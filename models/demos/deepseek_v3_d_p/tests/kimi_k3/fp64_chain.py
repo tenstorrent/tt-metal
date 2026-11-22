@@ -69,6 +69,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     write_manifest,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as dsa
+from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as dsa_golden
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_vllm_emulation import kda_flashkda_emulation
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, checkpoint_tensors, missed_keys, topk_recall
 
@@ -204,6 +205,25 @@ def index_topk(
     return F.pad(indices, (0, pad), value=-1), F.pad(values, (0, pad), value=float("nan"))
 
 
+def dsa_topk(
+    hidden: torch.Tensor, w: dict, dims: dsa.Dims, eps: float, index_keys: torch.Tensor, start: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Each row's FP64 indexer top-k (``index_topk``) for the normed DSA input ``hidden`` of rows
+    ``[start, start + n)``, in blocks of ``QUERY_BLOCK`` rows; ``index_keys``: every row's index key so far."""
+    indices, scores = [], []
+    for lo in range(0, hidden.shape[0], QUERY_BLOCK):
+        hi = min(lo + QUERY_BLOCK, hidden.shape[0])
+        qr = rms64(hidden[lo:hi] @ w["q_a_proj.weight"].T, w["q_a_layernorm.weight"], eps)
+        index_q = (qr @ w["indexer.wq_b.weight"].T).reshape(-1, dims.index_heads, dims.index_dim)
+        index_w = (hidden[lo:hi] @ w["indexer.weights_proj.weight"].T) * (
+            dims.index_heads**-0.5 * dims.index_dim**-0.5
+        )
+        i, s = index_topk(index_q, index_w, index_keys, torch.arange(start + lo, start + hi), dims.topk)
+        indices.append(i)
+        scores.append(s)
+    return torch.cat(indices), torch.cat(scores)
+
+
 # --- model ---------------------------------------------------------------------------------------------------------
 
 
@@ -230,48 +250,20 @@ class ChainModel:
         config = json.loads((checkpoint / "config.json").read_text())
         kda_config = KDAConfig.from_model_config(config)
         eps = float(config.get("text_config", config)["rms_norm_eps"])
-        num_experts = int(config.get("text_config", config)["num_experts"])
         embedding = checkpoint_tensors(checkpoint, None, ["embed_tokens.weight"])["embed_tokens.weight"]
         layers, digests = {}, {"embed_tokens": tensor_digest({"w": embedding})}
         for l in range(DSA_LAYER + 1):
-            names = ["input_layernorm.weight", "mlp_res_norm.weight", "mlp_res_proj.weight"]
-            names += ["post_attention_layernorm.weight", "self_attention_res_norm.weight"]
-            names += ["self_attention_res_proj.weight"]
-            if l in KDA_LAYERS:
-                names += [f"self_attn.{n}" for n in required_kda_weight_names(kda_config)]
-            if l == 0:
-                names += [f"mlp.{n}" for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")]
-            if l in MOE_LAYERS or l == DSA_LAYER:
-                names += [f"block_sparse_moe.gate.{n}" for n in ("weight", "e_score_correction_bias")]
-            if l in MOE_LAYERS:
-                names += [f"block_sparse_moe.{n}" for n in MoE_NON_ROUTED if not n.startswith("gate.")]
-            if l == DSA_LAYER:
-                names += [f"self_attn.{n}" for n in dsa.WEIGHTS]
-            t = checkpoint_tensors(checkpoint, l, names)
-            digests[f"layers.{l}"] = tensor_digest(t)
-            layer = {
-                "input_layernorm": t["input_layernorm.weight"].to(F64),
-                "attn_res": (t["self_attention_res_norm.weight"].to(F64), t["self_attention_res_proj.weight"].to(F64)),
-                "mlp_res": (t["mlp_res_norm.weight"].to(F64), t["mlp_res_proj.weight"].to(F64)),
-                "post_attention_layernorm": t["post_attention_layernorm.weight"].to(F64),
-            }
-            if l in KDA_LAYERS:
-                kda = {n: t[f"self_attn.{n}"] for n in required_kda_weight_names(kda_config)}
-                layer["kda"] = {n: v.to(F64) for n, v in normalize_kda_state_dict(kda, kda_config).items()}
-            if l == 0:
-                layer["mlp"] = {
-                    n: t[f"mlp.{n}"].to(F64) for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")
-                }
-            if l in MOE_LAYERS:
-                experts, digests[f"layers.{l}.experts"] = load_experts(checkpoint, l, num_experts, threads, log)
-                w = {n: t[f"block_sparse_moe.{n}"] for n in MoE_NON_ROUTED}
-                layer["moe"] = MoE64(w, experts, C.NUM_EXPERTS_PER_TOKEN, eps)
-            if l == DSA_LAYER:
-                layer["dsa"] = {n: t[f"self_attn.{n}"].to(F64) for n in dsa.WEIGHTS}
-                layer["gate"] = t["block_sparse_moe.gate.weight"].to(F64)
-                layer["gate_bias"] = t["block_sparse_moe.gate.e_score_correction_bias"].to(F64)
-            layers[l] = layer
-            log(f"loaded layer {l} weights")
+            layers[l], d = load_layer(
+                checkpoint,
+                l,
+                kda=l in KDA_LAYERS,
+                dense=l == 0,
+                moe=l in MOE_LAYERS,
+                dsa=l == DSA_LAYER,
+                threads=threads,
+                log=log,
+            )
+            digests.update(d)
         return cls(embedding, layers, kda_config, dsa.Dims(eps=eps), eps, digests=digests)
 
     def identity(self) -> dict:
@@ -285,6 +277,63 @@ class ChainModel:
         if self.kda_precision != "fp64":  # absent for the golden, so existing FP64 runs keep their identity
             identity["kda_precision"] = self.kda_precision
         return identity
+
+
+def load_layer(
+    checkpoint: Path,
+    l: int,
+    *,
+    kda: bool,
+    dense: bool,
+    moe: bool,
+    dsa: bool,
+    threads: int,
+    log: Callable[[str], None] = print,
+) -> tuple[dict, dict[str, str]]:
+    """Layer ``l``'s weights as ``ChainModel.layers[l]`` holds them, and their digests: the norms and AttnRes queries;
+    ``kda`` (KDA attention), ``dsa`` (DSA attention), ``dense`` (dense FFN) or ``moe`` (the full MoE); a DSA layer
+    without ``moe`` gets only its router (``gate`` / ``gate_bias``, to route sampled rows for a cross-check)."""
+    config = json.loads((checkpoint / "config.json").read_text())
+    kda_config = KDAConfig.from_model_config(config)
+    eps = float(config.get("text_config", config)["rms_norm_eps"])
+    names = ["input_layernorm.weight", "mlp_res_norm.weight", "mlp_res_proj.weight"]
+    names += ["post_attention_layernorm.weight", "self_attention_res_norm.weight"]
+    names += ["self_attention_res_proj.weight"]
+    if kda:
+        names += [f"self_attn.{n}" for n in required_kda_weight_names(kda_config)]
+    if dense:
+        names += [f"mlp.{n}" for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")]
+    if moe or dsa:
+        names += [f"block_sparse_moe.gate.{n}" for n in ("weight", "e_score_correction_bias")]
+    if moe:
+        names += [f"block_sparse_moe.{n}" for n in MoE_NON_ROUTED if not n.startswith("gate.")]
+    if dsa:
+        names += [f"self_attn.{n}" for n in dsa_golden.WEIGHTS]
+    t = checkpoint_tensors(checkpoint, l, names)
+    digests = {f"layers.{l}": tensor_digest(t)}
+    layer = {
+        "input_layernorm": t["input_layernorm.weight"].to(F64),
+        "attn_res": (t["self_attention_res_norm.weight"].to(F64), t["self_attention_res_proj.weight"].to(F64)),
+        "mlp_res": (t["mlp_res_norm.weight"].to(F64), t["mlp_res_proj.weight"].to(F64)),
+        "post_attention_layernorm": t["post_attention_layernorm.weight"].to(F64),
+    }
+    if kda:
+        weights = {n: t[f"self_attn.{n}"] for n in required_kda_weight_names(kda_config)}
+        layer["kda"] = {n: v.to(F64) for n, v in normalize_kda_state_dict(weights, kda_config).items()}
+    if dense:
+        layer["mlp"] = {n: t[f"mlp.{n}"].to(F64) for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")}
+    if moe:
+        num_experts = int(config.get("text_config", config)["num_experts"])
+        experts, digests[f"layers.{l}.experts"] = load_experts(checkpoint, l, num_experts, threads, log)
+        w = {n: t[f"block_sparse_moe.{n}"] for n in MoE_NON_ROUTED}
+        layer["moe"] = MoE64(w, experts, C.NUM_EXPERTS_PER_TOKEN, eps)
+    if dsa:
+        layer["dsa"] = {n: t[f"self_attn.{n}"].to(F64) for n in dsa_golden.WEIGHTS}
+        if not moe:
+            layer["gate"] = t["block_sparse_moe.gate.weight"].to(F64)
+            layer["gate_bias"] = t["block_sparse_moe.gate.e_score_correction_bias"].to(F64)
+    log(f"loaded layer {l} weights")
+    return layer, digests
 
 
 MoE_NON_ROUTED = (
@@ -403,18 +452,8 @@ def chain_segment(
     out["dsa_input_3"] = read
     stage("layer 3 keys")
     n = x.shape[0]
-    indices, scores = [], []
-    for lo in range(0, n, QUERY_BLOCK):
-        hi = min(lo + QUERY_BLOCK, n)
-        qr = rms64(hidden[lo:hi] @ L["dsa"]["q_a_proj.weight"].T, L["dsa"]["q_a_layernorm.weight"], eps)
-        index_q = (qr @ L["dsa"]["indexer.wq_b.weight"].T).reshape(-1, dims.index_heads, dims.index_dim)
-        index_w = (hidden[lo:hi] @ L["dsa"]["indexer.weights_proj.weight"].T) * (
-            dims.index_heads**-0.5 * dims.index_dim**-0.5
-        )
-        i, s = index_topk(index_q, index_w, index_keys, torch.arange(start + lo, start + hi), dims.topk)
-        indices.append(i)
-        scores.append(s)
-    out["topk_indices_3"], out["topk_scores_3"] = torch.cat(indices).int(), torch.cat(scores)
+    indices, out["topk_scores_3"] = dsa_topk(hidden, L["dsa"], dims, eps, index_keys, start)
+    out["topk_indices_3"] = indices.int()
     stage("layer 3 indexer top-k")
     local = [r - start for r in sampled if start <= r < start + n]
     out["sampled_rows"] = torch.tensor([start + r for r in local], dtype=torch.int64)
