@@ -28,6 +28,8 @@ Global layers: logits `near ++ far ++ sink`, one softmax (HF), as two exact part
 `DecodePositionsFast` = `DecodePositions` without the O(max_ctx) far mask, plus `far`.
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -50,6 +52,8 @@ KV_WIDTH = V_WIDTH + HEAD_DIM  # 288
 SCALE = HEAD_DIM**-0.5
 FAR_CHUNK = 128  # sdpa K chunk of the far cache (P1 sweep: 128 < 256 < 512 ms at 120K)
 LOCAL_CHUNK = 128
+# k and v ring writes as one paged_fused_update_cache program; INKLING_KV_FUSED=0: two paged_update_cache calls
+FUSED_KV_WRITE = os.environ.get("INKLING_KV_FUSED", "1") != "0"
 
 
 class DecodePositionsFast(DecodePositions):
@@ -133,6 +137,14 @@ class Inkling2AttentionFast(Inkling2Attention):
 
         self.sink_cols = put(torch.ones(1, 1, N_HEADS, 32), ttnn.float32)
         self.local_cfg = sdpa_cfg(LOCAL_CHUNK)
+        # k and v ring writes in one paged_fused_update_cache program: k's row on core (0, 0), v's on (0, 1)
+        self.kv_shard_v = ttnn.create_sharded_memory_config(
+            shape=(32, HEAD_DIM),
+            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 1))}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
         if not is_global:
             # local core runs at scale=1: fold SCALE into q's pre-scale and clip threshold (t -> t * SCALE),
             # so q leaves _project already scaled with one bf16 rounding
@@ -230,8 +242,17 @@ class Inkling2AttentionFast(Inkling2Attention):
         xk = xq if xk is None else xk
         xv = xq if xv is None else xv
         q, rel, gate, sink, k, v = self._project(state, positions, xq, xk, xv)  # E3 seam
-        self._write(state.k_ring, k, positions.ring)
-        self._write(state.v_ring, v, positions.ring)
+        if FUSED_KV_WRITE:
+            ttnn.experimental.paged_fused_update_cache(
+                state.k_ring,
+                ttnn.to_memory_config(k, self.kv_shard),
+                state.v_ring,
+                ttnn.to_memory_config(v, self.kv_shard_v),
+                update_idxs_tensor=positions.ring,
+            )
+        else:
+            self._write(state.k_ring, k, positions.ring)
+            self._write(state.v_ring, v, positions.ring)
         if self.is_global:
             row = ttnn.to_memory_config(ttnn.concat([v, self.mass_col, k], dim=-1), self.kv_full_shard)
             ttnn.experimental.paged_update_cache(state.kv_full, row, update_idxs_tensor=positions.pos)
