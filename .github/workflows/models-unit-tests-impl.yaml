@@ -164,7 +164,6 @@ jobs:
         # crashing with `OSError [Errno 30] Read-only file system`.
         HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
@@ -208,12 +207,22 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-watcher: true
+      # Short-lived HF read token from GitHub OIDC (no stored secret). Directly before the
+      # test step so the 60-minute token lifetime starts late.
+      - name: 🤗 Get Hugging Face token (OIDC)
+        id: hf-oidc
+        timeout-minutes: 5
+        uses: ./docker-job/.github/actions/hf-oidc-token
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./docker-job/.github/actions/run-with-log
+        env:
+          HF_TOKEN: ${{ steps.hf-oidc.outputs.token }}
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
+            # Test code must not be able to request OIDC tokens.
+            unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
             mkdir -p generated/test_reports
             ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
