@@ -76,7 +76,7 @@ def hold_prefill_l1(model):
 
 
 class _Parts(list):
-    """An all-reduce output of a 512 / 1024-row pass: one width-sharded tensor per 256 rows (_TPAllReduce.PART)."""
+    """An all-reduce output of a pass of more than _TPAllReduce.PART rows: one width-sharded tensor per PART rows."""
 
     def deallocate(self, force=True):
         for t in self:
@@ -91,10 +91,11 @@ class _TPAllReduce:
     BF8 (the batched decode's all-reduce precision) on 90 cores, so the [rows, 4 x hidden] scratch fits L1."""
 
     CORES, LINKS = 90, 2
-    PART = (
-        256  # rows per all_reduce_async call: its link workers' CB holds 45 shards' rows (391 KB at 256 rows; a 512 /
-    )
-    # 1024-row pass runs one call per 256 rows, each part straight from the interleaved input's rows)
+    # rows per all_reduce_async call (a 1024-row pass runs one call per 512 rows, each part straight from the interleaved
+    # input's rows): a 512-row pass in one call instead of two 256-row ones, its link workers' CB capped at ~400 KB of
+    # shards (all_reduce_async_program_factory.cpp): batched DFlash 29.73 -> 29.59 ms per round at 128 users, 31.69 ->
+    # 31.55 at 256
+    PART = 512
     _instances = {}
 
     def __init__(self, mesh, rows, hidden):
@@ -301,8 +302,8 @@ class _ResNorm:
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "resnorm_reader.cpp"), core_ranges=cores, compile_time_args=reader_ct,
                 runtime_args=[], common_runtime_args=reader_args + self.ar_noc + [t.buffer_address() for t in ys[1:]],
-                defines=defines + ([("RN_YPARTS", str(len(ys))), ("RN_YPART_ARG", str(len(reader_args) + len(self.ar_noc)))]
-                                   if len(ys) > 1 else []),
+                defines=defines + ([("RN_YPARTS", str(len(ys))), ("RN_YPART_ARG", str(len(reader_args) + len(self.ar_noc))),
+                                    ("RN_YPART_RT", str(ys[0].shape[-2] // TILE))] if len(ys) > 1 else []),
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
             ),
             ttnn.KernelDescriptor(

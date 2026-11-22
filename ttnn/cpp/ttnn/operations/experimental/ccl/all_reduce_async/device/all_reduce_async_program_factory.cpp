@@ -763,6 +763,12 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = tt::div_up(output_tensor_cores.num_cores(), num_links) * output_tensor_shard_num_pages;
+    // At most ~400 KB in whole shards: the reader pushes one shard at a time and the writer pops within a shard, so a
+    // CB of fewer shards than the link sends streams them (a [512, 32] BF8 shard on each of 90 cores, 2 links: 45
+    // shards, 783 KB, do not fit next to the op's L1 buffers)
+    constexpr uint32_t max_cb_bytes = 400 * 1024;
+    const uint32_t shard_bytes = output_tensor_shard_num_pages * l1_scratch_cb_page_size_bytes;
+    cb_num_pages = std::min(cb_num_pages, std::max<uint32_t>(2, max_cb_bytes / shard_bytes) * output_tensor_shard_num_pages);
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_df = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
