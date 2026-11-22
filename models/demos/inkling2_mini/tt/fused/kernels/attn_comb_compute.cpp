@@ -21,6 +21,8 @@ namespace {
 constexpr uint32_t cb_z = 0, cb_o = 1, cb_c = 2, cb_zs = 16, cb_out = 17, cb_lf = 18, cb_st = 19, cb_r = 20;
 constexpr uint32_t cb_m = 21, cb_s = 22;
 constexpr uint32_t dt = 4;
+// SFPU ops on the top two faces only (rows 0..15; the group's heads are rows 0..2, every op is per element)
+constexpr VectorMode VM = VectorMode::R;
 
 FORCE_INLINE void load(uint32_t cb, uint32_t tile, uint32_t dst) {
     reconfig_data_format_srca(cb);
@@ -40,10 +42,10 @@ FORCE_INLINE void wsum(uint32_t cb, uint32_t first, uint32_t stride, uint32_t n,
         load(cb, first + i * stride, x);
         load(cb_s, i, d + 2);
         mul_binary_tile_init();
-        mul_binary_tile(x, d + 2, x);
+        mul_binary_tile(x, d + 2, x, VM);
         if (i > 0) {
             add_binary_tile_init();
-            add_binary_tile(d, d + 1, d);
+            add_binary_tile(d, d + 1, d, VM);
         }
     }
 }
@@ -62,7 +64,7 @@ void kernel_main() {
     for (uint32_t i = 1; i < nsplit; ++i) {
         load(cb_c, i, 1);
         binary_max_tile_init();
-        binary_max_tile(0, 1, 0);
+        binary_max_tile(0, 1, 0, VM);
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -74,9 +76,9 @@ void kernel_main() {
         load(cb_c, i, 0);
         load(cb_m, 0, 1);
         sub_binary_tile_init();
-        sub_binary_tile(0, 1, 0);
+        sub_binary_tile(0, 1, 0, VM);
         exp_tile_init();
-        exp_tile(0);
+        exp_tile(0, VM);
         tile_regs_commit();
         tile_regs_wait();
         put(0, cb_s);
@@ -111,7 +113,7 @@ void kernel_main() {
         log_tile_init();
         log_tile(1);
         add_binary_tile_init();
-        add_binary_tile(0, 1, 0);
+        add_binary_tile(0, 1, 0, VM);
         tile_regs_commit();
         tile_regs_wait();
         put(0, cb_lf);
@@ -123,9 +125,9 @@ void kernel_main() {
         load(cb_st, 0, 0);
         load(cb_lf, 0, 1);
         sub_binary_tile_init();
-        sub_binary_tile(0, 1, 0);
+        sub_binary_tile(0, 1, 0, VM);
         exp_tile_init();
-        exp_tile(0);
+        exp_tile(0, VM);
         tile_regs_commit();
         tile_regs_wait();
         put(0, cb_r);
