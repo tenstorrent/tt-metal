@@ -255,11 +255,14 @@ class Inkling2AttentionFast(Inkling2Attention):
         if not masked:
             near = ttnn.add(near, positions.near_mask)
         logits = ttnn.concat([near, ttnn.add(self.sink_pad, ttnn.typecast(sink, ttnn.float32))], dim=-1)
-        probs = ttnn.softmax(logits, dim=-1, compute_kernel_config=self.hifi4, numeric_stable=True)
-        p_near = ttnn.typecast(ttnn.slice(probs, [0, 0, 0, 0], [1, N_KV, GROUPS, WINDOW]), ttnn.bfloat16)
-        o_near = ttnn.matmul(p_near, state.v_ring, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
+        # softmax and log-sum-exp from one exp pass
         m = ttnn.max(logits, dim=-1, keepdim=True)
-        lse = ttnn.add(m, ttnn.log(ttnn.sum(ttnn.exp(ttnn.subtract(logits, m)), dim=-1, keepdim=True)))
+        e = ttnn.exp(ttnn.subtract(logits, m))
+        z = ttnn.sum(e, dim=-1, keepdim=True)  # [1,8,3,1]; a matmul with a ones column runs on one core (~140 us)
+        e_near = ttnn.slice(e, [0, 0, 0, 0], [1, N_KV, GROUPS, WINDOW])
+        p_near = ttnn.multiply(e_near, ttnn.reciprocal(z), dtype=ttnn.bfloat16)
+        o_near = ttnn.matmul(p_near, state.v_ring, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
+        lse = ttnn.add(m, ttnn.log(z))
 
         # far partial with the near mass as its sink
         far_pos, valid = positions.far
