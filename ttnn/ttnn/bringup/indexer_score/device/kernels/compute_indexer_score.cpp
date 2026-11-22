@@ -411,6 +411,74 @@ inline void block_max_pool_batched(uint32_t unit_strip) {
     acc.pop_front(unit_strip);
 }
 
+#ifdef INDEXER_SCORE_BMAX_COMPUTE
+// Bring-up fork (PB.FBM, block_max_compute): each masked accumulator tile's per-row max over its 32 keys (one block =
+// one key tile) into cb_bmax_out (bf16, column 0), before the untilize reads the same tiles. EXACT: the tile is first
+// copied to a bf16 tile (cb_bmax_tmp) by the same unpack (copy_tile and pack_untilize share UnpackToDestEn) and the
+// same packer conversion the untilize uses, i.e. the very bf16 scores the op writes; the reduce then works on bf16
+// values, which survive srcA and the reduce's 16-bit row transpose unchanged. (A reduce straight from the fp32
+// accumulator lost the low bits before the pack: 1 bf16 ulp low on ~1 % of the maxes, 8x4 probe.)
+constexpr uint32_t cb_bmax_out = get_named_compile_time_arg_val("cb_bmax_out");
+constexpr uint32_t cb_bmax_scaler = get_named_compile_time_arg_val("cb_bmax_scaler");
+constexpr uint32_t cb_bmax_tmp = get_named_compile_time_arg_val("cb_bmax_tmp");
+#ifdef INDEXER_SCORE_FP32_DEST
+constexpr uint32_t bmax_dest_tiles = 4;  // half-sync fp32 DEST
+#else
+constexpr uint32_t bmax_dest_tiles = 8;  // half-sync bf16 DEST
+#endif
+
+/** The unit's QC x KC accumulator tiles (pushed, masked; not popped: the untilize consumes them) -> as many column-0
+ *  row-max tiles in cb_bmax_out, same order (strip r's KC tiles together). Leaves srcB on the bf16 scaler (cb_w's
+ *  format, as the next matmul expects); the untilize reconfigures srcA and the packer itself. */
+template <uint32_t unit_strip>
+inline void block_max_rows() {
+    CircularBuffer acc(cb_acc_strip);
+    CircularBuffer tmp(cb_bmax_tmp);
+    CircularBuffer out(cb_bmax_out);
+    acc.wait_front(unit_strip);
+    // (1) the written bf16 scores as tiles
+    tmp.reserve_back(unit_strip);
+    reconfig_data_format_srca(cb_mask, cb_acc_strip);
+    pack_reconfig_data_format(cb_acc_strip, cb_bmax_tmp);
+    copy_init(cb_acc_strip);
+    for (uint32_t i = 0; i < unit_strip; i += bmax_dest_tiles) {
+        const uint32_t n = (i + bmax_dest_tiles <= unit_strip) ? bmax_dest_tiles : (unit_strip - i);
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < n; ++j) {
+            copy_tile(cb_acc_strip, i + j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < n; ++j) {
+            pack_tile<true>(j, cb_bmax_tmp, i + j);
+        }
+        tile_regs_release();
+    }
+    tmp.push_back(unit_strip);
+    // (2) their row maxes
+    tmp.wait_front(unit_strip);
+    out.reserve_back(unit_strip);
+    reconfig_data_format(cb_acc_strip, cb_bmax_tmp, cb_w, cb_bmax_scaler);  // srcA -> bf16 tiles, srcB -> scaler
+    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_bmax_tmp, cb_bmax_scaler, cb_bmax_out);
+    for (uint32_t i = 0; i < unit_strip; i += bmax_dest_tiles) {
+        const uint32_t n = (i + bmax_dest_tiles <= unit_strip) ? bmax_dest_tiles : (unit_strip - i);
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < n; ++j) {
+            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_bmax_tmp, cb_bmax_scaler, i + j, 0, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < n; ++j) {
+            pack_tile<true>(j, cb_bmax_out, i + j);
+        }
+        tile_regs_release();
+    }
+    reduce_uninit(cb_bmax_tmp);
+    out.push_back(unit_strip);
+    tmp.pop_front(unit_strip);
+}
+#endif
+
 /** Stamp the causal -inf mask onto row r's masked suffix [valid, KC) in place (empty when fully valid).
  *  straddle_* shift the diagonal on the mid-slab boundary chip (0 elsewhere); see causal_diag_tile. */
 inline void stamp_masked_suffix(
@@ -527,6 +595,9 @@ void kernel_main() {
     if constexpr (block_pool) {
         CircularBuffer(cb_scaler).wait_front(1);  // 1.0 reduce-MAX scaler, reused, never popped
     }
+#ifdef INDEXER_SCORE_BMAX_COMPUTE
+    CircularBuffer(cb_bmax_scaler).wait_front(1);  // PB.FBM: the reader's 1.0 reduce-MAX scaler, never popped
+#endif
 
     CircularBuffer k(cb_k);
     CircularBuffer acc(cb_acc_strip);
@@ -734,6 +805,9 @@ void kernel_main() {
                                 /*batches = q-rows */ q_tiles_per_unit));
                     }
                 } else {
+#ifdef INDEXER_SCORE_BMAX_COMPUTE
+                    block_max_rows<unit_strip>();  // PB.FBM: the block maxes first (the writer reads them per strip)
+#endif
                     compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);
                 }
             }

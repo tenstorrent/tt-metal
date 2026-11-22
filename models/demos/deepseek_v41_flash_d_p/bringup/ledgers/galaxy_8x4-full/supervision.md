@@ -1312,3 +1312,6 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   73.5k (111.5 ms, was ~113.8), 1M 58.6k (139.7, was ~142); single 99.7 / 122.7 ms. Gap now ~11.8 ms (139k), ~17 ms (1M).
 - 04:40 Framework F300 (a9...): agent-written results/<task>_*.md reports survive the final gate (PB.9G / PB.GAP reports were deleted). PB.GAP's gap table is lost; its numbers are in BREADCRUMBS / PB.GAP.json.
 - 04:45 NEXT (overseer's pick per the owner's plan: the biggest remaining gap at 1M is the packed plain top-k, +6.8 ms): QUEUED PB.FBM: block maxima in the score's compute kernel (exact), then block-select thresholds for single and packed from measurement. Port to model_bringup after.
+- 04:38 heartbeat: PB.FBM agent active; watch armed.
+- 05:08 heartbeat: PB.FBM agent active; watch armed.
+- 05:38 heartbeat: PB.FBM agent active (~75 min); watch armed.

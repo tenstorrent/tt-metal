@@ -211,6 +211,13 @@ struct operation_attributes_t {
     // block_max_pin: block_max_out gets +inf at each query's own block (its newest visible key). HASHED.
     uint32_t block_keys{0};
     bool block_max_pin{false};
+    // Bring-up fork option (DeepSeek-V4.1 PB.FBM, INDEXER_BMAX_COMPUTE; default false = the writer's block max):
+    // block_keys 32 and block_max_out a STRIP-MAJOR [1, 1, Sq / 32 * NB / 8, 256] bf16 ROW_MAJOR tensor (512-byte
+    // pages of 8 blocks): the compute kernel max-reduces each masked score tile's rows (one block = one key tile) on
+    // the FPU before the untilize; the writer copies each tile's 32 row maxes (column 0) as one 64-byte run to byte
+    // (strip * NB + logical key tile) * 64. Exact (the same bf16 values as the writer path's fp32 maxes). No pin, no
+    // bias. HASHED.
+    bool block_max_compute{false};
     // The (stripes, per-stripe chunk) pair the invP remap decodes with; the product is the global chunk either way.
     uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
     uint32_t key_stripe_chunk() const {

@@ -121,6 +121,14 @@ def block_select_on() -> bool:
     return settings.get("INDEXER_BLOCK_SELECT") == "on"
 
 
+def bmax_compute_on() -> bool:
+    """INDEXER_BMAX_COMPUTE=on (call-time, PB.FBM): the block path's 32-key block maxes made on the score op's compute
+    kernel (a row reduce of each score tile, ring_indexer_score_dsa block_max_compute: a strip-major bf16 tensor) and
+    transposed by ttnn.bringup.block_max_bf16(strip_major=True); off = PB.BM's writer-core 8-key fp32 maxes + the fold.
+    """
+    return settings.get("INDEXER_BMAX_COMPUTE") == "on"
+
+
 class force_block_select:
     """Context: every eligible indexer call takes the block path (``True``) or the plain one (``False``) whatever its
     length (runtime.compile warms both paths' programs: they depend on shapes only)."""
@@ -151,7 +159,20 @@ def use_block_select(ix, kv_len: int, t: int, packed: bool = False) -> bool:
         return False
     if _BSEL_FORCE[0] is not None:
         return bool(_BSEL_FORCE[0])
-    return int(kv_len) >= int(settings.get("INDEXER_BLOCK_SELECT_MIN_PACKED" if packed else "INDEXER_BLOCK_SELECT_MIN"))
+    return int(kv_len) >= bsel_min(packed)
+
+
+# PB.FBM: INDEXER_BLOCK_SELECT_MIN / _MIN_PACKED "auto" = each block-max path's measured crossover in keys (8x4 ladder):
+# (single, packed) with INDEXER_BMAX_COMPUTE on (the compute kernel's maxes) / off (PB.BM: the writer's; packed never)
+BSEL_MIN_AUTO = {"on": (163840, 196608), "off": (131072, 1 << 30)}
+
+
+def bsel_min(packed: bool = False) -> int:
+    """The block path's smallest key count (settings INDEXER_BLOCK_SELECT_MIN / _MIN_PACKED; auto: BSEL_MIN_AUTO)."""
+    v = settings.get("INDEXER_BLOCK_SELECT_MIN_PACKED" if packed else "INDEXER_BLOCK_SELECT_MIN")
+    if str(v) == "auto":
+        return BSEL_MIN_AUTO[settings.get("INDEXER_BMAX_COMPUTE")][1 if packed else 0]
+    return int(v)
 
 
 def _upload(mesh, t, dtype, layout=ttnn.TILE_LAYOUT, dims=None):
@@ -255,7 +276,9 @@ class TtIndexer:
         # PB.BM (INDEXER_BLOCK_SELECT): the block path's persistent buffers a capacity (setup); plain indexers only (the
         # candidate source's block maxes are pinned, the re-index layers' scores biased: neither is eligible)
         self.bsel_ok = type(self) is TtIndexer
-        self._bsel = {}  # capacity T -> (block max fp32 [1, 1, Sq, NB8], block max bf16 [1, 1, Sq, NB8 / F], gathered)
+        # capacity T -> {"bm8": the writer's block max fp32 [1, 1, Sq, NB8] (INDEXER_BMAX_COMPUTE=off), "strip": the
+        # compute kernel's strip-major bf16 [1, 1, Sq / 32 x NB / 8, 256] (on), "bm": bf16 [1, 1, Sq, NB], "gath": gathered}
+        self._bsel = {}
 
     def share(self, memo, kv_src: int | None) -> None:
         """INDEXER_GLUE=on (P.16): the chunk's ChunkMemo and this layer's KV source (the tiled index keys are made once
@@ -279,44 +302,63 @@ class TtIndexer:
             self.bsel_buffers(t)  # (PB.BM: at load; a later switch on allocates at its first call)
 
     def bsel_buffers(self, t: int):
-        """PB.BM: the block path's buffers for capacity ``t`` (allocated at the first call: setup)."""
+        """PB.BM: the block path's buffers for capacity ``t`` (setup at load; a buffer the other INDEXER_BMAX_COMPUTE
+        side needs at its first call): (the score op's block_max_out for the current side, bf16 maxes [1, 1, Sq, NB],
+        gathered scores)."""
         hit = self._bsel.get(t)
+        nb = bsel_blocks(t)
+        sq = self.sq
+        alloc = lambda shape, dt: ttnn.allocate_tensor_on_device(  # noqa: E731
+            ttnn.Shape(shape), dt, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
+        )
         if hit is None:
-            f = BSEL_BLOCK // SCORE_BLOCK
-            nb8 = bsel_blocks(t) * f  # (block_max_out: NB * 8 >= T; whole 16-byte bf16 runs after the fold)
-            sq = self.sq
-            alloc = lambda shape, dt: ttnn.allocate_tensor_on_device(  # noqa: E731
-                ttnn.Shape(shape), dt, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
-            )
-            hit = self._bsel[t] = (
-                ttnn.zeros(
-                    [1, 1, sq, nb8],
+            hit = self._bsel[t] = {
+                "bm": alloc([1, 1, sq, nb], ttnn.bfloat16),
+                "gath": alloc([1, 1, sq, self.topk * BSEL_BLOCK], ttnn.bfloat16),
+            }
+        cmax = bmax_compute_on()
+        key = "strip" if cmax else "bm8"
+        if key not in hit:
+            if (
+                cmax
+            ):  # PB.FBM: the score op's compute-kernel maxes, strip-major (a block's 32 row maxes: 64 B), 512 B pages
+                assert sq % 32 == 0 and nb % 8 == 0, (sq, nb)
+                hit[key] = alloc([1, 1, sq // 32 * nb // 8, 256], ttnn.bfloat16)
+            else:  # (block_max_out: NB8 * 8 >= T; whole 16-byte bf16 runs after the fold)
+                hit[key] = ttnn.zeros(
+                    [1, 1, sq, nb * (BSEL_BLOCK // SCORE_BLOCK)],
                     dtype=ttnn.float32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=self.mesh,
                     memory_config=DRAM,
-                ),
-                alloc([1, 1, sq, nb8 // f], ttnn.bfloat16),
-                alloc([1, 1, sq, self.topk * BSEL_BLOCK], ttnn.bfloat16),
-            )
-        return hit
+                )
+        return hit[key], hit["bm"], hit["gath"]
+
+    def bsel_epilogue(self, t: int) -> dict:
+        """The score op's block epilogue of the block path (INDEXER_BMAX_COMPUTE: on = the compute kernel's 32-key
+        maxes, strip-major bf16; off = the writer's 8-key fp32 maxes)."""
+        if bmax_compute_on():
+            return dict(block_keys=BSEL_BLOCK, block_max_out=self.bsel_buffers(t)[0], block_max_compute=True)
+        return dict(block_keys=SCORE_BLOCK, block_max_out=self.bsel_buffers(t)[0])
 
     def block_topk(
         self, logits: ttnn.Tensor, t: int, n: int | None = None, n_tensor=None, phase=None, keys_vl=None
     ) -> ttnn.Tensor:
         """PB.BM: the chip's top-k [1, 1, Sq, topk] uint32 of ``logits`` [1, 1, Sq, T] bf16 RM by block-max
-        pre-selection, from the block maxes the score op wrote into ``bsel_buffers(t)[0]`` (block_max_out, blocks of
-        SCORE_BLOCK). ``n`` / ``n_tensor``: the valid BSEL_BLOCK blocks (kv_len / BSEL_BLOCK; a runtime value or each
+        pre-selection, from the block maxes the score op wrote into ``bsel_buffers(t)[0]`` (block_max_out: blocks of
+        SCORE_BLOCK, or with INDEXER_BMAX_COMPUTE=on the compute kernel's strip-major BSEL_BLOCK maxes). ``n`` / ``n_tensor``: the valid BSEL_BLOCK blocks (kv_len / BSEL_BLOCK; a runtime value or each
         chip's [1] uint32 on the device). ``phase``: a row move applied to the bf16 block maxes (the glued path's roll
         to the alone chip rows, as its scores were rolled). ``keys_vl``: the plain top-k's valid length (an int or the
         chips' tensor) for BSEL_CHECK only (tests/test_indexer_block_select.py). Every op on the matmul grid
         (max_grid: 11 x 10 on the Galaxy), the compute sub-device of a gather-hide region (tt/gather_hide.py)."""
-        bm8, bm, gath = self.bsel_buffers(t)
-        f = BSEL_BLOCK // SCORE_BLOCK
+        src_max, bm, gath = self.bsel_buffers(t)
         mg = max_grid()
         kw = dict(n=int(n)) if n_tensor is None else dict(n_tensor=n_tensor)
         profiler.signpost("indexer_bmax")  # (PB.BM's sections: the fold, the top-k's, the gather)
-        ttnn.bringup.block_max_bf16(bm8, factor=f, output_tensor=bm, max_grid=mg, **kw)
+        if bmax_compute_on():  # PB.FBM: the compute kernel's strip-major maxes -> [Sq, NB] (a transpose)
+            ttnn.bringup.block_max_bf16(src_max, strip_major=True, output_tensor=bm, max_grid=mg, **kw)
+        else:
+            ttnn.bringup.block_max_bf16(src_max, factor=BSEL_BLOCK // SCORE_BLOCK, output_tensor=bm, max_grid=mg, **kw)
         src = bm if phase is None else phase(bm)
         vl = dict(valid_length=int(n)) if n_tensor is None else dict(valid_length_tensor=n_tensor)
         profiler.signpost("indexer_topk")
@@ -607,7 +649,7 @@ class TtIndexer:
     def __call__(self, x: ttnn.Tensor, qr: ttnn.Tensor, start: int, cache) -> ttnn.Tensor:
         t = self._capacity(cache)
         bsel = use_block_select(self, self.kv_len_of(start, t), t)
-        ep = dict(block_keys=SCORE_BLOCK, block_max_out=self.bsel_buffers(t)[0]) if bsel else {}
+        ep = self.bsel_epilogue(t) if bsel else {}
         logits, kv_len = self.scores(x, qr, start, cache, **ep)
         out = self.topk_of(logits, kv_len, t if bsel else None)
         dealloc(logits)

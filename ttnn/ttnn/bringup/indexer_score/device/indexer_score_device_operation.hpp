@@ -211,6 +211,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     // Bring-up fork (PB.7C): per-device query-row ranges (operation_attributes_t::lane_ranges); empty = off.
     const std::vector<uint32_t>& lane_ranges = {},
     // Bring-up fork (PB.KR): every shard of the keys already in k (operation_attributes_t::keys_gathered).
-    bool keys_gathered = false);
+    bool keys_gathered = false,
+    // Bring-up fork (PB.FBM): block maxes on the compute kernel (operation_attributes_t::block_max_compute).
+    bool block_max_compute = false);
 
 }  // namespace ttnn::experimental::bringup

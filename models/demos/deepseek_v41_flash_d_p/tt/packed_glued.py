@@ -1492,15 +1492,7 @@ class GluedCall(OneCall):
         then per pass p (each chip's p-th segment) its top-k at its alone chip rows (DS41-342) with each chip's own
         valid length, copied back to the segment's rows."""
         from . import cores
-        from .indexer import (
-            BSEL_BLOCK,
-            SCORE_BLOCK,
-            Kept,
-            TtCandidateIndexer,
-            TtReindexer,
-            topk_large_indices,
-            use_block_select,
-        )
+        from .indexer import BSEL_BLOCK, Kept, TtCandidateIndexer, TtReindexer, topk_large_indices, use_block_select
 
         ix, i, cfg = block.indexer, block.layer, block.cfg
         assert ix.glue, "PACKED_ATTN_ONECALL=on: INDEXER_GLUE=on"
@@ -1569,7 +1561,7 @@ class GluedCall(OneCall):
         elif reidx:
             ep = dict(block_keys=ix.block, block_bias=bias_full)
         elif bsel:
-            ep = dict(block_keys=SCORE_BLOCK, block_max_out=ix.bsel_buffers(t)[0])
+            ep = ix.bsel_epilogue(t)  # (PB.FBM: INDEXER_BMAX_COMPUTE picks the compute kernel's or the writer's maxes)
         profiler.signpost("indexer")
         logits = ttnn.bringup.ring_indexer_score_dsa(
             q,

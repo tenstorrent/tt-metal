@@ -1528,3 +1528,66 @@
   gap probe: `resident submit --cmd "<walls env> [GAP_PP=1] [GAP_CPROF=<dir> GAP_PROF=0] scripts/run_safe_pytest.sh
   --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_gap_probe.py"`; A/B: `GAP_AB=1` same
   file; op check: tests/test_cwrite_window_ops.py.
+
+## PB.FBM perf (attempt 1): indexer block maxima on the score's COMPUTE kernel (INDEXER_BMAX_COMPUTE on | off)
+- Read first: OV-3 / OV-58 / OV-61, PACKED_RULES.md, rule 20, perf_guide s1-5, the PB.BM / PB.KR / PB.GAP sections above,
+  DS41-379..382 (block select), DS41-385 (compare op times within one run).
+- Expected saving per chunk (written before the first device run; from PB.BM's numbers): the writer's 8-key fp32 max
+  (one RISC-V compare a score, 64 MB of fp32 maxes a layer a chip at 1M) costs the single ring +0.34 ms a call at
+  139264 and +3.1 at 1M (probe), +0.67 a layer in the model at 1M; the fold reads them back (0.39 ms a layer at 1M).
+  On: one FPU row-reduce a score tile (~1 % of the tile's 256 matmul tile-ops) + one 64-byte write a tile (8 MB a layer
+  at 1M) + a transpose op (8 MB in / out, ~0.1 ms). Single 8192 at 1024000 (block path on both sides): device
+  -2.0 (score epilogue) -0.9 (fold -> transpose) = about -2.5..-3 ms a chunk; host 0. Below the old crossover the
+  block path becomes cheaper than the plain top-k at 139264 too (old +0.5 ms device there, minus ~1.4 of epilogue +
+  fold): about -0.5..-1 ms device, +12 launches (+~1 ms host) once INDEXER_BLOCK_SELECT_MIN is lowered. Packed 4 x 2k
+  at 1M (block path today off: MIN_PACKED never): top-k -8.8 ms, + fold / gather / 2nd top-k ~+2, + the compute max
+  ~+0.3 = about -6 ms device a chunk; at 139264 ~0..-1 ms device, host +~1 ms.
+- Load reasons: (1) tests/perf/test_fbm_probe.py on the ladder's load (layers 0-20, decode, 8192, resident engram):
+  "the fork's byte check runs on the resident mesh (0 opens); the timing part reuses the held perf model's indexer
+  objects (its score config, dtypes, grid) and the same load serves the walls / no-rebuild units after it".
+- What (INDEXER_BMAX_COMPUTE=on, call-time: batch_call_settings + batch_call_apply; off = PB.BM's writer path,
+  unchanged): fork ring_indexer_score_dsa `block_max_compute` (CHANGELOG PB.FBM): compute (INDEXER_SCORE_BMAX_COMPUTE)
+  copies each masked fp32 accumulator tile to a bf16 tile (copy_tile + pack_tile: the untilize's unpack and packer, i.e.
+  the written scores), reduce MAX / REDUCE_ROW with a reader-made 1.0 scaler, column 0 -> cb_bmax_out; the writer's
+  epilogue copies a tile's 32 row maxes into one 64-byte run, written to a strip-major bf16 [Sq / 32 x NB / 8, 256]
+  tensor (512-byte pages). ttnn.bringup.block_max_bf16(strip_major=True) (new kernel block_max_strip.cpp) transposes it
+  to [Sq, NB] bf16, the same tensor the top-k read before. tt/indexer.py: bmax_compute_on, bsel_buffers (per side,
+  lazily), bsel_epilogue (the score's epilogue for either side; tt/packed_glued._index_dynamic uses it too), block_topk
+  (transpose or fold), bsel_min (auto thresholds). Cores: the score op as before (11 x 10 = 110, matmul grid); the
+  transpose on max_grid (110 on the Galaxy: data movement only).
+- DECIDED (OV-58): blocks of 32 = one key tile, so the compute max is a plain tile-row reduce; the writer copies 32
+  values a tile instead of 1024 compares.
+- Gotcha (DS41-389): the first version reduced straight from the fp32 accumulator: 32 of a chip's maxes 1 bf16 ulp low
+  (the row reduce does not round as the score's pack does); the bf16 copy first is exact (0 of 132M maxes differ).
+- Gotcha: a kernel or C++ change makes the resident runner start a new process (a model load, ~3 min) per iteration;
+  an offline JIT compile of the cached build command (the failing log's trisc command, run for UNPACK / MATH / PACK in
+  the cache dir) caught compile errors without the device.
+- Probe finding (tests/perf/test_fbm_probe.py, op level, back-to-back calls): the 1M score call costs +2.4 ms with
+  compute maxes, the same with both new steps disabled (a temporary diagnostic knob, removed): the epilogue's presence,
+  not the reduce, in that synthetic loop; in the model the score section grew only +0.3 ms a layer at 1M (+0.72 for
+  the writer path). 512-byte pages instead of one page a strip: no change in the probe (kept: spreads the writes).
+- Measured: results/PB.FBM_ladder.md (before / after at 139264 / 524288 / 1024000, the indexer split, crossovers at
+  262144 / 393216 too). Steady after vs before: single 1024000 122.1 -> 120.0 ms wall (device 111.07 -> 108.81), 524288
+  107.0 -> 105.9; 4 x 2k 1024000 139.5 -> 132.8 (126.76 -> 121.23), 524288 125.4 -> 122.1; 139264 unchanged (plain).
+  Expected (top of this section) single 1M -2.5..-3 device: measured -2.3; 4 x 2k 1M ~-6: measured -5.5.
+- DECIDED (OV-58): INDEXER_BLOCK_SELECT_MIN / _MIN_PACKED default "auto" (tt/indexer.py BSEL_MIN_AUTO): on 163840 /
+  196608 keys (the measured crossovers, results/PB.FBM_ladder.md s2), off 131072 / never (PB.BM's), so the A/B's off
+  side is exactly PB.BM's path and the brief's two settings stay the switches (a number overrides both sides).
+- Rule 20, per-chunk values this change touches and how they reach the device: the valid block count (kv_len / 32):
+  single path the transpose's prepared-program value slot (common arg n) and topk_large_indices' valid_length (runtime,
+  not hashed); glued path the derive's per-pass block-count tensors (D_BSEL, made on the device from the chunk header),
+  read by the transpose (n_tensor) and the top-k (valid_length_tensor). The score op's kv_len / chunk start / ranges as
+  before (runtime args); the max tensor's address a patched buffer arg. The path choice (block vs plain) is a host
+  decision on the chunk's length; every program depends on shapes only, both paths warmed by runtime.compile
+  (force_block_select). Nothing new is uploaded per chunk.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.FBM --spec $BRINGUP_SPEC --check` (devjob);
+  probe: `resident submit --cmd "<walls env> [FBM_PARTS=check,time] [FBM_POS=..] [FBM_FORMS=single,ranges]
+  [FBM_EPS=off,w8,cmax] scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_fbm_probe.py"`; ladder: the walls / skip_positions units with
+  LADDER_POS / SKIP_POS, A/B with DS41_INDEXER_BMAX_COMPUTE=on|off, crossovers with DS41_INDEXER_BLOCK_SELECT_MIN=0
+  DS41_INDEXER_BLOCK_SELECT_MIN_PACKED=0 vs DS41_INDEXER_BLOCK_SELECT=off.
+- Gate `gate PB.FBM --check` (devjob fbm_gate, after the last code edit, hooks clean): PASS PB.FBM. Oracle alone vs
+  today 0.0, lane equivalence 0.0, slot digests 0, packed determinism 0.0; determinism 0.0; cold strict no-rebuild 0
+  builds on every path; block-select set mismatches 0 (single / packed, 139264 / 1024000). Ladder steady (gate units):
+  single 100.1 / 105.6 / 119.8 ms, 4 x 2k 111.7 / 123.4 / 134.9 at 139264 / 524288 / 1024000 (before: 100.3 / 107.0 /
+  122.1 and 110.2 / 125.4 / 139.5). Report: results/PB.FBM_ladder.md.

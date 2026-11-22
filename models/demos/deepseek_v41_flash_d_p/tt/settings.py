@@ -1116,23 +1116,35 @@ TABLE = {
         "length; both paths' programs depend on shapes only and runtime.compile warms both). off = the plain "
         "top-k over every visible key (the path before)",
     ),
+    "INDEXER_BMAX_COMPUTE": Setting(
+        "on",
+        ("on", "off"),
+        "PB.FBM (OWNER 2026-11-22), read per call (CALL-TIME, bringup/hooks.py batch_call_settings / batch_call_apply). "
+        "INDEXER_BLOCK_SELECT's block maxes: on = the score op's COMPUTE kernel max-reduces each score tile's rows on "
+        "the FPU (one block = one 32-key tile; ring_indexer_score_dsa block_max_compute: a strip-major bf16 tensor, one "
+        "64-byte write a tile) and ttnn.bringup.block_max_bf16(strip_major=True) transposes it to "
+        "[Sq, NB]; off = the score's writer core computes the max of every 8 keys (one RISC-V compare a score, fp32 "
+        "[Sq, T / 8]) and block_max_bf16 folds 4 of them (PB.BM, the path before). Same bf16 maxima (exact)",
+    ),
     "INDEXER_BLOCK_SELECT_MIN": Setting(
-        "131072",
+        "auto",
         None,
-        "PB.BM (INDEXER_BLOCK_SELECT=on): the smallest key count (the scores' kv_len: compressed keys, positions / "
-        "ratio) at which a single-request indexer call takes the block path; below it the plain top-k. 131072 (262144 "
-        "positions at ratio 2): the 8x4 ladder, single 8192, on - off device +0.5 ms at 69632 keys (139264), -4.9 ms at "
-        "516096 (1024000): crossover ~111k keys (the block path's fixed cost: the score writer's block max, the fold, "
-        "the gather). Call-time",
+        "PB.BM / PB.FBM (INDEXER_BLOCK_SELECT=on): the smallest key count (the scores' kv_len: compressed keys, "
+        "positions / ratio) at which a single-request indexer call takes the block path; below it the plain top-k. "
+        "auto = each block-max path's measured crossover (tt/indexer.py BSEL_MIN_AUTO): INDEXER_BMAX_COMPUTE=on 163840 "
+        "(PB.FBM, 8x4 ladder single 8192, block - plain steady device / wall ms: 135168 keys +0.6 / +1.0 (resumed -1.1 "
+        "/ -1.5), 200704 keys -2.4 / -0.8, 266240 keys -2.7 / -2.1, 516096 keys -7.0 / -9.9; 73728 keys -0.2 / +1.9); "
+        "off 131072 (PB.BM: the writer's block max, crossover ~111k keys). A number: that threshold on both. Call-time",
     ),
     "INDEXER_BLOCK_SELECT_MIN_PACKED": Setting(
-        "1073741824",
+        "auto",
         None,
-        "PB.BM (INDEXER_BLOCK_SELECT=on): the same threshold for the glued packed path's one-call ring (lane_ranges). "
-        "Default: never (above any capacity): that ring's writer-core block max costs +1.3 ms a layer at 139264 and "
-        "+2.6 at 1M (tests/perf/test_bsel_score_probe.py), more than the top-k saves (8x4 4 x 2k ladder, on - off "
-        "device +5.1 ms at 139264, +0.8 at 1M). Next lever: the block max on the compute kernel's FPU (row reduce). "
-        "Call-time",
+        "PB.BM / PB.FBM (INDEXER_BLOCK_SELECT=on): the same threshold for the glued packed path's one-call ring "
+        "(lane_ranges; the chunk's largest key count). auto: INDEXER_BMAX_COMPUTE=on 196608 (PB.FBM, 8x4 ladder "
+        "chip-aligned 4 x 2k, block - plain steady device / wall ms: 73728 keys +0.4 / +1.3, 135168 keys -1.2 / +2.2 "
+        "(resumed -1.1 / +2.4), 200704 keys -1.5 / -2.1 (resumed -2.3 / 0.0), 266240 keys -2.1 / -2.1, 516096 keys "
+        "-5.6 / -8.4: the extra launches cost wall below ~200k keys); off never (PB.BM: the writer-core block max cost "
+        "the ranges ring +1.3 ms a layer at 139264, +2.6 at 1M). A number: that threshold on both. Call-time",
     ),
     "CKV_BFP4_PREPARED": Setting(
         "on",

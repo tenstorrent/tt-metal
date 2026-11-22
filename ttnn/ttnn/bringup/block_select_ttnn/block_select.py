@@ -240,11 +240,19 @@ def block_max_bf16(
     output_tensor: ttnn.Tensor | None = None,
     memory_config=None,
     max_grid=None,
+    strip_major: bool = False,
 ) -> ttnn.Tensor:
-    """block_max [.., R, NI] fp32 ROW_MAJOR (bf16 values widened: the indexer score's block_max_out) -> [.., R,
+    """``strip_major`` (PB.FBM): block_max [.., S NB / 8, 256] bf16 ROW_MAJOR, strip-major in 512-byte pages of 8 blocks
+    (the indexer score's block_max_compute output: strip s, block b's 32 row maxes at byte (s NB + b) 64) ->
+    ``output_tensor`` [.., 32 S, NB] bf16 ROW_MAJOR (required: it gives S and NB; a transpose of each strip, exact),
+    the first ``n`` blocks (rounded up to 8); ``factor`` 1.
+    Else: block_max [.., R, NI] fp32 ROW_MAJOR (bf16 values widened: the indexer score's block_max_out) -> [.., R,
     NI / factor] bf16 ROW_MAJOR, column b = the max of input columns [b factor, (b + 1) factor) (exact), for the first
     ``n`` output columns (rounded up to 8; the rest not written). ``n`` a runtime value (one program for every n) or
     ``n_tensor`` ([1] uint32 ROW_MAJOR DRAM a device, read on the device). ``factor`` a power of two <= 16."""
+    if strip_major:
+        assert int(factor) == 1, f"block_max_bf16 strip_major: factor {factor} (the maxes are already 32-key blocks)"
+        return _block_max_strip(block_max, n, n_tensor, output_tensor, memory_config, max_grid)
     F = int(factor)
     assert 1 <= F <= 16 and F & (F - 1) == 0, f"block_max_bf16: factor {F}"
     _dram_rm(block_max, "block_max", ttnn.float32)
@@ -308,6 +316,88 @@ def block_max_bf16(
         slots = [] if has_len else [(0, COMMON_ARG | 3), (1, COMMON_ARG | 3)]
         pp = ttnn.bringup.prepare_program(md, ios, slots)
         assert pp.patch_count >= len(ios), f"block_max_bf16: {pp.patch_count} patched slots"
+        if len(_PREPARED) >= _PREPARED_CAP:
+            _PREPARED.popitem(last=False)
+        _PREPARED[key] = hit = (mesh, pp)
+    else:
+        _PREPARED.move_to_end(key)
+    if has_len:
+        ttnn.bringup.run_prepared(hit[1], ios)
+    else:
+        ttnn.bringup.run_prepared(hit[1], ios, [int(n), int(n)])
+    return out
+
+
+STRIP_CHUNK = 128  # strip_major: blocks a work unit (8 KiB in + 8 KiB out of L1, double-buffered, a RISC)
+
+
+def _block_max_strip(block_max, n, n_tensor, output_tensor, memory_config, max_grid) -> ttnn.Tensor:
+    """block_max_bf16(strip_major=True): [.., S NB / 8, 256] bf16 RM (strip-major, 512-byte pages of 8 blocks) ->
+    output_tensor [.., 32 S, NB] bf16 RM (its shape gives S and NB)."""
+    _dram_rm(block_max, "block_max", ttnn.bfloat16)
+    assert int(block_max.shape[-1]) == 256, f"block_max_bf16 strip_major: width {block_max.shape[-1]} (pages of 8 x 32)"
+    assert output_tensor is not None, "block_max_bf16 strip_major: output_tensor [.., 32 S, NB] gives the geometry"
+    assert (n is None) != (n_tensor is None), "block_max_bf16: exactly one of n / n_tensor"
+    out = output_tensor
+    _dram_rm(out, "output", ttnn.bfloat16)
+    NB = int(out.shape[-1])
+    S = int(out.shape[-2]) // 32
+    assert NB % 8 == 0 and int(out.shape[-2]) == 32 * S, f"block_max_bf16 strip_major: output {list(out.shape)}"
+    assert (
+        int(block_max.shape[-2]) == S * NB // 8
+    ), f"block_max_bf16 strip_major: input rows {block_max.shape[-2]} != S {S} x NB {NB} / 8"
+    strips = _rows(out) // 32
+    gx, gy = _grid(block_max.device(), max_grid)
+    ncores = gx * gy
+    has_len = n_tensor is not None
+    ios = [block_max, out] + ([n_tensor] if has_len else [])
+    scratch = 64 + 2 * 4 * STRIP_CHUNK * 64  # (two RISCs x two in + two out buffers)
+
+    def make():
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
+        cbs = [
+            ttnn.CBDescriptor(
+                total_size=scratch,
+                core_ranges=crs,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(buffer_index=CB, data_format=ttnn.uint8, page_size=scratch)
+                ],
+            )
+        ]
+        ct = [CB, NB, gx, ncores, STRIP_CHUNK, int(has_len)]
+        for t in (block_max, out, n_tensor if has_len else out):
+            ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+        common = [int(block_max.buffer_address()), int(out.buffer_address())]
+        common += [int(n_tensor.buffer_address()) if has_len else 0, 0, strips]
+        ks = []
+        for half, cfg in ((0, ttnn.ReaderConfigDescriptor()), (1, ttnn.WriterConfigDescriptor())):
+            cth = ct[:6] + [half] + ct[6:]
+            ks.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNELS / "block_max_strip.cpp"),
+                    core_ranges=crs,
+                    compile_time_args=cth,
+                    runtime_args=ttnn.RuntimeArgs(),
+                    common_runtime_args=list(common),
+                    config=cfg,
+                )
+            )
+        return ttnn.ProgramDescriptor(kernels=ks, semaphores=[], cbs=cbs)
+
+    mesh = block_max.device()
+    key = ("bmax_strip", mesh.id(), has_len, _mg_key(max_grid)) + tuple(
+        (tuple(t.shape[i] for i in range(len(t.shape))), str(t.memory_config())) for t in ios
+    )
+    hit = _PREPARED.get(key)
+    if hit is None:
+        shape_m = mesh.shape
+        md = ttnn.MeshProgramDescriptor()
+        md[
+            ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(shape_m[0] - 1, shape_m[1] - 1))
+        ] = make()
+        slots = [] if has_len else [(0, COMMON_ARG | 3), (1, COMMON_ARG | 3)]
+        pp = ttnn.bringup.prepare_program(md, ios, slots)
+        assert pp.patch_count >= len(ios), f"block_max_bf16 strip_major: {pp.patch_count} patched slots"
         if len(_PREPARED) >= _PREPARED_CAP:
             _PREPARED.popitem(last=False)
         _PREPARED[key] = hit = (mesh, pp)

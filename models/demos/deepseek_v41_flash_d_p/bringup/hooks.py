@@ -1413,7 +1413,8 @@ def batch_call_settings(env=None) -> tuple:
     # INDEXER_BLOCK_SELECT / _MIN / _MIN_PACKED (PB.BM: the index top-k by block-max pre-selection, read per indexer
     # call) likewise; PACKED_KEYS_OWNED (PB.KR: a segment's index keys to its own chips, local scoring) likewise,
     # refreshed like POS_DYNAMIC; PACKED_CWRITE_FAST (PB.GAP: the batched ckeep derive and the slice-free packed served
-    # writes, read per call) likewise, refreshed like POS_DYNAMIC
+    # writes, read per call) likewise, refreshed like POS_DYNAMIC; INDEXER_BMAX_COMPUTE (PB.FBM: the block maxes on the
+    # score's compute kernel, read per indexer call) likewise, refreshed like POS_DYNAMIC
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1437,6 +1438,7 @@ def batch_call_settings(env=None) -> tuple:
         "INDEXER_BLOCK_SELECT",
         "INDEXER_BLOCK_SELECT_MIN",
         "INDEXER_BLOCK_SELECT_MIN_PACKED",
+        "INDEXER_BMAX_COMPUTE",
         "COMMON_VALUE_SLOTS",
         "MHC_POST_V2",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))
@@ -1458,6 +1460,7 @@ def batch_call_apply(model) -> None:
         _settings.snap["INDEXER_BLOCK_SELECT"] = _settings._read("INDEXER_BLOCK_SELECT")  # PB.BM: likewise
         _settings.snap["INDEXER_BLOCK_SELECT_MIN"] = _settings._read("INDEXER_BLOCK_SELECT_MIN")  # PB.BM: likewise
         _settings.snap["INDEXER_BLOCK_SELECT_MIN_PACKED"] = _settings._read("INDEXER_BLOCK_SELECT_MIN_PACKED")
+        _settings.snap["INDEXER_BMAX_COMPUTE"] = _settings._read("INDEXER_BMAX_COMPUTE")  # PB.FBM: likewise
     want = _settings.get("DECODER_SKIP")
     have = getattr(model, "skip_mode", None)
     if have is None or want == have or "replay128" in (want, have) or getattr(model, "tail_of", None) is not None:

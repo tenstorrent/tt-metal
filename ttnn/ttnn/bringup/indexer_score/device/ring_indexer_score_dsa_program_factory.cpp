@@ -393,7 +393,9 @@ ProgramDescriptor build_ring_program_descriptor_impl(
     // Bring-up fork block epilogue (opt-in): the writer's bias-window and block-max scratch, after every other CB so
     // the default program's CB indices and sizes are unchanged.
     const bool has_ep = tensors.has_block_epilogue();
-    uint32_t cb_ep_bias = 0, cb_ep_max = 0;
+    // PB.FBM: the block maxes on the compute kernel (block_max_compute; block_keys 32, strip-major bf16 output)
+    const bool cmax = has_ep && args.block_max_compute && tensors.block_max_out.has_value();
+    uint32_t cb_ep_bias = 0, cb_ep_max = 0, cb_cmax_scaler = 0, cb_cmax_out = 0, cb_cmax_tmp = 0;
     if (has_ep) {
         const uint32_t bk = args.block_keys;
         const uint32_t blocks_per_tile = tt::constants::TILE_WIDTH / bk;
@@ -414,7 +416,26 @@ ProgramDescriptor build_ring_program_descriptor_impl(
             make_scratch(cb_ep_bias, bias_slots * bf16_tile);
         }
         if (tensors.block_max_out.has_value()) {
-            make_scratch(cb_ep_max, tt::constants::TILE_HEIGHT * KC * blocks_per_tile * 4);
+            // PB.FBM (block_max_compute): one 64-byte run of row maxes a tile; else the fp32 runs of every row
+            make_scratch(
+                cb_ep_max,
+                cmax ? KC * tt::constants::TILE_HEIGHT * 2u : tt::constants::TILE_HEIGHT * KC * blocks_per_tile * 4);
+        }
+        if (cmax) {  // PB.FBM: compute's 1.0 reduce scaler (from the reader) and its row-max tiles (to the writer)
+            const auto make_tiles = [&](uint32_t& slot, uint32_t ntiles) {
+                slot = next_cb_index++;
+                desc.cbs.push_back(CBDescriptor{
+                    .total_size = ntiles * bf16_tile,
+                    .core_ranges = core_ranges,
+                    .format_descriptors = {{CBFormatDescriptor{
+                        .buffer_index = static_cast<uint8_t>(slot),
+                        .data_format = tt::DataFormat::Float16_b,
+                        .page_size = bf16_tile}}}});
+            };
+            make_tiles(cb_cmax_scaler, 1);
+            // a whole unit's QC x KC max tiles, double-buffered: compute pushes them before the unit's untilize
+            make_tiles(cb_cmax_out, 2 * QC * KC);
+            make_tiles(cb_cmax_tmp, QC * KC);  // the unit's written bf16 scores as tiles (the reduce's input)
         }
     }
 
@@ -567,7 +588,7 @@ ProgramDescriptor build_ring_program_descriptor_impl(
         writer_ct.push_back(cb_ep_bias);
         writer_ct.push_back(cb_ep_max);
         writer_ct.push_back(bias.has_value() ? bias->logical_shape()[-1] / tt::constants::TILE_WIDTH : 0u);
-        writer_ct.push_back(bmax.has_value() ? bmax->logical_shape()[-1] * 4u : 0u);
+        writer_ct.push_back(bmax.has_value() ? bmax->logical_shape()[-1] * (cmax ? 2u : 4u) : 0u);  // page bytes
         tt::tt_metal::TensorAccessorArgs(bias.has_value() ? *bias->buffer() : *out.buffer()).append_to(writer_ct);
         tt::tt_metal::TensorAccessorArgs(bmax.has_value() ? *bmax->buffer() : *out.buffer()).append_to(writer_ct);
     }
@@ -639,6 +660,21 @@ ProgramDescriptor build_ring_program_descriptor_impl(
     }
     if (keys_gathered) {  // PB.KR: every shard already in k (the gathered buffer): no arrival gate, no k_local read
         reader_kernel.defines.emplace_back("INDEXER_SCORE_KEYS_GATHERED", "1");
+    }
+    if (cmax) {  // PB.FBM: compute max-reduces each score tile's rows; the reader makes its scaler; the writer copies
+        reader_kernel.defines.emplace_back("INDEXER_SCORE_BMAX_COMPUTE", "1");
+        writer_kernel.defines.emplace_back("INDEXER_SCORE_BMAX_COMPUTE", "1");
+        compute_kernel.defines.emplace_back("INDEXER_SCORE_BMAX_COMPUTE", "1");
+        reader_kernel.named_compile_time_args.emplace_back("cb_bmax_scaler", cb_cmax_scaler);
+        compute_kernel.named_compile_time_args.emplace_back("cb_bmax_scaler", cb_cmax_scaler);
+        compute_kernel.named_compile_time_args.emplace_back("cb_bmax_out", cb_cmax_out);
+        compute_kernel.named_compile_time_args.emplace_back("cb_bmax_tmp", cb_cmax_tmp);
+        writer_kernel.named_compile_time_args.emplace_back("cb_bmax_out", cb_cmax_out);
+        // block_max_out [1, 1, Sq / 32 x NB / 8, 256]: its pages a query strip
+        writer_kernel.named_compile_time_args.emplace_back(
+            "bmax_strip_pages",
+            static_cast<uint32_t>(tensors.block_max_out->logical_shape()[2]) /
+                (q.logical_shape()[2] / tt::constants::TILE_HEIGHT));
     }
 
     // Append uniform scalar fields to a kernel's common argument list, preserving order.

@@ -363,6 +363,13 @@ void bind_indexer_score(nb::module_& mod) {
                 there, e.g. each segment's keys to its own chips only): no all-gather, no arrival wait, the own shard
                 read from k too (k_local only fixes the shard geometry), and the all-gather's worker column computes.
                 Same scores.
+            block_max_compute: optional bool (default False = the writer's block max; bring-up fork,
+                deepseek_v41_flash_d_p PB.FBM): with block_keys 32 and block_max_out a STRIP-MAJOR
+                [1, 1, Sq / 32 * NB / 8, 256] bf16 ROW_MAJOR tensor (512-byte pages of 8 blocks; NB >= the key tiles,
+                a multiple of 8), the compute kernel max-reduces each score tile's rows on the FPU (one block = one
+                key tile): the 64 bytes at ((s * NB) + b) * 64 hold the max of query rows 32 s .. 32 s + 31's written
+                bf16 scores in keys [32 b, 32 b + 32), for the tiles each call writes; the rest untouched. Exact. No
+                block_max_pin / block_bias. ttnn.bringup.block_max_bf16(strip_major=True) turns it into [Sq, NB].
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -408,7 +415,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("k_local_extra") = std::vector<ttnn::Tensor>{},
         nb::arg("lane_own_extent") = false,
         nb::arg("lane_ranges") = std::vector<uint32_t>{},
-        nb::arg("keys_gathered") = false);
+        nb::arg("keys_gathered") = false,
+        nb::arg("block_max_compute") = false);
 }
 
 }  // namespace ttnn::operations::bringup::indexer_score::detail

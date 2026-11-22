@@ -1,0 +1,105 @@
+{
+ "used": [
+  {
+   "id": "DS41-379",
+   "how": "kept the block_select ops (block_gather / block_keys) and extended block_max_bf16 with a strip_major transpose instead of a stock gather / typecast",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-382",
+   "how": "the new transpose runs on max_grid (the gather-hide compute sub-device) so it is safe inside the packed top-k region",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-385",
+   "how": "the probe times off / writer / compute forms back to back in one run and compares within the run",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-356",
+   "how": "every ladder submit runs the walls before skip_positions in one process",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-381",
+   "how": "the probe gives every key buffer one capacity (a 1M slot) in the ranges form",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-380",
+   "how": "the A/B switch is read per call through settings (batch_call_settings + batch_call_apply snapshot refresh), not a module-level flag a reloaded module would miss",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "A MAX REDUCE_ROW straight from an fp32-DEST accumulator tile is not the max of the bf16 values the untilize writes (1 ulp low): added as DS41-389",
+  "A kernel source or C++ change makes the resident runner start a new process (a model load) per iteration; the cached JIT compile command from a failing log can be re-run offline for UNPACK / MATH / PACK to catch compile errors without the device",
+  "An op-level back-to-back probe of ring_indexer_score_dsa at 1M charges the block epilogue's mere presence ~+1.5 ms a call that the in-model profile does not show (+0.3 ms a layer): judge epilogue costs in the model's profile"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padded or duplicated work: the block-max tensor is the capacity's existing NB (bsel_blocks), the 512-byte pages hold the same bytes; the compute reduce runs only on the tiles the score already makes"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked without stops; DECIDED lines in BREADCRUMBS PB.FBM (block 32 = one key tile, auto thresholds, MIN values); oracle / exactness checks kept and reported (0 of 132M maxes differ, gate oracle metrics)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "no gate test or its configuration changed; all model runs used the ladder load (layers 0-20, 8192, decode) through the resident runner; the probe file is BATCH_SHARED with BATCH_LAYERS executed"
+  }
+ ],
+ "cited_only": [
+  "DS41-389"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.FBM",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-22T05:50:14",
+  "head": "cc2d1e1376f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.FBM.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.FBM_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.FBM.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_fbm_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_glued.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/README.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/block_select.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_max_strip.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/tests/unit/test_block_select.py",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/compute_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/reader_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/writer_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/ring_indexer_score_dsa_program_factory.cpp",
+   "ttnn/ttnn/bringup/indexer_score/indexer_score_nanobind.cpp",
+   "ttnn/ttnn/bringup/indexer_score/tests/unit/test_block_max_compute.py"
+  ]
+ }
+}

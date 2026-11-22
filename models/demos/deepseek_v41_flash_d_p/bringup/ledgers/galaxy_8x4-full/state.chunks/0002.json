@@ -560,6 +560,83 @@
   },
   "waiting": "accepted, but the gate fails with the change on:\nFAIL PB.BM\n  cmd rc=0 (0s), log: /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/PB.BM.log\n  device opens of PB.BM so far: 17 (0 safe-runner processes, 17 resident-runner restarts); runner model loads 11\n  MISSING  packed_alone_vs_today_max_abs_diff (need == 0)\n  MISSING  packed_lane_equiv_max_abs_diff (need == 0)\n  MISSING  packed_slot_digest_mismatches (need == 0)\n  MISSING  packed_determinism_max_abs_diff (need == 0)\n  ok       no_rebuild_pass_lanes2x3k = 1 (need == 1)\n  ok       no_rebuild_pass_lanes2x3k_tagentic_cc = 1 (need == 1)\n  ok       no_rebuild_pass_lanes4x1600s = 1 (need == 1)\n  ok       no_rebuild_pass_lanes4x1600s_tagentic_cc = 1 (need == 1)\n  ok       no_rebuild_pass_lanes4x2k = 1 (need == 1)\n  ok       no_rebuild_pass_lanes4x2k_tagentic_cc = 1 (need == 1)\n  ok       no_rebuild_pass_lanes6mix = 1 (need == 1)\n  ok       no_rebuild_pass_lanes6mix_tagentic_cc = 1 (need == 1)\n  ok       no_rebuild_pass_one1600 = 1 (need == 1)\n  ok       no_rebuild_pass_one1600_tagentic_cc = 1 (need == 1)\n  ok       no_rebuild_pass_one4k = 1 (need == 1)\n  ok       no_rebuild_pass_one4k_tagentic_cc = 1 (need == 1)\n  ok       no_rebuild_pass_single8192 = 1 (need == 1)\n  ok       no_rebuild_pass_single8192_tagentic_cc = 1 (need == 1)\n  ok       program_builds_after_warmup_lanes2x3k = 0 (need == 0)\n  ok       program_builds_after_warmup_lanes2x3k_tagentic_cc = 0 (need == 0)\n  ok       program_builds_after_warmup_lanes4x1600s = 0 (need == 0)\n  ok       program_builds_after_warmup_lanes4x1600s_tagentic_cc = 0 (need == 0)\n  ok       program_builds_after_warmup_lanes4x2k = 0 (need == 0)\n  ok       program_builds_after_warmup_lanes4x2k_tagentic_cc = 0 (need == 0)\n  ok       program_builds_after_warmup_lanes6mix = 0 (need == 0)\n  ok       program_builds_after_warmup_lanes6mix_tagentic_cc = 0 (need == 0)\n  ok       program_builds_after_warmup_one1600 = 0 (need == 0)\n  ok       program_builds_after_warmup_one1600_tagentic_cc = 0 (need == 0)\n  ok       program_builds_after_warmup_one4k = 0 (need == 0)\n  ok       program_builds_after_warmup_one4k_tagentic_cc = 0 (need == 0)\n  ok       program_builds_after_warmup_serving = 0 (need == 0)\n  ok       program_builds_after_warmup_serving_tagentic_cc = 0 (need == 0)\n  ok       program_builds_after_warmup_single8192 = 0 (need == 0)\n  ok       program_builds_after_warmup_single8192_tagentic_cc = 0 (need == 0)\n  ok       ids_uploads_per_chunk = 0.0 (need == 0)\n  ok       ids_uploads_per_chunk_tagentic_cc = 0.0 (need == 0)\n  ok       packed_fallback_chunks_lanes2x3k = 0 (need == 0)\n  ok       packed_fallback_chunks_lanes2x3k_tagentic_cc = 0 (need == 0)\n  ok       packed_fallback_chunks_lanes4x1600s = 0 (need == 0)\n  ok       packed_fallback_chunks_lanes4x1600s_tagentic_cc = 0 (need == 0)\n  ok       packed_fallback_chunks_lanes4x2k = 0 (need == 0)\n  ok       packed_fallback_chunks_lanes4x2k_tagentic_cc = 0 (need == 0)\n  ok       packed_fallback_chunks_lanes6mix = 0 (need == 0)\n  ok       packed_fallback_chunks_lanes6mix_tagentic_cc = 0 (need == 0)\n  ok       packed_fallback_chunks_one1600 = 0 (need == 0)\n  ok       packed_fallback_chunks_one1600_tagentic_cc = 0 (need == 0)\n  ok       packed_fallback_chunks_one4k = 0 (need == 0)\n  ok       packed_fallback_chunks_one4k_tagentic_cc = 0 (need == 0)\n  ok       steady_tok_s_p1024000_tagentic_cc = 67870.8 (need > 0)\n  ok       steady_tok_s_p139264_tagentic_cc = 82002.0 (need > 0)\n  ok       ladder_lanes4x2k_tok_s_p1024000 = 54540.6 (need > 0)\n  ok       ladder_lanes4x2k_tok_s_p1024000_tagentic_cc = 54540.6 (need > 0)\n  ok       ladder_lanes4x2k_tok_s_p139264 = 72431.5 (need > 0)\n  ok       ladder_lanes4x2k_tok_s_p139264_tagentic_cc = 72431.5 (need > 0)\n  MISSING  idx_block_select_set_mismatches* (need == 0)\n  MISSING  determinism_max_abs_diff (need == 0)\nThe change misses a recorded limit: reject it (decide --task PB.BM --reject), or fix it and measure again; limits are never edited"
  },
+ "PB.FBM": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "628f0d7f358fe3d2f590d08789272f6c76673794",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "09a15346-4ec1-41e4-a1ba-995e918a6d1f"
+  },
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 4.4,
+  "history": [
+   {
+    "reused": [
+     "PB.FBM#test_determinism",
+     "PB.FBM#test_packed_fast_tier",
+     "PB.FBM#test_packed_oracle",
+     "PB.FBM#test_indexer_block_select",
+     "PB.FBM#test_skip_positions",
+     "PB.FBM#test_packed_walls",
+     "PB.FBM#test_no_rebuild"
+    ],
+    "s": 4.4,
+    "status": "PASS",
+    "t": "2026-11-22T05:58:59"
+   }
+  ],
+  "last_run": "2026-11-22T05:58:56",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/PB.FBM.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": {
+   "reused": [
+    "PB.FBM#test_determinism",
+    "PB.FBM#test_packed_fast_tier",
+    "PB.FBM#test_packed_oracle",
+    "PB.FBM#test_indexer_block_select",
+    "PB.FBM#test_skip_positions",
+    "PB.FBM#test_packed_walls",
+    "PB.FBM#test_no_rebuild"
+   ],
+   "units": {
+    "PB.FBM#test_determinism": "7b9d823dfe647342",
+    "PB.FBM#test_indexer_block_select": "28414639bde80222",
+    "PB.FBM#test_no_rebuild": "cae31f31f20d98c4",
+    "PB.FBM#test_packed_fast_tier": "99ec3a0cc26d251e",
+    "PB.FBM#test_packed_oracle": "082f0fbfc4db7bb0",
+    "PB.FBM#test_packed_walls": "90f60e4536654fbb",
+    "PB.FBM#test_skip_positions": "3b2da0444f054758"
+   }
+  },
+  "started": "2026-11-22T05:58:52",
+  "status": "PASS",
+  "units": {
+   "PB.FBM#test_determinism": "PASS",
+   "PB.FBM#test_indexer_block_select": "PASS",
+   "PB.FBM#test_no_rebuild": "PASS",
+   "PB.FBM#test_packed_fast_tier": "PASS",
+   "PB.FBM#test_packed_oracle": "PASS",
+   "PB.FBM#test_packed_walls": "PASS",
+   "PB.FBM#test_skip_positions": "PASS"
+  },
+  "waiting": null
+ },
  "PB.FX": {
   "ab_pending": null,
   "agent": {
