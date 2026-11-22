@@ -72,15 +72,20 @@ try:
                     f._last = None
 
     if os.environ.get("M2_EAGER_ONLY"):  # mockwarm: compile every program of an eager step per variant, no traces
+        import models.demos.inkling2_mini.tt.mk.moe_norm as MN
+
         for v in VARIANTS:
-            if v.startswith("twin"):
-                tw, _, v = v.partition(",")
-                set_twin(tw == "twin1")
+            flags = [t for t in v.split(",") if ":" not in t]
+            spec = [t for t in v.split(",") if ":" in t]
+            v = spec[0] if spec else ""
+            set_twin("twin1" in flags)
+            (MN.install if "norm1" in flags else MN.uninstall)(m)
+            gates = "gates1" in flags
+            if not v:
                 m.step()
                 m.step()
-                print("M2EAGER", tw, flush=True)
-                if not v:
-                    continue
+                print("M2EAGER", flags, flush=True)
+                continue
             f = v.split(":")
             xr = tuple(range(int(f[5]) + 1)) if len(f) > 5 else (0,)
             import models.demos.inkling2_mini.tt.mk.stage as STG
@@ -94,6 +99,7 @@ try:
                 parts=int(f[3]),
                 max_cores=int(f[4]),
                 exclude_rows=xr,
+                gates=gates,
             )
             m.step()
             m.step()
@@ -109,11 +115,19 @@ try:
     print("M2MODEL", json.dumps(base), flush=True)
     with open(OUT, "a") as f:
         f.write(json.dumps(base) + "\n")
+    import models.demos.inkling2_mini.tt.mk.moe_norm as MN
+
     for v in VARIANTS:
-        if v.startswith("twin"):
-            tw, _, v = v.partition(",")
-            set_twin(tw == "twin1")
-            if not v:  # twin only, no overlap
+        flags = [t for t in v.split(",") if ":" not in t]
+        spec = [t for t in v.split(",") if ":" in t]
+        v = spec[0] if spec else ""
+        tw = "twin1" if "twin1" in flags else "twin0"
+        set_twin(tw == "twin1")
+        (MN.install if "norm1" in flags else MN.uninstall)(m)
+        gates = "gates1" in flags
+        tw = ",".join(flags)
+        if True:
+            if not v:  # flags only, no overlap
                 m.step()
                 m.step()
                 ttnn.synchronize_device(dev)
@@ -138,14 +152,20 @@ try:
             parts=parts,
             max_cores=mc,
             exclude_rows=xr,
+            gates=gates,
         )
         try:
             m.step()  # two eager steps: the attach pattern is periodic from the 2nd step on (capture must not see new
             m.step()  # host + fill programs)
             ttnn.synchronize_device(dev)
-            res, got = run(m, f"overlap {v}", ov)
+            res, got = run(m, f"overlap {tw} {v}", ov)
             res["logits_bit_equal_vs_base"] = bool(torch.equal(got, ref))
             res["logits_max_abs_vs_base"] = float((got - ref).abs().max())
+            g2, r2 = got.reshape(len(got), -1).double(), ref.reshape(len(ref), -1).double()
+            res["logits_pcc_min"] = round(
+                min(torch.corrcoef(torch.stack([a, b]))[0, 1].item() for a, b in zip(g2, r2)), 6
+            )
+            res["argmax_equal"] = f"{int((g2.argmax(-1) == r2.argmax(-1)).sum())}/{len(g2)}"
             for pos in res["ms"]:
                 res.setdefault("saved_ms", {})[pos] = round(base["ms"][pos] - res["ms"][pos], 2)
         finally:

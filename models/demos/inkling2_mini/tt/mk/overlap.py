@@ -17,8 +17,12 @@ reads whatever prefix was filled. Bytes into every CB slot are unchanged, so out
 App order: model.APPS (one pointer per projection, advanced by every call): decode steps only.
 """
 
+import functools
+import os
+
 import ttnn
 from models.demos.inkling2_mini.tt import model as MD
+from models.demos.inkling2_mini.tt.mk.gate_stage import GateStage
 from models.demos.inkling2_mini.tt.mk.stage import StagedBankLinear, coalesce, program_cores, range_bytes, resplit
 
 _orig_generic_op = ttnn.generic_op
@@ -67,10 +71,20 @@ class _Track:
 
 class Overlap:
     def __init__(
-        self, model, weights=("w_all",), parts=6, max_cores=1, staged_kb=None, split=3, exclude_rows=(0, 1, 2, 3, 4, 5)
+        self,
+        model,
+        weights=("w_all",),
+        parts=6,
+        max_cores=1,
+        staged_kb=None,
+        split=3,
+        exclude_rows=(0, 1, 2, 3, 4, 5),
+        gates=None,
     ):
         """max_cores: hosts have at most this many cores (1 = the single-core residual programs, ~22 us each with DRAM
-        idle; wider small programs are short, so a fill piece makes them longer instead of hiding)."""
+        idle; wider small programs are short, so a fill piece makes them longer instead of hiding). gates: also stage
+        the message gates' F / G (tt/mk/gate_stage.py) on their combine cores outside row 0 and outside the
+        projections' staging cores; default INKLING_STAGE_GATES (off)."""
         self.parts, self.max_cores = parts, max_cores
         self.order = [L for L, _ in MD.APPS]
         gx = model.device.compute_with_storage_grid_size().x
@@ -87,8 +101,21 @@ class Overlap:
             assert not (t.cores & taken)
             taken |= t.cores
             self.tracks.append(t)
+        gates = os.environ.get("INKLING_STAGE_GATES", "0") == "1" if gates is None else gates
+        self.gorder, self.gstages = [], {}
+        if gates:  # call order of the gates: apps with messages (loop layers, passes > 1), QKV gate then mlp gate
+            for L, p in MD.APPS:
+                lay = model.layers[L]
+                if lay.qkv_gate is not None and p > 1:
+                    self.gorder += [lay.qkv_gate, lay.mlp_gate]
+            forbidden = {(x, 0) for x in range(gx)} | taken  # row 0: the hosts' cores
+            for g in dict.fromkeys(self.gorder):
+                self.gstages[id(g)] = GateStage(g, forbidden)
+            gcores = set().union(*(gs.stage_cores for gs in self.gstages.values())) if self.gstages else set()
+            taken = taken | gcores
+        self.gptr, self.gfilled, self.gn, self.gstaged = 0, None, 0, 0
         self.stage_cores = taken
-        words = max(t.staged for t in self.tracks) // 4
+        words = max([t.staged for t in self.tracks] + [gs.bytes for gs in self.gstages.values()]) // 4
         spec = ttnn.ShardSpec(coalesce(sorted(taken)), (1, words), ttnn.ShardOrientation.ROW_MAJOR)
         self.stage = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, len(taken), words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, model.device,
@@ -96,6 +123,10 @@ class Overlap:
         )  # fmt: skip
         for t in self.tracks:
             t.bind(self.stage)
+        for g in dict.fromkeys(self.gorder):
+            gs = self.gstages[id(g)]
+            gs.stage = self.stage
+            g._combine = functools.partial(self._consume_gate, gs)  # instance attribute over the class method
         self.queue = []  # [(proxy, part index)]: pieces still to attach, oldest first
         self.in_own = False
         self.seen = {"programs": 0, "too_wide": 0, "clash": 0, "attached": 0}
@@ -105,6 +136,8 @@ class Overlap:
         ttnn.generic_op = _orig_generic_op
         for t in self.tracks:
             t.restore()
+        for g in dict.fromkeys(self.gorder):
+            del g._combine
         ttnn.deallocate(self.stage)
 
     def consume(self, proxy, x, out):
@@ -126,6 +159,22 @@ class Overlap:
         self.queue += [(nxt, k) for k in range(self.parts)]
         return y
 
+    def _consume_gate(self, gs, z, h, m):
+        assert self.gorder[self.gptr] is gs.gate, ("gate order out of step", self.gptr)
+        self.queue = [q for q in self.queue if q[0] is not gs]
+        staged = self.gfilled is gs
+        self.in_own = True
+        try:
+            y = gs.combine(z, h, m, staged)
+        finally:
+            self.in_own = False
+        self.gn += 1
+        self.gstaged += int(staged)
+        self.gptr = (self.gptr + 1) % len(self.gorder)
+        self.gfilled = None
+        self.queue.insert(0, (self.gstages[id(self.gorder[self.gptr])], 0))  # urgent: its consumer comes soon
+        return y
+
     def _generic_op(self, io, prog):
         if self.in_own:
             return _orig_generic_op(io, prog)
@@ -143,6 +192,11 @@ class Overlap:
         if not self.queue:
             return _orig_generic_op(io, prog)
         proxy, k = self.queue.pop(0)
+        if isinstance(proxy, GateStage):
+            prog = proxy.attach(prog)  # asserts disjoint cores
+            self.gfilled = proxy
+            self.seen["attached"] += 1
+            return _orig_generic_op(list(io[:-1]) + proxy.fill_io + [io[-1]], prog)
         prog = proxy.st.attach(prog, (k / self.parts, (k + 1) / self.parts))  # asserts disjoint cores
         proxy.track.filled = k + 1  # a proxy's pieces attach in order, so its filled prefix is k + 1 parts
         self.seen["attached"] += 1
@@ -153,6 +207,9 @@ class Overlap:
         for t in self.tracks:
             out[t.name] = {"calls": t.n, "staged_kb_avg": round(t.staged_sum / max(1, t.n) / 1024, 1),
                            "staged_kb_max": t.staged // 1024, "cores": len(t.cores)}  # fmt: skip
+        if self.gorder:
+            out["gates"] = {"calls": self.gn, "staged": self.gstaged,
+                            "stage_cores": len(set().union(*(g.stage_cores for g in self.gstages.values())))}  # fmt: skip
         return out
 
 
