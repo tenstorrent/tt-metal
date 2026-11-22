@@ -36,6 +36,9 @@ constexpr bool ring = get_named_compile_time_arg_val("recipe_ring") != 0;
 // absolute positions, a local K tile mapped through the chunk groups' regions), 3 a block mask (sparse ring: the
 // wrapper gives each K tile of the chunk its valid columns, recipe_ring_tile_valid).
 constexpr uint32_t ring_mask = get_named_compile_time_arg_val("recipe_ring_mask");
+// Block mask rows (recipe::ring_mask == 3): K tiles per block. Each Q tile row has its own kept blocks
+// (recipe_ring_row_blocks), so one step can stack several Q blocks that keep different blocks of the chunk.
+constexpr uint32_t ring_block_tiles = get_named_compile_time_arg_val("recipe_ring_block_tiles");
 // Causal sliding window in keys (0: none): key k is visible to query q iff q - window < k <= q.
 constexpr uint32_t ring_window = get_named_compile_time_arg_val("recipe_ring_window");
 // KV-pad rotation: Q rows map to the sequence through the slab's wrap segments; K tiles past the cache or the logical

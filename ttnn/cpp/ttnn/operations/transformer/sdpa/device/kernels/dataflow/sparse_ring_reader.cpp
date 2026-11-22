@@ -412,10 +412,10 @@ void kernel_main() {
                     read_block(
                         q_generator, q_slice, q_local_padded_Nt, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
                 }
-                if constexpr (num_q_passes > 1) {
-                    // Fill cb_q_in to its capacity (resident_slots blocks) so compute pops it whole at the end of the
-                    // pass and every pass's Q starts at the buffer's base: compute addresses Q block i at i blocks past
-                    // the read pointer, which must not wrap.
+                // Fill cb_q_in to its capacity (resident_slots blocks): compute waits for and pops it whole, every
+                // pass's Q starts at the buffer's base (compute addresses Q block i at i blocks past the base, which
+                // must not wrap), and a stacked step's window may span blocks past the pass's last (never used).
+                {
                     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
                     const uint32_t pad_tiles = (resident_slots - n_res) * q_chunk_tiles;
                     if (pad_tiles > 0) {

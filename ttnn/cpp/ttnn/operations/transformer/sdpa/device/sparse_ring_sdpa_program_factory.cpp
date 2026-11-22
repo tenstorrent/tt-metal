@@ -805,36 +805,34 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     // NOTE: KernelDescriptors are built after chain construction.
 
-    // Circular buffers: the recipe compute layout (recipe_compute_program: CBs 0-16, 29-31; recipe_ring_cbs.hpp) with
-    // one region of the O and l banks (CBs 9, 13) per slot, each extra slot's maxima pair from CB kSlotMaxCb0, the
-    // pooled-column bias in the recipe's mask CB 15 (one row of tiles per Q tile row: the attn-mask layout), then the
-    // plan pages and the block counts.
+    // Circular buffers: the recipe compute layout (recipe_compute_program: CBs 0-16, 29-31; recipe_ring_cbs.hpp) for
+    // a step of `stack` stacked Q blocks, with one region of the O, l and maxima banks (CBs 9, 13, 10) and of Q per
+    // slot, the pooled-column bias in the recipe's mask CB 15 (one row of tiles per Q tile row of a block: the
+    // attn-mask layout), then the plan pages and the block counts.
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     const auto v_storage = recipes::recipe_kv_storage(gathered_input_tensor_v.dtype());
-    tt::tt_metal::ProgramDescriptor recipe_program = recipes::recipe_compute_program(
-        policy,
-        core_grid_set,
-        1,
-        Sq_chunk_t,
-        Sk_chunk_t,
-        DHt,
-        scale_value,
-        vDHt,
-        v_storage != policy.selection.kv_storage ? std::optional<recipes::KVStorage>(v_storage) : std::nullopt,
-        q_df);
-    auto& recipe_compute = recipe_program.kernels.front();
+    const auto make_recipe_program = [&](uint32_t stack) {
+        return recipes::recipe_compute_program(
+            policy,
+            core_grid_set,
+            1,
+            stack * Sq_chunk_t,
+            Sk_chunk_t,
+            DHt,
+            scale_value,
+            vDHt,
+            v_storage != policy.selection.kv_storage ? std::optional<recipes::KVStorage>(v_storage) : std::nullopt,
+            q_df);
+    };
     const bool has_block_counts = tensor_args.block_counts.has_value();
     const uint32_t block_counts_bytes = tt::round_up(mask_n_blocks_pad, 32u);
     // The block mask covers keys past a block's real tokens (recipe_ring_mask 3): no key-bias tiles.
     const uint32_t key_bias_tiles = 0;
-    constexpr uint32_t kSparsePlanCb = 17, kBlockCountsCb = 18, kSlotMaxCb0 = 33;
+    constexpr uint32_t kSparsePlanCb = 17, kBlockCountsCb = 18;
     constexpr uint32_t kPooledBiasCb = 15;  // the recipe's attn-mask CB
-    // The BF16 recipes' maxima tiles (CBs 10 / 11).
-    const uint32_t state_tile_bytes = 2048u;
-    const auto state_df = tt::DataFormat::Float16_b;
-    const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages) {
-        tt::tt_metal::ProgramDescriptor::CBDescriptors cbs = recipe_program.cbs;
+    const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, uint32_t stack) {
+        tt::tt_metal::ProgramDescriptor::CBDescriptors cbs = make_recipe_program(stack).cbs;
         for (auto& cb : cbs) {
             auto& format = cb.format_descriptors.front();
             const uint32_t page = format.page_size;
@@ -844,6 +842,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 case recipe_ring_cb::v: cb.total_size = v_piece_tiles * kv_pages * page; break;
                 case recipe_ring_cb::out_b: cb.total_size = Sq_chunk_t * vDHt * 2 * slots * page; break;
                 case recipe_ring_cb::sum_b: cb.total_size = Sq_chunk_t * slots * page; break;
+                case recipe_ring_cb::max_a: cb.total_size = Sq_chunk_t * slots * page; break;
                 case recipe_ring_cb::out:
                     // The writer drains one Q block at a time; a block that kept nothing is pushed whole (zeros).
                     format.data_format = out_df;
@@ -861,10 +860,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                     .buffer_index = static_cast<uint8_t>(id), .data_format = df, .page_size = page_size}}},
             });
         };
-        for (uint32_t s = 1; s < slots; ++s) {
-            add_cb(kSlotMaxCb0 + 2 * (s - 1), state_tile_bytes, Sq_chunk_t, state_df);
-            add_cb(kSlotMaxCb0 + 2 * (s - 1) + 1, state_tile_bytes, Sq_chunk_t, state_df);
-        }
         if (pooled_route) {
             add_cb(kPooledBiasCb, 2048, Sq_chunk_t * Sk_chunk_t, tt::DataFormat::Float16_b);
         }
@@ -877,9 +872,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
         return cbs;
     };
-    const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages) -> uint64_t {
+    const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages, uint32_t stack = 1) -> uint64_t {
         uint64_t bytes = 0;
-        for (const auto& cb : lay_out_cbs(slots, kv_pages)) {
+        for (const auto& cb : lay_out_cbs(slots, kv_pages, stack)) {
             bytes += cb.total_size;
         }
         return bytes;
@@ -890,9 +885,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // each working core needs at least P blocks (no empty pass; group members stay in lockstep).
     // The live L1 top is not in the program hash: a cached program keeps the S of the call that built it.
     const uint64_t usable_l1 = ttnn::operations::core::available_program_l1_capacity(mesh_device);
-    // Slot maxima CB pairs from kSlotMaxCb0 below the 64 CBs.
-    const uint32_t recipe_max_slots = 1u + (64u - kSlotMaxCb0) / 2u;
-    uint32_t max_slots = std::min({kResidentMaxSlots, max_q_per_core, recipe_max_slots});
+    uint32_t max_slots = std::min(kResidentMaxSlots, max_q_per_core);
     if (args.q_blocks_per_pass.has_value()) {
         max_slots = std::min(max_slots, *args.q_blocks_per_pass);
     }
@@ -953,7 +946,22 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         kv_cb_pages,
         cb_bytes_for_slots(resident_slots, kv_cb_pages),
         usable_l1);
-    desc.cbs = lay_out_cbs(resident_slots, kv_cb_pages);
+    // Stacked step: the most slots per recipe step that fit beside the pass's slots (at most the recipe's Q chunk of
+    // kRecipeMaxQTiles rows; stacked blocks must align with the BF16 recipes' two-row groups).
+    constexpr uint32_t kRecipeMaxQTiles = 32;
+    uint32_t stack_slots = block_tiles % 2 == 0 ? std::min(resident_slots, kRecipeMaxQTiles / Sq_chunk_t) : 1u;
+    while (stack_slots > 1 && cb_bytes_for_slots(resident_slots, kv_cb_pages, stack_slots) > usable_l1) {
+        --stack_slots;
+    }
+    log_debug(
+        tt::LogOp,
+        "SparseRingSDPA: {} Q blocks per step ({} of {} B of L1 for CBs)",
+        stack_slots,
+        cb_bytes_for_slots(resident_slots, kv_cb_pages, stack_slots),
+        usable_l1);
+    desc.cbs = lay_out_cbs(resident_slots, kv_cb_pages, stack_slots);
+    const tt::tt_metal::ProgramDescriptor recipe_program = make_recipe_program(stack_slots);
+    const auto& recipe_compute = recipe_program.kernels.front();
     const uint32_t cb_q_in = recipe_ring_cb::q;
     const uint32_t cb_k_in = recipe_ring_cb::k;
     const uint32_t cb_v_in = recipe_ring_cb::v;
@@ -1178,7 +1186,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"cb_block_counts", cb_block_counts},
         {"key_bias_tiles", key_bias_tiles},
         {"cb_key_bias", cb_key_bias},
-        {"slot_max_cb0", kSlotMaxCb0},
+        {"stack_slots", stack_slots},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = named_args;
@@ -1194,12 +1202,15 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     auto recipe_args = recipes::recipe_named_args(recipe_compute.named_compile_time_args);
     recipes::set_named_arg(recipe_args, "recipe_ring", 1);
     recipes::set_named_arg(recipe_args, "recipe_ring_mask", 3);
+    recipes::set_named_arg(recipe_args, "recipe_ring_block_tiles", block_tiles);
     recipes::set_named_arg(recipe_args, "recipe_kv_hold", 1);
     recipes::set_named_arg(recipe_args, "recipe_mask", pooled_route ? 1u : 0u);
     recipes::set_named_arg(recipe_args, "recipe_mask_flagged", pooled_route ? 1u : 0u);
     compute_kernel.named_compile_time_args.insert(
         compute_kernel.named_compile_time_args.end(), recipe_args.begin(), recipe_args.end());
-    compute_kernel.defines = recipe_compute.defines;
+    // The granularity defines of a one-block step (they divide the stacked step's counts too): the stacked step's
+    // larger divisors only unroll the helpers further (kernel config buffer).
+    compute_kernel.defines = stack_slots == 1 ? recipe_compute.defines : make_recipe_program(1).kernels.front().defines;
     // Built at O2 to fit the kernel config buffer.
     compute_kernel.opt_level = recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2);
     compute_kernel.config = recipe_compute.config;
