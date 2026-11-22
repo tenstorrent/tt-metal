@@ -294,14 +294,31 @@ class _DataFiles:
         self.fds.clear()
 
 
-def _raise_partly_restored(err: Exception, at: str, placed: list[str], total: int) -> None:
+def _partly_restored_advice(shared_mesh: bool) -> str:
+    """What a load that stopped after placing tensors tells its caller to do. Ranks that share a mesh must make the
+    same device allocations in the same order, and ranks that stopped at different tensors no longer have, so on such
+    a mesh the job has to restart; elsewhere the model can be loaded again."""
+    if shared_mesh:
+        return (
+            "the model and optimizer are partly restored, and the ranks sharing this mesh may now hold different "
+            "device allocations: end the job and restart it instead of loading again"
+        )
+    return "the model and optimizer are partly restored: load again or discard them"
+
+
+def _shares_mesh(local: set[tuple[int, ...]]) -> bool:
+    """Whether other ranks hold devices of this process's mesh."""
+    return len(local) < prod(list(mesh_device().shape))
+
+
+def _raise_partly_restored(err: Exception, at: str, placed: list[str], total: int, shared_mesh: bool = False) -> None:
     """Re-raise ``err``, as a ``CheckpointError`` that says the live state is partly restored once a tensor was
-    placed."""
+    placed, and what to do about it (``_partly_restored_advice``)."""
     if not placed:
         raise err
     raise CheckpointError(
         f"load failed at {at} ({type(err).__name__}: {err}) after {len(placed)} of {total} tensors were placed (the "
-        f"first: {placed[0]}); the model and optimizer are partly restored: load again or discard them"
+        f"first: {placed[0]}); {_partly_restored_advice(shared_mesh)}"
     ) from err
 
 
@@ -366,7 +383,7 @@ def _read_and_place(
                 pending = submit(keys[position + 1][1]) if position + 1 < len(keys) else None
                 _place(by_key[key], arrays, device, local)
             except Exception as err:
-                _raise_partly_restored(err, key, placed, len(keys))
+                _raise_partly_restored(err, key, placed, len(keys), _shares_mesh(local))
             placed.append(key)
             read_s += t_read_done - t_key
             place_s += time.perf_counter() - t_read_done
@@ -404,12 +421,14 @@ def load(
     the train state stored and the names restored.
 
     Everything that can be checked without reading tensor data is checked before the first tensor is placed: keys,
-    shapes, dtypes, layouts, param groups, the sizes of the data files and the stored RNG state. A failure after that
-    (a read error, the device out of memory) leaves the model and optimizer partly restored; the ``CheckpointError``
-    raised then says how many tensors were placed, and the model should be loaded again or discarded. A scheduler or
-    dataloader without a ``set_state_dict`` is refused before anything is placed; one that refuses its state can only
-    say so after, and raises a ``CheckpointError`` naming it, with the tensors, the optimizer scalars and the scheduler
-    (when the dataloader refuses) already restored.
+    shapes, dtypes, layouts, param groups, the sizes of the data files and the stored RNG state. A failure after that (a
+    read error, the device out of memory) leaves the model and optimizer partly restored; the ``CheckpointError`` raised
+    then says how many tensors were placed, and the model should be loaded again or discarded. On a mesh several ranks
+    share, the ranks may then have placed different tensors, and such a mesh needs every rank to make the same device
+    allocations in the same order: the error then says to end the job and restart it instead of loading again. A
+    scheduler or dataloader without a ``set_state_dict`` is refused before anything is placed; one that refuses its
+    state can only say so after, and raises a ``CheckpointError`` naming it, with the tensors, the optimizer scalars and
+    the scheduler (when the dataloader refuses) already restored.
 
     Under ``tt-run`` with several ranks the call is collective (the package docstring has the rules): every rank
     restores the shards of the coordinates it holds, and ``strict`` judges unexpected entries over the union of the
@@ -544,8 +563,8 @@ def load(
                 # Another rank's failure stopped the load after this rank placed tensors; a failure of this rank's
                 # own (the cause) already says how many it placed.
                 raise type(err)(
-                    f"{err}; rank {group.rank} had placed {len(placed)} of {len(plan.keys)} tensors, so the model and "
-                    f"optimizer are partly restored: load again or discard them"
+                    f"{err}; rank {group.rank} had placed {len(placed)} of {len(plan.keys)} tensors, so "
+                    f"{_partly_restored_advice(_shares_mesh(local))}"
                 ) from err
             raise
         stats["read_and_place_s"] = time.perf_counter() - t1

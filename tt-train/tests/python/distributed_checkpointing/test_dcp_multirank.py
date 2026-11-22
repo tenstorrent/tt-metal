@@ -309,6 +309,7 @@ def test_a_rank_that_placed_its_tensors_says_so_when_another_rank_fails(two_rank
             assert f"; rank 0 had placed {n} of {n} tensors, so the model and optimizer are partly restored" in message
         else:
             assert "rank 1 had placed" not in message, "a failing rank's own message already counts its tensors"
+        assert "end the job and restart it instead of loading again" in message, "the ranks share a mesh"
     finally:
         ttnn.distributed_context_barrier()
 
