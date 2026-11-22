@@ -413,7 +413,7 @@
       timeout: 54
       tier: 2
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -448,7 +448,7 @@
       timeout: 12
       tier: 2
       release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -471,7 +471,7 @@
       timeout: 52
       tier: 2
       release_ready: false
-  owner_id: U08RL15T4N8 # Danilo Djekic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -616,7 +616,7 @@
       timeout: 255
       tier: 2
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -683,7 +683,7 @@
       timeout: 47
       tier: 2
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -738,7 +738,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -763,7 +763,7 @@
       timeout: 10
       tier: 2
       release_ready: false
-  owner_id: U08NCAT9V9N
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -2320,7 +2320,7 @@
       timeout: 25
       tier: 1
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: shield
   budget_type: demo
   sp_config: sc4
@@ -2493,7 +2493,7 @@
       timeout: 90
       tier: 1
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: shield
   budget_type: demo
   sp_config: sc4
@@ -2525,7 +2525,7 @@
     bh_sc1_high_power:
       # 30 killed the leg at 38 min on run 34831600450, mid-bringup.
       timeout: 60
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: shield
   budget_type: demo
   sp_config: sc1
@@ -2553,7 +2553,7 @@
       # K3's 60: its L24 leg was still in bringup at 38 min on CI (run 34831600450), where weight load
       # is NFS-bound. Locally the whole launcher took about 6 min at 96 slots (four ~265 ms chunks).
       timeout: 60
-  owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: shield
   budget_type: demo
   sp_config: sc1
