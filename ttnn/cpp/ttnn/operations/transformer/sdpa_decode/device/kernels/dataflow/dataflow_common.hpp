@@ -860,6 +860,121 @@ void read_v(
     cb_v.push_back(v_chunk_tiles);
 }
 
+#ifdef SDPA_DECODE_TWO_NOC
+#ifndef SDPA_DECODE_K_GROUP
+#define SDPA_DECODE_K_GROUP 2  // K tiles per transaction-id group
+#endif
+#ifndef SDPA_DECODE_K_WINDOW
+#define SDPA_DECODE_K_WINDOW 4  // groups in flight per NOC (<= 14)
+#endif
+// K stream for non-paged K, no mask, V read from K's L1 buffer (flash MLA decode). K tiles alternate between the two
+// NOCs by row. Each NOC keeps a rolling window of up to SDPA_DECODE_K_WINDOW groups of SDPA_DECODE_K_GROUP reads in
+// flight, each group tagged with its own transaction id (1..WINDOW), so the stream does not drain at every barrier
+// inside a chunk. K tile column `const_col` (if < DHt) holds the same bytes for every key, so it is read only while
+// each K buffer slot is filled for the first time. Same tiles in the same L1 slots as read_kv_mask_chunks: the output
+// is unchanged.
+template <uint32_t DHt, uint32_t vDHt, uint32_t cb_k_in, uint32_t cb_v_in, uint32_t const_col, typename KReaderType>
+void read_k_chunks_two_noc(
+    uint32_t k_chunk_start,
+    uint32_t k_chunk_end,
+    uint32_t k_start_tile_id,
+    uint32_t Sk_chunk_t,
+    uint32_t k_chunk_tiles,
+    uint32_t v_chunk_tiles,
+    const KReaderType& k_reader,
+    uint32_t k_tile_bytes,
+    uint32_t v_tile_bytes) {
+    constexpr uint32_t GROUP = SDPA_DECODE_K_GROUP;
+    constexpr uint32_t WIN = SDPA_DECODE_K_WINDOW;
+    static_assert(WIN >= 1 && WIN <= 14, "trids 1..14 for K, 15 for the V copy");
+    constexpr uint32_t V_TRID = 15;
+    Noc noc0;
+    const uint8_t noc_id = noc0.get_noc_id();
+    Noc noc1(1 - noc_id);
+    const Noc* nocs[2] = {&noc0, &noc1};
+    const uint32_t my_noc_x = my_x[noc_id];
+    const uint32_t my_noc_y = my_y[noc_id];
+    CircularBuffer cb_k(cb_k_in);
+    CircularBuffer cb_v(cb_v_in);
+    // chunks until every K slot has been written once (no skipping unless the buffer holds whole chunks)
+    const uint32_t k_pages = get_local_cb_interface(cb_k_in).fifo_num_pages;
+    const uint32_t full_chunks = (k_pages % k_chunk_tiles == 0) ? k_pages / k_chunk_tiles : 0xFFFFFFFF;
+
+    uint32_t grp[2] = {0, 0};  // groups started per NOC
+    uint32_t cnt[2] = {0, 0};  // reads in the open group per NOC
+    auto trid_of = [](uint32_t g) { return 1 + g % WIN; };
+    for (uint32_t k_chunk = k_chunk_start, i = 0; k_chunk < k_chunk_end; ++k_chunk, ++i) {
+        const uint32_t first[2] = {grp[0], grp[1]};
+        cb_k.reserve_back(k_chunk_tiles);
+        const uint32_t k_base = cb_k.get_write_ptr();
+        const bool skip_const = i >= full_chunks;
+        uint32_t l1 = k_base;
+        for (uint32_t col = 0; col < DHt; ++col) {
+            if (col == const_col && skip_const) {
+                l1 += Sk_chunk_t * k_tile_bytes;
+                continue;
+            }
+            uint32_t page = k_start_tile_id + col;
+            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+                const uint32_t n = row & 1;
+                if (cnt[n] == 0 && grp[n] >= WIN) {  // reuse of a trid: wait for group grp - WIN
+                    nocs[n]->async_read_barrier<NocOptions::TXN_ID>({.trid = trid_of(grp[n])});
+                }
+                nocs[n]->async_read<NocOptions::TXN_ID>(
+                    k_reader,
+                    CoreLocalMem<uint32_t>(l1),
+                    k_tile_bytes,
+                    {.page_id = page},
+                    {},
+                    {.trid = trid_of(grp[n])});
+                if (++cnt[n] == GROUP) {
+                    cnt[n] = 0;
+                    ++grp[n];
+                }
+                page += DHt;
+                l1 += k_tile_bytes;
+            }
+        }
+        // close open groups, then wait for this chunk's groups whose trid was not reused (older ones were waited)
+        for (uint32_t n = 0; n < 2; ++n) {
+            if (cnt[n]) {
+                cnt[n] = 0;
+                ++grp[n];
+            }
+            for (uint32_t g = (grp[n] > first[n] + WIN) ? grp[n] - WIN : first[n]; g < grp[n]; ++g) {
+                nocs[n]->async_read_barrier<NocOptions::TXN_ID>({.trid = trid_of(g)});
+            }
+        }
+        cb_k.push_back(k_chunk_tiles);
+        k_start_tile_id += k_chunk_tiles;
+
+        // V chunk (transpose of K) from K's L1 buffer
+        cb_v.reserve_back(v_chunk_tiles);
+        uint32_t v_write_ptr = cb_v.get_write_ptr();
+        UnicastEndpoint v_src;
+        for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+            uint32_t k_read_ptr = k_base + row * k_tile_bytes;
+            for (uint32_t col = 0; col < vDHt; ++col) {
+                noc0.async_read<NocOptions::TXN_ID>(
+                    v_src,
+                    CoreLocalMem<uint32_t>(v_write_ptr),
+                    v_tile_bytes,
+                    {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = k_read_ptr},
+                    {},
+                    {.trid = V_TRID});
+                v_write_ptr += v_tile_bytes;
+                k_read_ptr += Sk_chunk_t * k_tile_bytes;
+            }
+        }
+        noc0.async_read_barrier<NocOptions::TXN_ID>({.trid = V_TRID});
+        cb_v.push_back(v_chunk_tiles);
+    }
+    // sticky packet tags back to the default transaction id
+    noc_async_read_set_trid(0, noc_id);
+    noc_async_read_set_trid(0, 1 - noc_id);
+}
+#endif
+
 template <
     uint32_t DHt,
     uint32_t vDHt,
@@ -890,6 +1005,26 @@ void read_kv_mask_chunks(
     uint32_t k_tile_bytes,
     uint32_t v_tile_bytes,
     uint32_t PSt) {
+#ifdef SDPA_DECODE_TWO_NOC
+    if constexpr (reuse_k && !use_attention_mask) {
+#ifdef SDPA_DECODE_K_CONST_COL
+        constexpr uint32_t const_col = SDPA_DECODE_K_CONST_COL;
+#else
+        constexpr uint32_t const_col = 0xFFFFFFFF;  // none
+#endif
+        read_k_chunks_two_noc<DHt, vDHt, cb_k_in, cb_v_in, const_col>(
+            k_chunk_start,
+            k_chunk_end,
+            k_start_tile_id,
+            Sk_chunk_t,
+            k_chunk_tiles,
+            v_chunk_tiles,
+            k_reader,
+            k_tile_bytes,
+            v_tile_bytes);
+        return;
+    }
+#endif
     Noc noc;
     CircularBuffer cb_k(cb_k_in);
     CircularBuffer cb_v(cb_v_in);

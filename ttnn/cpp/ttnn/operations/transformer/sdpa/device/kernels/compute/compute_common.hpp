@@ -1131,11 +1131,13 @@ ALWI void matmul_blocks(
     const bool& transpose,
     const bool& add_mask = false,
     const uint32_t& mask_cb = 0,
-    const uint32_t& zero_cb = 0) {
+    const uint32_t& zero_cb = 0,
+    const uint32_t& k0 = 0) {
     // precondition: in0_cb has M*K produced
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
+    // k0: inner tiles below k0 are skipped; the caller guarantees in0 is zero there, so the sums are unchanged
 
     CircularBuffer cb_in0(in0_cb);
     CircularBuffer cb_in1(in1_cb);
@@ -1166,10 +1168,10 @@ ALWI void matmul_blocks(
             tile_regs_acquire();
 
             uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
+            uint32_t in0_index = in0_index_offset + k0;
+            uint32_t in1_index = in1_index_offset + k0 * N;
 
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+            for (uint32_t inner_dim = k0; inner_dim < in0_block_w; inner_dim++) {
                 matmul_block(
                     in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
                 in0_index++;

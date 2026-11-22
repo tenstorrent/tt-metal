@@ -33,6 +33,12 @@ struct SDPAProgramConfig {
     // narrowest pack, in tiles, that goes out as one block rather than tile by tile. Unset keeps the architecture
     // default, 8 on Wormhole and 2 on Blackhole.
     std::optional<uint32_t> min_blocked_pack_tiles;
+    // Decode only: Q is zero on its first qk_skip_head_dim columns (a multiple of 32, below the K head dim), so the
+    // QK^T matmul skips those columns; the result is the same as with 0, which multiplies every column.
+    uint32_t qk_skip_head_dim = 0;
+    // Decode with non-paged K, no K multicast, V read from K (flash MLA): this K tile column (32 columns) holds the
+    // same bytes for every key, so the reader loads it from DRAM only while each K buffer slot is first filled.
+    std::optional<uint32_t> const_k_tile_col;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

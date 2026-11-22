@@ -427,7 +427,13 @@ void kernel_main() {
                     true,
                     add_mask_fusion,
                     mask_cb_to_use,
-                    cb_zero_in);
+                    cb_zero_in,
+#ifdef SDPA_DECODE_QK_SKIP_TILES
+                    SDPA_DECODE_QK_SKIP_TILES  // Q is zero on these leading tiles of the head dim
+#else
+                    0
+#endif
+                );
 
                 /* QK += MASK */
                 // Apply block padding mask for every chunk when block_size < TILE_HEIGHT.

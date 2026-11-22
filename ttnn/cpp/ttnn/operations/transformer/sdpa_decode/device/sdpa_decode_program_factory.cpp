@@ -929,6 +929,17 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
 
+    const uint32_t qk_skip_head_dim = program_config.has_value() ? program_config->qk_skip_head_dim : 0;
+    TT_FATAL(
+        qk_skip_head_dim % TILE_WIDTH == 0 && qk_skip_head_dim < DH,
+        "qk_skip_head_dim ({}) must be a multiple of {} below the K head dim ({})",
+        qk_skip_head_dim,
+        TILE_WIDTH,
+        DH);
+    if (qk_skip_head_dim > 0) {
+        compute_defines["SDPA_DECODE_QK_SKIP_TILES"] = std::to_string(qk_skip_head_dim / TILE_WIDTH);
+    }
+
     KernelDescriptor::Defines compute_defines_vec;
     compute_defines_vec.reserve(compute_defines.size());
     for (auto& [k, v] : compute_defines) {
@@ -950,6 +961,14 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         two_noc_k ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
     if (two_noc_k) {
         reader_desc.defines.emplace_back("SDPA_DECODE_TWO_NOC", "1");
+    }
+    if (program_config.has_value() && program_config->const_k_tile_col.has_value()) {
+        const uint32_t col = program_config->const_k_tile_col.value();
+        TT_FATAL(col < DHt, "const_k_tile_col ({}) must be below the K head dim in tiles ({})", col, DHt);
+        // only the two-NOC flash MLA reader (read_k_chunks_pipelined) uses it
+        if (two_noc_k && reuse_k) {
+            reader_desc.defines.emplace_back("SDPA_DECODE_K_CONST_COL", std::to_string(col));
+        }
     }
     reader_desc.config = DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
