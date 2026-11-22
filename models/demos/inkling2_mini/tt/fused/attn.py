@@ -204,6 +204,8 @@ class AttnPrep:
         dyn = int(self.dyn and not q)
         has_tau = int(self.dyn and q)
         mass = int(self.dyn and kind == "v")
+        # bfp4 far cache (opt-in): the writer converts the bfp8 row
+        far4 = int(bool(self.dyn and not q) and state.kv_full.dtype == ttnn.bfloat4_b)
         r_rt, w_rt = [], []
         for g, _ in enumerate(cores):
             r = [proj.buffer_address(), (self.q_taps if q else self.kv_taps[kind]).buffer_address()]
@@ -275,8 +277,10 @@ class AttnPrep:
         else:
             out_dtype = state.k_ring.dtype
             assert out_dtype in (ttnn.bfloat16, ttnn.bfloat8_b), out_dtype
-            assert not self.dyn or state.kv_full.dtype == out_dtype
-            named_w = dict(ndst=1 + int(self.dyn), bfp8=int(out_dtype == ttnn.bfloat8_b), mass=mass)
+            assert not self.dyn or state.kv_full.dtype in (out_dtype, ttnn.bfloat4_b), state.kv_full.dtype
+            assert not far4 or out_dtype == ttnn.bfloat8_b, "a bfp4 far cache needs bfp8 rings"
+            assert not (far4 and chain is not None), "bfp4 far cache: one-token prep only"
+            named_w = dict(ndst=1 + int(self.dyn), bfp8=int(out_dtype == ttnn.bfloat8_b), mass=mass, far4=far4)
             named_w["chain"] = int(chain is not None)
             writer = _kernel("attn_kv_writer.cpp", cores, named_w, w_rt, ttnn.WriterConfigDescriptor())
         out_page = 1088 if out_dtype == ttnn.bfloat8_b else 2048
@@ -298,7 +302,7 @@ class AttnPrep:
             _cb(19, out_dtype, 1, crs, page=out_page),
             _cb(20, out_dtype, 1, crs, page=out_page),
             _stage(24, crs),
-            _stage(25, crs, 1024),  # kv writer: slot indices + prefetched bfp8 exponent blocks
+            _stage(25, crs, 1536),  # kv writer: slot indices + prefetched bfp8 exponent (+ bfp4 mantissa) blocks
         ]
         return kernels, cbs
 

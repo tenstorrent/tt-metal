@@ -29,6 +29,8 @@ Global layers: logits `near ++ far ++ sink`, one softmax (HF), as two exact part
 """
 
 
+import os
+
 import torch
 
 import ttnn
@@ -70,6 +72,12 @@ FAR_OPTS = (
 # far call with the kv groups as the batch (q [1, 8, 3, 288], cache viewed as [8, 1, S, 288]): 16-row Q tiles, so
 # the softmax runs on half the rows; exact exp keeps it bit-equal to the 24-head call (custom C++ build only)
 FAR_GRP = hasattr(ttnn.SDPAProgramConfig, "exact_exp_half_tile")
+# opt-in, changes the output: far cache dtype (None: the cache dtype; ttnn.bfloat4_b with bfp8 rings halves the far
+# reads at long context). The decode writer converts the bfp8 row (round to nearest). Decode only: prefill
+# and multi-token verify refuse it.
+# INKLING_FAR_KV=bfp4 turns it on (fits 512K on one p100a: 10,368 B / token instead of 19,584).
+FAR_DTYPE = ttnn.bfloat4_b if os.environ.get("INKLING_FAR_KV") == "bfp4" else None
+FAR_CHUNK_BFP4 = 256  # bfp4 far cache: 256 beats 128 at 120K (615 vs 720 us per global use)
 # local ring (1024 slots): 4 cores per kv head x 256-key chunks, 37.4 -> 31.7 us per call vs the default 13 cores x 128
 # (each of 13 cores got < 1 chunk; the tree reduction dominated)
 LOCAL_CHUNK = 256
@@ -147,7 +155,7 @@ class FastAttentionState(AttentionState):
         self.kv_full = self.kv_grp = None
         if is_global:
             self.kv_full = ttnn.zeros(
-                [1, N_KV, max_ctx, KV_WIDTH], dtype=cache_dtype, layout=ttnn.TILE_LAYOUT, device=device
+                [1, N_KV, max_ctx, KV_WIDTH], dtype=FAR_DTYPE or cache_dtype, layout=ttnn.TILE_LAYOUT, device=device
             )
             # the same buffer as [8, 1, max_ctx, 288] (the far call with kv groups as the batch)
             self.kv_grp = ttnn.reshape(self.kv_full, [N_KV, 1, max_ctx, KV_WIDTH])
@@ -247,8 +255,9 @@ class Inkling2AttentionFast(Inkling2Attention):
         self.q_pad = put(torch.zeros(1, 1, N_HEADS, V_WIDTH))
         # far q is zero on the v / mass columns: QK skips them; the mass column block [1, 0 x 31] is the same for
         # every written key (unwritten keys are causally masked), so it is read once per K buffer slot
-        self.far_cfg = sdpa_cfg(FAR_CHUNK, **FAR_OPTS)
-        self.far_grp_cfg = sdpa_cfg(FAR_CHUNK, **FAR_OPTS, exact_exp_half_tile=True) if FAR_GRP else None
+        self.far_chunk = FAR_CHUNK_BFP4 if FAR_DTYPE == ttnn.bfloat4_b else FAR_CHUNK
+        self.far_cfg = sdpa_cfg(self.far_chunk, **FAR_OPTS)
+        self.far_grp_cfg = sdpa_cfg(self.far_chunk, **FAR_OPTS, exact_exp_half_tile=True) if FAR_GRP else None
         self.kv_full_shard = ttnn.create_sharded_memory_config(
             shape=(32, KV_WIDTH),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
@@ -319,8 +328,8 @@ class Inkling2AttentionFast(Inkling2Attention):
             b.x_base = x_base
 
     def new_state(self, max_ctx, cache_dtype=ttnn.bfloat16):
-        if self.is_global and max_ctx % FAR_CHUNK:
-            raise ValueError(f"max_ctx {max_ctx} not a multiple of {FAR_CHUNK}")
+        if self.is_global and max_ctx % self.far_chunk:
+            raise ValueError(f"max_ctx {max_ctx} not a multiple of {self.far_chunk}")
         return FastAttentionState(self.device, self.is_global, max_ctx, cache_dtype)
 
     # ---------------------------------------------------------------- pieces

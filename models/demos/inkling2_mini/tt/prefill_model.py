@@ -843,6 +843,9 @@ class Inkling2Prefill:
             qs = ttnn.typecast(ttnn.multiply(_f32(q), SCALE), ttnn.bfloat16)  # kernel adds mask to raw q.k
 
         if is_global:  # far cache rows [v | 1, 0 x 31 | k] (attention_fast kv_full)
+            # shortcut: no prefill write for the bfp4 far cache opt-in (attention_fast FAR_DTYPE); port G3's FarFill4
+            # when prefill must run with it
+            assert st.kv_full.dtype == k_c.dtype, "prefill: bfp4 far cache (FAR_DTYPE) not supported"
             mass = _rows(self.c_mass[cdt], 0, t)
             ttnn.fill_cache(st.kv_full, ttnn.concat([v_c, mass, k_c], dim=-1), 0, update_idx=s)
         if self.r3:

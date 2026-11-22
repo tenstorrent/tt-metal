@@ -44,6 +44,27 @@ FORCE_INLINE void copy_tile_row(uint32_t src, uint32_t sr, uint32_t dst, uint32_
     }
 }
 
+// bfp8 mantissa byte (sign | 7 bits, shared exponent) -> bfp4 nibble (sign | 3 bits, same exponent): round to
+// nearest, ties to even, saturate at 7, zero without sign (as the host packer, blockfloat_common.cpp).
+FORCE_INLINE uint32_t bfp8_to_bfp4_nibble(uint32_t b) {
+    const uint32_t m = b & 0x7f, rem = m & 15;
+    uint32_t q = m >> 4;
+    if (rem > 8 || (rem == 8 && (q & 1))) {
+        ++q;
+    }
+    q = q > 7 ? 7 : q;
+    return q ? ((b >> 7) << 3) | q : 0;
+}
+
+// 2 n bfp8 mantissa bytes at src -> n bfp4 bytes at dst (element 2j in the low nibble of byte j)
+FORCE_INLINE void bfp8_to_bfp4(uint32_t src, uint32_t dst, uint32_t n) {
+    volatile tt_l1_ptr uint8_t* s = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src);
+    volatile tt_l1_ptr uint8_t* d = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst);
+    for (uint32_t j = 0; j < n; ++j) {
+        d[j] = bfp8_to_bfp4_nibble(s[2 * j]) | (bfp8_to_bfp4_nibble(s[2 * j + 1]) << 4);
+    }
+}
+
 FORCE_INLINE uint32_t row_offset(uint32_t r, uint32_t es) { return (r >> 4) * 512 * es + (r & 15) * 16 * es; }
 
 // Zero `bytes` (multiple of 16) of L1 at dst with NOC reads of the hardware zero region.

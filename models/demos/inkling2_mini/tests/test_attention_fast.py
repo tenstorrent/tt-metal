@@ -238,6 +238,45 @@ def test_fast_trace_replay_deterministic(device, is_global):
     assert torch.isfinite(first).all()
 
 
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_far_bfp4_rows(device, monkeypatch):
+    """bfp4 far cache (FAR_DTYPE opt-in, bfp8 rings): the rows decode writes equal the host bfp4 rounding of the
+    ring's bfp8 rows ([v | 1, 0 x 31 | k]); the neighbouring rows of the same tiles keep their values."""
+    import models.demos.inkling2_mini.tt.attention_fast as AF
+
+    monkeypatch.setattr(AF, "FAR_DTYPE", ttnn.bfloat4_b)
+    sd = ta.random_state_dict(True, seed=11)
+    p, steps = 3001, 3  # rows 3001..3003: odd / even rows of one 16 B mantissa block, mid tile
+    inputs = ta.make_inputs(steps, True, seed=4)
+    runner = Runner(device, True, sd, 4096, ttnn.bfloat8_b)
+    xs = _xs(inputs, True)
+    runner.set_inputs(p, [x[0] for x in xs])
+    runner.capture()
+    pk, pv = seeded_prefix(p, seed=2)
+    runner.state.fill(pk, pv)
+    st = runner.state
+    assert st.kv_full.dtype == ttnn.bfloat4_b
+    before = ttnn.to_torch(st.kv_full).float()[0]
+    try:
+        for i in range(steps):
+            runner.set_inputs(p + i, [x[i] for x in xs])
+            runner.run()
+    finally:
+        runner.release()
+    after = ttnn.to_torch(st.kv_full).float()[0]
+    bfp4 = lambda t: ttnn.to_torch(ttnn.from_torch(t, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()  # noqa
+    k = ttnn.to_torch(st.k_ring).float()[0]
+    v = ttnn.to_torch(st.v_ring).float()[0]
+    rows = list(range(p, p + steps))
+    slots = [r % 1024 for r in rows]
+    mass = torch.zeros(8, steps, 32)
+    mass[..., 0] = 1.0
+    want = bfp4(torch.cat([v[:, slots], mass, k[:, slots]], dim=-1).unsqueeze(0))[0]
+    assert torch.equal(after[:, rows], want)
+    keep = [r for r in range(p - 32, p + 32) if r not in rows]
+    assert torch.equal(after[:, keep], before[:, keep])
+
+
 def _median_ms(device, trace, n=15):
     samples = []
     for _ in range(n):

@@ -12,9 +12,45 @@
 // back, so tokens that write rows of the same tile must not overlap. Runtime args after the destinations: wait,
 // next_x, next_y, has_next. With wait, the core waits on semaphore 0 (the previous token's writer) before it
 // reads the exponent blocks; after its writes land it increments the next token's semaphore.
+// far4: the far cache (last destination) is bfp4 (source bfp8): same exponent byte, each mantissa rounded to 3 bits
+//       (nearest, ties to even, as the host packer), two per byte (element 0 in the low nibble); the 16 B block
+//       holding the face row and its neighbour is prefetched, patched and written back.
 #include "attn_io.hpp"
 
 namespace {
+// bfp4 cache: offset of the 16 B block holding face f, row fr (8 B per face row) and of the row inside it
+FORCE_INLINE uint32_t bfp4_blk(uint32_t f, uint32_t fr) { return 64 + f * 128 + (fr & ~1u) * 8; }
+
+// Row r of a bfp4 cache's tiles page0 ..: like write_row's bfp8 case; mants holds, per chunk, the 64 B aligned block
+// read from the tile that contains the chunk's 16 B block.
+FORCE_INLINE void write_row4(
+    uint32_t base, uint32_t page0, uint32_t r, uint32_t src, uint32_t nchunks, uint32_t exps, uint32_t mants) {
+    const InterleavedAddrGen<true> dst = {.bank_base_address = base, .page_size = 576};
+    const uint32_t f0 = (r >> 4) * 2, fr = r & 15;
+    volatile tt_l1_ptr uint8_t* s = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src);
+    for (uint32_t c = 0; c < nchunks; c += 2) {
+        const uint32_t page = page0 + c / 2;
+        const uint32_t e_l1 = exps + (c / 2) * 64;
+        volatile tt_l1_ptr uint8_t* e = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(e_l1);
+        for (uint32_t h = 0; h < 2; ++h) {
+            e[(f0 + h) * 16 + fr] = s[c + h];
+            const uint32_t blk = bfp4_blk(f0 + h, fr);
+            const uint32_t l1 = mants + (c + h) * 64 + (blk & 63);  // the 16 B block inside the staged 64 B
+            attnio::bfp8_to_bfp4(src + 64 + (c + h) * 16, l1 + (fr & 1) * 8, 8);
+            noc_async_write(l1, dst.get_noc_addr(page, blk), 16);
+        }
+        noc_async_write(e_l1, dst.get_noc_addr(page, 0), 64);
+    }
+}
+
+FORCE_INLINE void read_mants4(uint32_t base, uint32_t page0, uint32_t r, uint32_t nchunks, uint32_t mants) {
+    const InterleavedAddrGen<true> dst = {.bank_base_address = base, .page_size = 576};
+    const uint32_t f0 = (r >> 4) * 2, fr = r & 15;
+    for (uint32_t c = 0; c < nchunks; ++c) {
+        const uint32_t blk = bfp4_blk(f0 + c % 2, fr);
+        noc_async_read(dst.get_noc_addr(page0 + c / 2, blk & ~63u), mants + c * 64, 64);
+    }
+}
 // Row r of the cache tiles page0 .. (one per pair of 16-element chunks): chunk c of the packed source (bf16: 32 B
 // at 32c; bfp8: exponent byte c and 16 mantissa bytes at 64 + 16c) -> face (r / 16) * 2 + c % 2, face row r % 16.
 // bfp8: exps holds the tiles' prefetched 64 B exponent blocks (one per tile), patched here and written back.
@@ -61,12 +97,15 @@ void kernel_main() {
     constexpr uint32_t bfp8 = get_named_compile_time_arg_val("bfp8");
     constexpr uint32_t mass = get_named_compile_time_arg_val("mass");
     constexpr uint32_t chain = get_named_compile_time_arg_val("chain");
+    constexpr uint32_t far4 = get_named_compile_time_arg_val("far4");
+    static_assert(!far4 || bfp8, "a bfp4 far cache needs bfp8 rows");
     constexpr uint32_t cb_out = 19, cb_mass = 20, cb_stage = 25;
     constexpr uint32_t tile_bytes = bfp8 ? 1088 : 2048;
 
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), attnio::ALIGN);
     const uint32_t h = get_arg_val<uint32_t>(0);
-    // stage: [64 d) slot index of destination d, then per destination 5 exponent blocks (4 row tiles + mass)
+    // stage: [64 d) slot index of destination d, then per destination 5 exponent blocks (4 row tiles + mass), then
+    // (far4) 10 staged mantissa blocks of the far cache (8 row chunks + 2 mass chunks)
     uint32_t base[ndst], page0[ndst], row0[ndst], r[ndst];  // row0: first tile of the cache row
     for (uint32_t d = 0; d < ndst; ++d) {
         const InterleavedAddrGen<true> pa = {.bank_base_address = get_arg_val<uint32_t>(1 + d * 5 + 4), .page_size = 4};
@@ -92,9 +131,18 @@ void kernel_main() {
         r[d] = pos & 31;
         if constexpr (bfp8) {  // prefetch the exponent blocks while compute runs
             const uint32_t exps = stage + 64 * ndst + d * 5 * 64;
-            read_exps(base[d], tile_bytes, page0[d], 4, exps);
+            const bool d4 = far4 && d == ndst - 1;
+            const uint32_t tb = d4 ? 576 : tile_bytes;
+            read_exps(base[d], tb, page0[d], 4, exps);
             if (mass && d == ndst - 1) {
-                read_exps(base[d], tile_bytes, row0[d] + 4, 1, exps + 4 * 64);
+                read_exps(base[d], tb, row0[d] + 4, 1, exps + 4 * 64);
+            }
+            if (d4) {
+                const uint32_t mants = stage + 64 * ndst + ndst * 5 * 64;
+                read_mants4(base[d], page0[d], r[d], 8, mants);
+                if (mass) {
+                    read_mants4(base[d], row0[d] + 4, r[d], 2, mants + 8 * 64);
+                }
             }
         }
     }
@@ -106,6 +154,14 @@ void kernel_main() {
     const uint32_t src = get_read_ptr(cb_out);
     for (uint32_t d = 0; d < ndst; ++d) {
         const uint32_t exps = stage + 64 * ndst + d * 5 * 64;
+        if (far4 && d == ndst - 1) {
+            const uint32_t mants = stage + 64 * ndst + ndst * 5 * 64;
+            write_row4(base[d], page0[d], r[d], src, 8, exps, mants);
+            if (mass) {
+                write_row4(base[d], row0[d] + 4, r[d], get_read_ptr(cb_mass), 2, exps + 4 * 64, mants + 8 * 64);
+            }
+            continue;
+        }
         write_row(base[d], tile_bytes, page0[d], r[d], src, 8, exps, bfp8);
         if (mass && d == ndst - 1) {  // the far cache is the last destination; mass chunk at tile 4
             write_row(base[d], tile_bytes, row0[d] + 4, r[d], get_read_ptr(cb_mass), 2, exps + 4 * 64, bfp8);
