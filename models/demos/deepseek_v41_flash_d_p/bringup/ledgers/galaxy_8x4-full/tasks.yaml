@@ -6118,3 +6118,67 @@ tasks:
     metrics:
       noconv_*_wall_ms*: '> 0'
       noconv_*_max_abs_diff*: == 0
+- id: MB.6
+  title: 'OWNER 2026-11-21: bring the batching branch''s indexer BLOCK-MAX PRE-SELECTION (PB.BM, exact) to the shipped single-request
+    path; re-measure its threshold at 5120'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - MB.5
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.2_fresh_walls.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.4_slowdown.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.6_ladder.md
+  ab:
+    env:
+      INDEXER_BLOCK_SELECT: 'off'
+    change:
+      INDEXER_BLOCK_SELECT: 'on'
+  ab_mode: full
+  ab_rungs:
+  - last
+  brief:
+    prior_work: 'Batching branch PB.BM = e821084f82f: top-512 blocks (32 keys) by block max, then top-512 keys over those
+      blocks'' keys (exact: the selected sets equal, 0 mismatches); writer-core block max (indexer_score block_max_out) +
+      new fork folder ttnn/ttnn/bringup/block_select_ttnn (block_gather, block_keys, block_max_bf16); switch INDEXER_BLOCK_SELECT
+      with INDEXER_BLOCK_SELECT_MIN = 131072 visible keys on the single path (crossover ~111k keys measured at the 8192 chunk);
+      both programs built at warm-up. Single 8192 at 1M: 64.2k -> 67.9k new tok/s. Tests: tests/test_indexer_block_select.py
+      (selection sets on vs off), tests/perf/test_block_select_probe.py, test_bsel_score_probe.py; the fork''s tests/unit/test_block_select.py.'
+    details: 'Take PB.BM''s SINGLE-REQUEST parts (path-limited: `git show e821084f82f -- <files>` / git apply --3way: tt/indexer.py,
+      tt/settings.py, tt/runners/adapter.py''s warm-up of both programs, ttnn/ttnn/bringup/block_select_ttnn, the indexer_score
+      fork use, INDEX.md / __init__, the tests above; leave out the packed-only files (packed_glued.py, glued_derive.py, gather_hide.py:
+      this branch has no packed path)). Re-measure the crossover at the 5120 chunk (160 query rows a chip: the score / top-k
+      shapes differ from 8192''s 256) and set INDEXER_BLOCK_SELECT_MIN from the measurement. Exact: the selection-set test
+      (0 mismatches beyond 512th-value ties), the model outputs on vs off identical where sets are equal. Gate: the 5120 accept
+      units, the set test, the 5120 ladder (51200 .. 1024000), cold no-rebuild. Report the ladder on vs off in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.6_ladder.md
+      after the last gate check. Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_indexer_block_select.py && BRINGUP_CHUNK=5120
+      DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=51200,131072,139264,262144,524288,786432,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
+      program_builds_after_warmup_serving*: == 0
+      ids_uploads_per_chunk*: == 0
+      steady_tok_s_p*: '> 0'
+      idx_block_select_set_mismatches*: == 0

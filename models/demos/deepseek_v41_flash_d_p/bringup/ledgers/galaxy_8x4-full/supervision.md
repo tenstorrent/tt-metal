@@ -677,3 +677,7 @@
 - 17:20 on model_bringup: framework F298 parity (a46a236777f); QUEUED MB.5 (the no-conversion probe on the 5120 single path at 1M, tests only, outputs A == B). Launched --until MB.5.
 - 17:14 heartbeat: MB.5 agent active; watch armed.
 - 17:35 MB.5 ACCEPTED (tests-only probe, outputs equal). NO-CONVERSION at 5120 / 1M: 86.1-87.1 -> 85.1-85.9 ms (saving 0.2-2.0 ms, ~1%; device 0.26-0.49, pack host ~0.8). Both paths: ~1% at 1M.
+- 17:40 heartbeat: both queues empty (model_bringup at MB.5, ready to push; batching after PB.NC); waiting on the owner's next direction.
+- 18:10 heartbeat: idle, waiting on the owner (model_bringup push; batching next steps).
+- 18:40 idle (both queues empty); heartbeat cron stopped until work resumes. Waiting on the owner: model_bringup push; batching next steps.
+- 02:00 on model_bringup: F299 framework parity (e940ad9b422); QUEUED MB.6 (block-max port, single path only; threshold re-measured at 5120; gate = 5120 accept units + selection-set test + ladder + cold no-rebuild). Launched --until MB.6.
