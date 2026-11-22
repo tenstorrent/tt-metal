@@ -6182,3 +6182,36 @@ tasks:
       ids_uploads_per_chunk*: == 0
       steady_tok_s_p*: '> 0'
       idx_block_select_set_mismatches*: == 0
+- id: MB.7
+  title: 'OWNER 2026-11-21: the block-select threshold at 5120 (MB.6''s ladder: 262144 slower on the block path, 63.4k vs
+    67.3k; 524288+ faster): re-measure and set it so no rung regresses'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - MB.6
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt/settings.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.7_threshold.md
+  brief:
+    prior_work: 'MB.6 (9f7910f39e6): INDEXER_BLOCK_SELECT_MIN = 131072 keys (crossover estimated ~130k keys at 5120 from tests/perf/test_mb6_bsel_crossover.py).
+      Its A/B ladder (steady new tok/s, off -> on): 262144 (133632 keys, on the block path) 67.3k -> 63.4k (-5.7 %), 524288
+      64.3k -> 65.9k, 786432 60.7k -> 61.6k, 1024000 59.2k -> 61.9k; 51200..139264 below the threshold (same).'
+    details: 'Re-measure, block vs plain forced (the crossover probe and the ladder''s method: real previous chunk, warm-up,
+      10 timed runs, median, two runs), at 262144, 393216 and 524288 (5120 chunk, steady): is 262144''s -5.7 % real or noise?
+      Set INDEXER_BLOCK_SELECT_MIN (tt/settings.py, the default and its text) to the smallest key count at which the block
+      path is not slower in wall at any measured rung; no other change. Gate: the 5120 ladder (no rung slower than MB.6''s
+      off side beyond noise), cold no-rebuild. Report the table in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.7_threshold.md
+      after the last gate check.'
+  gate:
+    cmd: BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=51200,131072,139264,262144,524288,786432,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      steady_tok_s_p*: '> 0'
+      program_builds_after_warmup_serving*: == 0
+      ids_uploads_per_chunk*: == 0

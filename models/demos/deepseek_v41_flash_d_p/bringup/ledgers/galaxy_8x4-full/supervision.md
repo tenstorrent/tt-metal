@@ -684,3 +684,7 @@
 - 01:38 heartbeat: MB.6 agent active; watch armed.
 - 02:08 heartbeat: MB.6 agent active; watch armed.
 - 02:38 heartbeat: MB.6 agent active (~65 min); watch armed.
+- 02:55 MB.6 ACCEPTED -> 9f7910f39e6 (all 8 units PASS; selection sets 0 mismatches; cold no-rebuild 0). 5120 steady new
+  tok/s off -> on: 1M 59.2k -> 61.9k (+4.6 %), 786k +1.4 %, 524k +2.4 %, but 262144 (133632 keys, just above MIN 131072)
+  67.3k -> 63.4k (-5.7 %). QUEUED MB.7: re-measure 262144 / 393216 / 524288 block vs plain, set INDEXER_BLOCK_SELECT_MIN so no
+  rung regresses; gate 5120 ladder + cold no-rebuild.
