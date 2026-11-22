@@ -487,7 +487,7 @@ class ResidentDFlashRows:
             block_tables=[list(range(u * nb, (u + 1) * nb)) for u in range(users)],
             kv_block_size=block_size,
             rows=True,
-            groups=users,
+            groups=users * R // 8,  # (8 rows per group: a user per group at R = 8, two at R = 4)
             verify=R,
             taps=list(zip(tap_layers, self.taps)),
         )
@@ -557,6 +557,11 @@ class ResidentDFlashRows:
             tv = time.perf_counter()
             self._step([[t[u]] + drafts[u] for u in range(U)], p)
             g = self.greedy_rows()
+            if getattr(self, "logit_log", None) is not None:  # (diagnostics: {(user, position): logits})
+                lg = self.m.logits()[:, :, : self.d.vocab_chip].reshape(U * R, -1)[:, : self.vocab]
+                for u in range(U):
+                    for r in range(R):
+                        self.logit_log[("spec", u, p[u] + r)] = (r, lg[u * R + r].float().clone())
             te = time.perf_counter()
             acc = []
             for u in range(U):
@@ -598,6 +603,10 @@ class ResidentDFlashRows:
         while len(gen[0]) < n_new:
             self._step([[t[u]] * R for u in range(U)], p)
             g = self.greedy_rows()
+            if getattr(self, "logit_log", None) is not None:
+                lg = self.m.logits()[:, :, : self.d.vocab_chip].reshape(U * R, -1)[:, : self.vocab]
+                for u in range(U):
+                    self.logit_log[("greedy", u, p[u])] = lg[u * R].float().clone()
             t = [g[u][0] for u in range(U)]
             for u in range(U):
                 gen[u].append(t[u])

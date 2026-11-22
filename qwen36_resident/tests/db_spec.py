@@ -28,21 +28,25 @@ def main():
     faulthandler.enable()
     ap = argparse.ArgumentParser()
     ap.add_argument("--users", type=int, default=4)
+    ap.add_argument("--rows", type=int, default=8, help="verify rows per user (8: 4 users at most, 4: 8 users)")
     ap.add_argument("--prompt-len", type=int, default=256)
     ap.add_argument("--new", type=int, default=128)
     ap.add_argument("--corpus", default=CORPUS)
     ap.add_argument("--json", default=None)
+    ap.add_argument("--gaps", action="store_true", help="log logits; at each divergence the top-2 gaps")
     a = ap.parse_args()
     ids = torch.load(a.corpus)["ids"]
-    prompts = [ids[7000 * u + 101 : 7000 * u + 101 + a.prompt_len].tolist() for u in range(a.users)]
+    stride = (len(ids) - a.prompt_len - 101) // a.users  # (distinct corpus slices that fit, 8 users included)
+    prompts = [ids[stride * u + 101 : stride * u + 101 + a.prompt_len].tolist() for u in range(a.users)]
     mesh = open_mesh()
     out = dict(users=a.users, prompt_len=a.prompt_len, new=a.new)
     try:
         ck = Q.Checkpoint(Q.checkpoint_dir())
         t0 = time.time()
-        eng = ResidentDFlashRows(mesh, ck, users=a.users, max_pos=a.prompt_len + a.new + 256)
+        eng = ResidentDFlashRows(mesh, ck, users=a.users, max_pos=a.prompt_len + a.new + 256, R=a.rows)
         print(f"engine: {a.users} users x {eng.R} verify rows + drafter, built in {time.time() - t0:.0f} s", flush=True)
         t0 = time.time()
+        eng.logit_log = {} if a.gaps else None
         ref = eng.greedy(prompts, a.new)
         print(f"greedy reference: {a.users} x {a.new} tokens in {time.time() - t0:.1f} s", flush=True)
         gen, stats = eng.generate(prompts, a.new)
@@ -57,6 +61,35 @@ def main():
             flush=True,
         )
         print(f"tokens equal to greedy per user: {same} of {a.new} (first difference {first_diff})", flush=True)
+        if a.gaps:  # (at each user's first difference: how close the two decodes' top-2 are there)
+            for u, f in enumerate(first_diff):
+                if f is None:
+                    continue
+                pos = a.prompt_len + f - 1  # (the logits at position pos predict generated token f)
+                gl, sl = eng.logit_log.get(("greedy", u, pos)), (eng.logit_log.get(("spec", u, pos)) or (0, None))[1]
+                if gl is None or sl is None:
+                    print(f"  user {u}: token {f}: logits not logged at {pos}")
+                    continue
+                g2, s2 = gl.topk(2), sl.topk(2)
+                print(
+                    f"  user {u}: token {f} (pos {pos}): greedy top-2 {g2.indices.tolist()} gap "
+                    f"{float(g2.values[0] - g2.values[1]):.4f}; spec top-2 {s2.indices.tolist()} gap "
+                    f"{float(s2.values[0] - s2.values[1]):.4f}; max |dlogit| {float((gl - sl).abs().max()):.4f}"
+                )
+        if a.gaps:  # (before each user's first difference: max |dlogit| vs the greedy decode, by the spec row index)
+            by_row = {}
+            for (kind, u, pos), v in list(eng.logit_log.items()):
+                if kind != "spec" or (first_diff[u] is not None and pos >= a.prompt_len + first_diff[u] - 1):
+                    continue
+                g_ = eng.logit_log.get(("greedy", u, pos))
+                if g_ is not None:
+                    r, lg_ = v
+                    d_ = float((g_ - lg_).abs().max())
+                    n_, m_, z_ = by_row.get(r, (0, 0.0, 0))
+                    by_row[r] = (n_ + 1, max(m_, d_), z_ + int(d_ == 0.0))
+            for r in sorted(by_row):
+                n_, m_, z_ = by_row[r]
+                print(f"  spec row {r}: {n_} positions, bit-identical {z_}, max |dlogit| {m_:.4f}")
         print(f"db spec: {'PASS' if out['ok'] else 'FAIL'}", flush=True)
     finally:
         close_mesh(mesh)
