@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""E10d measurement for M1: the MoE input norm (tt/moe.py MoE.norm: reshard + sharded rms_norm + to L1 bf16,
+"""Measurement: the MoE input norm (tt/moe.py MoE.norm: reshard + sharded rms_norm + to L1 bf16,
 3 programs) vs FusedRowNorm with an L1 output (1 program). Not bit-equal (HiFi2 FPU vs fp32 SFPU), so this
 records how many bf16 outputs differ, the PCC and both traced times; it asserts only PCC."""
 
@@ -15,7 +15,7 @@ import ttnn
 from models.demos.inkling2_mini.tt.fused.norm import FusedRowNorm
 
 C = 2304
-RESULTS = os.environ.get("INKLING_E10_RESULTS")
+RESULTS = os.environ.get("INKLING_FUSED_RESULTS")
 
 
 def traced(device, fn, n=200):

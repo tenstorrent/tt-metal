@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""E10d FusedMessageSplit: exact row copies + dense twins of the 48 loop messages, vs the selector-matmul path of
+"""FusedMessageSplit: exact row copies + dense twins of the 48 loop messages, vs the selector-matmul path of
 model._messages (tf32-rounded copies, PCC), traced twice bit-equal, and timed against 24 selector matmuls."""
 
 import json
@@ -16,7 +16,7 @@ from models.demos.inkling2_mini.tt.fused import common as F
 from models.demos.inkling2_mini.tt.fused.messages import FusedMessageSplit
 
 C = 2304
-RESULTS = os.environ.get("INKLING_E10_RESULTS")
+RESULTS = os.environ.get("INKLING_FUSED_RESULTS")
 
 
 def host(t):
@@ -81,7 +81,7 @@ def test_message_split(device):
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 16 * 1024 * 1024}], indirect=True)
 def test_all_messages_cost(device):
-    """E10d: device time of model._messages' input side today (2 seals + attend over them, E2 RowOps ops) plus
+    """Device time of model._messages' input side (2 seals + attend over them, unfused RowOps ops) plus
     the split, per loop pass. Timing only."""
     g = torch.Generator().manual_seed(6)
     rows = R.RowOps(device)
@@ -104,7 +104,7 @@ def test_all_messages_cost(device):
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 16 * 1024 * 1024}], indirect=True)
 def test_fused_messages(device):
-    """E10d FusedMessages (seal + one 12-core attend, straight into the per-layer message tensors) vs the model's
+    """FusedMessages (seal + one 12-core attend, straight into the per-layer message tensors) vs the model's
     path (MessageAttnRes.all_messages, E2 ops) + split: PCC per message, traced twice bit-equal, timed."""
     from models.demos.inkling2_mini.tt.fused.messages import FusedMessages
 

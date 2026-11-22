@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""E10c dense twins: one layer application of the fused residual path (model._app dataflow, attention / MoE
+"""Dense twins: one layer application of the fused residual path (model._app dataflow, attention / MoE
 replaced by fixed rows) with twins on must be bit-equal to twins off (every input gathered from its row), traced
 twice bit-equal, and is timed both ways. Device ops before/after are the same programs, so op count is unchanged."""
 
@@ -22,7 +22,7 @@ from models.demos.inkling2_mini.tt.fused.norm import FusedRowNorm
 
 C = 2304
 TRACE_PARAMS = [{"trace_region_size": 32 * 1024 * 1024}]
-RESULTS = os.environ.get("INKLING_E10_RESULTS")
+RESULTS = os.environ.get("INKLING_FUSED_RESULTS")
 
 
 def weights(g, is_global):
@@ -66,7 +66,7 @@ def test_twin_app(device, kind):
         return ttnn.from_torch(t.reshape(1, 1, -1, C), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     A, Y = row(torch.randn(1, C, generator=g), ttnn.bfloat16), row(torch.randn(1, C, generator=g), ttnn.bfloat16)
-    # the loop messages as the model makes them (E10d: FusedMessageSplit, rows + dense twins)
+    # the loop messages as the model makes them (FusedMessageSplit, rows + dense twins)
     msgs = FusedMessageSplit(device)(row(torch.randn(48, C, generator=g), ttnn.float32))[0]
     for k in range(2):
         frows.seal(None, row(torch.randn(1, C, generator=g) * (k + 1), ttnn.bfloat16), k)
@@ -134,7 +134,7 @@ def test_twin_app(device, kind):
 
 @pytest.mark.parametrize("device_params", TRACE_PARAMS, indirect=True)
 def test_conv_l1_input(device):
-    """E10d: conv_mlp reads the MoE output y straight from L1 (bit-equal to the DRAM copy the model makes today,
+    """conv_mlp reads the MoE output y straight from L1 (bit-equal to the DRAM copy the model makes today,
     which this removes: one to_memory_config program per layer application)."""
     g = torch.Generator().manual_seed(8)
     w, _ = weights(g, False)
