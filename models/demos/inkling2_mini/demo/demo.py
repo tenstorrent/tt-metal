@@ -32,10 +32,7 @@ def dram_free(dev):
 def trace_one_app(model, L=11, p=1, pos=5):
     """Capture one layer application, replay twice from the same state: bit-equal?"""
     dev = model.device
-    x = torch.zeros(1, 1, 32, 2304)
-    x[0, 0, 0] = torch.randn(2304)
-    h = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
-    st = ttnn.from_torch(torch.zeros(1, 1, 32, 2304), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev)
+    h = ttnn.from_torch(torch.randn(1, 1, 1, 2304), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
     stack = model.rows.seal(None, h, 0)  # depth-2 attn-res for L11
     model.reset()
     model.positions.update(pos)
@@ -53,7 +50,6 @@ def trace_one_app(model, L=11, p=1, pos=5):
         ttnn.execute_trace(dev, tid, cq_id=0, blocking=True)
         runs.append(ttnn.to_torch(out))
     ttnn.release_trace(dev, tid)
-    del st
     return {
         "app_trace_bit_equal": bool(torch.equal(runs[0], runs[1])),
         "app_trace_eq_eager": bool(torch.equal(runs[0], eager)),

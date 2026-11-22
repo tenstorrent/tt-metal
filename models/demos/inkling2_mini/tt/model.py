@@ -10,9 +10,8 @@ the layer wiring (block boundaries, residual add in fp32, bf16 layer exit), loop
 final attn-res, final norm, unembed, softcap 30, vocab mask (cols >= 200058), on-device argmax, state reset.
 Attention = tt/attention.py (T3), MoE = tt/moe.py (T4), attn-res / message / gate / short conv = tt/residual.py (T5).
 
-Tensor forms
-- "tv": token vector [1,1,32,C] TILE, row 0 = token (T5 form). Residual path, block-state stack, attn-res.
-- "row": [1,1,1,C] TILE. Attention and MoE inputs/outputs.
+Tensor form: "row" [1,1,1,C] TILE everywhere on the token path (r vectors: [1,1,r,C]); block-state stacks are
+residual.py split stacks (review-r5 #8b).
 """
 
 from __future__ import annotations
@@ -31,6 +30,8 @@ from models.demos.inkling2_mini.tt.residual import (
     ShortConv,
     _torch,
     cache_index,
+    split_k_matmul,
+    split_k_weight,
     to_device,
 )
 
@@ -80,29 +81,26 @@ class _QKVGate:
         d = rows.device
         g3 = ("q", "k", "v")
         down = torch.cat([_torch(w[f"msg_gate.{g}.down"]).reshape(2 * HIDDEN, rank) for g in g3], -1)
-        self.down = to_device(down.to(torch.bfloat16), d, ttnn.bfloat16)  # [2C, 3*rank]
+        self.down = split_k_weight(down, d)  # [2C, 3*rank]
         self.forget = to_device(
             torch.cat([_torch(w[f"msg_gate.{g}.forget"]).reshape(rank, HIDDEN) for g in g3]).float(), d
         )
         self.gain = to_device(torch.cat([_torch(w[f"msg_gate.{g}.gain"]).reshape(rank, HIDDEN) for g in g3]).float(), d)
-        mask = torch.zeros(32, 3 * rank)
+        mask = torch.zeros(3, 3 * rank)
         for i in range(3):
             mask[i, i * rank : (i + 1) * rank] = 1
         self.mask = to_device(mask, d)
         self.rows = rows
 
     def __call__(self, h, m):
-        """h, m: fp32 [1,1,32,C], rows 0..2 = (q, k, v) inputs / messages. Returns fp32, rows 0..2 gated."""
+        """h, m: fp32 [1,1,3,C], rows = (q, k, v) inputs / messages. Returns fp32 [1,1,3,C]."""
         r = self.rows
-        nh = ttnn.rms_norm(h, epsilon=EPS, compute_kernel_config=r.ckc)
-        nm = ttnn.rms_norm(m, epsilon=EPS, compute_kernel_config=r.ckc)
-        x = ttnn.typecast(ttnn.concat([nh, nm], dim=-1), ttnn.bfloat16)
-        z = ttnn.typecast(ttnn.matmul(x, self.down, dtype=ttnn.bfloat16, compute_kernel_config=r.ckc), ttnn.float32)
-        z = ttnn.multiply(z, self.mask, dtype=ttnn.float32)
+        x = ttnn.concat([r.rms(h, eps=EPS, dtype=ttnn.bfloat16), r.rms(m, eps=EPS, dtype=ttnn.bfloat16)], dim=-1)
+        z = ttnn.typecast(split_k_matmul(x, self.down, r.ckc), ttnn.bfloat16)  # HF: bf16 down_proj output
+        z = ttnn.multiply(z, self.mask, dtype=ttnn.float32)  # bf16 * 0/1: exact
         f = ttnn.tanh(r.mm(z, self.forget))
         g = ttnn.tanh(r.mm(z, self.gain))
-        keep = ttnn.subtract(h, ttnn.multiply(f, h, dtype=ttnn.float32), dtype=ttnn.float32)
-        return ttnn.add(keep, ttnn.multiply(g, m, dtype=ttnn.float32), dtype=ttnn.float32)
+        return ttnn.addcmul(ttnn.addcmul(h, f, h, value=-1.0), g, m)  # h - f*h + g*m, fp32
 
 
 class _Layer:
@@ -184,49 +182,34 @@ class Inkling2Model:
                 lay.conv_mlp.alloc_state(c),
             )
         self.positions = DecodePositions(device, max_ctx)
-        self.rep3 = self.rows.selector(32, 32, [(0, 0), (1, 0), (2, 0)])
-        for l in range(LOOP_END - LOOP_START):  # message selectors exist before any trace capture
-            self.rows.selector(32, 64, [(j, 4 * l + j) for j in range(3)])
-            self.rows.selector(32, 64, [(0, 4 * l + 3)])
         self.tokens = ttnn.from_torch(
             torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
         self._zero_hist = {}
+        self.phase = 0
         # allocate the zero sources now: a buffer allocated after a trace capture can alias trace scratch
         self.reset()
 
     # ------------------------------------------------------------ helpers
     @staticmethod
-    def _tv(row):
-        """[1,1,1,C] -> [1,1,32,C], rows 1..31 zero."""
-        return ttnn.pad(row, [(0, 0), (0, 0), (0, 31), (0, 0)], 0.0)
-
-    @staticmethod
-    def _row(tv, i=0):
-        return ttnn.slice(tv, [0, 0, i, 0], [1, 1, i + 1, tv.shape[-1]])
+    def _row(x, i=0):
+        return ttnn.slice(x, [0, 0, i, 0], [1, 1, i + 1, x.shape[-1]])
 
     def _messages(self, h12_in, h17_out):
-        """Cross-pass messages for all 12 loop layers: [(qkv in rows 0..2, mlp in row 0)] (MessageAttnRes math)."""
+        """Cross-pass messages for all 12 loop layers: [(qkv [1,1,3,C], mlp row)] (MessageAttnRes math)."""
         r, q = self.rows, self.msg
-        out = r.attend(q.q, r.seal(r.seal(None, h12_in, 0), h17_out, 1), q.mask)  # [1,1,64,C], row 4l+j
-        return [
-            (
-                r.mm(r.selector(32, 64, [(j, 4 * l + j) for j in range(3)]), out),
-                r.mm(r.selector(32, 64, [(0, 4 * l + 3)]), out),
-            )
-            for l in range(LOOP_END - LOOP_START)
-        ]
+        out = q.all_messages(h12_in, h17_out)  # [1,1,48,C], row 4l+j
+        return [(r.mm(q.qkv_sel(l), out), r.mm(q.mlp_sel(l), out)) for l in range(LOOP_END - LOOP_START)]
 
-    def _rms(self, row, w):
-        """Weighted RMSNorm (Olmo2 style: fp32 math), result bf16 row."""
-        y = ttnn.rms_norm(row, weight=w, epsilon=EPS, compute_kernel_config=self.hifi4)
-        return y if y.dtype == ttnn.bfloat16 else ttnn.typecast(y, ttnn.bfloat16)
+    def _rms(self, x, w):
+        """Weighted RMSNorm (Olmo2 style: fp32 math), result bf16."""
+        return self.rows.rms(x, weight=w, eps=EPS, dtype=ttnn.bfloat16)
 
     def reset(self):
         """Zero every conv history (the only state read unmasked). KV caches need no reset: the position masks
         hide every slot not written in the current sequence, and stale values are finite."""
         for st, ca, cm in self.states.values():
-            for t in [*st.k_hist, *st.v_hist, ca, cm]:
+            for t in [*st.k_hist, *st.v_hist, *ca, *cm]:
                 key = (tuple(t.shape), t.dtype)
                 if key not in self._zero_hist:
                     self._zero_hist[key] = ttnn.from_torch(
@@ -235,7 +218,9 @@ class Inkling2Model:
                 ttnn.copy(self._zero_hist[key], t)
 
     def set_inputs(self, token, pos):
-        """Host writes before a step (outside any trace)."""
+        """Host writes before a step (outside any trace). Also sets the conv ring phase: a traced step only
+        replays correctly at positions with the phase it was captured at."""
+        self.phase = pos % ShortConv.PHASES
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(torch.tensor([[token]], dtype=torch.int32), dtype=ttnn.uint32), self.tokens
         )
@@ -243,30 +228,30 @@ class Inkling2Model:
 
     # ------------------------------------------------------------ one layer application
     def _app(self, L, p, h, stack, n_sealed, msgs):
-        """h: bf16 tv (layer input). stack: fp32 tv of n_sealed block states (None if 0). Returns (out bf16 tv,
+        """h: bf16 row (layer input). stack: split stack of n_sealed block states (None if 0). Returns (out bf16 row,
         stack, n_sealed) after this layer."""
         lay = self.layers[L]
         attn_st, conv_a, conv_m = self.states[cache_index(L, p)]
 
-        # attention inputs. Multi-row tensors: row 0/1/2 = q/k/v input (tv form).
+        # attention inputs. Multi-row tensors: row 0/1/2 = q/k/v input.
         if lay.attn_res is None:
             x = h
         else:
             x = lay.attn_res(stack, h, n_sealed + 1, split=False)
         if msgs is not None:
             if not lay.is_global:
-                x = self.rows.mm(self.rep3, x)  # same input in rows 0..2
+                x = ttnn.repeat(x, ttnn.Shape([1, 1, 3, 1]))  # same input in rows 0..2
             x = lay.qkv_gate(x, msgs[0])
         if lay.is_global:
             qn, kn, vn = (self._rms(self._row(x, i), w) for i, w in enumerate(lay.norms))
         elif msgs is None:
-            qn = kn = vn = self._rms(self._row(x), lay.norms[0])
+            qn = kn = vn = self._rms(x, lay.norms[0])
         else:
             xn = self._rms(x, lay.norms[0])
             qn, kn, vn = (self._row(xn, i) for i in range(3))
 
         a = lay.attn.decode(qn, attn_st, self.positions, kn, vn)  # bf16 row
-        a = ttnn.typecast(lay.conv_attn(self._tv(a), conv_a), ttnn.float32)  # conv returns bf16 (HF .to(input))
+        a = ttnn.typecast(lay.conv_attn(a, conv_a, self.phase), ttnn.float32)  # conv returns bf16 (HF .to(input))
 
         if lay.boundary:
             stack = self.rows.seal(stack, h, n_sealed)
@@ -278,9 +263,9 @@ class Inkling2Model:
         m = lay.mlp_res(stack, resid, n_sealed + 1)[0]
         if msgs is not None:
             m = lay.mlp_gate(m, msgs[1])
-        y, _ = lay.moe(self._row(m))  # bf16 row
-        y = lay.conv_mlp(self._tv(y), conv_m)  # bf16 tv
-        out = ttnn.typecast(ttnn.add(resid, ttnn.typecast(y, ttnn.float32), dtype=ttnn.float32), ttnn.bfloat16)
+        y, _ = lay.moe(m)  # bf16 row
+        y = lay.conv_mlp(y, conv_m, self.phase)  # bf16 row
+        out = ttnn.add(resid, ttnn.typecast(y, ttnn.float32), dtype=ttnn.bfloat16)  # fp32 add, bf16 out
         return out, stack, n_sealed
 
     # ------------------------------------------------------------ one token
@@ -292,14 +277,12 @@ class Inkling2Model:
         dev = self.device
         self.positions.prepare()
         e = ttnn.embedding(self.tokens, self.embed, layout=ttnn.TILE_LAYOUT)
-        e = self._rms(ttnn.reshape(e, [1, 1, 1, HIDDEN]), self.embed_norm)
-        h = self._tv(e)
+        h = self._rms(ttnn.reshape(e, [1, 1, 1, HIDDEN]), self.embed_norm)
         res = {"embed": h, "apps": []} if collect else {}
 
         def forced(t):
-            tv = torch.zeros(1, 1, 32, HIDDEN, dtype=torch.bfloat16)
-            tv[0, 0, 0] = t.reshape(HIDDEN).to(torch.bfloat16)
-            return ttnn.from_torch(tv, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
+            row = t.reshape(1, 1, 1, HIDDEN).to(torch.bfloat16)
+            return ttnn.from_torch(row, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev)
 
         stack, n = None, 0
         pre = None
@@ -325,7 +308,7 @@ class Inkling2Model:
                 res["apps"].append(h)
 
         x = self.final_res(stack, h, n + 1)[0]
-        x = self._rms(self._row(x), self.final_norm)
+        x = self._rms(x, self.final_norm)
         logits = ttnn.linear(x, self.unembed, dtype=ttnn.float32, compute_kernel_config=self.mm_cfg)
         logits = ttnn.multiply(ttnn.tanh(ttnn.multiply(logits, 1.0 / SOFTCAP)), SOFTCAP)
         logits = ttnn.add(logits, self.vocab_mask)

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Batch-1 greedy generation for Inkling2Model: eager or one trace for the whole 48-application decode step.
+"""Batch-1 greedy generation for Inkling2Model: eager or traced whole 48-application decode steps (one trace per
+short-conv ring phase, pos % 4).
 
 v1 prefill = decode token by token (design.md §6)."""
 
@@ -9,37 +10,42 @@ from __future__ import annotations
 import time
 
 import ttnn
+from models.demos.inkling2_mini.tt.residual import ShortConv
 
 
 class Generator:
     def __init__(self, model):
         self.model = model
         self.device = model.device
-        self.trace = None
-        self.out = None
+        self.trace = None  # [phase] -> trace id
+        self.out = None  # [phase] -> output dict
 
     def capture(self):
-        """Compile eagerly once (program cache), then capture one full decode step."""
+        """Compile eagerly once (program cache), then capture one full decode step per conv phase."""
         m = self.model
         m.set_inputs(0, 0)
         m.step()  # compile
         ttnn.synchronize_device(self.device)
-        self.trace = ttnn.begin_trace_capture(self.device, cq_id=0)
-        self.out = m.step()
-        ttnn.end_trace_capture(self.device, self.trace, cq_id=0)
+        self.trace, self.out = [], []
+        for ph in range(ShortConv.PHASES):
+            m.set_inputs(0, ph)
+            self.trace.append(ttnn.begin_trace_capture(self.device, cq_id=0))
+            self.out.append(m.step())
+            ttnn.end_trace_capture(self.device, self.trace[-1], cq_id=0)
         ttnn.synchronize_device(self.device)
 
     def release(self):
-        if self.trace is not None:
-            ttnn.release_trace(self.device, self.trace)
-            self.trace = None
+        for t in self.trace or []:
+            ttnn.release_trace(self.device, t)
+        self.trace = None
 
     def decode(self, token, pos, traced=True):
         """One step. Returns device result dict (logits, token)."""
         self.model.set_inputs(token, pos)
         if traced:
-            ttnn.execute_trace(self.device, self.trace, cq_id=0, blocking=False)
-            return self.out
+            ph = pos % ShortConv.PHASES
+            ttnn.execute_trace(self.device, self.trace[ph], cq_id=0, blocking=False)
+            return self.out[ph]
         return self.model.step()
 
     @staticmethod
