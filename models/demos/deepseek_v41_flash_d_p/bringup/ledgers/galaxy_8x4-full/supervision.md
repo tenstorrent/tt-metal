@@ -694,3 +694,4 @@
 - 06:08 heartbeat: MB.8 agent active; watch armed.
 - 06:20 OWNER: run the full ladder on the batching branch: PB.LAD (scripted, patch_lad) after MB.8 finishes and the branch switch.
 - 06:38 heartbeat: MB.8 agent active; watch armed.
+- 06:55 MB.8 ACCEPTED (8 units PASS, sets 0 mismatches, cold no-rebuild 0): at 5120 the compute-side block max is an exact device win at 1M (75.6 vs 76.1 ms) but no wall gain (host-bound; the crossover stays 262144 keys); accepted under the owner's device-win rule, same code on both branches.
