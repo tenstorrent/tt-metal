@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Chunked prefill vs the CPU golden on code1500 (1478 tokens: crosses the 1024 window).
 
-1. Teacher-forced prefill (each application gets its golden input): logits PCC over all positions >= 0.9999.
+1. Teacher-forced prefill (each application gets its golden input): logits PCC over all positions >= 0.9999, with
+   one 1536-row chunk and with 256-token chunks (s > 0: ring rotation, conv tail carry, global far part).
 2. prompt0: 16 greedy tokens after prefill equal the golden greedy tokens.
 3. code1500: 16 decode steps after prefill, fed the decode-only path's tokens: top-1 agrees on >= 14 of 16 steps.
 Logits are streamed per 128 rows (host RSS < 3 GB).
@@ -11,20 +12,23 @@ Logits are streamed per 128 rows (host RSS < 3 GB).
 """
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 import torch
 
 import ttnn
-from models.demos.inkling2_mini.convert import cache as wcache
 from models.demos.inkling2_mini.demo.golden_check import GOLDEN
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.model import Inkling2Model
 from models.demos.inkling2_mini.tt.prefill_model import Inkling2Prefill
 
+# Prefill reads the experts as tiles: a TILE-layout cache (the stick caches are refused).
+TILE_CACHE = Path(os.environ["INKLING_TILE_CACHE"]) if os.environ.get("INKLING_TILE_CACHE") else None
 pytestmark = pytest.mark.skipif(
-    GOLDEN is None or wcache.DEFAULT_ROOT is None or not (GOLDEN / "code1500").exists(),
-    reason="golden or weight cache missing (set INKLING_GOLDEN and INKLING_CACHE)",
+    GOLDEN is None or TILE_CACHE is None or not (GOLDEN / "code1500").exists(),
+    reason="golden or TILE weight cache missing (set INKLING_GOLDEN and INKLING_TILE_CACHE)",
 )
 
 
@@ -39,8 +43,9 @@ def test_prefill_code1500(device):
     d = GOLDEN / "code1500"
     ids = torch.load(d / "input_ids.pt")[0].tolist()
     T = len(ids)
-    model = Inkling2Model(device, max_ctx=2048, log=lambda s: None)
-    pf = Inkling2Prefill(model)
+    # prefill reads TILE expert weights: the stick cache's BFP4 layers are refused
+    model = Inkling2Model(device, max_ctx=2048, root=TILE_CACHE, log=lambda s: None)
+    pf = Inkling2Prefill(model, root=TILE_CACHE)  # before any capture; prefill calls may come later
     ref = torch.load(d / "logits_bf16.pt")[0][:T]  # bf16
 
     inputs = {}
@@ -52,28 +57,30 @@ def test_prefill_code1500(device):
         g = inputs[a][s : s + t]
         return torch.cat([g, torch.zeros(t - g.shape[0], g.shape[1])]) if g.shape[0] < t else g
 
-    acc = torch.zeros(5, dtype=torch.float64)
+    def forced_pcc(chunk):
+        acc = torch.zeros(5, dtype=torch.float64)
 
-    def cb(p0, blk):  # streamed PCC sums
-        a, b = blk.double(), ref[p0 : p0 + blk.shape[0]].double()
-        acc[0] += a.sum()
-        acc[1] += b.sum()
-        acc[2] += (a * b).sum()
-        acc[3] += (a * a).sum()
-        acc[4] += (b * b).sum()
+        def cb(p0, blk):  # streamed PCC sums
+            a, b = blk.double(), ref[p0 : p0 + blk.shape[0]].double()
+            acc[0] += a.sum()
+            acc[1] += b.sum()
+            acc[2] += (a * b).sum()
+            acc[3] += (a * a).sum()
+            acc[4] += (b * b).sum()
 
-    pf.logits_cb = cb
-    pf.prefill(ids, logits_all=True, force=force)
-    pf.logits_cb = None
-    n = ref.numel()
-    lp = float((acc[2] - acc[0] * acc[1] / n) / ((acc[3] - acc[0] ** 2 / n) * (acc[4] - acc[1] ** 2 / n)).sqrt())
-    print(f"teacher-forced logits PCC {lp:.6f}")
-    assert lp >= 0.9999
+        pf.logits_cb = cb
+        pf.prefill(ids, logits_all=True, force=force, chunk=chunk)
+        pf.logits_cb = None
+        n = ref.numel()
+        return float((acc[2] - acc[0] * acc[1] / n) / ((acc[3] - acc[0] ** 2 / n) * (acc[4] - acc[1] ** 2 / n)).sqrt())
 
-    # decode after prefill. Prefill each length class before capture (its cached consts must exist first).
+    for chunk in (2048, 256):
+        lp = forced_pcc(chunk)
+        print(f"teacher-forced logits PCC, chunk {chunk}: {lp:.6f}")
+        assert lp >= 0.9999, chunk
+
+    # decode after prefill; the prefills of new lengths come after the capture
     p0 = torch.load(GOLDEN / "prompt0" / "input_ids.pt")[0].tolist()
-    pf.prefill(p0)
-    pf.prefill(ids)
     gen = Generator(model)
     gen.capture()
     last = pf.prefill(p0)

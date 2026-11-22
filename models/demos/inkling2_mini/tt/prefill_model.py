@@ -7,29 +7,32 @@ continues at pos = len(prompt):
 - attention (per HF cache index c): 1024-slot ring (slot = pos % 1024), global full cache, k/v conv inputs at lag 0-2;
 - post-attn / post-mlp ShortConv state rows 0-3 = inputs at lag 0-3 (fp32).
 
-A chunk is T tokens (default 2048; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128; pad rows
-are never written to a cache). Per application, everything is a [1,1,T,C] sequence tensor:
+A chunk is T tokens (default 2048; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128). Pad
+rows (positions >= len(prompt)) keep the old ring slots, but kv_full gets all T rows: decode writes position P before
+any read of it, so those rows are never read. Per application, everything is a [1,1,T,C] sequence tensor:
 - block / message attn-res: per-token softmax over depth (no cross-token mixing);
 - k=4 short convs: exact unaligned row slices of [3 history rows ++ chunk];
-- banded rel bias in 128-query blocks: block b, row u, key col c <-> distance u + 1024 - c for every block, so the
-  whole additive mask (bias, window, sink column, -inf) is one batched matmul [rel_states, sink, 1] @ Bu[u] (one
-  constant matrix per row offset u) and one permute;
-- local attention: SDPA over the blocks (batch), keys = 1152 positions ++ 32 zero rows (sink: zero key and value);
-- global attention: near part (positions [s-1024, s+T)) per block by matmul with its log-sum-exp; far part
-  (positions < s-1024, no bias) by SDPA at head dim 160 with anchor keys whose logit is the near LSE, so the far
-  output carries the exact near weight in column 128;
-- MoE: router + top-8 on device, token -> expert sort on host, 32-row slots each bound to one expert, indexed
-  sparse_matmul (<= 128 slots per call), gathered back and weighted.
+- attention, R3 path (r3=True; the SDPA needs `rel_logits`): one causal SDPA per layer, banded rel bias
+  rel_states @ rel_proj added in the kernel, per-query sink logit; local: ring (position order) ++ chunk, window 1024;
+  global: kv_full rows [0, s+T);
+- attention, blocked path (older builds): banded rel bias in 128-query blocks (block b, row u, key col c <-> distance
+  u + 1024 - c, so the whole additive mask is one batched matmul [rel_states, sink, 1] @ Bu[u]); local: SDPA over the
+  blocks, keys = 1152 positions ++ 32 zero rows (sink: zero key and value); global: near part (positions
+  [s-1024, s+T)) per block by matmul with its log-sum-exp, far part (positions < s-1024, no bias) by SDPA at head
+  dim 160 with anchor keys whose logit is the near LSE, so the far output carries the exact near weight in column 128;
+- MoE: router + top-8 on device, token -> expert sort on host, 64-row slots each bound to one expert, indexed
+  sparse_matmul (<= 128 slots per call; one call with R2), gathered back and weighted. Needs TILE expert weights:
+  the stick-layout layers of a stick cache (v1-stick4) are refused, so prefill sessions load the TILE cache v1.
 
-Trace rule: prefill caches constant device tensors (masks, per-row bias matrices) per chunk shape. Run one prefill of
-each prompt-length class BEFORE `Generator.capture()`: a buffer first allocated after a capture can sit in memory the
-trace replays write to.
+Trace rule: every constant device tensor (and every weight copy) is made in __init__, sized for `chunk`; a prefill
+call allocates only per-call tensors. So make the Inkling2Prefill before `Generator.capture()` (a buffer first
+allocated after a capture and kept can sit in memory the trace replays write to); prefill calls after the capture
+are safe, for any prompt length.
 """
 
 from __future__ import annotations
 
 import math
-import os
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -62,7 +65,6 @@ GROUPS = N_HEADS // N_KV
 SCALE = HEAD_DIM**-0.5
 FAR_DH = HEAD_DIM + 32  # far part head dim: q ++ [lse_hi, lse_lo, 0...]
 QB = 128  # local attention query block (SDPA batch element)
-GM = int(os.environ.get("PF_GM", "64"))  # rows per expert slot in grouped MoE
 
 
 def _f32(x):
@@ -120,6 +122,28 @@ def _load(root, layer, names):
         if e["layer"] == layer and e["name"] in names:
             out[e["name"]] = ttnn.load_tensor(Path(root) / e["file"])
     return out
+
+
+def _band_matrix(p, is_global):
+    """Blocked-path mask matrix [1, QB, 18, KB] from rel_proj p [16, 1024]: rows 0-15 rel_proj skewed per row offset
+    u; row 16: sink column; row 17: 0 in the window / sink, -inf elsewhere (the left operand carries
+    [rel_states, sink, 1]): one matmul gives the whole mask."""
+    kb = WINDOW + QB + 32
+    bu = torch.zeros(QB, D_REL + 2, kb)
+    cc = torch.arange(kb)
+    for u in range(QB):
+        c = torch.arange(u + 1, u + WINDOW + 1)
+        bu[u][:D_REL, c] = p[:, u + WINDOW - c]
+        lo = 0 if is_global else u + 1  # global: keys at distance >= 1024 stay visible (no bias)
+        bu[u][D_REL + 1] = torch.where((cc >= lo) & (cc <= u + WINDOW), 0.0, NEG)
+    bu[:, D_REL, WINDOW + QB] = 1.0
+    bu[:, D_REL + 1, WINDOW + QB] = 0.0
+    return bu.unsqueeze(0)
+
+
+def _is_sticks(t):
+    """Stick-layout expert tensor (convert/stick.py): [1, 1, P*32, 32] instead of [1, E, K, N]."""
+    return tuple(t.shape)[:2] == (1, 1) and t.shape[-1] == 32
 
 
 def _host(t):
@@ -218,7 +242,9 @@ class _LayerPF:
         self.w_qgrs, self.w_k, self.w_v, self.w_o = (dev_of(f"attn.{n}") for n in ("w_qgrs", "w_k", "w_v", "w_o"))
         self.q_scale = put(_host(w["attn.q_clip_scale"]).view(1, N_HEADS, 1, HEAD_DIM))
         self.rel_scale = put(_host(w["attn.rel_clip_scale"]).view(1, N_HEADS, 1, D_REL))
-        self.rel_proj = put(_host(w["attn.rel_proj"]).view(1, 1, D_REL, WINDOW), ttnn.bfloat16)
+        rel_p = _host(w["attn.rel_proj"]).view(D_REL, WINDOW)
+        self.rel_proj = put(rel_p.view(1, 1, D_REL, WINDOW), ttnn.bfloat16)
+        self.bu = None if pf.r3 else put(_band_matrix(rel_p, lay.is_global), ttnn.bfloat16)
         # k/v conv taps per lag (fp32). Local: residual and 1/sqrt(K+1) folded in; global: static taps, the
         # residual and 1/sqrt(2K+1) are applied after adding the dynamic taps.
         self.conv_scale = 1.0 / math.sqrt((2 if lay.is_global else 1) * TAPS + 1)
@@ -255,17 +281,49 @@ class _LayerPF:
         self.router_w = put(rw.view(1, 1, HIDDEN, NUM_EXPERTS))
         self.router_bias_row = ttnn.to_torch(moe.router_bias).float().reshape(1, 1, 1, NUM_EXPERTS)
         self.w_gate_up = moe.w_gate_up if hasattr(moe, "w_gate_up") else dev_of("experts.w_gate_up")
+        self.w_down = moe.w_down
+        for t in (self.w_gate_up, self.w_down):
+            if _is_sticks(t) or len(t.shape) != 4 or t.shape[1] != NUM_EXPERTS or t.layout != ttnn.TILE_LAYOUT:
+                raise ValueError(
+                    f"layer {L}: prefill needs TILE expert weights [1, {NUM_EXPERTS}, K, N], got {tuple(t.shape)} "
+                    f"{t.layout} (stick layout from a stick cache, e.g. v1-stick4). Load the model from a TILE cache "
+                    "(e.g. INKLING_CACHE=/work/inkling-bringup/cache/v1): sparse_matmul cannot read sticks."
+                )
         del w
 
 
 class Inkling2Prefill:
-    def __init__(self, model, root=wcache.DEFAULT_ROOT, chunk=2048):
-        chunk = int(os.environ.get("PF_CHUNK", chunk))
-        assert chunk % QB == 0 and (WINDOW % chunk == 0 or chunk % WINDOW == 0), chunk
+    def __init__(
+        self,
+        model,
+        root=wcache.DEFAULT_ROOT,
+        chunk=2048,
+        r3=False,
+        r2=False,
+        slot_rows=64,
+        group_grid=(9, 4),
+        group_ibw=(12, 18),
+        r3_chunks=(128, 128),
+        weighted_reduce=False,
+        profile=False,
+        debug=False,
+    ):
+        """model: a built Inkling2Model, before any Generator.capture(). chunk: max tokens per pass (a multiple of 128
+        that divides 1024 or is a multiple of it); prefill(ids, chunk=...) may use any smaller valid size.
+        r3: banded-bias SDPA (needs a build whose SDPA takes `rel_logits`; None: use it when it does).
+        r2: one indexed sparse_matmul call with repeated sorted expert ids (needs that build; pair with
+        group_ibw=(72, 36), whole K per block).
+        slot_rows: rows per expert slot. group_grid / group_ibw: grouped expert matmul grid and in0 block widths
+        (gate_up, down). weighted_reduce: MoE combine by attn_res_weighted_reduce_nc. profile: synchronized
+        per-section times in self.times. debug: print each application."""
+        assert self._chunk_ok(chunk), chunk
         self.m = model
         self.device = dev = model.device
         self.chunk = chunk
-        self.gm = GM
+        self.gm = slot_rows
+        if r3 is None:
+            r3 = "rel_logits" in (ttnn.transformer.scaled_dot_product_attention.__doc__ or "")
+        self.r3 = r3
         self.ckc = model.rows.ckc  # HiFi4, fp32 acc
         self.hifi4 = model.hifi4
         self.mm_cfg = model.mm_cfg
@@ -293,17 +351,62 @@ class Inkling2Prefill:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self._tail_const = {}
         self._sdpa_pc = {}
-        g = os.environ.get("PF_GGRID", "9x4").split("x")
-        self.group_grid = (int(g[0]), int(g[1]))  # 9x4: T4 decode tuning (N = 72 tiles over 36 cores)
-        gi = os.environ.get("PF_GIBW", "12,18").split(",")
-        self.group_ibw = {HIDDEN: int(gi[0]), INTER: int(gi[1])}
+        self.group_grid = tuple(group_grid)  # 9x4: T4 decode tuning (N = 72 tiles over 36 cores)
+        self.group_ibw = {HIDDEN: group_ibw[0], INTER: group_ibw[1]}
         self.logits_cb = None
-        self.debug = os.environ.get("PF_DEBUG") == "1"
-        self.profile = os.environ.get("PF_PROFILE") == "1"
+        self.wred = weighted_reduce
+        self.r2_step = 1 << 20 if r2 else NUM_EXPERTS  # sparse_matmul ids per call
+        self.r3_chunks = tuple(r3_chunks)
+        self.debug = debug
+        self.profile = profile
         self.times = defaultdict(float)
         self._t = None
+        self._consts()
+
+    @staticmethod
+    def _chunk_ok(chunk):
+        return chunk % QB == 0 and (WINDOW % chunk == 0 or chunk % WINDOW == 0)
+
+    def _consts(self):
+        """Every constant device tensor, sized for self.chunk (a call slices what it needs)."""
+        T, put, bf = self.chunk, self._put, ttnn.bfloat16
+        cdts = (
+            {st[0].k_ring.dtype for st in self.m.states.values()}
+            if isinstance(self.m.states, dict)
+            else {st[0].k_ring.dtype for st in self.m.states}
+        )
+        self.c_zring = put(torch.zeros(1, N_KV, WINDOW, HEAD_DIM), bf)
+        self.c_mass = {d: put(torch.nn.functional.pad(torch.ones(1, N_KV, T, 1), (0, 31)), d) for d in cdts}
+        self.c_zero_row = put(torch.zeros(1, 1, 1, HIDDEN), bf)
+        self.c_zx = {m: put(torch.zeros(1, 1, 32 - m, HIDDEN), bf) for m in (TAPS, 1 + 2 * TAPS)}
+        for lp in self.layers:  # router bias, one row per token
+            lp.router_bias_rows = put(lp.router_bias_row.expand(1, 1, T, NUM_EXPERTS).contiguous())
+        if self.r3:
+            return
+        nb, kb = T // QB, WINDOW + QB + 32
+        e = torch.zeros(2, 1, 1, 1, D_REL + 2)
+        e[0, ..., D_REL] = 1
+        e[1, ..., D_REL + 1] = 1
+        self.c_e16, self.c_e17 = put(e[0], bf), put(e[1], bf)
+        # key positions < 0: absolute query block g < 1024 / QB, key col c <-> position QB*g - 1024 + c
+        g = torch.arange(WINDOW // QB).view(-1, 1, 1, 1)
+        vm = torch.where(QB * g - WINDOW + torch.arange(kb).view(1, 1, 1, kb) < 0, NEG, 0.0)
+        self.c_vmask = put(torch.cat([vm, torch.zeros(nb, 1, 1, kb)]), bf)
+        self.c_zkvb = {d: put(torch.zeros(nb, N_KV, 32, HEAD_DIM), d) for d in cdts}
+        self.c_zkv = {d: put(torch.zeros(1, N_KV, 32, HEAD_DIM), d) for d in cdts}
+        # global near: keys left of the band (col o0 + j is -inf iff o0 + j < 1024, o0 = min(s, 1024)) / right of it
+        left = torch.where(torch.arange(WINDOW + T) < WINDOW, NEG, 0.0)
+        self.c_gleft = put(left.view(1, 1, 1, -1).expand(1, N_HEADS, QB, -1).contiguous(), bf)
+        self.c_gright = put(torch.full((1, N_HEADS, QB, T), NEG), bf)
+        self.c_sel = (put(torch.eye(32)[0].view(1, 1, 1, 32), bf), put(torch.eye(32)[1].view(1, 1, 1, 32), bf))
+        ka = torch.zeros(1, N_KV, 32, FAR_DH)
+        ka[..., HEAD_DIM] = 1
+        ka[..., HEAD_DIM + 1] = 1
+        va = torch.zeros(1, N_KV, 32, FAR_DH)
+        va[..., HEAD_DIM] = 1
+        self.c_anchors = (put(ka, bf), put(va, bf))
+        self.c_zcol = put(torch.zeros(1, N_KV, self.m.max_ctx, 32), bf)
 
     def _tick(self, name):
         """PF_PROFILE=1: synchronize and charge the time since the last tick to `name`."""
@@ -316,11 +419,6 @@ class Inkling2Prefill:
         self._t = now
 
     # ------------------------------------------------------------------ constants
-    def _const(self, key, fn):
-        if key not in self._tail_const:
-            self._tail_const[key] = fn()
-        return self._tail_const[key]
-
     def _put(self, t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT):
         return ttnn.from_torch(t, dtype=dtype, layout=layout, device=self.device)
 
@@ -347,7 +445,7 @@ class Inkling2Prefill:
         return y
 
     def _kv(self, lp, x, w, kv, tail):
-        """k or v for the chunk: projection, k=4 conv over [history ++ chunk], heads, clip / rms. -> [1,8,T,128] bf16."""
+        """k or v for the chunk: projection, k=4 conv over [history ++ chunk], heads, clip / rms -> [1,8,T,128] bf16."""
         width = N_KV * HEAD_DIM
         proj = self._linear(x, w)
         t = proj.shape[2]
@@ -391,11 +489,7 @@ class Inkling2Prefill:
                     continue
                 part = _bf16(_rows(k, lo, hi))
                 if hi - lo < WINDOW:
-                    zb = self._const(
-                        ("zring", WINDOW - (hi - lo)),
-                        lambda w=WINDOW - (hi - lo): self._put(torch.zeros(1, N_KV, w, HEAD_DIM), ttnn.bfloat16),
-                    )
-                    part = ttnn.concat([part, zb], dim=2)
+                    part = ttnn.concat([part, _rows(self.c_zring, 0, WINDOW - (hi - lo))], dim=2)
                 m = self._put(((src >= lo) & (src < hi)).float().view(1, 1, WINDOW, 1), ttnn.bfloat16)
                 term = ttnn.multiply(part, m)
                 new = term if new is None else ttnn.add(new, term)
@@ -465,60 +559,75 @@ class Inkling2Prefill:
         v_c = ttnn.typecast(v, cdt) if cdt != ttnn.bfloat16 else v
         qs = ttnn.typecast(ttnn.multiply(_f32(q), SCALE), ttnn.bfloat16)  # kernel adds mask to raw q.k
 
-        if not is_global:
+        if is_global:  # far cache rows [v | 1, 0 x 31 | k] (attention_fast kv_full)
+            mass = _rows(self.c_mass[cdt], 0, t)
+            ttnn.fill_cache(st.kv_full, ttnn.concat([v_c, mass, k_c], dim=-1), 0, update_idx=s)
+        if self.r3:
+            attn = self._attention_r3(lp, qs, rel, sink, st, k_c, v_c, s, t)
+        elif not is_global:
             attn = self._local_blocked(lp, qs, rel, sink, st, k_c, v_c, s, t)
-            far = None
         else:
             attn = self._global_blocked(lp, qs, rel, sink, st, k_c, v_c, s, t)
         self._tick("a.core")
-        # cache writes (after reading the old ring)
+        # ring writes (after reading the old ring; the global blocked path reads kv_full only below s)
         self._write_ring(st.k_ring, k, s, n)
         self._write_ring(st.v_ring, v, s, n)
-        if is_global:  # far cache rows [v | 1, 0 x 31 | k] (attention_fast kv_full)
-            mass = self._const(
-                ("mass", t), lambda: self._put(torch.nn.functional.pad(torch.ones(1, N_KV, t, 1), (0, 31)), cdt)
-            )
-            ttnn.fill_cache(st.kv_full, ttnn.concat([v_c, mass, k_c], dim=-1), 0, update_idx=s)
 
         self._tick("a.cache_write")
         attn = _unheads(_bf16(attn))  # [1,1,T,3072]
         gated = ttnn.multiply(_f32(attn), ttnn.sigmoid(_f32(gate)))
         return self._linear(ttnn.typecast(gated, ttnn.bfloat16), lp.w_o)
 
+    def _attention_r3(self, lp, qs, rel, sink, st, k_c, v_c, s, t):
+        """Attention by one SDPA with an in-kernel banded rel bias (R3): rel_logits[q, d] = rel_states[q] . proj[:, d]
+        for key distance d < 1024, per-query sink logit; local layers also mask d >= 1024. The queries are the
+        last t keys: local keys = [ring rotated to position order ++ chunk] (only the s valid slots while s < 1024),
+        global keys =
+        kv_full rows [0, s + t) (the chunk is written there first)."""
+        rl = ttnn.matmul(rel, lp.rel_proj, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,24,t,1024]
+        rl = ttnn.to_layout(rl, ttnn.ROW_MAJOR_LAYOUT)
+        if lp.lay.is_global:
+            if s == 0:
+                kk, vv = k_c, v_c
+            else:
+                kv = ttnn.slice(st.kv_full, [0, 0, 0, 0], [1, N_KV, s + t, KV_WIDTH])
+                kk, vv = _cols(kv, V_WIDTH, KV_WIDTH), _cols(kv, 0, HEAD_DIM)
+            window = None
+        else:
+            if s == 0:
+                kk, vv = k_c, v_c
+            elif s < WINDOW:  # positions [0, s) sit in slots [0, s); the other slots are not positions yet
+                kk = ttnn.concat([_rows(st.k_ring, 0, s), k_c], dim=2)
+                vv = ttnn.concat([_rows(st.v_ring, 0, s), v_c], dim=2)
+            else:
+                o = s % WINDOW
+                rot = lambda r: r if o == 0 else ttnn.concat([_rows(r, o, WINDOW), _rows(r, 0, o)], dim=2)  # noqa: E731
+                kk = ttnn.concat([rot(st.k_ring), k_c], dim=2)
+                vv = ttnn.concat([rot(st.v_ring), v_c], dim=2)
+            window = WINDOW
+        return ttnn.transformer.scaled_dot_product_attention(
+            qs,
+            kk,
+            vv,
+            is_causal=True,
+            scale=1.0,
+            sliding_window_size=window,
+            rel_logits=rl,
+            attention_sink=_bf16(sink),
+            program_config=self._sdpa_cfg(*self.r3_chunks),
+            compute_kernel_config=self.sdpa_ckc,
+        )
+
     def _band(self, lp, rel, sink, s, t, is_global):
         """Additive mask in query-block coordinates [nb, 24, QB, KB]: banded rel bias, window / causal limits, sink
         column (KB-32), key positions < 0. Block b, row u, key col c <-> key position s + QB*b - 1024 + c."""
         nb = t // QB
         kb = WINDOW + QB + 32
-        if not hasattr(lp, "bu"):
-            # rows 0-15: rel_proj skewed per row offset u; row 16: sink column; row 17: 0 in the window/sink, -inf
-            # elsewhere (the left operand carries [rel_states, sink, 1]): one matmul gives the whole mask
-            p = ttnn.to_torch(lp.rel_proj).float().reshape(D_REL, WINDOW)
-            bu = torch.zeros(QB, D_REL + 2, kb)
-            cc = torch.arange(kb)
-            for u in range(QB):
-                c = torch.arange(u + 1, u + WINDOW + 1)
-                bu[u][:D_REL, c] = p[:, u + WINDOW - c]
-                lo = 0 if is_global else u + 1  # global: keys at distance >= 1024 stay visible (no bias)
-                bu[u][D_REL + 1] = torch.where((cc >= lo) & (cc <= u + WINDOW), 0.0, NEG)
-            bu[:, D_REL, WINDOW + QB] = 1.0
-            bu[:, D_REL + 1, WINDOW + QB] = 0.0
-            lp.bu = self._put(bu.unsqueeze(0), ttnn.bfloat16)  # [1, QB, 18, KB]
-
-        def consts():
-            e = torch.zeros(2, 1, 1, 1, D_REL + 2)
-            e[0, ..., D_REL] = 1
-            e[1, ..., D_REL + 1] = 1
-            vm = None
-            if s < WINDOW:  # key positions < 0 (first chunk)
-                c = torch.arange(kb).view(1, kb)
-                vm = torch.zeros(nb, 1, 1, kb)
-                for b in range(nb):
-                    vm[b, 0] = torch.where((s + QB * b - WINDOW + c) < 0, NEG, 0.0)
-                vm = self._put(vm, ttnn.bfloat16)
-            return self._put(e[0], ttnn.bfloat16), self._put(e[1], ttnn.bfloat16), vm
-
-        e16, e17, vmask = self._const(("blk2", nb, min(s, WINDOW)), consts)
+        e16, e17 = self.c_e16, self.c_e17
+        vmask = None
+        if s < WINDOW:  # key positions < 0: absolute query blocks s/QB ..
+            g0 = s // QB
+            vmask = ttnn.slice(self.c_vmask, [g0, 0, 0, 0], [g0 + nb, 1, 1, kb])
 
         # A[u, (b, h), :] = [rel[h, QB*b + u, 0:16], sink[h, QB*b + u], 1]
         ra = ttnn.permute(ttnn.reshape(rel, [N_HEADS, nb, QB, D_REL]), (2, 1, 0, 3))
@@ -553,7 +662,7 @@ class Inkling2Prefill:
         k_all = ttnn.concat([ring_k, k_c], dim=2)
         v_all = ttnn.concat([ring_v, v_c], dim=2)
         cdt = k_c.dtype
-        zp = self._const(("zkvb", cdt, nb), lambda: self._put(torch.zeros(nb, N_KV, 32, HEAD_DIM), cdt))
+        zp = ttnn.slice(self.c_zkvb[cdt], [0, 0, 0, 0], [nb, N_KV, 32, HEAD_DIM])
         kbt = ttnn.concat(
             [ttnn.concat([_rows(k_all, QB * b, QB * b + WINDOW + QB) for b in range(nb)], dim=0), zp], dim=2
         )
@@ -585,7 +694,7 @@ class Inkling2Prefill:
         cdt = k_c.dtype
         ring_k = st.k_ring if o == 0 else ttnn.concat([_rows(st.k_ring, o, WINDOW), _rows(st.k_ring, 0, o)], dim=2)
         ring_v = st.v_ring if o == 0 else ttnn.concat([_rows(st.v_ring, o, WINDOW), _rows(st.v_ring, 0, o)], dim=2)
-        zpad = self._const(("zkv", cdt), lambda: self._put(torch.zeros(1, N_KV, 32, HEAD_DIM), cdt))
+        zpad = self.c_zkv[cdt]
         kn = ttnn.concat([ring_k, k_c, zpad], dim=2)  # key j <-> position s - 1024 + j
         vn = ttnn.concat([ring_v, v_c, zpad], dim=2)
         kk = WINDOW + t + 32
@@ -599,26 +708,11 @@ class Inkling2Prefill:
                 right = t - QB * b - QB  # keys after the band: future
                 parts = []
                 if left:
-                    parts.append(
-                        self._const(
-                            ("gleft", left, min(s, WINDOW)),
-                            lambda: self._put(
-                                torch.where(s - WINDOW + torch.arange(left) < 0, NEG, 0.0)
-                                .view(1, 1, 1, left)
-                                .expand(1, N_HEADS, QB, left)
-                                .contiguous(),
-                                ttnn.bfloat16,
-                            ),
-                        )
-                    )
+                    o0 = min(s, WINDOW)
+                    parts.append(_cols(self.c_gleft, o0, o0 + left))
                 parts.append(_cols(bb, 0, WINDOW + QB))
                 if right:
-                    parts.append(
-                        self._const(
-                            ("gright", right),
-                            lambda: self._put(torch.full((1, N_HEADS, QB, right), NEG), ttnn.bfloat16),
-                        )
-                    )
+                    parts.append(_cols(self.c_gright, 0, right))
                 parts.append(_cols(bb, WINDOW + QB, kb))
                 rowsm.append(ttnn.concat(parts, dim=-1))
             g = len(rowsm)
@@ -652,28 +746,13 @@ class Inkling2Prefill:
         lse = ttnn.add(ttnn.reshape(lse, [1, N_KV, GROUPS * t, 1]), -math.log(32.0))
         hi = ttnn.typecast(lse, ttnn.bfloat16)
         lo = ttnn.typecast(ttnn.subtract(lse, _f32(hi)), ttnn.bfloat16)
-        sel = self._const(
-            "anchor_sel",
-            lambda: (
-                self._put(torch.eye(32)[0].view(1, 1, 1, 32), ttnn.bfloat16),
-                self._put(torch.eye(32)[1].view(1, 1, 1, 32), ttnn.bfloat16),
-            ),
-        )
+        sel = self.c_sel
         qext = ttnn.add(ttnn.multiply(hi, sel[0]), ttnn.multiply(lo, sel[1]))  # [1,8,3T,32]
         qf = ttnn.concat([qg, qext], dim=-1)  # [1,8,3T,160]
         qf = ttnn.reshape(qf, [1, N_HEADS, t, FAR_DH])
 
-        def anchors():
-            ka = torch.zeros(1, N_KV, 32, FAR_DH)
-            ka[..., HEAD_DIM] = 1
-            ka[..., HEAD_DIM + 1] = 1
-            va = torch.zeros(1, N_KV, 32, FAR_DH)
-            va[..., HEAD_DIM] = 1
-            return self._put(ka, ttnn.bfloat16), self._put(va, ttnn.bfloat16)
-
-        ka, va = self._const("anchors", anchors)
-        zfull = self._const("zcol", lambda: self._put(torch.zeros(1, N_KV, self.m.max_ctx, 32), ttnn.bfloat16))
-        zcol = _rows(zfull, 0, far)
+        ka, va = self.c_anchors
+        zcol = _rows(self.c_zcol, 0, far)
         kv = ttnn.slice(st.kv_full, [0, 0, 0, 0], [1, N_KV, far, KV_WIDTH])
         kf = ttnn.concat([ttnn.concat([_bf16(_cols(kv, V_WIDTH, KV_WIDTH)), zcol], dim=-1), ka], dim=2)
         vf = ttnn.concat([ttnn.concat([_bf16(_cols(kv, 0, HEAD_DIM)), zcol], dim=-1), va], dim=2)
@@ -693,8 +772,8 @@ class Inkling2Prefill:
 
     # ------------------------------------------------------------------ MoE
     def _grouped_mm(self, a, w, moe, ei, n, k):
-        """a [1, G, GM, k] (slot g of one expert) x w[ei[g]] -> [1, G, GM, n]: indexed sparse_matmul (only the slot's
-        expert is read), 1D mcast config with per_core_M = GM / 32."""
+        """a [1, G, GM, k] (slot g of one expert; GM = slot_rows) x w[ei[g]] -> [1, G, GM, n]: indexed sparse_matmul
+        (only the slot's expert is read), 1D mcast config with per_core_M = GM / 32."""
         g = a.shape[1]
         grid, ibw = self.group_grid, self.group_ibw[k]
         key = ("grpcfg", n, k, grid, ibw, self.gm)
@@ -716,9 +795,10 @@ class Inkling2Prefill:
                 mcast_in0=True,
             )
         outs = []
+        step = self.r2_step
         for i, idx in enumerate(ei):
-            g0 = i * NUM_EXPERTS
-            ag = a if len(ei) == 1 else ttnn.slice(a, [0, g0, 0, 0], [1, min(g, g0 + NUM_EXPERTS), self.gm, k])
+            g0 = i * step
+            ag = a if len(ei) == 1 else ttnn.slice(a, [0, g0, 0, 0], [1, min(g, g0 + step), self.gm, k])
             outs.append(
                 ttnn.sparse_matmul(
                     ag,
@@ -732,7 +812,9 @@ class Inkling2Prefill:
                     dtype=ttnn.bfloat16,
                 )
             )
-        sizes = [min(g, i * NUM_EXPERTS + NUM_EXPERTS) - i * NUM_EXPERTS for i in range(len(outs))]
+        if len(outs) == 1:
+            return ttnn.reshape(outs[0], [1, g, self.gm, n])
+        sizes = [min(g, i * step + step) - i * step for i in range(len(outs))]
         out = ttnn.concat([ttnn.reshape(o, [1, z, self.gm, n]) for o, z in zip(outs, sizes)], dim=1)
         return ttnn.reshape(out, [1, g, self.gm, n])
 
@@ -743,9 +825,7 @@ class Inkling2Prefill:
         x = ttnn.rms_norm(h, weight=moe.norm_w, epsilon=RMS_EPS, compute_kernel_config=moe.router_compute)
         x = _bf16(x)
         logits = ttnn.matmul(x, lp.router_w, dtype=ttnn.float32, compute_kernel_config=moe.router_compute)
-        bias = self._const(
-            ("rbias", id(lp), t), lambda: self._put(lp.router_bias_row.expand(1, 1, t, NUM_EXPERTS).contiguous())
-        )
+        bias = _rows(lp.router_bias_rows, 0, t)
         weights, indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
             logits,
             bias,
@@ -786,14 +866,14 @@ class Inkling2Prefill:
         self._tick("moe.dispatch")
         ei = [
             self._put(
-                torch.from_numpy(eid[g0 : g0 + NUM_EXPERTS]).view(1, 1, 1, -1), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT
+                torch.from_numpy(eid[g0 : g0 + self.r2_step]).view(1, 1, 1, -1), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT
             )
-            for g0 in range(0, nslot, NUM_EXPERTS)
-        ]  # sparse_matmul takes at most 128 (= experts) indices per call
+            for g0 in range(0, nslot, self.r2_step)
+        ]  # sparse_matmul takes at most 128 (= experts) indices per call; R2 lifts that (one call)
         gu = self._grouped_mm(xs, lp.w_gate_up, moe, ei, 2 * INTER, HIDDEN)
         hid = softcapped_swiglu(_cols(gu, 0, INTER), _cols(gu, INTER, 2 * INTER))
         self._tick("moe.gate_up")
-        y = self._grouped_mm(hid, moe.w_down, moe, ei, HIDDEN, INTER)
+        y = self._grouped_mm(hid, lp.w_down, moe, ei, HIDDEN, INTER)
         self._tick("moe.down")
         cap = rows
         y_rm = ttnn.reshape(ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT), [nslot * cap, HIDDEN])
@@ -801,11 +881,12 @@ class Inkling2Prefill:
         yb = ttnn.reshape(ttnn.embedding(bi, y_rm, layout=ttnn.TILE_LAYOUT), [1, TOP_K, t, HIDDEN])
         wk = _bf16(ttnn.permute(weights, (0, 3, 2, 1)))  # [1,8,T,1]
         if n < t:
-            vrow = self._const(
-                ("vrow", n, t), lambda: self._put((torch.arange(t) < n).float().view(1, 1, t, 1), ttnn.bfloat16)
-            )
+            vrow = self._put((torch.arange(t) < n).float().view(1, 1, t, 1), ttnn.bfloat16)  # per call, not cached
             wk = ttnn.multiply(wk, vrow)
-        out = ttnn.sum(ttnn.multiply(yb, wk), dim=1, keepdim=True)
+        if self.wred:  # one pass over the 8 planes, no full-size product
+            out = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(yb, wk, dim=1)
+        else:
+            out = ttnn.sum(ttnn.multiply(yb, wk), dim=1, keepdim=True)
         return _bf16(out)
 
     # ------------------------------------------------------------------ conv / one application
@@ -969,7 +1050,7 @@ class Inkling2Prefill:
           0..3 of the shared input; triple = row 0 q, rows 1..4 k lags, rows 5..8 v lags);
         - post-attn / post-mlp FusedShortConv rings: ring[(P - k) % 4] = conv input at lag k, dense fp32 pages."""
         P = ctx["L"] - 1
-        zero = self._const("zrow", lambda: self._put(torch.zeros(1, 1, 1, HIDDEN), ttnn.bfloat16))
+        zero = self.c_zero_row
         conv_rows = []
         for c, tails in ctx["tails"].items():
             st = self.m.states[c][0]
@@ -979,9 +1060,7 @@ class Inkling2Prefill:
                 rows = [fix(q[0])] + [fix(r) for r in k] + [fix(r) for r in v]
             else:
                 rows = [fix(r) for r in k]
-            z = self._const(
-                ("zx", len(rows)), lambda m=len(rows): self._put(torch.zeros(1, 1, 32 - m, HIDDEN), ttnn.bfloat16)
-            )
+            z = self.c_zx[len(rows)]
             ttnn.copy(ttnn.concat(rows + [z], dim=2), st.x_hist)
             pad = ctx["t"] - n
             for name in ("attn", "mlp"):
@@ -1001,19 +1080,22 @@ class Inkling2Prefill:
                     )
                 i += 1
 
-    def prefill(self, ids, logits_all=False, log=None, force=None, collect=None):
+    def prefill(self, ids, logits_all=False, log=None, force=None, collect=None, chunk=None):
         """ids: prompt token list. Fills the model's decode state for positions [0, len). Returns logits fp32 host
-        tensor: [len, 200058] if logits_all else [1, 200058] (last position)."""
+        tensor: [len, 200058] if logits_all else [1, 200058] (last position). chunk: tokens per pass (default
+        self.chunk, at most self.chunk)."""
         m = self.m
         L = len(ids)
         assert 0 < L <= m.max_ctx
+        chunk = chunk or self.chunk
+        assert chunk <= self.chunk and self._chunk_ok(chunk), (chunk, self.chunk)
         m.reset()
         ctx = self._new_ctx()
         ctx["L"] = L
         outs = []
         s = 0
         while s < L:
-            n = min(self.chunk, L - s)
+            n = min(chunk, L - s)
             t = -(-n // QB) * QB
             assert s + t <= m.max_ctx, "max_ctx must cover the padded last chunk"
             chunk_ids = list(ids[s : s + n]) + [0] * (t - n)
