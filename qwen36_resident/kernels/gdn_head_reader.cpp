@@ -189,13 +189,16 @@ void kernel_main() {
     }
     cb_push_back(cb_row_mask, 1);
     uint32_t cur = 0;
+    uint32_t vcur[batch];  // (verify rows: per row of the core's group its user's slot word, mod R)
     if constexpr (kVRows) {
-        // the user's slot word (every row of the group holds it; one user per core), for this RISC and the writer
+        // the rows' slot words (every row of a user holds its user's; this core runs group u0's rows)
         const uint32_t scratch = get_write_ptr(cb_s_in);
         noc_async_read(get_noc_addr_from_bank_id<true>(0, tok_addr + tok_ver_off + kTokVerSlot), scratch, 128);
         noc_async_read_barrier();
-        cur = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[u0 * batch] % batch;
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_slot)) = cur + 1;
+        for (uint32_t u = 0; u < batch; u++) {
+            vcur[u] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[u0 * batch + u] % vrows_r;
+        }
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_slot)) = 1;
     } else if constexpr (verify) {
         // the slot word lands in the state CB, unused until the first state read
         const uint32_t scratch = get_write_ptr(cb_s_in);
@@ -253,7 +256,7 @@ void kernel_main() {
             noc_semaphore_wait_min(state_sem, i - copies * n + 1);
         }
         cb_reserve_back(cb_s_in, st);
-        if (kVRows && r % batch > 0) {
+        if (kVRows && r % vrows_r > 0) {  // (a user's row u > 0: chained from row u - 1)
             noc_semaphore_wait_min(state_sem, i);
             const uint32_t src = s_new + ((i - 1) % s_new_states) * st * kF32Tile;
             cb_reserve_back(cb_s_mm, st);
@@ -264,7 +267,7 @@ void kernel_main() {
             cb_push_back(cb_s_in, st);
             return;
         }
-        const uint32_t slot = kVRows ? (r / batch) * batch + cur : r;
+        const uint32_t slot = kVRows ? (r / vrows_r) * vrows_r + vcur[r % batch] : r;
         const uint32_t first = (((l % copies) * num_heads + head) * kUsers + slot) * st;
         const uint32_t s_mm_at = get_write_ptr(cb_s_mm);
         push_pages(cb_s_mm, state_dram, first, st, kF32Tile);

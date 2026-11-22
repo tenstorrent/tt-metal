@@ -261,10 +261,10 @@ void kernel_main() {
         // every row's new k / v into the tail tiles once per layer, then per pass the masked tail tiles (verify rows:
         // per user gr at its first pass, its passes' masks 2 u + j, its placement tiles 4 gr ..; the active passes)
         cb_wait_front(cb_mask, 2 * kUsers);
-        cb_wait_front(cb_rowsel, 4 * groups);
+        cb_wait_front(cb_rowsel, 4 * kVUsers);
         for (uint32_t i = 0; i < layers * n_act; i++) {
-            const uint32_t u = act.row[i % n_act], gr = u / users, n_tail = n_of[u];
-            if (u % users == 0) {
+            const uint32_t u = act.row[i % n_act], gr = u / kPPU, n_tail = n_of[u];  // (gr: the pass's user)
+            if (u % kPPU == 0) {
                 cb_wait_front(cb_kw, Dt);
                 norm_rope(cb_kraw, cb_kw, 0, cb_knew, cb_knew, kRopeK + 3 * gr);
                 cb_pop_front(cb_kw, Dt);
@@ -280,7 +280,7 @@ void kernel_main() {
                 sum_partials<true>(children);
             }
             cb_pop_front(cb_q, Dt);
-            if (u % users == users - 1) {
+            if (u % kPPU == kPPU - 1) {
                 pack_tail_bf8(n_tail);
             }
         }

@@ -23,20 +23,20 @@ FORCE_INLINE void build_packed_rope(uint32_t base) {
         noc_async_read(get_noc_addr(from), to, kFaceRow);
         noc_async_read(get_noc_addr(from + kFace), to + kFace, kFaceRow);
     };
-    // (verify rows: pass ug = gr * users + g of user gr takes rows gr * batch + g * group_rows + r; user gr's tail
-    // rope at kRopeK + 3 gr)
+    // (pass ug = its user's pass g = ug % kPPU takes rows (ug / kPPU) kVR + g group_rows + r; user v's tail rope at
+    // kRopeK + 3 v, row r from its row v kVR + r — a single-user verify: one user of kVR = batch rows)
     for (uint32_t k = 0; k < 3; k++) {
         for (uint32_t ug = 0; ug < kUsers; ug++) {
-            const uint32_t gr = ug / users, g = ug % users;
+            const uint32_t r0 = (ug / kPPU) * kVR + (ug % kPPU) * group_rows;
             for (uint32_t r = 0; r < group_rows; r++) {
                 for (uint32_t h = 0; h < heads; h++) {
-                    copy_row(3 * (gr * batch + g * group_rows + r) + k, kRopeQ + 3 * ug + k, r * heads + h);
+                    copy_row(3 * (r0 + r) + k, kRopeQ + 3 * ug + k, r * heads + h);
                 }
             }
         }
-        for (uint32_t gr = 0; gr < groups; gr++) {
-            for (uint32_t r = 0; r < batch; r++) {
-                copy_row(3 * (gr * batch + r) + k, kRopeK + 3 * gr + k, r);
+        for (uint32_t v = 0; v < kVUsers; v++) {
+            for (uint32_t r = 0; r < kVR; r++) {
+                copy_row(3 * (v * kVR + r) + k, kRopeK + 3 * v + k, r);
             }
         }
     }

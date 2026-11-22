@@ -167,9 +167,10 @@ void kernel_main() {
     }
     // verify rows: group gr's ring step (row gr * batch's word; rows mode leaves `ring` 0), kept here (compute writes
     // cb_dout once the layers run)
-    uint32_t vring[groups];
-    for (uint32_t gr = 0; gr < groups; gr++) {
-        vring[gr] = kVRows ? head[kVRingCopy / 4 + gr * batch] : ring;
+    // (verify rows: per user, user k of group gr = row gr * batch + k * kVR)
+    uint32_t vring[groups * kUPG];
+    for (uint32_t i = 0; i < groups * kUPG; i++) {
+        vring[i] = kVRows ? head[kVRingCopy / 4 + i * kVR] : ring;
     }
     auto ring_of = [&](uint32_t gr) -> uint32_t { return vring[gr]; };
     if constexpr (verify_rows) {
@@ -188,14 +189,21 @@ void kernel_main() {
         };
         for (uint32_t blk = 0; blk < 32 / batch; blk++) {
             for (uint32_t r = 0; r < batch; r++) {
-                const uint32_t row = blk * batch + r;
+                const uint32_t row = blk * batch + r, k = r / kVR, rk = r % kVR;  // (user k's row rk)
                 for (uint32_t j = 0; j < 3; j++) {
-                    if (r + j >= 3) {
-                        one(j, row, blk * batch + r + j - 3);
+                    if (rk + j >= 3) {
+                        one(j, row, row + j - 3);
+                        continue;
                     }
-                    for (uint32_t gr = 0; r + j < 3 && gr < (kVRows ? groups : 1); gr++) {
-                        const uint32_t h = ring_of(gr) % batch + r + j;  // history row r + j in the two blocks
-                        one(3 + 6 * gr + 2 * j + (h >= batch ? 1 : 0), row, blk * batch + h % batch);
+                    if constexpr (kVRows) {
+                        // the user's history row rk + j: ring slot s, block s / kVR (absolute), row k kVR + s % kVR
+                        for (uint32_t gr = 0; gr < groups; gr++) {
+                            const uint32_t s = (vring[gr * kUPG + k] + rk + j) % kRingSlots;
+                            one(3 + 3 * (gr * kHistSlots + s / kVR) + j, row, blk * batch + k * kVR + s % kVR);
+                        }
+                    } else {
+                        const uint32_t h = ring_of(0) % batch + r + j;  // history row r + j in the two blocks read
+                        one(3 + 2 * j + (h >= batch ? 1 : 0), row, blk * batch + h % batch);
                     }
                 }
             }
@@ -245,7 +253,7 @@ void kernel_main() {
             cb_reserve_back(cb_conv_w, 4 * kBlk);
             // (row groups: one set of taps; group gr's history at gr * 3 * kBlk tiles, from its rows
             // gr * num_streamers * gdn_copies further, see the writer)
-            cb_reserve_back(cb_conv_hist, groups * 3 * kBlk);
+            cb_reserve_back(cb_conv_hist, groups * kHPG * kBlk);
             if (conv_bytes > 0) {
                 for (uint32_t j = 0; j < 4; j++) {
                     noc_async_read(
@@ -257,12 +265,13 @@ void kernel_main() {
                     if (kVRows && !ag.has(gr)) {
                         continue;
                     }
-                    const uint32_t b0 = (conv_step(ring_of(gr), g, gdn_copies) % kRingSlots) / batch;
-                    for (uint32_t j = 0; j < 2; j++) {
+                    // (verify rows: every block of the group's rings, in block order)
+                    const uint32_t b0 = kVRows ? 0 : (conv_step(ring_of(gr), g, gdn_copies) % kRingSlots) / batch;
+                    for (uint32_t j = 0; j < (kVRows ? kHistSlots : 2); j++) {
                         noc_async_read(
                             hist.get_noc_addr(
                                 gr * num_streamers * gdn_copies + row, ((b0 + j) % kHistSlots) * kBlkBytes),
-                            get_write_ptr(cb_conv_hist) + (gr * 3 + j) * kBlkBytes,
+                            get_write_ptr(cb_conv_hist) + (gr * kHPG + j) * kBlkBytes,
                             conv_bytes);
                     }
                 }
@@ -275,14 +284,14 @@ void kernel_main() {
                             hist.get_noc_addr(
                                 gr * num_streamers * gdn_copies + row,
                                 (rows_mode ? j : (step + j) % kHistSlots) * kBlkBytes),
-                            get_write_ptr(cb_conv_hist) + (gr * 3 + j) * kBlkBytes,
+                            get_write_ptr(cb_conv_hist) + (gr * kHPG + j) * kBlkBytes,
                             conv_bytes);
                     }
                 }
             }
             noc_async_read_barrier();
             cb_push_back(cb_conv_w, 4 * kBlk);
-            cb_push_back(cb_conv_hist, groups * 3 * kBlk);
+            cb_push_back(cb_conv_hist, groups * kHPG * kBlk);
             g++;
         }
         mark(l, 0);

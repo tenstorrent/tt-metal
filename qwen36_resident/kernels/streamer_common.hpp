@@ -170,15 +170,22 @@ static_assert(!verify || batch >= 2, "verify runs two or more rows of one user")
 constexpr bool verify_pair = verify && batch == 2;  // MTP: pair slots
 constexpr bool verify_rows = verify && batch > 2;   // DFlash2: a ring of single-row slots
 constexpr uint32_t kRingSlots = 16;
-static_assert(!verify_rows || (kRingSlots % batch == 0 && batch + 3 <= kRingSlots), "ring of single-row slots");
+
 // conv history slots per (streamer, GDN copy) row (verify_rows: blocks of batch single-row slots)
-constexpr uint32_t kHistSlots = verify_rows ? kRingSlots / batch : (verify ? 4 : 3);
-// verify rows (DB1, row groups; active_rows.hpp): group gr is one user's verify of batch rows with its own ring step
-// (token-state word, read by the reader; the writer takes it from the reader's copy at cb_dout + kVRingCopy): its
-// history rows at gr * num_streamers * gdn_copies further, its row selections H_j,b at cb_shift tiles 3 + 6 gr + 2 j +
-// b (the S_j at 0 .. 2 are shared)
+// rows per user of a verify of R > 2 rows: the batch (one user), or with verify rows vrows_r (8 / R users per group's
+// tiles, user k in rows k R ..; active_rows.hpp)
+constexpr uint32_t kVR = verify_rows && groups > 1 ? vrows_r : batch;
+constexpr uint32_t kUPG = batch / kVR;  // users per group
+static_assert(!verify_rows || (kRingSlots % kVR == 0 && kVR + 3 <= kRingSlots && batch % kVR == 0), "ring of slots");
+constexpr uint32_t kHistSlots = verify_rows ? kRingSlots / kVR : (verify ? 4 : 3);
+// verify rows (DB1, row groups; active_rows.hpp): group gr's batch rows are kUPG users of kVR rows (user k in rows
+// k kVR ..), each with its own ring step (token-state word, read by the reader; the writer takes it from the reader's
+// copy at cb_dout + kVRingCopy); the group's history rows at gr * num_streamers * gdn_copies further; a group reads all
+// kHistSlots blocks of its users' rings (block order, kHPG slots of cb_conv_hist per group), its row selections H_b,j
+// (both users' rows, block b absolute) at cb_shift tiles 3 + 3 (gr kHistSlots + b) + j (the S_j at 0 .. 2 are shared)
 constexpr bool kVRows = verify_rows && groups > 1;
-constexpr uint32_t kShiftTiles = kVRows ? 3 + 6 * groups : 9;
+constexpr uint32_t kShiftTiles = kVRows ? 3 + 3 * kHistSlots * groups : 9;
+constexpr uint32_t kHPG = kVRows && kHistSlots > 3 ? kHistSlots : 3;  // cb_conv_hist slots per group
 constexpr uint32_t kVRingCopy = 64;
 constexpr uint32_t gdn_layers = layers - (attn_interval > 0 ? layers / attn_interval : 0);
 constexpr bool fc_in = get_compile_time_arg_val(60) != 0;

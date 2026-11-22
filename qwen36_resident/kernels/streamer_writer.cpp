@@ -142,11 +142,11 @@ void kernel_main() {
     const uint32_t active_mask = groups == 1
                                      ? (*ring_sem & 0xffff)
                                      : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base(cb_dout))[kTokActive];
-    // verify rows: each group's ring step, from the reader's copy (streamer_common.hpp kVRows)
-    uint32_t vring[groups];
-    for (uint32_t gr = 0; gr < groups; gr++) {
-        vring[gr] =
-            kVRows ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base(cb_dout) + kVRingCopy)[gr * batch] : ring;
+    // verify rows: each user's ring step (user k of group gr: row gr * batch + k * kVR), from the reader's copy
+    uint32_t vring[groups * kUPG];
+    for (uint32_t i = 0; i < groups * kUPG; i++) {
+        vring[i] =
+            kVRows ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base(cb_dout) + kVRingCopy)[i * kVR] : ring;
     }
     // (row groups: group gr's conv history rows follow the num_streamers x gdn_copies rows of the groups before it)
     const uint32_t hist_group_rows = num_streamers * gdn_copies;
@@ -296,19 +296,25 @@ void kernel_main() {
                     if (kVRows && !ag.has(gr)) {
                         continue;
                     }
-                    const uint32_t s0 = (vring[gr] + 3) % kRingSlots;
-                    const uint32_t b = s0 / batch, o = s0 % batch, n1 = batch - o;
                     const uint32_t page = gr * hist_group_rows + first_row + g % gdn_copies;
                     const uint32_t src = get_read_ptr(cb_hist_out) + gr * kBlkViews * 2048;
-                    for (uint32_t t = 0; t < views_of(n_conv) * 32 / batch; t++) {
-                        for (uint32_t f = 0; f < 2; f++) {
-                            const uint32_t at = t * kTileBytes + f * batch * 32;
-                            noc_async_write(src + at, hist.get_noc_addr(page, b * kBlkBytes + at + o * 32), n1 * 32);
-                            if (o > 0) {
+                    // (per user k of the group: its rows k kVR .. of y into its slots, rows k kVR + slot % kVR)
+                    for (uint32_t k = 0; k < kUPG; k++) {
+                        const uint32_t s0 = (vring[gr * kUPG + k] + 3) % kRingSlots;
+                        const uint32_t b = s0 / kVR, o = s0 % kVR, n1 = kVR - o, base = k * kVR * 32;
+                        for (uint32_t t = 0; t < views_of(n_conv) * 32 / batch; t++) {
+                            for (uint32_t f = 0; f < 2; f++) {
+                                const uint32_t at = t * kTileBytes + f * batch * 32;
                                 noc_async_write(
-                                    src + at + n1 * 32,
-                                    hist.get_noc_addr(page, ((b + 1) % kHistSlots) * kBlkBytes + at),
-                                    o * 32);
+                                    src + at + base,
+                                    hist.get_noc_addr(page, b * kBlkBytes + at + base + o * 32),
+                                    n1 * 32);
+                                if (o > 0) {
+                                    noc_async_write(
+                                        src + at + base + n1 * 32,
+                                        hist.get_noc_addr(page, ((b + 1) % kHistSlots) * kBlkBytes + at + base),
+                                        o * 32);
+                                }
                             }
                         }
                     }

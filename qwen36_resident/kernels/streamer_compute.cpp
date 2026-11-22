@@ -414,7 +414,7 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
     cb_reserve_back(cb_qkvz_out, groups * kBlk);
     if (gdn) {
         cb_wait_front(cb_conv_w, 4 * kBlk);
-        cb_wait_front(cb_conv_hist, groups * 3 * kBlk);
+        cb_wait_front(cb_conv_hist, groups * kHPG * kBlk);
         cb_reserve_back(cb_hist_out, groups * hist_slots * kBlkViews);
     }
     if (n_conv > 0) {
@@ -425,7 +425,7 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
         // operands of a view go to DST first (slot 0 keeps y for the history), one init per op
         for (uint32_t k = 0; k < groups_on(); k++) {
             const uint32_t gr = group_at(k);
-            const uint32_t oq = gr * kBlkViews, oh = gr * 3 * kBlkViews, oo = gr * hist_slots * kBlkViews;
+            const uint32_t oq = gr * kBlkViews, oh = gr * kHPG * kBlkViews, oo = gr * hist_slots * kBlkViews;
             for (uint32_t v = 0; v < views_of(n_conv); v++) {
                 tile_regs_acquire();
                 if constexpr (verify_rows) {
@@ -437,11 +437,12 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
                     }
                     reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_conv_hist_full);
                     matmul_init(cb_shift, cb_conv_hist_full);
-                    const uint32_t hsel = 3 + (kVRows ? 6 * gr : 0);
-                    for (uint32_t j = 0; j < 3; j++) {
-                        for (uint32_t b = 0; b < 2; b++) {
-                            matmul_tiles(
-                                cb_shift, cb_conv_hist_full, hsel + 2 * j + b, oh + b * kBlkViews + v, 2 + 2 * j);
+                    // (verify rows: every block of the group's rings, H_b,j at 3 + 3 (gr kHistSlots + b) + j; a single
+                    // user: the two blocks read, H_j,b at 3 + 2 j + b)
+                    for (uint32_t b = 0; b < (kVRows ? kHistSlots : 2); b++) {
+                        for (uint32_t j = 0; j < 3; j++) {
+                            const uint32_t sel = kVRows ? 3 + 3 * (gr * kHistSlots + b) + j : 3 + 2 * j + b;
+                            matmul_tiles(cb_shift, cb_conv_hist_full, sel, oh + b * kBlkViews + v, 2 + 2 * j);
                         }
                     }
                     reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
@@ -528,7 +529,7 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
         // with no q|k|v columns the writer skips it
         cb_push_back(cb_hist_out, groups * hist_slots * kBlkViews);
         cb_pop_front(cb_conv_w, 4 * kBlk);
-        cb_pop_front(cb_conv_hist, groups * 3 * kBlk);
+        cb_pop_front(cb_conv_hist, groups * kHPG * kBlk);
     }
 }
 

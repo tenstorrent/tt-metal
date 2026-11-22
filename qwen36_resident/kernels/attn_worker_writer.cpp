@@ -114,8 +114,8 @@ void kernel_main() {
     // packed: the tail tiles (row 0's tile, and the next one if a row reaches it; verify rows: per user gr, its rows
     // gr * batch ..)
     auto tile_of = [&](uint32_t r) { return tail_row[r] * banks + tail_bank[r]; };
-    auto n_tail_of = [&](uint32_t gr) -> uint32_t {
-        return packed && role == 2 && tile_of(gr * batch + batch - 1) != tile_of(gr * batch) ? 2 : 1;
+    auto n_tail_of = [&](uint32_t v) -> uint32_t {  // (user v's rows v kVR ..)
+        return packed && role == 2 && tile_of(v * kVR + kVR - 1) != tile_of(v * kVR) ? 2 : 1;
     };
     for (uint32_t i = 0; i < layers * n_act; i++) {
         const uint32_t l = i / n_act, u = act.row[i % n_act];
@@ -155,11 +155,11 @@ void kernel_main() {
         if (ts_addr) {
             ts[l * 4 + 3] = *clk;
         }
-        if (packed && role == 2 && u % users == users - 1) {
+        if (packed && role == 2 && u % kPPU == kPPU - 1) {
             // the layer's tail tiles, once all passes have used them: k of each tile, then v (verify rows: the user's,
             // through its last pass's page list)
             const uint32_t copy_stride = get_arg_val<uint32_t>(tail_args + 2);
-            const uint32_t tp0 = tile_of((u / users) * batch), n_tail = n_tail_of(u / users);
+            const uint32_t tp0 = tile_of((u / kPPU) * kVR), n_tail = n_tail_of(u / kPPU);
             cb_wait_front(cb_flush, 2 * tail_pages(n_tail) * Dt);
             for (uint32_t kv = 0; kv < 2; kv++) {
                 for (uint32_t j = 0; j < n_tail; j++) {

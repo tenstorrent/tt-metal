@@ -115,7 +115,15 @@ void kernel_main() {
     auto& stage_iface = get_local_cb_interface(cb_stage);
     const uint32_t stage = stage_iface.fifo_limit - stage_iface.fifo_size;
     uint32_t cur = 0;
-    if constexpr (verify) {
+    uint32_t vcur[batch];  // (verify rows: per row of the core's group its user's slot word, mod R)
+    if constexpr (kVRows) {
+        const uint32_t tok_addr = get_arg_val<uint32_t>(peers_base + 2 * num_streamers + 6);
+        noc_async_read(get_noc_addr_from_bank_id<true>(0, tok_addr + tok_ver_off + kTokVerSlot), stage, 128);
+        noc_async_read_barrier();
+        for (uint32_t u = 0; u < batch; u++) {
+            vcur[u] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[u0 * batch + u] % vrows_r;
+        }
+    } else if constexpr (verify) {
         volatile tt_l1_ptr uint32_t* slot_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_slot));
         while (*slot_sem == 0) {
             invalidate_l1_cache();
@@ -240,7 +248,7 @@ void kernel_main() {
     const bool eager = copies * n <= 1 && !kVRows;
     uint32_t landed = 0;
     auto write_state = [&](uint32_t i, uint32_t r) {
-        const uint32_t slot = kVRows ? (r / batch) * batch + (cur + r % batch) % batch : r;
+        const uint32_t slot = kVRows ? (r / vrows_r) * vrows_r + (vcur[r % batch] + r % vrows_r) % vrows_r : r;
         const uint32_t first = ((i / n % copies * num_heads + head) * kUsers + slot) * st;
         cb_wait_front(cb_s_new_out, st);
         if constexpr (kVRows) {

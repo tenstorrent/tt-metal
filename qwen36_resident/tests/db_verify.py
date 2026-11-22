@@ -51,7 +51,8 @@ def dev_states(model):
     return t.reshape(d.n, model._gdn_copies, d.nv, LR, 128, 128)
 
 
-def run_random(mesh, U, layers, interval, steps, max_pos=512, seed=0, use_taps=True, only=None, starts=None):
+def run_random(mesh, G, layers, interval, steps, max_pos=512, seed=0, use_taps=True, only=None, starts=None, R=8):
+    U = G * 8 // R  # (users: one per group at R = 8, two at R = 4)
     n = mesh.get_num_devices()
     d = Dims(n, mesh.dram_grid_size().x, vocab=VOCAB)
     n_attn = sum(is_attn(l, interval) for l in range(layers))
@@ -87,7 +88,7 @@ def run_random(mesh, U, layers, interval, steps, max_pos=512, seed=0, use_taps=T
         kv_pool_blocks=blocks,
         block_tables=tables,
         rows=True,
-        groups=U,
+        groups=G,
         verify=R,
         taps=list(zip(tap_layers, taps)),
     )
@@ -297,6 +298,7 @@ def main():
     ap.add_argument("--len", type=int, default=256)
     ap.add_argument("--contexts", default="128,8192,32768")
     ap.add_argument("--groups", type=int, default=4)
+    ap.add_argument("--rows", type=int, default=8, help="verify rows per user (8: a user per group, 4: two)")
     ap.add_argument("--layers", type=int, default=4)  # (row groups need an attention layer: its leader runs the rows)
     ap.add_argument("--interval", type=int, default=4)
     ap.add_argument("--steps", type=int, default=12)
@@ -314,7 +316,15 @@ def main():
             only = None if a.only is None else [int(x) for x in a.only.split(",")]
             starts = None if a.starts is None else [int(x) for x in a.starts.split(",")]
             out = run_random(
-                mesh, a.groups, a.layers, a.interval, a.steps, use_taps=not a.no_taps, only=only, starts=starts
+                mesh,
+                a.groups,
+                a.layers,
+                a.interval,
+                a.steps,
+                use_taps=not a.no_taps,
+                only=only,
+                starts=starts,
+                R=a.rows,
             )
     finally:
         close_mesh(mesh)

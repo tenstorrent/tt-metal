@@ -623,10 +623,10 @@ class ResidentModel:
             and kv_pool_blocks is not None
             and embed is not None
             and fc is None
-            and ((not verify and not taps) or (self.vrows and R == 8))
+            and ((not verify and not taps) or (self.vrows and R in (4, 8)))
         ):
             raise ValueError(
-                "row groups: rows mode with paged KV and the hub feed (embed), no fc; verify (8 rows per group, taps) "
+                "row groups: rows mode with paged KV and the hub feed (embed), no fc; verify (4 or 8 rows, taps) "
                 "or neither verify nor taps"
             )
         if self.vrows and self.gdn_chunk:
@@ -641,9 +641,11 @@ class ResidentModel:
         self.tok_pos_off = 0
         self.fc = fc is not None
         self.sample = embed is not None and not verify  # the hub draws the fed token (sampling.hpp)
+        # (verify rows: users of R rows, 8 / R per row group — 4 x 8 or 8 x 4 at four groups)
+        self.vusers = groups * 8 // R if self.vrows else 0
         if self.vrows:
-            assert len(st) == groups, "verify rows: one State per row group"
-            st = [s for s in st for _ in range(R)]  # (user g's R slots start as copies of its state)
+            assert len(st) == self.vusers, f"verify rows: one State per user ({self.vusers})"
+            st = [s for s in st for _ in range(R)]  # (user k's R slots start as copies of its state)
         elif verify:
             assert isinstance(st, State)
             st = [st] * R
@@ -854,7 +856,8 @@ class ResidentModel:
         extra = (n_sub - 1) * B * 2 * nv_max * TILE if lm_head else 0
         # verify: two more conv history outputs and the row selections (R > 2 rows: 9 row selections; verify rows: the
         # 3 shared S_j and 6 H_j,b per group, streamer_common.hpp)
-        n_shift = 3 + 6 * groups if self.vrows else 9
+        # (verify rows: per group and tap one selection per history block, 16 / R blocks: 3 + 6 G at R = 8, 3 + 12 G at 4)
+        n_shift = 3 + 3 * (16 // R) * groups if self.vrows else 9
         extra += (2 * blk_tiles * 64 * B + 3 * 2048) if R == 2 else (n_shift * 2048 if verify else 0)
         ring_bytes = ((L1_WEIGHT_BUDGET - act_bytes(B, groups) + act_bytes(1) - extra) // lcm) * lcm
         # (row groups: the one-group ring, the most the L1 measurement below may grow the ring to)
@@ -974,8 +977,8 @@ class ResidentModel:
             kv_stride = 0
             if self.vrows:  # (a table per user; every row of the user reads and writes through it)
                 bpu = -(-sts_all[0].max_pos // kv_block_size)
-                ut = block_tables or [range(g * bpu, (g + 1) * bpu) for g in range(groups)]
-                assert len(ut) == groups, "verify rows: one block table per user (row group)"
+                ut = block_tables or [range(g * bpu, (g + 1) * bpu) for g in range(self.vusers)]
+                assert len(ut) == self.vusers, "verify rows: one block table per user"
                 self._kv_pool_setup(sts_all, kv_pool_blocks, kv_block_size, [ut[r // R] for r in range(LR)])
             else:
                 self._kv_pool_setup(sts_all[:1] if verify else sts_all, kv_pool_blocks, kv_block_size, block_tables)
@@ -1260,7 +1263,8 @@ class ResidentModel:
                 aliased(17, 22, groups * blk_tiles),
                 aliased(18, 23, groups * blk_tiles),
                 aliased(19, 24, CONV_K * blk_tiles),
-                aliased(20, 25, groups * (CONV_K - 1) * blk_tiles),
+                # (verify rows: a group reads 16 / R history blocks — 2 at R = 8, its whole ring of 4 at R = 4)
+                aliased(20, 25, groups * max(CONV_K - 1, 16 // R if self.vrows else 0) * blk_tiles),
                 *([T(21, self.o_in_t)] if groups == 1 else []),
                 cb(30, grid, groups * (3 if R == 2 or (self.rows and not self.vrows) else 1) * blk_tiles * B // TILE),
             ]
@@ -1420,7 +1424,8 @@ class ResidentModel:
                     17,
                     prep_grid,
                     # (verify rows: per pass its q rope, per user its tail's k rope, attn_common.hpp kRopePages)
-                    3 * LR + ((3 * attn_users + 3) * groups if packed else 0)
+                    # (per user its tail's k rope: users = groups at 4 x 8, 2 groups' worth at 8 x 4)
+                    3 * LR + (3 * attn_users * groups + 3 * (self.vusers or groups) if packed else 0)
                     # (row groups: the leader's q-pass rope tiles / the tail core's per-row rope tiles)
                     + (max(3, 3 * -(-LR // (TILE // heads_a))) if groups > 1 and not self.vrows else 0),
                 ),
@@ -1440,7 +1445,7 @@ class ResidentModel:
                 *([cb(42, lead_grid, 2 * Dt)] if groups > 1 else []),
                 # tail core
                 cb(11, tail_grid, Dt),
-                cb(12, tail_grid, 4 * groups if packed else 2 * LR),
+                cb(12, tail_grid, 4 * (self.vusers or groups) if packed else 2 * LR),
                 cb(16, tail_grid, Dt),
                 cb(18, tail_grid, Dt),
                 cb(19, tail_grid, (2 if packed else 1) * Dt),
@@ -1491,6 +1496,7 @@ class ResidentModel:
                 ("o_tiles", d.gv // TILE),  # the streamers' o_in tiles per row group (gdn_head_writer.cpp)
                 ("tok_pos_off", self.tok_pos_off),  # the rows' positions with row groups (active_rows.hpp)
                 ("tok_ver_off", self.tok_ver_off),  # verify rows: per-row ring / slot / prev words (active_rows.hpp)
+                ("vrows_r", R if self.vrows else 0),  # verify rows: rows per user (active_rows.hpp)
                 ("sem_raddr", SEM_RADDR),
                 ("attn_tails", self.attn_tails),  # (attn_common.hpp kTails)
             ]
@@ -1942,12 +1948,12 @@ class ResidentModel:
 
     def token_state_vrows(self, x0, pos, ring, slot, prev=None, active=None):
         """verify rows: the host token state of a step of every user's R rows. Per user g (row group g): x0 [R, HIDDEN]
-        (x0: [groups, R, HIDDEN]), its row 0's position pos[g] (row r at pos[g] + r), its conv ring step ring[g] and
+        (x0: [users, R, HIDDEN]; users = groups x 8 / R), its row 0's position pos[g] (row r at pos[g] + r), its conv ring step ring[g] and
         GDN slot slot[g] (after a step at (k, s) with a drafts accepted the next continues at k + 1 + a, (s + a) % R),
         prev[g] the previous step's accepted drafts (None: none, the committed state; the chunked GDN's word, kept
         for it), active[g] (default all): an inactive user's rows do not run."""
         assert self.vrows
-        U, R, LR = self.groups, self.R, self.launch_rows
+        U, R, LR = self.vusers, self.R, self.launch_rows
         act = [True] * U if active is None else [bool(a) for a in active]
         prev = [None] * U if prev is None else list(prev)
         x0 = x0.reshape(LR, HIDDEN)
@@ -2338,12 +2344,15 @@ class ResidentModel:
         conv_step in streamer_common.hpp; ring: by default the position at batch 1, else 0)"""
         sts = sts if isinstance(sts, (list, tuple)) else [sts]
         if self.vrows and len(sts) == self.launch_rows:
-            # verify rows: group g's ring (user g's histories at its ring step, ring: per user or one for all) after
-            # the S x copies rows of the groups before it
-            b, n = self.batch, self.d.n
-            rings = list(ring) if isinstance(ring, (list, tuple)) else [ring or 0] * self.groups
+            # verify rows: group g's users' rings (each user's histories at its ring step; ring: per user or one for
+            # all) after the S x copies rows of the groups before it; sts holds each user's State once per row
+            b, n, R = self.batch, self.d.n, self.R
+            upg = b // R
+            rings = list(ring) if isinstance(ring, (list, tuple)) else [ring or 0] * self.vusers
             per = [
-                self._hist_host_rows(sts[g * b], rings[g]).reshape(n, self._S * self._gdn_copies, -1)
+                self._hist_host_group(
+                    [sts[(g * upg + k) * R] for k in range(upg)], rings[g * upg : (g + 1) * upg]
+                ).reshape(n, self._S * self._gdn_copies, -1)
                 for g in range(self.groups)
             ]
             return torch.cat(per, dim=1).reshape(n * self.groups * self._S * self._gdn_copies, -1)
@@ -2382,6 +2391,24 @@ class ResidentModel:
                 for age in range(CONV_K - 1):
                     slot = (ring * uses + age) % 3
                     hist[:, rep_rows * copies + c, slot * blk + at] = h[:, age, src]
+        return hist.reshape(n * S * copies, -1)
+
+    def _hist_host_group(self, users, rings):
+        """verify rows: one row group's conv histories — its users (8 / R, rows k R .. of the group's batch x 32 tiles),
+        each a ring of 16 single-row slots stored in 16 / R blocks (block b: user k's slots b R .. b R + R - 1 in its R
+        rows; streamer_common.hpp): user k's history row j (the input at pos - 3 + j) in slot (ring_k + j) % 16"""
+        n, S, copies, R, b = self.d.n, self._S, self._gdn_copies, self.R, self.batch
+        blk = self._blk * TILE * b
+        rows, cols, src = self.hist_index()
+        hist = torch.zeros(n, S * copies, 16 // R * blk)
+        rep_rows = rows.repeat_interleave(TILE)
+        for k, (st, rk) in enumerate(zip(users, rings)):
+            for c in range(min(len(st.hist), copies)):
+                h = torch.stack(st.hist[c])  # [n, 3, conv_ch]
+                for j in range(CONV_K - 1):
+                    slot = (rk + j) % 16
+                    at = (slot // R) * blk + tiny_index(cols, k * R + slot % R, b)
+                    hist[:, rep_rows * copies + c, at] = h[:, j, src]
         return hist.reshape(n * S * copies, -1)
 
     def _hist_host_rows(self, st, ring):

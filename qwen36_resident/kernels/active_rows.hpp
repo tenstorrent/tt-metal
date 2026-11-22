@@ -32,6 +32,8 @@ constexpr uint32_t tok_pos_off = get_named_compile_time_arg_val("tok_pos_off");
 // tok_ver_off + kTokVer* + 4 row of the token state (0: no verify rows)
 constexpr uint32_t tok_ver_off = get_named_compile_time_arg_val("tok_ver_off");
 constexpr uint32_t kTokVerRing = 0, kTokVerSlot = 128, kTokVerPrev = 256;
+// verify rows: rows per user (8: a user per group; 4: two users per group, rows k R ..); 0 without verify rows
+constexpr uint32_t vrows_r = get_named_compile_time_arg_val("vrows_r");
 // per row group: the mixers' row-buffer block (row_tiles batch x 32 tiles) and the streamers' o_in block (o_tiles)
 constexpr uint32_t row_tiles = get_named_compile_time_arg_val("row_tiles");
 constexpr uint32_t o_tiles = get_named_compile_time_arg_val("o_tiles");

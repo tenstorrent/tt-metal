@@ -128,20 +128,19 @@ void kernel_main() {
         chs[u] = role >= 2 ? (takes[u] ? Chunk{tp, 1, 1} : Chunk{0, 1, 0}) : chunk_of(w, tp);
     }
     // packed: every pass takes the tiles below its user's row 0's; the tail core that tile and the next one if a row
-    // of the user reaches it (verify rows: user gr's rows gr * batch ..; pass u is user u / users's)
-    auto n_tail_of = [&](uint32_t gr) -> uint32_t {
-        return packed && tps[gr * batch + batch - 1] != tps[gr * batch] ? 2 : 1;
-    };
+    // of the user reaches it
+    // (user v's rows v kVR .. v kVR + kVR - 1; pass u is user u / kPPU's)
+    auto n_tail_of = [&](uint32_t v) -> uint32_t { return packed && tps[v * kVR + kVR - 1] != tps[v * kVR] ? 2 : 1; };
     for (uint32_t u = 0; packed && u < kUsers; u++) {
-        const uint32_t r0 = (u / users) * batch;
-        chs[u] = role == 2 ? Chunk{tps[r0], 1, n_tail_of(u / users)} : chunk_of(w, tps[r0]);
+        const uint32_t r0 = (u / kPPU) * kVR;
+        chs[u] = role == 2 ? Chunk{tps[r0], 1, n_tail_of(u / kPPU)} : chunk_of(w, tps[r0]);
     }
     if constexpr (kv_paged) {
         // the pages of this core's tiles (the writer's tail pages too: it reads them after the cb_ntiles push)
         const uint32_t pt_addr = get_arg_val<uint32_t>(role >= 2 ? 11 : 9);
         for (uint32_t k = 0; k < act.n; k++) {
             const uint32_t u = act.row[k];
-            translate_chunk(pt_addr, kVRows ? (u / users) * batch : (verify ? 0 : u), u, chs[u], chs[u].n);
+            translate_chunk(pt_addr, kVRows ? (u / kPPU) * kVR : (verify ? 0 : u), u, chs[u], chs[u].n);
         }
     }
     for (uint32_t u = 0; u < kUsers; u++) {
@@ -192,9 +191,9 @@ void kernel_main() {
         if constexpr (packed) {
             // per pass and tail tile j: row (r, h) sees column c up to its row's position; per tail tile j: the
             // placement matrix of the new rows on it (row pos % 32 <- row r) and the rows it keeps
-            // (verify rows: masks 2 ug + j per pass ug, placement / keep 4 gr + 2 j (+ 1) per user gr)
+            // (verify rows: masks 2 ug + j per pass ug, placement / keep 4 v + 2 j (+ 1) per user v)
             cb_reserve_back(cb_mask, 2 * kUsers);
-            cb_reserve_back(cb_rowsel, 4 * groups);
+            cb_reserve_back(cb_rowsel, 4 * kVUsers);
             volatile tt_l1_ptr uint16_t* m = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_mask));
             volatile tt_l1_ptr uint16_t* sel = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_rowsel));
             for (uint32_t row = 0; row < 32; row++) {
@@ -202,26 +201,26 @@ void kernel_main() {
                     const uint32_t at = ((row / 16) * 2 + col / 16) * 256 + (row % 16) * 16 + col % 16;
                     for (uint32_t j = 0; j < 2; j++) {
                         for (uint32_t ug = 0; ug < kUsers; ug++) {
-                            const uint32_t r0 = (ug / users) * batch, r = r0 + (ug % users) * group_rows + row / heads;
+                            const uint32_t r0 = (ug / kPPU) * kVR, r = r0 + (ug % kPPU) * group_rows + row / heads;
                             const bool seen = row >= qrows || (tps[r0] + j) * 32 + col <= tps[r] * 32 + tail_rs[r];
                             m[(2 * ug + j) * 1024 + at] = seen ? 0 : 0xff80;
                         }
-                        for (uint32_t gr = 0; gr < groups; gr++) {
-                            const uint32_t r0 = gr * batch;
+                        for (uint32_t v = 0; v < kVUsers; v++) {
+                            const uint32_t r0 = v * kVR;
                             bool placed = false, kept = true;
-                            for (uint32_t r = 0; r < batch; r++) {
+                            for (uint32_t r = 0; r < kVR; r++) {
                                 const bool here = tps[r0 + r] == tps[r0] + j && tail_rs[r0 + r] == row;
                                 placed |= here && col == r;
                                 kept &= !here;
                             }
-                            sel[(4 * gr + 2 * j) * 1024 + at] = placed ? 0x3f80 : 0;
-                            sel[(4 * gr + 2 * j + 1) * 1024 + at] = kept ? 0x3f80 : 0;
+                            sel[(4 * v + 2 * j) * 1024 + at] = placed ? 0x3f80 : 0;
+                            sel[(4 * v + 2 * j + 1) * 1024 + at] = kept ? 0x3f80 : 0;
                         }
                     }
                 }
             }
             cb_push_back(cb_mask, 2 * kUsers);
-            cb_push_back(cb_rowsel, 4 * groups);
+            cb_push_back(cb_rowsel, 4 * kVUsers);
             cb_reserve_back(cb_rope, kRopePages);
             noc_async_read(tok.get_noc_addr(0, rope_off), get_write_ptr(cb_rope), 3 * batch * groups * kTile);
             noc_async_read_barrier();
@@ -334,8 +333,8 @@ void kernel_main() {
         } else if (packed) {
             // once per layer: the tail tiles, the k norm weight and every row's k / v (rows 0 .. batch - 1)
             // (verify rows: per user, at its first pass; its rows in its group's block of the row buffer)
-            const uint32_t n_tail = n_tail_of(u / users);
-            if (u % users == 0) {
+            const uint32_t n_tail = n_tail_of(u / kPPU);
+            if (u % kPPU == 0) {
                 cb_reserve_back(cb_tail8, 2 * tail_pages(n_tail) * Dt);
                 read_rows(ch, k_addr, 0, n_tail, get_write_ptr(cb_tail8), pages, copy_page);
                 read_rows(ch, v_addr, 0, n_tail, get_write_ptr(cb_tail8) + n_tail * kKvRow, pages, copy_page);
@@ -350,11 +349,13 @@ void kernel_main() {
                 cb_reserve_back(cb_kraw, Dt);
                 cb_reserve_back(cb_vraw, Dt);
                 const uint32_t k = get_write_ptr(cb_kraw), v = get_write_ptr(cb_vraw);
-                const uint32_t grows = rows + (u / users) * row_tiles * kRowTile;
-                for (uint32_t r = 0; r < batch; r++) {
+                // (user u / kPPU's kVR rows: in group (its first row) / batch, from row (its first row) % batch)
+                const uint32_t vr0 = (u / kPPU) * kVR;
+                const uint32_t grows = rows + (vr0 / batch) * row_tiles * kRowTile;
+                for (uint32_t r = 0; r < kVR; r++) {
                     for (uint32_t d = 0; d < Dt; d++) {
-                        place_row(grows + (k0 + d) * kRowTile + user_offset(r), k + d * kTile, r);
-                        place_row(grows + (v0 + d) * kRowTile + user_offset(r), v + d * kTile, r);
+                        place_row(grows + (k0 + d) * kRowTile + user_offset(vr0 % batch + r), k + d * kTile, r);
+                        place_row(grows + (v0 + d) * kRowTile + user_offset(vr0 % batch + r), v + d * kTile, r);
                     }
                 }
                 noc_async_read_barrier();
