@@ -16,8 +16,9 @@ from pathlib import Path
 
 import ttnn
 
-# v1-stick = v1 with the single-dtype expert layers in the stick layout (relayout_sticks.py; other files hard-linked)
-DEFAULT_ROOT = Path(os.environ.get("INKLING_CACHE", "/work/inkling-bringup/cache/v1-stick"))
+# v1-stick4 = v1 with the BFP4/BFP4 expert layers in the stick layout (relayout_sticks.py --dtypes BFP4; other files
+# hard-linked). BFP8 layers stay tiles: their stick path sums the down projection in a different order (not identical).
+DEFAULT_ROOT = Path(os.environ.get("INKLING_CACHE", "/work/inkling-bringup/cache/v1-stick4"))
 
 
 def manifest(root: Path | str = DEFAULT_ROOT) -> dict:
