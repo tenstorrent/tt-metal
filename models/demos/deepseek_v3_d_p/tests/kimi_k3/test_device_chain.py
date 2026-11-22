@@ -164,7 +164,7 @@ def test_k31_layers_0_3_run_free(mesh_device, device_params):
             restore.append((block, "_ffn_path"))
             block._ffn_path = ffn_path
 
-    def on_layer_hidden(global_idx, hidden):  # fires inside layer global_idx + 1 with its AttnRes read
+    def dsa_input_tap(global_idx, hidden):  # fires inside layer global_idx + 1 with its AttnRes read
         if global_idx == 2:
             keep("dsa_input_3", hidden)
 
@@ -174,8 +174,13 @@ def test_k31_layers_0_3_run_free(mesh_device, device_params):
 
     inner_forward = model.forward
 
-    def tapped_forward(*args, **kwargs):
-        return inner_forward(*args, layer_tap=layer_tap, on_layer_hidden=on_layer_hidden, **kwargs)
+    def tapped_forward(*args, on_layer_hidden=None, **kwargs):  # the runtime's own hook (the drafter's) still fires
+        def both(global_idx, hidden, _runtime_hook=on_layer_hidden):
+            dsa_input_tap(global_idx, hidden)
+            if _runtime_hook is not None:
+                _runtime_hook(global_idx, hidden)
+
+        return inner_forward(*args, layer_tap=layer_tap, on_layer_hidden=both, **kwargs)
 
     model.forward = tapped_forward
     restore.append((model, "forward"))
