@@ -172,14 +172,65 @@ FORCE_INLINE uint8_t source_channel(uint8_t header_src_ch_id) {
 // State
 // ---------------------------------------------------------------------------------------------------------------------
 
+// Trailer arrival: the seq the next slot's trailer carries once its packet has landed (packets retired + 1). An empty
+// base without it, so the progress (and the code) is the register build's. Named only through next_seq_of.
+template <bool TRAILER_ARRIVAL>
+struct ProgressSeq {};
+template <>
+struct ProgressSeq<true> {
+    uint32_t next_seq = 1;
+    // The last packet's bytes on the link (trailer::padded_size): the next header is guessed at that distance from
+    // its slot's end, so its loads go out with the trailer's instead of after them (a stream's sizes repeat).
+    uint32_t last_padded = 2 * trailer::TRAILER_BYTES;
+    // First-level-ack channels: the next slot to ack, packets_ready slots past the next slot (0: progress_start sets
+    // it).
+    uint32_t ack_slot_addr = 0;
+};
+
 // A receiver channel's per-packet state.
-struct ReceiverChannelProgress {
-    uint32_t packets_ready = 0;  // present (and acked under first-level acks), not retired
+struct ReceiverChannelProgress : ProgressSeq<trailer_arrival> {
+    uint32_t packets_ready = 0;  // present (and acked under first-level acks), not retired; trailer arrival: acked only
     uint32_t next_slot_addr = 0;
     uint32_t next_index = 0;
     uint32_t uncredited = 0;                      // retired (NoC commands issued), not yet credited
     uint32_t idle_passes_with_partial_group = 0;  // completion groups of several slots only
 };
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Trailer arrival (router_common.hpp)
+// ---------------------------------------------------------------------------------------------------------------------
+
+// The slot at `slot_addr`'s trailer: its seq (the poll word), then its size, as two volatile loads in that order. The
+// loads are performed in program order (the router relies on that elsewhere: the sender's completions-then-acks reads),
+// so a size read with a matching seq is that packet's: its trailer had landed when the seq was read, and the bytes of
+// one command land in order (the size word before the seq word, the packet before both).
+struct Trailer {
+    uint32_t seq;
+    uint32_t size;
+};
+FORCE_INLINE Trailer load_trailer(uint32_t slot_addr) {
+    auto* const words =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + channel_buffer_size - trailer::TRAILER_BYTES);
+    Trailer t;
+    t.seq = words[trailer::SEQ_WORD];
+    t.size = words[trailer::SIZE_WORD];
+    return t;
+}
+
+// VC's progress's next seq (trailer arrival only; a call dependent on VC, so a build without it never names the
+// member).
+template <size_t VC, typename Progress>
+FORCE_INLINE auto& next_seq_of(Progress& progress) {
+    return progress.next_seq;
+}
+template <size_t VC, typename Progress>
+FORCE_INLINE auto& last_padded_of(Progress& progress) {
+    return progress.last_padded;
+}
+template <size_t VC, typename Progress>
+FORCE_INLINE auto& ack_slot_addr_of(Progress& progress) {
+    return progress.ack_slot_addr;
+}
 
 // One test for the wrap: the index and the address move together (testing the new index again for the address costs a
 // second branch).
@@ -222,6 +273,9 @@ template <size_t VC>
 constexpr ReceiverChannelProgress progress_start() {
     ReceiverChannelProgress progress;
     progress.next_slot_addr = ReceiverChannel<VC>::first_slot_addr;
+    if constexpr (trailer_arrival) {
+        ack_slot_addr_of<VC>(progress) = ReceiverChannel<VC>::first_slot_addr;
+    }
     return progress;
 }
 
@@ -243,6 +297,41 @@ using Credits = ReceiverChannelCounterBasedResponseCreditSender;
 // ---------------------------------------------------------------------------------------------------------------------
 // Arrivals and first-level acks
 // ---------------------------------------------------------------------------------------------------------------------
+
+// Trailer arrival: acks the next landed packet past the acked ones (packets_ready), if its trailer carries its seq
+// (next_seq + its distance from the next slot): one per pass, as the pass handles one (probing on past it would put
+// another dependent load ahead of the packet's handling). `next_header_addr`: the next slot's header address where this
+// call acked the next slot, else unchanged (0).
+template <size_t VC>
+FORCE_INLINE bool accumulate_first_level_acks_by_trailer(
+    ReceiverChannelProgress& progress, Credits& credits, uint32_t& next_header_addr) {
+    router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+    const uint32_t ready = progress.packets_ready;
+    const uint32_t slot_addr = ack_slot_addr_of<VC>(progress);
+    // The trailer, then the header's source channel at the guessed address (last_padded), in program order: a load
+    // after a matching seq read sees the landed packet (load_trailer). Reloaded at the trailer's address on a miss.
+    uint32_t header_addr = slot_addr + channel_buffer_size - last_padded_of<VC>(progress);
+    const Trailer t = load_trailer(slot_addr);
+    uint8_t src_ch_id = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_addr)->src_ch_id;
+    if (t.seq != next_seq_of<VC>(progress) + ready) {
+        return false;
+    }
+    const uint32_t padded = trailer::padded_size(t.size);
+    if (__builtin_expect(padded != last_padded_of<VC>(progress), 0)) {
+        last_padded_of<VC>(progress) = padded;
+        header_addr = slot_addr + channel_buffer_size - padded;
+        src_ch_id = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_addr)->src_ch_id;
+    }
+    if (ready == 0) {
+        next_header_addr = header_addr;
+    }
+    credits.accumulate_ack_credit(source_channel(src_ch_id));
+    progress.packets_ready = ready + 1;
+    ack_slot_addr_of<VC>(progress) = slot_addr == ReceiverChannel<VC>::slot_addr(ReceiverChannel<VC>::num_slots - 1)
+                                         ? ReceiverChannel<VC>::first_slot_addr
+                                         : slot_addr + channel_buffer_size;
+    return true;
+}
 
 // Acks the `arrived` packets (the register's count at pass start), the oldest unacked, before they are processed; the
 // remote sender credits their slots to its producers on the ack. The register is consumed here, not at retire. Returns
@@ -275,9 +364,17 @@ template <size_t VC>
 FORCE_INLINE void retire(ReceiverChannelProgress& progress, SlotSourcesOf<VC>& sources, uint8_t source) {
     sources.set(progress.next_index, source);
     progress.uncredited++;
-    progress.packets_ready--;
-    if constexpr (!ReceiverChannel<VC>::first_level_ack) {
-        increment_local_update_ptr_val<ReceiverChannel<VC>::packets_received_stream>(-1);
+    if constexpr (trailer_arrival) {
+        // The next slot's trailer is the next seq.
+        next_seq_of<VC>(progress)++;
+        if constexpr (ReceiverChannel<VC>::first_level_ack) {
+            progress.packets_ready--;
+        }
+    } else {
+        progress.packets_ready--;
+        if constexpr (!ReceiverChannel<VC>::first_level_ack) {
+            increment_local_update_ptr_val<ReceiverChannel<VC>::packets_received_stream>(-1);
+        }
     }
     advance<VC>(progress);
 }
@@ -365,12 +462,13 @@ FORCE_INLINE bool handle(
     ReceiverChannelProgress& progress,
     SlotSourcesOf<VC>& sources,
     Connections& downstreams,
+    uint32_t header_addr,
     uint32_t header_word,
     uint32_t route_word,
     CommandBuffersReady ready) {
     using Routing = typename ReceiverChannel<VC>::Routing;
     const auto packet = PACKET_HEADER_TYPE::PackedPayloadAndSendType::unpack(header_word);
-    auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.next_slot_addr);
+    auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_addr);
     const uint8_t trid = ReceiverChannel<VC>::CompletionTrids::of_slot(progress.next_index);
     const uint32_t size = packet.payload_size_bytes + sizeof(PACKET_HEADER_TYPE);
     if constexpr (ReceiverChannel<VC>::forwards) {
@@ -381,7 +479,7 @@ FORCE_INLINE bool handle(
             // 2D without a relay: nothing to admit besides the downstreams and no sparse multicast, so the admit and
             // the commands are one step (Downstreams::admit_and_forward: a unicast forward tests only its downstream).
             // (A 2D header does not change on the way: Routing2D::update_for_next_hop is empty.)
-            if (!routers.admit_and_forward(route.forward_to(), progress.next_slot_addr, size, trid, ready.forward)) {
+            if (!routers.admit_and_forward(route.forward_to(), header_addr, size, trid, ready.forward)) {
                 return false;
             }
             note_received<VC>(size);
@@ -403,14 +501,14 @@ FORCE_INLINE bool handle(
                     route_word,
                     route.forward_to(),
                     routers,
-                    progress.next_slot_addr,
+                    header_addr,
                     size,
                     trid);
                 delivers = false;  // the hop wrote this chip's page group
             } else {
                 // Forward first (the downstream router starts sooner), then write here.
                 Routing::update_for_next_hop(header, route_word);
-                routers.forward_all(route.forward_to(), progress.next_slot_addr, size, trid, ready.forward);
+                routers.forward_all(route.forward_to(), header_addr, size, trid, ready.forward);
                 record_forwarded<VC>(route.forward_to());
             }
         } else {
@@ -423,7 +521,7 @@ FORCE_INLINE bool handle(
         }
         if (delivers) {
             if constexpr (ReceiverChannel<VC>::delivers_through_relay) {
-                downstreams.relay.forward(progress.next_slot_addr, size, trid);
+                downstreams.relay.forward(header_addr, size, trid);
             } else {
                 deliver<ReceiverChannel<VC>::rx>(
                     header, packet.payload_size_bytes, packet.noc_send_type, trid, ready.local_write);
@@ -448,8 +546,8 @@ struct PacketLoads {
 
 // The next slot's loads, in program order header, route, command buffers (all volatile), so all are in flight together.
 template <size_t VC>
-FORCE_INLINE PacketLoads load_packet(const ReceiverChannelProgress& progress, const ChipCoordinates& my_chip) {
-    auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(progress.next_slot_addr);
+FORCE_INLINE PacketLoads load_packet(uint32_t header_addr, const ChipCoordinates& my_chip) {
+    auto* const header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_addr);
     PacketLoads loads;
     loads.header_word = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load_word(header);
     loads.route_word = 0;
@@ -468,8 +566,48 @@ FORCE_INLINE bool receive(
     SlotSourcesOf<VC>& sources,
     Connections& downstreams,
     uint32_t arrived,
-    const ChipCoordinates& my_chip) {
+    const ChipCoordinates& my_chip,
+    uint32_t acked_header_addr = 0) {
     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+    if constexpr (trailer_arrival) {
+        const uint32_t slot_addr = progress.next_slot_addr;
+        if constexpr (ReceiverChannel<VC>::first_level_ack) {
+            if (progress.packets_ready == 0) {
+                return false;  // nothing acked to process
+            }
+            if (acked_header_addr != 0) {
+                // Acked this pass: the ack scan read its trailer.
+                const PacketLoads loads = load_packet<VC>(acked_header_addr, my_chip);
+                return handle<VC>(
+                    progress,
+                    sources,
+                    downstreams,
+                    acked_header_addr,
+                    loads.header_word,
+                    loads.route_word,
+                    loads.ready);
+            }
+        }
+        // The trailer, then the packet's loads at the guessed header address (last_padded), in program order (a load
+        // after a matching seq read sees the landed packet: load_trailer); taken again at the trailer's address when
+        // the guess missed. (Acked packets have landed: no seq test.)
+        uint32_t header_addr = slot_addr + channel_buffer_size - last_padded_of<VC>(progress);
+        const Trailer t = load_trailer(slot_addr);
+        PacketLoads loads = load_packet<VC>(header_addr, my_chip);
+        if constexpr (!ReceiverChannel<VC>::first_level_ack) {
+            if (t.seq != next_seq_of<VC>(progress)) {
+                return false;
+            }
+        }
+        const uint32_t padded = trailer::padded_size(t.size);
+        if (__builtin_expect(padded != last_padded_of<VC>(progress), 0)) {
+            last_padded_of<VC>(progress) = padded;
+            header_addr = slot_addr + channel_buffer_size - padded;
+            loads = load_packet<VC>(header_addr, my_chip);
+        }
+        return handle<VC>(
+            progress, sources, downstreams, header_addr, loads.header_word, loads.route_word, loads.ready);
+    }
     if (progress.packets_ready == 0) {
         if constexpr (ReceiverChannel<VC>::first_level_ack) {
             return false;  // nothing acked to process
@@ -480,8 +618,9 @@ FORCE_INLINE bool receive(
             }
         }
     }
-    const PacketLoads loads = load_packet<VC>(progress, my_chip);
-    return handle<VC>(progress, sources, downstreams, loads.header_word, loads.route_word, loads.ready);
+    const PacketLoads loads = load_packet<VC>(progress.next_slot_addr, my_chip);
+    return handle<VC>(
+        progress, sources, downstreams, progress.next_slot_addr, loads.header_word, loads.route_word, loads.ready);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -646,8 +785,13 @@ FORCE_INLINE void step(
     uint32_t arrived_raw,
     const ChipCoordinates& my_chip) {
     const uint32_t arrived = arrived_raw & stream_count_mask;
+    uint32_t acked_header_addr = 0;  // trailer arrival: the next slot's header, where this pass acked it
     if constexpr (ReceiverChannel<VC>::first_level_ack) {
-        credit_frame_due |= accumulate_first_level_acks<VC>(progress, credits, arrived);
+        if constexpr (trailer_arrival) {
+            credit_frame_due |= accumulate_first_level_acks_by_trailer<VC>(progress, credits, acked_header_addr);
+        } else {
+            credit_frame_due |= accumulate_first_level_acks<VC>(progress, credits, arrived);
+        }
     }
     NamedProfiler<
         CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD,
@@ -656,7 +800,7 @@ FORCE_INLINE void step(
         timer;
     timer.set_should_dump(progress.packets_ready != 0);
     timer.open();
-    const bool handled_packet = receive<VC>(progress, sources, downstreams, arrived, my_chip);
+    const bool handled_packet = receive<VC>(progress, sources, downstreams, arrived, my_chip, acked_header_addr);
     timer.close();
     credit_frame_due |= credit_completions<VC>(progress, sources, handled_packet, credits);
 }
@@ -664,7 +808,9 @@ FORCE_INLINE void step(
 // VC's packets-received register, raw, for the pass's grouped reads; 0 where its channel does not run.
 template <size_t VC>
 FORCE_INLINE uint32_t read_packets_received() {
-    if constexpr (runs_vc(VC)) {
+    if constexpr (trailer_arrival) {
+        return 0;  // the trailers are the arrivals; the register is not used
+    } else if constexpr (runs_vc(VC)) {
         return read_stream_raw<ReceiverChannel<VC>::packets_received_stream>();
     } else {
         return 0;
@@ -721,6 +867,19 @@ struct ReceiverChannelStates : Each<receiver_vcs, ReceiverChannelState> {
         }
     }
 };
+
+// The RX heartbeat's idle test under trailer arrival: no landed packet past VC0's acked ones (as vc0_register_empty).
+template <size_t VC = 0, typename LoopCopy>
+FORCE_INLINE bool vc0_trailer_empty(ReceiverChannelStates& states, LoopCopy& loop_copy) {
+    if constexpr (trailer_arrival && runs_vc(VC)) {
+        const ReceiverChannelProgress& progress = states.template progress_for<VC>(loop_copy);
+        const uint32_t index = index_add<ReceiverChannel<VC>::num_slots>(progress.next_index, progress.packets_ready);
+        return load_trailer(ReceiverChannel<VC>::slot_addr(index)).seq !=
+               next_seq_of<VC>(progress) + progress.packets_ready;
+    } else {
+        return true;
+    }
+}
 
 template <size_t VC, typename LoopCopy, typename Connections>
 FORCE_INLINE void step_channel(
@@ -779,6 +938,24 @@ __attribute__((noinline)) void init_channel_streams() {
         [](auto rx) { init_stream_if_used<to_receiver_packets_sent_streams[decltype(rx)::value]>(0); });
 }
 
+// Trailer arrival: every receiver channel slot's trailer at 0, before the Ethernet handshake (so before the remote
+// sender's first packet). The first seq a slot expects is its index + 1, never 0; a trailer left by an earlier run
+// could match it.
+template <size_t VC = 0>
+__attribute__((noinline)) void clear_trailers() {
+    if constexpr (VC < MAX_NUM_VCS) {
+        if constexpr (runs_vc(VC)) {
+            for (uint32_t i = 0; i < ReceiverChannel<VC>::num_slots; i++) {
+                auto* const words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    ReceiverChannel<VC>::slot_addr(i) + channel_buffer_size - trailer::TRAILER_BYTES);
+                words[trailer::SIZE_WORD] = 0;
+                words[trailer::SEQ_WORD] = 0;
+            }
+        }
+        clear_trailers<VC + 1>();
+    }
+}
+
 // A single-ERISC router's loop takes them whatever channel trimming left it (empty without a receiver channel).
 constexpr bool has_downstream_connections = is_receiver_role || NUM_ACTIVE_ERISCS == 1;
 
@@ -800,6 +977,9 @@ FORCE_INLINE Connections set_up_channels(const RuntimeArgs& args) {
         auto receiver_channels =
             ReceiverChannelBuffersFromAllocs<PACKET_HEADER_TYPE, channel_allocs, RECEIVER_TO_ENTRY_IDX>::make();
         receiver_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
+        if constexpr (trailer_arrival) {
+            clear_trailers();
+        }
     }
     return downstreams;
 }
@@ -872,8 +1052,13 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams_in_memory)
         }
         end_round(round, true);
         if constexpr (telemetry::any_option) {
-            telemetry::round_end</*SENDER=*/false, /*RECEIVER=*/true>(
-                [] { return false; }, [] { return vc0_register_empty(); });
+            if constexpr (trailer_arrival) {
+                telemetry::round_end</*SENDER=*/false, /*RECEIVER=*/true>(
+                    [] { return false; }, [&] { return vc0_trailer_empty(states, loop_copy); });
+            } else {
+                telemetry::round_end</*SENDER=*/false, /*RECEIVER=*/true>(
+                    [] { return false; }, [] { return vc0_register_empty(); });
+            }
         }
     }
 }

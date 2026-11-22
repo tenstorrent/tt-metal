@@ -5,6 +5,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include <cstdint>
+#include <cstdlib>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -514,6 +515,21 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         "size of {}",
         min_buffer_size);
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
+    {
+        const char* env = std::getenv("TT_FABRIC_TRAILER_ARRIVAL");
+        const bool requested = env == nullptr || env[0] != '0';
+        this->trailer_arrival = requested && options.arch == tt::ARCH::BLACKHOLE &&
+                                options.fabric_tensix_config == FabricTensixConfig::DISABLED;
+        if (this->trailer_arrival) {
+            // The slot stride producers and the remote sender use: room for the trailer past the largest packet,
+            // rounded up to TRAILER_ARRIVAL_SLOT_ALIGN_BYTES (a stride off the 32 B grid measured a 2D 2-hop 16 B
+            // packet rate 4% lower, register path alike). Packets stay at most the fabric's channel_buffer_size (header
+            // + max payload), so the last 16 B of every slot are the trailer's.
+            const std::size_t a = TRAILER_ARRIVAL_SLOT_ALIGN_BYTES;
+            this->channel_buffer_size_bytes = (channel_buffer_size_bytes + TRAILER_ARRIVAL_PAD_BYTES + a - 1) / a * a;
+        }
+        options.trailer_arrival = this->trailer_arrival;
+    }
 
     // Compute available channel buffering space from memory regions
     size_t available_channel_buffering_space = std::accumulate(
@@ -1297,6 +1313,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
+    named_args["FABRIC_TRAILER_ARRIVAL"] = config.trailer_arrival ? 1 : 0;
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
     named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = final_enable_first_level_ack_vc0 ? 1 : 0;
     // VC1 does not use bubble flow control, and enabling first-level ack anyway compiles the ack paths

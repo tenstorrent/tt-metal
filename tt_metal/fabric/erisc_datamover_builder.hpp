@@ -243,6 +243,13 @@ struct FabricEriscDatamoverConfig {
         const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc);
 
     std::size_t channel_buffer_size_bytes = 0;
+    // End-aligned trailer arrival (FABRIC_TRAILER_ARRIVAL): every slot is TRAILER_ARRIVAL_PAD_BYTES longer than the
+    // largest packet, and the sender ends each packet with a 16 B trailer in the last 16 B of the remote slot, which
+    // the receiver polls instead of a packets-received register. Blackhole without a Tensix extension (MUX/UDM keep the
+    // register: their Tensix rings use the unpadded slot size); TT_FABRIC_TRAILER_ARRIVAL=0 turns it off.
+    bool trailer_arrival = false;
+    static constexpr std::size_t TRAILER_ARRIVAL_PAD_BYTES = 16;
+    static constexpr std::size_t TRAILER_ARRIVAL_SLOT_ALIGN_BYTES = 64;
 
     std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
     std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)

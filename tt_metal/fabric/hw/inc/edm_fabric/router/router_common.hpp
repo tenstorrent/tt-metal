@@ -66,6 +66,37 @@ constexpr bool has_vc2 = ACTUAL_VC2_SENDER_CHANNELS > 0;
 // UDM, which is its own mode.
 constexpr bool tensix_mux_mode = fabric_tensix_extension_mux_mode && !udm_mode;
 
+// End-aligned trailer arrival (the host's FABRIC_TRAILER_ARRIVAL). Instead of a packets-received stream register that
+// the remote sender increments with a second TX-queue command after each packet, every packet carries its arrival
+// signal in the same command:
+//   - every slot is TRAILER_BYTES longer than the largest packet (the host's pad, in channel_buffer_size);
+//   - the sender writes a trailer {size, seq} into its own slot right after the packet (header + payload, rounded up to
+//     16 B) and sends packet + trailer as one command to `slot_end - padded_size(size)` in the remote slot, so every
+//     trailer lands in the last 16 B of its remote slot, and its seq in the slot's last 4 bytes (the poll word);
+//   - seq: the sender's count of packets sent into that remote receiver channel (1, 2, ...), so a slot's next seq
+//     differs from the one it holds (one lap earlier, or the receiver's init 0);
+//   - the receiver polls its next slot's poll word for the seq it expects (its own count), reads the size from the
+//     same trailer, and finds the header at `slot_end - padded_size(size)`.
+// The poll word is written only by trailers: a packet ends 16 B before its slot's end, and the header edits (1D
+// next-hop update, sparse multicast indices) stay inside the header. Slot reuse is gated only by the completion
+// credits, as before. Tensix mux and UDM modes keep the register (the host does not pad their slots).
+constexpr bool trailer_arrival = fabric_trailer_arrival;
+static_assert(!trailer_arrival || (!fabric_tensix_extension_mux_mode && !udm_mode), "trailer arrival: no Tensix modes");
+namespace trailer {
+constexpr uint32_t TRAILER_BYTES = 16;
+constexpr uint32_t SIZE_WORD = 0;  // 32-bit word index in the trailer: the packet's size, header included, in bytes
+constexpr uint32_t SEQ_WORD = 3;   // the trailer's (and the slot's) last word: the seq, the receiver's poll word
+// A packet's bytes on the link: header + payload rounded up to 16 B, and the trailer.
+// Rounded up to PACKET_ALIGN, so the header lands on the slot's PACKET_ALIGN grid as at the slot's start (the host
+// rounds the slot stride up to a multiple of it: TRAILER_ARRIVAL_SLOT_ALIGN_BYTES).
+constexpr uint32_t PACKET_ALIGN = 64;
+FORCE_INLINE uint32_t padded_size(uint32_t size) {
+    return (size + TRAILER_BYTES + PACKET_ALIGN - 1) & ~(PACKET_ALIGN - 1);
+}
+static_assert(
+    !trailer_arrival || (channel_buffer_size % PACKET_ALIGN == 0 && channel_buffer_size >= 2 * TRAILER_BYTES));
+}  // namespace trailer
+
 // The count in a stream credit register (packets received, free slots). A count never exceeds its channel's slot
 // count, and every channel static_asserts its slot count against this mask, so the low 11 bits hold it.
 constexpr uint32_t stream_count_mask = 0x7FFu;

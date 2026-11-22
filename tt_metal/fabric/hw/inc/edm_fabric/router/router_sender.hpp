@@ -192,6 +192,9 @@ public:
             encode(RemoteReceiverChannel<VC>::num_slots, RemoteReceiverChannel<VC>::first_slot_addr));
     }
 
+    // Trailer arrival: the seq of the next packet sent (1, 2, ...), the remote receiver's expected count.
+    FORCE_INLINE uint32_t next_seq() const { return seq; }
+
     FORCE_INLINE bool has_room(uint32_t n) const { return free_slots() >= n; }
 
     // The next slot's address: the high half in bytes, word >> ADDR_SHIFT (the free-slot count stays below
@@ -203,6 +206,9 @@ public:
     FORCE_INLINE void take_slot() {
         ASSERT(has_room(1));
         word += word >= last_slot_word ? wrap_add : advance_add;
+        if constexpr (trailer_arrival) {
+            seq++;
+        }
     }
 
     // Slots the remote receiver completed: free again.
@@ -211,7 +217,14 @@ public:
         word += n;
     }
 
-    FORCE_INLINE bool operator!=(const RemoteReceiverChannelProgress& other) const { return word != other.word; }
+    // Trailer arrival compares the seq too: on a one-slot channel a send and a completion in one visit leave the word.
+    FORCE_INLINE bool operator!=(const RemoteReceiverChannelProgress& other) const {
+        if constexpr (trailer_arrival) {
+            return word != other.word || seq != other.seq;
+        } else {
+            return word != other.word;
+        }
+    }
 
 private:
     // The word: the free-slot count in the low FREE_SLOTS_BITS, the next slot's address in 16 B units above it.
@@ -235,10 +248,13 @@ private:
     static_assert(
         RemoteReceiverChannel<VC>::num_slots < (1u << ADDR_SHIFT), "the free-slot count stays below 1 << ADDR_SHIFT");
 
-    constexpr explicit RemoteReceiverChannelProgress(uint32_t w) : word(w) {}
+    // The seq's presence written to depend on VC, so a build without trailer arrival never checks its uses.
+    static constexpr bool has_seq = trailer_arrival && VC < MAX_NUM_VCS;
+    constexpr explicit RemoteReceiverChannelProgress(uint32_t w) : word(w), seq(present<has_seq, 3>(1u)) {}
     FORCE_INLINE uint32_t free_slots() const { return word & ((1u << FREE_SLOTS_BITS) - 1); }
 
     uint32_t word;
+    [[no_unique_address]] Present<has_seq, uint32_t, 3> seq;
 };
 
 // A sender channel's progress through its slots: its per-packet state.
@@ -625,26 +641,47 @@ FORCE_INLINE bool send(
         channel_trimming_usage_recorder.update_sender_channel_packet_size(CH, static_cast<uint16_t>(size));
     }
 
-    internal_::eth_send_packet_bytes_unsafe(sender_txq_id, slot_addr, remote.next_slot_addr(), size);
+    if constexpr (trailer_arrival) {
+        // The trailer {size, seq} right after the packet in this slot (its pad: packets are at most the slot minus the
+        // trailer), then packet + trailer in one command, ending at the remote slot's end. The slot is this router's
+        // until the remote receiver completes (or acks) the packet, which it does only after seeing this trailer.
+        // (The stores reach L1 before the command reads it, as the header's src_ch_id store above does.)
+        const uint32_t padded = trailer::padded_size(size);
+        auto* const trailer_words =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr + padded - trailer::TRAILER_BYTES);
+        trailer_words[trailer::SIZE_WORD] = size;
+        trailer_words[trailer::SEQ_WORD] = remote.next_seq();
+        internal_::eth_send_packet_bytes_unsafe(
+            sender_txq_id, slot_addr, remote.next_slot_addr() + channel_buffer_size - padded, padded);
+    } else {
+        internal_::eth_send_packet_bytes_unsafe(sender_txq_id, slot_addr, remote.next_slot_addr(), size);
+    }
     remote.take_slot();
     next_slot_addr = slot_addr == SenderChannel<CH>::last_slot_addr ? SenderChannel<CH>::first_slot_addr
                                                                     : slot_addr + channel_buffer_size;
 
-    // The TX queue's status after the send and the channel's counters, as one read group (without it, a 2D 3-hop row
-    // measured about 2 cycles per packet slower at 256 B).
-    begin_read_group();
-    const uint32_t status_after = read_txq_status(sender_txq_id);
-    const uint32_t reported =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::completion_counter_addr);
-    end_read_group();
+    uint32_t reported;
+    if constexpr (trailer_arrival) {
+        // No second command: the trailer is the arrival signal. Nothing waits for the TX queue to drain; the next
+        // command checks it before it issues.
+        reported = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::completion_counter_addr);
+        increment_local_update_ptr_val<SenderChannel<CH>::free_slots_stream>(1);
+    } else {
+        // The TX queue's status after the send and the channel's counters, as one read group (without it, a 2D 3-hop
+        // row measured about 2 cycles per packet slower at 256 B).
+        begin_read_group();
+        const uint32_t status_after = read_txq_status(sender_txq_id);
+        reported = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SenderChannel<CH>::completion_counter_addr);
+        end_read_group();
 
-    increment_local_update_ptr_val<SenderChannel<CH>::free_slots_stream>(1);
-    if (txq_busy(status_after)) {
-        while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        increment_local_update_ptr_val<SenderChannel<CH>::free_slots_stream>(1);
+        if (txq_busy(status_after)) {
+            while (internal_::eth_txq_is_busy(sender_txq_id)) {
+            }
         }
+        // The remote router's packets-received register +1: after the data, on the same TX queue.
+        remote_update_ptr_val<RemoteReceiverChannel<VC>::packets_received_stream, sender_txq_id>(1);
     }
-    // The remote router's packets-received register +1: after the data, on the same TX queue.
-    remote_update_ptr_val<RemoteReceiverChannel<VC>::packets_received_stream, sender_txq_id>(1);
     // First-level acks: the ack count is read after the register update, so its L1 load is not queued ahead of the
     // update's TX-queue stores (the packet's handoff); read after the completion count, it is never below it.
     uint32_t reported_acks = 0;

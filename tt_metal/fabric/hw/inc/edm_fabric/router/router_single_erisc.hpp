@@ -66,8 +66,14 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
                 receiver_pass(r, rx_loop_copy, downstreams, my_chip);
                 sender_pass(s, round.send_yielded);
             }
-            sender::after_round<true>(
-                round, s.states.loop_local_progress(), s.states, [] { return receiver::vc0_register_empty(); });
+            if constexpr (trailer_arrival) {
+                sender::after_round<true>(round, s.states.loop_local_progress(), s.states, [&] {
+                    return receiver::vc0_trailer_empty(r.states, rx_loop_copy);
+                });
+            } else {
+                sender::after_round<true>(
+                    round, s.states.loop_local_progress(), s.states, [] { return receiver::vc0_register_empty(); });
+            }
         }
     }
 }

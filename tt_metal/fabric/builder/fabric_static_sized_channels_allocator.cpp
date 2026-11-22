@@ -680,6 +680,28 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     // Blackhole router's credit loops.
     if (arch == tt::ARCH::BLACKHOLE) {
         configure_staged_buffer_slots(topology, num_sender_buffer_slots_per_vc, num_receiver_buffer_slots_per_vc);
+        if (options.trailer_arrival) {
+            // Trailer arrival pads every slot, which can cost a router one slot (a 2D router: 81 -> 80); the staged
+            // allocator's rounding takes it from each forwarding channel (16 -> 15, the worker 17 -> 19), which cost
+            // the 2D 2-hop 16 B packet rate 4%. Instead the forwarding channels keep up to their full-rate depth, one
+            // slot each at a time from the worker, while the worker keeps at least as many as they have.
+            const uint32_t worker = get_worker_connected_sender_channel();
+            const size_t senders = num_used_sender_channels_per_vc[0];
+            const size_t forwarding_depth =
+                slot_allocator::full_rate_depth(0, slot_allocator::ChannelKind::Forwarding, is_2D_topology(topology));
+            auto& vc0 = num_sender_buffer_slots_per_vc[0];
+            const size_t first_forwarding = worker == 0 ? 1 : 0;
+            if (senders > 1 && worker < senders) {
+                while (vc0[first_forwarding] < forwarding_depth && vc0[worker] >= vc0[first_forwarding] + senders) {
+                    for (size_t c = 0; c < senders; ++c) {
+                        if (c != worker) {
+                            vc0[c]++;
+                        }
+                    }
+                    vc0[worker] -= senders - 1;
+                }
+            }
+        }
         return;
     }
 

@@ -39,6 +39,9 @@ struct FabricEriscDatamoverOptions {
     FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED;
     eth_chan_directions direction = eth_chan_directions::EAST;  // only used by 2D to get the correct router direction
     tt::ARCH arch = tt::ARCH::Invalid;                          // selects the per-arch buffer slot tables
+    // Set by FabricEriscDatamoverConfig (trailer arrival's padded slots): VC0's forwarding channels keep their
+    // full-rate depth where the worker channel can give the slots (FabricStaticSizedChannelsAllocator).
+    bool trailer_arrival = false;
 };
 
 namespace builder_config {
