@@ -688,3 +688,4 @@
   tok/s off -> on: 1M 59.2k -> 61.9k (+4.6 %), 786k +1.4 %, 524k +2.4 %, but 262144 (133632 keys, just above MIN 131072)
   67.3k -> 63.4k (-5.7 %). QUEUED MB.7: re-measure 262144 / 393216 / 524288 block vs plain, set INDEXER_BLOCK_SELECT_MIN so no
   rung regresses; gate 5120 ladder + cold no-rebuild.
+- 03:08 heartbeat: MB.7 agent active; watch armed.

@@ -1,0 +1,54 @@
+{
+ "used": [
+  {
+   "id": "DS41-330",
+   "how": "measured the threshold in the model with its crossover probe (op probes cannot place it), not with op probes",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-183",
+   "how": "ran the gate check and the measure detached under devjob (> 9 min)",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-330",
+   "evidence": "its '+~0.4 ms host, wall crossover ~130k keys' is low: paired in-load probe (resident logs 20261122-025255 / 025342 run0) block - plain wall +1.8..+2.7 ms at 133632 / 199168 keys with device -0.3..-1.0; wall crossover ~250k keys (DS41-331, results/MB.7_threshold.md)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the host cost of a path that adds launches depends on whether the chunk is host-bound at that position; an extra-launch estimate per launch (30-50 us) undercounted it by ~5x here"
+ ],
+ "overseer": [
+  {
+   "id": "OV-57",
+   "answer": "n/a",
+   "evidence": "MB.7 changes only the default of INDEXER_BLOCK_SELECT_MIN (a host decision on kv_len); no per-chunk value or program attribute touched; cold test_no_rebuild 0 builds after warm-up, ids_uploads_per_chunk 0"
+  }
+ ],
+ "cited_only": [
+  "DS41-331"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "MB.7",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-22T03:08:31",
+  "head": "a61ff3a1268",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.7.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.7_threshold.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/MB.7.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

@@ -1105,17 +1105,18 @@ TABLE = {
         "top-k over every visible key (the path before)",
     ),
     "INDEXER_BLOCK_SELECT_MIN": Setting(
-        "131072",
+        "262144",
         None,
-        "PB.BM / MB.6 (INDEXER_BLOCK_SELECT=on): the smallest key count (the scores' kv_len: compressed keys, "
+        "PB.BM / MB.6 / MB.7 (INDEXER_BLOCK_SELECT=on): the smallest key count (the scores' kv_len: compressed keys, "
         "positions / ratio) at which a single-request indexer call takes the block path; below it the plain top-k. "
-        "131072 (262144 positions at ratio 2), re-measured at the 5120 chunk (MB.6, 8x4, 160 query rows a chip, "
-        "tests/perf/test_mb6_bsel_crossover.py, steady chunk, one load): block - plain device -0.07 ms at 53760 keys "
-        "(102400), +0.42 at 104960, -1.35 at 156160, -1.12 at 207360, -1.68 at 258560, -2.76 at 360960, -3.80 at "
-        "514560 (1024000); the indexer sections fit +0.72 ms - 0.0085 ms per 1k keys (device crossover ~85k keys) and "
-        "the block path's ~12 extra launches a chunk cost ~0.4 ms host where the chunk is not device-bound (wall +2.6 "
-        "ms at 102400, +0.6 at 204800, -1.8 at 307200), so the wall crossover is ~130k keys. (PB.BM at 8192: ~111k.) "
-        "Call-time",
+        "262144 (524288 positions at ratio 2; MB.7, OWNER 2026-11-21: the smallest count at which the block path is "
+        "not slower in wall at any measured rung). MB.7 (8x4, 5120 chunk, tests/perf/test_mb6_bsel_crossover.py, "
+        "steady chunk, one load, warm-up + 10 timed runs, median, two runs) block - plain wall / device ms: +1.81 / "
+        "-0.72 and +1.99 / -0.34 at 133632 keys (262144 positions), +2.65 / -1.01 and +2.03 / -0.93 at 199168 "
+        "(393216), -0.53 / -1.48 and -0.43 / -1.54 at 264704 (524288): the block path saves device time from ~85k keys "
+        "but its extra launches cost ~2-3 ms host where the chunk is host-bound (wall - device ~11 ms), so the wall "
+        "crossover is ~250k keys (MB.6's 131072 put the 262144 rung on the block path: -5.7 % tok/s in its A/B). "
+        "Results: bringup/ledgers/galaxy_8x4-full/results/MB.7_threshold.md. 131072 = MB.6's value. Call-time",
     ),
     "CKV_BFP4_PREPARED": Setting(
         "on",

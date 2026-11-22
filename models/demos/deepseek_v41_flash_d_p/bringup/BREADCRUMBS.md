@@ -1553,3 +1553,28 @@
   decoder-skip, outside history, determinism ok). `orchestrator measure --task MB.6` rc 0. Ladder on vs off:
   results/MB.6_ladder.md. 1M steady wall 86.7 -> 82.9 / 83.6 ms, device -3.6 ms; the 262144 / 524288 rungs are within
   cross-process noise in wall (+0.9 / +1.1 ms) with device -0.6 / -1.7.
+
+## MB.7 (perf): INDEXER_BLOCK_SELECT_MIN re-measured at 262144 / 393216 / 524288
+
+- Expected saving a chunk (written before any device run; perf_guide sections 1, 10): none by construction at the
+  rungs below the new threshold; the change only moves where the block path starts. From MB.6's fit (indexer +0.72 ms
+  - 0.0085 ms per 1k keys device, ~+0.4 ms host for 12 launches) the block path at 133632 keys (262144) should be
+  about -0.4 ms device and ~0 wall, so MB.6's -5.7 % tok/s there (~+4.6 ms) is expected to be cross-process noise;
+  at 199168 keys (393216) about -1.0 ms device, -0.5 wall; at 264704 (524288) -1.5 device, -1 wall. If 262144's
+  loss is real, raising MIN above 133632 keys returns it (+4.6 ms wall back); otherwise MIN stays 131072.
+- Load reason: needs the ladder's executed-layers load (the resident one) because the block path's cost lives in the
+  model's chunk (DS41-330: op probes are host-launch bound and cannot place it).
+- Measured (tests/perf/test_mb6_bsel_crossover.py, MB6_POS=262144,393216,524288 MB6_RUNS=10, two resident requests,
+  paired in one load): block - plain wall +1.81 / +1.99 ms at 133632 keys, +2.65 / +2.03 at 199168, -0.53 / -0.43 at
+  264704; device -0.72 / -0.34, -1.01 / -0.93, -1.48 / -1.54. Against the estimate: device as expected; host was ~2-3
+  ms, not ~0.4 (DS41-330's host figure was low, new DS41-331), so 262144's loss is real (smaller than MB.6's
+  cross-process -5.7 %).
+- Changed: INDEXER_BLOCK_SELECT_MIN 131072 -> 262144 keys (default and text; 131072 = MB.6's value, selectable).
+  Rungs 262144 / 393216 now plain, 524288+ block. No other change.
+- Results: `gate MB.7 --check` PASS (ladder steady tok/s 51200 69.5k, 131072 68.1k, 139264 67.7k, 262144 66.7k,
+  524288 64.5k, 786432 62.3k, 1024000 61.8k; cold no-rebuild 0 builds; ids uploads 0; determinism 0.0).
+  `orchestrator measure --task MB.7` rc 0. Table: ledgers/galaxy_8x4-full/results/MB.7_threshold.md.
+- Per-chunk values (rule 20): only the host path choice on kv_len (unchanged mechanism); both paths warmed in compile().
+- Re-run: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "MB6_POS=262144,393216,524288
+  MB6_RUNS=10 BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_mb6_bsel_crossover.py"`.
