@@ -1,0 +1,76 @@
+{
+ "used": [
+  {
+   "id": "DS41-311",
+   "how": "the set test and the crossover probe set force_block_select / BSEL_CHECK on the held indexers' own module globals as well as the current module (resident runner reloads tt/ in place)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-117",
+   "how": "160 query rows a chip at 5120 on 8x4: the set test and the op probe take rows / chunk from the spec, not PB.BM's 256",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-170",
+   "how": "the selection check compares id SETS, and a row counts as a tie row when the sorted score lists are equal (tie order is undefined)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the batching branch's DS41 ids (DS41-379 .. 382) collide with this branch's numbering; ported comments and tests must be renumbered (here DS41-329)",
+  "Python-built prepared ops at 160 rows are host-launch bound when timed alone, so an op probe cannot place a crossover (now DS41-330)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-57",
+   "answer": "done",
+   "evidence": "MB.6 adds no program attribute taken from the chunk: block_max_bf16's n is a prepared-program value slot, topk_large_indices valid_length is a runtime arg, and the score op's block_max_out is a per-capacity buffer allocated at setup. The path choice is a host decision on kv_len; adapter.compile warms the block path (first kind) and the plain path (second kind). The cold no-rebuild unit (program_builds_after_warmup_serving*) gates it. MB.6 leaves the other OV-57 items (slices, the ids re-upload) alone; they are other tasks."
+  }
+ ],
+ "cited_only": [
+  "DS41-329",
+  "DS41-330"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "MB.6",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-22T02:42:07",
+  "head": "0edb0778a4a",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.6.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.6_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/MB.6.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_block_select_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_bsel_score_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_mb6_bsel_crossover.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_indexer_block_select.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/__init__.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/README.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/block_select.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_gather.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_keys.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_max_bf16.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/tests/__init__.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/tests/unit/test_block_select.py"
+  ]
+ }
+}

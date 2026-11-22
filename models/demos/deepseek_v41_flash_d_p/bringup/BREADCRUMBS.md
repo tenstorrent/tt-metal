@@ -1501,3 +1501,55 @@
   `orchestrator measure --task MB.5`: rc 0 (determinism 0.0, quick rc 0, host_transfers_per_layer 0).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate MB.5 --spec $BRINGUP_SPEC --check --unit MB.5`
   (devjob). Knobs: NOCONV_POS, NOCONV_RUNS, NOCONV_REPEAT, NOCONV_OUT (JSON, default /tmp/mb5_noconv.json).
+
+## MB.6 (perf): indexer block-max pre-selection (PB.BM) on the single 5120 path
+
+- Expected saving a chunk (written before any device run; perf_guide sections 1-2): only the 3 plain index layers
+  (2, 8, 14: TtIndexer, ratio 2) take the block path. PB.BM at 8192 / 1M: plain top-k 9.40 ms -> fold 1.17 + top-k's
+  0.74 + gather 1.11, net on - off device -4.9 ms (score writer's block max included). The 5120 chunk has 160 query
+  rows a chip (8192: 256), so I scale by ~0.625: device about -3 ms at 1024000 (indexer section 17.5 ms in MB.5's
+  profile), about 0 near 260k positions (~130k keys), and +0.3..+0.5 ms at 51200 if the block path ran there (the
+  threshold keeps it off). Host: +12 launches a chunk on the block path (4 extra ops x 3 layers, prepared programs,
+  ~30-50 us each), so about +0.4..+0.6 ms host, hidden behind the device where the chunk is device-bound (MB.5: 6 ms
+  host exposed at 1M). Expected wall at 1M: -2..-3 ms of ~86 ms.
+- What (port of PB.BM e821084f82f, single-request parts only; git apply --3way, path-limited): tt/indexer.py
+  (block_topk, use_block_select, force_block_select, BSEL_CHECK, bsel buffers per capacity, the `indexer_topk` /
+  `indexer_bmax` / `indexer_gather` signposts), tt/settings.py (INDEXER_BLOCK_SELECT on|off, INDEXER_BLOCK_SELECT_MIN;
+  no _MIN_PACKED: this branch has no packed path, so use_block_select lost its `packed` argument),
+  tt/runners/adapter.py compile() (first warm kind forced to the block path, second to the plain path; a lone kind
+  runs again on the plain path), bringup/hooks.py (both switches call-time, refreshed in batch_call_apply), the fork
+  folder ttnn/ttnn/bringup/block_select_ttnn unchanged + PYTHON_OPS / INDEX.md (conflict resolved by keeping only
+  the block_select entry; the batching branch's high_bw_all_gather entry is not on this branch). Left out:
+  packed_glued.py, glued_derive.py, gather_hide.py, the packed warm-up. indexer_score's block_max_out was already here
+  (P.16): no fork change.
+- Tests: tests/test_indexer_block_select.py rewritten for the single path (5120 whole chunks from 0 through layers
+  0-14, points 138240 and 1024000, both whole chunks; the batching version's packed half and packed_common import
+  dropped); tests/perf/test_block_select_probe.py (rows from the spec's chunk: 160), tests/perf/test_bsel_score_probe.py
+  (single form only), NEW tests/perf/test_mb6_bsel_crossover.py (block vs plain forced, steady chunk, one load).
+- Load reason for the crossover: "needs the ladder's executed-layers load because the block path's cost (the score
+  writer's epilogue, 3 index layers) and its host launches exist only inside the model's chunk; the op probe was
+  host-launch bound (DS41-330)". One load, 7 positions, both sides: 294 s.
+- Crossover (MB.6, 8x4, single 5120, steady chunk; block - plain): device -0.07 / +0.42 / -1.35 / -1.12 / -1.68 /
+  -2.76 / -3.80 ms at 102400 / 204800 / 307200 / 409600 / 512000 / 716800 / 1024000 positions (53760 .. 514560
+  keys); wall +2.58 / +0.61 / -1.82 / +0.64 / -1.34 / -2.25 / -3.15 (spread 2-4 ms). Indexer sections:
+  +0.72 ms - 0.0085 ms per 1k keys (device crossover ~85k keys); host ~+0.4 ms (12 launches) -> wall ~130k keys.
+  DECIDED: INDEXER_BLOCK_SELECT_MIN stays 131072 keys (now measured at 5120, settings text updated). Ladder rungs on
+  the block path: 262144 (133632 keys), 524288, 786432, 1024000; 51200 / 131072 / 139264 stay plain.
+- Fork tests (rule 6): ops unchanged; check_block_select (the fork's unit cases, 10) passed on the resident 2D mesh
+  inside test_block_select_probe (0 opens). The fork's own unit file opens a mesh without 2D fabric: not run directly.
+- Per-chunk values (rule 20): the path choice is a host decision on kv_len (no program differs by value);
+  block_max_bf16's n is a prepared-program value slot; both top-k's valid_length are runtime args; block_gather /
+  block_keys take no per-chunk value; the score op's block_max_out is a buffer per capacity allocated at setup. Both
+  paths' programs are warmed in compile(); test_no_rebuild (cold) saw 0 builds on block-path chunks (264384, 528768).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd
+  "BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_mb6_bsel_crossover.py"`
+  (MB6_POS, MB6_RUNS); gate: `gate MB.6 --spec $BRINGUP_SPEC --check`.
+- Gotcha: the set test first asserted a 1024000 + chunk state, but the gate's shared process loads tables to
+  1024000 only (BATCH_MAX_SEQ is not honoured there). The top point is now fitted to the load: 1018880.
+- Gotcha: `orchestrator measure --part <stem>` knows only the A/B's timing tests (test_skip_positions,
+  test_no_rebuild). The other accuracy units run through `gate MB.6 --check`.
+- Results: `gate MB.6 --check` PASS (set test 0 mismatches at 138240 / 1018880; no-rebuild 0 builds; ladder, contract,
+  decoder-skip, outside history, determinism ok). `orchestrator measure --task MB.6` rc 0. Ladder on vs off:
+  results/MB.6_ladder.md. 1M steady wall 86.7 -> 82.9 / 83.6 ms, device -3.6 ms; the 262144 / 524288 rungs are within
+  cross-process noise in wall (+0.9 / +1.1 ms) with device -0.6 / -1.7.

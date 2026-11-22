@@ -1089,6 +1089,34 @@ TABLE = {
         "262144 2258 -> 954 us on one p150b; candidate k 2048 182 -> 138 us). stock = "
         "ttnn.experimental.topk_large_indices (the path before)",
     ),
+    "INDEXER_BLOCK_SELECT": Setting(
+        "on",
+        ("on", "off"),
+        "PB.BM (OWNER 2026-11-21), read per call (CALL-TIME, listed in bringup/hooks.py batch_call_settings and "
+        "refreshed in batch_call_apply). The plain indexers' top-512 (enc_source layers: TtIndexer; not the candidate "
+        "source, whose block maxes are pinned, nor the re-index layers, whose scores are biased) by EXACT block-max "
+        "pre-selection: the score op's writer also writes each query's max over every 8 keys (block_max_out), "
+        "ttnn.bringup.block_max_bf16 folds them to blocks of 32 (bf16), the top-512 blocks by max "
+        "(topk_large_indices), their 512 x 32 scores (ttnn.bringup.block_gather), the top-512 of those, back to key ids "
+        "(ttnn.bringup.block_keys). The top-512 keys always lie in the top-512 blocks by max, so the selected SET is "
+        "the plain top-k's up to ties at the 512th value (which the plain op leaves undefined too); the order of tied "
+        "keys may differ. Taken when the chunk's key count is >= INDEXER_BLOCK_SELECT_MIN (a host decision on the "
+        "length; both paths' programs depend on shapes only and runtime.compile warms both). off = the plain "
+        "top-k over every visible key (the path before)",
+    ),
+    "INDEXER_BLOCK_SELECT_MIN": Setting(
+        "131072",
+        None,
+        "PB.BM / MB.6 (INDEXER_BLOCK_SELECT=on): the smallest key count (the scores' kv_len: compressed keys, "
+        "positions / ratio) at which a single-request indexer call takes the block path; below it the plain top-k. "
+        "131072 (262144 positions at ratio 2), re-measured at the 5120 chunk (MB.6, 8x4, 160 query rows a chip, "
+        "tests/perf/test_mb6_bsel_crossover.py, steady chunk, one load): block - plain device -0.07 ms at 53760 keys "
+        "(102400), +0.42 at 104960, -1.35 at 156160, -1.12 at 207360, -1.68 at 258560, -2.76 at 360960, -3.80 at "
+        "514560 (1024000); the indexer sections fit +0.72 ms - 0.0085 ms per 1k keys (device crossover ~85k keys) and "
+        "the block path's ~12 extra launches a chunk cost ~0.4 ms host where the chunk is not device-bound (wall +2.6 "
+        "ms at 102400, +0.6 at 204800, -1.8 at 307200), so the wall crossover is ~130k keys. (PB.BM at 8192: ~111k.) "
+        "Call-time",
+    ),
     "CKV_BFP4_PREPARED": Setting(
         "on",
         ("on", "off"),

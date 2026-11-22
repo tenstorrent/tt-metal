@@ -681,3 +681,6 @@
 - 18:10 heartbeat: idle, waiting on the owner (model_bringup push; batching next steps).
 - 18:40 idle (both queues empty); heartbeat cron stopped until work resumes. Waiting on the owner: model_bringup push; batching next steps.
 - 02:00 on model_bringup: F299 framework parity (e940ad9b422); QUEUED MB.6 (block-max port, single path only; threshold re-measured at 5120; gate = 5120 accept units + selection-set test + ladder + cold no-rebuild). Launched --until MB.6.
+- 01:38 heartbeat: MB.6 agent active; watch armed.
+- 02:08 heartbeat: MB.6 agent active; watch armed.
+- 02:38 heartbeat: MB.6 agent active (~65 min); watch armed.

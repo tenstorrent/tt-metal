@@ -1398,9 +1398,16 @@ def batch_call_settings(env=None) -> tuple:
     skip = env.get(_settings.env_name("DECODER_SKIP"), str(_settings.table["DECODER_SKIP"].default))
     # ENGRAM_DEVICE (P.87) and ENGRAM_HOST_IMPL (C++ host path) are read per chunk: one load serves both values
     # POS_DYNAMIC (MB.2) is read per call too: both paths exist in one load (page copies vs slices)
-    return ("PREFILL_END", "ENGRAM_DEVICE", "ENGRAM_HOST_IMPL", "POS_DYNAMIC") + (
-        () if skip == "replay128" else ("DECODER_SKIP",)
-    )
+    # INDEXER_BLOCK_SELECT / _MIN (MB.6, PB.BM: the index top-k by block-max pre-selection, read per indexer call)
+    # likewise, refreshed like POS_DYNAMIC
+    return (
+        "PREFILL_END",
+        "ENGRAM_DEVICE",
+        "ENGRAM_HOST_IMPL",
+        "POS_DYNAMIC",
+        "INDEXER_BLOCK_SELECT",
+        "INDEXER_BLOCK_SELECT_MIN",
+    ) + (() if skip == "replay128" else ("DECODER_SKIP",))
 
 
 def batch_call_apply(model) -> None:
@@ -1409,8 +1416,12 @@ def batch_call_apply(model) -> None:
     A test that switches it itself (use_decoder_skip) still does, from the value it finds."""
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _settings
 
-    if _settings.snap is not None:  # MB.2: a call-time switch the load's snapshot froze (DS41-314: only this one)
+    if (
+        _settings.snap is not None
+    ):  # MB.2: a call-time switch the load's snapshot froze (DS41-314; MB.6: and the block-select pair)
         _settings.snap["POS_DYNAMIC"] = _settings._read("POS_DYNAMIC")
+        _settings.snap["INDEXER_BLOCK_SELECT"] = _settings._read("INDEXER_BLOCK_SELECT")  # MB.6: likewise
+        _settings.snap["INDEXER_BLOCK_SELECT_MIN"] = _settings._read("INDEXER_BLOCK_SELECT_MIN")  # MB.6: likewise
     want = _settings.get("DECODER_SKIP")
     have = getattr(model, "skip_mode", None)
     if have is None or want == have or "replay128" in (want, have) or getattr(model, "tail_of", None) is not None:
