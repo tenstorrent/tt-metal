@@ -57,3 +57,62 @@ def test_expert_dtype_map():
     assert expert_tensor_dtype(m, 2, "experts.w_gate_up", "BFP4") == "BFP8"
     with pytest.raises(SystemExit):  # mixed dtypes inside one §4 tensor
         expert_tensor_dtype({"L03/experts.w_down": {"default": "BFP4", "BFP8": [5]}}, 3, "experts.w_down", "BFP4")
+
+
+def _e12_sticks(w, nb):
+    """The stick page order as written by the fused MoE kernel's device-side builder (torch, [E, K, N])."""
+    E, K, N = w.shape
+    kt, nt = K // 32, N // 32
+    s = w.reshape(E, kt, 32, nt, 32).permute(0, 3, 1, 2, 4).reshape(E * nt, kt, 32, 32)
+    s = torch.cat([s, s.new_zeros((-s.shape[0]) % nb, kt, 32, 32)])
+    return s.reshape(-1, nb, kt, 32, 32).permute(0, 2, 1, 3, 4).reshape(1, 1, -1, 32)
+
+
+@pytest.mark.parametrize("dtype", ["BFP4", "BFP8"])
+def test_stick_round_trip(tmp_path, dtype):
+    """Stick file: same values in the kernel's page order, un-sticks to the exact source bytes, loader reports it."""
+    from models.demos.inkling2_mini.convert import stick
+    from models.demos.inkling2_mini.convert.convert import stick_layer
+
+    g = torch.Generator().manual_seed(1)
+    w = Writer(tmp_path)
+    w.write("experts.w_gate_up", 0, torch.randn(1, 2, 2304, 2304, generator=g), dtype, "TILE", ["src"])
+    w.write("experts.w_down", 0, torch.randn(1, 2, 1152, 2304, generator=g), dtype, "TILE", ["src"])
+    tiles = {e["name"]: (tmp_path / e["file"]).read_bytes() for e in w.entries}
+    vals = {e["name"]: ttnn.to_torch(ttnn.load_tensor(tmp_path / e["file"])) for e in w.entries}
+    assert not stick_layer(w, 0, ("BFP4", "BFP8")[dtype == "BFP4"])  # other dtype: left alone
+    assert stick_layer(w, 0, (dtype,))
+    (tmp_path / "manifest.json").write_text(json.dumps({"schema": 1, "tensors": w.entries}))
+
+    assert cache.layouts(tmp_path, 0) == {"experts.w_gate_up": "STICK", "experts.w_down": "STICK"}
+    layer = cache.load_layer(tmp_path, 0)
+    for e in w.entries:
+        t = layer[e["name"]]
+        assert t.dtype == DTYPES[dtype] and t.layout == ttnn.TILE_LAYOUT and list(t.shape) == e["shape"]
+        assert torch.equal(ttnn.to_torch(t), _e12_sticks(vals[e["name"]][0], e["stick_banks"]))
+        back = stick.unstick(tmp_path / e["file"], e)
+        hdr = len(tiles[e["name"]]) - back.size
+        assert back.tobytes() == tiles[e["name"]][hdr:]
+
+
+def test_stick_pages_small():
+    from models.demos.inkling2_mini.convert.stick import stick_pages
+
+    w = torch.arange(3 * 2 * 3, dtype=torch.float32).reshape(3, 2, 3)  # tile ids in (e, k, n) order, kt=2, nt=3
+    ref = w.permute(0, 2, 1).reshape(9, 2)  # sticks q = e*3 + n
+    ref = torch.cat([ref, torch.full((5, 2), -1.0)]).reshape(2, 7, 2).permute(0, 2, 1).reshape(-1)
+    assert stick_pages(3, 2, 3, 7).tolist() == ref.long().tolist()
+
+
+@pytest.mark.parametrize("dtype", ["BFP4", "BFP8"])
+def test_stick_header_matches_ttnn(tmp_path, dtype):
+    """The stored file header equals a fresh ttnn dump of a [1, 1, rows, 32] TILE tensor."""
+    from models.demos.inkling2_mini.convert import stick
+
+    rows = 32 * 41
+    ttnn.dump_tensor(
+        tmp_path / "h.tensorbin",
+        ttnn.from_torch(torch.zeros(1, 1, rows, 32), dtype=DTYPES[dtype], layout=ttnn.TILE_LAYOUT),
+    )
+    raw = (tmp_path / "h.tensorbin").read_bytes()
+    assert stick.header(rows, dtype) == raw[: 8 + int.from_bytes(raw[:8], "little")]

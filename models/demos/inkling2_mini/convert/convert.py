@@ -25,6 +25,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.demos.inkling2_mini.convert.source import Checkpoint, deinterleave_gate_up, dequant_experts
+from models.demos.inkling2_mini.convert.stick import write_sticks
 
 P = "model.llm."
 N_LAYERS = 24
@@ -201,8 +202,10 @@ def convert_layer(
     expert_dtype: str,
     dtype_map: dict | None = None,
     store: Checkpoint | None = None,
+    stick_dtypes: tuple[str, ...] = (),
 ):
-    """Writes every §4 tensor of one layer; experts in ``expert_dtype`` unless ``dtype_map`` overrides."""
+    """Writes every §4 tensor of one layer; experts in ``expert_dtype`` unless ``dtype_map`` overrides. Experts
+    whose gate_up and down share a dtype in ``stick_dtypes`` are stored in the stick layout (convert/stick.py)."""
     p = f"{P}layers.{layer}."
     is_global = layer in GLOBAL_LAYERS
 
@@ -262,6 +265,19 @@ def convert_layer(
     for name, src_name, is_w13 in (("experts.w_gate_up", "w13", True), ("experts.w_down", "w2", False)):
         dtype = expert_tensor_dtype(dtype_map or {}, layer, name, expert_dtype)
         convert_experts(ck, w, layer, name, f"{p}mlp.experts.{src_name}_weight", is_w13, dtype, store)
+    stick_layer(w, layer, stick_dtypes)
+
+
+def stick_layer(w: Writer, layer: int, stick_dtypes) -> bool:
+    """Rewrite the layer's two expert tensors in the stick layout, in place, if they share a dtype in
+    ``stick_dtypes`` (the fused MoE kernel needs one dtype for both)."""
+    ex = [i for i, e in enumerate(w.entries) if e["layer"] == layer and e["name"].startswith("experts.")]
+    if len({w.entries[i]["dtype"] for i in ex}) != 1 or w.entries[ex[0]]["dtype"] not in stick_dtypes:
+        return False
+    for i in ex:
+        f = w.out / w.entries[i]["file"]
+        w.entries[i] = write_sticks(f, f, w.entries[i])
+    return True
 
 
 def convert_experts(
@@ -363,6 +379,11 @@ def main(argv=None):
     )
     ap.add_argument("--force", action="store_true", help="reconvert listed units even if the manifest has them")
     ap.add_argument(
+        "--stick-experts",
+        default="",
+        help="dtypes (BFP4,BFP8) whose layers, when gate_up and down share that dtype, get the stick expert layout",
+    )
+    ap.add_argument(
         "--bf16-store",
         type=Path,
         help="read experts from this transformers bf16 export instead of dequantizing --ckpt (e.g. for cache/v1-b8)",
@@ -396,6 +417,9 @@ def main(argv=None):
     }
     w = Writer(args.out)
     w.entries = manifest["tensors"]
+    stick_dtypes = tuple(x for x in args.stick_experts.split(",") if x)
+    if set(stick_dtypes) - {"BFP4", "BFP8"}:
+        raise SystemExit(f"--stick-experts: BFP4 and/or BFP8, got {args.stick_experts}")
     if args.bfp8_expert_layers == "all":
         args.bfp8_expert_layers = ",".join(map(str, range(N_LAYERS)))
     bfp8 = {int(x) for x in args.bfp8_expert_layers.split(",") if x} | set(MXFP8_LAYERS)
@@ -405,6 +429,9 @@ def main(argv=None):
         manifest["fallback_layers"] = sorted({e["layer"] for e in w.entries if e["fallback"]})
         manifest["expert_dtype"] = {
             f"L{e['layer']:02d}/{e['name']}": e["dtype"] for e in w.entries if e["name"].startswith("experts.")
+        }
+        manifest["expert_layout"] = {
+            f"L{e['layer']:02d}/{e['name']}": e["layout"] for e in w.entries if e["name"].startswith("experts.")
         }
         manifest["complete"] = set(manifest["units_done"]) >= {"global"} | {f"L{i:02d}" for i in range(N_LAYERS)}
         manifest["peak_rss_gib_last_run"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, 2)
@@ -423,7 +450,7 @@ def main(argv=None):
         if layer is None:
             convert_global(ck, w)
         else:
-            convert_layer(ck, w, layer, "BFP8" if layer in bfp8 else "BFP4", dtype_map, store)
+            convert_layer(ck, w, layer, "BFP8" if layer in bfp8 else "BFP4", dtype_map, store, stick_dtypes)
             manifest.setdefault("dtype_map", {}).update(
                 {k: v for k, v in dtype_map.items() if k.startswith(f"L{layer:02d}/")}
             )

@@ -26,12 +26,22 @@ def manifest(root: Path | str = DEFAULT_ROOT) -> dict:
     return m
 
 
+def layouts(root: Path | str, layer: int | None) -> dict[str, str]:
+    """{§4 name: "RM" | "TILE" | "STICK"} for one layer (None = global). A "STICK" tensor (convert/stick.py) is a
+    [1, 1, rows, 32] TILE tensor holding the expert tiles of its ``tile_shape`` reordered for the fused MoE kernel;
+    it must sit DRAM interleaved on a device with ``stick_banks`` DRAM banks."""
+    return {e["name"]: e["layout"] for e in manifest(root)["tensors"] if e["layer"] == layer}
+
+
 def _load(root: Path | str, layer: int | None, device) -> dict[str, ttnn.Tensor]:
     out = {}
     for e in manifest(root)["tensors"]:
         if e["layer"] != layer:
             continue
         t = ttnn.load_tensor(Path(root) / e["file"])
+        if device is not None and e["layout"] == "STICK" and device.dram_grid_size().x != e["stick_banks"]:
+            raise ValueError(f"{e['file']}: stick layout for {e['stick_banks']} DRAM banks, device has "
+                             f"{device.dram_grid_size().x}")  # fmt: skip
         if device is not None:
             t = ttnn.to_device(t, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out[e["name"]] = t
