@@ -101,7 +101,9 @@ class Overlap:
             assert not (t.cores & taken)
             taken |= t.cores
             self.tracks.append(t)
-        gates = os.environ.get("INKLING_STAGE_GATES", "0") == "1" if gates is None else gates
+        gates = os.environ.get("INKLING_STAGE_GATES", "0") if gates is None else gates
+        self.gates_tail = gates == "tail"  # gate pieces after the w_all pieces (else ahead of them)
+        gates = gates not in (False, "0", None)
         self.gorder, self.gstages = [], {}
         if gates:  # call order of the gates: apps with messages (loop layers, passes > 1), QKV gate then mlp gate
             for L, p in MD.APPS:
@@ -172,7 +174,11 @@ class Overlap:
         self.gstaged += int(staged)
         self.gptr = (self.gptr + 1) % len(self.gorder)
         self.gfilled = None
-        self.queue.insert(0, (self.gstages[id(self.gorder[self.gptr])], 0))  # urgent: its consumer comes soon
+        nxt = (self.gstages[id(self.gorder[self.gptr])], 0)
+        if self.gates_tail:
+            self.queue.append(nxt)  # only hosts the w_all pieces leave
+        else:
+            self.queue.insert(0, nxt)  # urgent: its consumer comes soon
         return y
 
     def _generic_op(self, io, prog):

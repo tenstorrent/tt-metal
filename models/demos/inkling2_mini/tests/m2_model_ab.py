@@ -80,7 +80,7 @@ try:
             v = spec[0] if spec else ""
             set_twin("twin1" in flags)
             (MN.install if "norm1" in flags else MN.uninstall)(m)
-            gates = "gates1" in flags
+            gates = "tail" if "gatestail" in flags else ("gates1" in flags)
             if not v:
                 m.step()
                 m.step()
@@ -124,7 +124,7 @@ try:
         tw = "twin1" if "twin1" in flags else "twin0"
         set_twin(tw == "twin1")
         (MN.install if "norm1" in flags else MN.uninstall)(m)
-        gates = "gates1" in flags
+        gates = "tail" if "gatestail" in flags else ("gates1" in flags)
         tw = ",".join(flags)
         if True:
             if not v:  # flags only, no overlap
