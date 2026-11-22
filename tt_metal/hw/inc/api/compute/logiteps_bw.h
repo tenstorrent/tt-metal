@@ -21,7 +21,8 @@ namespace ckernel {
 // clang-format off
 /**
  * Computes the input gradient grad * f'(x) of logiteps over one tile, in BF16 DEST.
- * DEST tile idst holds x and tile idst + 1 holds grad; the result replaces x.
+ * DEST tile idst holds x and tile idst + 1 holds grad; the result replaces x, and tile idst + 1 is consumed: its
+ * contents afterwards are unspecified.
  *
  * Return value: None
  *
@@ -41,7 +42,7 @@ ALWI void logiteps_bw_tile([[maybe_unused]] uint32_t idst) {
         (idst + 2 <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "logiteps_bw_tile needs DEST tiles idst to idst + 1"));
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logiteps_bw_bf16, (32 /*ITERATIONS*/), idst, VectorMode::None));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_logiteps_bw_bf16, (32 /*ITERATIONS*/), idst, VectorMode::None));
 #else
     static_assert(on_board, "logiteps_bw_tile: Blackhole and Wormhole only");
 #endif
