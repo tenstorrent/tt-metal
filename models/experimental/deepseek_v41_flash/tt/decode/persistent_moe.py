@@ -461,7 +461,15 @@ def build_dspark_server_layers(config, loader, moe_mesh, cache) -> dict:
 
 
 def launch_instances_server(
-    full_device, config, loader, cache, num_layers: int, num_instances: int, dspark: bool = True, log=None
+    full_device,
+    config,
+    loader,
+    cache,
+    num_layers: int,
+    num_instances: int,
+    dspark: bool = True,
+    log=None,
+    prefill: bool = False,
 ) -> "PersistentMoE":
     """Launch one persistent MoE for ``num_instances`` independent model instances: layers ``0 .. num_layers - 1``
     (plus, with ``dspark``, the drafter's stages as layers :data:`DSPARK_LAYER_BASE` + s) at TP12 on the 3x4 MoE
@@ -473,7 +481,13 @@ def launch_instances_server(
     ``server.request_meshes[j]``. The server takes the requesters in any order, so each instance decodes on its own.
     With ``dspark`` it is launched for 4-row blocks and takes one-row requests on the same launch (:data:`MIXED_ROWS`,
     which must be on): every instance chooses per step between a one-row decode step and a 4-row verify block (or
-    draft). The caller stops it (:meth:`PersistentMoE.stop`) once every instance has shut down."""
+    draft). The caller stops it (:meth:`PersistentMoE.stop`) once every instance has shut down.
+
+    ``prefill`` also builds the persistent TP12 prefill MoE over the same blocks, every instance a requester
+    (:class:`~..prefill.persistent_moe.PersistentPrefillMoE`), as ``server.prefill_moe`` (``None`` without): each
+    instance's ``build_prefill`` runs its prefill model's MoE on it, time-shared with this server. Its sockets take L1
+    on the requester rows too, so it is built here, before the models. The prefill MoE's routed op needs ~1.1 MB of a
+    MoE core's L1, so the router columns stay in DRAM (as a DSpark server's do anyway)."""
     if tuple(full_device.shape) != GALAXY_MESH:
         raise ValueError(f"the instances' layout needs the {GALAXY_MESH} mesh, got {tuple(full_device.shape)}")
     if not 1 <= num_instances <= len(INSTANCE_ROWS):
@@ -490,19 +504,33 @@ def launch_instances_server(
     request_meshes = [full_device.create_submesh(ttnn.MeshShape(1, cols), ttnn.MeshCoordinate(r, 0)) for r in rows]
     start = time.perf_counter()
     moes = build_moe_layers(config, loader, moe_mesh, cache, range(num_layers), log=log)
+    target_moes = dict(moes)
     if dspark:
         moes.update(build_dspark_server_layers(config, loader, moe_mesh, cache))
-    server = PersistentMoE(
-        moe_mesh,
-        request_meshes,
-        moes,
-        single_senders=single_senders(rows),
-        rows=1,
-        block_rows=4 if dspark else 0,
-    )
+    global ROUTER_L1_BUDGET
+    router_budget = ROUTER_L1_BUDGET
+    if prefill:
+        ROUTER_L1_BUDGET = 0
+    try:
+        server = PersistentMoE(
+            moe_mesh,
+            request_meshes,
+            moes,
+            single_senders=single_senders(rows),
+            rows=1,
+            block_rows=4 if dspark else 0,
+        )
+    finally:
+        ROUTER_L1_BUDGET = router_budget
+    server.prefill_moe = None
+    if prefill:
+        from models.experimental.deepseek_v41_flash.tt.prefill.persistent_moe import PersistentPrefillMoE
+
+        server.prefill_moe = PersistentPrefillMoE(moe_mesh, request_meshes, target_moes, decode=server)
     logger.info(
         f"persistent MoE for {num_instances} instance(s) on mesh rows {rows}: layers 0..{num_layers - 1}"
-        f"{' + the DSpark drafter stages' if dspark else ''}, request modes {server.modes} "
+        f"{' + the DSpark drafter stages' if dspark else ''}{', + the prefill MoE' if prefill else ''}, "
+        f"request modes {server.modes} "
         f"({time.perf_counter() - start:.0f}s)"
     )
     return server

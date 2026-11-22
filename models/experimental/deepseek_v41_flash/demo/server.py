@@ -72,8 +72,13 @@ What V4.1 imposes on the serving side:
   ``--slot-idle-timeout`` seconds. One instance alone measured ~216 tok/s/user on GSM8K and ~145 on chat text
   against ~149 a step at a time (``tests/decode/test_dspark_spec.py``). What that path takes: one session per
   instance (``--num-users 1``), greedy decoding with the sampler on device (``--temperature 0``; a request's
-  ``temperature`` and ``top_p`` are ignored), no traced prefill model (prompts are replayed through decode,
-  ``--no-prefill``) and no ``--vision``. The 4-row verify attends the compressed groups densely, so it covers
+  ``temperature`` and ``top_p`` are ignored) and no ``--vision``. Prompts are prefilled by each instance's own traced
+  prefill model (:class:`_V41Prefiller`, one user per instance on that instance's row; no pipeline over rows), its MoE on
+  the persistent TP12 prefill MoE (``tt/prefill/persistent_moe.py``) launched with the server over the same blocks:
+  the trace holds each layer's request half, the MoE mesh serves each replayed chunk. A prefill stops the shared
+  decode server, so the other instances settle their posted steps and park meanwhile (:class:`_MoeGate`); the last
+  ``sliding_window`` prompt tokens are replayed through decode (KV-only prefill, and the DSpark drafter's rings).
+  ``--no-prefill`` replays whole prompts through decode instead. The 4-row verify attends the compressed groups densely, so it covers
   positions below ~508; past them the reply decodes a step at a time. ``--max-context`` defaults to
   :data:`_PERSISTENT_MAX_CONTEXT` here (one-level select; longer contexts are untested on this layout), and
   ``--total-context`` to :data:`_PERSISTENT_TOTAL_CONTEXT` (4M tokens per instance, shared by its running user and
@@ -181,6 +186,7 @@ import email.policy
 import hashlib
 import itertools
 import json
+import math
 import os
 import queue
 import socket
@@ -231,6 +237,11 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model, load_engram_tables
+from models.experimental.deepseek_v41_flash.tt.prefill.d_p_wire import (
+    PrefillClient,
+    PrefillServerError,
+    parse_prefill_address,
+)
 from models.experimental.deepseek_v41_flash.tt.vision import (
     DELIMITER_ROWS,
     FIRST_IMAGE_ROW,
@@ -243,6 +254,7 @@ from models.experimental.deepseek_v41_flash.tt.vision import (
 )
 from models.experimental.deepseek_v4_flash.demo.chat_cli import ChatEngine, ChatFormat, UserSession
 from models.experimental.deepseek_v4_flash.demo.server import (
+    _DEFAULT_USER,
     DECODE_RATE_WINDOW,
     GenerationServer,
     RequestError,
@@ -253,6 +265,7 @@ from models.experimental.deepseek_v4_flash.demo.server import (
     _HostConversation,
     _Lease,
     _normalized_messages,
+    _PrefixCache,
     _Prefiller,
     _PromptStopped,
     _Scheduler,
@@ -263,7 +276,9 @@ from models.experimental.deepseek_v4_flash.demo.server import (
     check_args,
     serve,
 )
+from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import PagedCacheFull
 from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
+from models.experimental.deepseek_v4_flash.tt.prefill.attention import ALIGNMENT as _PREFILL_ALIGNMENT
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
@@ -302,6 +317,9 @@ _PERSISTENT_MAX_CONTEXT = 16384
 # every conversation parked in its device RAM (any number of them, until the pool is full). ~13.4 GB per chip of the
 # instance's TP4 row (~3.2 KB per token: 4 compressed groups of bf16 KV and index keys).
 _PERSISTENT_TOTAL_CONTEXT = 4 * 1024 * 1024
+# Total slots per persistent-MoE instance: 1 active slot at a time plus up to 255 device-parked slots sharing the
+# instance's 4M-token KV pool. Once all 256 slots or the KV pool are full, the oldest slot is evicted to host RAM.
+_PERSISTENT_SLOTS = 256
 # Default --num-users with --persistent-moe and no --dspark (one stage holds every user's pools).
 _NUM_USERS_PERSISTENT = 8
 # Default --instances with --persistent-moe: one whole TP4 model (and its drafter) on each of mesh rows 4, 3, 2, 1, 0,
@@ -319,6 +337,9 @@ _DSPARK_RAISE_SECONDS = 2.0
 # A request that continues no slot's conversation reuses a parked slot whose cache it differs from only in the
 # cache's last this-many tokens, overwriting them, instead of taking a new slot (_V41SlotPool, _SlotReuse).
 _SLOT_REUSE_TOKENS = 512
+# Free pool room kept before each scheduler round for every active turn, besides its unfed prompt (_keep_headroom):
+# more than a round writes (a verify round, posted-ahead decode steps, 16 replay blocks) plus a capacity grow-ahead.
+_ROUND_HEADROOM_TOKENS = 2048
 
 # The checkpoint's own encoding (``encoding/encoding.py``): V4.1 renamed the DSML tool-call tags and takes no
 # "medium" reasoning effort, which the V4 server accepts and V4 renders as "high".
@@ -1011,11 +1032,13 @@ class _V41SlotPool(_SlotPool):
     differing message against the slot's turn marks and where its last reply started. Admission checks the tokens
     themselves and rewinds the cache in place (:class:`_SlotReuse`), or treats the slot as a new conversation's."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, max_slots: int | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.near_misses: set[int] = set()  # slots handed out for an in-place rewind, until their turn's admission
         # slot -> (index of the assistant message its last turn stored, the position that reply started at)
         self.reply_at: dict[int, tuple[int, int]] = {}
+        self.max_slots = max(len(self._busy), max_slots or len(self._busy))
+        self.max_device_parked = self.max_slots - len(self._busy)
         self.device_parked: list[_DeviceParkedConversation] = []
 
     def acquire(self, user_key: str, messages: list[dict]) -> _Lease:
@@ -1089,12 +1112,30 @@ class _V41SlotPool(_SlotPool):
             return slot, None
         if picked is not None:
             return picked
-        # When all slots are full but the page table/pool still has space, assign the oldest parked slot
-        # and keep the old user's KV cache resident in device RAM (device_parked).
-        if free and self.engine.tokens_left() > 0:
+        # When all active slots are occupied by idle conversations, assign the oldest free active slot and park its
+        # previous conversation in device RAM (evicting the oldest to host RAM if all slots or the KV pool are full).
+        if free and (self.engine.tokens_left() > 0 or self.device_parked):
             oldest = min(free, key=lambda i: self._used_at[i])
             return oldest, None
         return None
+
+    def counts(self) -> dict:
+        """How many slots are ``running`` / ``queued`` / ``parked`` / ``empty``, plus ``max_running`` / ``max_slots``."""
+        with self._cv:
+            running, queued = len(self._running), len(self._queue)
+            busy = sum(1 for b in self._busy if b)
+            free = [i for i, b in enumerate(self._busy) if not b]
+            parked_active = sum(1 for i in free if self.engine.users[i].pos)
+            parked = parked_active + len(self.device_parked)
+            empty = max(0, self.max_slots - busy - parked)
+            return {
+                "running": running,
+                "queued": queued,
+                "parked": parked,
+                "empty": empty,
+                "max_running": self.max_running,
+                "max_slots": self.max_slots,
+            }
 
     def drop_host(self, user_key: str) -> int:
         dropped = super().drop_host(user_key)
@@ -1187,6 +1228,51 @@ class _SlotReuse:
         finally:
             self._reuse.pop(turn.slot, None)
 
+    def _round(self) -> None:
+        self._keep_headroom()
+        super()._round()
+
+    def _keep_headroom(self) -> None:
+        """Evict parked conversations (device-parked ones and idle slots, least recently used first, to host RAM)
+        until the pools hold what the active turns may write before the next round: each one's unfed prompt and
+        :data:`_ROUND_HEADROOM_TOKENS`. Admission makes room for the prompt only; the reply, prompt tokens fed
+        through decode and verify rounds allocate blocks as they go, and a verify round that finds none raises
+        ``PagedCacheFull`` part-way, which the scheduler cannot recover from (:meth:`_abort_all`)."""
+        if not self._active:
+            return
+        need = sum(turn.prompt_left + _ROUND_HEADROOM_TOKENS for turn in self._active)
+        if need <= self.engine.tokens_left():
+            return
+        # Evicting reads the parked KV back off the device: no step may sit there waiting for its packet.
+        if not self._settle():
+            return
+        self._make_room(need, keep=-1)
+
+    def _room_mid_step(self, n_tokens: int, turn: _Turn) -> bool:
+        """A step of ``turn`` found the pools full before anything of it was posted: evict the least recently used
+        conversations to host RAM there and then, for its ``n_tokens`` and :data:`_ROUND_HEADROOM_TOKENS`, so the
+        turn goes on. Only while every step on the device already has its packet (none posted ahead) and no verify
+        round is live, as the eviction's reads queue behind them. True when that freed room."""
+        if self._posted or self.engine._replay_q or getattr(self, "_spec_live", None) is not None:
+            return False
+        before = self.engine.tokens_left()
+        logger.info(
+            f"user {turn.user_key!r} (slot {turn.slot}): the KV pool is full mid-turn ({before} tokens left), "
+            "evicting the least recently used conversations to host RAM"
+        )
+        self._make_room(n_tokens + _ROUND_HEADROOM_TOKENS, keep=turn.slot)
+        return self.engine.tokens_left() > before
+
+    def _post(self, turn: _Turn, positions, token_ids=None) -> None:
+        positions = list(positions)
+        try:
+            super()._post(turn, positions, token_ids)
+        except PagedCacheFull:
+            # post_traced grows the session's blocks before it posts any trace.
+            if not self._room_mid_step(len(positions), turn):
+                raise
+            super()._post(turn, positions, token_ids)
+
     def _reuse_plan(self, user: UserSession, turn: _Turn) -> _Rewind | None:
         prefiller = self.server.prefiller
         if prefiller is None or not prefiller.replay_window or not prefiller.continue_alignment:
@@ -1233,11 +1319,42 @@ class _SlotReuse:
             start -= step
         return None
 
+    def _evict_device_parked_to_host(self, oldest_dev: _DeviceParkedConversation, reason: str) -> None:
+        """Evict one device-parked conversation to host RAM (or free its blocks if the host tier is disabled)."""
+        pool = self.server.pool
+        if pool.host_users:
+            exported = False  # export_device_park frees the parked KV blocks itself
+            try:
+                snapshot = self.engine.model.export_device_park(oldest_dev.snapshot)
+                exported = True
+                pool.store(
+                    _HostConversation(
+                        owner=oldest_dev.owner,
+                        messages=list(oldest_dev.messages),
+                        tokens=list(oldest_dev.tokens),
+                        marks=list(oldest_dev.marks),
+                        pending_id=oldest_dev.pending_id,
+                        next_render=oldest_dev.next_render,
+                        thinking_mode=oldest_dev.thinking_mode,
+                        reasoning_effort=oldest_dev.reasoning_effort,
+                        system_prompt=oldest_dev.system_prompt,
+                        snapshot=snapshot,
+                        stored_at=oldest_dev.used_at,
+                    )
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"user {oldest_dev.owner!r}: could not export device-parked to host: {e}")
+                if not exported:
+                    self.engine.model.free_device_park(oldest_dev.snapshot)
+        else:
+            self.engine.model.free_device_park(oldest_dev.snapshot)
+        logger.debug(f"evicted device-parked user {oldest_dev.owner!r} ({reason}): {self._pool_summary()}")
+
     def _offload(self, slot: int, owner: str | None) -> None:
         if slot in self._reuse:
             return
         pool, user = self.server.pool, self.engine.users[slot]
-        if not user.pos or len(user.tokens) != user.pos or slot in self._cut_short:
+        if not user.pos or len(user.tokens) != user.pos or slot in self._cut_short or pool.max_device_parked <= 0:
             super()._offload(slot, owner)
             return
         try:
@@ -1246,6 +1363,7 @@ class _SlotReuse:
             logger.warning(f"user {owner!r} (slot {slot}): could not park on device, offloading to host: {e}")
             super()._offload(slot, owner)
             return
+        evicted: list[_DeviceParkedConversation] = []
         with pool._cv:
             pool.device_parked.append(
                 _DeviceParkedConversation(
@@ -1262,9 +1380,15 @@ class _SlotReuse:
                     used_at=pool._used_at[slot],
                 )
             )
+            while len(pool.device_parked) > pool.max_device_parked:
+                oldest = min(pool.device_parked, key=lambda c: c.used_at)
+                pool.device_parked.remove(oldest)
+                evicted.append(oldest)
+        for oldest in evicted:
+            self._evict_device_parked_to_host(oldest, f"all {pool.max_slots} slots full")
         logger.info(
             f"user {owner!r} (slot {slot}): {user.pos}-token conversation evicted from page table "
-            f"(KV cache kept in device RAM; {len(pool.device_parked)} device-parked)"
+            f"(KV cache kept in device RAM; {len(pool.device_parked)}/{pool.max_device_parked} device-parked)"
         )
 
     def _restore(self, user: UserSession, turn: _Turn) -> bool:
@@ -1312,35 +1436,7 @@ class _SlotReuse:
                     pool._busy[oldest_slot] = True
                     slot_owner = pool.owner[oldest_slot]
             if evict_dev:
-                if pool.host_users:
-                    exported = False  # export_device_park frees the parked KV blocks itself
-                    try:
-                        snapshot = self.engine.model.export_device_park(oldest_dev.snapshot)
-                        exported = True
-                        pool.store(
-                            _HostConversation(
-                                owner=oldest_dev.owner,
-                                messages=list(oldest_dev.messages),
-                                tokens=list(oldest_dev.tokens),
-                                marks=list(oldest_dev.marks),
-                                pending_id=oldest_dev.pending_id,
-                                next_render=oldest_dev.next_render,
-                                thinking_mode=oldest_dev.thinking_mode,
-                                reasoning_effort=oldest_dev.reasoning_effort,
-                                system_prompt=oldest_dev.system_prompt,
-                                snapshot=snapshot,
-                                stored_at=oldest_dev.used_at,
-                            )
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning(f"user {oldest_dev.owner!r}: could not export device-parked to host: {e}")
-                        if not exported:
-                            self.engine.model.free_device_park(oldest_dev.snapshot)
-                else:
-                    self.engine.model.free_device_park(oldest_dev.snapshot)
-                logger.debug(
-                    f"freed device-parked user {oldest_dev.owner!r} for {n_tokens} tokens: {self._pool_summary()}"
-                )
+                self._evict_device_parked_to_host(oldest_dev, f"for {n_tokens} tokens")
             else:
                 try:
                     super()._offload(oldest_slot, slot_owner)
@@ -1382,6 +1478,8 @@ class _SlotReuse:
         user = self.engine.users[turn.slot]
         if user.messages and user.messages[-1].get("role") == "assistant":
             self.server.pool.reply_at[turn.slot] = (len(user.messages) - 1, reply_at)
+        if getattr(self.server, "prefix_cache", None) is not None and not self._inflight and not self._posted:
+            self._capture_prefix(user)
 
 
 class _EngramPrefetch:
@@ -1457,6 +1555,66 @@ class _EngramPrefetch:
                 self._cv.notify_all()
 
 
+class _MoeGate:
+    """Instances sharing one persistent MoE take it in turn for a traced prefill (``--instances`` > 1).
+
+    A prefill stops the shared decode server (:meth:`~..tt.prefill.persistent_moe.PersistentPrefillMoE.window`), which
+    sends a stop from every requester row, so no instance may have a decode step posted or in flight while it runs.
+    :meth:`exclusive` (the prefilling instance's scheduler thread, its own steps already settled) posts a park chore
+    to every other instance's scheduler: a chore runs on that scheduler's thread right after its ``_settle()``, so it
+    parks with nothing in flight, busy or idle, and resumes once the prefill is done. An instance waiting for its own
+    turn at the gate has settled too, so it counts as parked: two instances prefilling at once take turns.
+    """
+
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._holder = None
+        self._parked: set = set()
+        self.schedulers: list = []
+
+    def _park(self, scheduler) -> None:
+        with self._cv:
+            while self._holder is not None and self._holder is not scheduler:
+                self._parked.add(scheduler)
+                self._cv.notify_all()
+                self._cv.wait()
+            self._parked.discard(scheduler)
+
+    @staticmethod
+    def _post_chore(scheduler, fn) -> None:
+        """``scheduler.run_on_scheduler(fn)`` without waiting for it."""
+        with scheduler._wake:
+            scheduler._chores.append((fn, threading.Event(), []))
+            scheduler._wake.notify_all()
+
+    @contextlib.contextmanager
+    def exclusive(self, scheduler):
+        others = [s for s in self.schedulers if s is not scheduler]
+        if not others:
+            yield
+            return
+        with self._cv:
+            while self._holder is not None:
+                self._parked.add(scheduler)
+                self._cv.notify_all()
+                self._cv.wait()
+            self._parked.discard(scheduler)
+            self._holder = scheduler
+        try:
+            t0 = time.perf_counter()
+            for other in others:
+                self._post_chore(other, lambda other=other: self._park(other))
+            with self._cv:
+                while not all(other in self._parked for other in others):
+                    self._cv.wait()
+            logger.debug(f"MoE gate: {len(others)} other instance(s) parked in {time.perf_counter() - t0:.3f}s")
+            yield
+        finally:
+            with self._cv:
+                self._holder = None
+                self._cv.notify_all()
+
+
 class _PrefillFirst(_Scheduler):
     """Finish every pending prompt before decoding, and look Engram rows up while a prompt waits.
 
@@ -1466,21 +1624,118 @@ class _PrefillFirst(_Scheduler):
     runs, the traced prefill one prompt at a time and the tokens replayed through decode pipelined. After that,
     the first ``--max-running`` turns in admission order decode together; the rest stay admitted, prompts already
     in the cache, until a seat frees.
+
+    With disaggregated prefill (:class:`_RemotePrefiller`) a prompt is sent to the prefill server at admission
+    (:meth:`_send_ahead`), and until its KV is back the turn neither holds decode up nor waits on the scheduler
+    thread: the other turns decode meanwhile. Only loading the KV and the tail replayed through decode settle them.
     """
 
     def _admit(self, turn: _Turn) -> None:
         super()._admit(turn)
         if turn in self._active:
+            if self.server.prefiller is not None and getattr(self.server, "prefix_cache", None) is not None:
+                user = self.engine.users[turn.slot]
+                self._remember_prefix(user, turn)
+                # For disaggregated prefill, if there is an uncached shared history prefix just below
+                # device_prefill (leaving a short tail <= 1024 tokens), trim device_prefill to the aligned
+                # boundary before it so the first request populates prefix_cache for subsequent requests.
+                prefiller = self.server.prefiller
+                if (
+                    isinstance(prefiller, _RemotePrefiller)
+                    and turn.device_prefill > 0
+                    and not turn.prefill_from
+                    and turn.prefix_cuts
+                ):
+                    full_len = user.pos + len(turn.ids)
+                    history_cuts = [c for c in turn.prefix_cuts if user.pos < c < full_len - 1]
+                    if history_cuts:
+                        history = max(history_cuts)
+                        if history <= user.pos + turn.device_prefill:
+                            aligned_h = prefiller.aligned(history - user.pos, user.pos)
+                            max_trim_tail = 2048 if getattr(self.engine.model, "verify_rows", 1) > 1 else 1024
+                            if full_len - (user.pos + aligned_h) <= max_trim_tail:
+                                turn.device_prefill = aligned_h
+            self._send_ahead(turn)
             self._prefetch_engram(turn)
 
+    def _send_ahead(self, turn: _Turn) -> None:
+        """Send the prompt a remote prefill takes to the prefill server now, from a thread of its own
+        (:meth:`_RemotePrefiller.start`); :meth:`_prefill_on_device` loads the reply once it is in."""
+        prefiller = self.server.prefiller
+        if (
+            not isinstance(prefiller, _RemotePrefiller)
+            or not turn.device_prefill
+            or turn.prefill_from
+            or turn.replay_ids
+        ):
+            return
+        user = self.engine.users[turn.slot]
+        if user.pos % prefiller.align or len(user.tokens) < user.pos:
+            return
+
+        # Not mark_prefill_chunk: it advances turn.fed, which must stay at prefill_from until the KV is loaded.
+        def progress(done: int) -> None:
+            if turn.cancelled.is_set():
+                raise _PromptStopped()
+
+        turn.remote_fetch = prefiller.start(user, turn.ids[: turn.device_prefill], progress, self._wake)
+
+    @staticmethod
+    def _fetching(turn: _Turn) -> bool:
+        """``turn``'s prompt is at the prefill server and its KV not back yet."""
+        job = getattr(turn, "remote_fetch", None)
+        return job is not None and not job.done()
+
+    def _retire(self, turn: _Turn, outcome: str) -> None:
+        job = getattr(turn, "remote_fetch", None)
+        if job is not None:
+            turn.remote_fetch = None
+            self.server.prefiller.forget(self.engine.users[turn.slot], job)
+        super()._retire(turn, outcome)
+
+    def _share_prefix(self, user: UserSession, turn: _Turn) -> bool:
+        if super()._share_prefix(user, turn):
+            return True
+        prefiller = self.server.prefiller
+        cache = getattr(self.server, "prefix_cache", None)
+        if user.pos or prefiller is None or cache is None or not hasattr(self.engine.model, "import_session"):
+            return False
+        vocab = getattr(getattr(self.engine.model, "config", None), "vocab_size", 0) or 0
+        hit = cache.lookup(turn.ids, vocab)
+        if hit is None:
+            return False
+        pos, _ = hit
+        tail = len(turn.ids) - pos
+        n_whole = prefiller.aligned(len(turn.ids))
+        # Prefer the unpolluted block-replay rate (excludes import_session and prefix-capture exports) when available.
+        rate = getattr(self, "_block_replay_rate", None) or self.replay_rate
+        whole_seconds = (
+            prefiller.seconds(n_whole) + (len(turn.ids) - n_whole) / rate if n_whole else len(turn.ids) / rate
+        )
+        if tail / rate >= whole_seconds:
+            return False
+        return self._share_decoded_prefix(user, turn)
+
+    def _prompt_done(self, turn: _Turn) -> None:
+        super()._prompt_done(turn)
+        if self.server.prefiller is not None and getattr(self.server, "prefix_cache", None) is not None:
+            pos = self.engine.users[turn.slot].pos
+            # _remember_prefix already captures end - 1 during the decode tail; only snapshot at pos if
+            # the prefiller covered the entire prompt with no decode tail.
+            if pos > 0 and turn.prefilled_on_device >= len(turn.ids):
+                turn.capture_at = pos
+
     def _prefill_waiting(self) -> bool:
-        """A prompt is still to be prefilled, or one has been submitted and not yet admitted.
+        """A prompt is still to be prefilled, or one has been submitted and not yet admitted. A prompt still at the
+        prefill server does not count: decode goes on until its KV is back.
 
         ``_new`` is appended under the scheduler lock and read here the way :meth:`_Scheduler._post_ahead` reads
         it: a request that arrived during this round."""
         if self._new:
             return True
-        return any(turn.phase == _Turn.PREFILL and turn.error is None for turn in self._active)
+        return any(
+            turn.phase == _Turn.PREFILL and turn.error is None and not self._fetching(turn) for turn in self._active
+        )
 
     def _holds_decode_seat(self, turn: _Turn) -> bool:
         """Whether ``turn`` is one of the first ``--max-running`` decoding turns. A prompt does not take a seat."""
@@ -1498,11 +1753,22 @@ class _PrefillFirst(_Scheduler):
                 return False
         return True
 
+    def _choose_feed(self, user: UserSession, turn: _Turn, continuing: bool) -> None:
+        prefiller = self.server.prefiller
+        if isinstance(prefiller, _RemotePrefiller) and prefiller.vocab and any(t >= prefiller.vocab for t in turn.ids):
+            return
+        super()._choose_feed(user, turn, continuing)
+
     def _prefetch_engram(self, turn: _Turn) -> None:
         """Start the host Engram lookup for the tokens the traced prefill will see, on a copy of the session."""
         prefiller = self.server.prefiller
         lookup = getattr(self.engine.model, "_engram_lookup", None)
-        if prefiller is None or lookup is None or not (turn.device_prefill or turn.replay_ids):
+        if (
+            prefiller is None
+            or getattr(prefiller, "model", None) is None
+            or lookup is None
+            or not (turn.device_prefill or turn.replay_ids)
+        ):
             return
         user = self.engine.users[turn.slot]
         slot = self.engine.model._slot_of.get(user.sid)
@@ -1547,12 +1813,18 @@ class _PrefillFirst(_Scheduler):
         prefetch = getattr(turn, "engram_prefetch", None)
         if traced is not None:
             traced._engram_prefetch = prefetch
+        gate = getattr(self.server, "moe_gate", None)
         try:
-            super()._prefill_on_device(turn, drain_seconds, drained)
+            # Several instances on one persistent MoE: the others parked while this one's prefill holds the MoE.
+            with gate.exclusive(self) if gate is not None else contextlib.nullcontext():
+                super()._prefill_on_device(turn, drain_seconds, drained)
+            if isinstance(self.server.prefiller, _RemotePrefiller):
+                turn.prefill_cached = self.server.prefiller.last_cached
         finally:
             if traced is not None:
                 traced._engram_prefetch = None
             turn.engram_prefetch = None
+            turn.remote_fetch = None
 
     def _drain_decode_queue(self) -> bool:
         """Feed the decode steps whose traces are already posted, and do not post any more.
@@ -1571,7 +1843,7 @@ class _PrefillFirst(_Scheduler):
         """One round of prompt work only: traced prefills and prompt tokens replayed through decode."""
         self._stalled = False
         for turn in list(self._active):
-            if turn not in self._active or turn.phase == _Turn.DECODE:
+            if turn not in self._active or turn.phase == _Turn.DECODE or self._fetching(turn):
                 continue
             if turn.error is not None:
                 if not turn.pending:
@@ -1609,6 +1881,17 @@ class _PrefillFirst(_Scheduler):
                 self._abort_all(exc)
 
     def _round_turns(self) -> None:
+        fetching = [turn for turn in self._active if self._fetching(turn)]
+        for turn in fetching:
+            if turn.cancelled.is_set():
+                turn.remote_fetch.abort()
+        if fetching and len(fetching) == len(self._active) and not self._inflight and not self._posted:
+            # Nothing to run until a prompt's KV is back (which notifies _wake), a request or chore comes in, or a
+            # turn is stopped (polled: a cancel does not notify).
+            with self._wake:
+                if not (self._new or self._chores or self._stop or any(turn.remote_fetch.done() for turn in fetching)):
+                    self._wake.wait(0.1)
+            return
         if self._prefill_waiting():
             if self._drain_decode_queue():
                 self._prefill_only_round()
@@ -1618,16 +1901,21 @@ class _PrefillFirst(_Scheduler):
             for turn in self._active
             if turn.phase == _Turn.DECODE and not turn.cancelled.is_set() and not self._holds_decode_seat(turn)
         ]
-        if not waiting:
+        held = waiting + fetching
+        if not held:
             super()._round_turns()
             return
         # Keep turns whose prompt is in but which have no decode seat out of this round, so a posted step of a
-        # seated turn is not stalled on them and lookahead follows the seated turns only.
-        self._active = [turn for turn in self._active if turn not in waiting]
+        # seated turn is not stalled on them and lookahead follows the seated turns only; and turns whose prompt is
+        # still at the prefill server, so the round does not wait for it.
+        order = list(self._active)
+        self._active = [turn for turn in self._active if turn not in held]
         try:
             super()._round_turns()
         finally:
-            self._active.extend(turn for turn in waiting if turn not in self._active)
+            kept = self._active
+            self._active = [turn for turn in order if turn in kept or turn in held]
+            self._active.extend(turn for turn in kept if turn not in order)
 
 
 class _V41Scheduler(_SlotReuse, _PrefillFirst):
@@ -1673,8 +1961,15 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
         # users have asked for more.
         self._drafts = self.engine.dspark_drafts[0]
         self._raise_since: float | None = None
+        self._block_replay_rate: float | None = None
+        if getattr(self.engine.model, "verify_rows", 1) > 1:
+            # 4-row block replay runs ~4x faster than single-row decode replay; seed both rates so _share_prefix
+            # uses true block-replay speed without being dragged down by import_session or prefix-capture exports.
+            self.replay_rate = max(self.replay_rate, 220.0)
+            self._block_replay_rate = 220.0
 
     def _round(self) -> None:
+        self._keep_headroom()
         self.rounds += 1
         before = self.steps
         self._spec_accounted = 0
@@ -1713,11 +2008,97 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
             self._spec_live = None
         super()._retire(turn, outcome)
 
+    def _block_replay_prompt(self, turn: _Turn) -> bool:
+        """Replay prompt tail tokens in ``verify_rows``-token blocks via ``decode_verify_block`` (~4x faster than
+        single-row decode replay), stopping before any prefix cut, image token, or the final prompt token."""
+        model = self.engine.model
+        t = getattr(model, "verify_rows", 1)
+        if (
+            t <= 1
+            or not getattr(model, "_block_verify", False)
+            or turn.cancelled.is_set()
+            or turn.device_prefill
+            or turn.replay_ids
+        ):
+            return False
+        user = self.engine.users[turn.slot]
+        # Leave at least the last prompt token for single-row decode so sampling and _prompt_done run identically.
+        left = turn.prompt_left - 1
+        if left < t:
+            return False
+        n = self._prefix_batch(turn, user, left)
+        vocab = getattr(getattr(model, "config", None), "vocab_size", 0) or 0
+        if vocab > 0:
+            for i in range(n):
+                if int(turn.ids[turn.fed + i]) >= vocab:
+                    n = i
+                    break
+        n_blocks = n // t
+        if n_blocks <= 0:
+            return False
+        if not self._settle():
+            return True
+        # Blocks ending at least a tail before the next state that is read -- a prefix snapshot or the prompt's end --
+        # run only layers 0..20: the full blocks of that tail rewrite the later layers' window rings and the drafter's.
+        kv_end = -1
+        if getattr(model, "kv_only_blocks", False):
+            tail = max(model.sliding_window, model.dspark.ring_rows if model.dspark is not None else 0)
+            reads = [user.pos + turn.prompt_left] + [cut for cut in turn.prefix_cuts if cut > user.pos]
+            if turn.capture_at is not None and turn.capture_at > user.pos:
+                reads.append(turn.capture_at)
+            kv_end = min(reads) - tail
+        user.activate()
+        ran = 0
+        t0 = time.perf_counter()
+        try:
+            for _ in range(min(n_blocks, 16)):
+                if turn.cancelled.is_set():
+                    break
+                chunk = [int(x) for x in turn.ids[turn.fed : turn.fed + t]]
+                kv_only = user.pos + t <= kv_end
+                try:
+                    model.decode_verify_block(chunk, user.pos, kv_only=kv_only)
+                except PagedCacheFull:
+                    # From the block's capacity check, before its trace replays; every earlier block was read back.
+                    if not self._room_mid_step(t, turn):
+                        raise
+                    model.decode_verify_block(chunk, user.pos, kv_only=kv_only)
+                user.tokens.extend(chunk)
+                user.pos += t
+                turn.fed += t
+                ran += t
+        except PagedCacheFull as e:
+            # From the block's capacity check, before its trace replays: only this turn's prompt is cut short.
+            self._cut_short.add(turn.slot)
+            self._fail(turn, e)
+        except Exception as e:  # noqa: BLE001 - see _abort_all
+            self._abort_all(e)
+            return True
+        finally:
+            if ran:
+                elapsed = time.perf_counter() - t0
+                if elapsed > 0 and getattr(self, "_block_replay_rate", None) is not None:
+                    self._block_replay_rate = 0.7 * self._block_replay_rate + 0.3 * (ran / elapsed)
+                if hasattr(model, "_spec_dirty"):
+                    model._spec_dirty.discard(user.index)
+                self.steps += ran
+                self._spec_accounted += ran
+                self._account(ran)
+        return True
+
     def _plan(self, turn: _Turn) -> list[tuple[int, int, bool]]:
         if turn.phase != _Turn.DECODE:
+            if turn.phase == _Turn.PREFILL:
+                user = self.engine.users[turn.slot]
+                if self._capture_due(turn, user):
+                    return []
+                if self._block_replay_prompt(turn):
+                    return []
             return super()._plan(turn)
         engine = self.engine
         user = engine.users[turn.slot]
+        if self._capture_due(turn, user):
+            return []
         # A posted step still has to be fed (_flush_ahead). Anything else waits while a prompt is pending, and
         # only a seated turn takes a verify round.
         if not self._flushing and (self._prefill_waiting() or not self._holds_decode_seat(turn)):
@@ -1793,10 +2174,6 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
             return 0
         pos = engine.users[turn.slot].pos
         room = engine.max_seq - pos - 2 * (self._drafts + 1)
-        if engine.block_verify:
-            # A 4-row verify block selects densely only below engine.block_end: this round's rows and the next
-            # one's, dispatched ahead, stay below it, and past it the reply decodes a step at a time.
-            room = min(room, engine.block_end - pos - 2 * (self._drafts + 1))
         return max(0, min(turn.max_tokens - len(turn.generated), room))
 
     def _speculator(self, turn: _Turn):
@@ -1841,6 +2218,7 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
             return
         # The rounds write their packets themselves, after every packet the engine's thread has queued.
         engine._packets.join()
+        self._capture_due(turn, user)
         others = any(
             other is not turn
             and other.phase == _Turn.DECODE
@@ -1871,6 +2249,8 @@ class _SpecScheduler(_SlotReuse, _PrefillFirst):
         if (self._inflight or self._posted) and not self._settle():
             return
         engine._packets.join()
+        for turn in turns:
+            self._capture_due(turn, engine.users[turn.slot])
         budgets = {turn: self._spec_budget(turn) for turn in turns}
         try:
             self._pause_live()
@@ -1959,11 +2339,32 @@ class V41GenerationServer(GenerationServer):
         publishes, and its snapshot covers every instance, see :meth:`monitor_snapshot`);
         ``files`` shares another server's upload store; ``cpus`` pins the host runtime's threads (default
         :func:`_host_cpus`)."""
+        if kwargs.get("prefiller") is None and args and getattr(args[0], "prefill_url", None):
+            engine = args[0]
+            kwargs["prefiller"] = _RemotePrefiller(
+                engine, engine.prefill_url, max_len=getattr(engine, "prefill_max_len", None)
+            )
+        if (
+            kwargs.get("prefix_cache") is None
+            and args
+            and isinstance(kwargs.get("prefiller"), _RemotePrefiller)
+            and hasattr(args[0].model, "import_session")
+        ):
+            host_bytes = kwargs.get("host_bytes", 0)
+            kwargs["prefix_cache"] = _PrefixCache(host_bytes if host_bytes > 0 else 32 << 30)
         super().__init__(*args, **kwargs)
         # Every instance's server, this one included (set by _Instances): the DSpark schedule counts their users.
         self.peers = [self]
         pool = self.pool
-        self.pool = _V41SlotPool(self.engine, pool.host_users, pool.host_bytes, pool.max_running, pool.idle_timeout)
+        max_slots = _PERSISTENT_SLOTS if getattr(self.engine, "persistent_moe", False) else len(self.engine.users)
+        self.pool = _V41SlotPool(
+            self.engine,
+            pool.host_users,
+            pool.host_bytes,
+            pool.max_running,
+            pool.idle_timeout,
+            max_slots=max_slots,
+        )
         scheduler = _SpecScheduler if self.engine.dspark else _V41Scheduler
         self.scheduler = scheduler(self, self.scheduler.prefill_chunk, self.scheduler.decode_ahead)
         # serve() builds the server after the warmup and the prefill snapshot, and before the scheduler starts: the
@@ -2015,6 +2416,8 @@ class V41GenerationServer(GenerationServer):
             self.monitor_feed.stop()
             logger.remove(self._monitor_sink)
         super().stop()
+        if self.prefiller is not None and hasattr(self.prefiller, "close"):
+            self.prefiller.close()
 
     def monitor_snapshot(self) -> dict:
         """The raw state :class:`~.monitor.MonitorFeed` publishes for the web monitor: counts, sizes and ages,
@@ -2318,6 +2721,8 @@ class _Instances:
             users=[user for server in self.servers for user in server.engine.users],
             images=first.engine.images,
             max_seq=first.engine.max_seq,
+            max_new_tokens=first.engine.max_new_tokens,
+            chat_format=first.engine.chat_format,
         )
         self.scheduler = _TurnsView(self.servers)
         self._lock = threading.Lock()
@@ -2338,15 +2743,22 @@ class _Instances:
         def rank(j: int):
             server = self.servers[j]
             pool = server.pool
-            holds = bool(pool.slots_of(user_key)) or any(
-                user.messages and _continues(messages, user.messages) for user in server.engine.users
+            holds = self._holds(server, user_key, messages)
+            parked_hit = any(
+                conv.messages and _continues(messages, conv.messages) for conv in getattr(pool, "device_parked", ())
             )
             counts = pool.counts()
+            busy = counts.get("running", 0) + counts.get("queued", 0)
+            # "empty" counts the device-parked capacity too, so an instance holding idle conversations still looks
+            # free: without the parked count, new conversations pile onto the lowest j and then contend for its
+            # one active session.
             return (
                 not holds,
+                not parked_hit,
+                busy > 0,
                 counts.get("empty", 0) == 0,
-                counts.get("empty", 0) + counts.get("parked", 0) == 0,
-                counts.get("running", 0) + counts.get("queued", 0),
+                busy,
+                counts.get("parked", 0),
                 j,
             )
 
@@ -2354,10 +2766,10 @@ class _Instances:
             return [self.servers[j] for j in sorted(range(len(self.servers)), key=rank)]
 
     def _holds(self, server, user_key: str, messages: list[dict]) -> bool:
-        """Whether ``server`` already has ``user_key``'s conversation: a slot it owns, or stored messages this
-        request continues. That instance is the only one that may serve the request."""
+        """Whether ``server`` already has ``user_key``'s conversation: a slot a named ``user_key`` owns, or stored
+        messages this request continues. That instance is the only one that may serve the request."""
         pool = server.pool
-        if pool.slots_of(user_key):
+        if user_key != _DEFAULT_USER and pool.slots_of(user_key):
             return True
         return any(user.messages and _continues(messages, user.messages) for user in server.engine.users)
 
@@ -2466,7 +2878,9 @@ def _serve_instances(args) -> int:
             # The server first, before any model allocates on the requester rows; stopped last (the stack unwinds
             # LIFO), after every instance's replay threads and prefetcher sessions.
             t0 = time.perf_counter()
-            server = pmoe.launch_instances_server(mesh_device, config, loader, cache, num_layers, n, dspark=args.dspark)
+            server = pmoe.launch_instances_server(
+                mesh_device, config, loader, cache, num_layers, n, dspark=args.dspark, prefill=args.prefill
+            )
             stack.callback(server.stop)
             logger.info(f"persistent MoE up in {time.perf_counter() - t0:.0f}s")
             engram_ids = [i for i in config.engram_layer_ids if i < num_layers]
@@ -2490,13 +2904,27 @@ def _serve_instances(args) -> int:
                 return engine
 
             logger.info(f"loading {n} instances in parallel")
+            # transformers' lazy module is not thread-safe: resolve AutoTokenizer here, before the loaders race for it.
+            from transformers import AutoTokenizer  # noqa: F401
+
             with ThreadPoolExecutor(max_workers=n, thread_name_prefix="instance-load") as pool:
                 engines = list(pool.map(load_instance, range(n)))
+            prefillers = []
             for j, engine in enumerate(engines):
                 t0 = time.perf_counter()
                 # Compiled and captured one instance at a time: a capture picks the server's request mode, which the
-                # instances share (see DeepSeekV41Model._use_server_rows).
+                # instances share (see DeepSeekV41Model._use_server_rows). Each instance's traced prefill is its own
+                # (its row's stage, its requester of the prefill MoE): decode compile, then the prefill's build,
+                # compile (the decode server stopped meanwhile) and capture, then the decode capture and the snapshot.
+                if args.prefill_url:
+                    prefiller = _RemotePrefiller(engine, args.prefill_url, max_len=args.prefill_max_len)
+                    stack.callback(prefiller.close)
+                else:
+                    prefiller = _V41Prefiller(engine, args, locked) if args.prefill else None
                 engine.warmup()
+                if prefiller is not None:
+                    prefiller.snapshot()
+                prefillers.append(prefiller)
                 logger.info(
                     f"instance {j} (mesh row {pmoe.INSTANCE_ROWS[j]}) captured in {time.perf_counter() - t0:.0f}s"
                 )
@@ -2513,7 +2941,7 @@ def _serve_instances(args) -> int:
                         args.model_id,
                         args.max_body_bytes,
                         args.prefill_chunk,
-                        prefiller=None,
+                        prefiller=prefillers[j],
                         decode_ahead=args.decode_ahead,
                         temperature=args.temperature,
                         host_users=args.host_users,
@@ -2529,13 +2957,25 @@ def _serve_instances(args) -> int:
                         cpus=cpus[j * per : (j + 1) * per] if per else [],
                     )
                 )
+            if args.prefill:
+                gate = _MoeGate()
+                gate.schedulers = [s.scheduler for s in servers]
+                for s in servers:
+                    s.moe_gate = gate
             api = _Instances(servers)
             sys.setswitchinterval(v4_server._GIL_SWITCH_SECONDS)
             api.start()
             httpd = v4_server._ModelHTTPServer((args.host, args.port), _V41Handler, api)
             logger.info(
                 f"serving {args.model_id!r} on http://{args.host}:{args.port} ({n} instances x "
-                f"{args.num_users} session(s), context {engines[0].max_seq}/user, prompts replayed through decode)"
+                f"{args.num_users} session(s), context {engines[0].max_seq}/user, "
+                + (
+                    f"disaggregated prefill via {args.prefill_url})"
+                    if args.prefill_url
+                    else "traced prefill on each instance's row, MoE on the shared prefill MoE)"
+                    if args.prefill
+                    else "prompts replayed through decode)"
+                )
             )
             try:
                 httpd.serve_forever()
@@ -2618,6 +3058,8 @@ class V41ChatEngine(ChatEngine):
         # --persistent-moe: one stage, every MoE on the persistent server; with DSpark, 4-row verify steps.
         self.persistent_moe = bool(getattr(args, "persistent_moe", False)) or moe_server is not None
         self.dspark = bool(getattr(args, "dspark", False))
+        self.prefill_url = getattr(args, "prefill_url", None)
+        self.prefill_max_len = getattr(args, "prefill_max_len", None)
         self.instance = instance
         self.instances = 1 if moe_server is None else len(moe_server.request_meshes)
         persistent = {}
@@ -2645,7 +3087,8 @@ class V41ChatEngine(ChatEngine):
             system_config=system_config,
             tp_size=getattr(args, "tp_size", _TP_SIZE),
             num_stages=num_stages,
-            submeshes=getattr(args, "submeshes", None),
+            # The persistent layout places its own stage (row 4, or the shared server's requester row).
+            submeshes=None if self.persistent_moe else getattr(args, "submeshes", None),
             use_prefetcher=getattr(args, "use_prefetcher", None),
             layer_submesh_ids=None if self.persistent_moe else plan_layer_placement(num_layers, num_stages, 1),
             image_rows=args.image_rows if vision else 0,
@@ -2734,15 +3177,8 @@ class V41ChatEngine(ChatEngine):
 
         # Drafts per verify round with 1, 2, ... seated decoding users, the last entry for more (--dspark-drafts).
         self.dspark_drafts = tuple(getattr(args, "dspark_drafts", _DSPARK_DRAFTS))
-        # The persistent stage's 4-row verify rounds (DSpark on --persistent-moe), and the first position whose
-        # verify block no longer selects densely: rounds stop short of it and the reply goes on a step at a time.
+        # The persistent stage's 4-row verify rounds (DSpark on --persistent-moe).
         self.block_verify = self.dspark and self.persistent_moe
-        self.block_end = None
-        if self.block_verify:
-            self.block_end = next(
-                (p for p in range(self.max_seq) if not self.model._block_dense(p)),
-                self.max_seq,
-            )
         if self.dspark:
             # Before anything is compiled; the drafter's prefetcher rings are on its own row (none on the stage's).
             self.model.prepare_spec_decode(self.rope["main"])
@@ -2756,8 +3192,7 @@ class V41ChatEngine(ChatEngine):
                 )
                 logger.info(
                     f"DSpark speculative decode: {self.model.verify_rows - 1} drafts + 1 verified in one "
-                    f"{self.model.verify_rows}-row step, greedy, {where} (its MoE on the persistent server); 4-row "
-                    f"verify rounds below position {self.block_end}, then plain decode"
+                    f"{self.model.verify_rows}-row step, greedy, {where} (its MoE on the persistent server)"
                 )
             else:
                 logger.info(
@@ -2953,6 +3388,349 @@ class _V41Prefiller(_Prefiller):
         return self.engine.model.commit_prefill_state(states, user.sid, start=user.pos)
 
 
+class _RemoteFetch:
+    """One prompt sent to the prefill server from a thread of its own (:meth:`_RemotePrefiller.start`).
+
+    The scheduler keeps decoding the other turns meanwhile; :meth:`_RemotePrefiller.run` takes :meth:`result` and
+    only the KV load touches the device. ``wake`` (the scheduler's condition) is notified when the reply is in.
+    """
+
+    def __init__(
+        self, prefiller: _RemotePrefiller, ids: list[int], have: int, on_progress, wake: threading.Condition | None
+    ):
+        self.ids = list(ids)  # the whole prompt from position 0
+        self.have = have
+        self.t0 = time.perf_counter()
+        self.t_done = 0.0
+        self.aborted = False
+        self.client: PrefillClient | None = None  # the connection carrying the request, for abort()
+        self._prefiller = prefiller
+        self._on_progress = on_progress
+        self._wake = wake
+        self._states: dict | None = None
+        self._error: BaseException | None = None
+        self._done = threading.Event()
+        threading.Thread(target=self._run, name="remote-prefill", daemon=True).start()
+
+    def _run(self) -> None:
+        try:
+            self._states = self._prefiller._fetch(self.ids, self.have, self._on_progress, self)
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the scheduler thread by result()
+            self._error = exc
+        finally:
+            self.t_done = time.perf_counter()
+            self._done.set()
+            if self._wake is not None:
+                with self._wake:
+                    self._wake.notify_all()
+
+    def done(self) -> bool:
+        return self._done.is_set()
+
+    def abort(self) -> None:
+        """Stop waiting for the reply: the connection is shut down, so the thread ends and :meth:`result` raises
+        :class:`_PromptStopped`."""
+        self.aborted = True
+        client = self.client
+        if client is not None and not self.done():
+            with contextlib.suppress(OSError):
+                client.sock.shutdown(socket.SHUT_RDWR)
+
+    def result(self) -> dict:
+        self._done.wait()
+        if self.aborted:
+            raise _PromptStopped()
+        if self._error is not None:
+            raise self._error
+        return self._states
+
+
+class _RemotePrefiller:
+    """Disaggregated prefill over TCP (:class:`~..tt.prefill.d_p_wire.PrefillClient`).
+
+    Sends the aligned prefix of a prompt to a remote prefill server, receives the bf16 KV cache entries over TCP,
+    and loads them into the decode device's KV cache via :meth:`DeepSeekV41Model.commit_host_prefill_state`.
+
+    The server keeps recent prompts' state in prefix-cache slots (protocol version 2): a prompt that starts with one
+    it kept (the next turn of a conversation, a retry) computes only the rest, and the reply's ``cached`` says how
+    many tokens it skipped. What the reply carries is decided by ``have`` alone: the whole prompt from position 0 is
+    always sent, with ``have`` the leading tokens whose entries this session already holds (``user.pos`` when the
+    prefill continues the session, else 0), and the reply holds the compressed entries from ``have`` on. A session
+    is continued from any position on the :attr:`align` grid (``continue_alignment``); a window replay from an
+    earlier point (``bounded``) is not offered, since the server's hits are exact continuations only.
+
+    A connection carries one request at a time, so concurrent prompts each take one from a pool of idle
+    connections (a new one when none is idle). :meth:`start` sends a prompt from a thread of its own while the
+    scheduler keeps decoding; :meth:`run` then only waits for what is left of it and loads the KV.
+    """
+
+    # Signals to _PrefillFirst._prefetch_engram that there is no local traced prefill model.
+    model = None
+
+    def __init__(self, engine: V41ChatEngine, url: str, max_len: int | None = None, timeout: float = 3600.0):
+        self.engine = engine
+        self.url = url
+        self.timeout = timeout
+        self._lock = threading.Lock()
+        self._idle: list[PrefillClient] = []
+        self._closed = False
+        self._fetches: dict[int, _RemoteFetch] = {}  # user index -> its prompt in flight (start)
+        client = PrefillClient(self.url, timeout=self.timeout)
+        self._idle.append(client)
+        self.address = client.address
+        info = client.info
+        self.info = info
+
+        decode_model = engine.model
+        self.window = int(info["window"])
+        if self.window != decode_model.sliding_window:
+            self.close()
+            raise ValueError(
+                f"prefill server {self.address} has window {self.window}, decode model has {decode_model.sliding_window}"
+            )
+        server_kv_sources = {int(k): int(v) for k, v in info["kv_sources"].items()}
+        for src in decode_model.config.kv_source_layer_ids:
+            if src >= decode_model.num_layers:
+                continue
+            want_ratio = int(decode_model.config.compress_ratios[src])
+            got_ratio = server_kv_sources.get(src)
+            if got_ratio != want_ratio:
+                self.close()
+                raise ValueError(
+                    f"prefill server {self.address} kv_source layer {src} ratio {got_ratio} != decode ratio {want_ratio}"
+                )
+
+        self.align = math.lcm(int(info["align"]), _PREFILL_ALIGNMENT, self.window)
+        self.chunk_size = int(info.get("chunk") or self.align)
+        self.vocab = int(info.get("vocab") or 0)
+        server_max = int(info["max_seq"])
+        cap = min(max_len or server_max, server_max, engine.max_seq - 1)
+        self.max_len = cap // self.align * self.align
+        if self.max_len < self.align:
+            self.close()
+            raise ValueError(
+                f"disaggregated prefill needs a context of at least {self.align + 1} tokens "
+                f"(server max_seq={server_max}, decode max_seq={engine.max_seq})"
+            )
+        announced_layers = {int(i) for i in info["layers"]}
+        self.kv_only = announced_layers != set(range(decode_model.num_layers))
+        # Leave sliding_window tokens for decode when the prefill server is KV-only or DSpark drafter rings need them.
+        self.decode_window = self.kv_only or bool(getattr(engine, "dspark", False))
+        self.fill_seconds = 0.5
+        self.chunk_seconds = 0.15
+        self.t_prefill_out = 0.0
+        self.last_cached = 0  # of the last run's tokens, how many the server took from its prefix cache
+        logger.info(
+            f"disaggregated prefill connected to {self.address}: up to {self.max_len} tokens "
+            f"(align {self.align}, chunk {self.chunk_size}, {len(announced_layers)}/{decode_model.num_layers} layers"
+            f"{', kv-only' if self.kv_only else ''}, tail {self.window if self.decode_window else 1} via decode, "
+            f"{info.get('cache_slots', 0)} prefix-cache slot(s) on the server)"
+        )
+
+    @property
+    def replay_window(self) -> int:
+        return self.window
+
+    @property
+    def continue_alignment(self) -> int:
+        return self.align
+
+    def snapshot(self) -> None:
+        pass
+
+    def _take_client(self) -> PrefillClient:
+        with self._lock:
+            if self._idle:
+                return self._idle.pop()
+        return PrefillClient(self.url, timeout=self.timeout)
+
+    def _give_client(self, client: PrefillClient) -> None:
+        with self._lock:
+            if not self._closed:
+                self._idle.append(client)
+                return
+        with contextlib.suppress(Exception):
+            client.close()
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            idle, self._idle = self._idle, []
+            fetches, self._fetches = list(self._fetches.values()), {}
+        for job in fetches:
+            job.abort()
+        for client in idle:
+            with contextlib.suppress(Exception):
+                client.close()
+
+    def _fetch(self, ids: list[int], have: int = 0, on_progress=None, job: _RemoteFetch | None = None) -> dict:
+        """The KV entries of ``ids`` (the whole prompt) from ``have`` on. A server that refuses ``have`` is
+        answered by asking again for every entry (``have`` 0, the reply's ``base`` says which it got)."""
+        try:
+            return self._request(ids, have, on_progress, job)
+        except PrefillServerError as exc:
+            if not have or "have" not in str(exc):
+                raise
+            logger.error(
+                f"prefill server {self.address} refused have={have} for a {len(ids)}-token prompt ({exc}): "
+                f"a decode-side bug; asking for every entry instead"
+            )
+            return self._request(ids, 0, on_progress, job)
+
+    def _request(self, ids: list[int], have: int, on_progress, job: _RemoteFetch | None) -> dict:
+        """One prefill request on one pooled connection (retried once on a new one if the connection drops). No
+        device work: safe off the scheduler thread."""
+        for attempt in range(2):
+            client = None
+            try:
+                client = self._take_client()
+                if job is not None:
+                    job.client = client
+                    if job.aborted:
+                        raise _PromptStopped()
+                states = client.prefill(ids, on_progress=on_progress, have=have)
+            except PrefillServerError:
+                if client is not None and client.sock.fileno() >= 0:
+                    self._give_client(client)  # an error reply leaves the connection usable
+                raise
+            except (ConnectionError, OSError) as exc:
+                if client is not None:
+                    with contextlib.suppress(Exception):
+                        client.close()
+                if attempt == 0 and not (job is not None and job.aborted):
+                    logger.warning(f"prefill server {self.address} connection lost ({exc}); reconnecting")
+                    continue
+                raise
+            except BaseException:
+                # Cancellation (_PromptStopped) or unexpected error mid-stream: discard unread response bytes.
+                if client is not None:
+                    with contextlib.suppress(Exception):
+                        client.close()
+                raise
+            self._give_client(client)
+            if states["seq_len"] != len(ids) or states["base"] != have:
+                raise RuntimeError(
+                    f"prefill server {self.address} answered a {len(ids)}-token prompt with have={have} with "
+                    f"entries of [{states['base']}, {states['seq_len']})"
+                )
+            return states
+
+    def _whole(self, user: UserSession, ids: list[int]) -> tuple[list[int], int]:
+        """The whole prompt to send for ``ids``, ``user``'s tokens from its position on, and its ``have``."""
+        if user.pos % self.align or len(user.tokens) < user.pos:
+            raise ValueError(
+                f"disaggregated prefill continues a session from a multiple of {self.align} it holds the tokens of "
+                f"(user.pos={user.pos}, {len(user.tokens)} tokens)"
+            )
+        return list(user.tokens[: user.pos]) + list(ids), user.pos
+
+    def start(self, user: UserSession, ids: list[int], on_progress=None, wake: threading.Condition | None = None):
+        """Send ``ids`` (``user``'s prompt from its position on) now, from a thread of its own; :meth:`run` for the
+        same user and ids loads the reply. Replaces (aborts) a prompt of ``user``'s still in flight."""
+        whole, have = self._whole(user, ids)
+        job = _RemoteFetch(self, whole, have, on_progress, wake)
+        with self._lock:
+            old, self._fetches[user.index] = self._fetches.get(user.index), job
+        if old is not None:
+            old.abort()
+        return job
+
+    def forget(self, user: UserSession, job: _RemoteFetch) -> None:
+        """Abort ``job``, ``user``'s prompt sent by :meth:`start` (its turn ended before loading it)."""
+        with self._lock:
+            if self._fetches.get(user.index) is job:
+                del self._fetches[user.index]
+        job.abort()
+
+    def aligned(self, n_tokens: int, start: int = 0, bounded: bool = False) -> int:
+        if start % self.align or bounded:
+            return 0
+        tail = self.window if self.decode_window else 1
+        n_tokens -= tail
+        if n_tokens <= 0:
+            return 0
+        return max(0, min(n_tokens // self.align * self.align, self.max_len - start))
+
+    def seconds(self, n_tokens: int) -> float:
+        return self.fill_seconds + max(0, -(-n_tokens // self.chunk_size) - 1) * self.chunk_seconds
+
+    def run(
+        self,
+        user: UserSession,
+        ids: list[int],
+        on_progress=None,
+        drain_seconds: float = 0.0,
+        drained: int = 0,
+        replayed: int = 0,
+    ) -> torch.Tensor | None:
+        engine, model = self.engine, self.engine.model
+        if engine._replay_q:
+            raise RuntimeError("prefill with decode traces still posted")
+        if replayed:
+            raise ValueError(f"disaggregated prefill takes no window replay (replayed={replayed})")
+        whole, have = self._whole(user, ids)
+        t_seat = time.perf_counter()
+        user.activate()
+        seat_seconds = time.perf_counter() - t_seat
+        n = len(ids)
+
+        with self._lock:
+            job = self._fetches.pop(user.index, None)
+        if job is not None and (job.ids != whole or job.have != have):
+            job.abort()
+            job = None
+        t_wait = time.perf_counter()
+        if job is None:
+            t0 = t_wait
+            states = self._fetch(whole, have, on_progress)
+        else:
+            t0 = job.t0
+            states = job.result()
+        self.t_prefill_out = time.perf_counter()
+        # A prompt sent ahead may have been back a while before the scheduler came to load it.
+        net_seconds = (job.t_done if job is not None else self.t_prefill_out) - t0
+        # What of the round trip the scheduler sat out (the rest overlapped other turns' decode).
+        wait_seconds = self.t_prefill_out - t_wait
+
+        # The reply starts at base: have, or 0 when the server refused have and sent every entry.
+        base = states["base"]
+        t_commit = time.perf_counter()
+        try:
+            if not base:
+                model.reset_session(user.sid)
+                model.reset_static_caches()
+            committed = model.commit_host_prefill_state(states, user.sid, ids=whole, start=base)
+        except Exception:
+            with contextlib.suppress(Exception):
+                user.reset()
+            raise
+        user.pos = committed
+        commit_seconds = time.perf_counter() - t_commit
+        total_seconds = net_seconds + commit_seconds
+        # Of this run's tokens (the session's from have on), those the server did not compute.
+        self.last_cached = max(0, min(states["cached"], len(whole)) - have)
+
+        computed = len(whole) - states["cached"]
+        num_chunks = -(-computed // self.chunk_size)
+        if num_chunks > 1 and total_seconds > 0:
+            self.chunk_seconds = 0.5 * self.chunk_seconds + 0.5 * (total_seconds / num_chunks)
+        if computed > 0:
+            fill_seconds = max(total_seconds - max(num_chunks - 1, 0) * self.chunk_seconds, 0.0)
+            self.fill_seconds = 0.5 * self.fill_seconds + 0.5 * fill_seconds
+        hit = f"{states['cached']} from the server's prefix cache" if states["cached"] else "no prefix-cache hit"
+        logger.info(
+            f"remote prefill {self.address} (user {user.index}): {n} tokens from {have} "
+            f"({hit}, entries from {base}) in {total_seconds:.2f}s "
+            f"({n / total_seconds if total_seconds > 0 else 0.0:.1f} tok/s), server {states['seconds']:.2f}s, "
+            f"queued {states['queued']:.2f}s, "
+            f"transfer {states['bytes'] / 1e6:.1f} MB ({net_seconds:.2f}s RTT, "
+            f"{'sent ahead, ' if job is not None else ''}{wait_seconds:.2f}s blocking the scheduler), "
+            f"KV load {1e3 * commit_seconds:.1f} ms, "
+            f"drain {1e3 * drain_seconds:.1f} ms ({drained} step(s)), seat {1e3 * seat_seconds:.1f} ms"
+        )
+        return None
+
+
 def _stage_engram_tables(args) -> bool:
     """Stage the Engram tables in ``STAGE_DIR`` (tmpfs) before the mesh is opened, and check that what is left
     for the model to read or map fits in host RAM.
@@ -3033,7 +3811,7 @@ def parse_args(argv: list[str] | None = None):
         model_id=os.environ.get("DEEPSEEK_V4_MODEL_ID", "deepseek-v4.1-flash"),
         num_layers=None,
         num_users=None,  # _NUM_USERS, or _NUM_USERS_ALL_STAGES with --prefill-all-stages
-        max_context=_MAX_CONTEXT,
+        max_context=None,
         total_context=None,
         # None means "no reply cap": a request runs until EOS or the context is full.
         # ``--max-new-tokens N`` still caps a reply at N.
@@ -3044,6 +3822,13 @@ def parse_args(argv: list[str] | None = None):
         temperature=1.0,
         decode_ahead=_DECODE_AHEAD,
         device_sampling=os.environ.get("DEEPSEEK_V4_DEVICE_SAMPLING", "1") not in ("0", "", "false", "False"),
+    )
+    p.add_argument(
+        "--prefill-url",
+        default=os.environ.get("DEEPSEEK_V41_PREFILL_URL"),
+        help="TCP URL or host:port of a disaggregated prefill server (e.g. tcp://10.82.97.40:9041 or "
+        "10.82.97.40:9041); sends prompts over TCP and loads the returned KV cache into the decode device "
+        "instead of running a local prefill model (default: DEEPSEEK_V41_PREFILL_URL, else unset)",
     )
     p.add_argument(
         "--prefill-kv-only",
@@ -3168,6 +3953,13 @@ def parse_args(argv: list[str] | None = None):
                 f"{_L1_SMALL_SIZE})"
             )
     args = p.parse_args(argv)
+    if args.prefill_url:
+        try:
+            parse_prefill_address(args.prefill_url)
+        except ValueError as exc:
+            p.error(f"--prefill-url: {exc}")
+        # Prefill runs on the remote prefill server over TCP, so do not build a local prefill model on this device.
+        args.prefill = False
     if args.max_running is None:
         env = os.environ.get("DEEPSEEK_V4_MAX_RUNNING")
         args.max_running = int(env) if env else 8
@@ -3187,13 +3979,18 @@ def parse_args(argv: list[str] | None = None):
         # Each verify round's log line, read when tt/spec.py is imported; DEEPSEEK_V4_SPEC_VERBOSE=1 brings them back.
         os.environ.setdefault("DEEPSEEK_V4_SPEC_VERBOSE", "0")
     if args.persistent_moe:
-        # No prefill model (build_prefill has none for this layout) and no image rows; the output stage samples.
-        args.prefill = False
+        # The traced prefill runs on each instance's own stage (one user per instance, no pipeline over rows), its MoE
+        # on the persistent TP12 prefill MoE (--no-prefill replays prompts through decode instead); no image rows;
+        # the output stage samples.
         args.prefill_all_stages = False
         args.vision = False
+        if args.prefill:
+            # Room above the prefetch rings for decode's host sockets, so releasing the rings frees one block of L1
+            # for the prefill's circular buffers (without it the sockets land mid-L1, under the 4-row step buffers).
+            os.environ.setdefault("DEEPSEEK_V4_GCB_HEADROOM", "16384")
         args.device_sampling = True
-        if args.max_context == p.get_default("max_context"):
-            args.max_context = _PERSISTENT_MAX_CONTEXT
+        if args.max_context is None:
+            args.max_context = _MAX_CONTEXT if args.prefill_url else _PERSISTENT_MAX_CONTEXT
         if not 1 <= args.instances <= len(pmoe.INSTANCE_ROWS):
             p.error(f"--instances takes 1 to {len(pmoe.INSTANCE_ROWS)} (the mesh rows above the MoE)")
         if args.dspark:
@@ -3222,6 +4019,8 @@ def parse_args(argv: list[str] | None = None):
             args.num_users = _NUM_USERS_PERSISTENT
     else:
         args.instances = 1
+    if args.max_context is None:
+        args.max_context = _MAX_CONTEXT
     # host_rs.enabled(), which the model reads too, follows the flag.
     os.environ["DEEPSEEK_V41_RUST_HOST"] = "1" if args.rust_host else "0"
     if args.rust_host:
@@ -3264,6 +4063,10 @@ def main(argv: list[str] | None = None) -> int:
             _launch_monitor(args.monitor_port)
     if not _stage_engram_tables(args):
         return 1
+    if args.persistent_moe and args.prefill and args.instances == 1:
+        # The model launches its own server: the prefill MoE's routed op needs the L1 the resident router columns
+        # would take (launch_instances_server does the same for several instances).
+        pmoe.ROUTER_L1_BUDGET = 0
     if args.persistent_moe and args.instances > 1:
         return _serve_instances(args)
     return serve(

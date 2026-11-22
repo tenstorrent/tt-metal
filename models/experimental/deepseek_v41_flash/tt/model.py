@@ -95,6 +95,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.dspark import (
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.decode.step_context import StepContextBuilder, rope_table, term
 from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
+from models.experimental.deepseek_v41_flash.tt.prefill.persistent_moe import PersistentPrefillMoE
 from models.experimental.deepseek_v41_flash.tt import host_rs
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     ENGRAM_RAM_MARGIN,
@@ -214,6 +215,7 @@ class SessionSnapshot:
     windows: dict[int, tuple[torch.Tensor, torch.Tensor]]
     entries: dict[int, tuple[torch.Tensor, torch.Tensor]]
     engram: Optional[torch.Tensor]
+    dspark_rings: Optional[list[torch.Tensor]] = None
 
     @property
     def nbytes(self) -> int:
@@ -222,6 +224,8 @@ class SessionSnapshot:
         tensors += [t for pair in (*self.windows.values(), *self.entries.values()) for t in pair]
         if self.engram is not None:
             tensors.append(self.engram)
+        if self.dspark_rings is not None:
+            tensors.extend(self.dspark_rings)
         return sum(t.numel() * t.element_size() for t in tensors)
 
 
@@ -234,14 +238,17 @@ class DeviceParkedSnapshot:
     windows: dict[int, tuple[torch.Tensor, torch.Tensor]]
     rows: dict[str, list[int]]
     engram: Optional[torch.Tensor]
+    dspark_rings: Optional[list[torch.Tensor]] = None
 
     @property
     def nbytes(self) -> int:
         """Host RAM the snapshot holds: its slot-local state (its KV blocks stay in device RAM)."""
         tensors = [*self.rings.values()]
-        tensors += [t for pair in self.windows.values() for t in pair]
+        tensors += [t for pair in (*self.windows.values(),) for t in pair]
         if self.engram is not None:
             tensors.append(self.engram)
+        if self.dspark_rings is not None:
+            tensors.extend(self.dspark_rings)
         return sum(t.numel() * t.element_size() for t in tensors)
 
 
@@ -259,6 +266,10 @@ def _l1_report(device) -> str:
 
 # The block verify's Engram lookup: before the dispatch (1), or on the feed thread after the packet (0).
 ENGRAM_BEFORE_DISPATCH = os.environ.get("DEEPSEEK_V41_VERIFY_ENGRAM_EARLY", "1") not in ("0", "", "false", "False")
+
+# Also capture KV-only block traces (layers 0 .. last kv source, no head, no drafter taps) for prompt replay of
+# positions older than the last sliding window (decode_verify_block(kv_only=True)). DEEPSEEK_V41_KV_ONLY_BLOCKS=0: off.
+KV_ONLY_BLOCKS = os.environ.get("DEEPSEEK_V41_KV_ONLY_BLOCKS", "1") not in ("0", "", "false", "False")
 
 
 # Once a model's traces are captured, leave a mixed persistent MoE's default request rows alone
@@ -343,8 +354,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
     gives that stage), which is the server's only requester. Each layer's FFN step is one
     ``persistent_moe_request`` in the stage's trace (:class:`~.decode.decoder_layer.DeepSeekV41PersistentMoeDecoderLayer`).
     The layers must all be on that one stage (``num_stages=1``). Steps are one decode row, or with ``verify_rows=4``
-    DSpark's 4-row verify blocks (:meth:`decode_verify_block`, the drafter on row 3); no prefill model, image tokens
-    or vision. :meth:`shutdown` stops the server's kernels, which must happen before the mesh closes.
+    DSpark's 4-row verify blocks (:meth:`decode_verify_block`, the drafter on row 3); no image tokens or vision.
+    :meth:`build_prefill` builds an eager prefill model on the stage whose MoE runs on the persistent TP12 prefill MoE
+    (:class:`~.prefill.persistent_moe.PersistentPrefillMoE`, over the server's own blocks), stopping the decode server
+    for each prompt (no traced prefill). :meth:`shutdown` stops the server's kernels, which must happen before the mesh
+    closes.
 
     ``moe_server`` (implies ``persistent_moe``) shares an already launched server among several models instead: this
     model is its requester ``moe_requester``, on that requester's mesh unless ``submeshes`` gives it, and the server
@@ -404,6 +418,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self.moe_server: Optional[pmoe.PersistentMoE] = moe_server
         self.moe_requester = moe_requester
         self._owns_moe_server = moe_server is None
+        self._server_moes: dict = {}  # layer -> its TP12 block on the server (_launch_moe_server)
+        self._prefill_moe: Optional[PersistentPrefillMoE] = None  # build_prefill under persistent_moe
         self.moe_mesh: Optional[ttnn.MeshDevice] = None if moe_server is None else moe_server.moe_mesh
         if persistent_moe:
             if tuple(full_device.shape) != pmoe.GALAXY_MESH:
@@ -442,6 +458,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self.verify_rows = verify_rows
         # The persistent stage's verify: one traced step of every layer's block ops (_block_verify_stage).
         self._block_verify = persistent_moe and verify_rows > 1
+        # The KV-only block traces are captured (decode_verify_block(kv_only=True)).
+        self.kv_only_blocks = False
         self.balance_dram_banks = balance_dram_banks
         self.loader = loader
         self.device = full_device
@@ -1696,7 +1714,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ttnn.deallocate(kv)
                 ttnn.deallocate(keys)
         engram = self._engram_lookup.export_history(slot, pos) if self._engram_lookup is not None else None
-        return SessionSnapshot(pos, rings, windows, entries, engram)
+        dspark_rings = None
+        if self.dspark is not None:
+            r_rows = self.dspark.ring_rows
+            dspark_rings = [slot_rows(stage.ring, slot * r_rows, r_rows) for stage in self.dspark.stages]
+        return SessionSnapshot(pos, rings, windows, entries, engram, dspark_rings)
 
     def import_session(self, sid: int, snapshot: SessionSnapshot) -> None:
         """Load ``snapshot`` (:meth:`export_session` of this model, from any session) into session ``sid``, which must
@@ -1747,25 +1769,52 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 if src is None or src in written or scache.comp_kv is None or src not in snapshot.entries:
                     continue
                 written.add(src)
-                kv, keys = (
-                    ttnn.from_torch(
-                        rows.reshape(1, 1, *rows.shape).float(),
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        device=device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        mesh_mapper=mapper,
-                    )
-                    for rows in snapshot.entries[src]
-                )
                 ratio = int(self.config.compress_ratios[src])
-                self._commit_paged_entries(scache, self._paged_ratios[ratio].layer_type, sid, kv, keys)
-                ttnn.deallocate(kv)
-                ttnn.deallocate(keys)
+                layer_type = self._paged_ratios[ratio].layer_type
+                kv_host, keys_host = snapshot.entries[src]
+                chunk_entries = 512 * CSA_INDEX_BLOCK_SIZE
+                for start_entry in range(0, kv_host.shape[0], chunk_entries):
+                    end_entry = min(start_entry + chunk_entries, kv_host.shape[0])
+                    kv, keys = (
+                        ttnn.from_torch(
+                            rows[start_entry:end_entry]
+                            .reshape(1, 1, end_entry - start_entry, rows.shape[-1])
+                            .to(torch.bfloat16)
+                            .contiguous(),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            device=device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=mapper,
+                        )
+                        for rows in (kv_host, keys_host)
+                    )
+                    self._commit_paged_entries(scache, layer_type, sid, kv, keys, entry_offset=start_entry)
+                    ttnn.deallocate(kv)
+                    ttnn.deallocate(keys)
         self._session_pos[sid] = pos
         self._sync_dense_entries(sid)
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
+        if snapshot.dspark_rings is not None and self.dspark is not None:
+            r_rows = self.dspark.ring_rows
+            d_dev = self.dspark.device
+            d_mapper = ttnn.ReplicateTensorToMesh(d_dev) if d_dev.get_num_devices() > 1 else None
+            for stage, rows_t in zip(self.dspark.stages, snapshot.dspark_rings):
+                if rows_t.shape[0] == stage.ring.shape[2]:
+                    host_to_device(rows_t.reshape(tuple(stage.ring.shape)).float(), stage.ring)
+                else:
+                    src_rows = ttnn.from_torch(
+                        rows_t.reshape(1, 1, *rows_t.shape).float(),
+                        dtype=stage.ring.dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=d_dev,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=d_mapper,
+                    )
+                    ttnn.fill_cache(stage.ring, src_rows, 0, update_idx=slot * r_rows)
+                    ttnn.deallocate(src_rows)
+            ttnn.synchronize_device(d_dev)
         if snapshot.engram is not None and self._engram_lookup is not None:
             self._engram_lookup.import_history(slot, snapshot.engram)
 
@@ -1796,12 +1845,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
                         slot_rows(t, slot * win_rows, win_rows) for t in (scache.win_kv, scache.win_gate)
                     )
         engram = self._engram_lookup.export_history(slot, pos) if self._engram_lookup is not None else None
+        dspark_rings = None
+        if self.dspark is not None:
+            r_rows = self.dspark.ring_rows
+            dspark_rings = [slot_rows(stage.ring, slot * r_rows, r_rows) for stage in self.dspark.stages]
         rows = paged.detach_session_rows(sid)
         self._covered_to.pop(sid, None)
         self._session_pos[sid] = 0
         self._spec_dirty.discard(slot)
         self._write_page_tables()
-        return DeviceParkedSnapshot(pos, rings, windows, rows, engram)
+        return DeviceParkedSnapshot(pos, rings, windows, rows, engram, dspark_rings)
 
     def reload_session_from_device_park(self, sid: int, snapshot: DeviceParkedSnapshot) -> None:
         """Reload a :class:`DeviceParkedSnapshot` into ``sid`` (which must be at position 0)."""
@@ -1844,6 +1897,25 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._sync_dense_entries(sid)
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
+        if snapshot.dspark_rings is not None and self.dspark is not None:
+            r_rows = self.dspark.ring_rows
+            d_dev = self.dspark.device
+            d_mapper = ttnn.ReplicateTensorToMesh(d_dev) if d_dev.get_num_devices() > 1 else None
+            for stage, rows_t in zip(self.dspark.stages, snapshot.dspark_rings):
+                if rows_t.shape[0] == stage.ring.shape[2]:
+                    host_to_device(rows_t.reshape(tuple(stage.ring.shape)).float(), stage.ring)
+                else:
+                    src_rows = ttnn.from_torch(
+                        rows_t.reshape(1, 1, *rows_t.shape).float(),
+                        dtype=stage.ring.dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=d_dev,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=d_mapper,
+                    )
+                    ttnn.fill_cache(stage.ring, src_rows, 0, update_idx=slot * r_rows)
+                    ttnn.deallocate(src_rows)
+            ttnn.synchronize_device(d_dev)
         if snapshot.engram is not None and self._engram_lookup is not None:
             self._engram_lookup.import_history(slot, snapshot.engram)
 
@@ -1874,7 +1946,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ttnn.deallocate(kv)
                 ttnn.deallocate(keys)
         self.free_device_park(snapshot)
-        return SessionSnapshot(pos, snapshot.rings, snapshot.windows, entries, snapshot.engram)
+        return SessionSnapshot(pos, snapshot.rings, snapshot.windows, entries, snapshot.engram, snapshot.dspark_rings)
 
     # -- replay: every posted step is bound to the session resident when it was posted -- #
     def _has_image_token(self, token_id) -> bool:
@@ -2515,14 +2587,32 @@ class DeepSeekV41Model(DeepSeekV4Model):
         """
         if self._decode_max_seq is None:
             raise RuntimeError("call prepare_static_decode() before build_prefill()")
-        if self.moe_server is not None:
-            raise NotImplementedError("the prefill model reads per-stage routed experts; persistent_moe has none")
         n = self.num_layers
         if kv_only:
             n = max(i for i in self.config.kv_source_layer_ids if i < self.num_layers) + 1
             lm_head = None
         layer_devices = self.layer_devices[:n]
-        experts = [layer.mlp.experts for layer in self.layers[:n]]
+        prefill_moe = None
+        if self.moe_server is not None:
+            # persistent_moe: the stage holds no MoE. Every prefill layer's MoE runs on the persistent TP12 prefill
+            # MoE, built over the decode server's own blocks (their weights read in place) and time-shared with it:
+            # the prefill model stops the decode server for each prompt and relaunches it after.
+            if not self._owns_moe_server:
+                # A shared server (several instances): its prefill MoE, built with it, every instance a requester.
+                self._prefill_moe = getattr(self.moe_server, "prefill_moe", None)
+                if self._prefill_moe is None:
+                    raise ValueError("the shared persistent MoE has no prefill MoE: launch it with prefill=True")
+            if self._prefill_moe is None:
+                self._prefill_moe = PersistentPrefillMoE(
+                    self.moe_mesh,
+                    [self.submeshes[0]],
+                    {li: self._server_moes[li] for li in range(self.num_layers)},
+                    decode=self.moe_server,
+                )
+            prefill_moe = self._prefill_moe
+            experts = None
+        else:
+            experts = [layer.mlp.experts for layer in self.layers[:n]]
         if self.prefill_layer_submesh_ids is not None:
             if not kv_only:
                 raise ValueError("the model was built with prefill_layer_submesh_ids, a KV-only prefill placement")
@@ -2543,6 +2633,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             kv_only=kv_only,
             image_rows=self.image_rows,
             balance_dram_banks=self.balance_dram_banks,
+            moe_server=prefill_moe,
             **kwargs,
         )
         # Each receiver FIFO is permanent L1 on its stage, so a second set would cost prefill's ops that room.
@@ -2873,6 +2964,166 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._session_pos[session_id] = total
         self._sync_dense_entries(session_id)
         note("prefill state committed")
+        return total
+
+    def commit_host_prefill_state(
+        self,
+        host_states: dict,
+        session_id: int,
+        ids: Optional[Sequence[int]] = None,
+        progress: Optional[Callable[[str], None]] = None,
+        start: int = 0,
+    ) -> int:
+        """Load host-memory KV cache entries (from a disaggregated prefill server over TCP, see
+        :mod:`.prefill.d_p_wire`) into the decode caches of ``session_id``; returns ``seq_len``.
+
+        ``host_states`` is ``{"seq_len": int, "base": int, "layers": {layer_idx: {"kv_tail": [W, Dh], ...}}}`` with
+        ``compressed_kv`` (``[(seq_len - base) // ratio, Dh]``) and ``idx_keys`` (``[(seq_len - base) // ratio,
+        index_head_dim]``) on every KV source layer: the entries of positions ``[base, seq_len)`` (``base`` absent:
+        0). Layers absent from ``host_states["layers"]`` (e.g. a KV-only prefill server) have their sliding-window
+        rings zeroed; the caller then replays the last ``sliding_window`` prompt tokens through decode.
+
+        ``start`` (``== base``) continues the session from its current position ``start`` instead of from 0: the
+        session already holds the entries below it (they may be shared with another session, and are not
+        touched), the rings are rewritten whole and the paged pools from entry ``start // ratio`` on, which must
+        begin a pool block. ``start == seq_len`` rewrites only the rings.
+
+        When ``ids`` (the ``seq_len`` prefilled token ids) is provided and Engram is enabled, the slot's token
+        history is extended over ``ids[start:]`` so subsequent decode steps hash against the prefilled prefix.
+        Call it with no step in flight.
+        """
+        note = progress or (lambda message: None)
+        self._require_paged()
+        if session_id not in self._slot_of:
+            raise KeyError(f"no such session {session_id}")
+        total = int(host_states["seq_len"])
+        if total <= 0 or total % ALIGNMENT or total % self.sliding_window:
+            raise ValueError(
+                f"prefilled length {total} must be a positive multiple of {ALIGNMENT} and of the "
+                f"{self.sliding_window}-token sliding window"
+            )
+        if total >= self._decode_max_seq:
+            raise PagedCacheFull(f"a {total}-token prefill state is past max_seq {self._decode_max_seq}")
+        if ids is not None and len(ids) != total:
+            raise ValueError(f"got {len(ids)} prompt ids for a {total}-token prefill state")
+        base = int(host_states.get("base", 0))
+        if base != start:
+            raise ValueError(f"the prefill state's entries start at {base}, the commit at {start}")
+        if start and (start != self._session_pos[session_id] or start > total):
+            raise ValueError(
+                f"a prefill continued from {start} up to {total} does not continue session {session_id} "
+                f"at position {self._session_pos[session_id]}"
+            )
+
+        layers_dict = host_states["layers"]
+        kv_sources = [i for i in self.config.kv_source_layer_ids if i < self.num_layers]
+        for src in kv_sources:
+            layer_data = layers_dict.get(src)
+            if layer_data is None or "compressed_kv" not in layer_data or "idx_keys" not in layer_data:
+                raise ValueError(f"prefill state is missing compressed_kv/idx_keys for kv source layer {src}")
+            ratio = int(self.config.compress_ratios[src])
+            if start % ratio or (start // ratio) % CSA_INDEX_BLOCK_SIZE:
+                raise ValueError(
+                    f"kv source {src} (ratio {ratio}): a commit from {start} does not start a "
+                    f"{CSA_INDEX_BLOCK_SIZE}-entry pool block"
+                )
+            want_entries = (total - start) // ratio
+            if layer_data["compressed_kv"].shape[0] != want_entries or layer_data["idx_keys"].shape[0] != want_entries:
+                raise ValueError(
+                    f"kv source {src} has {layer_data['compressed_kv'].shape[0]}/{layer_data['idx_keys'].shape[0]} "
+                    f"entries for positions [{start}, {total}) (expected {want_entries})"
+                )
+
+        self._wait_replays_dispatched()
+        self.ensure_session_capacity(total - 1, session_id)
+        slot, w = self._slot_of[session_id], self.sliding_window
+        ring_row = slot * w
+        chunk_entries = 512 * CSA_INDEX_BLOCK_SIZE  # 32,768 entries (~40 MiB/chunk) keeps DRAM bounded
+
+        for sm in self.submeshes_io:
+            device = sm["device"]
+            mapper = ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None
+            zero_rings = {}
+            written = set()
+            for li in sm["layers"]:
+                scache = sm["scaches"][li]
+                layer_data = layers_dict.get(li)
+                if layer_data is not None and "kv_tail" in layer_data:
+                    kv_tail = layer_data["kv_tail"]
+                    if kv_tail.shape[0] != w:
+                        raise ValueError(f"layer {li} kv_tail has {kv_tail.shape[0]} rows, expected {w}")
+                    note(f"upload ring for layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
+                    ring = ttnn.from_torch(
+                        kv_tail.reshape(1, 1, w, kv_tail.shape[1]).to(torch.bfloat16).contiguous(),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=mapper,
+                    )
+                    ttnn.fill_cache(scache.kv, ring, 0, update_idx=ring_row)
+                    ttnn.deallocate(ring)
+                else:
+                    note(f"zero the ring of layer {li + 1}/{self.num_layers} on decode submesh {sm['index']}")
+                    dh = scache.kv.shape[3]
+                    if dh not in zero_rings:
+                        zero_rings[dh] = ttnn.from_torch(
+                            torch.zeros(1, 1, w, dh, dtype=torch.bfloat16),
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=mapper,
+                        )
+                    ttnn.fill_cache(scache.kv, zero_rings[dh], 0, update_idx=ring_row)
+
+                src = self._kv_source_of.get(li)
+                if src is None or src in written or scache.comp_kv is None:
+                    continue
+                written.add(src)
+                ratio = int(self.config.compress_ratios[src])
+                group = self._paged_ratios[ratio].layer_type
+                comp_kv = layers_dict[src]["compressed_kv"]
+                idx_keys = layers_dict[src]["idx_keys"]
+                # Row 0 of the tensors is entry first; the session holds every entry below it already.
+                first = start // ratio
+                end = first + comp_kv.shape[0]
+                for e0 in range(first, end, chunk_entries):
+                    e1 = min(end, e0 + chunk_entries)
+                    r0, r1 = e0 - first, e1 - first
+                    kv_dev = ttnn.from_torch(
+                        comp_kv[r0:r1].reshape(1, 1, e1 - e0, comp_kv.shape[1]).to(torch.bfloat16).contiguous(),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=mapper,
+                    )
+                    keys_dev = ttnn.from_torch(
+                        idx_keys[r0:r1].reshape(1, 1, e1 - e0, idx_keys.shape[1]).to(torch.bfloat16).contiguous(),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=mapper,
+                    )
+                    self._commit_paged_entries(scache, group, session_id, kv_dev, keys_dev, e0, entry_offset=e0)
+                    ttnn.deallocate(kv_dev)
+                    ttnn.deallocate(keys_dev)
+            for zeros in zero_rings.values():
+                ttnn.deallocate(zeros)
+
+        self._session_pos[session_id] = total
+        self._sync_dense_entries(session_id)
+        for sm in self.submeshes_io:
+            ttnn.synchronize_device(sm["device"])
+        if ids is not None and self._engram_lookup is not None:
+            id_list = list(ids)
+            engram_chunk = 16384
+            for offset in range(start, total, engram_chunk):
+                piece = id_list[offset : offset + engram_chunk]
+                self._engram_lookup.hash_session(slot, torch.tensor([piece], dtype=torch.long), offset)
+        note("host prefill state committed")
         return total
 
     def _commit_paged_entries(
@@ -3784,6 +4035,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 )
 
         moes = pmoe.build_moe_layers(self.config, self.loader, self.moe_mesh, self.cache, range(num_layers), log=log)
+        # The model's own layers' TP12 blocks, for the prefill MoE (build_prefill) to read in place.
+        self._server_moes = {li: moes[li] for li in range(num_layers)}
         meshes, rows = [self.submeshes[0]], [pmoe.REQUESTER_ROW]
         # The DSpark drafter's MoE on this server (DSPARK_SERVER_MOE): its row-3 mesh is the server's on-demand
         # requester 1 and its stages are layers DSPARK_LAYER_BASE + s. The sockets take L1 on row 3 before the drafter
@@ -3962,6 +4215,26 @@ class DeepSeekV41Model(DeepSeekV4Model):
             torch.full((1, 1, t, d), float(2**20)), tile=tile, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         sm["block_tids"], sm["block_outs"] = {}, {}
+        selections = {}
+        cand_rows = None
+        for li in sm["layers"]:
+            if not cfg.compress_ratios[li]:
+                continue
+            src = self._kv_source_of[li]
+            if src not in selections:
+                rows = t * cfg.index_topk
+                selections[src] = (
+                    _device_zeros((1, 1, rows, cfg.head_dim), device, layout=ttnn.ROW_MAJOR_LAYOUT),
+                    _device_zeros((1, 1, rows, cfg.head_dim), device),
+                )
+            scache = sm["scaches"][li]
+            scache.sel_kv_rows, scache.sel_tile_rows = selections[src]
+            if self._candidate_group is not None and src == self._candidate_group:
+                if cand_rows is None:
+                    builds_pool = any(w in self._pool_builders for w in sm["layers"])
+                    cand_rows = candidate_buffers(device, cfg, with_pool=builds_pool, rows=t)
+                for k, v in cand_rows.items():
+                    setattr(scache, k, v)
         self.verify_sampler = DeepSeekV41DeviceSampler(
             self._lm_head_traced.device,
             self._lm_head_traced.weight.shape[-1],
@@ -3970,13 +4243,72 @@ class DeepSeekV41Model(DeepSeekV4Model):
         )
         if self.verify_sampler.out_words != self.device_sampler.out_words:
             raise NotImplementedError("the verify block's token page must be the decode output's page")
+        # The KV-only block: the layers that write the shared compressed KV and index keys. Its step still sends one
+        # output page (zeros), so the host reads and synchronizes on it like a verify block's.
+        last_source = max(i for i in cfg.kv_source_layer_ids if i < self.num_layers)
+        sm["kv_block_layers"] = [li for li in sm["layers"] if li <= last_source]
+        if KV_ONLY_BLOCKS and any(li > last_source for li, _ in self._engram_layers):
+            # The host writes every Engram layer's rows for a block; the KV-only step would leave some unread.
+            raise NotImplementedError("an Engram layer after the last kv source: set DEEPSEEK_V41_KV_ONLY_BLOCKS=0")
+        sm["kv_block_tids"], sm["kv_block_outs"] = {}, {}
+        sm["kv_block_done"] = _device_zeros(
+            [1, 1, 1, self.verify_sampler.out_words], self._lm_head_traced.device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+        )
 
     def _block_dense(self, pos: int) -> bool:
         """Whether every compressed group still selects densely (at most ``index_topk`` closed groups) at the block's
-        last row: the only select the block verify runs so far."""
+        last row."""
         t, topk = self.verify_rows, self.config.index_topk
         ratios = {int(r) for r in self.config.compress_ratios[: self.num_layers] if int(r)}
         return all((pos + t) // r <= topk for r in ratios)
+
+    def _block_dense_ratios(self, pos: int) -> frozenset[int]:
+        """The ratios whose index sources select densely across all ``verify_rows`` rows of the block at ``pos``."""
+        if not DENSE_SELECT:
+            return frozenset()
+        cfg, t = self.config, self.verify_rows
+        ratios = {int(cfg.compress_ratios[li]) for li in cfg.index_source_layer_ids if li < self.num_layers}
+        return frozenset(r for r in ratios if (pos + t) // r <= cfg.index_topk)
+
+    def _block_two_level(self, pos: int) -> bool:
+        """Whether any row in the block at ``pos`` has outgrown the candidate pool."""
+        return self._two_level(pos + self.verify_rows - 1)
+
+    def _block_variant_key(self, pos: int, kv_only: bool = False) -> tuple[bool, frozenset[int], bool, frozenset[int]]:
+        """``(odd, dense ratios, two-level, split layers)`` for the verify block starting at ``pos``; with ``kv_only``,
+        of the KV-only block (split layers among its layers only)."""
+        cfg = self.config
+        dense = self._block_dense_ratios(pos)
+        two_level = (
+            self._block_two_level(pos)
+            and self._candidate_group is not None
+            and int(cfg.compress_ratios[self._candidate_group]) not in dense
+        )
+        layers = self.submeshes_io[0]["kv_block_layers"] if kv_only else range(self.num_layers)
+        split = frozenset(
+            li for li in self._split_layers(pos) if int(cfg.compress_ratios[li]) not in dense and li in layers
+        )
+        return (pos % 2 == 1, dense, two_level, split)
+
+    def _reachable_block_variants(
+        self, kv_only: bool = False
+    ) -> list[tuple[bool, frozenset[int], bool, frozenset[int]]]:
+        """Every block verify variant (``kv_only``: KV-only block variant) reachable below ``max_seq`` (both even and
+        odd parities at each transition)."""
+        cfg, t = self.config, self.verify_rows
+        starts = {0}
+        for li in cfg.index_source_layer_ids:
+            if li >= self.num_layers:
+                continue
+            r = int(cfg.compress_ratios[li])
+            starts.add(max(0, (cfg.index_topk + 1) * r - t))
+        if self._candidate_group is not None:
+            r = int(cfg.compress_ratios[self._candidate_group])
+            starts.add(max(0, (cfg.candidate_topk_blocks * cfg.candidate_block_size + 1) * r - t))
+        for start in self._split_from.values():
+            starts.add(start)
+        positions = [p for s in sorted(starts) for p in (s, s + 1) if p < self._decode_max_seq]
+        return list(dict.fromkeys(self._block_variant_key(p, kv_only) for p in positions))
 
     def _block_verify_packet(self, ids: list[int], pos: int) -> torch.Tensor:
         t = self.verify_rows
@@ -3993,8 +4325,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
             packet[0, 0, 0, offset : offset + len(row)] = torch.tensor(row, dtype=torch.int32)
         return packet
 
-    def _block_context(self, sm: dict, pkt: ttnn.Tensor, odd: bool) -> dict:
+    def _block_context(self, sm: dict, pkt: ttnn.Tensor, variant: tuple) -> dict:
         """The block's per-row integers and RoPE rows, from one decode_step_context program."""
+        odd, dense, two_level, split = variant
         t, window, topk = self.verify_rows, self.sliding_window, self.config.index_topk
         win_rows = self.spec_window_rows
         tok0, pos0, st0 = (self._verify_fields[n][0] for n in ("token", "pos", "start2"))
@@ -4016,7 +4349,24 @@ class DeepSeekV41Model(DeepSeekV4Model):
             sb.add_int(("entry", 2), [t // 2], [term(st0 + g, pre_add=1, mode="div", div=2) for g in range(t // 2)])
         if 1 in sm["kv_ratios"]:
             sb.add_int(("entry", 1), [t], [term(pos0 + j) for j in range(t)])
+        sparse_ratios = [r for r in sm["index_ratios"] if r not in dense]
+        for ratio in sparse_ratios:
+            sb.add_int(
+                ("index_pos", ratio),
+                [t],
+                [term(pos0 + j, pre_add=1, mode="div", div=ratio, mul=_SELECT_KV_RATE, post_add=-1) for j in range(t)],
+            )
+        if sparse_ratios:
+            # untilize requires 32-high tiles; request a 32x32 copy of the compress RoPE rows for ROW_MAJOR select_kv.
+            sb.add_rope(("rope_row", "compress"), "compress", pos0, rows=t, tile_height=32)
         out = sb.run()
+        cos_row = sin_row = None
+        if sparse_ratios:
+            cos_c, sin_c, neg_sin_c = out[("rope_row", "compress")]
+            cos_row = ttnn.to_layout(cos_c, ttnn.ROW_MAJOR_LAYOUT)
+            sin_row = ttnn.to_layout(sin_c, ttnn.ROW_MAJOR_LAYOUT)
+            for tensor in (cos_c, sin_c, neg_sin_c):
+                ttnn.deallocate(tensor)
         ctx = {
             "token": out["token"],
             "ring_slots": out["ring_slots"],
@@ -4026,7 +4376,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "prev_slot": out.get(("prev_slot", 2)),
             "win_rope": out.get(("win_rope", 2)),
             "entry": {r: out[("entry", r)] for r in sm["kv_ratios"]},
+            "index_pos": {r: out[("index_pos", r)] for r in sparse_ratios},
+            "cos_row": cos_row,
+            "sin_row": sin_row,
             "odd": odd,
+            "dense": dense,
+            "two_level": two_level,
+            "split": split,
             "staging": sm["block_staging"],
             "commit_rows": sm.get("block_commit_rows"),
             "page_row": sm["block_page_row"],
@@ -4036,6 +4392,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
     def _block_attention_inputs(self, attn, ctx: dict) -> dict:
         r = attn.compress_ratio
         cos, sin, neg_sin = ctx["rope"]["main" if r == 0 else "compress"]
+        is_dense = r == 0 or r in ctx["dense"]
         inputs = dict(
             cos=cos,
             sin=sin,
@@ -4044,17 +4401,34 @@ class DeepSeekV41Model(DeepSeekV4Model):
             commit_rows=ctx["commit_rows"],
             lengths=ctx["lengths"][r],
             ring_slots=ctx["ring_slots"],
+            dense=is_dense,
         )
         if attn.is_kv_source:
             # A dense group's entry is its dense_kv row too (one session).
             inputs.update(
-                entry=ctx["entry"][r], dense_entry=ctx["entry"][r], page_row=ctx["page_row"], start_odd=ctx["odd"]
+                entry=ctx["entry"][r],
+                dense_entry=ctx["entry"][r] if is_dense else None,
+                page_row=ctx["page_row"],
+                start_odd=ctx["odd"],
             )
             if r == 2:
                 cos_win, sin_win, _ = ctx["win_rope"]
                 inputs.update(win_slot=ctx["win_slot"], prev_slot=ctx["prev_slot"], cos_win=cos_win, sin_win=sin_win)
             else:
                 inputs.update(cos_win=cos, sin_win=sin)
+        if attn.is_index_source and not is_dense:
+            inputs.update(
+                cos_row=ctx["cos_row"],
+                sin_row=ctx["sin_row"],
+                index_pos=ctx["index_pos"][r],
+                page_row=ctx["page_row"],
+                split_keys=attn.layer_idx in ctx["split"],
+            )
+            if ctx["two_level"] and attn.layer_idx in self._candidate_layers:
+                inputs.update(
+                    candidates=True,
+                    build_pool=attn.layer_idx in self._pool_builders,
+                )
         return inputs
 
     def _block_rows(self, hc_module, streams: ttnn.Tensor, pre_mix: ttnn.Tensor, gain, eps: float) -> ttnn.Tensor:
@@ -4074,22 +4448,26 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ttnn.deallocate(collapsed)
         return rows
 
-    def _block_verify_stage(self, sm: dict, odd: bool) -> ttnn.Tensor:
-        """The traced verify step of a block starting at an even or ``odd`` position, on the persistent stage: the
-        packet off the H2D socket, every layer's :meth:`~.decode.decoder_layer.DeepSeekV41PersistentMoeDecoderLayer.
+    def _block_verify_stage(self, sm: dict, variant: tuple, kv_only: bool = False) -> ttnn.Tensor:
+        """The traced verify step of a block for ``variant`` (``(odd, dense, two_level, split)``), on the persistent
+        stage: the packet off the H2D socket, every layer's :meth:`~.decode.decoder_layer.DeepSeekV41PersistentMoeDecoderLayer.
         decode_block`, the final norm, ``lm_head`` and the ``T``-row sampler (greedy: each row's argmax), whose page
         goes out the D2H socket. With a drafter, the target layers' stream means and the packet go to it after the
-        last tap (:meth:`_spec_write_verified`)."""
+        last tap (:meth:`_spec_write_verified`).
+
+        ``kv_only`` runs only layers ``0 .. max(kv_source_layer_ids)`` (``sm["kv_block_layers"]``): every compressed
+        KV entry, index key and ring row of those layers, as the full block writes them, but not the rings of the
+        layers after them, no taps and no head; its page is ``sm["kv_block_done"]``."""
         cfg, t = self.config, self.verify_rows
         hc, d = cfg.hc_mult, cfg.hidden_size
-        layers = sm["layers"]
+        layers = sm["kv_block_layers"] if kv_only else sm["layers"]
         pkt = sm["pkt"]
         ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
         if self.tp_size > 1:
             pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=CCL_TOPOLOGY)
         if self.use_prefetcher:
             self.layers[layers[0]].prefetch_weights(one_row=True, fused_qkv=True)
-        ctx = self._block_context(sm, pkt, odd)
+        ctx = self._block_context(sm, pkt, variant)
         with _region("EMBED"):
             embedded = ttnn.embedding(ctx["token"], self.embed_tokens.embedding_weight, layout=ttnn.ROW_MAJOR_LAYOUT)
             stacked = ttnn.repeat(ttnn.reshape(embedded, [1, 1, t, d]), ttnn.Shape([1, 1, hc, 1]))
@@ -4098,7 +4476,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             )
             ttnn.deallocate(stacked)
         pre_mix = sm["block_pre_mix_init"]
-        taps = sm.get("taps", {})
+        taps = {} if kv_only else sm.get("taps", {})
         tapped = {}
         for li in layers:
             layer = self.layers[li]
@@ -4135,6 +4513,14 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if pre_mix is not sm["block_pre_mix_init"]:
                 ttnn.deallocate(pre_mix)
             pre_mix = new_pre
+        if ctx["cos_row"] is not None:
+            ttnn.deallocate(ctx["cos_row"])
+            ttnn.deallocate(ctx["sin_row"])
+        if kv_only:
+            ttnn.deallocate(streams)
+            ttnn.deallocate(pre_mix)
+            self._send_output(sm["kv_block_done"])
+            return sm["kv_block_done"]
         with _region("HEAD"):
             last = self.layers[layers[-1]]
             hidden = self._block_rows(last.ffn_hc, streams, pre_mix, sm["block_final_gain"], self.norm.eps)
@@ -4175,7 +4561,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             def dispatch() -> None:
                 if self.dspark is not None and self.dspark.link is not None:
                     self._spec_write_verified()
-                outs.append(self._block_verify_stage(sm, pos % 2 == 1))
+                outs.append(self._block_verify_stage(sm, self._block_variant_key(pos)))
 
             try:
                 self._run_block_verify(dispatch, ids, pos, engram_rows)
@@ -4234,78 +4620,106 @@ class DeepSeekV41Model(DeepSeekV4Model):
         return [int(x) for x in out]
 
     def _compile_block_verify(self, token_id) -> None:
-        """Pass 1 of the block verify traces: one executed step per variant (even / odd start), before any capture,
+        """Pass 1 of the block verify traces: one executed step per reachable variant, before any capture,
         then rewind the resident session."""
         t = self.verify_rows
         self._use_server_rows(t)
         zeros = {li: torch.zeros(t, engram.kin, dtype=torch.bfloat16) for li, engram in self._engram_layers}
         sm = self.submeshes_io[0]
-        for odd in (False, True):
-            start = int(odd)
-            self.ensure_session_capacity(start + t - 1)
-            logger.info(f"[block-verify] compiling the {'odd' if odd else 'even'} block at {start}")
-            outs = []
+        for kv_only in (False, True) if KV_ONLY_BLOCKS else (False,):
+            for variant in self._reachable_block_variants(kv_only):
+                odd, dense, two_level, split = variant
+                sparse = any(r not in dense for r in sm["index_ratios"])
+                start = (1 if odd else 2) if sparse else int(odd)
+                self.ensure_session_capacity(start + t - 1)
+                logger.info(
+                    f"[block-verify] compiling {'KV-only ' if kv_only else ''}{'odd' if odd else 'even'} block "
+                    f"(dense={sorted(dense)}, two_level={two_level}, split={sorted(split)}) at {start}"
+                )
+                outs = []
 
-            def dispatch() -> None:
-                # The drafter's receive goes first: the stage's tap send stalls its queue until the receiver runs, and
-                # an op later in the stage may block the host on a first call (a CCL's setup), which would deadlock
-                # with a receive dispatched after the stage.
-                if self.dspark is not None and self.dspark.link is not None:
-                    self._spec_write_verified()
-                outs.append(self._block_verify_stage(sm, odd))
+                def dispatch() -> None:
+                    # The drafter's receive goes first: the stage's tap send stalls its queue until the receiver runs,
+                    # and an op later in the stage may block the host on a first call (a CCL's setup), which would
+                    # deadlock with a receive dispatched after the stage. A KV-only block taps nothing.
+                    if self.dspark is not None and self.dspark.link is not None and not kv_only:
+                        self._spec_write_verified()
+                    outs.append(self._block_verify_stage(sm, variant, kv_only))
 
-            self._run_block_verify(dispatch, [int(token_id)] * t, start, zeros)
-            for out in outs:
-                out.deallocate(True)
+                self._run_block_verify(dispatch, [int(token_id)] * t, start, zeros)
+                if not kv_only:
+                    for out in outs:
+                        out.deallocate(True)
         self.reset_session(self._resident[0])
 
     def _capture_block_verify(self) -> None:
         sm = self.submeshes_io[0]
         self._use_server_rows(self.verify_rows)  # its programs were compiled against the block-mode server
-        for odd in (False, True):
-            logger.info(f"[block-verify] capturing the {'odd' if odd else 'even'} block")
-            tid = ttnn.begin_trace_capture(sm["device"], cq_id=0)
-            with _trace_capture_guard():
-                out = self._block_verify_stage(sm, odd)
-            ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
-            sm["block_tids"][odd], sm["block_outs"][odd] = tid, out
+        for kv_only in (False, True) if KV_ONLY_BLOCKS else (False,):
+            tids, outs = (sm["kv_block_tids"], sm["kv_block_outs"]) if kv_only else (sm["block_tids"], sm["block_outs"])
+            for variant in self._reachable_block_variants(kv_only):
+                odd, dense, two_level, split = variant
+                logger.info(
+                    f"[block-verify] capturing {'KV-only ' if kv_only else ''}{'odd' if odd else 'even'} block "
+                    f"(dense={sorted(dense)}, two_level={two_level}, split={sorted(split)})"
+                )
+                tid = ttnn.begin_trace_capture(sm["device"], cq_id=0)
+                with _trace_capture_guard():
+                    out = self._block_verify_stage(sm, variant, kv_only)
+                ttnn.end_trace_capture(sm["device"], tid, cq_id=0)
+                tids[variant], outs[variant] = tid, out
+        self.kv_only_blocks = bool(sm["kv_block_tids"])
 
-    def decode_verify_block(self, token_ids, pos: int) -> list[int]:
+    def decode_verify_block(self, token_ids, pos: int, kv_only: bool = False) -> list[int]:
         """One block verify step on the persistent stage: tokens ``token_ids`` (``verify_rows`` of them) at positions
         ``pos ..``, every layer at once; returns each row's greedy token (row ``j``'s is the target's pick for
         ``pos + j + 1``). The step commits all its rows into the rings, writes them into the drafter's rings and keys
         its compressed state by position, as ``verify_rows`` single steps would, so :meth:`spec_fixup` undoes the
-        rejected ones. Blocks past the dense select are not supported yet."""
+        rejected ones.
+
+        ``kv_only`` replays the KV-only block instead (layers ``0 .. max(kv_source_layer_ids)``, see
+        :meth:`_block_verify_stage`) and returns zeros. It leaves the later layers' rings and the drafter's rings
+        without these rows, so it suits only prompt tokens that the last ``sliding_window`` positions (and the drafter
+        ring's ``dspark.ring_rows``) fed with full blocks or decode steps will overwrite."""
         t = self.verify_rows
         ids = [int(i) for i in token_ids]
         if len(ids) != t:
             raise ValueError(f"a verify step takes {t} tokens, got {len(ids)}")
-        if not self._block_dense(pos):
-            raise NotImplementedError(f"the block at {pos} is past the dense select, which the block verify needs")
         sm = self.submeshes_io[0]
-        if not sm["block_tids"]:
-            raise RuntimeError("capture the verify traces first (capture_spec_traces)")
+        tids = sm.get("kv_block_tids" if kv_only else "block_tids")
+        if not tids:
+            raise RuntimeError(
+                "capture the verify traces first (capture_spec_traces)"
+                + (", with DEEPSEEK_V41_KV_ONLY_BLOCKS on" if kv_only else "")
+            )
         t_start = time.perf_counter()
         self._wait_replays_dispatched()
         self._use_server_rows(t)
         sid = self._resident[0]
+        straddles_dense = DENSE_SELECT and any(
+            pos // r < self.config.index_topk < (pos + t) // r for r in sm["index_ratios"]
+        )
         with self._cq_lock:
             t_lock = time.perf_counter()
             self.ensure_session_capacity(pos + t - 1, sid)
             self._session_pos[sid] = pos + t
             self._spec_dirty.add(self._resident_slot())
             slot = self._slot_of.get(sid, 0)
-            tid = sm["block_tids"][pos % 2 == 1]
+            tid = tids[self._block_variant_key(pos, kv_only)]
+            # A KV-only block sends the drafter nothing, so its receive must not be queued.
+            feeds_drafter = self.dspark is not None and self.dspark.link is not None and not kv_only
             if self._host is not None:
                 # On the host runtime: its threads replay the block, write its packet and hash its tokens (the Engram
                 # history is theirs) and write every row's Engram rows.
                 self._host.dispatch_traces([int(tid)])
-                if self.dspark is not None and self.dspark.link is not None:
+                if feeds_drafter:
                     # A drafter on its own row is no stage: its receive stays this thread's queue.
                     ttnn.execute_trace(self.dspark.device, self._spec_tids["write_verified"], cq_id=0, blocking=False)
                 packet = self._block_verify_packet(ids, pos)
                 self._host.write_block(packet.reshape(-1).tolist(), ids, pos, slot)
                 out = self._read_socket_output().reshape(-1)[:t]
+                if straddles_dense:
+                    self._sync_dense_entries(sid)
                 return [int(x) for x in out]
 
             def engram_rows():
@@ -4326,10 +4740,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
             def replay() -> None:
                 ttnn.execute_trace(sm["device"], tid, cq_id=0, blocking=False)
-                if self.dspark is not None and self.dspark.link is not None:
+                if feeds_drafter:
                     ttnn.execute_trace(self.dspark.device, self._spec_tids["write_verified"], cq_id=0, blocking=False)
 
-            return self._run_block_verify(replay, ids, pos, engram_rows)
+            result = self._run_block_verify(replay, ids, pos, engram_rows)
+            if straddles_dense:
+                self._sync_dense_entries(sid)
+            return result
 
     def prefill_blocks(self, token_ids, start: int) -> tuple[int, list[int]]:
         """Feed known ``token_ids`` at ``start ..`` as verify blocks (the last one padded by repeating its last token);

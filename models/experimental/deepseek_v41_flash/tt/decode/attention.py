@@ -300,6 +300,22 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         # Only the scoring select runs the indexer's projections.
         self.q_b_proj.set_dram_stream(_SELECT_DRAM_STREAM_BYTES)
         self.weights_proj.set_dram_stream(_SELECT_DRAM_STREAM_BYTES)
+        # Identity gains (gain=2^20 with eps=2^40) for sharded_rmsnorm's row-block untile of (T, 32) TILE outputs.
+        untile_gain = float(1 << 20)
+        self._untile_q_gain = ttnn.from_torch(
+            torch.full((1, 1, 1, self.num_heads * self.head_dim), untile_gain, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._untile_w_gain = ttnn.from_torch(
+            torch.full((1, 1, 1, self.num_heads), untile_gain, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def _gather_heads(self, q: ttnn.Tensor, w: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """One row's query ``[1, 1, 1, Hi * D]`` and head weights ``[1, 1, 1, Hi]`` as the select's replicas on
@@ -330,18 +346,22 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         build_pool: bool = False,
         page_row: ttnn.Tensor | None = None,
         split_keys: bool | None = None,
+        output_row_offset: int | None = None,
+        output_row_stride: int | None = None,
+        deallocate_inputs: bool = False,
     ) -> ttnn.Tensor:
         """V4's :meth:`~DeepSeekV4Indexer.select_kv`, two-level when ``candidates`` is set, key-split over the
         ranks when ``split_keys`` (default :attr:`split_keys`).
 
-        ``tokens`` / ``q_a`` may hold ``T`` rows of one session (``decode`` with ``S == T``): ``cos_row`` /
-        ``sin_row`` are then ROW_MAJOR ``[1, 1, T, Rd]``, ``compress_pos`` ``[T]``, and ``new_row`` /
-        ``new_row_index`` ``[1, 1, n, Dh]`` / ``[n]``. One call selects every row's top-k at its own
-        position, row ``j`` into its ``window + index_topk`` rows of ``scache.sel_kv_rows`` instead of
-        ``sel_kv``. Such a select is one-level and unsplit.
+        ``tokens`` / ``q_a`` may hold ``T`` rows of one session (``decode`` with ``S == T``, or ``decode_block``):
+        ``cos_row`` / ``sin_row`` are then ROW_MAJOR ``[1, 1, T, Rd]``, ``compress_pos`` ``[T]``, and ``new_row`` /
+        ``new_row_index`` ``[1, 1, n, Dh]`` / ``[n]``. One call selects every row's top-k at its own position, row
+        ``j`` into ``scache.sel_kv_rows`` at ``output_row_offset + j * output_row_stride`` (defaulting to
+        ``sliding_window`` and ``sliding_window + index_topk``).
 
-        The candidate source then also writes its blocks into ``scache.cand_blocks`` /
-        ``pool_count``. A consumer selects from ``scache.pool_keys`` and gathers ``comp_kv`` rows
+        The candidate source then also writes its blocks into ``scache.cand_blocks`` / ``pool_count`` (or
+        ``cand_blocks_rows`` / ``pool_count_rows`` for ``T > 1``). A consumer selects from ``scache.pool_keys``
+        (or ``pool_keys_rows`` with ``pool_masks_rows`` / ``pool_counts_rows``) and gathers ``comp_kv`` rows
         through ``pool_rows``; ``build_pool`` first builds that pool from the source's blocks.
 
         ``page_row`` (INT32 ROW_MAJOR ``[1]``) picks the session's row of a shared ``[N, L]``
@@ -355,10 +375,42 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         split = self.split_keys if split_keys is None else split_keys
         assert not split or self.tp_size > 1, "a key split needs TP ranks to split over"
         assert not candidates or self.is_candidate_source or self.uses_candidates
-        assert rows == 1 or not (candidates or split), "a multi-row select is one-level and unsplit"
         q = self.q_b_proj(_decode_activation(self.q_b_proj, q_a))
+        if deallocate_inputs:
+            ttnn.deallocate(q_a)
+        if q.layout != ttnn.ROW_MAJOR_LAYOUT:
+            q_mem = q.memory_config()
+            if q.get_tile().tile_shape[0] < 32:
+                # ttnn.untilize requires 32-high tiles; sharded_rmsnorm's row-block mode un-tiles (T, 32) directly.
+                q_rm = ttnn.experimental.deepseek.sharded_rmsnorm(
+                    q,
+                    self._untile_q_gain,
+                    epsilon=float(1 << 40),
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(q)
+            else:
+                q_dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(q)
+                q_rm = ttnn.to_layout(q_dram, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(q_dram)
+            q = ttnn.to_memory_config(q_rm, q_mem)
+            ttnn.deallocate(q_rm)
         q = _apply_rope(q, cos_row, sin_row, self.rot, self.rope_dim, head_dim=self.head_dim)
         w = self.weights_proj(_decode_activation(self.weights_proj, tokens))
+        if deallocate_inputs:
+            ttnn.deallocate(tokens)
+        if w.layout != ttnn.ROW_MAJOR_LAYOUT and w.get_tile().tile_shape[0] < 32:
+            w_rm = ttnn.experimental.deepseek.sharded_rmsnorm(
+                w,
+                self._untile_w_gain,
+                epsilon=float(1 << 40),
+                output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(w)
+            w = w_rm
         # Row j's heads are rows [j * Hi, (j + 1) * Hi) of the query replica.
         if rows == 1 and GATHER_SELECT_HEADS:
             query, weights = self._gather_heads(q, w)
@@ -383,32 +435,48 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             extra["page_table_row_tensor"] = page_row
         # Under a split the merge writes the selected rows and the candidate blocks.
         candidate_outputs = {}
+        cand_blocks = scache.cand_blocks if rows == 1 else scache.cand_blocks_rows
+        pool_count = scache.pool_count if rows == 1 else scache.pool_count_rows
         if candidates and self.is_candidate_source:
             candidate_outputs = dict(
                 candidate_topk_blocks=self.candidate_topk_blocks,
                 candidate_block_size=self.candidate_block_size,
-                candidate_blocks_output=scache.cand_blocks,
-                pool_count_output=scache.pool_count,
+                candidate_blocks_output=cand_blocks,
+                pool_count_output=pool_count,
             )
             extra.update(
                 candidate_topk_blocks=self.candidate_topk_blocks, candidate_block_size=self.candidate_block_size
             )
             if not split:
-                extra.update(candidate_blocks_output=scache.cand_blocks, pool_count_output=scache.pool_count)
+                extra.update(candidate_blocks_output=cand_blocks, pool_count_output=pool_count)
         elif candidates:
+            pool_keys = scache.pool_keys if rows == 1 else scache.pool_keys_rows
+            pool_rows = scache.pool_rows if rows == 1 else scache.pool_rows_rows
+            pool_page_table = scache.pool_page_table if rows == 1 else scache.pool_page_table_rows
             if build_pool:
+                pool_extra = (
+                    dict(pool_masks_output=scache.pool_masks_rows, pool_counts_output=scache.pool_counts_rows)
+                    if rows > 1
+                    else {}
+                )
                 ttnn.experimental.deepseek.build_candidate_pool(
-                    scache.cand_blocks,
-                    scache.pool_count,
+                    cand_blocks,
+                    pool_count,
                     scache.idx_key_cache,
                     scache.idx_page_table,
                     self.candidate_block_size,
-                    pool_keys_output=scache.pool_keys,
-                    pool_rows_output=scache.pool_rows,
+                    pool_keys_output=pool_keys,
+                    pool_rows_output=pool_rows,
                     page_table_row_tensor=page_row,
+                    **pool_extra,
                 )
-            key_cache, page_table = scache.pool_keys, scache.pool_page_table
-            extra.update(num_keys_tensor=scache.pool_count, row_table=scache.pool_rows)
+            key_cache, page_table = pool_keys, pool_page_table
+            extra.update(
+                num_keys_tensor=pool_count if rows == 1 else scache.pool_counts_rows,
+                row_table=pool_rows,
+            )
+            if rows > 1:
+                extra["row_mask_table"] = scache.pool_masks_rows
             if new_row is not None:
                 # Without kv_page_table the op writes new_kv_row at new_row_index as a raw comp_kv row.
                 assert page_row is not None, "a consumer writing new_row needs page_row to map its logical entry"
@@ -416,14 +484,15 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             elif page_row is not None:
                 del extra["page_table_row_tensor"]
         output = scache.sel_kv if rows == 1 else scache.sel_kv_rows
-        output_row_offset = self.sliding_window
+        row_offset = self.sliding_window if output_row_offset is None else output_row_offset
+        row_stride = (self.sliding_window + self.index_topk) if output_row_stride is None else output_row_stride
         if split:
             extra.update(num_parts=self.tp_size, part_index_tensor=self.part_index)
         else:
             extra.update(
                 output_tensor=output,
-                output_row_offset=output_row_offset,
-                output_row_stride=self.sliding_window + self.index_topk,
+                output_row_offset=row_offset,
+                output_row_stride=row_stride,
             )
         sel_kv, scores, *_ = ttnn.experimental.deepseek.fused_lightning_select_kv(
             query,
@@ -447,7 +516,9 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
                 scache.comp_kv,
                 self.index_topk,
                 output_tensor=output,
-                output_row_offset=output_row_offset,
+                output_row_offset=row_offset,
+                output_row_stride=row_stride,
+                num_queries=rows,
                 **candidate_outputs,
             )
             ttnn.deallocate(gathered)
@@ -511,6 +582,13 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         "pool_keys",
         "pool_rows",
         "pool_page_table",
+        "cand_blocks_rows",
+        "pool_count_rows",
+        "pool_keys_rows",
+        "pool_rows_rows",
+        "pool_masks_rows",
+        "pool_counts_rows",
+        "pool_page_table_rows",
         "ring_view",
         "win_view_kv",
         "win_view_gate",
@@ -529,6 +607,13 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         pool_keys=None,
         pool_rows=None,
         pool_page_table=None,
+        cand_blocks_rows=None,
+        pool_count_rows=None,
+        pool_keys_rows=None,
+        pool_rows_rows=None,
+        pool_masks_rows=None,
+        pool_counts_rows=None,
+        pool_page_table_rows=None,
         ring_view=None,
         win_view_kv=None,
         win_view_gate=None,
@@ -549,6 +634,13 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         self.pool_keys = pool_keys
         self.pool_rows = pool_rows
         self.pool_page_table = pool_page_table
+        self.cand_blocks_rows = cand_blocks_rows
+        self.pool_count_rows = pool_count_rows
+        self.pool_keys_rows = pool_keys_rows
+        self.pool_rows_rows = pool_rows_rows
+        self.pool_masks_rows = pool_masks_rows
+        self.pool_counts_rows = pool_counts_rows
+        self.pool_page_table_rows = pool_page_table_rows
         self.ring_view = ring_view
         self.win_view_kv = win_view_kv
         self.win_view_gate = win_view_gate
@@ -1012,9 +1104,10 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)
         return q, kv, q_a
 
-    def _q_a_output(self) -> ttnn.Tensor:
-        """An empty ``q_a_output`` for attention_qkv_decode: one ``[1, q_lora]`` ROW_MAJOR row per core of the indexer
-        wq_b's B grid when the op's q_b cores contain it (wq_b then reads it in place), else of those q_b cores."""
+    def _q_a_output(self, rows: int = 1) -> ttnn.Tensor:
+        """An empty ``q_a_output`` for attention_qkv_decode: one ``[rows, q_lora]`` shard per core of the indexer
+        wq_b's B grid when the op's q_b cores contain it (wq_b then reads it in place), else of those q_b cores.
+        ROW_MAJOR for 1 row, ``(rows, 32)`` TILE for blocks."""
         grid = self.indexer.q_b_proj.b_core_grid()
         if not _core_grid_contains(_FUSED_Q_B_CORES, grid):
             grid = _FUSED_Q_B_CORES
@@ -1022,11 +1115,20 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         mem = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(grid, [1, q_lora], ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(grid, [rows, q_lora], ttnn.ShardOrientation.ROW_MAJOR),
         )
-        return ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, grid.num_cores(), q_lora]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device, mem
+        if rows == 1:
+            return ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, grid.num_cores(), q_lora]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device, mem
+            )
+        spec = ttnn.TensorSpec(
+            ttnn.Shape([1, 1, grid.num_cores() * rows, q_lora]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=mem,
+            tile=ttnn.Tile((rows, ttnn.TILE_SIZE)),
         )
+        return ttnn.allocate_tensor_on_device(spec, self.device)
 
     def _fused_qkv_into_ring(self, tokens, cos, sin, ring, sliding_pos, comp: bool = False, q_a_out=None):
         """:meth:`_qkv` of one row as attention_qkv_decode, writing its kv into ``ring`` at ``sliding_pos``.
@@ -1948,6 +2050,13 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         dense_entry: ttnn.Tensor | None = None,
         page_row: ttnn.Tensor | None = None,
         commit_rows: ttnn.Tensor | None = None,
+        dense: bool = True,
+        cos_row: ttnn.Tensor | None = None,
+        sin_row: ttnn.Tensor | None = None,
+        index_pos: ttnn.Tensor | None = None,
+        candidates: bool = False,
+        build_pool: bool = False,
+        split_keys: bool | None = None,
     ) -> ttnn.Tensor:
         """One verify block of ``R`` rows (positions ``p .. p + R - 1`` of one session) through this layer's
         attention; returns its all-reduced output, the ``(R, 32)`` block ``[1, 1, R, D]``.
@@ -1956,11 +2065,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         ``collapsed_replica_grid``). ``cos`` / ``sin`` / ``neg_sin`` are ``(R, 32)`` ``[1, 1, R, Rd]``, row ``j`` at
         ``p + j``. The new kv rows go into ``staging`` (``[1, 1, 32, Dh]`` TILE, rows past R finite); flash_mqa_decode
         reads the ring (positions <= p - 1) and them, bounded per row by ``lengths`` INT32 ``[1, 1, 1, 4 + R]``
-        (``[p, 0, 0, 0, n_0 .. n_{R-1}]``, ``n_j`` the dense selected rows), and then the rows are committed into the
-        ring at ``ring_slots`` INT32 ``[R]``. A compressed layer attends its group's ``dense_kv`` (the dense select:
-        every closed group); its kv source first closes the block's groups with compress_pool_decode (``win_slot``
-        ``[R]``, ``prev_slot`` ``[1]``, ``start_odd``, the closing groups' ``cos_win`` / ``sin_win`` / ``entry`` /
-        ``dense_entry``), writing their index keys, comp_kv and dense_kv rows.
+        (``[p, 0, 0, 0, n_0 .. n_{R-1}]``, ``n_j`` the selected rows), and then the rows are committed into the ring
+        at ``ring_slots`` INT32 ``[R]``. A compressed layer attends its group's ``dense_kv`` when ``dense``, or its
+        per-row selections in ``scache.sel_tile_rows`` (filled by :meth:`DeepSeekV41Indexer.select_kv` on the index
+        source layer); its kv source first closes the block's groups with compress_pool_decode (``win_slot`` ``[R]``,
+        ``prev_slot`` ``[1]``, ``start_odd``, the closing groups' ``cos_win`` / ``sin_win`` / ``entry`` /
+        ``dense_entry``), writing their index keys, comp_kv and (when ``dense``) dense_kv rows.
         """
         rows = tokens.memory_config().shard_spec.shape[0]
         pipes = []
@@ -1970,6 +2080,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             self.fused_prefetch_queued = False
             pipes = [*self.fused_pipes["q_a"], *self.fused_pipes["kv"], *self.fused_pipes["q_b"]]
         comp = self.is_kv_source and self.fused_comp_block is not None
+        need_select = self.is_index_source and not dense
+        q_a = self._q_a_output(rows) if need_select else None
         q = ttnn.experimental.deepseek.attention_qkv_decode(
             tokens,
             self.fused_w_q_a,
@@ -1987,6 +2099,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             comp_output=self.fused_comp_block if comp else None,
             memory_config=self.block_q_memory_config(rows),
             commit_rows=commit_rows,
+            q_a_output=q_a,
         )
         if self.is_kv_source:
             assert comp, "a block's compressor columns come out of attention_qkv_decode"
@@ -2024,8 +2137,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                     page_table=scache.idx_page_table,
                     entry=entry,
                     page_row=page_row,
-                    dense_kv=scache.dense_kv,
-                    dense_entry=dense_entry,
+                    dense_kv=scache.dense_kv if dense else None,
+                    dense_entry=dense_entry if dense else None,
                     comp_kv=scache.comp_kv,
                     start_odd=start_odd,
                     **windows,
@@ -2034,12 +2147,35 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                     ttnn.deallocate(t)
                 if gathered is not self.fused_comp_block:
                     ttnn.deallocate(gathered)
+        if need_select:
+            q_l1 = q.memory_config()
+            q_dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(q)
+            with _region("SELECT"):
+                self.indexer.select_kv(
+                    tokens,
+                    q_a,
+                    cos_row,
+                    sin_row,
+                    scache,
+                    index_pos,
+                    candidates=candidates,
+                    build_pool=build_pool,
+                    page_row=page_row,
+                    split_keys=split_keys,
+                    output_row_offset=0,
+                    output_row_stride=self.index_topk,
+                    deallocate_inputs=True,
+                )
+                ttnn.tilize(scache.sel_kv_rows, output_tensor=scache.sel_tile_rows)
+            q = ttnn.to_memory_config(q_dram, q_l1)
+            ttnn.deallocate(q_dram)
         compressed = self.compress_ratio > 0
         attn = ttnn.experimental.deepseek.flash_mqa_decode(
             q,
             scache.kv,
             lengths,
-            selected_kv=scache.dense_kv if compressed else None,
+            selected_kv=(scache.dense_kv if dense else scache.sel_tile_rows) if compressed else None,
             selected_row_offset=0,
             ring_rows=self.window,
             selected_rows=self.index_topk if compressed else 0,
@@ -2053,7 +2189,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             sin=neg_sin,
             new_kv=staging,
             num_rows=rows,
-            dense_selected=compressed,
+            dense_selected=compressed and dense,
         )
         ttnn.deallocate(q)
         # The ring held positions <= p - 1 for the attention; now the block's rows go in at their slots.
@@ -2166,9 +2302,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         return kw
 
 
-def candidate_buffers(device, config, with_pool: bool) -> dict:
+def candidate_buffers(device, config, with_pool: bool, rows: int = 1) -> dict:
     """The candidate source's outputs and, ``with_pool``, a consumer's pool, as
-    :class:`DeepSeekV41LayerCache` keyword arguments (all zero, in DRAM)."""
+    :class:`DeepSeekV41LayerCache` keyword arguments (all zero, in DRAM).
+
+    ``rows > 1`` builds the multi-row verify-block buffers (``*_rows``, plus ``pool_masks_rows`` /
+    ``pool_counts_rows`` for ``build_candidate_pool``'s union pool)."""
 
     def int32_zeros(shape):
         return ttnn.from_torch(
@@ -2179,22 +2318,31 @@ def candidate_buffers(device, config, with_pool: bool) -> dict:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    buffers = dict(cand_blocks=int32_zeros((1, config.candidate_topk_blocks)), pool_count=int32_zeros((1,)))
+    suffix = "" if rows == 1 else "_rows"
+    buffers = {
+        f"cand_blocks{suffix}": int32_zeros((rows, config.candidate_topk_blocks)),
+        f"pool_count{suffix}": int32_zeros((rows,)),
+    }
     if with_pool:
-        pool_size = config.candidate_topk_blocks * config.candidate_block_size
+        pool_size = rows * config.candidate_topk_blocks * config.candidate_block_size
         assert pool_size % CSA_INDEX_BLOCK_SIZE == 0, f"the {pool_size}-key pool must fill whole index blocks"
         pool_blocks = pool_size // CSA_INDEX_BLOCK_SIZE
         buffers.update(
-            pool_keys=_index_key_pool(device, pool_blocks, CSA_INDEX_BLOCK_SIZE, config.index_head_dim),
-            pool_rows=int32_zeros((1, pool_size)),
-            pool_page_table=ttnn.from_torch(
-                torch.arange(pool_blocks, dtype=torch.int32).reshape(1, pool_blocks),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
+            {
+                f"pool_keys{suffix}": _index_key_pool(device, pool_blocks, CSA_INDEX_BLOCK_SIZE, config.index_head_dim),
+                f"pool_rows{suffix}": int32_zeros((1, pool_size)),
+                f"pool_page_table{suffix}": ttnn.from_torch(
+                    torch.arange(pool_blocks, dtype=torch.int32).reshape(1, pool_blocks),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            }
         )
+        if rows > 1:
+            buffers["pool_masks_rows"] = int32_zeros((1, pool_size))
+            buffers["pool_counts_rows"] = int32_zeros((rows,))
     return buffers
 
 
@@ -2289,5 +2437,9 @@ def build_decode_caches(device, config, layers, max_seq: int, verify_rows: int =
                     consumers = [li for li in layers if li in config.index_source_layer_ids and li > source]
                     assert source in layers or not consumers, f"candidate consumers {consumers} need layer {source}"
                     shared[src].update(candidate_buffers(device, config, with_pool=bool(consumers)))
+                    if verify_rows > 1:
+                        shared[src].update(
+                            candidate_buffers(device, config, with_pool=bool(consumers), rows=verify_rows)
+                        )
         caches[i] = DeepSeekV41LayerCache(kv=zeros((1, 1, window, dh), ttnn.TILE_LAYOUT), **(shared[src] if r else {}))
     return caches

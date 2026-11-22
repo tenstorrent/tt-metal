@@ -69,10 +69,10 @@ void bind_attention_qkv_decode(::nanobind::module_& mod) {
         ``commit_rows`` (optional, blocks only): ROW_MAJOR bfloat16 ``[1, 1, h, head_dim]``, L1 HEIGHT_SHARDED on
         one core (shard ``[h, head_dim]``), also receives the kv rows: ``paged_update_cache``'s input for the ring.
 
-        ``q_a_output`` (optional, one row only): ROW_MAJOR bfloat16 L1 HEIGHT_SHARDED, one ``[1, q_lora]`` row per core
-        of a grid within the q_b cores. Each of those cores writes ``q_a * q_a_gamma`` into its row: q_a before its
-        RMSNorm's ``1 / rms`` scale, a replica ``matmul_decode`` reads as A. A scoring select's indexer query is
-        ``wq_b`` of it, and its top-k does not change under a positive scale of the query.
+        ``q_a_output`` (optional): ROW_MAJOR (1 row) or ``(h, 32)`` TILE (blocks) bfloat16 L1 HEIGHT_SHARDED, one
+        ``[h, q_lora]`` shard per core of a grid within the q_b cores. Each of those cores writes ``q_a * q_a_gamma``
+        into its shard: q_a before its RMSNorm's ``1 / rms`` scale, a replica ``matmul_decode`` reads as A. A scoring
+        select's indexer query is ``wq_b`` of it, and its top-k does not change under a positive scale of the query.
 
         Returns:
             ttnn.Tensor: q ``[1, 1, heads, head_dim]`` bfloat16 ROW_MAJOR (``[1, 1, heads * h, head_dim]`` for a

@@ -118,15 +118,16 @@ void FusedExpertsPrefillDeviceOperation::validate_on_program_cache_miss(
         "fused_experts_prefill: intermediate_size ({}) does not match gate_up_weights ({})",
         attributes.intermediate_size,
         inter);
-    // The I tiles are split over the cores of a group in runs (the first ones get one more).
+    // The I tiles are split over the cores of a group in runs (the first ones get one more); the factory only
+    // picks a group shape whose every core gets at least one, so the smallest group bounds I from below.
     TT_FATAL(
-        inter % kTile == 0 && inter / kTile >= kMaxCoresPerGroup,
+        inter % kTile == 0 && inter / kTile >= kMinCoresPerGroup,
         "fused_experts_prefill: local intermediate size ({}) must be a multiple of {} and at least {} (one I tile "
-        "for each of the up to {} cores of a group)",
+        "for each of the {} cores of the smallest group)",
         inter,
         kTile,
-        kTile * kMaxCoresPerGroup,
-        kMaxCoresPerGroup);
+        kTile * kMinCoresPerGroup,
+        kMinCoresPerGroup);
     const auto& gate_up_nd0 = tensor_args.gate_up_weights[0].memory_config().nd_shard_spec();
     TT_FATAL(gate_up_nd0.has_value(), "fused_experts_prefill: gate_up_weights[0] must be ND-sharded");
     const uint32_t gate_up_shard_rows = static_cast<uint32_t>(gate_up_nd0->shard_shape[-2]);

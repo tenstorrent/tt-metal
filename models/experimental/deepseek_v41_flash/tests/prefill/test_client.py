@@ -14,12 +14,12 @@ parser.add_argument("--top-p", type=float, default=None)
 parser.add_argument("--think", action="store_true")
 args = parser.parse_args()
 
-snap = sorted(glob.glob("/home/tt-admin/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash/snapshots/*"))[
-    -1
-]
-tok = AutoTokenizer.from_pretrained(snap)
+snap = sorted(
+    glob.glob("/big_home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash/snapshots/*")
+)[-1]
+tok = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-V4.1-Flash-1017")
 lines, total = [], 0
-for line in open("/home/tt-admin/smanoj/top-200000.txt"):
+for line in open("../top-200000.txt"):
     total += len(tok(line, add_special_tokens=False)["input_ids"])
     if total > 500_000:
         break

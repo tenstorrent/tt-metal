@@ -51,7 +51,9 @@ def _pcc(expected, actual, threshold, what):
 
 @pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("seq_len", (128, 1000, 2048))  # one tile column of rows, a ragged length, a long chunk
+@pytest.mark.parametrize(
+    "seq_len", (128, 992, 2048)
+)  # one tile column of rows, off the 1024 grid (chunks are 32-aligned), a long chunk
 @pytest.mark.parametrize("layer", (1, 14))
 @torch.no_grad()
 def test_engram_prefill(device, layer, seq_len):

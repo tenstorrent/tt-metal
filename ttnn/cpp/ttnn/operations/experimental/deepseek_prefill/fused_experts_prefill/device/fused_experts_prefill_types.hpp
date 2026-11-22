@@ -24,6 +24,9 @@ struct GroupShape {
 };
 inline constexpr GroupShape kGroupShapes[] = {{4, 2}, {3, 2}};
 inline constexpr uint32_t kMaxCoresPerGroup = 8;
+// The smallest group: an expert needs at least this many I tiles (one per core of a 3x2 group). TP12 of V4.1
+// (I = 2304 / 12 = 192, 6 I tiles) runs at exactly this; the 4x2 shape is then skipped (see the factory).
+inline constexpr uint32_t kMinCoresPerGroup = 6;
 
 // Tile rows of one expert processed per chunk. Bounded by L1 (the gathered SwiGLU activations scale
 // with it); an expert with more rows runs as several chunks, re-reading its weights per chunk.

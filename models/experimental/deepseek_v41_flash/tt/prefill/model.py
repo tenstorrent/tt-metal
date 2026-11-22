@@ -39,6 +39,7 @@ Handing the states over to decode: :meth:`~..model.DeepSeekV41Model.build_prefil
 stages and :meth:`~..model.DeepSeekV41Model.commit_prefill_state` writes its states into the decode caches.
 """
 
+import contextlib
 import math
 import queue
 import threading
@@ -62,6 +63,7 @@ from models.experimental.deepseek_v41_flash.tt.prefill.attention import (
     ratio_layer_type,
 )
 from models.experimental.deepseek_v41_flash.tt.prefill.decoder_layer import DeepSeekV41PrefillDecoderLayer
+from models.experimental.deepseek_v41_flash.tt.prefill.persistent_moe import PersistentPrefillMLP
 from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
 from models.experimental.deepseek_v4_flash.tt.common import CCL_TOPOLOGY, _HIFI4, _trace_capture_guard
 from models.experimental.deepseek_v4_flash.tt.model import (
@@ -106,6 +108,14 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
     ``bounded_replay`` also captures the traced prefill's fresh-window variants, so :meth:`prefill_traced` can
     resume a prompt from its cached compressed KV alone (see :meth:`DeepSeekV41TracedPrefill.run`).
 
+    ``moe_server`` (a :class:`~.persistent_moe.PersistentPrefillMoE`) runs every layer's MoE on the persistent TP12
+    MoE mesh instead of on the layer's stage: each stage in ``layer_devices`` must be one of its requesters, and the
+    stages hold no router, shared or routed expert weights (``experts`` and ``expert_dtype`` are unused). The server
+    must hold layers ``0 .. num_layers - 1``. Both prefills take it: the eager one sends every layer's rows to the
+    server; the traced one captures only each layer's requester half (:meth:`~.persistent_moe.PersistentPrefillMoE.send_chunk`)
+    and dispatches the MoE mesh's half (:meth:`~.persistent_moe.PersistentPrefillMoE.serve`) per replayed chunk. Either
+    stops the server's decode op (if any) for the compile and for each prompt, and relaunches it after.
+
     ``balance_dram_banks`` matches :class:`~..model.DeepSeekV41Model`'s: the routed experts' gate_up columns are
     split into K-row pieces that cover every DRAM bank. It must agree with the experts of the decode model the
     prefill shares them with (``build_prefill`` passes that model's setting through), or the two ops read two
@@ -137,6 +147,7 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         bounded_replay: bool = False,
         image_rows: int = 0,
         balance_dram_banks: bool = True,
+        moe_server=None,
     ):
         self._progress = progress or (lambda message, important=False: None)
         self.image_rows = image_rows
@@ -156,6 +167,13 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
             layer_devices = [device] * num_layers
         if len(layer_devices) != num_layers:
             raise ValueError(f"got {len(layer_devices)} layer devices for {num_layers} layers")
+        # The persistent prefill MoE: each layer's stage is one of the server's requesters (by mesh identity).
+        requester_of = {}
+        if moe_server is not None:
+            requester_of = {id(mesh): j for j, mesh in enumerate(moe_server.request_meshes)}
+            missing = sorted({i for i in range(num_layers) if id(layer_devices[i]) not in requester_of})
+            if missing:
+                raise ValueError(f"layers {missing} are on a stage that is not a requester of moe_server")
         if engram_lookup is None and any(i in config.engram_layer_ids for i in range(num_layers)):
             raise ValueError("the built layers include an Engram layer: pass engram_lookup")
         self.config = config
@@ -169,6 +187,7 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         self.engram_lookup = engram_lookup
         self.kv_only = kv_only
         self._traced = None
+        self.moe_server = moe_server
         self.keep_decode_prefetcher = False
         self.shared_socket_pairs = {}
         # Engram layer -> decode's rows sockets (same core, same one-row page) to reuse instead of opening more.
@@ -204,7 +223,10 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                 layer_device = self.layer_devices[i]
                 layer_cache = cache.sub(f"layers.{i}")
                 layer_experts = experts[i] if experts is not None else None
-                if layer_experts is None:
+                mlp = None
+                if moe_server is not None:
+                    mlp = PersistentPrefillMLP(moe_server, requester_of[id(layer_device)], i)
+                elif layer_experts is None:
                     note(f"layer {i + 1}/{num_layers}: routed experts", important=True)
                     layer_experts = DeepSeekV41PreloadedExperts(
                         config,
@@ -226,6 +248,7 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                     weight_dtype=weight_dtype,
                     moe_weight_dtype=moe_weight_dtype,
                     tp_size=tp_size,
+                    mlp=mlp,
                 )
                 note(f"layer {i + 1}/{num_layers}: built")
 
@@ -506,6 +529,16 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         total = ids.shape[1]
         states = self.new_state() if states is None else states
         num_chunks = -(-total // chunk_size)
+        if self.moe_server is not None:
+            # The MoE mesh is time-shared with the persistent decode MoE (if any): stopped for the prompt, relaunched
+            # once every chunk is done.
+            with self.moe_server.window():
+                logits = self._prefill_chunks(ids, chunk_size, on_chunk, states, total, num_chunks)
+            return logits, states
+        return self._prefill_chunks(ids, chunk_size, on_chunk, states, total, num_chunks), states
+
+    def _prefill_chunks(self, ids, chunk_size, on_chunk, states, total, num_chunks):
+        logits = None
         for index, start in enumerate(range(0, total, chunk_size)):
             end = min(total, start + chunk_size)
             self._tag = f"chunk {index + 1}/{num_chunks}"
@@ -521,7 +554,19 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
             if on_chunk is not None:
                 self.synchronize("device compute")
                 on_chunk(index, start, end, time.perf_counter() - t0)
-        return logits, states
+        return logits
+
+    def free_states(self, states: list[PrefillAttentionState]) -> None:
+        """Free the device tensors of ``states`` once they are committed: what :meth:`prefill_traced` sliced out of
+        its buffers, or everything an eager :meth:`prefill` left in them."""
+        if self._traced is not None:
+            self._traced.free_states(states)
+            return
+        for state in states:
+            for name, tensor in vars(state).items():
+                if isinstance(tensor, ttnn.Tensor):
+                    ttnn.deallocate(tensor)
+                    setattr(state, name, None)
 
     # ------------------------------------------------------------------ traced prefill
     def prepare_traced_prefill(self, max_len: int, chunk_size: int = 1024) -> None:
@@ -538,14 +583,20 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                 f"{self._traced._chunk_size} is prepared; release_traced_prefill() before preparing another"
             )
         self._traced = DeepSeekV41TracedPrefill(self, bounded_replay=self.bounded_replay)
-        self._traced.prepare(max_len, chunk_size)
+        with self._moe_window():
+            self._traced.prepare(max_len, chunk_size)
 
     def compile_traced_prefill(self, max_len: int, chunk_size: int = 1024) -> None:
         """The first half of :meth:`prepare_traced_prefill` (no capture); :meth:`capture_traced_prefill` finishes it."""
         if self._traced is not None and (self._traced.prepared or self._traced.compiled):
             raise RuntimeError("a traced prefill plan is already compiled; release_traced_prefill() first")
         self._traced = DeepSeekV41TracedPrefill(self, bounded_replay=self.bounded_replay)
-        self._traced.compile(max_len, chunk_size)
+        with self._moe_window():
+            self._traced.compile(max_len, chunk_size)
+
+    def _moe_window(self):
+        """The persistent prefill MoE's window (the decode server stopped, relaunched at exit), or nothing."""
+        return self.moe_server.window() if self.moe_server is not None else contextlib.nullcontext()
 
     def prefill_traced(
         self,
@@ -563,7 +614,8 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
         :meth:`DeepSeekV41TracedPrefill.run`)."""
         if self._traced is None or not self._traced.prepared:
             raise RuntimeError("call prepare_traced_prefill(max_len, chunk_size) first")
-        return self._traced.run(input_ids, on_chunk=on_chunk, start=start, seed=seed, bounded_replay=bounded_replay)
+        with self._moe_window():
+            return self._traced.run(input_ids, on_chunk=on_chunk, start=start, seed=seed, bounded_replay=bounded_replay)
 
     def continuation_tokens(self, start: int, n_tokens: int, bounded_replay: bool = False) -> int:
         """How many of ``n_tokens`` further tokens :meth:`prefill_traced` takes from ``start`` (see
@@ -1205,14 +1257,23 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         model = self.model
         model._tag = "traced prepare"
         self._stop_prefetcher()
-        for stage in self.stages:
-            model._note(f"traced prefill: capturing stage {stage.index}", important=True)
-            for fresh in self._variants():
-                tid = ttnn.begin_trace_capture(stage.device, cq_id=0)
-                with _trace_capture_guard():
-                    self._stage_forward(stage, fresh)
-                ttnn.end_trace_capture(stage.device, tid, cq_id=0)
-                stage.traces[fresh] = tid
+        server = model.moe_server
+        if server is not None:
+            # The traces hold each layer's requester half only (send the rows, receive the result); the MoE mesh's
+            # half is dispatched per replayed chunk (_serve_moe), in the same layer order.
+            server.stage_only = True
+        try:
+            for stage in self.stages:
+                model._note(f"traced prefill: capturing stage {stage.index}", important=True)
+                for fresh in self._variants():
+                    tid = ttnn.begin_trace_capture(stage.device, cq_id=0)
+                    with _trace_capture_guard():
+                        self._stage_forward(stage, fresh)
+                    ttnn.end_trace_capture(stage.device, tid, cq_id=0)
+                    stage.traces[fresh] = tid
+        finally:
+            if server is not None:
+                server.stage_only = False
         self.prepared = True
         model._note("traced prefill: ready", important=True)
 
@@ -1223,9 +1284,19 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
             for fresh in iter(chunks.get, None):
                 for stage in self.stages:
                     ttnn.execute_trace(stage.device, stage.traces[fresh], cq_id=0, blocking=False)
+                self._serve_moe()
         except Exception:
             logger.exception("[traced-prefill] replay thread failed; the host will wait on the sockets forever")
             raise
+
+    def _serve_moe(self) -> None:
+        """With the persistent prefill MoE (``model.moe_server``): the MoE mesh's half of one replayed chunk, every
+        layer's in the traces' order (stages, then layers within a stage), eager on the MoE mesh (no trace there).
+        Each waits on its layer's rows from the replaying requester; the sockets pace the two meshes."""
+        if self.model.moe_server is None:
+            return
+        for layer in self.model.layers:
+            layer.mlp.serve(self._chunk_size)
 
     @property
     def continue_alignment(self) -> int:

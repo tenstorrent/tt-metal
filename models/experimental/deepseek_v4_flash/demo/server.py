@@ -1368,6 +1368,7 @@ class _Turn:
         self.device_prefill = 0  # prompt tokens still to go through the traced prefill model
         self.prefill_from = 0  # ... from this many fed (replayed through decode up to an aligned position)
         self.prefilled_on_device = 0  # ... and how many it took, once it has run
+        self.prefill_cached = 0  # ... of which a remote prefill server took this many from its prefix cache
         # A conversation resumed from an earlier turn (see _Scheduler._resume): the cached tokens before the
         # rewound position that the prefill model replays first, to rebuild the sliding window.
         self.replay_ids: list[int] = []
@@ -1464,8 +1465,8 @@ class _Turn:
             "outcome": outcome,
             "ended": time.time(),
             "queued_s": (self.t_admit or time.perf_counter()) - self.t_submit,
-            "prompt_tokens": len(self.ids),
-            "cached_tokens": self.cached,
+            "prompt_tokens": len(self.ids) - self.prefill_cached,
+            "cached_tokens": self.cached + self.prefill_cached,
             "prefilled": self.fed,
             "prefilled_on_device": self.prefilled_on_device,
             "generated": len(self.generated),
@@ -2969,8 +2970,8 @@ class _Scheduler:
             (
                 "done",
                 {
-                    "prompt_tokens": len(turn.ids),
-                    "cached_tokens": turn.cached,
+                    "prompt_tokens": len(turn.ids) - turn.prefill_cached,
+                    "cached_tokens": turn.cached + turn.prefill_cached,
                     "completion_tokens": len(turn.generated),
                     "reasoning_tokens": turn.stream.reasoning_tokens(turn.generated),
                     "content": turn.stream.content,
@@ -2999,8 +3000,8 @@ class _Scheduler:
             (
                 "done",
                 {
-                    "prompt_tokens": len(turn.ids),
-                    "cached_tokens": turn.cached,
+                    "prompt_tokens": len(turn.ids) - turn.prefill_cached,
+                    "cached_tokens": turn.cached + turn.prefill_cached,
                     "completion_tokens": 0,
                     "reasoning_tokens": 0,
                     "content": "",
@@ -3050,7 +3051,7 @@ class _Scheduler:
         self.ended_prefilled += turn.fed
         self.ended_generated += len(turn.generated)
         self.ended_input += turn.cached + len(turn.ids)
-        self.ended_cached += turn.cached
+        self.ended_cached += turn.cached + turn.prefill_cached
         self.ended += 1
         # The record carries the totals, and goes in before the turn leaves the active ones: a monitor that reads
         # the records and then the active turns finds every turn in exactly one of them.

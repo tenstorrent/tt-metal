@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """``ttnn.experimental.deepseek_prefill.fused_experts_prefill`` at V4.1's shapes, on random weights.
 
-V4.1 has H = 5120 and a per-rank I of 576 (TP4, the production split: 18 I tiles), 1152 (TP2) or 2304
+V4.1 has H = 5120 and a per-rank I of 192 (TP12, the persistent MoE's split: 6 I tiles, one per core of a 3x2
+group, the smallest I the op takes), 576 (TP4, the production prefill split: 18 I tiles), 1152 (TP2) or 2304
 (TP1). They differ from V4's H = 4096, I = 512 in what the op had to change: the I tiles split evenly over 6
 cores but not 8, so the op runs 3x2 groups of 6 (20 groups instead of 15) and the 80 down shards split
 unevenly over a group (14 or 13 per core, two kernel variants); and at I = 2304 a core's gate_up run may not
@@ -79,7 +80,7 @@ _CASES = {
 
 
 @pytest.mark.parametrize("banked", (False, True), ids=("whole_k", "banked"))
-@pytest.mark.parametrize("inter", (576, 1152, 2304), ids=("tp4", "tp2", "tp1"))
+@pytest.mark.parametrize("inter", (192, 576, 1152, 2304), ids=("tp12", "tp4", "tp2", "tp1"))
 @pytest.mark.parametrize("case", list(_CASES), ids=list(_CASES))
 def test_fused_experts_prefill_v41(device, reset_seeds, case, inter, banked):
     num_tokens, num_experts, top_k, hot, path = _CASES[case]
@@ -140,3 +141,29 @@ def test_fused_experts_prefill_v41_384_experts_1024_tokens(device, reset_seeds, 
         gate_up_k_shards=_k_shards(INTER_TP4, banked),
         dram_banks=_model_dram_banks(),
     )
+
+
+@pytest.mark.parametrize("banked", (False, True), ids=("whole_k", "banked"))
+def test_fused_experts_prefill_v41_tp12_one_row_blocks(device, reset_seeds, banked):
+    """TP12 with 400 KB of every L1 bank held, as the persistent MoE's long-lived buffers hold it on a five-instance
+    DSpark server (a 4-row request socket per instance): the two-row M-blocks no longer fit, so the op falls back to
+    one-row blocks (half the x staging). Same 1024-token chunk and checks as the full-scale TP4 test."""
+    from models.experimental.deepseek_v4_flash.tt.model import _l1_spacer
+
+    spacer = _l1_spacer(device, 400 * 1024)
+    try:
+        _run_case(
+            device,
+            1024,
+            384,
+            6,
+            [],
+            "ranking",
+            check_every=127,
+            hidden=HIDDEN,
+            inter=192,
+            gate_up_k_shards=_k_shards(192, banked),
+            dram_banks=_model_dram_banks(),
+        )
+    finally:
+        spacer.deallocate()

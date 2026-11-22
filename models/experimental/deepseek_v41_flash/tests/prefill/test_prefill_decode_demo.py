@@ -69,6 +69,19 @@ copy of its routed experts on its prefill stage (see ``DeepSeekV41Model(prefill_
 head, so at least the last ``sliding_window`` (128) prompt tokens are replayed through decode, which fills the other
 layers' rings and gives the first token; ``DEEPSEEK_V4_E2E_COMPARE=1`` (a prefill logits check) does not apply.
 
+``DEEPSEEK_V41_E2E_PERSISTENT_MOE=1`` (opt-in) runs the persistent-MoE layout of ``test_full_model_decode_demo.py``'s
+``tp4_1stage_persistent_moe12`` case: decode is ``DeepSeekV41Model(persistent_moe=True)`` -- every layer's attention,
+hyper-connections, norms, Engram and ``lm_head`` on one TP4 stage (mesh row 4), every MoE on the persistent TP12
+``fused_experts`` server on the 3x4 submesh at rows 5-7 -- and the prefill model is built on that same stage by
+``build_prefill``, its MoE on the persistent TP12 *prefill* MoE over the server's own blocks
+(:class:`~models.experimental.deepseek_v41_flash.tt.prefill.persistent_moe.PersistentPrefillMoE`). Prefill is traced as
+above, on that one stage: its trace holds each layer's requester half (send the rows to the MoE mesh, receive the
+result), and every replayed chunk dispatches the MoE mesh's half (eager there) layer by layer. The compile and each
+prompt stop the decode server and relaunch it after (chunks of at most 1024 tokens); the decode server reads its router
+columns from DRAM (``DEEPSEEK_V41_MOE_ROUTER_L1_BUDGET``) so the prefill MoE's routed op has the L1 it needs.
+``DEEPSEEK_V4_NUM_STAGES`` and
+``DEEPSEEK_V41_PREFILL_ALL_STAGES`` do not apply.
+
 ``DEEPSEEK_V41_PREFILL_HOST_TIMERS=1`` times the host side of every traced prefill chunk and logs, per prompt, each
 part's mean and max per chunk next to the chunk's wall time (see :class:`_HostTimers`): the Engram host lookup and the
 packet write (the run loop's thread), the trace dispatch of every stage (the replay thread) and the wait for the chunk's
@@ -118,8 +131,10 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     engram_ram_needed,
     stage_engram_tables,
 )
+from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
+from models.experimental.deepseek_v41_flash.tt.prefill.persistent_moe import CHUNK as PERSISTENT_CHUNK
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
     _Progress,
     _env_int,
@@ -127,7 +142,7 @@ from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill
 )
 from models.experimental.deepseek_v4_flash.tests.prefill.test_prefill_decode_demo import (
     _DECODE_REPLAY_AHEAD,
-    _DEVICE_PARAMS,
+    _DEVICE_PARAMS as _V4_DEVICE_PARAMS,
     _LONGBENCH_FILE as _V4_LONGBENCH_FILE,
     _Prompt,
     _Result,
@@ -150,6 +165,15 @@ _NUM_STAGES = pipeline_stage_count()
 _MESH = (8, _TP_SIZE)
 # Opt-in: the KV-only prefill on a placement of its own over every stage (see the module docstring).
 _PREFILL_ALL_STAGES = os.environ.get("DEEPSEEK_V41_PREFILL_ALL_STAGES", "0") == "1"
+# Opt-in: the persistent-MoE layout, decode and prefill (see the module docstring).
+_PERSISTENT_MOE = os.environ.get("DEEPSEEK_V41_E2E_PERSISTENT_MOE", "0") == "1"
+# The persistent layout's one stage runs every layer's CCLs, whose semaphores live in L1_SMALL: open the mesh with the
+# server's --persistent-moe size (its _PERSISTENT_L1_SMALL_SIZE) unless DEEPSEEK_V4_L1_SMALL_SIZE says otherwise.
+_DEVICE_PARAMS = (
+    {**_V4_DEVICE_PARAMS, "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "16384"))}
+    if _PERSISTENT_MOE
+    else _V4_DEVICE_PARAMS
+)
 # Opt-in: per-chunk host timers of the traced prefill (see the module docstring).
 _HOST_TIMERS = os.environ.get("DEEPSEEK_V41_PREFILL_HOST_TIMERS", "0") == "1"
 # The LongBench v2 questions: DEEPSEEK_V4_LONGBENCH, else zai-org/LongBench-v2's data.json in the Hugging Face cache
@@ -268,6 +292,14 @@ def _run(
         raise ValueError(f"DEEPSEEK_V4_E2E_CHUNK={chunk_size} must be a positive multiple of {ALIGNMENT}")
     if compare and _PREFILL_ALL_STAGES:
         raise ValueError("DEEPSEEK_V4_E2E_COMPARE=1 checks prefill's logits; the KV-only prefill has none")
+    if _PERSISTENT_MOE and _PREFILL_ALL_STAGES:
+        raise ValueError(
+            "DEEPSEEK_V41_E2E_PERSISTENT_MOE=1 prefills on its one stage: unset DEEPSEEK_V41_PREFILL_ALL_STAGES"
+        )
+    if _PERSISTENT_MOE and chunk_size > PERSISTENT_CHUNK:
+        raise ValueError(
+            f"DEEPSEEK_V4_E2E_CHUNK={chunk_size}: the persistent prefill MoE takes at most {PERSISTENT_CHUNK}"
+        )
 
     # --- tokenizer, config, prompts ----------------------------------------------------------------- #
     progress.step("[1/6] tokenizer, config and prompts")
@@ -331,16 +363,23 @@ def _run(
     system_config = load_system_config(mesh_device=mesh_device)
     set_active_system_config(system_config)
     mesh_rows = tuple(mesh_device.shape)[0]
-    if not 1 <= _NUM_STAGES <= mesh_rows:
-        raise ValueError(f"DEEPSEEK_V4_NUM_STAGES={_NUM_STAGES} must be in [1, {mesh_rows}] (mesh rows)")
-    submeshes = [
-        mesh_device.create_submesh(ttnn.MeshShape(1, _TP_SIZE), ttnn.MeshCoordinate(i, 0)) for i in range(_NUM_STAGES)
-    ]
-    placement = plan_layer_placement(num_layers, _NUM_STAGES, 1)
-    spans = []
-    for k in dict.fromkeys(placement):
-        owned = [li for li, stage in enumerate(placement) if stage == k]
-        spans.append(f"stage {k}: layers {owned[0]}-{owned[-1]}")
+    if _PERSISTENT_MOE:
+        # The model carves its own stage (row 4) and the server's 3x4 MoE mesh (rows 5-7).
+        stage_count, submeshes, placement = 1, None, None
+        spans = [f"stage 0 (mesh row 4): layers 0-{num_layers - 1}, every MoE on the persistent TP12 mesh (rows 5-7)"]
+    else:
+        stage_count = _NUM_STAGES
+        if not 1 <= _NUM_STAGES <= mesh_rows:
+            raise ValueError(f"DEEPSEEK_V4_NUM_STAGES={_NUM_STAGES} must be in [1, {mesh_rows}] (mesh rows)")
+        submeshes = [
+            mesh_device.create_submesh(ttnn.MeshShape(1, _TP_SIZE), ttnn.MeshCoordinate(i, 0))
+            for i in range(_NUM_STAGES)
+        ]
+        placement = plan_layer_placement(num_layers, _NUM_STAGES, 1)
+        spans = []
+        for k in dict.fromkeys(placement):
+            owned = [li for li, stage in enumerate(placement) if stage == k]
+            spans.append(f"stage {k}: layers {owned[0]}-{owned[-1]}")
     logger.info(f"{num_layers}/{config.num_hidden_layers} layers over {len(spans)} stage(s): " + ", ".join(spans))
     prefill_placement = None
     if _PREFILL_ALL_STAGES:
@@ -362,6 +401,11 @@ def _run(
     # --- the decode model: static state and session, before anything of prefill exists ------------------ #
     # Everything allocated here, in DRAM and in L1, is live while prefill is captured, so prefill keeps off it.
     use_prefetcher = os.environ.get("DEEPSEEK_V4_PREFETCHER", "1") == "1"
+    if _PERSISTENT_MOE and "DEEPSEEK_V41_MOE_ROUTER_L1_BUDGET" not in os.environ:
+        # The decode server keeps every layer's router columns in L1 when they fit (~680 KiB of each MoE core with
+        # one-row requests), which leaves the prefill MoE's fused_experts_prefill too little (it needs ~1.1 MB a core
+        # at TP12). Read them from DRAM instead, as the server's DSpark block layout does.
+        pmoe.ROUTER_L1_BUDGET = 0
     progress.step(
         f"[2/6] decode model ({len(spans)} x TP{_TP_SIZE} stages, prefetcher {'on' if use_prefetcher else 'off'})"
     )
@@ -373,13 +417,14 @@ def _run(
         system_config=system_config,
         loader=loader,
         config=config,
-        num_stages=_NUM_STAGES,
+        num_stages=stage_count,
         submeshes=submeshes,
         use_prefetcher=use_prefetcher,
         layer_submesh_ids=placement,
         prefill_layer_submesh_ids=prefill_placement,
+        persistent_moe=_PERSISTENT_MOE,
     )
-    _assert_decode_parallelism(decode, _TP_SIZE, _NUM_STAGES)
+    _assert_decode_parallelism(decode, _TP_SIZE, stage_count, persistent_moe=_PERSISTENT_MOE)
     assert decode.num_layers == num_layers, f"decode built {decode.num_layers} layers, prefill {num_layers}"
     logger.info(f"decode model: {num_layers} layers built in {time.perf_counter() - t0:.1f}s")
     decode.prepare_static_decode(
@@ -421,6 +466,7 @@ def _run(
         prefill.synchronize("uploads")
         build_seconds = time.perf_counter() - t0
         logger.info(f"prefill model built in {build_seconds:.1f}s")
+    if max_len:
         progress.step(
             f"[3/6] prefill compile for prompts of up to {max_len} tokens: persistent buffers, H2D / D2D / D2H "
             f"sockets, compile the {chunk_size}-token chunk step (once; not timed)"
@@ -567,6 +613,7 @@ class _HostTimers:
                     t0 = time.perf_counter()
                     for stage in traced.stages:
                         ttnn.execute_trace(stage.device, stage.traces[fresh], cq_id=0, blocking=False)
+                    traced._serve_moe()  # the persistent prefill MoE's half (a no-op without it)
                     dispatch.append(time.perf_counter() - t0)
             except Exception:
                 logger.exception("[traced-prefill] replay thread failed; the host will wait on the sockets forever")
@@ -684,7 +731,7 @@ def _decode_one(
         progress.step(f"{tag}: commit: prefill state -> decode caches")
         t0 = time.perf_counter()
         committed = decode.commit_prefill_state(states, sid, progress=lambda m: progress(m, important=False))
-        prefill.free_traced_states(states)
+        prefill.free_states(states)
         assert committed == aligned
         logger.info(f"commit of {committed} tokens: {time.perf_counter() - t0:.2f}s")
         if aligned == real_len:

@@ -764,7 +764,8 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             self._debug_taps["attn_pre"] = ttnn.to_torch(ttnn.get_device_tensors(attn_pre)[0]).float()
         with _region("ATTENTION"):
             attn_out = attn.decode_block(tokens, scache, **attn_inputs)
-        ttnn.deallocate(tokens)
+        if tokens.is_allocated():
+            ttnn.deallocate(tokens)
         if getattr(self, "_debug_taps", None) is not None:
             self._debug_taps["attn_out"] = (
                 ttnn.to_torch(ttnn.get_device_tensors(attn_out)[0]).float().reshape(-1, attn_out.shape[-1])

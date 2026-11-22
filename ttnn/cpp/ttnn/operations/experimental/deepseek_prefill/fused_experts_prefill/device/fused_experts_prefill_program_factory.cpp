@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -79,7 +80,10 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
 
     // Group shape: the experts of a group run one after the other and the gate_up and down phases of an expert
     // are separated by the group's all-gather, so a call takes about (experts per group) * (gate_up shards +
-    // down shards of the busiest core) weight reads. Ties keep the first shape.
+    // down shards of the busiest core) weight reads. Ties keep the first shape. A shape with more cores than the
+    // expert has I tiles would leave a core without gate_up work, so it is not a candidate (TP12: 6 I tiles, so
+    // only the 3x2 groups).
+    const auto shape_fits = [&](const GroupShape& shape) { return shape.x * shape.y <= it; };
     const auto shape_cost = [&](const GroupShape& shape) {
         const uint32_t cpg = shape.x * shape.y;
         const uint32_t groups = (kGridX / shape.x) * (kGridY / shape.y);
@@ -87,12 +91,14 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
                                     static_cast<uint64_t>((dn_total + cpg - 1) / cpg) * dn_shard_tiles;
         return ((num_experts + groups - 1) / groups) * per_expert;
     };
-    GroupShape group = kGroupShapes[0];
+    std::optional<GroupShape> best;
     for (const auto& shape : kGroupShapes) {
-        if (shape_cost(shape) < shape_cost(group)) {
-            group = shape;
+        if (shape_fits(shape) && (!best.has_value() || shape_cost(shape) < shape_cost(*best))) {
+            best = shape;
         }
     }
+    TT_FATAL(best.has_value(), "fused_experts_prefill: no group shape fits {} I tiles", it);
+    const GroupShape group = *best;
     const uint32_t cores_per_group = group.x * group.y;
     const uint32_t groups_x = kGridX / group.x;
     const uint32_t num_groups = groups_x * (kGridY / group.y);
@@ -105,7 +111,6 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
     const uint32_t dn_max = dn_base + (dn_rem ? 1 : 0);
     const uint32_t nt_max = 2 * dn_max;     // most output tile columns of a core (the cb_outt / cb_outrm stride)
     const uint32_t row_bytes = hidden * 2;  // one x_tok / partials row (bf16)
-    const uint32_t m_block = kMBlock;
 
     const tt::DataFormat x_df = tt::DataFormat::Bfp8_b;  // tilized x
     const tt::DataFormat rm_df = tt::DataFormat::Float16_b;
@@ -142,9 +147,10 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
     const uint32_t hdr_words = align_up(n_owned_max, 16u);
     const uint32_t meta_bytes = align_up(hdr_words * 4 + n_owned_max * tokens * 4, 64u);
 
-    const uint32_t x_cb_bytes = m_block * kt * x_tile_bytes;
-    const uint32_t mm_cb_bytes = 2 * m_block * mm_tile_bytes;
-    const uint32_t outt_cb_bytes = m_block * nt_max * bf16_tile_bytes;
+    // The CBs sized by the M-block (m_block tile rows of x streamed against each weight tile).
+    const auto x_cb_bytes_of = [&](uint32_t mb) { return mb * kt * x_tile_bytes; };
+    const auto mm_cb_bytes_of = [&](uint32_t mb) { return 2 * mb * mm_tile_bytes; };
+    const auto outt_cb_bytes_of = [&](uint32_t mb) { return mb * nt_max * bf16_tile_bytes; };
     // Row-major x staging: one group of `rm_group` segments (16 tiles each) is gathered per barrier; the
     // reader reserves the segments cumulatively so it refills as compute's tilize frees them.
     const uint32_t rm_chunks_per_row = kt / kRmChunkTiles;
@@ -156,7 +162,7 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
     }
     const uint32_t rm_cb_bytes = rm_group * kRmChunkTiles * bf16_tile_bytes;
     const uint32_t outrm_cb_bytes = 2 * nt_max * bf16_tile_bytes;
-    const uint32_t rscal_cb_bytes = 2 * m_block * bf16_tile_bytes;
+    const auto rscal_cb_bytes_of = [&](uint32_t mb) { return 2 * mb * bf16_tile_bytes; };
 
     // L1 per core of a (spp, m_chunk) configuration: the weight ring (two slots of the larger of spp gate_up
     // shards and the down slice) and the SwiGLU activations (m_chunk tile rows of the group's I) are the
@@ -164,11 +170,11 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
     const auto slot_tiles_of = [&](uint32_t spp, uint32_t dpp) {
         return std::max(spp * gu_shard_tiles, dpp * dn_shard_tiles);
     };
-    const auto l1_bytes = [&](uint32_t spp, uint32_t dpp, uint32_t m_chunk) {
+    const auto l1_bytes = [&](uint32_t spp, uint32_t dpp, uint32_t m_chunk, uint32_t mb) {
         const uint32_t act_local_bytes = m_chunk * it_max * act_tile_bytes;
-        return meta_bytes + x_cb_bytes + 2 * slot_tiles_of(spp, dpp) * w_tile_bytes + mm_cb_bytes + act_local_bytes +
-               cores_per_group * act_local_bytes + outt_cb_bytes + rm_cb_bytes + outrm_cb_bytes + rscal_cb_bytes +
-               scratch_cb_bytes;
+        return meta_bytes + x_cb_bytes_of(mb) + 2 * slot_tiles_of(spp, dpp) * w_tile_bytes + mm_cb_bytes_of(mb) +
+               act_local_bytes + cores_per_group * act_local_bytes + outt_cb_bytes_of(mb) + rm_cb_bytes +
+               outrm_cb_bytes + rscal_cb_bytes_of(mb) + scratch_cb_bytes;
     };
     // The resident run at the full chunk size first (every M-block of a chunk reads each weight once), then the
     // run streamed one shard at a time with the largest chunk that fits (an expert with more rows re-reads its
@@ -179,25 +185,33 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
         lowest_occupied_l1.has_value() ? lowest_occupied_l1.value() : device->l1_size_per_core();
     const uint32_t l1_region_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint32_t l1_budget = l1_region_end > l1_region_base ? l1_region_end - l1_region_base : 0;
-    // (gate_up shards per slot, down shards per slot, M tile rows per chunk); a core's down run is resident (one
-    // slot for every M-block) when dpp >= its dn_cnt.
-    const std::array<std::array<uint32_t, 3>, 7> candidates = {{
-        {it_max, dn_max, kChunkTiles},
-        {1, dn_max, kChunkTiles},
-        {1, 1, kChunkTiles},
-        {1, dn_max, kChunkTiles / 2},
-        {1, 1, kChunkTiles / 2},
-        {1, dn_max, m_block},
-        {1, 1, m_block},
+    // (gate_up shards per slot, down shards per slot, M tile rows per chunk, M tile rows per block); a core's down
+    // run is resident (one slot for every M-block) when dpp >= its dn_cnt. One-row M-blocks are the last resort:
+    // they halve the x staging (the largest CB) but unpack every weight tile once per tile row instead of once per
+    // kMBlock rows -- for when long-lived L1 (e.g. a persistent decode server's request sockets) leaves too little.
+    const std::array<std::array<uint32_t, 4>, 11> candidates = {{
+        {it_max, dn_max, kChunkTiles, kMBlock},
+        {1, dn_max, kChunkTiles, kMBlock},
+        {1, 1, kChunkTiles, kMBlock},
+        {1, dn_max, kChunkTiles / 2, kMBlock},
+        {1, 1, kChunkTiles / 2, kMBlock},
+        {1, dn_max, kMBlock, kMBlock},
+        {1, 1, kMBlock, kMBlock},
+        {1, dn_max, kChunkTiles, 1},
+        {1, 1, kChunkTiles, 1},
+        {1, 1, kChunkTiles / 2, 1},
+        {1, 1, 1, 1},
     }};
     uint32_t spp = 0;
     uint32_t dpp = 0;
     uint32_t m_chunk = 0;
-    for (const auto& [cand_spp, cand_dpp, cand_m] : candidates) {
-        if (l1_bytes(cand_spp, cand_dpp, cand_m) <= l1_budget) {
+    uint32_t m_block = 0;
+    for (const auto& [cand_spp, cand_dpp, cand_m, cand_mb] : candidates) {
+        if (l1_bytes(cand_spp, cand_dpp, cand_m, cand_mb) <= l1_budget) {
             spp = cand_spp;
             dpp = cand_dpp;
             m_chunk = cand_m;
+            m_block = cand_mb;
             break;
         }
     }
@@ -208,8 +222,8 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
         "chunks, but only {} B are free",
         inter,
         hidden,
-        l1_bytes(1, 1, m_block),
-        m_block,
+        l1_bytes(1, 1, 1, 1),
+        1,
         l1_budget);
     const bool resident = spp >= it_max;
     const uint32_t slot_tiles = slot_tiles_of(spp, dpp);
@@ -221,8 +235,8 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
     const uint32_t act_full_cb_bytes = act_full_tiles * act_tile_bytes;
     log_debug(
         tt::LogOp,
-        "fused_experts_prefill: {}x{} groups, gate_up {} (spp {}), down {} (dpp {}), m_chunk {}, L1 per core {} of {} "
-        "B",
+        "fused_experts_prefill: {}x{} groups, gate_up {} (spp {}), down {} (dpp {}), m_chunk {}, m_block {}, L1 per "
+        "core {} of {} B",
         group.x,
         group.y,
         resident ? "resident" : "streamed",
@@ -230,8 +244,13 @@ ProgramDescriptor FusedExpertsPrefillDeviceOperation::MultiCore::create_descript
         dpp >= dn_max ? "resident" : "streamed",
         dpp,
         m_chunk,
-        l1_bytes(spp, dpp, m_chunk),
+        m_block,
+        l1_bytes(spp, dpp, m_chunk, m_block),
         l1_budget);
+    const uint32_t x_cb_bytes = x_cb_bytes_of(m_block);
+    const uint32_t mm_cb_bytes = mm_cb_bytes_of(m_block);
+    const uint32_t outt_cb_bytes = outt_cb_bytes_of(m_block);
+    const uint32_t rscal_cb_bytes = rscal_cb_bytes_of(m_block);
 
     const uint32_t limit_bits = std::bit_cast<uint32_t>(attributes.swiglu_limit);
     const uint32_t scaling_bits = std::bit_cast<uint32_t>(attributes.routed_scaling_factor);

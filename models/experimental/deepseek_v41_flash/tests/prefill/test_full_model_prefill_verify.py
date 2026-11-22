@@ -38,6 +38,12 @@ Steps::
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
       models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_prefill_verify.py
 
+**Persistent MoE** (``DEEPSEEK_V4_VERIFY_PERSISTENT_MOE=1``): every layer's MoE runs on the persistent TP12 prefill
+MoE (:class:`~...tt.prefill.persistent_moe.PersistentPrefillMoE`) on the 3x4 submesh at row 5, the layout the
+persistent decode uses. The rest of each layer -- Engram, attention, hyper-connections, norms -- and the head stay on
+TP4 stages over rows 0-4 (``DEEPSEEK_V4_NUM_STAGES`` of them, at most 5, default 5), each stage a requester of the
+MoE; the stages load no MoE weights. Chunks are at most 1024 tokens (the server's chunk).
+
 Knobs (environment): ``DEEPSEEK_V4_VERIFY_LEN`` (2048), ``DEEPSEEK_V4_VERIFY_CHUNK`` (1024),
 ``DEEPSEEK_V4_VERIFY_LAYERS`` (all; must match the reference's), ``DEEPSEEK_V4_NUM_STAGES`` (8;
 ``DEEPSEEK_V4_PREFILL_STAGES`` still applies when that is unset),
@@ -54,6 +60,7 @@ import json
 import math
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -81,11 +88,14 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     load_engram_table,
     stage_engram_tables,
 )
+from models.experimental.deepseek_v41_flash.tt.decode.persistent_moe import build_moe_layers
 from models.experimental.deepseek_v41_flash.tt.prefill.attention import PrefillShared
 from models.experimental.deepseek_v41_flash.tt.prefill.model import (
     DeepSeekV41PrefillModel,
     _free_distinct,
 )
+from models.experimental.deepseek_v41_flash.tt.prefill.persistent_moe import CHUNK as PERSISTENT_CHUNK
+from models.experimental.deepseek_v41_flash.tt.prefill.persistent_moe import PersistentPrefillMoE
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
     _DEFAULT_PROMPT_FILE,
     _Progress,
@@ -105,6 +115,10 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 
 # Tokens per head pass for the all-token logits (bounds the fp32 collapse temporaries on the head device).
 _HEAD_ROWS = 256
+# DEEPSEEK_V4_VERIFY_PERSISTENT_MOE: the MoE on the 3x4 submesh at row 5 (TP12), the stages on the rows above it.
+_PERSISTENT_MOE = os.environ.get("DEEPSEEK_V4_VERIFY_PERSISTENT_MOE", "0") not in ("0", "", "false", "False")
+_MOE_MESH_SHAPE = (3, 4)
+_MOE_MESH_ROW = 5
 
 
 @pytest.mark.skipif(not _checkpoint_available(), reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
@@ -135,6 +149,8 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
     for name, value in (("DEEPSEEK_V4_VERIFY_LEN", target_len), ("DEEPSEEK_V4_VERIFY_CHUNK", chunk_size)):
         if value <= 0 or value % ALIGNMENT:
             raise ValueError(f"{name}={value} must be a positive multiple of {ALIGNMENT}")
+    if _PERSISTENT_MOE and chunk_size > PERSISTENT_CHUNK:
+        raise ValueError(f"DEEPSEEK_V4_VERIFY_CHUNK={chunk_size}: the persistent MoE takes at most {PERSISTENT_CHUNK}")
     layer_floor = _env_float("DEEPSEEK_V4_VERIFY_LAYER_PCC", 0.95)
     pre_mix_atol = _env_float("DEEPSEEK_V4_VERIFY_PRE_MIX_ATOL", 0.02)
     e2e_floor = _env_float("DEEPSEEK_V4_VERIFY_E2E_PCC", 0.90)
@@ -192,6 +208,12 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
     mesh_rows, mesh_cols = tuple(mesh_device.shape)
     assert mesh_cols >= _TP_SIZE
     num_stages = _NUM_STAGES
+    if _PERSISTENT_MOE:
+        # The stages are the rows above the MoE mesh; the env default (every mesh row) becomes all of them.
+        if "DEEPSEEK_V4_NUM_STAGES" not in os.environ and "DEEPSEEK_V4_PREFILL_STAGES" not in os.environ:
+            num_stages = _MOE_MESH_ROW
+        assert 1 <= num_stages <= _MOE_MESH_ROW, f"the persistent MoE leaves rows 0-{_MOE_MESH_ROW - 1} for stages"
+        assert (mesh_rows, mesh_cols) == (_MOE_MESH_ROW + _MOE_MESH_SHAPE[0], _MOE_MESH_SHAPE[1])
     assert 1 <= num_stages <= mesh_rows
     placement = plan_layer_placement(num_layers, num_stages, 1)
     submeshes = [
@@ -199,29 +221,71 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
         for i in range(placement[-1] + 1)
     ]
     layer_devices = [submeshes[k] for k in placement]
-    rope = _build_rope(config, loader.snapshot_dir, total)
-    engram_lookup = None
-    if engram_ids:
-        tables = {i: load_engram_table(loader, i) for i in engram_ids}
-        engram_lookup = EngramHostLookup(
-            config, loader.snapshot_dir, tables, batch=1, max_seq=total, tokenizer=tokenizer
-        )
     cache = WeightCache(CACHE_DIR) if CACHE_DIR else None
     t0 = time.perf_counter()
-    model = DeepSeekV41PrefillModel(
-        config,
-        loader,
-        layer_devices[0],
-        rope,
-        num_layers=num_layers,
-        cache=cache,
-        weight_dtype=_ATTENTION_WEIGHT_DTYPE,
-        expert_dtype=_EXPERT_DTYPE,
-        tp_size=_TP_SIZE,
-        layer_devices=layer_devices,
-        progress=progress,
-        engram_lookup=engram_lookup,
-    )
+    moe_server = moe_load = None
+    loader_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="moe-build")
+    try:
+        if _PERSISTENT_MOE:
+            assert (
+                cache is not None
+            ), "the persistent MoE loads its TP12 experts from the weight cache (DEEPSEEK_V4_CACHE_DIR)"
+            moe_mesh = mesh_device.create_submesh(
+                ttnn.MeshShape(*_MOE_MESH_SHAPE), ttnn.MeshCoordinate(_MOE_MESH_ROW, 0)
+            )
+            # The sockets first (they take L1 on every stage before the layers allocate there), then the MoE mesh's
+            # 40 layers load on their own thread while this one maps the Engram tables and builds the stages: the
+            # submeshes are disjoint (own allocator and command queues), as the stages' own build threads rely on.
+            moe_server = PersistentPrefillMoE(moe_mesh, submeshes)
+
+            def load_moe():
+                start = time.perf_counter()
+                moe_server.add_layers(
+                    build_moe_layers(
+                        config,
+                        loader,
+                        moe_mesh,
+                        cache,
+                        range(num_layers),
+                        log=lambda layer: progress(
+                            f"persistent MoE: layer {layer + 1}/{num_layers} at TP12", important=True
+                        ),
+                    )
+                )
+                logger.info(
+                    f"persistent prefill MoE: layers 0..{num_layers - 1} at TP12 on rows {_MOE_MESH_ROW}-"
+                    f"{_MOE_MESH_ROW + _MOE_MESH_SHAPE[0] - 1} in {time.perf_counter() - start:.1f}s, "
+                    f"{len(submeshes)} requester stage(s)"
+                )
+
+            moe_load = loader_pool.submit(load_moe)
+
+        rope = _build_rope(config, loader.snapshot_dir, total)
+        engram_lookup = None
+        if engram_ids:
+            tables = {i: load_engram_table(loader, i) for i in engram_ids}
+            engram_lookup = EngramHostLookup(
+                config, loader.snapshot_dir, tables, batch=1, max_seq=total, tokenizer=tokenizer
+            )
+        model = DeepSeekV41PrefillModel(
+            config,
+            loader,
+            layer_devices[0],
+            rope,
+            num_layers=num_layers,
+            cache=cache,
+            weight_dtype=_ATTENTION_WEIGHT_DTYPE,
+            expert_dtype=_EXPERT_DTYPE,
+            tp_size=_TP_SIZE,
+            layer_devices=layer_devices,
+            progress=progress,
+            engram_lookup=engram_lookup,
+            moe_server=moe_server,
+        )
+        if moe_load is not None:
+            moe_load.result()
+    finally:
+        loader_pool.shutdown(wait=True)
     model.synchronize("uploads")
     logger.info(f"model built in {time.perf_counter() - t0:.1f}s on {len(submeshes)} stage(s)")
 

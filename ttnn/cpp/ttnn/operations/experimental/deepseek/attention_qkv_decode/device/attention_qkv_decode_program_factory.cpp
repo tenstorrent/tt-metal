@@ -623,8 +623,9 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
         const auto& shard = *t.q_a_output->shard_spec();
         const auto out_cores =
             corerange_to_cores(shard.grid, std::nullopt, shard.orientation == ShardOrientation::ROW_MAJOR);
+        const uint32_t pages_per_core = is_block ? q_lora_tiles : 1;
         for (uint32_t p = 0; p < out_cores.size(); ++p) {
-            qa_out_page[out_cores[p]] = p;
+            qa_out_page[out_cores[p]] = p * pages_per_core;
         }
         qb_reader.compiler_options.defines.emplace("QA_OUT", "1");
         qb_reader.tensor_bindings.push_back(

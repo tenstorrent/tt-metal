@@ -166,17 +166,21 @@ void AttentionQkvDecodeDeviceOperation::validate_on_program_cache_miss(
     }
     if (t.q_a_output.has_value()) {
         const Tensor& o = *t.q_a_output;
-        TT_FATAL(rows == 1, "attention_qkv_decode: q_a_output is a one-row output");
+        const bool ok_layout =
+            rows == 1 ? (o.layout() == Layout::ROW_MAJOR)
+                      : (o.layout() == Layout::TILE && o.tensor_spec().tile().get_tile_shape() ==
+                                                           std::array<uint32_t, 2>{rows, tt::constants::TILE_WIDTH});
         TT_FATAL(
-            o.storage_type() == StorageType::DEVICE && o.layout() == Layout::ROW_MAJOR &&
-                o.dtype() == DataType::BFLOAT16 &&
+            o.storage_type() == StorageType::DEVICE && ok_layout && o.dtype() == DataType::BFLOAT16 &&
                 o.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
                 o.buffer()->buffer_type() == BufferType::L1 && o.shard_spec().has_value() &&
-                o.shard_spec()->shape[0] == 1 && o.shard_spec()->shape[1] == q_lora &&
+                o.shard_spec()->shape[0] == rows && o.shard_spec()->shape[1] == q_lora &&
                 weight_role_cores(WeightRole::QB).contains(o.shard_spec()->grid) &&
-                o.logical_shape().volume() == o.shard_spec()->grid.num_cores() * q_lora,
-            "attention_qkv_decode: q_a_output must be ROW_MAJOR bfloat16 L1 HEIGHT_SHARDED, one [1, {}] row per core "
+                o.logical_shape().volume() == o.shard_spec()->grid.num_cores() * rows * q_lora,
+            "attention_qkv_decode: q_a_output must be {} bfloat16 L1 HEIGHT_SHARDED, one [{}, {}] shard per core "
             "of a grid within the q_b cores {}, got {} {}",
+            rows == 1 ? "ROW_MAJOR" : fmt::format("({}, 32) TILE", rows),
+            rows,
             q_lora,
             weight_role_cores(WeightRole::QB).str(),
             o.logical_shape(),

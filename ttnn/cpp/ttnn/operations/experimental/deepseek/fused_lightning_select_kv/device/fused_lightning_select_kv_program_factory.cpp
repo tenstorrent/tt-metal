@@ -186,7 +186,8 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     // page table so the writer can keep every score this core produces resident for the top-k select.
     const uint32_t cores_in_grid = all_cores.num_cores();
     const uint32_t max_num_blocks = tensor_args.page_table_tensor.logical_shape()[-1];
-    const uint32_t max_blocks_per_core = tt::div_up(max_num_blocks, cores_in_grid);
+    const uint32_t max_blocks_per_part = tt::div_up(max_num_blocks, args.num_parts);
+    const uint32_t max_blocks_per_core = tt::div_up(max_blocks_per_part, cores_in_grid);
     const uint32_t local_key_capacity = std::max(max_blocks_per_core, 1u) * page_block_size;
     constexpr tt::DataFormat scores_format = tt::DataFormat::Float32;
     const DataflowBufferSpec scores_dfb{

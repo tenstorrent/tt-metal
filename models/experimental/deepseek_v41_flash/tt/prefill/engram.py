@@ -71,10 +71,13 @@ class DeepSeekV41PrefillEngram(DeepSeekV4Module):
         # q_weight and k_weight only ever appear as a product, with the 1/sqrt(D) of ``dot``. The fused gate op takes
         # one [32, D] page per stream copy, every row holding that copy's vector, so it is a plain tile operand
         # against a 32-token block: [1, hc, 32, D].
-        gate_file = cache.file("gate_weight.prefill_op")
+        # Copy h's page is 32 rows of copy h's vector: repeat each row in place (repeat_interleave). A plain
+        # ``repeat`` would cycle copies 0..hc-1 down every page, so each token row would gate with another copy's
+        # weight. The cache name changed with the layout, so a file of the old one is never picked up.
+        gate_file = cache.file("gate_weight.prefill_page")
         gate_weight = _materialize(
             lambda: (_value(weights["q_weight"]).float() * _value(weights["k_weight"]).float() * self.dim**-0.5)
-            .repeat(ttnn.TILE_SIZE, 1)
+            .repeat_interleave(ttnn.TILE_SIZE, dim=0)
             .reshape(1, self.hc, ttnn.TILE_SIZE, self.dim),
             gate_file,
             ttnn.float32,

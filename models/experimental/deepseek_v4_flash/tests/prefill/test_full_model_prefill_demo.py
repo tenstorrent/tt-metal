@@ -102,7 +102,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 
 _TP_SIZE = 4
 _MODELS_DIR = Path(__file__).resolve().parents[4]
-_DEFAULT_PROMPT_FILE = _MODELS_DIR / "tt_transformers/demo/sample_prompts/input_data_long_128k.json"
+_DEFAULT_PROMPT_FILE = _MODELS_DIR / "ttt_compat/demo/sample_prompts/input_data_long_128k.json"
 _CONTEXT_CACHE = _MODELS_DIR / "tt_transformers/demo/context_cache"
 _ATTENTION_WEIGHT_DTYPE = ttnn.bfloat8_b
 _SPLIT_SENTINEL = "@@USER-CONTENT@@"

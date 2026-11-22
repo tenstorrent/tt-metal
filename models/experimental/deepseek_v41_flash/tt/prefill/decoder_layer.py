@@ -62,6 +62,10 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
     ``ffn``, ``engram``, ``hc_attn``, ``hc_ffn``) with a ``.prefill`` suffix on every weight, so decode and
     prefill share a cache directory without colliding.
 
+    ``mlp`` replaces the MoE block: a callable ``mlp(normed [1, 1, T, D], image_mask=...) -> [1, 1, T, D]`` such as
+    :class:`~.persistent_moe.PersistentPrefillMLP` (the MoE on the persistent TP12 server), and ``experts`` is then
+    unused (``None``) and no MoE weight is loaded here.
+
     ``tp_size > 1`` needs ``device`` to be a 1xTP mesh and ``experts`` built at the same ``tp_size``; the
     streams, ``pre_mix``, hyper-connections, norms and Engram are replicated over it.
     """
@@ -78,6 +82,7 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
         weight_dtype: ttnn.DataType = ttnn.bfloat8_b,
         moe_weight_dtype: ttnn.DataType = ttnn.bfloat16,
         tp_size: int = 1,
+        mlp=None,
     ):
         cache = _as_cache(cache)
         self.config = config
@@ -108,14 +113,18 @@ class DeepSeekV41PrefillDecoderLayer(DeepSeekV4PrefillDecoderLayer):
             weight_dtype=weight_dtype,
             tp_size=tp_size,
         )
-        self.mlp = DeepSeekV41PrefillMoE(
-            config,
-            _strip_prefix(weights, "mlp"),
-            device,
-            experts=experts,
-            cache=cache.sub("ffn"),
-            weight_dtype=moe_weight_dtype,
-            tp_size=tp_size,
+        self.mlp = (
+            mlp
+            if mlp is not None
+            else DeepSeekV41PrefillMoE(
+                config,
+                _strip_prefix(weights, "mlp"),
+                device,
+                experts=experts,
+                cache=cache.sub("ffn"),
+                weight_dtype=moe_weight_dtype,
+                tp_size=tp_size,
+            )
         )
         self.attn_hc = DeepSeekV41PrefillHyperConnection(
             config, _strip_prefix(weights, "attn_hc"), device, cache=cache.sub("hc_attn")

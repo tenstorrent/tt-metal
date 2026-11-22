@@ -40,8 +40,9 @@ def test_engram_gate_prefill_op(device, seq_len):
     torch.manual_seed(seq_len)
     x = torch.randn(1, HC, seq_len, DIM).bfloat16().float()
     kv = torch.randn(1, 1, seq_len, (HC + 1) * DIM).bfloat16().float()
-    q_weight = 1.0 + 0.1 * torch.randn(HC, DIM)
-    k_weight = 1.0 + 0.1 * torch.randn(HC, DIM)
+    # Every copy its own weights (the checkpoint's differ per copy), so a page holding another copy's vector fails.
+    q_weight = torch.randn(HC, DIM)
+    k_weight = torch.randn(HC, DIM)
     gate_weight = q_weight * k_weight * DIM**-0.5
     expected = _reference(x, kv, gate_weight)
 
@@ -53,7 +54,9 @@ def test_engram_gate_prefill_op(device, seq_len):
     tt_x = to_device(x)
     tt_kv = to_device(kv)
     # One [32, D] page per copy, every row holding that copy's vector.
-    tt_gate = to_device(gate_weight.repeat(ttnn.TILE_SIZE, 1).reshape(1, HC, ttnn.TILE_SIZE, DIM), ttnn.float32)
+    tt_gate = to_device(
+        gate_weight.repeat_interleave(ttnn.TILE_SIZE, dim=0).reshape(1, HC, ttnn.TILE_SIZE, DIM), ttnn.float32
+    )
 
     # Twice: the second call runs from the program cache, after the exchange semaphore was reset.
     for _ in range(2):
@@ -84,7 +87,9 @@ def test_engram_gate_prefill_inputs_intact(device, seq_len):
 
     tt_x = to_device(x)
     tt_kv = to_device(kv)
-    tt_gate = to_device(gate_weight.repeat(ttnn.TILE_SIZE, 1).reshape(1, HC, ttnn.TILE_SIZE, DIM), ttnn.float32)
+    tt_gate = to_device(
+        gate_weight.repeat_interleave(ttnn.TILE_SIZE, dim=0).reshape(1, HC, ttnn.TILE_SIZE, DIM), ttnn.float32
+    )
 
     ttnn.experimental.deepseek.engram_gate_prefill(tt_x, tt_kv, tt_gate, EPS, clamp_value=GATE_CLAMP)
 
