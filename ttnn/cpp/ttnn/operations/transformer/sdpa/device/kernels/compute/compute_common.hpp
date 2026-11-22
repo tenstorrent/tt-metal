@@ -1922,7 +1922,16 @@ void sdpa_inner_loop(
                 // Apply mask if causal overlap, sliding window, or this K chunk has padding
                 apply_mask = (q_start_tile < k_high_idx) || (sliding_window_size > 0) || needs_padding_mask;
             } else if constexpr (use_provided_mask) {
+#ifdef SDPA_REL_BIAS
+                // rel bias: a K chunk whose keys are all >= W behind every query of the Q chunk gets no bias (the
+                // reader pushes no mask for it). Only global layers have such chunks: a windowed layer's K range
+                // starts at a chunk the first query still sees.
+                const int32_t far_d = static_cast<int32_t>(q_start_tile * 32 + SDPA_REL_Q_OFF) -
+                                      static_cast<int32_t>((k_chunk + 1) * Sk_chunk_t * 32 - 1);
+                apply_mask = far_d < static_cast<int32_t>(SDPA_REL_W);
+#else
                 apply_mask = true;
+#endif
             } else if constexpr (use_padded_mask) {
                 // Apply mask only on the last K chunk
                 apply_mask = (k_chunk == iter_k_chunk_end - 1);

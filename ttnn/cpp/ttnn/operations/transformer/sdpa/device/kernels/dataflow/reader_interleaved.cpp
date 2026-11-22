@@ -1059,6 +1059,16 @@ void kernel_main() {
                         cb_mask.reserve_back(Sk_chunk_t);
                         uint32_t mask_write_ptr = cb_mask.get_write_ptr();
 #ifdef SDPA_REL_BIAS
+                        {
+                            // No bias for this K chunk at all (every key >= W behind the chunk's first query): no
+                            // mask; compute skips the add for the same chunks.
+                            const int32_t far_d =
+                                static_cast<int32_t>(q_chunk * Sq_chunk_t * tt::constants::TILE_HEIGHT + kRelQOff) -
+                                static_cast<int32_t>((k_chunk + 1) * Sk_chunk_t * tt::constants::TILE_HEIGHT - 1);
+                            if (far_d >= static_cast<int32_t>(kRelW)) {
+                                break;
+                            }
+                        }
                         if (q_valid) {
                             const uint32_t scratch = (CircularBuffer(cb_id_rel_scratch).get_write_ptr() + 63) & ~63u;
                             rel_read_rows<Sk_chunk_t * tt::constants::TILE_HEIGHT>(
