@@ -267,12 +267,20 @@ class MochiPipeline(PipelineAPIMixin):
             parallel_config=self.parallel_config,
             is_fsdp=True,
         )
-        self._tracer = Tracer(self._transformer.forward, device=device, prep_run=False)
-
-        self._checkpoint.load(
+        # With reloads, the first traced call after each one runs the step untraced before capturing it.
+        self._tracer = Tracer(
+            self._transformer.forward, device=device, prep_run=self.reload_dit_model, clone_prep_inputs=False
+        )
+        self.residency.register(
             self._transformer,
-            mesh_device=self._device,
-            parallel_config=self.parallel_config,
+            {
+                "get_torch_state_dict": self._checkpoint.state_dict,
+                "model_name": self._checkpoint.model_name,
+                "subfolder": "transformer",
+                "parallel_config": self.parallel_config,
+                "mesh_shape": tuple(device.shape),
+                "mesh_device": device,
+            },
         )
 
         with self._reshape_vae():
@@ -282,8 +290,20 @@ class MochiPipeline(PipelineAPIMixin):
                 ccl_manager=self._vae_ccl_manager,
                 use_torch=config.use_reference_vae,
             )
-            if not config.use_reference_vae:
-                self._vae.reload_weights()
+        if self._vae.decoder is not None:
+            self.residency.register(
+                self._vae.decoder,
+                {
+                    "get_torch_state_dict": self._vae.decoder_state_dict,
+                    "model_name": self._checkpoint.model_name,
+                    "subfolder": "vae",
+                    "parallel_config": self.vae_parallel_config,
+                    "mesh_shape": tuple(self._vae_mesh_shape),
+                    "mesh_device": device,
+                },
+                # The VAE is memory-constrained: it evicts the transformer, which reloads at the next call.
+                evicts=[self._transformer] if self.reload_dit_model else [],
+            )
 
         logger.info("Pipeline allocation run...")
         self(prompts=[""], num_inference_steps=2, guidance_scale=2, traced=False)
@@ -331,26 +351,7 @@ class MochiPipeline(PipelineAPIMixin):
         )
         on_event(SectionEnd("encoder"))
 
-        # 3b. If the transformer was destroyed, recreate it.
-        if self._transformer is None:
-            logger.info("Recreating MochiTransformer3DModel")
-            self._transformer = self._checkpoint.build(
-                ccl_manager=self._ccl_manager,
-                parallel_config=self.parallel_config,
-                is_fsdp=True,
-            )
-            self._tracer = Tracer(
-                self._transformer.forward, device=self._device, prep_run=True, clone_prep_inputs=False
-            )
-
-            logger.info("Loading MochiTransformer3DModel state_dict")
-            self._checkpoint.load(
-                self._transformer,
-                mesh_device=self._device,
-                parallel_config=self.parallel_config,
-            )
-
-        assert self._tracer is not None
+        self.residency.load(self._transformer)
 
         # 4. Prepare latent variables
         torch.manual_seed(seed)
@@ -438,15 +439,10 @@ class MochiPipeline(PipelineAPIMixin):
         vae_traced: bool,
         on_event: PipelineEventCallback,
     ) -> torch.Tensor:
-        # If the VAE is memory-constrained, free the transformer.
-        if self.reload_dit_model:
-            logger.info("Freeing MochiTransformer3DModel")
-            self._transformer = None
-            self._tracer.release_trace()
-            self._tracer = None
-
         on_event(SectionStart("vae"))
         with self._reshape_vae():
+            if self._vae.decoder is not None:
+                self.residency.load(self._vae.decoder)
             video = self._vae.decode(latents, traced=vae_traced)
         on_event(SectionEnd("vae"))
 

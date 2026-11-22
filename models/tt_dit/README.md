@@ -92,6 +92,48 @@ Each pipeline includes:
 - Optimized execution on Wormhole systems
 - Comprehensive timing collection and profiling
 
+### Device residency and traces
+`pipelines/residency.py` owns which modules are on device. A pipeline registers each module once in
+`__init__` with the keywords `cache.load_model` takes (`spec`), the modules that must be gone before it is
+resident (`evicts`), how it is evicted when another module lists it (`mode`: `Offload()` deallocates,
+`Shard(axis, ccl_manager)` shards and later gathers) and what runs after it is evicted (`on_evict`):
+
+```
+self.residency.register(a, spec, evicts=(...), mode=Offload(), on_evict=(self.release_traces,))
+
+self.residency.load(a):
+    for m in evicts[a] that are loaded:
+        m.mode.evict(m); run m.on_evict in order
+    if a is transiently sharded:  a.gather(...)
+    elif a is not loaded:         cache.load_model(a, **spec)
+```
+
+There is no `unload`: a module is evicted only because another module's `load` lists it. Residency releases
+traces only through `on_evict`, never on a load.
+
+- **Trace interface.** `PipelineAPIMixin.release_traces` releases every live `Tracer` (`Tracer.release_all`),
+  however it was built. Override it only to also release traces that are not `Tracer`s; releasing less is
+  unsound, since a load after any capture can land in any live trace's scratch.
+- **Permanent modules.** A module that no registration lists is never evicted, and loading it releases
+  nothing. A module first loaded after a capture has its buffers live during every later replay; if that can
+  land in a trace's scratch, release traces at that load site.
+- **`on_evict`.** The designer's declaration of what the eviction releases; it is trusted, not checked. The
+  default `(self.release_traces,)` is for a new module. `()` keeps a pipeline whose eviction released nothing;
+  `(tracer.release_trace,)` one that released exactly that tracer; `(self.release_traces, extra, ...)` composes
+  per-module cleanup after the release. A declaration narrower than "release all" keeps an existing pipeline's
+  behavior; where that behavior is unsound (a trace replayed after a reload moved a buffer it reads), say so in
+  a comment at the registration.
+
+Rules:
+1. Register each module once in the pipeline's `__init__`, after construction, before any load that is not
+   construction-time.
+2. Residency changes only through `self.residency.load(m)`. No module loads, reloads, pages, shards or evicts
+   itself.
+3. `on_evict=()` only for an untraced module whose eviction frees everything it allocated.
+4. Trace strategy lives in `release_traces`; `on_evict` composes it with per-module cleanup.
+5. Persistent device memory that is not a module's weights is a `StateTensor` allocated before the first
+   capture, or goes with the module's eviction (`deallocate_weights` override or `register_eviction_hook`).
+
 ## Testing
 
 The test suite is organized into three main categories:

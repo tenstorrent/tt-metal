@@ -1232,17 +1232,13 @@ class MochiVAEDecoderAdapter:
             self._tracer = Tracer(self._decoder.forward, device=self.device, prep_run=False)
             self._decoder_state_dict = torch_vae.decoder.state_dict()
 
-    def is_loaded(self) -> bool:
-        return self._torch_vae is not None or self._decoder.is_loaded()
+    @property
+    def decoder(self) -> MochiVAEDecoder | None:
+        """The TT-NN decoder, ``None`` with the reference VAE."""
+        return self._decoder
 
-    def deallocate_weights(self) -> None:
-        if self._decoder is not None:
-            self._decoder.deallocate_weights()
-
-    def reload_weights(self) -> None:
-        if self._decoder is None or self._decoder.is_loaded():
-            return
-        self._decoder.load_torch_state_dict(self._decoder_state_dict)
+    def decoder_state_dict(self) -> dict[str, torch.Tensor]:
+        return self._decoder_state_dict
 
     @torch.no_grad()
     def decode(self, latents: torch.Tensor, *, traced: bool) -> torch.Tensor:
