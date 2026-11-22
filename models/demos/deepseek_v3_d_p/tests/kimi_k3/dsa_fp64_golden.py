@@ -186,13 +186,22 @@ def index_k_fp8(keys: torch.Tensor) -> torch.Tensor:
     return fp8_e4m3(bf16(keys), keys.shape[-1], True)
 
 
-def attend(q: dict, row: int, latent: torch.Tensor, kpe: torch.Tensor, w: dict, dims: Dims = Dims()) -> torch.Tensor:
-    """Gated MLA output ``[hidden]`` of query row ``row`` of ``q`` (``layer_queries``) over the given keys
-    (``latent`` [n, lora], ``kpe`` [n, rope]), absorbed: q_nope W_k scores the latent and W_v maps the latent mix."""
+def attention_weights(
+    q: dict, row: int, latent: torch.Tensor, kpe: torch.Tensor, w: dict, dims: Dims = Dims()
+) -> torch.Tensor:
+    """Softmax attention weights ``[heads, n]`` of query row ``row`` of ``q`` (``layer_queries``) over the given keys
+    (``latent`` [n, lora], ``kpe`` [n, rope]), absorbed: q_nope W_k scores the latent."""
     kvb = w["kv_b_proj.weight"].reshape(dims.heads, dims.nope + dims.v, dims.lora)
     q_latent = torch.einsum("hd,hdl->hl", q["q_nope"][row], kvb[:, : dims.nope])
     scores = (q_latent @ latent.T + q["q_pe"][row] @ kpe.T) * (dims.nope + dims.rope) ** -0.5
-    mixed = scores.softmax(-1) @ latent  # [heads, lora]
+    return scores.softmax(-1)
+
+
+def attend(q: dict, row: int, latent: torch.Tensor, kpe: torch.Tensor, w: dict, dims: Dims = Dims()) -> torch.Tensor:
+    """Gated MLA output ``[hidden]`` of query row ``row`` of ``q`` (``layer_queries``) over the given keys
+    (``latent`` [n, lora], ``kpe`` [n, rope]): ``attention_weights`` mix the latent and W_v maps the mix."""
+    kvb = w["kv_b_proj.weight"].reshape(dims.heads, dims.nope + dims.v, dims.lora)
+    mixed = attention_weights(q, row, latent, kpe, w, dims) @ latent  # [heads, lora]
     out = torch.einsum("hl,hvl->hv", mixed, kvb[:, dims.nope :]).reshape(-1) * q["gate"][row]
     return out @ w["o_proj.weight"].T
 
