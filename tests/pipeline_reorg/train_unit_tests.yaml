@@ -108,12 +108,13 @@
 
 - name: tt-train python experimental tests
   # Single-chip only: a test that needs a bigger mesh skips here and runs nowhere. 45 s on a warm p150b, almost all
-  # of it the SST-2 LoRA recipe test; the rest of the timeout is for a cold JIT cache.
+  # of it the SST-2 LoRA recipe test. CI has no HF or JIT cache, so the timeout also covers downloading
+  # Llama-3.2-1B-Instruct and SST-2 and two cold compiles (the recipe runs twice).
   cmd: |
     python -m pytest tt-train/tests/python/experimental
   skus:
     bh_p150b_civ2:
-      timeout: 5
+      timeout: 15
   owner_id: U07K00A281X # Kevin Wu
   team: train
   budget_type: unit
