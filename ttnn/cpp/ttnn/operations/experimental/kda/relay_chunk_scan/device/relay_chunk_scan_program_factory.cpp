@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <iterator>
 #include <numeric>
 #include <optional>
 #include <string>
@@ -316,26 +315,24 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto w_format = tt::tt_metal::datatype_to_dataformat_converter(in.gate_weight.dtype());
     const uint32_t gate_k = in.gate_input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     const uint32_t gate_bytes = core_chunks * kt * state_tile;
-    // In the workspace, on the correction cores: K blocks of x (once the matmul is done, a pair's partial sums of this
-    // core's head, then each chunk's sigmoid(gate) * weight: in place all of the core's, streamed one), then K blocks
-    // of W, then a pair's partial sums of its other head. Each core forms its head over all of K where the buffers fit,
-    // else the heads pair up (`ways` 2, each core forming two heads over half of K, then swapping partial sums: their
-    // FP32 transfer waits on both cores' matmuls and shares the column's links); x's and W's buffers hold `depth`
-    // K tiles of 2 and of 2 (paired) or 3 and 4 slots, the largest that fit. They hold them in the smallest K blocks
-    // that divide `depth` and the core's K and whose slots have read transaction ids (gate_matmul_dataflow.hpp): small
-    // blocks keep each operand's reads and multicasts close behind the matmul.
+    // In the workspace, on the correction cores: K blocks of x (after the matmul, a pair's partial sums of this core's
+    // head, then each chunk's sigmoid(gate) * weight), then K blocks of W, then a pair's partial sums of its other
+    // head. Each core forms its head over all of K where the buffers fit, else the heads pair up (`ways` 2: each core
+    // forms two heads over half of K, then they swap partial sums). x's and W's buffers hold `depth` K tiles in 2 and 2
+    // (paired) or 3 and 4 slots, the largest depth that fits, in the smallest K blocks whose slots have read
+    // transaction ids (gate_matmul_dataflow.hpp): small blocks keep reads and multicasts close behind the matmul.
     const auto slots = [](uint32_t ways) { return ways == 2 ? std::array{2u, 2u} : std::array{3u, 4u}; };
+    const auto x_block = [&](uint32_t kb) { return core_chunks * kb * tt::tile_size(x_format); };
+    const auto w_block = [&](uint32_t kb, uint32_t ways) { return kb * ways * kt * tt::tile_size(w_format); };
     const auto gate_buffers = [&](uint32_t kb, uint32_t ways, uint32_t depth) {
-        const uint32_t x_block = core_chunks * kb * tt::tile_size(x_format);
-        const uint32_t w_block = kb * ways * kt * tt::tile_size(w_format);
         const uint32_t pair_bytes = ways == 2 ? gate_bytes : 0;
         return std::array{
             shared_cb(
                 {},
-                {{cb_gin0, x_format, slots(ways)[0] * depth / kb * x_block, x_block},
+                {{cb_gin0, x_format, slots(ways)[0] * depth / kb * x_block(kb), x_block(kb)},
                  {cb_gate_partial, tt::DataFormat::Float32, pair_bytes, state_tile},
                  {cb_gate_factor, output_format, factor_bytes, factor_bytes}}),
-            shared_cb({}, {{cb_gin1, w_format, slots(ways)[1] * depth / kb * w_block, w_block}}),
+            shared_cb({}, {{cb_gin1, w_format, slots(ways)[1] * depth / kb * w_block(kb, ways), w_block(kb, ways)}}),
             shared_cb({}, {{cb_gate_pair, tt::DataFormat::Float32, pair_bytes, state_tile}})};
     };
     const auto& workspace_shard = in.gate_workspace.memory_config().shard_spec()->shape;
@@ -345,8 +342,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto fits = [&](uint32_t kb, uint32_t ways, uint32_t depth) {
         const auto buffers = gate_buffers(kb, ways, depth);
         return buffers[0].total_size + buffers[1].total_size + buffers[2].total_size <= workspace_bytes &&
-               buffers[0].total_size / (core_chunks * kb * tt::tile_size(x_format)) <= 15 &&
-               buffers[1].total_size / (kb * ways * kt * tt::tile_size(w_format)) <= 15;
+               buffers[0].total_size / x_block(kb) <= 15 && buffers[1].total_size / w_block(kb, ways) <= 15;
     };
     uint32_t gate_ways = 0;
     uint32_t gate_depth = 0;
@@ -714,12 +710,8 @@ tt::tt_metal::ProgramDescriptor build_program(
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0},
     };
 
-    const auto& semaphores = attrs.semaphore_addresses;
     // The entry states' and final states' (and carries') arrivals, then x's and W's block counts.
-    const uint32_t arrival_address = semaphores[0];
-    const uint32_t final_address = semaphores[1];
-    const uint32_t x_valid = semaphores[2];
-    const uint32_t w_valid = semaphores[3];
+    const auto [arrival_address, final_address, x_valid, w_valid] = attrs.semaphore_addresses;
     const auto append_gate_args = [&](tt::tt_metal::KernelDescriptor::RTArgList& args) {
         args.push_back(in.gate_input.buffer());
         args.push_back(gate_local.buffer());
