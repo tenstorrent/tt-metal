@@ -839,6 +839,12 @@ class ttMLA:
             env_full_below = os.environ.get("SPARSE_MLA_FULL_PUSH_DENSE_BELOW")
             default_full_below = 204_800 if getattr(config, "indexer_types", None) else 300_000
             full_below = int(env_full_below) if env_full_below is not None else default_full_below
+            # Per layer (SPARSE_MLA_FULL_PUSH_DENSE_BELOW_LAYERS="layer:tokens,..."): the push volume depends on how
+            # spread the layer's top-k is, so layers differ (K3.1 L24, 900k: push 1.9 ms at layer 15, 4.8 ms at 11).
+            for item in filter(None, os.environ.get("SPARSE_MLA_FULL_PUSH_DENSE_BELOW_LAYERS", "").split(",")):
+                layer, tokens = (int(v) for v in item.split(":"))
+                if layer == layer_idx:
+                    full_below = tokens
             full_slabs = min(divup(full_below, slab), max(0, full_rows // slab - 1))
             self._full_push_dense_below = full_slabs * slab
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the

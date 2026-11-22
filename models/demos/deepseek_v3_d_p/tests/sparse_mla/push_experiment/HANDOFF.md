@@ -66,6 +66,21 @@ working DSA layers, not 6) and GLM layers 0-7 (full 0, 1, 2, 6; shared 3-5). Run
   too would only save a launch (plan needs all 120 cores, push 24). Hiding plan + PREFIX behind the Q/KV stems is
   worth at most the stems (~0.43 ms) and would take their grid. Not worth it.
 
+### 0.3b Per-layer behavior (important for cutoffs)
+
+- **The push cost differs per layer, by up to 2.5x.** K3.1 L24 (DSA layers 3, 7, 11, 15, 19), push at 300k / 900k:
+  1.13/2.13, 2.27/3.82, 3.14/4.76, 1.50/1.92, 2.88/3.94 ms. The dense gather costs every layer the same (~4.2 ms
+  exposed at 1M). So layers 3 and 15 win from ~300-400k, while 7, 11 and 19 barely break even at 1M. With one cutoff
+  (300k) K3.1 L24 LOSES ~3 ms/chunk at 300-600k and only wins from ~750k (-4.2 ms at 1M); whole request a wash
+  (46,043 vs 46,035 ms), both PCC gates pass. The depth-8 tuning saw only layer 3 and was misleading.
+  `SPARSE_MLA_FULL_PUSH_DENSE_BELOW_LAYERS="layer:tokens,..."` sets per-layer cutoffs (a value past the buffer = never).
+- **GLM union sizes (real 1M top-k, staged layers):** union of all chips' rows = 3.4-29% of the context, per chip
+  0.8-4.5%, reuse 3-8x, owners balanced (max/mean <= 1.2). A *sparse union all-gather* (each owner broadcasts only the
+  rows anyone needs, over the efficient 1-hop ring) costs ~union% of a dense gather: for GLM about the same as the push
+  (L62 ~1.2 vs 1.45 ms). For K3.1's deep layers (push ~13% of context per chip by its cost) it plausibly beats both the
+  push and the dense gather. With push v2 every owner already holds all requesters' bitmaps of its blocks (inbox), so
+  the union is local; missing: per-owner variable-length gather and the requester-side union-rank rewrite.
+
 ### 0.4 Harness (`tools/`, also see tools/README.md)
 
 - `run_local.patch`: local copy of `run_multirank_pcc.sh` with `LOCAL_NUM_LAYERS/LOCAL_REQUEST_LEN/LOCAL_CHECK_PCC/
