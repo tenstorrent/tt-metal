@@ -45,7 +45,8 @@ ttnn::Tensor sliding_ring_sdpa_wrapper(
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision) {
     return sliding_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -72,7 +73,8 @@ ttnn::Tensor sliding_ring_sdpa_wrapper(
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers,
-        kv_cache_layer_idx);
+        kv_cache_layer_idx,
+        precision);
 }
 }  // namespace
 
@@ -100,7 +102,8 @@ void bind_sliding_ring_sdpa(nb::module_& mod) {
             program_config (ttnn.SDPAProgramConfig): Program configuration.
             sliding_window_size (int): Sliding window in tokens.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Deprecated and ignored (one warning per
+                process); the numerics come from precision.
             dim (int): Sequence dimension of the ring exchange.
             multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): CCL semaphores.
             num_links (int): Number of fabric links.
@@ -118,6 +121,8 @@ void bind_sliding_ring_sdpa(nb::module_& mod) {
                 and element count as slot_id. Defaults to None.
             kv_cache_num_layers (int, optional): Layers packed per cache slot. None uses 1.
             kv_cache_layer_idx (int, optional): Layer within the cache slot. None uses 0.
+            precision (ttnn.SDPAPrecision, optional): The numerics recipe (ttnn.transformer's SDPA precision
+                recipes). Defaults to STANDARD; ACCURATE for FP32 accumulation.
 
         Lanes: slot_id / kv_actual_isl_tensor with B > 1 elements (up to 8) make one call serve B requests.
         Q holds their CP-local rows stacked request-major, [1 x nh x B*N/num_devices x d], and the output
@@ -158,7 +163,8 @@ void bind_sliding_ring_sdpa(nb::module_& mod) {
         nb::arg("slot_id").noconvert() = nb::none(),
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
-        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
+        nb::arg("precision") = nb::none());
 }
 
 }  // namespace ttnn::experimental::gemma4

@@ -218,8 +218,9 @@ test_gemma4_chunked_perf_check = pytest.mark.parametrize(
 )(test_gemma4_chunked_perf_check)
 
 
-def test_rejects_fp32_dest_acc(expect_error):
-    """The fork has only the streaming compute path; the shared op would silently build its v1 path instead."""
+def test_fp32_dest_acc_config_ignored(expect_error):
+    """Numerics come from precision= (the SDPA precision recipes): an FP32-DEST compute_kernel_config is ignored, and the
+    shared test's accuracy checks pass through the fork."""
 
     def fp32_dest_acc(config):
         return ttnn.init_device_compute_kernel_config(
@@ -240,9 +241,8 @@ def test_rejects_fp32_dest_acc(expect_error):
         return _shared_op(q, k, v, joint_q, joint_k, joint_v, **kwargs)
 
     with mock.patch.object(ttnn.transformer, "ring_joint_scaled_dot_product_attention", routed_with_fp32):
-        with expect_error(RuntimeError, "requires streaming compute; set fp32_dest_acc_en=false"):
-            shared.test_ring_joint_attention_gemma_complete_group_sliding_geometry(expect_error=expect_error)
-    assert calls["fork"] == 1
+        shared.test_ring_joint_attention_gemma_complete_group_sliding_geometry(expect_error=expect_error)
+    assert calls["fork"] > 0
 
 
 # Lanes: several requests per call.

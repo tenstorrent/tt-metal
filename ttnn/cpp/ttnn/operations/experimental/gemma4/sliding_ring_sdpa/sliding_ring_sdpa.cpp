@@ -9,6 +9,7 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/gemma4/sliding_ring_sdpa/device/sliding_ring_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 namespace ttnn::experimental::gemma4 {
 
@@ -37,7 +38,10 @@ ttnn::Tensor sliding_ring_sdpa(
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision) {
+    // Numerics come from precision= (the SDPA precision recipes); compute_kernel_config is accepted and ignored.
+    ttnn::transformer::detail::warn_ignored_compute_kernel_config(compute_kernel_config);
     // The ring size comes from mesh_device, but halo routing and dispatch follow Q's mesh: every tensor the op reads
     // or writes must live on it. The halo exchange writes the two halo buffers (last) while attention reads Q, K and
     // V, so each halo buffer needs storage of its own; shared with the other, V would land where K should be.
@@ -83,7 +87,6 @@ ttnn::Tensor sliding_ring_sdpa(
         /*is_balanced=*/false,
         /*is_cross=*/false,
         scale,
-        compute_kernel_config,
         core_allocation_strategy,
         kv_cache_batch_idx,
         kv_actual_isl,
@@ -93,7 +96,12 @@ ttnn::Tensor sliding_ring_sdpa(
         kv_actual_isl_tensor,
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
-        sliding_window_size);
+        sliding_window_size,
+        /*circular_kv_cache=*/false,
+        std::nullopt,  // logical_n_tensor
+        std::nullopt,  // logical_l_tensor
+        std::nullopt,  // kv_valid_end_tensor
+        precision);
     return output_tensors[ttnn::prim::GEMMA4_SLIDING_RING_SDPA_OUTPUT_IDX];
 }
 

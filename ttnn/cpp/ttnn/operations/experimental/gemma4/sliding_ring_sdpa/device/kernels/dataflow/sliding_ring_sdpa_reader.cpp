@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Gemma4 sliding ring SDPA reader (compute: sliding_ring_sdpa.cpp, the precision recipes). Size-optimized: the dataflow
+// kernels leave the kernel config buffer to the recipe compute.
+#pragma GCC optimize("Os")
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -19,7 +23,6 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -234,11 +237,7 @@ void kernel_main() {
     constexpr uint32_t kv_meta_args_offset =
         kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
-#ifdef KV_VALID_END
-    constexpr bool has_kv_valid_end = kv_pad_from_metadata;
-#else
-    constexpr bool has_kv_valid_end = false;
-#endif
+    constexpr bool has_kv_valid_end = get_named_compile_time_arg_val("kv_valid_end") == 1 && kv_pad_from_metadata;
     constexpr uint32_t kv_valid_end_args_offset =
         has_kv_valid_end ? kv_meta_args.next_compile_time_args_offset() : kv_meta_args_offset;
     constexpr auto kv_valid_end_args = TensorAccessorArgs<kv_valid_end_args_offset>();
@@ -297,9 +296,6 @@ void kernel_main() {
         true, /* wait_for_op_signal */
         argidx);
 
-    // The K split's band index follows the fused-op signaler block.
-    const uint32_t ksplit_arg_index = argidx;
-
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -310,11 +306,11 @@ void kernel_main() {
     // Sliding never rotates Q, so it is always 0.
     constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
     static_assert(rotated_max_slots == 0, "Sliding attention has no rotated Q split");
-    constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
-    static_assert(
-        get_named_compile_time_arg_val("dense_causal_skip") == 0, "Sliding attention has no dense causal K skip");
-    constexpr bool ksplit_enabled = ksplit_count > 1;
-    [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(ksplit_arg_index) : 0;
+    // Sliding work plans: the compact halo's predecessor slots, the most source ranges a Q chunk's plan holds, and
+    // whether the local slab goes first (a multi-hop halo, long enough to hide behind it).
+    constexpr uint32_t sliding_halo_slot_count = get_named_compile_time_arg_val("sliding_halo_slot_count");
+    constexpr uint32_t sliding_max_source_ranges = get_named_compile_time_arg_val("sliding_max_source_ranges");
+    constexpr bool sliding_local_first = get_named_compile_time_arg_val("sliding_local_first") == 1;
 
     // Common runtime args: metadata block first when present, then the logical-length pair.
     constexpr uint32_t logical_length_common_arg_base =
@@ -328,8 +324,8 @@ void kernel_main() {
     // kv_actual_isl[b]. Each unit loads its lane's slot, logical_nt and Q mapping.
     constexpr uint32_t num_lanes = get_named_compile_time_arg_val("num_lanes");
     static_assert(
-        num_lanes == 1 || (slot_from_metadata && kv_pad_from_metadata && has_sliding_window && !ksplit_enabled),
-        "Lanes need the metadata path, a sliding window and no K split");
+        num_lanes == 1 || (slot_from_metadata && kv_pad_from_metadata && has_sliding_window),
+        "Lanes need the metadata path and a sliding window");
     // kv_valid_end is a single value, and the host rejects it with a sliding window.
     static_assert(num_lanes == 1 || !has_kv_valid_end, "Lanes do not support kv_valid_end");
     [[maybe_unused]] uint32_t lane_batch_idx[num_lanes] = {};
@@ -369,7 +365,7 @@ void kernel_main() {
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
             for (uint32_t lane = 0; lane < num_lanes; ++lane) {
                 const uint32_t kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
-                    kv_actual_isls[lane], q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
+                    kv_actual_isls[lane], q_local_padded_Nt, ring_size, kv_local_padded_Nt, sliding_halo_slot_count);
                 const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
                 lane_logical_nt[lane] = trace_metadata::logical_tile_rows_clamped_to_cache(
                     kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
@@ -448,7 +444,11 @@ void kernel_main() {
 
     Noc noc;
 
-    constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
+    // Q is pushed in groups of q_push_rows tile rows so compute can start QK incrementally. An odd Q tile count with a
+    // 2-row QK subblock (the paired recipes end such a chunk with a single row) is pushed one row at a time; compute
+    // waits on cumulative tile counts, so any row grouping that covers the chunk is valid.
+    constexpr uint32_t q_push_rows = Sq_chunk_t % qk_subblock_h != 0 ? 1 : qk_subblock_h;
+    constexpr uint32_t q_num_subblocks = Sq_chunk_t / q_push_rows;
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
     constexpr uint32_t q_heads_per_k = NH / NHK;
     static_assert(chunked_enabled, "Sliding windows require chunked prefill");
@@ -531,7 +531,8 @@ void kernel_main() {
         }
     };
     auto arrival_preview = fused_op_receiver.seq;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
+    // Sliding never packs several KV sources into a K chunk.
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<1>(
         ring_size,
         kv_local_padded_Nt,
         logical_nt,
@@ -573,8 +574,8 @@ void kernel_main() {
             // fronted in the CB, so we only need to read it once on the first ring iteration.
             const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
-            const ring_joint::SlidingQWorkPlan<SLIDING_MAX_SOURCE_RANGES> sliding_q_plan =
-                ring_joint::build_sliding_q_work_plan<SLIDING_MAX_SOURCE_RANGES>(
+            const ring_joint::SlidingQWorkPlan<sliding_max_source_ranges> sliding_q_plan =
+                ring_joint::build_sliding_q_work_plan<sliding_max_source_ranges>(
                     q_chunk * Sq_chunk_t,
                     Sq_chunk_t,
                     ring_index,
@@ -587,16 +588,12 @@ void kernel_main() {
                     logical_nt,
                     circular_kv_slab_count,
                     kv_pad_rotation_enabled ? &qmap : nullptr,
-                    /*local_first=*/SLIDING_LOCAL_FIRST && ksplit_count == 1);
+                    /*local_first=*/sliding_local_first);
             ASSERT(sliding_q_plan.is_valid);
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
-            // Sliding K split: this core's band of the work plan (ring_joint_ksplit.hpp).
-            const auto sliding_band =
-                ring_joint::sliding_ksplit_range(sliding_q_plan.total_k_chunk_count, ksplit_idx, ksplit_count);
-            // Q must be pushed on the first K chunk actually PROCESSED for this Q chunk, which is the
-            // band's first chunk under a K split. Reads Q exactly once per q_iter, so no extra work.
+            // Q is pushed after the Q chunk's first K chunk, once per q_iter.
             bool first_k_for_q = true;
-            for (uint32_t k_chunk = sliding_band.begin; k_chunk < sliding_band.end; ++k_chunk) {
+            for (uint32_t k_chunk = 0; k_chunk < sliding_q_plan.total_k_chunk_count; ++k_chunk) {
                 const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
                 const uint32_t source_ring_id = sliding_k_chunk.source_ring_id;
                 const uint32_t source_k_chunk = sliding_k_chunk.source_k_chunk;
@@ -658,8 +655,8 @@ void kernel_main() {
                     const auto read_q = [&](const auto& q_gen) {
                         if constexpr (use_q_subblock_push) {
                             for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                                const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * q_push_rows;
+                                const uint32_t sb_row_end = sb_row_start + q_push_rows;
                                 Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
                                 read_block(
                                     q_gen,
