@@ -467,6 +467,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         // bring-up fork block epilogue: its presence adds a define, CBs and writer arguments
         attrs.block_keys,
         attrs.block_max_pin,
+        attrs.block_max_compute,  // bring-up fork (PB.FBM): the block maxes on the compute kernel
         tensor_args.block_bias.has_value(),
         tensor_args.block_max_out.has_value(),
         tensor_args.block_bias.has_value() ? tensor_args.block_bias->logical_shape()[-1] : 0u,
@@ -951,7 +952,9 @@ ttnn::Tensor launch_indexer_score(
     std::optional<ttnn::Tensor> block_max_out = std::nullopt,
     bool block_max_pin = false,
     // Bring-up fork (P.31): natural_query_blocks with the queries' own rows per SP rank (operation_attributes_t).
-    uint32_t natural_query_rows = 0) {
+    uint32_t natural_query_rows = 0,
+    // Bring-up fork (PB.FBM): block maxes on the compute kernel (operation_attributes_t::block_max_compute).
+    bool block_max_compute = false) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::bringup::indexer_score::IndexerScoreDeviceOperation;
@@ -1257,7 +1260,35 @@ ttnn::Tensor launch_indexer_score(
         if (block_bias.has_value()) {
             check(*block_bias, DataType::BFLOAT16, Layout::TILE, 32, "block_bias");
         }
-        if (block_max_out.has_value()) {
+        if (block_max_out.has_value() && block_max_compute) {
+            // PB.FBM: strip-major bf16 RM, one block = one key tile (32 keys)
+            TT_FATAL(
+                block_keys == tt::constants::TILE_WIDTH && !block_max_pin && !block_bias.has_value(),
+                "indexer_score block_max_compute: needs block_keys 32, no block_max_pin, no block_bias; got block_keys "
+                "{}",
+                block_keys);
+            const auto& t = *block_max_out;
+            const auto& shape = t.logical_shape();
+            const uint32_t Tt = (k.logical_shape()[2] + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+            TT_FATAL(
+                t.storage_type() == StorageType::DEVICE && t.dtype() == DataType::BFLOAT16 &&
+                    t.layout() == Layout::ROW_MAJOR && t.memory_config().buffer_type() == BufferType::DRAM &&
+                    t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "indexer_score block_max_compute: block_max_out must be a DRAM-interleaved ROW_MAJOR bf16 device "
+                "tensor");
+            // 512-byte pages of 8 blocks: [1, 1, Sq / 32 x NB / 8, 256], NB a multiple of 8 (the same bytes as
+            // [1, 1, Sq / 32, NB x 32]; the small pages spread a strip over the DRAM banks)
+            const uint32_t strips = Sq / tt::constants::TILE_HEIGHT;
+            TT_FATAL(
+                Sq % tt::constants::TILE_HEIGHT == 0 && shape.rank() == 4 && shape[0] == 1 && shape[1] == 1 &&
+                    shape[3] == 8 * tt::constants::TILE_HEIGHT && shape[2] % strips == 0 &&
+                    (shape[2] / strips) * 8 >= Tt,
+                "indexer_score block_max_compute: block_max_out must be [1, 1, Sq / 32 x NB / 8, 256] (Sq / 32 = {}, "
+                "NB >= the key tiles {}); got {}",
+                strips,
+                Tt,
+                shape);
+        } else if (block_max_out.has_value()) {
             TT_FATAL(
                 block_keys <= 8,
                 "indexer_score: block_max_out needs block_keys <= 8 (a tile's fp32 run of 32 / block_keys values "
@@ -1266,8 +1297,10 @@ ttnn::Tensor launch_indexer_score(
             check(*block_max_out, DataType::FLOAT32, Layout::ROW_MAJOR, 4, "block_max_out");
         }
     }
+    TT_FATAL(!block_max_compute || block_max_out.has_value(), "indexer_score: block_max_compute needs block_max_out");
     operation_attributes.block_keys = block_keys;
     operation_attributes.block_max_pin = block_max_pin;
+    operation_attributes.block_max_compute = block_max_compute;
     tensor_args.block_bias = std::move(block_bias);
     tensor_args.block_max_out = std::move(block_max_out);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -1386,7 +1419,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::optional<ttnn::Tensor>& block_bias,
     const std::optional<ttnn::Tensor>& block_max_out,
     bool block_max_pin,
-    uint32_t natural_query_rows) {
+    uint32_t natural_query_rows,
+    bool block_max_compute) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::bringup::indexer_score::FusedRingConfig fused_ring;
@@ -1503,7 +1537,8 @@ ttnn::Tensor ring_indexer_score_dsa(
         block_bias,
         block_max_out,
         block_max_pin,
-        natural_query_rows);
+        natural_query_rows,
+        block_max_compute);
 }
 
 }  // namespace ttnn::experimental::bringup

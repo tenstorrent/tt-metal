@@ -1578,3 +1578,75 @@
 - Re-run: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "MB6_POS=262144,393216,524288
   MB6_RUNS=10 BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
   scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_mb6_bsel_crossover.py"`.
+
+## MB.8 (perf): PB.FBM's compute-kernel block maxes on the single 5120 path; INDEXER_BLOCK_SELECT_MIN re-measured
+
+- Expected saving a chunk (written before any device run; perf_guide sections 1-3, 10): only the 3 plain index layers
+  take the block path, and only at kv_len >= the threshold. At 1M (block path on both sides): PB.FBM measured single
+  8192 1M device -2.3 ms (score epilogue -0.4 a layer x 3, fold -> transpose ~-0.3 a layer); scaled to 160 query rows
+  a chip (x0.625): about -1.3..-1.5 ms device, host 0 (same launch count: transpose replaces fold), wall -1..-1.5 of
+  ~83 ms. At 524288 (block both sides): ~-0.8 ms device. Below MB.7's 262144 keys the change matters only if the
+  cheaper block path moves the wall crossover down: MB.7 measured block - plain wall +1.8..+2.7 ms at 133632 / 199168
+  keys with device -0.3..-1.0; the compute maxes remove ~0.4-0.6 ms device a chunk there, but the 12 extra launches
+  (host ~2-3 ms, DS41-331) stay, so I expect 133632 still slower in wall, 199168 near even; the threshold likely stays
+  at 262144 or moves to ~196608. Ladder rungs at 51200 .. 262144: no change by construction (plain path).
+- Load reason for the crossover: "needs the ladder's executed-layers load because the block path's cost (score
+  epilogue in 3 index layers, the extra launches on a host-bound chunk) exists only inside the model's chunk; the op
+  probe is host-launch bound (DS41-330)".
+- What (port of PB.FBM 9fc4c58e110, single-request parts; `git apply --3way` path-limited): tt/indexer.py
+  (bmax_compute_on, bsel_buffers per side as a dict, bsel_epilogue, block_topk transpose vs fold, bsel_min /
+  BSEL_MIN_AUTO; no `packed` argument: this branch has no packed path), tt/settings.py (INDEXER_BMAX_COMPUTE on|off,
+  INDEXER_BLOCK_SELECT_MIN "auto"; no _MIN_PACKED), bringup/hooks.py (INDEXER_BMAX_COMPUTE call-time in
+  batch_call_settings / batch_call_apply), fork indexer_score `block_max_compute` (types, device op, ring factory,
+  compute / reader / writer kernels, nanobind, tests/unit/test_block_max_compute.py), block_select_ttnn
+  `block_max_bf16(strip_major=True)` (block_select.py, kernels/block_max_strip.cpp, unit test cases), INDEX.md,
+  CHANGELOG / README of both forks, tests/perf/test_fbm_probe.py (the packed "ranges" form removed). Conflicts: every
+  fork signature that grew packed-only options on the batching branch (natural_query_lane, lane_rows, k_extra,
+  lane_own_extent, lane_ranges, keys_gathered): kept this branch's signature + block_max_compute only. Left out:
+  packed_glued.py. Built (`./build_metal.sh`, rc 0).
+- Cores (rule 18): the score op unchanged (matmul grid, 11 x 10 = 110); the strip transpose on max_grid (110 on the
+  Galaxy; data movement only).
+- Fork tests (rule 6): test_fbm_probe FBM_PARTS=check on the resident 2D mesh (0 opens): check_block_max_compute 128
+  chip cases (4 starts) exact; check_block_select 15 cases (10 previous + 5 strip-major) byte-exact. The forks' own
+  unit files open a mesh without 2D fabric: not run directly (as MB.6). With the option off the fork programs and
+  hashes are unchanged (the define, CBs and named args exist only with block_max_compute).
+- Crossover (tests/perf/test_mb6_bsel_crossover.py, DS41_INDEXER_BMAX_COMPUTE=on, block vs plain forced, one load;
+  runs 1-2: MB6_POS=131072,196608,262144,393216,524288 MB6_RUNS=10; runs 3-4: 393216,524288,655360,786432
+  MB6_RUNS=20, added because no point <= 264704 keys was faster in both runs). block - plain wall per run / pooled
+  median, device mean (ms):
+  | positions | keys | wall runs | wall pooled | device |
+  |---|---|---|---|---|
+  | 131072 | 68096 | -1.53, +4.28 | +3.06 | -0.08 |
+  | 196608 | 100864 | +0.27, +0.10 | +0.46 | -1.05 |
+  | 262144 | 133632 | +1.42, +1.34 | +1.31 | -0.71 |
+  | 393216 | 199168 | -0.64, +1.22, +0.06, +0.86 | +0.35 | -1.25 |
+  | 524288 | 264704 | +1.59, -0.69, -1.06, +0.31 | -0.16 | -2.28 |
+  | 655360 | 330240 | +0.04, -1.12 | -0.50 | -2.29 |
+  | 786432 | 395776 | -1.69, -2.56 | -2.09 | -3.16 |
+  Against the estimate: device as expected (lower than MB.7's writer path by ~0.4-0.8 ms at the same keys); the wall
+  crossover did not move (host-bound launches, DS41-331 / new DS41-333).
+- DECIDED: INDEXER_BLOCK_SELECT_MIN = auto, on = 262144 keys (the smallest key count above which no measured point is
+  slower in pooled wall: 199168 +0.35, 264704 -0.16), off = 262144 (MB.7). Same threshold both sides, so the ladder's
+  rungs take the same paths on and off; the A/B isolates the compute maxes at 524288+.
+  Note for the owner: per run, 264704 keys was slower in 2 of 4 runs (+1.59, +0.31) and faster in 2; read strictly
+  per run, only 395776 keys is faster in every run (threshold ~393216 would put the 524288 rung on plain: -2.3 ms
+  device given up for ~0 wall). Set DS41_INDEXER_BLOCK_SELECT_MIN=<n> to try it.
+- Per-chunk values (rule 20): block_max_compute is a hashed attribute fixed per load (one program per side); kv_len /
+  chunk start stay the score op's runtime args; the transpose's n (valid blocks = kv_len / 32) is the prepared-program
+  value slot (as the fold's); topk valid_length runtime. Nothing new uploaded per chunk; the path choice is the host
+  decision on kv_len as before; compile() warms both paths. Gate's cold test_no_rebuild: 0 builds after warm-up.
+- Gate `gate MB.8 --check` (devjob mb8_gate): PASS. Steady tok/s 51200 69.1k, 131072 67.9k, 139264 66.1k, 262144
+  66.7k, 524288 65.6k, 786432 63.0k, 1024000 61.6k (MB.7: 69.5 / 68.1 / 67.7 / 66.7 / 64.5 / 62.3 / 61.8k); set
+  mismatches 0 at 138240 / 1018880; determinism 0.0; contract / decoder-skip 0 failed; outside history 0.0; builds
+  after warm-up 0; ids uploads 0; err_final_hidden 0.136 <= 0.242, top5 1.0.
+- Re-run: probe `resident submit --cmd "FBM_PARTS=check DS41_INDEXER_BMAX_COMPUTE=on <walls env>
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_fbm_probe.py"`;
+  crossover `resident submit --cmd "MB6_POS=... MB6_RUNS=20 DS41_INDEXER_BMAX_COMPUTE=on BRINGUP_CHUNK=5120
+  DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_mb6_bsel_crossover.py"`; gate
+  `gate MB.8 --spec $BRINGUP_SPEC --check`; A/B `orchestrator measure --task MB.8`.
+- Outcome vs the estimate: on (gate MB.8) vs MB.7's gate (the off code, other process): block rungs device -0.04 /
+  -0.54 / -0.48 ms at 524288 / 786432 / 1024000 (fold -> transpose -0.26..-0.53, score +0.10..+0.18); estimate was
+  -1.3..-1.5 at 1M: at 160 rows a chip the writer's max cost the score little. Rungs <= 262144: same code both sides.
+  `orchestrator measure --task MB.8` rc 0 (on side: test_skip_positions, test_no_rebuild). Report:
+  ledgers/galaxy_8x4-full/results/MB.8_ladder.md.

@@ -335,6 +335,13 @@ void bind_indexer_score(nb::module_& mod) {
                 natural_query_blocks): the query tokens per SP rank when the queries' chunk is not the key cache's
                 (a small chunk scoring keys a larger chunk wrote): device (d, c) holds positions chunk_start_idx +
                 d*natural_query_rows + c*Sq + [0, Sq). Tile-aligned, >= Sq.
+            block_max_compute: optional bool (default False = the writer's block max; bring-up fork,
+                deepseek_v41_flash_d_p PB.FBM): with block_keys 32 and block_max_out a STRIP-MAJOR
+                [1, 1, Sq / 32 * NB / 8, 256] bf16 ROW_MAJOR tensor (512-byte pages of 8 blocks; NB >= the key tiles,
+                a multiple of 8), the compute kernel max-reduces each score tile's rows on the FPU (one block = one
+                key tile): the 64 bytes at ((s * NB) + b) * 64 hold the max of query rows 32 s .. 32 s + 31's written
+                bf16 scores in keys [32 b, 32 b + 32), for the tiles each call writes; the rest untouched. Exact. No
+                block_max_pin / block_bias. ttnn.bringup.block_max_bf16(strip_major=True) turns it into [Sq, NB].
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -369,7 +376,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("block_bias") = nb::none(),
         nb::arg("block_max_out") = nb::none(),
         nb::arg("block_max_pin") = false,
-        nb::arg("natural_query_rows") = 0);
+        nb::arg("natural_query_rows") = 0,
+        nb::arg("block_max_compute") = false);
 }
 
 }  // namespace ttnn::operations::bringup::indexer_score::detail

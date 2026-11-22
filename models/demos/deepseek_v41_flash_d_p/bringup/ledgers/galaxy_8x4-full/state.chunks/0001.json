@@ -3533,6 +3533,87 @@
   },
   "waiting": null
  },
+ "MB.8": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "628f0d7f358fe3d2f590d08789272f6c76673794",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "a6808b54-71e3-4d15-896f-28bae9087d8e"
+  },
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 2.4,
+  "history": [
+   {
+    "reused": [
+     "MB.8#test_determinism",
+     "MB.8#test_ladder",
+     "MB.8#test_decoder_skip_decode",
+     "MB.8#test_contract",
+     "MB.8#test_outside_history",
+     "MB.8#test_indexer_block_select",
+     "MB.8#test_skip_positions",
+     "MB.8#test_no_rebuild"
+    ],
+    "s": 2.4,
+    "status": "PASS",
+    "t": "2026-11-22T06:52:04"
+   }
+  ],
+  "last_run": "2026-11-22T06:52:02",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/MB.8.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": {
+   "reused": [
+    "MB.8#test_determinism",
+    "MB.8#test_ladder",
+    "MB.8#test_decoder_skip_decode",
+    "MB.8#test_contract",
+    "MB.8#test_outside_history",
+    "MB.8#test_indexer_block_select",
+    "MB.8#test_skip_positions",
+    "MB.8#test_no_rebuild"
+   ],
+   "units": {
+    "MB.8#test_contract": "27c0da42779aae92",
+    "MB.8#test_decoder_skip_decode": "8d92a3b43f49731f",
+    "MB.8#test_determinism": "cdc8cfa064661895",
+    "MB.8#test_indexer_block_select": "3bb9ce9dbeed2a35",
+    "MB.8#test_ladder": "8cc26f2a4e5576d8",
+    "MB.8#test_no_rebuild": "41ab0509e09725b1",
+    "MB.8#test_outside_history": "c9dd795b6fabb120",
+    "MB.8#test_skip_positions": "d97015974d17681d"
+   }
+  },
+  "started": "2026-11-22T06:52:00",
+  "status": "PASS",
+  "units": {
+   "MB.8#test_contract": "PASS",
+   "MB.8#test_decoder_skip_decode": "PASS",
+   "MB.8#test_determinism": "PASS",
+   "MB.8#test_indexer_block_select": "PASS",
+   "MB.8#test_ladder": "PASS",
+   "MB.8#test_no_rebuild": "PASS",
+   "MB.8#test_outside_history": "PASS",
+   "MB.8#test_skip_positions": "PASS"
+  },
+  "waiting": null
+ },
  "P.1": {
   "agent": {
    "defs": {

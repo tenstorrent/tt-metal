@@ -1400,6 +1400,8 @@ def batch_call_settings(env=None) -> tuple:
     # POS_DYNAMIC (MB.2) is read per call too: both paths exist in one load (page copies vs slices)
     # INDEXER_BLOCK_SELECT / _MIN (MB.6, PB.BM: the index top-k by block-max pre-selection, read per indexer call)
     # likewise, refreshed like POS_DYNAMIC
+    # INDEXER_BMAX_COMPUTE (MB.8, PB.FBM: the block maxes on the score's compute kernel, read per indexer call)
+    # likewise, refreshed like POS_DYNAMIC
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1407,6 +1409,7 @@ def batch_call_settings(env=None) -> tuple:
         "POS_DYNAMIC",
         "INDEXER_BLOCK_SELECT",
         "INDEXER_BLOCK_SELECT_MIN",
+        "INDEXER_BMAX_COMPUTE",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))
 
 
@@ -1422,6 +1425,7 @@ def batch_call_apply(model) -> None:
         _settings.snap["POS_DYNAMIC"] = _settings._read("POS_DYNAMIC")
         _settings.snap["INDEXER_BLOCK_SELECT"] = _settings._read("INDEXER_BLOCK_SELECT")  # MB.6: likewise
         _settings.snap["INDEXER_BLOCK_SELECT_MIN"] = _settings._read("INDEXER_BLOCK_SELECT_MIN")  # MB.6: likewise
+        _settings.snap["INDEXER_BMAX_COMPUTE"] = _settings._read("INDEXER_BMAX_COMPUTE")  # MB.8: likewise
     want = _settings.get("DECODER_SKIP")
     have = getattr(model, "skip_mode", None)
     if have is None or want == have or "replay128" in (want, have) or getattr(model, "tail_of", None) is not None:

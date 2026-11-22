@@ -1,0 +1,85 @@
+{
+ "used": [
+  {
+   "id": "DS41-330",
+   "how": "placed the threshold with the in-model crossover probe (test_mb6_bsel_crossover.py), not op probes",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-331",
+   "how": "expected the 12 extra launches to keep the wall crossover high despite the cheaper device path; measured several runs and pooled the medians because the host cost is noisy",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-329",
+   "how": "relied on the call-time switch refreshed in batch_call_apply (INDEXER_BMAX_COMPUTE added there) so the held model takes each run's value",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "ran the gate check detached under devjob",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a path-limited cherry-pick from the batching branch into model_bringup conflicts on every fork signature that grew packed-only options (lane_ranges, keys_gathered, k_extra); the resolution is: keep this branch's signature and add only the new option"
+ ],
+ "overseer": [
+  {
+   "id": "OV-57",
+   "answer": "n/a",
+   "evidence": "MB.8 adds no per-chunk value: the compute block max is a hashed op attribute fixed per load (block_max_compute), the transpose's n is the existing prepared-program value slot, kv_len / start stay runtime args; the path choice stays a host decision on kv_len, both paths warmed in compile(); gate's cold test_no_rebuild checks 0 builds"
+  }
+ ],
+ "new": [
+  "DS41-332",
+  "DS41-333"
+ ],
+ "cited_only": [
+  "DS41-332",
+  "DS41-333"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "MB.8",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-22T06:44:09",
+  "head": "9c96319be97",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.8.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.8_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/MB.8.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_fbm_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/README.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/block_select.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_max_strip.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/tests/unit/test_block_select.py",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/compute_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/reader_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/writer_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/ring_indexer_score_dsa_program_factory.cpp",
+   "ttnn/ttnn/bringup/indexer_score/indexer_score_nanobind.cpp",
+   "ttnn/ttnn/bringup/indexer_score/tests/unit/test_block_max_compute.py"
+  ]
+ }
+}

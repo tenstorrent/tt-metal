@@ -84,13 +84,23 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   1.96 ms, + bias 1.69 ms; deepseek_v41_flash_d_p P.16: indexer section 25.15 -> 12.94 ms a chunk.
 - Speed: not measured for the plain op.
 
+- `block_max_compute` (ring op, fork, opt-in, default False; PB.FBM): with `block_keys=32` and `block_max_out` a
+  STRIP-MAJOR `[1, 1, Sq / 32 * NB / 8, 256]` bf16 ROW_MAJOR tensor (512-byte pages of 8 blocks; NB >= the key
+  tiles, a multiple of 8): the COMPUTE kernel copies each masked score tile to a bf16 tile (the untilize's unpack and
+  packer: the written scores) and max-reduces its rows (reduce MAX / REDUCE_ROW, a reader-made 1.0 scaler) before the
+  untilize; the writer copies each tile's 32 row maxes (column 0) into one 64-byte run at byte (strip x NB + logical
+  key tile) x 64 (no RISC-V compare). Exact (byte-checked against the writer path and torch,
+  `tests/unit/test_block_max_compute.py`; a reduce straight from the fp32 accumulator was 1 ulp low, DS41-389). No pin / bias. `ttnn.bringup.block_max_bf16(strip_major=True)`
+  turns the output into `[Sq, NB]`. Hashed; works in the single, ranges and keys_gathered forms.
+
 ## Limits
 - fp32 DEST: DSA only (not MSA, not block pooling); `dst_full_sync_en` must stay False.
 - `natural_query_blocks`: axis ring only, block-cyclic layout required, no metadata (`chunk_start_idx_tensor`) path.
   `natural_query_rows`: the same; only the query geometry moves (the key stripes and the invP remap are the cache's).
 - Block epilogue: `ring_indexer_score_dsa` only, batch 1, one head-summed plane; the bias values are a mask (any
   nonzero bias masks the block; no general additive bias); block_max_out needs block_keys <= 8 (16-byte aligned fp32
-  runs per score tile); the writer does the block max on its RISC-V core (scalar, about 1 compare per score).
+  runs per score tile); the writer does the block max on its RISC-V core (scalar, about 1 compare per score), except
+  with `block_max_compute` (blocks of 32 only, on the compute kernel).
 - Source multi-device tests are not carried (they open FABRIC_1D / torus meshes); the ring op is covered by the
   fork's own 2x2 FABRIC_2D tests. `tests/unit/test_key_stride_ring.py` has a 2x4 case skipped on a 2x2 box.
 - Known source-test divergence: `test_indexer_score_rejects_fp32_dest_acc` fails on the fork by design (`tests/source.yaml`).
@@ -121,6 +131,9 @@ Tests: `tests/test_indexer_score.py` (model cases, `tests/cases.py`), `tests/uni
   P.31 (DECODER_SKIP=replay128): the decoder tail's layers 20-39 at a 1024-token chunk score the 5120-token chunks'
   keys with `natural_query_rows`.
   P.40: INDEX_K_FORMAT=bfp8 scores bfloat8_b keys (k_local and the ring buffer) against the bfloat4_b query.
+  PB.BM / PB.FBM / MB.8 (INDEXER_BLOCK_SELECT, INDEXER_BMAX_COMPUTE=on: `tt/indexer.py` TtIndexer.bsel_epilogue):
+  `block_max_compute` (block 32, strip-major) on the plain indexers' single calls; off: `block_keys=8,
+  block_max_out` (fp32, the writer's max).
 
 ## History
 CHANGELOG.md

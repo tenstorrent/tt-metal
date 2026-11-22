@@ -716,6 +716,13 @@ void kernel_main() {
                 ckernel::PoolType::MAX,
                 ckernel::ReduceDim::REDUCE_ROW>();
         }
+#ifdef INDEXER_SCORE_BMAX_COMPUTE
+        // bring-up fork (PB.FBM, block_max_compute): compute's 1.0 reduce-MAX scaler for the block maxes
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            get_named_compile_time_arg_val("cb_bmax_scaler"),
+            ckernel::PoolType::MAX,
+            ckernel::ReduceDim::REDUCE_ROW>();
+#endif
 
         WorkUnitSpan span;
         span.set_valid_k_len_tiles(kv_len_tiles);

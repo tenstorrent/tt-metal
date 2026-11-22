@@ -10,6 +10,11 @@ two top-k's are `ttnn.bringup.topk_large_indices`; these ops do the rest:
   -> [.., R, NI / factor] bf16 ROW_MAJOR, column b = max of input columns [b factor, (b + 1) factor), exact. Only the
   first `n` output columns (rounded up to 8) are written: `n` is a runtime value (a prepared-program value slot) or
   `n_tensor` ([1] uint32 a device, read on the device). Both RISCs of every core, double-buffered reads.
+- `block_max_bf16(block_max, *, strip_major=True, n=None, n_tensor=None, output_tensor=None, ...)` (PB.FBM): block_max
+  [.., S, NB * 32] bf16 ROW_MAJOR, strip-major (`ring_indexer_score_dsa(block_max_compute=True)`'s output: row s =
+  query strip s, block b's 32 row values at [32 b, 32 b + 32)) -> [.., 32 S, NB] bf16 ROW_MAJOR (each strip
+  transposed, exact copies), the first `n` blocks (rounded up to 8). Work units of 128 blocks of a strip (one 8 KiB
+  read, 32 row writes) over both RISCs of every core, double-buffered. NB a multiple of 8.
 - `block_gather(scores, ids, *, block, output_tensor=None, memory_config=None, max_grid=None)`: scores [.., R, W]
   bf16 ROW_MAJOR + block ids [.., R, K] uint32 ROW_MAJOR -> [.., R, K block] bf16 ROW_MAJOR, row r =
   scores[r, ids[r, j] block + o] at j block + o; an id >= W / block (0xFFFFFFFF) gives block x -inf. One 64-byte DRAM
@@ -67,7 +72,8 @@ Tests: `tests/unit/test_block_select.py` (`check_block_select`, also run by the 
 ## Used by
 deepseek_v41_flash_d_p PB.BM: `tt/indexer.py` TtIndexer.block_topk (INDEXER_BLOCK_SELECT), single and glued packed
 paths (batching branch); MB.6: the single-request path of model_bringup (chunk 5120, INDEXER_BLOCK_SELECT_MIN 131072
-keys re-measured there).
+keys re-measured there; MB.8 re-measured it with the compute maxes).
+PB.FBM / MB.8: `block_max_bf16(strip_major=True)` on the score's compute-kernel maxes (INDEXER_BMAX_COMPUTE=on).
 
 ## History
 CHANGELOG.md

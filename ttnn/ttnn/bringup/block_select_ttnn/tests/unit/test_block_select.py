@@ -130,6 +130,32 @@ def check_block_select(mesh, rows: int = 96, seed: int = 0) -> dict:
             ttnn.deallocate(got)
         ttnn.deallocate(xt)
         n += 1
+    # block_max_bf16(strip_major=True) (PB.FBM): [S, NB 32] strip-major bf16 -> [32 S, NB], the first n blocks (to 8)
+    for S, NB, nn in ((8, 16384, 16384), (8, 2176, 2176), (3, 512, 77), (2, 264, 1), (5, 4096, 1000)):
+        x = torch.randn(1, 1, S, NB * 32)
+        x[..., 0, ::5] = float("-inf")
+        x = x.to(torch.bfloat16)
+        xt = _up(x.reshape(1, 1, S * NB // 8, 256), mesh, ttnn.bfloat16)  # (512-byte pages of 8 blocks)
+        want = x.view(1, 1, S, NB, 32).permute(0, 1, 2, 4, 3).reshape(1, 1, S * 32, NB)
+        m = min(-(-nn // 8) * 8, NB)
+        for use_t in (False, True):
+            prev = torch.full((1, 1, S * 32, NB), 7.0, dtype=torch.bfloat16)
+            ot = _up(prev, mesh, ttnn.bfloat16)
+            if use_t:
+                lt = _up(torch.tensor([nn], dtype=torch.int32).view(1, 1, 1, 1), mesh, ttnn.uint32)
+                got = ttnn.bringup.block_max_bf16(xt, strip_major=True, n_tensor=lt, output_tensor=ot)
+                ttnn.deallocate(lt)
+            else:
+                got = ttnn.bringup.block_max_bf16(xt, strip_major=True, n=nn, output_tensor=ot)
+            d = _down(got, mesh)
+            bad = (d[..., :m].view(torch.int16) != want[..., :m].view(torch.int16)).nonzero()
+            if len(bad):
+                print("block_max_bf16 strip_major mismatch", (S, NB, nn, use_t), len(bad), bad[:8].tolist())
+            assert not len(bad), (S, NB, nn, use_t)
+            assert torch.equal(d[..., m:].view(torch.int16), prev[..., m:].view(torch.int16)), "wrote past n"
+            ttnn.deallocate(got)
+        ttnn.deallocate(xt)
+        n += 1
     return {"cases": n}
 
 

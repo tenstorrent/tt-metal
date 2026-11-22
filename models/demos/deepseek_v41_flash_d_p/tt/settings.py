@@ -1104,19 +1104,32 @@ TABLE = {
         "length; both paths' programs depend on shapes only and runtime.compile warms both). off = the plain "
         "top-k over every visible key (the path before)",
     ),
+    "INDEXER_BMAX_COMPUTE": Setting(
+        "on",
+        ("on", "off"),
+        "PB.FBM (OWNER 2026-11-22), read per call (CALL-TIME, bringup/hooks.py batch_call_settings / batch_call_apply). "
+        "INDEXER_BLOCK_SELECT's block maxes: on = the score op's COMPUTE kernel max-reduces each score tile's rows on "
+        "the FPU (one block = one 32-key tile; ring_indexer_score_dsa block_max_compute: a strip-major bf16 tensor, one "
+        "64-byte write a tile) and ttnn.bringup.block_max_bf16(strip_major=True) transposes it to "
+        "[Sq, NB]; off = the score's writer core computes the max of every 8 keys (one RISC-V compare a score, fp32 "
+        "[Sq, T / 8]) and block_max_bf16 folds 4 of them (PB.BM, the path before). Same bf16 maxima (exact)",
+    ),
     "INDEXER_BLOCK_SELECT_MIN": Setting(
-        "262144",
+        "auto",
         None,
-        "PB.BM / MB.6 / MB.7 (INDEXER_BLOCK_SELECT=on): the smallest key count (the scores' kv_len: compressed keys, "
-        "positions / ratio) at which a single-request indexer call takes the block path; below it the plain top-k. "
-        "262144 (524288 positions at ratio 2; MB.7, OWNER 2026-11-21: the smallest count at which the block path is "
-        "not slower in wall at any measured rung). MB.7 (8x4, 5120 chunk, tests/perf/test_mb6_bsel_crossover.py, "
-        "steady chunk, one load, warm-up + 10 timed runs, median, two runs) block - plain wall / device ms: +1.81 / "
-        "-0.72 and +1.99 / -0.34 at 133632 keys (262144 positions), +2.65 / -1.01 and +2.03 / -0.93 at 199168 "
-        "(393216), -0.53 / -1.48 and -0.43 / -1.54 at 264704 (524288): the block path saves device time from ~85k keys "
-        "but its extra launches cost ~2-3 ms host where the chunk is host-bound (wall - device ~11 ms), so the wall "
-        "crossover is ~250k keys (MB.6's 131072 put the 262144 rung on the block path: -5.7 % tok/s in its A/B). "
-        "Results: bringup/ledgers/galaxy_8x4-full/results/MB.7_threshold.md. 131072 = MB.6's value. Call-time",
+        "PB.BM / MB.6 / MB.7 / MB.8 (INDEXER_BLOCK_SELECT=on): the smallest key count (the scores' kv_len: compressed "
+        "keys, positions / ratio) at which a single-request indexer call takes the block path; below it the plain "
+        "top-k. auto = each block-max path's smallest key count at which the block path is not slower in wall at any "
+        "measured rung (OWNER 2026-11-21; tt/indexer.py BSEL_MIN_AUTO by INDEXER_BMAX_COMPUTE): on = 262144 (MB.8, 8x4, 5120 chunk, the "
+        "compute-kernel maxes, test_mb6_bsel_crossover.py, block - plain wall (median of 20-60 timed runs pooled over "
+        "2-4 runs) / device ms: 68096 keys +3.06 / -0.08, 100864 +0.46 / -1.05, 133632 +1.31 / -0.71, 199168 +0.35 / "
+        "-1.25, 264704 -0.16 / -2.28, 330240 -0.50 / -2.29, 395776 -2.09 / -3.16; device lower everywhere, the 12 extra "
+        "launches keep the wall crossover between 199168 and 264704 keys); "
+        "off = 262144 (524288 positions at ratio 2; MB.7, 8x4, 5120 chunk, tests/perf/test_mb6_bsel_crossover.py, "
+        "steady chunk, block - plain wall / device ms: +1.81 / -0.72 and +1.99 / -0.34 at 133632 keys, +2.65 / -1.01 "
+        "and +2.03 / -0.93 at 199168, -0.53 / -1.48 and -0.43 / -1.54 at 264704; the writer-core block max's extra "
+        "launches cost ~2-3 ms host where the chunk is host-bound; results/MB.7_threshold.md). A number: that "
+        "threshold on both sides (131072 = MB.6's value). Call-time",
     ),
     "CKV_BFP4_PREPARED": Setting(
         "on",

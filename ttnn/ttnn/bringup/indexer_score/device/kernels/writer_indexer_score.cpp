@@ -58,7 +58,27 @@ constexpr auto ep_max_args = TensorAccessorArgs<ep_bias_args.next_compile_time_a
 static_assert(ep_block_keys > 0 && tt::constants::TILE_WIDTH % ep_block_keys == 0, "block_keys must divide 32");
 constexpr uint32_t ep_blocks_per_tile = tt::constants::TILE_WIDTH / ep_block_keys;
 constexpr uint32_t ep_max_tile_bytes = ep_blocks_per_tile * sizeof(uint32_t);  // a tile's max run (fp32)
+#ifdef INDEXER_SCORE_BMAX_COMPUTE
+// PB.FBM (block_max_compute): compute pushes, per strip, KC bf16 tiles whose column 0 holds each query row's max of
+// that key tile (one block = 32 keys); block_max_out is strip-major [Sq / 32 x NB / 8, 256] bf16 (512-byte pages of 8
+// blocks): a tile's 32 row maxes are one 64-byte run at byte (strip x NB + logical key tile) x 64.
+static_assert(ep_block_keys == tt::constants::TILE_WIDTH && !ep_pin && !ep_bias, "block_max_compute: block 32 only");
+constexpr uint32_t cb_ep_cmax = get_named_compile_time_arg_val("cb_bmax_out");
+constexpr uint32_t ep_cmax_run_bytes = tt::constants::TILE_HEIGHT * sizeof(uint16_t);  // 64 B: a tile's row maxes
+constexpr uint32_t ep_cmax_tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
+static_assert(ep_cmax_run_bytes % NOC_DRAM_WRITE_ALIGNMENT_BYTES == 0, "block max run not write-aligned");
+constexpr uint32_t ep_cmax_page_blocks = ep_max_page_bytes / ep_cmax_run_bytes;  // blocks a page of block_max_out
+constexpr uint32_t ep_cmax_strip_pages = get_named_compile_time_arg_val("bmax_strip_pages");
+static_assert(ep_cmax_page_blocks > 0 && ep_max_page_bytes % ep_cmax_run_bytes == 0, "block_max_out page");
+/** A strip compute pushed whose maxes the writer does not write (no fragment): drain it. */
+inline void ep_cmax_drain() {
+    CircularBuffer bm(cb_ep_cmax);
+    bm.wait_front(k_tiles_per_unit);
+    bm.pop_front(k_tiles_per_unit);
+}
+#else
 static_assert(!ep_max || ep_max_tile_bytes % NOC_DRAM_WRITE_ALIGNMENT_BYTES == 0, "block max run not write-aligned");
+#endif
 constexpr uint32_t ep_bias_tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);  // one bf16 bias tile
 // Bias tiles a strip can touch: per fragment its blocks' tile span (+1 for a straddle), KC fragments at most.
 constexpr uint32_t ep_bias_slots =
@@ -154,6 +174,49 @@ inline void block_epilogue(Noc noc, CircularBuffer& cb, const EpCtx& ep, const E
             }
         }
     }
+#ifdef INDEXER_SCORE_BMAX_COMPUTE
+    if constexpr (ep_max) {
+        // PB.FBM: column 0 of each of the strip's KC max tiles (rows 0-15 in face 0, 16-31 in face 2, a face row
+        // every 16 values) -> one 64-byte run a tile in the scratch, then one write a fragment (its tiles are
+        // consecutive logical tiles: consecutive runs). The previous strip's writes drained before its pop.
+        CircularBuffer bm(cb_ep_cmax);
+        bm.wait_front(k_tiles_per_unit);
+        const uint32_t src = bm.get_read_ptr();
+        const uint32_t max_base = CircularBuffer(cb_ep_max).get_write_ptr();
+        for (uint32_t f = 0; f < fr.n; ++f) {
+            for (uint32_t t = 0; t < fr.width[f]; ++t) {
+                const uint32_t tile = fr.col[f] + t;
+                const volatile uint16_t* in =
+                    reinterpret_cast<const volatile uint16_t*>(src + tile * ep_cmax_tile_bytes);
+                volatile uint32_t* o = reinterpret_cast<volatile uint32_t*>(max_base + tile * ep_cmax_run_bytes);
+#pragma GCC unroll 16
+                for (uint32_t i = 0; i < tt::constants::TILE_HEIGHT / 2; ++i) {
+                    o[i] = uint32_t(in[ep_tile_offset(2 * i, 0)]) | (uint32_t(in[ep_tile_offset(2 * i + 1, 0)]) << 16);
+                }
+            }
+        }
+        bm.pop_front(k_tiles_per_unit);
+        // pages of ep_cmax_page_blocks blocks (512 B): page = strip x pages a strip + block / page blocks, so a strip's
+        // runs spread over the DRAM banks (one page a strip put every core of a query group on one bank)
+        const uint32_t page0 = (q_seq_row0 / tt::constants::TILE_HEIGHT) * ep_cmax_strip_pages;
+        for (uint32_t f = 0; f < fr.n; ++f) {
+            uint32_t t = 0;
+            while (t < fr.width[f]) {
+                const uint32_t blk = fr.logical[f] + t;
+                const uint32_t in_page = blk % ep_cmax_page_blocks;
+                uint32_t run = ep_cmax_page_blocks - in_page;
+                run = run < fr.width[f] - t ? run : fr.width[f] - t;
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(max_base + (fr.col[f] + t) * ep_cmax_run_bytes),
+                    max_acc,
+                    run * ep_cmax_run_bytes,
+                    {},
+                    {.page_id = page0 + blk / ep_cmax_page_blocks, .offset_bytes = in_page * ep_cmax_run_bytes});
+                t += run;
+            }
+        }
+    }
+#else
     if constexpr (ep_max) {
         const uint32_t max_base = CircularBuffer(cb_ep_max).get_write_ptr();
         constexpr uint32_t max_row = k_tiles_per_unit * ep_max_tile_bytes;
@@ -211,6 +274,7 @@ inline void block_epilogue(Noc noc, CircularBuffer& cb, const EpCtx& ep, const E
             }
         }
     }
+#endif
 }
 #else
 #define EP_PARAM
@@ -233,6 +297,9 @@ inline void write_strip(
         block_epilogue(noc, cb, ep, fr, q_seq_row0);  // waits for the strip
     } else {
         cb.wait_front(k_tiles_per_unit);
+#ifdef INDEXER_SCORE_BMAX_COMPUTE
+        ep_cmax_drain();
+#endif
     }
 #else
     cb.wait_front(k_tiles_per_unit);  // always pop the full KC strip
@@ -332,6 +399,9 @@ inline void write_shard_major_strip(
 #ifdef INDEXER_SCORE_BLOCK_EPILOGUE
     else {
         cb.wait_front(k_tiles_per_unit);
+#ifdef INDEXER_SCORE_BMAX_COMPUTE
+        ep_cmax_drain();
+#endif
     }
 #endif
     cb.pop_front(k_tiles_per_unit);

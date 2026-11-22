@@ -233,3 +233,33 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Run: not on the 8x4: a 2x2 FABRIC_2D sub-mesh of the Galaxy fails the router handshake (K-68); the model's quick A/B
   on the 8x4 exercises the path (rung last, every layer against the golden). Runs on a 2x2 box / in F.1.
 - Files: tests/cases.py, tests/test_indexer_score.py
+
+### PB.FBM (deepseek_v41_flash_d_p, 2026-11-22; ported to model_bringup by MB.8): block_max_compute, the 32-key block maxes on the compute kernel
+- What: opt-in `ring_indexer_score_dsa(block_max_compute=False)` (needs `block_keys=32` and `block_max_out`, no pin,
+  no bias): `block_max_out` is a strip-major `[1, 1, Sq / 32 * NB / 8, 256]` bf16 ROW_MAJOR tensor (512-byte pages of 8
+  blocks). Compute (define INDEXER_SCORE_BMAX_COMPUTE), per unit after the causal mask and before the untilize:
+  copy_tile + pack_tile of each fp32 accumulator tile to a bf16 tile (cb_bmax_tmp: the untilize's own unpack and packer,
+  i.e. the written scores), reduce MAX / REDUCE_ROW of it with a 1.0 scaler (cb_bmax_scaler, made once by the reader)
+  into cb_bmax_out (column 0 = each query row's max of the tile's 32 keys). The writer (the epilogue path) copies the 32
+  row maxes of each of its strip's tiles into a 64-byte run and writes it to byte (strip x NB + logical key tile) x 64
+  (one write per page run) instead of the fp32 8-key maxes of every row. New CBs only in this mode (scaler 1 tile,
+  out 2 QC KC tiles, tmp QC KC tiles, scratch KC x 64 B). Hashed; on the batching branch it works in the single, lane_ranges and
+  keys_gathered forms; model_bringup has the single form only (the other options are not on this branch).
+- Why: deepseek_v41_flash_d_p PB.FBM (OWNER 2026-11-22): the writer-core block max (one RISC-V compare a score) made
+  the block pre-selected top-k a loss on packed chunks (lane_ranges ring +1.3 ms a layer at 139264) and below ~111k
+  keys on single chunks; the compute kernel's FPU reduce costs ~1 % of a unit.
+- Exactness: a reduce straight from the fp32 accumulator gave maxes 1 bf16 ulp low on ~1 % of the blocks (8x4 probe,
+  DS41-389): the row reduce does not round as the score's pack does; reducing the bf16 copy is exact.
+- Measured (8x4, the model's indexer objects, random data, a 1M slot, tests/perf/test_fbm_probe.py, ms a call, same
+  run): single ring 139264 off 1.36 / writer max 1.79 / compute max 1.39; ranges (keys_gathered) 1.31 / 2.14 / 1.36;
+  at 1024000 9.6 / 12.36 / 12.06 and 9.07 / 11.94 / 11.83 (back-to-back calls; with both new steps disabled the 1M
+  call still costs +1.5 ms, i.e. the epilogue's presence, not the reduce; PB.BM saw the writer path +0.67 ms a layer
+  in the model vs +2.75 in this probe). Compute maxes vs the writer path's folded maxes: 0 of 132,120,576 differ.
+- Tests: tests/unit/test_block_max_compute.py (check_block_max_compute: compute maxes == writer path's == torch on
+  every chip, scores unchanged, nothing past kv_len, the strip transpose; ratio 2 and 1; refusals); run on the 8x4
+  through the model's probe (check part: 128 chip cases, 4 starts). No fork regression suite on the 8x4 (PACKED_RULES).
+- Default: off (false): the programs and their hashes unchanged.
+- Files: device/indexer_score_device_operation_types.hpp, device/indexer_score_device_operation.cpp,
+  device/indexer_score_device_operation.hpp, device/ring_indexer_score_dsa_program_factory.cpp,
+  device/kernels/compute_indexer_score.cpp, device/kernels/reader_indexer_score.cpp,
+  device/kernels/writer_indexer_score.cpp, indexer_score_nanobind.cpp, tests/unit/test_block_max_compute.py, README.md
