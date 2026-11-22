@@ -40,6 +40,7 @@ jobs:
             - dpkg -s tt-metalium tt-metalium-validation tt-nn tt-nn-validation | grep -e '^Package' -e '^Version'
             - ls -l /dev/tenstorrent/
             # Log to a file and print the tail, as smoke-n150-asan does.
+            # 45 m, not GitHub's 15 m: kernel JIT runs cold, with no remote ccache.
             - >-
               ulimit -n 4096; rc=0; timeout 45m tt-nn-validation-smoke
               --gtest_output=xml:test-reports/ >/tmp/smoke.log 2>&1 || rc=$?;
