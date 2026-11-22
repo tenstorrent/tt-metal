@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class StepSave(BaseModel):
-    """Save every ``frequency`` optimizer steps, and the final checkpoint on the run's last step."""
+    """Save every ``frequency`` optimizer steps, and on the run's last step."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -16,15 +16,12 @@ class StepSave(BaseModel):
     # A multiple of metrics.train.frequency, and of metrics.validation.frequency when the run validates, so
     # every checkpoint carries the metrics of its own step. `CheckpointCallback` checks it when training starts.
     frequency: int = Field(default=100, ge=1)
-    # Checkpoints go to <project_dir>/checkpoints/.
+    # Checkpoints go to <project_dir>/checkpoints/, as checkpoint_step<step>_epoch<epoch>_<time>.
     project_dir: str = "runs"
-    # The name of the checkpoint of the run's last step. When an earlier run's checkpoint has it, the time is
-    # appended, as "final_20260101_120000", so that one is kept.
-    final_checkpoint_name: str = "final"
 
 
 class NoSave(BaseModel):
-    """Save no checkpoint, not even the final one."""
+    """Save no checkpoint, not even on the run's last step."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -102,7 +99,7 @@ class CheckpointConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     save_strategy: SaveStrategy = Field(default_factory=NoSave)
-    # Never deletes the checkpoint just saved, such as the final one.
+    # Never deletes the checkpoint just saved, such as the last step's.
     rotation_strategy: RotationStrategy = Field(default_factory=LastRotation)
     # Unset starts from the pretrained weights.
     init_strategy: Optional[InitStrategy] = None

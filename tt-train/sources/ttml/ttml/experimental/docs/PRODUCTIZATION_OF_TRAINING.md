@@ -268,7 +268,7 @@ The `checkpoint` section:
 
 | Field | Default | Description |
 |---|---|---|
-| `save_strategy` | `type: none` | When to save; see below. Unless `none`, the final checkpoint is also saved on the last step. |
+| `save_strategy` | `type: none` | When to save; see below. Unless `none`, a checkpoint is also saved on the last step. |
 | `rotation_strategy` | `type: last` | Which checkpoints to keep; see below. |
 | `init_strategy` | unset | A checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). Unset starts from the pretrained weights. |
 | `format` | `type: hf` | How a checkpoint stores the model; see above. |
@@ -294,8 +294,8 @@ A field another `type` doesn't take is an error, so to change the type with `--s
 
 | `save_strategy` | Saves |
 |---|---|
-| `step` | Every `frequency` (100) optimizer steps, and the final checkpoint on the last step, named `final_checkpoint_name` (`final`). Checkpoints go in `<project_dir>/checkpoints/`, `project_dir` defaulting to `runs`. |
-| `none` | Nothing, not even the final checkpoint. |
+| `step` | Every `frequency` (100) optimizer steps, and on the last step. Checkpoints go in `<project_dir>/checkpoints/`, `project_dir` defaulting to `runs`, named `checkpoint_step<step>_epoch<epoch>_<time>`, as `checkpoint_step500_epoch1_20260101_120000`. |
+| `none` | Nothing, not even on the last step. |
 
 Every checkpoint carries the metrics of its own step, as `trainer_state.json` and `checkpoint_history.json` record
 them: the latest value of every metric `MetricsCallback` logged, such as `train/loss` and `val/loss`. The step and
@@ -303,9 +303,9 @@ epoch are recorded next to them, as `step` and `epoch`.
 `MetricsCallback` must come before `CheckpointCallback` in the callbacks; without it, checkpoints carry no metrics.
 So `save_strategy.frequency` must be a multiple of `metrics.train.frequency`, and of `metrics.validation.frequency`
 when the run validates; otherwise the job stops when training starts, before the first step.
-The run's last step always logs and validates, so the final checkpoint's metrics are its own too, whether or not the
+The run's last step always logs and validates, so its checkpoint's metrics are its own too, whether or not the
 stopping limit is a multiple of `frequency`. A step that is both a multiple of `frequency` and the last step saves
-one checkpoint, the final one.
+one checkpoint.
 
 | `rotation_strategy` | Keeps |
 |---|---|
@@ -314,11 +314,11 @@ one checkpoint, the final one.
 | `none` | Every checkpoint. |
 
 Rotation never deletes the checkpoint just saved, and only deletes checkpoints of the same run: an earlier run's in the
-same `project_dir`, such as the one a run started from, are kept. Nor does a save overwrite them: when an earlier run's
-checkpoint already has the name, such as `final`, the time is appended (`final_20260101_120000`), with a warning, and
-`checkpoint_history.json` and the log give the path. `<project_dir>/checkpoints/checkpoint_history.json`
-lists the run's checkpoints that are kept, with their step, epoch and metrics. A checkpoint is written to a staging
-directory and moved into place when complete, so a failed save leaves the previous one intact.
+same `project_dir`, such as the one a run started from, are kept. `<project_dir>/checkpoints/checkpoint_history.json`
+lists the run's checkpoints that are kept, oldest first, with their path, step, epoch and metrics; a run replaces an
+earlier run's list on its first save. So its last entry is the checkpoint of the run's last step, which is also logged
+as the run's `model` artifact. A checkpoint is written to a staging directory and moved into place when complete, so a
+failed save leaves the previous one intact.
 
 ### Starting from a checkpoint
 
@@ -329,7 +329,7 @@ starts from the pretrained weights of `model.name`.
 checkpoint:
   init_strategy:
     type: init
-    path: runs/my_run/checkpoints/final
+    path: runs/my_run/checkpoints/checkpoint_step500_epoch1_20260101_120000
 ```
 
 `init`, the only `type` so far, loads the checkpoint's weights onto the pretrained weights of `model.name`: training
@@ -377,6 +377,9 @@ finally:
   `trainer.validation_enabled`.
 - **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint as the run saves
   them.
+- **The trained model.** With `CheckpointCallback`, it is the last entry of
+  `<project_dir>/checkpoints/checkpoint_history.json` once `train` returns. A failed run may not have replaced an
+  earlier run's history, so give each job a `project_dir` of its own.
 
 ---
 

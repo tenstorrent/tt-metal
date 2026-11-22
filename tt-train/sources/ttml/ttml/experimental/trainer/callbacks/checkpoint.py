@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 from ..managers.checkpoint import CheckpointManager
@@ -13,8 +14,8 @@ from .metrics import MetricsCallback
 
 class CheckpointCallback(Callback):
     """Saves checkpoints with ``Trainer.save_checkpoint``: every ``frequency`` steps of a "step"
-    ``config.checkpoint.save_strategy``, and the final one, named its ``final_checkpoint_name``, on the run's last
-    step. A "none" strategy saves nothing.
+    ``config.checkpoint.save_strategy``, and on the run's last step, which is also logged as the model artifact. A
+    "none" strategy saves nothing.
 
     Every checkpoint carries the metrics of its own step: the ``values`` of the trainer's ``MetricsCallback``, which
     comes before this one in the callbacks. So the save frequency must be a multiple of the metrics' ``frequency``,
@@ -80,15 +81,14 @@ class CheckpointCallback(Callback):
         if self.manager is None:
             return
         if global_step == self._total_steps:
-            name = trainer.config.checkpoint.save_strategy.final_checkpoint_name
-            path = self._save(trainer, name)
-            trainer.logger.log_artifact(path, artifact_type="model", name=name)
+            path = self._save(trainer)
+            trainer.logger.log_artifact(path, artifact_type="model", name=os.path.basename(path))
         elif self.manager.should_save_checkpoint(global_step):
             self._save(trainer)
 
-    def _save(self, trainer: Any, name: Optional[str] = None) -> str:
+    def _save(self, trainer: Any) -> str:
         metrics = dict(self.metrics.values) if self.metrics is not None else {}
-        return self.manager.save_checkpoint(step=trainer.global_step, epoch=trainer.epoch, metrics=metrics, name=name)
+        return self.manager.save_checkpoint(step=trainer.global_step, epoch=trainer.epoch, metrics=metrics)
 
 
 def _check_multiple(save_frequency: int, metrics_frequency: int, field: str) -> None:

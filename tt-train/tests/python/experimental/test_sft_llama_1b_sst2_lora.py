@@ -87,7 +87,13 @@ def recipe(tmp_path_factory):
     ]
     logged = run_recipe(overrides)
     config = load_config(RECIPE, overrides)
-    return SimpleNamespace(config=config, checkpoints=project / "checkpoints", logged=logged)
+    checkpoints = project / "checkpoints"
+    return SimpleNamespace(config=config, checkpoints=checkpoints, last=last_checkpoint(checkpoints), logged=logged)
+
+
+def last_checkpoint(checkpoints: Path) -> Path:
+    """The checkpoint of the run's last step: the last one ``checkpoint_history.json`` lists."""
+    return Path(json.loads((checkpoints / HISTORY_FILE).read_text())["checkpoints"][-1]["path"])
 
 
 def logged_values(logged, name: str) -> dict[int, float]:
@@ -106,32 +112,32 @@ def test_logs_the_train_and_validation_losses(recipe):
 
 
 def test_saves_every_step_and_keeps_the_last_checkpoint(recipe):
-    """Step 1's checkpoint is saved, then rotated away once the final one is saved at step 2."""
-    saved = [message for message in recipe.logged.messages if message.startswith("Saved checkpoint: ")]
+    """Step 1's checkpoint is saved, then rotated away once step 2's is saved."""
+    saved = [m.removeprefix("Saved checkpoint: ") for m in recipe.logged.messages if m.startswith("Saved checkpoint: ")]
     removed = [message for message in recipe.logged.messages if message.startswith("Removed old checkpoint: ")]
-    step_1 = saved[0].removeprefix("Saved checkpoint: ")
-    assert len(saved) == 2 and Path(step_1).name.startswith("checkpoint_step1_epoch0_"), saved
-    assert saved[1] == f"Saved checkpoint: {recipe.checkpoints / 'final'}"
-    assert removed == [f"Removed old checkpoint: {step_1}"]
+    assert len(saved) == 2 and Path(saved[0]).name.startswith("checkpoint_step1_epoch0_"), saved
+    assert Path(saved[0]).parent == recipe.checkpoints, saved
+    assert saved[1] == str(recipe.last) and recipe.last.name.startswith(f"checkpoint_step{STEPS}_epoch0_"), saved
+    assert removed == [f"Removed old checkpoint: {saved[0]}"]
     # Nothing left of a save: no staging directory, nor the one a save replaced.
-    assert sorted(path.name for path in recipe.checkpoints.iterdir()) == [HISTORY_FILE, "final"]
+    assert sorted(path.name for path in recipe.checkpoints.iterdir()) == sorted([HISTORY_FILE, recipe.last.name])
 
 
 def test_a_checkpoint_carries_the_metrics_of_its_step(recipe):
-    final = recipe.checkpoints / "final"
+    last = recipe.last
     metrics = {"train/loss": logged_values(recipe.logged, "train/loss")[STEPS]}
     metrics["val/loss"] = logged_values(recipe.logged, "val/loss")[STEPS]
 
-    state = json.loads((final / TRAINER_STATE).read_text())
+    state = json.loads((last / TRAINER_STATE).read_text())
     assert (state["step"], state["epoch"], state["metrics"]) == (STEPS, 0, metrics)
     assert state["format"] == {"type": "hf"}
     assert state["base_model"] == {"name_or_path": recipe.config.model.name}
     (entry,) = json.loads((recipe.checkpoints / HISTORY_FILE).read_text())["checkpoints"]
-    assert (entry["name"], entry["path"], entry["step"], entry["metrics"]) == ("final", str(final), STEPS, metrics)
+    assert (entry["name"], entry["path"], entry["step"], entry["metrics"]) == (last.name, str(last), STEPS, metrics)
 
 
-def test_the_final_checkpoint_is_a_peft_adapter(recipe):
-    final = recipe.checkpoints / "final"
+def test_the_last_checkpoint_is_a_peft_adapter(recipe):
+    last = recipe.last
     lora = recipe.config.model.lora
     hf_config = load_hf_config(recipe.config.model.name)
     hidden, heads, kv_heads = (hf_config[k] for k in ("hidden_size", "num_attention_heads", "num_key_value_heads"))
@@ -139,8 +145,8 @@ def test_the_final_checkpoint_is_a_peft_adapter(recipe):
     rows = {"q_proj": heads * head_dim, "k_proj": kv_heads * head_dim, "v_proj": kv_heads * head_dim, "o_proj": hidden}
     assert sorted(rows) == sorted(lora.target_modules), "premise: the recipe adapts q, k, v and o"
 
-    assert (final / ADAPTER_CONFIG).is_file() and (final / ADAPTER_WEIGHTS).is_file()
-    adapter = read_adapter(final)
+    assert (last / ADAPTER_CONFIG).is_file() and (last / ADAPTER_WEIGHTS).is_file()
+    adapter = read_adapter(last)
     expected_shapes = {}
     for layer in range(hf_config["num_hidden_layers"]):
         for projection, out_features in rows.items():
@@ -163,10 +169,10 @@ def test_the_final_checkpoint_is_a_peft_adapter(recipe):
 
 
 def test_a_run_initialized_from_the_checkpoint_starts_from_its_adapters(recipe, tmp_path):
-    """One step at a learning rate of 0 keeps the weights the run loaded, so its final checkpoint is the one it
-    started from. The run saves to the project_dir it started from, and keeps that checkpoint."""
-    init = tmp_path / "checkpoints" / "final"
-    shutil.copytree(recipe.checkpoints / "final", init)
+    """One step at a learning rate of 0 keeps the weights the run loaded, so its checkpoint is the one it started
+    from. The run saves to the project_dir it started from, and keeps that checkpoint."""
+    init = tmp_path / "checkpoints" / recipe.last.name
+    shutil.copytree(recipe.last, init)
     logged = run_recipe(
         [
             "stopping_criteria.limit=1",
@@ -180,10 +186,11 @@ def test_a_run_initialized_from_the_checkpoint_starts_from_its_adapters(recipe, 
     (saved_path,) = [
         m.removeprefix("Saved checkpoint: ") for m in logged.messages if m.startswith("Saved checkpoint: ")
     ]
-    assert Path(saved_path).parent == init.parent and Path(saved_path).name.startswith("final_"), saved_path
-    started_from, saved = read_adapter(recipe.checkpoints / "final"), read_adapter(saved_path)
+    assert Path(saved_path).parent == init.parent and Path(saved_path).name.startswith("checkpoint_step1_epoch0_")
+    assert last_checkpoint(init.parent) == Path(saved_path)
+    started_from, saved = read_adapter(recipe.last), read_adapter(saved_path)
     assert sorted(saved.tensors) == sorted(started_from.tensors)
     for name, value in started_from.tensors.items():
         np.testing.assert_array_equal(saved.tensors[name], value, err_msg=name)
     # The saved adapters equal the ones it started from, so the step-2 trainer_state tells the kept checkpoint apart.
-    assert (init / TRAINER_STATE).read_text() == (recipe.checkpoints / "final" / TRAINER_STATE).read_text()
+    assert (init / TRAINER_STATE).read_text() == (recipe.last / TRAINER_STATE).read_text()
