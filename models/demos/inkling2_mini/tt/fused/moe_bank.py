@@ -86,6 +86,69 @@ def bank_weights(device, w, dtype, name):
                            memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
 
 
+def _nd(device, t, dtype, banks):
+    """[1, E, K, n*32] torch -> DRAM tensor ND-sharded one 32-column shard [E, K, 32] per bank, round robin over
+    banks 0 .. banks-1: shard m (columns m*32..) sits in bank m % banks, the shards of a bank one after another, each
+    receiver-contiguous (expert e's K tiles of that column in a row), as the tensor prefetcher streams grouped weights.
+    """
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape([t.shape[1], t.shape[2], 32]),
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))}),
+        ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )  # fmt: skip
+    return ttnn.from_torch(t.bfloat16(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device,
+                           memory_config=ttnn.MemoryConfig(ttnn.BufferType.DRAM, spec))  # fmt: skip
+
+
+def pf_columns(name, nb=BL.N_BANKS):
+    """Source column tile of ring position m (bank m % nb, worker i = m // nb of that bank) in the PF layout's main
+    tensor: gate_up worker i is the gate (i even) or up column of base pair b + nb * (i // 2); down worker i owns
+    column b + nb * i = m."""
+    P = N_GATE
+    base, _ = BL.gu_pair_counts(P, nb)
+    if name.endswith("w_gate_up"):
+        out = []
+        for m in range(nb * 2 * base):
+            b, i = m % nb, m // nb
+            j = b + nb * (i // 2)
+            out.append(j if i % 2 == 0 else P + j)
+        return out
+    return list(range(nb * (NT_DN // nb)))
+
+
+def pf_weights(device, w, dtype, name):
+    """Device-layout expert weight ``w`` [E, K, N] (torch) -> (main, extra) DRAM tensors in the PF layout (tests).
+    main: the base columns (pf_columns), ND-sharded per ring position (_nd). extra: gate_up's extra pair as the bank
+    layout stores it (bank extra_bank(e), slot e // (nb - X_LO), gate column then up column), DRAM interleaved; down's
+    leftover columns (70, 71 of 72) in banks 0, 1 at slot e * kt, DRAM interleaved. Same tiles as the TILE tensor."""
+    E, K, N = w.shape
+    nb = BL.N_BANKS
+    w = w.bfloat16()
+    main = _nd(device, w.reshape(E, K, N // 32, 32)[:, :, pf_columns(name)].reshape(1, E, K, -1), dtype, nb)
+    if name.endswith("w_down"):
+        lo = nb * (NT_DN // nb)
+        # shortcut: DRAM interleaved with banks 2..6 left empty (~5/7 of a 2-column tensor wasted); an ND-shard over
+        # banks 0, 1 alone read back wrong columns in the kernel. Upgrade if DRAM gets tight.
+        kt = K // 32
+        tiles = w[:, :, lo * 32 :].reshape(E, kt, 32, NT_DN - lo, 32).permute(0, 1, 3, 2, 4)  # [E, kt, 2, 32, 32]
+        out = torch.zeros(E * kt, nb, 32, 32, dtype=torch.bfloat16)
+        out[:, : NT_DN - lo] = tiles.reshape(E * kt, NT_DN - lo, 32, 32)
+        return main, ttnn.from_torch(out.reshape(1, 1, -1, 32), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device,
+                                     memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+    P, kt = N_GATE, K // 32
+    tiles = w.reshape(E, kt, 32, N // 32, 32).permute(0, 1, 3, 2, 4)  # [E, kt, nt, 32, 32]
+    per = nb - X_LO
+    slots = -(-E // per) * 2 * kt
+    out = torch.zeros(slots, nb, 32, 32, dtype=torch.bfloat16)
+    for e in range(E):
+        b, s0 = BL.extra_bank(e, 0, nb), (e // per) * 2 * kt
+        out[s0 : s0 + kt, b] = tiles[e, :, P - 1]
+        out[s0 + kt : s0 + 2 * kt, b] = tiles[e, :, 2 * P - 1]
+    extra = ttnn.from_torch(out.reshape(1, 1, -1, 32), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+    return main, extra
+
+
 def row_placement(device, per_bank):
     """per_bank[b] logical cores for DRAM bank b on the row of the bank's optimal NOC0 worker: its own row segment
     first (nearest the worker), then the rest of the row, then the rows above / below. Adapted from
@@ -123,6 +186,9 @@ class BankMoeExperts:
         """``w_gate_up`` / ``w_down``: bank-layout DRAM tensors (``bank_weights`` or the bank cache), BFP4 or BFP8
         (each its own). Placement and flags: module doc. x_mcast: the collector reads x once and multicasts it
         (otherwise every gate_up core reads it). noc1_banks: banks whose workers read on NOC1 (writer on NOC0)."""
+        self.pf = isinstance(w_gate_up, tuple)  # PF layout (pf_weights): (main, extra) per tensor
+        if self.pf:
+            (w_gate_up, self.gu_x), (w_down, self.dn_x) = w_gate_up, w_down
         self.x_mcast, self.noc1_banks = x_mcast, tuple(noc1_banks)
         self.dense_out = DENSE_OUT if dense_out is None else dense_out
         self.dense, self._last = None, None  # the twin (one per instance) and the row tensor it is registered for
@@ -234,6 +300,8 @@ class BankMoeExperts:
             "nbuf": self.nbuf, "kt_gu": KT_GU, "kt_dn": KT_DN, "x_tiles": KT_GU, "n_banks": self.nb, "base": self.base,
             "x_lo": X_LO, "dn_slots": self.dn_slots, **common,
         }  # fmt: skip
+        if self.pf:
+            r_named["n_pf"] = len(pf_columns("experts.w_down", self.nb))
         w_named = {
             "cb_g": CB_G, "cb_u16": CB_U16, "sem_u": SEM_U,
             "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O, "cb_z": CB_Z, "cb_scr": CB_SCR, "sem_g": SEM_G,
@@ -252,7 +320,8 @@ class BankMoeExperts:
             core = ttnn.CoreCoord(*c)
             px, py = self.noc[gate]
             r_args.append((core, [x.buffer_address(), weights.buffer_address(), indices.buffer_address(),
-                                  self.w_gate_up.buffer_address(), self.w_down.buffer_address(), f, b, k, off, dslot]))  # fmt: skip
+                                  self.w_gate_up.buffer_address(), self.w_down.buffer_address(), f, b, k, off, dslot]
+                           + ([self.gu_x.buffer_address(), self.dn_x.buffer_address()] if self.pf else [])))  # fmt: skip
             w_args.append((core, [f, j, px, py, cx, cy, out.buffer_address(), n, indices.buffer_address(), b]
                            + ([self.dense.buffer_address()] if self.dense_out else [])))  # fmt: skip
             c_args.append((core, [f]))
@@ -270,9 +339,14 @@ class BankMoeExperts:
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KDIR}/moe_bank_reader.cpp",
                     core_ranges=_range_set(cores),
-                    compile_time_args=acc(x) + acc(weights) + acc(indices) + acc(self.w_gate_up) + acc(self.w_down),
+                    compile_time_args=acc(x)
+                    + acc(weights)
+                    + acc(indices)
+                    + acc(self.w_gate_up)
+                    + acc(self.w_down)
+                    + (acc(self.gu_x) + acc(self.dn_x) if self.pf else []),
                     named_compile_time_args=list(r_named.items()),
-                    defines=xdef,
+                    defines=xdef + [("PF_LAYOUT", "1")] * self.pf,
                     runtime_args=pick(r_args),
                     config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=rnoc),
                 ),
@@ -321,7 +395,12 @@ class BankMoeExperts:
             for i in (SEM_U, SEM_G, SEM_R, SEM_X)
         ]
         prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=self.cbs)
-        io = [x, weights, indices, self.w_gate_up, self.w_down] + ([self.dense] if self.dense_out else []) + [out]
+        io = (
+            [x, weights, indices, self.w_gate_up, self.w_down]
+            + ([self.gu_x, self.dn_x] if self.pf else [])
+            + ([self.dense] if self.dense_out else [])
+            + [out]
+        )
         y = ttnn.generic_op(io, prog)
         if self.dense_out:  # register the twin for this output; drop the previous output's entry (no leak)
             if self._last is not None:

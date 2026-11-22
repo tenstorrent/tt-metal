@@ -12,6 +12,10 @@
 //      for e: the column (kt_gu tiles), blocks of SBK, nbuf - 1 blocks in flight; then their down column.
 // Runtime args: x, routing weights, ids, w_gate_up, w_down addresses; flags (F_* below); bank; kslot;
 //   col_off (0: gate column, kt_gu: up column); dn slot.
+// PF_LAYOUT (moe_bank.py pf_weights): w_gate_up / w_down hold the base columns, one receiver-contiguous shard per
+//   ring position m = bank + n_banks * dslot (expert e's column = kt tiles at page (e * kt) * n_pf + m); the extra
+//   pair (as the bank layout) and down's last columns (bank b's at slot e * kt_dn) come from two more interleaved
+//   tensors (runtime args 10, 11).
 // IDS_FROM_SEM (for a program that routes in the same program, tt/mk): ids (cb_scr bytes 0..15) and routing
 //   weights (32..47) arrive by multicast and sem_ids is set, instead of being read from their tensors.
 // X_MCAST: x is not read here; the collector multicasts it into cb_x and the writer pushes it, so the weight
@@ -77,6 +81,14 @@ void kernel_main() {
     const auto ids = TensorAccessor(ids_args, ids_addr);
     const auto gu = TensorAccessor(gu_args, gu_addr);
     const auto dn = TensorAccessor(dn_args, dn_addr);
+#ifdef PF_LAYOUT
+    constexpr uint32_t n_pf = get_named_compile_time_arg_val("n_pf");  // base columns (70)
+    constexpr auto gux_args = TensorAccessorArgs<dn_args.next_compile_time_args_offset()>();
+    constexpr auto dnx_args = TensorAccessorArgs<gux_args.next_compile_time_args_offset()>();
+    const auto gux = TensorAccessor(gux_args, get_arg_val<uint32_t>(a++));
+    const auto dnx = TensorAccessor(dnx_args, get_arg_val<uint32_t>(a++));
+    const uint32_t m = bank + nb * dslot;  // ring position
+#endif
 
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
@@ -121,9 +133,14 @@ void kernel_main() {
         cb_reserve_back(cb_wd, topk * kt_dn);
         uint32_t wr = get_write_ptr(cb_wd);
         for (uint32_t e = 0; e < topk; ++e) {
-            const uint32_t slot = (eid[e] * dn_slots + dslot) * kt_dn;
+#ifdef PF_LAYOUT
+            const uint64_t src =
+                m < n_pf ? dn.get_noc_addr(eid[e] * kt_dn * n_pf + m) : dnx.get_noc_addr(eid[e] * kt_dn * nb + bank);
+#else
+            const uint64_t src = dn.get_noc_addr(((eid[e] * dn_slots + dslot) * kt_dn) * nb + bank);
+#endif
             noc_async_read_set_trid(DN_TRID0 + e);
-            noc_async_read(dn.get_noc_addr(slot * nb + bank), wr, kt_dn * tb);
+            noc_async_read(src, wr, kt_dn * tb);
             wr += kt_dn * tb;
         }
         for (uint32_t e = 0; e < topk; ++e) {
@@ -159,7 +176,13 @@ void kernel_main() {
     for (uint32_t e = 0; e < topk; ++e) {
         const bool active = !(flags & F_EXTRA) || extra_bank(eid[e]) == bank;
         // pair = gate column then up column, 2 * kt_gu tiles contiguous in this bank; this core's column
+#ifdef PF_LAYOUT
+        const uint64_t src = (flags & F_EXTRA)
+                                 ? gux.get_noc_addr(((eid[e] / (nb - x_lo)) * 2 * kt_gu + col_off) * nb + bank)
+                                 : gu.get_noc_addr(eid[e] * kt_gu * n_pf + m);
+#else
         const uint64_t src = gu.get_noc_addr((gu_slot(eid[e], bank, kslot) * 2 * kt_gu + col_off) * nb + bank);
+#endif
         for (uint32_t t = 0; t < kt_gu; t += sbk) {
             if (active) {
                 s.block_contig(src + t * s.tile_bytes);

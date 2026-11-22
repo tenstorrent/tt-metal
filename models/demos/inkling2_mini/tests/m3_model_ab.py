@@ -7,6 +7,7 @@
 # PCC, argmax), replay bit-equal, median ms of 3 x 10 steps at pos 2048 and 122880, overlap stats. DRAM-busy fraction
 # = GB per step (P3: 4.864 / 7.230) / (ms * 443 GB/s).
 # usage: python models/demos/inkling2_mini/tests/m3_model_ab.py <out.jsonl> '<variant json>' ...
+# "hold": KB (L1 probe): one extra lock-step L1 tensor of that many KB per core on the expert step's worker cores.
 # M3_EAGER_ONLY=1 (mockwarm): two eager steps per variant, no traces, no numbers.
 import json
 import os
@@ -79,6 +80,18 @@ try:
         if v.get("pipe") is not None:
             assert ov is None, "pipe and tile-fill staging both wrap w_all"
             ov = PipeOverlap(m, **v["pipe"])
+        hold = None
+        if v.get("hold"):
+            from models.demos.inkling2_mini.tt.mk.stage import coalesce
+
+            wc = sorted({tuple(c) for c, *_ in m.layers[0].moe.fused.workers_info})
+            words = v["hold"] * 256
+            hold = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, len(wc), words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, dev,
+                ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+                                  ttnn.ShardSpec(coalesce(wc), (1, words), ttnn.ShardOrientation.ROW_MAJOR)),
+            )  # fmt: skip
+            print("M3HOLD", v["hold"], "KB on", len(wc), "cores", flush=True)
         try:
             m.step()  # two eager steps: the attach pattern is periodic from the 2nd step on (the capture must not
             m.step()  # meet new host + fill programs)
@@ -90,6 +103,8 @@ try:
         finally:
             if ov is not None:
                 ov.uninstall(m)
+            if hold is not None:
+                ttnn.deallocate(hold)
         res["variant"] = v
         res["logits_bit_equal_vs_base"] = bool(torch.equal(got, ref))
         res["logits_max_abs_vs_base"] = float((got - ref).abs().max())
