@@ -10,7 +10,9 @@
 #include "api/tile_constants.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
 // Issue zero writes for rows [first_row, TILE_HEIGHT) of reserved tiles [first_tile, first_tile + tiles); the
@@ -110,6 +112,34 @@ TT_KERNEL void reader(
     // as soon as they land, so compute starts on the gate while the rest of the batch is read. Each reservation waits
     // for compute to release that buffer's previous batch.
     kda_prep::Batches<batch_items> batches(work_item_start, work_item_count, num_chunks, valid_chunks);
+    // PoC (conv fused into prep, measurement only): after a q/k/v batch lands, replay the convolution reader's data
+    // movement per tile on this core: 16 face copies (the shifted tap tiles) and 2 carried-row copies, each from and
+    // to the same address, so prep's data is unchanged and only its reader's load grows. Prep staying near its own
+    // time means the convolution could hide in it.
+    constexpr bool poc_conv_staging = true;
+    UnicastEndpoint self;
+    const uint32_t self_x = my_x[noc.get_noc_id()];
+    const uint32_t self_y = my_y[noc.get_noc_id()];
+    const auto stage_like_conv = [&](auto& buffer, uint32_t tiles) {
+        if constexpr (!poc_conv_staging) {
+            return;
+        }
+        noc.async_read_barrier();
+        const uint32_t base = buffer.get_write_ptr();
+        const uint32_t face = buffer.get_entry_size() / 4;
+        for (uint32_t t = 0; t < tiles; ++t) {
+            for (uint32_t copy = 0; copy < 18; ++copy) {
+                const uint32_t address = base + t * buffer.get_entry_size() + (copy % 4) * face;
+                const uint32_t bytes = copy < 16 ? face : face / 16 * 3;
+                noc.async_read(
+                    self,
+                    buffer,
+                    bytes,
+                    noc_traits_t<UnicastEndpoint>::src_args_type{.noc_x = self_x, .noc_y = self_y, .addr = address},
+                    {.offset_bytes = t * buffer.get_entry_size() + (copy % 4) * face});
+            }
+        }
+    };
     const auto read_batch = [&](const auto& accessor, auto& buffer, uint32_t width_tiles) {
         buffer.reserve_back(batches.size * Ct * width_tiles);
         const uint32_t row_stride = num_heads * width_tiles;
@@ -198,10 +228,13 @@ TT_KERNEL void reader(
         beta.push_back(batches.size * Ct);
 
         read_batch(q_accessor, q, Kt);
+        stage_like_conv(q, batches.size * Ct * Kt);
         publish(q, Kt, false);
         read_batch(v_accessor, v, Vt);
+        stage_like_conv(v, batches.size * Ct * Vt);
         publish(v, Vt, true);
         read_batch(k_accessor, k, Kt);
+        stage_like_conv(k, batches.size * Ct * Kt);
         publish(k, Kt, true);
     };
 
