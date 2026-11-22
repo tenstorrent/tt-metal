@@ -59,6 +59,7 @@ from models.demos.inkling2_mini.tt.attention import (
 from models.demos.inkling2_mini.tt.attention_fast import KV_WIDTH, V_WIDTH
 from models.demos.inkling2_mini.tt.fused.common import dense_matrix
 from models.demos.inkling2_mini.tt.fused.pf_attnres import PfAttnRes
+from models.demos.inkling2_mini.tt.fused.pf_combine import PfCombine
 from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
 from models.demos.inkling2_mini.tt.fused.pf_gate import PfGateTail
 from models.demos.inkling2_mini.tt.fused.pf_gateout import PfGateOut
@@ -442,6 +443,8 @@ class Inkling2Prefill:
         self.unified = experts == "unified"
         # unified experts: routing buffers built on the device (tt/fused/pf_route.py), no host round trip
         self._pfroute = PfRoute(dev) if self.unified else None
+        # unified experts: gather + weight + sum of the k expert rows in one program (tt/fused/pf_combine.py)
+        self._pfcomb = PfCombine(dev) if self.unified else None
         self.dev_route = self.unified
         # fp32 DEST: the op's precise mode (fp32 partials, bf16 activations; bf8 activations miss the gate)
         self.unified_ckc = ttnn.init_device_compute_kernel_config(
@@ -1001,9 +1004,13 @@ class Inkling2Prefill:
             zero_output_row=b["u_rows"] - 32,
         )
         self._tick("moe.experts")
+        wk = _bf16(ttnn.permute(weights, (0, 3, 2, 1)))  # [1,8,T,1]
+        if self._pfcomb is not None:
+            out = self._pfcomb(y, b["bi"], wk)
+            ttnn.deallocate(y)
+            return out
         yb = ttnn.reshape(ttnn.embedding(b["bi"], y, layout=ttnn.TILE_LAYOUT), [1, TOP_K, t, HIDDEN])
         ttnn.deallocate(y)
-        wk = _bf16(ttnn.permute(weights, (0, 3, 2, 1)))  # [1,8,T,1]
         return _bf16(ttnn.sum(ttnn.multiply(yb, wk), dim=1, keepdim=True))
 
     def _urows(self, t):
