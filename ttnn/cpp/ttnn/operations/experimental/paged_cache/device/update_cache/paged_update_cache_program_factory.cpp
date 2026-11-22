@@ -18,6 +18,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace ttnn::experimental::prim {
 
