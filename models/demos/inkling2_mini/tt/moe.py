@@ -41,8 +41,8 @@ ROUTER_SPLIT = 9  # K chunks of the router GEMM (256 each)
 # in one run; 101 -> 77 us for BFP4 (E7). down stays on sparse_matmul (bank-local was no faster: 54 vs 55 us).
 # INKLING_MOE_BANK=0 turns it off (A/B runs).
 BANK_LOCAL = os.environ.get("INKLING_MOE_BANK", "1") != "0"
-# Fused expert step for BFP4 layers (tt/fused/moe_expert.py); INKLING_MOE_FUSED=0 falls back to the path above.
-FUSED_EXPERTS = os.environ.get("INKLING_MOE_FUSED", "1") != "0"
+# The fused expert step (tt/fused/moe_expert.py) serves every layer: BFP4, BFP8 and BFP4 gate_up + BFP8 down.
+# Inkling2MoE(..., fused=False) falls back to the sparse_matmul / bank-local path above (A/B runs, TILE caches only).
 # Workers on rows 3..9 and collector (10, 9): clear of the tensor prefetcher's receiver ring (cores 0..6, 0..2).
 FUSED_PLACEMENT = dict(origin=(0, 3), shape=(11, 7), collector=(10, 9))
 # Router top-k as one scalar-top-k program (tt/fused/router_topk.py), bit-equal to moe_grouped_topk;
@@ -75,12 +75,13 @@ def load_moe_weights(layer_dir):
 
 
 class Inkling2MoE:
-    def __init__(self, device, weights, gate_up_grid=(9, 4), down_grid=(9, 4), in0_block_w=(12, 18)):
+    def __init__(self, device, weights, gate_up_grid=(9, 4), down_grid=(9, 4), in0_block_w=(12, 18), fused=True):
         """``weights``: dict keyed by section-4 names (host tensors from prepare_moe_weights / load_moe_weights).
 
         Both projections have N = 2304 = 72 output tiles, so at most 72 of the 110 cores (11x10) get an
         output column; ``*_grid`` and ``in0_block_w`` (gate_up K-block, down K-block, in tiles) are the
-        knobs tuned on p100a (see tests/test_moe.py and T4-report.md)."""
+        knobs tuned on p100a (see tests/test_moe.py and T4-report.md). ``fused=False`` uses those sparse_matmul /
+        bank-local paths instead of the fused expert step (TILE caches only)."""
         dram = ttnn.DRAM_MEMORY_CONFIG
         self.device = device
         self.norm_w = ttnn.to_device(weights["mlp_norm"], device, dram)
@@ -117,8 +118,8 @@ class Inkling2MoE:
         # Stick-layout caches (convert/stick.py) store both expert tensors as [1, 1, P*32, 32] sticks; only the fused
         # step reads them.
         sticks = all(tuple(t.shape)[:2] == (1, 1) and t.shape[-1] == 32 for t in (gu, weights["experts.w_down"]))
-        assert FUSED_EXPERTS or not sticks, "stick-layout expert weights need the fused expert step"
-        if FUSED_EXPERTS:  # any of BFP4 / BFP8 / BFP4 gate_up + BFP8 down
+        assert fused or not sticks, "stick-layout expert weights need the fused expert step"
+        if fused:  # any of BFP4 / BFP8 / BFP4 gate_up + BFP8 down
             self.w_gate_up = ttnn.to_device(gu, device, dram)
             self.fused = FusedMoeExperts(device, self.w_gate_up, self.w_down, sticks=sticks, **FUSED_PLACEMENT)
         elif BANK_LOCAL and gu.dtype == ttnn.bfloat4_b:  # re-layout on load; the cache files are unchanged

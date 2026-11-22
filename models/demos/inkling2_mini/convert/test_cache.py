@@ -96,20 +96,12 @@ def test_expert_dtype_map():
         expert_tensor_dtype({"L03/experts.w_down": {"default": "BFP4", "BFP8": [5]}}, 3, "experts.w_down", "BFP4")
 
 
-def _e12_sticks(w, nb):
-    """The stick page order as written by the fused MoE kernel's device-side builder (torch, [E, K, N])."""
-    E, K, N = w.shape
-    kt, nt = K // 32, N // 32
-    s = w.reshape(E, kt, 32, nt, 32).permute(0, 3, 1, 2, 4).reshape(E * nt, kt, 32, 32)
-    s = torch.cat([s, s.new_zeros((-s.shape[0]) % nb, kt, 32, 32)])
-    return s.reshape(-1, nb, kt, 32, 32).permute(0, 2, 1, 3, 4).reshape(1, 1, -1, 32)
-
-
 @pytest.mark.parametrize("dtype", ["BFP4", "BFP8"])
 def test_stick_round_trip(tmp_path, dtype):
     """Stick file: same values in the kernel's page order, un-sticks to the exact source bytes, loader reports it."""
     from models.demos.inkling2_mini.convert import stick
     from models.demos.inkling2_mini.convert.convert import stick_layer
+    from models.demos.inkling2_mini.tt.fused.moe_expert import stick_order  # the kernel's own page order
 
     g = torch.Generator().manual_seed(1)
     w = Writer(tmp_path)
@@ -126,7 +118,7 @@ def test_stick_round_trip(tmp_path, dtype):
     for e in w.entries:
         t = layer[e["name"]]
         assert t.dtype == DTYPES[dtype] and t.layout == ttnn.TILE_LAYOUT and list(t.shape) == e["shape"]
-        assert torch.equal(ttnn.to_torch(t), _e12_sticks(vals[e["name"]][0], e["stick_banks"]))
+        assert torch.equal(ttnn.to_torch(t), stick_order(vals[e["name"]][0], e["stick_banks"]))
         back = stick.unstick(tmp_path / e["file"], e)
         hdr = len(tiles[e["name"]]) - back.size
         assert back.tobytes() == tiles[e["name"]][hdr:]

@@ -21,8 +21,6 @@ BFP8 weights use the standard ``matmul_block`` at ``bfp8_fidelity`` (default HiF
 down may differ in dtype (e.g. BFP4 gate_up + BFP8 down).
 """
 
-import os
-
 import torch
 
 import ttnn
@@ -57,24 +55,27 @@ def _crs(c0, c1=None):
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c0), ttnn.CoreCoord(*c1))])
 
 
+def stick_order(w, n_banks):
+    """Device-layout expert weight ``w`` [E, K, N] (torch) -> [1, 1, P*32, 32] in stick page order (see
+    stick_weights); the order the reader kernel walks with STICK_LAYOUT."""
+    E, K, N = w.shape
+    kt, nt = K // 32, N // 32
+    sticks = w.reshape(E, kt, 32, nt, 32).permute(0, 3, 1, 2, 4).reshape(E * nt, kt, 32, 32)
+    pad = (-sticks.shape[0]) % n_banks
+    if pad:
+        sticks = torch.cat([sticks, sticks.new_zeros(pad, kt, 32, 32)])
+    # page p = n_banks * (m0 + i) + b with stick (q // n_banks, b): order (stick-in-bank, i, bank)
+    return sticks.reshape(-1, n_banks, kt, 32, 32).permute(0, 2, 1, 3, 4).reshape(1, 1, -1, 32)
+
+
 def stick_weights(device, w, dtype, n_banks=None):
     """Device-layout expert weight ``w`` [E, K, N] (torch; gate_up [E,H,2I] or down [E,I,H]) -> DRAM tensor in the
     stick layout: stick q = e * Nt + n (one output column of one expert, Kt tiles in K order) lies contiguous in DRAM
     bank q % n_banks, so a core reads it in a few long bursts instead of Kt scattered 576 B tiles.
     Same tiles, same bytes and size as the TILE tensor (whole tiles move; <= n_banks - 1 padding sticks)."""
     nb = n_banks or device.dram_grid_size().x
-    E, K, N = w.shape
-    kt, nt = K // 32, N // 32
-    sticks = w.bfloat16().reshape(E, kt, 32, nt, 32).permute(0, 3, 1, 2, 4).reshape(E * nt, kt, 32, 32)
-    q = sticks.shape[0]
-    pad = (-q) % nb
-    if pad:
-        sticks = torch.cat([sticks, sticks.new_zeros(pad, kt, 32, 32)])
-    # page p = nb * (m0 + i) + b with stick (q // nb, b): order (stick-in-bank, i, bank)
-    pages = sticks.reshape(-1, nb, kt, 32, 32).permute(0, 2, 1, 3, 4).reshape(-1, 32)
-    t = ttnn.from_torch(pages.reshape(1, 1, -1, 32), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
-    return t
+    return ttnn.from_torch(stick_order(w.bfloat16(), nb), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device,
+                           memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
 
 
 def _cores(origin, shape):
@@ -219,9 +220,7 @@ class FusedMoeExperts:
             )
             c_args.append((core, [int(gate)]))
         (x0, y0), (x1, y1) = self.noc[self.rect[0]], self.noc[self.rect[-1]]
-        # shortcut: E12_PROBE=NO_MM|NO_READ (comma list) is a timing probe only (wrong output); drop it once tuned.
-        probe = [(f"E12_PROBE_{p}", "1") for p in os.environ.get("E12_PROBE", "").split(",") if p]
-        layout = [("E12_STICKS", "1")] if self.sticks else []
+        layout = [("STICK_LAYOUT", "1")] if self.sticks else []
         r_named["n_banks"] = self.n_banks
         kernels = [
             ttnn.KernelDescriptor(
@@ -229,7 +228,7 @@ class FusedMoeExperts:
                 core_ranges=self.workers,
                 compile_time_args=acc(x) + acc(weights) + acc(indices) + acc(self.w_gate_up) + acc(self.w_down),
                 named_compile_time_args=list(r_named.items()),
-                defines=probe + layout,
+                defines=layout,
                 runtime_args=r_args,
                 config=ttnn.ReaderConfigDescriptor(),
             ),
@@ -237,7 +236,7 @@ class FusedMoeExperts:
                 kernel_source=f"{KDIR}/moe_expert_writer.cpp",
                 core_ranges=self.workers,
                 compile_time_args=acc(out) + (acc(debug) if debug is not None else []),
-                defines=([("E12_DEBUG", "1")] if debug is not None else []) + layout,
+                defines=([("DEBUG_DUMP", "1")] if debug is not None else []) + layout,
                 named_compile_time_args=list(w_named.items()),
                 runtime_args=w_args,
                 config=ttnn.WriterConfigDescriptor(),
@@ -246,7 +245,7 @@ class FusedMoeExperts:
                 kernel_source=f"{KDIR}/moe_expert_compute.cpp",
                 core_ranges=self.workers,
                 named_compile_time_args=list(c_named.items()),
-                defines=probe + [("E12_STD_GU", "1")] * self.std_gu + [("E12_STD_DN", "1")] * self.std_dn,
+                defines=[("STD_MM_GU", "1")] * self.std_gu + [("STD_MM_DN", "1")] * self.std_dn,
                 runtime_args=c_args,
                 config=self.compute_config,
             ),

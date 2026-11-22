@@ -19,7 +19,7 @@ constexpr uint32_t cb_h16 = get_named_compile_time_arg_val("cb_h16");
 constexpr uint32_t cb_hid = get_named_compile_time_arg_val("cb_hid");
 constexpr uint32_t cb_o = get_named_compile_time_arg_val("cb_o");
 constexpr uint32_t cb_z = get_named_compile_time_arg_val("cb_z");
-#ifdef E12_DEBUG
+#ifdef DEBUG_DUMP
 constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");
 constexpr uint32_t cb_ws16 = get_named_compile_time_arg_val("cb_ws16");
 #endif
@@ -43,7 +43,7 @@ void kernel_main() {
     const uint32_t L = get_arg_val<uint32_t>(a++);
     constexpr auto out_args = TensorAccessorArgs<0>();
     const auto out = TensorAccessor(out_args, out_addr);
-#ifdef E12_DEBUG
+#ifdef DEBUG_DUMP
     // debug dump: bf16 ROW_MAJOR [256, 256] DRAM, 512 B rows (see moe_expert.py debug_rows)
     constexpr auto dbg_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     const auto dbg = TensorAccessor(dbg_args, get_arg_val<uint32_t>(8));
@@ -72,13 +72,13 @@ void kernel_main() {
         cb_push_back(cb_u16, 1);
 
         cb_wait_front(cb_h16, 1);
-#ifdef E12_DEBUG
+#ifdef DEBUG_DUMP
         dump(get_write_ptr(cb_g), j, 0, SLOT);
         dump(u16_base, 36 + j, 0, SLOT);
         dump(get_read_ptr(cb_h16), 72 + j, 0, SLOT);
         dump(get_write_ptr(cb_ws16), 198 + j, 0, SLOT);
 #endif
-#ifdef E12_STICKS
+#ifdef STICK_LAYOUT
         // hidden layout [e][kt]: tile (e, j) at slot e * 36 + j
         for (uint32_t e = 0; e < topk; ++e) {
             noc_async_write(
@@ -92,7 +92,7 @@ void kernel_main() {
         cb_pop_front(cb_h16, 1);
     } else {
         cb_wait_front(cb_g, topk);
-#ifdef E12_DEBUG
+#ifdef DEBUG_DUMP
         dump(get_read_ptr(cb_g), 144 + j, 0, SLOT);
 #endif
         noc_async_write(get_read_ptr(cb_g), get_noc_addr(px, py, u16_base), SLOT);
@@ -107,7 +107,7 @@ void kernel_main() {
     cb_push_back(cb_hid, hid_tiles);
 
     cb_wait_front(cb_o, 1);
-#ifdef E12_DEBUG
+#ifdef DEBUG_DUMP
     if (L == 0) {
         for (uint32_t r = 0; r < 36; ++r) {
             dump(hid_base + r * SLOT, 108 + r, 0, SLOT);

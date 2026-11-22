@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fused MoE expert step, compute, one of the 72 worker cores (in0 1x32 tiles, fp32 dest). Each matmul phase runs
-// Blackhole custom_mm (LoFi only: exact for BFP4 weights) or, with E12_STD_GU / E12_STD_DN, the standard
+// Blackhole custom_mm (LoFi only: exact for BFP4 weights) or, with STD_MM_GU / STD_MM_DN, the standard
 // matmul_block at the kernel's math fidelity (HiFi2 for BFP8 weights, as tt/moe.py). gate_up weights stream
 // through cb_w, down weights through cb_wd (each in its own format, so BFP4 gate_up + BFP8 down works).
 //   A (all):   for each of the 8 experts, one output tile of x @ W_gu[:, col_gu] (gate col j on gate cores, up col j
@@ -47,7 +47,6 @@ FORCE_INLINE void mm_tile(uint32_t cb_in0, uint32_t in0_first, uint32_t cb_out) 
     tile_regs_acquire();
     for (uint32_t k = 0; k < k_tiles; k += sbk) {
         cb_wait_front(cb_wt, sbk);
-#ifndef E12_PROBE_NO_MM
         if constexpr (std_mm) {
             for (uint32_t kk = 0; kk < sbk; ++kk) {
                 matmul_block(cb_in0, cb_wt, in0_first + k + kk, kk, 0, 0, 1, 1, 1);
@@ -57,7 +56,6 @@ FORCE_INLINE void mm_tile(uint32_t cb_in0, uint32_t in0_first, uint32_t cb_out) 
         } else {
             custom_mm_block<LAYOUT, true>(cb_in0, cb_wt, in0_first + k, 0, 0, sbk);
         }
-#endif
         cb_pop_front(cb_wt, sbk);
     }
     tile_regs_commit();
@@ -68,12 +66,12 @@ FORCE_INLINE void mm_tile(uint32_t cb_in0, uint32_t in0_first, uint32_t cb_out) 
     cb_push_back(cb_out, 1);
 }
 
-#ifdef E12_STD_GU
+#ifdef STD_MM_GU
 constexpr bool STD_GU = true;
 #else
 constexpr bool STD_GU = false;
 #endif
-#ifdef E12_STD_DN
+#ifdef STD_MM_DN
 constexpr bool STD_DN = true;
 #else
 constexpr bool STD_DN = false;

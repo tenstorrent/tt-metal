@@ -41,9 +41,7 @@ struct Stream {
         cb_reserve_back(cb, sbk * (in_flight + 1));
         noc_async_read_set_trid(trid_issue);
         for (uint32_t i = 0; i < sbk; ++i) {
-#ifndef E12_PROBE_NO_READ
             noc_async_read(acc.get_noc_addr(pages[i]), wr, tile_bytes);
-#endif
             wr += tile_bytes;
         }
         if (wr >= end) {
@@ -58,9 +56,7 @@ struct Stream {
     FORCE_INLINE void block_contig(uint64_t src) {
         cb_reserve_back(cb, sbk * (in_flight + 1));
         noc_async_read_set_trid(trid_issue);
-#ifndef E12_PROBE_NO_READ
         noc_async_read(src, wr, sbk * tile_bytes);
-#endif
         wr += sbk * tile_bytes;
         if (wr >= end) {
             wr = base;
@@ -147,7 +143,7 @@ void kernel_main() {
     Stream s, sd;
     open(s, cb_w);
     open(sd, cb_wd);
-#ifdef E12_STICKS
+#ifdef STICK_LAYOUT
     // Stick layout (moe_expert.stick_weights): stick q = expert * n_cols + col is kt_* tiles at pages
     // n_banks * (m0 + i) + q % n_banks, m0 = (q / n_banks) * kt_*: contiguous in bank q % n_banks.
     constexpr uint32_t nb = get_named_compile_time_arg_val("n_banks");
