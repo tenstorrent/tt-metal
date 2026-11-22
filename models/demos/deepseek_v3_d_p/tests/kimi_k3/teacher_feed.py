@@ -214,7 +214,7 @@ def load_input(run_dir: Path, start: int, end: int) -> torch.Tensor:
 # --- a device run's output directory ---------------------------------------------------------------------------
 
 # What a device run writes into its output directory; a new run clears all of it first.
-RUN_FILES = ("chunk_*.pt", "caches.pt", "metrics.json", "windows.tsv", "rows.pt", "host.json", MANIFEST)
+RUN_FILES = ("chunk_*.pt", "state_*.pt", "caches.pt", "metrics.json", "windows.tsv", "rows.pt", "host.json", MANIFEST)
 
 
 def chunk_path(out: Path, index: int) -> Path:

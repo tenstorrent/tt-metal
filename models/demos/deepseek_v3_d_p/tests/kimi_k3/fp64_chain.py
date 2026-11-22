@@ -188,8 +188,8 @@ class ChainModel:
     """Weights of layers 0-3 the chain reads (checkpoint dtypes; FP64 casts happen at use or once at load).
 
     ``layers[l]``: ``input_layernorm``, ``attn_res`` (norm, proj; l >= 1), ``mlp_res`` (norm, proj),
-    ``post_attention_layernorm``, and ``kda`` (l in 0-2), ``mlp`` (l = 0, dense FFN), ``moe`` (l in 1-2), ``dsa`` and
-    ``gate`` / ``gate_bias`` (l = 3; the gate only to route sampled rows for the cross-check)."""
+    ``post_attention_layernorm``, and ``kda`` (l in 0-2), ``mlp`` (l = 0, dense FFN), ``moe`` (l in 1-2, unless
+    loaded without routed experts), ``dsa`` (l = 3) and ``gate`` / ``gate_bias`` (l in 1-3: the router alone)."""
 
     embedding: torch.Tensor
     layers: dict[int, dict]
@@ -201,7 +201,11 @@ class ChainModel:
     digests: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_checkpoint(cls, checkpoint: Path, threads: int = 16, log: Callable[[str], None] = print) -> "ChainModel":
+    def from_checkpoint(
+        cls, checkpoint: Path, threads: int = 16, log: Callable[[str], None] = print, routed_experts: bool = True
+    ) -> "ChainModel":
+        """``routed_experts=False`` leaves out the MoE layers' routed experts (~145 GB resident) and their ``moe``
+        entry, for a consumer that reads the chain's stored MoE outputs instead; every other digest is the same."""
         config = json.loads((checkpoint / "config.json").read_text())
         kda_config = KDAConfig.from_model_config(config)
         eps = float(config.get("text_config", config)["rms_norm_eps"])
@@ -237,12 +241,13 @@ class ChainModel:
                 layer["mlp"] = {
                     n: t[f"mlp.{n}"].to(F64) for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")
                 }
-            if l in MOE_LAYERS:
+            if l in MOE_LAYERS and routed_experts:
                 experts, digests[f"layers.{l}.experts"] = load_experts(checkpoint, l, num_experts, threads, log)
                 w = {n: t[f"block_sparse_moe.{n}"] for n in MoE_NON_ROUTED}
                 layer["moe"] = MoE64(w, experts, C.NUM_EXPERTS_PER_TOKEN, eps)
             if l == DSA_LAYER:
                 layer["dsa"] = {n: t[f"self_attn.{n}"].to(F64) for n in dsa.WEIGHTS}
+            if l in MOE_LAYERS or l == DSA_LAYER:  # the router alone (layer 3: sampled rows; 1-2: kda_chain_feed)
                 layer["gate"] = t["block_sparse_moe.gate.weight"].to(F64)
                 layer["gate_bias"] = t["block_sparse_moe.gate.e_score_correction_bias"].to(F64)
             layers[l] = layer
