@@ -33,16 +33,21 @@ constexpr uint32_t kSdpaSfpuAddrMod7 = recipe::wormhole ? ADDR_MOD_3 : ADDR_MOD_
 // Attention sink (recipe::sink): dest tile 0's first column (a row's denominator l) += k * exp(scale * (sink - m)),
 // with m in dest tile 1's first column (the maxima the row's P were taken against). k is the score exp's mean factor
 // (on average P = k * exp(scale * (s - m)), and l sums P), so the sink weighs like one more key with logit `sink`.
-template <uint32_t scale_fp32, uint32_t k_bits>
+// rows (recipe::sink_rows): each row has its own logit, in dest tile 2's first column.
+template <uint32_t scale_fp32, uint32_t k_bits, bool rows = false>
 inline void calculate_sdpa_sink_denominator(uint32_t sink_bits) {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     constexpr float scale = __builtin_bit_cast(float, scale_fp32);
     constexpr float k = __builtin_bit_cast(float, k_bits);
-    const sfpi::vFloat sink = Converter::as_float(sink_bits);
+    const sfpi::vFloat scalar_sink = Converter::as_float(sink_bits);
 #pragma GCC unroll 1
     for (int d = 0; d < 4; ++d) {
         sfpi::vFloat l = sfpi::dst_reg[0];
         sfpi::vFloat m = sfpi::dst_reg[32];
+        sfpi::vFloat sink = scalar_sink;
+        if constexpr (rows) {
+            sink = sfpi::dst_reg[64];
+        }
         sfpi::dst_reg[0] = l + k * _sfpu_exp_fp32_accurate_((sink - m) * scale);
         sfpi::dst_reg += 2;
     }

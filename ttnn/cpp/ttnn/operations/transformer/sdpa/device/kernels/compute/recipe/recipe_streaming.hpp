@@ -505,12 +505,13 @@ ALWI void blocked_matmul_and_pack(
 }
 
 // Whether the current K chunk takes the additive mask: every chunk with an attn_mask, a key-range call's edge
-// chunks only (the reader's control page per Q chunk, recipe_read_key_range), none otherwise. A template: only the
-// key-range form reads state, the others stay constant expressions.
+// chunks only (the reader's control page per Q chunk, recipe_read_key_range) or the chunks a wrapper flags
+// (recipe::mask_flagged), none otherwise. A template: only the key-range and flagged forms read state, the others stay
+// constant expressions.
 static bool recipe_edge_chunk;
-template <bool krange = recipe::krange>
+template <bool flagged = recipe::krange || recipe::mask_flagged>
 ALWI constexpr bool recipe_chunk_masked() {
-    if constexpr (krange) {
+    if constexpr (flagged) {
         return recipe_edge_chunk;
     } else {
         return recipe::mask;
@@ -637,6 +638,8 @@ inline void calculate_sdpa_rescale_add() {
 // logit (FP32, or BF16 in the low half word). Normalization adds k * exp(scale * (sink - m)) to every row's denominator
 // (calculate_sdpa_sink_denominator), m being the maxima the row's P were taken against, in row order.
 static uint32_t recipe_sink_bits, recipe_sink_row;
+// Per-row sinks (recipe::sink_rows): the sink CB tile of the Q chunk's first tile row.
+static uint32_t recipe_sink_row_base;
 // The CB holding the Q chunk's maxima the rows' P were taken against (set before normalizing).
 static uint32_t recipe_sink_max_cb;
 static __attribute__((noinline)) void recipe_read_sink() {
@@ -659,12 +662,17 @@ constexpr float kRecipeSinkExpFactor = recipe::accurate ? 0.9699356f
                                        : recipe::fp32   ? 0.9650970f
                                                         : 1.0051060f / static_cast<float>(1u << kRefMaxExpOctaves);
 constexpr uint32_t kRecipeSinkExpFactorBits = __builtin_bit_cast(uint32_t, kRecipeSinkExpFactor);
-// This row's maxima into dest tile `dest` (the denominator is in tile 0).
+// This row's maxima into dest tile `dest` (the denominator is in tile 0); per-row sinks: its logits into dest + 1.
 ALWI void recipe_sink_load_max(uint32_t max_cb, uint32_t dest) {
     CircularBuffer(max_cb).wait_front(recipe_sink_row + 1);
     sdpa_stream_reconfig_srca(max_cb);
     copy_init(max_cb);
     copy_tile(max_cb, recipe_sink_row, dest);
+    if constexpr (recipe::sink_rows) {
+        sdpa_stream_reconfig_srca(recipe::sink_cb);
+        copy_init(recipe::sink_cb);
+        copy_tile(recipe::sink_cb, recipe_sink_row_base + recipe_sink_row, dest + 1);
+    }
 }
 // The FP32 recipes' normalization hook (sdpa::streaming::normalize_rows).
 template <uint32_t scale_fp32>
@@ -675,7 +683,7 @@ struct RecipeSinkHook {
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_sdpa_sink_denominator,
-            (scale_fp32, kRecipeSinkExpFactorBits),
+            (scale_fp32, kRecipeSinkExpFactorBits, recipe::sink_rows),
             0,
             VectorMode::C,
             recipe_sink_bits)));

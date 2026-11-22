@@ -627,7 +627,7 @@ ALWI void normalize_row_streaming_body(uint32_t cur_sum_cb, uint32_t cur_out_cb,
                         DST_SYNC_MODE,
                         DST_ACCUM_MODE,
                         calculate_sdpa_sink_denominator,
-                        (scale_fp32, kRecipeSinkExpFactorBits),
+                        (scale_fp32, kRecipeSinkExpFactorBits, recipe::sink_rows),
                         0,
                         VectorMode::C,
                         recipe_sink_bits)));
@@ -848,7 +848,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     // whose reader then keeps three K entries and materializes no V): V tile (k, d) is K^T tile (d, k), so the PV
     // matmul's in1 steps one tile per K row and KT tiles per V column (the unpacker's column stride).
     constexpr bool v_in_k = cb_v_in == cb_kt_in;
-    static_assert(!v_in_k || Sq_chunk_t == 1, "in-place V packs one-row PV subblocks only");
+    // The unpacker's column stride needs PV subblocks at least as wide as tall (one-row Q chunks: any width).
+    static_assert(
+        !v_in_k || Sq_chunk_t == 1 || qktv_subblock_w >= (recipe::fp32 ? 1 : qktv_subblock_h), "in-place V subblocks");
     constexpr uint32_t v_in1_stride = v_in_k ? 1 : vDHt;
     auto v_tile = [](uint32_t k, uint32_t col) -> uint32_t { return v_in_k ? col * KT_stride + k : k * vDHt + col; };
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1137,7 +1139,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         q_wait_tiles += q_subblock_num_tiles;
     }
 
-    if constexpr (!v_in_k) {
+    if constexpr (!v_in_k && !recipe::kv_hold) {
         CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);  // in-place V: after the PV
     }
 
@@ -1834,7 +1836,9 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             }
         }
 
-        CircularBuffer(cb_v_in).pop_front(KT_stride * (v_in_k ? DHt : vDHt));  // in-place V: the K^T chunk
+        if constexpr (!recipe::kv_hold) {
+            CircularBuffer(cb_v_in).pop_front(KT_stride * (v_in_k ? DHt : vDHt));  // in-place V: the K^T chunk
+        }
         CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
     }
     return false;
@@ -1935,7 +1939,7 @@ template <
     uint32_t cb_normalized_out,
     bool independent_q_release = false>
 ALWI void sdpa_recipe_segment(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
-    static_assert(Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && vDHt <= DHt && vDHt >= 1);
+    static_assert(Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && vDHt >= 1);
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;
