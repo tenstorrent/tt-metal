@@ -507,6 +507,12 @@ jobs:
             needs.find-changes.outputs.tt-nn-changed == 'true'
         }}
     secrets: inherit
+    # id-token: write is for the Hugging Face OIDC exchange in tt-train-tests. Job-level
+    # permissions replace inherited defaults, so restate what the tests need.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: merge_gate

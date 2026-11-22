@@ -158,6 +158,12 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
+    # id-token: write is for the Hugging Face OIDC exchange (hf-oidc-token). The caller must
+    # grant it too. A job-level block replaces the workflow default, so restate the reads.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
@@ -224,7 +230,6 @@ jobs:
         timeout-minutes: 10
         with:
           install-ttml: ${{ inputs.wheel-artifact-name != '' }}
-          hf-token: ${{ secrets.HUGGINGFACE_TOKEN }}
 
       - name: Install Python dependencies for metrics
         if: ${{ inputs.test-category == 'perf' }}
@@ -232,15 +237,27 @@ jobs:
           uv pip list
           uv pip install "gitpython==3.1.55" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
 
+      # Short-lived HF read token from GitHub OIDC (no stored secret). Directly before the
+      # test step so the 60-minute token lifetime starts late.
+      - name: 🤗 Get Hugging Face token (OIDC)
+        id: hf-oidc
+        if: ${{ inputs.package-artifact-name == '' }}
+        timeout-minutes: 5
+        uses: ./docker-job/.github/actions/hf-oidc-token
+
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
+          HF_TOKEN: ${{ steps.hf-oidc.outputs.token }}
           LSAN_OPTIONS: ${{ inputs.package-artifact-name != '' && 'suppressions=/usr/share/tt-metalium/lsan.supp' || '' }}
           UBSAN_OPTIONS: ${{ inputs.package-artifact-name != '' && 'print_stacktrace=1:halt_on_error=1' || '' }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
+            # Best effort: tests do not inherit the OIDC request variables. The wrapper shell
+            # (run-with-log) keeps them in its own environment.
+            unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
             python3 tools/tt-power-sidecar/tt_power_sidecar.py \
               --backend sysfs \
               --out /work/power_report.json \
