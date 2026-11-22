@@ -8,7 +8,7 @@
 // 3. Streams this core's weight tiles, in the order compute eats them:
 //      gate_up: for e in 0..7: for kt in 0..71: W_gu[id_e][kt][col_gu]
 //      down:    for kt in 0..35: for e in 0..7: W_dn[id_e][kt][col_dn]   (matches the gathered hidden [kt][e])
-//    in blocks of SBK tiles, two blocks in flight (one transaction id per block).
+//    in blocks of SBK tiles, nbuf - 1 blocks in flight (one transaction id per block).
 // Runtime args: x, routing weights, ids, w_gate_up, w_down addresses; is_gate; col_gu; col_dn.
 
 #include <cstdint>
@@ -16,6 +16,7 @@
 
 constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");
 constexpr uint32_t cb_w = get_named_compile_time_arg_val("cb_w");
+constexpr uint32_t cb_wd = get_named_compile_time_arg_val("cb_wd");
 constexpr uint32_t cb_ws16 = get_named_compile_time_arg_val("cb_ws16");
 constexpr uint32_t cb_scr = get_named_compile_time_arg_val("cb_scr");
 constexpr uint32_t sbk = get_named_compile_time_arg_val("sbk");
@@ -31,29 +32,47 @@ constexpr uint32_t TINY = 64;         // bytes of a 1x32 bf16 tile: [face0 row0 
 constexpr uint32_t FACE_BYTES = 512;  // one 16x16 bf16 face of a 32x32 tile
 
 struct Stream {
-    uint32_t base, end, wr, tile_bytes;
+    uint32_t cb, base, end, wr, tile_bytes;
     uint32_t in_flight = 0, trid_issue = 1, trid_wait = 1;
 
     template <typename Acc>
     FORCE_INLINE void block(const Acc& acc, const uint32_t* pages) {
-        // room for this block plus the one still in flight
-        cb_reserve_back(cb_w, sbk * (in_flight + 1));
+        // room for this block plus the ones still in flight
+        cb_reserve_back(cb, sbk * (in_flight + 1));
         noc_async_read_set_trid(trid_issue);
         for (uint32_t i = 0; i < sbk; ++i) {
+#ifndef E12_PROBE_NO_READ
             noc_async_read(acc.get_noc_addr(pages[i]), wr, tile_bytes);
+#endif
             wr += tile_bytes;
         }
         if (wr >= end) {
             wr = base;
         }
         trid_issue = trid_issue == nbuf ? 1 : trid_issue + 1;
-        if (++in_flight == 2) {
+        if (++in_flight == nbuf - 1) {
+            retire();
+        }
+    }
+    // one contiguous run of sbk tiles (stick layout: a column of one expert sits in one DRAM bank, in order)
+    FORCE_INLINE void block_contig(uint64_t src) {
+        cb_reserve_back(cb, sbk * (in_flight + 1));
+        noc_async_read_set_trid(trid_issue);
+#ifndef E12_PROBE_NO_READ
+        noc_async_read(src, wr, sbk * tile_bytes);
+#endif
+        wr += sbk * tile_bytes;
+        if (wr >= end) {
+            wr = base;
+        }
+        trid_issue = trid_issue == nbuf ? 1 : trid_issue + 1;
+        if (++in_flight == nbuf - 1) {
             retire();
         }
     }
     FORCE_INLINE void retire() {
         noc_async_read_barrier_with_trid(trid_wait);
-        cb_push_back(cb_w, sbk);
+        cb_push_back(cb, sbk);
         trid_wait = trid_wait == nbuf ? 1 : trid_wait + 1;
         --in_flight;
     }
@@ -116,11 +135,41 @@ void kernel_main() {
         cb_push_back(cb_ws16, 1);
     }
 
-    Stream s;
-    s.tile_bytes = get_tile_size(cb_w);
-    s.base = get_write_ptr(cb_w);
-    s.end = s.base + nbuf * sbk * s.tile_bytes;
-    s.wr = s.base;
+    // gate_up streams through cb_w, down through cb_wd (own format); trids 1..nbuf are reused, so the gate_up stream
+    // is fully retired before the down stream starts.
+    auto open = [](Stream& st, uint32_t cb) {
+        st.cb = cb;
+        st.tile_bytes = get_tile_size(cb);
+        st.base = get_write_ptr(cb);
+        st.end = st.base + nbuf * sbk * st.tile_bytes;
+        st.wr = st.base;
+    };
+    Stream s, sd;
+    open(s, cb_w);
+    open(sd, cb_wd);
+#ifdef E12_STICKS
+    // Stick layout (moe_expert.stick_weights): stick q = expert * n_cols + col is kt_* tiles at pages
+    // n_banks * (m0 + i) + q % n_banks, m0 = (q / n_banks) * kt_*: contiguous in bank q % n_banks.
+    constexpr uint32_t nb = get_named_compile_time_arg_val("n_banks");
+    for (uint32_t e = 0; e < topk; ++e) {
+        const uint32_t q = eid[e] * nt_gu + col_gu;
+        const uint64_t src = gu.get_noc_addr((q / nb) * kt_gu * nb + q % nb);
+        for (uint32_t kt = 0; kt < kt_gu; kt += sbk) {
+            s.block_contig(src + kt * s.tile_bytes);
+        }
+    }
+    while (s.in_flight) {
+        s.retire();
+    }
+    // down: [e][kt] order (the gathered hidden is [e][kt] in this layout)
+    for (uint32_t e = 0; e < topk; ++e) {
+        const uint32_t q = eid[e] * nt_dn + col_dn;
+        const uint64_t src = dn.get_noc_addr((q / nb) * kt_dn * nb + q % nb);
+        for (uint32_t kt = 0; kt < kt_dn; kt += sbk) {
+            sd.block_contig(src + kt * sd.tile_bytes);
+        }
+    }
+#else
     uint32_t pages[sbk];
 
     // gate_up: one 72-tile column per expert
@@ -133,6 +182,9 @@ void kernel_main() {
             s.block(gu, pages);
         }
     }
+    while (s.in_flight) {
+        s.retire();
+    }
     // down: [kt][e] order
     uint32_t dfirst[topk];
     for (uint32_t e = 0; e < topk; ++e) {
@@ -144,10 +196,11 @@ void kernel_main() {
             const uint32_t q = t + i;
             pages[i] = dfirst[q % topk] + (q / topk) * nt_dn;
         }
-        s.block(dn, pages);
+        sd.block(dn, pages);
     }
-    while (s.in_flight) {
-        s.retire();
+#endif
+    while (sd.in_flight) {
+        sd.retire();
     }
     noc_async_read_set_trid(0);
     noc_async_read_barrier();

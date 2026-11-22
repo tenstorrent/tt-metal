@@ -78,7 +78,15 @@ void kernel_main() {
         dump(get_read_ptr(cb_h16), 72 + j, 0, SLOT);
         dump(get_write_ptr(cb_ws16), 198 + j, 0, SLOT);
 #endif
+#ifdef E12_STICKS
+        // hidden layout [e][kt]: tile (e, j) at slot e * 36 + j
+        for (uint32_t e = 0; e < topk; ++e) {
+            noc_async_write(
+                get_read_ptr(cb_h16) + e * 64, get_noc_addr(cx, cy, hid_base + (e * (hid_tiles / topk) + j) * 64), 64);
+        }
+#else
         noc_async_write(get_read_ptr(cb_h16), get_noc_addr(cx, cy, hid_base + j * SLOT), SLOT);
+#endif
         noc_async_write_barrier();
         noc_semaphore_inc(get_noc_addr(cx, cy, get_semaphore(sem_g_id)), 1);
         cb_pop_front(cb_h16, 1);

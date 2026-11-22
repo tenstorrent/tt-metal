@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Fused MoE expert step, compute, one of the 72 worker cores (Blackhole custom_mm: in0 1x32 tiles, LoFi,
-// fp32 dest).
+// Fused MoE expert step, compute, one of the 72 worker cores (in0 1x32 tiles, fp32 dest). Each matmul phase runs
+// Blackhole custom_mm (LoFi only: exact for BFP4 weights) or, with E12_STD_GU / E12_STD_DN, the standard
+// matmul_block at the kernel's math fidelity (HiFi2 for BFP8 weights, as tt/moe.py). gate_up weights stream
+// through cb_w, down weights through cb_wd (each in its own format, so BFP4 gate_up + BFP8 down works).
 //   A (all):   for each of the 8 experts, one output tile of x @ W_gu[:, col_gu] (gate col j on gate cores, up col j
 //              on up cores), packed bf16 into cb_g (8 tiny tiles).
 //   B (gate):  h = tanh(g/4) * sigmoid(g) * tanh(u/25) * 100 * w_e, on face 0 of a 32x32 view (8 tiny tiles
@@ -18,9 +20,12 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");
 constexpr uint32_t cb_w = get_named_compile_time_arg_val("cb_w");
+constexpr uint32_t cb_wd = get_named_compile_time_arg_val("cb_wd");
 constexpr uint32_t cb_g = get_named_compile_time_arg_val("cb_g");
 constexpr uint32_t cb_g32 = get_named_compile_time_arg_val("cb_g32");
 constexpr uint32_t cb_u16 = get_named_compile_time_arg_val("cb_u16");
@@ -35,18 +40,25 @@ constexpr uint32_t hid_tiles = get_named_compile_time_arg_val("hid_tiles");
 
 constexpr auto LAYOUT = CustomMmDestLayout::DefaultSplitAcc;
 
-// One output tile: in0 tiles [in0_first, in0_first + k_tiles) of cb_in0 times k_tiles streamed weight tiles.
-template <uint32_t k_tiles>
+// One output tile: in0 tiles [in0_first, in0_first + k_tiles) of cb_in0 times k_tiles weight tiles streamed
+// through cb_wt. std: matmul_block (fidelity from the kernel config), else custom_mm (LoFi).
+template <uint32_t k_tiles, uint32_t cb_wt, bool std_mm>
 FORCE_INLINE void mm_tile(uint32_t cb_in0, uint32_t in0_first, uint32_t cb_out) {
     tile_regs_acquire();
     for (uint32_t k = 0; k < k_tiles; k += sbk) {
-        cb_wait_front(cb_w, sbk);
-        if (k + sbk < k_tiles) {
-            custom_mm_block<LAYOUT, false>(cb_in0, cb_w, in0_first + k, 0, 0, sbk);
+        cb_wait_front(cb_wt, sbk);
+#ifndef E12_PROBE_NO_MM
+        if constexpr (std_mm) {
+            for (uint32_t kk = 0; kk < sbk; ++kk) {
+                matmul_block(cb_in0, cb_wt, in0_first + k + kk, kk, 0, 0, 1, 1, 1);
+            }
+        } else if (k + sbk < k_tiles) {
+            custom_mm_block<LAYOUT, false>(cb_in0, cb_wt, in0_first + k, 0, 0, sbk);
         } else {
-            custom_mm_block<LAYOUT, true>(cb_in0, cb_w, in0_first + k, 0, 0, sbk);
+            custom_mm_block<LAYOUT, true>(cb_in0, cb_wt, in0_first + k, 0, 0, sbk);
         }
-        cb_pop_front(cb_w, sbk);
+#endif
+        cb_pop_front(cb_wt, sbk);
     }
     tile_regs_commit();
     cb_reserve_back(cb_out, 1);
@@ -56,16 +68,34 @@ FORCE_INLINE void mm_tile(uint32_t cb_in0, uint32_t in0_first, uint32_t cb_out) 
     cb_push_back(cb_out, 1);
 }
 
+#ifdef E12_STD_GU
+constexpr bool STD_GU = true;
+#else
+constexpr bool STD_GU = false;
+#endif
+#ifdef E12_STD_DN
+constexpr bool STD_DN = true;
+#else
+constexpr bool STD_DN = false;
+#endif
+
 void kernel_main() {
     const uint32_t is_gate = get_arg_val<uint32_t>(0);
 
     // ---- A: gate_up column for each expert
-    custom_mm_block_init<false, LAYOUT>(cb_x, cb_w, cb_g);
+    if constexpr (STD_GU) {
+        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_g);
+        matmul_block_init(cb_x, cb_w, 0, 1, 1, 1);
+    } else {
+        custom_mm_block_init<false, LAYOUT>(cb_x, cb_w, cb_g);
+    }
     cb_wait_front(cb_x, kt_gu);
     for (uint32_t e = 0; e < topk; ++e) {
-        mm_tile<kt_gu>(cb_x, 0, cb_g);
+        mm_tile<kt_gu, cb_w, STD_GU>(cb_x, 0, cb_g);
     }
-    custom_mm_block_uninit<LAYOUT>(cb_g);
+    if constexpr (!STD_GU) {
+        custom_mm_block_uninit<LAYOUT>(cb_g);
+    }
     cb_pop_front(cb_x, kt_gu);
 
     // ---- B: softcapped SwiGLU x routing weight, 8 experts in one tile
@@ -112,15 +142,21 @@ void kernel_main() {
         cb_pop_front(cb_g32, 1);
         cb_pop_front(cb_u16, 1);
         cb_pop_front(cb_ws16, 1);
-        reconfig_data_format_srca(cb_w);
     }
+    reconfig_data_format_srca(cb_wd);
     pack_reconfig_data_format(cb_o);
     pack_init(cb_o);
 
     // ---- C: down column over the gathered hidden of all 8 experts
-    custom_mm_block_init_short<false, LAYOUT>(cb_hid, cb_w, cb_o);
+    if constexpr (STD_DN) {
+        matmul_block_init(cb_hid, cb_wd, 0, 1, 1, 1);
+    } else {
+        custom_mm_block_init_short<false, LAYOUT>(cb_hid, cb_wd, cb_o);
+    }
     cb_wait_front(cb_hid, hid_tiles);
-    mm_tile<hid_tiles>(cb_hid, 0, cb_o);
-    custom_mm_block_uninit<LAYOUT>(cb_o);
+    mm_tile<hid_tiles, cb_wd, STD_DN>(cb_hid, 0, cb_o);
+    if constexpr (!STD_DN) {
+        custom_mm_block_uninit<LAYOUT>(cb_o);
+    }
     cb_pop_front(cb_hid, hid_tiles);
 }
