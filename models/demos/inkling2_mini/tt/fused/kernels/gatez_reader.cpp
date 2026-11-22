@@ -8,6 +8,7 @@
 #define kernel_main prep_main
 #include "attnres_reader.cpp"
 #undef kernel_main
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t kt_n = get_named_compile_time_arg_val("kt");  // K tiles per split
@@ -34,11 +35,13 @@ void kernel_main() {
         rowio::read_pages(eye_addr, 4096, 0, 1, get_write_ptr(cb_eye));
     }
     {
+        DeviceZoneScopedN("R_wait_x");
         volatile tt_l1_ptr uint32_t* sp =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("sem_x")));
         noc_semaphore_wait(sp, n_prep);
         noc_semaphore_set(sp, 0);
     }
+    DeviceZoneScopedN("R_x");
     cb_reserve_back(cb_x, kt_n);
     rowio::read_pages(x_addr, 2048, s * kt_n, kt_n, get_write_ptr(cb_x));
     noc_async_read_barrier();

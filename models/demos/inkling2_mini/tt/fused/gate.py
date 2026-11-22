@@ -41,12 +41,8 @@ class _FusedGate:
         self.down = R.split_k_weight(torch.cat(downs, -1), device)  # [1, SPLIT, 2C/SPLIT, 64 g] bf16
         self.f = R.to_device(torch.cat(forgets).float(), device)  # [1, 1, 64 g, C]
         self.g = R.to_device(torch.cat(gains).float(), device)
-        self.mask = None
-        if g > 1:
-            m = torch.zeros(rows, g * RANK)
-            for i in range(rows):
-                m[i, i * RANK : (i + 1) * RANK] = 1
-            self.mask = R.to_device(m, device)
+        self.block = g > 1  # row i goes through gate i only (z tiles 2i, 2i + 1; applied by the combine reader)
+        assert not self.block or (g == rows and RANK == 64)
         ks = 2 * self.c // R.SPLIT
         assert ks % 32 == 0 and self.ntc % 1 == 0
         self.xs = ttnn.from_torch(
@@ -165,25 +161,27 @@ class _FusedGate:
     def _combine(self, z, h, m):
         cores, crs = self.comb_cores
         out, out_dense = self.out.get_twin("out", self.rows, self.c, ttnn.float32)
-        has_mask = int(self.mask is not None)
+        block = int(self.block)
+
+        def src(t):  # [addr, dense, nvec]: fp32 dense twins are read row by row (E10c)
+            tw = F.twin(t)
+            if tw is not None and t.dtype == ttnn.float32:
+                return tw[0].buffer_address(), 1, tw[1]
+            return t.buffer_address(), 0, 0
+
+        (h_a, h_d, h_n), (m_a, m_d, m_n) = src(h), src(m)
         rd, wr = {}, {}
         for i, core in enumerate(cores):
             col0 = i * self.nt
-            rd[core] = [
-                z.buffer_address(),
-                self.mask.buffer_address() if has_mask else 0,
-                self.f.buffer_address(),
-                self.g.buffer_address(),
-                h.buffer_address(),
-                m.buffer_address(),
-                col0,
-            ]
+            rd[core] = [z.buffer_address(), 0, self.f.buffer_address(), self.g.buffer_address(), h_a, m_a, col0]
+            rd[core] += [h_d, m_d, h_n, m_n]
             wr[core] = [out.buffer_address(), col0, out_dense.buffer_address()]
         named = dict(
             kz=self.kz,
             nt=self.nt,
             nct=self.ntc,
-            has_mask=has_mask,
+            has_mask=0,
+            block=block,
             h_tile=F.tile_bytes(h.dtype),
             rows=self.rows,
             pages=F.pages(self.c),
@@ -205,7 +203,8 @@ class _FusedGate:
             F.cb(16, ttnn.bfloat16, self.kz, cores=crs),
             F.cb(17, f32, self.nt, cores=crs),
         ]
-        io = [z, h, m, self.f, self.g] + ([self.mask] if has_mask else []) + [out_dense, out]
+        tws = [t[0] for t in (F.twin(h), F.twin(m)) if t is not None]
+        io = [z, h, m, *tws, self.f, self.g, out_dense, out]
         F.run(io, kernels, cbs)
         return out  # the cached object itself: its dense twin is keyed by identity
 

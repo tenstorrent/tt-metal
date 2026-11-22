@@ -8,6 +8,7 @@
 #define kernel_main prep_main
 #include "gate_prep_writer.cpp"
 #undef kernel_main
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t kz = get_named_compile_time_arg_val("kz");
@@ -31,6 +32,7 @@ void kernel_main() {
     const uint32_t root_x = get_arg_val<uint32_t>(A + 3), root_y = get_arg_val<uint32_t>(A + 4);
 
     if (s == 0) {
+        DeviceZoneScopedN("W_root");
         volatile tt_l1_ptr uint32_t* sp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_z);
         noc_semaphore_wait(sp, n_split - 1);
         noc_semaphore_set(sp, 0);

@@ -76,8 +76,8 @@ def test_twin_app(device, kind):
 
     def app(h, skip_rows=False):
         rep = 3 if (with_msg and not is_global) else None
-        # x feeds only the fused norm without messages (the gate's combine reads its rows); resid feeds only fused ops
-        x = attn(None, h, 3, split=False, repeat_rows=rep, row_out=not (skip_rows and not with_msg))
+        # x and resid feed only fused ops (norm, gate prep and combine, conv, attn-res): all read the dense twins
+        x = attn(None, h, 3, split=False, repeat_rows=rep, row_out=not skip_rows)
         if with_msg:
             x = qkv(x, msgs[0])
         qkv_rows = norm(x)

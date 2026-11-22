@@ -26,6 +26,7 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_x, cb_w, cb_z);
     }
     pack_reconfig_data_format(cb_z);
+    DeviceZoneScopedN("C_z");
     cb_wait_front(cb_zero, 1);
     cb_wait_front(cb_x, kt_n);
     cb_wait_front(cb_w, kt_n * kz);

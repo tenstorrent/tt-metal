@@ -9,30 +9,25 @@ void kernel_main() {
     constexpr uint32_t kz = get_named_compile_time_arg_val("kz");    // z width in tiles (64 * gates / 32)
     constexpr uint32_t nt = get_named_compile_time_arg_val("nt");    // column tiles per core
     constexpr uint32_t nct = get_named_compile_time_arg_val("nct");  // C / 32
-    constexpr uint32_t has_mask = get_named_compile_time_arg_val("has_mask");
     constexpr uint32_t h_tile = get_named_compile_time_arg_val("h_tile");  // page bytes of h and m
     constexpr uint32_t cb_z = 0, cb_mask = 1, cb_f = 2, cb_g = 3, cb_h = 4, cb_m = 5;
 
+    constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
+    constexpr uint32_t block = get_named_compile_time_arg_val("block");  // row i through gate i only (block mask)
+    constexpr uint32_t T = get_named_compile_time_arg_val("pages");
+
     const uint32_t z_addr = get_arg_val<uint32_t>(0);
-    const uint32_t mask_addr = get_arg_val<uint32_t>(1);
     const uint32_t f_addr = get_arg_val<uint32_t>(2);
     const uint32_t g_addr = get_arg_val<uint32_t>(3);
     const uint32_t h_addr = get_arg_val<uint32_t>(4);
     const uint32_t m_addr = get_arg_val<uint32_t>(5);
     const uint32_t col0 = get_arg_val<uint32_t>(6);
+    const uint32_t h_dense = get_arg_val<uint32_t>(7);  // h / m given as dense twins (fp32): vector r = pages r*T ..
+    const uint32_t m_dense = get_arg_val<uint32_t>(8);
+    const uint32_t h_nvec = get_arg_val<uint32_t>(9);  // twin vectors (rows >= nvec repeat the last one)
+    const uint32_t m_nvec = get_arg_val<uint32_t>(10);
 
-    cb_reserve_back(cb_z, kz);
-    rowio::read_pages(z_addr, 4096, 0, kz, get_write_ptr(cb_z));
-    if constexpr (has_mask) {
-        cb_reserve_back(cb_mask, kz);
-        rowio::read_pages(mask_addr, 4096, 0, kz, get_write_ptr(cb_mask));
-    }
-    noc_async_read_barrier();
-    cb_push_back(cb_z, kz);
-    if constexpr (has_mask) {
-        cb_push_back(cb_mask, kz);
-    }
-
+    // bulk weights first
     cb_reserve_back(cb_f, kz * nt);
     cb_reserve_back(cb_g, kz * nt);
     const uint32_t f = get_write_ptr(cb_f), g = get_write_ptr(cb_g);
@@ -40,11 +35,49 @@ void kernel_main() {
         rowio::read_pages(f_addr, 4096, kt * nct + col0, nt, f + kt * nt * 4096);
         rowio::read_pages(g_addr, 4096, kt * nct + col0, nt, g + kt * nt * 4096);
     }
+    // z: only rows 0..rows-1 matter (output rows >= rows are never written; matmul rows are independent). With
+    // the block mask, row i keeps z tiles 2i, 2i+1 (gate i) and the rest of the row is zeroed.
+    cb_reserve_back(cb_z, kz);
+    const uint32_t zl = get_write_ptr(cb_z);
+    const InterleavedAddrGen<true> zs = {.bank_base_address = z_addr, .page_size = 4096};
+    for (uint32_t r = 0; r < rows; ++r) {
+        const uint32_t off = rowio::row_offset(r, 4);
+        for (uint32_t t = 0; t < kz; ++t) {
+            const uint32_t d = zl + t * 4096 + off;
+            if (!block || t / 2 == r) {
+                noc_async_read(zs.get_noc_addr(t, off), d, 64);
+                noc_async_read(zs.get_noc_addr(t, off + 1024), d + 1024, 64);
+            } else {
+                rowio::zero_words(d, 64);
+                rowio::zero_words(d + 1024, 64);
+            }
+        }
+    }
+    // h, m: column tiles col0 .. of row form, or rows of the dense twins (elements 32 j .. 32 j + 31 of vector r:
+    // 128 contiguous bytes -> the two face-row chunks of tile row r)
     cb_reserve_back(cb_h, nt);
     cb_reserve_back(cb_m, nt);
-    rowio::read_pages(h_addr, h_tile, col0, nt, get_write_ptr(cb_h));
-    rowio::read_pages(m_addr, h_tile, col0, nt, get_write_ptr(cb_m));
+    const uint32_t srcs[2] = {h_addr, m_addr}, dense[2] = {h_dense, m_dense}, nvec[2] = {h_nvec, m_nvec};
+    const uint32_t cbs[2] = {get_write_ptr(cb_h), get_write_ptr(cb_m)};
+    for (uint32_t i = 0; i < 2; ++i) {
+        if (!dense[i]) {
+            rowio::read_pages(srcs[i], h_tile, col0, nt, cbs[i]);
+            continue;
+        }
+        const InterleavedAddrGen<true> ds = {.bank_base_address = srcs[i], .page_size = 4096};
+        for (uint32_t j = 0; j < nt; ++j) {
+            const uint32_t e = 32 * (col0 + j);
+            for (uint32_t r = 0; r < rows; ++r) {
+                const uint32_t v = r < nvec[i] ? r : nvec[i] - 1;
+                const uint64_t a = ds.get_noc_addr(v * T + e / 1024, (e % 1024) * 4);
+                const uint32_t d = cbs[i] + j * 4096 + rowio::row_offset(r, 4);
+                noc_async_read(a, d, 64);
+                noc_async_read(a + 64, d + 1024, 64);
+            }
+        }
+    }
     noc_async_read_barrier();
+    cb_push_back(cb_z, kz);
     cb_push_back(cb_f, kz * nt);
     cb_push_back(cb_g, kz * nt);
     cb_push_back(cb_h, nt);

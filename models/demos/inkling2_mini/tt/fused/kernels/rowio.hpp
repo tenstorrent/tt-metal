@@ -32,6 +32,7 @@ FORCE_INLINE void zero_words(uint32_t l1, uint32_t bytes) {
 // Gather row r of a row-form tensor (base addr, tile_bytes per page, es bytes per element, ntc tiles along C)
 // into dense L1 at dst (C = 32 * ntc elements; the pad up to pad_bytes is zeroed). stage: 64B-aligned scratch of
 // ntc * 128 bytes. DRAM reads must be 64B aligned, so whole 64B blocks are staged and the chunks copied out.
+// [j0, j1): only these tiles (the two data-movement RISCs can each gather a part; the pad goes with the last part).
 FORCE_INLINE void gather_row(
     uint32_t base,
     uint32_t tile_bytes,
@@ -40,31 +41,34 @@ FORCE_INLINE void gather_row(
     uint32_t r,
     uint32_t dst,
     uint32_t pad_bytes,
-    uint32_t stage) {
+    uint32_t stage,
+    uint32_t j0 = 0,
+    uint32_t j1 = 0xffffffff) {
+    j1 = j1 < ntc ? j1 : ntc;
     const InterleavedAddrGen<true> src = {.bank_base_address = base, .page_size = tile_bytes};
     const uint32_t off = row_offset(r, es);
     const uint32_t blk = off & ~(DRAM_RD_ALIGN - 1);
     const uint32_t in_blk = off - blk;
     const uint32_t chunk = 16 * es;
     const uint32_t row_bytes = ntc * 32 * es;
-    if (pad_bytes > row_bytes) {
+    if (pad_bytes > row_bytes && j1 == ntc) {
         zero_words(dst + row_bytes, pad_bytes - row_bytes);
     }
     if (in_blk == 0 && chunk == 64 && (dst & (DRAM_RD_ALIGN - 1)) == 0) {  // fp32: chunks land in place
-        for (uint32_t j = 0; j < ntc; ++j) {
+        for (uint32_t j = j0; j < j1; ++j) {
             noc_async_read(src.get_noc_addr(j, off), dst + j * 128, 64);
             noc_async_read(src.get_noc_addr(j, off + 1024), dst + j * 128 + 64, 64);
         }
         noc_async_read_barrier();
         return;
     }
-    for (uint32_t j = 0; j < ntc; ++j) {
+    for (uint32_t j = j0; j < j1; ++j) {
         noc_async_read(src.get_noc_addr(j, blk), stage + j * 128, 64);
         noc_async_read(src.get_noc_addr(j, blk + 256 * es), stage + j * 128 + 64, 64);
     }
     noc_async_read_barrier();
     // chunks out of the staged blocks: local L1 -> L1 NOC copies (16B alignment), not RISC-V word loops
-    for (uint32_t j = 0; j < ntc; ++j) {
+    for (uint32_t j = j0; j < j1; ++j) {
         noc_async_read(get_noc_addr(stage + j * 128 + in_blk), dst + j * 2 * chunk, chunk);
         noc_async_read(get_noc_addr(stage + j * 128 + 64 + in_blk), dst + j * 2 * chunk + chunk, chunk);
     }

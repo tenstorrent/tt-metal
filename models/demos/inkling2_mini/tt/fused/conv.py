@@ -53,27 +53,24 @@ class FusedShortConv:
         stage2 = int(resid is not None or out_dtype != x.dtype)
         slots = [ring[(phase - k) % 4] for k in range(4)]
         res = resid if resid is not None else x
-        reader = F.kernel(
-            "conv_reader.cpp",
-            ttnn.ReaderConfigDescriptor(),
-            dict(ntc=ntc, pages=T, has_resid=int(resid is not None)),
-            F.input_args(x)
-            + [s.buffer_address() for s in slots[1:]]
-            + [self.taps.buffer_address()]
-            + F.input_args(res),
+        in_args = (
+            F.input_args(x) + [s.buffer_address() for s in slots[1:]] + [self.taps.buffer_address()] + F.input_args(res)
         )
+        reader = F.kernel("conv_reader.cpp", ttnn.ReaderConfigDescriptor(), dict(ntc=ntc, pages=T), in_args[:5])
         cb_out = 17
         writer = F.kernel(
             "conv_writer.cpp",
             ttnn.WriterConfigDescriptor(),
-            dict(ntc=ntc, pages=T, cb_out=cb_out, row_out=int(row_out)),  # 0: dense twin only (fused consumers)
+            # row_out 0: dense twin only (fused consumers)
+            dict(ntc=ntc, pages=T, cb_out=cb_out, row_out=int(row_out), has_resid=int(resid is not None)),
             [
                 slots[0].buffer_address(),
                 out.buffer_address(),
                 F.tile_bytes(out_dtype),
                 F.ES[out_dtype],
                 out_dense.buffer_address(),
-            ],
+            ]
+            + in_args,
         )
         x_in, res_in = F.input_dtype(x), F.input_dtype(res)
         fp32_cbs = [1, 2, 16] + ([0] if x_in == ttnn.float32 else []) + ([3] if res_in == ttnn.float32 else [])
@@ -91,6 +88,8 @@ class FusedShortConv:
             F.cb(17, out_dtype, T),
             F.cb(18, x.dtype, T),
             F.stage_cb(24, ntc),
+            F.cb(25, ttnn.bfloat16, 1, 32),  # writer -> reader: second half of x landed
+            F.stage_cb(26, ntc),
         ]
         tws = [t[0] for t in (F.twin(x), F.twin(res)) if t is not None]
         io = [x, res, *tws, self.taps, *slots, out_dense, out]
