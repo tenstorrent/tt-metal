@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/transformer/sdpa/sparse_sdpa.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
 #include <optional>
 
@@ -18,7 +18,8 @@ struct SparseSDPAParams {
     uint32_t v_dim;      // width of V (= leading v_dim cols of the K_DIM-wide KV cache); the output width
     transformer::SparseKVFormat kv_format;
     uint32_t k_chunk_size = 128;
-    DeviceComputeKernelConfig compute_kernel_config;
+    // The numerics (sdpa_config.hpp): resolved by the API (STANDARD for BF16 inputs, the FP8 default for FP8 ones).
+    transformer::SDPAPrecision precision = transformer::SDPAPrecision::STANDARD;
     // Indexed KV cache: when set, kv is a [B,1,T,K_DIM] shared cache and this selects the batch slot to
     // attend to (the gather page ids are offset by cache_batch_idx * T). It is a DYNAMIC runtime arg
     // (excluded from the program hash, re-applied every dispatch), so changing it does NOT recompile.

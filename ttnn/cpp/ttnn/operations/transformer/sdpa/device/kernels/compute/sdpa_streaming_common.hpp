@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Streaming SDPA compute helpers shared by compute_streaming.hpp and sparse_ring_streaming.hpp.
+// Streaming SDPA compute helpers used by compute_streaming.hpp.
 // Depends on primitives from compute_common.hpp (must be included first). The includer must also define
 // should_use_blocked_pack_width(uint32_t) before including this header: each op sets its own blocked-pack threshold.
 

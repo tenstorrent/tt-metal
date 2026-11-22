@@ -184,6 +184,17 @@ def test_sparse_sdpa_bf16_multi_query_tile(device):
 
 
 @run_for_blackhole()
+@pytest.mark.parametrize("k_dim, v_dim", [(576, 96), (192, 160), (64, 32)])
+def test_sparse_sdpa_bf16_odd_v_tiles(device, k_dim, v_dim):
+    """An odd V tile count: the BF16 recipes tilize V into its own CB instead of reading it in place from K."""
+    H, S, T, TOPK, kc = 64, 32, 1024, 256, 128
+    q, kv, indices = make_inputs(H, S, T, TOPK, k_dim, lambda s: 1 + (s * 37) % TOPK, seed=63)
+    out, scale = run_op(q, kv, indices, device, k_chunk_size=kc, v_dim=v_dim)
+    score = pcc(out, golden(q, kv, indices, scale, v_dim))
+    assert score >= 0.999, f"BF16 v_dim={v_dim} sparse SDPA PCC {score:.5f}"
+
+
+@run_for_blackhole()
 def test_sparse_sdpa_scaled_fp8_kv_multi_query_tile(device):
     """GLM geometry: two 32-head query tiles share each gathered packed-KV chunk."""
     H, S, T, TOPK, kc = 64, 64, 128, 64, 32
@@ -782,7 +793,8 @@ def check_scaled_split_k(device, H, S, T, TOPK, kc, nv_id, split, seed):
         (64, 160, 1024, 512, 128, "mixed", True),  # sentinel tails: empty HEAD segments, masks in either segment
         (32, 250, 1024, 512, 128, "causal", True),  # 2+ tokens/core, prefill-like valid counts
         (64, None, 1024, 256, 64, "mixed", True),  # 1 token + a sliver per core: S = cores + 10
-        (128, 160, 1024, 512, 128, "mixed", True),  # Sqt=4: the merge fills DST
+        # Sqt=4: the precision recipe's state leaves no L1 for split-K's merge buffers at 128 heads: whole-token split
+        (128, 160, 1024, 512, 128, "mixed", False),
         (96, 160, 1024, 512, 128, "mixed", True),  # Sqt=3
         (128, 160, 4096, 1344, 448, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
     ],
@@ -827,7 +839,8 @@ def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, H, S, T, TOPK, kc, nv_id
         (64, 32, 4096, 2048, K_DIM, V_DIM, 128, "all", True),  # GLM chunk 1024 per chip: half a token per core
         (64, 32, 1024, 512, K_DIM, V_DIM, 128, "mixed", True),  # sentinel tails
         (64, 40, 1024, 512, K_DIM, V_DIM, 128, "causal", True),  # prefill-like valid counts
-        (128, 16, 1024, 512, K_DIM, V_DIM, 64, "mixed", True),  # Sqt=4
+        # Sqt=4: the precision recipe's state leaves no L1 for split-K's merge buffers at 128 heads: whole-token split
+        (128, 16, 1024, 512, K_DIM, V_DIM, 64, "mixed", "l1"),
         (32, 1, 4096, 2048, 512, 256, 32, "all", True),  # Qwen 3.8 QSA decode: 1 row, 64 chunks on 2 cores
         (32, 5, 4096, 2080, 512, 256, 32, "mixed", True),  # QSA rows with 65 chunks: 32 + 33 per token
         (64, 64, 1024, 512, K_DIM, V_DIM, 128, "all", False),  # 2S > cores: whole-token split
@@ -838,8 +851,10 @@ def test_sparse_sdpa_split_k_kv_formats(device, kv_dtype, H, S, T, TOPK, k_dim, 
     """BF16 and plain FP8 KV must use split-K only when 2S <= cores and match the torch golden (PCC)."""
     grid = device.compute_with_storage_grid_size()
     cores = grid.x * grid.y
-    if split != (2 * S <= cores):
-        pytest.skip(f"case needs 2S {'<=' if split else '>'} cores ({cores})")
+    l1_bound = split == "l1"  # 2S <= cores, but the split-K CBs do not fit L1
+    split = False if l1_bound else split
+    if (split or l1_bound) != (2 * S <= cores):
+        pytest.skip(f"case needs 2S {'<=' if split or l1_bound else '>'} cores ({cores})")
     q, kv, indices = make_inputs(H, S, T, TOPK, k_dim, nv_pattern(nv_id, TOPK), seed=77)
     fp8 = kv_dtype == ttnn.fp8_e4m3
     kv_format = FP8_KV if fp8 else BF16_KV

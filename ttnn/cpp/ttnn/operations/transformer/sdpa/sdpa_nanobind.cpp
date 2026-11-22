@@ -196,7 +196,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     bool use_column_major_ccl,
     uint32_t block_size,
     std::optional<uint32_t> q_blocks_per_pass,
-    const std::optional<ttnn::Tensor>& block_counts) {
+    const std::optional<ttnn::Tensor>& block_counts,
+    std::optional<SDPAPrecision> precision) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -222,7 +223,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
                              : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
         block_size,
         q_blocks_per_pass,
-        block_counts);
+        block_counts,
+        precision);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -488,7 +490,8 @@ void bind_sdpa(nb::module_& mod) {
                 (scale != 0) to contribute exp(model_sink). Defaults to None.
             scale (float, optional): defaults to K_DIM**-0.5.
             k_chunk_size (int): defaults to 128 (must divide TOPK, multiple of 32).
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): deprecated, ignored (one warning);
+                the numerics come from precision.
             cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
                 It is a dynamic runtime arg, so changing the slot does not recompile. Changing T also reuses the
                 program for a plain interleaved cache, but recompiles for sharded or block-cyclic caches.
@@ -504,6 +507,9 @@ void bind_sdpa(nb::module_& mod) {
                 sp_coord*tp + tp_coord), so stripes = sp*tp and per-stripe chunk = block_cyclic_chunk_local/tp.
             sub_core_grids (ttnn.CoreRangeSet, optional): restrict work to these cores (default: all cores of the
                 first subdevice). Part of the program-cache key.
+            precision (ttnn.SDPAPrecision, optional): The numerics recipe. Defaults to STANDARD for bf16 q and kv;
+                an fp8 q or kv (FP8_E4M3, SCALED_FP8) tilizes through the FP32 dest and accepts only BALANCED (its
+                default) or ACCURATE.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -522,7 +528,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_chunk_local") = nb::none(),
         nb::arg("block_cyclic_cache_tp_sharded") = false,
         nb::arg("attention_sink") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("precision") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
@@ -544,7 +551,8 @@ void bind_sdpa(nb::module_& mod) {
         Keyword args:
             scale (float, optional): defaults to d to the power of -0.5.
             block_size (int): KV block size in tokens; defaults to 128. Must be a multiple of 32 and divide T.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional). fp8 q requires fp32_dest_acc_en.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): deprecated, ignored (one warning);
+                the numerics come from precision.
             cache_batch_idx (int, optional): select the batch slot of a shared [B, n_kv, T, feature_dim] K/V cache.
                 It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
             chunk_start_idx (int, optional): global position of query row 0. When set, enforces a token-level
@@ -565,6 +573,8 @@ void bind_sdpa(nb::module_& mod) {
                 a later query on the same core is read from L1 instead of DRAM; output is byte-identical either
                 way. The slot count is sized per call from the free L1 (an estimate, not a reservation) and baked
                 into the program, so a trace replays the count it captured unchecked. Default False.
+            precision (ttnn.SDPAPrecision, optional): The numerics recipe. Defaults to STANDARD for bf16 q; fp8 q
+                tilizes through the FP32 dest and accepts only BALANCED (its default) or ACCURATE.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
@@ -586,7 +596,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
-        nb::arg("enable_kv_block_cache") = false);
+        nb::arg("enable_kv_block_cache") = false,
+        nb::arg("precision") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(
@@ -929,7 +940,8 @@ void bind_sdpa(nb::module_& mod) {
             program_config (ttnn.SDPAProgramConfig): q_chunk_size must equal block_size; k_chunk_size sets the K/V
                 piece size and must be a multiple of block_size.
             scale (float, optional): defaults to D to the power of -0.5.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): deprecated, ignored (one warning);
+                the numerics come from precision.
             dim (int): all-gather dimension; must be the sequence dimension (2 or -2).
             multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): all-gather semaphores.
             num_links (int), cluster_axis (int), mesh_device (ttnn.MeshDevice), topology (ttnn.Topology),
@@ -947,6 +959,8 @@ void bind_sdpa(nb::module_& mod) {
                 sequence (e.g. VSA's ragged 4x4x4 tiles). Tokens past a block's count are never attended; a block of
                 count 0 is never computed or pooled. Defaults to None: full blocks except the shard and logical_n
                 tails.
+            precision (ttnn.SDPAPrecision, optional): The numerics recipe: STANDARD (default) or FAST (the
+                BF16-state recipes; each resident Q block keeps its own state in L1).
 
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
@@ -976,7 +990,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("use_column_major_ccl") = false,
         nb::arg("block_size") = 64,
         nb::arg("q_blocks_per_pass") = nb::none(),
-        nb::arg("block_counts").noconvert() = nb::none());
+        nb::arg("block_counts").noconvert() = nb::none(),
+        nb::arg("precision") = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

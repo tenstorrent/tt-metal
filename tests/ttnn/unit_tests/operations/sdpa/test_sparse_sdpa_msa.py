@@ -158,7 +158,9 @@ def _assert_kv_cache_parity(device, q, k, v, indices, **kw):
 # Per bank, for H=16, d=128, bf16 K/V: room for the base CBs (~68 KiB) plus exactly topk=16 bf16 slots (64 KiB each),
 # with less than one slot to spare. Holds for a base footprint anywhere in (36, 100] KiB.
 _BF16_SLOT = 2 * BLK_KV * _D * 2  # one block of K and of V
-_TOPK_SLOTS_HEADROOM = 16 * _BF16_SLOT + 100 * 1024
+# 16 slots above the op's other CBs at this geometry (the precision recipe's layout: about 120 KB, within one slot of
+# the 160 KB allowed here, so 16 slots fit and 15 do not).
+_TOPK_SLOTS_HEADROOM = 16 * _BF16_SLOT + 160 * 1024
 
 
 @contextmanager

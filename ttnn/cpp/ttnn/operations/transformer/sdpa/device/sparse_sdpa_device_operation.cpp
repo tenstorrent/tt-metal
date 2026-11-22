@@ -10,6 +10,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <bit>
+#include <cmath>
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 
 namespace ttnn::prim {
 
@@ -103,8 +105,8 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "sparse_sdpa is Blackhole-only");
 
     // dtypes. q and kv may each be bf16 or fp8_e4m3 — fp8 halves that input's K/Q-gather bytes; the reader
-    // gathers it row-major and compute tilizes fp8 -> bfp8_b cb_*_in (near-lossless, also halves the L1).
-    // fp8 inputs require fp32_dest_acc_en (the unpack-to-dest path); enforced below.
+    // gathers it row-major and compute tilizes fp8 -> bfp8_b (near-lossless, also halves the L1).
+    // fp8 inputs require an FP32-state recipe (the unpack-to-dest path); enforced below.
     const bool kv_is_fp8 = (kv.dtype() == DataType::FP8_E4M3);
     const bool q_is_fp8 = (q.dtype() == DataType::FP8_E4M3);
     TT_FATAL(q.dtype() == DataType::BFLOAT16 || q_is_fp8, "q must be bf16 or fp8_e4m3");
@@ -209,13 +211,19 @@ void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams&
     TT_FATAL((TOPK * idx.element_size()) % dram_align == 0, "indices row bytes must be {}B aligned", dram_align);
     TT_FATAL((attrs.v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
 
-    // fp8 q/kv tilizes through a 32-bit dest accumulator (fp8 unpacks to fp32 in DEST, packs to bf16/bfp8),
-    // so it requires fp32_dest_acc_en. The op factory defaults it on for fp8 inputs (see sparse_sdpa.cpp).
-    // (fp32_dest_acc_en is otherwise free: the compute kernel processes the H/TILE_HEIGHT query tile-rows in
-    // DST-sized groups, so DST never caps H — only per-core L1 does.)
+    // fp8 q/kv tilizes through a 32-bit dest (fp8 unpacks to fp32 in DEST, packs to bf16/bfp8), so it needs an
+    // FP32-DEST recipe. The API defaults FP8 inputs to one (sparse_sdpa.cpp).
     TT_FATAL(
-        !(kv_is_fp8 || q_is_fp8) || get_fp32_dest_acc_en(attrs.compute_kernel_config),
-        "fp8 q/kv requires fp32_dest_acc_en=true (32-bit dest for the fp8 tilize)");
+        !(kv_is_fp8 || q_is_fp8) || attrs.precision == transformer::SDPAPrecision::BALANCED ||
+            attrs.precision == transformer::SDPAPrecision::ACCURATE,
+        "sparse_sdpa: fp8 q/kv requires precision BALANCED or ACCURATE (32-bit dest for the fp8 tilize)");
+    // The recipe exps fold the scale into FP32 coefficients and the key masks add -2^100 before it
+    // (resolve_recipe_policy's bounds).
+    TT_FATAL(
+        std::isfinite(attrs.scale) && attrs.scale >= 0x1p-64f && attrs.scale <= 0x1p16f,
+        "sparse_sdpa: scale must be finite and in [2^-64, 2^16], got {}",
+        attrs.scale);
+    ttnn::operations::transformer::sdpa::detail::require_recipe_sfploadmacro();
 }
 
 SparseSDPAOperation::spec_return_value_t SparseSDPAOperation::compute_output_specs(
@@ -238,11 +246,10 @@ SparseSDPAOperation::tensor_return_value_t SparseSDPAOperation::create_output_te
 }
 
 ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
-    // kv_format + dtypes + compute_kernel_config MUST be in the hash: q/kv may be bf16 or fp8_e4m3 (different CB
+    // kv_format + dtypes + precision MUST be in the hash: q/kv may be bf16 or fp8_e4m3 (different CB
     // formats, row byte widths, fp32-dest/unpack modes, and output dtype), scaled FP8 changes row interpretation,
-    // and fp32_dest_acc_en changes
-    // the program. Same-shape-different-dtype (or -config) calls otherwise alias to one program and the
-    // second silently reuses the first's kernel (wrong results).
+    // and the recipe changes the program. Same-shape-different-dtype (or -config) calls otherwise alias to one program
+    // and the second silently reuses the first's kernel (wrong results).
     //
     // kv's shape is hashed ONLY when kv is sharded. For an INTERLEAVED kv the per-page address is
     // shape-independent (just page_id, page_size, num_banks), so T rides on the accessor's common runtime
@@ -256,7 +263,7 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.v_dim,
         attrs.kv_format,
         attrs.k_chunk_size,
-        attrs.compute_kernel_config,
+        attrs.precision,
         t.q.logical_shape(),
         t.q.dtype(),
         t.kv.dtype(),
@@ -280,9 +287,12 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.indices.dtype(),
         t.attention_sink,
         attrs.worker_core_grid,
-        // The split-K plan depends on the free L1 (live L1 tensors), which the fields above do not pin.
+        // The plan depends on the free L1 (live L1 tensors), which the fields above do not pin.
         plan.split_k,
-        plan.num_used);
+        plan.num_used,
+        plan.passes,
+        plan.fused,
+        plan.group);
 }
 
 Tensor sparse_sdpa(
@@ -293,7 +303,7 @@ Tensor sparse_sdpa(
     uint32_t v_dim,
     transformer::SparseKVFormat kv_format,
     uint32_t k_chunk_size,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    transformer::SDPAPrecision precision,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic,
     const std::optional<Tensor>& attention_sink,
@@ -309,7 +319,7 @@ Tensor sparse_sdpa(
             .v_dim = v_dim,
             .kv_format = kv_format,
             .k_chunk_size = k_chunk_size,
-            .compute_kernel_config = compute_kernel_config,
+            .precision = precision,
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
             .worker_core_grid = worker_core_grid,

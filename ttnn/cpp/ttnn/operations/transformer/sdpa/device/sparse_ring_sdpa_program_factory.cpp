@@ -15,6 +15,8 @@
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_kv_chains.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 
 #include <algorithm>
 #include <array>
@@ -45,6 +47,7 @@ namespace {
 namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
 namespace ag_dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dynamic;
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+namespace recipes = ttnn::operations::transformer::sdpa::detail;
 
 // Host-side summary of which ring-loop iterations do useful SDPA work. Bits are indexed by ring_iter,
 // not ring_id; kernels still advance their sync/ring-id sequence on every iter before checking the mask.
@@ -378,11 +381,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         num_local_q_chunks,
         num_local_k_chunks);
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
+    // The recipe owns the numerics (sdpa_config.hpp SDPAPrecision; recipe_compute_program below).
+    const auto policy =
+        recipes::resolve_precision_policy(recipes::select_recipe(args.precision, gathered_input_tensor_k.dtype()));
 
     const CoreCoord grid_size = args.program_config.compute_with_storage_grid_size;
-    const bool exp_approx_mode = args.program_config.exp_approx_mode.value_or(true);
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet core_grid_set(core_grid);
@@ -453,29 +456,15 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const bool group_mcast = use_head_chain;
     const uint32_t k_piece_tiles = Sk_chunk_t * DHt;
     const uint32_t v_piece_tiles = Sk_chunk_t * vDHt;
-    // Pair steps (one step over two consecutive pieces of a head, halving the per-step fixed cost) apply to small
-    // pieces (<= 256 keys). They need a 4-deep K/V CB, so a pair and the next piece's delivery fit together, and twice
-    // the score scratch; the pass split below turns them on only when that costs no extra pass.
-    const bool pair_steps_eligible = Sk_chunk_t <= 8;
-    bool pair_steps = false;                       // decided with the pass split
     uint32_t kv_cb_pages = group_mcast ? 3u : 2u;  // decided with the pass split
-    uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
-    uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
-    uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
 
-    log_debug(
-        tt::LogOp,
-        "k_piece_tiles: {}, v_piece_tiles: {}, qk_tiles: {}, out0_t: {}, statistics_tiles: {}",
-        k_piece_tiles,
-        v_piece_tiles,
-        qk_tiles,
-        out0_t,
-        statistics_tiles);
+    log_debug(tt::LogOp, "k_piece_tiles: {}, v_piece_tiles: {}", k_piece_tiles, v_piece_tiles);
 
     // Host code is responsible for determining matmul configuration
-    const uint32_t dst_size = ttnn::get_dest_reg_count(args.compute_kernel_config);
+    // DEST tiles in half-sync: 8 with the BF16-state recipes' 16-bit DEST (the only ones this op runs).
+    TT_FATAL(!policy.fp32_destination, "SparseRingSDPA runs the BF16-state recipes");
+    const uint32_t dst_size = 8u;
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
@@ -491,9 +480,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    // Validated: fp32_dest_acc_en is off, so compute takes the streaming path.
-    const bool use_streaming_compute = !fp32_dest_acc_en;
-    TT_ASSERT(use_streaming_compute);
+    // The writer's positional "streaming compute" flag (the dense ring op's layout): the recipe compute.
+    const bool use_streaming_compute = true;
 
     auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
         Sq_chunk_t,
@@ -814,141 +802,103 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    if (args.program_config.matmul_math_fidelity.has_value()) {
-        defines["SDPA_MATMUL_FIDELITY"] =
-            std::to_string(static_cast<uint32_t>(*args.program_config.matmul_math_fidelity));
-    }
-    // MATH_FIDELITY is not defined on the unpack TRISC, and all three must agree on how P.V is set up.
-    if (math_fidelity == MathFidelity::LoFi) {
-        defines["SDPA_COMPUTE_LOFI"] = "1";
-    }
 
     // NOTE: KernelDescriptors are built after chain construction.
 
-    // Create circular buffers
-
+    // Circular buffers: the recipe compute layout (recipe_compute_program: CBs 0-16, 29-31; recipe_ring_cbs.hpp) with
+    // one region of the O and l banks (CBs 9, 13) per slot, each extra slot's maxima pair from CB kSlotMaxCb0, the
+    // pooled-column bias in the recipe's mask CB 15 (one row of tiles per Q tile row: the attn-mask layout), then the
+    // plan pages and the block counts.
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
-    tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
-    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-
-    // The pooled-column bias tiles are Float16_b: the step adds them into the scores by L1 accumulation.
-    tt::DataFormat mask_df = tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    // Intermediates stay in bf16 to save L1 (fp32 dest accumulation is off).
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;
-    tt::DataFormat stats_df = im_df;
-    tt::DataFormat qk_im_df = tt::DataFormat::Float16_b;
-    // The output and sum slots are Float32: the packer accumulates every step onto them, so small late increments
-    // are not rounded away.
-    tt::DataFormat state_df = tt::DataFormat::Float32;
-
-    uint32_t q_tile_size = tt::tile_size(q_df);
-    uint32_t k_tile_size = tt::tile_size(k_df);
-    uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
-    uint32_t out_tile_size = tt::tile_size(out_df);
-    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
-    uint32_t im_tile_size = tt::tile_size(im_df);
-    uint32_t stats_tile_size = tt::tile_size(stats_df);
-    uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
-    uint32_t state_tile_size = tt::tile_size(state_df);
-
-    log_debug(tt::LogOp, "data formats: q {}, k {}, v {}, out {}, scalar {}", q_df, k_df, v_df, out_df, scalar_df);
-
-    uint32_t next_cb_index = 0;
-    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
-        const uint32_t cb_index = next_cb_index++;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = page_size_bytes * num_pages,
-            .core_ranges = core_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_index),
-                .data_format = data_format,
-                .page_size = page_size_bytes,
-            }}},
-        });
-        return cb_index;
-    };
-
-    // Slot-dependent CBs ("slots" = Q blocks per core per pass) are laid out by lay_out_cbs, which the pass split runs
-    // with a byte counter per candidate and then with the real allocator, so the fit check and allocation agree.
-    // A step's scores (cb_qk_im) hold up to kResidentGroup Q blocks of Sq_chunk_t x Sk_chunk_t tiles, twice that with
-    // pair steps; the compute kernel derives the same capacity.
-    constexpr uint32_t kResidentGroup = 4;
+    const auto v_storage = recipes::recipe_kv_storage(gathered_input_tensor_v.dtype());
+    tt::tt_metal::ProgramDescriptor recipe_program = recipes::recipe_compute_program(
+        policy,
+        core_grid_set,
+        1,
+        Sq_chunk_t,
+        Sk_chunk_t,
+        DHt,
+        scale_value,
+        vDHt,
+        v_storage != policy.selection.kv_storage ? std::optional<recipes::KVStorage>(v_storage) : std::nullopt,
+        q_df);
+    auto& recipe_compute = recipe_program.kernels.front();
     const bool has_block_counts = tensor_args.block_counts.has_value();
     const uint32_t block_counts_bytes = tt::round_up(mask_n_blocks_pad, 32u);
-    const uint32_t key_bias_tiles =
-        (has_block_counts || args.logical_n % tt::constants::TILE_WIDTH != 0) ? 2 * (Sk_chunk_t / block_tiles) : 0u;
-    struct CbLayout {
-        uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
-            recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity;
-    };
-    const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, bool pairs, const auto& alloc) -> CbLayout {
-        const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {
-            return alloc(tile_size, num_tiles, data_format);
+    // The block mask covers keys past a block's real tokens (recipe_ring_mask 3): no key-bias tiles.
+    const uint32_t key_bias_tiles = 0;
+    constexpr uint32_t kSparsePlanCb = 17, kBlockCountsCb = 18, kSlotMaxCb0 = 33;
+    constexpr uint32_t kPooledBiasCb = 15;  // the recipe's attn-mask CB
+    // The BF16 recipes' maxima tiles (CBs 10 / 11).
+    const uint32_t state_tile_bytes = 2048u;
+    const auto state_df = tt::DataFormat::Float16_b;
+    const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages) {
+        tt::tt_metal::ProgramDescriptor::CBDescriptors cbs = recipe_program.cbs;
+        for (auto& cb : cbs) {
+            auto& format = cb.format_descriptors.front();
+            const uint32_t page = format.page_size;
+            switch (format.buffer_index) {
+                case recipe_ring_cb::q: cb.total_size = Sq_chunk_t * DHt * slots * page; break;
+                case recipe_ring_cb::k: cb.total_size = k_piece_tiles * kv_pages * page; break;
+                case recipe_ring_cb::v: cb.total_size = v_piece_tiles * kv_pages * page; break;
+                case recipe_ring_cb::out_b: cb.total_size = Sq_chunk_t * vDHt * 2 * slots * page; break;
+                case recipe_ring_cb::sum_b: cb.total_size = Sq_chunk_t * slots * page; break;
+                case recipe_ring_cb::out:
+                    // The writer drains one Q block at a time; a block that kept nothing is pushed whole (zeros).
+                    format.data_format = out_df;
+                    format.page_size = tt::tile_size(out_df);
+                    cb.total_size = Sq_chunk_t * vDHt * format.page_size;
+                    break;
+                default: break;
+            }
+        }
+        const auto add_cb = [&](uint32_t id, uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
+            cbs.push_back(CBDescriptor{
+                .total_size = page_size * num_pages,
+                .core_ranges = core_grid_set,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(id), .data_format = df, .page_size = page_size}}},
+            });
         };
-        CbLayout l{};
-        l.q_in = tile_cb(Sq_chunk_t * DHt * slots, q_tile_size, q_df);
-        l.k_in = tile_cb(k_piece_tiles * kv_pages, k_tile_size, k_df);
-        l.v_in = tile_cb(v_piece_tiles * kv_pages, v_tile_size, v_df);
-        l.identity_scale_in = tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-        l.col_identity = tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-        // The compute step's row-sum operand (an identity tile, from the writer): the sum slots keep one partial sum
-        // per column, which normalization collapses with col_identity.
-        l.sum_identity = tile_cb(1, scalar_tile_size, scalar_df);
-        const uint32_t qk_im_cb_tiles =
-            std::max(qk_tiles, std::min(slots, kResidentGroup) * Sq_chunk_t * Sk_chunk_t * (pairs ? 2u : 1u));
-        const uint32_t res_stats_tiles = statistics_tiles * slots;
-        l.qk_im = tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
-        // Staging CBs (max, out, sum): one accumulator set per slot, updated in place and never pushed or popped
-        // until the pass's final normalization, so read and write indices name the same tile.
-        l.max_A = tile_cb(res_stats_tiles, stats_tile_size, stats_df);
-        l.exp_max_diff = tile_cb(res_stats_tiles, stats_tile_size, stats_df);
-        l.out = tile_cb(out0_t, out_tile_size, out_df);
-        l.stats_in = tile_cb(statistics_tiles * slots, im_tile_size, im_df);
-        l.prev_out = tile_cb(out_im_tiles * slots, state_tile_size, state_df);
-        l.recip_scratch = tile_cb(1, im_tile_size, im_df);  // 1-tile recip scratch for res_normalize_slot
-        l.sum_in = tile_cb(statistics_tiles * slots, state_tile_size, state_df);
+        for (uint32_t s = 1; s < slots; ++s) {
+            add_cb(kSlotMaxCb0 + 2 * (s - 1), state_tile_bytes, Sq_chunk_t, state_df);
+            add_cb(kSlotMaxCb0 + 2 * (s - 1) + 1, state_tile_bytes, Sq_chunk_t, state_df);
+        }
+        if (pooled_route) {
+            add_cb(kPooledBiasCb, 2048, Sq_chunk_t * Sk_chunk_t, tt::DataFormat::Float16_b);
+        }
         // Plan pages: a 16-word summary [kept-block words][union piece bits lo, hi][do_pooled], then the Q block's
         // mask row. Two pages: compute reads one iteration's records while the reader fills the next.
-        l.sparse_plan = alloc(64 + mask_row_bytes, 2, tt::DataFormat::UInt32);
-        // One pooled chunk of bias tiles in flight; only with the pooled route.
-        l.pooled_bias = pooled_route ? tile_cb(Sk_chunk_t, mask_tile_size, mask_df)
-                                     : std::numeric_limits<uint32_t>::max();  // inactive
-        // One byte per global block, filled once by the reader.
-        l.block_counts = has_block_counts ? alloc(block_counts_bytes, 1, tt::DataFormat::UInt32)
-                                          : std::numeric_limits<uint32_t>::max();  // inactive
-        // Key bias: one column-bias tile per block whose real tokens end inside a tile, two pieces' worth. Needed
-        // only with block_counts or a logical_n off a tile boundary.
-        l.key_bias = key_bias_tiles > 0 ? tile_cb(key_bias_tiles, mask_tile_size, mask_df)
-                                        : std::numeric_limits<uint32_t>::max();  // inactive
-        return l;
+        add_cb(kSparsePlanCb, 64 + mask_row_bytes, 2, tt::DataFormat::UInt32);
+        if (has_block_counts) {
+            // One byte per global block, filled once by the reader.
+            add_cb(kBlockCountsCb, block_counts_bytes, 1, tt::DataFormat::UInt32);
+        }
+        return cbs;
     };
-    const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages, bool pairs) -> uint64_t {
+    const auto cb_bytes_for_slots = [&](uint32_t slots, uint32_t kv_pages) -> uint64_t {
         uint64_t bytes = 0;
-        uint32_t index = 0;
-        lay_out_cbs(
-            slots, kv_pages, pairs, [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
-                bytes += static_cast<uint64_t>(page_size_bytes) * num_pages;
-                return index++;
-            });
+        for (const auto& cb : lay_out_cbs(slots, kv_pages)) {
+            bytes += cb.total_size;
+        }
         return bytes;
     };
 
-    // Pass split. S = slots per pass: the largest count (at most kResidentMaxSlots, the core's block count and
+    // Pass split. S = slots per pass: the largest count (at most the recipe's slot limit, the core's block count and
     // q_blocks_per_pass) whose CBs end below the lowest live L1 buffer. P passes split every core's blocks evenly, so
     // each working core needs at least P blocks (no empty pass; group members stay in lockstep).
     // The live L1 top is not in the program hash: a cached program keeps the S of the call that built it.
     const uint64_t usable_l1 = ttnn::operations::core::available_program_l1_capacity(mesh_device);
-    uint32_t max_slots = std::min(kResidentMaxSlots, max_q_per_core);
+    // Slot maxima CB pairs from kSlotMaxCb0 below the 64 CBs.
+    const uint32_t recipe_max_slots = 1u + (64u - kSlotMaxCb0) / 2u;
+    uint32_t max_slots = std::min({kResidentMaxSlots, max_q_per_core, recipe_max_slots});
     if (args.q_blocks_per_pass.has_value()) {
         max_slots = std::min(max_slots, *args.q_blocks_per_pass);
     }
-    const auto fit_slots_for = [&](uint32_t kv_pages, bool pairs) -> uint32_t {
+    const auto fit_slots_for = [&](uint32_t kv_pages) -> uint32_t {
         uint32_t slots = max_slots;
-        while (slots > 0 && cb_bytes_for_slots(slots, kv_pages, pairs) > usable_l1) {
+        while (slots > 0 && cb_bytes_for_slots(slots, kv_pages) > usable_l1) {
             --slots;
         }
         return slots;
@@ -956,34 +906,25 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const auto passes_for = [&](uint32_t slots) {
         return slots > 0 ? tt::div_up(max_q_per_core, slots) : std::numeric_limits<uint32_t>::max();
     };
-    // The K/V depth with the fewest passes (a pass re-streams every piece and repeats every step's fixed cost); at
-    // equal passes the deeper one: pair steps (4 pages), then the default depth (3 with group delivery), then 2.
-    struct KvLayout {
-        uint32_t pages;
-        bool pairs;
-    };
-    std::vector<KvLayout> kv_layouts;
-    if (pair_steps_eligible) {
-        kv_layouts.push_back({4, true});
-    }
-    kv_layouts.push_back({kv_cb_pages, false});
-    if (kv_cb_pages > 2) {
-        kv_layouts.push_back({2, false});
-    }
+    // The K/V depth with the fewest passes (a pass re-streams every piece); at equal passes the deeper one (3 with
+    // group delivery, then 2).
+    const bool pair_steps = false;
     uint32_t fit_slots = 0;
-    for (const auto& layout : kv_layouts) {
-        const uint32_t slots = fit_slots_for(layout.pages, layout.pairs);
+    for (const uint32_t pages : {kv_cb_pages, 2u}) {
+        if (pages > kv_cb_pages) {
+            continue;
+        }
+        const uint32_t slots = fit_slots_for(pages);
         if (slots > 0 && passes_for(slots) < passes_for(fit_slots)) {
             fit_slots = slots;
-            kv_cb_pages = layout.pages;
-            pair_steps = layout.pairs;
+            kv_cb_pages = pages;
         }
     }
     TT_FATAL(
         fit_slots > 0,
         "SparseRingSDPA CBs need {} B with one Q block per core but only {} B of L1 are usable (k_chunk={}); reduce "
         "k_chunk_size.",
-        cb_bytes_for_slots(1, 2, false),
+        cb_bytes_for_slots(1, 2),
         usable_l1,
         Sk_chunk_t * tt::constants::TILE_HEIGHT);
     const uint32_t num_q_passes = passes_for(fit_slots);
@@ -1004,88 +945,47 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t resident_slots = tt::div_up(max_q_per_core, num_q_passes);
     log_debug(
         tt::LogOp,
-        "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages, pair steps {} "
-        "({} of {} B of L1 for CBs)",
+        "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages ({} of {} B of L1 for "
+        "CBs)",
         max_q_per_core,
         num_q_passes,
         resident_slots,
         kv_cb_pages,
-        pair_steps ? "on" : "off",
-        cb_bytes_for_slots(resident_slots, kv_cb_pages, pair_steps),
+        cb_bytes_for_slots(resident_slots, kv_cb_pages),
         usable_l1);
-
-    const CbLayout cbs = lay_out_cbs(resident_slots, kv_cb_pages, pair_steps, allocate_cb);
-    const uint32_t cb_q_in = cbs.q_in;
-    const uint32_t cb_k_in = cbs.k_in;
-    const uint32_t cb_v_in = cbs.v_in;
-    const uint32_t cb_identity_scale_in = cbs.identity_scale_in;
-    const uint32_t cb_col_identity = cbs.col_identity;
-    const uint32_t cb_qk_im = cbs.qk_im;
-    const uint32_t cb_max_A = cbs.max_A;
-    const uint32_t cb_exp_max_diff = cbs.exp_max_diff;
-    const uint32_t cb_out = cbs.out;
-    const uint32_t cb_stats_in = cbs.stats_in;
-    const uint32_t cb_prev_out = cbs.prev_out;
-    const uint32_t cb_recip_scratch = cbs.recip_scratch;
-    const uint32_t cb_sum_in = cbs.sum_in;
-    const uint32_t cb_sparse_plan = cbs.sparse_plan;
+    desc.cbs = lay_out_cbs(resident_slots, kv_cb_pages);
+    const uint32_t cb_q_in = recipe_ring_cb::q;
+    const uint32_t cb_k_in = recipe_ring_cb::k;
+    const uint32_t cb_v_in = recipe_ring_cb::v;
+    const uint32_t cb_identity_scale_in = recipe_ring_cb::identity_scale;
+    const uint32_t cb_col_identity = recipe_ring_cb::col_identity;
+    const uint32_t cb_out = recipe_ring_cb::out;
+    const uint32_t cb_sparse_plan = kSparsePlanCb;
     // Without the pooled route the bias CB is not allocated; the kernels still take an id (and its tile size), so
     // they get Q's, which they never touch through it.
-    const uint32_t cb_pooled_bias = pooled_route ? cbs.pooled_bias : cbs.q_in;
-    const uint32_t cb_block_counts = has_block_counts ? cbs.block_counts : cbs.q_in;
-    const uint32_t cb_key_bias = key_bias_tiles > 0 ? cbs.key_bias : cbs.q_in;
+    const uint32_t cb_pooled_bias = pooled_route ? kPooledBiasCb : cb_q_in;
+    const uint32_t cb_block_counts = has_block_counts ? kBlockCountsCb : cb_q_in;
+    const uint32_t cb_key_bias = cb_q_in;
 
-    // The dense op's padding-mask and scale CBs: the resident step masks padding by narrowing its K width and applies
-    // the scale inside its exp, so neither is allocated. Their slots in the shared CB argument block stay.
+    // The rest of the dense op's CB argument block: slots no kernel of this op reads (the recipe compute takes its CBs
+    // from recipe_ring_cbs.hpp). Not allocated; the slots stay so the indices hold.
     constexpr uint32_t inactive_cb = std::numeric_limits<uint32_t>::max();
-    const uint32_t cb_mask_in = inactive_cb;
-    const uint32_t cb_scale_in = inactive_cb;
     // No attention sink: alias a valid CB so compile-time tile-size queries remain valid.
     const uint32_t cb_attention_sink = cb_q_in;
-    // Slots of the dense op's CB argument block no kernel of this op reads: the second accumulator set, the
-    // save / restore and signal CBs, and the metadata mailbox. Not allocated; the slots stay so the indices hold.
-    const uint32_t cb_out_im_A = inactive_cb;
-    const uint32_t cb_out_im_B = inactive_cb;
-    const uint32_t cb_max_B = inactive_cb;
-    const uint32_t cb_sum_A = inactive_cb;
-    const uint32_t cb_sum_B = inactive_cb;
-    const uint32_t cb_stats_out = inactive_cb;
-    const uint32_t cb_sum_out = inactive_cb;
-    const uint32_t cb_signal = inactive_cb;
-    const uint32_t cb_kv_pad_derived = inactive_cb;
     // All Q blocks' plan records go in one page per ring iteration, after the 16-word header and the shard slice
     // (mask_nb_pad words), when they fit in the page; otherwise each block gets its own page (plan_rec_base = 0).
     const uint32_t plan_rec_words = tt::div_up(mask_nb, 32u) + 3;
     const bool plan_fits_one_page =
         (16 + mask_nb_pad + resident_slots * plan_rec_words) * sizeof(uint32_t) <= 64 + mask_row_bytes;
     const uint32_t plan_rec_base = plan_fits_one_page ? 16 + mask_nb_pad : 0;
-    {
-        uint64_t cb_bytes = 0;
-        for (const auto& cb : desc.cbs) {
-            cb_bytes += cb.total_size;
-        }
-        log_debug(
-            tt::LogOp,
-            "SparseRingSDPA CBs: {} buffers, {} bytes ({} slots; k {} t, v {} t, qk {} t, out_im {} t, stats {} t; "
-            "im tile {} B)",
-            desc.cbs.size(),
-            cb_bytes,
-            resident_slots,
-            k_piece_tiles * kv_cb_pages,
-            v_piece_tiles * kv_cb_pages,
-            qk_tiles,
-            out_im_tiles,
-            statistics_tiles,
-            im_tile_size);
-    }
 
     const std::vector<uint32_t> cb_compile_time_args = {
-        cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
-        cb_stats_in, cb_prev_out, cb_col_identity, cb_recip_scratch, cb_sum_out,      cb_sum_in,
-        cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,     cb_out_im_B,
-        cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff, cb_kv_pad_derived};
+        cb_q_in,     cb_k_in,     cb_v_in,         inactive_cb, inactive_cb, cb_identity_scale_in,
+        inactive_cb, inactive_cb, cb_col_identity, inactive_cb, inactive_cb, inactive_cb,
+        inactive_cb, cb_out,      inactive_cb,     inactive_cb, inactive_cb, inactive_cb,
+        inactive_cb, inactive_cb, inactive_cb,     inactive_cb, inactive_cb, inactive_cb};
     const std::vector<uint32_t> reader_cb_compile_time_args = {
-        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived};
+        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, inactive_cb};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
     writer_compile_time_args.insert(
@@ -1278,7 +1178,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"cb_block_counts", cb_block_counts},
         {"key_bias_tiles", key_bias_tiles},
         {"cb_key_bias", cb_key_bias},
-        {"cb_sum_identity", cbs.sum_identity},
+        {"slot_max_cb0", kSlotMaxCb0},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = named_args;
@@ -1287,15 +1187,22 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
-    compute_kernel.defines = kernel_defines;
+    // The recipe compute: its named arguments, compute config (fidelity, FP32 DEST and unpack-to-dest modes) and
+    // defines, with the sparse ring's own. The block mask (recipe_ring_mask 3) masks keys outside a slot's kept blocks
+    // and past a block's real tokens; K and V stay over a piece's steps (recipe_kv_hold); the pooled entries' column
+    // bias is the additive mask of the chunks the kernel flags (recipe_mask_flagged), already divided by the scale.
+    auto recipe_args = recipes::recipe_named_args(recipe_compute.named_compile_time_args);
+    recipes::set_named_arg(recipe_args, "recipe_ring", 1);
+    recipes::set_named_arg(recipe_args, "recipe_ring_mask", 3);
+    recipes::set_named_arg(recipe_args, "recipe_kv_hold", 1);
+    recipes::set_named_arg(recipe_args, "recipe_mask", pooled_route ? 1u : 0u);
+    recipes::set_named_arg(recipe_args, "recipe_mask_flagged", pooled_route ? 1u : 0u);
+    compute_kernel.named_compile_time_args.insert(
+        compute_kernel.named_compile_time_args.end(), recipe_args.begin(), recipe_args.end());
+    compute_kernel.defines = recipe_compute.defines;
     // Built at O2 to fit the kernel config buffer.
-    compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
-    compute_kernel.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode,
-    };
+    compute_kernel.opt_level = recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2);
+    compute_kernel.config = recipe_compute.config;
 
     // Pooled-column bias per block token count: bf16 (round-to-nearest-even) ln(len) / scale, -30000 for len 0,
     // two per word for len = 0 .. block_tokens + 1 (the last unused). The generator weights each pooled column by its

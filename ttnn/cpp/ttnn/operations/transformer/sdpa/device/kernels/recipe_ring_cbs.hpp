@@ -8,8 +8,8 @@
 // ring_joint_sdpa_program_factory.cpp, exp_ring_joint_sdpa_program_factory.cpp). CBs 0-16 (and 29-31 with fused chunks)
 // are the recipe compute layout (recipe_compute_program): Q, K, V, the reduce scaler, the column identity, the
 // reciprocal scratch, QK, the state banks (O 8/9, maxima 10/11, sums 12/13), exp(max diff) and the output. CBs 17/18
-// are recipe_checkpoint.hpp's state request / ack (the rings keep each Q chunk's state resident over its pass); the
-// ring dataflow CBs follow from 19.
+// are recipe_checkpoint.hpp's state request / ack (the sparse split-K handoff; the rings keep each Q chunk's state
+// resident over its pass); the ring dataflow CBs follow from 19.
 namespace recipe_ring_cb {
 constexpr uint32_t q = 0, k = 1, v = 2, identity_scale = 3, col_identity = 4, recip_scratch = 5, qk = 6;
 constexpr uint32_t out_a = 8, out_b = 9, max_a = 10, max_b = 11, sum_a = 12, sum_b = 13, exp_max_diff = 14, out = 16;

@@ -4,9 +4,13 @@
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_msa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_msa_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <array>
@@ -19,6 +23,14 @@
 namespace ttnn::prim {
 
 namespace {
+namespace recipes = ttnn::operations::transformer::sdpa::detail;
+namespace msa_cb = ::sparse_sdpa_msa::recipe_cb;
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CBFormatDescriptor;
+
+recipes::PrecisionPolicy msa_policy(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
+    return recipes::resolve_precision_policy(recipes::select_recipe(attrs.precision, t.k.dtype()));
+}
 
 // Compile-time args filled by index name (sparse_sdpa_msa_common.hpp) so the factory and the kernel share one
 // layout; every index must be set exactly once before the accessor blocks are appended.
@@ -55,13 +67,77 @@ struct BlockCyclicCt {
 using RtArgs = std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>;
 }  // namespace
 
+tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::recipe_layout(
+    const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t, const Geometry& g, uint32_t kv_cache_slots) {
+    const auto policy = msa_policy(attrs, t);
+    const uint32_t q_tiles = recipes::recipe_compute_q_tiles(policy, g.Sqt, g.Skt);
+    const auto grid = t.q.device()->compute_with_storage_grid_size();
+    const auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    const auto v_storage = recipes::recipe_kv_storage(t.v.dtype());
+    auto program = recipes::recipe_compute_program(
+        policy,
+        core_grid,
+        1,
+        q_tiles,
+        g.Skt,
+        g.DHt,
+        attrs.scale,
+        g.vDHt,
+        v_storage != policy.selection.kv_storage ? std::optional<recipes::KVStorage>(v_storage) : std::nullopt,
+        g.q_in_df);
+    // Compute tilizes Q itself (one entry); K / V hold one block (the reader and writer fill the block at the CBs'
+    // bases) or the block cache's slots; the output CB holds a token's rows (untilized after the step that
+    // normalizes them), BF16 whatever Q's type.
+    const uint32_t kv_blocks = kv_cache_slots > 0 ? kv_cache_slots : 1;
+    for (auto& c : program.cbs) {
+        auto& format = c.format_descriptors.front();
+        if (format.buffer_index == recipe_ring_cb::q) {
+            c.total_size = q_tiles * g.DHt * format.page_size;
+        } else if (format.buffer_index == recipe_ring_cb::k) {
+            c.total_size = kv_blocks * g.k_tiles_per_block * format.page_size;
+        } else if (format.buffer_index == recipe_ring_cb::v) {
+            c.total_size = kv_blocks * g.v_tiles_per_block * format.page_size;
+        } else if (format.buffer_index == recipe_ring_cb::out) {
+            format.data_format = tt::DataFormat::Float16_b;
+            format.page_size = tt::tile_size(tt::DataFormat::Float16_b);
+            c.total_size = q_tiles * g.vDHt * format.page_size;
+        }
+    }
+    const auto add_cb = [&](uint32_t id, uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
+        program.cbs.push_back(CBDescriptor{
+            .total_size = page_size * num_pages,
+            .core_ranges = core_grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(id), .data_format = df, .page_size = page_size}}},
+        });
+    };
+    constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
+    add_cb(msa_cb::q_rm, g.q_row_bytes, q_tiles * tt::constants::TILE_HEIGHT, g.q_rm_df);
+    add_cb(msa_cb::idx, g.idx_row_bytes, 1, bf);
+    add_cb(msa_cb::ctrl, message_page_bytes(sparse_sdpa_msa::ctrl::WORD_COUNT), 2, bf);
+    add_cb(msa_cb::kreq, message_page_bytes(sparse_sdpa_msa::kreq::WORD_COUNT), 2, bf);
+    add_cb(msa_cb::kack, message_page_bytes(1), 2, bf);
+    add_cb(msa_cb::out_rm, tt::tile_size(g.out_df), g.Sqt * g.vDHt, g.out_df);
+    if (kv_cache_slots > 0) {
+        // The reader runs one block ahead of compute (a miss's DRAM read overlaps the previous block's math) and
+        // keeps the previous block's slot off the victim list.
+        add_cb(msa_cb::slot, message_page_bytes(1), sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, tt::DataFormat::UInt32);
+    }
+    // fp8 Q tilizes through the FP32 dest.
+    auto& compute = program.kernels.front();
+    auto& config = std::get<tt::tt_metal::ComputeConfigDescriptor>(compute.config);
+    config.unpack_to_dest_mode.resize(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (g.q_is_fp8) {
+        config.unpack_to_dest_mode[msa_cb::q_rm] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    return program;
+}
+
 tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::create_descriptor(
     const SparseSDPAMsaParams& attrs,
     const SparseSDPAMsaInputs& t,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    using enum SparseSDPAMsaOperation::Cb;
-
     tt::tt_metal::ProgramDescriptor desc;
 
     // K/V are separate pre-tiled caches, gathered one block at a time by the reader and writer together.
@@ -76,9 +152,6 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const uint32_t scale_packed = std::bit_cast<uint32_t>(attrs.scale);
     const uint32_t q_row_bytes = g.q_row_bytes, idx_row_bytes = g.idx_row_bytes;
     const uint32_t out_elem_bytes = output.element_size();
-    const bool q_is_fp8 = g.q_is_fp8;
-    constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
-
     // Work split and the hash-excluded per-dispatch scalars (K/V slot offsets, group strides, per-coordinate
     // causal geometry) come from the helper override_runtime_arguments also uses, so the values baked here
     // and the ones patched on a cache hit cannot drift.
@@ -87,27 +160,27 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
     const uint32_t num_cores = dyn.num_cores;
 
-    // ---- CBs (fixed ids = Cb enum; descriptor insertion order is irrelevant) ----
-    const auto cb = [&](uint32_t id, uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = page_size * num_pages,
-            .core_ranges = core_grid,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(id), .data_format = df, .page_size = page_size}}},
-        });
-    };
-    // Per-core K/V block cache: the reader fills a slot on a miss and compute reads it in place, replacing the
-    // streamed K/V block buffers. The count is hashed, so this layout is fixed for the program's lifetime.
+    // ---- CBs: the recipe layout (recipe_layout) ----
     const uint32_t kv_cache_slots = attrs.kv_cache_slots;
-    for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/kv_cache_slots > 0)) {
-        cb(s.id, s.page_size, s.num_pages, s.df);
-    }
-    if (kv_cache_slots > 0) {
-        cb(cb_k_cache, k_tile_bytes, kv_cache_slots * k_tiles_per_block, g.k_df);
-        cb(cb_v_cache, v_tile_bytes, kv_cache_slots * v_tiles_per_block, g.v_df);
-        // The reader runs one block ahead of compute (a miss's DRAM read overlaps the previous block's math) and
-        // keeps the previous block's slot off the victim list.
-        cb(cb_slot, message_page_bytes(1), sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, bf);
+    auto layout = recipe_layout(attrs, t, g, kv_cache_slots);
+    desc.cbs = std::move(layout.cbs);
+    auto& recipe_compute = layout.kernels.front();
+    const uint32_t q_tiles = recipes::named_arg(recipe_compute.named_compile_time_args, "q_tiles");
+    {
+        const uint64_t cb_align = tt::tt_metal::hal::get_dram_alignment();
+        uint64_t cb_bytes = 0;
+        for (const auto& c : desc.cbs) {
+            cb_bytes += tt::align(static_cast<uint64_t>(c.total_size), cb_align);
+        }
+        const uint64_t l1_available = recipes::recipe_free_l1(*t.q.device());
+        TT_FATAL(
+            cb_bytes <= l1_available,
+            "sparse_sdpa_msa recipe needs {} B of L1 per core ({} heads, d {}, block {}), but only {} B are available",
+            cb_bytes,
+            H,
+            g.d,
+            block_size,
+            l1_available);
     }
 
     // Block-cyclic ("slab") cache: the invP remap is baked as compile-time args, so a natural-order cache folds
@@ -145,27 +218,18 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     reader_args.set(rct::V_TILES_PER_BLOCK, v_tiles_per_block);
     reader_args.set(rct::K_HALF, k_half);
     reader_args.set(rct::V_HALF, v_half);
-    reader_args.set(rct::CB_Q_RM, cb_q_rm);
-    reader_args.set(rct::CB_K_IN, cb_k_in);
-    reader_args.set(rct::CB_V_IN, cb_v_in);
-    reader_args.set(rct::CB_IDX, cb_idx);
-    reader_args.set(rct::CB_CTRL, cb_ctrl);
-    reader_args.set(rct::CB_KREQ, cb_kreq);
-    reader_args.set(rct::CB_KACK, cb_kack);
     reader_args.set(rct::K_TILE_BYTES, k_tile_bytes);  // K is tiled: per-tile read size
     reader_args.set(rct::V_TILE_BYTES, v_tile_bytes);  // V is tiled: per-tile read size
     reader_args.set(rct::CAUSAL_MASK_ENABLED, attrs.causal_enabled() ? 1u : 0u);
     reader_args.set(rct::BLOCK_SIZE, block_size);  // for diag_block = p/bs, offset = p%bs
-    reader_args.set(rct::CB_VMASK, cb_vmask);      // reader builds the per-token partial-column tile
     reader_args.set(rct::BLOCK_CYCLIC, block_cyclic_ct.enabled);
     reader_args.set(rct::BC_CHUNK_LOCAL, block_cyclic_ct.chunk_local);
     reader_args.set(rct::BC_SP, block_cyclic_ct.sp);
     reader_args.set(rct::BC_SHARD_STRIDE_GAP, block_cyclic_ct.shard_stride_gap);
     reader_args.set(rct::BC_SLAB_STRIDE_GAP, block_cyclic_ct.slab_stride_gap);
     reader_args.set(rct::KV_CACHE_SLOTS, kv_cache_slots);  // 0 = streamed path
-    reader_args.set(rct::CB_K_CACHE, cb_k_cache);
-    reader_args.set(rct::CB_V_CACHE, cb_v_cache);
-    reader_args.set(rct::CB_SLOT, cb_slot);
+    reader_args.set(rct::D_TILES, DHt);
+    reader_args.set(rct::Q_TILES, q_tiles);
     std::vector<uint32_t> reader_ct = reader_args.take();
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
@@ -189,25 +253,15 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     writer_args.set(wct::V_TILES_PER_BLOCK, v_tiles_per_block);
     writer_args.set(wct::K_HALF, k_half);
     writer_args.set(wct::V_HALF, v_half);
-    writer_args.set(wct::CB_OUT_RM, cb_out_rm);
-    writer_args.set(wct::CB_SCALE, cb_scale);
-    writer_args.set(wct::CB_COL_IDENTITY, cb_col_identity);
-    writer_args.set(wct::CB_K_IN, cb_k_in);
-    writer_args.set(wct::CB_V_IN, cb_v_in);
-    writer_args.set(wct::CB_KREQ, cb_kreq);
-    writer_args.set(wct::CB_KACK, cb_kack);
     writer_args.set(wct::K_TILE_BYTES, k_tile_bytes);
     writer_args.set(wct::V_TILE_BYTES, v_tile_bytes);
-    writer_args.set(wct::CAUSAL_MASK_ENABLED, attrs.causal_enabled() ? 1u : 0u);
-    writer_args.set(wct::CB_NEGINF, cb_neginf);  // writer builds the persistent -inf mask tile
     writer_args.set(wct::BLOCK_CYCLIC, block_cyclic_ct.enabled);
     writer_args.set(wct::BC_CHUNK_LOCAL, block_cyclic_ct.chunk_local);
     writer_args.set(wct::BC_SP, block_cyclic_ct.sp);
     writer_args.set(wct::BC_SHARD_STRIDE_GAP, block_cyclic_ct.shard_stride_gap);
     writer_args.set(wct::BC_SLAB_STRIDE_GAP, block_cyclic_ct.slab_stride_gap);
     writer_args.set(wct::KV_CACHE_SLOTS, kv_cache_slots);  // 0 = streamed path
-    writer_args.set(wct::CB_K_CACHE, cb_k_cache);
-    writer_args.set(wct::CB_V_CACHE, cb_v_cache);
+    writer_args.set(wct::D_TILES, DHt);
     std::vector<uint32_t> writer_ct = writer_args.take();
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
@@ -215,32 +269,6 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         .append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.v.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_ct, writer_crt);
-
-    namespace cct = sparse_sdpa_msa::compute_ct;
-    CtArgs<cct::COUNT> compute_args;
-    compute_args.set(cct::H, H);
-    compute_args.set(cct::DHT, DHt);
-    compute_args.set(cct::VDHT, vDHt);
-    compute_args.set(cct::SKT, Skt);
-    compute_args.set(cct::SCALE_FP32, scale_packed);
-    compute_args.set(cct::CB_Q_RM, cb_q_rm);
-    compute_args.set(cct::CB_Q_IN, cb_q_in);
-    compute_args.set(cct::CB_K_IN, cb_k_in);
-    compute_args.set(cct::CB_V_IN, cb_v_in);
-    compute_args.set(cct::CB_SCALE, cb_scale);
-    compute_args.set(cct::CB_QK_IM, cb_qk_im);
-    compute_args.set(cct::CB_MAX_A, cb_max_a);
-    compute_args.set(cct::CB_MAX_B, cb_max_b);
-    compute_args.set(cct::CB_SUM_A, cb_sum_a);
-    compute_args.set(cct::CB_SUM_B, cb_sum_b);
-    compute_args.set(cct::CB_OUT_A, cb_out_a);
-    compute_args.set(cct::CB_OUT_B, cb_out_b);
-    compute_args.set(cct::CB_CORR, cb_corr);
-    compute_args.set(cct::CB_OUT_IM, cb_out_im);
-    compute_args.set(cct::CB_OUT_RM, cb_out_rm);
-    compute_args.set(cct::CB_CTRL, cb_ctrl);
-    compute_args.set(cct::CB_COL_IDENTITY, cb_col_identity);
-    compute_args.set(cct::CB_RECIP_SCRATCH, cb_recip_scratch);
 
     // ---- kernels ----
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
@@ -260,50 +288,33 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     writer_desc.common_runtime_args = writer_crt;
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
-    auto [math_fidelity, math_approx, fp32_acc, packer_l1_acc, dst_full_sync] =
-        get_compute_kernel_config_args(t.q.device()->arch(), attrs.compute_kernel_config);
-    (void)packer_l1_acc;
-
-    // Query sub-blocking: qsb tile rows must fit in DEST.
-    const uint32_t dst_size = fp32_acc ? 4u : 8u;
-    uint32_t qsb = 1;
-    for (uint32_t dd = std::min(Sqt, dst_size); dd >= 1; --dd) {
-        if (Sqt % dd == 0) {
-            qsb = dd;
-            break;
-        }
-    }
-    compute_args.set(cct::QSB, qsb);
-    compute_args.set(cct::CAUSAL_MASK_ENABLED, attrs.causal_enabled() ? 1u : 0u);
-    compute_args.set(cct::CB_NEGINF, cb_neginf);            // full -inf mask tile (future key-tiles)
-    compute_args.set(cct::CB_VMASK, cb_vmask);              // partial-column mask tile (boundary key-tile)
-    compute_args.set(cct::KV_CACHE_SLOTS, kv_cache_slots);  // 0 = compute streams from cb_k_in/cb_v_in
-    compute_args.set(cct::CB_K_CACHE, cb_k_cache);
-    compute_args.set(cct::CB_V_CACHE, cb_v_cache);
-    compute_args.set(cct::CB_SLOT, cb_slot);
-    const std::vector<uint32_t> compute_ct = compute_args.take();
-
+    // The recipe compute: its named arguments, compute config (fidelity, FP32 DEST and unpack-to-dest modes) and
+    // defines, with the MSA kernel's own. MSA masks only the causal diagonal block's future keys (recipe_ring_mask 0)
+    // and keeps each token's state resident.
+    const auto policy = msa_policy(attrs, t);
+    auto compute_named = recipes::recipe_named_args(recipe_compute.named_compile_time_args);
+    recipes::set_named_arg(compute_named, "recipe_ring", 1);
+    compute_named.emplace_back("q_tiles", q_tiles);
+    compute_named.emplace_back("head_tiles", Sqt);
+    compute_named.emplace_back("k_tiles", Skt);
+    compute_named.emplace_back("d_tiles", DHt);
+    compute_named.emplace_back("vd_tiles", vDHt);
+    compute_named.emplace_back("scale", scale_packed);
+    compute_named.emplace_back("causal", attrs.causal_enabled() ? 1u : 0u);
+    compute_named.emplace_back("kv_cache_slots", kv_cache_slots);
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source = kdir + "compute/sparse_sdpa_msa_compute.cpp";
     compute_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_grid;
-    compute_desc.compile_time_args = compute_ct;
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    // fp8 Q must unpack into 32-bit DEST before tilize packs to bfp8.
-    if (q_is_fp8) {
-        unpack_to_dest_mode[cb_q_rm] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    compute_desc.named_compile_time_args = std::move(compute_named);
+    compute_desc.defines = recipe_compute.defines;
+    compute_desc.config = recipe_compute.config;
+    // Math builds at -O2 (sparse_sdpa_msa_compute.cpp); with fused chunks or ACCURATE, unpack and pack too (their code
+    // at -O3 overflows the kernel config buffer, as on the rings).
+    const bool recipe_fused = recipes::named_arg(compute_desc.named_compile_time_args, "recipe_fused") != 0;
+    if (recipe_fused || policy.selection.recipe == recipes::Recipe::D) {
+        compute_desc.opt_level = recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2);
     }
-    compute_desc.config = tt::tt_metal::ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_acc,
-        .dst_full_sync_en = dst_full_sync,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-        .math_approx_mode = math_approx};
-    std::map<std::string, std::string> cdefs{
-        {"EXP_APPROX_MODE", std::to_string(static_cast<int>(math_approx))},
-    };
-    compute_desc.defines = tt::tt_metal::KernelDescriptor::Defines(cdefs.begin(), cdefs.end());
 
     auto* q_buf = t.q.buffer();
     auto* k_buf = t.k.buffer();

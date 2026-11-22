@@ -18,6 +18,10 @@
 #include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <bit>
+#include <cmath>
+#include <mutex>
+#include <unordered_map>
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 
 namespace ttnn::prim {
 
@@ -155,10 +159,18 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
         v.dtype() == DataType::BFLOAT16 || v.dtype() == DataType::BFLOAT8_B,
         "sparse_sdpa_msa: v must be bf16 or bfp8_b");
     TT_FATAL(idx.dtype() == DataType::UINT32, "indices must be uint32");
-    // fp8 Q tilize requires a 32-bit DEST accumulator.
+    // fp8 Q tilizes through the 32-bit DEST, so it needs an FP32-DEST recipe (the API's default for fp8 q).
     TT_FATAL(
-        !q_is_fp8 || get_fp32_dest_acc_en(attrs.compute_kernel_config),
-        "fp8 q requires fp32_dest_acc_en=true (32-bit DEST for the fp8 tilize)");
+        !q_is_fp8 || attrs.precision == transformer::SDPAPrecision::BALANCED ||
+            attrs.precision == transformer::SDPAPrecision::ACCURATE,
+        "sparse_sdpa_msa: fp8 q requires precision BALANCED or ACCURATE (32-bit DEST for the fp8 tilize)");
+    // The recipe exps fold the scale into FP32 coefficients and the key masks add -2^100 before it
+    // (resolve_recipe_policy's bounds).
+    TT_FATAL(
+        std::isfinite(attrs.scale) && attrs.scale >= 0x1p-64f && attrs.scale <= 0x1p16f,
+        "sparse_sdpa_msa: scale must be finite and in [2^-64, 2^16], got {}",
+        attrs.scale);
+    ttnn::operations::transformer::sdpa::detail::require_recipe_sfploadmacro();
 
     validate_non_hashed(attrs, t);
 
@@ -267,45 +279,6 @@ SparseSDPAMsaOperation::Geometry SparseSDPAMsaOperation::derive_kernel_geometry(
     return g;
 }
 
-std::vector<SparseSDPAMsaOperation::CbSpec> SparseSDPAMsaOperation::base_cbs(
-    const Geometry& g, bool causal, bool block_cache_serves_kv) {
-    constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
-    constexpr uint32_t tile_bytes = tt::tile_size(bf);  // intermediates are bf16
-    std::vector<CbSpec> cbs = {
-        {cb_q_rm, g.q_row_bytes, g.H, g.q_rm_df},
-        {cb_q_in, tt::tile_size(g.q_in_df), g.Sqt * g.DHt, g.q_in_df},
-        {cb_scale, tile_bytes, 1, bf},
-        {cb_qk_im, tile_bytes, g.Sqt * g.Skt, bf},
-        {cb_max_a, tile_bytes, g.Sqt, bf},
-        {cb_max_b, tile_bytes, g.Sqt, bf},
-        {cb_sum_a, tile_bytes, g.Sqt, bf},
-        {cb_sum_b, tile_bytes, g.Sqt, bf},
-        {cb_out_a, tile_bytes, g.Sqt * g.vDHt, bf},
-        {cb_out_b, tile_bytes, g.Sqt * g.vDHt, bf},
-        {cb_corr, tile_bytes, g.Sqt, bf},
-        {cb_out_im, tile_bytes, g.Sqt * g.vDHt, bf},  // bf16 accumulator, full precision
-        {cb_out_rm, tt::tile_size(g.out_df), g.Sqt * g.vDHt, g.out_df},
-        {cb_idx, g.idx_row_bytes, 1, bf},
-        {cb_ctrl, message_page_bytes(sparse_sdpa_msa::ctrl::WORD_COUNT), 2, bf},  // active block count + causal control
-        {cb_col_identity, tile_bytes, 1, bf},
-        {cb_recip_scratch, tile_bytes, 1, bf},
-        {cb_kreq, message_page_bytes(sparse_sdpa_msa::kreq::WORD_COUNT), 2, bf},
-        {cb_kack, message_page_bytes(1), 2, bf},
-    };
-    // Streamed K/V: one block, single-buffered -- the reader reserves it and the writer fills its half into the
-    // same L1. Absent when the block cache serves K/V (compute then reads the cache CBs in place).
-    if (!block_cache_serves_kv) {
-        cbs.push_back({cb_k_in, g.k_tile_bytes, g.k_tiles_per_block, g.k_df});
-        cbs.push_back({cb_v_in, g.v_tile_bytes, g.v_tiles_per_block, g.v_df});
-    }
-    // The mask tiles are touched only under CAUSAL_MASK_ENABLED, so causal-off skips their L1.
-    if (causal) {
-        cbs.push_back({cb_neginf, tile_bytes, 1, bf});
-        cbs.push_back({cb_vmask, tile_bytes, 2, bf});
-    }
-    return cbs;
-}
-
 uint32_t SparseSDPAMsaOperation::message_page_bytes(uint32_t words) {
     const uint32_t quantum =
         std::max<uint32_t>(tt::tt_metal::hal::get_l1_alignment(), CIRCULAR_BUFFER_COMPUTE_WORD_SIZE);
@@ -336,10 +309,44 @@ uint32_t SparseSDPAMsaOperation::resolve_kv_cache_slots(
         return 0;
     }
     const uint64_t cb_align = tt::tt_metal::hal::get_dram_alignment();
-    uint64_t base_bytes =
-        tt::align(static_cast<uint64_t>(message_page_bytes(1)) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, cb_align);
-    for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/true)) {
-        base_bytes += tt::align(static_cast<uint64_t>(s.page_size) * s.num_pages, cb_align);
+    // The streamed layout's CBs less its one-block K / V CBs, plus the slot queue. Memoized: the layout builds the
+    // recipe program descriptor, and this runs on every call (the key holds everything recipe_layout reads).
+    const std::size_t key = ttsl::hash::hash_objects_with_default_seed(
+        device->id(),
+        std::bit_cast<uint32_t>(attrs.scale),
+        attrs.block_size,
+        attrs.precision,
+        attrs.chunk_start_idx.has_value(),
+        t.q.logical_shape(),
+        t.q.dtype(),
+        t.k.logical_shape(),
+        t.k.dtype(),
+        t.v.logical_shape(),
+        t.v.dtype(),
+        t.indices.logical_shape());
+    static std::mutex memo_mutex;
+    static std::unordered_map<std::size_t, uint64_t> memo;
+    uint64_t base_bytes = 0;
+    {
+        const std::lock_guard lock(memo_mutex);
+        if (const auto it = memo.find(key); it != memo.end()) {
+            base_bytes = it->second;
+        }
+    }
+    if (base_bytes == 0) {
+        base_bytes =
+            tt::align(static_cast<uint64_t>(message_page_bytes(1)) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, cb_align);
+        for (const auto& c : recipe_layout(attrs, t, g, 0).cbs) {
+            const uint32_t index = c.format_descriptors.front().buffer_index;
+            if (index != 1 && index != 2) {  // the recipe K and V CBs (recipe_ring_cb::k, v)
+                base_bytes += tt::align(static_cast<uint64_t>(c.total_size), cb_align);
+            }
+        }
+        const std::lock_guard lock(memo_mutex);
+        if (memo.size() >= 4096) {
+            memo.clear();
+        }
+        memo.emplace(key, base_bytes);
     }
     const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint64_t l1_end = l1_base + device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
@@ -367,7 +374,7 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<SparseSDPAMsaOperation>(
         std::bit_cast<uint32_t>(attrs.scale),
         attrs.block_size,
-        attrs.compute_kernel_config,
+        attrs.precision,
         t.q.logical_shape(),
         t.q.dtype(),
         t.k.dtype(),
@@ -571,7 +578,7 @@ Tensor sparse_sdpa_msa(
     const Tensor& indices,
     float scale,
     uint32_t block_size,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    transformer::SDPAPrecision precision,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> chunk_start_idx,
     std::optional<uint32_t> cluster_axis,
@@ -581,7 +588,7 @@ Tensor sparse_sdpa_msa(
     OperationType::operation_attributes_t attrs{
         .scale = scale,
         .block_size = block_size,
-        .compute_kernel_config = compute_kernel_config,
+        .precision = precision,
         .cache_batch_idx = cache_batch_idx,
         .block_cyclic = block_cyclic,
         .chunk_start_idx = chunk_start_idx,

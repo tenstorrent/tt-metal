@@ -19,6 +19,20 @@
 
 namespace ttnn::transformer {
 
+namespace detail {
+void warn_ignored_compute_kernel_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    static std::once_flag compute_once;
+    if (compute_kernel_config.has_value()) {
+        std::call_once(compute_once, [] {
+            log_warning(
+                tt::LogOp,
+                "Prefill SDPA ignores compute_kernel_config (deprecated): the numerics come from precision= "
+                "(ttnn.SDPAPrecision, STANDARD by default; ACCURATE for FP32 accumulation).");
+        });
+    }
+}
+}  // namespace detail
+
 namespace {
 // Empty joint (0 elements) == "no joint". Normalize to nullopt so self-attention callers passing
 // zero-length dummy joints don't create duplicate input Buffer*s -> resolve_bindings() bails and the
@@ -29,15 +43,8 @@ namespace {
 void warn_ignored_prefill_arguments(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config) {
-    static std::once_flag compute_once, program_once;
-    if (compute_kernel_config.has_value()) {
-        std::call_once(compute_once, [] {
-            log_warning(
-                tt::LogOp,
-                "Prefill SDPA ignores compute_kernel_config (deprecated): the numerics come from precision= "
-                "(ttnn.SDPAPrecision, STANDARD by default; ACCURATE for FP32 accumulation).");
-        });
-    }
+    static std::once_flag program_once;
+    detail::warn_ignored_compute_kernel_config(compute_kernel_config);
     if (program_config.has_value() &&
         (program_config->exp_approx_mode.has_value() || program_config->min_blocked_pack_tiles.has_value() ||
          program_config->matmul_math_fidelity.has_value() || program_config->sub_core_grids.has_value())) {

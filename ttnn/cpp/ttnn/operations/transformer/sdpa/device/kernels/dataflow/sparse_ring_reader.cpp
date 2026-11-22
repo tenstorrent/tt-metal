@@ -878,19 +878,34 @@ void kernel_main() {
                                 // The chunk's own row back into the plan scratch: compute reads only the header
                                 // words of a plan page, and every page has been popped by now.
                                 read_chunk_row(nq, res_qc[i]);
+                                // One row of bias tiles per Q tile row (the recipe reads its attn mask that way); the
+                                // columns past the chunk's pooled entries are zero (compute masks them).
                                 CircularBuffer cb_bias(cb_pooled_bias);
-                                cb_bias.reserve_back(Sk_chunk_t);
+                                constexpr uint32_t bias_row_bytes = Sk_chunk_t * pooled_bias_tile_bytes;
+                                cb_bias.reserve_back(Sq_chunk_t * Sk_chunk_t);
+                                const uint32_t bias_l1 = cb_bias.get_write_ptr();
                                 // Block-form row: exact iff the block's own bit is set on a block with a real token.
                                 pooled_bias_gen::generate_tiles<pooled_bias_tile_bytes, has_block_counts>(
                                     noc,
-                                    cb_bias.get_write_ptr(),
+                                    bias_l1,
                                     row0,
                                     tiles,
                                     geo,
                                     CoreLocalMem<volatile uint32_t>(scratch),
                                     pooled_bias_table_base,
                                     counts_table);
-                                cb_bias.push_back(Sk_chunk_t);
+                                if (tiles < Sk_chunk_t) {
+                                    CoreLocalMem<volatile uint32_t> pad(bias_l1 + tiles * pooled_bias_tile_bytes);
+                                    for (uint32_t w = 0; w < (Sk_chunk_t - tiles) * pooled_bias_tile_bytes / 4; ++w) {
+                                        pad[w] = 0;
+                                    }
+                                }
+                                for (uint32_t r = 1; r < Sq_chunk_t; ++r) {
+                                    pooled_bias_gen::copy_local(
+                                        noc, bias_l1, bias_l1 + r * bias_row_bytes, bias_row_bytes);
+                                }
+                                noc.async_read_barrier();
+                                cb_bias.push_back(Sq_chunk_t * Sk_chunk_t);
                             }
                         }
                         i0 = i1;

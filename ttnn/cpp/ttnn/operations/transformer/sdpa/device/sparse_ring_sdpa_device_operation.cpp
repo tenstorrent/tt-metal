@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -156,9 +157,19 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         !args.scale.has_value() || (std::isfinite(*args.scale) && *args.scale > 0.0f),
         "SparseRingSDPA: scale must be finite and positive, got {}",
         args.scale.value_or(0.0f));
+    // The recipe exps fold the scale into FP32 coefficients and the masks add -2^100 before it (resolve_recipe_policy's
+    // bounds).
     TT_FATAL(
-        !get_fp32_dest_acc_en(args.compute_kernel_config),
-        "SparseRingSDPA requires streaming compute; set fp32_dest_acc_en=false");
+        !args.scale.has_value() || (*args.scale >= 0x1p-64f && *args.scale <= 0x1p16f),
+        "SparseRingSDPA: scale must be in [2^-64, 2^16], got {}",
+        args.scale.value_or(0.0f));
+    ttnn::operations::transformer::sdpa::detail::require_recipe_sfploadmacro();
+    // Resident Q blocks keep one state each in the BF16 recipes' state banks; the FP32-state recipes keep O and l
+    // pushed between chunks and could hold only one block per core per pass (main also required BF16 state).
+    TT_FATAL(
+        args.precision == ttnn::transformer::SDPAPrecision::STANDARD ||
+            args.precision == ttnn::transformer::SDPAPrecision::FAST,
+        "SparseRingSDPA runs the STANDARD and FAST precision recipes only");
     TT_FATAL(
         !args.q_blocks_per_pass.has_value() || (*args.q_blocks_per_pass >= 1 && *args.q_blocks_per_pass <= 32),
         "SparseRingSDPA: q_blocks_per_pass must be in [1, 32], got {}",
@@ -437,7 +448,7 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.scale,
         args.logical_n,
         args.ring_size,
-        args.compute_kernel_config,
+        args.precision,
         args.program_config,
         args.ccl_core_grid_offset,
         args.all_gather_operation_attributes,
@@ -468,8 +479,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADevice
 
     const CoreCoord grid = args.program_config.compute_with_storage_grid_size;
     // QK^T and softmax @ V dominate the modeled cycles, so use their fidelity when it is overridden.
-    const tt::tt_metal::MathFidelity fidelity =
-        args.program_config.matmul_math_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
+    const tt::tt_metal::MathFidelity fidelity = ttnn::operations::transformer::sdpa::detail::recipe_math_fidelity(
+        args.precision, tensor_args.gathered_k.dtype());
 
     // Dense upper bound: the kept-block density is only known on device.
     int ideal_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
@@ -506,7 +517,7 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const CoreCoord ccl_core_grid_offset,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<float> scale,
-    const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const ttnn::transformer::SDPAPrecision precision,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const uint32_t block_size,
     const std::optional<uint32_t> q_blocks_per_pass,
@@ -516,9 +527,6 @@ SparseRingSDPAResult sparse_ring_sdpa(
     TT_FATAL(
         pooled_k.has_value() == pooled_v.has_value(),
         "pooled_k and pooled_v must be passed together (Sol-Attn) or both omitted (kept blocks only)");
-
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
     log_debug(
         tt::LogOp,
@@ -569,7 +577,7 @@ SparseRingSDPAResult sparse_ring_sdpa(
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         std::move(program_config),
-        kernel_config_val,
+        precision,
         std::move(all_gather_operation_attributes),
         std::move(all_gather_tensor_args),
         ccl_core_grid_offset,

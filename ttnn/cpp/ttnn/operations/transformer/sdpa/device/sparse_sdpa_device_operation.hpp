@@ -24,10 +24,13 @@ struct SparseSDPAOperation {
     using tensor_return_value_t = Tensor;
 
     struct SparseSDPAProgramFactory {
-        // The split-K choice depends on the free L1, so compute_program_hash hashes it.
+        // The split-K and L1 choices depend on the free L1, so compute_program_hash hashes them.
         struct Plan {
             bool split_k = false;
             uint32_t num_used = 0;  // cores that get work
+            uint32_t passes = 1;    // head passes per token (the Q tile rows that fit L1 at once)
+            bool fused = true;      // fused recipe chunks (their CBs fit L1)
+            uint32_t group = 1;     // gathered chunks per recipe step (sparse_step_group)
         };
         static Plan select_plan(const operation_attributes_t& attrs, const tensor_args_t& t);
 
@@ -64,7 +67,7 @@ Tensor sparse_sdpa(
     uint32_t v_dim,
     transformer::SparseKVFormat kv_format,
     uint32_t k_chunk_size,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    transformer::SDPAPrecision precision,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
     const std::optional<Tensor>& attention_sink = std::nullopt,

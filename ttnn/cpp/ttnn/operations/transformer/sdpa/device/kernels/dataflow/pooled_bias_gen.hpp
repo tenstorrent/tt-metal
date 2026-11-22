@@ -99,6 +99,14 @@ SPARSE_RING_HOT void fill_tile_rows(const Noc& noc, uint32_t tile_addr, const ui
         {});
 }
 
+// An L1-to-L1 copy of `bytes` from src to dst on this core (the caller waits with async_read_barrier).
+FORCE_INLINE void copy_local(const Noc& noc, uint32_t src, uint32_t dst, uint32_t bytes) {
+    const uint8_t noc_id = noc.get_noc_id();
+    UnicastEndpoint endpoint;
+    noc.async_read(
+        endpoint, CoreLocalMem<uint32_t>(dst), bytes, {.noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = src}, {});
+}
+
 // Write `tiles` bias tiles for pooled tile rows [row0_t, row0_t + tiles) at L1 address dst (a reserved
 // cb_pooled_bias region of >= tiles * tile_bytes). Column j of the row is padded block g = row0_t * 32 + j (shard
 // g / nb_pad, block g % nb_pad): the "exact / padding" value when it is computed exactly (its mask bit is set and it

@@ -4,7 +4,9 @@
 
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_state_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
@@ -13,64 +15,29 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>  // corerange_to_cores
+#include <algorithm>
 #include <array>
 #include <bit>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ttnn::prim {
 
-// Fixed CB id convention shared with the kernels.
-// Flash/online-softmax keeps ping-pong (prev/cur) buffers for the running max, sum, and output.
-enum SparseCB : uint32_t {
-    cb_q_rm = 0,   // Q rows (row-major, reader -> compute tilize)
-    cb_q_in,       // Q tiled [Sqt, DHt]
-    cb_k_rm,       // K chunk rows (row-major)
-    cb_k_in,       // K tiled [Skt,DHt], or scaled-cache latent [Skt,vDHt] in BFP8
-    cb_neginf,     // all-(-inf) tile (writer-built once): bcast-added to fully-masked key tiles
-    cb_mask_part,  // per-token partial-boundary mask tile (row 0: -inf for cols >= valid%32)
-    cb_scale,      // reduce identity scaler (1 tile)
-    cb_qk_im,      // scores [Sqt, Skt]
-    cb_max_a,      // running max ping-pong [Sqt, 1]
-    cb_max_b,
-    cb_sum_a,  // running sum ping-pong [Sqt, 1]
-    cb_sum_b,
-    cb_out_a,  // running out ping-pong [Sqt, vDHt] (single-buffered for L1 accumulation)
-    cb_out_b,
-    cb_corr,            // exp(prev_max - cur_max) correction [Sqt, 1]
-    cb_out_im,          // fixed pre-untilize copy of the final out [Sqt, vDHt]
-    cb_out_rm,          // untilized row-major out (compute -> writer)
-    cb_idx,             // reader-internal: one token's index row (uint32)
-    cb_ctrl,            // reader -> compute: per-segment control_message (active chunk count is 0 for an empty HEAD)
-    cb_col_identity,    // ones-in-col0 (writer-built): finalizes the partial row-sum via matmul_reduce
-    cb_recip_scratch,   // 1-tile reciprocal scratch for normalize_row_streaming
-    cb_kreq,            // reader->writer K-gather handoff (dual-NoC split)
-    cb_kack,            // writer->reader ack that its half of the chunk landed in cb_k_rm
-    cb_k_rope_rm,       // scaled FP8 only: format-only BF16 view of one packed row slab
-    cb_k_scale_bcast,   // scaled FP8 only: per-row broadcast scale tiles (FP32, or FP16 with fused dequant)
-    cb_k_latent_tile,   // scaled FP8 without fused dequant: one TILE_HEIGHT-row BFP8 latent slab
-    cb_k_rope_tile,     // scaled FP8 only: one K chunk's BF16 RoPE tiles
-    cb_attention_sink,  // persistent first-column vector: one sink scalar per head
-    cb_sink_scratch,    // writer scratch for gathering sink scalars
-    // split-K (sparse_sdpa_common.hpp seg_kind): this core's HEAD flash state out, the neighbour's HEAD state in
-    cb_head_ready,  // compute -> writer: the HEAD state is in cb_out_b / cb_max_b / cb_sum_b
-    cb_head_ack,    // writer -> compute: the HEAD state was sent, compute can pop it
-    cb_recv_out,    // core i+1's HEAD state, NoC-written straight into these CBs' base
-    cb_recv_max,
-    cb_recv_sum,
-    cb_merge_ctrl,  // writer -> compute: the neighbour's semaphore value (SPLIT_PARTIAL_*)
-    cb_corr2,       // exp(recv_max - merged_max)
-    cb_count
-};
-
 namespace {
+namespace recipes = ttnn::operations::transformer::sdpa::detail;
+namespace sparse_cb = ::sparse_sdpa::recipe_cb;
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CBFormatDescriptor;
 
-// Shapes and formats shared by make_cbs and create_descriptor.
+// Shapes and formats shared by the layout and create_descriptor.
 struct OpDims {
     bool use_attention_sink;
     bool scaled_kv;
-    // Fused FP8 dequant (one FPU pass for tilize x scale, see kernels/compute/sparse_sdpa_fused_dequant.hpp). The
-    // attention-sink term is added to the row-sum unscaled, so the sink path keeps the two-pass dequant.
+    // Fused FP8 dequant (one FPU pass for tilize x scale, see kernels/compute/sparse_sdpa_fused_dequant.hpp). It scales
+    // V by 2^OFFSET, which compute undoes on the output; an attention sink adds an unscaled term to the denominator, so
+    // the sink path keeps the two-pass dequant.
     bool fused_dequant;
     uint32_t H;      // head count, from the tensor (any multiple of TILE_HEIGHT)
     uint32_t S;      // query rows
@@ -114,111 +81,193 @@ OpDims op_dims(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
     };
 }
 
-// The CB list (fixed ids = SparseCB enum; descriptor insertion order is irrelevant). select_plan sizes the split-K L1
-// footprint from this same list.
-tt::tt_metal::ProgramDescriptor::CBDescriptors make_cbs(
-    const SparseSDPAParams& attrs, const SparseSDPAInputs& t, tt::tt_metal::DataType out_dtype, bool split_k) {
+// The format compute tilizes K into (the recipe's K storage): FP8 rows into BFP8 (near-lossless, half the L1 and
+// cheaper matmuls), BF16 rows and the scaled cache (dequantized latent beside BF16 RoPE in one CB) into BF16.
+DataType sparse_k_tile_dtype(const OpDims& d) {
+    return !d.scaled_kv && d.kv_df == tt::DataFormat::Fp8_e4m3 ? DataType::BFLOAT8_B : DataType::BFLOAT16;
+}
+
+recipes::PrecisionPolicy sparse_policy(const SparseSDPAParams& attrs, const OpDims& d) {
+    return recipes::resolve_precision_policy(recipes::select_recipe(attrs.precision, sparse_k_tile_dtype(d)));
+}
+
+// Gathered chunks per recipe step. A step narrower than one full QK subblock (the recipes' widest, 4 tiles:
+// recipe_subblock_width) pays the step's fixed cost for less work: on BH, Qwen 3.8 QSA decode (32 heads, 1 row,
+// top-2048 of 4096, D 512) took 194 / 112 / 100 / 101 us at 1 / 2 / 4 / 8-tile steps. Compute tilizes `group` chunks
+// into one step (the reader still gathers chunk by chunk); a token's last group may hold fewer chunks (masked tail).
+uint32_t sparse_step_group(const OpDims& d) {
+    constexpr uint32_t kWidestQkSubblockTiles = 4;
+    if (d.Skt >= kWidestQkSubblockTiles) {
+        return 1;
+    }
+    const uint32_t n_chunks = d.topk / d.k_chunk;
+    return std::min((kWidestQkSubblockTiles + d.Skt - 1) / d.Skt, n_chunks);
+}
+
+// The layout of one plan: the recipe compute CBs (recipe_compute_program) resized for the sparse kernel, the sparse
+// dataflow CBs (sparse_sdpa_common.hpp recipe_cb), and the recipe compute kernel (named arguments, defines, config).
+struct SparseLayout {
     tt::tt_metal::ProgramDescriptor::CBDescriptors cbs;
+    tt::tt_metal::KernelDescriptor compute;
+    uint32_t q_tiles = 0;  // Q tile rows compute processes per pass (an odd pass padded where the recipe needs it)
+    bool v_in_k = true;    // V read in place from the K^T chunk
+};
+
+SparseLayout sparse_make_layout(
+    const SparseSDPAParams& attrs,
+    const SparseSDPAInputs& t,
+    tt::tt_metal::DataType out_dtype,
+    bool split_k,
+    uint32_t passes,
+    bool fused,
+    uint32_t group) {
     const OpDims d = op_dims(attrs, t);
-    const uint32_t Sqt = d.Sqt, Skt = d.Skt, DHt = d.DHt, vDHt = d.vDHt;
-
-    constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
-    constexpr tt::DataFormat fp32 = tt::DataFormat::Float32;
-    constexpr uint32_t tile_bytes = tt::tile_size(bf);  // 2048
-    const uint32_t scale_blocks = ::sparse_sdpa::scale_block_count(d.v_dim);
-    // K and Q are read row-major in their native dtype (cb_k_rm / cb_q_rm) and tilized by compute. FP8 (and the
-    // scaled cache's FP8 latent) tilizes into BFP8 (near-lossless, PCC 0.99998): it halves cb_k_in / cb_q_in L1 and
-    // cheapens both matmuls (the HW within-face transpose works on block-float). BF16 stays BF16.
-    const bool kv_is_fp8 = d.kv_df == tt::DataFormat::Fp8_e4m3;
-    const tt::DataFormat k_in_df = (d.scaled_kv || kv_is_fp8) ? tt::DataFormat::Bfp8_b : bf;
-    const uint32_t k_in_tile_bytes = tt::tile_size(k_in_df);
-    const uint32_t k_in_width_tiles = d.scaled_kv ? vDHt : DHt;
-    const tt::DataFormat q_in_df = d.q_df == tt::DataFormat::Fp8_e4m3 ? tt::DataFormat::Bfp8_b : bf;
-    // Output dtype matches q (compute_output_specs). The final untilize packs the bf16 accumulator (cb_out_im) to
-    // this format in cb_out_rm (fp8_e4m3 is a regular float8, not block-float, so it untilizes fine).
-    const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(out_dtype);
-
-    const auto& core_grid = attrs.worker_core_grid;
-    const auto cb = [&](uint32_t id, uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
-        cbs.push_back(tt::tt_metal::CBDescriptor{
+    const auto policy = sparse_policy(attrs, d);
+    const bool fp32 = policy.fp32_destination;
+    const uint32_t pass_rows = (d.Sqt + passes - 1) / passes;
+    const uint32_t step_kt = group * d.Skt;  // K tiles per recipe step
+    SparseLayout layout;
+    layout.q_tiles = recipes::recipe_compute_q_tiles(policy, pass_rows, step_kt);
+    const uint32_t q_tiles = layout.q_tiles;
+    // In-place V needs PV subblocks at least as wide as the BF16 recipes' two-row groups; a narrower V gets its own CB.
+    layout.v_in_k = fp32 || recipes::recipe_subblock_width(d.vDHt) >= 2;
+    const tt::DataFormat q_format =
+        d.q_df == tt::DataFormat::Fp8_e4m3 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
+    const auto& grid = attrs.worker_core_grid;
+    auto program = recipes::recipe_compute_program(
+        policy, grid, 1, q_tiles, step_kt, d.DHt, attrs.scale, d.vDHt, std::nullopt, q_format);
+    layout.compute = std::move(program.kernels.front());
+    auto& cbs = program.cbs;
+    // Compute tilizes Q and K itself, so one entry each; the output CB holds a pass's rows (compute untilizes them
+    // after the step that normalizes them), BF16 whatever Q's type.
+    for (auto& c : cbs) {
+        auto& format = c.format_descriptors.front();
+        if (format.buffer_index == recipe_ring_cb::q) {
+            c.total_size = q_tiles * d.DHt * format.page_size;
+        } else if (format.buffer_index == recipe_ring_cb::k) {
+            c.total_size = step_kt * d.DHt * format.page_size;
+        } else if (format.buffer_index == recipe_ring_cb::v) {
+            c.total_size = step_kt * d.vDHt * format.page_size;
+        } else if (format.buffer_index == recipe_ring_cb::out) {
+            format.data_format = tt::DataFormat::Float16_b;
+            format.page_size = tt::tile_size(tt::DataFormat::Float16_b);
+            c.total_size = q_tiles * d.vDHt * format.page_size;
+        }
+    }
+    if (!layout.v_in_k) {
+        // Compute tilizes V beside K without a pack reconfigure (sparse_sdpa_compute.cpp produce_k_chunk).
+        const auto format_of = [&](uint32_t id) {
+            for (const auto& c : cbs) {
+                if (c.format_descriptors.front().buffer_index == id) {
+                    return c.format_descriptors.front().data_format;
+                }
+            }
+            return tt::DataFormat::Invalid;
+        };
+        TT_FATAL(format_of(recipe_ring_cb::v) == format_of(recipe_ring_cb::k), "sparse_sdpa: V's CB needs K's format");
+    }
+    if (layout.v_in_k) {
+        cbs.erase(
+            std::remove_if(
+                cbs.begin(),
+                cbs.end(),
+                [](const CBDescriptor& c) { return c.format_descriptors.front().buffer_index == recipe_ring_cb::v; }),
+            cbs.end());
+    }
+    if (!fused) {
+        recipes::recipe_drop_fused(cbs, layout.compute.named_compile_time_args, q_tiles);
+    }
+    const auto add_cb = [&](uint32_t id, uint32_t page_size, uint32_t num_pages, tt::DataFormat df) {
+        cbs.push_back(CBDescriptor{
             .total_size = page_size * num_pages,
-            .core_ranges = core_grid,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .core_ranges = grid,
+            .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(id), .data_format = df, .page_size = page_size}}},
         });
     };
-    cb(cb_q_rm, d.k_dim * t.q.element_size(), d.H, d.q_df);
-    cb(cb_q_in, tt::tile_size(q_in_df), Sqt * DHt, q_in_df);
+    constexpr tt::DataFormat bf = tt::DataFormat::Float16_b;
+    constexpr uint32_t tile_bytes = 2048;
+    // Q rows: two tile rows of heads, so the reader runs one ahead of compute's tilize.
+    add_cb(sparse_cb::q_rm, d.k_dim * t.q.element_size(), 2 * tt::constants::TILE_HEIGHT, d.q_df);
     if (d.scaled_kv) {
         // One double-buffered allocation with an owning FP8 FIFO and a format-only BF16 RoPE alias. Both use
-        // the physical packed-page stride. Only cb_k_rm advances FIFO state; compute derives the alias read
+        // the physical packed-page stride. Only sparse_cb::k_rm advances FIFO state; compute derives the alias read
         // pointer from the owner before reading RoPE. This lets the reader gather slab N+1 while compute
         // reconstructs slab N without independent alias pointers drifting at the ring wrap.
-        cbs.push_back(tt::tt_metal::CBDescriptor{
+        cbs.push_back(CBDescriptor{
             .total_size = d.packed_page_bytes * tt::constants::TILE_HEIGHT * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH,
-            .core_ranges = core_grid,
+            .core_ranges = grid,
             .format_descriptors = {{
-                tt::tt_metal::CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(cb_k_rm),
+                CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(sparse_cb::k_rm),
                     .data_format = d.kv_df,
                     .page_size = d.packed_page_bytes},
-                tt::tt_metal::CBFormatDescriptor{
-                    .buffer_index = static_cast<uint8_t>(cb_k_rope_rm),
+                CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(sparse_cb::k_rope_rm),
                     .data_format = bf,
                     .page_size = d.packed_page_bytes},
             }},
         });
-    } else {
-        cb(cb_k_rm, d.k_dim * t.kv.element_size(), d.k_chunk, d.kv_df);
-    }
-    cb(cb_k_in, k_in_tile_bytes, Skt * k_in_width_tiles, k_in_df);
-    cb(cb_neginf, tile_bytes, 1, bf);
-    cb(cb_mask_part, tile_bytes, 1, bf);
-    cb(cb_scale, tile_bytes, 1, bf);
-    cb(cb_qk_im, tile_bytes, Sqt * Skt, bf);
-    cb(cb_max_a, tile_bytes, Sqt, bf);
-    cb(cb_max_b, tile_bytes, Sqt, bf);
-    cb(cb_sum_a, tile_bytes, Sqt, bf);
-    cb(cb_sum_b, tile_bytes, Sqt, bf);
-    cb(cb_out_a, tile_bytes, Sqt * vDHt, bf);
-    cb(cb_out_b, tile_bytes, Sqt * vDHt, bf);
-    cb(cb_corr, tile_bytes, Sqt, bf);
-    cb(cb_out_im, tile_bytes, Sqt * vDHt, bf);
-    cb(cb_out_rm, tt::tile_size(out_df), Sqt * vDHt, out_df);
-    cb(cb_idx, d.topk * t.indices.element_size(), 1, bf);
-    cb(cb_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
-    cb(cb_col_identity, tile_bytes, 1, bf);
-    cb(cb_recip_scratch, tile_bytes, 1, bf);
-    cb(cb_kreq, ::sparse_sdpa::gather_request::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
-    cb(cb_kack, ::sparse_sdpa::ACK_PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
-    if (d.scaled_kv) {
-        const uint32_t scale_pages = scale_blocks * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH;
+        const uint32_t scale_pages = ::sparse_sdpa::scale_block_count(d.v_dim) * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH;
         if (d.fused_dequant) {
             // FP16 scale tiles. Declared UInt16: the JIT rejects an FP16 (A-exponent) CB next to the BF16 ones, and
             // compute reprograms srcB to Float16 for the fused multiply.
-            cb(cb_k_scale_bcast, tt::tile_size(tt::DataFormat::UInt16), scale_pages, tt::DataFormat::UInt16);
+            add_cb(sparse_cb::k_scale, tt::tile_size(tt::DataFormat::UInt16), scale_pages, tt::DataFormat::UInt16);
         } else {
-            cb(cb_k_scale_bcast, tt::tile_size(fp32), scale_pages, fp32);
-            cb(cb_k_latent_tile, k_in_tile_bytes, vDHt, tt::DataFormat::Bfp8_b);
+            add_cb(sparse_cb::k_scale, tt::tile_size(tt::DataFormat::Float32), scale_pages, tt::DataFormat::Float32);
+            add_cb(sparse_cb::k_latent, tile_bytes, d.vDHt, bf);
         }
-        cb(cb_k_rope_tile, tile_bytes, Skt * (DHt - vDHt), bf);
+    } else {
+        add_cb(sparse_cb::k_rm, d.k_dim * t.kv.element_size(), d.k_chunk, d.kv_df);
     }
+    const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(out_dtype);
+    add_cb(sparse_cb::out_rm, tt::tile_size(out_df), q_tiles * d.vDHt, out_df);
+    add_cb(sparse_cb::idx, d.topk * t.indices.element_size(), 1, bf);
+    add_cb(sparse_cb::ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
+    add_cb(sparse_cb::kreq, ::sparse_sdpa::gather_request::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
+    add_cb(sparse_cb::kack, ::sparse_sdpa::ACK_PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     if (d.use_attention_sink) {
-        cb(cb_attention_sink, tile_bytes, Sqt, bf);
-        cb(cb_sink_scratch, d.H * sizeof(uint16_t), 1, bf);
+        add_cb(sparse_cb::sink, tile_bytes, passes * q_tiles, bf);
+        add_cb(sparse_cb::sink_scratch, d.H * sizeof(uint16_t), 1, bf);
     }
+    const tt::DataFormat state_df = fp32 ? tt::DataFormat::Float32 : bf;
     if (split_k) {
-        // Split-K merge state: core i+1's HEAD state in, the merge scratch, and the HEAD send handshake.
-        cb(cb_recv_out, tile_bytes, Sqt * vDHt, bf);
-        for (uint32_t id : {cb_recv_max, cb_recv_sum, cb_corr2}) {
-            cb(id, tile_bytes, Sqt, bf);
-        }
-        cb(cb_merge_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, 1, bf);
-        for (uint32_t id : {cb_head_ready, cb_head_ack}) {
-            cb(id, ::sparse_sdpa::ACK_PAGE_BYTES, 1, bf);
+        // The HEAD's checkpoint request / ack (StateTransfer words), the neighbour's state planes, c_b and the merge
+        // control page.
+        using Transfer = ::sdpa::streaming::StateTransfer;
+        constexpr uint32_t request_bytes = ::sparse_sdpa::align_cb_page(Transfer::Words * sizeof(uint32_t));
+        add_cb(sparse_cb::checkpoint_request, request_bytes, 1, tt::DataFormat::UInt32);
+        add_cb(sparse_cb::checkpoint_ack, request_bytes, 1, tt::DataFormat::UInt32);
+        add_cb(sparse_cb::recv_out, 4096, q_tiles * d.vDHt, tt::DataFormat::Float32);
+        add_cb(sparse_cb::recv_max, tt::tile_size(state_df), q_tiles, state_df);
+        add_cb(sparse_cb::recv_sum, 4096, q_tiles, tt::DataFormat::Float32);
+        add_cb(sparse_cb::merge_corr, tt::tile_size(state_df), q_tiles, state_df);
+        add_cb(sparse_cb::merge_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, 1, tt::DataFormat::UInt32);
+    }
+    // Compute: FP32 state CBs unpack to dest (the recipe sets its own); FP8 rows tilize through the FP32 dest.
+    auto& config = std::get<tt::tt_metal::ComputeConfigDescriptor>(layout.compute.config);
+    config.unpack_to_dest_mode.resize(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32 && split_k) {
+        for (uint32_t id : {sparse_cb::recv_out, sparse_cb::recv_max, sparse_cb::recv_sum, sparse_cb::merge_corr}) {
+            config.unpack_to_dest_mode[id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
-    return cbs;
+    if (d.kv_df == tt::DataFormat::Fp8_e4m3) {
+        config.unpack_to_dest_mode[sparse_cb::k_rm] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (d.q_df == tt::DataFormat::Fp8_e4m3) {
+        config.unpack_to_dest_mode[sparse_cb::q_rm] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    layout.cbs = std::move(cbs);
+    return layout;
+}
+
+uint64_t sparse_layout_l1_bytes(const SparseLayout& layout, uint64_t cb_align) {
+    uint64_t bytes = 0;
+    for (const auto& c : layout.cbs) {
+        bytes += (c.total_size + cb_align - 1) / cb_align * cb_align;
+    }
+    return bytes;
 }
 
 // Relative split-K gather speed (%) of Blackhole NoC0 rows y = FIRST_ROW_Y.. when every core gathers K at once: the
@@ -261,29 +310,56 @@ std::vector<uint64_t> split_k_unit_bounds(
     return bounds;
 }
 
-}  // namespace
-
-SparseSDPAOperation::SparseSDPAProgramFactory::Plan SparseSDPAOperation::SparseSDPAProgramFactory::select_plan(
+SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan(
     const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
+    using Plan = SparseSDPAOperation::SparseSDPAProgramFactory::Plan;
+    auto* device = t.q.device();
+    const OpDims d = op_dims(attrs, t);
+    const auto out_dtype = SparseSDPAOperation::compute_output_specs(attrs, t).data_type();
+    // ProgramImpl::allocate_circular_buffers places each CB at the DRAM alignment, not the L1 one.
+    const uint64_t cb_align = device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
+    const uint64_t l1_available = recipes::recipe_free_l1(*device);
+    const auto fits = [&](bool split_k, uint32_t passes, bool fused, uint32_t group) {
+        return sparse_layout_l1_bytes(
+                   sparse_make_layout(attrs, t, out_dtype, split_k, passes, fused, group), cb_align) <= l1_available;
+    };
+    // The fewest head passes that fit L1 (each pass gathers the token's keys again), then grouped steps and fused
+    // chunks if they fit.
+    Plan plan{.split_k = false, .num_used = attrs.worker_core_grid.num_cores()};
+    bool found = false;
+    const uint32_t group = sparse_step_group(d);
+    for (uint32_t passes = 1; passes <= d.Sqt && !found; ++passes) {
+        for (const uint32_t g : {group, 1u}) {
+            for (const bool fused : {true, false}) {
+                if (!found && fits(false, passes, fused, g)) {
+                    plan.passes = passes;
+                    plan.fused = fused;
+                    plan.group = g;
+                    found = true;
+                }
+            }
+        }
+    }
+    TT_FATAL(found, "sparse_sdpa: one Q tile row of {} heads does not fit L1 ({} B free)", d.H, l1_available);
     // Split-K: deal (token, chunk) units contiguously over the cores when whole tokens do not divide evenly. GLM per
     // chip has 160 query rows: on 96 cores the whole-token split leaves 64 cores with 2 tokens and 32 with 1
     // (makespan 2 tokens); split-K gives every core 26-27 of the 2560 chunk units (1.67 tokens). Merges are pairwise
-    // between neighbouring cores, at most one per core (needs Sqt <= 4 so a merge fits DST once).
-    const uint32_t S = t.q.logical_shape()[2];
-    const uint32_t Sqt = t.q.logical_shape()[1] / tt::constants::TILE_HEIGHT;
-    const uint32_t n_chunks = t.indices.logical_shape()[3] / attrs.k_chunk_size;
+    // between neighbouring cores, at most one per core. One head pass per token.
+    const uint32_t S = d.S;
+    const uint32_t n_chunks = d.topk / d.k_chunk;
     const uint32_t num_cores = attrs.worker_core_grid.num_cores();
     // BF16 and plain FP8 KV: split-K only when every token gets two cores (2S <= cores); with more rows it was
     // slower in most measured shapes.
     const bool split_k_ok =
-        !t.attention_sink.has_value() && Sqt <= 4 && n_chunks > 1 && (attrs.has_scaled_kv() || 2 * S <= num_cores);
-    Plan plan{.split_k = split_k_ok && S > num_cores && (S % num_cores) != 0, .num_used = num_cores};
+        plan.passes == 1 && !d.use_attention_sink && d.Sqt <= 4 && n_chunks > 1 && (d.scaled_kv || 2 * S <= num_cores);
+    Plan split = plan;
+    split.split_k = split_k_ok && S > num_cores && (S % num_cores) != 0;
     // Small S (fewer query rows than cores, e.g. GLM chunk 1024/2048: 32/64 rows per chip on 96 cores): the
     // whole-token split leaves most cores idle at one token-time (~330 us, compute-bound). Deal the (token, chunk)
     // units over `num_used` <= min(num_cores, 2S) cores instead, so every token straddles at most two neighbouring
-    // cores and the existing pairwise HEAD -> TAIL merge applies unchanged: every core range must start at a token
-    // boundary or run to one (no range strictly inside a token). num_used is the largest such count; S=32 -> 64
-    // cores (half a token each), S=64 on 96 cores -> 96 (2/3).
+    // cores and the pairwise HEAD -> TAIL merge applies: every core range must start at a token boundary or run to one
+    // (no range strictly inside a token). num_used is the largest such count; S=32 -> 64 cores (half a token each),
+    // S=64 on 96 cores -> 96 (2/3).
     if (split_k_ok && S < num_cores) {
         const uint64_t units = static_cast<uint64_t>(S) * n_chunks;
         const auto valid = [&](uint32_t m) {
@@ -297,24 +373,61 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan SparseSDPAOperation::SparseS
         };
         for (uint32_t m = std::min<uint32_t>(num_cores, 2 * S); m > S; --m) {
             if (valid(m)) {
-                plan = Plan{.split_k = true, .num_used = m};
+                split.split_k = true;
+                split.num_used = m;
                 break;
             }
         }
     }
-    if (!plan.split_k) {
-        return plan;
+    // Keep the whole-token split when the merge CBs do not fit in the free L1.
+    if (split.split_k && fits(true, 1, plan.fused, plan.group)) {
+        return split;
     }
-    // Keep the whole-token split when the merge CBs do not fit in the free L1 (e.g. large H with large k_chunk).
-    // ProgramImpl::allocate_circular_buffers places each CB at the DRAM alignment, not the L1 one.
-    const uint64_t cb_align = t.q.device()->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
-    uint64_t cb_bytes = 0;
-    for (const auto& c : make_cbs(attrs, t, SparseSDPAOperation::compute_output_specs(attrs, t).data_type(), true)) {
-        cb_bytes += (c.total_size + cb_align - 1) / cb_align * cb_align;
+    return plan;
+}
+
+}  // namespace
+
+SparseSDPAOperation::SparseSDPAProgramFactory::Plan SparseSDPAOperation::SparseSDPAProgramFactory::select_plan(
+    const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
+    // Memoized: the plan builds candidate layouts, and a cache hit hashes it. The key holds everything the plan reads
+    // (the device, its free L1, the op's scalars and the input specs it uses), as one flat array: hashing the tensor
+    // shapes and the core range set per call cost more host time than the legacy op's hit path.
+    const auto& qs = t.q.logical_shape();
+    const std::array<uint32_t, 17> fields{
+        attrs.v_dim,
+        static_cast<uint32_t>(attrs.kv_format),
+        attrs.k_chunk_size,
+        static_cast<uint32_t>(attrs.precision),
+        attrs.worker_core_grid.num_cores(),
+        static_cast<uint32_t>(qs.rank()),
+        qs[-3],
+        qs[-2],
+        qs[-1],
+        static_cast<uint32_t>(t.q.dtype()),
+        static_cast<uint32_t>(t.kv.dtype()),
+        static_cast<uint32_t>(t.kv.mesh_buffer().aligned_page_size()),
+        static_cast<uint32_t>(t.kv.element_size()),
+        t.indices.logical_shape()[-1],
+        static_cast<uint32_t>(t.indices.element_size()),
+        static_cast<uint32_t>(t.attention_sink.has_value()),
+        static_cast<uint32_t>(attrs.has_scaled_kv())};
+    auto* device = t.q.device();
+    const auto key = ttsl::hash::hash_objects_with_default_seed(device->id(), recipes::recipe_free_l1(*device), fields);
+    static std::mutex mutex;
+    static std::unordered_map<std::size_t, Plan> memo;
+    {
+        const std::lock_guard lock(mutex);
+        if (const auto it = memo.find(key); it != memo.end()) {
+            return it->second;
+        }
     }
-    if (cb_bytes > ttnn::operations::data_movement::get_max_l1_space(t.q)) {
-        return Plan{.split_k = false, .num_used = num_cores};
+    const Plan plan = sparse_resolve_plan(attrs, t);
+    const std::lock_guard lock(mutex);
+    if (memo.size() >= 4096) {
+        memo.clear();
     }
+    memo.emplace(key, plan);
     return plan;
 }
 
@@ -324,7 +437,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
 
     const OpDims d = op_dims(attrs, t);
     const uint32_t H = d.H, S = d.S, topk = d.topk, k_dim = d.k_dim, v_dim = d.v_dim, k_chunk = d.k_chunk;
-    const uint32_t DHt = d.DHt, vDHt = d.vDHt, Skt = d.Skt, Sqt = d.Sqt, packed_page_bytes = d.packed_page_bytes;
+    const uint32_t DHt = d.DHt, vDHt = d.vDHt, Skt = d.Skt, packed_page_bytes = d.packed_page_bytes;
     const auto use_attention_sink = static_cast<uint32_t>(d.use_attention_sink);
     const auto scaled_kv = static_cast<uint32_t>(d.scaled_kv);
     const auto fused_dequant = static_cast<uint32_t>(d.fused_dequant);
@@ -343,15 +456,18 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const Plan plan = select_plan(attrs, t);
     const auto split_k = static_cast<uint32_t>(plan.split_k);
     const uint32_t num_used = plan.num_used;
-    desc.cbs = make_cbs(attrs, t, output.dtype(), plan.split_k);
+    SparseLayout layout =
+        sparse_make_layout(attrs, t, output.dtype(), plan.split_k, plan.passes, plan.fused, plan.group);
+    const uint32_t q_tiles = layout.q_tiles;
+    desc.cbs = std::move(layout.cbs);
     if (plan.split_k) {
         desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = 0, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
     }
+    const auto policy = sparse_policy(attrs, d);
 
     // ---- compile-time args ----
-    // CB ids are passed to each kernel as compile-time args (the SparseCB enum is the single source). Each block's
-    // order is the kernel's *_ct_arg enum in sparse_sdpa_common.hpp; the TensorAccessorArgs chain last.
+    // Each block's order is the kernel's *_ct_arg enum in sparse_sdpa_common.hpp; the TensorAccessorArgs chain last.
     // The cache layout is compile-time so the remap is fully optimized out for natural-order KV.
     std::array<uint32_t, 5> block_cyclic_ct{0, 1, 1, 0, 0};
     if (attrs.has_block_cyclic()) {
@@ -360,13 +476,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         block_cyclic_ct = {1, bc.chunk_local, bc.sp, seq_len_local - bc.chunk_local, bc.chunk_local * (bc.sp - 1)};
     }
 
-    std::vector<uint32_t> reader_ct = {H, S, topk, k_chunk, k_dim};
-    reader_ct.insert(reader_ct.end(), {cb_q_rm, cb_k_rm, cb_mask_part, cb_idx, cb_ctrl});
-    reader_ct.insert(reader_ct.end(), {q_elem_bytes, kv_elem_bytes, idx_elem_bytes});
+    std::vector<uint32_t> reader_ct = {H, S, topk, k_chunk, k_dim, q_elem_bytes, kv_elem_bytes, idx_elem_bytes};
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
-    reader_ct.insert(
-        reader_ct.end(),
-        {scaled_kv, v_dim, cb_k_scale_bcast, packed_page_bytes, cb_kreq, cb_kack, split_k, fused_dequant});
+    reader_ct.insert(reader_ct.end(), {scaled_kv, v_dim, packed_page_bytes, split_k, fused_dequant});
+    reader_ct.insert(reader_ct.end(), {q_tiles, plan.passes});
     TT_FATAL(
         reader_ct.size() == ::sparse_sdpa::reader_ct_arg::END,
         "sparse_sdpa reader compile-time argument layout is out of sync");
@@ -380,24 +493,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         .append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
 
-    // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
-    std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
+    // The writer is the lighter dataflow kernel, so it builds the persistent compute-input tiles.
+    std::vector<uint32_t> writer_ct = {H, S, vDHt, out_elem_bytes};
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
-    writer_ct.insert(writer_ct.end(), {scaled_kv, k_dim, kv_elem_bytes, cb_idx, cb_kreq, cb_kack, packed_page_bytes});
-    writer_ct.insert(writer_ct.end(), {use_attention_sink, cb_attention_sink, cb_sink_scratch});
+    writer_ct.insert(writer_ct.end(), {scaled_kv, k_dim, kv_elem_bytes, packed_page_bytes, use_attention_sink});
     writer_ct.insert(
         writer_ct.end(),
-        {split_k,
-         cb_out_b,
-         cb_max_b,
-         cb_sum_b,
-         cb_head_ready,
-         cb_head_ack,
-         cb_recv_out,
-         cb_recv_max,
-         cb_recv_sum,
-         cb_merge_ctrl,
-         fused_dequant});
+        {split_k, fused_dequant, q_tiles, plan.passes, static_cast<uint32_t>(policy.fp32_destination)});
     TT_FATAL(
         writer_ct.size() == ::sparse_sdpa::writer_ct_arg::END,
         "sparse_sdpa writer compile-time argument layout is out of sync");
@@ -407,70 +509,6 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         .append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(d.use_attention_sink ? t.attention_sink->buffer() : nullptr)
         .append_to(writer_ct, writer_crt);
-
-    // packer_l1_acc has no ComputeConfigDescriptor field (this op does no L1 packer accumulation).
-    [[maybe_unused]] auto [math_fidelity, math_approx, fp32_acc, packer_l1_acc, dst_full_sync] =
-        get_compute_kernel_config_args(device->arch(), attrs.compute_kernel_config);
-    // Query sub-blocking: the DST-bound primitives (matmuls, reduce, sub_exp, salad) hold `qsb` query
-    // tile-rows live in DEST, so qsb must be <= dst_size (8 without fp32 acc, 4 with, half-sync). Process
-    // Sqt rows in q_groups = Sqt/qsb passes. Pick the largest divisor of Sqt that fits so groups are
-    // equal-height (salad's sbh is a compile-time template param). qsb==Sqt (one group) for small H.
-    const uint32_t dst_size = fp32_acc ? 4u : 8u;
-    uint32_t qsb = 1;
-    for (uint32_t c = std::min(Sqt, dst_size); c >= 1; --c) {
-        if (Sqt % c == 0) {
-            qsb = c;
-            break;
-        }
-    }
-    const std::vector<uint32_t> compute_ct = {
-        H,
-        DHt,
-        vDHt,
-        Skt,
-        std::bit_cast<uint32_t>(attrs.scale),
-        cb_q_rm,
-        cb_q_in,
-        cb_k_rm,
-        cb_k_in,
-        cb_neginf,
-        cb_mask_part,
-        cb_scale,
-        cb_qk_im,
-        cb_max_a,
-        cb_max_b,
-        cb_sum_a,
-        cb_sum_b,
-        cb_out_a,
-        cb_out_b,
-        cb_corr,
-        cb_out_im,
-        cb_out_rm,
-        cb_ctrl,
-        cb_col_identity,
-        cb_recip_scratch,
-        scaled_kv,
-        cb_k_rope_rm,
-        cb_k_scale_bcast,
-        cb_k_latent_tile,
-        cb_k_rope_tile,
-        static_cast<uint32_t>(math_approx),
-        qsb,
-        packed_page_bytes,
-        use_attention_sink,
-        cb_attention_sink,
-        split_k,
-        cb_head_ready,
-        cb_head_ack,
-        cb_recv_out,
-        cb_recv_max,
-        cb_recv_sum,
-        cb_merge_ctrl,
-        cb_corr2,
-        fused_dequant};
-    TT_FATAL(
-        compute_ct.size() == ::sparse_sdpa::compute_ct_arg::END,
-        "sparse_sdpa compute compile-time argument layout is out of sync");
 
     // ---- kernels ----
     const auto make_kernel =
@@ -483,28 +521,39 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             k.config = std::move(config);
             return k;
         };
-    // fp8 inputs must unpack into a 32-bit dest (fp8 -> fp32 in DEST, then packed to bfp8 cb_*_in).
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (d.kv_df == tt::DataFormat::Fp8_e4m3) {
-        unpack_to_dest_mode[cb_k_rm] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-    if (d.q_df == tt::DataFormat::Fp8_e4m3) {
-        unpack_to_dest_mode[cb_q_rm] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
     auto reader_desc =
         make_kernel("dataflow/sparse_sdpa_reader.cpp", std::move(reader_ct), tt::tt_metal::ReaderConfigDescriptor{});
     auto writer_desc =
         make_kernel("dataflow/sparse_sdpa_writer.cpp", std::move(writer_ct), tt::tt_metal::WriterConfigDescriptor{});
-    auto compute_desc = make_kernel(
-        "compute/sparse_sdpa_compute.cpp",
-        compute_ct,
-        tt::tt_metal::ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_acc,
-            .dst_full_sync_en = dst_full_sync,
-            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-            .math_approx_mode = math_approx});
+    // The recipe compute: its named arguments (after the L1 choice above), compute config (fidelity, FP32 DEST and
+    // unpack-to-dest modes) and defines, with the sparse kernel's own. Sparse masks only the sentinel tail of a
+    // token's last chunk (recipe_ring_mask 0) and keeps each pass's state resident.
+    auto compute_args = recipes::recipe_named_args(layout.compute.named_compile_time_args);
+    recipes::set_named_arg(compute_args, "recipe_ring", 1);
+    if (d.use_attention_sink) {
+        recipes::set_named_arg(compute_args, "recipe_sink_cb", sparse_cb::sink);
+        recipes::set_named_arg(compute_args, "recipe_sink_bf16", 1);
+        recipes::set_named_arg(compute_args, "recipe_sink_rows", 1);
+    }
+    compute_args.emplace_back("q_tiles", q_tiles);
+    compute_args.emplace_back("head_tiles", d.Sqt);
+    compute_args.emplace_back("passes", plan.passes);
+    compute_args.emplace_back("k_tiles", plan.group * Skt);  // one recipe step
+    compute_args.emplace_back("gather_tiles", Skt);          // one gathered chunk
+    compute_args.emplace_back("d_tiles", DHt);
+    compute_args.emplace_back("vd_tiles", vDHt);
+    compute_args.emplace_back("scale", std::bit_cast<uint32_t>(attrs.scale));
+    compute_args.emplace_back("v_in_k", layout.v_in_k ? 1u : 0u);
+    compute_args.emplace_back("scaled_kv", scaled_kv);
+    compute_args.emplace_back("fused_dequant", fused_dequant);
+    compute_args.emplace_back("packed_row_bytes", packed_page_bytes);
+    compute_args.emplace_back("split_k", split_k);
+    auto compute_desc = make_kernel("compute/sparse_sdpa_compute.cpp", {}, layout.compute.config);
+    compute_desc.named_compile_time_args = std::move(compute_args);
+    compute_desc.defines = layout.compute.defines;
+    // Every thread builds at -O2: the tilizes and the dequant beside the recipe step put the FP32 recipes' unpack image
+    // at -O3 4.6 KB over the kernel config buffer (BALANCED, scaled FP8, 64 heads).
+    compute_desc.opt_level = recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2);
 
     // Indexed KV cache: the gather page ids are offset by cache_batch_idx * T to select the cache's batch
     // slot (0 when not indexed). The cache-hit override re-derives this from the current attrs/tensor T.

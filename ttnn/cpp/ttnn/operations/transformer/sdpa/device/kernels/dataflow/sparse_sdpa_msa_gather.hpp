@@ -21,18 +21,19 @@ struct TridRing {
     Noc& noc;
     uint32_t issued = 0;
 
+    // One tile into L1 at `dst_l1` (an absolute address: the block cache's slots do not follow the CB's FIFO
+    // pointers).
     template <typename Accessor>
-    FORCE_INLINE void read(
-        const Accessor& t, experimental::CB& cb, uint32_t tile_bytes, uint32_t page_id, uint32_t offset_bytes) {
+    FORCE_INLINE void read(const Accessor& t, uint32_t tile_bytes, uint32_t page_id, uint32_t dst_l1) {
         if constexpr (K_TRID_RING == 0) {
-            noc.async_read(t, cb, tile_bytes, {.page_id = page_id}, {.offset_bytes = offset_bytes});
+            noc.async_read(t, CoreLocalMem<uint32_t>(dst_l1), tile_bytes, {.page_id = page_id}, {});
         } else {
             const uint32_t trid = (issued % TRID_MOD) + 1;
             if (issued >= K_TRID_RING) {
                 experimental::async_read_barrier_with_trid(noc, trid);  // free this slot before reuse
             }
             experimental::set_read_trid(noc, trid);
-            noc.async_read(t, cb, tile_bytes, {.page_id = page_id}, {.offset_bytes = offset_bytes});
+            noc.async_read(t, CoreLocalMem<uint32_t>(dst_l1), tile_bytes, {.page_id = page_id}, {});
             ++issued;
         }
     }

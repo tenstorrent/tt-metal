@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Fused scaled-FP8 KV dequant for sparse_sdpa (Blackhole): tilize the FP8 latent and multiply it by its per-row,
-// per-128-column scale in a single FPU pass.
+// Fused scaled-FP8 KV dequant for sparse_sdpa (Blackhole): the recipe's input path for the scaled FP8 cache. Tilize
+// the FP8 latent and multiply it by its per-row, per-128-column scale in a single FPU pass.
 //
-// The plain path is two passes per latent tile: tilize (srcA -> ELWADD with a zeroed srcB -> fp32 dest -> bfp8
-// pack), then unpack that bfp8 tile again and mul_tiles_bcast_cols by the FP32 scale tile (-> second bfp8 pack).
+// The plain path is two passes per latent tile: tilize (srcA -> ELWADD with a zeroed srcB -> fp32 dest -> bf16
+// pack), then unpack that tile again and mul_tiles_bcast_cols by the FP32 scale tile (-> second pack).
 // The BH 8-bit tilize already routes srcA through the FPU, so here srcB carries the scale instead of zeros and
 // the FPU op is ELWMUL with SRCB_BCAST_COL: one unpack, one FPU pass and one pack per tile.
 //
@@ -63,7 +63,7 @@ inline void unpack_tile(uint32_t address_a, uint32_t address_b) {
 #ifdef TRISC_MATH
 // One LoFi pass regardless of the op's math fidelity: exact for the FP8 srcA (4 significant bits) times a
 // power-of-two scale (the production cast, round_scale_to_power_of_two=True). An arbitrary scale keeps only
-// srcB's LoFi bits (~7), about the precision the two-pass path's BFP8 intermediate kept.
+// srcB's LoFi bits (~7), as BF16 keeps.
 inline void math_init() {
     addr_mod_t{.srca = {.incr = 8}, .srcb = {.incr = 8}, .dest = {.incr = 8}}.set(ADDR_MOD_2);
     ckernel_template tmp(1, 8, TT_OP_ELWMUL(0, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0));
@@ -82,8 +82,9 @@ inline void math_tile(uint32_t dst_index) {
 }
 #endif
 
-// Dequantize the latent field of one 32-row packed slab (front of cb_packed) into tile row `row_tile` of
-// cb_out, consuming `scale_blocks` FP16 scale tiles from the front of cb_scale (not popped here).
+// Dequantize the latent field of one 32-row packed slab (front of cb_packed) into cb_out's tiles row_tile + c *
+// out_col_stride (latent tile column c; the recipe's K^T layout), consuming `scale_blocks` FP16 scale tiles from the
+// front of cb_scale (not popped here).
 template <
     uint32_t cb_packed,
     uint32_t cb_scale,
@@ -91,7 +92,7 @@ template <
     uint32_t latent_physical_ct,
     uint32_t scale_blocks,
     uint32_t tiles_per_scale_block,
-    uint32_t out_row_tiles>
+    uint32_t out_col_stride>
 ALWI void latent_slab(uint32_t row_tile) {
     static_assert(tiles_per_scale_block <= 4, "one scale block per FP32 half-DEST");
     reconfig_data_format_srca(cb_packed);
@@ -123,7 +124,7 @@ ALWI void latent_slab(uint32_t row_tile) {
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t tile = 0; tile < tiles_per_scale_block; ++tile) {
-            pack_tile<true>(tile, cb_out, row_tile * out_row_tiles + block * tiles_per_scale_block + tile);
+            pack_tile<true>(tile, cb_out, (block * tiles_per_scale_block + tile) * out_col_stride + row_tile);
         }
         tile_regs_release();
     }

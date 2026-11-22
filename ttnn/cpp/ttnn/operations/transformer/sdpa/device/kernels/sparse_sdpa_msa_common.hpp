@@ -32,6 +32,19 @@ constexpr uint32_t BOUNDARY_COL = 3;   // causal: partial-column boundary within
 constexpr uint32_t WORD_COUNT = 4;
 }  // namespace ctrl
 
+// Circular buffers beside the recipe compute layout (CBs 0-16 and 29-31, recipe_compute_program; the kernels use
+// recipe_ring_cb's names for those). The K CB holds one block in the recipe's K^T layout (block tile (r, c) at
+// c * k_tiles + r), the V CB one block as stored; with the block cache each holds the cache's slots.
+namespace recipe_cb {
+constexpr uint32_t q_rm = 20;    // Q rows (row-major, reader -> compute tilize)
+constexpr uint32_t idx = 21;     // reader-internal: one token's block-id row (uint32)
+constexpr uint32_t ctrl = 22;    // reader -> compute per token: active block count + causal geometry (ctrl:: words)
+constexpr uint32_t kreq = 23;    // reader -> writer gather request (kreq)
+constexpr uint32_t kack = 24;    // writer -> reader: its lower tile halves landed
+constexpr uint32_t out_rm = 25;  // untilized row-major out (compute -> writer)
+constexpr uint32_t slot = 26;    // block cache only: per-block slot id reader -> compute (depth = reader run-ahead)
+}  // namespace recipe_cb
+
 // Compile-time argument indices, one enum per kernel. The factory fills each slot by name and the kernel reads it
 // by the same name, so the two cannot drift; COUNT is where the kernel's TensorAccessorArgs block begins.
 namespace reader_ct {
@@ -47,27 +60,18 @@ enum : uint32_t {
     V_TILES_PER_BLOCK,
     K_HALF,
     V_HALF,
-    CB_Q_RM,
-    CB_K_IN,
-    CB_V_IN,
-    CB_IDX,
-    CB_CTRL,
-    CB_KREQ,
-    CB_KACK,
     K_TILE_BYTES,
     V_TILE_BYTES,
     CAUSAL_MASK_ENABLED,
     BLOCK_SIZE,
-    CB_VMASK,
     BLOCK_CYCLIC,
     BC_CHUNK_LOCAL,
     BC_SP,
     BC_SHARD_STRIDE_GAP,
     BC_SLAB_STRIDE_GAP,
     KV_CACHE_SLOTS,
-    CB_K_CACHE,
-    CB_V_CACHE,
-    CB_SLOT,
+    D_TILES,  // K's tile columns (the K^T layout's row count)
+    Q_TILES,  // Q tile rows compute processes (padding rows past H zero)
     COUNT
 };
 }  // namespace reader_ct
@@ -83,69 +87,27 @@ enum : uint32_t {
     V_TILES_PER_BLOCK,
     K_HALF,
     V_HALF,
-    CB_OUT_RM,
-    CB_SCALE,
-    CB_COL_IDENTITY,
-    CB_K_IN,
-    CB_V_IN,
-    CB_KREQ,
-    CB_KACK,
     K_TILE_BYTES,
     V_TILE_BYTES,
-    CAUSAL_MASK_ENABLED,
-    CB_NEGINF,
     BLOCK_CYCLIC,
     BC_CHUNK_LOCAL,
     BC_SP,
     BC_SHARD_STRIDE_GAP,
     BC_SLAB_STRIDE_GAP,
     KV_CACHE_SLOTS,
-    CB_K_CACHE,
-    CB_V_CACHE,
+    D_TILES,
     COUNT
 };
 }  // namespace writer_ct
 
-namespace compute_ct {
-enum : uint32_t {
-    H,
-    DHT,
-    VDHT,
-    SKT,
-    SCALE_FP32,
-    CB_Q_RM,
-    CB_Q_IN,
-    CB_K_IN,
-    CB_V_IN,
-    CB_SCALE,
-    CB_QK_IM,
-    CB_MAX_A,
-    CB_MAX_B,
-    CB_SUM_A,
-    CB_SUM_B,
-    CB_OUT_A,
-    CB_OUT_B,
-    CB_CORR,
-    CB_OUT_IM,
-    CB_OUT_RM,
-    CB_CTRL,
-    CB_COL_IDENTITY,
-    CB_RECIP_SCRATCH,
-    QSB,
-    CAUSAL_MASK_ENABLED,
-    CB_NEGINF,
-    CB_VMASK,
-    KV_CACHE_SLOTS,
-    CB_K_CACHE,
-    CB_V_CACHE,
-    CB_SLOT,
-    COUNT
-};
-}  // namespace compute_ct
+// The K^T position of tile i (DRAM order: row tile i / d_tiles, column i % d_tiles) of a block of k_tiles row tiles.
+constexpr uint32_t kt_tile_position(uint32_t i, uint32_t d_tiles, uint32_t k_tiles) {
+    return (i % d_tiles) * k_tiles + i / d_tiles;
+}
 
 // Per-core K/V block cache.
-constexpr uint32_t KV_CACHE_SLOTS_MAX = 64;      // bounds the reader's per-block residency scan
-constexpr uint32_t KV_CACHE_SLOT_DEPTH = 2;      // cb_slot depth: the reader runs one block ahead of compute
+constexpr uint32_t KV_CACHE_SLOTS_MAX = 64;  // bounds the reader's per-block residency scan
+constexpr uint32_t KV_CACHE_SLOT_DEPTH = 2;  // cb_slot depth: the reader runs one block ahead of compute
 // A cache needs two slots: the reader never evicts the previous block's slot (compute may still read it), and a
 // one-slot cache would have no run-ahead anyway. The host floor is max(this, topk): fewer slots than
 // one query selects give no reuse.
