@@ -5,13 +5,13 @@
 // (tt/fused/moe_bank.py; weight layout: convert/bank_layout.py). Every weight read is from this core's own bank.
 // 1. ids, routing weights (row 0 of their TILE tensors); pair cores also x (row 0 of its 72 tiles, as 1x32 tiles)
 //    and the routing-weight tile (face 0 = 8 tiny tiles, w_e repeated), as moe_expert_reader.cpp.
-// 2. Down-only cores (role 0) first issue their down column for all 8 experts (cb_wd holds it all), so the bank
-//    stays busy while the pair cores stream gate_up.
-// 3. Pair cores (role 1: base pair kslot, every expert; role 2: the extra pair, only experts e with
+// 2. Cores without a gate_up column first issue their down column for all 8 experts (cb_wd holds it all), so the
+//    bank stays busy while the others stream gate_up.
+// 3. gate_up cores (the gate or the up column of pair slot kslot; the extra pair slot only for experts e with
 //    extra_bank(e) == bank, other experts' blocks are pushed unread and their outputs never sent):
-//      for e: gate column (kt_gu tiles) then up column (kt_gu tiles), blocks of SBK, nbuf - 1 blocks in flight;
-//    then their down column.
-// Runtime args: x, routing weights, ids, w_gate_up, w_down addresses; role; bank; kslot; dn slot.
+//      for e: the column (kt_gu tiles), blocks of SBK, nbuf - 1 blocks in flight; then their down column.
+// Runtime args: x, routing weights, ids, w_gate_up, w_down addresses; flags (F_* below); bank; kslot;
+//   col_off (0: gate column, kt_gu: up column); dn slot.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -33,6 +33,7 @@ constexpr uint32_t base = get_named_compile_time_arg_val("base");          // ba
 constexpr uint32_t x_lo = get_named_compile_time_arg_val("x_lo");          // first bank holding extra pairs (2)
 constexpr uint32_t dn_slots = get_named_compile_time_arg_val("dn_slots");  // down column slots per expert (11)
 
+constexpr uint32_t F_GU = 1, F_GATE = 2, F_EXTRA = 4, F_DN = 8;
 constexpr uint32_t TINY = 64;
 constexpr uint32_t FACE_BYTES = 512;
 
@@ -50,9 +51,10 @@ void kernel_main() {
     const uint32_t ids_addr = get_arg_val<uint32_t>(a++);
     const uint32_t gu_addr = get_arg_val<uint32_t>(a++);
     const uint32_t dn_addr = get_arg_val<uint32_t>(a++);
-    const uint32_t role = get_arg_val<uint32_t>(a++);
+    const uint32_t flags = get_arg_val<uint32_t>(a++);
     const uint32_t bank = get_arg_val<uint32_t>(a++);
     const uint32_t kslot = get_arg_val<uint32_t>(a++);
+    const uint32_t col_off = get_arg_val<uint32_t>(a++);
     const uint32_t dslot = get_arg_val<uint32_t>(a++);
 
     constexpr auto x_args = TensorAccessorArgs<0>();
@@ -70,7 +72,7 @@ void kernel_main() {
 
     const uint32_t scr = get_write_ptr(cb_scr);
     noc_async_read(ids.get_noc_addr(0), scr, 32);
-    if (role) {
+    if (flags & F_GU) {
         noc_async_read(wts.get_noc_addr(0), scr + 32, 32);
         cb_reserve_back(cb_x, x_tiles);
         const uint32_t xl = get_write_ptr(cb_x);
@@ -103,32 +105,36 @@ void kernel_main() {
         }
     };
 
-    if (role == 0) {
-        read_down();
-        noc_async_read_barrier();
-        cb_push_back(cb_wd, topk * kt_dn);
+    if (!(flags & F_GU)) {
+        if (flags & F_DN) {
+            read_down();
+            noc_async_read_barrier();
+            cb_push_back(cb_wd, topk * kt_dn);
+        }
         return;
     }
 
-    volatile tt_l1_ptr uint16_t* w16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr + 32);
-    cb_reserve_back(cb_ws16, 1);
-    volatile tt_l1_ptr uint32_t* ws = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ws16));
-    for (uint32_t e = 0; e < topk; ++e) {
-        const uint32_t v = w16[e];
-        const uint32_t pair = v | (v << 16);
-        for (uint32_t i = 0; i < 16; ++i) {
-            ws[e * 16 + i] = pair;
+    if (flags & F_GATE) {
+        volatile tt_l1_ptr uint16_t* w16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr + 32);
+        cb_reserve_back(cb_ws16, 1);
+        volatile tt_l1_ptr uint32_t* ws = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ws16));
+        for (uint32_t e = 0; e < topk; ++e) {
+            const uint32_t v = w16[e];
+            const uint32_t pair = v | (v << 16);
+            for (uint32_t i = 0; i < 16; ++i) {
+                ws[e * 16 + i] = pair;
+            }
         }
+        cb_push_back(cb_ws16, 1);
     }
-    cb_push_back(cb_ws16, 1);
 
     Stream<sbk, nbuf> s;
     s.open(cb_w);
     for (uint32_t e = 0; e < topk; ++e) {
-        const bool active = role == 1 || extra_bank(eid[e]) == bank;
-        // gate column then up column: 2 * kt_gu tiles contiguous in this bank
-        const uint64_t src = gu.get_noc_addr(gu_slot(eid[e], bank, kslot) * 2 * kt_gu * nb + bank);
-        for (uint32_t t = 0; t < 2 * kt_gu; t += sbk) {
+        const bool active = !(flags & F_EXTRA) || extra_bank(eid[e]) == bank;
+        // pair = gate column then up column, 2 * kt_gu tiles contiguous in this bank; this core's column
+        const uint64_t src = gu.get_noc_addr((gu_slot(eid[e], bank, kslot) * 2 * kt_gu + col_off) * nb + bank);
+        for (uint32_t t = 0; t < kt_gu; t += sbk) {
             if (active) {
                 s.block_contig(src + t * s.tile_bytes);
             } else {  // not this expert's extra bank: compute runs on stale tiles, the writer drops the result
@@ -137,8 +143,10 @@ void kernel_main() {
         }
     }
     s.drain();
-    read_down();
-    noc_async_read_barrier();
-    cb_push_back(cb_wd, topk * kt_dn);
+    if (flags & F_DN) {
+        read_down();
+        noc_async_read_barrier();
+        cb_push_back(cb_wd, topk * kt_dn);
+    }
     noc_async_read_set_trid(0);
 }

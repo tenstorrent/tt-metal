@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Bank-streamed MoE expert step, compute (tt/fused/moe_bank.py), one worker core; the fused expert step's compute
-// (moe_expert_compute.cpp) with per-core roles. Runtime arg role: 0 down column only; 1 pair core: owns gate column j
-// AND up column j (one DRAM bank): A packs g_e into cb_g and u_e into cb_u (the tiny view of cb_u16) per expert, then
-// B (softcapped SwiGLU x routing weight) as a fused gate core; then C (down) on every core. Same matmul / SFPU
-// sequence as moe_expert_compute.cpp, so each output tile is the same.
+// (moe_expert_compute.cpp) with per-core flags: F_GU: A, one gate_up column (gate or up) for each expert into cb_g;
+// F_GATE: B, softcapped SwiGLU x routing weight with the partner's u (cb_u16, from the writer); F_DN: C, the down
+// column over the gathered hidden. Same matmul / SFPU sequence as moe_expert_compute.cpp, so each output tile is
+// the same. Runtime arg: flags.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -32,7 +32,7 @@ constexpr uint32_t sbk = get_named_compile_time_arg_val("sbk");
 constexpr uint32_t kt_gu = get_named_compile_time_arg_val("kt_gu");
 constexpr uint32_t topk = get_named_compile_time_arg_val("topk");
 constexpr uint32_t hid_tiles = get_named_compile_time_arg_val("hid_tiles");
-constexpr uint32_t cb_u = get_named_compile_time_arg_val("cb_u");
+constexpr uint32_t F_GU = 1, F_GATE = 2, F_DN = 8;
 
 constexpr auto LAYOUT = CustomMmDestLayout::DefaultSplitAcc;
 
@@ -74,10 +74,10 @@ constexpr bool STD_DN = false;
 #endif
 
 void kernel_main() {
-    const uint32_t role = get_arg_val<uint32_t>(0);
+    const uint32_t flags = get_arg_val<uint32_t>(0);
 
-    if (role) {
-        // ---- A: gate_up column for each expert
+    if (flags & F_GU) {
+        // ---- A: this core's gate_up column for each expert
         if constexpr (STD_GU) {
             compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_g);
             matmul_block_init(cb_x, cb_w, 0, 1, 1, 1);
@@ -87,67 +87,67 @@ void kernel_main() {
         cb_wait_front(cb_x, kt_gu);
         for (uint32_t e = 0; e < topk; ++e) {
             mm_tile<kt_gu, cb_w, STD_GU>(cb_x, 0, cb_g);
-            mm_tile<kt_gu, cb_w, STD_GU>(cb_x, 0, cb_u);
         }
         if constexpr (!STD_GU) {
             custom_mm_block_uninit<LAYOUT>(cb_g);
         }
         cb_pop_front(cb_x, kt_gu);
-
-        // ---- B: softcapped SwiGLU x routing weight, 8 experts in one tile
-        {
-            // The 8 tiny g tiles (512 B) are face 0 of one standard 32x32 bf16 tile in cb_g32's view; u, w and h use
-            // the same view, so the eltwise chain runs on the best-trodden 32x32 copy/SFPU/pack path.
-            cb_reserve_back(cb_g32, 1);
-            cb_push_back(cb_g32, 1);
-            cb_reserve_back(cb_u16, 1);
-            cb_push_back(cb_u16, 1);
-            reconfig_data_format_srca(cb_g32);
-            pack_reconfig_data_format(cb_h16);
-            pack_init(cb_h16);
-            cb_wait_front(cb_g32, 1);
-            cb_wait_front(cb_u16, 1);
-            cb_wait_front(cb_ws16, 1);
-            tile_regs_acquire();
-            copy_init(cb_g32);
-            copy_tile(cb_g32, 0, 0);
-            copy_tile(cb_g32, 0, 1);
-            copy_init(cb_u16);
-            copy_tile(cb_u16, 0, 2);
-            copy_init(cb_ws16);
-            copy_tile(cb_ws16, 0, 3);
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, 0x3e800000u);  // g / 4
-            mul_unary_tile(2, 0x3d23d70au);  // u / 25
-            tanh_tile_init();
-            tanh_tile(0);
-            tanh_tile(2);
-            sigmoid_tile_init();
-            sigmoid_tile(1);
-            mul_binary_tile_init();
-            mul_binary_tile(0, 1, 0);
-            mul_binary_tile(0, 2, 0);
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, 0x42c80000u);  // * 4 * 25
-            mul_binary_tile_init();
-            mul_binary_tile(0, 3, 0);  // * routing weight
-            tile_regs_commit();
-            cb_reserve_back(cb_h16, 1);
-            tile_regs_wait();
-            pack_tile(0, cb_h16);
-            tile_regs_release();
-            cb_push_back(cb_h16, 1);
-            cb_pop_front(cb_g32, 1);
-            cb_pop_front(cb_u16, 1);
-            cb_pop_front(cb_ws16, 1);
-        }
-    } else {  // down-only core: the hardware init A would have done
+    } else if (flags & F_DN) {  // down-only core: the hardware init A would have done
         if constexpr (STD_DN) {
             compute_kernel_hw_startup<SrcOrder::Reverse>(cb_hid, cb_wd, cb_o);
         } else {
             custom_mm_block_init<false, LAYOUT>(cb_hid, cb_wd, cb_o);
             custom_mm_block_uninit<LAYOUT>(cb_o);
         }
+    }
+
+    // ---- B: softcapped SwiGLU x routing weight, 8 experts in one tile (u from the partner, via the writer)
+    if (flags & F_GATE) {
+        // The 8 tiny g tiles (512 B) are face 0 of one standard 32x32 bf16 tile in cb_g32's view; u, w and h use
+        // the same view, so the eltwise chain runs on the best-trodden 32x32 copy/SFPU/pack path.
+        cb_reserve_back(cb_g32, 1);
+        cb_push_back(cb_g32, 1);
+        reconfig_data_format_srca(cb_g32);
+        pack_reconfig_data_format(cb_h16);
+        pack_init(cb_h16);
+        cb_wait_front(cb_g32, 1);
+        cb_wait_front(cb_u16, 1);
+        cb_wait_front(cb_ws16, 1);
+        tile_regs_acquire();
+        copy_init(cb_g32);
+        copy_tile(cb_g32, 0, 0);
+        copy_tile(cb_g32, 0, 1);
+        copy_init(cb_u16);
+        copy_tile(cb_u16, 0, 2);
+        copy_init(cb_ws16);
+        copy_tile(cb_ws16, 0, 3);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, 0x3e800000u);  // g / 4
+        mul_unary_tile(2, 0x3d23d70au);  // u / 25
+        tanh_tile_init();
+        tanh_tile(0);
+        tanh_tile(2);
+        sigmoid_tile_init();
+        sigmoid_tile(1);
+        mul_binary_tile_init();
+        mul_binary_tile(0, 1, 0);
+        mul_binary_tile(0, 2, 0);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, 0x42c80000u);  // * 4 * 25
+        mul_binary_tile_init();
+        mul_binary_tile(0, 3, 0);  // * routing weight
+        tile_regs_commit();
+        cb_reserve_back(cb_h16, 1);
+        tile_regs_wait();
+        pack_tile(0, cb_h16);
+        tile_regs_release();
+        cb_push_back(cb_h16, 1);
+        cb_pop_front(cb_g32, 1);
+        cb_pop_front(cb_u16, 1);
+        cb_pop_front(cb_ws16, 1);
+    }
+    if (!(flags & F_DN)) {
+        return;
     }
     reconfig_data_format_srca(cb_wd);
     pack_reconfig_data_format(cb_o);

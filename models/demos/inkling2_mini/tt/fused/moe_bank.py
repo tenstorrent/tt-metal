@@ -11,12 +11,14 @@ who reads what: the weights are in the bank layout (convert/bank_layout.py), whe
 optimal NOC0 reader and reads only that bank, as the gpt-oss fused decode streams do
 (models/demos/gpt_oss/tt/fused_decode/stream.py, row_placement: ~96 % of DRAM peak on Blackhole).
 
-Workers: one per down column (72; bank b has columns b, b + 7, ...: 11 on banks 0, 1, 10 on the others). Core i of
-bank b also owns gate|up pair j = b + 7 i for i < 5 (role 1), and core 5 of banks 2..6 the expert's extra pair 35
-when convert/bank_layout.extra_bank puts it in that bank (role 2). Pair cores compute g and u of their pair for all
-8 experts, the SwiGLU, and send h to the collector; the collector multicasts the hidden [8][36] to the whole grid;
-every worker then runs its down column over K = 8 x 36 hidden tiles, in the same order as the stick-layout
-FusedMoeExperts, so the output is the same.
+Workers per bank b (row_placement): the gate core and the up core of each base pair j = b, b + 7, ... (10), then on
+banks 2..6 the gate and up cores of the extra pair 35 (they only compute the experts whose extra pair
+convert/bank_layout.extra_bank puts in that bank; their other blocks are pushed unread and dropped), or on banks 0, 1
+a down-only core. The first ones of each bank also own its down columns b, b + 7, ... (11 on banks 0, 1, 10 on the
+others): 82 workers, each reading one gate_up column and / or one down column of the 8 experts. As in the fused step,
+an up core hands its 8 u tiles to its gate core, the gate core computes the SwiGLU and sends h to the collector, the
+collector multicasts the hidden [8][36] to the whole grid, and every down core runs its column over K = 8 x 36 hidden
+tiles in the same order as the stick-layout FusedMoeExperts, so the output is the same.
 """
 
 import torch
@@ -50,7 +52,7 @@ from models.demos.inkling2_mini.tt.fused.moe_expert import (
     _range_set,
 )
 
-CB_U = 12  # tiny view of cb_u16 (compute packs u_e there)
+F_GU, F_GATE, F_EXTRA, F_DN = 1, 2, 4, 8  # worker flags (moe_bank_*.cpp)
 X_LO = 2  # convert/bank_layout.extra_bank: first bank holding extra pairs
 
 
@@ -98,7 +100,7 @@ def row_placement(device, per_bank):
 class BankMoeExperts:
     def __init__(self, device, w_gate_up, w_down, sbk=18, nbuf=3, bfp8_fidelity=ttnn.MathFidelity.HiFi2):
         """``w_gate_up`` / ``w_down``: bank-layout DRAM tensors (``bank_weights`` or the bank cache), BFP4 or BFP8
-        (each its own). Placement and roles: module doc."""
+        (each its own). Placement and flags: module doc."""
         nb = device.dram_grid_size().x
         assert nb == BL.N_BANKS, nb
         assert (2 * KT_GU) % sbk == 0 and HID_TILES % sbk == 0, sbk
@@ -113,19 +115,30 @@ class BankMoeExperts:
         self.base, n_extra = BL.gu_pair_counts(N_GATE, nb)
         assert n_extra == 1, n_extra
         self.dn_slots = BL.dn_slots(NT_DN, nb)
-        per_bank = [len(range(b, NT_DN, nb)) for b in range(nb)]
-        place = row_placement(device, per_bank)
-        self.workers_info = []  # (core, role, bank, kslot, j, dslot, n)
+        # Per bank b: the gate and the up core of base pairs b, b + 7, ... (10), then the extra pair's gate and up
+        # cores (banks >= X_LO) or a down-only core (the 11th down column of banks 0, 1); the first ones get the
+        # bank's down columns b, b + 7, ...
+        units = []
         for b in range(nb):
-            for i, c in enumerate(place[b]):
-                n = b + nb * i
-                if i < self.base:
-                    role, k, j = 1, i, b + nb * i
-                elif i == self.base and b >= X_LO:
-                    role, k, j = 2, self.base, N_GATE - 1
-                else:
-                    role, k, j = 0, 0, 0
-                self.workers_info.append((c, role, b, k, j, i, n))
+            u = [(F_GU | F_GATE, k, b + nb * k, 0) for k in range(self.base)]
+            u = [x for g in u for x in (g, (F_GU, g[1], g[2], KT_GU))]  # gate, up of each pair
+            if b >= X_LO:
+                u += [
+                    (F_GU | F_GATE | F_EXTRA, self.base, N_GATE - 1, 0),
+                    (F_GU | F_EXTRA, self.base, N_GATE - 1, KT_GU),
+                ]
+            n_dn = len(range(b, NT_DN, nb))
+            u += [(0, 0, 0, 0)] * max(0, n_dn - len(u))
+            units.append([(f | (F_DN if i < n_dn else 0), k, j, off, i) for i, (f, k, j, off) in enumerate(u)])
+        place = row_placement(device, [len(u) for u in units])
+        self.workers_info = []  # (core, flags, bank, kslot, j, col_off, dslot, n, partner gate core)
+        for b in range(nb):
+            gate_of = {}
+            for (f, k, j, off, i), c in zip(units[b], place[b]):
+                if f & F_GATE:
+                    gate_of[j] = c
+            for (f, k, j, off, i), c in zip(units[b], place[b]):
+                self.workers_info.append((c, f, b, k, j, off, i, b + nb * i, gate_of.get(j, c)))
         grid = device.compute_with_storage_grid_size()
         allc = [(x, y) for y in range(grid.y) for x in range(grid.x)]
         used = {w[0] for w in self.workers_info}
@@ -170,7 +183,7 @@ class BankMoeExperts:
             cb(w, self.nbuf * self.sbk * gtile, (CB_W, gu_dtype, gtile, t32)),
             cb(w, HID_TILES * dtile, (CB_WD, dn_dtype, dtile, t32)),  # the whole down column of the 8 experts
             cb(w, 2048, (CB_G, bf, 64, tiny), (CB_G32, bf, 2048, t32)),
-            cb(w, 2048, (CB_U, bf, 64, tiny), (CB_U16, bf, 2048, t32)),
+            cb(w, 2048, (CB_U16, bf, 2048, t32)),
             cb(w, 2048, (CB_WS16, bf, 2048, t32)),
             cb(w, 2048, (CB_H16, bf, 2048, t32)),
             cb(self.all_cores, HID_TILES * 64, (CB_HID, bf, 64, tiny)),
@@ -196,22 +209,24 @@ class BankMoeExperts:
             "x_lo": X_LO, "dn_slots": self.dn_slots, **common,
         }  # fmt: skip
         w_named = {
+            "cb_g": CB_G, "cb_u16": CB_U16, "sem_u": SEM_U,
             "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O, "cb_z": CB_Z, "cb_scr": CB_SCR, "sem_g": SEM_G,
             "sem_r": SEM_R, "n_banks": self.nb, "x_lo": X_LO, **common,
         }  # fmt: skip
         c_named = {
-            "cb_x": CB_X, "cb_w": CB_W, "cb_wd": CB_WD, "cb_g": CB_G, "cb_g32": CB_G32, "cb_u16": CB_U16, "cb_u": CB_U,
+            "cb_x": CB_X, "cb_w": CB_W, "cb_wd": CB_WD, "cb_g": CB_G, "cb_g32": CB_G32, "cb_u16": CB_U16,
             "cb_ws16": CB_WS16, "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O, "sbk": self.sbk, "kt_gu": KT_GU,
             **common,
         }  # fmt: skip
         cx, cy = self.noc[self.collector]
         r_args, w_args, c_args = [], [], []
-        for c, role, b, k, j, dslot, n in self.workers_info:
+        for c, f, b, k, j, off, dslot, n, gate in self.workers_info:
             core = ttnn.CoreCoord(*c)
+            px, py = self.noc[gate]
             r_args.append((core, [x.buffer_address(), weights.buffer_address(), indices.buffer_address(),
-                                  self.w_gate_up.buffer_address(), self.w_down.buffer_address(), role, b, k, dslot]))  # fmt: skip
-            w_args.append((core, [role, j, cx, cy, out.buffer_address(), n, indices.buffer_address(), b]))
-            c_args.append((core, [role]))
+                                  self.w_gate_up.buffer_address(), self.w_down.buffer_address(), f, b, k, off, dslot]))  # fmt: skip
+            w_args.append((core, [f, j, px, py, cx, cy, out.buffer_address(), n, indices.buffer_address(), b]))
+            c_args.append((core, [f]))
         (x0, y0), (x1, y1) = self.mcast_rect
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
