@@ -41,12 +41,11 @@ void kernel_main() {
     constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(9);
     constexpr uint32_t slice_Wt = get_compile_time_arg_val(10);
     constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(11);
-    // [12] unused: my_chip_id is a common runtime arg
 
 #ifdef FUSE_RS_ADDCMUL
-    constexpr uint32_t addcmul_temp_cb = get_compile_time_arg_val(13);
-    constexpr uint32_t addcmul_a_cb = get_compile_time_arg_val(14);
-    constexpr uint32_t addcmul_b_cb = get_compile_time_arg_val(15);
+    constexpr uint32_t addcmul_temp_cb = get_compile_time_arg_val(12);
+    constexpr uint32_t addcmul_a_cb = get_compile_time_arg_val(13);
+    constexpr uint32_t addcmul_b_cb = get_compile_time_arg_val(14);
 #endif
 
     uint32_t arg_idx = 0;

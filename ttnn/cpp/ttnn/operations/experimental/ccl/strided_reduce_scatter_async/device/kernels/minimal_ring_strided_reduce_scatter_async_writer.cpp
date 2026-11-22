@@ -52,32 +52,31 @@ namespace Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-// [0] unused: my_chip_id is a common runtime arg
-constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(2);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
-constexpr uint32_t page_size = get_compile_time_arg_val(5);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(6);
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(7);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(8);
-constexpr uint32_t slice_C = get_compile_time_arg_val(9);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(10);
-constexpr uint32_t dim = get_compile_time_arg_val(11);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(12);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(13);
-constexpr uint32_t N_full_block_wt = get_compile_time_arg_val(14);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(15);
-constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(16);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(17);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(18);
+constexpr uint32_t ring_size = get_compile_time_arg_val(0);
+constexpr uint32_t cb_compute_output_id = get_compile_time_arg_val(1);
+constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(2);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
+constexpr uint32_t page_size = get_compile_time_arg_val(4);
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(5);
+constexpr uint32_t input_tensor_B = get_compile_time_arg_val(6);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(7);
+constexpr uint32_t slice_C = get_compile_time_arg_val(8);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(9);
+constexpr uint32_t dim = get_compile_time_arg_val(10);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(11);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(12);
+constexpr uint32_t N_full_block_wt = get_compile_time_arg_val(13);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(14);
+constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(15);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(16);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(17);
 // The mux sits in program-local L1: its addresses here and in the runtime args are offsets from the map
 // address it publishes in semaphore fabric_mux_l1_base_semaphore_id.
-constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(20);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(21);
+constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(19);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(20);
 
-constexpr uint32_t num_ct_args = 22;
+constexpr uint32_t num_ct_args = 21;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();

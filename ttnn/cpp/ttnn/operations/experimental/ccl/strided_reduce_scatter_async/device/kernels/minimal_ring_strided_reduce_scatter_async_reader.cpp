@@ -49,29 +49,28 @@ namespace Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-// [0] unused: my_chip_id is a common runtime arg
-constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
-constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(3);
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
-constexpr uint32_t page_size = get_compile_time_arg_val(6);
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(7);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(8);
-constexpr uint32_t slice_C = get_compile_time_arg_val(9);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(10);
-constexpr uint32_t dim = get_compile_time_arg_val(11);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(12);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(13);
-constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(14);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(15);
-constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(16);
-constexpr uint32_t mm_block_wt = get_compile_time_arg_val(17);
-// [18]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
+constexpr uint32_t ring_size = get_compile_time_arg_val(0);
+constexpr uint32_t cb_input_id = get_compile_time_arg_val(1);
+constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(2);
+constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
+constexpr uint32_t page_size = get_compile_time_arg_val(5);
+constexpr uint32_t input_tensor_B = get_compile_time_arg_val(6);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(7);
+constexpr uint32_t slice_C = get_compile_time_arg_val(8);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(9);
+constexpr uint32_t dim = get_compile_time_arg_val(10);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(11);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(12);
+constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(13);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(14);
+constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(15);
+constexpr uint32_t mm_block_wt = get_compile_time_arg_val(16);
+// [17]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
 // Rolling L1 window over the matmul output, in M blocks; 0 = no window (the whole output is
 // resident, so a row's address is its row). With a window the matmul recycles slot m % this, and a
 // row's address is remapped into the window — see windowed_slice_row below.
-constexpr uint32_t mm_window_blocks = get_compile_time_arg_val(19);
+constexpr uint32_t mm_window_blocks = get_compile_time_arg_val(18);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -99,8 +98,8 @@ void kernel_main() {
     const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::div_up(slice_Ht_per_core, mm_block_ht);
     const uint32_t input_batch_num_pages = slice_C * slice_Ht * input_tensor_Wt;
 
-    constexpr uint32_t ct_idx = 20;  // [17]=mm_block_wt, [18]=fuse_mm_op (via FUSE_MM_OP_SIGNALER
-                                     // define), [19]=mm_window_blocks
+    constexpr uint32_t ct_idx = 19;  // [16]=mm_block_wt, [17]=fuse_mm_op (via FUSE_MM_OP_SIGNALER
+                                     // define), [18]=mm_window_blocks
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;

@@ -672,26 +672,25 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
 
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_reader.cpp
     std::vector<uint32_t> sender_reader_compile_args = {
-        0,                                  // [0]  unused: my_chip_id is a common runtime arg
-        ring_size,                          // [1]  ring_size
-        input_cb_index,                     // [2]  cb_input_id
-        intermediate_cb_index,              // [3]  cb_intermediate_id
-        reader_output_cb_index,             // [4]  cb_reader_output_id
-        tile_granularity,                   // [5]  tile_granularity
-        page_size,                          // [6]  page_size
-        input_tensor_B,                     // [7]  input_tensor_B
-        input_tensor_Wt,                    // [8]  input_tensor_Wt
-        slice_C,                            // [9]  slice_C
-        slice_Wt,                           // [10] slice_Wt
-        normalized_dim,                     // [11] dim normalized to 4D
-        mm_block_ht_val,                    // [12] mm_block_ht
-        mm_cores_y_val,                     // [13] mm_cores_y
-        mm_N_full_block_wt_val,             // [14] N_full_block_wt
-        chunk_width_in_tiles_val,           // [15] chunk_width_in_tiles
-        chunks_per_mm_N_full_block_val,     // [16] chunks_per_mm_N_full_block
-        mm_block_wt_val,                    // [17] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
-        static_cast<uint32_t>(fuse_mm_op),  // [18] fuse_mm_op (consumed via FUSE_MM_OP_SIGNALER define)
-        mm_window_blocks.value_or(0),       // [19] mm_window_blocks (0 = whole MM output resident)
+        ring_size,                          // [0]  ring_size
+        input_cb_index,                     // [1]  cb_input_id
+        intermediate_cb_index,              // [2]  cb_intermediate_id
+        reader_output_cb_index,             // [3]  cb_reader_output_id
+        tile_granularity,                   // [4]  tile_granularity
+        page_size,                          // [5]  page_size
+        input_tensor_B,                     // [6]  input_tensor_B
+        input_tensor_Wt,                    // [7]  input_tensor_Wt
+        slice_C,                            // [8]  slice_C
+        slice_Wt,                           // [9]  slice_Wt
+        normalized_dim,                     // [10] dim normalized to 4D
+        mm_block_ht_val,                    // [11] mm_block_ht
+        mm_cores_y_val,                     // [12] mm_cores_y
+        mm_N_full_block_wt_val,             // [13] N_full_block_wt
+        chunk_width_in_tiles_val,           // [14] chunk_width_in_tiles
+        chunks_per_mm_N_full_block_val,     // [15] chunks_per_mm_N_full_block
+        mm_block_wt_val,                    // [16] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
+        static_cast<uint32_t>(fuse_mm_op),  // [17] fuse_mm_op (consumed via FUSE_MM_OP_SIGNALER define)
+        mm_window_blocks.value_or(0),       // [18] mm_window_blocks (0 = whole MM output resident)
     };
 
     // Input (MM output): always TensorAccessorArgs (handles interleaved AND L1-sharded) so the reader's
@@ -749,24 +748,23 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_writer.cpp
     // NOTE: writer does not receive fuse_mm_op; only reader needs to wait on the MM semaphore.
     std::vector<uint32_t> sender_writer_compile_args = {
-        0,                               // [0]  unused: my_chip_id is a common runtime arg
-        ring_size,                       // [1]  ring_size
-        compute_output_cb_index,         // [2]  cb_compute_output_id
-        reader_output_cb_index,          // [3]  cb_reader_output_id
-        tile_granularity,                // [4]  packet_size_in_pages
-        page_size,                       // [5]  page_size
-        num_tiles_to_write_per_packet,   // [6]  num_tiles_to_write_per_packet
-        input_tensor_B,                  // [7]  input_tensor_B
-        input_tensor_Wt,                 // [8]  input_tensor_Wt
-        slice_C,                         // [9]  slice_C
-        slice_Wt,                        // [10] slice_Wt
-        normalized_dim,                  // [11] dim normalized to 4D
-        mm_block_ht_val,                 // [12] mm_block_ht
-        mm_cores_y_val,                  // [13] mm_cores_y
-        mm_N_full_block_wt_val,          // [14] N_full_block_wt
-        chunk_width_in_tiles_val,        // [15] chunk_width_in_tiles
-        chunks_per_mm_N_full_block_val,  // [16] chunks_per_mm_N_full_block
-        // [17+] fabric_mux CT args appended after (num_ct_args = 22 in writer kernel)
+        ring_size,                       // [0]  ring_size
+        compute_output_cb_index,         // [1]  cb_compute_output_id
+        reader_output_cb_index,          // [2]  cb_reader_output_id
+        tile_granularity,                // [3]  packet_size_in_pages
+        page_size,                       // [4]  page_size
+        num_tiles_to_write_per_packet,   // [5]  num_tiles_to_write_per_packet
+        input_tensor_B,                  // [6]  input_tensor_B
+        input_tensor_Wt,                 // [7]  input_tensor_Wt
+        slice_C,                         // [8]  slice_C
+        slice_Wt,                        // [9]  slice_Wt
+        normalized_dim,                  // [10] dim normalized to 4D
+        mm_block_ht_val,                 // [11] mm_block_ht
+        mm_cores_y_val,                  // [12] mm_cores_y
+        mm_N_full_block_wt_val,          // [13] N_full_block_wt
+        chunk_width_in_tiles_val,        // [14] chunk_width_in_tiles
+        chunks_per_mm_N_full_block_val,  // [15] chunks_per_mm_N_full_block
+        // [16+] fabric_mux CT args appended after (num_ct_args = 21 in writer kernel)
     };
 
     append_fabric_mux_connection_ct_args(
@@ -851,13 +849,12 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         chunks_per_mm_N_full_block_val,  // [9]  chunks_per_mm_N_full_block
         slice_Wt,                        // [10] slice_Wt
         mm_N_full_block_wt_val,          // [11] mm_N_full_block_wt
-        0,                               // [12] unused: my_chip_id is a common runtime arg
     };
     // Append addcmul CB indices for the compute kernel.
     if (fuse_rs_addcmul) {
-        sender_reduce_kernel_config.compile_args.push_back(addcmul_temp_cb_index);  // [13]
-        sender_reduce_kernel_config.compile_args.push_back(addcmul_a_cb_index);     // [14]
-        sender_reduce_kernel_config.compile_args.push_back(addcmul_b_cb_index);     // [15]
+        sender_reduce_kernel_config.compile_args.push_back(addcmul_temp_cb_index);  // [12]
+        sender_reduce_kernel_config.compile_args.push_back(addcmul_a_cb_index);     // [13]
+        sender_reduce_kernel_config.compile_args.push_back(addcmul_b_cb_index);     // [14]
     }
     sender_reduce_kernel_config.defines = reduce_compute_defines;
 

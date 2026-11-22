@@ -1119,7 +1119,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         true,
         ring_size,
-        0u,  // unused: the rank is a common runtime arg
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -1189,7 +1188,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         ring_size,
-        0u,  // unused: the rank is a common runtime arg
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -1234,7 +1232,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in0_is_output_writer,
         false,  // is_injector_core
         ring_size,
-        0u,  // unused: the rank is a common runtime arg
         in3_tile_size,
         num_tiles_to_write_per_packet,
         num_targets_forward,
@@ -1297,7 +1294,6 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             in1_is_output_writer,
             (uint32_t)is_injector,  // is_injector_core
             ring_size,
-            0u,                               // unused: the rank is a common runtime arg
             N_chunks,                         // N_chunks
             N_tiles_per_chunk,                // N_tiles_per_chunk
             static_cast<uint32_t>(topology),  // topology
@@ -2276,6 +2272,8 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     const uint32_t ternary_scalar =
         has_fused_ternary ? std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value()) : 0u;
 
+    // A merged range shares these args across its devices: write only values that are the same on every device (never
+    // the rank slot, which is per device).
     auto write_in0 = [&](tt::tt_metal::RuntimeArgsData& common) {
         common[kIn0BufferSlot] = ag_output_addr;
         common[kIn0BiasSlot] = bias_addr;

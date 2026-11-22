@@ -36,13 +36,9 @@ struct RingJointSDPADescriptorAdapterOperation {
 
 }  // namespace detail
 
-// The per-chip descriptors (ring rank, write counts, ring masks and the fused all-gather's rank, route and fabric
-// connections, all runtime args) merge into one program per range.
+// No padding: where per-device args differ in length (the ends of a Linear ring), the programs stay per device.
 struct RingJointSDPAProgramFactory {
     static constexpr bool merge_per_device_programs = true;
-    // A Linear end has no fabric connection towards the missing neighbour, so its all-gather writer args are shorter.
-    // The writer parses them in order behind a has-neighbour flag, so the zero padding is never read.
-    static constexpr bool pad_per_device_runtime_args = true;
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const RingJointSDPAParams& args,
         const RingJointSDPAInputs& tensor_args,
