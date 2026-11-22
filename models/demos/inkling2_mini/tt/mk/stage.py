@@ -28,8 +28,9 @@ from models.demos.inkling2_mini.tt.fused.bank_linear import DST_TILES, TILE
 from models.demos.inkling2_mini.tt.fused.moe_bank import row_placement
 
 MKDIR = "models/demos/inkling2_mini/tt/mk/kernels"
-# fill read size / reads in flight per RISC (M2_FILL="piece:in_flight" for A/B runs)
-FILL = tuple(int(v) for v in os.environ.get("M2_FILL", "16384:4").split(":"))
+# fill read size / reads in flight per RISC (M2_FILL="piece:in_flight" for A/B runs). Measured in the model
+# (M2-report): 2 KB / 1 best (-1.51 ms @4K); 16 KB / 4 gained nothing (the hosts wait on small DRAM reads of their own)
+FILL = tuple(int(v) for v in os.environ.get("M2_FILL", "2048:1").split(":"))
 
 
 def cores_of(crs):
@@ -146,8 +147,11 @@ class StagedBankLinear:
         lo, hi = int(self.staged * part[0]) // 32 * 32, int(self.staged * part[1]) // 32 * 32
         mid = (lo + hi) // 2 // 32 * 32
         kernels = []
-        for (a, b), proc, noc in (((lo, mid), ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
-                                  ((mid, hi), ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1)):  # fmt: skip
+        halves = (((lo, mid), ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
+                  ((mid, hi), ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1))  # fmt: skip
+        if len(FILL) > 2 and FILL[2] == 1:  # one RISC per core
+            halves = (((lo, hi), ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),)
+        for (a, b), proc, noc in halves:
             rt = []
             for c, bank, slot, n in self.ranges:
                 n_core = max(0, min(b, n, self.staged) - a)

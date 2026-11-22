@@ -64,7 +64,9 @@ class _Track:
 
 
 class Overlap:
-    def __init__(self, model, weights=("w_all",), parts=4, max_cores=1, staged_kb=None, split=3, exclude_rows=(0,)):
+    def __init__(
+        self, model, weights=("w_all",), parts=4, max_cores=1, staged_kb=None, split=3, exclude_rows=(0, 1, 2, 3, 4, 5)
+    ):
         """max_cores: hosts have at most this many cores (1 = the single-core residual programs, ~22 us each with DRAM
         idle; wider small programs are short, so a fill piece makes them longer instead of hiding)."""
         self.parts, self.max_cores = parts, max_cores
