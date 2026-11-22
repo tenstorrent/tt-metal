@@ -20,6 +20,7 @@
 # - llk-smoke n150 runs on llk-perf even beside llk-blackhole (the
 #   allowlist picks p150b only there; a condition cannot negate).
 # - build-docs runs on docs-only changes (GHA skips it with asan-build).
+# - Any .gitmodules change is a submodule change.
 #
 # Conditions for PR Gate jobs not ported yet:
 #   runtime-examples:  {changed: [cmake, tt-metalium, image]}
@@ -132,8 +133,12 @@ path-groups:
                    '.github/scripts/utils/find-changed-files.sh', '.github/actions/find-changed-files/action.yml'],
            groups: [tt-metalium-api-headers, clang-tidy-key-workflow]}
     # The .gitmodules grep: a changed path that starts with a submodule path.
+    # The script reads .gitmodules at HEAD, so a PR that adds a submodule
+    # changes .gitmodules too: any .gitmodules change counts as a submodule
+    # change (a superset of the script).
     - rules:
-        - {paths: ['tt_metal/third_party/tracy*', 'tt_metal/third_party/umd*', 'tt_metal/third_party/tt-cluster-descriptors*'],
+        - {paths: ['tt_metal/third_party/tracy*', 'tt_metal/third_party/umd*', 'tt_metal/third_party/tt-cluster-descriptors*',
+                   '.gitmodules'],
            groups: [submodule]}
     # Not in the script: the ci-build chain image's inputs (docker-bake.hcl
     # target ci-build and the files its Dockerfile copies).
