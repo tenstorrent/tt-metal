@@ -42,13 +42,15 @@ Build tt-metal and activate its python env as usual. The scripts take their data
 Host only, one layer at a time (peak host RSS ~3 GB; the checkpoint is ~19 GB, the cache ~21 GB):
 
 ```
-python -m models.demos.inkling2_mini.convert --ckpt $INKLING_CKPT --out $INKLING_CACHE --stick-experts BFP4,BFP8
+python -m models.demos.inkling2_mini.convert --ckpt $INKLING_CKPT --out $INKLING_CACHE --stick-experts BFP4
 ```
 
-`--stick-experts` stores the experts of layers whose gate_up and down share a dtype in the layout the fused
-MoE kernel reads (the default model expects it). A rerun converts only the units (global, L00 ... L23) whose
-settings changed; the model refuses a cache whose manifest is not complete. The chunked prefill reads the
-experts as tiles: convert a second cache without `--stick-experts` for it.
+`--stick-experts BFP4` stores the experts of the BFP4/BFP4 layers in the layout the fused MoE kernel reads.
+Use BFP4 only: in the stick layout the kernel sums the down projection expert by expert, which rounds the
+BFP8 layers differently (token-only 127 -> 124) and is slower; BFP4 gains ~0.27 ms/token at 126.
+A rerun converts only the units (global, L00 ... L23) whose settings changed; the model refuses a cache
+whose manifest is not complete. The chunked prefill reads the experts as tiles: convert a second cache
+without `--stick-experts` for it.
 
 ttnn opens the card even for host-side tensor conversions. To convert or run the host-only tests without
 the card, point it at a mock cluster:
