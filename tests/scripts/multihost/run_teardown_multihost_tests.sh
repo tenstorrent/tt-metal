@@ -232,8 +232,9 @@ echo "--- 3. a rank hangs on the remote host (P22): at the --timeout tt-run stop
 echo "       241, nothing left"
 ttrun_opts=(--job-timeout 30)
 PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" ttrun_job
+rc=$?
 ttrun_opts=()
-expect torn_down "multihost_remote_hang_timeout" $? 241
+expect torn_down "multihost_remote_hang_timeout" $rc 241
 
 echo "--- 4. the daemon on the remote host is killed (P19): the rank there must not outlive it. We wait for this"
 echo "       job's rank to come up on the remote host and kill ONLY this job's prted there; the rank's tt-run-rank"
@@ -259,8 +260,12 @@ bound=()
 # exec in the background subshell, so $! is tt-run's own pid (a backgrounded function would be a subshell's)
 ( export PROBE_SCENARIO=all_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts"; exec_ttrun=1 ttrun_job ) >"$sig_log" 2>&1 &
 ttrun_pid=$!
-# all ranks up first (each rank counts twice under tt-run: its tt-run-rank wrapper carries the probe path too)
-for _ in $(seq 1 60); do [ "$(ranks_still_alive)" -ge "$num_hosts" ] 2>/dev/null && break; sleep 1; done
+# every rank has installed its SIGTERM handler first: all_hang prints its first heartbeat right after (the processes
+# alone exist before that, and a SIGTERM then kills a rank on the default action)
+for _ in $(seq 1 60); do
+  [ "$(grep "all_hang heartbeat" "$sig_log" 2>/dev/null | grep -o "probe r=[0-9]*" | sort -u | wc -l)" -ge "$num_hosts" ] && break
+  sleep 1
+done
 kill -INT "$ttrun_pid" 2>/dev/null
 for _ in $(seq 1 60); do kill -0 "$ttrun_pid" 2>/dev/null || break; sleep 1; done
 kill -9 "$ttrun_pid" 2>/dev/null || true
