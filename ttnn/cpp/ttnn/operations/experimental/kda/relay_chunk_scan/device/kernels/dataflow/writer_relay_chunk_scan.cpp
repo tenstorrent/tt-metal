@@ -31,7 +31,7 @@ void kernel_main() {
     const uint32_t head = self.head;
     const uint32_t place = self.place;
     const uint32_t first_chunk = place * core_chunks;
-    Gate::move_x((head / heads) * cores_per_head + place, (head / heads) * num_chunks + first_chunk, head);
+    Gate::move_x((head / heads) * cores_per_head + place, (head / heads) * num_chunks + first_chunk);
 
     // The reader's chunk count.
     cb_wait_front(cb_chron, 1);
