@@ -1,0 +1,364 @@
+---
+# TEMPORARY C0 measurement for the clang-tidy result cache (torrentci#3525,
+# design r3 C0 / r2.8). Manual only: no trigger or dashboard targets these
+# jobs. Scripts are in .torrentci/c0-ctcache. Remove after C0 is recorded.
+jobs:
+  - id: c0-ctcache-replay-warm
+    description: C0 - ctcache replay of main k..k+10, warm per push, plus the all-hit floor
+    timeout: 10h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 16Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 24Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: prep
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/prep.sh
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/replay.sh warm
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
+  - id: c0-ctcache-replay-stale
+    description: C0 - ctcache replay of main k+1..k+10 read-only against k markers
+    timeout: 10h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 16Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 24Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: prep
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/prep.sh
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/replay.sh stale
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
+  - id: c0-ctcache-scale-16
+    description: C0 - uncached clang-tidy scan at 16 CPU
+    timeout: 4h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 16Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 24Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: prep
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/prep.sh
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - C0_TOOLS=.torrentci/c0-ctcache .torrentci/c0-ctcache/analyse.sh scale-16 plain
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
+  - id: c0-ctcache-scale-32
+    description: C0 - uncached clang-tidy scan at 32 CPU
+    timeout: 4h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '32', memory: 32Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 48Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '32'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: prep
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/prep.sh
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - C0_TOOLS=.torrentci/c0-ctcache .torrentci/c0-ctcache/analyse.sh scale-32 plain
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
+  - id: c0-ctcache-scale-64
+    description: C0 - uncached clang-tidy scan at 64 CPU
+    timeout: 4h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '64', memory: 64Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 96Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '64'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: prep
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/prep.sh
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - C0_TOOLS=.torrentci/c0-ctcache .torrentci/c0-ctcache/analyse.sh scale-64 plain
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
+  - id: c0-ctcache-shard-0
+    description: C0 - uncached clang-tidy scan, shard 0 of 4
+    timeout: 4h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 16Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 24Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: prep
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/prep.sh
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - C0_TOOLS=.torrentci/c0-ctcache .torrentci/c0-ctcache/analyse.sh shard-0 plain 0 4
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
+  - id: c0-ctcache-shard-1
+    description: C0 - uncached clang-tidy scan, shard 1 of 4
+    timeout: 4h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 16Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 24Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: prep
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/prep.sh
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - C0_TOOLS=.torrentci/c0-ctcache .torrentci/c0-ctcache/analyse.sh shard-1 plain 1 4
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
+  - id: c0-ctcache-shard-2
+    description: C0 - uncached clang-tidy scan, shard 2 of 4
+    timeout: 4h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 16Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 24Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: prep
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/prep.sh
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - C0_TOOLS=.torrentci/c0-ctcache .torrentci/c0-ctcache/analyse.sh shard-2 plain 2 4
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
+  - id: c0-ctcache-shard-3
+    description: C0 - uncached clang-tidy scan, shard 3 of 4
+    timeout: 4h
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '16', memory: 16Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 24Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_COMPILERCHECK, value: content}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+    cache:
+      key: 'cpm-v1-${ref_name}-${commit_sha}'
+      restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
+      save-paths: [.cpmcache]
+    steps:
+      - id: prep
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/prep.sh
+      - id: measure
+        kind: shell
+        shell:
+          run:
+            - C0_TOOLS=.torrentci/c0-ctcache .torrentci/c0-ctcache/analyse.sh shard-3 plain 3 4
+      - id: cpm-cache-save
+        kind: shell
+        shell:
+          run:
+            - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
+  - id: c0-ctcache-parity
+    description: C0 - ctcache parity gaps G1-G6 on the ci-build image's clang-tidy-23
+    timeout: 30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '2', memory: 2Gi}
+          limits: {memory: 4Gi}
+    steps:
+      - id: parity
+        kind: shell
+        shell:
+          run:
+            - .torrentci/c0-ctcache/parity.sh
