@@ -3,10 +3,10 @@
 
 """Expert dequant vs transformers' ``Inkling2LoopDequantizeExperts`` (+ ``Interleave(dim=1)`` for w13), 2 experts.
 
-Needs a transformers with Inkling2Loop (no ttnn, no device):
-    PYTHONPATH=<worktree>:<worktree>/.t1-pydeps /work/inkling-bringup/ref-venv/bin/python -m pytest \
+Needs a transformers with Inkling2Loop (>= 5.24; no ttnn, no device), skips otherwise:
+    PYTHONPATH=<worktree> $INKLING_REF_PYTHON -m pytest \
         --noconftest -c /dev/null models/demos/inkling2_mini/convert/test_dequant.py
-The real-checkpoint cases read ``$INKLING_CKPT`` (default /work/models/Inkling-2-Mini) and skip when absent.
+The real-checkpoint cases read ``$INKLING_CKPT`` (and ``$INKLING_BF16_STORE``) and skip when unset or absent.
 """
 
 import json
@@ -21,7 +21,7 @@ from models.demos.inkling2_mini.convert.source import deinterleave_gate_up, dequ
 core = pytest.importorskip("transformers.core_model_loading")
 if not hasattr(core, "Inkling2LoopDequantizeExperts"):
     pytest.skip("transformers here has no Inkling2Loop (needs >= 5.24)", allow_module_level=True)
-CKPT = Path(os.environ.get("INKLING_CKPT", "/work/models/Inkling-2-Mini"))
+CKPT = Path(os.environ["INKLING_CKPT"]) if os.environ.get("INKLING_CKPT") else None
 SRC = ["w", "w_scale", "w_amax", "w_denominator"]
 
 
@@ -72,8 +72,8 @@ def test_synthetic(nvfp4, is_w13):
 
 
 def _open_ckpt():
-    index = CKPT / "model.safetensors.index.json"
-    if not index.exists():
+    index = CKPT / "model.safetensors.index.json" if CKPT else None
+    if index is None or not index.exists():
         pytest.skip(f"no checkpoint at {CKPT}")
     shards = set(json.loads(index.read_text())["weight_map"].values())
     if not all((CKPT / s).exists() for s in shards):
@@ -96,14 +96,14 @@ def test_checkpoint(layer, name):
     assert exact > 0.99, exact
 
 
-BF16_STORE = Path(os.environ.get("INKLING_BF16_STORE", "/work/models/Inkling-2-Mini-bf16"))
+BF16_STORE = Path(os.environ["INKLING_BF16_STORE"]) if os.environ.get("INKLING_BF16_STORE") else None
 
 
 @pytest.mark.parametrize("layer", [0, 20], ids=["L0-nvfp4", "L20-mxfp8"])
 @pytest.mark.parametrize("name", ["w13", "w2"])
 def test_bf16_store_matches_dequant(layer, name):
     """The --bf16-store source (cache/v1-b8) holds the same expert values as our dequant of the checkpoint."""
-    if not BF16_STORE.exists():
+    if BF16_STORE is None or not BF16_STORE.exists():
         pytest.skip(f"no bf16 store at {BF16_STORE}")
     ckpt = _open_ckpt()
     from models.demos.inkling2_mini.convert.source import Checkpoint

@@ -2,11 +2,12 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
 # Inkling-2-Mini v1 baseline: golden check (forced + token-only), then traces + greedy + tok/s at max_ctx 4K/32K/128K.
-# Usage: models/demos/inkling2_mini/demo/run_baseline.sh [out_dir]   (from the repo root, env set; takes ~6 min)
+# Usage: models/demos/inkling2_mini/demo/run_baseline.sh <out_dir>   (from the repo root; takes ~6 min)
+# Needs INKLING_CACHE and INKLING_GOLDEN. INKLING_CARD_LOCK, if set, is a lock file held around each card run.
 set -euo pipefail
-OUT=${1:-/work/inkling-bringup/A1-scratch/baseline}
+OUT=${1:?usage: run_baseline.sh <out_dir>}
 mkdir -p "$OUT"
-L="flock /tmp/tt-card.lock"
+L=${INKLING_CARD_LOCK:+flock $INKLING_CARD_LOCK}
 M=models.demos.inkling2_mini.demo
 filter() { grep -E '^prompt|logits|^\{"pos"|match_golden|Error|error' | cut -c1-300; }
 $L python -m $M.golden_check --json "$OUT/golden_forced.json" 2>&1 | filter

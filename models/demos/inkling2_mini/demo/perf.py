@@ -2,19 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 """Inkling-2-Mini perf harness: golden gate, traced decode tok/s, prefill tok/s + TTFT. One JSON line per run.
 
-    python -m models.demos.inkling2_mini.demo.perf --label my-experiment [--long code1500 prose8k] [--set-baseline]
+    python -m models.demos.inkling2_mini.demo.perf --golden DIR --results DIR --label my-experiment \
+        [--long code1500 prose8k] [--set-baseline]
 
-Every card part runs in its own worker process under `flock /tmp/tt-card.lock` (other tasks interleave between parts).
-The line is printed and appended to /work/inkling-bringup/perf/results.jsonl (with branch, commit, label).
+Every card part runs in its own worker process, so other card users can interleave between parts when
+``$INKLING_CARD_LOCK`` names a lock file each worker should hold (flock). A worker past its time limit is killed;
+``$INKLING_CARD_RESET``, if set, is a shell command run after that (under the lock) to reset the card.
+The line is printed and appended to ``<results>/results.jsonl`` (with branch, commit, label).
+Paths: ``--golden`` (default ``$INKLING_GOLDEN``), ``--results`` (default ``$INKLING_PERF_DIR``); weights
+``$INKLING_CACHE``.
 
-Gate (review-r5 D3, design §7), short golden prompts prompt0/prompt1/chat/math, eager:
-  forced:     per-app PCC >= baseline - 0.0005, logits PCC >= 0.98, top-1 >= 90 %, top-5 contains ref top-1 >= 98 %
+Gate (design §7), short golden prompts prompt0/prompt1/chat/math, eager:
+  forced:     per-app PCC >= 0.99 and >= baseline - 0.0005, logits PCC >= 0.98, top-1 >= 90 %,
+              top-5 contains ref top-1 >= 98 %
   token-only: logits PCC >= 0.98, top-1 hits >= baseline - 1
   long (code1500, prose8k; traced prefill, ALL positions vs golden v1, last position vs v2): regression gate =
               top-1, top-5, logits PCC (full for code1500, ref top-32 entries for prose8k) >= baseline - 0.01.
               Design §7 absolute bars are reported per prompt as "bars_7" (v1 baseline does not meet them).
               No per-app PCC on long prompts: two valid CPU refs differ to 0.958 there (golden-v2.md).
-Baseline = perf/baseline.json (written by --set-baseline). Without it only the absolute bars apply.
+Baseline = <results>/baseline.json, written by --set-baseline only from a run that has the gate and passes it.
+Without it only the absolute bars apply.
 
 Decode: traced 48-app step, median of 5 x 10 steps, at (max_ctx, pos) = (4K, 2K), (32K, 30K), (128K, 120K).
 v1 decode cost depends on max_ctx; pos is set directly (no real 120K sequence).
@@ -39,12 +46,13 @@ import sys
 import time
 from pathlib import Path
 
-GOLDEN = Path("/work/inkling-bringup/golden")
-PERF = Path("/work/inkling-bringup/perf")
+GOLDEN = Path(os.environ["INKLING_GOLDEN"]) if os.environ.get("INKLING_GOLDEN") else None
 SHORT = ["prompt0", "prompt1", "chat", "math"]
 DECODE = [(4096, 2048), (32768, 30720), (131072, 122880)]
 LONG_CTX = {"code1500": 2048, "prose8k": 8704}
-LOCK = "/tmp/tt-card.lock"
+LOCK = os.environ.get("INKLING_CARD_LOCK")  # optional flock file held by each worker
+RESET = os.environ.get("INKLING_CARD_RESET")  # optional shell command run after a worker times out
+APP_PCC_FLOOR = 0.99  # forced per-app PCC, absolute (v1 measured 0.9926)
 HERE = Path(__file__).resolve()
 
 
@@ -55,7 +63,7 @@ def _open(trace_mib=512):
     return ttnn.open_device(device_id=0, trace_region_size=trace_mib << 20)
 
 
-def worker_gate(out):
+def worker_gate(out, golden):
     import torch  # noqa: F401
 
     import ttnn
@@ -68,8 +76,8 @@ def worker_gate(out):
         model = Inkling2Model(dev, max_ctx=2048, log=lambda s: None)
         for name in SHORT:
             res[name] = {
-                "forced": run_prompt(model, name, True, gdir=GOLDEN),
-                "tokens": run_prompt(model, name, False, gdir=GOLDEN),
+                "forced": run_prompt(model, name, True, gdir=golden),
+                "tokens": run_prompt(model, name, False, gdir=golden),
             }
     finally:
         ttnn.close_device(dev)
@@ -129,7 +137,7 @@ def worker_decode(out, max_ctx, pos, steps=10, reps=5):
     Path(out).write_text(json.dumps(r))
 
 
-def worker_prefill(out, name, mode):
+def worker_prefill(out, golden, name, mode):
     """Long-prompt prefill + gate over ALL positions (golden v1 full-position files; v2 last position).
 
     TT logits are read back at every position for the gate; that readback is timed separately and is NOT in ttft_s
@@ -140,12 +148,12 @@ def worker_prefill(out, name, mode):
     from models.demos.inkling2_mini.tt.generator import Generator
     from models.demos.inkling2_mini.tt.model import VOCAB_REAL, Inkling2Model
 
-    d = GOLDEN / name
+    d = Path(golden) / name
     ids = torch.load(d / "input_ids.pt")[0].tolist()
     top32 = torch.load(d / "logits_top32.pt")
     ref_idx, ref_val = top32["indices"].long(), top32["values"].float()
     full = torch.load(d / "logits_bf16.pt")[0] if (d / "logits_bf16.pt").exists() else None  # [T, V] bf16 (T <= 2048)
-    v2 = GOLDEN / "v2" / name / "last.pt"
+    v2 = Path(golden) / "v2" / name / "last.pt"
     v2_last = torch.load(v2)["logits_last"].float() if v2.exists() else None
     T = len(ids)
     fn, impl = _prefill_impl(mode)
@@ -213,13 +221,18 @@ def worker_prefill(out, name, mode):
 # ---------------------------------------------------------------- driver (no card)
 def _run_worker(args, tmp):
     limit = _timeout_s(args)
-    cmd = ["timeout", str(limit), "flock", LOCK, sys.executable, "-m", "models.demos.inkling2_mini.demo.perf"]
+    lock = ["flock", LOCK] if LOCK else []
+    cmd = [*lock, "timeout", str(limit), sys.executable, "-m", "models.demos.inkling2_mini.demo.perf"]
     cmd += ["--worker", *args, "--out", tmp]
     t0 = time.time()
     p = subprocess.run(cmd, capture_output=True, text=True)
-    if p.returncode == 124:  # timed out: reset the card inside the lock before anything else runs
-        subprocess.run(["flock", LOCK, "bash", "-c", "(. ~/.tenstorrent-venv/bin/activate && tt-smi -r)"])
-        raise RuntimeError(f"worker {args} timed out after {limit}s; card reset with tt-smi -r")
+    if p.returncode == 124:  # timed out: the card may be hung
+        if RESET:
+            subprocess.run([*lock, "bash", "-c", RESET])
+        raise RuntimeError(
+            f"worker {args} timed out after {limit}s; "
+            + ("ran $INKLING_CARD_RESET" if RESET else "the card may need a reset (tt-smi -r)")
+        )
     if p.returncode != 0 or not Path(tmp).exists():
         tail = "\n".join(l for l in (p.stdout + p.stderr).splitlines() if "| info" not in l and "| DEBUG" not in l)[
             -3000:
@@ -232,7 +245,7 @@ def _run_worker(args, tmp):
 
 
 def _timeout_s(args):
-    """<= 3x the expected time of each worker (lock wait included)."""
+    """<= 3x the expected card time of each worker (the timeout starts after the lock is taken)."""
     kind = args[0]
     if kind == "prefill":
         return {"code1500": 450, "prose8k": 2400}.get(args[1], 3600)
@@ -269,6 +282,8 @@ def summarize_gate(g, base):
         fails.append("forced top5")
     if s["tokens_logits_pcc_min"] < 0.98:
         fails.append("token-only logits pcc")
+    if min(apps) < APP_PCC_FLOOR:
+        fails.append(f"forced app pcc {min(apps):.5f} < {APP_PCC_FLOOR}")
     if base:
         bad = [a for a in range(48) if apps[a] < base["app_pcc"][a] - 0.0005]
         if bad:
@@ -281,6 +296,8 @@ def summarize_gate(g, base):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--label", default="")
+    ap.add_argument("--golden", type=Path, default=GOLDEN, help="golden dir ($INKLING_GOLDEN)")
+    ap.add_argument("--results", type=Path, default=os.environ.get("INKLING_PERF_DIR"), help="($INKLING_PERF_DIR)")
     ap.add_argument("--long", nargs="*", default=["code1500", "prose8k"])
     ap.add_argument("--prefill", choices=["auto", "decode", "chunked"], default="auto")
     ap.add_argument("--skip-gate", action="store_true")
@@ -293,16 +310,21 @@ def main():
     if a.worker:
         kind, *rest = a.worker
         if kind == "gate":
-            worker_gate(a.out)
+            worker_gate(a.out, a.golden)
         elif kind == "decode":
             worker_decode(a.out, int(rest[0]), int(rest[1]))
         elif kind == "prefill":
-            worker_prefill(a.out, rest[0], rest[1])
+            worker_prefill(a.out, a.golden, rest[0], rest[1])
         return
 
-    PERF.mkdir(parents=True, exist_ok=True)
-    tmp = str(PERF / f".w{os.getpid()}.json")
-    base_f = PERF / "baseline.json"
+    if a.golden is None or a.results is None:
+        ap.error("--golden and --results are required (or set INKLING_GOLDEN and INKLING_PERF_DIR)")
+    if a.set_baseline and a.skip_gate:
+        ap.error("--set-baseline needs the gate (drop --skip-gate)")
+    results = Path(a.results)
+    results.mkdir(parents=True, exist_ok=True)
+    tmp = str(results / f".w{os.getpid()}.json")
+    base_f = results / "baseline.json"
     base = json.loads(base_f.read_text()) if base_f.exists() and not a.set_baseline else None
     line = {
         "time": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -313,7 +335,7 @@ def main():
     }
     fails = []
     if not a.skip_gate:
-        g = _run_worker(["gate"], tmp)
+        g = _run_worker(["gate", "--golden", str(a.golden)], tmp)
         line["gate"], fails = summarize_gate(g, base)
     line["decode"] = {}
     for mc, pos in DECODE:
@@ -322,7 +344,7 @@ def main():
             line["decode"][f"{mc // 1024}K"] = {k: (round(v, 3) if isinstance(v, float) else v) for k, v in r.items()}
     line["prefill"] = {}
     for name in a.long:
-        r = _run_worker(["prefill", name, a.prefill], tmp)
+        r = _run_worker(["prefill", name, a.prefill, "--golden", str(a.golden)], tmp)
         line["prefill"][name] = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in r.items()}
         bars = {
             "top1>=0.90": r.get("top1", 0) >= 0.90,
@@ -338,7 +360,9 @@ def main():
                     fails.append(f"{name} {k} {r[k]:.3f} < baseline {b[k]:.3f} - 0.01")
     line["gate_pass"] = (not fails) if not a.skip_gate else None
     line["gate_fails"] = fails
-    if a.set_baseline and "gate" in line:
+    if a.set_baseline and fails:
+        print(f"not writing {base_f}: the run failed the gate: {fails}", file=sys.stderr)
+    elif a.set_baseline:
         b = {
             "commit": line["commit"],
             "app_pcc": line["gate"]["app_pcc"],
@@ -350,7 +374,7 @@ def main():
     s = json.dumps(line, sort_keys=True)
     print(s)
     if not a.no_append:
-        with open(PERF / "results.jsonl", "a") as f:
+        with open(results / "results.jsonl", "a") as f:
             f.write(s + "\n")
 
 

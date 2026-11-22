@@ -4,8 +4,10 @@
 """Host-only ttnn checks (no device): the torch BFP emulation used by moe_pcc.py matches ttnn's round trip, and
 cache.py loads what the converter's Writer wrote, under the §4 names, dtypes and layouts.
 
-    PYTHONPATH=<worktree> /work/tt-metal/python_env/bin/python -m pytest --noconftest -c /dev/null \
+    TT_METAL_MOCK_CLUSTER_DESC_PATH=<p100 cluster desc yaml> pytest --noconftest -c /dev/null \
         models/demos/inkling2_mini/convert/test_cache.py
+
+(the mock cluster keeps ttnn's host conversions off the card; see README.md)
 """
 
 import json

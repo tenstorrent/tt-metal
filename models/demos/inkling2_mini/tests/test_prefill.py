@@ -7,21 +7,25 @@
 3. code1500: 16 decode steps after prefill, fed the decode-only path's tokens: top-1 agrees on >= 14 of 16 steps.
 Logits are streamed per 128 rows (host RSS < 3 GB).
 
-    flock /tmp/tt-card.lock pytest -s models/demos/inkling2_mini/tests/test_prefill.py
+    pytest -s models/demos/inkling2_mini/tests/test_prefill.py
 """
 
 import json
-from pathlib import Path
 
 import pytest
 import torch
 
 import ttnn
+from models.demos.inkling2_mini.convert import cache as wcache
+from models.demos.inkling2_mini.demo.golden_check import GOLDEN
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.model import Inkling2Model
 from models.demos.inkling2_mini.tt.prefill_model import Inkling2Prefill
 
-GOLDEN = Path("/work/inkling-bringup/golden")
+pytestmark = pytest.mark.skipif(
+    GOLDEN is None or wcache.DEFAULT_ROOT is None or not (GOLDEN / "code1500").exists(),
+    reason="golden or weight cache missing (set INKLING_GOLDEN and INKLING_CACHE)",
+)
 
 
 @pytest.fixture(scope="module")

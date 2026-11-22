@@ -75,8 +75,8 @@ def check(src: Path, dst: Path) -> int:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--src", type=Path, default=Path("/work/inkling-bringup/cache/v1"))
-    ap.add_argument("--dst", type=Path, default=Path("/work/inkling-bringup/cache/v1-stick"))
+    ap.add_argument("--src", type=Path, required=True, help="cache to read")
+    ap.add_argument("--dst", type=Path, required=True, help="new cache to write")
     ap.add_argument("--dtypes", default="BFP4", help="comma list of BFP4, BFP8")
     ap.add_argument("--n-banks", type=int, default=N_BANKS)
     ap.add_argument("--dry-run", action="store_true")

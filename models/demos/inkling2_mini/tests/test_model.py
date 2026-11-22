@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Full model vs the CPU golden (needs the v1 weight cache and /work/inkling-bringup/golden).
+"""Full model vs the CPU golden (needs the weight cache $INKLING_CACHE and the golden dir $INKLING_GOLDEN).
 
 Hidden-forced (each application gets its golden input): design.md §7 per-layer and logits bars.
 Token-only (golden tokens, no hidden forcing): reported, gated on logits PCC only.
@@ -14,8 +14,11 @@ from models.demos.inkling2_mini.tests.hf_ref import finite_min
 from models.demos.inkling2_mini.tt.model import Inkling2Model
 
 pytestmark = pytest.mark.skipif(
-    not (GOLDEN / "prompt0").exists() or not (wcache.DEFAULT_ROOT / "manifest.json").exists(),
-    reason="golden or weight cache missing",
+    GOLDEN is None
+    or wcache.DEFAULT_ROOT is None
+    or not (GOLDEN / "prompt0").exists()
+    or not (wcache.DEFAULT_ROOT / "manifest.json").exists(),
+    reason="golden or weight cache missing (set INKLING_GOLDEN and INKLING_CACHE)",
 )
 
 

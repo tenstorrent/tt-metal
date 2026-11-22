@@ -402,8 +402,8 @@ def summarize(entries: list[dict]) -> str:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--ckpt", type=Path, default=Path(os.environ.get("INKLING_CKPT", "/work/models/Inkling-2-Mini")))
-    ap.add_argument("--out", type=Path, default=Path(os.environ.get("INKLING_CACHE", "/work/inkling-bringup/cache/v1")))
+    ap.add_argument("--ckpt", type=Path, default=os.environ.get("INKLING_CKPT"), help="checkpoint dir ($INKLING_CKPT)")
+    ap.add_argument("--out", type=Path, default=os.environ.get("INKLING_CACHE"), help="cache dir ($INKLING_CACHE)")
     ap.add_argument("--layers", default=",".join(map(str, range(N_LAYERS))), help="comma list, default all")
     ap.add_argument("--skip-global", action="store_true")
     ap.add_argument(
@@ -430,6 +430,8 @@ def main(argv=None):
         help="read experts from this transformers bf16 export instead of dequantizing --ckpt (e.g. for cache/v1-b8)",
     )
     args = ap.parse_args(argv)
+    if args.ckpt is None or args.out is None:
+        ap.error("--ckpt and --out are required (or set INKLING_CKPT and INKLING_CACHE)")
     dtype_map = json.loads(args.dtype_map.read_text()) if args.dtype_map else {}
     check_dtype_map(dtype_map)
 

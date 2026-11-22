@@ -16,13 +16,19 @@ from pathlib import Path
 
 import ttnn
 
-# v1-stick4 = v1 with the BFP4/BFP4 expert layers in the stick layout (relayout_sticks.py --dtypes BFP4; other files
-# hard-linked). BFP8 layers stay tiles: their stick path sums the down projection in a different order (not identical).
-DEFAULT_ROOT = Path(os.environ.get("INKLING_CACHE", "/work/inkling-bringup/cache/v1-stick4"))
+# The weight cache the model loads by default: $INKLING_CACHE (None if unset; pass a root instead).
+DEFAULT_ROOT = Path(os.environ["INKLING_CACHE"]) if os.environ.get("INKLING_CACHE") else None
 
 
-def manifest(root: Path | str = DEFAULT_ROOT) -> dict:
-    m = json.loads((Path(root) / "manifest.json").read_text())
+def _root(root) -> Path:
+    if root is None:
+        raise ValueError("no weight cache given: set INKLING_CACHE or pass the cache directory")
+    return Path(root)
+
+
+def manifest(root: Path | str | None = DEFAULT_ROOT) -> dict:
+    root = _root(root)
+    m = json.loads((root / "manifest.json").read_text())
     if m.get("schema") != 1:
         raise ValueError(f"{root}: manifest schema {m.get('schema')} != 1")
     if not m.get("complete"):
@@ -40,11 +46,12 @@ def layouts(root: Path | str, layer: int | None) -> dict[str, str]:
 
 
 def _load(root: Path | str, layer: int | None, device) -> dict[str, ttnn.Tensor]:
+    root = _root(root)
     out = {}
     for e in manifest(root)["tensors"]:
         if e["layer"] != layer:
             continue
-        t = ttnn.load_tensor(Path(root) / e["file"])
+        t = ttnn.load_tensor(root / e["file"])
         if device is not None and e["layout"] == "STICK" and device.dram_grid_size().x != e["stick_banks"]:
             raise ValueError(f"{e['file']}: stick layout for {e['stick_banks']} DRAM banks, device has "
                              f"{device.dram_grid_size().x}")  # fmt: skip

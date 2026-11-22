@@ -2,14 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """Inkling-2-Mini on one p100a: DRAM report, trace checks, greedy generation, decode speed.
 
-    flock /tmp/tt-card.lock python -m models.demos.inkling2_mini.demo.demo --max-ctx 131072 \
+    python -m models.demos.inkling2_mini.demo.demo --prompt "Write a haiku about a lake." [--gen 64]
+    python -m models.demos.inkling2_mini.demo.demo --golden DIR --max-ctx 131072 \
         [--skip-app-trace] [--gen 64] [--perf-pos 2048 32768] [--json out.json]
+
+Weights come from ``$INKLING_CACHE``. ``--prompt`` is wrapped in the model's chat template (tokenizer from
+``--tokenizer``, default ``$INKLING_CKPT``) and replaces the golden prompts; without it the golden prompts
+(``--golden``, default ``$INKLING_GOLDEN``) are generated and prompt 0 is compared with the golden greedy tokens.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -19,8 +25,6 @@ import ttnn
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.model import Inkling2Model
 
-GOLDEN = Path("/work/inkling-bringup/golden")
-TOKENIZER = "/work/models/Inkling-2-Mini/tokenizer.json"
 GiB = 2**30
 
 
@@ -66,7 +70,14 @@ def main():
     ap.add_argument("--perf-steps", type=int, default=20)
     ap.add_argument("--skip-app-trace", action="store_true")
     ap.add_argument("--json", type=str, default=None)
+    ap.add_argument("--prompt", type=str, help="user message to answer (replaces the golden prompts)")
+    ap.add_argument("--golden", type=Path, default=os.environ.get("INKLING_GOLDEN"), help="golden dir")
+    ap.add_argument("--tokenizer", default=os.environ.get("INKLING_CKPT"), help="HF tokenizer dir (checkpoint dir)")
     args = ap.parse_args()
+    if args.prompt is None and args.golden is None:
+        ap.error("give --prompt, or --golden / INKLING_GOLDEN for the golden prompts")
+    if args.prompt is not None and args.tokenizer is None:
+        ap.error("--prompt needs --tokenizer or INKLING_CKPT")
     res = {"max_ctx": args.max_ctx, "trace_mib": args.trace_mib}
     t0 = time.time()
     dev = ttnn.open_device(device_id=0, trace_region_size=args.trace_mib << 20)
@@ -101,29 +112,39 @@ def main():
         res["step_trace_vs_eager_maxdiff"] = float((outs[0] - e).abs().max())
         print(json.dumps(res), flush=True)
 
-        try:
-            from tokenizers import Tokenizer
+        tok = None
+        if args.tokenizer is not None:
+            try:
+                from transformers import AutoTokenizer
 
-            tok = Tokenizer.from_file(TOKENIZER)
-        except Exception as ex:  # noqa: BLE001
-            tok = None
-            res["tokenizer_error"] = str(ex)
-        gold = json.loads((GOLDEN / "greedy.json").read_text())
+                tok = AutoTokenizer.from_pretrained(args.tokenizer)
+            except Exception as ex:  # noqa: BLE001
+                if args.prompt is not None:
+                    raise
+                res["tokenizer_error"] = str(ex)
+        if args.prompt is not None:
+            ids = tok.apply_chat_template([{"role": "user", "content": args.prompt}], tokenize=True)
+            prompts = [("prompt", ids["input_ids"] if hasattr(ids, "keys") else list(ids))]
+            gold = None
+        else:
+            gold = json.loads((args.golden / "greedy.json").read_text())
+            prompts = [(k, torch.load(args.golden / f"prompt{k}" / "input_ids.pt")[0].tolist()) for k in args.prompts]
         res["gen"] = []
-        for k in args.prompts:
-            ids = torch.load(GOLDEN / f"prompt{k}" / "input_ids.pt")[0].tolist()
+        for k, ids in prompts:
             t1 = time.time()
             new, times = gen.generate(ids, args.gen, traced=True)
             g = {"prompt": k, "ids": new, "seconds": round(time.time() - t1, 1)}
             if times:
                 g["decode_tok_s"] = len(times) / sum(times)
-            if k == 0:
+            if gold is not None and k == 0:
                 ref = gold["new_ids"]
                 n = min(len(ref), len(new))
                 g["match_golden_first16"] = sum(int(a == b) for a, b in zip(new[:n], ref[:n]))
                 g["first_mismatch"] = next((i for i in range(n) if new[i] != ref[i]), None)
             if tok is not None:
                 g["text"] = tok.decode(new, skip_special_tokens=False)
+            if args.prompt is not None:
+                print(g["text"], flush=True)
             res["gen"].append(g)
             print(json.dumps(g, ensure_ascii=False), flush=True)
 

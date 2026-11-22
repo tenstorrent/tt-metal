@@ -131,7 +131,9 @@ def main(argv=None):
     from transformers import AutoConfig
 
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--ckpt", type=Path, default=Path(os.environ.get("INKLING_CKPT", "/work/models/Inkling-2-Mini")))
+    ap.add_argument(
+        "--ckpt", type=Path, default=os.environ.get("INKLING_CKPT"), required=not os.environ.get("INKLING_CKPT")
+    )
     ap.add_argument("--layers", default=",".join(map(str, range(20))))
     ap.add_argument("--tokens", type=int, default=512)
     ap.add_argument("--out", type=Path, help="JSON lines, one per layer (appended)")

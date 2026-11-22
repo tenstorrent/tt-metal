@@ -5,13 +5,17 @@
 Every application gets the golden input of that application (HF dataflow, see model.golden_app_inputs); stack and
 messages follow from those inputs. Prints per-app PCC over all positions, then logits PCC / top-1 / top-5.
 
-    flock /tmp/tt-card.lock python -m models.demos.inkling2_mini.demo.golden_check [--prompts 0 1] [--json out.json]
+    python -m models.demos.inkling2_mini.demo.golden_check --golden DIR [--prompts 0 1] [--json out.json]
+
+The golden directory (``--golden``, default ``$INKLING_GOLDEN``) holds one sub-directory per prompt with the CPU
+reference tensors; the weight cache is ``$INKLING_CACHE``.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -20,7 +24,7 @@ import torch
 import ttnn
 from models.demos.inkling2_mini.tt.model import APPS, VOCAB_REAL, Inkling2Model, golden_app_inputs
 
-GOLDEN = Path("/work/inkling-bringup/golden")
+GOLDEN = Path(os.environ["INKLING_GOLDEN"]) if os.environ.get("INKLING_GOLDEN") else None
 
 
 def pcc(a, b):
@@ -33,9 +37,13 @@ def row0(t):
     return ttnn.to_torch(t).float().reshape(-1, t.shape[-1])[0]
 
 
-def run_prompt(model, k, force=True, tag="", gdir=GOLDEN, save=None):
-    """k: golden prompt name (e.g. "chat") or index n for "prompt{n}". save: dir for the raw TT tensors."""
+def run_prompt(model, k, force=True, tag="", gdir=None, save=None):
+    """k: golden prompt name (e.g. "chat") or index n for "prompt{n}". gdir: golden dir (default $INKLING_GOLDEN).
+    save: dir for the raw TT tensors."""
     name = k if isinstance(k, str) else f"prompt{k}"
+    gdir = gdir or GOLDEN
+    if gdir is None:
+        raise ValueError("no golden directory: set INKLING_GOLDEN or pass gdir")
     d = Path(gdir) / name
     ids = torch.load(d / "input_ids.pt")[0].tolist()
     embed = torch.load(d / "embed.pt")[0].float()
@@ -90,14 +98,18 @@ def run_prompt(model, k, force=True, tag="", gdir=GOLDEN, save=None):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--golden", type=Path, default=GOLDEN, required=GOLDEN is None, help="golden dir ($INKLING_GOLDEN)")
     ap.add_argument("--prompts", nargs="+", default=["0", "1"], help="indices (prompt{n}) or golden names")
     ap.add_argument("--max-ctx", type=int, default=2048)
     ap.add_argument("--json", type=str, default=None)
     ap.add_argument("--b8-layers", type=int, nargs="*", default=[], help="layers loaded from --b8-root")
-    ap.add_argument("--b8-root", type=str, default="/work/inkling-bringup/cache/v1-b8")
+    ap.add_argument("--b8-root", type=str, help="weight cache for --b8-layers")
+    ap.add_argument("--save-dir", type=Path, help="write the raw TT tensors of each prompt here")
     ap.add_argument("--trace-mib", type=int, default=512)
     ap.add_argument("--no-force", action="store_true", help="feed golden tokens only (no hidden forcing)")
     args = ap.parse_args()
+    if args.b8_layers and not args.b8_root:
+        ap.error("--b8-layers needs --b8-root")
     dev = ttnn.open_device(device_id=0, trace_region_size=args.trace_mib << 20)
     try:
         model = Inkling2Model(
@@ -109,7 +121,8 @@ def main():
                 int(k) if k.isdigit() else k,
                 not args.no_force,
                 "_b8" + "_".join(map(str, args.b8_layers)) if args.b8_layers else "",
-                save="/work/inkling-bringup/A1-scratch",
+                gdir=args.golden,
+                save=args.save_dir,
             )
             for k in args.prompts
         ]
