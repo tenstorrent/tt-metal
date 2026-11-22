@@ -121,7 +121,7 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         relay_chunk_scan_max_heads_per_link);
     TT_FATAL(
         std::set<CoreCoord>(attrs.cores.begin(), attrs.cores.end()).size() == attrs.cores.size(),
-        "{}: the op's cores must be distinct",
+        "{}: the cores must be distinct",
         operation_name);
     const auto grid = mesh->compute_with_storage_grid_size();
     for (const auto& core : attrs.cores) {

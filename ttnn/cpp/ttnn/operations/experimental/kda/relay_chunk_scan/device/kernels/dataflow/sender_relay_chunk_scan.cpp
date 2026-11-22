@@ -93,7 +93,6 @@ void kernel_main() {
             hdrs[b][c] = PacketHeaderPool::allocate_header();
         }
     }
-    const uint32_t units = num_heads * kt;
     const auto head_xy = [&](uint32_t u) { return get_arg_val<uint32_t>(head_args + u / kt); };
     const auto head_slot = [&](uint32_t u) { return get_arg_val<uint32_t>(slot_args + u / kt); };
     // Unit u's column in its head's slot (of cb_eout, and of a landing buffer's states).
