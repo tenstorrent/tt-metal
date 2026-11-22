@@ -2931,3 +2931,9 @@ test_perf_ab.py (test_the_accept_runs_the_gate_when_the_ab_side_was_timing_only)
 OPEN: selftest/test_perf_ab.py has 15 failures in this checkout before F299 too (the fake runner's call dirs land under
 results/, not run_dir/ab: test_the_ab_report_runs_off_and_on_then_waits_for_the_owner's relative_to) - a harness
 regression from an earlier change, to bisect; F299 was verified end to end on PB.KR's accept instead.
+
+## F300 (2026-11-22, DeepSeek-V4.1 PB.9G / PB.GAP): an agent's report survives the final gate
+F292 made results/<task>_*.md gate outputs (a test's report table), so core/gate deleted them before running: an agent's
+own report written before the final gate was lost (PB.9G's ladder tables came out empty, PB.GAP's gap table vanished).
+The gate now keeps the bytes of every such .md it deletes and puts back each one its tests did not write again; a report
+a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_report_survives_the_gate_a_tests_own_report_is_rewritten.
