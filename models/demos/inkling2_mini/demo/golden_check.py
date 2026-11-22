@@ -33,8 +33,10 @@ def row0(t):
     return ttnn.to_torch(t).float().reshape(-1, t.shape[-1])[0]
 
 
-def run_prompt(model, k, force=True, tag=""):
-    d = GOLDEN / f"prompt{k}"
+def run_prompt(model, k, force=True, tag="", gdir=GOLDEN, save=None):
+    """k: golden prompt name (e.g. "chat") or index n for "prompt{n}". save: dir for the raw TT tensors."""
+    name = k if isinstance(k, str) else f"prompt{k}"
+    d = Path(gdir) / name
     ids = torch.load(d / "input_ids.pt")[0].tolist()
     embed = torch.load(d / "embed.pt")[0].float()
     hid = [torch.load(d / f"hidden_{a:02d}.pt")[0].float() for a in range(len(APPS))]
@@ -56,10 +58,11 @@ def run_prompt(model, k, force=True, tag=""):
         tt_logits[t] = ttnn.to_torch(r["logits"]).float().reshape(-1)[:VOCAB_REAL]
         tt_tok.append(int(ttnn.to_torch(r["token"]).reshape(-1)[0]))
     secs = time.time() - t0
-    torch.save(
-        {"apps": tt_apps, "embed": tt_embed, "logits": tt_logits},
-        f"/work/inkling-bringup/A1-scratch/{'tf' if force else 'free'}{tag}_prompt{k}.pt",
-    )
+    if save is not None:
+        torch.save(
+            {"apps": tt_apps, "embed": tt_embed, "logits": tt_logits},
+            Path(save) / f"{'tf' if force else 'free'}{tag}_{name}.pt",
+        )
     ref_top1 = ref_logits.argmax(-1)
     tt_top5 = tt_logits.topk(5, dim=-1).indices
     out = {
@@ -87,7 +90,7 @@ def run_prompt(model, k, force=True, tag=""):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--prompts", type=int, nargs="+", default=[0, 1])
+    ap.add_argument("--prompts", nargs="+", default=["0", "1"], help="indices (prompt{n}) or golden names")
     ap.add_argument("--max-ctx", type=int, default=2048)
     ap.add_argument("--json", type=str, default=None)
     ap.add_argument("--b8-layers", type=int, nargs="*", default=[], help="layers loaded from --b8-root")
@@ -102,14 +105,18 @@ def main():
         )
         res = [
             run_prompt(
-                model, k, not args.no_force, "_b8" + "_".join(map(str, args.b8_layers)) if args.b8_layers else ""
+                model,
+                int(k) if k.isdigit() else k,
+                not args.no_force,
+                "_b8" + "_".join(map(str, args.b8_layers)) if args.b8_layers else "",
+                save="/work/inkling-bringup/A1-scratch",
             )
             for k in args.prompts
         ]
     finally:
         ttnn.close_device(dev)
     for r in res:
-        print(f"prompt{r['prompt']} T={r['T']} {r['seconds']}s embed {r['embed_pcc']:.5f}")
+        print(f"{r['prompt']} T={r['T']} {r['seconds']}s embed {r['embed_pcc']:.5f}")
         for a, (L, p) in enumerate(APPS):
             print(f"  app {a:2d} L{L:02d} p{p} pcc {r['app_pcc'][a]:.5f} min/pos {r['app_pcc_min_pos'][a]:.5f}")
         print(
