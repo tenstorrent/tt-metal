@@ -80,8 +80,10 @@ def test_k31_layers_0_3_run_free(mesh_device, device_params):
     chunk = layout.chunk
     assert state_every % chunk == 0, f"state reads every {state_every} rows must end on {chunk}-row chunks"
     max_seq_len = -(-count // CACHE_LEN) * CACHE_LEN
+    # The window is the whole model as the runtime sees it (first and last rank): a rank that hands off mid-block
+    # (layer 3 is inside AttnRes block 0) has no socket spec; the last rank's final norm is not scored.
     hf_config, params = k31_stage.window_params(
-        mesh_shape, 0, NUM_LAYERS, max_seq_len, is_first_rank=True, is_last_rank=False
+        mesh_shape, 0, NUM_LAYERS, max_seq_len, is_first_rank=True, is_last_rank=True
     )
     common = {
         "count": count,
