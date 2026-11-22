@@ -70,6 +70,7 @@ F_GU, F_GATE, F_EXTRA, F_DN = 1, 2, 4, 8  # worker flags (moe_bank_*.cpp)
 # reads 3 pages instead of gathering the row. INKLING_MOE_TWIN=0: row only (A/B runs).
 DENSE_OUT = os.environ.get("INKLING_MOE_TWIN", "1") != "0"
 SEM_X = 3  # x multicast done (X_MCAST)
+SEM_PF = 4  # ring workers whose down entries landed (PF_RING, counted on the collector)
 NOC1_BANKS = (0,)  # banks whose workers read on NOC1 (module doc)
 X_LO = 2  # convert/bank_layout.extra_bank: first bank holding extra pairs
 
@@ -86,18 +87,22 @@ def bank_weights(device, w, dtype, name):
                            memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
 
 
-def _nd(device, t, dtype, banks):
-    """[1, E, K, n*32] torch -> DRAM tensor ND-sharded one 32-column shard [E, K, 32] per bank, round robin over
-    banks 0 .. banks-1: shard m (columns m*32..) sits in bank m % banks, the shards of a bank one after another, each
-    receiver-contiguous (expert e's K tiles of that column in a row), as the tensor prefetcher streams grouped weights.
-    """
+def pf_memory_config(E, K, banks=BL.N_BANKS):
+    """DRAM ND-sharding of a PF main tensor [1, E, K, n*32]: one 32-column shard [E, K, 32] per bank in turn, so
+    shard m (columns m*32..) sits in bank m % banks, the shards of a bank one after another, each receiver-contiguous
+    (expert e's K tiles of that column in a row), as the tensor prefetcher streams grouped weights."""
     spec = ttnn.NdShardSpec(
-        ttnn.Shape([t.shape[1], t.shape[2], 32]),
+        ttnn.Shape([E, K, 32]),
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))}),
         ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     )  # fmt: skip
+    return ttnn.MemoryConfig(ttnn.BufferType.DRAM, spec)
+
+
+def _nd(device, t, dtype, banks):
+    """[1, E, K, n*32] torch -> PF main DRAM tensor (pf_memory_config)."""
     return ttnn.from_torch(t.bfloat16(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device,
-                           memory_config=ttnn.MemoryConfig(ttnn.BufferType.DRAM, spec))  # fmt: skip
+                           memory_config=pf_memory_config(t.shape[1], t.shape[2], banks))  # fmt: skip
 
 
 def pf_columns(name, nb=BL.N_BANKS):
@@ -187,6 +192,7 @@ class BankMoeExperts:
         (each its own). Placement and flags: module doc. x_mcast: the collector reads x once and multicasts it
         (otherwise every gate_up core reads it). noc1_banks: banks whose workers read on NOC1 (writer on NOC0)."""
         self.pf = isinstance(w_gate_up, tuple)  # PF layout (pf_weights): (main, extra) per tensor
+        self.ring = None  # set_ring
         if self.pf:
             (w_gate_up, self.gu_x), (w_down, self.dn_x) = w_gate_up, w_down
         self.x_mcast, self.noc1_banks = x_mcast, tuple(noc1_banks)
@@ -221,15 +227,8 @@ class BankMoeExperts:
             n_dn = len(range(b, NT_DN, nb))
             u += [(0, 0, 0, 0)] * max(0, n_dn - len(u))
             units.append([(f | (F_DN if i < n_dn else 0), k, j, off, i) for i, (f, k, j, off) in enumerate(u)])
-        place = row_placement(device, [len(u) for u in units])
-        self.workers_info = []  # (core, flags, bank, kslot, j, col_off, dslot, n, partner gate core)
-        for b in range(nb):
-            gate_of = {}
-            for (f, k, j, off, i), c in zip(units[b], place[b]):
-                if f & F_GATE:
-                    gate_of[j] = c
-            for (f, k, j, off, i), c in zip(units[b], place[b]):
-                self.workers_info.append((c, f, b, k, j, off, i, b + nb * i, gate_of.get(j, c)))
+        self.units, self.place = units, row_placement(device, [len(u) for u in units])
+        self._assign()
         grid = device.compute_with_storage_grid_size()
         allc = [(x, y) for y in range(grid.y) for x in range(grid.x)]
         used = {w[0] for w in self.workers_info}
@@ -251,6 +250,35 @@ class BankMoeExperts:
             fp32_dest_acc_en=True,
             math_approx_mode=False,
         )
+
+    def _assign(self):
+        self.workers_info = []  # (core, flags, bank, kslot, j, col_off, dslot, n, partner gate core)
+        for b in range(self.nb):
+            gate_of = {}
+            for (f, k, j, off, i), c in zip(self.units[b], self.place[b]):
+                if f & F_GATE:
+                    gate_of[j] = c
+            for (f, k, j, off, i), c in zip(self.units[b], self.place[b]):
+                self.workers_info.append((c, f, b, k, j, off, i, b + self.nb * i, gate_of.get(j, c)))
+
+    def n_ring(self):
+        """Ring positions per bank (PF layout base workers)."""
+        return len(pf_columns("experts.w_down", self.nb)) // self.nb
+
+    def ring_cores(self):
+        """{bank: the cores of its ring positions (its first n_ring() workers)}."""
+        return {b: self.place[b][: self.n_ring()] for b in range(self.nb)}
+
+    def set_ring(self, order, cfg, ring, ring_bytes):
+        """Read guessed experts from a tensor prefetcher ring (tt/mk/expert_pipe.py). order: {bank: its ring cores in
+        the pipe's receiver order} (receiver r gets ring position bank + n_banks * r, so unit r moves to order[b][r]);
+        cfg / ring: the pipe's receiver config page and ring addresses."""
+        assert self.pf
+        for b, cs in order.items():
+            assert sorted(cs) == sorted(self.place[b][: len(cs)]), (b, cs)
+            self.place[b] = list(cs) + self.place[b][len(cs) :]
+        self._assign()
+        self.ring = (cfg, ring, ring_bytes)
 
     def _cbs(self, gu_dtype, dn_dtype):
         tiny = ttnn.TileDescriptor(ttnn.Tile([1, 32]))
@@ -278,14 +306,20 @@ class BankMoeExperts:
             cb(w, 2048, (CB_U16, bf, 2048, t32)),
             cb(w, 2048, (CB_WS16, bf, 2048, t32)),
             cb(w, 2048, (CB_H16, bf, 2048, t32)),
-            cb(self.all_cores, HID_TILES * 64, (CB_HID, bf, 64, tiny)),
+            cb(self.all_cores, HID_TILES * 64 + 512 * self.pf, (CB_HID, bf, 64, tiny)),  # PF: + the guess-out scratch
             cb(w, 64, (CB_O, bf, 64, tiny)),
             cb(w, 2048, (CB_Z, bf, 2048, t32)),
             cb(w, 128, (CB_SCR, ttnn.uint16, 64, tiny)),  # ids + weights (reader), ids (writer)
         ]
 
-    def __call__(self, x, weights, indices):
-        """x [1,1,1,H] bf16 (L1), weights / indices from Inkling2MoE.route -> [1,1,1,H] bf16 L1."""
+    def __call__(self, x, weights, indices, guess=None, guess_out=None, n_guess=3, signal=None):
+        """x [1,1,1,H] bf16 (L1), weights / indices from Inkling2MoE.route -> [1,1,1,H] bf16 L1. guess (after
+        set_ring): the [1,1,1,E] uint16 ROW_MAJOR DRAM mask the prefetcher streamed this call's ring slabs by; routed
+        experts it marks are read from the ring, and every ring worker pops the slabs. guess_out (PF layout): a mask of the
+        same shape the collector writes with this step's n_guess highest-weight experts (for a later step's guess).
+        signal: tensor prefetcher op signal address the collector raises at its end (ExpertPipe.request waits on it)."""
+        ring = guess is not None
+        assert not ring or self.ring is not None
         for t in (x, weights, indices):
             assert t.memory_config().buffer_type == ttnn.BufferType.L1, t.memory_config()
             assert t.layout == ttnn.TILE_LAYOUT
@@ -302,6 +336,10 @@ class BankMoeExperts:
         }  # fmt: skip
         if self.pf:
             r_named["n_pf"] = len(pf_columns("experts.w_down", self.nb))
+        if ring:
+            gtb, dtb = (ttnn.Tile([32, 32]).get_tile_size(t.dtype) for t in (self.w_gate_up, self.w_down))
+            r_named.update(ring_bytes=self.ring[2], blk_gu=KT_GU // 2 * gtb, blk_dn=KT_DN * dtb, n_groups=guess.shape[-1],
+                           sem_pf=SEM_PF)  # fmt: skip
         w_named = {
             "cb_g": CB_G, "cb_u16": CB_U16, "sem_u": SEM_U,
             "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O, "cb_z": CB_Z, "cb_scr": CB_SCR, "sem_g": SEM_G,
@@ -321,7 +359,9 @@ class BankMoeExperts:
             px, py = self.noc[gate]
             r_args.append((core, [x.buffer_address(), weights.buffer_address(), indices.buffer_address(),
                                   self.w_gate_up.buffer_address(), self.w_down.buffer_address(), f, b, k, off, dslot]
-                           + ([self.gu_x.buffer_address(), self.dn_x.buffer_address()] if self.pf else [])))  # fmt: skip
+                           + ([self.gu_x.buffer_address(), self.dn_x.buffer_address()] if self.pf else [])
+                           + ([int(dslot < self.n_ring() and bool(f & F_GU)), self.ring[0], self.ring[1],
+                               guess.buffer_address(), cx, cy] if ring else [])))  # fmt: skip
             w_args.append((core, [f, j, px, py, cx, cy, out.buffer_address(), n, indices.buffer_address(), b]
                            + ([self.dense.buffer_address()] if self.dense_out else [])))  # fmt: skip
             c_args.append((core, [f]))
@@ -344,9 +384,10 @@ class BankMoeExperts:
                     + acc(indices)
                     + acc(self.w_gate_up)
                     + acc(self.w_down)
-                    + (acc(self.gu_x) + acc(self.dn_x) if self.pf else []),
+                    + (acc(self.gu_x) + acc(self.dn_x) if self.pf else [])
+                    + (acc(guess) if ring else []),
                     named_compile_time_args=list(r_named.items()),
-                    defines=xdef + [("PF_LAYOUT", "1")] * self.pf,
+                    defines=xdef + [("PF_LAYOUT", "1")] * self.pf + [("PF_RING", "1")] * ring,
                     runtime_args=pick(r_args),
                     config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=rnoc),
                 ),
@@ -372,8 +413,12 @@ class BankMoeExperts:
             ttnn.KernelDescriptor(
                 kernel_source=f"{KDIR}/moe_expert_collector.cpp",
                 core_ranges=_range_set([self.collector]),
-                compile_time_args=acc(x) if self.x_mcast else [],
-                defines=xdef,
+                compile_time_args=(acc(x) if self.x_mcast else [])
+                + (acc(indices) + acc(weights) + acc(guess_out) if guess_out is not None else []),
+                defines=xdef
+                + [("GUESS_OUT", "1")] * (guess_out is not None)
+                + [("PF_SIGNAL", "1")] * (signal is not None)
+                + [("PF_RING", "1")] * ring,
                 named_compile_time_args=[
                     ("cb_hid", CB_HID),
                     ("sem_g", SEM_G),
@@ -383,21 +428,37 @@ class BankMoeExperts:
                     ("cb_x", CB_X),
                     ("x_tiles", KT_GU),
                     ("sem_x", SEM_X),
+                    ("topk", TOP_K),
+                    ("n_guess", n_guess),
+                    ("n_groups", self.w_gate_up.shape[1]),
+                    ("sem_pf", SEM_PF),
+                    ("n_ring", self.n_ring() * self.nb if self.pf else 0),
                 ],
                 runtime_args=[
-                    (ttnn.CoreCoord(*self.collector), [x0, y0, x1, y1, self.mcast_dests, x.buffer_address()])
+                    (
+                        ttnn.CoreCoord(*self.collector),
+                        [x0, y0, x1, y1, self.mcast_dests, x.buffer_address()]
+                        + (
+                            [indices.buffer_address(), weights.buffer_address(), guess_out.buffer_address()]
+                            if guess_out is not None
+                            else [0, 0, 0]
+                        )
+                        + [signal or 0],
+                    )
                 ],
                 config=ttnn.WriterConfigDescriptor(),
             ),
         ]
         sems = [
             ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all_cores, initial_value=0)
-            for i in (SEM_U, SEM_G, SEM_R, SEM_X)
+            for i in (SEM_U, SEM_G, SEM_R, SEM_X) + ((SEM_PF,) if ring else ())
         ]
         prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=self.cbs)
         io = (
             [x, weights, indices, self.w_gate_up, self.w_down]
             + ([self.gu_x, self.dn_x] if self.pf else [])
+            + ([guess] if ring else [])
+            + ([guess_out] if guess_out is not None else [])
             + ([self.dense] if self.dense_out else [])
             + [out]
         )

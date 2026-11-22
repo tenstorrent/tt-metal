@@ -8,9 +8,20 @@
 // X_MCAST (tt/fused/moe_bank.py) first: reads row 0 of x's 72 tiles (as 1x32 tiles, as moe_bank_reader.cpp does) into
 //   its cb_x, multicasts them into every core's cb_x and sets sem_x there; runtime arg 5: x address, compile args:
 //   x's TensorAccessorArgs.
+// GUESS_OUT (tt/fused/moe_bank.py, after the multicast; with PF_RING, also after sem_pf reached n_ring: every ring
+//   worker has its down entries, so the prefetcher has read this call's mask for both tensors): writes the mask of this
+//   step's n_guess highest-weight routed experts
+//   ([n_groups] uint16, 1 = marked) for a later step's prefetch. Runtime args 6..8: ids, routing weights (row 0 of
+//   their TILE tensors), mask out; compile args after x's: their TensorAccessorArgs.
+// PF_SIGNAL: then raises tensor prefetcher op signal (runtime arg 9: its address), releasing the next step's
+//   prefetch request (queue_tensor_prefetcher_wait_for_signal ahead of it), so that request's DRAM reads start
+//   after this step's instead of during it.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#ifdef PF_SIGNAL
+#include "api/dataflow/tensor_prefetcher_signal.h"
+#endif
 
 constexpr uint32_t cb_hid = get_named_compile_time_arg_val("cb_hid");
 constexpr uint32_t sem_g_id = get_named_compile_time_arg_val("sem_g");
@@ -68,4 +79,55 @@ void kernel_main() {
         far ? get_noc_multicast_addr(x1, y1, x0, y0, sem_r_addr) : get_noc_multicast_addr(x0, y0, x1, y1, sem_r_addr);
     noc_semaphore_set_multicast(sem_r_addr, sem_mc, num_dests);
     noc_async_write_barrier();
+
+#ifdef GUESS_OUT
+    {
+        constexpr uint32_t topk = get_named_compile_time_arg_val("topk");
+        constexpr uint32_t n_guess = get_named_compile_time_arg_val("n_guess");
+        constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
+#ifdef X_MCAST
+        constexpr uint32_t g0 = TensorAccessorArgs<0>().next_compile_time_args_offset();
+#else
+        constexpr uint32_t g0 = 0;
+#endif
+        constexpr auto ids_args = TensorAccessorArgs<g0>();
+        constexpr auto wts_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
+        constexpr auto msk_args = TensorAccessorArgs<wts_args.next_compile_time_args_offset()>();
+        const auto ids = TensorAccessor(ids_args, get_arg_val<uint32_t>(6));
+        const auto wts = TensorAccessor(wts_args, get_arg_val<uint32_t>(7));
+        const auto msk = TensorAccessor(msk_args, get_arg_val<uint32_t>(8));
+#ifdef PF_RING
+        noc_semaphore_wait(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("sem_pf"))),
+            get_named_compile_time_arg_val("n_ring"));
+#endif
+        const uint32_t buf = get_write_ptr(cb_hid) + hid_bytes;  // cb_hid's spare 512 B past the hidden (moe_bank.py)
+        noc_async_read(ids.get_noc_addr(0), buf, 32);
+        noc_async_read(wts.get_noc_addr(0), buf + 32, 32);
+        noc_async_read_barrier();
+        volatile tt_l1_ptr uint16_t* id16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buf);
+        volatile tt_l1_ptr uint16_t* w16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buf + 32);
+        volatile tt_l1_ptr uint16_t* mk = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buf + 64);
+        for (uint32_t g = 0; g < n_groups; ++g) {
+            mk[g] = 0;
+        }
+        uint32_t taken = 0;  // bit e: routed expert e already picked
+        for (uint32_t k = 0; k < n_guess; ++k) {
+            uint32_t best = topk;
+            for (uint32_t e = 0; e < topk; ++e) {  // positive bf16: larger value = larger bit pattern
+                if (!(taken & (1u << e)) && (best == topk || w16[e] > w16[best])) {
+                    best = e;
+                }
+            }
+            taken |= 1u << best;
+            mk[id16[best]] = 1;
+        }
+        noc_async_write(buf + 64, msk.get_noc_addr(0), n_groups * 2);
+        noc_async_write_barrier();
+    }
+#endif
+#ifdef PF_SIGNAL
+    experimental::tensor_prefetcher_signal(get_arg_val<uint32_t>(9));
+    noc_async_atomic_barrier();
+#endif
 }

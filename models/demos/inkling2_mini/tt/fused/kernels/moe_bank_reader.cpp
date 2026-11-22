@@ -16,6 +16,13 @@
 //   ring position m = bank + n_banks * dslot (expert e's column = kt tiles at page (e * kt) * n_pf + m); the extra
 //   pair (as the bank layout) and down's last columns (bank b's at slot e * kt_dn) come from two more interleaved
 //   tensors (runtime args 10, 11).
+// PF_RING (with PF_LAYOUT): ring workers (runtime arg 12 set) read the routed experts that the guess mask (arg 15,
+//   [n_groups] uint16) marks from a tensor prefetcher pipe's L1 ring (config page arg 13, ring arg 14) instead of
+//   DRAM: the prefetcher streamed the marked experts' columns in ascending expert order, gate_up as 2 entries of
+//   blk_gu bytes each, then down as 1 entry of blk_dn bytes each (tt/mk/expert_pipe.py). Entries never straddle
+//   the ring's end. Every marked slab is popped, used or not. Once its down entries landed (so the prefetcher has
+//   read the mask for both tensors), each ring worker increments sem_pf on the collector (args 16, 17: its NOC x, y),
+//   which only then may write the next guess mask over this one (moe_expert_collector.cpp GUESS_OUT).
 // IDS_FROM_SEM (for a program that routes in the same program, tt/mk): ids (cb_scr bytes 0..15) and routing
 //   weights (32..47) arrive by multicast and sem_ids is set, instead of being read from their tensors.
 // X_MCAST: x is not read here; the collector multicasts it into cb_x and the writer pushes it, so the weight
@@ -24,6 +31,10 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "moe_stream.hpp"
+#ifdef PF_RING
+#include <new>
+#include "api/dataflow/prefetcher_pipe.h"
+#endif
 
 constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");
 constexpr uint32_t cb_w = get_named_compile_time_arg_val("cb_w");
@@ -89,6 +100,25 @@ void kernel_main() {
     const auto dnx = TensorAccessor(dnx_args, get_arg_val<uint32_t>(a++));
     const uint32_t m = bank + nb * dslot;  // ring position
 #endif
+#ifdef PF_RING
+    constexpr uint32_t RING = get_named_compile_time_arg_val("ring_bytes");
+    constexpr uint32_t BLK_GU = get_named_compile_time_arg_val("blk_gu");
+    constexpr uint32_t BLK_DN = get_named_compile_time_arg_val("blk_dn");
+    constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
+    constexpr uint32_t half_gu = kt_gu / 2;  // tiles per gate_up entry
+    static_assert(half_gu % sbk == 0, "a stream block must not straddle two ring entries");
+    const bool on_ring = get_arg_val<uint32_t>(a++);
+    const uint32_t cfg = get_arg_val<uint32_t>(a++);
+    const uint32_t ring = get_arg_val<uint32_t>(a++);
+    constexpr auto g_args = TensorAccessorArgs<dnx_args.next_compile_time_args_offset()>();
+    const auto guess = TensorAccessor(g_args, get_arg_val<uint32_t>(a++));
+    const uint32_t coll_x = get_arg_val<uint32_t>(a++);
+    const uint32_t coll_y = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t sem_pf_id = get_named_compile_time_arg_val("sem_pf");
+    alignas(experimental::PrefetcherPipe) uint8_t pipe_mem[sizeof(experimental::PrefetcherPipe)];
+    experimental::PrefetcherPipe* pipe = nullptr;
+    uint32_t r_off = 0, r_lim = 0;  // ring offset of this call's first entry; entries wrap at r_lim
+#endif
 
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
@@ -124,6 +154,47 @@ void kernel_main() {
     for (uint32_t e = 0; e < topk; ++e) {
         eid[e] = id16[e];
     }
+#ifdef PF_RING
+    // rank[e]: position of routed expert e among the marked experts (ascending ids), or -1
+    int32_t rank[topk];
+    uint32_t nsel = 0;
+    if (on_ring) {
+        const uint32_t tmp = get_write_ptr(cb_w);  // free until the stream opens
+        noc_async_read(guess.get_noc_addr(0), tmp, (n_groups * 2 + 63) / 64 * 64);
+        noc_async_read_barrier();
+        volatile tt_l1_ptr uint16_t* mk = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tmp);
+        for (uint32_t e = 0; e < topk; ++e) {
+            rank[e] = -1;
+        }
+        for (uint32_t g = 0; g < n_groups; ++g) {
+            if (mk[g] != 0) {
+                for (uint32_t e = 0; e < topk; ++e) {
+                    if (eid[e] == g) {
+                        rank[e] = nsel;
+                    }
+                }
+                ++nsel;
+            }
+        }
+    }
+    auto open_pipe = [&](uint32_t entry) {
+        pipe = new (pipe_mem) experimental::PrefetcherPipe(experimental::ReceiverConfigPage{cfg}, entry);
+        r_off = pipe->get_read_ptr() - ring;
+        r_lim = RING - RING % entry;
+    };
+    auto close_pipe = [&](uint32_t n_entries) {  // hand every entry of this call back, used or not
+        if (n_entries) {
+            pipe->wait_front(n_entries);
+            pipe->pop_front(n_entries);
+        }
+        pipe->~PrefetcherPipe();
+        pipe = nullptr;
+    };
+    auto entry_addr = [&](uint32_t q, uint32_t entry) {  // L1 NOC address of this call's entry q, once it landed
+        pipe->wait_front(q + 1);
+        return get_noc_addr(ring + (r_off + q * entry) % r_lim);
+    };
+#endif
 
     // down column of every routed expert, [e][kt] (the gathered hidden is [e][kt]): one run per expert, each on its
     // own transaction id, pushed as it lands, so the down chain runs behind the reads instead of after them
@@ -132,12 +203,22 @@ void kernel_main() {
         const uint32_t tb = get_tile_size(cb_wd);
         cb_reserve_back(cb_wd, topk * kt_dn);
         uint32_t wr = get_write_ptr(cb_wd);
+#ifdef PF_RING
+        if (on_ring) {
+            open_pipe(BLK_DN);
+        }
+#endif
         for (uint32_t e = 0; e < topk; ++e) {
 #ifdef PF_LAYOUT
-            const uint64_t src =
+            uint64_t src =
                 m < n_pf ? dn.get_noc_addr(eid[e] * kt_dn * n_pf + m) : dnx.get_noc_addr(eid[e] * kt_dn * nb + bank);
 #else
-            const uint64_t src = dn.get_noc_addr(((eid[e] * dn_slots + dslot) * kt_dn) * nb + bank);
+            uint64_t src = dn.get_noc_addr(((eid[e] * dn_slots + dslot) * kt_dn) * nb + bank);
+#endif
+#ifdef PF_RING
+            if (on_ring && rank[e] >= 0) {
+                src = entry_addr(rank[e], BLK_DN);
+            }
 #endif
             noc_async_read_set_trid(DN_TRID0 + e);
             noc_async_read(src, wr, kt_dn * tb);
@@ -147,6 +228,13 @@ void kernel_main() {
             noc_async_read_barrier_with_trid(DN_TRID0 + e);
             cb_push_back(cb_wd, kt_dn);
         }
+#ifdef PF_RING
+        if (on_ring) {
+            close_pipe(nsel);  // waits for every down entry: the prefetcher is past this call's mask
+            noc_semaphore_inc(get_noc_addr(coll_x, coll_y, get_semaphore(sem_pf_id)), 1);
+            noc_async_atomic_barrier();
+        }
+#endif
         noc_async_read_set_trid(0);
     };
 
@@ -171,6 +259,11 @@ void kernel_main() {
         cb_push_back(cb_ws16, 1);
     }
 
+#ifdef PF_RING
+    if (on_ring) {
+        open_pipe(BLK_GU);
+    }
+#endif
     Stream<sbk, nbuf> s;
     s.open(cb_w);
     for (uint32_t e = 0; e < topk; ++e) {
@@ -184,6 +277,12 @@ void kernel_main() {
         const uint64_t src = gu.get_noc_addr((gu_slot(eid[e], bank, kslot) * 2 * kt_gu + col_off) * nb + bank);
 #endif
         for (uint32_t t = 0; t < kt_gu; t += sbk) {
+#ifdef PF_RING
+            if (on_ring && rank[e] >= 0) {  // entry 2 * rank holds the first half of the column, the next the rest
+                s.block_contig(entry_addr(2 * rank[e] + t / half_gu, BLK_GU) + (t % half_gu) * s.tile_bytes);
+                continue;
+            }
+#endif
             if (active) {
                 s.block_contig(src + t * s.tile_bytes);
             } else {  // not this expert's extra bank: compute runs on stale tiles, the writer drops the result
@@ -192,6 +291,11 @@ void kernel_main() {
         }
     }
     s.drain();
+#ifdef PF_RING
+    if (on_ring) {
+        close_pipe(2 * nsel);
+    }
+#endif
     if (flags & F_DN) {
         read_down();
     }
