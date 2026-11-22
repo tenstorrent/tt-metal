@@ -73,6 +73,6 @@ if [[ " ${STEPS} " == *" 3 "* ]]; then
     "export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4; \
      export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill; \
      export DS_PERF_IGNORE_POWER=1 SKIP_PERF_GATES=1 LOGURU_LEVEL=INFO; \
-     python3 -m pytest 'models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc[blackhole-glm53-torus-xy-4x4-sp1-L5-preload0-chunks1-iters1-notrace]' -sv --timeout=1500"
+     python3 -m pytest 'models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc[blackhole-glm53-torus-xy-4x4-sp1-L5-preload0-chunks1-iters1-notrace]' -sv -rs --timeout=1500"
 fi
 echo "===== rr_diag done $(date -u +%T)"

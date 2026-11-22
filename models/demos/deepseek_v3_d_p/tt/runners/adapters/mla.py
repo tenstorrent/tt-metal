@@ -92,6 +92,10 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             return None
         arch = "bh" if is_blackhole() else "wh"
         num_devices = ttnn.get_num_devices()
+        if any(int(h) > 1 for h in os.environ.get("PREFILL_STAGE_HOSTS", "").split(",") if h.strip()):
+            # A [RING,RING] seam stage's mesh spans two hosts, so this process sees only its own half of the
+            # chips; the cache is keyed by the stage mesh, which every stage of the run shares.
+            num_devices = int(mesh_shape[0]) * int(mesh_shape[1])
         path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / mesh_cache_key(mesh_shape, sp_axis)
         path.mkdir(parents=True, exist_ok=True)
         return path

@@ -24,7 +24,7 @@ RUN_NAME="${MODEL}${VARIANT}"
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
   kimi_k3|kimi_k3_1)   MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
-  glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4 sc1_4x4" ;;
+  glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4 sc1_4x4 sc4_rr" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -100,6 +100,8 @@ TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 PP_RANKS=0
 # Non-zero for a 4x4 layout: the galaxy count, two 4x4 stages (tray halves) on each.
 PP_4X4_HOSTS=0
+# 1 for the [RING,RING] 4x4 carve: in-Galaxy tori alternating with two-host seam tori (12 ranks on SC4).
+PP_RR=0
 # PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
 EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${RUN_NAME}"
 MTP_PCC_THRESHOLD=""
@@ -167,7 +169,7 @@ case "${MODEL}" in
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
     fi
     case "${CONFIG}" in
-      *_4x4)
+      *_4x4|sc4_rr)
         # 4x4 stages, two per galaxy, bound by tt-run discovery as for Kimi-K3 below: 8 stages for sc4, two
         # (all 78 layers) for sc1. glm53_4x4.json holds the layout: SP=4 on mesh axis 1, 2560-token chunks
         # (640 tokens per chip, GLM's 8x4 per-chip load), TP-deduped KV and the slots it fits. Its 1064960
@@ -191,6 +193,15 @@ case "${MODEL}" in
         PP_4X4_HOSTS=1
         [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
         PP_RANKS=$((2 * PP_4X4_HOSTS))
+        if [ "${CONFIG}" = sc4_rr ]; then
+          # [RING,RING]: 8 stages, the odd (seam) ones on two hosts each, so 12 ranks; the 4x4 tray-half cache
+          # serves it (same mesh coordinates, only the fabric differs).
+          PP_RR=1
+          PP_RANKS=12
+          RUNNER_ENV+=" export PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2; export PREFILL_FABRIC_MODE=2d_torus_xy;"
+          RUNNER_ENV+=" export TT_METAL_FABRIC_DISABLE_INTERMESH_VC=${PREFILL_RR_RELAY:-0};"
+          PRODUCER_ENV+=" export PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2;"
+        fi
         # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
         # non-empty on every host before launch.
         GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill}"
@@ -465,7 +476,9 @@ if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   [ "${#HOST_LIST[@]}" -eq "${PP_4X4_HOSTS}" ] || {
     echo "${MODEL}/${CONFIG} requires exactly ${PP_4X4_HOSTS} cabled Galaxy hosts in ${TTRUN_DIR}/hostfile; got '${RESOLVED_HOSTS}'" >&2; exit 2;
   }
-  if [ "${PP_4X4_HOSTS}" -eq 1 ]; then
+  if [ "${PP_RR}" = 1 ]; then
+    MGD="${MGD_DIR}/sc4_4x4_rr_mgd.textproto"
+  elif [ "${PP_4X4_HOSTS}" -eq 1 ]; then
     MGD="${MGD_DIR%/ci}/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto"
   else
     MGD="${MGD_DIR}/sc4_4x4_sp1_mgd.textproto"
@@ -606,7 +619,13 @@ fi
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
 # Producer rank r must share a host with runner rank r, which --map-by slot over HOSTS gives only
 # when each host's ranks are contiguous -- as tt-run binds a host's two 4x4 meshes.
-if [ "${PP_4X4_HOSTS}" -ne 0 ] && [ "$(printf '%s\n' "${RANK_HOSTS}" | uniq | wc -l)" -ne "${PP_4X4_HOSTS}" ]; then
+if [ "${PP_RR}" = 1 ]; then
+  # A seam stage's second rank sits on the next host, so a host's ranks are not contiguous: place each producer
+  # rank with its runner rank from tt-run's rankfile.
+  mkdir -p "${TT_METAL_HOME}/generated/ttrun"
+  cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"
+  PRODUCER_PLACEMENT=(--map-by rankfile:file=generated/ttrun/producer_rankfile --wdir "${TT_METAL_HOME}")
+elif [ "${PP_4X4_HOSTS}" -ne 0 ] && [ "$(printf '%s\n' "${RANK_HOSTS}" | uniq | wc -l)" -ne "${PP_4X4_HOSTS}" ]; then
   echo "tt-run discovery interleaved hosts across ranks: ${RANK_HOSTS//$'\n'/ }"; exit 1
 fi
 if [ "${DFLASH}" = 1 ]; then

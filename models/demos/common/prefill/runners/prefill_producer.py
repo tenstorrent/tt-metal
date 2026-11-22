@@ -836,25 +836,44 @@ def _has_index_config(table) -> bool:
     return _num_model_configs(table) > 1 and ADAPTER.cache_kind(1) == "index"
 
 
-def _read_chunks(table, device_map, config_id, layer, slot_id, positions) -> list:
-    """Raw bytes of the chunk at each position of one layer, from a single batched read."""
+# A [RING,RING] seam stage spans two hosts, so each layer's KV lies on chips of both: a validator reads the chunks
+# its host can reach and scores those positions (the other host's validator scores the rest).
+_MULTI_HOST_STAGES = any(int(h) > 1 for h in os.environ.get("PREFILL_STAGE_HOSTS", "").split(",") if h.strip())
+
+
+def _read_chunks(table, device_map, config_id, layer, slot_id, positions, allow_missing=False) -> list:
+    """Raw bytes of the chunk at each position of one layer, from a single batched read. ``allow_missing``: a
+    chunk on a chip this process cannot reach comes back as None instead of failing the read."""
     locs = [table.lookup(layer, pos, slot_id, config_id) for pos in positions]
     unique_ids = {}
     for loc in locs:
         if loc.device_group_index not in unique_ids:
-            unique_ids[loc.device_group_index] = _resolve_unique_id(
-                table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+            try:
+                unique_ids[loc.device_group_index] = _resolve_unique_id(
+                    table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+                )
+            except KeyError:
+                if not allow_missing:
+                    raise
+                unique_ids[loc.device_group_index] = None
+    present = [loc for loc in locs if unique_ids[loc.device_group_index] is not None]
+    sizes = [loc.size_bytes for loc in present]
+    blob = (
+        memoryview(
+            ttnn.experimental.disaggregation.read_dram_umd_batch(
+                [unique_ids[loc.device_group_index] for loc in present], [loc.noc_addr for loc in present], sizes
             )
-    sizes = [loc.size_bytes for loc in locs]
-    blob = memoryview(
-        ttnn.experimental.disaggregation.read_dram_umd_batch(
-            [unique_ids[loc.device_group_index] for loc in locs], [loc.noc_addr for loc in locs], sizes
         )
+        if present
+        else memoryview(b"")
     )
     chunks, offset = [], 0
-    for size in sizes:
-        chunks.append(blob[offset : offset + size])
-        offset += size
+    for loc in locs:
+        if unique_ids[loc.device_group_index] is None:
+            chunks.append(None)
+            continue
+        chunks.append(blob[offset : offset + loc.size_bytes])
+        offset += loc.size_bytes
     return chunks
 
 
@@ -875,8 +894,24 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
     positions = range(start, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
-    rows = [decode(raw, head_dim) for raw in _read_chunks(table, device_map, config_id, layer, slot_id, positions)]
+    raws = _read_chunks(table, device_map, config_id, layer, slot_id, positions, allow_missing=_MULTI_HOST_STAGES)
+    rows = [None if raw is None else decode(raw, head_dim) for raw in raws]
+    if any(r is None for r in rows):
+        # Positions on the other host's chips: NaN rows, which the PCC callers mask out (_visible_rows).
+        rows = [
+            torch.full((NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim), float("nan")) if r is None else r.float()
+            for r in rows
+        ]
     return torch.cat(rows, dim=0)[: read_len - start]
+
+
+def _visible_rows(device_rows: torch.Tensor, golden: torch.Tensor, what: str):
+    """Drop the rows a seam-stage validator could not read (NaN, see _read_kv_slice) from both sides."""
+    mask = ~torch.isnan(device_rows.float()).any(dim=-1)
+    if bool(mask.all()):
+        return device_rows, golden
+    logger.info(f"[producer]   {what}: scoring the {int(mask.sum())}/{mask.numel()} rows on this host's chips")
+    return device_rows[mask], golden[mask]
 
 
 def _golden_pe_as_device(golden_pe, layout: str):
@@ -1393,6 +1428,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 logger.warning(f"[producer] KV dump for layer {layer} failed: {exc}")
 
         golden = _load_golden_kv_post(trace_dir, layer, cmp_len, start=golden_offset)
+        device_kv, golden = _visible_rows(device_kv, golden, f"layer {layer} KVPE")
         # Re-base the pe half only if the model rotates it. Kimi-K3 is NoPE (`mla_use_nope`): its 64
         # rope dims pass through unrotated, so applying the half-split re-interleave scores the
         # transform instead of the cache -- 0.02 against a nope half of 0.998.
@@ -1509,6 +1545,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 position0=first_pos + skip_rows,
             )
             dev_ik = rotate_index_keys(hf_config, dev_ik.float()).to(torch.bfloat16)  # the golden's natural basis
+            dev_ik, golden_ik = _visible_rows(dev_ik, golden_ik, f"layer {layer} index")
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             if is_mtp_row:
                 mtp_index_pcc = pcc_index
