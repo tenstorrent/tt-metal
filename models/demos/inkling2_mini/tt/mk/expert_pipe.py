@@ -23,8 +23,22 @@ streams the marked experts in ascending id order: gate_up as 2 entries per exper
 step's gate_up entries and, separately, its down entries (each entry size wraps on its own).
 """
 
+import os
+from pathlib import Path
+
 import ttnn
 from models.demos.inkling2_mini.tt.mk.pipe_stage import _core_list
+
+
+def check_kernel_tree():
+    """The ring reader needs PrefetcherPipe's unbound receiver constructor in the tt-metal tree the JIT compiles
+    kernels from (TT_METAL_RUNTIME_ROOT / TT_METAL_HOME). Without it the expert step fails to compile after a
+    prefetch request is queued, and closing the device then hangs in the prefetcher's auto-stop, so fail here."""
+    root = os.environ.get("TT_METAL_RUNTIME_ROOT") or os.environ.get("TT_METAL_HOME") or ""
+    h = Path(root) / "tt_metal/hw/inc/api/dataflow/prefetcher_pipe.h"
+    if not h.exists() or "ReceiverConfigPage" not in h.read_text():
+        raise RuntimeError(f"expert prefetch: {h} lacks PrefetcherPipe(ReceiverConfigPage, ...) (commit 'prefetcher "
+                           "pipe: receiver constructor without a program binding'); not installing")  # fmt: skip
 
 
 def _crs(cs):
@@ -33,6 +47,7 @@ def _crs(cs):
 
 class ExpertPipe:
     def __init__(self, device, experts, ring_bytes):
+        check_kernel_tree()
         self.device = device
         ref = experts[0]
         rc = ref.ring_cores()

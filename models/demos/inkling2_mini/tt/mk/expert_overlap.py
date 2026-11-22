@@ -160,6 +160,21 @@ class ExpertOverlap:
             ttnn.deallocate(t)
         self.ep.release()
 
+    def abort(self, model):
+        """After an error mid-step: try to drain the queued request and stop the prefetcher, so the device can close
+        (a close with a queued request hangs). Best effort; restores the model either way."""
+        self.i = 0
+        try:
+            self.uninstall(model)
+        except Exception:
+            for L, e in self.orig.items():
+                model.layers[L].moe.fused = e
+            for L, lin in self.wrapped.items():
+                setattr(model.layers[L].attn, self.proj, lin)
+            for st in self.staged:
+                st.signal = None
+            raise
+
     def stats(self):
         return {
             "expert_calls": self.n,

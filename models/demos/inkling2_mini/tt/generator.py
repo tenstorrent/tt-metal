@@ -51,8 +51,14 @@ class Generator:
             from models.demos.inkling2_mini.tt.mk import router_stage
 
             self.router_stage = router_stage.install(m)  # next app's router weights into L1 (rides on the conv)
-            m.step()
-            m.step()
+            try:
+                m.step()
+                m.step()
+            except Exception:
+                if self.experts is not None:  # a queued prefetch request would hang the device close
+                    self.experts.abort(m)
+                    self.experts = None
+                raise
         ttnn.synchronize_device(self.device)
         self.trace, self.out = [], []
         for ph in range(ShortConv.PHASES):
