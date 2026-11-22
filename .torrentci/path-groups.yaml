@@ -1,0 +1,152 @@
+---
+# Path groups for dashboard member conditions (tenstorrent/torrentci#2809).
+# A port of .github/scripts/utils/find-changed-files.sh at main 0dddf9795bb
+# and the pr-gate llk-smoke-tests sku-allowlist. Update both together;
+# torrentci's scripts/path-conditions-compare diffs them on real PRs.
+#
+# Porting rules:
+# - Each bash `case` is one scan; its arms are rules in order, first match
+#   wins. Patterns are verbatim; only extglob `@(a|b)` is split. `*` crosses
+#   `/` in both, so `dir/*(*/)*.h` is `dir/*.h` and `dir/**/*.h` needs a `/`.
+# - The .gitmodules grep is a static submodule scan. The submodule/workflow
+#   and LLK fallbacks are `implies`. CMAKE is the only flag both set by a
+#   fallback and read raw (run-clang-tidy), so it alone has a `-raw` twin.
+# - Conditions apply to pull requests and merge-queue entries; branches
+#   (main) run every member. Any change under .torrentci/ runs every member.
+#
+# Supersets of the GHA gate (TorrentCI runs more, never less):
+# - `image`: inputs of the ci-build chain image. The script ignores them;
+#   every member on that image runs when they change.
+# - llk-smoke n150 runs on llk-perf even beside llk-blackhole (the
+#   allowlist picks p150b only there; a condition cannot negate).
+# - build-docs runs on docs-only changes (GHA skips it with asan-build).
+#
+# Conditions for PR Gate jobs not ported yet:
+#   runtime-examples:  {changed: [cmake, tt-metalium, image]}
+#   ttnn-examples:     {changed: [cmake, tt-metalium, tt-nn, image]}
+#   llk-smoke-p150b-*: {changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-blackhole, image]}
+#   build-docs:        {changed: [any-code, docs, image]}
+#   train-smoke:       {changed: [tt-train, image]}
+#   ci-build-image:    unconditional (a `needs` of the members on its image)
+path-groups:
+  scans:
+    # The main case.
+    - rules:
+        - {paths: ['tt-train/*CMakeLists.txt', 'tt-train/*.cmake', 'tt-train/*.cmake.in', 'cmake/packaging.cmake'],
+           groups: [cmake, cmake-raw, tt-train, any-code]}
+        - {paths: ['CMakeLists.txt', '**/CMakeLists.txt', '**/*.cmake', '*.cmake.in', '**/*.cmake.in', 'CMakePresets.json'],
+           groups: [cmake, cmake-raw, any-code]}
+        - {paths: ['tt_metal/sfpi-info.sh', 'tt_metal/sfpi-version'], groups: [cmake, cmake-raw, llk-sfpi, any-code]}
+        - {paths: ['tt_metal/ttsim-version'], groups: [ttsim-ci]}
+        - {paths: ['tests/pipeline_reorg/ttsim_merge_gate_tests.yaml', 'tests/pipeline_reorg/ttsim_sanity_tests.yaml',
+                   'tests/pipeline_reorg/ttsim_unit_tests.yaml', 'tests/pipeline_reorg/ttsim-skip-list.yaml'],
+           groups: [ttsim-ci]}
+        - {paths: ['.github/actions/fetch-ttsim/**', '.github/actions/setup-ttsim/**', '.github/workflows/ttsim-*.yaml'],
+           groups: [ttsim-ci, workflows]}
+        - {paths: ['.github/workflows/merge-gate.yaml'], groups: [ttsim-ci, workflows]}
+        - {paths: ['.github/time_budget.yaml'], groups: [ttsim-ci]}
+        - {paths: ['.clang-tidy', '**/.clang-tidy', 'cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml'],
+           groups: [clang-tidy-config]}
+        - {paths: ['tt_stl/**/*.h', 'tt_stl/**/*.hpp', 'tt_stl/**/*.c', 'tt_stl/**/*.cpp'], groups: [tt-metalium, any-code]}
+        - {paths: ['tt_metal/tt-llk/.github/**', 'tt_metal/tt-llk/tests/requirements.txt'], groups: [llk-ci]}
+        - {paths: ['tt_metal/tt-llk/tt_llk_wormhole_b0/**', 'tt_metal/hw/ckernels/wormhole_b0/**'], groups: [llk-wormhole]}
+        - {paths: ['tt_metal/tt-llk/tt_llk_blackhole/**', 'tt_metal/hw/ckernels/blackhole/**'], groups: [llk-blackhole]}
+        - {paths: ['tt_metal/tt-llk/common/**'], groups: [llk-common]}
+        - {paths: ['tt_metal/tt-llk/tt_llk_quasar/**', 'tt_metal/tt-llk/tests/sources/quasar/**',
+                   'tt_metal/tt-llk/tests/python_tests/quasar/**', 'tt_metal/hw/ckernels/quasar/**'],
+           groups: [llk-quasar]}
+        - {paths: ['tt_metal/tt-llk/tests/hardware_free/**', 'tt_metal/tt-llk/tests/run_hardware_free.sh'],
+           groups: [llk-hardware-free]}
+        - {paths: ['tt_metal/tt-llk/perf/**'], groups: [llk-hardware-free, tt-metalium, any-code]}
+        - {paths: ['tt_metal/tt-llk/tests/**/perf/**', 'tt_metal/tt-llk/tests/**/*perf*'], groups: [llk-perf]}
+        - {paths: ['tt_metal/tt-llk/tests/python_tests/helpers/**', 'tt_metal/tt-llk/tests/python_tests/conftest.py'],
+           groups: [llk-quasar, llk-tests]}
+        - {paths: ['tt_metal/tt-llk/tests/python_tests/fuser/**'], groups: [llk-quasar, llk-tests]}
+        - {paths: ['tt_metal/tt-llk/tools/include/perf_counters/**', 'tt_metal/tt-llk/tools/python/**'],
+           groups: [llk-quasar, llk-tests, llk-perf, tools, tt-metalium, any-code]}
+        - {paths: ['tt_metal/tt-llk/tests/**'], groups: [llk-tests]}
+        - {paths: ['.github/workflows/llk-*.yaml', '.github/workflows/build-quasar-perf.yml', '.github/scripts/llk-*.sh',
+                   'tests/pipeline_reorg/llk_unit_tests.yaml', 'tests/pipeline_reorg/llk_merge_gate_tests.yaml',
+                   'tests/pipeline_reorg/llk_pr_gate_tests.yaml', 'tests/pipeline_reorg/llk_hardware_free_tests.yaml'],
+           groups: [llk-ci]}
+        - {paths: ['tt_metal/**/*.h', 'tt_metal/**/*.hpp', 'tt_metal/**/*.inl', 'tt_metal/**/*.c', 'tt_metal/**/*.cpp',
+                   'tt_metal/**/*.cc', 'tt_metal/**/*.py'],
+           groups: [tt-metalium, any-code]}
+        - {paths: ['tests/tt_metal/tt_metal/llk/**'], groups: [llk-unit-tests, tt-metalium-tests, any-code]}
+        - {paths: ['ttnn/**/*.h', 'ttnn/**/*.hpp', 'ttnn/**/*.inl', 'ttnn/**/*.c', 'ttnn/**/*.cpp', 'ttnn/**/*.py'],
+           groups: [tt-nn, any-code]}
+        - {paths: ['tests/tt_metal/**/*.h', 'tests/tt_metal/**/*.hpp', 'tests/tt_metal/**/*.c', 'tests/tt_metal/**/*.cpp',
+                   'tests/tt_metal/**/*.py'],
+           groups: [tt-metalium-tests, any-code]}
+        - {paths: ['tests/ttnn/**/*.h', 'tests/ttnn/**/*.hpp', 'tests/ttnn/**/*.c', 'tests/ttnn/**/*.cpp', 'tests/ttnn/**/*.py'],
+           groups: [tt-nn-tests, any-code]}
+        - {paths: ['tt-train/tests/ops/smoke_tests.txt', 'tt-train/tests/ops/run_smoke_tests.sh',
+                   'tests/pipeline_reorg/train_pr_gate_tests.yaml', 'tests/pipeline_reorg/train_merge_gate_tests.yaml'],
+           groups: [tt-train, any-code]}
+        - {paths: ['tt-train/*.h', 'tt-train/*.hpp', 'tt-train/*.inl', 'tt-train/*.c', 'tt-train/*.cpp', 'tt-train/*.py',
+                   'tt-train/*.fbs'],
+           groups: [tt-train, any-code]}
+        - {paths: ['tools/**/*.h', 'tools/**/*.hpp', 'tools/**/*.inl', 'tools/**/*.c', 'tools/**/*.cpp', 'tools/**/*.py'],
+           groups: [tools, any-code]}
+        - {paths: ['tt_metal/python_env/requirements*.txt', 'tt_metal/python_env/create_venv.sh'], groups: [any-code]}
+        - {paths: ['tools/triage/requirements.txt'], groups: [tools, any-code]}
+        - {paths: ['models/README.md'], groups: [docs, model-charts]}
+        - {paths: ['docs/**', '**/*.rst', '**/*.md'], groups: [docs]}
+        - {paths: ['models/**'], groups: [models, any-code]}
+        - {paths: ['.github/workflows/build-artifact.yaml', '.github/workflows/build-docker-artifact.yaml'],
+           groups: [build-workflows, any-code]}
+        - {paths: ['.github/workflows/*.yaml', '.github/workflows/*.yml'], groups: [workflows]}
+    # run-clang-tidy's C/C++ scan and key-workflow list.
+    - rules:
+        - paths: ['tt_metal/*.h', 'tt_metal/*.hpp', 'tt_metal/*.c', 'tt_metal/*.cpp', 'tt_metal/*.cc', 'tt_metal/*.inl',
+                  'tt_metal/*.tpp', 'tt_metal/*.fbs',
+                  'ttnn/*.h', 'ttnn/*.hpp', 'ttnn/*.c', 'ttnn/*.cpp', 'ttnn/*.cc', 'ttnn/*.inl', 'ttnn/*.tpp', 'ttnn/*.fbs',
+                  'tests/tt_metal/*.h', 'tests/tt_metal/*.hpp', 'tests/tt_metal/*.c', 'tests/tt_metal/*.cpp',
+                  'tests/tt_metal/*.cc', 'tests/tt_metal/*.inl', 'tests/tt_metal/*.tpp', 'tests/tt_metal/*.fbs',
+                  'tests/ttnn/*.h', 'tests/ttnn/*.hpp', 'tests/ttnn/*.c', 'tests/ttnn/*.cpp', 'tests/ttnn/*.cc',
+                  'tests/ttnn/*.inl', 'tests/ttnn/*.tpp', 'tests/ttnn/*.fbs',
+                  'tests/scale_out/*.h', 'tests/scale_out/*.hpp', 'tests/scale_out/*.c', 'tests/scale_out/*.cpp',
+                  'tests/scale_out/*.cc', 'tests/scale_out/*.inl', 'tests/scale_out/*.tpp', 'tests/scale_out/*.fbs',
+                  'tests/tt_eager/*.h', 'tests/tt_eager/*.hpp', 'tests/tt_eager/*.c', 'tests/tt_eager/*.cpp',
+                  'tests/tt_eager/*.cc', 'tests/tt_eager/*.inl', 'tests/tt_eager/*.tpp', 'tests/tt_eager/*.fbs',
+                  'tt-train/*.h', 'tt-train/*.hpp', 'tt-train/*.c', 'tt-train/*.cpp', 'tt-train/*.cc', 'tt-train/*.inl',
+                  'tt-train/*.tpp', 'tt-train/*.fbs',
+                  'tools/*.h', 'tools/*.hpp', 'tools/*.c', 'tools/*.cpp', 'tools/*.cc', 'tools/*.inl', 'tools/*.tpp',
+                  'tools/*.fbs',
+                  'tt_stl/*.h', 'tt_stl/*.hpp', 'tt_stl/*.c', 'tt_stl/*.cpp', 'tt_stl/*.cc', 'tt_stl/*.inl', 'tt_stl/*.tpp',
+                  'tt_stl/*.fbs']
+          groups: [clang-tidy-source]
+        - {paths: ['tt_metal/llrt/hal/codegen/codegen.py', 'tt_metal/llrt/hal/codegen/codegen.sh'], groups: [clang-tidy-source]}
+        - {paths: ['.github/workflows/code-analysis.yaml', '.github/workflows/clang-tidy-reusable.yaml',
+                   '.github/workflows/pr-gate.yaml', '.github/workflows/build-docker-artifact.yaml',
+                   '.github/workflows/resolve-docker-pull-refs.yaml', 'cmake/clang-tidy-export-fixes-wrapper.sh'],
+           groups: [clang-tidy-key-workflow]}
+    # tt-metalium-api-headers-changed's scan.
+    - rules:
+        - {paths: ['tt_metal/api/*.h', 'tt_metal/api/*.hpp', 'tt_metal/api/*.tpp', 'tt_metal/api/*.inl',
+                   'tt_metal/sources.cmake', 'tt_metal/CMakeLists.txt', 'CMakePresets.json',
+                   '.github/workflows/code-analysis.yaml'],
+           groups: [tt-metalium-api-headers]}
+        - {paths: ['.github/api-include-cleaner.clang-tidy', '.github/scripts/utils/run_api_header_include_cleaner.py',
+                   '.github/scripts/utils/test_run_api_header_include_cleaner.py',
+                   '.github/scripts/utils/find-changed-files.sh', '.github/actions/find-changed-files/action.yml'],
+           groups: [tt-metalium-api-headers, clang-tidy-key-workflow]}
+    # The .gitmodules grep: a changed path that starts with a submodule path.
+    - rules:
+        - {paths: ['tt_metal/third_party/tracy*', 'tt_metal/third_party/umd*', 'tt_metal/third_party/tt-cluster-descriptors*'],
+           groups: [submodule]}
+    # Not in the script: the ci-build chain image's inputs (docker-bake.hcl
+    # target ci-build and the files its Dockerfile copies).
+    - rules:
+        - {paths: ['dockerfile/**', 'install_dependencies.sh', 'scripts/patch_activate_posix.sh',
+                   'docs/requirements-docs.txt', 'tests/sweep_framework/requirements-sweeps.txt',
+                   'tt_metal/python_env/requirements-dev.txt', 'models/tt_dit/utils/vbench-requirements.txt',
+                   'tools/triage/requirements.txt', 'tt_metal/sfpi-info.sh', 'tt_metal/sfpi-version'],
+           groups: [image]}
+  implies:
+    submodule: [tt-metalium, tt-nn, tt-metalium-tests, tt-nn-tests, tt-train, tools, any-code, cmake, tt-metalium-api-headers]
+    workflows: [tt-metalium, tt-nn, tt-metalium-tests, tt-nn-tests, tt-train, tools, any-code, cmake]
+    llk-wormhole: [tt-metalium, any-code]
+    llk-blackhole: [tt-metalium, any-code]
+    llk-common: [tt-metalium, any-code]
+    llk-sfpi: [tt-metalium, any-code]

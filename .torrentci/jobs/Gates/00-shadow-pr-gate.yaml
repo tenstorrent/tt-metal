@@ -1,19 +1,41 @@
 ---
 # Non-required shadow of the PR Gate, run on each merge-queue entry. Members
-# grow as PR Gate jobs are ported.
+# grow as PR Gate jobs are ported. Each `when` is the job's pr-gate.yaml
+# condition over .torrentci/path-groups.yaml (tenstorrent/torrentci#2809);
+# on main every member runs.
 dashboards:
   - id: shadow-pr-gate
     name: Shadow PR Gate
     description: "Shadow PR Gate: a non-blocking shadow of the PR Gate, run on each merge-queue entry; its checks are not required"
     report: {check: true}
     members:
-      - job: asan-build
-      - job: smoke-cpu-asan
-      - job: smoke-n150-asan
-      - job: ttnn-smoke-n150-asan
+      - {job: asan-build, when: {changed: [any-code, image]}}
+      # runtime-smoke-tests (cpu-only and n150 legs).
+      - {job: smoke-cpu-asan, when: {changed: [cmake, tt-metalium, tt-metalium-tests, tt-nn-tests, image]}}
+      - {job: smoke-n150-asan, when: {changed: [cmake, tt-metalium, tt-metalium-tests, tt-nn-tests, image]}}
+      - {job: ttnn-smoke-n150-asan, when: {changed: [cmake, tt-metalium, tt-nn, tt-metalium-tests, tt-nn-tests, image]}}
       - job: llk-hardware-free
-      - job: llk-smoke-n150-g1
-      - job: llk-smoke-n150-g2
+        when: {changed: [llk-wormhole, llk-blackhole, llk-common, llk-sfpi, llk-tests, llk-ci, llk-perf, llk-hardware-free,
+                         llk-quasar]}
+      # llk-smoke-tests with the sku-allowlist's wh_n150_civ2.
+      - {job: llk-smoke-n150-g1, when: {changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-wormhole, llk-perf, image]}}
+      - {job: llk-smoke-n150-g2, when: {changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-wormhole, llk-perf, image]}}
       - job: verify-time-budgets
+      # code-analysis: run-clang-tidy.
       - job: clang-tidy
+        when: {changed: [clang-tidy-source, cmake-raw, clang-tidy-config, llk-wormhole, llk-blackhole, llk-common, llk-sfpi,
+                         submodule, clang-tidy-key-workflow, image]}
+      # code-analysis include cleaner: run-clang-tidy and api-headers-changed.
       - job: include-cleaner
+        when:
+          changed:
+            - {all: [tt-metalium-api-headers, clang-tidy-source]}
+            - {all: [tt-metalium-api-headers, cmake-raw]}
+            - {all: [tt-metalium-api-headers, clang-tidy-config]}
+            - {all: [tt-metalium-api-headers, llk-wormhole]}
+            - {all: [tt-metalium-api-headers, llk-blackhole]}
+            - {all: [tt-metalium-api-headers, llk-common]}
+            - {all: [tt-metalium-api-headers, llk-sfpi]}
+            - {all: [tt-metalium-api-headers, submodule]}
+            - {all: [tt-metalium-api-headers, clang-tidy-key-workflow]}
+            - image
