@@ -416,6 +416,7 @@ def chain_segment(
 # Products stored FP64 (small, or exact for a downstream FP64 consumer); every other float product is stored fp32.
 KEEP_FP64 = ("attn_output_3",)
 SAMPLED = ("sampled_rows", "attn_output_3")  # products of the sampled rows only
+KEYS = ("latent", "kpe", "index_key")  # per-row products held in the state files
 
 
 def storable(products: dict) -> dict:
@@ -582,9 +583,13 @@ def load_products(run_dir: Path, names: list[str], start: int = 0, end: int | No
     parts: dict[str, list[torch.Tensor]] = {n: [] for n in names}
     for index in range(start // seg, -(-end // seg)):
         lo = index * seg
-        data = torch.load(segment_path(run_dir, index), weights_only=True)
-        if any(n in ("latent", "kpe", "index_key") for n in names):
-            data.update(torch.load(state_path(run_dir, index), weights_only=True)["keys"])
+        # Memory-mapped, and only the files holding a requested name: a segment file is ~0.6 GB at 4096 rows, so a
+        # full read of 255 of them is a ~160 GB pass for a few columns (review r1 m1). Slices are copied by the cat.
+        data = {}
+        if any(n not in KEYS for n in names):
+            data.update(torch.load(segment_path(run_dir, index), weights_only=True, mmap=True))
+        if any(n in KEYS for n in names):
+            data.update(torch.load(state_path(run_dir, index), weights_only=True, mmap=True)["keys"])
         for n in names:
             parts[n].append(data[n][max(start, lo) - lo : end - lo])
     return {n: torch.cat(v) for n, v in parts.items()}
@@ -594,7 +599,10 @@ def load_sampled(run_dir: Path) -> dict[str, torch.Tensor]:
     """The sampled-row products of every complete segment: ``sampled_rows`` (absolute rows, ascending) and
     ``attn_output_3`` (FP64 ``[rows, hidden]``)."""
     manifest = json.loads((Path(run_dir) / MANIFEST).read_text())
-    parts = [torch.load(segment_path(run_dir, i), weights_only=True) for i in range(len(manifest["segments"]))]
+    parts = []
+    for i in range(len(manifest["segments"])):
+        p = torch.load(segment_path(run_dir, i), weights_only=True, mmap=True)  # only the sampled rows are read
+        parts.append({k: p[k].clone() for k in SAMPLED})
     return {k: torch.cat([p[k] for p in parts]) for k in SAMPLED}
 
 
