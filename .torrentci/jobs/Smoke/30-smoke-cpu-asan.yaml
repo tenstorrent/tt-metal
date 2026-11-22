@@ -36,6 +36,7 @@ jobs:
             - cat .torrentci/packages.json 2>/dev/null || true
             - dpkg -s tt-metalium tt-metalium-validation | grep -e '^Package' -e '^Version'
             - mkdir -p test-reports
+            # find: the UMD tree layout moves between UMD bumps.
             - >-
               TT_METAL_MOCK_CLUSTER_DESC_PATH=$(find /usr/libexec/tt-metalium/tt_metal/third_party/umd
               -path '*/cluster_descriptor_examples/wormhole_N150.yaml' -print -quit)
