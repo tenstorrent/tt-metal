@@ -73,7 +73,8 @@ void kernel_main() {
         const uint32_t out_addr = get_arg_val<uint32_t>(9), out_tile = get_arg_val<uint32_t>(10);
         const uint32_t out_es = get_arg_val<uint32_t>(11);
         cb_wait_front(16, T);
-        rowio::scatter_row(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(16), 0, ntc / 2);
+        constexpr bool dram = get_named_compile_time_arg_val("split_out") != 2;  // 2: L1-interleaved output
+        rowio::scatter_row<dram>(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(16), 0, ntc / 2);
         noc_async_write_barrier();
     }
 }

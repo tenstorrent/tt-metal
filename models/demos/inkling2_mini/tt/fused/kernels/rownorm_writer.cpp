@@ -16,6 +16,7 @@ void kernel_main() {
 
     cb_wait_front(cb_np, T);
     // the reader scatters tiles 0 .. ntc/2 (E10d: both RISCs)
-    rowio::scatter_row(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(cb_np), ntc / 2, ntc);
+    constexpr bool dram = get_named_compile_time_arg_val("split_out") != 2;  // 2: L1-interleaved output
+    rowio::scatter_row<dram>(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(cb_np), ntc / 2, ntc);
     noc_async_write_barrier();
 }

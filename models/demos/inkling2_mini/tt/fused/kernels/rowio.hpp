@@ -78,6 +78,7 @@ FORCE_INLINE void gather_row(
 
 // Scatter dense L1 src (C = 32 * ntc elements, es bytes each) into row r of a row-form DRAM tensor. DRAM writes
 // need 16B alignment only, which every chunk has. Caller issues the write barrier.
+template <bool DRAM = true>  // false: an L1-interleaved output
 // [j0, j1): only these tiles (both data-movement RISCs can each scatter a part).
 FORCE_INLINE void scatter_row(
     uint32_t base,
@@ -89,7 +90,7 @@ FORCE_INLINE void scatter_row(
     uint32_t j0 = 0,
     uint32_t j1 = 0xffffffff) {
     j1 = j1 < ntc ? j1 : ntc;
-    const InterleavedAddrGen<true> dst = {.bank_base_address = base, .page_size = tile_bytes};
+    const InterleavedAddrGen<DRAM> dst = {.bank_base_address = base, .page_size = tile_bytes};
     const uint32_t off = row_offset(r, es);
     const uint32_t chunk = 16 * es;
     for (uint32_t j = j0; j < j1; ++j) {
