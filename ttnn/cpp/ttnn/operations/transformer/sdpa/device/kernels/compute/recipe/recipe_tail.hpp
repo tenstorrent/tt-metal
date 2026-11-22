@@ -123,14 +123,57 @@ static uint32_t recipe_mask_row0;
 constexpr uint32_t kRecipeRingBlockTableTiles = 64;
 static uint8_t recipe_ring_tile_valid[kRecipeRingBlockTableTiles];
 
-// Block mask: whether K tiles [t0, t0 + n) of the chunk hold no valid key.
-ALWI bool recipe_ring_tiles_empty(uint32_t t0, uint32_t n) {
+// Block mask rows (recipe::ring_block_tiles): per Q tile row of the chunk, its kept blocks (bit j: K tiles
+// [j * ring_block_tiles, (j + 1) * ring_block_tiles)), set by the wrapper; a row sees tile t's valid columns only if
+// it keeps the tile's block. A row that keeps no block of the chunk is untouched by the fused chunk, and its scores
+// are fully masked on the reduce path. Rows whose state has seen no key yet (recipe_ring_rows_fresh, bit per row:
+// the wrapper zeroed O and l and set the max to the masked value) take the reduce path within the fused chunk (a
+// redo), whose rescale by exp(scale (masked - m)) = 0 wipes the initial state.
+static uint32_t recipe_ring_row_blocks[32];
+// K tiles per block (a nonzero divisor in builds without block mask rows).
+constexpr uint32_t kRecipeRingBlockDiv = recipe::ring_block_tiles != 0 ? recipe::ring_block_tiles : 1;
+static uint32_t recipe_ring_rows_fresh;
+// The fused chunk's groups (bit g) that keep no block of the chunk / have a fresh row (set per chunk).
+static uint32_t recipe_ring_skip_groups;
+static uint32_t recipe_ring_fresh_groups;
+// Per fused-chunk group, its started row-sum columns (the first computed QK piece's width; 0: none yet).
+static uint8_t recipe_ring_psum_w[32];
+// The fused chunk's K tiles are all full (no partial block tile): a subblock whose blocks a group keeps runs whole.
+static bool recipe_ring_full_tiles;
+
+// Block mask rows: a fused-chunk group whose QK runs (neither skipped nor fresh), and a check unit with one (a unit
+// with none issues no check and reads no verdict). Free functions, not lambdas: a fused-chunk lambda calling a local
+// lambda captures it, which changes the closures of builds without block mask rows.
+ALWI bool recipe_ring_group_live(uint32_t g) {
+    return (((recipe_ring_skip_groups | recipe_ring_fresh_groups) >> g) & 1u) == 0;
+}
+ALWI bool recipe_ring_unit_live(uint32_t g0, uint32_t n) {
+    const uint32_t unit = ((1u << n) - 1u) << g0;
+    return (unit & ~(recipe_ring_skip_groups | recipe_ring_fresh_groups)) != 0;
+}
+
+// Block mask rows: the kept blocks of rows [r0, r0 + h).
+ALWI uint32_t recipe_ring_rows_blocks(uint32_t r0, uint32_t h) {
+    uint32_t bits = 0;
+    for (uint32_t r = r0; r < r0 + h; ++r) {
+        bits |= recipe_ring_row_blocks[r];
+    }
+    return bits;
+}
+
+// Block mask rows: whether rows [r0, r0 + h) have a masked key in K tiles [t0, t0 + n) (a partial tile, or a tile one
+// of the rows does not keep).
+ALWI bool recipe_ring_tiles_masked(uint32_t r0, uint32_t h, uint32_t t0, uint32_t n) {
+    uint32_t all = 0xffffffffu;
+    for (uint32_t r = r0; r < r0 + h; ++r) {
+        all &= recipe_ring_row_blocks[r];
+    }
     for (uint32_t t = t0; t < t0 + n; ++t) {
-        if (recipe_ring_tile_valid[t] != 0) {
-            return false;
+        if (recipe_ring_tile_valid[t] < 32 || ((all >> (t / kRecipeRingBlockDiv)) & 1u) == 0) {
+            return true;
         }
     }
-    return true;
+    return false;
 }
 
 ALWI uint32_t recipe_valid_k_columns(uint32_t tile) {
@@ -212,6 +255,12 @@ ALWI void mask_recipe_tail_body(uint32_t col_offset, uint32_t width, uint32_t he
         for (uint32_t row = 0; row < height; ++row) {
             for (uint32_t col = 0; col < width; ++col) {
                 uint32_t valid = recipe_valid_k_columns(recipe_k_tile_offset + col_offset + col);
+                if constexpr (recipe::ring && recipe::ring_mask == 3) {
+                    const uint32_t block = (col_offset + col) / kRecipeRingBlockDiv;
+                    if (((recipe_ring_row_blocks[recipe_mask_row0 + row] >> block) & 1u) == 0) {
+                        valid = 0;
+                    }
+                }
                 const uint32_t dst = row * width + col;
                 if constexpr (recipe::ring) {
                     int32_t lo = -kRecipeBandOpen, hi = kRecipeBandOpen;

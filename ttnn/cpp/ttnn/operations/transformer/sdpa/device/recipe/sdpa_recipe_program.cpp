@@ -300,6 +300,7 @@ ProgramDescriptor recipe_compute_program(
              {"recipe_sink_rows", 0},
              {"recipe_ring", 0},
              {"recipe_ring_mask", 0},
+             {"recipe_ring_block_tiles", 0},
              {"recipe_ring_window", 0},
              {"recipe_ring_rotation", 0},
              {"recipe_ring_circular", 0},

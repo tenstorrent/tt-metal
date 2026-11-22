@@ -820,7 +820,9 @@ template <
     uint32_t cb_col_identity,
     uint32_t cb_recip_scratch,
     uint32_t cb_normalized_out,
-    bool independent_q_release = false>
+    bool independent_q_release = false,
+    // false: never dispatch to the fused chunk (a wrapper that runs its fused chunks itself, only masked chunks here)
+    bool fused_dispatch = true>
 static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     AccumulatorHalf& prev, AccumulatorHalf& cur, bool is_last_iter, bool is_first_iter, bool release_q = false) {
     constexpr uint32_t KT_stride = Sk_chunk_t;
@@ -931,7 +933,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     }
     // Wormhole runs its fused chunks from the segment loop (recipe_fused_chunk_step); key-range calls run their edge
     // chunks on the reduce path.
-    if constexpr (recipe::fused_active && !recipe::wormhole) {
+    if constexpr (recipe::fused_active && !recipe::wormhole && fused_dispatch) {
         if (!is_first_iter && !recipe_chunk_masked() && !recipe_ring_chunk_reduce()) {
             // MLA-width rings (a narrower V than Q/K, D >= 512) also size-optimize the PACK copy: their pack image
             // put the program 704 B over the kernel config buffer (ring_mla mla_100k, Q160/K320, BH).
