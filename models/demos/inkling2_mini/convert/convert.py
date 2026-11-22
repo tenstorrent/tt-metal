@@ -211,6 +211,16 @@ def convert_layer(
 ):
     """Writes every §4 tensor of one layer; experts in ``expert_dtype`` unless ``dtype_map`` overrides. Experts
     whose gate_up and down share a dtype in ``stick_dtypes`` are stored in the stick layout (convert/stick.py)."""
+    convert_layer_dense(ck, w, layer)
+    p = f"{P}layers.{layer}."
+    for name, src_name, is_w13 in (("experts.w_gate_up", "w13", True), ("experts.w_down", "w2", False)):
+        dtype = expert_tensor_dtype(dtype_map or {}, layer, name, expert_dtype)
+        convert_experts(ck, w, layer, name, f"{p}mlp.experts.{src_name}_weight", is_w13, dtype, store)
+    stick_layer(w, layer, stick_dtypes)
+
+
+def convert_layer_dense(ck: Checkpoint, w: Writer, layer: int):
+    """Every §4 tensor of one layer except the routed experts."""
     p = f"{P}layers.{layer}."
     is_global = layer in GLOBAL_LAYERS
 
@@ -267,10 +277,6 @@ def convert_layer(
             put(f"msg_gate.{m}.down", down.T, "BF16", "TILE", src[:1])
             put(f"msg_gate.{m}.forget", forget.float().T, "FP32", "TILE", src[1:2])
             put(f"msg_gate.{m}.gain", gain.float().T, "FP32", "TILE", src[2:])
-    for name, src_name, is_w13 in (("experts.w_gate_up", "w13", True), ("experts.w_down", "w2", False)):
-        dtype = expert_tensor_dtype(dtype_map or {}, layer, name, expert_dtype)
-        convert_experts(ck, w, layer, name, f"{p}mlp.experts.{src_name}_weight", is_w13, dtype, store)
-    stick_layer(w, layer, stick_dtypes)
 
 
 def stick_layer(w: Writer, layer: int, stick_dtypes) -> bool:
