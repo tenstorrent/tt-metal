@@ -40,7 +40,7 @@ struct RopeChainDeviceOperation {
         uint32_t group_heads;  // >= 1
         tt::tt_metal::MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
-        std::optional<CoreCoord> max_grid;
+        std::optional<tt::tt_metal::CoreCoord> max_grid;
     };
 
     struct tensor_args_t {
@@ -119,6 +119,6 @@ ttnn::Tensor rotary_embedding_indexed_chain(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output_tensor,
-    std::optional<CoreCoord> max_grid);
+    std::optional<tt::tt_metal::CoreCoord> max_grid);
 
 }  // namespace ttnn::prim::bringup

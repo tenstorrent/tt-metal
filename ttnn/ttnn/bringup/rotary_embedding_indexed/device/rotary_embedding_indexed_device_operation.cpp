@@ -964,7 +964,7 @@ ttnn::Tensor rotary_embedding_indexed(
     bool row_major_output,
     bool uniform,
     const std::optional<ttnn::Tensor>& output_tensor,
-    std::optional<CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     using OperationType = ttnn::operations::bringup::rotary_embedding_indexed::RotaryEmbeddingIndexedDeviceOperation;
 
     auto arch = input.storage_type() == StorageType::DEVICE ? input.device()->arch() : ttnn::GetDefaultDevice()->arch();

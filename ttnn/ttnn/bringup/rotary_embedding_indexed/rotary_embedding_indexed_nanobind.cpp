@@ -124,7 +124,7 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const std::optional<Tensor>&,
                 bool,
                 const std::optional<Tensor>&,
-                std::optional<CoreCoord>,
+                std::optional<tt::tt_metal::CoreCoord>,
                 uint32_t,
                 const std::optional<tt::tt_metal::Layout>&,
                 const std::optional<tt::tt_metal::DataType>&,

@@ -43,7 +43,7 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         // Bring-up option max_grid (deepseek_v41_flash_d_p FIX.15, agent rule 18): the op runs on the rectangle
         // (0, 0) .. (max_grid.x - 1, max_grid.y - 1) of the device's compute grid. Default (none) = the whole grid.
         // Hashed when set.
-        std::optional<CoreCoord> max_grid = std::nullopt;
+        std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt;
         // Write the output row-major (each row the prefix channels then the rotated ones), for a consumer that
         // reads rows, so no untilize follows. Needs concat_prefix and a rotary region covering the whole input.
         bool row_major_output = false;
@@ -137,6 +137,6 @@ ttnn::Tensor rotary_embedding_indexed(
     bool row_major_output = false,
     bool uniform = false,
     const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
-    std::optional<CoreCoord> max_grid = std::nullopt);
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
 
 }  // namespace ttnn::prim::bringup

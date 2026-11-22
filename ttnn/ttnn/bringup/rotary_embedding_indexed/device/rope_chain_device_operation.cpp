@@ -55,7 +55,7 @@ Geometry geometry(
     return g;
 }
 
-CoreCoord op_grid(const RopeChainDeviceOperation::operation_attributes_t& args, IDevice* device) {
+tt::tt_metal::CoreCoord op_grid(const RopeChainDeviceOperation::operation_attributes_t& args, IDevice* device) {
     auto grid = device->compute_with_storage_grid_size();
     if (args.max_grid.has_value()) {
         grid.x = std::max<std::size_t>(1, std::min<std::size_t>(grid.x, args.max_grid->x));
@@ -404,7 +404,7 @@ ttnn::Tensor rotary_embedding_indexed_chain(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output_tensor,
-    std::optional<CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
     using OperationType = ttnn::operations::bringup::rotary_embedding_indexed::RopeChainDeviceOperation;
     // The stock op's default compute config (HiFi4, fp32 DEST): the rotated values equal its own.
     auto kernel_config_val = init_device_compute_kernel_config(

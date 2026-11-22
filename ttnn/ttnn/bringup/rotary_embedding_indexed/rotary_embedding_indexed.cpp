@@ -25,7 +25,7 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<ttnn::Tensor>& concat_prefix,
     bool uniform,
     const std::optional<ttnn::Tensor>& output_tensor,
-    std::optional<CoreCoord> max_grid,
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
     uint32_t input_heads,
     const std::optional<tt::tt_metal::Layout>& output_layout,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
