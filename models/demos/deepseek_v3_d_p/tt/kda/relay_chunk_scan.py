@@ -174,7 +174,8 @@ class RelayChunkScan:
         num_chunks = local_rows // ttnn.TILE_SIZE
         if num_chunks == 0:
             raise ValueError(f"relay prefix needs at least one chunk of {ttnn.TILE_SIZE} rows, has {local_rows} rows")
-        budget = min(max_cores, len(cores) - senders - relay_count)
+        # max_cores bounds the program's matmul cores, the relay cores' with the correction cores'.
+        budget = min(max_cores, len(cores) - senders) - relay_count
 
         def fits(d):
             per_column = (grid.y - first_row) // d
