@@ -268,6 +268,16 @@ void kernel_main() {
         const auto up_acc =
             TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
+#ifdef STACKED_EXPERTS
+        // Stacked weights: expert g's gate / up are the column halves of its [K, 2*hidden] block of the gate_up
+        // tensor, its down block follows the previous experts' blocks.
+        [[maybe_unused]] const uint32_t gate_page_off = global_expert_id * GU_EXPERT_TILES;
+        [[maybe_unused]] const uint32_t up_page_off = gate_page_off + UP_COL_TILES;
+        [[maybe_unused]] const uint32_t down_page_off = global_expert_id * D_EXPERT_TILES;
+        [[maybe_unused]] constexpr uint32_t gu_row_stride = GU_ROW_TILES;
+#else
+        [[maybe_unused]] constexpr uint32_t gate_page_off = 0, up_page_off = 0, down_page_off = 0, gu_row_stride = 0;
+#endif
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
         const uint32_t count_value =
@@ -320,7 +330,9 @@ void kernel_main() {
                                 up_col0,
                                 up_col_end,
                                 l1_w_up,
-                                up_tile_bytes);
+                                up_tile_bytes,
+                                gu_row_stride,
+                                up_page_off);
                             l1_w_up += per_core_N_gu * up_tile_bytes;
                         }
                         noc_up.async_read_barrier();
@@ -426,7 +438,9 @@ void kernel_main() {
                                     down_col0,
                                     down_col_end,
                                     l1_w,
-                                    down_tile_bytes);
+                                    down_tile_bytes,
+                                    0,
+                                    down_page_off);
                             }
                             l1_w += per_core_N_d * down_tile_bytes;
                         }

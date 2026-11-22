@@ -459,6 +459,16 @@ void kernel_main() {
         const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
 
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
+#ifdef STACKED_EXPERTS
+        // Stacked weights: expert g's gate / up are the column halves of its [K, 2*hidden] block of the gate_up
+        // tensor, its down block follows the previous experts' blocks.
+        [[maybe_unused]] const uint32_t gate_page_off = global_expert_id * GU_EXPERT_TILES;
+        [[maybe_unused]] const uint32_t up_page_off = gate_page_off + UP_COL_TILES;
+        [[maybe_unused]] const uint32_t down_page_off = global_expert_id * D_EXPERT_TILES;
+        [[maybe_unused]] constexpr uint32_t gu_row_stride = GU_ROW_TILES;
+#else
+        [[maybe_unused]] constexpr uint32_t gate_page_off = 0, up_page_off = 0, down_page_off = 0, gu_row_stride = 0;
+#endif
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
         const uint32_t count_value =
@@ -859,7 +869,9 @@ void kernel_main() {
                         gate_col0,
                         gate_col_end,
                         l1_w_gate,
-                        gate_tile_bytes);
+                        gate_tile_bytes,
+                        gu_row_stride,
+                        gate_page_off);
                     l1_w_gate += per_core_N_gu * gate_tile_bytes;
                 }
                 // `up` slot. LEGACY: reader reads it on NoC 0. UP_SPLIT: writer
@@ -882,7 +894,9 @@ void kernel_main() {
                             gate_col0,
                             gate_col_end,
                             l1_w_up,
-                            up_tile_bytes);
+                            up_tile_bytes,
+                            gu_row_stride,
+                            up_page_off);
                         l1_w_up += per_core_N_gu * up_tile_bytes;
                     }
                 }
@@ -1068,7 +1082,16 @@ void kernel_main() {
                     const uint32_t row = kb * in0_block_w_d + k;
                     if (row < K_down_tiles) {
                         DRuns::read(
-                            noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
+                            noc_read,
+                            down_acc,
+                            row,
+                            N_down_tiles_full,
+                            down_col0,
+                            down_col_end,
+                            l1_w,
+                            down_tile_bytes,
+                            0,
+                            down_page_off);
                     }
                     l1_w += per_core_N_d * down_tile_bytes;
                 }

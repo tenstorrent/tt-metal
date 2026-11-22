@@ -182,7 +182,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // than one expert's region. K still comes from x's last dim (emb).
     const uint32_t M_tiles_full = op.m_tiles;
     const uint32_t K_gate_tiles = x_shape[-1] / TILE;          // = N_gate K = emb / TILE
-    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;  // = hidden / TILE
+    // Stacked experts: gate_projs[0] is the whole [.., E, K, 2*hidden] gate_up tensor (gate = left half).
+    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE / (op.stacked_experts ? 2 : 1);  // = hidden / TILE
     const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
     const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
 
@@ -327,8 +328,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // Single source of truth for the dst-accumulator mode: drives DST_CAPACITY,
     // the ComputeConfig below, and (via -DFP32_DEST_ACC_EN) the compute kernel's
     // SwiGLU-OAI dst budget + SFPU fp32-dest template, so they can't drift.
-    constexpr bool kFp32DestAccEn = false;
-    constexpr uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
+    // Precise mode (compute_kernel_config.fp32_dest_acc_en): fp32 DEST and K-loop partials, bf16 activations and
+    // intermediates. Default: bf16 DEST, bf16 partials, bf8_b activations / intermediates.
+    const bool kFp32DestAccEn = op.precise;
+    const uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
     const uint32_t gu_out_subblock_h = 1;
     uint32_t gu_sub_w = 1;
     for (uint32_t cand = DST_CAPACITY; cand >= 1; --cand) {
@@ -356,7 +359,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // ceil(112/11) on the 11-wide grid) is the shape that lands there, and no divisor can save
     // it -- so below the cliff, give up the exact tiling and take a RAGGED last subblock
     // instead. Shapes whose divisor rule already clears 3 keep their exact tiling untouched.
-    if (d_sub_w < 3) {
+    // A ROW_MAJOR output needs whole subblocks per row (below), so it keeps the exact tiling (precise mode with
+    // its 4-tile DST on per_core_N_d = 7 lands here).
+    if (d_sub_w < 3 && !op.output_row_major) {
         d_sub_w = std::min<uint32_t>(DST_CAPACITY, per_core_N_d);
     }
     const uint32_t d_out_subblock_w = d_sub_w;
@@ -421,13 +426,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     //   * intermediates (gate/up_intermed, activated) are Bfp8_b: post-activation
     //     per-element values feeding the next matmul, not accumulators, so
     //     1KB/tile (half the bf16 cost) is enough and saves L1.
-    const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
-    const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
-    const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
+    const tt::DataFormat intermed_df = kFp32DestAccEn ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b;
+    const tt::DataFormat partials_gu_df = kFp32DestAccEn ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const tt::DataFormat partials_d_df = partials_gu_df;
 
     // See in0_x_ts above: cb_in0_x is bf8_b on the row-major path (tilize output),
     // else it matches x's dtype (bf8_b on the TILE path).
-    const tt::DataFormat in0_x_df = op.x_is_row_major ? tt::DataFormat::Bfp8_b : x_df;
+    const tt::DataFormat in0_x_df =
+        op.x_is_row_major ? (kFp32DestAccEn ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b) : x_df;
     const uint32_t in0_x_tile_size = tt::tile_size(in0_x_df);
     const uint32_t gate_tile_size = tt::tile_size(gate_df);
     const uint32_t up_tile_size = tt::tile_size(up_df);
@@ -1025,6 +1031,19 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
         reader_defines.emplace_back("FUSE_BIAS", "1");
     }
+    // Stacked experts: page offsets of expert g's blocks (g = global expert id) and the gate_up row stride.
+    tt::tt_metal::KernelDescriptor::Defines stacked_defines;
+    if (op.stacked_experts) {
+        const uint32_t gu_row_tiles = gate_shape[-1] / TILE;
+        stacked_defines.emplace_back("STACKED_EXPERTS", "1");
+        stacked_defines.emplace_back("GU_ROW_TILES", std::to_string(gu_row_tiles));
+        stacked_defines.emplace_back("UP_COL_TILES", std::to_string(N_gate_tiles_full));
+        stacked_defines.emplace_back("GU_EXPERT_TILES", std::to_string((gate_shape[-2] / TILE) * gu_row_tiles));
+        stacked_defines.emplace_back("D_EXPERT_TILES", std::to_string(K_down_tiles * N_down_tiles_full));
+        for (const auto& d : stacked_defines) {
+            reader_defines.push_back(d);
+        }
+    }
     // x_row_index accessor: last in the reader's accessor stream (after the optional bias block).
     if (op.x_indexed) {
         tt::tt_metal::TensorAccessorArgs(t.x_row_index->buffer()).append_to(reader_ct_args);
@@ -1116,6 +1135,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.core_ranges = core_range_set;
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+    writer_kernel_desc.defines = stacked_defines;
 
     // Compute kernel compile-time args: positional + named CB ids.
     std::vector<uint32_t> compute_ct_args = {

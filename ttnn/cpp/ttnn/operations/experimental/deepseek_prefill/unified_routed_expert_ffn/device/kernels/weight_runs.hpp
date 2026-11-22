@@ -43,6 +43,9 @@ struct WeightRuns {
     // `l1_base + (j - j0) * page_bytes`. Columns are the free dim, so callers pass jend clipped to
     // the tensor's real N and the phantom columns past it stay UNWRITTEN — the guard the per-tile
     // loops used to spell out per column. Reads are ISSUED only; the caller owns the barrier.
+    //
+    // row_stride / page_off (stacked expert weights): page of (row, j) = page_off + row * row_stride + j; row_stride 0
+    // means n_tiles_full (one expert's own tensor).
     template <class Acc>
     static FORCE_INLINE void read(
         const Noc& noc,
@@ -52,8 +55,10 @@ struct WeightRuns {
         uint32_t j0,
         uint32_t jend,
         uint32_t l1_base,
-        uint32_t page_bytes) {
-        const uint32_t page_row_base = row * n_tiles_full;
+        uint32_t page_bytes,
+        uint32_t row_stride = 0,
+        uint32_t page_off = 0) {
+        const uint32_t page_row_base = page_off + row * (row_stride ? row_stride : n_tiles_full);
         uint32_t j = j0;
         uint32_t off = 0;
         while (j < jend) {

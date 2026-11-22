@@ -57,7 +57,7 @@ void validate_compute_kernel_config(const std::optional<ttnn::DeviceComputeKerne
     TT_FATAL(
         config->math_fidelity == tt::tt_metal::MathFidelity::LoFi,
         "unified_routed_expert_ffn runs at LoFi only; pass math_fidelity=LoFi");
-    TT_FATAL(!config->fp32_dest_acc_en, "unified_routed_expert_ffn needs fp32_dest_acc_en=False (bf16 DEST)");
+    // fp32_dest_acc_en=True selects the precise mode (fp32 DEST and partials, bf16 activations / intermediates).
     TT_FATAL(!config->math_approx_mode, "unified_routed_expert_ffn needs math_approx_mode=False");
 }
 }  // namespace
@@ -127,11 +127,33 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         x_shape[-1],
         gate_shape[-2],
         up_shape[-2]);
-    TT_FATAL(
-        gate_shape[-1] == up_shape[-1] && gate_shape[-1] == down_shape[-2],
-        "gate/up N ({}) must equal down K ({})",
-        gate_shape[-1],
-        down_shape[-2]);
+    if (op.stacked_experts) {
+        // One [.., E, K, 2*hidden] gate_up tensor and one [.., E, hidden, emb] down tensor in every slot.
+        const auto& ref_gu = t.gate_projs[0];
+        const auto& ref_d = t.down_projs[0];
+        TT_FATAL(gate_shape.rank() >= 3 && down_shape.rank() >= 3, "stacked experts need [.., E, K, N] weights");
+        TT_FATAL(
+            gate_shape[-1] == 2 * down_shape[-2],
+            "stacked gate_up N ({}) must be 2x down K ({})",
+            gate_shape[-1],
+            down_shape[-2]);
+        TT_FATAL(gate_shape[-3] == down_shape[-3], "stacked gate_up / down expert counts differ");
+        TT_FATAL(down_shape[-2] % tt::constants::TILE_HEIGHT == 0, "stacked hidden ({}) must be tile-aligned", down_shape[-2]);
+        for (uint32_t e = 0; e < op.experts_per_chip; ++e) {
+            TT_FATAL(
+                t.gate_projs[e].buffer() == ref_gu.buffer() && t.up_projs[e].buffer() == ref_gu.buffer() &&
+                    t.down_projs[e].buffer() == ref_d.buffer(),
+                "stacked experts: every gate/up slot must hold the gate_up tensor and every down slot the down tensor");
+        }
+        TT_FATAL(
+            is_dram_interleaved(ref_gu) && is_dram_interleaved(ref_d), "stacked expert weights must be DRAM-interleaved");
+    } else {
+        TT_FATAL(
+            gate_shape[-1] == up_shape[-1] && gate_shape[-1] == down_shape[-2],
+            "gate/up N ({}) must equal down K ({})",
+            gate_shape[-1],
+            down_shape[-2]);
+    }
     TT_FATAL(down_shape[-1] == x_shape[-1], "down N ({}) must equal x K ({})", down_shape[-1], x_shape[-1]);
 
     constexpr uint32_t TILE = tt::constants::TILE_HEIGHT;
@@ -507,7 +529,10 @@ ttnn::Tensor unified_routed_expert_moe(
             .l1_end = l1_end,
             .x_indexed = x_row_index.has_value(),
             .output_row_major = output.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-            .zero_output_row = zero_output_row},
+            .zero_output_row = zero_output_row,
+            .stacked_experts = !gate_projs.empty() && !up_projs.empty() &&
+                               gate_projs[0].buffer() == up_projs[0].buffer(),
+            .precise = compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

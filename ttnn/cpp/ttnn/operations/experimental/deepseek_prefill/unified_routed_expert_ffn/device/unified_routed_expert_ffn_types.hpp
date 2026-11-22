@@ -121,6 +121,16 @@ struct UnifiedRoutedExpertFfnParams {
     // pairs point at) names it here instead of zeroing it with a separate op.
     uint32_t zero_output_row = std::numeric_limits<uint32_t>::max();
 
+    // Stacked expert weights: every gate_projs / up_projs slot holds the same [.., E, K, 2*hidden] tensor (gate in
+    // columns [0, hidden), up in [hidden, 2*hidden)) and every down_projs slot the same [.., E, hidden, emb] tensor;
+    // expert g's blocks start at tile g * K * 2*hidden / 1024 and g * hidden * emb / 1024 (g = global expert id).
+    // Set when gate_projs[0] and up_projs[0] are one buffer. Changes the reader/writer programs (part of the key).
+    bool stacked_experts = false;
+
+    // Precise mode, set by compute_kernel_config.fp32_dest_acc_en: fp32 DEST and K-loop partials, bf16 activations
+    // and intermediates (default: bf16 DEST / partials, bf8_b activations). Part of the key (the config is not).
+    bool precise = false;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -132,7 +142,9 @@ struct UnifiedRoutedExpertFfnParams {
         "l1_end",
         "x_indexed",
         "output_row_major",
-        "zero_output_row");
+        "zero_output_row",
+        "stacked_experts",
+        "precise");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -145,7 +157,9 @@ struct UnifiedRoutedExpertFfnParams {
             l1_end,
             x_indexed,
             output_row_major,
-            zero_output_row);
+            zero_output_row,
+            stacked_experts,
+            precise);
     }
 };
 
