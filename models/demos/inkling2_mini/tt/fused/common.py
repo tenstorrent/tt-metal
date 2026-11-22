@@ -108,6 +108,20 @@ def kernel(name, config, named, rt=None, cores=None):
     )
 
 
+def fixed_rt(named, *rts):
+    """Pad every core's runtime args of each {core: args} dict to one length and add those lengths to the named
+    compile-time args. generic_op's program cache key ignores runtime-arg counts, so a module whose per-core
+    counts depend on the row count (the multi-row prefill kernels) would otherwise reuse a cached program built
+    for another count and fail its arg-count check. The kernels ignore the zero padding."""
+    named = dict(named)
+    for i, rt in enumerate(rts):
+        n = max(len(v) for v in rt.values())
+        for v in rt.values():
+            v.extend([0] * (n - len(v)))
+        named[f"rt_len{i}"] = n
+    return named
+
+
 def core_list(device, n, first_row=0):
     """n worker cores, row-major over the compute grid starting at first_row: (list, CoreRangeSet)."""
     gx = device.compute_with_storage_grid_size().x

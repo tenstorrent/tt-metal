@@ -320,9 +320,7 @@ class _LayerPF:
             t /= math.sqrt(5)
             self.conv_taps[k] = [put(t[r].view(1, 1, 1, -1)) for r in range(TAPS)]
         if lay.is_loop:
-            # shortcut: PfGateTail stays off: its per-core runtime-arg count depends on T, so a cached program
-            # clashes when the chunk length changes (8K: 2048 then 256 rows); on again once S5 pads the args
-            self.gates = {g: _Gate(dev, w, g, pf.ckc, False) for g in ("q", "k", "v", "mlp")}
+            self.gates = {g: _Gate(dev, w, g, pf.ckc, pf.fused_glue) for g in ("q", "k", "v", "mlp")}
         rw = ttnn.to_torch(moe.router_w).float().reshape(HIDDEN, NUM_EXPERTS)
         self.router_w = put(rw.view(1, 1, HIDDEN, NUM_EXPERTS))
         self.router_bias_row = ttnn.to_torch(moe.router_bias).float().reshape(1, 1, 1, NUM_EXPERTS)

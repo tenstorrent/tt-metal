@@ -73,6 +73,7 @@ class PfConv:
             c_args[core] = [len(us)] + [r1 - r0 for _, r0, r1 in us]
         res_page = 4096 if resid is None or resid.dtype == ttnn.float32 else 2048
         named = dict(wt=wt, has_resid=int(resid is not None), res_page=res_page, mode=MODES[mode])
+        named = F.fixed_rt(named, r_args, w_args, c_args)
         kernels = [
             F.kernel("pf_conv_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, crs),
             F.kernel("pf_conv_writer.cpp", ttnn.WriterConfigDescriptor(), named, w_args, crs),

@@ -59,7 +59,7 @@ class PfAttnRes:
             r_args[c] = [n.buffer_address() for n in ns] + [x.buffer_address() for x in lg] + [len(us)] + flat
             w_args[c] = [o.buffer_address() for o in outs] + [len(us)] + flat
             c_args[c] = [len(us)] + [j1 - j0 for _, j0, j1 in us]
-        named = dict(d1=d1, nq=nq, wt=wt)
+        named = F.fixed_rt(dict(d1=d1, nq=nq, wt=wt), r_args, w_args, c_args)
         kernels = [
             F.kernel("pf_attnres_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, crs),
             F.kernel("pf_attnres_writer.cpp", ttnn.WriterConfigDescriptor(), named, w_args, crs),

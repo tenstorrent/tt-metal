@@ -56,6 +56,7 @@ class PfGateTail:
             w_args[core] = [out.buffer_address(), 4096, len(us)] + flat
             c_args[core] = [len(us)] + [r1 - r0 for _, r0, r1 in us]
         named = dict(wt=wt, kz=kz, minus_one=_bits(-1.0), one=_bits(1.0))
+        named = F.fixed_rt(named, r_args, w_args, c_args)
         kernels = [
             F.kernel("pf_gate_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, crs),
             F.kernel("pf_conv_writer.cpp", ttnn.WriterConfigDescriptor(), named, w_args, crs),
