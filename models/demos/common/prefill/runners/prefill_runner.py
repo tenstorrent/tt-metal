@@ -1532,6 +1532,25 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         warmup_acks=getattr(runtime, "warmup_ack_count", lambda: 0)(),
         layers=f"{first_layer_idx}-{first_layer_idx + num_my_layers - 1}",
     )
+    _rt_dir = os.environ.get("SCRATCH_RT_DUMP")  # SCRATCH device timeline
+    _rt_recs, _rt_names, _rt_meta = [], {}, {"dropped": 0, "freq": 0.0}
+    if _rt_dir:
+
+        _rt_keep = os.environ.get("SCRATCH_RT_KEEP", "").split(",")
+        _rt_ok = {}
+
+        def _rt_cb(batch):
+            _rt_meta["dropped"] += int(batch.dropped)
+            for r in batch.records:
+                rid = int(r.runtime_id)
+                if rid not in _rt_names:
+                    _rt_names[rid] = ";".join(str(k) for k in r.kernel_sources)
+                    _rt_meta["freq"] = float(r.frequency)
+                    _rt_ok[rid] = not _rt_keep[0] or any(k in _rt_names[rid] for k in _rt_keep)
+                if _rt_ok[rid]:
+                    _rt_recs.append((int(r.chip_id), rid, int(r.start_timestamp), int(r.end_timestamp)))
+
+        _rt_handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(_rt_cb)
     try:
         run_request_loop(
             runtime,
@@ -1553,6 +1572,14 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             hang_detector=hang_detector,
         )
     finally:
+        if _rt_dir:
+            import json as _json
+            import time as _t
+
+            _t.sleep(1.0)
+            ttnn.device.UnregisterProgramRealtimeProfilerCallback(_rt_handle)
+            with open(f"{_rt_dir}/rank{rank}.json", "w") as _f:
+                _json.dump({"meta": _rt_meta, "names": _rt_names, "recs": _rt_recs}, _f)
         if hang_detector is not None:
             hang_detector.stop()
         import gc
