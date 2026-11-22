@@ -23,6 +23,7 @@ import torch
 
 import ttnn
 from models.demos.inkling2_mini.tt.dram_sharded import BankLocalExperts
+from models.demos.inkling2_mini.tt.fused.moe_bank import BankMoeExperts
 from models.demos.inkling2_mini.tt.fused.moe_expert import FusedMoeExperts
 from models.demos.inkling2_mini.tt.fused.router import FusedRouter
 
@@ -75,7 +76,9 @@ def load_moe_weights(layer_dir):
 
 
 class Inkling2MoE:
-    def __init__(self, device, weights, gate_up_grid=(9, 4), down_grid=(9, 4), in0_block_w=(12, 18), fused=True):
+    def __init__(
+        self, device, weights, gate_up_grid=(9, 4), down_grid=(9, 4), in0_block_w=(12, 18), fused=True, layout=None
+    ):
         """``weights``: dict keyed by section-4 names (host tensors from prepare_moe_weights / load_moe_weights).
 
         Both projections have N = 2304 = 72 output tiles, so at most 72 of the 110 cores (11x10) get an
@@ -119,7 +122,10 @@ class Inkling2MoE:
         # step reads them.
         sticks = all(tuple(t.shape)[:2] == (1, 1) and t.shape[-1] == 32 for t in (gu, weights["experts.w_down"]))
         assert fused or not sticks, "stick-layout expert weights need the fused expert step"
-        if fused:  # any of BFP4 / BFP8 / BFP4 gate_up + BFP8 down
+        if layout == "BANK":  # bank-layout cache (convert/bank_layout.py): every read from the reader's own bank
+            self.w_gate_up = ttnn.to_device(gu, device, dram)
+            self.fused = BankMoeExperts(device, self.w_gate_up, self.w_down)
+        elif fused:  # any of BFP4 / BFP8 / BFP4 gate_up + BFP8 down
             self.w_gate_up = ttnn.to_device(gu, device, dram)
             self.fused = FusedMoeExperts(device, self.w_gate_up, self.w_down, sticks=sticks, **FUSED_PLACEMENT)
         elif BANK_LOCAL and gu.dtype == ttnn.bfloat4_b:  # re-layout on load; the cache files are unchanged

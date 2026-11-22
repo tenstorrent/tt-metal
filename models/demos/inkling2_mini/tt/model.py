@@ -114,14 +114,14 @@ class _QKVGate:
 class _Layer:
     """Weights of one decoder layer (shared by its loop passes)."""
 
-    def __init__(self, device, rows, frows, L, w, prefetcher=None):
+    def __init__(self, device, rows, frows, L, w, prefetcher=None, expert_layout=None):
         self.L = L
         self.is_global = L in GLOBAL_LAYERS
         self.is_loop = LOOP_START <= L < LOOP_END
         self.boundary = L in BOUNDARY_LAYERS
         attn_w = {k[len("attn.") :]: v for k, v in w.items() if k.startswith("attn.")}
         self.attn = Inkling2Attention(device, attn_w, self.is_global, prefetcher)
-        self.moe = Inkling2MoE(device, w)
+        self.moe = Inkling2MoE(device, w, layout=expert_layout)
         # residual path: E10 fused kernels (one program each); frows holds the in-place block-state stack
         self.attn_res = FusedAttnRes(frows, w, "attn_res_q", 3 if self.is_global else 1) if L > 0 else None
         self.mlp_res = FusedAttnRes(frows, w, "mlp_res_q", 1)
@@ -202,10 +202,10 @@ class Inkling2Model:
 
         self.layers = []
         for L in range(N_LAYERS):
-            w = wcache.load_layer(
-                (layer_roots or {}).get(L, root), L, None
-            )  # host tensors; modules move them (review-r4 #8)
-            self.layers.append(_Layer(device, self.rows, self.frows, L, w, self.prefetcher))
+            lroot = (layer_roots or {}).get(L, root)
+            w = wcache.load_layer(lroot, L, None)  # host tensors; modules move them (review-r4 #8)
+            lay = wcache.layouts(lroot, L).get("experts.w_gate_up")
+            self.layers.append(_Layer(device, self.rows, self.frows, L, w, self.prefetcher, lay))
             del w
             log(f"layer {L} on device")
 
