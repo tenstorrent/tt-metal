@@ -10,9 +10,14 @@
 // blocks in flight (transaction ids 1..4). The activation comes in on the writer's NOC.
 // Runtime args: weight address, bank, first tile slot, staging L1 address, staged bytes, number of passes, ncq per
 // pass.
+// PF_SIGNAL (tt/mk/expert_overlap.py): the core at NOC (sig_x, sig_y) raises tensor prefetcher op signal `pf_signal`
+//   once its reads are done, releasing a queued prefetch request (in place of a signal program after this one).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#ifdef PF_SIGNAL
+#include "api/dataflow/tensor_prefetcher_signal.h"
+#endif
 
 constexpr uint32_t cb_w = 1;
 constexpr uint32_t kb = get_named_compile_time_arg_val("kb");
@@ -71,4 +76,11 @@ void kernel_main() {
         ++retired;
     }
     noc_async_read_set_trid(0);
+#ifdef PF_SIGNAL
+    if (my_x[noc_index] == get_named_compile_time_arg_val("sig_x") &&
+        my_y[noc_index] == get_named_compile_time_arg_val("sig_y")) {
+        experimental::tensor_prefetcher_signal(get_named_compile_time_arg_val("pf_signal"));
+        noc_async_atomic_barrier();
+    }
+#endif
 }

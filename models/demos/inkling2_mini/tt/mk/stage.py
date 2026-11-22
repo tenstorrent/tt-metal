@@ -118,6 +118,7 @@ class StagedBankLinear:
         fill: (read size in bytes, reads in flight) of the fill kernel."""
         self.bl, dev = bl, bl.device
         self.fill = fill
+        self.signal = None  # tensor prefetcher op signal address raised by the first core's reader (expert_overlap)
         self.tb = ttnn.Tile([TILE, TILE]).get_tile_size(bl.dtype)
         # per core: (core, bank, first slot, range bytes)
         self.ranges = []
@@ -183,6 +184,12 @@ class StagedBankLinear:
         """Staged prefix (bytes per core) once the parts up to fraction `frac` are filled (as fill_kernels cuts)."""
         return int(self.staged * frac) // 32 * 32
 
+    def _signal_args(self):
+        if self.signal is None:
+            return []
+        p = self.bl.device.worker_core_from_logical_core(ttnn.CoreCoord(*self.bl.cores[0][0]))
+        return [("pf_signal", self.signal), ("sig_x", p.x), ("sig_y", p.y)]
+
     def __call__(self, x, out=None, staged=None):
         """BankLinear.__call__ with the staged reader (same args otherwise). staged: prefix bytes that are filled
         (default all; 0 = everything from DRAM)."""
@@ -217,7 +224,8 @@ class StagedBankLinear:
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=f"{MKDIR}/stage_linear_reader.cpp", core_ranges=bl.grid, compile_time_args=acc(bl.weight),
-                named_compile_time_args=list(named.items()), runtime_args=r_args,
+                named_compile_time_args=list(named.items()) + self._signal_args(), runtime_args=r_args,
+                defines=[("PF_SIGNAL", "1")] * (self.signal is not None),
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
             ),
             ttnn.KernelDescriptor(

@@ -60,6 +60,7 @@ class ExpertOverlap:
         dev = self.device = model.device
         assert release in ("w_all", "w_o", "moe"), release
         self.release = release
+        self.staged = []  # M3's staged w_all linears that raise the signal in their reader instead
         self.proj = {"w_all": "w_all", "w_o": "wo"}.get(release)  # the attention projection that releases a request
         self.dynamic = dynamic  # False: the seed masks stay (no guess_out writes; for tests)
         layers = sorted({L for L, _ in self.apps})
@@ -91,6 +92,15 @@ class ExpertOverlap:
         for L in layers:
             model.layers[L].moe.fused = _Proxy(self, L, self.orig[L])
         self.wrapped = {}  # L -> the projection wrapped with the release signal
+        if self.proj == "w_all":
+            from models.demos.inkling2_mini.tt.mk.overlap import _Proxy as M3Proxy
+
+            banks = [model.layers[L].attn.w_all.bank for L in layers]
+            if all(isinstance(b, M3Proxy) for b in banks):
+                for b in banks:
+                    b.st.signal = self.ep.signal
+                    self.staged.append(b.st)
+                self.proj = None if self.staged else self.proj
         if self.proj:
             for L in layers:
                 a = model.layers[L].attn
@@ -99,7 +109,7 @@ class ExpertOverlap:
 
     def _request(self, a):
         L = self.apps[a][0]
-        if self.proj:  # pairs with app a's w_all / w_o signal, which comes after this request in program order
+        if self.proj or self.staged:  # pairs with app a's w_all / w_o signal, after this request in program order
             ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(self.device, 0, capture_into_trace=True)
         self.ep.request(self.orig[L], self.masks[self.src[a]], capture=True)
 
@@ -129,7 +139,7 @@ class ExpertOverlap:
                             memory_config=l1)  # fmt: skip
         ids = ttnn.from_torch(torch.arange(8, dtype=torch.int32).reshape(1, 1, 1, 8), dtype=ttnn.uint16,
                               layout=ttnn.TILE_LAYOUT, device=dev, memory_config=l1)  # fmt: skip
-        if self.proj:
+        if self.proj or self.staged:
             ttnn.experimental.signal_tensor_prefetcher(dev, 0)  # the queued request waits for app 0's w_all / w_o
             ttnn.deallocate(ex(x, w, ids, guess=self.masks[self.src[0]]))
         else:
@@ -144,6 +154,8 @@ class ExpertOverlap:
             e.ring = None
         for L, lin in self.wrapped.items():
             setattr(model.layers[L].attn, self.proj, lin)
+        for st in self.staged:
+            st.signal = None
         for t in self.masks:
             ttnn.deallocate(t)
         self.ep.release()
