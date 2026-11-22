@@ -108,27 +108,20 @@ class Qwen25VlCheckpoint:
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
-        self.load_weights(model, device=device, parallel_config=parallel_config)
+        cache.load_model(model, **self.spec(device=device, parallel_config=parallel_config))
         return model
 
-    def load_weights(
-        self,
-        model: Qwen25VlEncoder,
-        *,
-        device: ttnn.MeshDevice,
-        parallel_config: EncoderParallelConfig,
-    ) -> None:
-        """Load the weights of a model built by ``build``, e.g. again after ``deallocate_weights``."""
-        cache.load_model(
-            model,
-            get_torch_state_dict=self._load_state_dict,
-            model_name=self._name,
-            subfolder=self._subfolder,
-            parallel_config=parallel_config,
-            mesh_shape=tuple(device.shape),
-            mesh_device=device,
-            dtype=f"{WEIGHT_CACHE_DTYPE}_qkv16",
-        )
+    def spec(self, *, device: ttnn.MeshDevice, parallel_config: EncoderParallelConfig) -> dict:
+        """The `cache.load_model` keywords of a model built by ``build``."""
+        return {
+            "get_torch_state_dict": self._load_state_dict,
+            "model_name": self._name,
+            "subfolder": self._subfolder,
+            "parallel_config": parallel_config,
+            "mesh_shape": tuple(device.shape),
+            "mesh_device": device,
+            "dtype": f"{WEIGHT_CACHE_DTYPE}_qkv16",
+        }
 
     def _load_state_dict(self) -> dict[str, torch.Tensor]:
         torch_model = transformers.Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -155,26 +148,19 @@ class Qwen25VlCheckpoint:
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
-        self.load_vision_weights(model, device=device, parallel_config=parallel_config)
+        cache.load_model(model, **self.vision_spec(device=device, parallel_config=parallel_config))
         return model
 
-    def load_vision_weights(
-        self,
-        model: Qwen25VlVisionModel,
-        *,
-        device: ttnn.MeshDevice,
-        parallel_config: EncoderParallelConfig,
-    ) -> None:
-        """Load the weights of a tower built by ``build_vision``, e.g. again after ``deallocate_weights``."""
-        cache.load_model(
-            model,
-            get_torch_state_dict=self._load_vision_state_dict,
-            model_name=self._name,
-            subfolder=f"{self._subfolder}/vision" if self._subfolder else "vision",
-            parallel_config=parallel_config,
-            mesh_shape=tuple(device.shape),
-            mesh_device=device,
-        )
+    def vision_spec(self, *, device: ttnn.MeshDevice, parallel_config: EncoderParallelConfig) -> dict:
+        """The `cache.load_model` keywords of a tower built by ``build_vision``."""
+        return {
+            "get_torch_state_dict": self._load_vision_state_dict,
+            "model_name": self._name,
+            "subfolder": f"{self._subfolder}/vision" if self._subfolder else "vision",
+            "parallel_config": parallel_config,
+            "mesh_shape": tuple(device.shape),
+            "mesh_device": device,
+        }
 
     def _load_vision_state_dict(self) -> dict[str, torch.Tensor]:
         """Reads only the safetensors shards that hold the tower, not the whole vision-language model."""

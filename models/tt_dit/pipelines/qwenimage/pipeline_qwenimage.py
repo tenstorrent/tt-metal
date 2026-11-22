@@ -467,6 +467,16 @@ class QwenImagePipeline(PipelineAPIMixin):
             self._checkpoint.build(ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=False)
             for m in self._ccl_managers
         ]
+        text_encoder = self._text_encoder
+        self._paged_encoders = []
+        if text_encoder.offload:
+            self._paged_encoders.append(text_encoder.encoder)
+            self.residency.register(text_encoder.encoder, text_encoder.encoder_spec, on_evict=())
+        if text_encoder.vision is not None and (text_encoder.offload or text_encoder.offload_vision):
+            self._paged_encoders.append(text_encoder.vision)
+            self.residency.register(text_encoder.vision, text_encoder.vision_spec, on_evict=())
+        # Built loaded and never evicted, so it needs no load keywords.
+        self.residency.register(self._transformers[0], {}, evicts=self._paged_encoders)
         self._dbcache = (
             DBCache(
                 [_BatchedCFG(t) if self._cfg_enabled and not self._cfg_parallel else t for t in self._transformers],
@@ -752,6 +762,8 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         logger.info("encoding prompts...")
         on_event(SectionStart("encoder"))
+        for module in self._paged_encoders:
+            self.residency.load(module)
         # One entry per submesh: the CFG pass it runs, or both passes batched on the only one.
         torch_contexts = self._text_encoder.encode_cfg(
             prompts,
@@ -764,6 +776,7 @@ class QwenImagePipeline(PipelineAPIMixin):
             images=self._vision_images(images, conditions) if edit else (),
         )
         on_event(SectionEnd("encoder"))
+        self.residency.load(self._transformers[0])
         prompt_sequence_lengths = [c.shape[1] for c in torch_contexts]
 
         logger.info("preparing timesteps...")
