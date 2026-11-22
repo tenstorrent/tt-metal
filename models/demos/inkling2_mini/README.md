@@ -32,7 +32,7 @@ Build tt-metal and activate its python env as usual. The scripts take their data
 |---|---|
 | `INKLING_CKPT` | the Hugging Face checkpoint directory (safetensors, config.json, tokenizer) |
 | `INKLING_CACHE` | the converted weight cache the model loads |
-| `INKLING_TILE_CACHE` | a cache without `--stick-experts`, for the chunked prefill and its test |
+| `INKLING_TILE_CACHE` | a cache with the experts as tiles, for the chunked prefill and its test |
 | `INKLING_GOLDEN` | CPU golden outputs (per-prompt hidden states and logits), for the golden check and perf gate |
 | `INKLING_PERF_DIR` | where perf.py appends its results and keeps its baseline |
 | `INKLING_REF_PYTHON` | a python with transformers >= 5.24 (Inkling2), for the HF-reference tests |
@@ -43,26 +43,23 @@ Build tt-metal and activate its python env as usual. The scripts take their data
 Host only, one layer at a time (peak host RSS ~3 GB; the checkpoint is ~19 GB, the cache ~21 GB):
 
 ```
-python -m models.demos.inkling2_mini.convert --ckpt $INKLING_CKPT --out $INKLING_CACHE --stick-experts BFP4
-```
-
-`--stick-experts BFP4` stores the experts of the BFP4/BFP4 layers in the layout the fused MoE kernel reads.
-Use BFP4 only: in the stick layout the kernel sums the down projection expert by expert, which rounds the
-BFP8 layers differently (token-only 127 -> 124) and is slower; BFP4 gains ~0.27 ms/token at 126.
-A rerun converts only the units (global, L00 ... L23) whose settings changed; the model refuses a cache
-whose manifest is not complete. The chunked prefill reads the experts as tiles: convert a second cache
-without `--stick-experts` for it.
-
-The stick cache can also be made from a tile cache in a second step, which costs disk only for the rewritten
-expert tensors (every other file is hard-linked) and checks each rewritten tensor against its source:
-
-```
 python -m models.demos.inkling2_mini.convert --ckpt $INKLING_CKPT --out $INKLING_TILE_CACHE
-python -m models.demos.inkling2_mini.convert.relayout_sticks --src $INKLING_TILE_CACHE --dst $INKLING_CACHE --dtypes BFP4
+python -m models.demos.inkling2_mini.convert.relayout_sticks --src $INKLING_TILE_CACHE --dst $INKLING_CACHE \
+    --layout bank --dtypes BFP4,BFP8
 ```
 
-Sticks are laid out for the card's DRAM bank count, 7 on a p100a (`convert/stick.py` `N_BANKS`). The loader
-refuses a stick cache made for another count; for a p150 (8 banks) use `relayout_sticks --n-banks 8`.
+The first step writes a cache with every expert as tiles; the chunked prefill reads that one
+(`INKLING_TILE_CACHE`). A rerun converts only the units (global, L00 ... L23) whose settings changed; the model
+refuses a cache whose manifest is not complete.
+
+The second step rewrites the expert tensors of every layer (BFP4, BFP8 and mixed) in the bank layout, where each
+expert column lives in one DRAM bank and the decode MoE (`tt/fused/moe_bank.py`) reads it from its own bank. It
+costs disk only for the rewritten tensors (every other file is hard-linked) and checks each one against its
+source. It is ~1.9 ms/token faster than the stick layout (`--layout stick`, read by the older fused kernel). Both layouts sum the down projection expert by expert, a different order than the tile path:
+the BFP8 layers round differently (token-only 127 -> 125 on the short gate), with equal code1500 results.
+
+Sticks and bank layouts are laid out for the card's DRAM bank count, 7 on a p100a (`convert/stick.py`
+`N_BANKS`). The loader refuses a cache made for another count; for a p150 (8 banks) use `relayout_sticks --n-banks 8`.
 
 ttnn opens the card even for host-side tensor conversions. To convert or run the host-only tests without
 the card, point it at a mock cluster:
