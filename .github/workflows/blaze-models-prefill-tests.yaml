@@ -27,10 +27,10 @@ on:
         type: boolean
         default: false
         description: "K3 > k3_prefill_runner_24l"
-      k3_prefill_runner_93l:
+      k31_prefill_runner_93l:
         type: boolean
         default: false
-        description: "K3 > k3_prefill_runner_93l"
+        description: "K3.1 > k31_prefill_runner_93l (SC4)"
       k3_dspark_runner:
         type: boolean
         default: false
@@ -326,9 +326,9 @@ jobs:
             title: "(GLM-5.3-744B) disaggregated prefill SC4 vs SC1 scaling"
           - model: glm53_mtp_kv_share
             title: "(GLM-5.3-744B) MTP KV share prefill SC4 vs SC1 scaling"
-          # sc4 alone: K3's sc1 leg runs 24 of 93 layers, so there is no sc1 baseline to scale from.
-          - model: kimi_k3
-            title: "(Kimi-K3-2.8T) disaggregated prefill SC4 perf"
+          # sc4 alone: K3.1's sc1 leg runs 24 of 93 layers, so there is no sc1 baseline to scale from.
+          - model: kimi_k3_1
+            title: "(Kimi-K3.1) disaggregated prefill SC4 perf"
             sc4_only: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep

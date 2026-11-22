@@ -242,10 +242,10 @@ case "${MODEL}" in
     # The cache root is the adapter's ttnn_cache_default; 76 slots measured for the 8x4 stage.
     kimi_layout "${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill}" \
       kimi_k3_1 76
-    # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare. 10240 tokens is
-    # whole chunks in both layouts (4 of 2560 at 4x4, 2 of 5120 at 8x4), so every one of the 8192 golden
-    # positions is compared, the gate reads earlier chunks' KV from later ones, and the tail past 8192 is timed.
-    REQUEST_LEN=10240
+    # K3's 1M request, as K3 times it: whole chunks in both layouts (410 of 2560 at 4x4, 205 of 5120 at 8x4).
+    # The golden is the 8192-token prompt of a vLLM capture and its span bounds the compare, so the first 8192
+    # positions are PCC'd and the rest of the request (the trace's tokens repeated) is timed.
+    REQUEST_LEN=1049600
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"

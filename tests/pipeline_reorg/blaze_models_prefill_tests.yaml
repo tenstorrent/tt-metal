@@ -2472,9 +2472,10 @@
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
 
-# SC4 Kimi-K3: 93 layers as 8 stages of [4,4], two per galaxy; stage shape, chunk, KV dedup and slots come from
-# the kimi_k3 manifest. Own test_type, so the scarce 4-galaxy leg is dispatchable without a single-galaxy one.
-- name: "(Kimi-K3-2.8T) disaggregated prefill 8x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC4"
+# SC4 Kimi-K3.1: 93 layers as 8 stages of [4,4], two per galaxy; stage shape, chunk, KV dedup and slots come from
+# the kimi_k3_1 manifest. Replaces K3's SC4 leg (K3's own SC4 run stays reachable by hand: run_multirank_pcc.sh
+# kimi_k3). Own test_type, so the scarce 4-galaxy leg is dispatchable without a single-galaxy one.
+- name: "(Kimi-K3.1) disaggregated prefill 8x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2482,18 +2483,18 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3
-  test_type: k3_prefill_runner_93l
-  test_tags: [kimi_k3, runner, kv_cache]
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1
+  test_type: k31_prefill_runner_93l
+  test_tags: [kimi_k3_1, runner, kv_cache]
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # The job takes about 19 min warm; 90 leaves room for a cold Weka cache of the 1.5 TB of weights.
+      # K3's leg took about 19 min warm; 90 leaves room for a cold Weka cache of the weights.
       # shield/demo bh_sc4 is a SUM over the team's legs on that SKU: 60 (GLM-5.3) + 25 (DSpark) + 90 of 380.
       timeout: 90
       tier: 1
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
   team: shield
   budget_type: demo
   sp_config: sc4
@@ -2532,9 +2533,9 @@
 
 # K3.1 mirror of the leg above: the same launcher and layout -- sc4's first two [4,4] stages, one per tray
 # half, 12 layers each, depth 24 (ends on a DSA layer) -- at the 96 slots measured for the first 4x4 stage.
-# Its golden is an 8192-token vLLM prompt: the request is four 2.5k chunks, the golden's 8k is PCC'd and
-# the tail timed, as K3 does at 55k of 1M. No perf baseline yet, so throughput is reported, not gated.
-- name: "(Kimi-K3.1) disaggregated prefill L24 2x[4,4] KV accuracy 8k@2.5k + perf 10k@2.5k, SC1"
+# K3's 1M request at 2.5k chunks; its golden is an 8192-token vLLM prompt, so the golden's 8k is PCC'd and the
+# rest of the 1M timed, as K3 does at 55k of 1M. No perf baseline yet, so throughput is reported, not gated.
+- name: "(Kimi-K3.1) disaggregated prefill L24 2x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
