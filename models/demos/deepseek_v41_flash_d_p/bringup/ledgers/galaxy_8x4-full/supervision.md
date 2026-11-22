@@ -1315,3 +1315,7 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 04:38 heartbeat: PB.FBM agent active; watch armed.
 - 05:08 heartbeat: PB.FBM agent active; watch armed.
 - 05:38 heartbeat: PB.FBM agent active (~75 min); watch armed.
+- 06:05 PB.FBM ACCEPTED (7 units PASS; selection sets 0 mismatches; oracle 0; cold no-rebuild 0). Block maxima in the
+  score's compute kernel (fork option); thresholds re-measured (packed ~196608 keys). new tok/s off -> on: 4x2k 1M 57.9k ->
+  60.9k (+5.3 %), 524k 65.3 -> 67.1k (+2.8 %); single 8192 1M 66.8 -> 68.6k (+2.7 %), 524k +1.2 %; 139k within noise. Next:
+  port to model_bringup (MB.8, threshold re-measured at 5120).
