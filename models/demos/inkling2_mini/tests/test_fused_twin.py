@@ -17,6 +17,7 @@ from models.demos.inkling2_mini.tt.fused import common as F
 from models.demos.inkling2_mini.tt.fused.attnres import FusedAttnRes, FusedRowOps
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
 from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVGate
+from models.demos.inkling2_mini.tt.fused.messages import FusedMessageSplit
 from models.demos.inkling2_mini.tt.fused.norm import FusedRowNorm
 
 C = 2304
@@ -65,7 +66,8 @@ def test_twin_app(device, kind):
         return ttnn.from_torch(t.reshape(1, 1, -1, C), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     A, Y = row(torch.randn(1, C, generator=g), ttnn.bfloat16), row(torch.randn(1, C, generator=g), ttnn.bfloat16)
-    msgs = (row(torch.randn(3, C, generator=g), ttnn.float32), row(torch.randn(1, C, generator=g), ttnn.float32))
+    # the loop messages as the model makes them (E10d: FusedMessageSplit, rows + dense twins)
+    msgs = FusedMessageSplit(device)(row(torch.randn(48, C, generator=g), ttnn.float32))[0]
     for k in range(2):
         frows.seal(None, row(torch.randn(1, C, generator=g) * (k + 1), ttnn.bfloat16), k)
     # the app input h: a fused output (has a twin), as in the model
