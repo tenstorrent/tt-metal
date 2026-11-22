@@ -97,6 +97,14 @@ K3.1 per-layer table (committed in run_multirank_pcc.sh's kimi_k3_1 case): `3:30
   push and the dense gather. With push v2 every owner already holds all requesters' bitmaps of its blocks (inbox), so
   the union is local; missing: per-owner variable-length gather and the requester-side union-rank rewrite.
 
+- **K3.1's top-k is far more spread than GLM's, but on a synthetic prompt.** Dumped from an eager L24 run (wrapper
+  `dump_topk.py` in the overnight scratch): union / per-chip share of the context at 312k and 1M: layer 3 51/9.5% and
+  55/6.5%; layer 7 73/19% and 62/12%; layer 11 94/28% and 83/15%; layer 15 52/13% and 33/5.7%; layer 19 92/25% and
+  84/12% (GLM: union 3-29%, per chip 0.8-4.5%). The simulated busiest push link matches the measured push times
+  (layer 11: 199k rows ~ 4.8 ms). A union all-gather would not help these deep layers. BUT the K3.1 leg's 1M request
+  is the 8k golden prompt repeated (`_load_token_pool` tiles the trace), so the indexer picks the same tokens in many
+  copies; real long documents likely favor the push much more. Get a real 1M K3.1 trace before tuning K3.1 further.
+
 ### 0.4 Harness (`tools/`, also see tools/README.md)
 
 - `run_local.patch`: local copy of `run_multirank_pcc.sh` with `LOCAL_NUM_LAYERS/LOCAL_REQUEST_LEN/LOCAL_CHECK_PCC/

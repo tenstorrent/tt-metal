@@ -227,7 +227,9 @@ case "${MODEL}" in
     # EXPERIMENT branch: room for the full-layer push path's extra semaphores (2048 B ran out).
     RUNNER_ENV+=" export PREFILL_L1_SMALL_SIZE=3072;"
     # EXPERIMENT branch: per-layer full-layer push cutoffs for the L24 stage's DSA layers 3/7/11/15/19, measured on this
-    # leg's 1M request (push-always vs baseline per layer); 11 never pushes. See push_experiment/HANDOFF.md 0.3b.
+    # leg's 1M request (push-always vs baseline per layer); 11 never pushes. That request repeats the 8k golden prompt,
+    # which spreads the deep layers' top-k (union 83-94% of the context), so these suit this leg, not real long
+    # documents. See push_experiment/HANDOFF.md 0.3b.
     RUNNER_ENV+=" export SPARSE_MLA_FULL_PUSH_DENSE_BELOW_LAYERS=3:307200,7:870400,11:4194304,15:409600,19:972800;"
     # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare, so no
     # length cap is needed: as for kimi_k3, the span is PCC'd and the tail is timed. Two chunks, so the
