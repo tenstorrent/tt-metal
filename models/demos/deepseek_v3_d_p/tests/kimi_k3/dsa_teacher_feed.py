@@ -48,6 +48,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     chunk_path,
     complete_run,
     missed_keys,
+    quantile,
     replay_live_and_sealed,
     replay_missing,
     rms_norm,
@@ -271,9 +272,6 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
     topk = want.shape[1]  # the reference's selection size (2048)
     nan = float("nan")
 
-    def q(t: torch.Tensor, x: float) -> float:
-        return float(t.float().quantile(x)) if t.numel() else nan
-
     windows = []
     for lo in range(0, count, window):
         hi = min(lo + window, count)
@@ -287,24 +285,24 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
                 "end": hi,
                 "attn_rows": int(nr.numel()),
                 "attn_nrmse_median": float(nr.median()) if nr.numel() else nan,
-                "attn_nrmse_p99": q(nr, 0.99),
+                "attn_nrmse_p99": quantile(nr, 0.99),
                 "attn_nrmse_max": float(nr.max()) if nr.numel() else nan,
                 "kv_latent_pcc": pcc(kv_ref[lo:hi, :lora], caches["kvpe"][lo:hi, :lora]),
                 "kv_rope_pcc": pcc(kv_ref[lo:hi, lora:], caches["kvpe"][lo:hi, lora:]),
                 "index_key_pcc": pcc(key_ref[lo:hi], caches["index"][lo:hi]),
                 "recall_mean": float(gated.mean()) if gated.numel() else nan,
-                "recall_p05": q(gated, 0.05),
+                "recall_p05": quantile(gated, 0.05),
                 "recall_gpu_vs_reference_mean": (
                     float(gpu_recall[max(lo, topk) : hi].mean()) if gpu_recall is not None and gated.numel() else nan
                 ),
                 "recall_min_below_topk": float(recall[lo : min(hi, topk)].min()) if lo < topk else nan,
                 "misses": int(rank.numel()),
-                "miss_rank_p10": q(rank, 0.1),
-                "miss_rank_median": q(rank, 0.5),
+                "miss_rank_p10": quantile(rank, 0.1),
+                "miss_rank_median": quantile(rank, 0.5),
                 "miss_rank_min": int(rank.min()) if rank.numel() else -1,
                 "miss_top_half_fraction": float((2 * rank < selected).float().mean()) if rank.numel() else nan,
-                "miss_spread_share_median": q(share, 0.5),
-                "miss_spread_share_p90": q(share, 0.9),
+                "miss_spread_share_median": quantile(share, 0.5),
+                "miss_spread_share_p90": quantile(share, 0.9),
             }
         )
     result = {

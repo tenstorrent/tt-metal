@@ -1336,3 +1336,16 @@ def test_dsa_teacher_feed_from_the_chain_scores_against_it(tmp_path: Path, expec
     assert [w["attn_rows"] for w in result["windows"]] == [1, 1, 1]
     with expect_error(ValueError, "sampled-row products"):
         fp64_chain.load_products(chain, ["attn_output_3"])
+
+
+def test_quantile_by_hand_and_beyond_torch_quantile_size():
+    """[1, 2, 3, 4]: median 2.5, p10 1.3 (linear interpolation); empty is NaN; 2^24 + 1 values (torch.quantile's
+    limit is 2^24) give their exact median."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import quantile
+
+    t = torch.tensor([4.0, 1.0, 3.0, 2.0])
+    assert quantile(t, 0.5) == pytest.approx(2.5) and quantile(t, 0.1) == pytest.approx(1.3)
+    assert quantile(t, 0.0) == 1.0 and quantile(t, 1.0) == 4.0
+    assert quantile(torch.empty(0), 0.5) != quantile(torch.empty(0), 0.5)  # NaN
+    big = torch.arange(2**24 + 1).flip(0)
+    assert quantile(big, 0.5) == 2**23

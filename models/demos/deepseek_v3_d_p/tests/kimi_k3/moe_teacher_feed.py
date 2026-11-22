@@ -54,6 +54,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     complete_run,
     load_input,
     missed_keys,
+    quantile,
     replay_live_and_sealed,
     replay_missing,
     rms_norm,
@@ -249,10 +250,6 @@ def routing_window(got, got_w, want, want_w, choice, num_experts: int = NUM_EXPE
     return {"recall": recall, "dropped": dropped, "weight_err": weight_err, "misses": missed_keys(got, want, choice)}
 
 
-def _q(t: torch.Tensor, q: float) -> float:
-    return float(t.float().quantile(q)) if t.numel() else float("nan")
-
-
 def _mean(t) -> float:
     t = torch.cat(t) if isinstance(t, list) else t
     return float(t.float().mean()) if t.numel() else float("nan")
@@ -320,21 +317,21 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
                 "start": lo,
                 "end": hi,
                 "moe_nrmse_median": float(row_nrmse[lo:hi].median()),
-                "moe_nrmse_p99": _q(row_nrmse[lo:hi], 0.99),
+                "moe_nrmse_p99": quantile(row_nrmse[lo:hi], 0.99),
                 "moe_nrmse_max": float(row_nrmse[lo:hi].max()),
                 "recall_vs_reference_mean": float(recall.mean()),
                 "set_equal_vs_reference": float((recall == 1).float().mean()),
                 "recall_reference_vs_fp32_mean": float(per_row["recall_reference_vs_fp32"][lo:hi].mean()),
                 "recall_device_vs_fp32_mean": float(per_row["recall_device_vs_fp32"][lo:hi].mean()),
                 "misses": int(rank.numel()),
-                "miss_rank_median": _q(rank, 0.5),
+                "miss_rank_median": quantile(rank, 0.5),
                 "miss_rank_min": int(rank.min()) if rank.numel() else -1,
                 "miss_top_half_fraction": float((2 * rank < selected).float().mean()) if rank.numel() else float("nan"),
                 "dropped_reference_weight_mean": float(per_row["dropped"][lo:hi].mean()),
-                "dropped_reference_weight_p99": _q(per_row["dropped"][lo:hi], 0.99),
+                "dropped_reference_weight_p99": quantile(per_row["dropped"][lo:hi], 0.99),
                 "recall_gpu_vs_reference_mean": _mean(per_row["recall_gpu_vs_reference"][lo:hi]),
                 "weight_err_median": float(per_row["weight_err"][lo:hi].median()),
-                "weight_err_p99": _q(per_row["weight_err"][lo:hi], 0.99),
+                "weight_err_p99": quantile(per_row["weight_err"][lo:hi], 0.99),
             }
         )
     rank = misses["rank"]
@@ -477,7 +474,10 @@ def host_check(*, trace: Trace, out: Path, checkpoint: Path, rows: int) -> dict:
         "rows": picks,
         "seconds": round(time.perf_counter() - began, 1),
         "experts_read": len(host.experts),
-        **{k: {"median": float(v.median()), "p90": _q(v, 0.9), "max": float(v.max())} for k, v in distances.items()},
+        **{
+            k: {"median": float(v.median()), "p90": quantile(v, 0.9), "max": float(v.max())}
+            for k, v in distances.items()
+        },
     }
     (out / "host.json").write_text(json.dumps(result, indent=1))
     return result

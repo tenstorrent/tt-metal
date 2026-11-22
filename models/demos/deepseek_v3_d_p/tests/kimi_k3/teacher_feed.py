@@ -253,6 +253,18 @@ def complete_run(out: Path) -> dict:
 # --- selection measures and bars --------------------------------------------------------------------------------
 
 
+def quantile(t: torch.Tensor, q: float) -> float:
+    """The ``q`` quantile of all of ``t``'s values (linear interpolation, as ``torch.quantile``), NaN if empty; for any
+    size (``torch.quantile`` refuses more than 2^24 values, which 1M rows' top-k misses exceed)."""
+    v = t.flatten().float().sort().values
+    if not v.numel():
+        return float("nan")
+    pos = q * (v.numel() - 1)
+    lo = int(pos)
+    hi = min(lo + 1, v.numel() - 1)
+    return float(v[lo] + (v[hi] - v[lo]) * (pos - lo))
+
+
 def topk_recall(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
     """Per row the fraction of `want`'s valid (>= 0) keys that occur in `got`, i.e. |got ∩ want| / |want| as sets
     (a key `got` holds twice counts once). Both `[rows, k]` int64; `got`'s no-key entries (the uint32 0xFFFFFFFF
