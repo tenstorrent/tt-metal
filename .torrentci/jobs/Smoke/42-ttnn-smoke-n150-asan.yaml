@@ -1,0 +1,46 @@
+---
+# PR Gate ttnn-smoke-tests on one n150.
+jobs:
+  - id: ttnn-smoke-n150-asan
+    name: TT-NN smoke n150 (ASan)
+    checkout: false
+    description: "Run the PR Gate ttnn validation smoke test on one n150 with the ASan packages"
+    timeout: 1h30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        accelerator: {type: n150, count: 1}
+        resources:
+          requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
+    packages:
+      artifacts:
+        - from-job: asan-build
+          name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          install: [tt-metalium, tt-metalium-validation, tt-nn, tt-nn-validation]
+    env:
+      - {name: HOME, value: /tmp/home}
+      - {name: TT_METAL_CACHE, value: /tmp/tt-metal-cache}
+      - {name: ASAN_OPTIONS, value: color=always}
+      - {name: UBSAN_OPTIONS, value: "color=always:print_stacktrace=1:halt_on_error=1"}
+      - {name: GTEST_COLOR, value: 'yes'}
+      - {name: TT_METAL_WATCHER_TEST_MODE, value: '1'}
+      - {name: TT_LOGGER_LEVEL, value: warn}
+      - {name: TT_METAL_RUNTIME_ROOT, value: /usr/libexec/tt-metalium}
+      - {name: LSAN_OPTIONS, value: "suppressions=/usr/share/tt-metalium/lsan.supp"}
+    steps:
+      - id: ttnn-smoke-n150
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$HOME" "$TT_METAL_CACHE" test-reports
+            - cat .torrentci/packages.json 2>/dev/null || true
+            - dpkg -s tt-metalium tt-metalium-validation tt-nn tt-nn-validation | grep -e '^Package' -e '^Version'
+            - ls -l /dev/tenstorrent/
+            # Log to a file and print the tail, as smoke-n150-asan does.
+            - >-
+              ulimit -n 4096; rc=0; timeout 45m tt-nn-validation-smoke
+              --gtest_output=xml:test-reports/ >/tmp/smoke.log 2>&1 || rc=$?;
+              tail -c 20000 /tmp/smoke.log; exit $rc

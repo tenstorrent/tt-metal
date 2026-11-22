@@ -1,0 +1,44 @@
+---
+# PR Gate runtime smoke, cpu-only entry: the CPU_* cases on a mock cluster.
+jobs:
+  - id: smoke-cpu-asan
+    name: Runtime smoke, CPU only (ASan)
+    checkout: false
+    description: "Run the PR Gate runtime validation smoke cpu-only test (CPU_* cases, mock cluster) on the ASan packages"
+    timeout: 1h
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: ci-build}
+        resources:
+          requests: {cpu: '4', memory: 16Gi, ephemeral-storage: 30Gi}
+          limits: {cpu: '4', memory: 16Gi, ephemeral-storage: 40Gi}
+    packages:
+      artifacts:
+        - from-job: asan-build
+          name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          install: [tt-metalium, tt-metalium-validation]
+    env:
+      - {name: ASAN_OPTIONS, value: color=always}
+      - {name: TSAN_OPTIONS, value: color=always}
+      - {name: UBSAN_OPTIONS, value: "color=always:print_stacktrace=1:halt_on_error=1"}
+      - {name: GTEST_COLOR, value: 'yes'}
+      - {name: TT_METAL_WATCHER_TEST_MODE, value: '1'}
+      - {name: TT_LOGGER_LEVEL, value: warn}
+      - {name: TT_METAL_RUNTIME_ROOT, value: /usr/libexec/tt-metalium}
+      - {name: LSAN_OPTIONS, value: "suppressions=/usr/share/tt-metalium/lsan.supp"}
+    steps:
+      - id: smoke-cpu
+        kind: shell
+        shell:
+          run:
+            - cat .torrentci/packages.json 2>/dev/null || true
+            - dpkg -s tt-metalium tt-metalium-validation | grep -e '^Package' -e '^Version'
+            - mkdir -p test-reports
+            - >-
+              TT_METAL_MOCK_CLUSTER_DESC_PATH=$(find /usr/libexec/tt-metalium/tt_metal/third_party/umd
+              -path '*/cluster_descriptor_examples/wormhole_N150.yaml' -print -quit)
+              && echo "mock cluster: $TT_METAL_MOCK_CLUSTER_DESC_PATH"
+              && test -f "$TT_METAL_MOCK_CLUSTER_DESC_PATH" && export TT_METAL_MOCK_CLUSTER_DESC_PATH
+              && tt-metalium-validation-smoke --gtest_filter='*CPU_*' --gtest_output=xml:test-reports/
