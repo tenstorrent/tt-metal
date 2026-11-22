@@ -29,13 +29,20 @@ inline void _llk_math_hw_cleanup_init_dest_sync_()
     _llk_math_pack_sync_init_<Dst, is_fp32_dest_acc_en>();
 }
 
-/** Zero math/unpack-style ADDR_MOD_0..7 so stale increments cannot survive. */
+/**
+ * @brief Zero the transient math/unpack-style ADDR_MOD_0..5 so stale increments cannot survive.
+ *
+ * ADDR_MOD_6/7 keep their @ref _llk_math_hw_configure_ invariants (dest += 2 / zero advance):
+ * the reconfig a following op runs sets formats only, and the SFPU ops after it assume the
+ * invariants, so zeroing slot 6 would make them store every iteration to the same rows.
+ */
 inline void _llk_math_hw_cleanup_poison_addr_mods_()
 {
-    for (std::uint8_t mod_index = 0; mod_index < 8; ++mod_index)
+    for (std::uint8_t mod_index = 0; mod_index < 6; ++mod_index)
     {
         addr_mod_t {}.set(mod_index);
     }
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 /**
@@ -44,8 +51,8 @@ inline void _llk_math_hw_cleanup_poison_addr_mods_()
  * @tparam is_fp32_dest_acc_en Kernel DST_ACCUM_MODE (re-asserted, not changed).
  * @note On return both cfg banks use Float16_b formats, the global Blackhole dest remap is
  *       enabled, and bank 0 is selected.
- * @note On return dest half-sync is on section 0, MOP CFG is NOP-poisoned, and ADDR_MOD_0..7
- *       are zero.
+ * @note On return dest half-sync is on section 0, MOP CFG is NOP-poisoned, ADDR_MOD_0..5 are
+ *       zero, and ADDR_MOD_6/7 hold their hw_configure invariants (dest += 2 / zero advance).
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_hw_cleanup_canonical_()

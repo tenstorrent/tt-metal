@@ -437,8 +437,7 @@ inline void _sfpu_unary_power_fp32_(const std::uint32_t exponent) {
 
 inline void power_init() {
     // The paired store's ADDR_MOD_6 stride is owned by calculate_unary_power_iterative (set and
-    // restored there); a throttled matmul (MM_THROTTLE > 0) programs the slot itself and the
-    // op increments dest explicitly.
+    // restored there, also in MM_THROTTLE builds); this init never touches the slot.
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
@@ -462,7 +461,7 @@ inline void calculate_unary_power(const std::uint32_t exponent) {
  * Each row runs the same multiply sequence as a single-row walk; pairing them shares the walk's
  * branches and lets each row's multiply cover the other's MUL latency, so no NOPs are needed.
  * The last squaring is skipped since its result is never used. Advances dst_reg by two rows: the second
- * store does it through ADDR_MOD_6 as programmed by @ref power_init (an explicit increment under MM_THROTTLE).
+ * store does it through ADDR_MOD_6, set by the caller's loop entry (calculate_unary_power_iterative).
  *
  * @param exp_minus_one Exponent minus one (the first factor is the base itself)
  */
@@ -484,12 +483,7 @@ sfpi_inline void _sfpu_unary_power_iterative_two_rows_(const std::uint32_t exp_m
         in1 *= in1;
     }
     sfpi::dst_reg[0] = result0;
-#if defined(MM_THROTTLE) && MM_THROTTLE > 0
-    sfpi::dst_reg[1] = result1;
-    sfpi::dst_reg += 2;
-#else
     sfpi::dst_reg[1].mode(ADDR_MOD_2) = result1;
-#endif
 }
 
 /**
@@ -499,8 +493,8 @@ sfpi_inline void _sfpu_unary_power_iterative_two_rows_(const std::uint32_t exp_m
  * @tparam ITERATIONS Number of Dest rows to process; must be even, since rows are processed in pairs.
  * @param exponent Non-negative integer exponent value
  * @note Call @ref power_init first. The paired store's ADDR_MOD_6 stride is owned here: set at
- *       entry and restored to the dest += 2 invariant at exit, unless the kernel is built with
- *       MM_THROTTLE (the slot is the throttled matmul's there; dest advances explicitly).
+ *       entry and restored to the dest += 2 invariant at exit, also in MM_THROTTLE builds (the
+ *       throttled matmul restores the same invariant at its own exit, so interleaving is safe).
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_power_iterative(const std::uint32_t exponent) {
@@ -514,13 +508,11 @@ inline void calculate_unary_power_iterative(const std::uint32_t exponent) {
         }
         return;
     }
-#if !(defined(MM_THROTTLE) && MM_THROTTLE > 0)
     // The paired store walks dest through physical addr_mod slot 6, advancing by the two rows the
     // pair just wrote (one sfpi row is two dest counter steps), so the row loop needs no separate
     // increment. Unary SFPU sets addr_mod_base, so the store names ADDR_MOD_2, which maps to
     // physical slot 6.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
-#endif
     // Iterative approach for positive integer exponents
     const std::uint32_t exp_minus_one = exponent - 1;
     if (__builtin_constant_p(exponent) || exponent == 1) {
@@ -537,10 +529,8 @@ inline void calculate_unary_power_iterative(const std::uint32_t exponent) {
             _sfpu_unary_power_iterative_two_rows_(exp_minus_one);
         }
     }
-#if !(defined(MM_THROTTLE) && MM_THROTTLE > 0)
     // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-#endif
 }
 
 /**

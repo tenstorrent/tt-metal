@@ -216,7 +216,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
 
+#if defined(ARCH_BLACKHOLE)
+    // Template args must match the init's: with the row MOP the uninit is what restores the
+    // ADDR_MOD_6 invariant the init's next-tile modifier displaced (see llk_math_matmul.h).
+    _llk_math_matmul_uninit_<THROTTLE_LEVEL, MATMUL_ROW_MOP>();
+#else
     _llk_math_matmul_uninit_();
+#endif
 }
 
 #endif

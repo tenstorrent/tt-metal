@@ -49,7 +49,8 @@ inline void calculate_lerp(
     // compiler then interleaves the two rows' dependent SFPMADs, and the SFPNOP each of a one-row
     // body's two dependent SFPMADs costs (write latency that nothing else can fill) disappears.
     // Identical instructions on identical operands, only the issue order changes, so the results
-    // are bit-identical to the one-row body. The second store advances dest (see lerp_init).
+    // are bit-identical to the one-row body. The second store advances dest (see the slot-6
+    // set at the top of calculate_lerp).
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d += 2) {
         sfpi::vFloat a_in0 = sfpi::dst_reg[off_in0];

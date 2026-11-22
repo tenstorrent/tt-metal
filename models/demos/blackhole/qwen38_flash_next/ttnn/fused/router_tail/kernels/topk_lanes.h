@@ -39,6 +39,8 @@ inline void _bitonic_topk_phases_steps_lanes(
     const int i_end_step,
     const int i_start_step,
     const std::uint32_t pass_mask) {
+    // The alternate stores advance dest through ADDR_MOD_6 by 32 rows.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
     // NOTE (stable sort): TIE_ORDER is the GLOBAL sort order, not this call's idir. Callers may run
     // this network with a flipped idir to build bitonic sequences; the tie polarity must not follow it.
     // If more than 1 phase is requested, do all the steps from all phases
@@ -247,6 +249,9 @@ inline void _bitonic_topk_phases_steps_lanes(
         set_dst_write_addr(dst_addr_offset);
     }
     topk_replay_init = -1;
+
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 // ---- end of the copy ----
 

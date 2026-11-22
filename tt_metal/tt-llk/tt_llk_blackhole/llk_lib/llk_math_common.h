@@ -26,6 +26,8 @@ using namespace ckernel::math;
  * @note The SFPU reads ALU_FORMAT_SPEC_REG1_SrcB (the SrcB ALU format, programmed unpack-side on Blackhole, not here) to
  *       interpret data it loads from DEST. For SFPU work, ensure that format's exponent family (BF16 vs FP16) matches
  *       the data in DEST (tt-llk #951).
+ * @note Establishes the ADDR_MOD_6/7 invariants (dest += 2 / zero advance) this thread's SFPU ops assume.
+ *       Any op that reprograms either slot must restore its invariant before returning.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)

@@ -593,9 +593,9 @@ inline void pack_row(const std::uint32_t num_chunks, const bool mirror_last, Epi
     }
     epilogue();
 
-    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next PACK SFPU op. Before the
-    // semaphore post: the post hands the row to MATH, whose next SFPU section re-programs
-    // the slot itself; a restore issued after the post could land inside MATH's next section.
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next PACK SFPU op. ADDR_MOD slots
+    // are per-thread config, so this restore is PACK-local -- it cannot land in MATH's section;
+    // MATH's own sections program their slot themselves.
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     ckernel::t6_semaphore_post<ckernel::p_stall::WAIT_SFPU>(S2F);
 }

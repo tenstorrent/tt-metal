@@ -1269,9 +1269,8 @@ void exp_init() {
             // primed here.
             sfpu_reciprocal_init<false>();
 #else
-            // _sfpu_exp_fp32_accurate_tti_: DEST advances by 2 on its store; LREG12..14 hold 1/ln2 and -ln2 in two
-            // parts.
-            addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+            // _sfpu_exp_fp32_accurate_tti_: DEST advances by 2 on its store (the ADDR_MOD_6
+            // invariant hw_configure establishes); LREG12..14 hold 1/ln2 and -ln2 in two parts.
             _sfpu_load_config32_(p_sfpu::LREG12, Converter::hi16(EXP_FP32_LOG2E), Converter::lo16(EXP_FP32_LOG2E));
             _sfpu_load_config32_(
                 p_sfpu::LREG13, Converter::hi16(EXP_FP32_NEG_LN2_HI), Converter::lo16(EXP_FP32_NEG_LN2_HI));

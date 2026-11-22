@@ -393,7 +393,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false, bool INT8_INPUT = false>
 void dequant_init(const std::uint32_t zero_point) {
-    // One-time setup for calculate_dequant; see quant_init for the
+    // One-time setup for calculate_dequant_int32; see quant_init for the
     // record/replay rationale. The caller passes -zero_point (so the
     // recorded body computes (A + LREG2) * B = (A - zero_point) * B).
     //

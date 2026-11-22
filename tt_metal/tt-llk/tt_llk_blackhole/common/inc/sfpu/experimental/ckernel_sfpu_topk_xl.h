@@ -2847,9 +2847,6 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
 template <std::uint32_t K, bool fused>
 inline void _topk_xl_merge_(const std::uint32_t dst_index)
 {
-    // The sort's alternate stores advance dest through ADDR_MOD_6 by one face row (+32).
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
-
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
 
     [[maybe_unused]] constexpr bool descending    = false; // direction the merge writes
@@ -2936,9 +2933,6 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
     ckernel_unpack_template::run(n_iters);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     set_dst_write_addr_offset(tile_offset + 0);
-
-    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
-    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 // =============================================================================

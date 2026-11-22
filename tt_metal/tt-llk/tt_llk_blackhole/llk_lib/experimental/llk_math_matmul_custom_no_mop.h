@@ -148,7 +148,8 @@ inline void matmul_configure_addrmod_reinit(
 {
     // Reinit must restore the address-modifier contract used by replay. For tiny tiles this
     // re-establishes the shape-aware addrmods (see matmul_configure_addrmod_no_mop); for full tiles
-    // it restores the hardcoded 32x32 addrmods. transpose affects ADDR_MOD_1/4, fidelity uses ADDR_MOD_5/6.
+    // it restores the hardcoded 32x32 addrmods. transpose affects ADDR_MOD_1/4, fidelity uses ADDR_MOD_5
+    // (slot 6 is the throttled-execute counter reset, programmed in the execute itself).
     matmul_configure_addrmod_no_mop<math_fidelity, THROTTLE_LEVEL>(
         transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 }

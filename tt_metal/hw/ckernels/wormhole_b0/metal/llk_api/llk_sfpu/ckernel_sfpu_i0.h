@@ -29,17 +29,6 @@ struct I0Series {
     static constexpr float A11 = 1.50E-22f;
 };
 
-// Whether calculate_i0 advances dest from its second SFPSTORE through ADDR_MOD_6 (programmed by
-// i0_init) or with a separate dest increment per row pair. A throttled matmul (MM_THROTTLE > 0)
-// programs ADDR_MOD_6 for its own MOP, and the fused-activation matmul / conv kernels run
-// matmul_block and the activation back to back without re-running either init, so in a kernel
-// built with MM_THROTTLE neither i0_init nor calculate_i0 touches ADDR_MOD_6.
-#if defined(MM_THROTTLE) && MM_THROTTLE > 0
-constexpr bool I0_STORE_INCR = false;
-#else
-constexpr bool I0_STORE_INCR = true;
-#endif
-
 /**
  * @brief Programs the state calculate_i0 reads: vConstFloatPrgm0-2 = I0Series::A5, A4, A3.
  * @note Run it after any other SFPU op's init and before calculate_i0: the programmable
@@ -60,14 +49,14 @@ inline void i0_init() {
  * @tparam ITERATIONS: Dest rows to process; must be even.
  * @note Call i0_init first; this reads vConstFloatPrgm0-2 as it programs them. The paired store's
  *       ADDR_MOD_6 stride is owned here: set at entry and restored to the dest += 2 invariant at
- *       exit (unless the kernel is built with MM_THROTTLE, where the slot is the matmul's).
+ *       exit, also in MM_THROTTLE builds (the throttled matmul restores the same invariant at its
+ *       own exit, so interleaving is safe).
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i0() {
     static_assert(ITERATIONS % 2 == 0, "calculate_i0 processes two rows per trip");
-    if constexpr (I0_STORE_INCR) {
-        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * SFP_DESTREG_STRIDE}}.set(ADDR_MOD_6);
-    }
+    // The paired store's advance: dest += 2 rows through ADDR_MOD_6, restored below.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * SFP_DESTREG_STRIDE}}.set(ADDR_MOD_6);
     const vFloat a11 = I0Series::A11;
     const vFloat a10 = I0Series::A10;
     const vFloat a9 = I0Series::A9;
@@ -107,17 +96,10 @@ inline void calculate_i0() {
         r0 = r0 * t0 + a;
         r1 = r1 * t1 + a;
         dst_reg[0] = r0 * t0 + I0Series::A0;
-        if constexpr (I0_STORE_INCR) {
-            dst_reg[1].mode(ADDR_MOD_2) = r1 * t1 + I0Series::A0;
-        } else {
-            dst_reg[1] = r1 * t1 + I0Series::A0;
-            dst_reg += 2;
-        }
+        dst_reg[1].mode(ADDR_MOD_2) = r1 * t1 + I0Series::A0;
     }
-    if constexpr (I0_STORE_INCR) {
-        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
-        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    }
+    // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 }  // namespace sfpu

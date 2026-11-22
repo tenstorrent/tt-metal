@@ -23,8 +23,8 @@ namespace ckernel {
  * SFPU operations must reinitialize it as needed.
  * On Wormhole, this operation also programs LREG12 and LREG13. Callers must
  * restore those programmable constants before another SFPU operation relies on them.
- * This operation relies on the ADDR_MOD_6 (dest incr 2) invariant and does not
- * program it, so a rand_tile with no rand_tile_init in the same kernel
+ * On Wormhole and Blackhole, this operation relies on the ADDR_MOD_6 (dest incr 2)
+ * invariant and does not program it, so a rand_tile with no rand_tile_init in the same kernel
  * (keeping the PRNG stream seeded by an earlier rand_tile_init or a host-set seed) is
  * valid only while the SFPU control register still holds the state the generic SFPU
  * init leaves (control register cleared). An init that changes SFPU control state

@@ -465,6 +465,8 @@ inline void _llk_pack_reconfig_data_format_(
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
  * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats
  * are unaffected by the issue).
+ * @note Establishes the ADDR_MOD_6/7 invariants (dest += 2 / zero advance) this thread's SFPU ops assume.
+ *       Any op that reprograms either slot must restore its invariant before returning.
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(

@@ -326,6 +326,8 @@ inline void _llk_pack_reconfig_data_format_(
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
+ * @note Establishes the ADDR_MOD_6/7 invariants (dest += 2 / zero advance) this thread's SFPU ops assume.
+ *       Any op that reprograms either slot must restore its invariant before returning.
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(
