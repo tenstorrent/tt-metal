@@ -25,8 +25,8 @@ inline void _llk_math_eltwise_unary_sfpu_init_()
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-// Kernel-invariant SFPU init: the SFPU config register only. ADDR_MOD_7 is not set here:
-// _llk_math_hw_configure_ sets it to zero advance and every op leaves it there.
+// Kernel-invariant SFPU init: the SFPU config register only. ADDR_MOD_7 is set to zero advance by
+// _llk_math_hw_configure_ and every op leaves it there.
 inline void _llk_math_eltwise_unary_sfpu_init_once_()
 {
     sfpu::_init_sfpu_config_reg();

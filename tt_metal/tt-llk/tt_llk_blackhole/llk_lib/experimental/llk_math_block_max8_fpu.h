@@ -134,11 +134,8 @@ inline void gather_all(std::integer_sequence<std::uint32_t, P...>)
 /**
  * @brief Initialize SFPU state for masking and the final merge.
  *
- * Does not program the ADDR_MOD_7 zero-advance invariant the FPU moves also use: it relies on
- * @ref _llk_math_hw_configure_ (compute_kernel_hw_startup) having left slot 7 at zero advance,
- * as the ADDR_MOD constant's comment above states.
- *
- * @note Call before @ref _llk_math_block_max8_fpu_.
+ * @note Call after @ref _llk_math_hw_configure_ (compute_kernel_hw_startup), which leaves ADDR_MOD_7 at
+ *       zero advance for the FPU moves, and before @ref _llk_math_block_max8_fpu_.
  */
 inline void _llk_math_block_max8_fpu_init_()
 {

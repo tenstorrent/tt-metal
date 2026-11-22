@@ -19,8 +19,8 @@ using namespace ckernel;
  * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>. Ignored on BH:
- *       kept for signature parity with WH, whose init programs the bcast addr-mods off it.
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>. Ignored on BH;
+ *       present for signature parity with WH, whose init programs the bcast addr-mods from it.
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4> (ELWMUL only)
  * @param num_faces: Number of faces to process (1, 2, or 4)
  * @note Establishes the operand-driven default Src zero-substitution state, which the bcast-col compute asserts

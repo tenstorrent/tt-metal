@@ -11,7 +11,7 @@
 #include "sanitizer/api.h"
 
 namespace ckernel {
-// Kernel-invariant SFPU init (SFPU config register; ADDR_MOD_7 is set by hw_configure). Retained for the
+// Kernel-invariant SFPU init (SFPU config register; ADDR_MOD_7 is set by hw_configure). Used by the
 // standalone tt-llk SFPU test harness, which bypasses the metal "full init" entry points and runs this itself.
 inline void llk_math_sfpu_init_once() {
     SAN_HOOK(unsupported());
@@ -237,7 +237,7 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         // invariant comes from _llk_math_hw_configure_, which must already have run on this thread.
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::exponential>();
     } else {
-        // Generic fallback (pre-restructuring behavior): ops without a self-contained sfpu::<op>_init()
+        // Generic fallback: ops without a self-contained sfpu::<op>_init()
         // get the full generic unary SFPU init (config reg + counter reset). Keeps the bare no-arg delegate
         // instantiable across the whole SfpuType set.
         _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();

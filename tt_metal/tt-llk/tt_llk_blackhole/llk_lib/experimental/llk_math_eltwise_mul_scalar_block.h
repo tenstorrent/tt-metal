@@ -23,11 +23,8 @@ inline void _llk_math_eltwise_mul_scalar_block_init_()
 /**
  * @brief Multiply a block of tiles by one reused scalar SrcB: Output[i] = SrcA[i] * SrcB.
  *
- * The per-call set/restore of ADDR_MOD_7 around the walk is deliberate: slots 0-5 all have
- * other owners, so none can be programmed once in the init. Measured cost (BH CI,
- * perf_eltwise_mul_scalar_block, KERNEL zone): MATH_ISOLATE at one tile per block goes from 3614
- * to 4461 cycles (+23%), TILE_LOOP flat -- accepted as the fixed price of keeping slot 7 at its
- * zero-advance invariant between calls.
+ * @note Programs ADDR_MOD_7 for the walk and restores its zero-advance invariant on return, on every call:
+ *       slots 0-5 all have other owners, so the stride cannot be programmed once in the init.
  */
 inline void _llk_math_eltwise_mul_scalar_block_(const std::uint32_t dst_index, const std::uint32_t block_size)
 {
