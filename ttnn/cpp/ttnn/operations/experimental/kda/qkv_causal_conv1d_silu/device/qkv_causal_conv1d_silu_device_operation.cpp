@@ -185,8 +185,21 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const Shape expected_history_shape =
         tail.token_paged ? Shape({entries, qkv_conv::history_rows, width})
                          : Shape({entries, width / tail.page_channels, qkv_conv::history_rows * tail.page_channels});
+    const uint32_t slab_parts = qkv_causal_conv1d_silu_slab_parts(attrs, in);
+    if (slab_parts > 1) {
+        // An SP-sharded slab: each rank's entry holds its slice of every branch, whole pages per slice.
+        for (const uint32_t branch_width : {attrs.q_width, attrs.k_width, attrs.v_width}) {
+            TT_FATAL(
+                branch_width % (tail.page_channels * slab_parts) == 0,
+                "qkv_causal_conv1d_silu: an SP-sharded history slab needs each of Q/K/V divisible into {} slices of "
+                "whole {}-channel pages, got width {}",
+                slab_parts,
+                tail.page_channels,
+                branch_width);
+        }
+    }
     TT_FATAL(
-        history_shape == expected_history_shape,
+        slab_parts > 1 || history_shape == expected_history_shape,
         "qkv_causal_conv1d_silu: history must be {} for Q+K+V = {} and page_channels = {}, got {}",
         expected_history_shape,
         channels,

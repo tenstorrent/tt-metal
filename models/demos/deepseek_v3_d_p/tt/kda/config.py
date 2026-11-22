@@ -40,9 +40,10 @@ KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
 # the DRAM placement, and only Galaxy's measures the L1 one.
 KDA_QKV_L1_BYTES_PER_CORE = 112 * 1024
 # The QKV convolution's fabric history exchange (qkv_causal_conv1d_silu_layout.hpp): a persistent buffer of
-# predecessor, carry, outgoing and end rows, three rows each, and its entry, predecessor and carry semaphores.
-KDA_HISTORY_EXCHANGE_ROWS = 12
-KDA_HISTORY_EXCHANGE_SEMAPHORES = 3
+# predecessor, carry, outgoing, end and (SP-sharded slab) gathered old-tail rows, three rows each, and its entry,
+# predecessor, carry and old-tail arrival semaphores.
+KDA_HISTORY_EXCHANGE_ROWS = 15
+KDA_HISTORY_EXCHANGE_SEMAPHORES = 4
 # The gated norm's output stays in interleaved L1 until the output projection reads it when each core's share fits
 # this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_NORM_OUTPUT_L1_BYTES_PER_CORE = 48 * 1024

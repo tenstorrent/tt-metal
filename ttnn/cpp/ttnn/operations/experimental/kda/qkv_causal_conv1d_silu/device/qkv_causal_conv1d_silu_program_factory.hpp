@@ -47,6 +47,10 @@ inline QkvCausalConv1dSiluTailLayout qkv_causal_conv1d_silu_tail_layout(const Qk
         .page_channels = attrs.page_channels.value_or(attrs.q_width + attrs.k_width + attrs.v_width)};
 }
 
+// The SP ranks a history slab's entry is split over: SP for an SP-sharded entry (channel-paged, each rank's slice of
+// every Q/K/V branch, [entries, (Q+K+V) / (P * SP), 3P]), else 1 (no slab, or an entry holding every channel).
+uint32_t qkv_causal_conv1d_silu_slab_parts(const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in);
+
 // Every convolution core stages an equal share of the channel tiles of the rows the exchange core sends.
 inline uint32_t qkv_causal_conv1d_silu_staged_ct(uint32_t channel_tiles, uint32_t convolution_cores) {
     return (channel_tiles + convolution_cores - 1) / convolution_cores;
