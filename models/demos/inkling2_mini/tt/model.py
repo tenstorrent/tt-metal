@@ -247,7 +247,7 @@ class Inkling2Model:
         self.positions.update(pos)
 
     # ------------------------------------------------------------ one layer application
-    def _app(self, L, p, h, stack, n_sealed, msgs):
+    def _app(self, L, p, h, stack, n_sealed, msgs, row_out=True):
         """h: bf16 row (layer input). stack: split stack of n_sealed block states (None if 0). Returns (out bf16 row,
         stack, n_sealed) after this layer."""
         lay = self.layers[L]
@@ -279,7 +279,9 @@ class Inkling2Model:
         if msgs is not None:
             m = lay.mlp_gate(m, msgs[1])
         y, _ = lay.moe(m)  # bf16 row (L1); conv_mlp reads it from L1
-        out = lay.conv_mlp.conv_add(y, conv_m, self.phase, resid, ttnn.bfloat16)  # fp32 add, bf16 out
+        # fp32 add, bf16 out. Every decode consumer of out is a fused kernel reading its dense twin, so the row form
+        # is written only when the caller reads it (collect)
+        out = lay.conv_mlp.conv_add(y, conv_m, self.phase, resid, ttnn.bfloat16, row_out=row_out)
         return out, stack, n_sealed
 
     # ------------------------------------------------------------ one token
@@ -317,7 +319,7 @@ class Inkling2Model:
             if L == 12:
                 h12_in = h
             msgs = all_msgs[L - LOOP_START] if (LOOP_START <= L < LOOP_END and p > 1) else None
-            h, stack, n = self._app(L, p, h, stack, n, msgs)
+            h, stack, n = self._app(L, p, h, stack, n, msgs, row_out=collect)
             if collect:
                 res["apps"].append(ttnn.clone(h))  # h is a module buffer: later loop passes overwrite it
 
