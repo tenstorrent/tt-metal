@@ -104,6 +104,12 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   off in this mode (a column's groups may read different buffers): every core reads its own keys and gates on the
   ring itself. Rows no range covers are not written.
 
+- `keys_gathered` (ring op, fork, opt-in, default False; PB.KR, needs `lane_ranges`): `k` already holds every SP
+  shard of the keys each device reads (the caller moved them, e.g. each segment's keys to its own chips only): no
+  all-gather kernels, no arrival wait, the own shard read from `k` too, and the all-gather's worker column computes
+  (11 x 10 on a capped Galaxy grid instead of 10 x 10). Same scores over [0, kv_len). Hashed. Measured (8x4, 4 x 2048
+  rows at 1024000, kv_len 516096): 9.0-9.8 ms a call vs the ranges ring's 10.9-11.2.
+
 ## Limits
 - fp32 DEST: DSA only (not MSA, not block pooling); `dst_full_sync_en` must stay False.
 - `natural_query_blocks`: axis ring only, block-cyclic layout required, no metadata (`chunk_start_idx_tensor`) path.
@@ -148,6 +154,8 @@ Tests: `tests/test_indexer_score.py` (model cases, `tests/cases.py`), `tests/uni
   ring (one call over a packed chunk); PB.3M (PACKED_LANE_BALANCE=on): `lane_own_extent`. PB.7C
   (PACKED_GLUED_DYNAMIC=on, `tt/packed_glued.GluedCall._index_dynamic`): `lane_ranges` at q_chunk 32, one call a
   layer over a glued chunk's segments (6 key buffers: the unused ones gather one slab).
+  PB.KR (PACKED_KEYS_OWNED=on, `tt/owned_keys.py`): `keys_gathered` with every range on buffer 0, the gathered buffer
+  each chip's own segment's keys only (sent there by tt/owned_gather.py).
 
 ## History
 CHANGELOG.md

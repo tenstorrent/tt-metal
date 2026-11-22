@@ -420,16 +420,22 @@ class OwnedSend:
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
         return md, n_ports
 
-    def __call__(self, out: ttnn.Tensor, R: int, axis: int, entries: list, dest: list) -> None:
+    def __call__(self, out: ttnn.Tensor, R: int, axis: int, entries: list, dest: list, page: int | None = None) -> None:
         """``out`` [1, 1, owners R, page] uint8 ROW_MAJOR DRAM interleaved (the source's history buffer);
         ``entries`` [(record buffer [1, 1, R, page], lo, hi)] (<= NS; rows [lo, hi) of every owner); ``dest`` per chip
-        (chip-linear): the entry index it receives, or None. ``axis`` 0: the group is the whole mesh, 1: a column."""
+        (chip-linear): the entry index it receives, or None. ``axis`` 0: the group is the whole mesh, 1: a column.
+        PB.KR ``page`` (bytes): the buffers' DRAM page instead of a ROW_MAJOR row (a TILE tensor: one tile a page;
+        R, lo and hi count pages; every buffer interleaved with that page size)."""
         assert 0 < len(entries) <= NS and len(dest) == self.n, (len(entries), len(dest))
-        page = int(out.shape[-1])
         loc0 = next(t for t, _, _ in entries if t is not None)
-        assert page % 64 == 0 and int(loc0.shape[-1]) == page and int(loc0.shape[-2]) == R, (out.shape, loc0.shape)
+        if page is None:
+            page = int(out.shape[-1])
+            assert page % 64 == 0 and int(loc0.shape[-1]) == page and int(loc0.shape[-2]) == R, (out.shape, loc0.shape)
+        else:
+            page = int(page)
+            assert page % 64 == 0, page
         k = max(1, self.payload // page)
-        key = (_geom(out), _geom(loc0), int(R), int(axis))
+        key = (_geom(out), _geom(loc0), int(R), int(axis), page)  # (PB.KR: a page of another size, another program)
         hit = self._pp.get(key)
         if hit is None:
             md, _ = self._build(out, loc0, int(R), int(axis), page, k)

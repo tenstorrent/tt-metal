@@ -1292,3 +1292,12 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 23:58 F-bug lead: kept units merge delta[u]['metrics'] (core/gate.py ~1008); the 4 accuracy units' delta records evidently carried no metrics (they passed). Investigate the delta store after the --rerun finishes; fix + selftest.
 - 23:51 heartbeat: PB.BM accuracy-unit --rerun running (resident busy).
 - 00:10 PB.BM committed e821084f82f (gate --commit-only after the --rerun PASS; the first commit attempt lacked SKIP). Framework bug logged as OPEN in dev/BREADCRUMBS (evidence overwritten; next time snapshot delta/<task>.json first). Next: apply patch_kr and run PB.KR.
+- 00:21 heartbeat: PB.KR agent active; watch armed.
+- 00:51 heartbeat: PB.KR agent active; watch armed.
+- 01:21 heartbeat: PB.KR agent active; watch armed.
+- 01:25 PB.KR ACCEPTED (6 units PASS: fast tier, oracle 0, cold no-rebuild 0). Packed index keys to owning chips (owned
+  gather) + local scoring. new tok/s off -> on: 4x2k 1M 54.0k -> 57.7k (+6.8 %), 4x1600s 1M 45.9k -> 51.2k (+11.5 %);
+  139k 72.9 -> 72.0k / 63.9 -> 63.7k (~noise). Agent's probe (a): the 4x2k attention section's +11 ms at 1M = 12 key
+  decodes +3.7, region-send waits for the slowest peer ~2.5, exposed history gathers +1.4, contention +1.7, attn_index
+  +0.4. (Snapshot of delta / results taken before the accept gate, per the open framework bug.)
+- 01:50 ROOT CAUSE of the MISSING-metrics accept failures (PB.BM, PB.KR): F105 reused the A/B 'on' side as the accept gate, but with the resident runner serving the side is timing-only (F285), so the accuracy units never ran and results/ lost their metrics. Fix F299 (orchestrator.ab_on_reuse: only a side covering every gate unit) committed; verifying end to end on PB.KR's accept (resume).

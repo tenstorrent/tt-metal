@@ -469,6 +469,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.lane_buffer,
         attrs.lane_own_extent,    // bring-up fork (PB.3M): each lane buffer gathered to its own lanes' extent
         attrs.has_lane_ranges(),  // bring-up fork (PB.7C): per-device query-row ranges (their values not hashed)
+        attrs.keys_gathered,      // bring-up fork (PB.KR): no all-gather (the keys already in k)
         // bring-up fork block epilogue: its presence adds a define, CBs and writer arguments
         attrs.block_keys,
         attrs.block_max_pin,
@@ -970,7 +971,9 @@ ttnn::Tensor launch_indexer_score(
     // Bring-up fork (PB.3M): each lane buffer gathered to its own lanes' extent (operation_attributes_t).
     bool lane_own_extent = false,
     // Bring-up fork (PB.7C): per-device query-row ranges (operation_attributes_t::lane_ranges).
-    std::vector<uint32_t> lane_ranges = {}) {
+    std::vector<uint32_t> lane_ranges = {},
+    // Bring-up fork (PB.KR): every shard of the keys already in k (operation_attributes_t::keys_gathered).
+    bool keys_gathered = false) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::bringup::indexer_score::IndexerScoreDeviceOperation;
@@ -1346,6 +1349,9 @@ ttnn::Tensor launch_indexer_score(
         tensor_args.k_extra = std::move(k_extra);
         tensor_args.k_local_extra = std::move(k_local_extra);
     }
+    TT_FATAL(
+        !keys_gathered || !lane_ranges.empty(),
+        "indexer_score keys_gathered: needs lane_ranges (the keys each device reads already in k)");
     if (!lane_ranges.empty()) {  // PB.7C: per-device query-row ranges (operation_attributes_t::lane_ranges)
         using A = ttnn::operations::bringup::indexer_score::operation_attributes_t;
         const uint32_t range_sq = q.logical_shape()[2];
@@ -1406,6 +1412,7 @@ ttnn::Tensor launch_indexer_score(
                 "indexer_score lane_ranges: k_extra / k_local_extra must match k / k_local (one key capacity)");
         }
         operation_attributes.lane_ranges = std::move(lane_ranges);
+        operation_attributes.keys_gathered = keys_gathered;
         tensor_args.k_extra = std::move(k_extra);
         tensor_args.k_local_extra = std::move(k_local_extra);
     }
@@ -1535,7 +1542,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::vector<ttnn::Tensor>& k_extra,
     const std::vector<ttnn::Tensor>& k_local_extra,
     bool lane_own_extent,
-    const std::vector<uint32_t>& lane_ranges) {
+    const std::vector<uint32_t>& lane_ranges,
+    bool keys_gathered) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::bringup::indexer_score::FusedRingConfig fused_ring;
@@ -1662,7 +1670,8 @@ ttnn::Tensor ring_indexer_score_dsa(
         k_extra,
         k_local_extra,
         lane_own_extent,
-        lane_ranges);
+        lane_ranges,
+        keys_gathered);
 }
 
 }  // namespace ttnn::experimental::bringup

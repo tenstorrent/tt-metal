@@ -1405,3 +1405,75 @@
   models/demos/deepseek_v41_flash_d_p/tests/perf/test_block_select_probe.py"`; score-epilogue probe: the walls env +
   tests/perf/test_bsel_score_probe.py; an A/B at threshold 0: DS41_INDEXER_BLOCK_SELECT_MIN=0
   DS41_INDEXER_BLOCK_SELECT_MIN_PACKED=0 with the walls / skip_positions units.
+
+## PB.KR perf (attempt 1): a packed segment's index keys only to the chips it owns + local scoring (PACKED_KEYS_OWNED on | off)
+- Read first: OV-3 / OV-58 / OV-61, PACKED_RULES.md, rule 20, perf_guide s1-8, PB.HG / PB.BM sections above, DS41-328 /
+  DS41-336 / DS41-343 / DS41-375 / DS41-376 / DS41-381 / DS41-382, indexer_score README (lane_ranges).
+- Today (PB.7C / PB.9G): one ring_indexer_score_dsa a layer with lane_ranges over 6 key buffers (4 segments + 2 scratch);
+  its fused ring all-gather moves EVERY segment's decoded keys around the 8-chip SP ring to every chip (at 1M: 4 x ~62 MB
+  received a chip a layer), key multicast down a core column off in ranges mode.
+- Expected saving per chunk (written before any device run; perf_guide s1-4; from PB.BM's score probe: ranges ring 12.01
+  ms vs single ring 9.60 at 1M, 1.60 vs 1.33 at 139264, a call): the plain indexers that run under decode (layers 2 / 8 /
+  14) score locally on keys already on the chip: device -1.5..-2.5 ms a layer at 1M (the ranges ring's surplus over the
+  single ring's compute, if the local scorer matches it), -4.5..-7.5 ms a chunk at 1024000, -0.5..-1 ms at 139264; plus
+  less fabric / DRAM traffic beside the decodes / top-k regions (PB.HG saw -4..-9 ms of indexer section from that).
+  Cost: one owned key send a source and chunk (each chip receives 7 owners x its segment's keys: ~62 MB at 1M, ~2.6 ms
+  at PB.HG's 24 MB/ms on the gather column; hidden in the prefetch regions like the history) + a small tail send a layer
+  (the chunk's own keys). Host: +2 prepared launches a source (prefetch + tail send, ~0.1 ms each) = ~+0.5 ms; the ring
+  call keeps its count. Single 8192 chunks: unchanged (the switch touches packed chunks only).
+- Load reasons: (1) tests/perf/test_kr_probe.py (KR_PARTS=ops,score) on the ladder's load (layers 0-20, decode, 8192,
+  resident engram): "the per-op profile of a real 4 x 2k and single chunk at 1M needs the executed layers at a 1M
+  history; the score / send probe reuses the same held model's indexer objects (no layer runs)".
+- Probe (a), per-op profile at 1024000 (tests/perf/test_kr_probe.py test_kr_attn_ops, real-time profiler op rows, one
+  steady chunk each, PB.BM code): single 8192 device 115.0 ms, 4 x 2k 133.5. Attention phase (attention + attn_region +
+  attn_index + history_gather) 31.3 vs 42.9 ms: +3.7 the 12 history index-key decodes in the decodes' region (single:
+  3 of them, 0.93 ms, in engram_rows), +1.7 the 12 history packs (single 0.43 in engram_rows), +3.8 the glued window
+  region send (attn_region; min chip 2.6 of max 5.1: ~2.5 ms waiting for peers), +1.4 exposed history gathers, +0.4
+  attn_index, +1.7 contention (rope chains +0.95, matmuls +0.5, concat +0.3 beside the region's gathers), -0.3
+  sparse_sdpa, -1.05 the single's tail gathers (packed: in the tails region). Table: results/PB.KR_ladder.md.
+- Probe (b), op level at 1024000 (test_kr_score, 4 chip-aligned 2048-row segments, kv_len 516096): ranges ring 10.81 /
+  10.95 ms a call; non-ring indexer_score_dsa on keys already present (compute proxy, 110 cores) 8.80 / 8.78; owned key
+  send of one source (7 owners x 8064 pages of 1088 B a chip) 2.04 / 1.99 ms, bytes exact. So the local scorer is not
+  slower: ~-2 ms a call (the ring's AG worker column computes again + no gather traffic, DS41-384).
+- DECIDED (OV-58): the local scorer is the ring op itself with a new fork option keys_gathered (no AG kernels, no
+  arrival gate, own shard from k, 11 x 10 cores), not the non-ring indexer_score_dsa: only the ring op has natural
+  query blocks and lane_ranges (per-chip starts as runtime values, rule 20); the same compute kernel gives the same
+  scores. Op check: keys_gathered vs ranges ring bit-identical over [0, kv_len) on every chip (DS41-383: past kv_len
+  neither writes), 9.0-9.8 vs 10.9-11.2 ms a call in the same runs (DS41-385: compare within a run).
+- What (PACKED_KEYS_OWNED=on, call-time, batch_call_settings + batch_call_apply; off = PB.7C's ranges ring,
+  unchanged): tt/owned_keys.py (Keys: per chunk; make_plan after the decodes' region cuts each index source's decoded
+  history [0, c wr) into ~PIECE_MS (1 ms) pieces on attention phases between the decodes and the source's indexer
+  (+ the tails region when too few); finish at the indexer: unplaced pieces + the chunk's own rows [h, hi), serially;
+  one gathered buffer [1, 1, SP x local rows, 128] bfp8 a (capacity, source), zeros at creation);
+  tt/owned_gather.OwnedSend: a `page` option (a TILE buffer: one page a tile; R / lo / hi in pages; page in the program
+  key); tt/gather_hide.Hide: decodes() makes the plan, attention() / _long_region() / tails() add the key pieces as
+  region gathers (gather column); tt/packed_glued.GluedCall: keys made with the owned histories, _index_dynamic scores
+  with keys_gathered (every range on buffer 0, no k_extra / scratch buffers). Fork ttnn.bringup.ring_indexer_score_dsa
+  keys_gathered (CHANGELOG PB.KR). Cores: the scorer 11 x 10 = 110 (was 10 x 10 + the AG column), the key sends the
+  owned send's 9 cores of the gather column.
+- Gotcha: one piece per region (19 launches a chunk) made 139264 host-bound worse (+5.2 ms wall 4 x 2k, exposed host
+  +5.5) while 1M won; pieces sized by time (1 ms) -> 6 sends a chunk, 139264 neutral.
+- Measured, same held load (layers 0-20, decode; walls on: gate unit runs, off: resident run with
+  DS41_PACKED_KEYS_OWNED=off on the first version's code, the off path unchanged since): steady wall off -> on, 4 x 2k
+  139264 112.2 -> 112.4, 1024000 150.2 -> 141.8; 4 x 1600s 118.3 -> 116.5, 162.8 -> 146.5; resumed 113.6 -> 113.3,
+  150.9 -> 141.6, 117.8 -> 115.8, 160.2 -> 144.4. Device 95.4 -> 95.6, 134.4 -> 128.2, 97.4 -> 95.8, 142.5 -> 131.9.
+  Indexer at 1M 4 x 2k: score section 34.8 -> 22.7, top-k 9.48 -> 9.49, key sends (indexer_keys: hidden pieces charged
+  at their kernel time + the serial tails) 0 -> 4.9. Expected (above) -4.5..-7.5 ms device at 1M: measured -6.1 (4 x
+  2k), -10.6 (4 x 1600s); the walls -8.4 / -16.3 (exposed host down with the shorter indexer too).
+- Rule 20, per-chunk values this change touches and how they reach the device: the chip -> segment map, every
+  entry's page range [a, b) (history pieces, tails) and the lane key buffers' addresses: OwnedSend common value
+  slots (run_prepared, one program a (gathered buffer, lane buffer, pages an owner, axis, page) geometry); the ranges
+  table (row ranges, starts, kv_lens; buffer 0): the ring's runtime table as before; the keys_gathered program is
+  hashed on the option only. Nothing new is uploaded per chunk; the gathered buffers are made once a (capacity,
+  source).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.KR --spec $BRINGUP_SPEC --check` (devjob);
+  probes: `resident submit --cmd "<walls env> KR_PARTS=ops,score scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_kr_probe.py"`; the off side: the walls unit's command with
+  DS41_PACKED_KEYS_OWNED=off.
+- Gate `gate PB.KR --check` (devjob krgate, after the last code edit, hooks clean): PASS PB.KR. Packed oracle alone vs
+  today 0.0, lane equivalence 0.0, slot digests 0, packed determinism 0.0; determinism 0.0; fast tier 18 segments 0;
+  no-rebuild cold strict 0 builds on every path; single 8192 steady 99.2 ms at 139264, 123.3 at 1024000 (unchanged);
+  ladder tok/s 4 x 2k 72883 / 57772, 4 x 1600s 63725 / 50676 (139264 / 1024000). Report: results/PB.KR_ladder.md.
+- Next lever (not built): the 4 x 2k attention section's other +11 ms (probe (a)): the 12 key decodes (+3.7 ms) and
+  packs (+1.7) are 4x work per chip by design (each chip is the source of its rows for every segment); the window region
+  send waits ~2.5 ms for the slowest peer.

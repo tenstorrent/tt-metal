@@ -1031,9 +1031,15 @@ class GluedCall(OneCall):
         from . import history_gather
 
         self.owned = bool(self.geo.align) and history_gather.owned_on()
+        self.keys = None
         if self.owned:
             chip_seg = [(e[0] if e is not None else 0) for e in (self.geo.entry(q, 0) for q in range(self.geo.n))]
             history_gather.owned_begin(mesh, self.geo.segs, chip_seg)
+            # PB.KR (PACKED_KEYS_OWNED=on): each segment's index keys to its own chips, scored there (tt/owned_keys.py)
+            from . import owned_keys
+
+            if owned_keys.on() and dynamic_on():
+                self.keys = owned_keys.Keys(mesh, self.geo.segs, chip_seg)
         self.hide = None
         from .gather_hide import Hide, Split, hide_on
 
@@ -1429,7 +1435,7 @@ class GluedCall(OneCall):
             self._keep(("cands", i), cands_all)
 
     # ------------------------------------------------------------------ indexer, PB.7C: ONE ring call a layer
-    def _ranges(self, lens: list) -> list:
+    def _ranges(self, lens: list, one_buffer: bool = False) -> list:
         """ring_indexer_score_dsa lane_ranges: per chip [n, (row_lo, row_hi, segment = its key buffer, position of
         row_lo, kv_len) x RANGES_MAX] over its glued rows; rows no segment holds (the tail pad, an empty chip) a filler
         range (buffer 0, position 0, kv_len 32: computed, never kept)."""
@@ -1440,7 +1446,7 @@ class GluedCall(OneCall):
             last = 0
             for j, a, b in g.chip[q]:
                 assert a == last, (q, g.chip[q])
-                w.append((a, b, j, g.position(j, q, a), lens[j]))
+                w.append((a, b, 0 if one_buffer else j, g.position(j, q, a), lens[j]))
                 last = b
             if last < g.R:
                 w.append((last, g.R, 0, 0, 32))
@@ -1535,10 +1541,25 @@ class GluedCall(OneCall):
             brm = ttnn.scatter(ix._neg[t], -1, cands, ix.src, memory_config=DRAM, sub_core_grids=sub_cores())
             bias_full = ttnn.to_layout(brm, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(brm))
             dealloc(brm)
-        # (a fixed buffer count, GLUED_SEGS: no program a segment count; the extra ones are scratch key shards of the
-        # same spec that gather one slab, never read. Distinct tensors: a tensor passed twice would let the op's buffer
-        # bindings, resolved once at the program's creation, follow another call's duplicate pattern)
-        kl = k_locals + [_scratch_keys(mesh, k_locals[0], b) for b in range(len(k_locals), GLUED_SEGS)]
+        keys = getattr(self, "keys", None)
+        if keys is not None:  # PB.KR (PACKED_KEYS_OWNED=on): every segment's keys on its own chips, scored there
+            kg = keys.finish(block.kv_src)
+            assert tuple(kg.shape) == tuple(ix._kbuf[t].shape), (tuple(kg.shape), tuple(ix._kbuf[t].shape))
+            kargs = dict(
+                k_extra=[], k_local_extra=[], lane_ranges=self._ranges(lens, one_buffer=True), keys_gathered=True
+            )
+            k_ring, kl0 = kg, k_locals[0]
+        else:
+            # (a fixed buffer count, GLUED_SEGS: no program a segment count; the extra ones are scratch key shards of
+            # the same spec that gather one slab, never read. Distinct tensors: a tensor passed twice would let the
+            # op's buffer bindings, resolved once at the program's creation, follow another call's duplicate pattern)
+            kl = k_locals + [_scratch_keys(mesh, k_locals[0], b) for b in range(len(k_locals), GLUED_SEGS)]
+            kargs = dict(
+                k_extra=[_kbuf(mesh, ix._kbuf[t], b) for b in range(1, GLUED_SEGS)],
+                k_local_extra=kl[1:],
+                lane_ranges=self._ranges(lens),
+            )
+            k_ring, kl0 = ix._kbuf[t], kl[0]
         ep = {}
         # PB.BM (INDEXER_BLOCK_SELECT): a plain indexer's top-k by block-max pre-selection (the score op writes the
         # block maxes; a host decision on the chunk's largest key count, both paths' programs warmed)
@@ -1552,9 +1573,9 @@ class GluedCall(OneCall):
         profiler.signpost("indexer")
         logits = ttnn.bringup.ring_indexer_score_dsa(
             q,
-            ix._kbuf[t],
+            k_ring,
             w,
-            kl[0],
+            kl0,
             ix.ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=SP_AXIS),
             cluster_axis=SP_AXIS,
             topology=ix.topology,
@@ -1569,9 +1590,7 @@ class GluedCall(OneCall):
             block_cyclic_chunk_local=ix.key_rows,
             natural_query_blocks=True,
             natural_query_rows=0 if ix.key_rows == ix.w_rows else ix.w_rows,
-            k_extra=[_kbuf(mesh, ix._kbuf[t], b) for b in range(1, GLUED_SEGS)],
-            k_local_extra=kl[1:],
-            lane_ranges=self._ranges(lens),
+            **kargs,
             **ep,
         )
         STATS["max_calls"] = max(STATS.get("max_calls", 0), 1)  # (PB.7C: ring calls this layer)

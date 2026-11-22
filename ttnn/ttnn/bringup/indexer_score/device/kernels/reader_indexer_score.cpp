@@ -460,7 +460,12 @@ inline void read_k_chunk_fused(
             for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
                 const uint32_t physical_tile = physical_tile_start + k_col;
                 const uint32_t shard = physical_tile / tiles_per_shard;
-                if (shard == ring_index) {
+#ifdef INDEXER_SCORE_KEYS_GATHERED
+                constexpr bool own_from_local = false;  // (PB.KR: the own shard is in the gathered buffer too)
+#else
+                constexpr bool own_from_local = true;
+#endif
+                if (own_from_local && shard == ring_index) {
                     const uint32_t local_base =
                         local_batch_page_offset + (physical_tile - ring_index * tiles_per_shard) * head_dim_tiles;
                     read_ktile_dims(noc, k_local_acc, ptr, local_base);  // OWN shard from the SP-local cache
@@ -545,6 +550,9 @@ struct FusedRingGate {
     }
 
     void gate_shard(uint32_t physical_tile_start, uint32_t k_tiles_in_unit, uint32_t midpoint_tiles) const {
+#ifdef INDEXER_SCORE_KEYS_GATHERED
+        return;  // (PB.KR: every shard was in the gathered buffer before the call: nothing arrives)
+#endif
         const uint32_t shard = physical_tile_start / tiles_per_shard;
         if (shard != ring_index) {
             if constexpr (partial_readiness_enabled) {

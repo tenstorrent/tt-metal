@@ -234,7 +234,9 @@ ProgramDescriptor build_ring_program_descriptor_impl(
     const uint32_t grid_y = phys_grid.y;  // full compute-grid height (all rows kept for compute)
     TT_FATAL(fused.num_links >= 1, "indexer_score fused: num_links must be >= 1 (got {})", fused.num_links);
     const uint32_t ag_worker_cores = fused.num_links * ag_rt::kRingDirectionCount;
-    const uint32_t reserved_cols = (ag_worker_cores + grid_y - 1) / grid_y;  // columns needed to hold the workers
+    // (PB.KR keys_gathered: no all-gather, no worker column: every column of the grid computes)
+    const bool keys_gathered = args.keys_gathered;
+    const uint32_t reserved_cols = keys_gathered ? 0u : (ag_worker_cores + grid_y - 1) / grid_y;
     TT_FATAL(phys_grid.x > reserved_cols, "indexer_score fused: grid too small to reserve {} AG cols", reserved_cols);
     // Compute columns after reserving the AG worker column(s); NOTE this differs from the classic factory's
     // grid_x (which is the FULL grid width) -- here the rightmost reserved_cols columns belong to the AG.
@@ -247,8 +249,8 @@ ProgramDescriptor build_ring_program_descriptor_impl(
     // The two-marker protocol requires both ring directions to carry slices. Linear topologies and a two-chip
     // ring leave one direction with no targets, whose writer intentionally discards its local packet stream.
     // (PB.3A lanes: the gather has up to 8 inputs; the AG's partial readiness needs one)
-    const bool partial_readiness_enabled = fused.topology == ttnn::ccl::Topology::Ring && ring_size > 2 &&
-                                           lanes_args == nullptr &&
+    const bool partial_readiness_enabled = !keys_gathered && fused.topology == ttnn::ccl::Topology::Ring &&
+                                           ring_size > 2 && lanes_args == nullptr &&
                                            ag_rt::uses_output_bank_owned_schedule({k_local}, {k}, /*dim=*/2);
     const uint32_t units_per_shard = units_in_group(KC, sll_t);
     const uint32_t work_unit_count = ring_size * units_per_shard;
@@ -635,6 +637,9 @@ ProgramDescriptor build_ring_program_descriptor_impl(
         writer_kernel.defines.emplace_back("INDEXER_SCORE_RANGES", "1");
         compute_kernel.defines.emplace_back("INDEXER_SCORE_RANGES", "1");
     }
+    if (keys_gathered) {  // PB.KR: every shard already in k (the gathered buffer): no arrival gate, no k_local read
+        reader_kernel.defines.emplace_back("INDEXER_SCORE_KEYS_GATHERED", "1");
+    }
 
     // Append uniform scalar fields to a kernel's common argument list, preserving order.
     const auto append_scalars = [](KernelDescriptor::RTArgList& rt, const auto& range) {
@@ -776,6 +781,9 @@ ProgramDescriptor build_ring_program_descriptor_impl(
     desc.kernels.push_back(std::move(reader_kernel));
     desc.kernels.push_back(std::move(writer_kernel));
     desc.kernels.push_back(std::move(compute_kernel));
+    if (keys_gathered) {  // PB.KR: the caller put every shard in k before the call: no all-gather kernels
+        return desc;
+    }
 
     // Producer-side signaler copies the consumer's receiver cores + signal semaphores.
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> ag_sig =
@@ -971,6 +979,9 @@ RingIndexerScoreDsaMeshWorkloadFactory::create_mesh_workload(
         if (args.lane_rows > 0) {
             shared.lane = lane_of_device(args, shared.device_index, shared.tp_index, tensors.q.logical_shape()[2]);
         }
+        if (args.keys_gathered) {  // PB.KR: no all-gather kernels to patch
+            continue;
+        }
         for (size_t index = 0; index < kernel_indices.size(); ++index) {
             auto& plan = shared.ag_plans[index];
             plan.kernel_idx = kernel_indices[index];
@@ -1102,7 +1113,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         ag_updates[2].emplace_back(ag_rt::kWriterReadySemaphoreFieldOffset, scalar_controls.forward_semaphore);
         ag_updates[3].emplace_back(ag_rt::kWriterReadySemaphoreFieldOffset, scalar_controls.backward_semaphore);
     }
-    if (update_extent) {
+    if (update_extent && !args.keys_gathered) {
         const auto& shape = k_local.padded_shape();
         const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
@@ -1221,7 +1232,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         }
 
         // Semaphore rotation need not rewrite the unchanged extent or consumer geometry.
-        for (size_t i = 0; i < ag_updates.size(); ++i) {
+        for (size_t i = 0; i < ag_updates.size() && !args.keys_gathered; ++i) {
             patch_fields(i, ag_updates[i]);
         }
     }

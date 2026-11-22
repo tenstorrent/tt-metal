@@ -209,6 +209,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     // Bring-up fork (PB.3M): each lane buffer gathered to its own lanes' extent (operation_attributes_t).
     bool lane_own_extent = false,
     // Bring-up fork (PB.7C): per-device query-row ranges (operation_attributes_t::lane_ranges); empty = off.
-    const std::vector<uint32_t>& lane_ranges = {});
+    const std::vector<uint32_t>& lane_ranges = {},
+    // Bring-up fork (PB.KR): every shard of the keys already in k (operation_attributes_t::keys_gathered).
+    bool keys_gathered = false);
 
 }  // namespace ttnn::experimental::bringup

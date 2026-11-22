@@ -199,6 +199,12 @@ struct operation_attributes_t {
     static constexpr uint32_t kRangeWords = 5;
     static constexpr uint32_t kRangeStride = 1 + kRangesMax * kRangeWords;
     bool has_lane_ranges() const { return !lane_ranges.empty(); }
+    // Bring-up fork option (DeepSeek-V4.1 PB.KR, PACKED_KEYS_OWNED; default false = the fused ring gathers the keys):
+    // with lane_ranges, k (the gathered buffer) already holds every SP shard of the keys each device reads (the
+    // caller moved them there before the call, e.g. each segment's keys to its own chips only): no all-gather kernels,
+    // no arrival gate, the own shard read from k too (k_local only fixes the shard geometry), and the all-gather's
+    // worker column computes. Same scores. HASHED.
+    bool keys_gathered{false};
     // Bring-up fork block epilogue (opt-in, fused ring only; default 0 / false = no epilogue, the program unchanged):
     // block_keys > 0 when tensor_args.block_bias or block_max_out is given -- blocks of block_keys adjacent logical
     // keys (block b = keys [b block_keys, (b + 1) block_keys)), applied by the writer to the untilized scores.

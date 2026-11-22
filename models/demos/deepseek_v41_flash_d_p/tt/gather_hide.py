@@ -480,6 +480,14 @@ class Hide:
         the prefetch gathers planned there."""
         self.dec_done = True
         self.attention(self.dec_layer, steps, key=("dec",))
+        keys = getattr(self.oc, "keys", None)
+        if keys is not None:  # PB.KR: the decoded histories' key sends, as pieces over the regions before each reader
+            keys.make_plan(self.order, self.dec_layer, self.oc.model.index_sources())
+
+    def _key_gathers(self, key) -> list:
+        """PB.KR (PACKED_KEYS_OWNED=on): region ``key``'s index-key send pieces [(lane, fn(sub), est ms)]."""
+        keys = getattr(self.oc, "keys", None)
+        return keys.gathers(key) if keys is not None else []
 
     def attention(self, i: int, steps: list, key=None):
         """Layer i's attention phase (``steps``: fn(previous result) each) as a region beside its share of the
@@ -492,6 +500,9 @@ class Hide:
             p = self._prep(ckv, r.start, ("slot", k))
             if p is not None:
                 plans.append((r.lane, p))
+        kg = [(lane, g) for lane, g, _ in self._key_gathers(("attn", i) if key is None else key)]
+        if not plans and kg:
+            return self.split.region(kg, steps, "attention")
         if not plans:
             out = None
             for step in steps:
@@ -506,7 +517,7 @@ class Hide:
             else:
                 history_gather.prefetch_gather(p, sub)
 
-        gathers = [(lane, lambda sub, p=p: one(sub, p)) for lane, p in plans]
+        gathers = [(lane, lambda sub, p=p: one(sub, p)) for lane, p in plans] + kg
         return self.split.region(gathers, steps, "attention")
 
     def flush(self, s: int) -> None:
@@ -552,6 +563,7 @@ class Hide:
         if group is not None:  # PB.HG: every segment's tail to its own chips, in place (no tail buffer / slice_write)
             plan = history_gather.owned_tails_prepare(group, self.chunk, self._locs(group, ("tail",)))
             pieces = [(lane, g) for lane, g, _ in self._long_gathers(("tails", i))] if self.long else []
+            pieces += [(lane, g) for lane, g, _ in self._key_gathers(("tails", i))]
             STATS["tails"] += len(group.ckvs)
             gathers = [(-1, lambda sub: history_gather.owned_tails_send(plan, sub))] + pieces
             return self.split.region(gathers, steps, "indexer", after_last=self.long)
@@ -780,7 +792,7 @@ class Hide:
         packs = [lambda prev, j=j: (self._pack(j), prev)[1] for j in self.pack_at.pop(key, ())]
         n = len(steps)
         steps = list(steps) + packs
-        gathers = self._long_gathers(key)
+        gathers = self._long_gathers(key) + self._key_gathers(key)
         if not gathers:
             out = None
             for step in steps:

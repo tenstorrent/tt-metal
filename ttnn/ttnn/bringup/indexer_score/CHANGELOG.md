@@ -313,3 +313,26 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   device/ring_indexer_score_dsa_program_factory.cpp, device/indexer_score_device_operation.cpp,
   device/indexer_score_device_operation.hpp, device/indexer_score_device_operation_types.hpp,
   indexer_score_nanobind.cpp, README.md
+
+### PB.KR (deepseek_v41_flash_d_p, 2026-11-22): keys_gathered, the lane_ranges ring without its all-gather
+- What: opt-in `ring_indexer_score_dsa(keys_gathered=False)` (needs `lane_ranges`): `k` already holds every SP shard
+  of the keys each device reads (the caller moved them there before the call). The program has no all-gather kernels
+  (create returns after the reader / writer / compute; the override skips the AG argument plans and extents), the
+  reader (define INDEXER_SCORE_KEYS_GATHERED) never waits on a shard's arrival and reads its own shard from `k` too
+  (k_local only fixes the shard geometry), no partial readiness, and the all-gather's reserved worker column computes
+  (the factory reserves 0 columns: 11 x 10 = 110 cores on the Galaxy's capped grid instead of 10 x 10). Compute,
+  schedule order aside, is the ranges program's: the same scores. Hashed.
+- Why: deepseek_v41_flash_d_p PB.KR (OWNER 2026-11-21, option 1, PACKED_KEYS_OWNED): a chip-aligned packed chunk's
+  ranges ring moved EVERY segment's keys around the SP ring to every chip (4 x ~62 MB received a chip a layer at 1M);
+  the model now sends each segment's decoded keys only to the chips it owns (tt/owned_keys.py, ahead of the layer,
+  beside the attention phases) into one gathered buffer and scores locally.
+- Measured (8x4, op level, the model's indexer objects and configs, random data, a 1M slot, 4 chip-aligned 2048-row
+  segments at 1024000, kv_len 516096; tests/perf/test_kr_probe.py test_kr_score): keys_gathered 9.0-9.8 ms a call vs
+  the ranges ring 10.9-11.2 ms (same run); scores over [0, kv_len) bit-identical on every chip (columns past kv_len are
+  not written by either program).
+- Default: off (false): the programs and their hashes unchanged.
+- Run: models/demos/deepseek_v41_flash_d_p/tests/perf/test_kr_probe.py (KR_PARTS=score) and the model's packed oracle /
+  fast tier / walls; no fork regression suite on the 8x4 (PACKED_RULES).
+- Files: device/indexer_score_device_operation_types.hpp, device/indexer_score_device_operation.cpp,
+  device/indexer_score_device_operation.hpp, device/ring_indexer_score_dsa_program_factory.cpp,
+  device/kernels/reader_indexer_score.cpp, indexer_score_nanobind.cpp, README.md

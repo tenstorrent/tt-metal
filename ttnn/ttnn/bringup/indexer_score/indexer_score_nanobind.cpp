@@ -358,6 +358,11 @@ void bind_indexer_score(nb::module_& mod) {
                 positions start + (row - row_lo) against buffer `buffer`'s keys (0: k / k_local, i: k_extra[i - 1])
                 up to kv_len; rows no range covers are not written. Every value (the buffer map too) is a runtime
                 value; kv_len must cover every range's. The key multicast is off in this mode.
+            keys_gathered: optional bool (default False; bring-up fork, deepseek_v41_flash_d_p PB.KR, needs
+                lane_ranges): k already holds every SP shard of the keys each device reads (the caller moved them
+                there, e.g. each segment's keys to its own chips only): no all-gather, no arrival wait, the own shard
+                read from k too (k_local only fixes the shard geometry), and the all-gather's worker column computes.
+                Same scores.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -402,7 +407,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("k_extra") = std::vector<ttnn::Tensor>{},
         nb::arg("k_local_extra") = std::vector<ttnn::Tensor>{},
         nb::arg("lane_own_extent") = false,
-        nb::arg("lane_ranges") = std::vector<uint32_t>{});
+        nb::arg("lane_ranges") = std::vector<uint32_t>{},
+        nb::arg("keys_gathered") = false);
 }
 
 }  // namespace ttnn::operations::bringup::indexer_score::detail

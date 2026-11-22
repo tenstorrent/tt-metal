@@ -1,0 +1,108 @@
+{
+ "used": [
+  {
+   "id": "DS41-328",
+   "how": "one key capacity a chunk: the gathered key buffer is sized per (capacity, source) and asserted equal to the ring's k shape (tt/packed_glued._index_dynamic)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-381",
+   "how": "probe slots / states all one capacity (test_kr_probe uses one 1M capacity for every segment)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-343",
+   "how": "keys_gathered passes k_extra=[] and every range on buffer 0 instead of repeating the gathered tensor (a tensor passed twice binds once)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-375",
+   "how": "per-chip unicasts of tt/owned_gather.OwnedSend reused for the key send (no same-mesh multicast to a segment's rectangle)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-376",
+   "how": "the key send reuses OwnedSend's port cores routed by root direction; only a page-size option added",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-382",
+   "how": "the key-send pieces run in the gather-hide regions only as gathers on the gather column (OwnedSend's cores), nothing on the whole grid inside a region",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-336",
+   "how": "probe (a) table: the 4x2k attention section's 12 history decodes (3.73 ms) identified as a separate cost from the ring",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the lane_ranges ring leaves logits columns past kv_len unwritten (DS41-383 added)",
+  "the fused ring reserves a compute column for its AG workers on the capped grid (DS41-384 added)",
+  "op-level probe time drift between runs of one held process (DS41-385 added)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: the on path drops the 5 scratch key buffers of the ranges ring (k_extra=[]); the key send moves exactly each segment's rows [0, hi) per owner"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "built after the two probes without asking (BREADCRUMBS PB.KR: DECIDED lines); oracle / determinism / digests measured by the gate"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "tests/perf/test_kr_probe.py: BATCH_SHARED, BATCH_LAYERS executed, no load-time env; gate units unchanged"
+  }
+ ],
+ "cited_only": [
+  "DS41-383",
+  "DS41-384",
+  "DS41-385"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.KR",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-22T01:16:43",
+  "head": "911817a3e39",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.KR.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.KR_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.KR.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_kr_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/gather_hide.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/owned_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/owned_keys.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_glued.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/kernels/reader_indexer_score.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/ring_indexer_score_dsa_program_factory.cpp",
+   "ttnn/ttnn/bringup/indexer_score/indexer_score_nanobind.cpp"
+  ]
+ }
+}

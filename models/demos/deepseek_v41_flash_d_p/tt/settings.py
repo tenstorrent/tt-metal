@@ -1525,6 +1525,20 @@ TABLE = {
         "off = PB.9G / PB.MB4: every segment's history all-gathered to all chips into its lane's buffer. The same "
         "bytes at the same rows of every chip's table (data moves)",
     ),
+    "PACKED_KEYS_OWNED": Setting(
+        "on",
+        ("on", "off"),
+        "PB.KR (OWNER 2026-11-21, option 1), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings and refreshed in batch_call_apply). A chip-aligned packed chunk (PACKED_CHIPS=on, "
+        "PACKED_GLUED_DYNAMIC=on) whose histories go to their own chips (PACKED_HIST_OWNED=on): on = each segment's "
+        "decoded index keys go ONLY to the chips that segment owns (tt/owned_keys.py through tt/owned_gather.py, one "
+        "program a source: the history [0, c wr) as pieces beside the attention phases between the decodes' region "
+        "and the source's indexer (hidden like the history prefetch), the chunk's own rows [c wr, hi) at the indexer) "
+        "into ONE gathered key buffer a source, then each chip scores its rows on its own keys "
+        "(ttnn.bringup.ring_indexer_score_dsa keys_gathered: no ring all-gather, every grid column computes); the "
+        "same top-k. off = PB.7C: the one-call ring moves every segment's keys around the SP ring to every chip. "
+        "Single-request chunks are unchanged either way",
+    ),
     "HIST_OWNED_LINKS": Setting(
         "2",
         ("2", "1"),
