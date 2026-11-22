@@ -1,7 +1,85 @@
 # Hand-off: sparse MLA full-layer KV push + two-level top-k (GLM-5.3, Kimi K3.1)
 
-Status as of 2026-11-21. This is an **experiment branch**, not for merge. It holds measurement-only switches and CI
+Status as of 2026-11-22 (see section 0 for the overnight update). This is an **experiment branch**, not for merge. It holds measurement-only switches and CI
 tweaks. Read the whole document before running anything on a Galaxy.
+
+## 0. Update 2026-11-22 (overnight, bh-glx-120-b07u08, 8x4 Galaxy)
+
+Sections 1-8 below are the 2026-11-21 state. This section supersedes them where they disagree.
+
+### 0.1 Commits on top of `4b689a36015`
+
+| Commit | Change | Measured (traced, 8x4) |
+|---|---|---|
+| `c4de2ee0abf` | Plan exits early in dense mode; plan `dense_below_2` (third output + header word `kWordDense2`) and push `second_dense`, so a GLM full layer uses ONE plan (its shared successors') instead of two | Dense plan 166 -> 41 us. Bit-identical to the two-plan path (GLM layer, metadata path, 10k/102k/410k) |
+| `230da3eb00d` | Push v2: plan `owner_major` table (one slot per owner: header + that owner's block bitmaps); push `inbox`: each chip sends every owner its slot (fused write+inc), arrivals = start fence, no plan-table all-gather; `reuse_inbox` for REST after PREFIX. Model: `SPARSE_KV_PUSH_INBOX` (default 1) | gather+push -> push: L14 1M 507 -> 336 us, L62 1M 1559 -> 1454 us, 46k -42 us; REST 108-120 -> 94-98 us. Bit-exact vs all-gathered tables (real GLM top-k L14/L62; GLM and K3.1 layers on the metadata path) |
+| `67b99fb5e16` | Plan batches the L1 loads of its scatter/rewrite loops | Plan 222 -> 210 us (1M), 162 -> 149 us (46k) |
+| `1f9284d5cb2` | Full-layer cutoff per model: GLM-5.3 204,800, K3.1 300,000 (`SPARSE_MLA_FULL_PUSH_DENSE_BELOW` still overrides) | see 0.2 |
+
+Tests on this host: plan unit tests + push-vs-gather (real top-k) + dense-mode-vs-gather 22/22; sparse-MLA gate 6/6
+(incl. traced-vs-untraced); determinism 6/6. Gate, same host, v2 vs v1 push (traced ms): K3.1 warm 3.330 vs 3.364,
+GLM warm 3.007 vs 3.039, K3.1 long 6.350 vs 6.407, GLM long 5.051 vs 5.126.
+
+### 0.2 Real-weights runner A/B (local, depth 8, full 1M request, host chunk times)
+
+Depth 8 = K3.1 layers 0-7 (one working DSA layer, 3; the runner's LAST layer is KV-only, so the CI L24 leg has 5
+working DSA layers, not 6) and GLM layers 0-7 (full 0, 1, 2, 6; shared 3-5). Run-to-run noise per 50k band ~+-0.3 ms.
+
+- **GLM-5.3** (whole request): baseline (push off) 9,264-9,312 ms -> 8,212 ms (-11.6%). Push-always crosses the
+  baseline at ~205k (-0.3 ms/chunk at 205k, -1.6 at 256k, -13.4 at 1M); hence the 204,800 cutoff.
+- **K3.1** (whole request): 12,836-12,854 -> 12,686 ms (-1.2%, one DSA layer). Push-always crosses at ~300k
+  (-0.13 ms at 307k, -0.73 at 512k, -2.2 at 1M per DSA layer). The 300k cutoff stays.
+- K3.1 DSA layer at 1M in push mode (chip 0 RT timeline): indexer 6.08 ms, stems 0.43, top-k 0.77 (beside the idle
+  gather), plan 0.28, push 2.23, sparse SDPA 0.82. GLM full layer at 1M: indexer 3.87, stems 0.42, top-k 0.59,
+  plan 0.21, push 0.65, SDPA 0.88; the shared layer after it: REST push 49 us + SDPA.
+
+### 0.3 Answers to the open questions
+
+- **Why the push is slow at long context / low eth utilization.** It is fabric-bound, not kernel-bound. With
+  dimension-ordered routing the 8-long Y ring carries ~2x the hop-bytes of the 4-long X ring (avg 2 vs 1 hops); at
+  L62 1M the busiest Y links forward ~13 GB/s (about half of 25). Per sender, a loaded channel moves ~660 packets while
+  others idle (direction imbalance follows from the routing). Packet payload 6-14 KB and deeper sender pipelining
+  (mux buffers 2->4, kBatch 4->8) change nothing (1.46-1.50 ms). Real GLM top-k: a needed row is needed by ~6 chips
+  (L62: 46.5k distinct rows/chip, 239k union). Simulated on that top-k, a per-row multicast tree (Y trunk, X
+  branches) cuts the busiest link 62.6k -> 32.8k rows (~1.9x); the fabric's rectangle multicast does NOT help (63%
+  of deliveries wasted, X links flood). A real tree needs MoE-style store-and-forward (`sparse_dispatch_2d`, on main
+  since 2026-11-19, not on this branch), which also runs every link at 1-hop efficiency. Biggest remaining lever for
+  GLM (shared layers' PREFIX push 1.45 ms vs 0.82 ms attention window at L62 -> ~0.6 ms exposed x 57 layers).
+- **Why the planner is slow.** Not the NoC exchanges (each 6-18 us) but per-index L1 work on two RISCs: bucket+scatter
+  ~66 us and rank rewrite ~70 us of ~210 us at 1M (DPRINT step timestamps). Load batching gives 6%. The earlier
+  measured TRISC variant (208 -> 117 us) is the remaining big lever if done on supported APIs.
+- **Cutoffs.** GLM ~200k, K3.1 ~300k (0.2). They move down as fixed costs drop.
+- **Top-k faster / smaller arrays.** Below the cutoff top-k hides behind the gather, so small-T support (8-key blocks
+  pay below ~128k) would not show. Above it top-k is serial (0.6-0.8 ms at 1M). Proposal, exact: process stage-3
+  candidate blocks in descending block-max order (stage 2 already sorts them) and stop merging once the running
+  2048th key >= the next chunk's best block max. Gain depends on how peaked the logits are; measure on real logits.
+- **Fuse top-k into the indexer.** No: in the ring layout no core holds a full logit row, and the partial fusion that
+  pays (indexer block maxima) is in.
+- **K3.1: plan + push as one op / better overlap.** The table exchange is now inside the push (v2). Fusing the plan
+  too would only save a launch (plan needs all 120 cores, push 24). Hiding plan + PREFIX behind the Q/KV stems is
+  worth at most the stems (~0.43 ms) and would take their grid. Not worth it.
+
+### 0.4 Harness (`tools/`, also see tools/README.md)
+
+- `run_local.patch`: local copy of `run_multirank_pcc.sh` with `LOCAL_NUM_LAYERS/LOCAL_REQUEST_LEN/LOCAL_CHECK_PCC/
+  LOCAL_WARMUP_CHUNKS` and the venv python for producer + runner (login shells reset PATH). Needs `TTRUN_DIR` with a
+  `hostfile` of `localhost`. `LOCAL_CHECK_PCC=1` is required: it drives the producer's completion drain that logs
+  `CHUNK_RETIRE` (per-chunk host spans).
+- `drive2.sh <model> <tag> <layers> "<env>"`: one run (about 3 min K3.1, 3-13 min GLM incl. first compile).
+  Extra per-rank env goes through `SCRATCH_RUNNER_ENV` (uncommitted hook in run_multirank_pcc.sh; tt-run does not
+  forward env). `analyze.py A B` compares host chunk times per band; `rtsum.py`/`timeline.py` read the RT dump
+  (uncommitted `SCRATCH_RT_DUMP/SCRATCH_RT_KEEP` hook in prefill_runner.py). RT mis-times sub-device-overlapped
+  programs (top-k beside the gather shows negative durations).
+- `tests/nightly/blackhole/sdpa/test_zz_push_bench_scratch.py` (`BENCH_INBOX=1`, `BENCH_LAYERS`, `BENCH_STARTS`,
+  `BENCH_PAYLOAD`): per-step traced push timings on the staged real GLM 1M top-k, plus a bit-exact v1/v2 check, ~1 min.
+  Compare FP8 buffers as bytes (random FP8 holds NaNs).
+
+### 0.5 Next steps
+
+1. Multicast-tree push (store-and-forward, `sparse_dispatch_2d`-style) for long contexts: ~1.9x less busiest-link load.
+2. Top-k stage-3 early exit (0.3); then re-measure the cutoffs.
+3. Plan on 5 RISCs (supported APIs) or a different rank scheme.
+4. CI A/B of the four commits with `topk_push_long` (both runner legs) before productionizing.
 
 ## 1. TL;DR
 
