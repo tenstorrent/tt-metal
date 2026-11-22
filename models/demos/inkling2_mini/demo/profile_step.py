@@ -10,6 +10,7 @@ then: python -m models.demos.inkling2_mini.demo.profile_report <ops_perf_results
 import sys
 
 import ttnn
+from models.demos.inkling2_mini.tt.device import open_device
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.model import Inkling2Model
 
@@ -18,7 +19,7 @@ def main():
     from tracy import signpost
 
     max_ctx = int(sys.argv[1]) if len(sys.argv) > 1 else 4096
-    dev = ttnn.open_device(device_id=0, trace_region_size=512 << 20)
+    dev = open_device(trace_region_size=512 << 20)
     try:
         model = Inkling2Model(dev, max_ctx=max_ctx, log=lambda s: None)
         gen = Generator(model)

@@ -22,6 +22,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.inkling2_mini.tt.device import open_device
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.model import Inkling2Model
 
@@ -80,7 +81,7 @@ def main():
         ap.error("--prompt needs --tokenizer or INKLING_CKPT")
     res = {"max_ctx": args.max_ctx, "trace_mib": args.trace_mib}
     t0 = time.time()
-    dev = ttnn.open_device(device_id=0, trace_region_size=args.trace_mib << 20)
+    dev = open_device(trace_region_size=args.trace_mib << 20)
     try:
         res["dram_free_open_gib"] = dram_free(dev)[0]
         model = Inkling2Model(dev, max_ctx=args.max_ctx, log=lambda s: None)

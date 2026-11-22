@@ -110,7 +110,9 @@ def main():
     args = ap.parse_args()
     if args.b8_layers and not args.b8_root:
         ap.error("--b8-layers needs --b8-root")
-    dev = ttnn.open_device(device_id=0, trace_region_size=args.trace_mib << 20)
+    from models.demos.inkling2_mini.tt.device import open_device
+
+    dev = open_device(trace_region_size=args.trace_mib << 20)
     try:
         model = Inkling2Model(
             dev, max_ctx=args.max_ctx, log=lambda s: None, layer_roots={L: args.b8_root for L in args.b8_layers}

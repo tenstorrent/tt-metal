@@ -57,10 +57,11 @@ HERE = Path(__file__).resolve()
 
 
 # ---------------------------------------------------------------- workers (run on the card)
-def _open(trace_mib=512):
-    import ttnn
+def _open(trace_mib=512, ring_kb=None):
+    """Decode workers: the bigger kernel-config ring (tt/device.py). ring_kb=0: the default ring."""
+    from models.demos.inkling2_mini.tt.device import RING_KB, open_device
 
-    return ttnn.open_device(device_id=0, trace_region_size=trace_mib << 20)
+    return open_device(trace_region_size=trace_mib << 20, ring_kb=RING_KB if ring_kb is None else ring_kb)
 
 
 def worker_gate(out, golden):
@@ -165,7 +166,7 @@ def worker_prefill(out, golden, name, mode):
     toks, top5, pcc_pos, pcc32 = [], [], [], []
     last = None
     readback = 0.0
-    dev = _open()
+    dev = _open(ring_kb=0)  # prefill programs keep the default L1 (the ring takes RING_KB from the allocator)
     try:
         model = Inkling2Model(dev, max_ctx=LONG_CTX.get(name, T + 576), log=lambda s: None)
         gen = Generator(model)
