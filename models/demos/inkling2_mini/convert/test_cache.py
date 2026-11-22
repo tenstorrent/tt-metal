@@ -35,7 +35,7 @@ def test_load_layer_and_global(tmp_path):
     w.write("mlp_norm", 3, torch.randn(72, 32), "BF16", "RM", ["src"])
     w.write("router.w", 3, torch.randn(2304, 128), "FP32", "TILE", ["src"])
     w.write("final_norm", None, torch.randn(72, 32), "BF16", "RM", ["src"])
-    (tmp_path / "manifest.json").write_text(json.dumps({"schema": 1, "tensors": w.entries}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"schema": 1, "complete": True, "tensors": w.entries}))
 
     layer = cache.load_layer(tmp_path, 3, device=None)
     assert set(layer) == {"attn.w_o", "mlp_norm", "router.w"}
@@ -46,6 +46,41 @@ def test_load_layer_and_global(tmp_path):
     assert set(cache.load_global(tmp_path, device=None)) == {"final_norm"}
     with pytest.raises(KeyError):
         cache.load_layer(tmp_path, 4, device=None)
+
+
+def test_incomplete_manifest_refused(tmp_path):
+    w = Writer(tmp_path)
+    w.write("final_norm", None, torch.randn(72, 32), "BF16", "RM", ["src"])
+    (tmp_path / "manifest.json").write_text(json.dumps({"schema": 1, "complete": False, "tensors": w.entries}))
+    with pytest.raises(ValueError, match="not complete"):
+        cache.load_global(tmp_path)
+
+
+def test_dtype_map_keys():
+    from models.demos.inkling2_mini.convert.convert import check_dtype_map
+
+    check_dtype_map({"L00/experts.w_down": "BFP8", "L19/experts.w_gate_up": "BFP8"})
+    for bad in ("L21/experts.w_down", "L99/experts.w_down", "L3/experts.w_down", "L05/attn.w_o", "x"):
+        with pytest.raises(SystemExit):
+            check_dtype_map({bad: "BFP8"})
+
+
+def test_unit_key():
+    """A unit's key changes with the settings that shape it, and only with those of its own layer."""
+    from models.demos.inkling2_mini.convert.convert import unit_key
+
+    base = unit_key("L08", "BFP4", {}, (), None)
+    assert base == unit_key("L08", "BFP4", {"L09/experts.w_down": "BFP8"}, (), None)
+    changed = [
+        unit_key("L08", "BFP8", {}, (), None),
+        unit_key("L08", "BFP4", {"L08/experts.w_down": "BFP8"}, (), None),
+        unit_key("L08", "BFP4", {}, ("BFP4",), None),
+        unit_key("L08", "BFP4", {}, (), "/some/bf16-store"),
+    ]
+    assert base not in changed and len(set(changed)) == len(changed)
+    assert unit_key("global", None, {"L08/experts.w_down": "BFP8"}, ("BFP4",), None) == unit_key(
+        "global", None, {}, (), None
+    )
 
 
 def test_expert_dtype_map():
@@ -82,7 +117,7 @@ def test_stick_round_trip(tmp_path, dtype):
     vals = {e["name"]: ttnn.to_torch(ttnn.load_tensor(tmp_path / e["file"])) for e in w.entries}
     assert not stick_layer(w, 0, ("BFP4", "BFP8")[dtype == "BFP4"])  # other dtype: left alone
     assert stick_layer(w, 0, (dtype,))
-    (tmp_path / "manifest.json").write_text(json.dumps({"schema": 1, "tensors": w.entries}))
+    (tmp_path / "manifest.json").write_text(json.dumps({"schema": 1, "complete": True, "tensors": w.entries}))
 
     assert cache.layouts(tmp_path, 0) == {"experts.w_gate_up": "STICK", "experts.w_down": "STICK"}
     layer = cache.load_layer(tmp_path, 0)

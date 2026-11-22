@@ -25,6 +25,10 @@ def manifest(root: Path | str = DEFAULT_ROOT) -> dict:
     m = json.loads((Path(root) / "manifest.json").read_text())
     if m.get("schema") != 1:
         raise ValueError(f"{root}: manifest schema {m.get('schema')} != 1")
+    if not m.get("complete"):
+        raise ValueError(
+            f"{root}: manifest is not complete (conversion unfinished or interrupted); rerun the converter"
+        )
     return m
 
 

@@ -6,7 +6,9 @@
     python -m models.demos.inkling2_mini.convert [--ckpt DIR] [--out DIR] [--layers 0,20] [--skip-global]
 
 Each file is ``ttnn.dump_tensor`` of a host tensor in its final dtype + layout. ``manifest.json`` is rewritten
-after every unit (global, L00 ... L23); a rerun skips units already listed there.
+after every unit (global, L00 ... L23). Each unit records a key over the converter version and the settings that
+shape it (expert dtypes, dtype-map entries, stick layout, expert source); a rerun skips a unit only when its key
+is unchanged, so changing the dtype map reconverts exactly the layers it touches.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import resource
 import subprocess
 import time
@@ -28,6 +31,8 @@ from models.demos.inkling2_mini.convert.source import Checkpoint, deinterleave_g
 from models.demos.inkling2_mini.convert.stick import write_sticks
 
 P = "model.llm."
+# Bump when a change to this file changes what any unit writes: every unit's key changes, so a rerun reconverts.
+CONVERTER_VERSION = 2
 N_LAYERS = 24
 GLOBAL_LAYERS = {5, 11, 17, 23}
 LOOP_LAYERS = range(6, 18)
@@ -336,6 +341,36 @@ def convert_experts(
         w.entries[-1].update(fallback=True, fallback_reason=reason)
 
 
+DTYPE_MAP_KEY = re.compile(r"L(\d\d)/(experts\.w_gate_up|experts\.w_down)")
+
+
+def check_dtype_map(dtype_map: dict):
+    """Refuse keys the converter would not apply as written: only ``Lxx/experts.w_gate_up`` and
+    ``Lxx/experts.w_down`` of the NVFP4 layers 0-19. Layers 20-23 come as MXFP8 and are always stored BFP8."""
+    bad = []
+    for k in dtype_map:
+        m = DTYPE_MAP_KEY.fullmatch(k)
+        if not m or int(m[1]) >= N_LAYERS:
+            bad.append(f"{k} (not Lxx/experts.w_gate_up or Lxx/experts.w_down with xx < {N_LAYERS})")
+        elif int(m[1]) in MXFP8_LAYERS:
+            bad.append(f"{k} (layers {MXFP8_LAYERS.start}-{MXFP8_LAYERS.stop - 1} are MXFP8, always BFP8)")
+    if bad:
+        raise SystemExit(f"--dtype-map: bad keys: {bad}")
+
+
+def unit_key(unit: str, expert_dtype: str | None, dtype_map: dict, stick_dtypes, expert_source: str | None) -> str:
+    """Hash of everything that decides what ``unit`` writes (besides the checkpoint, checked separately)."""
+    spec = {"version": CONVERTER_VERSION, "unit": unit}
+    if unit != "global":
+        spec |= {
+            "expert_dtype": expert_dtype,
+            "dtype_map": {k: v for k, v in sorted(dtype_map.items()) if k.startswith(unit + "/")},
+            "stick_dtypes": sorted(stick_dtypes),
+            "expert_source": expert_source,
+        }
+    return hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -390,11 +425,7 @@ def main(argv=None):
     )
     args = ap.parse_args(argv)
     dtype_map = json.loads(args.dtype_map.read_text()) if args.dtype_map else {}
-    bad = [
-        k for k in dtype_map if not (k[:1] == "L" and k.split("/", 1)[-1] in ("experts.w_gate_up", "experts.w_down"))
-    ]
-    if bad:
-        raise SystemExit(f"--dtype-map: only Lxx/experts.w_gate_up and Lxx/experts.w_down keys, got {bad}")
+    check_dtype_map(dtype_map)
 
     ck = Checkpoint(args.ckpt)
     store = Checkpoint(args.bf16_store) if args.bf16_store else None
@@ -412,6 +443,7 @@ def main(argv=None):
         "expert_source": str(args.bf16_store) if args.bf16_store else "dequant of --ckpt",
         "min_weight_pcc": MIN_WEIGHT_PCC,
         "units_done": [],
+        "unit_keys": {},
         "unit_seconds": {},
         "tensors": [],
     }
@@ -423,7 +455,17 @@ def main(argv=None):
     if args.bfp8_expert_layers == "all":
         args.bfp8_expert_layers = ",".join(map(str, range(N_LAYERS)))
     bfp8 = {int(x) for x in args.bfp8_expert_layers.split(",") if x} | set(MXFP8_LAYERS)
-    units = ([] if args.skip_global else ["global"]) + [f"L{int(x):02d}" for x in args.layers.split(",") if x]
+    layers = [int(x) for x in args.layers.split(",") if x]
+    if bad := [x for x in layers + sorted(bfp8) if not 0 <= x < N_LAYERS]:
+        raise SystemExit(f"--layers / --bfp8-expert-layers: no layer {bad} (0-{N_LAYERS - 1})")
+    units = ([] if args.skip_global else ["global"]) + [f"L{x:02d}" for x in layers]
+    expert_source = str(args.bf16_store) if args.bf16_store else None
+    manifest.setdefault("unit_keys", {})
+
+    def key(unit):
+        layer = None if unit == "global" else int(unit[1:])
+        dtype = None if layer is None else "BFP8" if layer in bfp8 else "BFP4"
+        return unit_key(unit, dtype, dtype_map, stick_dtypes, expert_source)
 
     def save():
         manifest["fallback_layers"] = sorted({e["layer"] for e in w.entries if e["fallback"]})
@@ -433,7 +475,10 @@ def main(argv=None):
         manifest["expert_layout"] = {
             f"L{e['layer']:02d}/{e['name']}": e["layout"] for e in w.entries if e["name"].startswith("experts.")
         }
-        manifest["complete"] = set(manifest["units_done"]) >= {"global"} | {f"L{i:02d}" for i in range(N_LAYERS)}
+        all_units = {"global"} | {f"L{i:02d}" for i in range(N_LAYERS)}
+        manifest["complete"] = set(manifest["units_done"]) >= all_units and all(
+            u in manifest["unit_keys"] for u in all_units
+        )
         manifest["peak_rss_gib_last_run"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, 2)
         args.out.mkdir(parents=True, exist_ok=True)
         tmp = manifest_path.with_suffix(".tmp")
@@ -442,19 +487,27 @@ def main(argv=None):
 
     for unit in units:
         if unit in manifest["units_done"] and not args.force:
-            print(f"{unit}: already in manifest, skipped", flush=True)
-            continue
+            if manifest["unit_keys"].get(unit) == key(unit):
+                print(f"{unit}: already in manifest with the same settings, skipped", flush=True)
+                continue
+            print(f"{unit}: settings or converter version changed, reconverting", flush=True)
         t0 = time.time()
         layer = None if unit == "global" else int(unit[1:])
+        # Not done until rewritten: a crash mid-unit leaves the manifest incomplete, so the loader refuses it.
+        manifest["units_done"] = [u for u in manifest["units_done"] if u != unit]
+        manifest["unit_keys"].pop(unit, None)
         w.entries[:] = [e for e in w.entries if e["layer"] != layer]  # drop a half-written unit
+        save()
         if layer is None:
             convert_global(ck, w)
         else:
             convert_layer(ck, w, layer, "BFP8" if layer in bfp8 else "BFP4", dtype_map, store, stick_dtypes)
-            manifest.setdefault("dtype_map", {}).update(
-                {k: v for k, v in dtype_map.items() if k.startswith(f"L{layer:02d}/")}
-            )
-        manifest["units_done"] = [u for u in manifest["units_done"] if u != unit] + [unit]
+            m = manifest.setdefault("dtype_map", {})
+            for k in [k for k in m if k.startswith(f"{unit}/")]:
+                del m[k]
+            m.update({k: v for k, v in dtype_map.items() if k.startswith(f"{unit}/")})
+        manifest["units_done"].append(unit)
+        manifest["unit_keys"][unit] = key(unit)
         manifest["unit_seconds"][unit] = round(time.time() - t0, 1)
         save()
         rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
