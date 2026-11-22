@@ -163,11 +163,17 @@ class DPPrefill:
         on_chunk: Optional[Callable[[int, int, float], None]] = None,
         slot: int = 0,
         start: int = 0,
+        times: Optional[dict] = None,
+        sync_chunks: bool = False,
     ) -> int:
         """Prefill ``ids`` into cache slot ``slot`` from position ``start``; returns the prompt length. ``start`` > 0
         continues the slot's prompt, which holds ``ids[:start]`` (:meth:`resume_start`). The chunks keep to the
         ``chunk`` grid: a start off it runs a partial first chunk up to the grid. ``on_chunk(start, end, seconds)``
-        after each chunk (host enqueue time; the device runs behind)."""
+        after each chunk (host enqueue time; the device runs behind, unless ``sync_chunks``).
+
+        ``times`` (seconds, added up): ``input`` building the chunks' inputs, ``enqueue`` issuing their programs,
+        ``drain`` waiting for the device after the last one (with ``sync_chunks``: after each one, so ``enqueue +
+        drain`` of a chunk is its device time; slower, the host no longer runs ahead), ``chunks`` how many."""
         import ttnn
 
         ids = [int(t) for t in ids]
@@ -178,18 +184,30 @@ class DPPrefill:
             raise ValueError(
                 f"start {start} for a {n}-token prompt: 32-aligned, before its end, at most {self.max_seq - self.chunk}"
             )
+        times = times if times is not None else {}
         kv = self.slots[slot]
         pos = int(start)
         while pos < n:
             end = min(n, (pos // self.chunk + 1) * self.chunk)
             t0 = time.perf_counter()
             inp = self.runtime.make_chunk_input(ids[pos:end], pos)
+            t1 = time.perf_counter()
             self.runtime.prefill_chunk(inp, kv, slot_id=0, actual_start=pos, actual_end=end)
             ttnn.deallocate(inp)
+            t2 = time.perf_counter()
+            if sync_chunks:
+                ttnn.synchronize_device(self.mesh_device)
+            t3 = time.perf_counter()
+            times["input"] = times.get("input", 0.0) + t1 - t0
+            times["enqueue"] = times.get("enqueue", 0.0) + t2 - t1
+            times["drain"] = times.get("drain", 0.0) + t3 - t2
+            times["chunks"] = times.get("chunks", 0) + 1
             if on_chunk is not None:
-                on_chunk(pos, end, time.perf_counter() - t0)
+                on_chunk(pos, end, t3 - t0)
             pos = end
+        t0 = time.perf_counter()
         ttnn.synchronize_device(self.mesh_device)
+        times["drain"] = times.get("drain", 0.0) + time.perf_counter() - t0
         return n
 
     def host_states(self, seq_len: int, times: Optional[dict] = None, slot: int = 0, base: int = 0) -> dict:

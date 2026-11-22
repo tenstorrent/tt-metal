@@ -2424,7 +2424,8 @@ class _Scheduler:
         user.thinking_mode = conv.thinking_mode
         user.reasoning_effort = conv.reasoning_effort
         user.system_prompt = conv.system_prompt
-        user.pos = conv.snapshot.pos
+        # (not snapshot.pos: a speculative verify block leaves the session past the drafts it rejected)
+        user.pos = len(conv.tokens)
         logger.info(
             f"user {turn.user_key!r} (slot {turn.slot}): {user.pos}-token conversation restored from host RAM in "
             f"{time.perf_counter() - t0:.2f}s ({self.server.pool.host_summary()})"
@@ -4079,8 +4080,15 @@ def serve(
     if args.prefill or num_stages is not None:
         # The layout of tests/prefill/test_prefill_decode_demo.py: the whole mesh opened as
         # ``rows x 4`` (8 x 4 = all 32 chips of a Galaxy). ``num_stages`` carves that many 1x4
-        # submeshes off the front; the rest of the mesh stays open and idle.
-        chips = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        # submeshes off the front; the rest of the mesh stays open and idle. A profile's mesh_shape spares the
+        # system-mesh query, which in a multi-mesh fabric job would bring the control plane up before the fabric
+        # is configured.
+        profile_mesh = args.system_config.device.mesh_shape
+        chips = (
+            profile_mesh[0] * profile_mesh[1]
+            if profile_mesh
+            else ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+        )
         if chips % _TP_SIZE:
             print(
                 f"TP{_TP_SIZE} stages need a multiple of {_TP_SIZE} chips, but the system has {chips}", file=sys.stderr
