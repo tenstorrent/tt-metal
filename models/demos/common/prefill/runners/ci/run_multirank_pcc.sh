@@ -207,7 +207,8 @@ case "${MODEL}" in
     # is the deepest depth the golden's decoder-output stream covers, so sc1 is a real accuracy gate
     # rather than a smaller copy of sc4. sc1 keeps the default 256k context, so its perf probes are
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
-    # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
+    # baseline for sc4 -- 24 layers against 93. CI's sc4 leg and summary now run K3.1 (kimi_k3_1 below);
+    # K3's sc4 stays runnable by hand and keeps its perf_baselines.json entry.
     SC1_NUM_LAYERS=24
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized; \
       export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
@@ -246,6 +247,9 @@ case "${MODEL}" in
     # The golden is the 8192-token prompt of a vLLM capture and its span bounds the compare, so the first 8192
     # positions are PCC'd and the rest of the request (the trace's tokens repeated) is timed.
     REQUEST_LEN=1049600
+    # Demand a measurement: until perf_baselines.json has a kimi_k3_1 entry for the config, the gate otherwise
+    # returns before reading the metrics, and a leg that measured nothing would pass green.
+    REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-1}"
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"

@@ -27,10 +27,10 @@ on:
         type: boolean
         default: false
         description: "K3 > k3_prefill_runner_24l"
-      k31_prefill_runner_93l:
+      k31_runner:
         type: boolean
         default: false
-        description: "K3.1 > k31_prefill_runner_93l (SC4)"
+        description: "K3.1 > k31_runner (SC4 93L + SC1 L24 disaggregated runner legs)"
       k3_dspark_runner:
         type: boolean
         default: false

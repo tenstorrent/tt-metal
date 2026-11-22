@@ -2485,7 +2485,7 @@
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1
   test_type: k31_prefill_runner_93l
-  test_tags: [kimi_k3_1, runner, kv_cache]
+  test_tags: [kimi_k3_1, k31_runner, runner, kv_cache]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -2506,7 +2506,7 @@
 # accuracy gate rather than a smaller copy of sc4. sc4's 127 slots, traced like sc4, and timed to sc4's
 # 1M request (the capacity probe ran exactly this: stages 0+1 on one Galaxy, 129 traced); 24 layers are
 # no baseline for 93, so its numbers are gated against their own kimi_k3 sc1 baseline and reported in
-# this job's summary, kept out of the sc4 summary.
+# this job's summary. (K3's sc4 leg was replaced by K3.1's; the sc4 summary reports kimi_k3_1.)
 - name: "(Kimi-K3-2.8T) disaggregated prefill L24 2x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2547,12 +2547,12 @@
     export TABLE_WAIT_SECS=2400
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1
   test_type: k31_prefill_runner_24l
-  test_tags: [kimi_k3_1, runner, kv_cache]
+  test_tags: [kimi_k3_1, k31_runner, runner, kv_cache]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
       # K3's 60: its L24 leg was still in bringup at 38 min on CI (run 34831600450), where weight load
-      # is NFS-bound. Locally the whole launcher took about 6 min at 96 slots (four ~265 ms chunks).
+      # is NFS-bound, and it runs the same 1M request (410 chunks).
       timeout: 60
   owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
   team: shield
