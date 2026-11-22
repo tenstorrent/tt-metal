@@ -39,13 +39,14 @@ def _golden(x, gu, dn, ids, w):
 
 
 DTYPES = {"bfp4": ("bfloat4_b", "bfloat4_b"), "bfp8": ("bfloat8_b", "bfloat8_b"), "mixed": ("bfloat4_b", "bfloat8_b")}
-# INKLING_FUSED_MOE_PLACE=offring: workers on logical rows 3..9 (11 x 7), collector a spare core of that rectangle, clear of the
-# tensor prefetcher's receiver ring (0..6, 0..2).
-PLACES = {"default": {}, "offring": {"origin": (0, 3), "shape": (11, 7), "collector": (10, 9)}}
 
 
 def _place():
-    return PLACES[os.environ.get("INKLING_FUSED_MOE_PLACE", "default")]
+    """The model's placement (tt/moe.py FUSED_PLACEMENT): 77-core rectangle off the prefetcher ring, collector
+    inside it."""
+    from models.demos.inkling2_mini.tt.moe import FUSED_PLACEMENT
+
+    return FUSED_PLACEMENT
 
 
 def _time(device, fn, repeats=20, iters=20):
@@ -104,7 +105,7 @@ def test_fused_moe_unit(device, dtype_name, layout):
     ref = _golden(x.float(), gu_b, dn_b, ids, w.bfloat16().float())
     pcc = _pcc(got, ref)
     us = _time(device, lambda: fused(x_t, w_t, i_t))
-    res = {"dtype": dtype_name, "layout": layout, "place": os.environ.get("INKLING_FUSED_MOE_PLACE", "default"), "pcc_vs_torch": round(pcc, 6), "fused_us": round(us, 1),
+    res = {"dtype": dtype_name, "layout": layout, "pcc_vs_torch": round(pcc, 6), "fused_us": round(us, 1),
            "max_abs": float((got - ref).abs().max()), "ref_absmax": float(ref.abs().max())}  # fmt: skip
     print("FUSED-MOE-UNIT", json.dumps(res))
     assert torch.isfinite(got).all()
@@ -130,32 +131,35 @@ def test_fused_moe_block(device, dtype_name, layout):
         weights["experts.w_down"] = ttnn.from_torch(
             down.transpose(1, 2).unsqueeze(0).contiguous(), dtype=down_dtype, layout=ttnn.TILE_LAYOUT
         )
-    gate_up_dev = ttnn.to_torch(weights["experts.w_gate_up"])[0].bfloat16()  # [E, H, 2I], round-tripped
-    down_dev = ttnn.to_torch(weights["experts.w_down"])[0].bfloat16()  # [E, I, H]
-    gate_up_b, down_b = gate_up_dev.transpose(1, 2), down_dev.transpose(1, 2)
     # The HF reference is CPU-only but slow; cache it so later card runs hold the lock for less time.
     cache = hf_ref.cache_dir("fused_moe") / f"ref_{dtype_name}.pt"
+    gate_up_dev = down_dev = None
+    if layout == "sticks" or not cache.exists():  # bf16 copies of the device weights (~2 GB host): only when needed
+        gate_up_dev = ttnn.to_torch(weights["experts.w_gate_up"])[0].bfloat16()  # [E, H, 2I], round-tripped
+        down_dev = ttnn.to_torch(weights["experts.w_down"])[0].bfloat16()  # [E, I, H]
     if cache.exists():
         r = torch.load(cache)
         refs, ref_idx = r["refs"], r["idx"]
     else:
-        refs, ref_idx = tm._reference(x, norm_w, router_w, bias, {"A": (gate_up, down), "B": (gate_up_b, down_b)})
+        b = (gate_up_dev.transpose(1, 2), down_dev.transpose(1, 2))
+        refs, ref_idx = tm._reference(x, norm_w, router_w, bias, {"A": (gate_up, down), "B": b})
+        del b
         torch.save({"refs": refs, "idx": ref_idx}, cache)
-    del gate_up_b, down_b, gate_up, down
+    del gate_up, down
 
-    moe = Inkling2MoE(device, weights)
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    if layout == "sticks":  # stick tensors first, each bf16 copy freed at once (host RSS <= 10 GB)
+        gu_t = stick_weights(device, gate_up_dev, expert_dtype)
+        del gate_up_dev
+        dn_t = stick_weights(device, down_dev, down_dtype)
+        del down_dev
+    else:  # the non-fused BFP4 path keeps gate_up bank-local only, so the fused step gets its own TILE copy
+        gu_t, dn_t = ttnn.to_device(weights["experts.w_gate_up"], device, dram), None
+    # Baseline: the non-fused path (with fused on by default the "baseline" would be the fused step itself).
+    moe = Inkling2MoE(device, weights, fused=False)
     del weights
-    if layout == "sticks":
-        fused = FusedMoeExperts(
-            device,
-            stick_weights(device, gate_up_dev, expert_dtype),
-            stick_weights(device, down_dev, down_dtype),
-            sticks=True,
-            **_place(),
-        )
-    else:
-        fused = FusedMoeExperts(device, moe.w_gate_up, moe.w_down, **_place())
-    del gate_up_dev, down_dev
+    dn_t = moe.w_down if dn_t is None else dn_t
+    fused = FusedMoeExperts(device, gu_t, dn_t, sticks=layout == "sticks", **_place())
     baseline_experts = moe.experts
 
     # baseline expert time first (same routing input), then swap in the fused step
@@ -196,7 +200,6 @@ def test_fused_moe_block(device, dtype_name, layout):
     res = {
         "dtype": dtype_name,
         "layout": layout,
-        "place": os.environ.get("INKLING_FUSED_MOE_PLACE", "default"),
         "pcc_vs_B_roundtrip": round(pcc_b, 6),
         "pcc_vs_A_bf16": round(pcc_a, 6),
         "pcc_fused_vs_baseline_step": round(pcc_vs_base, 6),
@@ -221,18 +224,20 @@ def test_fused_moe_block(device, dtype_name, layout):
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 64 * 1024 * 1024}], indirect=True)
 @pytest.mark.parametrize("dtype_name", ["bfp4", "mixed"])
-def test_fused_moe_stress(device, dtype_name):
-    """Multi-step traced run: one trace holds STEPS MoE blocks (fused expert step) on different tokens,
-    replayed REPLAYS times; every replay must be bit-equal to the first and match eager."""
+@pytest.mark.parametrize("layout", ["tiles", "sticks"])
+def test_fused_moe_stress(device, dtype_name, layout):
+    """Multi-step traced run: one trace holds STEPS MoE blocks (Inkling2MoE with its own fused step, as the model
+    builds it) on different tokens, replayed REPLAYS times; every replay must be bit-equal to the first and match
+    eager."""
     from models.demos.inkling2_mini.tests import test_moe as tm
-    from models.demos.inkling2_mini.tt.fused.moe_expert import FusedMoeExperts
+    from models.demos.inkling2_mini.tt.fused.moe_expert import stick_order
     from models.demos.inkling2_mini.tt.moe import Inkling2MoE, prepare_moe_weights
 
     steps, replays = int(os.environ.get("INKLING_FUSED_MOE_STEPS", "16")), int(
         os.environ.get("INKLING_FUSED_MOE_REPLAYS", "30")
     )
     expert_dtype, down_dtype = (getattr(ttnn, n) for n in DTYPES[dtype_name])
-    # Host RSS <= 4 GB: only n_w experts exist on device; a +10 router bias keeps every top-8 inside them.
+    # Host RSS ~2 GB: only n_w experts exist on device; a +10 router bias keeps every top-8 inside them.
     n_w = int(os.environ.get("INKLING_FUSED_MOE_STRESS_EXPERTS", "32"))
     g = torch.Generator().manual_seed(3)
     x = (3.0 * torch.randn(tm.N_TOKENS, HIDDEN, generator=g)).bfloat16()
@@ -248,12 +253,17 @@ def test_fused_moe_stress(device, dtype_name):
          torch.randn(n_w, HIDDEN, INTER, generator=g) * (8.0 / math.sqrt(HIDDEN))], dim=2
     ).bfloat16()  # fmt: skip
     dn = (torch.randn(n_w, INTER, HIDDEN, generator=g) / math.sqrt(INTER)).bfloat16()
-    weights["experts.w_gate_up"] = ttnn.from_torch(gu.unsqueeze(0), dtype=expert_dtype, layout=ttnn.TILE_LAYOUT)
-    weights["experts.w_down"] = ttnn.from_torch(dn.unsqueeze(0), dtype=down_dtype, layout=ttnn.TILE_LAYOUT)
+    if layout == "sticks":  # as the stick cache stores them: [1, 1, P*32, 32]; Inkling2MoE detects the shape
+        nb = device.dram_grid_size().x
+        gu, dn = stick_order(gu, nb), stick_order(dn, nb)
+    else:
+        gu, dn = gu.unsqueeze(0), dn.unsqueeze(0)
+    weights["experts.w_gate_up"] = ttnn.from_torch(gu, dtype=expert_dtype, layout=ttnn.TILE_LAYOUT)
+    weights["experts.w_down"] = ttnn.from_torch(dn, dtype=down_dtype, layout=ttnn.TILE_LAYOUT)
     del gu, dn
     moe = Inkling2MoE(device, weights)
     del weights
-    moe.experts = FusedMoeExperts(device, moe.w_gate_up, moe.w_down, **_place())
+    assert moe.fused is not None and moe.fused.sticks == (layout == "sticks")
     xs = [tm._to_dev(x[t % tm.N_TOKENS], device) for t in range(steps)]
     eager = [ttnn.to_torch(moe(xi)[0]).reshape(-1)[:HIDDEN].float() for xi in xs]
     tid = ttnn.begin_trace_capture(device, cq_id=0)
@@ -268,5 +278,4 @@ def test_fused_moe_stress(device, dtype_name):
             assert all(_pcc(g, e) > 0.9999 for g, e in zip(got, eager))
         assert all(torch.equal(g, f) for g, f in zip(got, first)), f"replay {r} differs"
     ttnn.release_trace(device, tid)
-    print("FUSED-MOE-STRESS", json.dumps({"dtype": dtype_name, "place": os.environ.get("INKLING_FUSED_MOE_PLACE", "default"),
-                                    "steps": steps, "replays": replays, "ok": True}))  # fmt: skip
+    print("FUSED-MOE-STRESS", json.dumps({"dtype": dtype_name, "layout": layout, "steps": steps, "replays": replays}))
