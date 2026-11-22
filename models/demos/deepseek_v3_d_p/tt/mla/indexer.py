@@ -756,6 +756,8 @@ class TtIndexerBase:
                 memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
                 **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
             )  # [1, 1, S/sp, D_idx]
+        # With no rope or Hadamard after it, the norm writes the cache dtype itself (no typecast op).
+        norm_dtype = index_kbuf.dtype if self._index_rope_dim == 0 and self._index_hadamard is None else None
         k = ttnn.layer_norm(
             k,
             weight=self._idx_knorm_w,
@@ -763,6 +765,7 @@ class TtIndexerBase:
             epsilon=self._index_k_norm_eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            dtype=norm_dtype,
         )
 
         # Rope the per-chip shard at its block-cyclic positions (kv_actual_global=start_pos), then write it
@@ -783,9 +786,12 @@ class TtIndexerBase:
                 compute_kernel_config=self.default_compute_kernel_config,
                 **({"program_config": k_hadamard_cfg["program_config"]} if k_hadamard_cfg is not None else {}),
             )
-        else:
+        elif k.dtype != index_kbuf.dtype:
             k_cache = ttnn.typecast(k, index_kbuf.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(k)
+        else:
+            k_cache = k
+        if k_cache is not k:
+            ttnn.deallocate(k)
         k = k_cache
         if metadata is not None:
             # Trace-safe: slot_idx (metadata[0]) + kv_actual_global (metadata[1]) read on-device. num_layers
