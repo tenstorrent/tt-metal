@@ -938,7 +938,7 @@ template <
     bool CLAMP_NEGATIVE,
     bool is_fp32_dest_acc_en>
 void exp_init() {
-    // Common SFPU init inlined (SFPU config register + counter reset), then the op-specific
+    // Common SFPU init (SFPU config register + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
     // _llk_math_eltwise_unary_sfpu_init_<exponential>() (the approximate replay path also programs ADDR_MOD_6, below).
     sfpu::_init_sfpu_config_reg();
