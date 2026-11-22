@@ -4,13 +4,15 @@
 // M2 weight staging (tt/mk/stage.py): copies bytes [off, off + n) of this core's contiguous weight range in DRAM bank
 // `bank` (tile slot `slot`, page = slot * n_banks + bank) into this core's L1 staging shard at the same offset.
 // Runs as an extra data-movement kernel inside another program (on cores that program does not use), so the copy
-// overlaps that program's compute. Reads in up to 16 KB pieces, 4 in flight.
+// overlaps that program's compute. Reads in `piece`-byte pieces, `in_flight` outstanding (a host program that
+// waits on small DRAM reads itself slows down behind deep fill queues).
 // Runtime args: weight address, bank, first tile slot, staging L1 address, byte offset, bytes.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
 constexpr uint32_t nb = get_named_compile_time_arg_val("n_banks");
-constexpr uint32_t PIECE = 16384, IN_FLIGHT = 4;
+constexpr uint32_t PIECE = get_named_compile_time_arg_val("piece");
+constexpr uint32_t IN_FLIGHT = get_named_compile_time_arg_val("in_flight");
 
 void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(0);

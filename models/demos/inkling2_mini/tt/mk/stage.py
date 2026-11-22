@@ -20,6 +20,7 @@ on those cores.
 """
 
 import copy
+import os
 
 import ttnn
 from models.demos.inkling2_mini.tt.fused import common as F
@@ -27,6 +28,8 @@ from models.demos.inkling2_mini.tt.fused.bank_linear import DST_TILES, TILE
 from models.demos.inkling2_mini.tt.fused.moe_bank import row_placement
 
 MKDIR = "models/demos/inkling2_mini/tt/mk/kernels"
+# fill read size / reads in flight per RISC (M2_FILL="piece:in_flight" for A/B runs)
+FILL = tuple(int(v) for v in os.environ.get("M2_FILL", "16384:4").split(":"))
 
 
 def cores_of(crs):
@@ -59,6 +62,17 @@ def placement(device, per_bank, exclude=()):
     return out
 
 
+def coalesce(cores):
+    """(x, y) list -> CoreRangeSet of row runs (dispatch writes kernels / args per range: few ranges launch faster)."""
+    runs = []
+    for x, y in sorted(set(cores), key=lambda c: (c[1], c[0])):
+        if runs and runs[-1][1] == y and runs[-1][2] == x - 1:
+            runs[-1][2] = x
+        else:
+            runs.append([x, y, x])
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(a, y), ttnn.CoreCoord(b, y)) for a, y, b in runs])
+
+
 def resplit(bl, split, exclude=()):
     """A copy of BankLinear ``bl`` whose every work item is cut into ``split`` cores (contiguous runs of its passes),
     over the SAME weight tensor: an item's tiles are contiguous in its bank in pass order, so a sub-item's range is
@@ -79,7 +93,7 @@ def resplit(bl, split, exclude=()):
     for i, (b, rot, part) in enumerate(out.items):
         out.cores.append((place[b][seen[b]], i))
         seen[b] += 1
-    out.grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c, _ in out.cores])
+    out.grid = coalesce([c for c, _ in out.cores])
     return out
 
 
@@ -141,7 +155,7 @@ class StagedBankLinear:
                                                 self.stage.buffer_address(), a, n_core]))  # fmt: skip
             kernels.append(ttnn.KernelDescriptor(
                 kernel_source=f"{MKDIR}/stage_fill.cpp", core_ranges=self.bl.grid, compile_time_args=acc,
-                named_compile_time_args=[("n_banks", self.bl.nb)], runtime_args=rt,
+                named_compile_time_args=[("n_banks", self.bl.nb), ("piece", FILL[0]), ("in_flight", FILL[1])], runtime_args=rt,
                 config=ttnn.DataMovementConfigDescriptor(processor=proc, noc=noc),
             ))  # fmt: skip
         return kernels
