@@ -54,7 +54,8 @@ constexpr uint32_t final_arg = packed_arg + 6;
 // x | y << 16), one after the other in its link's order. It reads each head's complement-form [E | B] rows (E = A - I)
 // and entry state column by column (the initial state on the chronologically first rank, else the predecessor's landed
 // columns, in the head's landing slot), then copies the landed entry state to the head's correction cores as their
-// seed; on the first rank, the relayed final states P as well, which the final carry and a separated tail start from.
+// seed; on the first rank, with a separated tail, the relayed final states P as well, which the final carry and the
+// tail start from (else the last rank's final states are the final carry: kda_relay::final_from_last).
 void kernel_main() {
     const uint32_t heads = get_arg_val<uint32_t>(0);
     const auto head_of = [](uint32_t s) { return get_arg_val<uint32_t>(1 + s * (1 + cores_per_head)); };
@@ -65,8 +66,8 @@ void kernel_main() {
 
     const Chronology chronology;
     const bool holder = chronology.holder();
-    // The writer's chronology: this rank's position (the slab index stays in its word); compute's: whether this rank
-    // forms the final carry, whether it applies the final transition, and the heads.
+    // The writer's chronology: this rank's position and flags (the slab index stays in its word); compute's: whether
+    // this rank holds the relay's start, whether it applies the final transition, the heads, and the carry's source.
     auto* chron_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(Chronology::cb_chron));
     auto* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(Chronology::cb_ctl));
     static_assert(Chronology::slab_index_word != kda_relay::chron_flags_word);

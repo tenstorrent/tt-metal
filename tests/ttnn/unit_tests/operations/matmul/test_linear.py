@@ -18,7 +18,6 @@ from tt_py_test_utils_common.utility_functions import (
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import is_tiny_tile_combo_supported
 
-
 pytestmark = pytest.mark.use_module_device
 
 
@@ -1851,3 +1850,54 @@ def test_linear_l1_host_transpose(device, shape_a, shape_b, transpose_a, transpo
     assert_numeric_metrics(
         torch_output, output_tensor, pcc_threshold=0.999, check_ulp=False, check_frobenius=False, check_allclose=False
     )
+
+
+# An FP32 row bias on FP32 partials with K in one block takes the 2D matmul's direct path (FUSE_BIAS_SFPU_DIRECT): the
+# bias is added in DEST on the pack thread with the SFPU activation. A RELU, applied by the packer, keeps the two-phase
+# path. SIGMOID's second parameter: 0 exact, 2 exact to BF16.
+@pytest.mark.parametrize("subblock", [(1, 2), (2, 1)], ids=["subblock-1x2", "subblock-2x1"])
+@pytest.mark.parametrize(
+    "activation",
+    [
+        None,
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 0.0, 0.0),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 0.0, 2.0),
+    ],
+    ids=["none", "relu", "sigmoid", "sigmoid-bf16-exact"],
+)
+def test_linear_fp32_bias_one_k_block_activation(device, subblock, activation):
+    torch.manual_seed(0)
+    grid_x, grid_y = 4, 4
+    out_subblock_h, out_subblock_w = subblock
+    per_core_m, per_core_n = out_subblock_h, 2
+    m, k, n = grid_y * per_core_m * 32, 128, grid_x * per_core_n * 32
+    torch_a = torch_random((1, 1, m, k), -1, 1, dtype=torch.float32)
+    torch_b = torch_random((k, n), -1, 1, dtype=torch.float32)
+    torch_bias = torch_random((1, 1, 1, n), -1, 1, dtype=torch.float32)
+    a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=k // 32,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=activation,
+        fuse_batch=True,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+    output = ttnn.linear(
+        a, b, bias=bias, program_config=program_config, compute_kernel_config=compute_config, dtype=ttnn.bfloat16
+    )
+    expected = torch_a.bfloat16().float() @ torch_b.bfloat16().float() + torch_bias
+    if activation is not None:
+        expected = torch.relu(expected) if activation.op_type == ttnn.UnaryOpType.RELU else torch.sigmoid(expected)
+    assert_with_pcc(expected, ttnn.to_torch(output).float(), 0.9999)

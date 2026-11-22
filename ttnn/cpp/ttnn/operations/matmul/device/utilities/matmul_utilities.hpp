@@ -335,8 +335,9 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
             const uint32_t param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
             TT_FATAL(param0 <= 4, "Invalid Vector mode value: {}", param0);
             result.param0 = param0;
-            // param1 is fast_approximate flag
+            // param1: 0 exact, 1 fast approximate, 2 exact to BF16 (for outputs that keep only BF16 precision)
             result.param1 = has_second ? static_cast<uint32_t>(params[1]) : 0;
+            TT_FATAL(result.param1 <= 2, "Invalid sigmoid mode: {}", result.param1);
             break;
         }
 

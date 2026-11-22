@@ -561,6 +561,8 @@ _DETERMINISM_CASES = {
     "in-place": {},
     "streamed": {"max_cores": _HEADS + _HEADS // 2},
     "float32-output": {"output_dtype": ttnn.float32},
+    # On a rank boundary there is no separated tail: the last rank sends the final carry as it forms.
+    "rank-aligned": {"interval": "rotated"},
 }
 
 
@@ -570,12 +572,13 @@ def test_relay_chunk_scan_determinism(mesh_device, case):
     """Eager calls, trace replays and the first replay against the first eager call return bit-identical outputs and
     carries: the relay keeps its arrival and final counters, landing buffers and per-core seed counts across calls, and
     a replay must not see what a previous call left. A split start exercises the separated tail and its final
-    transition."""
+    transition; a rank-aligned one the final carry from the last rank."""
     options = dict(_DETERMINISM_CASES[case])
     output_dtype = options.pop("output_dtype", ttnn.bfloat16)
+    interval = options.pop("interval", "split")
     relay = _relay(mesh_device, **options)
     transforms = _Transforms(mesh_device, relay, seed=None, output_dtype=output_dtype)
-    actual_start = make_actual_start(mesh_device, _INTERVALS["split"][0])
+    actual_start = make_actual_start(mesh_device, _INTERVALS[interval][0])
 
     def step():
         return _run(relay, transforms, actual_start)

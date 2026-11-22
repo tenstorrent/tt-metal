@@ -15,7 +15,7 @@
 namespace ttnn::experimental::prim {
 
 // The relay's persistent counters: its entry-state arrivals and its final-state arrivals (the relayed final state on
-// the first rank, the final carry on every other).
+// the first rank, the final carry on every rank but its source).
 inline constexpr uint32_t relay_semaphores = 2;
 
 struct RelayChunkScanParams {

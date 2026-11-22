@@ -27,10 +27,11 @@ void bind_relay_chunk_scan(nb::module_& mod) {
         ``terms`` (the entry correction), the seed being ``S_p``, or ``P`` for the chunks of a separated tail,
         and writes each row's gated RMSNorm ``x / sqrt(mean(x^2) + norm_epsilon) * norm_weight *
         sigmoid(gate)``, token-major, with the gate ``gate_input @ gate_weight`` formed at ``gate_math_fidelity``
-        while the relay's hops are on their way. The first rank forms the final carry as ``P`` lands: ``P + (E P + B)``
-        with its final transition ``final_e`` / ``final_b`` when the interval ends in a separated tail, else
-        ``P``. It multicasts it from L1 along the SP axis into every rank's carry output, and every other rank
-        waits for its arrival, which separates consecutive calls across the SP line.
+        while the relay's hops are on their way. When the interval ends in a separated tail, the first rank forms the
+        final carry as ``P`` lands, ``P + (E P + B)`` with its final transition ``final_e`` / ``final_b``; otherwise
+        the final carry is ``P`` itself and the last rank sends it as it forms. The carry's source multicasts it from
+        L1 along the SP axis into every rank's carry output, and every other rank waits for its arrival, which
+        separates consecutive calls across the SP line.
 
         ``cores`` lists the same number of correction cores per head, head by head, then two sender cores per link,
         then the relay cores (each runs the hop of up to two heads of one link, far apart in its order). The

@@ -68,8 +68,9 @@ def is_4x4_subtorus() -> bool:
 
 
 def kimi_k3_model_device_params(mesh_shape: tuple[int, int]) -> dict:
-    """The device the Kimi-K3 model opens (tests/kimi_k3/test_prefill_perf.py): kda_device_params' fabric with K3's
-    L1_SMALL and the MoE block's fabric payload, so a layer measured here sees the model's L1 and relay packets."""
+    """The device the Kimi-K3 prefill runner opens (models/demos/common/prefill/runners/prefill_runner.py): K3's
+    L1_SMALL and the MoE block's fabric payload on kda_device_params' fabric, so a layer measured here sees the model's
+    L1 and relay packets."""
     from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_device_params
 
     return moe_block_device_params(

@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/dataflow/relay_chronology.hpp"
 
 using namespace tt::tt_fabric;
 using namespace tt::tt_fabric::linear::experimental;
@@ -82,7 +83,7 @@ void kernel_main() {
     const bool last = position == sp_size - 1;
     // The final carry's source (kda_relay::final_from_last): on its way from the last rank the final state is the final
     // carry, and the relay's hand-off to the first rank gives way to it.
-    const bool final_from_last = !topology.split;
+    const bool final_from_last = kda_relay::final_from_last(topology);
     const bool relays = relay && !(final_from_last && last);
     const bool carry_source = final_from_last ? last : position == 0;
 

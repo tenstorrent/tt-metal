@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
@@ -191,6 +192,26 @@ def _trace_wall_samples_ms(
         deallocate_state(state)
 
 
+def _in_model_traced_ms(mesh_device: ttnn.MeshDevice, step: Callable[[], tuple]) -> list[float]:
+    """Report-only: ms per call of _CALLS_PER_TRACE layer calls back to back in one trace, as the model runs its layers
+    (one replay's launch and sync spread over them); empty if the trace cannot be captured here."""
+
+    def calls():
+        for _ in range(_CALLS_PER_TRACE - 1):
+            ttnn.deallocate(step()[0])
+        return step()[0]
+
+    try:
+        with TracedStep(mesh_device, calls) as in_trace:
+            in_trace.capture()
+            in_trace.replay()
+            samples = _block_samples_ms(mesh_device, lambda: in_trace.replay(sync=False), 1)
+    except Exception as error:  # report-only: never fail the gated measurement
+        logger.warning(f"in-model traced timing skipped: {error}")
+        return []
+    return [ms / _CALLS_PER_TRACE for ms in samples]
+
+
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
@@ -295,18 +316,7 @@ def test_synthetic_kimi_k3_perf(
         # Each call replaces the slot's carry in the slabs, so the last eager call and the replay start from
         # different carries; at a 5k chunk the carry has converged, so their outputs still agree.
         untraced, traced, trace_pcc = measure_host(mesh_device, lambda: step()[0])  # the carry stays in the slab
-
-        # The model runs its layers back to back inside one trace: per call of _CALLS_PER_TRACE calls in one trace,
-        # without each replay's launch and sync.
-        def calls():
-            for _ in range(_CALLS_PER_TRACE - 1):
-                ttnn.deallocate(step()[0])
-            return step()[0]
-
-        with TracedStep(mesh_device, calls) as in_trace:
-            in_trace.capture()
-            in_trace.replay()
-            in_model = [ms / _CALLS_PER_TRACE for ms in _block_samples_ms(mesh_device, in_trace.replay, 1)]
+        in_model = _in_model_traced_ms(mesh_device, step)
     finally:
         deallocate_state(state)
         slots.deallocate()
@@ -332,8 +342,9 @@ def test_synthetic_kimi_k3_perf(
                 "margin_pct": MARGIN[mode] * 100.0,
             },
         )
-    samples = " ".join(f"{ms:.3f}" for ms in in_model)
-    print(
-        f"kimi_k3 KDA layer {layout} traced in-model ({_CALLS_PER_TRACE} calls a trace): {min(in_model):.3f} ms ({samples})"
-    )
+    if in_model:
+        samples = " ".join(f"{ms:.3f}" for ms in in_model)
+        logger.info(
+            f"kimi_k3 KDA layer {layout} traced, {_CALLS_PER_TRACE} calls a trace: {min(in_model):.3f} ms ({samples})"
+        )
     gate(f"kimi_k3 KDA layer {layout}", results, trace_pcc)

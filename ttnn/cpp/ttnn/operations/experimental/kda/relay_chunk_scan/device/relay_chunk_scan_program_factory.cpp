@@ -316,41 +316,37 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t gate_k = in.gate_input.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     const uint32_t gate_bytes = core_chunks * kt * state_tile;
     // In the workspace, on the correction cores: K blocks of x (after the matmul, each chunk's sigmoid(gate) * weight),
-    // then K blocks of W. x's and W's buffers hold `depth` K tiles in 3 and 4 slots, the largest depth that fits, in
-    // the smallest K blocks whose slots have read transaction ids (gate_matmul_dataflow.hpp): small blocks keep reads
-    // and multicasts close behind the matmul.
+    // then K blocks of W, in 3 and 4 slots of the largest K block that fits. One block per DST pass halves the FP32
+    // packs with L1 accumulation that bound the matmul (Kimi-K3 SP8xTP4: K block 4 -> 8, relay 182.8 -> 175.9 us).
     const auto x_block = [&](uint32_t kb) { return core_chunks * kb * tt::tile_size(x_format); };
     const auto w_block = [&](uint32_t kb) { return kb * kt * tt::tile_size(w_format); };
-    const auto gate_buffers = [&](uint32_t kb, uint32_t depth) {
+    const auto gate_buffers = [&](uint32_t kb) {
         return std::array{
             shared_cb(
                 {},
-                {{cb_gin0, x_format, 3 * depth / kb * x_block(kb), x_block(kb)},
+                {{cb_gin0, x_format, 3 * x_block(kb), x_block(kb)},
                  {cb_gate_factor, output_format, factor_bytes, factor_bytes}}),
-            shared_cb({}, {{cb_gin1, w_format, 4 * depth / kb * w_block(kb), w_block(kb)}})};
+            shared_cb({}, {{cb_gin1, w_format, 4 * w_block(kb), w_block(kb)}})};
     };
     const auto& workspace_shard = in.gate_workspace.memory_config().shard_spec()->shape;
     const uint32_t workspace_bytes = workspace_shard[0] * workspace_shard[1] * in.gate_workspace.element_size();
     // The buffers fit the workspace, and each slot of x's and W's (a buffer they share an address with can make more)
     // reads under its own transaction id, of which there are 15.
-    const auto fits = [&](uint32_t kb, uint32_t depth) {
-        const auto buffers = gate_buffers(kb, depth);
+    const auto fits = [&](uint32_t kb) {
+        const auto buffers = gate_buffers(kb);
         return buffers[0].total_size + buffers[1].total_size <= workspace_bytes &&
                buffers[0].total_size / x_block(kb) <= 15 && buffers[1].total_size / w_block(kb) <= 15;
     };
-    uint32_t gate_depth = 0;
-    for (const uint32_t depth : {8u, 4u, 2u}) {
-        if (gate_depth == 0 && gate_k % depth == 0 && fits(depth, depth)) {
-            gate_depth = depth;
+    uint32_t gate_kb = 0;
+    for (const uint32_t kb : {8u, 4u, 2u}) {
+        if (gate_kb == 0 && gate_k % kb == 0 && fits(kb)) {
+            gate_kb = kb;
         }
     }
     TT_FATAL(
-        gate_depth != 0,
+        gate_kb != 0,
         "relay_chunk_scan: the output gate's buffers do not fit gate_workspace's {} B per core",
         workspace_bytes);
-    // One K block spans the whole depth: each DST pass then runs kb K steps of matmuls per FP32 pack and L1
-    // accumulation, which halving kb made the bound (Kimi-K3 SP8xTP4: kb 4 -> 8, relay 182.8 -> 176.0 us).
-    const uint32_t gate_kb = gate_depth;
     // x is shared among the cores at a place of a batch's heads.
     const uint32_t batches = batch_heads / attrs.num_heads;
     const uint32_t gate_x_groups = batches * cores_per_head;
@@ -407,7 +403,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         const auto format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
         return kda_factory_detail::cb_descriptor(index, tiles, tt::tile_size(format), format, correction_set);
     };
-    auto gate_cbs = gate_buffers(gate_kb, gate_depth);
+    auto gate_cbs = gate_buffers(gate_kb);
     for (auto& cb : gate_cbs) {
         cb.core_ranges = correction_set;
         cb.buffer = in.gate_workspace.buffer();

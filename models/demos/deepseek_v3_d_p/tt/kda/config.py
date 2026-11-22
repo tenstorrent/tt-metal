@@ -269,7 +269,12 @@ _DECAY_OUT_BLOCK_TILES = 32
 
 
 def decay_projection_program_config(
-    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int, fused_activation: ttnn.UnaryWithParam | None = None
+    grid: ttnn.CoreCoord,
+    rows: int,
+    key_dim: int,
+    width: int,
+    fused_activation: ttnn.UnaryWithParam | None = None,
+    fp32_bias: bool = False,
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
 
@@ -284,13 +289,15 @@ def decay_projection_program_config(
     out_block_h = max(
         h for h in range(1, per_core_M + 1) if per_core_M % h == 0 and h * out_block_w <= _DECAY_OUT_BLOCK_TILES
     )
+    # FP32 accumulation holds four tiles in DST. With an FP32 bias, added in DST on the pack thread (K is one block),
+    # a subblock shares them with its bias row: one row of at most two (2 x 1 measured 1.4 us slower than 1 x 1).
+    out_subblock_h = 1
+    out_subblock_w = max(w for w in range(1, (2 if fp32_bias else 4) + 1) if out_block_w % w == 0)
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=key_dim // tile,
-        out_subblock_h=1,
-        # FP32 accumulation holds four tiles in DST. A subblock and its bias row share them when the FP32 bias is
-        # added in DST on the pack thread (one K block), so at most two columns.
-        out_subblock_w=max(w for w in range(1, 3) if out_block_w % w == 0),
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
         out_block_h=out_block_h,
         out_block_w=out_block_w,
         per_core_M=per_core_M,

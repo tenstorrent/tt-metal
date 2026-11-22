@@ -496,6 +496,8 @@ void kernel_main() {
 
                             if (last_out) {
 #ifdef FUSE_BIAS_SFPU_DIRECT
+                                static_assert(
+                                    out_subblock_num_tiles + out_subblock_w <= 4, "FP32 DEST half holds four tiles");
                                 // The subblock's bias tiles (row 0 of each) into DEST after its products; the
                                 // pack thread adds them on the SFPU, applies the activation and packs the final
                                 // tiles to the output, while the math thread moves on to the next subblock.

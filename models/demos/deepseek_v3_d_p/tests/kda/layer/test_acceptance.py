@@ -104,7 +104,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
         pytest.param(
             (8, 4),
             1,
-            kda_device_params((8, 4)),
+            kimi_k3_model_device_params((8, 4)),
             2 * PREFILL_CHUNK_TOKENS,
             None,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -256,7 +256,7 @@ _REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.022, recurrent=0.017, convol
         pytest.param(
             (8, 4),
             1,
-            kda_device_params((8, 4)),
+            kimi_k3_model_device_params((8, 4)),
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
