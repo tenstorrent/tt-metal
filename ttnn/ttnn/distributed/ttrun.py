@@ -41,9 +41,9 @@ from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_va
 
 # --- timeouts and graces (seconds) -----------------------------------------------------------------------------------
 #
-# The job's own wall clock is the --timeout given through --mpi-args ("--timeout N"); there is none by default, so a
-# long-running job is never cut off. tt-run takes it off the launch line and runs it itself: at N seconds the job is
-# stopped as for Ctrl-C. A collective that hangs is bounded in the DistributedContext instead (the per-call operation
+# The job's own wall clock is tt-run's --job-timeout N; there is none by default, so a long-running job is never cut off. At
+# N seconds the job is stopped as for Ctrl-C (SIGTERM to every rank, the grace, then the force). A --timeout given in
+# --mpi-args is PRRTE's own and is passed to it unchanged: at N seconds PRRTE kills every rank at once (tt-run warns). A collective that hangs is bounded in the DistributedContext instead (the per-call operation
 # timeout, TT_METAL_OPERATION_TIMEOUT_SECONDS, plan P16). tt-run waits on events (the launcher exiting, a signal, a
 # rank's stop line), never on a poll interval.
 
@@ -98,6 +98,11 @@ PASSED_SIGNALS = (
     signal.SIGCONT,
     signal.SIGWINCH,
 )
+
+# Of those, the ones prterun itself forwards to every rank (measured, PRRTE 3.0.8): tt-run sends one of these to prterun
+# when it cannot use job control (tt-run-rank built without PMIx). SIGWINCH it drops; SIGQUIT ends prterun and orphans
+# the ranks, so it is never sent there.
+LAUNCHER_FORWARDED_SIGNALS = (signal.SIGUSR1, signal.SIGUSR2, signal.SIGALRM, signal.SIGTSTP, signal.SIGCONT)
 
 # --- the ranks' environment ------------------------------------------------------------------------------------------
 # default, override: LD_LIBRARY_PATH in tt-run's environment ({home} is the launch directory).
@@ -247,55 +252,16 @@ def find_signal_helper() -> Tuple[Optional[str], str]:
     return None, "tt-run-rank is not built (tools/scaleout, needs the ULFM Open MPI install)"
 
 
-def split_launcher_timeout(mpi_args: List[str]) -> Tuple[Optional[float], List[str]]:
-    """(the --timeout in seconds or None, --mpi-args without it). tt-run runs that clock itself and stops the job
-    gracefully at it, where PRRTE's --timeout would kill every rank at once. Only --mpi-args are read: a rank program's
-    own --timeout (pytest's) is the program's."""
-    cmd = mpi_args
-    timeout, out, skip = None, [], False
-    for i, a in enumerate(cmd):
-        if skip:
-            skip = False
-            continue
-        if a == "--timeout" and i + 1 < len(cmd):
-            value, skip = cmd[i + 1], True
-        elif a.startswith("--timeout="):
-            value = a.split("=", 1)[1]
-        else:
-            out.append(a)
-            continue
-        try:
-            timeout = float(value)
-        except ValueError:
-            pass
-    return timeout, out
-
-
-def with_mpi_init_preset_env(cmd: List[str]) -> List[str]:
-    """The launch line with MPI_INIT_PRESET_ENV forwarded to every rank (-x, before the first app context, so every
-    context and every host gets it), unless the line already sets it."""
-    extra = []
-    for key, value in MPI_INIT_PRESET_ENV.items():
-        if not any(a == key or a.startswith(f"{key}=") for a in cmd):
-            extra += ["-x", f"{key}={value}"]
-    return cmd[:1] + extra + cmd[1:] if extra else cmd
-
-
-def launch_env(cmd: List[str]) -> Dict[str, str]:
-    """The environment for the launcher: os.environ with MPI_INIT_PRESET_ENV preset, minus an OMPI_MCA_ TCP-interface
-    variable that contradicts the one the launch line sets (the command line wins). Says so when it drops one."""
-    env = dict(os.environ)
-    for key, value in MPI_INIT_PRESET_ENV.items():  # with -x on the line: both are needed (tt-metal #64717)
-        env.setdefault(key, value)
-    for on_line, opposite in _TCP_IF_PAIR:
-        var = f"OMPI_MCA_{opposite}"
-        if has_mca_param(cmd, on_line) and var in env:
-            logger.warning(
-                f"{TT_RUN_PREFIX} the launch line sets {on_line} and the environment sets {var}={env[var]}; Open MPI "
-                f"refuses both, so {var} is dropped for this job"
-            )
-            env.pop(var)
-    return env
+def mpi_args_timeout(mpi_args: Optional[List[str]]) -> Optional[str]:
+    """The --timeout value given in --mpi-args (PRRTE's own), or None. Only --mpi-args are read: a rank program's own
+    --timeout (pytest's) is the program's."""
+    args = mpi_args or []
+    for i, a in enumerate(args):
+        if a == "--timeout" and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith("--timeout="):
+            return a.split("=", 1)[1]
+    return None
 
 
 def find_rank_wrapper() -> Optional[str]:
@@ -313,164 +279,6 @@ def find_rank_wrapper() -> Optional[str]:
     return str(candidate) if os.access(candidate, os.X_OK) else shutil.which("tt-run-rank")
 
 
-def _is_peer_failure(m: re.Match) -> bool:
-    """A [tt-stop] line whose reason is MPI reporting a failed peer: the consequence of another rank's death."""
-    return "MPI_ERR_PROC_FAILED" in m.group(4)
-
-
-def prterun_tool_uri(prterun_pid: int) -> Optional[str]:
-    """The PMIx server URI prterun publishes for tools: the first line of
-    ``<tmpdir>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>``, or None while it is not there yet."""
-    for f in glob.glob(f"{tempfile.gettempdir()}/prterun.*.{prterun_pid}.*/pmix.*.tool.{prterun_pid}"):
-        try:
-            with open(f) as fh:
-                uri = fh.readline().strip()
-        except OSError:
-            continue
-        if uri:
-            return uri
-    return None
-
-
-def describe_rank_failure(launcher_stderr: str, rc: int) -> Tuple[str, str]:
-    """(message, origin) for a job a rank failed, read from prterun's own banner (its line wrapping undone):
-    which rank, on which host when prterun says, how it ended, and what happened to the other ranks."""
-    t = re.sub(r"\s+", " ", launcher_stderr)
-    tail = f"{_KILLED_OTHERS} — run tt-smi -r on every host of the job. tt-run returns {rc}."
-    if _DAEMON_LOST_BANNER in t:
-        h = re.search(r"Remote daemon: \S+ on node (\S+)", t)
-        where = h.group(1) if h else "a remote host"
-        return (
-            f"the launcher lost its daemon on {where} and ended the job (the ranks there were stopped by their "
-            f"wrappers); {tail}",
-            f"daemon on {where}",
-        )
-    m = re.search(r"MPI_ABORT was invoked on rank (\d+) .*?Errorcode: (-?\d+)", t)
-    if m:
-        h = re.search(rf"process rank {m.group(1)} with PID \d+ on node (\S+) calling", t)
-        where = f" on {h.group(1)}" if h else ""
-        return (
-            f"rank {m.group(1)}{where} called MPI_Abort (error code {m.group(2)}); {tail}",
-            f"rank {m.group(1)}{where}",
-        )
-    m = re.search(r"process rank (\d+) with PID (\d+) on node (\S+) exited on signal (\d+)", t)
-    if m:
-        r, pid, host, n = m.groups()
-        try:
-            name = signal.Signals(int(n)).name
-        except ValueError:
-            name = "unknown signal"
-        return f"rank {r} on {host} (pid {pid}) was killed by signal {n} ({name}); {tail}", f"rank {r} on {host}"
-    m = re.search(r"process rank (\d+) with PID (\d+) on node (\S+) exiting improperly", t)
-    if m:
-        r, pid, host = m.groups()
-        return f"rank {r} on {host} (pid {pid}) exited without calling MPI_Finalize; {tail}", f"rank {r} on {host}"
-    m = re.search(r"The first process to do so was: Process name: \[[^\]]*,(\d+)\] Exit code: (-?\d+)", t)
-    if m:
-        return f"rank {m.group(1)} exited with code {m.group(2)}; {tail}", f"rank {m.group(1)}"
-    return (
-        f"a rank failed (launcher exit {rc}) but its banner was not recognised; see the launcher output above. "
-        f"tt-run returns {rc}.",
-        "",
-    )
-
-
-def remove_stale_launcher_leftovers() -> int:
-    """Remove this user's leftovers from a killed job that no live owner claims (teardown plan P11, P25). The
-    launcher's normal exit clears both of these; a launcher killed by a signal (``kill -9``, an OOM kill, a runner
-    reaping the tree) never runs that exit path and leaves them behind until reboot:
-
-    - Open MPI shared-memory segments in /dev/shm (``sm_segment.*``, 16 MB each) that no live process maps AND
-      have sat unmapped past SHM_MIN_STALE_AGE_S (a just-created one may be a concurrent job's, so it is kept).
-    - PRRTE launcher session directories (``<tmpdir>/prterun.<host>.<pid>.<uid>``) whose launcher pid is dead.
-
-    A segment a running job still maps, or a directory whose launcher pid is alive, is kept, so a concurrent job
-    is never touched. A ``LaunchedJob`` runs this before it launches (clear a prior killed job's leak) and again
-    in its teardown (its own, once the launcher it owned is gone). It is a fail-safe on the launch host only, so
-    remote hosts are cleaned by each rank's own context.
-    """
-    host, uid, removed, now = socket.gethostname(), os.getuid(), 0, time.time()
-    # Open MPI /dev/shm segments that no live process maps.
-    mine = glob.glob(f"/dev/shm/sm_segment.{host}.{uid}.*")
-    if mine:
-        mapped = set()
-        for d in os.listdir("/proc"):
-            if not d.isdigit():
-                continue
-            try:
-                with open(f"/proc/{d}/maps") as fh:
-                    for line in fh:
-                        if "sm_segment." in line:
-                            mapped.add(line.rsplit(" ", 1)[1].strip())
-            except OSError:
-                continue
-        for seg in mine:
-            if seg in mapped:
-                continue
-            try:
-                # Uncertain ownership: a just-created segment may be a concurrent same-user job's that has not
-                # mapped it yet (shm_open and mmap are not atomic). Sweep only one that has sat unmapped past
-                # SHM_MIN_STALE_AGE_S, i.e. long enough that it cannot be mid-startup — a genuine leak, not a race.
-                if now - os.path.getmtime(seg) < SHM_MIN_STALE_AGE_S:
-                    continue
-                os.unlink(seg)
-                removed += 1
-            except OSError:
-                pass
-    # PRRTE session directories whose launcher pid is dead (prterun.<host>.<pid>.<uid>).
-    for d in glob.glob(f"{tempfile.gettempdir()}/prterun.*.{uid}"):
-        if not os.path.isdir(d):
-            continue
-        try:
-            pid = int(d.rsplit(".", 2)[-2])
-        except (ValueError, IndexError):
-            continue
-        if os.path.exists(f"/proc/{pid}"):
-            continue  # the launcher is still alive: a live job owns this directory
-        shutil.rmtree(d, ignore_errors=True)
-        if not os.path.exists(d):
-            removed += 1
-    if removed:
-        logger.info(
-            f"{TT_RUN_PREFIX} removed {removed} stale launcher leftover(s) of this user (shm segments / PRRTE session dirs)"
-        )
-    return removed
-
-
-def _wait_gone(pids: List[int], timeout_s: float, wake_fd: Optional[int] = None) -> None:
-    """Block until every pid has exited (a zombie counts), timeout_s has passed, or wake_fd is readable (a signal at
-    tt-run): one pidfd per process (Linux 5.3+), no polling."""
-    fds = []
-    for pid in pids:
-        try:
-            fds.append(os.pidfd_open(pid))
-        except ProcessLookupError:
-            pass
-    end = time.time() + timeout_s
-    try:
-        while fds and time.time() < end:
-            ready, _, _ = select.select(fds + ([wake_fd] if wake_fd is not None else []), [], [], end - time.time())
-            if wake_fd is not None and wake_fd in ready:
-                return
-            for fd in ready:
-                fds.remove(fd)
-                os.close(fd)
-    finally:
-        for fd in fds:
-            os.close(fd)
-
-
-def _still_running(pid: int) -> bool:
-    """Whether a process that is not tt-run's child is still running. A process that has died is either gone from /proc
-    or a zombie (state Z) waiting for its parent to reap it; in a container whose PID 1 never reaps orphans, a zombie's
-    /proc entry stays for good, so its mere existence is not a sign of life (and a SIGKILL to it does nothing)."""
-    try:
-        with open(f"/proc/{pid}/stat") as fh:
-            return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
-    except (OSError, IndexError):
-        return False
-
-
 class LaunchedJob:
     """Owns one MPI launcher for the life of a job and cleans up after it (teardown plan P6, P7, P19, P11, P25).
 
@@ -483,6 +291,191 @@ class LaunchedJob:
     guard stops it instead (``_launcher_left_running``). The launcher is SIGKILLed only when it ignores a force; PRRTE
     tears the ranks down, and the process-end step is only the last resort for ranks it failed to reap.
     """
+
+    @staticmethod
+    def prterun_tool_uri(prterun_pid: int) -> Optional[str]:
+        """The PMIx server URI prterun publishes for tools: the first line of
+        ``<tmpdir>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>``, or None while it is not there yet."""
+        for f in glob.glob(f"{tempfile.gettempdir()}/prterun.*.{prterun_pid}.*/pmix.*.tool.{prterun_pid}"):
+            try:
+                with open(f) as fh:
+                    uri = fh.readline().strip()
+            except OSError:
+                continue
+            if uri:
+                return uri
+        return None
+
+    @staticmethod
+    def with_mpi_init_preset_env(cmd: List[str]) -> List[str]:
+        """The launch line with MPI_INIT_PRESET_ENV forwarded to every rank (-x, before the first app context, so every
+        context and every host gets it), unless the line already sets it."""
+        extra = []
+        for key, value in MPI_INIT_PRESET_ENV.items():
+            if not any(a == key or a.startswith(f"{key}=") for a in cmd):
+                extra += ["-x", f"{key}={value}"]
+        return cmd[:1] + extra + cmd[1:] if extra else cmd
+
+    @staticmethod
+    def launch_env(cmd: List[str]) -> Dict[str, str]:
+        """The environment for the launcher: os.environ with MPI_INIT_PRESET_ENV preset, minus an OMPI_MCA_ TCP-interface
+        variable that contradicts the one the launch line sets (the command line wins). Says so when it drops one."""
+        env = dict(os.environ)
+        for key, value in MPI_INIT_PRESET_ENV.items():  # with -x on the line: both are needed (tt-metal #64717)
+            env.setdefault(key, value)
+        for on_line, opposite in _TCP_IF_PAIR:
+            var = f"OMPI_MCA_{opposite}"
+            if has_mca_param(cmd, on_line) and var in env:
+                logger.warning(
+                    f"{TT_RUN_PREFIX} the launch line sets {on_line} and the environment sets {var}={env[var]}; Open MPI "
+                    f"refuses both, so {var} is dropped for this job"
+                )
+                env.pop(var)
+        return env
+
+    @staticmethod
+    def _is_peer_failure(m: re.Match) -> bool:
+        """A [tt-stop] line whose reason is MPI reporting a failed peer: the consequence of another rank's death."""
+        return "MPI_ERR_PROC_FAILED" in m.group(4)
+
+    @staticmethod
+    def describe_rank_failure(launcher_stderr: str, rc: int) -> Tuple[str, str]:
+        """(message, origin) for a job a rank failed, read from prterun's own banner (its line wrapping undone):
+        which rank, on which host when prterun says, how it ended, and what happened to the other ranks."""
+        t = re.sub(r"\s+", " ", launcher_stderr)
+        tail = f"{_KILLED_OTHERS} — run tt-smi -r on every host of the job. tt-run returns {rc}."
+        if _DAEMON_LOST_BANNER in t:
+            h = re.search(r"Remote daemon: \S+ on node (\S+)", t)
+            where = h.group(1) if h else "a remote host"
+            return (
+                f"the launcher lost its daemon on {where} and ended the job (the ranks there were stopped by their "
+                f"wrappers); {tail}",
+                f"daemon on {where}",
+            )
+        m = re.search(r"MPI_ABORT was invoked on rank (\d+) .*?Errorcode: (-?\d+)", t)
+        if m:
+            h = re.search(rf"process rank {m.group(1)} with PID \d+ on node (\S+) calling", t)
+            where = f" on {h.group(1)}" if h else ""
+            return (
+                f"rank {m.group(1)}{where} called MPI_Abort (error code {m.group(2)}); {tail}",
+                f"rank {m.group(1)}{where}",
+            )
+        m = re.search(r"process rank (\d+) with PID (\d+) on node (\S+) exited on signal (\d+)", t)
+        if m:
+            r, pid, host, n = m.groups()
+            try:
+                name = signal.Signals(int(n)).name
+            except ValueError:
+                name = "unknown signal"
+            return f"rank {r} on {host} (pid {pid}) was killed by signal {n} ({name}); {tail}", f"rank {r} on {host}"
+        m = re.search(r"process rank (\d+) with PID (\d+) on node (\S+) exiting improperly", t)
+        if m:
+            r, pid, host = m.groups()
+            return f"rank {r} on {host} (pid {pid}) exited without calling MPI_Finalize; {tail}", f"rank {r} on {host}"
+        m = re.search(r"The first process to do so was: Process name: \[[^\]]*,(\d+)\] Exit code: (-?\d+)", t)
+        if m:
+            return f"rank {m.group(1)} exited with code {m.group(2)}; {tail}", f"rank {m.group(1)}"
+        return (
+            f"a rank failed (launcher exit {rc}) but its banner was not recognised; see the launcher output above. "
+            f"tt-run returns {rc}.",
+            "",
+        )
+
+    @staticmethod
+    def remove_stale_launcher_leftovers() -> int:
+        """Remove this user's leftovers from a killed job that no live owner claims (teardown plan P11, P25). The
+        launcher's normal exit clears both of these; a launcher killed by a signal (``kill -9``, an OOM kill, a runner
+        reaping the tree) never runs that exit path and leaves them behind until reboot:
+
+        - Open MPI shared-memory segments in /dev/shm (``sm_segment.*``, 16 MB each) that no live process maps AND
+          have sat unmapped past SHM_MIN_STALE_AGE_S (a just-created one may be a concurrent job's, so it is kept).
+        - PRRTE launcher session directories (``<tmpdir>/prterun.<host>.<pid>.<uid>``) whose launcher pid is dead.
+
+        A segment a running job still maps, or a directory whose launcher pid is alive, is kept, so a concurrent job
+        is never touched. A ``LaunchedJob`` runs this before it launches (clear a prior killed job's leak) and again
+        in its teardown (its own, once the launcher it owned is gone). It is a fail-safe on the launch host only, so
+        remote hosts are cleaned by each rank's own context.
+        """
+        host, uid, removed, now = socket.gethostname(), os.getuid(), 0, time.time()
+        # Open MPI /dev/shm segments that no live process maps.
+        mine = glob.glob(f"/dev/shm/sm_segment.{host}.{uid}.*")
+        if mine:
+            mapped = set()
+            for d in os.listdir("/proc"):
+                if not d.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{d}/maps") as fh:
+                        for line in fh:
+                            if "sm_segment." in line:
+                                mapped.add(line.rsplit(" ", 1)[1].strip())
+                except OSError:
+                    continue
+            for seg in mine:
+                if seg in mapped:
+                    continue
+                try:
+                    # Uncertain ownership: a just-created segment may be a concurrent same-user job's that has not
+                    # mapped it yet (shm_open and mmap are not atomic). Sweep only one that has sat unmapped past
+                    # SHM_MIN_STALE_AGE_S, i.e. long enough that it cannot be mid-startup — a genuine leak, not a race.
+                    if now - os.path.getmtime(seg) < SHM_MIN_STALE_AGE_S:
+                        continue
+                    os.unlink(seg)
+                    removed += 1
+                except OSError:
+                    pass
+        # PRRTE session directories whose launcher pid is dead (prterun.<host>.<pid>.<uid>).
+        for d in glob.glob(f"{tempfile.gettempdir()}/prterun.*.{uid}"):
+            if not os.path.isdir(d):
+                continue
+            try:
+                pid = int(d.rsplit(".", 2)[-2])
+            except (ValueError, IndexError):
+                continue
+            if os.path.exists(f"/proc/{pid}"):
+                continue  # the launcher is still alive: a live job owns this directory
+            shutil.rmtree(d, ignore_errors=True)
+            if not os.path.exists(d):
+                removed += 1
+        if removed:
+            logger.info(
+                f"{TT_RUN_PREFIX} removed {removed} stale launcher leftover(s) of this user (shm segments / PRRTE session dirs)"
+            )
+        return removed
+
+    @staticmethod
+    def _wait_gone(pids: List[int], timeout_s: float, wake_fd: Optional[int] = None) -> None:
+        """Block until every pid has exited (a zombie counts), timeout_s has passed, or wake_fd is readable (a signal at
+        tt-run): one pidfd per process (Linux 5.3+), no polling."""
+        fds = []
+        for pid in pids:
+            try:
+                fds.append(os.pidfd_open(pid))
+            except ProcessLookupError:
+                pass
+        end = time.time() + timeout_s
+        try:
+            while fds and time.time() < end:
+                ready, _, _ = select.select(fds + ([wake_fd] if wake_fd is not None else []), [], [], end - time.time())
+                if wake_fd is not None and wake_fd in ready:
+                    return
+                for fd in ready:
+                    fds.remove(fd)
+                    os.close(fd)
+        finally:
+            for fd in fds:
+                os.close(fd)
+
+    @staticmethod
+    def _still_running(pid: int) -> bool:
+        """Whether a process that is not tt-run's child is still running. A process that has died is either gone from /proc
+        or a zombie (state Z) waiting for its parent to reap it; in a container whose PID 1 never reaps orphans, a zombie's
+        /proc entry stays for good, so its mere existence is not a sign of life (and a SIGKILL to it does nothing)."""
+        try:
+            with open(f"/proc/{pid}/stat") as fh:
+                return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
+        except (OSError, IndexError):
+            return False
 
     def __init__(self, cmd: List[str], cwd: Path, job_timeout: Optional[float] = None):
         self.cmd = cmd
@@ -518,14 +511,14 @@ class LaunchedJob:
         self._wake_fd: Optional[int] = None  # the write end of wait()'s wakeup pipe, while wait() runs
         self.rank_stop: Optional[re.Match] = None  # the rank that stopped the job (its [tt-stop] line)
         # Why the job is stopping, once it is: "signal" (at tt-run), "rank" (a rank stopped it; its code is the job's)
-        # or "timeout" (the --timeout given in --mpi-args, which tt-run runs itself).
+        # or "timeout" (tt-run's --job-timeout).
         self.stop_reason: Optional[str] = None
-        self.job_timeout = job_timeout  # the --timeout given in --mpi-args (split_launcher_timeout), run by tt-run
+        self.job_timeout = job_timeout  # tt-run's --job-timeout: a graceful stop at this many seconds
         if os.path.basename(self.cmd[0]).startswith(("mpirun", "prterun", "mpiexec")):
-            self.cmd = with_mpi_init_preset_env(self.cmd)
+            self.cmd = self.with_mpi_init_preset_env(self.cmd)
 
     def __enter__(self) -> "LaunchedJob":
-        remove_stale_launcher_leftovers()  # before launch: clear a prior killed job's /dev/shm + session-dir leak
+        self.remove_stale_launcher_leftovers()  # before launch: clear a prior killed job's /dev/shm + session-dir leak
         # Own only the launcher's stderr (stdout, the bulk of rank output, stays inherited) so a pump thread can
         # watch for prterun's MPI_ABORT banner; the thread re-emits every line, so owning the pipe swallows nothing.
         self._helper, self._helper_why = find_signal_helper()
@@ -537,7 +530,7 @@ class LaunchedJob:
             self.proc = subprocess.Popen(
                 self.cmd,
                 cwd=self.cwd,
-                env=launch_env(self.cmd),
+                env=self.launch_env(self.cmd),
                 start_new_session=True,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -557,7 +550,7 @@ class LaunchedJob:
         try:
             self._teardown.callback(self._release_guard)  # last: the job is over, whatever the teardown had to do
             self._start_guard()
-            self._teardown.callback(remove_stale_launcher_leftovers)
+            self._teardown.callback(self.remove_stale_launcher_leftovers)
             self._teardown.callback(self._restore_handlers)  # after the sweep: a Ctrl-C during it is still tt-run's
             self._teardown.callback(self._end_survivors)
             # Capture the session and process group WHILE the launcher is alive, so the sweep can find its ranks
@@ -646,7 +639,7 @@ class LaunchedJob:
         been stopped, so a rank that does not exit is forced after it. The first line names the rank, except that a
         rank stopping because MPI reported a failed peer is only a symptom: the dead rank's own line (from its
         wrapper, which can reach tt-run later from another host) replaces it."""
-        if self.rank_stop is not None and not (_is_peer_failure(self.rank_stop) and not _is_peer_failure(m)):
+        if self.rank_stop is not None and not (self._is_peer_failure(self.rank_stop) and not self._is_peer_failure(m)):
             return
         replaced = self.rank_stop is not None
         self.rank_stop = m
@@ -722,10 +715,17 @@ class LaunchedJob:
                 continue
             name = signal.Signals(signum).name
             why = self._signal_ranks(signum)
-            if why:
+            if why and signum in LAUNCHER_FORWARDED_SIGNALS:
+                try:
+                    self.proc.send_signal(signum)  # prterun forwards this one to every rank itself
+                    logger.info(f"{TT_RUN_PREFIX} {name} received: passed it on to all ranks through the launcher")
+                except ProcessLookupError:
+                    pass
+            elif why:
                 logger.warning(f"{TT_RUN_PREFIX} {name} received, could not pass it on to the ranks: {why}")
                 continue
-            logger.info(f"{TT_RUN_PREFIX} {name} received: passed it on to all ranks")
+            else:
+                logger.info(f"{TT_RUN_PREFIX} {name} received: passed it on to all ranks")
             if signum == signal.SIGTSTP:
                 logger.warning(f"{TT_RUN_PREFIX} the job is paused; fg or bg resumes it (the ranks get SIGCONT)")
                 self._pause_self()
@@ -752,7 +752,7 @@ class LaunchedJob:
         """``signum`` to every rank on every host through PRRTE job control. Returns "" when sent, else why not."""
         if self._helper is None:
             return self._helper_why
-        uri = prterun_tool_uri(self.proc.pid)
+        uri = self.prterun_tool_uri(self.proc.pid)
         if uri is None:
             return f"no rendezvous file for prterun pid {self.proc.pid}"
         try:
@@ -934,7 +934,7 @@ class LaunchedJob:
             os.set_blocking(wake_w, False)
             previous_wakeup = signal.set_wakeup_fd(wake_w, warn_on_full_buffer=False)  # a signal at tt-run ends it
             try:
-                _wait_gone(survivors, settle_s, wake_r)  # let a rank still in its exit path leave on its own
+                self._wait_gone(survivors, settle_s, wake_r)  # let a rank still in its exit path leave on its own
             finally:
                 signal.set_wakeup_fd(previous_wakeup)
                 os.close(wake_r)
@@ -965,8 +965,8 @@ class LaunchedJob:
                     os.kill(pid, sig)
                 except ProcessLookupError:
                     pass
-            _wait_gone(survivors, KILL_GRACE_S)
-            survivors = [pid for pid in survivors if _still_running(pid)]
+            self._wait_gone(survivors, KILL_GRACE_S)
+            survivors = [pid for pid in survivors if self._still_running(pid)]
             if not survivors:
                 return
 
@@ -995,7 +995,8 @@ def run_launcher(cmd: List[str], cwd: Path, job_timeout: Optional[float] = None)
     manager starts it in its own session, turns SIGINT/SIGTERM at tt-run into a stop, and on exit tears the job
     down (ends leftover ranks, clears shm). This applies the exit-code contract: one rank fails, the whole job
     fails, with a truthful code. The launcher's own code is kept — a rank's code or a signal — except that a stop at
-    tt-run returns 128 + the signal it got, a stop at the --timeout returns 241, and tt-run never returns 0 while a
+    tt-run returns 128 + the signal it got, a stop at tt-run's --job-timeout returns 241 (as PRRTE's own does), and tt-run
+    never returns 0 while a
     rank it started was left alive (P19). The result is said once — the failing rank
     named from prterun's banner, or the forced stop with what it means for the devices — and every run ends with
     one ``job end:`` line.
@@ -1026,9 +1027,16 @@ def run_launcher(cmd: List[str], cwd: Path, job_timeout: Optional[float] = None)
         rc = 128 + job.forwarded[0]
         cause = signal.Signals(job.forwarded[0]).name
         outcome = "forced" if job.forced_why else "stopped"
+    elif rc == PRTE_TIMEOUT_EXIT_CODE:  # PRRTE's own --timeout (from --mpi-args) killed every rank
+        logger.error(
+            f"{TT_RUN_PREFIX} job forced down after {elapsed:.0f} s (PRRTE --timeout from --mpi-args): the launcher killed "
+            "every rank (SIGTERM, then SIGKILL 250 ms later) without a graceful shutdown, so devices may be left "
+            f"unhealthy. Run tt-smi -r on every host of the job before the next run. tt-run returns {rc}."
+        )
+        outcome, cause = "forced", "--timeout"
     elif rc != 0 or _DAEMON_LOST_BANNER in launcher_stderr:  # prterun exits 0 after losing a daemon
         rc = rc or 1
-        message, origin = describe_rank_failure(launcher_stderr, rc)
+        message, origin = LaunchedJob.describe_rank_failure(launcher_stderr, rc)
         logger.error(f"{TT_RUN_PREFIX} {message}")
         outcome, cause = "failed", "rank failure"
     elif job.ended:  # the launcher reported success but left ranks alive -> a failure (logged as a leak)
@@ -3271,6 +3279,7 @@ def legacy_flow(
     phase2_failure_hint: Phase2FailureHint = "legacy",
     tracy_args: Optional[str] = None,
     factory_system_descriptor: Optional[Path] = None,
+    job_timeout: Optional[float] = None,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -3654,8 +3663,13 @@ def legacy_flow(
         except ValueError as e:
             raise click.ClickException(str(e))
 
-    # The job's --timeout is tt-run's own clock (a graceful stop at N s): it leaves the launch line.
-    job_timeout, effective_mpi_args = split_launcher_timeout(effective_mpi_args)
+    prrte_timeout = mpi_args_timeout(effective_mpi_args)
+    if prrte_timeout is not None:
+        logger.warning(
+            f"{TT_RUN_PREFIX} --mpi-args sets PRRTE's own --timeout {prrte_timeout}: at that time PRRTE kills every rank "
+            "at once (SIGTERM, then SIGKILL 250 ms later) with no graceful stop, and the devices may need tt-smi -r. "
+            "tt-run's --job-timeout stops the job gracefully instead."
+        )
     mpi_cmd = build_mpi_command(
         config,
         program,
@@ -3763,6 +3777,7 @@ def new_mode_flow(
     force_rediscovery: bool = False,
     tracy_args: Optional[str] = None,
     factory_system_descriptor: Optional[Path] = None,
+    job_timeout: Optional[float] = None,
 ) -> None:
     """New mode flow for ttrun using mesh graph descriptor(s).
 
@@ -4011,6 +4026,7 @@ def new_mode_flow(
         phase2_failure_hint=phase2_failure_hint,
         tracy_args=tracy_args,
         factory_system_descriptor=resolved_fsd,  # Propagate FSD to Phase 2 workload
+        job_timeout=job_timeout,
     )
 
 
@@ -4131,6 +4147,14 @@ def new_mode_flow(
     "this MGD/host fingerprint, even if a cache hit would otherwise skip it (e.g. after a host link failure).",
 )
 @click.option(
+    "--job-timeout",
+    "job_timeout",
+    type=float,
+    default=None,
+    help="Stop the job gracefully after this many seconds: SIGTERM to every rank, then TT_RUN_STOP_GRACE_S, then the "
+    "force (exit 241). No clock by default. A --timeout in --mpi-args is PRRTE's own and kills every rank at once.",
+)
+@click.option(
     "--tracy",
     "tracy_args",
     type=str,
@@ -4165,6 +4189,7 @@ def main(
     rankfile_syntax: str,
     force_rediscovery: bool,
     tracy_args: Optional[str],
+    job_timeout: Optional[float],
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -4249,6 +4274,7 @@ def main(
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
             tracy_args=tracy_args,
             factory_system_descriptor=factory_system_descriptor,
+            job_timeout=job_timeout,
         )
         return
 
@@ -4283,6 +4309,7 @@ def main(
             force_rediscovery=force_rediscovery,
             tracy_args=tracy_args,
             factory_system_descriptor=factory_system_descriptor,
+            job_timeout=job_timeout,
         )
         return
 

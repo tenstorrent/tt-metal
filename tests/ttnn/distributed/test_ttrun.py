@@ -1693,6 +1693,52 @@ class TestJobOwnership:
         assert time.time() - t0 < 15, f"the Ctrl-C did not end the wait: {time.time() - t0:.0f} s\n{text}"
         assert "straggler" in text and "outcome=stopped exit=130" in text, text
 
+    @pytest.mark.parametrize("sig,reaches_launcher", [("SIGUSR1", True), ("SIGQUIT", False)], ids=["usr1", "quit"])
+    def test_run_launcher_passes_signals_through_the_launcher_without_a_signal_tool(
+        self, sig, reaches_launcher, tmp_path, monkeypatch
+    ):
+        import signal
+        import threading
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # tt-run-rank built without PMIx: no job control. A signal prterun forwards to every rank itself (SIGUSR1,
+        # SIGUSR2, SIGALRM, SIGTSTP, SIGCONT) is sent to the launcher instead; SIGQUIT, which would end prterun and
+        # orphan the ranks, never is (tt-run says it could not pass it on).
+        rec = tmp_path / "rec"
+        rec.mkdir()
+        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", "/nonexistent/tt-run-rank")
+        fake = (
+            f'trap "echo USR1 >> {rec}/launcher.signals" USR1; trap "echo QUIT >> {rec}/launcher.signals" QUIT; '
+            "trap 'exit 130' INT; while :; do sleep 0.1; done"
+        )
+        running = threading.Event()
+
+        def send():
+            time.sleep(0.5)
+            if running.is_set():
+                os.kill(os.getpid(), getattr(signal, sig))
+            time.sleep(1.0)
+            if running.is_set():
+                os.kill(os.getpid(), signal.SIGINT)  # no tool: the stop is forced (SIGINT to the launcher)
+
+        def launch():
+            running.set()
+            try:
+                return m.run_launcher(["bash", "-c", fake], cwd=Path.cwd())
+            finally:
+                running.clear()
+
+        threading.Thread(target=send, daemon=True).start()
+        text, rc = self._logged_rc(launch)
+        got = (rec / "launcher.signals").read_text().split() if (rec / "launcher.signals").exists() else []
+        assert rc == 130, text
+        if reaches_launcher:
+            assert got == ["USR1"] and "passed it on to all ranks through the launcher" in text, (got, text)
+        else:
+            assert got == [] and "could not pass it on to the ranks" in text, (got, text)
+
     def test_run_launcher_keeps_the_job_on_a_hangup(self, tmp_path, monkeypatch):
         import signal
         import threading
@@ -1844,13 +1890,13 @@ class TestJobOwnership:
             os.kill(daemon.pid, signal.SIGKILL)
             daemon.wait()
             end = time.time() + 5
-            while time.time() < end and m._still_running(wrapper_pid):
+            while time.time() < end and m.LaunchedJob._still_running(wrapper_pid):
                 time.sleep(0.1)
-            assert not m._still_running(wrapper_pid), "the wrapper (and its rank) outlived its daemon"
+            assert not m.LaunchedJob._still_running(wrapper_pid), "the wrapper (and its rank) outlived its daemon"
             text = out.read_text()
             assert "is gone; stopping the rank (SIGTERM)" in text and "got TERM" in text, text
         finally:
-            if m._still_running(wrapper_pid):
+            if m.LaunchedJob._still_running(wrapper_pid):
                 os.killpg(daemon.pid, signal.SIGKILL)
 
     def test_run_launcher_fails_a_job_whose_launcher_lost_a_daemon(self):
@@ -2030,7 +2076,9 @@ class TestJobOwnership:
         assert ("btl_tcp_if_exclude" in result.output) == (site_include is None), result.output
 
     def test_launch_env_drops_a_tcp_interface_variable_the_line_contradicts(self, monkeypatch):
-        from ttnn.distributed.ttrun import launch_env
+        from ttnn.distributed.ttrun import LaunchedJob
+
+        launch_env = LaunchedJob.launch_env
 
         # A site profile exports an exclude list; --tcp-interface (or --mpi-args) puts an include list on the line.
         # Open MPI aborts on both, so the environment's one is dropped; an unrelated environment is left alone.
@@ -2043,7 +2091,9 @@ class TestJobOwnership:
         assert "OMPI_MCA_btl_tcp_if_include" not in launch_env(["mpirun", "--mca", "btl_tcp_if_exclude", "lo", "p"])
 
     def test_launch_presets_the_variables_mpi_init_would_add(self):
-        from ttnn.distributed.ttrun import MPI_INIT_PRESET_ENV, launch_env, with_mpi_init_preset_env
+        from ttnn.distributed.ttrun import MPI_INIT_PRESET_ENV, LaunchedJob
+
+        launch_env, with_mpi_init_preset_env = LaunchedJob.launch_env, LaunchedJob.with_mpi_init_preset_env
 
         # tt-metal #64717: MPI_Init adding these to the environment races Tracy's getenv. Every rank gets them already
         # set, through -x on the launch line and in the launcher's own environment (CI crashed in a Phase 1 rank with
@@ -2066,17 +2116,45 @@ class TestJobOwnership:
         env = launch_env(["mpirun", "prog"])
         assert all(env[k] == v for k, v in MPI_INIT_PRESET_ENV.items())
 
-    def test_timeout_is_taken_off_the_launch_line(self, monkeypatch):
-        from ttnn.distributed.ttrun import LaunchedJob, split_launcher_timeout
+    @pytest.mark.parametrize("where", ["tt_run", "mpi_args"])
+    def test_a_timeout_is_tt_runs_graceful_one_or_prrtes_own(self, where, sample_rank_binding_yaml, monkeypatch):
+        from click.testing import CliRunner
 
-        # tt-run runs the --timeout of --mpi-args itself (a graceful stop at N); PRRTE's, which kills every rank at once,
-        # leaves the launch line. A rank program's own --timeout (pytest's) is never read: only --mpi-args are.
-        assert split_launcher_timeout(["--oversubscribe", "--timeout", "20"]) == (20.0, ["--oversubscribe"])
-        assert split_launcher_timeout(["--timeout=7"]) == (7.0, [])
-        assert split_launcher_timeout(["--oversubscribe"]) == (None, ["--oversubscribe"])
-        program_timeout = ["mpirun", "-np", "1", "pytest", "tests/x.py", "--timeout", "600"]
-        job = LaunchedJob(program_timeout, Path("."))
-        assert job.job_timeout is None and job.cmd[-2:] == ["--timeout", "600"], job.cmd
+        from ttnn.distributed import ttrun as m
+
+        # tt-run's --job-timeout is its graceful clock (handed to the launcher, never on the mpirun line). A --timeout in
+        # --mpi-args is PRRTE's own: it reaches mpirun unchanged, with a warning that it kills every rank at once. A
+        # rank program's own --timeout (pytest's) is never read.
+        seen = {}
+        monkeypatch.setattr(
+            m, "run_launcher", lambda cmd, cwd, job_timeout=None: seen.update(cmd=cmd, t=job_timeout) or 0
+        )
+        args = ["--job-timeout", "30"] if where == "tt_run" else ["--mpi-args", "--timeout 30"]
+        result = CliRunner().invoke(
+            m.main, ["--rank-binding", str(sample_rank_binding_yaml), *args, "pytest", "x.py", "--timeout", "600"]
+        )
+        assert result.exit_code == 0, result.output
+        line = seen["cmd"]
+        values = [line[i + 1] for i, x in enumerate(line[:-1]) if x == "--timeout"]
+        assert line[-2:] == ["--timeout", "600"] and "600" in values, line  # pytest's own, on every rank, untouched
+        if where == "tt_run":
+            assert seen["t"] == 30.0 and "30" not in values, line
+        else:
+            assert seen["t"] is None and values.count("30") == 1, line
+        assert m.mpi_args_timeout(["--oversubscribe", "--timeout", "20"]) == "20"
+        assert m.mpi_args_timeout(["--timeout=7"]) == "7" and m.mpi_args_timeout(["-np", "2"]) is None
+
+    def test_run_launcher_preserves_prrtes_timeout_exit_code(self):
+        from ttnn.distributed.ttrun import PRTE_TIMEOUT_EXIT_CODE, run_launcher
+
+        # PRRTE's own --timeout (from --mpi-args) killed every rank: tt-run keeps its 241 and says the job was forced
+        # down and the devices may need a reset.
+        text, rc = self._logged_rc(
+            lambda: run_launcher(["bash", "-c", f"exit {PRTE_TIMEOUT_EXIT_CODE}"], cwd=Path.cwd())
+        )
+        assert rc == PRTE_TIMEOUT_EXIT_CODE
+        assert "job forced down" in text and "PRRTE --timeout" in text and "tt-smi -r" in text, text
+        assert f"job end: outcome=forced exit={PRTE_TIMEOUT_EXIT_CODE}" in text, text
 
     @staticmethod
     def _logged(fn):
@@ -2136,7 +2214,9 @@ class TestJobOwnership:
         import socket
         import time
 
-        from ttnn.distributed.ttrun import remove_stale_launcher_leftovers
+        from ttnn.distributed.ttrun import LaunchedJob
+
+        remove_stale_launcher_leftovers = LaunchedJob.remove_stale_launcher_leftovers
 
         # The third piece of P11: before launching, tt-run removes this user's Open MPI shared-memory segments
         # that no live process maps (what a killed job leaves behind), and keeps the ones a running job still maps.
@@ -2172,7 +2252,9 @@ class TestJobOwnership:
     def test_sweep_removes_a_stale_prterun_session_dir_but_keeps_a_live_one(self):
         import tempfile
 
-        from ttnn.distributed.ttrun import remove_stale_launcher_leftovers
+        from ttnn.distributed.ttrun import LaunchedJob
+
+        remove_stale_launcher_leftovers = LaunchedJob.remove_stale_launcher_leftovers
 
         # P25: a killed launcher never runs prterun's exit path, so its <tmp>/prterun.<host>.<pid>.<uid> directory
         # stays. The same sweep removes the ones whose launcher pid is dead and keeps a live job's directory.

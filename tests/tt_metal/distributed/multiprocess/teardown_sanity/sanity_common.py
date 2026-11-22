@@ -278,12 +278,13 @@ def mpi_cmd(ulfm: bool = True, extra: str = "", btl: str = "self,tcp", np: int =
 MPI_BINDING = HERE / "sanity_mpi_binding.yaml"
 
 
-def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3, mpi_prefix: str | None = None) -> list:
+def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3, mpi_prefix: str | None = None, ttrun_extra: tuple = ()) -> list:
     """Launch the raw C++ probe THROUGH tt-run (legacy mode, np local ranks), so the row tests tt-run's own teardown:
     its exit code, signal handling and cleanup. tt-run picks the plain launcher and adds --mca btl self,tcp; extra
     group-E settings (a transport, a component, an interface) go through --mpi-args."""
     return [
         TTRUN,
+        *ttrun_extra,
         "--rank-binding",
         str(MPI_BINDING),
         "--mpi-args",

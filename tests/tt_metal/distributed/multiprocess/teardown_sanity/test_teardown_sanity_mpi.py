@@ -72,24 +72,41 @@ def test_ttrun_dead_rank():
 
 
 def test_ttrun_hang_timeout():
-    """A rank spins forever. With --timeout 20 in --mpi-args, tt-run sends SIGTERM to every rank at 20 s (graceful; tt-run
-    runs the clock itself and takes PRRTE's --timeout off the launch line), the job ends with 241 and leaves nothing (P5).
-    """
+    """A rank spins forever. With tt-run's --job-timeout 20, tt-run sends SIGTERM to every rank at 20 s (graceful), the job
+    ends with 241 and leaves nothing (P5)."""
     r = run_case(
         "ttrun_hang_timeout",
         {**NP, "PROBE_SCENARIO": "victim_hang"},
         DEADLINE_END,
-        cmd=ttrun_mpi_cmd("--timeout 20 --report-state-on-timeout"),
+        cmd=ttrun_mpi_cmd(ttrun_extra=("--job-timeout", "20")),
     )
     ended(r)
     nonzero(r)
-    assert r.exit == 241, f"expected PRRTE's timeout code 241, got {r.exit} — the wall clock was not what ended it: {r}"
+    assert r.exit == 241, f"expected the timeout code 241, got {r.exit} — the clock was not what ended it: {r}"
     # tt-run's own job time (launch to the end of the job), not the harness wall clock that also counts start-up
     m = re.search(r"job end: .* elapsed=([0-9.]+)s", r.log)
     assert m, r.log[-2000:]
     assert 20 <= float(m.group(1)) < 40, f"the job did not end at the ~20 s --timeout but at {m.group(1)} s: {r}"
     assert "the job reached its --timeout of 20 s: sent SIGTERM to all ranks" in r.log, r.log[-2000:]
     clean(r)
+
+
+def test_ttrun_mpi_args_timeout_is_prrtes_own():
+    """--mpi-args "--timeout 20" is PRRTE's own clock and reaches mpirun unchanged: tt-run warns at the start that it
+    kills every rank at once, PRRTE ends the job at 20 s with 241, tt-run says it was forced, nothing is left."""
+    r = run_case(
+        "ttrun_mpi_args_timeout",
+        {**NP, "PROBE_SCENARIO": "victim_hang"},
+        DEADLINE_END,
+        cmd=ttrun_mpi_cmd("--timeout 20"),
+    )
+    ended(r)
+    clean(r)
+    assert r.exit == 241, r
+    assert "sets PRRTE's own --timeout 20" in r.log, r.log[-2000:]
+    assert "job forced down" in r.log and "PRRTE --timeout" in r.log and "outcome=forced exit=241" in r.log, r.log[
+        -2000:
+    ]
 
 
 @pytest.mark.xfail(

@@ -123,10 +123,11 @@ trap 'rm -f "$binding" "$rankfile"' EXIT
 # the job never ends). usage: ttrun_job [more --mpi-args]. With bound=() the job runs unbounded, for a case that signals
 # tt-run's own pid (timeout passes on only one signal).
 bound=(timeout 120)
+ttrun_opts=()  # tt-run's own options for the next ttrun_job (e.g. --job-timeout N)
 ttrun_job() {
   local run=("${bound[@]}")
   [ -n "${exec_ttrun:-}" ] && run=(exec "${run[@]}")
-  "${run[@]}" "${ttrun_cmd[@]}" --rank-binding "$binding" \
+  "${run[@]}" "${ttrun_cmd[@]}" "${ttrun_opts[@]}" --rank-binding "$binding" \
     --mpi-args "--rankfile $rankfile --oversubscribe --bind-to none --tag-output -x PROBE_SCENARIO -x PROBE_VICTIM -x PROBE_NP $*" \
     "$probe"
 }
@@ -229,7 +230,9 @@ expect torn_down "multihost_remote_rank_death" $? 137
 
 echo "--- 3. a rank hangs on the remote host (P22): at the --timeout tt-run stops the job (SIGTERM to every rank),"
 echo "       241, nothing left"
-PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" ttrun_job --timeout 30
+ttrun_opts=(--job-timeout 30)
+PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" ttrun_job
+ttrun_opts=()
 expect torn_down "multihost_remote_hang_timeout" $? 241
 
 echo "--- 4. the daemon on the remote host is killed (P19): the rank there must not outlive it. We wait for this"
