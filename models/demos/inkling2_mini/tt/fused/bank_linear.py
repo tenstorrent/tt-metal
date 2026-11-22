@@ -119,6 +119,8 @@ class BankLinear:
         self.grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c, _ in self.cores])
         self.max_ncq = max(ncq for _, _, part in self.items for ncq, _ in part)
         self.out_dtype = out_dtype
+        # x_rows > 0: the caller guarantees only the first x_rows rows of every x are non-zero (x_rows.hpp)
+        self.x_rows = 0
         cfg = compute_kernel_config
         self.compute = ttnn.ComputeConfigDescriptor(
             math_fidelity=cfg.math_fidelity, fp32_dest_acc_en=True, dst_full_sync_en=True,
@@ -141,7 +143,7 @@ class BankLinear:
         otb = ttnn.Tile([TILE, TILE]).get_tile_size(self.out_dtype)
         named = dict(kt=self.Kt, kb=self.KB, nblk=self.nblk, n_banks=self.nb, out_cols=self.out_cols,
                      out_page=otb if tiles_out else out.shape[-1] * 4, max_ncq=self.max_ncq, tiles_out=int(tiles_out),
-                     out_tile=otb)  # fmt: skip
+                     out_tile=otb, x_rows=self.x_rows)  # fmt: skip
         r_args, c_args, w_args = {}, {}, {}
         for c, i in self.cores:
             b, rot, part = self.items[i]

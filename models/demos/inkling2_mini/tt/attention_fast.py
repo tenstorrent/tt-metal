@@ -243,6 +243,11 @@ class Inkling2AttentionFast(Inkling2Attention):
         self.window = (
             AttnWindow(self.device, self.w_all.act_mem) if isinstance(self.w_all, _DramShardedLinear) else None
         )
+        # The window's input is a zeroed [1, 1, 32, C] L1 tensor (_shared_l1) of which only rows 0..8 (ROWS) are ever
+        # written: w_all reads only those rows of each activation tile (fused/kernels/x_rows.hpp), the same bytes in
+        # its CB with ~1/4 of the NOC traffic on the 8 shard cores. (w_o's 1-row input read this way was slower.)
+        if self.window is not None and self.w_all.bank is not None:
+            self.w_all.bank.x_rows = 9
 
     def new_state(self, max_ctx, cache_dtype=ttnn.bfloat16):
         if self.is_global and max_ctx % FAR_CHUNK:

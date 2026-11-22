@@ -8,9 +8,12 @@
 // walk order (block j = (p + rot) % nblk to position p, as the reference's lookahead), so compute starts after the
 // first block while the weight stream runs on the reader's NOC. Runtime args: x address, rot, out address, number
 // of passes, then (ncq, first column tile) per pass.
+// x_rows > 0: only the first x_rows rows of each activation tile are in use (the rest zero): x_rows.hpp reads those
+// and fills the rest from L1 zeros (same cb_x bytes, less NOC traffic on the activation's shard cores).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "x_rows.hpp"
 
 constexpr uint32_t cb_x = 0, cb_out = 16;
 constexpr uint32_t kt = get_named_compile_time_arg_val("kt");
@@ -20,6 +23,7 @@ constexpr uint32_t out_cols = get_named_compile_time_arg_val("out_cols");
 constexpr uint32_t out_page = get_named_compile_time_arg_val("out_page");
 constexpr uint32_t tiles_out = get_named_compile_time_arg_val("tiles_out");
 constexpr uint32_t out_tile = get_named_compile_time_arg_val("out_tile");
+constexpr uint32_t x_rows = get_named_compile_time_arg_val("x_rows");
 constexpr uint32_t DST_TILES = 8;
 
 void kernel_main() {
@@ -36,12 +40,18 @@ void kernel_main() {
     const uint32_t xtb = get_tile_size(cb_x);
     cb_reserve_back(cb_x, kt);
     const uint32_t xl = get_write_ptr(cb_x);
+    const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     for (uint32_t p = 0; p < nblk; ++p) {
         const uint32_t j = (p + rot) % nblk;
         noc_async_read_set_trid(p % 4 + 1);
         for (uint32_t r = 0; r < kb; ++r) {
-            noc_async_read(xs.get_noc_addr(j * kb + r), xl + (p * kb + r) * xtb, xtb);
+            const uint32_t dst = xl + (p * kb + r) * xtb;
+            if constexpr (x_rows > 0) {
+                read_x_tile<x_rows>(xs.get_noc_addr(j * kb + r), dst, zeros);
+            } else {
+                noc_async_read(xs.get_noc_addr(j * kb + r), dst, xtb);
+            }
         }
         if (p > 0) {
             noc_async_read_barrier_with_trid((p - 1) % 4 + 1);
