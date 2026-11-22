@@ -777,6 +777,7 @@ class MiniMaxH3Attention(Module):
                 and self.sol_mode == "resident"
                 and not self._sol_block_residual()
             )
+            self._sol_prepass.residual_bfp8 = self._SPARSE_RING and self._SPARSE_RING_DTYPE == "bf8"
         scale = self.head_dim**-0.5
         out = self._sol_prepass(q_BHNE, k_BHNE, v_BHNE, scale=scale, report_density=self.sol_report_density)
         return self._sol_kwargs(out)
@@ -1221,7 +1222,7 @@ class MiniMaxH3Attention(Module):
     # sparse ring op attends exactly the mask's blocks, and the ring-joint reader forces block 0 itself (with its
     # bias) when a Q chunk keeps nothing on a shard. Default off.
     _NO_FORCE_BLOCK0 = os.environ.get("MINIMAX_H3_SOL_NO_FORCE_BLOCK0", "0") == "1"
-    # Block residual (sol_prepass.compute_block_residual): instead of one pooled entry per key block, weighted by each
+    # Block residual (sol_prepass.block_residual_reference): instead of one pooled entry per key block, weighted by each
     # query token's own logit, the blocks a Q block leaves out are summarized by one residual from its mean query
     # (res = sum p_k vc_k / sum p_k, lse = m + ln sum p_k), merged into its exact attention by log-sum-exp through the
     # sparse op's residual_bias input. Fused pre-pass and sparse ring op only. Default off.

@@ -292,19 +292,28 @@ RESIDUAL_COLS = 2
 RES_MASK = 1.0e4
 
 
-def residual_constants(geo: SolGeometry, cols: int = RESIDUAL_COLS) -> dict:
-    """Host constants of the block residual (fp32): ``res_logl`` [1,1,1,nbg] ln(block length) for valid blocks and
-    -RES_MASK for empty / padding ones; ``res_e<c>`` [1,1,1,32] word c of a bias row."""
+def residual_constants(geo: SolGeometry, scale: float) -> dict:
+    """Host constants of the block residual. ``res_logl`` [1,1,1,nbg] fp32: ln(block length) for valid blocks, -RES_MASK
+    for empty / padding ones (block_residual_reference). For the device kernel (sol_kernels/sol_residual_*.cpp), bf16:
+    ``res_kaug`` [1,1,nbg,32], columns 0 / 1 the hi / lo parts of res_logl / scale, which q_aug . kaug^T adds to the
+    raw logits; ``res_tiles`` [1,1,5*32,32]: q_aug (columns 0, 1 = 1), diag(-RES_MASK / scale) (mask . D^T masks the
+    kept blocks), ones, and the two row duplications (tile t, row j picks row 16t + j // 2)."""
     lengths = geo.block_lengths().reshape(-1)
     logl = torch.full((1, 1, 1, geo.n_blocks_pad), -RES_MASK)
     pos = lengths > 0
     logl[0, 0, 0, pos] = torch.log(lengths[pos])
-    out = {"res_logl": logl}
-    for c in range(cols):
-        e = torch.zeros(1, 1, 1, TILE)
-        e[..., c] = 1.0
-        out[f"res_e{c}"] = e
-    return out
+    w = logl[0, 0, 0] / scale
+    hi = w.bfloat16().float()
+    kaug = torch.zeros(1, 1, geo.n_blocks_pad, TILE)
+    kaug[0, 0, :, 0] = hi
+    kaug[0, 0, :, 1] = w - hi
+    tiles = torch.zeros(5, TILE, TILE)
+    tiles[0, :, :2] = 1.0
+    tiles[1] = torch.eye(TILE) * (-RES_MASK / scale)
+    tiles[2] = 1.0
+    for t in range(2):
+        tiles[3 + t, torch.arange(TILE), 16 * t + torch.arange(TILE) // 2] = 1.0
+    return {"res_logl": logl, "res_kaug": kaug, "res_tiles": tiles.reshape(1, 1, 5 * TILE, TILE)}
 
 
 def residual_bias_split(w: torch.Tensor, scale: float, cols: int = RESIDUAL_COLS) -> torch.Tensor:
@@ -322,11 +331,12 @@ def residual_bias_split(w: torch.Tensor, scale: float, cols: int = RESIDUAL_COLS
 
 
 def block_residual_reference(q_bar, kc, vc, block_mask, consts: dict, *, scale: float, cols: int = RESIDUAL_COLS):
-    """Host fp32 mirror of `compute_block_residual`. q_bar [S, H, nb_pad, D]; kc / vc [H, nbg, D] (torch_reference's
-    pooled_k / pooled_v); block_mask [S, H, nqc_pad, nbg] with q_chunk == block. Per (head, Q block), over the valid
-    blocks the mask leaves out: p_k = exp(scale q_bar . kc_k + ln len_k - m), res = sum p_k vc_k / sum p_k and
-    lse = m + ln sum p_k (natural units). Returns res [S, H, nb_pad, D], lse [S, H, nb_pad] and the op's column biases
-    [S, H, nb_pad, cols] (lse / scale split by residual_bias_split, clamped at NEG)."""
+    """Host fp32 mirror of the block residual kernel (sol_kernels/sol_residual_compute.cpp). q_bar [S, H, nb_pad, D];
+    kc / vc [H, nbg, D] (torch_reference's pooled_k / pooled_v); block_mask [S, H, nqc_pad, nbg] with q_chunk == block.
+    Per (head, Q block), over the valid blocks the mask leaves out: p_k = exp(scale q_bar . kc_k + ln len_k - m),
+    res = sum p_k vc_k / sum p_k and lse = m + ln sum p_k (natural units). Returns res [S, H, nb_pad, D],
+    lse [S, H, nb_pad] and the op's column biases [S, H, nb_pad, cols] (lse / scale split by residual_bias_split,
+    clamped at NEG)."""
     lg = scale * (q_bar.float() @ kc.float().transpose(-2, -1)[None]) + consts["res_logl"]
     lg = lg - RES_MASK * block_mask[:, :, : lg.shape[2]].float()
     m = lg.amax(-1, keepdim=True)
@@ -336,61 +346,6 @@ def block_residual_reference(q_bar, kc, vc, block_mask, consts: dict, *, scale: 
     lse = (m + torch.log(den))[..., 0]
     bias = residual_bias_split((lse / scale).clamp(min=NEG), scale, cols)
     return {"res": res, "lse": lse, "bias": bias}
-
-
-def compute_block_residual(
-    q_bar: ttnn.Tensor,
-    kc: ttnn.Tensor,
-    vc: ttnn.Tensor,
-    mask: ttnn.Tensor,
-    *,
-    consts: dict,
-    scale: float,
-    compute_kernel_config,
-    cols: int = RESIDUAL_COLS,
-) -> dict:
-    """The sparse op's block-residual inputs from the local q_bar [1, H, nb_pad, D], the gathered kc / vc
-    [1, H, nbg, D] (bf16 block means) and the gather-form uint32 mask [1, H, nqc_pad, nbg] (q_chunk == block), in fp32
-    as block_residual_reference: ``pooled_v`` [1, H, cols * nb_pad, D] bf16 (each Q block's residual, once per
-    column), ``pooled_k`` (zeros, same shape) and ``residual_bias`` [1, H, nb_pad, 32] fp32 row-major (the column biases).
-    """
-    kct = ttnn.transpose(kc, -2, -1)
-    lg = ttnn.matmul(q_bar, kct, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config)
-    ttnn.deallocate(kct)
-    mask_t = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
-    m01 = ttnn.typecast(mask_t, ttnn.float32)
-    ttnn.deallocate(mask_t)
-    lg = ttnn.add(ttnn.multiply(lg, scale), consts["res_logl"])
-    lg = ttnn.subtract(lg, ttnn.multiply(m01, RES_MASK))
-    ttnn.deallocate(m01)
-    m = ttnn.max(lg, dim=3, keepdim=True)
-    p = ttnn.exp(ttnn.subtract(lg, m))
-    ttnn.deallocate(lg)
-    den = ttnn.sum(p, dim=3, keepdim=True)
-    p16 = ttnn.typecast(p, ttnn.bfloat16)
-    ttnn.deallocate(p)
-    num = ttnn.matmul(p16, vc, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config)
-    ttnn.deallocate(p16)
-    res = ttnn.typecast(ttnn.multiply(num, ttnn.reciprocal(den)), ttnn.bfloat16)
-    ttnn.deallocate(num)
-    w = ttnn.clamp(ttnn.multiply(ttnn.add(m, ttnn.log(den)), 1.0 / scale), min=NEG)
-    ttnn.deallocate(m)
-    ttnn.deallocate(den)
-    bias = None
-    for c in range(cols):
-        bits = ttnn.bitwise_right_shift(ttnn.bitcast(w, ttnn.uint32), 16)
-        b = ttnn.bitcast(ttnn.bitwise_left_shift(bits, 16), ttnn.float32)
-        term = ttnn.multiply(b, consts[f"res_e{c}"])
-        bias = term if bias is None else ttnn.add(bias, term)
-        if c + 1 < cols:
-            r = ttnn.clamp(ttnn.rsub(ttnn.exp(ttnn.multiply(ttnn.subtract(b, w), scale)), 1.0), min=1e-30)
-            w = ttnn.add(w, ttnn.multiply(ttnn.log(r), 1.0 / scale))
-    bias_rm = ttnn.to_layout(bias, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(bias)
-    pooled_v = ttnn.repeat_interleave(res, cols, dim=2)
-    ttnn.deallocate(res)
-    pooled_k = ttnn.multiply(pooled_v, 0.0)
-    return {"pooled_k": pooled_k, "pooled_v": pooled_v, "residual_bias": bias_rm}
 
 
 def torch_reference(q, k, v, geo: SolGeometry, consts: dict, *, tau: float, scale: float, thresh_type: str = "diag"):

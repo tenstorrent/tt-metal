@@ -38,7 +38,6 @@ from .sol_prepass import (
     SolGeometry,
     _pad32,
     build_constants,
-    compute_block_residual,
     compute_row_max,
     residual_constants,
     row_max_constants,
@@ -158,6 +157,7 @@ class SolPrepassFused:
     _shared: dict = {}
     _generation: int = 0
     pooled_v_bfp8: bool = False
+    residual_bfp8: bool = False  # block residual: pooled_k / pooled_v in BFP8 (the sparse op's 8-bit path)
     keep_across_generations: bool = False
 
     @classmethod
@@ -203,17 +203,11 @@ class SolPrepassFused:
         assert thresh_type == "diag", "fused pre-pass implements the diag threshold (H3 policy)"
         self.mode = mode
         self.partial_prefix = bool(partial_prefix)
-        # Block residual (sol_prepass.compute_block_residual): the outputs are the sparse op's residual entries
-        # (pooled_k / pooled_v / residual_bias) instead of the per-block means; needs the gather-form mask per Q block.
+        # Block residual (sol_residual program, sol_prepass.block_residual_reference): the outputs are the sparse op's
+        # residual entries (pooled_k / pooled_v / residual_bias) instead of the per-block means; needs the gather-form
+        # mask per Q block, which the route then also writes as 0/1 tiles.
         self.block_residual = bool(block_residual)
         assert not self.block_residual or mode != "chunk", "the block residual needs a block-form mask"
-        self._residual_ckc = (
-            ttnn.init_device_compute_kernel_config(
-                mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
-            )
-            if self.block_residual
-            else None
-        )
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.sp_axis = sp_axis
@@ -298,8 +292,8 @@ class SolPrepassFused:
         "ones": (False, ttnn.bfloat16, ttnn.TILE_LAYOUT),
         "shsel": (False, ttnn.bfloat16, ttnn.TILE_LAYOUT),
         "geo": (True, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
-        "res_logl": (False, ttnn.float32, ttnn.TILE_LAYOUT),
-        **{f"res_e{c}": (False, ttnn.float32, ttnn.TILE_LAYOUT) for c in range(RESIDUAL_COLS)},
+        "res_kaug": (False, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        "res_tiles": (False, ttnn.bfloat16, ttnn.TILE_LAYOUT),
     }
 
     def _refresh_constants(self, st: dict) -> None:
@@ -328,7 +322,8 @@ class SolPrepassFused:
         host = {name: c[name] for name in self._CONST_SPECS if name in c}
         host["geo"] = self._geo_host(geo, c["n_valid_blocks"])
         if self.block_residual:
-            host.update(residual_constants(geo))
+            rc = residual_constants(geo, scale)
+            host.update(res_kaug=rc["res_kaug"], res_tiles=rc["res_tiles"])
         return host, {"n_valid_blocks": c["n_valid_blocks"], "nkcl": c["nkcl"]}
 
     def prepare(self, geo: SolGeometry, sink_tokens: int, scale: float) -> None:
@@ -529,7 +524,7 @@ class SolPrepassFused:
         ttnn.generic_op([q, k, v, st["geo"], *outs], prog)
         return outs
 
-    def _route_program(self, q_bar, kc, mask, bias, union) -> ttnn.ProgramDescriptor:
+    def _route_program(self, q_bar, kc, mask, bias, union, m01) -> ttnn.ProgramDescriptor:
         st, geo = self._state, self.geo
         _, H, _, D = q_bar.shape
         S, DT, NBPT, NQCT = geo.shards, D // TILE, geo.nb_pad // TILE, geo.nqc_pad // TILE
@@ -567,6 +562,11 @@ class SolPrepassFused:
         acc_out += [hw_on, geo.nb] + list(ttnn.TensorAccessorArgs(hw).get_compile_time_args())
         acc_out += list(ttnn.TensorAccessorArgs(st["geo"]).get_compile_time_args())
         units_per_shard = 1 if (self.route_units_per_shard and mode == 1) else 0
+        m01_defines = []
+        if m01 is not None:
+            assert units_per_shard and TQ == 1, "the mask tiles come from (head, shard) units with q_chunk == block"
+            acc_out += list(ttnn.TensorAccessorArgs(m01).get_compile_time_args())
+            m01_defines = [("SOL_ROUTE_M01", "1")]
         units = H * S if units_per_shard else H * NQCT
         self.route_units = (units, units_per_shard)
         ct += [nx, ny, units, units_per_shard]
@@ -619,6 +619,8 @@ class SolPrepassFused:
         if units_per_shard:
             sizes.update({23: (S + 3) // 4, 24: 8, 29: 8})
             del sizes[16]
+        if m01 is not None:
+            sizes[26] = NBPT
         cbs = [self._cb(i, n, cores) for i, n in sizes.items()]
         if units_per_shard:
             cbs.append(self._cb(16, 2, cores, page_size=mask_rows_bytes, dtype=ttnn.uint32))
@@ -640,9 +642,17 @@ class SolPrepassFused:
             ttnn.ReaderConfigDescriptor(),
         )
         writer = self._kernel(
-            "sol_route_writer.cpp", cores, ct + acc_out, [], [0, 0, 0, 0, 0], ttnn.WriterConfigDescriptor()
+            "sol_route_writer.cpp",
+            cores,
+            ct + acc_out,
+            [],
+            [0] * (6 if m01 is not None else 5),
+            ttnn.WriterConfigDescriptor(),
+            m01_defines,
         )
-        compute = self._kernel("sol_route_compute.cpp", cores, ct, [], [], self._compute_config(full_sync=True))
+        compute = self._kernel(
+            "sol_route_compute.cpp", cores, ct, [], [], self._compute_config(full_sync=True), m01_defines
+        )
         sems = (
             [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in (0, 1, 2)]
             if units_per_shard
@@ -675,7 +685,7 @@ class SolPrepassFused:
 
     def _run_route(
         self, q_bar: ttnn.Tensor, kc: ttnn.Tensor
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None, ttnn.Tensor | None]:
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None, ttnn.Tensor | None, ttnn.Tensor | None]:
         st, geo = self._state, self.geo
         _, H, _, _ = q_bar.shape
         width = geo.nkc_pad if self.mode == "chunk" else geo.n_blocks_pad
@@ -706,6 +716,15 @@ class SolPrepassFused:
             )
         else:
             union = mask
+        m01 = None
+        if self.block_residual:
+            m01 = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, H, geo.nqc_pad, width]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                self.mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
         hw_ok = self.head_weights and self.mode != "chunk" and self.route_units_per_shard and geo.nqc_pad // TILE <= 8
         if self.head_weights and not hw_ok:
             print("SolPrepassFused: SOL_HEAD_WEIGHTS needs (head, shard) units, the block-form mask and NQCT <= 8: off")
@@ -724,7 +743,7 @@ class SolPrepassFused:
         else:
             self._route_hw = self._route_hw_buf
         if st["route_prog"] is None:
-            st["route_prog"] = self._route_program(q_bar, kc, mask, bias, union)
+            st["route_prog"] = self._route_program(q_bar, kc, mask, bias, union, m01)
         prog = st["route_prog"]
         ins = [q_bar, kc, st["const_or"], st["colconst"], st["qsel"], st["ksel"], st["erow"], st["ones"]]
         prog.kernels[0].common_runtime_args = (
@@ -740,11 +759,99 @@ class SolPrepassFused:
             union.buffer_address(),
             hw.buffer_address(),
             st["geo"].buffer_address(),
-        ]
+        ] + ([m01.buffer_address()] if m01 is not None else [])
         ttnn.generic_op(
-            [*ins, st["shsel"], st["geo"], mask, bias, union] + ([hw] if self._route_hw is not None else []), prog
+            [*ins, st["shsel"], st["geo"], mask, bias, union]
+            + ([hw] if self._route_hw is not None else [])
+            + ([m01] if m01 is not None else []),
+            prog,
         )
-        return mask, (bias if self.emit_bias else None), (union if self.emit_chunk_union else None)
+        return mask, (bias if self.emit_bias else None), (union if self.emit_chunk_union else None), m01
+
+    RESIDUAL_KCH = 4  # key tiles per reader chunk of the residual program
+
+    def _residual_program(self, q_bar, kc, vc, m01, outs) -> ttnn.ProgramDescriptor:
+        """sol_residual: one unit per (head, local Q tile row), fused over its key tiles (sol_residual_compute.cpp)."""
+        st, geo = self._state, self.geo
+        _, H, _, D = q_bar.shape
+        NBPT, DT = geo.nb_pad // TILE, D // TILE
+        NBGT, KCH = geo.shards * NBPT, self.RESIDUAL_KCH
+        assert RESIDUAL_COLS == 2 and DT <= 4 and NBGT % KCH == 0, (RESIDUAL_COLS, DT, NBGT)
+        nx, ny, cores = self._cores()
+        pv_bfp8 = outs[0].get_dtype() == ttnn.bfloat8_b
+        scale = st["scale"]
+        ct = [H, NBPT, NBGT, DT, nx, ny, H * NBPT, KCH]
+        ct += [_f32_bits(scale), _f32_bits(1.0 / scale), _f32_bits(NEG), int(pv_bfp8)]
+        ins = [q_bar, kc, vc, m01, st["res_kaug"], st["res_tiles"]]
+        acc_in = [a for t in ins for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
+        acc_out = [a for t in outs for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
+        f32 = dict(page_size=2 * TILE_BYTES, dtype=ttnn.float32)
+        pv_page = BFP8_TILE_BYTES if pv_bfp8 else TILE_BYTES
+        pv_fmt = dict(page_size=pv_page, dtype=ttnn.bfloat8_b if pv_bfp8 else ttnn.bfloat16)
+        cbs = [
+            self._cb(0, DT, cores),
+            self._cb(1, 2 * KCH * DT, cores),
+            self._cb(2, 2 * KCH, cores),
+            self._cb(3, 2 * KCH, cores),
+            self._cb(4, 2 * KCH * DT, cores),
+            self._cb(5, 5, cores),
+            self._cb(6, NBGT, cores, **f32),
+            self._cb(7, NBGT, cores),
+            self._cb(8, 1, cores, **f32),
+            self._cb(9, 2, cores, **f32),
+            self._cb(10, 1, cores),
+            self._cb(11, 1, cores),
+            self._cb(12, 1, cores, **f32),
+            self._cb(13, 1, cores, **f32),
+            self._cb(14, NBGT, cores),
+            self._cb(15, DT, cores),
+            self._cb(16, 2 * DT, cores, **pv_fmt),
+            self._cb(17, 2, cores, **f32),
+            self._cb(18, 1, cores, **pv_fmt),
+            self._cb(19, 1, cores, page_size=32 * 128, dtype=ttnn.uint32),
+        ]
+        config = self._compute_config(full_sync=True)
+        modes = [ttnn.UnpackToDestMode.Default] * 64
+        for i in (6, 8, 9, 12, 13):  # fp32 tiles copied into DST keep fp32
+            modes[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        config.unpack_to_dest_mode = modes
+        reader = self._kernel(
+            "sol_residual_reader.cpp", cores, ct + acc_in, [], [0] * len(ins), ttnn.ReaderConfigDescriptor()
+        )
+        writer = self._kernel(
+            "sol_residual_writer.cpp", cores, ct + acc_out, [], [0] * len(outs), ttnn.WriterConfigDescriptor()
+        )
+        compute = self._kernel("sol_residual_compute.cpp", cores, ct, [], [], config)
+        return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+
+    def _run_residual(self, q_bar, kc, vc, m01) -> dict:
+        """The sparse op's block-residual inputs: ``pooled_v`` [1, H, 2 * nb_pad, D] (each Q block's residual, once per
+        column), ``pooled_k`` (zeros, same shape), in BFP8 with ``residual_bfp8``, and ``residual_bias``
+        [1, H, nb_pad, 32] fp32 row-major (the two column biases)."""
+        st, geo = self._state, self.geo
+        _, H, _, D = q_bar.shape
+        dtype = ttnn.bfloat8_b if self.residual_bfp8 else ttnn.bfloat16
+        shape = ttnn.Shape([1, H, RESIDUAL_COLS * geo.nb_pad, D])
+        pv, pk = (
+            ttnn.allocate_tensor_on_device(shape, dtype, ttnn.TILE_LAYOUT, self.mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+            for _ in range(2)
+        )
+        rb = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, H, geo.nb_pad, TILE]),
+            ttnn.float32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        key = ("residual", dtype)
+        if key not in st:
+            st[key] = self._residual_program(q_bar, kc, vc, m01, [pv, pk, rb])
+        prog = st[key]
+        ins = [q_bar, kc, vc, m01, st["res_kaug"], st["res_tiles"]]
+        prog.kernels[0].common_runtime_args = [t.buffer_address() for t in ins]
+        prog.kernels[1].common_runtime_args = [t.buffer_address() for t in (pv, pk, rb)]
+        ttnn.generic_op([*ins, pv, pk, rb], prog)
+        return {"pooled_k": pk, "pooled_v": pv, "residual_bias": rb}
 
     def _gather(self, t: ttnn.Tensor) -> ttnn.Tensor:
         """All-gather a pooled [1, H, nb_pad, D] tensor along dim 2 over the SP axis with the configured arguments."""
@@ -814,12 +921,12 @@ class SolPrepassFused:
             ttnn.deallocate(vc_local)
         reuse = self.mask_reuse > 1 and self._held_route is not None and self._reuse_left > 0
         if reuse:
-            mask, bias, union, self._route_hw = self._held_route
+            mask, bias, union, m01, self._route_hw = self._held_route
             self._reuse_left -= 1
         else:
-            mask, bias, union = self._run_route(q_bar, kc)
+            mask, bias, union, m01 = self._run_route(q_bar, kc)
             if self.mask_reuse > 1:
-                self._held_route = (mask, bias, union, self._route_hw)
+                self._held_route = (mask, bias, union, m01, self._route_hw)
                 self._reuse_left = self.mask_reuse - 1
         self.last_mask_reused = reuse
         if report_density:
@@ -841,9 +948,9 @@ class SolPrepassFused:
         residual = None
         if self.block_residual:
             assert geo.q_chunk == geo.block, "the block residual is per Q block: q_chunk must be the block"
-            residual = compute_block_residual(
-                q_bar, kc, vc, mask, consts=self._state, scale=scale, compute_kernel_config=self._residual_ckc
-            )
+            residual = self._run_residual(q_bar, kc, vc, m01)
+            if self.mask_reuse <= 1:
+                ttnn.deallocate(m01)
         if not self.persistent_internal:
             ttnn.deallocate(q_bar)
         out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "row_max": row_max}

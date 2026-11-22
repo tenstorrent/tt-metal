@@ -881,8 +881,8 @@ def test_runtime_len_dense_table(runtime, geom, monkeypatch):
 
 
 # Block residual (residual_bias): each Q block attends its kept blocks exactly and summarizes the blocks it leaves out
-# by one residual from its mean query, merged by log-sum-exp (the reference algorithm the MiniMax-H3 pre-pass computes,
-# sol_prepass.compute_block_residual). The inputs come from block_residual_inputs, the reference from
+# by one residual from its mean query, merged by log-sum-exp (the reference algorithm the MiniMax-H3 pre-pass computes
+# in its sol_residual kernel). The inputs come from block_residual_inputs, the reference from
 # residual_reference with the op's bf16 column biases; the exact-lse reference is logged (the biases' own error). The
 # rel-L2 gate is the op's own rounding floor: the default (pooled) path against its reference on the same inputs.
 RESIDUAL_FLOOR_MARGIN = 1.25

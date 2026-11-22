@@ -22,7 +22,7 @@ namespace {
 constexpr uint32_t cb_kc = 0, cb_q = 1, cb_ones = 2, cb_qsel = 3, cb_ksel = 4, cb_erow = 5, cb_constor = 6, cb_colc = 7,
                    cb_part = 8, cb_mom = 9, cb_qsq = 10, cb_thrcol = 11, cb_thr = 12, cb_exact = 13, cb_block01 = 14,
                    cb_chunk2 = 15, cb_mask_out = 16, cb_brow = 17, cb_bias_out = 18, cb_var = 20, cb_union_out = 21,
-                   cb_recv = 23, cb_pl = 24, cb_nv = 25, cb_shsel = 29;
+                   cb_recv = 23, cb_pl = 24, cb_nv = 25, cb_m01 = 26, cb_shsel = 29;
 constexpr uint32_t PART_T = 8;
 constexpr uint32_t HALF_NEG = 0xBF000000u;
 constexpr uint32_t SLAB = 3;
@@ -360,6 +360,10 @@ void kernel_main() {
                 if constexpr (MODE != 0 && !UNITS_PER_SHARD) {
                     mask_out.reserve_back(MASK_T);
                 }
+#ifdef SOL_ROUTE_M01
+                CircularBuffer m01(cb_m01);
+                m01.reserve_back(NBPT);
+#endif
                 for (uint32_t c0 = 0; c0 < NBPT; c0 += SLAB) {
                     const uint32_t nc = min_u(SLAB, NBPT - c0);
                     tile_regs_acquire();
@@ -397,10 +401,16 @@ void kernel_main() {
                         if constexpr (MODE != 0 && !UNITS_PER_SHARD) {
                             pack_tile<true>(cc, cb_mask_out, c0 + cc);
                         }
+#ifdef SOL_ROUTE_M01
+                        pack_tile<true>(cc, cb_m01, c0 + cc);
+#endif
                     }
                     tile_regs_release();
                 }
                 block01.push_back(NBPT);
+#ifdef SOL_ROUTE_M01
+                m01.push_back(NBPT);
+#endif
                 block01.wait_front(NBPT);
                 if constexpr (MODE != 0 && !UNITS_PER_SHARD) {
                     mask_out.push_back(MASK_T);

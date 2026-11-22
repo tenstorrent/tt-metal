@@ -323,7 +323,7 @@ def test_sol_prepass_fused_block_residual(
 
     kc = host["kc_local"].permute(1, 0, 2, 3).reshape(H, S * nbp, D)
     vc = host["vc_local"].permute(1, 0, 2, 3).reshape(H, S * nbp, D)
-    ref = block_residual_reference(host["q_bar"], kc, vc, mask, residual_constants(geo), scale=scale)
+    ref = block_residual_reference(host["q_bar"], kc, vc, mask, residual_constants(geo, scale), scale=scale)
     real = torch.zeros(nbp, dtype=torch.bool)
     real[: geo.nb] = True
     live = (ref["lse"] > NEG * scale / 2) & real

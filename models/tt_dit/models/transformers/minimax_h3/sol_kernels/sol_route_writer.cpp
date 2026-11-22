@@ -11,7 +11,8 @@
 #include "api/tensor/noc_traits.h"
 
 namespace {
-constexpr uint32_t cb_mask_out = 16, cb_bias_out = 18, cb_rows = 19, cb_union_out = 21, cb_ring = 22, cb_nv = 25;
+constexpr uint32_t cb_mask_out = 16, cb_bias_out = 18, cb_rows = 19, cb_union_out = 21, cb_ring = 22, cb_nv = 25,
+                   cb_m01 = 26;
 constexpr uint32_t GEO_BYTES = 128;
 constexpr uint32_t TILE_BYTES = 2048;
 constexpr uint32_t RING_PAGES = 8;
@@ -63,6 +64,10 @@ void kernel_main() {
     constexpr uint32_t NB = get_compile_time_arg_val(un_args.next_compile_time_args_offset() + 1);
     constexpr auto hw_args = TensorAccessorArgs<un_args.next_compile_time_args_offset() + 2>();
     constexpr auto geo_args = TensorAccessorArgs<hw_args.next_compile_time_args_offset()>();
+#ifdef SOL_ROUTE_M01
+    // Block residual: the 0/1 mask also as bf16 tiles [1, H, nqc_pad, n_blocks_pad] (q_chunk = block).
+    constexpr auto m01_args = TensorAccessorArgs<geo_args.next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t NX = get_compile_time_arg_val(16);
     constexpr uint32_t NY = get_compile_time_arg_val(17);
@@ -82,6 +87,11 @@ void kernel_main() {
     [[maybe_unused]] const auto hwt = TensorAccessor(hw_args, get_common_arg_val<uint32_t>(3));
     static_assert(
         HEAD_WEIGHTS == 0 || (UNITS_PER_SHARD == 1 && NQCT <= 8), "head weights: (head, shard) units, NQCT <= 8");
+#ifdef SOL_ROUTE_M01
+    static_assert(UNITS_PER_SHARD == 1, "the mask tiles come from (head, shard) units");
+    const auto m01 = TensorAccessor(m01_args, get_common_arg_val<uint32_t>(5));
+    CircularBuffer cbm01(cb_m01);
+#endif
 
     Noc noc;
     {
@@ -151,6 +161,19 @@ void kernel_main() {
                     }
                     noc.async_write_barrier();
                     cbm.pop_front(1);
+#ifdef SOL_ROUTE_M01
+                    cbm01.wait_front(NBPT);
+                    for (uint32_t c = 0; c < NBPT; ++c) {
+                        noc.async_write(
+                            cbm01,
+                            m01,
+                            TILE_BYTES,
+                            {.offset_bytes = c * TILE_BYTES},
+                            {.page_id = (h * NQCT + it) * NBGT + sp * NBPT + c});
+                    }
+                    noc.async_write_barrier();
+                    cbm01.pop_front(NBPT);
+#endif
                 } else {
                     cbm.wait_front(MASK_T);
                     const uint32_t mbase = cbm.get_read_ptr();
