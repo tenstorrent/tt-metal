@@ -39,7 +39,7 @@ def _plan_tiers(num_chunks: int, factor: int) -> list[int]:
     return tiers
 ```
 
-`models/experimental/deepseek_v41_flash/tt/prefill/model.py:669`
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py:669`
 
 ```python
 def _caps_at(self, chunks: int, chunk_size: int) -> dict:
@@ -60,7 +60,7 @@ large.
 
 ### 2.1 Causal cut built every step (each stage, each indexed layer type)
 
-`models/experimental/deepseek_v41_flash/tt/prefill/model.py:1047`
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py:1047`
 
 ```python
 for key, (entry, query) in io.cut_ramps.items():
@@ -121,7 +121,7 @@ def _entry_prefix(buf: ttnn.Tensor, cap: int) -> tuple[ttnn.Tensor, bool]:
 
 ### 2.3 Top-k selection (each index source: 8 layers)
 
-`models/experimental/deepseek_v41_flash/tt/prefill/attention.py:321`
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/attention.py:321`
 
 ```python
 def _select_rows(self, scores: ttnn.Tensor) -> ttnn.Tensor:
@@ -137,7 +137,7 @@ which could bound this to the entries the chunk has seen; it is not used yet.
 
 ### 2.4 Two-level candidates: the candidate source (layer 20)
 
-`models/experimental/deepseek_v41_flash/tt/prefill/attention.py:342`
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/attention.py:342`
 (`_candidate_blocks`)
 
 ```python
@@ -168,7 +168,7 @@ several times. The block top-k (`k = 2048`) runs over `cap / 8` columns.
 
 ### 2.5 Two-level candidates: expansion to an entry mask
 
-`models/experimental/deepseek_v41_flash/tt/prefill/attention.py:384`
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/attention.py:384`
 
 ```python
 def _expand_candidates(self, blocks: ttnn.Tensor, cut: ttnn.Tensor) -> ttnn.Tensor:
@@ -188,7 +188,7 @@ This builds a full `[T, cap]` mask: `repeat_interleave`, possibly a tilize, `log
 2 GiB passes. It runs on the candidate source's stage and again on each consumer stage that receives the
 block mask.
 
-`models/experimental/deepseek_v41_flash/tt/prefill/model.py:1136` (each consumer stage):
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py:1136` (each consumer stage):
 
 ```python
 if blocks_in is not None and stage.candidate_consumer:
@@ -199,7 +199,7 @@ if blocks_in is not None and stage.candidate_consumer:
 
 ### 2.6 Restricting a consumer's scores (index sources 24, 28, 32 and 36)
 
-`models/experimental/deepseek_v41_flash/tt/prefill/attention.py:574`
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/attention.py:574`
 
 ```python
 elif self.uses_candidates and shared.candidates is not None:
@@ -235,7 +235,7 @@ A chunk writes only `C / rate` rows, but `indexed_fill` rebuilds the whole `cap`
 copied back. That is about three passes over `cap x width` per buffer: 1 GiB of entries plus 256 MiB of
 index keys for layer 20, and half that for each rate-2 source.
 
-`models/experimental/deepseek_v41_flash/tt/prefill/attention.py:555` (each kv source):
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/attention.py:555` (each kv source):
 
 ```python
 rows, cap = step.entry_rows[self.rate], step.caps[self.layer_type]
@@ -245,7 +245,7 @@ self._write_entries(bufs.idx_keys, keys, rows, cap)
 
 ### 2.8 The same write into every mirror on a later stage
 
-`models/experimental/deepseek_v41_flash/tt/prefill/model.py:1120`
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py:1120`
 
 ```python
 for src, mirror in io.mirrors.items():
@@ -262,7 +262,7 @@ At five layers per stage, layer 20's group (layers 20 to 39) is mirrored on thre
 
 ### 2.9 Candidate pins (the candidate source's stage)
 
-`models/experimental/deepseek_v41_flash/tt/prefill/model.py:1058`
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py:1058`
 
 ```python
 if stage.candidate_source and tier in self._candidate_tiers:
@@ -282,7 +282,7 @@ Three `[T, cap / 8]` ops, which are small next to sections 2.1 to 2.8.
 
 ## 3. Stage-to-stage traffic that scales with `cap`
 
-`models/experimental/deepseek_v41_flash/tt/prefill/model.py:1187`
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py:1187`
 
 ```python
 if candidates_on and stage.candidates_out:
@@ -301,14 +301,14 @@ consumer's stage. The receive buffers are one per distinct block count
 
 These are allocated once, at the size of the longest prompt, and are not per-chunk work.
 
-`models/experimental/deepseek_v41_flash/tt/prefill/attention.py:515` (each kv source):
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/attention.py:515` (each kv source):
 
 ```python
 bufs.entries = self._zeros_rm(entry_capacity)
 bufs.idx_keys = self._zeros_rm(entry_capacity, self.config.index_head_dim)
 ```
 
-`models/experimental/deepseek_v41_flash/tt/prefill/model.py:857` (each stage with an index source):
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py:857` (each stage with an index source):
 
 ```python
 for tier_cap in sorted({caps.get(key, 0) for caps in self._tier_caps}):
@@ -319,13 +319,13 @@ query = (rate * ((torch.arange(t) + 1) // rate)).to(torch.float32).reshape(1, 1,
 cut_ramps[key] = tuple(zeros(x.shape, ttnn.TILE_LAYOUT, ttnn.float32, x) for x in (entry, query))
 ```
 
-`models/experimental/deepseek_v41_flash/tt/prefill/model.py:878` (each stage reading a remote group):
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py:878` (each stage reading a remote group):
 
 ```python
 mirrors = {src: group_rows(src, self._entry_capacity[ratio_layer_type(rate_of[src])]) for src in stage.mirrored}
 ```
 
-`models/experimental/deepseek_v41_flash/tt/prefill/model.py:883` (the candidate source's stage):
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py:883` (the candidate source's stage):
 
 ```python
 if stage.candidate_source:
@@ -351,7 +351,7 @@ next to everything above and decode's caches.
 
 ## 5. Once per prompt, proportional to the prompt (not `cap`)
 
-`models/experimental/deepseek_v41_flash/tt/prefill/model.py:1460` (`_export_states`):
+`models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill/model.py:1460` (`_export_states`):
 
 ```python
 if attn.is_kv_source:

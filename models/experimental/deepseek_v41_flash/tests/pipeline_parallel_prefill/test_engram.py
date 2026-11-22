@@ -13,7 +13,7 @@ Checked by PCC on the output and on what Engram adds to the streams (``out - x``
 
 The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint).
 
-    pytest models/experimental/deepseek_v41_flash/tests/prefill/test_engram.py
+    pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_engram.py
 """
 
 import pytest
@@ -28,7 +28,7 @@ from models.experimental.deepseek_v41_flash.tests.reference import (
     reference_engram_with_embed,
 )
 from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, engram_weights, load_config
-from models.experimental.deepseek_v41_flash.tt.prefill.engram import DeepSeekV41PrefillEngram
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.engram import DeepSeekV41PrefillEngram
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 

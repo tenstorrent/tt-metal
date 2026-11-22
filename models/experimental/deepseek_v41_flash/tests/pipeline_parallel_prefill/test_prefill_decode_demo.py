@@ -5,7 +5,7 @@
 
 The V4.1 twin of ``models/experimental/deepseek_v4_flash/tests/prefill/test_prefill_decode_demo.py`` (read its
 docstring for the flow; this one follows it step for step). Each prompt's 128-aligned part is prefilled by
-:class:`~models.experimental.deepseek_v41_flash.tt.prefill.model.DeepSeekV41PrefillModel` (traced, the stages
+:class:`~models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.model.DeepSeekV41PrefillModel` (traced, the stages
 pipelined), its per-layer state committed into the decode caches on device
 (:meth:`~models.experimental.deepseek_v41_flash.tt.model.DeepSeekV41Model.commit_prefill_state`: every layer's sliding
 ring, and each compressed group's ``comp_kv`` / ``idx_key_cache`` on every stage that selects from it), the ragged tail
@@ -39,17 +39,17 @@ What differs from V4:
 Run it (ttnn venv)::
 
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
-      models/experimental/deepseek_v41_flash/tests/prefill/test_prefill_decode_demo.py::test_prefill_decode_demo
+      models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_prefill_decode_demo.py::test_prefill_decode_demo
 
 The known-correct questions::
 
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
-      models/experimental/deepseek_v41_flash/tests/prefill/test_prefill_decode_demo.py::test_prefill_decode_longbench_known_correct
+      models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_prefill_decode_demo.py::test_prefill_decode_longbench_known_correct
 
 A quick bring-up (layers 0-2: a window layer, an Engram layer and a ratio-2 kv + index source, one per stage)::
 
     DEEPSEEK_V4_DECODE_LAYERS=3 DEEPSEEK_V4_MAX_NEW_TOKENS=32 DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
-      models/experimental/deepseek_v41_flash/tests/prefill/test_prefill_decode_demo.py::test_prefill_decode_text
+      models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_prefill_decode_demo.py::test_prefill_decode_text
 
 Knobs (environment), as in the V4 demo: ``DEEPSEEK_V4_MAX_NEW_TOKENS`` (16384), ``DEEPSEEK_V4_E2E_CHUNK`` (1024 = prefill
 chunk), ``DEEPSEEK_V4_E2E_TEXT``, ``DEEPSEEK_V4_DECODE_LAYERS``, ``DEEPSEEK_V4_E2E_MAX_INPUT``,
@@ -103,7 +103,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _tokenize_chat,
     _traced_max_seq,
 )
-from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefill_demo import (
+from models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.test_full_model_prefill_demo import (
     _ATTENTION_WEIGHT_DTYPE,
     _TP_SIZE,
 )
@@ -119,7 +119,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     stage_engram_tables,
 )
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
-from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
     _Progress,
     _env_int,

@@ -9,7 +9,7 @@ docstring), on the V4.1 decode model and :class:`DeepSeekV41PrefillModel` instea
 
 * the engine (:class:`V41ChatEngine`) builds :class:`DeepSeekV41Model` and its ``lm_head``; its layers are split
   evenly over the stages in contiguous runs (five per stage at the default eight), a placement the prefill model
-  shares, as in ``tests/prefill/test_prefill_decode_demo.py``. The full mesh stays open;
+  shares, as in ``tests/pipeline_parallel_prefill/test_prefill_decode_demo.py``. The full mesh stays open;
   ``DEEPSEEK_V4_NUM_STAGES`` (default 8) is how many ``1 x 4`` submeshes are carved from it;
 * the prefill (:class:`_V41Prefiller`) is :meth:`DeepSeekV41Model.build_prefill` (sharing the routed experts,
   embedding, ``lm_head``, sockets and the Engram host lookup) with no CSA position bias to commit. By default it
@@ -196,7 +196,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _build_rope,
     _traced_max_seq,
 )
-from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefill_demo import (
+from models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.test_full_model_prefill_demo import (
     _ATTENTION_WEIGHT_DTYPE,
     _TP_SIZE,
 )

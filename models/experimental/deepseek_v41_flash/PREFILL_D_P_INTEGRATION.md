@@ -6,7 +6,7 @@ validation pending. Read "The blocker" before planning server work.
 
 ## 1. The two implementations at a glance
 
-| | metal_2: `models/demos/deepseek_v41_flash_d_p` | metal_1: `models/experimental/deepseek_v41_flash/tt/prefill` |
+| | metal_2: `models/demos/deepseek_v41_flash_d_p` | metal_1: `models/experimental/deepseek_v41_flash/tt/pipeline_parallel_prefill` |
 | --- | --- | --- |
 | Mesh | one 8x4 Blackhole Galaxy mesh, `FABRIC_2D_TORUS_XY` | eight `1 x 4` submeshes (pipeline stages) of the same Galaxy |
 | Parallelism | sequence-parallel (SP) over mesh rows (axis 0), tensor-parallel (TP) over mesh columns (axis 1); every chip works on every layer | pipeline over stages (five layers a stage), TP4 inside a stage; stages work on consecutive chunks |

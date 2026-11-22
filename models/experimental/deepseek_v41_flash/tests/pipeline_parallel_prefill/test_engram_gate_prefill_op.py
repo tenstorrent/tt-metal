@@ -8,7 +8,7 @@ The prefill counterpart of ``tests/decode/test_engram_gate_op.py``: same math, b
 prefill chunk uses (``[1, hc, T, D]`` streams, ``[1, 1, T, (hc+1)*D]`` kv) and T spans several 32-token blocks, so
 the block loop, the cohort all-gather and the partial last block are all exercised.
 
-    pytest models/experimental/deepseek_v41_flash/tests/prefill/test_engram_gate_prefill_op.py
+    pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_engram_gate_prefill_op.py
 """
 
 import pytest

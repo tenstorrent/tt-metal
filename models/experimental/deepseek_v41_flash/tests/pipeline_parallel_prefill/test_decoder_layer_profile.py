@@ -8,7 +8,7 @@ The device half only: nothing is compared. The streams, ``pre_mix`` and Engram r
 the submesh, as the model's are. A warm-up chunk fills the program cache; the profiled chunk, run on a fresh state,
 sits between ``PREFILL_LAYER_START`` / ``PREFILL_LAYER_END`` signposts.
 
-    python -m tracy -p -r -v -m pytest models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer_profile.py
+    python -m tracy -p -r -v -m pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_decoder_layer_profile.py
 """
 
 import pytest
@@ -20,7 +20,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _build_rope,
     _checkpoint_available,
 )
-from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefill_demo import (
+from models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.test_full_model_prefill_demo import (
     _ATTENTION_WEIGHT_DTYPE,
     _EXPERT_DTYPE,
     _TP_SIZE,
@@ -33,8 +33,10 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     load_config,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
-from models.experimental.deepseek_v41_flash.tt.prefill.attention import PrefillShared
-from models.experimental.deepseek_v41_flash.tt.prefill.decoder_layer import DeepSeekV41PrefillDecoderLayer
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.attention import PrefillShared
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.decoder_layer import (
+    DeepSeekV41PrefillDecoderLayer,
+)
 from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config, set_active_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader

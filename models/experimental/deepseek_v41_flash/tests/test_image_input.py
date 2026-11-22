@@ -32,7 +32,7 @@ import ttnn
 from models.experimental.deepseek_v41_flash.tests.reference import load_reference, reference_moe
 from models.experimental.deepseek_v41_flash.tt import engram_lookup
 from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, load_config, moe_weights
-from models.experimental.deepseek_v41_flash.tt.prefill.moe import DeepSeekV41PrefillMoE
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.moe import DeepSeekV41PrefillMoE
 from models.experimental.deepseek_v41_flash.tt.vision import (
     DELIMITER_ROWS,
     FIRST_IMAGE_ROW,
@@ -50,7 +50,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 
 TP_SIZE = 4
-# Mean fraction of each token's 6 experts the bf16 ranking shares with the fp32 reference's (tests/prefill/test_moe.py).
+# Mean fraction of each token's 6 experts the bf16 ranking shares with the fp32 reference's (tests/pipeline_parallel_prefill/test_moe.py).
 MIN_ROUTING_OVERLAP = 0.9
 
 

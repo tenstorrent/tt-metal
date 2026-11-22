@@ -55,13 +55,15 @@ from models.experimental.deepseek_v41_flash.tt.config import decoder_layer_weigh
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import EngramHostLookup
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
-from models.experimental.deepseek_v41_flash.tt.prefill.attention import (
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.attention import (
     PrefillShared,
     PrefillStaticShared,
     V41PrefillStaticStep,
     ratio_layer_type,
 )
-from models.experimental.deepseek_v41_flash.tt.prefill.decoder_layer import DeepSeekV41PrefillDecoderLayer
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.decoder_layer import (
+    DeepSeekV41PrefillDecoderLayer,
+)
 from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
 from models.experimental.deepseek_v4_flash.tt.common import CCL_TOPOLOGY, _HIFI4, _trace_capture_guard
 from models.experimental.deepseek_v4_flash.tt.model import (

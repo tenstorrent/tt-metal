@@ -10,7 +10,7 @@ reference is the checkpoint's ``Block.hc_mixes`` / ``hc_pre`` (``tests/reference
 
 Each case checks ``post``, ``comb``, the own ``pre`` and ``collapsed``.
 
-    pytest models/experimental/deepseek_v41_flash/tests/prefill/test_hyperconnection.py
+    pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_hyperconnection.py
 """
 
 import types
@@ -28,7 +28,9 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     decoder_layer_weights,
     load_config,
 )
-from models.experimental.deepseek_v41_flash.tt.prefill.hyperconnection import DeepSeekV41PrefillHyperConnection
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.hyperconnection import (
+    DeepSeekV41PrefillHyperConnection,
+)
 from models.experimental.deepseek_v4_flash.tt.decode.decoder_layer import _strip_prefix
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir

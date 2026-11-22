@@ -27,7 +27,7 @@ The token cap is what makes a prefill chunk one op call: the model runs chunks o
 ``_routed`` at ``MAX_OP_TOKENS``, so a cap of 1024 halves the weight traffic of every layer (see
 ``test_moe_chunk.py`` for the end-to-end version).
 
-    pytest models/experimental/deepseek_v41_flash/tests/prefill/test_fused_experts_prefill.py
+    pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_fused_experts_prefill.py
 """
 
 import pytest

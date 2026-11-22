@@ -27,14 +27,16 @@ from typing import Optional
 
 import ttnn
 
-from models.experimental.deepseek_v41_flash.tt.prefill.attention import (
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.attention import (
     DeepSeekV41PrefillAttention,
     PrefillShared,
     PrefillStaticShared,
 )
-from models.experimental.deepseek_v41_flash.tt.prefill.engram import DeepSeekV41PrefillEngram
-from models.experimental.deepseek_v41_flash.tt.prefill.hyperconnection import DeepSeekV41PrefillHyperConnection
-from models.experimental.deepseek_v41_flash.tt.prefill.moe import DeepSeekV41PrefillMoE
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.engram import DeepSeekV41PrefillEngram
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.hyperconnection import (
+    DeepSeekV41PrefillHyperConnection,
+)
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.moe import DeepSeekV41PrefillMoE
 from models.experimental.deepseek_v4_flash.tt.decode.decoder_layer import _strip_prefix
 from models.experimental.deepseek_v4_flash.tt.prefill.attention import (
     ALIGNMENT,

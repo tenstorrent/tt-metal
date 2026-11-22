@@ -15,13 +15,13 @@ The streams carry the input through the hyper-connection mix almost unchanged, s
 about the sublayers: the check is PCC of what the layer adds to the streams (``out - x``) and, by absolute error,
 the ``pre_mix`` it hands on.
 
-Expected to fail until ``fused_experts_prefill`` is built for V4.1's shapes (see :mod:`..tt.prefill.moe`): the
+Expected to fail until ``fused_experts_prefill`` is built for V4.1's shapes (see :mod:`..tt.pipeline_parallel_prefill.moe`): the
 device half runs first so that failure is quick, before the reference is built.
 
 The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint),
 shared with the decode tests; ``tools/fill_expert_cache.py`` converts the routed experts ahead of time.
 
-    pytest models/experimental/deepseek_v41_flash/tests/prefill/test_decoder_layer.py
+    pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_decoder_layer.py
 """
 
 import pytest
@@ -44,8 +44,10 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     load_config,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
-from models.experimental.deepseek_v41_flash.tt.prefill.attention import PrefillShared
-from models.experimental.deepseek_v41_flash.tt.prefill.decoder_layer import DeepSeekV41PrefillDecoderLayer
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.attention import PrefillShared
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.decoder_layer import (
+    DeepSeekV41PrefillDecoderLayer,
+)
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 

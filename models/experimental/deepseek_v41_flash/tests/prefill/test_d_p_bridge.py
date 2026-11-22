@@ -103,7 +103,7 @@ def test_d_p_vs_kv_only(mesh_device):
         load_host_states,
         to_prefill_states,
     )
-    from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
+    from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.model import DeepSeekV41PrefillModel
     from models.experimental.deepseek_v4_flash.tt.model import plan_layer_placement
     from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config, set_active_system_config
     from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache

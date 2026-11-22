@@ -28,7 +28,7 @@ tower is built before the traces are captured and an image is encoded (eagerly) 
 Run it (ttnn venv)::
 
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
-      models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_prefill_image_demo.py
+      models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_full_model_prefill_image_demo.py
 
 Knobs (environment): those of ``test_full_model_prefill_demo.py`` (``DEEPSEEK_V4_PREFILL_LEN`` default 16384,
 ``DEEPSEEK_V4_PREFILL_CHUNK``, ``DEEPSEEK_V4_PREFILL_LAYERS``, ``DEEPSEEK_V4_NUM_STAGES``,
@@ -62,7 +62,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _build_rope,
     _checkpoint_available,
 )
-from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefill_demo import (
+from models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.test_full_model_prefill_demo import (
     _ATTENTION_WEIGHT_DTYPE,
     _EXPERT_DTYPE,
     _NUM_STAGES,
@@ -82,7 +82,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     load_engram_table,
     stage_engram_tables,
 )
-from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v41_flash.tt.vision import (
     DELIMITER_ROWS,
     FIRST_IMAGE_ROW,

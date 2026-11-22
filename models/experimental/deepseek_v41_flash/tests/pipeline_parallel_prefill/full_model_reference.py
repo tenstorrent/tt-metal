@@ -16,7 +16,7 @@ Cached on disk, keyed by the prompt tokens and the layer count: the embedding st
 and ``pre_mix``, and the logits of every token (collapse with the last ``pre_mix``, final norm, ``head``). No device
 is touched, so it can run ahead of the device test, alone::
 
-    python -m models.experimental.deepseek_v41_flash.tests.prefill.full_model_reference --len 2048
+    python -m models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.full_model_reference --len 2048
 
 The device's prefill selects as the reference does, two-level past ``candidate_topk_blocks * candidate_block_size``
 = 16384 compressed entries. The reference indexer materializes ``[T, index_n_heads, E]`` fp32 scores (~107 GB at

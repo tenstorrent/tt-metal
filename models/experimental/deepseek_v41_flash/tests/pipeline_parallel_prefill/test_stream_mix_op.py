@@ -11,7 +11,7 @@
 
 Self-contained: random inputs against a torch reference of the same math.
 
-    pytest models/experimental/deepseek_v41_flash/tests/prefill/test_stream_mix_op.py
+    pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_stream_mix_op.py
 """
 
 import pytest

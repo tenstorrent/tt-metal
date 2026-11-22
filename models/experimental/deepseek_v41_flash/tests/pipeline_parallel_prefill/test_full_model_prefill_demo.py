@@ -16,7 +16,7 @@ By default the prefill is *KV-only*: layers after the last kv source (layer 20) 
 no first token). The sliding-window rings of layers 21-39 are not filled; decode would replay the last 128 tokens for
 them. ``DEEPSEEK_V4_PREFILL_KV_ONLY=0`` builds the whole stack and reports the first token.
 
-The prefill is *traced and pipelined* (:class:`~models.experimental.deepseek_v41_flash.tt.prefill.model.DeepSeekV41TracedPrefill`,
+The prefill is *traced and pipelined* (:class:`~models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.model.DeepSeekV41TracedPrefill`,
 V4's ``TracedPrefill``): the chunk step is compiled and captured once per stage (not timed), then replayed for every
 chunk with the stages running as a pipeline. A chunk's only host input is its packet (H2D on stage 0) and its Engram
 rows (H2D on the Engram layers' stages); the residual and any compressed KV a later stage reads go stage to stage
@@ -34,7 +34,7 @@ it score every entry a chunk can see, so each chunk costs more the further in it
 Run it (ttnn venv)::
 
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
-      models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_prefill_demo.py
+      models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_full_model_prefill_demo.py
 
 Knobs (environment):
 
@@ -87,7 +87,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     load_engram_table,
     stage_engram_tables,
 )
-from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
     _DEFAULT_PROMPT_FILE,
     _Progress,

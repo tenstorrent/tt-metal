@@ -6,7 +6,7 @@
 ``fused_experts_prefill`` now takes 1024 tokens per call instead of 512, so a production chunk is ONE routed
 call rather than two. This runs the real 40-layer checkpoint end to end at exactly that shape -- chunk 1024,
 TP4 stages, bf8 attention, bf4 balanced-DRAM experts, the Engram lookup -- and checks the model still produces
-sane output through its public :meth:`~....tt.prefill.model.DeepSeekV41PrefillModel.prefill` entry point.
+sane output through its public :meth:`~....tt.pipeline_parallel_prefill.model.DeepSeekV41PrefillModel.prefill` entry point.
 
 It is deliberately cheaper and more direct than ``test_full_model_prefill_verify.py`` (which compares every
 layer teacher-forced against a cached CPU reference):
@@ -20,7 +20,7 @@ layer teacher-forced against a cached CPU reference):
 For a full accuracy comparison against the fp32 reference, run ``test_full_model_prefill_verify.py``; this test
 is the fast "does the 1024-token MoE work in the real model" gate.
 
-    pytest models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_prefill_moe1024.py -x -s
+    pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_full_model_prefill_moe1024.py -x -s
 
 Knobs: ``DEEPSEEK_V4_MOE1024_LEN`` (1024, the prompt length), ``DEEPSEEK_V4_MOE1024_LAYERS`` (all 40),
 ``DEEPSEEK_V4_MOE1024_STAGES`` (8), ``DEEPSEEK_V4_MOE1024_MAX_RMS`` (64.0, the per-layer residual RMS ceiling).
@@ -44,7 +44,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _build_rope,
     _checkpoint_available,
 )
-from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefill_demo import (
+from models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.test_full_model_prefill_demo import (
     _ATTENTION_WEIGHT_DTYPE,
     _EXPERT_DTYPE,
     _TP_SIZE,
@@ -57,7 +57,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     load_engram_table,
     stage_engram_tables,
 )
-from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v4_flash.tests.prefill.test_full_model_prefill_demo import (
     _DEFAULT_PROMPT_FILE,
     _Progress,

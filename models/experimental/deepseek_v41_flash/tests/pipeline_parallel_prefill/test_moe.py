@@ -10,11 +10,11 @@
   bias (~57), the one the bf16 ranking is most likely to get wrong.
 * ``test_moe_prefill`` -- the whole block over a chunk, the routed experts included, on the model's own
   configuration: TP4 on a 1x4 Galaxy submesh, bf4 experts, ``balance_dram_banks=True``
-  (``tests/prefill/test_fused_experts_prefill.py`` covers that op alone at V4.1's shapes).
+  (``tests/pipeline_parallel_prefill/test_fused_experts_prefill.py`` covers that op alone at V4.1's shapes).
 
 The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint).
 
-    pytest models/experimental/deepseek_v41_flash/tests/prefill/test_moe.py
+    pytest models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_moe.py
 """
 
 import types
@@ -35,7 +35,7 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     moe_weights,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.moe import DeepSeekV41PreloadedExperts
-from models.experimental.deepseek_v41_flash.tt.prefill.moe import DeepSeekV41PrefillMoE
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.moe import DeepSeekV41PrefillMoE
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 

@@ -33,10 +33,10 @@ per-layer stream statistics and the top 5 after every chunk; nothing is compared
 Steps::
 
     # 1. the reference, on the host (no device; reads the two ~101 GB Engram tables in turn); cached
-    python -m models.experimental.deepseek_v41_flash.tests.prefill.full_model_reference --len 2048
+    python -m models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.full_model_reference --len 2048
     # 2. the device run (DEEPSEEK_V4_VERIFY_GENERATE=1 would compute a missing reference in-test, holding the card)
     DEEPSEEK_V4_CACHE_DIR=/path/to/cache pytest -s \\
-      models/experimental/deepseek_v41_flash/tests/prefill/test_full_model_prefill_verify.py
+      models/experimental/deepseek_v41_flash/tests/pipeline_parallel_prefill/test_full_model_prefill_verify.py
 
 Knobs (environment): ``DEEPSEEK_V4_VERIFY_LEN`` (2048), ``DEEPSEEK_V4_VERIFY_CHUNK`` (1024),
 ``DEEPSEEK_V4_VERIFY_LAYERS`` (all; must match the reference's), ``DEEPSEEK_V4_NUM_STAGES`` (8;
@@ -66,8 +66,11 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _build_rope,
     _checkpoint_available,
 )
-from models.experimental.deepseek_v41_flash.tests.prefill.full_model_reference import run_reference, store_for
-from models.experimental.deepseek_v41_flash.tests.prefill.test_full_model_prefill_demo import (
+from models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.full_model_reference import (
+    run_reference,
+    store_for,
+)
+from models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.test_full_model_prefill_demo import (
     _ATTENTION_WEIGHT_DTYPE,
     _EXPERT_DTYPE,
     _NUM_STAGES,
@@ -81,8 +84,8 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     load_engram_table,
     stage_engram_tables,
 )
-from models.experimental.deepseek_v41_flash.tt.prefill.attention import PrefillShared
-from models.experimental.deepseek_v41_flash.tt.prefill.model import (
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.attention import PrefillShared
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.model import (
     DeepSeekV41PrefillModel,
     _free_distinct,
 )
@@ -180,7 +183,7 @@ def _run(mesh_device, progress: _Progress, AutoTokenizer) -> None:
         logger.warning(
             f"no complete reference for this prompt in {store.dir}: running the model and printing its outputs only, "
             "nothing is compared or asserted. Generate the reference on the host first (no device):\n"
-            f"  python -m models.experimental.deepseek_v41_flash.tests.prefill.full_model_reference --len {target_len}"
+            f"  python -m models.experimental.deepseek_v41_flash.tests.pipeline_parallel_prefill.full_model_reference --len {target_len}"
             + (f" --layers {num_layers}" if num_layers != config.num_hidden_layers else "")
             + "\nor set DEEPSEEK_V4_VERIFY_GENERATE=1 to compute it here (holds the card meanwhile)."
         )

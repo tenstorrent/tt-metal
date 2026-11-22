@@ -45,7 +45,7 @@ Visibility of entry `w` to query `i` of a chunk starting at `start` (`start` a m
 
 ## What the code does today
 
-Traced prefill (`DeepSeekV41TracedPrefill` in `tt/prefill/model.py`, attention in `tt/prefill/attention.py` and
+Traced prefill (`DeepSeekV41TracedPrefill` in `tt/pipeline_parallel_prefill/model.py`, attention in `tt/pipeline_parallel_prefill/attention.py` and
 V4's `deepseek_v4_flash/tt/prefill/attention.py`):
 
 1. `mask_tables_host` builds `static` and `threshold` `[T, 128 + T + cap]` once per compressed layer type.

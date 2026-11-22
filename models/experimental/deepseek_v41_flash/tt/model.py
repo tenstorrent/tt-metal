@@ -107,7 +107,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     staged_copy,
 )
 from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41DeviceSampler, DeepSeekV41LMHead
-from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
+from models.experimental.deepseek_v41_flash.tt.pipeline_parallel_prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v41_flash.tt.vision import (
     ImageSockets,
     extend_embedding,
