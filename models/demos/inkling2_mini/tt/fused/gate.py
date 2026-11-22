@@ -59,10 +59,15 @@ class _FusedGate:
         self.prep_cores = F.core_list(device, 2 * rows)
         self.comb_cores = F.core_list(device, n)
         assert 2 * rows <= R.SPLIT
-        self.z_cores = F.core_list(device, R.SPLIT)
-        self.eye = ttnn.from_torch(
-            torch.eye(32)[None, None], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
-        )
+        self.z_parts = 2  # K parts per split: 18 cores of 8 K tiles (fewer matmul tiles per core)
+        self.z_cores = F.core_list(device, R.SPLIT * self.z_parts)
+        # packed partial rows on the root: sender s row r -> packed row (s - 1) * rows + r; S_b[r, j] selects them
+        n_rows = (R.SPLIT * self.z_parts - 1) * rows
+        self.z_nb = -(-n_rows // 32)
+        sel = torch.zeros(32, 32 * self.z_nb)
+        for g in range(n_rows):
+            sel[g % rows, g] = 1.0
+        self.sel = ttnn.from_torch(sel[None, None], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         self.fused_z = True  # E10c: down_proj + split-K sum in one program (False: ttnn matmul + sum)
 
     def _prep(self, h, m, build_only=False):
@@ -120,8 +125,9 @@ class _FusedGate:
         F.run(io, kernels, cbs)
 
     def _prep_z(self, h, m):
-        """Gate prep + z = sum_s xs[s] @ down[s] in one program: one core per split; the first 2 R cores also run
-        the prep (bf16 rms rows -> xs) and signal every split core; partials summed on core 0.
+        """Gate prep + z = x @ down in one program: one core per K part; the first 2 R cores also run the prep
+        (bf16 rms rows, kept in their L1) and signal every core, which then reads its x tiles from those rows;
+        partial z rows are summed on core 0. (xs is only used by the unfused fallback.)
         Returns z ([1, 1, R, 64 g] fp32)."""
         prep = self._prep(h, m, build_only=True)
         cores, crs = self.z_cores
@@ -129,17 +135,28 @@ class _FusedGate:
         z = self.out.get("z", self.rows, self.kz * 32, ttnn.float32)
         virt = [self.device.worker_core_from_logical_core(c) for c in cores]
         xy = [v for c in virt for v in (c.x, c.y)]
-        kt = self.xs.shape[-1] // 32
+        kt = self.xs.shape[-1] // 32 // self.z_parts
         rd, cp, wr = {}, {}, {}
         for s, core in enumerate(cores):
             is_prep = int(s < n_prep)
             prd, pwr = (prep["rd"][s], prep["wr"][s]) if is_prep else ([0] * 9, [0] * 3)
-            x = self.xs.buffer_address()
-            rd[core] = [*prd, x, self.down.buffer_address(), s, self.eye.buffer_address(), is_prep]
+            x = self.sel.buffer_address()  # reader arg A + 0: the root reads the selection tiles
+            first = s * kt  # K tile of the whole x: split s // parts, its part s % parts
+            rd[core] = [*prd, x, self.down.buffer_address(), first, first * self.kz, is_prep, *xy]
             cp[core] = [s, is_prep]
-            wr[core] = [*pwr, z.buffer_address(), s, is_prep, *xy]
-        named = dict(prep["named"], kt=kt, kz=self.kz, n_split=len(cores), n_prep=n_prep, sem_x=0, sem_z=1)
-        cnamed = dict(prep["cnamed"], kt=kt, kz=self.kz, n_split=len(cores))
+            wr[core] = [*pwr, z.buffer_address(), s, is_prep, *xy, *(prd[:5] if is_prep else [0] * 5)]
+        named = dict(
+            prep["named"],
+            kt=kt,
+            kz=self.kz,
+            n_split=len(cores),
+            n_prep=n_prep,
+            sem_x=0,
+            sem_z=1,
+            rows=self.rows,
+            nb=self.z_nb,
+        )
+        cnamed = dict(prep["cnamed"], kt=kt, kz=self.kz, n_split=len(cores), nb=self.z_nb)
         kernels = [
             F.kernel("gatez_reader.cpp", ttnn.ReaderConfigDescriptor(), named, rd, crs),
             F.kernel("gatez_writer.cpp", ttnn.WriterConfigDescriptor(), named, wr, crs),
@@ -149,13 +166,15 @@ class _FusedGate:
         cbs = [c for c in prep["cbs"]] + [
             F.cb(5, ttnn.bfloat16, kt, cores=crs),
             F.cb(6, ttnn.bfloat16, kt * self.kz, cores=crs),
-            F.cb(7, f32, (len(cores) - 1) * self.kz, cores=crs),
-            F.cb(8, f32, 1, cores=crs),
+            F.cb(7, f32, self.z_nb * self.kz, cores=crs),
+            F.cb(8, f32, self.z_nb, cores=crs),
             F.cb(9, f32, 1, cores=crs),
             F.cb(18, f32, self.kz, cores=crs),
+            F.cb(29, ttnn.bfloat16, 1, 32, cores=crs),  # prep writer -> reader: second half of the row landed
+            F.stage_cb(30, self.ntc, crs),
         ]
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in (0, 1)]
-        io = prep["io"] + [self.down, self.eye, z]
+        io = prep["io"] + [self.down, self.sel, z]
         return ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems))
 
     def _combine(self, z, h, m):

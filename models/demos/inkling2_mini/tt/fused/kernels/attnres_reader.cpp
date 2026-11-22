@@ -34,7 +34,14 @@ void kernel_main() {
             rowio::read_pages(p_addr, p_tile, p_row, T, get_write_ptr(cb_p));
             noc_async_read_barrier();
         } else {
+#ifdef ATTNRES_SPLIT_GATHER  // gatez: the writer gathers tiles ntc/2.. and pushes CB 29 when they have landed
+            rowio::gather_row(
+                p_addr, p_tile, p_es, ntc, p_row, get_write_ptr(cb_p), T * 1024 * p_es, stage, 0, ntc / 2);
+            cb_wait_front(29, 1);
+            cb_pop_front(29, 1);
+#else
             rowio::gather_row(p_addr, p_tile, p_es, ntc, p_row, get_write_ptr(cb_p), T * 1024 * p_es, stage);
+#endif
         }
         cb_push_back(cb_scaler, 1);
         cb_push_back(cb_p, T);

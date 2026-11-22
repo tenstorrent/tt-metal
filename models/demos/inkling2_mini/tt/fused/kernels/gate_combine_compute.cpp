@@ -15,6 +15,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/debug/kernel_profiler.hpp"
 
 namespace {
 FORCE_INLINE void load(uint32_t cb, uint32_t tile, uint32_t dst) {
@@ -53,10 +54,14 @@ void kernel_main() {
     cb_push_back(cb_zb, kz);
 
     cb_wait_front(cb_zb, kz);
-    cb_wait_front(cb_f, kz * nt);
-    cb_wait_front(cb_g, kz * nt);
-    cb_wait_front(cb_h, nt);
-    cb_wait_front(cb_m, nt);
+    {
+        DeviceZoneScopedN("C_wait_fg");
+        cb_wait_front(cb_f, kz * nt);
+        cb_wait_front(cb_g, kz * nt);
+        cb_wait_front(cb_h, nt);
+        cb_wait_front(cb_m, nt);
+    }
+    DeviceZoneScopedN("C_math");
     pack_reconfig_data_format(cb_out);
     cb_reserve_back(cb_out, nt);
     for (uint32_t j = 0; j < nt; ++j) {

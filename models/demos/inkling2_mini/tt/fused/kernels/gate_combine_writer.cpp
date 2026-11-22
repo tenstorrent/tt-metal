@@ -4,6 +4,7 @@
 // Message-gate combine, writer: rows 0..R-1 of the core's output tiles -> row-form fp32 DRAM tensor (the
 // padding rows of the zeroed output buffer are never written).
 #include "rowio.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t nt = get_named_compile_time_arg_val("nt");
@@ -17,7 +18,11 @@ void kernel_main() {
 
     const InterleavedAddrGen<true> dst = {.bank_base_address = out_addr, .page_size = 4096};
     const InterleavedAddrGen<true> dd = {.bank_base_address = dense_addr, .page_size = 4096};
-    cb_wait_front(cb_out, nt);
+    {
+        DeviceZoneScopedN("W_wait");
+        cb_wait_front(cb_out, nt);
+    }
+    DeviceZoneScopedN("W_out");
     const uint32_t src = get_read_ptr(cb_out);
     for (uint32_t j = 0; j < nt; ++j) {
         for (uint32_t r = 0; r < rows; ++r) {

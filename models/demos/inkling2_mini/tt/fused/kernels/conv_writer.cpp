@@ -19,10 +19,10 @@ void kernel_main() {
     const uint32_t out_dense = get_arg_val<uint32_t>(4);  // dense twin of the output (0: none)
 
     {
-        // E10c: inputs this RISC reads while the reader gathers x. Args 5..: the reader's x args, ring slots at
-        // lag 1, 2, 3, taps, resid args.
+        // E10c: inputs this RISC reads while the reader gathers x and reads taps / ring. Args 5..: the reader's x args,
+        // ring slots at lag 1, 2, 3, taps, resid args.
         constexpr uint32_t has_resid = get_named_compile_time_arg_val("has_resid");
-        constexpr uint32_t cb_x = 0, cb_ring = 1, cb_taps = 2, cb_resid = 3, cb_stage = 26,
+        constexpr uint32_t cb_x = 0, cb_resid = 3, cb_stage = 26,
                            cb_sync = 25;  // own stage: the reader stages tiles too
         uint32_t a = 5;
         const uint32_t x_addr = get_arg_val<uint32_t>(a++);
@@ -30,10 +30,7 @@ void kernel_main() {
         const uint32_t x_es = get_arg_val<uint32_t>(a++);
         const uint32_t x_row = get_arg_val<uint32_t>(a++);
         const uint32_t x_dense = get_arg_val<uint32_t>(a++);
-        const uint32_t r1 = get_arg_val<uint32_t>(a++);
-        const uint32_t r2 = get_arg_val<uint32_t>(a++);
-        const uint32_t r3 = get_arg_val<uint32_t>(a++);
-        const uint32_t taps = get_arg_val<uint32_t>(a++);
+        a += 4;  // ring slots, taps: read by the reader
         const uint32_t res_addr = get_arg_val<uint32_t>(a++);
         const uint32_t res_tile = get_arg_val<uint32_t>(a++);
         const uint32_t res_es = get_arg_val<uint32_t>(a++);
@@ -48,13 +45,6 @@ void kernel_main() {
                 x_addr, x_tile, x_es, ntc, x_row, get_write_ptr(cb_x), T * 1024 * x_es, stage, ntc / 2, ntc);
         }
         cb_push_back(cb_sync, 1);
-        cb_reserve_back(cb_taps, 4 * T);
-        rowio::read_pages(taps, 4096, 0, 4 * T, get_write_ptr(cb_taps));
-        cb_reserve_back(cb_ring, 3 * T);
-        const uint32_t ring = get_write_ptr(cb_ring);
-        rowio::read_pages(r1, 4096, 0, T, ring);
-        rowio::read_pages(r2, 4096, 0, T, ring + T * 4096);
-        rowio::read_pages(r3, 4096, 0, T, ring + 2 * T * 4096);
         if constexpr (has_resid) {
             cb_reserve_back(cb_resid, T);
             if (res_dense) {
@@ -65,8 +55,6 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
-        cb_push_back(cb_taps, 4 * T);
-        cb_push_back(cb_ring, 3 * T);
         if constexpr (has_resid) {
             cb_push_back(cb_resid, T);
         }

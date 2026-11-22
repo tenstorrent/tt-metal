@@ -4,6 +4,7 @@
 // Message-gate combine, reader (one core per nt column tiles): z (+ block mask), the core's forget / gain column
 // slices, and its h / m row-form tiles.
 #include "rowio.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t kz = get_named_compile_time_arg_val("kz");    // z width in tiles (64 * gates / 32)
@@ -27,6 +28,7 @@ void kernel_main() {
     const uint32_t h_nvec = get_arg_val<uint32_t>(9);  // twin vectors (rows >= nvec repeat the last one)
     const uint32_t m_nvec = get_arg_val<uint32_t>(10);
 
+    DeviceZoneScopedN("R_all");
     // bulk weights first
     cb_reserve_back(cb_f, kz * nt);
     cb_reserve_back(cb_g, kz * nt);
