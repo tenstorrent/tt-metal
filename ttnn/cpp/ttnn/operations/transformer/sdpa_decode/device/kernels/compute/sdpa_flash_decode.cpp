@@ -610,9 +610,8 @@ void kernel_main() {
                     // Writer kernel handles the semaphore wait and data transfer to cb_m_in, cb_l_in, cb_out_o
                     // Data arrives in order: l, m, o
 
-                    // Combine child with existing local/accumulated data
-                    // Move child's L to cb_prev_sum_2 for correction
-                    move_block_ool(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
+                    // Combine child with existing local/accumulated data. The correction reads the child's L
+                    // straight from cb_l_in (same bf16 format as cb_prev_sum_2: the copy was exact).
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -622,8 +621,8 @@ void kernel_main() {
                     // * 5. PREV_SUM *= EXP_MAX_DIFF
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
                     correction_block<scale_fp32, vector_mode>(
-                        cb_m_in,        // cb child max
-                        cb_prev_sum_2,  // cb child sum
+                        cb_m_in,  // cb child max
+                        cb_l_in,  // cb child sum
                         cb_cur_max,
                         cb_prev_max,
                         cb_cur_sum,
@@ -632,13 +631,12 @@ void kernel_main() {
                         cb_exp_max_diff_2,
                         Sq_chunk_t);
 
-                    // OUT_ACC_2 <- CHILD_OUT
-                    move_block_ool(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
-
                     // OUT_ACC *= EXP_MAX_DIFF (scale local accumulator)
-                    // OUT_ACC_2 *= EXP_MAX_DIFF_2 (scale child's accumulator)
+                    // OUT_ACC_2 = CHILD_OUT * EXP_MAX_DIFF_2 (straight from cb_out_o: both bf16, the old copy into
+                    // OUT_ACC_2 was exact)
                     mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
-                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im_2, cb_exp_max_diff_2);
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(
+                        cb_out_o, cb_exp_max_diff_2, cb_out_accumulate_im_2);
 
                     // OUT_ACC = OUT_ACC + OUT_ACC_2
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
