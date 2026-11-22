@@ -1,0 +1,52 @@
+{
+ "bands": {
+  "c1": "spec",
+  "c2": "spec",
+  "c3-4": "plain",
+  "c5-8": "plain",
+  "c9-16": "spec"
+ },
+ "c1_build": true,
+ "c1_f2c": {
+  "built": true,
+  "path": "/home/ttuser/experiments/gemma4/bench/resident/m7/h5/v5_2/run_1122_0644_f2c/c1_f2c.json",
+  "sha256": "39f22cf7e6eb9bf9e00319db3648e8c24933f46c1ee72aa3a49efa7aa54b8ff4"
+ },
+ "c1_policy": "f2c",
+ "d_carry": {
+  "file": "m7_d_carry.json",
+  "sha256": "fd20be92c6efa48aa17df3a6291947447931639c52ac33b943c02ab76d354c85"
+ },
+ "format": "m7-serving-config/1",
+ "g_t": {
+  "report": "gt_report_ruled_v1.json",
+  "sha256": "59efa64f797ec5ba6333d3d6048ddd48d009a6f339a711ef91c269b1a2c8d394"
+ },
+ "h5_report": {
+  "file": "m7_h5_report.json",
+  "sha256": "b53406879fa14daa43420f06241c54f964d5b4dc914e0efedaa98ac3179c46b2"
+ },
+ "seed": {
+  "P": 0,
+  "evidence_sha256": "a2135c641453fd7a0f4971ad691e47fb9c843ac4ee640e90c98323e830181b01",
+  "source": "S-C",
+  "verdict": "c"
+ },
+ "switch": {
+  "2": {
+   "J": 64,
+   "cap": 1024,
+   "dwell": 64
+  },
+  "4": {
+   "J": 64,
+   "cap": "<256",
+   "dwell": 64
+  },
+  "8": {
+   "J": 64,
+   "cap": "<256",
+   "dwell": 64
+  }
+ }
+}

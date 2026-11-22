@@ -1,4 +1,0 @@
-{
-  "arch": "Gemma4QB2ResidentMultiS32PBRingAPCForCausalLM",
-  "main_class": "models.demos.gemma4_31b_qb2.tt.package_boot_s3pb_ring_apc:Gemma4ResidentMultiS32PBRingAPCPackaged"
-}

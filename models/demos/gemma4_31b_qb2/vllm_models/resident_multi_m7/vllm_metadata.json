@@ -1,0 +1,4 @@
+{
+  "arch": "Gemma4QB2ResidentMultiM7ForCausalLM",
+  "main_class": "models.demos.gemma4_31b_qb2.tt.package_boot_m7:Gemma4ResidentMultiM7Packaged"
+}

@@ -1,0 +1,122 @@
+{
+  "add_bos_token": true,
+  "add_eos_token": false,
+  "audio_token": "<|audio|>",
+  "backend": "tokenizers",
+  "boa_token": "<|audio>",
+  "boi_token": "<|image>",
+  "bos_token": "<bos>",
+  "eoa_token": "<audio|>",
+  "eoc_token": "<channel|>",
+  "eoi_token": "<image|>",
+  "eos_token": "<eos>",
+  "eot_token": "<turn|>",
+  "escape_token": "<|\"|>",
+  "etc_token": "<tool_call|>",
+  "etd_token": "<tool|>",
+  "etr_token": "<tool_response|>",
+  "extra_special_tokens": [
+    "<|video|>"
+  ],
+  "image_token": "<|image|>",
+  "mask_token": "<mask>",
+  "model_max_length": 1000000000000000019884624838656,
+  "pad_token": "<pad>",
+  "padding_side": "left",
+  "processor_class": "Gemma4Processor",
+  "response_schema": {
+    "type": "object",
+    "properties": {
+      "role": {
+        "const": "assistant"
+      },
+      "thinking": {
+        "type": "string"
+      },
+      "content": {
+        "type": "string"
+      },
+      "tool_calls": {
+        "x-regex-iterator": "<\\|tool_call>(.*?)<tool_call\\|>",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "function"
+            },
+            "function": {
+              "type": "object",
+              "x-regex": "call\\:(?P<name>\\w+)(?P<arguments>\\{.*\\})",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "arguments": {
+                  "type": "object",
+                  "x-parser": "gemma4-tool-call",
+                  "additionalProperties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "x-regex": "(\\<\\|channel\\>thought\\n(?P<thinking>.*?)\\<channel\\|\\>)?(?P<tool_calls>\\<\\|tool_call\\>.*\\<tool_call\\|\\>)?(?P<content>(?:(?!\\<turn\\|\\>)(?!\\<\\|tool_response\\>).)+)?(?:\\<turn\\|\\>|\\<\\|tool_response\\>)?"
+  },
+  "response_template": {
+    "defaults": {
+      "role": "assistant"
+    },
+    "fields": {
+      "content": {
+        "close": [
+          "<turn|>",
+          "<|tool_response>",
+          "<eos>"
+        ],
+        "content": "text"
+      },
+      "thinking": {
+        "close": "<channel|>",
+        "content": "text",
+        "open": "<|channel>thought\n"
+      },
+      "tool_calls": {
+        "close": "<tool_call|>",
+        "content": "json",
+        "content_args": {
+          "string_delims": [
+            [
+              "<|\"|>",
+              "<|\"|>"
+            ]
+          ],
+          "unquoted_keys": true
+        },
+        "open_pattern": "<\\|tool_call>call:(?P<name>\\w+)",
+        "repeats": true,
+        "transform": {
+          "function": {
+            "arguments": "{content}",
+            "name": "{name}"
+          },
+          "type": "function"
+        }
+      }
+    },
+    "start_anchor": [
+      "<|turn>model\n",
+      "<tool_response|>"
+    ]
+  },
+  "soc_token": "<|channel>",
+  "sot_token": "<|turn>",
+  "stc_token": "<|tool_call>",
+  "std_token": "<|tool>",
+  "str_token": "<|tool_response>",
+  "think_token": "<|think|>",
+  "tokenizer_class": "GemmaTokenizer",
+  "unk_token": "<unk>"
+}

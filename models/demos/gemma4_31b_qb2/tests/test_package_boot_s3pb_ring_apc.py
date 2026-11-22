@@ -10,7 +10,8 @@ The class composes the S1 batch class v2 with update 4's packaged ring class by 
 - the inherited pre-warm calls the PB generator directly, with no request ids or tail orders;
 - the S1 capability is prefix_resume(tail_slots(4)): granularity 8192, min_suffix 2080, prompt_only, req_ids;
 - contwarm's code hash covers every tt/ source, so adding this file changes the marker key (the first start re-warms);
-- the bundle names the class.
+- update 6: no bundle names it any more. `batch` is the M7 composition (vllm_models/resident_multi_m7); this class stays
+  in tt/, unserved, as update 5 kept update 4's packaged ring class (LEAD_DECISIONS_PKG P153 (c)).
     pytest -q models/demos/gemma4_31b_qb2/tests/test_package_boot_s3pb_ring_apc.py"""
 
 import ast
@@ -158,7 +159,9 @@ def test_new_tt_source_changes_the_warm_marker_key(tmp_path):
     assert cw.code_hash("resident_m5_11", pkg_dir=tmp_path) != before
 
 
-def test_bundle_names_the_packaged_class():
-    meta = json.loads((ROOT / "vllm_models" / "resident_multi_s3pb_ring_apc" / "vllm_metadata.json").read_text())
-    assert meta == {"arch": "Gemma4QB2ResidentMultiS32PBRingAPCForCausalLM",
-                    "main_class": "models.demos.gemma4_31b_qb2.tt.package_boot_s3pb_ring_apc:Gemma4ResidentMultiS32PBRingAPCPackaged"}
+def test_update6_no_bundle_names_it():
+    metas = [json.loads(p.read_text()) for p in (ROOT / "vllm_models").glob("*/vllm_metadata.json")]
+    assert metas, "no bundle found"
+    assert "models.demos.gemma4_31b_qb2.tt.package_boot_s3pb_ring_apc:Gemma4ResidentMultiS32PBRingAPCPackaged" not in {
+        m["main_class"] for m in metas}
+    assert "Gemma4QB2ResidentMultiS32PBRingAPCForCausalLM" not in {m["arch"] for m in metas}
