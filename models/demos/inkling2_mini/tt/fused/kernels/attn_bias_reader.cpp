@@ -26,45 +26,57 @@ void kernel_main() {
     const uint32_t j0 = get_arg_val<uint32_t>(a++);
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), attnio::ALIGN);
 
+    // stage: [0, 1536) rel row blocks, [1536] tau, [1600] ring slot, [1664 + 1088 j) profile rows of slot tile j
+    constexpr uint32_t st_tau = 1536, st_ring = 1600, st_prof = 1664;
     cb_reserve_back(cb_rs, 1);
-    attnio::read_pages(rs, 4096, 0, 1, get_write_ptr(cb_rs));
     cb_reserve_back(cb_g, 1);
-    attnio::read_pages(g, 2048, 0, 1, get_write_ptr(cb_g));
     cb_reserve_back(cb_near, nj);
-    attnio::read_pages(near, 4096, j0, nj, get_write_ptr(cb_near));
     cb_reserve_back(cb_p, nj);
-    const uint32_t pw = get_write_ptr(cb_p);
-    attnio::zero_l1(pw, nj * 2048);
-
-    // rel matrix: dense 384 bf16 at the tile start = heads 0..15 in face 0; heads 16..23 move to face 2
     cb_reserve_back(cb_rel, 1);
-    const uint32_t rw = get_write_ptr(cb_rel);
-    attnio::gather_row(proj, 2048, 2, rel_tile, 12, 0, rw, stage);
-    noc_async_read(get_noc_addr(rw + 512), rw + 1024, 256);
+    const uint32_t pw = get_write_ptr(cb_p), rw = get_write_ptr(cb_rel);
+    // wave 1: constants, zeros, rel row blocks, tau, ring slot - one read barrier
+    attnio::read_pages(rs, 4096, 0, 1, get_write_ptr(cb_rs));
+    attnio::read_pages(g, 2048, 0, 1, get_write_ptr(cb_g));
+    attnio::read_pages(near, 4096, j0, nj, get_write_ptr(cb_near));
+    attnio::zero_l1(pw, nj * 2048);
+    attnio::zero_l1(rw, 2048);
+    attnio::stage_row(proj, 2048, 2, rel_tile, 12, 0, stage);
+    const InterleavedAddrGen<true> ring_a = {.bank_base_address = ring, .page_size = 4};
+    noc_async_read(ring_a.get_noc_addr(0, 0), stage + st_ring, 64);
+    if constexpr (has_tau) {
+        const InterleavedAddrGen<true> tau_a = {.bank_base_address = tau, .page_size = 4096};
+        noc_async_read(tau_a.get_noc_addr(0, 0), stage + st_tau, 64);
+    }
     noc_async_read_barrier();
-    attnio::zero_l1(rw + 512, 512);
-    attnio::zero_l1(rw + 1280, 768);
 
+    // wave 2: rel matrix (head h's 16 values -> row h: face 0 for h < 16, face 2 after), the profile rows
+    for (uint32_t h = 0; h < 24; ++h) {
+        const uint32_t dst = h < 16 ? rw + 32 * h : rw + 1024 + 32 * (h - 16);
+        noc_async_read(get_noc_addr(stage + (h >> 1) * 128 + (h & 1) * 64), dst, 32);
+    }
+    const uint32_t rpos = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + st_ring);
+    const InterleavedAddrGen<true> tab = {.bank_base_address = table, .page_size = 1};
+    uint32_t in_blk[nj];
+    for (uint32_t j = 0; j < nj; ++j) {
+        const uint32_t off = ((32 * (j0 + j) + 1024 - rpos) & 1023) * 32;
+        const uint32_t blk = off & ~(attnio::ALIGN - 1);
+        in_blk[j] = off - blk;
+        noc_async_read(tab.get_noc_addr(0, blk), stage + st_prof + j * 1088, 1088);
+    }
     if constexpr (has_tau) {
         cb_reserve_back(cb_tau, 1);
-        const uint32_t tw = get_write_ptr(cb_tau);
-        const uint32_t bits = attnio::read_u32(tau, 4096, stage);  // tau at [0, 0] of its fp32 tile
-        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tw);
+        const uint32_t bits = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + st_tau);  // tau at [0, 0]
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tau));
         for (uint32_t k = 0; k < 1024; ++k) {
             p[k] = bits;
         }
         cb_push_back(cb_tau, 1);
     }
+    noc_async_read_barrier();
 
-    const uint32_t rpos = attnio::read_u32(ring, 4, stage);
-    noc_async_read_barrier();  // profile tiles zeroed
-    const InterleavedAddrGen<true> tab = {.bank_base_address = table, .page_size = 1};
+    // wave 3: profile tiles (rows 0..15 -> face 0, 16..31 -> face 2)
     for (uint32_t j = 0; j < nj; ++j) {
-        const uint32_t off = ((32 * (j0 + j) + 1024 - rpos) & 1023) * 32;
-        const uint32_t blk = off & ~(attnio::ALIGN - 1);
-        noc_async_read(tab.get_noc_addr(0, blk), stage, 1088);
-        noc_async_read_barrier();
-        const uint32_t s = stage + off - blk;
+        const uint32_t s = stage + st_prof + j * 1088 + in_blk[j];
         noc_async_read(get_noc_addr(s), pw + j * 2048, 512);
         noc_async_read(get_noc_addr(s + 512), pw + j * 2048 + 1024, 512);
     }

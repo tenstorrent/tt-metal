@@ -30,46 +30,61 @@ void kernel_main() {
     const uint32_t h0 = get_arg_val<uint32_t>(2);
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), attnio::ALIGN);
 
+    // stage: [0, 128 nh*4) gate blocks; attn rows k at st_a + 512 k; merge: valid at st_v, o_near rows at
+    // st_o + 512 k, r blocks at st_r + 64 k, a blocks at st_m + 64 k
+    constexpr uint32_t st_a = 128 * nh * 4, st_v = st_a + 512 * nh, st_o = st_v + 64, st_r = st_o + 512 * nh;
+    constexpr uint32_t st_m = st_r + 64 * nh;
     cb_reserve_back(cb_a, 1);
     cb_reserve_back(cb_g, 1);
     const uint32_t aw = get_write_ptr(cb_a), gw = get_write_ptr(cb_g);
+    uint32_t mw = 0, rw = 0, ow = 0, g = 0, e_a[nh];
+    // wave 1: zeros and every staged block - one read barrier
     attnio::zero_l1(aw + nh * 256, 2048 - nh * 256);
     attnio::zero_l1(gw + nh * 256, 2048 - nh * 256);
-    attnio::gather_row(proj, 2048, 2, gate_tile + h0 * 4, nh * 4, 0, gw, stage);
-    uint32_t valid = 1;
+    attnio::stage_row(proj, 2048, 2, gate_tile + h0 * 4, nh * 4, 0, stage);
+    for (uint32_t k = 0; k < nh; ++k) {
+        attnio::stage_row(attn, 2048, 2, 0, 4, h0 + k, stage + st_a + 512 * k);
+    }
     if constexpr (merge) {
         const uint32_t o_near = get_arg_val<uint32_t>(3);
         const uint32_t r_addr = get_arg_val<uint32_t>(4);
         const uint32_t valid_addr = get_arg_val<uint32_t>(5);
-        const uint32_t g = get_arg_val<uint32_t>(6);  // kv group
-        valid = attnio::read_u32(valid_addr, 4096, stage) != 0;
+        g = get_arg_val<uint32_t>(6);  // kv group
+        const InterleavedAddrGen<true> va = {.bank_base_address = valid_addr, .page_size = 4096};
+        noc_async_read(va.get_noc_addr(0, 0), stage + st_v, 64);
         cb_reserve_back(cb_m, 1);
         cb_reserve_back(cb_r, 1);
         cb_reserve_back(cb_o, 1);
-        const uint32_t mw = get_write_ptr(cb_m), rw = get_write_ptr(cb_r), ow = get_write_ptr(cb_o);
+        mw = get_write_ptr(cb_m), rw = get_write_ptr(cb_r), ow = get_write_ptr(cb_o);
         attnio::zero_l1(mw + nh * 512, 4096 - nh * 512);
         attnio::zero_l1(rw + nh * 512, 4096 - nh * 512);
         attnio::zero_l1(ow + nh * 512, 4096 - nh * 512);
-        if (!valid) {
-            attnio::zero_l1(aw, nh * 256);
-        }
         const InterleavedAddrGen<true> rg = {.bank_base_address = r_addr, .page_size = 4096};
         for (uint32_t k = 0; k < nh; ++k) {
-            attnio::gather_row(o_near, 4096, 4, 4 * g, 4, k, ow + k * 512, stage);
-            noc_async_read(rg.get_noc_addr(g, k * 64), stage, 64);  // r at (k, 0) of tile g
-            noc_async_read_barrier();
-            fill(rw + k * 512, *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage), 128);
-            uint32_t a_bits = 0;
-            if (valid) {
-                const uint32_t e = attnio::read_elem_block(attn, 2048, 2, h0 + k, 128, stage);
-                a_bits = static_cast<uint32_t>(*reinterpret_cast<volatile tt_l1_ptr uint16_t*>(e)) << 16;
-            }
-            fill(mw + k * 512, a_bits, 128);
+            attnio::stage_row(o_near, 4096, 4, 4 * g, 4, k, stage + st_o + 512 * k);
+            noc_async_read(rg.get_noc_addr(g, k * 64), stage + st_r + 64 * k, 64);  // r at (k, 0) of tile g
+            e_a[k] = attnio::stage_elem_block(attn, 2048, 2, h0 + k, 128, stage + st_m + 64 * k);
         }
     }
-    if (valid) {
+    noc_async_read_barrier();
+    // wave 2: chunks into the pages, fills
+    attnio::unstage_row(2, nh * 4, 0, gw, stage);
+    const bool valid = !merge || *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + st_v) != 0;
+    for (uint32_t k = 0; k < nh; ++k) {
+        if (valid) {
+            attnio::unstage_row(2, 4, h0 + k, aw + k * 256, stage + st_a + 512 * k);
+        }
+    }
+    if (!valid) {  // far cache empty: A and a read as zero
+        attnio::zero_l1(aw, nh * 256);
+    }
+    if constexpr (merge) {
         for (uint32_t k = 0; k < nh; ++k) {
-            attnio::gather_row(attn, 2048, 2, 0, 4, h0 + k, aw + k * 256, stage);
+            attnio::unstage_row(4, 4, k, ow + k * 512, stage + st_o + 512 * k);
+            fill(rw + k * 512, *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + st_r + 64 * k), 128);
+            const uint32_t a_bits =
+                valid ? static_cast<uint32_t>(*reinterpret_cast<volatile tt_l1_ptr uint16_t*>(e_a[k])) << 16 : 0;
+            fill(mw + k * 512, a_bits, 128);
         }
     }
     noc_async_read_barrier();

@@ -224,7 +224,7 @@ class AttnPrep:
             _cb(19, out_dtype, 1, crs, page=out_page),
             _cb(20, out_dtype, 1, crs, page=out_page),
             _stage(24, crs),
-            _stage(25, crs, 256),
+            _stage(25, crs, 1024),  # kv writer: slot indices + prefetched bfp8 exponent blocks
         ]
         return kernels, cbs
 
@@ -279,7 +279,7 @@ class AttnPrep:
             _cb(19, ttnn.bfloat16, 1, crs),
             _cb(20, ttnn.bfloat16, 1, crs),
             _cb(21, ttnn.bfloat16, 1, crs),
-            _stage(24, crs),
+            _stage(24, crs, 1664 + NJ * 1088 + 64),  # rel blocks, tau, ring slot, NJ profile row runs
             _stage(25, crs, 512),
         ]
         return kernels, cbs
@@ -365,7 +365,7 @@ class AttnOut:
         ]
         cbs = [_cb(0, ttnn.bfloat16, 1, crs), _cb(1, ttnn.bfloat16, 1, crs), _cb(16, ttnn.bfloat16, 1, crs)]
         cbs += [_cb(i, ttnn.float32, 1, crs) for i in (2, 3, 4)] if merge is not None else []
-        cbs.append(_stage(24, crs))
+        cbs.append(_stage(24, crs, 5184))  # gate, attn rows, merge rows and scalars (attn_out_reader.cpp)
         ttnn.generic_op(io + [self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         return self.act
 

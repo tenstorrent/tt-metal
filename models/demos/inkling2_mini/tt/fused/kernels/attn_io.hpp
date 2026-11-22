@@ -30,8 +30,30 @@ FORCE_INLINE void zero_l1(uint32_t dst, uint32_t bytes) {
     }
 }
 
-// Row r, tiles t0 .. t0 + ntc - 1 of a row-form DRAM tensor -> dense L1 at dst (32 * ntc elements). stage: 64B
-// aligned scratch of ntc * 128 bytes. Barriers inside.
+// Row r, tiles t0 .. t0 + ntc - 1 of a row-form DRAM tensor -> dense L1 at dst (32 * ntc elements), in two halves
+// so that several rows share one read barrier: stage_row issues the 64B-aligned block reads into stage (ntc * 128
+// bytes, 64B aligned), unstage_row (after a read barrier) the local chunk copies into dst.
+FORCE_INLINE void stage_row(
+    uint32_t base, uint32_t tile_bytes, uint32_t es, uint32_t t0, uint32_t ntc, uint32_t r, uint32_t stage) {
+    const InterleavedAddrGen<true> src = {.bank_base_address = base, .page_size = tile_bytes};
+    const uint32_t blk = row_offset(r, es) & ~(ALIGN - 1);
+    for (uint32_t j = 0; j < ntc; ++j) {
+        noc_async_read(src.get_noc_addr(t0 + j, blk), stage + j * 128, 64);
+        noc_async_read(src.get_noc_addr(t0 + j, blk + 256 * es), stage + j * 128 + 64, 64);
+    }
+}
+
+FORCE_INLINE void unstage_row(uint32_t es, uint32_t ntc, uint32_t r, uint32_t dst, uint32_t stage) {
+    const uint32_t off = row_offset(r, es);
+    const uint32_t in_blk = off - (off & ~(ALIGN - 1));
+    const uint32_t chunk = 16 * es;
+    for (uint32_t j = 0; j < ntc; ++j) {
+        noc_async_read(get_noc_addr(stage + j * 128 + in_blk), dst + j * 2 * chunk, chunk);
+        noc_async_read(get_noc_addr(stage + j * 128 + 64 + in_blk), dst + j * 2 * chunk + chunk, chunk);
+    }
+}
+
+// stage_row + unstage_row with their barriers.
 FORCE_INLINE void gather_row(
     uint32_t base,
     uint32_t tile_bytes,
@@ -41,21 +63,22 @@ FORCE_INLINE void gather_row(
     uint32_t r,
     uint32_t dst,
     uint32_t stage) {
+    stage_row(base, tile_bytes, es, t0, ntc, r, stage);
+    noc_async_read_barrier();
+    unstage_row(es, ntc, r, dst, stage);
+    noc_async_read_barrier();
+}
+
+// Issue the read of the 64B block holding element (r, c) of a row-form DRAM tensor into stage; returns the L1
+// address the element will have there (valid after a read barrier).
+FORCE_INLINE uint32_t
+stage_elem_block(uint32_t base, uint32_t tile_bytes, uint32_t es, uint32_t r, uint32_t c, uint32_t stage) {
     const InterleavedAddrGen<true> src = {.bank_base_address = base, .page_size = tile_bytes};
-    const uint32_t off = row_offset(r, es);
+    const uint32_t cc = c & 31;
+    const uint32_t off = row_offset(r, es) + (cc >> 4) * 256 * es + (cc & 15) * es;
     const uint32_t blk = off & ~(ALIGN - 1);
-    const uint32_t in_blk = off - blk;
-    const uint32_t chunk = 16 * es;
-    for (uint32_t j = 0; j < ntc; ++j) {
-        noc_async_read(src.get_noc_addr(t0 + j, blk), stage + j * 128, 64);
-        noc_async_read(src.get_noc_addr(t0 + j, blk + 256 * es), stage + j * 128 + 64, 64);
-    }
-    noc_async_read_barrier();
-    for (uint32_t j = 0; j < ntc; ++j) {
-        noc_async_read(get_noc_addr(stage + j * 128 + in_blk), dst + j * 2 * chunk, chunk);
-        noc_async_read(get_noc_addr(stage + j * 128 + 64 + in_blk), dst + j * 2 * chunk + chunk, chunk);
-    }
-    noc_async_read_barrier();
+    noc_async_read(src.get_noc_addr(c >> 5, blk), stage, 64);
+    return stage + off - blk;
 }
 
 // The 64B block holding element (r, c) of a row-form DRAM tensor -> stage; returns the L1 address of the element.
