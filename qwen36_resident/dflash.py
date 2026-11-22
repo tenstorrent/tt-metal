@@ -450,7 +450,17 @@ class ResidentDFlashRows:
     every user's prompt the same length here)."""
 
     def __init__(
-        self, mesh, ck, users=4, max_pos=4096, R=8, weights_dir=None, block_size=64, prefill=False, window=2048
+        self,
+        mesh,
+        ck,
+        users=4,
+        max_pos=4096,
+        R=8,
+        weights_dir=None,
+        block_size=64,
+        prefill=False,
+        window=2048,
+        kv_pool_blocks=None,
     ):
         from qwen36_resident.model import Dims, ResidentModel, State, is_attn
 
@@ -507,6 +517,9 @@ class ResidentDFlashRows:
         )
         nb = -(-max_pos // block_size)
         sts = [State(d, layers - n_attn, n_attn, 0, max_pos, zero=True, kv=False) for _ in range(users)]
+        # (kv_pool_blocks: a serving pool of the plugin's block count, every user on block 0 until its request's table
+        # arrives — SpecRowsSession.start; else a pool of each user's own blocks)
+        own = [list(range(u * nb, (u + 1) * nb)) for u in range(users)]
         self.m = ResidentModel(
             mesh,
             d,
@@ -516,8 +529,8 @@ class ResidentDFlashRows:
             interval,
             lm_head=True,
             embed=embed,
-            kv_pool_blocks=users * nb,
-            block_tables=[list(range(u * nb, (u + 1) * nb)) for u in range(users)],
+            kv_pool_blocks=kv_pool_blocks or users * nb,
+            block_tables=[[0]] * users if kv_pool_blocks else own,
             kv_block_size=block_size,
             rows=True,
             groups=users * R // 8,  # (8 rows per group: a user per group at R = 8, two at R = 4)
