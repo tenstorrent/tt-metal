@@ -15,6 +15,7 @@ void kernel_main() {
     const uint32_t out_es = get_arg_val<uint32_t>(2);
 
     cb_wait_front(cb_np, T);
-    rowio::scatter_row(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(cb_np));
+    // the reader scatters tiles 0 .. ntc/2 (E10d: both RISCs)
+    rowio::scatter_row(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(cb_np), ntc / 2, ntc);
     noc_async_write_barrier();
 }

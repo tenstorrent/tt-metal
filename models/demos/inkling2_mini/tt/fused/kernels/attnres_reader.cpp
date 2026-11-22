@@ -67,4 +67,13 @@ void kernel_main() {
             cb_push_back(cb_s, k * T);
         }
     }
+
+    if constexpr (get_named_compile_time_arg_val("split_out")) {
+        // row norm (E10d): first half of the output row scatter (the writer does the rest)
+        const uint32_t out_addr = get_arg_val<uint32_t>(9), out_tile = get_arg_val<uint32_t>(10);
+        const uint32_t out_es = get_arg_val<uint32_t>(11);
+        cb_wait_front(16, T);
+        rowio::scatter_row(out_addr, out_tile, out_es, ntc, 0, get_read_ptr(16), 0, ntc / 2);
+        noc_async_write_barrier();
+    }
 }

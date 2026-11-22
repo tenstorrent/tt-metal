@@ -38,8 +38,9 @@ class FusedRowNorm:
         for i, core in enumerate(cores):
             w = self.w[min(i, len(self.w) - 1)]
             rd[core] = [*F.input_args(x, i), 0, 0, self.scaler.buffer_address(), w.buffer_address()]
+            rd[core] += [outs[i].buffer_address(), F.tile_bytes(self.out_dtype), F.ES[self.out_dtype]]
             wr[core] = [outs[i].buffer_address(), F.tile_bytes(self.out_dtype), F.ES[self.out_dtype]]
-        named = dict(ntc=ntc, pages=T, nq=0, k=0, has_weight=1)
+        named = dict(ntc=ntc, pages=T, nq=0, k=0, has_weight=1, split_out=1)
         kernels = [
             F.kernel("attnres_reader.cpp", ttnn.ReaderConfigDescriptor(), named, rd, crs),
             F.kernel("rownorm_writer.cpp", ttnn.WriterConfigDescriptor(), named, wr, crs),

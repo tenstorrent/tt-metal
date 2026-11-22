@@ -52,7 +52,14 @@ class FusedRowOps:
         T, ntc, d = self.T, self.c // 32, k + 1
         assert 0 <= k < MAX_DEPTH and self.c % 32 == 0
         named = dict(
-            ntc=ntc, pages=T, nq=nq, k=k, has_weight=0, out_rows=nq if out_rows is None else out_rows, split3=0
+            ntc=ntc,
+            pages=T,
+            nq=nq,
+            k=k,
+            has_weight=0,
+            out_rows=nq if out_rows is None else out_rows,
+            split3=0,
+            split_out=0,
         )
         reader = F.kernel(
             "attnres_reader.cpp",

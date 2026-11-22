@@ -85,7 +85,7 @@ class _FusedGate:
                 args = [src.buffer_address(), F.tile_bytes(src.dtype), F.ES[src.dtype], r, 0]
             rd[core] = [*args, 0, 0, self.scaler.buffer_address(), 0]
             wr[core] = [0, 0, 0]
-        named = dict(ntc=self.ntc, pages=T, nq=0, k=0, has_weight=0)
+        named = dict(ntc=self.ntc, pages=T, nq=0, k=0, has_weight=0, split_out=0)
         assert h.dtype == m.dtype
         f32 = ttnn.float32
         cbs = [

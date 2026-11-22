@@ -73,7 +73,7 @@ class FusedMessages:
         F.check_row_input(h17_out)
         T, ntc, nq, k = r.T, self.c // 32, 4, 1
         cores, crs = F.core_list(self.device, self.n_layers)
-        named = dict(ntc=ntc, pages=T, nq=nq, k=k, has_weight=0, out_rows=3, split3=1)
+        named = dict(ntc=ntc, pages=T, nq=nq, k=k, has_weight=0, out_rows=3, split3=1, split_out=0)
         rd, wr = {}, {}
         for l, core in enumerate(cores):
             (qr, qd), (mr, md) = self.bufs[l]
