@@ -51,7 +51,7 @@ class _Signal:
 
 
 class ExpertOverlap:
-    def __init__(self, model, ring_kb=300, guesses=None, release="w_all", dynamic=True):
+    def __init__(self, model, ring_kb=300, guesses=None, release="w_all", dynamic=True, mpfe=None):
         """guesses: {gate_up dtype: n_guess} override, e.g. {"BFP4": 3}; default 2 (4K: 1 -> 18.01 ms, 2 -> 17.81,
         BFP4 3 -> 17.86, BFP4 4 -> 18.39). release: "w_all" (17.81 ms), "w_o" (18.48: too late), "moe" (18.26)."""
         from models.demos.inkling2_mini.tt import model as MD
@@ -86,7 +86,7 @@ class ExpertOverlap:
             prev = [b for b in range(a) if self.apps[b][0] == L]
             self.src.append(prev[-1] if prev and mode == "pass" else a)
         self.i, self.n = 0, 0
-        self.ep.start()
+        self.ep.start(**(mpfe or {}))
         ttnn.synchronize_device(dev)
         self._request(0)
         for L in layers:

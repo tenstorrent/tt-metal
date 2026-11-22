@@ -66,9 +66,10 @@ class ExpertPipe:
         gu, dn = KT_GU // 2 * t(ex.w_gate_up), KT_DN * t(ex.w_down)
         return min((self.ring_bytes - self.ring_bytes % gu) // (2 * gu), (self.ring_bytes - self.ring_bytes % dn) // dn)
 
-    def start(self):
+    def start(self, **mpfe):
+        """mpfe: start_tensor_prefetcher's MPFE weights (DRAM arbitration of the prefetcher against other reads)."""
         if not self.running:
-            ttnn.experimental.start_tensor_prefetcher(self.device)
+            ttnn.experimental.start_tensor_prefetcher(self.device, **mpfe)
             self.running = True
             self.signal = ttnn.experimental.get_tensor_prefetcher_signal_address(self.device, 0)
 
