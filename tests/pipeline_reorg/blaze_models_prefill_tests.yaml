@@ -2299,11 +2299,11 @@
 
 # The SC4 trunk leg on 4x4 stages: all 78 layers as 8 stages of [4,4], two per galaxy (one per tray half), SP on
 # mesh axis 1, bound by tt-run discovery on the sc4_4x4 descriptor (glm53_4x4.json's layout, 2560-token chunks).
-# [1/2] one chunk per forward; [2/2] packed, two 2560-token chunks per forward (glm53_4x4_packed.json), against the
-# same golden tail. It tracks the 4x4 layout against the 8x4 SC4 leg above until 4x4 runs in production, so it
-# gates on KV PCC only: PREFILL_PERF_GATE=0 keeps the throughput reported (job summary, SC4 vs SC1 scaling) and out
-# of the verdict. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1) on every host first.
-- name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] KV accuracy 1M tail@2.5k, one and two chunks per forward, SC4"
+# It tracks the 4x4 layout against the 8x4 SC4 leg above until 4x4 runs in production, so it gates on KV PCC only:
+# PREFILL_PERF_GATE=0 keeps the throughput reported (job summary, SC4 vs SC1 scaling) and out of the verdict.
+# run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1) on every host first. One launcher run
+# per job: each writes its own pipeline gantt, and the plots upload (archive: false) takes a single file.
+- name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] KV accuracy 1M tail@2.5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2312,18 +2312,41 @@
     fi
     cd "${TT_METAL_HOME}"
     export PREFILL_PERF_GATE=0
-    echo "===== [1/2] (GLM-5.3-744B) 8x[4,4] prefill KV accuracy 1M tail@2.5k, one chunk per forward ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_4x4 || exit $?
-    echo "===== [2/2] (GLM-5.3-744B) 8x[4,4] packed prefill KV accuracy 1M tail@2.5k, two chunks per forward ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_4x4 --variant packed || exit $?
-    echo "===== both runs passed ====="
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_4x4
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm53_4x4]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      # Both 4x4 runs took 20 min together on CI run 44783397957 (warm cache); 40 leaves room for a cold one.
+      timeout: 40
+      tier: 1
+      release_ready: false
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
+# The packed twin of the SC4 4x4 leg above: the same 8 stages of [4,4] and golden tail, two 2560-token chunks per
+# forward (glm53_4x4_packed.json), traced with D2H acks. PCC-gated only, as above.
+- name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] packed KV accuracy 1M tail@2.5k, two chunks per forward, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_PERF_GATE=0
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_4x4 --variant packed
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed, glm53_4x4]
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # Two launcher runs, each sized like the 8x4 SC4 leg's 60 (bringup, 1M request, PCC, mesh unwind).
-      timeout: 100
+      # As the unpacked 4x4 leg above.
+      timeout: 40
       tier: 1
       release_ready: false
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
@@ -2419,7 +2442,7 @@
 # The SC1 trunk leg on 4x4 stages: all 78 layers as two [4,4] stages, one per tray half, SP on mesh axis 1,
 # bound by tt-run discovery on the intragalaxy descriptor, at one slot (glm53_4x4.json's layout, 2560-token
 # chunks). It tracks the 4x4 layout against the 8x4 SC1 leg above until 4x4 runs in production; its SC4
-# counterpart is the 8x[4,4] leg above. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1)
+# counterparts are the 8x[4,4] legs above. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1)
 # first.
 - name: "(GLM-5.3-744B) disaggregated prefill 2x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC1"
   cmd: |
@@ -2551,8 +2574,8 @@
   skus:
     bh_sc4:
       # The job takes about 19 min warm; 90 leaves room for a cold Weka cache of the 1.5 TB of weights.
-      # shield/demo bh_sc4 is a SUM over the team's legs on that SKU: 60 (GLM-5.3) + 100 (GLM-5.3 4x4) + 25 (DSpark)
-      # + 90 of 380.
+      # shield/demo bh_sc4 is a SUM over the team's legs on that SKU: 60 (GLM-5.3) + 40 + 40 (GLM-5.3 4x4, packed)
+      # + 25 (DSpark) + 90 of 380.
       timeout: 90
       tier: 1
       release_ready: false
