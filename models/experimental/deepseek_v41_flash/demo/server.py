@@ -1405,7 +1405,8 @@ class _SlotReuse:
             user.thinking_mode = conv.thinking_mode
             user.reasoning_effort = conv.reasoning_effort
             user.system_prompt = conv.system_prompt
-            user.pos = conv.snapshot.pos
+            # (not snapshot.pos: a DSpark verify block leaves the session past the drafts it rejected)
+            user.pos = len(conv.tokens)
             logger.info(
                 f"user {turn.user_key!r} (slot {turn.slot}): reloaded {user.pos}-token conversation from device RAM"
             )

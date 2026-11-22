@@ -63,6 +63,8 @@ case "$OMPI_COMM_WORLD_RANK" in
   1)
     # (the prefill server listens only after its warm-up: a --prefill-url decode server keeps retrying until then)
     export DEEPSEEK_V41_PREFILL_WAIT=${DEEPSEEK_V41_PREFILL_WAIT:-7200}
+    # (--instances 1 sizes its mesh from this rather than asking the control plane before the fabric is set)
+    export DEEPSEEK_V4_MESH_SHAPE=${DEEPSEEK_V4_MESH_SHAPE:-8x4}
     echo "decode server: server.py ${decode_args[*]}"
     exec "$python" models/experimental/deepseek_v41_flash/demo/server.py "${decode_args[@]}"
     ;;
