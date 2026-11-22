@@ -1301,3 +1301,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   decodes +3.7, region-send waits for the slowest peer ~2.5, exposed history gathers +1.4, contention +1.7, attn_index
   +0.4. (Snapshot of delta / results taken before the accept gate, per the open framework bug.)
 - 01:50 ROOT CAUSE of the MISSING-metrics accept failures (PB.BM, PB.KR): F105 reused the A/B 'on' side as the accept gate, but with the resident runner serving the side is timing-only (F285), so the accuracy units never ran and results/ lost their metrics. Fix F299 (orchestrator.ab_on_reuse: only a side covering every gate unit) committed; verifying end to end on PB.KR's accept (resume).
+- 01:55 PB.KR committed 550779621e8 (F299 verified: the accept gate ran, kept its units, PASS). Switching to model_bringup for MB.6 (block-max port).
