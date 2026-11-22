@@ -1324,3 +1324,13 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   ladder for single 8192, chip-aligned 4x2k, 4x1792s at 51200 .. 1024000, steady + resumed; cold no-rebuild).
 - 07:08 heartbeat: PB.LAD agent active; watch armed (PB.LAD prior_work line to add at the stop, F278).
 - 07:30 PB.LAD committed (full ladder, all paths no-rebuild PASS). Tables sent to the owner. prior_work line added (F278).
+- 07:38 heartbeat: idle by design (both queues done; owner deciding what to measure next). model_bringup 16 commits unpushed.
+- 08:05 OPEN ITEM (tracked, owner: experimental branch = track only): the window carry of a STEADY chunk comes from a
+  model-owned per-slot device ring (TtWindowCache.ring, tt/attention.py:655-680, carry() :1322), not from tt-d-gen's
+  served cache (0_window_kv is a 128-row snapshot written only at the last chunk / cap, kv_contract.py:31-45). Matches
+  SGLang / ATOM (per-request window state), but nothing checks that the ring belongs to this request and position: a
+  request moved / restored / preempted between chunks would read stale rows. Fix when needed: tag ring with (request,
+  end position), fall back to replay on mismatch. Same dependency on model_bringup (shipped): owner to decide fix vs track.
+  DeepSeek research (agent, 2026-11-22): per-request window state (SGLang / ATOM), minutes-TTL host-DRAM window pool
+  (DeepSeek, exact resumes), decoder tail computed in prefill (DeepSeek) vs our DECODER_SKIP=decode; prefix cache =
+  compressed KV + index keys only; layers 2 / 8 / 14 score all keys (candidate pool only for layers > 20: decode side).
