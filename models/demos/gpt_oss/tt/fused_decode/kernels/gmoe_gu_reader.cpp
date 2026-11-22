@@ -46,7 +46,14 @@ void kernel_main() {
     constexpr uint32_t w_tile = 576;        // BFP4_b
     constexpr uint32_t b_tile = 2048;       // BF16
     constexpr uint32_t GROUP = 4;           // slots per in0 load
-    constexpr uint32_t DEPTH = GMOE_DEPTH;  // units in flight
+    constexpr uint32_t DEPTH = GMOE_DEPTH;  // units buffered (cb_w)
+#ifndef GMOE_INFLIGHT
+#define GMOE_INFLIGHT GMOE_DEPTH
+#endif
+    // units whose reads are in flight at once (<= DEPTH): DEPTH 2 with 1 in flight overlaps a unit's compute with the
+    // next unit's reads without more outstanding DRAM reads (congestion)
+    constexpr uint32_t INFLIGHT = GMOE_INFLIGHT;
+    static_assert(INFLIGHT >= 1 && INFLIGHT <= DEPTH);
     constexpr uint8_t NOC_B = 1;            // the odd pages of each unit (dynamic NOC mode)
 
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
@@ -92,7 +99,7 @@ void kernel_main() {
         // half on each NOC
         constexpr uint32_t SX = GMOE_XG_SX, CS = KT / SX, RS = GMOE_XG_RS;
         for (uint32_t i = 0; i < n; ++i) {
-            const uint32_t s = s0 + i;
+            const uint32_t s = gmoe::xg_row(s0 + i, 8 * RS);  // (X_g's row tile of slot s0 + i)
             const uint32_t ny = get_common_arg_val<uint32_t>(GMOE_XG_ARG + SX + s / RS);
             for (uint32_t j = 0; j < SX; ++j) {
                 const uint32_t nx = get_common_arg_val<uint32_t>(GMOE_XG_ARG + j);
@@ -171,7 +178,7 @@ void kernel_main() {
             continue;
         }
 #endif
-        if (issued - pushed == DEPTH) {
+        if (issued - pushed == INFLIGHT) {
             push_one();
         }
         const uint32_t slot = issued % DEPTH, inflight = issued - pushed + 1;

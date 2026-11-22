@@ -138,6 +138,12 @@ inline void fine_unit(const Plan& p, uint32_t NU, uint32_t u, uint32_t& e, uint3
     }
 }
 
+// X_g's row tile of slot s of S (the route op's P1T row tiles, so the gather's output): the slots dealt round robin
+// over X_g's 8 core rows (slot s in core row s % 8), so a slot group's GROUP slots are in GROUP different core rows and
+// the gate|up readers loading a group read from 4 x 10 cores, not one core row's 10 (its NOC links the hot spot: X_g
+// gate|up 202 -> 183 us at 256 rows, 237 -> 233 at 512). S is a multiple of 8.
+inline uint32_t xg_row(uint32_t s, uint32_t S) { return (s % 8) * (S / 8) + s / 8; }
+
 // the meta page a reader passes to its compute / writer: [u0, u1, tiles[E], base[E]]
 constexpr uint32_t META_WORDS = 2 + 2 * E;
 inline void put_meta(uint32_t l1, uint32_t u0, uint32_t u1, const Plan& p) {

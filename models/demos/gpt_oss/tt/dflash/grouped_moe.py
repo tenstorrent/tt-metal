@@ -46,8 +46,11 @@ def max_slots(rows):
 
 GROUP = 4  # gate|up in0 block (slots)
 # Timed with the routing tables of all 24 layers of a real run injected: fewer outstanding DRAM reads are faster
-# (congestion): gate|up 1 unit in flight (vs 3: 240 -> 224 us per layer at 3 pages), down 2 (vs 6: 92 -> 86 us)
-GU_DEPTH, DN_DEPTH = 1, 2
+# (congestion): gate|up 1 unit in flight (vs 3: 240 -> 224 us per layer at 3 pages), down 2 (vs 6: 92 -> 86 us); gate|up
+# buffers 2 units (its compute overlaps the next unit's reads, still 1 in flight: 243 -> 237 us at 512 rows; 3 units do not
+# fit in L1)
+GU_DEPTH, DN_DEPTH = 2, 2
+GU_INFLIGHT, DN_INFLIGHT = 1, 2
 # gate|up unit pages (consecutive pages in consecutive DRAM banks): weights-only reads with odd splits 3 / 5 / 9 / 15
 # took 158-169 us, even 2 / 4 / 6 / 10 / 12 / 20 192-198 us; the full op 217 (3 pages) vs 268 us (10)
 GU_SPLIT = 3
@@ -295,7 +298,7 @@ class GroupedMoE:
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_gu_reader.cpp"), core_ranges=cores, compile_time_args=rct,
                 runtime_args=[], common_runtime_args=rca,
-                defines=[("GMOE_DEPTH", str(GU_DEPTH)), ("GMOE_SPLIT", str(GU_SPLIT)), ("GMOE_XG_ARG", str(xg_arg)),
+                defines=[("GMOE_DEPTH", str(GU_DEPTH)), ("GMOE_INFLIGHT", str(GU_INFLIGHT)), ("GMOE_SPLIT", str(GU_SPLIT)), ("GMOE_XG_ARG", str(xg_arg)),
                          ("GMOE_XG_SX", "10"), ("GMOE_XG_RS", str(self.S // 8))] + gmajor,
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
@@ -339,7 +342,7 @@ class GroupedMoE:
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_down_reader.cpp"), core_ranges=cores, compile_time_args=rct,
                 runtime_args=[], common_runtime_args=[t.buffer_address() for t in io],
-                defines=[("GMOE_DEPTH", str(DN_DEPTH))],
+                defines=[("GMOE_DEPTH", str(DN_DEPTH)), ("GMOE_INFLIGHT", str(DN_INFLIGHT))],
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
             ttnn.KernelDescriptor(
