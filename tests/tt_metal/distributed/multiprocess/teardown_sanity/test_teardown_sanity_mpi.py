@@ -87,7 +87,7 @@ def test_ttrun_hang_timeout():
     m = re.search(r"job end: .* elapsed=([0-9.]+)s", r.log)
     assert m, r.log[-2000:]
     assert 20 <= float(m.group(1)) < 40, f"the job did not end at the ~20 s --timeout but at {m.group(1)} s: {r}"
-    assert "the job reached its --timeout of 20 s: sent SIGTERM to all ranks" in r.log, r.log[-2000:]
+    assert "the job reached its --job-timeout of 20 s: sent SIGTERM to all ranks" in r.log, r.log[-2000:]
     clean(r)
 
 

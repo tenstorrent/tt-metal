@@ -1550,10 +1550,12 @@ class TestJobOwnership:
             lambda: m.run_launcher(["bash", "-c", self._FAKE_PRTERUN], cwd=Path.cwd(), job_timeout=1.0)
         )
         assert rc == 241, text
-        assert "the job reached its --timeout of 1 s: sent SIGTERM to all ranks" in text, text
+        assert "the job reached its --job-timeout of 1 s: sent SIGTERM to all ranks" in text, text
         assert "--signal 15" in (rec / "helper.args").read_text()
         if ranks_exit:
-            assert "job stopped at its --timeout of 1 s" in text and "job end: outcome=stopped exit=241" in text, text
+            assert (
+                "job stopped at its --job-timeout of 1 s" in text and "job end: outcome=stopped exit=241" in text
+            ), text
             assert not (rec / "launcher.signals").exists(), "a graceful timeout must not signal the launcher"
         else:
             assert "job forced down" in text and "tt-smi -r" in text and "job end: outcome=forced exit=241" in text

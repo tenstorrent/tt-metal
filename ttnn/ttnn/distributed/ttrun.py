@@ -82,7 +82,7 @@ MPI_VERSION_PROBE_TIMEOUT_S = 10.0
 
 # --- exit codes ------------------------------------------------------------------------------------------------------
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
-PRTE_TIMEOUT_EXIT_CODE = 241  # a job stopped at its --timeout (PRRTE's code for its own --timeout, kept)
+PRTE_TIMEOUT_EXIT_CODE = 241  # a job stopped at tt-run's --job-timeout, or by PRRTE's own --timeout (its code)
 
 # --- signals ---------------------------------------------------------------------------------------------------------
 # Signals at tt-run that are not a stop: passed on to every rank unchanged through the same job control, the job goes
@@ -862,7 +862,7 @@ class LaunchedJob:
                     self._force(why, now - self.stop_t0)
             if self.job_timeout is not None and self.stop_t0 is None and now - self.t0 >= self.job_timeout:
                 self._begin_stop(
-                    "timeout", f"the job reached its --timeout of {self.job_timeout:g} s", ", then forcing"
+                    "timeout", f"the job reached its --job-timeout of {self.job_timeout:g} s", ", then forcing"
                 )
             if self.stop_sent and not self.forced_why and now - self.stop_t0 >= self.grace:
                 self._force(f"ranks did not exit within {self.grace:g} s", now - self.stop_t0)
@@ -1028,7 +1028,7 @@ def run_launcher(cmd: List[str], cwd: Path, job_timeout: Optional[float] = None)
         outcome = "forced" if job.forced_why else "stopped"
         if not job.forced_why:
             logger.warning(
-                f"{TT_RUN_PREFIX} job stopped at its --timeout of {job.job_timeout:g} s: every rank was sent SIGTERM "
+                f"{TT_RUN_PREFIX} job stopped at its --job-timeout of {job.job_timeout:g} s: every rank was sent SIGTERM "
                 f"and exited. tt-run returns {rc}."
             )
     elif job.stop_reason == "rank":  # a rank stopped the job: its code, and it is named
