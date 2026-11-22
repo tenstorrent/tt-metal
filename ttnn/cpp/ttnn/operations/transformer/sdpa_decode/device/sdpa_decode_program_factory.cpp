@@ -939,6 +939,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     if (qk_skip_head_dim > 0) {
         compute_defines["SDPA_DECODE_QK_SKIP_TILES"] = std::to_string(qk_skip_head_dim / TILE_WIDTH);
     }
+    if (use_half_tile && program_config.has_value() && program_config->exact_exp_half_tile) {
+        compute_defines["SDPA_EXACT_EXP_PARTIAL"] = "1";
+    }
 
     KernelDescriptor::Defines compute_defines_vec;
     compute_defines_vec.reserve(compute_defines.size());
@@ -961,6 +964,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         two_noc_k ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
     if (two_noc_k) {
         reader_desc.defines.emplace_back("SDPA_DECODE_TWO_NOC", "1");
+    }
+    // one sink block of PNHt tiles per batch (validate allows [B * padded heads, 32])
+    if (use_attention_sink && q_shape[1] > 1 && attention_sink->padded_shape()[0] == q_shape[1] * q_shape[2]) {
+        TT_FATAL(q_heads_parallel_factor == 1, "A per-batch attention sink needs q_heads_parallel_factor == 1");
+        reader_desc.defines.emplace_back("SDPA_DECODE_SINK_PER_BATCH", "1");
     }
     if (program_config.has_value() && program_config->const_k_tile_col.has_value()) {
         const uint32_t col = program_config->const_k_tile_col.value();

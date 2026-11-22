@@ -39,6 +39,9 @@ struct SDPAProgramConfig {
     // Decode with non-paged K, no K multicast, V read from K (flash MLA): this K tile column (32 columns) holds the
     // same bytes for every key, so the reader loads it from DRAM only while each K buffer slot is first filled.
     std::optional<uint32_t> const_k_tile_col;
+    // Decode only: with half tiles (16-row Q, <= 16 heads) the softmax exp is the accurate one, as with full tiles,
+    // instead of the approximate one; the rows are then bit-equal to the full-tile path.
+    bool exact_exp_half_tile = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

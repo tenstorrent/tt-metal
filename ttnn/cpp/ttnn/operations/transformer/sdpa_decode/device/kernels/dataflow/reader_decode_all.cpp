@@ -259,6 +259,11 @@ void kernel_main() {
         cb_sink.reserve_back(PNHt);
         uint32_t attention_sink_write_ptr = cb_sink.get_write_ptr();
 
+#ifdef SDPA_DECODE_SINK_PER_BATCH
+        const uint32_t sink_tile0 = cur_batch * PNHt;  // sink [B * padded heads, 32]: this batch's block
+#else
+        constexpr uint32_t sink_tile0 = 0;
+#endif
         for (uint32_t tile = 0; tile < PNHt; ++tile) {
             // Use noc.async_read with explicit size instead of noc.async_read_page because
             // the CB may use half tiles (16x32) while the DRAM buffer stores full tiles (32x32).
@@ -267,7 +272,7 @@ void kernel_main() {
                 attention_sink_reader,
                 CoreLocalMem<uint32_t>(attention_sink_write_ptr),
                 attention_sink_tile_bytes,
-                {.page_id = tile},
+                {.page_id = sink_tile0 + tile},
                 {});
             attention_sink_write_ptr += attention_sink_tile_bytes;
         }

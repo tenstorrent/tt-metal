@@ -591,9 +591,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
         const auto& sink_shape = attention_sink.padded_shape();
         TT_FATAL(sink_shape.size() == 2, "Attention sink must have 2 dimensions");
+        // [padded heads, 32] shared by every batch, or [batch * padded heads, 32] with one block per batch
         TT_FATAL(
-            sink_shape[0] == q_shape[2],
-            "Attention sink must have the same padded num heads as Q but got {}",
+            sink_shape[0] == q_shape[2] || sink_shape[0] == q_shape[1] * q_shape[2],
+            "Attention sink must have the same padded num heads as Q (or batch x that) but got {}",
             sink_shape[0]);
         TT_FATAL(
             sink_shape[1] == tt::constants::TILE_WIDTH,

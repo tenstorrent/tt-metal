@@ -40,7 +40,8 @@ void py_module(nb::module_& mod) {
                 bool,
                 std::optional<uint32_t>,
                 uint32_t,
-                std::optional<uint32_t>>(),
+                std::optional<uint32_t>,
+                bool>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("sub_core_grids") = nb::none(),
@@ -53,7 +54,8 @@ void py_module(nb::module_& mod) {
             nb::arg("segmented_accumulation") = false,
             nb::arg("min_blocked_pack_tiles") = nb::none(),
             nb::arg("qk_skip_head_dim") = 0,
-            nb::arg("const_k_tile_col") = nb::none())
+            nb::arg("const_k_tile_col") = nb::none(),
+            nb::arg("exact_exp_half_tile") = false)
         .def_rw("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
         .def_rw("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_rw("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
@@ -66,12 +68,13 @@ void py_module(nb::module_& mod) {
         .def_rw("min_blocked_pack_tiles", &SDPAProgramConfig::min_blocked_pack_tiles)
         .def_rw("qk_skip_head_dim", &SDPAProgramConfig::qk_skip_head_dim)
         .def_rw("const_k_tile_col", &SDPAProgramConfig::const_k_tile_col)
+        .def_rw("exact_exp_half_tile", &SDPAProgramConfig::exact_exp_half_tile)
         .def("__repr__", [](const SDPAProgramConfig& config) {
             return fmt::format(
                 "SDPAProgramConfig(compute_with_storage_grid_size={}, sub_core_grids={}, q_chunk_size={}, "
                 "k_chunk_size={}, exp_approx_mode={}, max_cores_per_head_batch={}, k_splits={}, "
                 "matmul_math_fidelity={}, segmented_accumulation={}, min_blocked_pack_tiles={}, qk_skip_head_dim={}, "
-                "const_k_tile_col={})",
+                "const_k_tile_col={}, exact_exp_half_tile={})",
                 config.compute_with_storage_grid_size,
                 config.sub_core_grids,
                 config.q_chunk_size,
@@ -83,7 +86,8 @@ void py_module(nb::module_& mod) {
                 config.segmented_accumulation,
                 config.min_blocked_pack_tiles,
                 config.qk_skip_head_dim,
-                config.const_k_tile_col);
+                config.const_k_tile_col,
+                config.exact_exp_half_tile);
         });
 
     nb::class_<PagedCacheGeometryOverride>(mod, "PagedCacheGeometryOverride")
