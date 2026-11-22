@@ -131,65 +131,6 @@ def nrmse(
     return torch.where(error == 0, torch.zeros_like(error), error / denominator)
 
 
-class TokenErrorAccumulator:
-    """NRMSE of a long ``[tokens, hidden]`` sequence streamed in consecutive chunks.
-
-    Keeps each token's squared error and squared expected norm (16 bytes per token), from which the
-    whole-run, window and per-token NRMSE equal ``nrmse`` on the concatenated rows.
-    """
-
-    def __init__(self) -> None:
-        self._error_squared: list[torch.Tensor] = []
-        self._expected_squared: list[torch.Tensor] = []
-
-    def update(self, expected: torch.Tensor, actual: torch.Tensor) -> None:
-        if expected.shape != actual.shape or expected.ndim != 2:
-            raise ValueError(
-                f"expected matching [tokens, hidden] chunks, got {tuple(expected.shape)} and {tuple(actual.shape)}"
-            )
-        expected = _as_float64("expected", expected)
-        actual = _as_float64("actual", actual)
-        self._error_squared.append((actual - expected).square().sum(-1))
-        self._expected_squared.append(expected.square().sum(-1))
-
-    def _sums(self) -> tuple[torch.Tensor, torch.Tensor]:
-        if not self._error_squared:
-            raise ValueError("no tokens accumulated")
-        return torch.cat(self._error_squared), torch.cat(self._expected_squared)
-
-    @property
-    def tokens(self) -> int:
-        return sum(chunk.numel() for chunk in self._error_squared)
-
-    def expected_norms(self) -> torch.Tensor:
-        return self._sums()[1].sqrt()
-
-    @staticmethod
-    def _ratio(error: torch.Tensor, expected: torch.Tensor) -> torch.Tensor:
-        # As ``nrmse``: an exact match is 0 (also on an all-zero golden), any error on a zero golden is inf.
-        return error.new_zeros(()) if error == 0 else (error / expected).sqrt()
-
-    def nrmse(self) -> float:
-        error, expected = self._sums()
-        return float(self._ratio(error.sum(), expected.sum()))
-
-    def window_nrmse(self, window: int) -> torch.Tensor:
-        """NRMSE of consecutive ``window``-token windows; the last may be partial."""
-        error, expected = self._sums()
-        return torch.stack(
-            [
-                self._ratio(error[start : start + window].sum(), expected[start : start + window].sum())
-                for start in range(0, error.numel(), window)
-            ]
-        )
-
-    def token_nrmse(self, floor: float) -> torch.Tensor:
-        """Per-token NRMSE with the whole golden's ``floor``."""
-        error, expected = self._sums()
-        error = error.sqrt()
-        return torch.where(error == 0, torch.zeros_like(error), error / expected.sqrt().clamp_min(floor))
-
-
 def assert_accurate(
     expected: torch.Tensor,
     actual: torch.Tensor,

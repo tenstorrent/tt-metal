@@ -2,20 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """Long-context accuracy of the device KDA layer against the FP64 golden of real Kimi-K3 ``layers.0`` inputs.
 
-The device runs consecutive full prefill calls from token 0, carrying its own state, over real code tokens from a
-vLLM trace; the golden (``tests/kda/long_context_golden.py``) was prepared on CPU outside the device lock, and this
-test only loads it. Error is reported and gated as NRMSE against the golden: per call (with PCC), over the whole
-window, per 1,024-token window (drift with context), per token (the golden-wide floor from its manifest), and
-for the final recurrent state per head (one drifting head is not averaged away).
+The device runs consecutive full prefill calls from token 0, carrying its own state, over the real code tokens the
+golden holds. The golden (``tests/kda/long_context_golden.py``, ``K3_LAYER0_GOLDEN`` in the long-context golden
+registry, ``tests/accuracy/golden_registry.py``) was prepared on CPU outside the device lock, and this test only
+loads it; a missing or incomplete golden fails the test. Error is scored with the shared windowed core
+(``tests/accuracy/windowed.py``) and gated as NRMSE against the golden: per call (with PCC), over the whole run,
+per 1,024-token window (drift with context), per token (the golden-wide floor from its manifest), and for the final
+recurrent state per head (one drifting head is not averaged away).
 
-Needs ``KIMI_K3_CKPT`` (layers.0 and embedding shards), ``KDA_LONG_CONTEXT_GOLDEN`` (a prepared golden) and
-``KDA_TRACE_DIR`` (the vLLM trace whose token ids the golden used); skips without them.
+Needs ``KIMI_K3_CKPT`` (layers.0 and embedding shards, checked against the golden's digests); skips without it.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -23,17 +23,17 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import Bar, RowSeries, check, nrmse, row_nrmse, row_sums
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
-from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT, FirstLayerInput
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
-    TokenErrorAccumulator,
-    assert_accurate,
-    make_actual_start,
-    nrmse,
+from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FirstLayerInput
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import nrmse as slice_nrmse
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
+    K3_LAYER0_GOLDEN,
+    load_window,
+    open_k3_layer0_golden,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, load_window, token_ids_sha256
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
     kda_device_params,
@@ -70,26 +70,22 @@ _THRESHOLDS: dict[int, dict[str, float]] = {
 )
 @pytest.mark.parametrize("tokens", [5120, 20480, 1044480], ids=["5k", "20k", "1M"])
 def test_kimi_k3_layer0_long_context_accuracy(
-    mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int, device_params: dict, tokens: int
+    mesh_device: ttnn.MeshDevice,
+    tensor_parallel_axis: int,
+    device_params: dict,
+    tokens: int,
+    kimi_k3_checkpoint_dir: Path,
 ) -> None:
-    run_dir, checkpoint, trace = (
-        os.environ.get(name) for name in ("KDA_LONG_CONTEXT_GOLDEN", "KIMI_K3_CKPT", "KDA_TRACE_DIR")
-    )
-    if not (run_dir and checkpoint and trace):
-        pytest.skip("set KDA_LONG_CONTEXT_GOLDEN (a prepared golden), KIMI_K3_CKPT and KDA_TRACE_DIR")
-    run_dir, checkpoint, trace = Path(run_dir), Path(checkpoint), resolve_trace_dir(trace)
-    manifest = json.loads((run_dir / MANIFEST).read_text(encoding="utf-8"))
-    if manifest["segments"][-1]["end"] < tokens or "token_floor" not in manifest:
-        pytest.skip(f"the golden in {run_dir} is incomplete or shorter than {tokens} tokens")
+    registered = open_k3_layer0_golden()
+    manifest, run_dir, checkpoint = registered.manifest, registered.path, kimi_k3_checkpoint_dir
+    assert tokens <= registered.rows, f"golden {K3_LAYER0_GOLDEN} has {registered.rows} rows, fewer than {tokens}"
     thresholds = _THRESHOLDS[tokens]
 
     config = kimi_k3_kda_config()
     weights = load_kda_layer_state_dict(checkpoint, 0, config)
-    identity = manifest["identity"]
+    identity = registered.identity
     assert kda_state_dict_sha256(weights) == identity["weights_sha256"], "the golden used other weights"
-    assert identity["input"] == FIRST_LAYER_INPUT, f"the golden's input is {identity['input']!r}"
-    token_ids = load_trace_token_ids(trace)[: manifest["tokens"]]
-    assert token_ids_sha256(token_ids) == manifest["token_ids_sha256"], "the golden used other tokens"
+    token_ids = registered.token_ids()
 
     build = FirstLayerInput(checkpoint)
     assert build.weights_sha256() == identity["input_weights_sha256"], "the golden's input used other embeddings"
@@ -105,7 +101,7 @@ def test_kimi_k3_layer0_long_context_accuracy(
     actual_end_tt = make_actual_start(layer.device, _CALL)
 
     state = layer.allocate_state(batch_size=1)
-    errors = TokenErrorAccumulator()
+    series = RowSeries()
     for start in range(0, tokens, _CALL):
         hidden_tt = to_sp_input(build(token_ids[start : start + _CALL])[:, permutation, :], mesh_device, sp_axis)
         with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -124,22 +120,29 @@ def test_kimi_k3_layer0_long_context_accuracy(
             pcc_threshold=_PCC,
             nrmse_threshold=thresholds["call"],
         )
-        errors.update(golden, output)
+        series.append(start, row_sums(golden, output))
 
-    windows = errors.window_nrmse(_WINDOW)
-    per_token = errors.token_nrmse(manifest["token_floor"])
+    floor = manifest["token_floor"]
+    whole = series.windows(
+        tokens, {"output_nrmse": nrmse, "token_nrmse_max": lambda s: float(row_nrmse(s, floor).max())}
+    )
+    windows = series.windows(_WINDOW, {"window_nrmse": nrmse})
+    per_token = row_nrmse(series.sums(), floor)
     golden_state = torch.load(run_dir / f"segment_{tokens // manifest['segment'] - 1:06d}.pt", weights_only=True)
     recurrent = reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tensor_parallel_axis, sp_size - 1)
     result = {
+        "golden_id": K3_LAYER0_GOLDEN,
         "tokens": tokens,
-        "output_nrmse": errors.nrmse(),
-        "call_nrmse_max": float(errors.window_nrmse(_CALL).max()),
-        "window_nrmse_max": float(windows.max()),
-        "window_nrmse_last": float(windows[-1]),
+        "output_nrmse": whole[0]["output_nrmse"],
+        "call_nrmse_max": max(w["call_nrmse"] for w in series.windows(_CALL, {"call_nrmse": nrmse})),
+        "window_nrmse_max": max(w["window_nrmse"] for w in windows),
+        "window_nrmse_last": windows[-1]["window_nrmse"],
         "token_nrmse_median": float(per_token.median()),
-        "token_nrmse_max": float(per_token.max()),
+        "token_nrmse_max": whole[0]["token_nrmse_max"],
         "token_nrmse_argmax": int(per_token.argmax()),
-        "state_head_nrmse_max": float(nrmse(golden_state["state"]["recurrent"][0], recurrent[0].double(), (0,)).max()),
+        "state_head_nrmse_max": float(
+            slice_nrmse(golden_state["state"]["recurrent"][0], recurrent[0].double(), (0,)).max()
+        ),
     }
     print("KDA_LONG_CONTEXT_ACCURACY=" + json.dumps(result, sort_keys=True))
     assert_accurate(
@@ -151,6 +154,7 @@ def test_kimi_k3_layer0_long_context_accuracy(
         nrmse_keep_dims=(0,),
         pcc_keep_dims=(0,),
     )
-    assert result["output_nrmse"] <= thresholds["output"], result
-    assert result["window_nrmse_max"] <= thresholds["window"], result
-    assert result["token_nrmse_max"] <= thresholds["token"], result
+    failures = check(
+        whole, [Bar("output_nrmse", "max", thresholds["output"]), Bar("token_nrmse_max", "max", thresholds["token"])]
+    ) + check(windows, [Bar("window_nrmse", "max", thresholds["window"])])
+    assert not failures, failures
