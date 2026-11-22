@@ -11,6 +11,7 @@ void kernel_main() {
     constexpr uint32_t nt = get_named_compile_time_arg_val("nt");    // column tiles per core
     constexpr uint32_t nct = get_named_compile_time_arg_val("nct");  // C / 32
     constexpr uint32_t h_tile = get_named_compile_time_arg_val("h_tile");  // page bytes of h and m
+    constexpr uint32_t fg = get_named_compile_time_arg_val("fg_page");     // page bytes of F and G (bf16 / fp32)
     constexpr uint32_t cb_z = 0, cb_mask = 1, cb_f = 2, cb_g = 3, cb_h = 4, cb_m = 5;
 
     constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
@@ -34,7 +35,7 @@ void kernel_main() {
     cb_reserve_back(cb_f, kz * nt);
     const uint32_t f = get_write_ptr(cb_f);
     for (uint32_t kt = f_w; kt < kz; ++kt) {
-        rowio::read_pages(f_addr, 4096, kt * nct + col0, nt, f + kt * nt * 4096);
+        rowio::read_pages(f_addr, fg, kt * nct + col0, nt, f + kt * nt * fg);
     }
     // z: only rows 0..rows-1 matter (output rows >= rows are never written; matmul rows are independent). With
     // the block mask, row i keeps z tiles 2i, 2i+1 (gate i) and the rest of the row is zeroed.

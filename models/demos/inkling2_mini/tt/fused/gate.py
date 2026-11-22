@@ -41,8 +41,13 @@ class _FusedGate:
         g = len(downs)
         self.kz = g * RANK // 32
         self.down = R.split_k_weight(torch.cat(downs, -1), device)  # [1, SPLIT, 2C/SPLIT, 64 g] bf16
-        self.f = R.to_device(torch.cat(forgets).float(), device)  # [1, 1, 64 g, C]
-        self.g = R.to_device(torch.cat(gains).float(), device)
+        # forget / gain: bf16 when every value is bf16 (checkpoint dtype): same operand values for the FPU
+        # (it reads fp32 as tf32, which holds any bf16 exactly), half the combine's DRAM bytes
+        f, g_ = torch.cat(forgets).float(), torch.cat(gains).float()
+        exact = all(torch.equal(t, t.to(torch.bfloat16).float()) for t in (f, g_))
+        self.fg_dtype = ttnn.bfloat16 if exact else ttnn.float32
+        self.f = R.to_device(f, device, self.fg_dtype)  # [1, 1, 64 g, C]
+        self.g = R.to_device(g_, device, self.fg_dtype)
         self.block = g > 1  # row i goes through gate i only (z tiles 2i, 2i + 1; applied by the combine reader)
         assert not self.block or (g == rows and RANK == 64)
         ks = 2 * self.c // R.SPLIT
@@ -190,6 +195,7 @@ class _FusedGate:
             f_w=self.kz // 2 if self.kz > 2 else 0,
             block=block,
             h_tile=F.tile_bytes(h.dtype),
+            fg_page=F.tile_bytes(self.fg_dtype),
             rows=self.rows,
             pages=F.pages(self.c),
         )
@@ -203,8 +209,8 @@ class _FusedGate:
         cbs = [
             F.cb(0, f32, self.kz, cores=crs),
             F.cb(1, f32, self.kz, cores=crs),
-            F.cb(2, f32, self.kz * self.nt, cores=crs),
-            F.cb(3, f32, self.kz * self.nt, cores=crs),
+            F.cb(2, self.fg_dtype, self.kz * self.nt, cores=crs),
+            F.cb(3, self.fg_dtype, self.kz * self.nt, cores=crs),
             F.cb(4, h.dtype, self.nt, cores=crs),
             F.cb(5, h.dtype, self.nt, cores=crs),
             F.cb(6, ttnn.bfloat16, 1, 32, cores=crs),  # writer -> reader: its F rows landed
