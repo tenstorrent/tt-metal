@@ -732,14 +732,28 @@ class RowsEngine:
 
     @property
     def can_batch(self):
-        """whether the PP prefill streams several whole prompts through one pass (PPPrefill.run_batch; not with the
-        prefix cache, which runs each whole prompt through prefill_whole)"""
-        return PP_BATCH and hasattr(self.pp, "run_batch") and self.prefix_cache is None
+        """whether the PP prefill streams several whole prompts through one pass (PPPrefill.run_batch; with the prefix
+        cache only the prompts too short to use it, see prefill_batch)"""
+        return PP_BATCH and hasattr(self.pp, "run_batch")
 
     def prefill_batch(self, items, chunk):
         """items [(prompt ids but the last, block table, slot)] at one PP chunk: one PP pass, each prompt handed off
         into its slot as reset + run + handoff of it alone would (run_batch resets the pipeline itself: a split prompt
         the plugin aborted mid-prefill, which the adapter only drops from pp_partial, leaves nothing behind)"""
+        if self.prefix_cache is not None:
+            # (prompts of a whole cache block or more go through the cache one by one; shorter ones can neither hit
+            # nor store a prefix and keep the batched pass)
+            blk = self.prefix_cache.block
+            for ids, blocks, r in [it for it in items if len(it[0]) >= blk]:
+                self._prefill_cached(ids, r, blocks, chunk)
+            items = [it for it in items if len(it[0]) < blk]
+            if len(items) == 1:
+                ids, blocks, r = items[0]
+                self.pp.reset()
+                self.pp.run(torch.as_tensor(ids), chunk=chunk)
+                self.pp.handoff(self.model, len(ids), block_table=blocks, slot=r)
+            if len(items) <= 1:
+                return
         self.pp.run_batch([(torch.as_tensor(ids), blocks, r) for ids, blocks, r in items], self.model, chunk=chunk)
 
     def prefill_begin(self, r):
