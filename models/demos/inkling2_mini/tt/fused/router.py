@@ -50,8 +50,10 @@ class FusedRouter:
             F.cb(22, fp, 2, cores=g),
         ]  # fmt: skip
 
-    def __call__(self, x):
-        """x [1,1,1,K] bf16 TILE (post-norm) -> (weights [1,1,1,k] bf16 TILE L1, ids [1,1,1,k] uint16 TILE L1)."""
+    def __call__(self, x, w_stage=None):
+        """x [1,1,1,K] bf16 TILE (post-norm) -> (weights [1,1,1,k] bf16 TILE L1, ids [1,1,1,k] uint16 TILE L1).
+        w_stage: an L1 tensor sharded over self.cores whose shards hold each core's W tiles (tt/mk/router_stage.py);
+        the reader then takes them from local L1 instead of DRAM (same bytes, same output)."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT, (x.dtype, x.layout)
         assert tuple(x.shape) == (1, 1, 1, 32 * self.kt * self.chunks), x.shape  # one token
         shape = ttnn.Shape([1, 1, 1, self.k])
@@ -63,7 +65,8 @@ class FusedRouter:
         r_args, w_args, c_args = {}, {}, {}
         for i, c in enumerate(self.cores):
             chunk, n, col = i // self.nt, i % self.nt, int(i == 0)
-            r_args[c] = [x.buffer_address(), self.w.buffer_address(), chunk, n, col, self.bias.buffer_address()]
+            r_args[c] = [x.buffer_address(), self.w.buffer_address(), chunk, n, col, self.bias.buffer_address(),
+                         w_stage.buffer_address() if w_stage is not None else 0]  # fmt: skip
             w_args[c] = [w.buffer_address(), ids.buffer_address(), chunk, n, col, *self.collector_noc]
             c_args[c] = [col]
 
@@ -83,7 +86,6 @@ class FusedRouter:
             kern("router_compute.cpp", self.compute_cfg, c_args),
         ]
         sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=self.grid, initial_value=0)]
-        ttnn.generic_op(
-            [x, self.w, self.bias, w, ids], ttnn.ProgramDescriptor(kernels=kernels, cbs=self.cbs, semaphores=sems)
-        )
+        io = [x, self.w, self.bias] + ([w_stage] if w_stage is not None else []) + [w, ids]
+        ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=self.cbs, semaphores=sems))
         return w, ids

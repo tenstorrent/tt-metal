@@ -21,6 +21,8 @@ void kernel_main() {
     const uint32_t n = get_arg_val<uint32_t>(3);
     const uint32_t collector = get_arg_val<uint32_t>(4);
     const uint32_t bias_addr = get_arg_val<uint32_t>(5);
+    const uint32_t w_stage =
+        get_arg_val<uint32_t>(6);  // != 0: this core's W tiles staged in local L1 (tt/mk/router_stage.py)
     constexpr auto x_args = TensorAccessorArgs<0>();
     constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     const auto xa = TensorAccessor(x_args, x_addr, 2048);
@@ -31,7 +33,12 @@ void kernel_main() {
     const uint32_t xd = get_write_ptr(cb_x), wd = get_write_ptr(cb_w);
     for (uint32_t k = 0; k < kt; ++k) {
         noc_async_read(xa.get_noc_addr(chunk * kt + k), xd + k * 2048, 2048);
-        noc_async_read(wa.get_noc_addr((chunk * kt + k) * nt + n), wd + k * 4096, 4096);
+        if (w_stage == 0) {
+            noc_async_read(wa.get_noc_addr((chunk * kt + k) * nt + n), wd + k * 4096, 4096);
+        }
+    }
+    if (w_stage != 0) {  // same pages in the same order (stage_pages_fill.cpp)
+        noc_async_read(get_noc_addr(w_stage), wd, kt * 4096);
     }
     if (collector) {
         cb_reserve_back(cb_bias, 1);

@@ -31,6 +31,7 @@ class Generator:
         self.trace = None  # [phase] -> trace id
         self.out = None  # [phase] -> output dict
         self.overlap = None  # tt/mk/overlap.Overlap while installed (capture .. release)
+        self.router_stage = None  # tt/mk/router_stage.RouterStage, same lifetime
 
     def capture(self):
         """Compile eagerly once (program cache), then capture one full decode step per conv phase."""
@@ -47,6 +48,9 @@ class Generator:
                 from models.demos.inkling2_mini.tt.mk.expert_overlap import ExpertOverlap
 
                 self.experts = ExpertOverlap(m)
+            from models.demos.inkling2_mini.tt.mk import router_stage
+
+            self.router_stage = router_stage.install(m)  # next app's router weights into L1 (rides on the conv)
             m.step()
             m.step()
         ttnn.synchronize_device(self.device)
@@ -62,6 +66,9 @@ class Generator:
         for t in self.trace or []:
             ttnn.release_trace(self.device, t)
         self.trace = None
+        if self.router_stage is not None:
+            self.router_stage.uninstall()
+            self.router_stage = None
         if self.experts is not None:
             self.experts.uninstall(self.model)
             self.experts = None

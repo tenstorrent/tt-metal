@@ -47,7 +47,12 @@ HOST_KB = {
     ("attn_window", 8): 45,  # 5.4 -> 5.9 (30 KB); 45 with the router host
     ("attn_out_compute", "attn_out_reader", "attn_out_writer", 8): 50,  # 6.6 -> 7.1 (33 KB); 50 with the router host
     ("gatez_compute", "gatez_reader", "gatez_writer", 18): 60,  # 14.3 -> 16.1 (mlp gate 8.7, QKV gate 18.8)
-    ("router_compute", "router_reader", "router_writer", 36): 130,
+    (
+        "router_compute",
+        "router_reader",
+        "router_writer",
+        36,
+    ): 100,  # 130 before its weights were staged (router_stage.py)
 }
 BUDGET = 0.8
 
