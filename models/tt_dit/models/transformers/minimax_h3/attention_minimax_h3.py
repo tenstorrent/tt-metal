@@ -328,7 +328,7 @@ class MiniMaxH3Attention(Module):
         self.lora_rank = lora_rank
         self._qkv_side_cols = 0
         if lora_rank is not None:
-            self._qkv_side_cols = col_suffix_cols(hidden_size // tp_factor, 3 * lora_rank, tp_factor, "qkv")
+            self._qkv_side_cols = col_suffix_cols(hidden_size // tp_factor, 3 * lora_rank, tp_factor)
             if is_fsdp or not is_sequence_parallel:
                 raise ValueError("the LoRA side branch needs the sequence-parallel DiT attention without FSDP")
             self.to_qkv_down = LowRankDown(

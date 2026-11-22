@@ -1675,7 +1675,7 @@ class MiniMaxH3Pipeline:
     def _dit_weight_mode(self) -> str:
         mode = "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
         if self.lora_side_path is not None:
-            mode += f"_loraside_{self.lora_side_path.stem}_{self._lora_side_digest[:12]}_x{self.lora_side_strength!r}"
+            mode += f"_loraside2_{self.lora_side_path.stem}_{self._lora_side_digest[:12]}_x{self.lora_side_strength!r}"
         return mode + to_out_weight_tag() + lofi_weight_cache_tag()
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:

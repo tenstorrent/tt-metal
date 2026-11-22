@@ -26,11 +26,12 @@ from models.tt_dit.models.transformers.minimax_h3.lora_side import (
 TP = 4
 
 
-def test_col_suffix_keeps_a_k_block_of_three():
-    # H3: 5376 / 4 = 42 tiles per device; q/k/v stack 3 * 128 ranks (3 tiles), ff1 128 (1 tile, padded to 3).
-    assert col_suffix_cols(1344, 3 * 128, TP) == 96
-    assert col_suffix_cols(1344, 128, TP) == 96
-    assert fit_k_block(6, 45) == 5 and fit_k_block(7, 45) == 5 and fit_k_block(3, 45) == 3
+def test_col_suffix_is_bfp8_aligned_with_a_k_block():
+    # H3: 5376 / 4 = 42 tiles per device; q/k/v stack 3 * 128 ranks (3 tiles -> 6: 46 has no K block in 3..8),
+    # ff1 128 (1 tile -> 2).
+    assert col_suffix_cols(1344, 3 * 128, TP) == 192
+    assert col_suffix_cols(1344, 128, TP) == 64
+    assert fit_k_block(7, 48) == 6 and fit_k_block(6, 44) == 4 and fit_k_block(3, 44) == 2
     # row-parallel: K block must divide both the base tiles (the concat seam) and the augmented ones
     assert fit_k_block(8, 56, 60) == 4 and fit_k_block(4, 112, 116) == 4
 
