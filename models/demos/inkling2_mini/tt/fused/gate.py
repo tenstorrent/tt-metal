@@ -180,11 +180,14 @@ class _FusedGate:
             rd[core] = [z.buffer_address(), 0, self.f.buffer_address(), self.g.buffer_address(), h_a, m_a, col0]
             rd[core] += [h_d, m_d, h_n, m_n, i % Z_COPIES]
             wr[core] = [out.buffer_address(), col0, out_dense.buffer_address(), self.g.buffer_address()]
+            wr[core] += [self.f.buffer_address()]
         named = dict(
             kz=self.kz,
             nt=self.nt,
             nct=self.ntc,
             has_mask=0,
+            # F rows the writer reads (with G): F + G are DRAM-bound, split them evenly over both RISCs (E10d)
+            f_w=self.kz // 2 if self.kz > 2 else 0,
             block=block,
             h_tile=F.tile_bytes(h.dtype),
             rows=self.rows,
@@ -204,6 +207,7 @@ class _FusedGate:
             F.cb(3, f32, self.kz * self.nt, cores=crs),
             F.cb(4, h.dtype, self.nt, cores=crs),
             F.cb(5, h.dtype, self.nt, cores=crs),
+            F.cb(6, ttnn.bfloat16, 1, 32, cores=crs),  # writer -> reader: its F rows landed
             F.cb(16, ttnn.bfloat16, self.kz, cores=crs),
             F.cb(17, f32, self.nt, cores=crs),
         ]

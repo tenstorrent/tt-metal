@@ -29,9 +29,11 @@ void kernel_main() {
 
     DeviceZoneScopedN("R_all");
     // bulk weights first
-    cb_reserve_back(cb_f, kz * nt);  // G: read by the writer (the other NOC), in parallel
+    // G and F rows kt < f_w: read by the writer (the other NOC), in parallel
+    constexpr uint32_t f_w = get_named_compile_time_arg_val("f_w");
+    cb_reserve_back(cb_f, kz * nt);
     const uint32_t f = get_write_ptr(cb_f);
-    for (uint32_t kt = 0; kt < kz; ++kt) {
+    for (uint32_t kt = f_w; kt < kz; ++kt) {
         rowio::read_pages(f_addr, 4096, kt * nct + col0, nt, f + kt * nt * 4096);
     }
     // z: only rows 0..rows-1 matter (output rows >= rows are never written; matmul rows are independent). With
@@ -82,6 +84,10 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     cb_push_back(cb_z, kz);
+    if constexpr (f_w > 0) {  // the writer's F rows have landed
+        cb_wait_front(6, 1);
+        cb_pop_front(6, 1);
+    }
     cb_push_back(cb_f, kz * nt);
     cb_push_back(cb_h, nt);
     cb_push_back(cb_m, nt);

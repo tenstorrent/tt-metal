@@ -24,12 +24,24 @@ void kernel_main() {
         constexpr uint32_t nct = get_named_compile_time_arg_val("nct");
         constexpr uint32_t cb_g = 3;
         const uint32_t g_addr = get_arg_val<uint32_t>(3);
+        constexpr uint32_t f_w = get_named_compile_time_arg_val("f_w");
+        if constexpr (f_w > 0) {  // F rows kt < f_w into the reader's (not yet pushed) cb_f pages
+            const uint32_t f_addr = get_arg_val<uint32_t>(4);
+            const uint32_t f = get_write_ptr(2);
+            cb_reserve_back(6, 1);
+            for (uint32_t kt = 0; kt < f_w; ++kt) {
+                rowio::read_pages(f_addr, 4096, kt * nct + col0, nt, f + kt * nt * 4096);
+            }
+        }
         cb_reserve_back(cb_g, kz * nt);
         const uint32_t g = get_write_ptr(cb_g);
         for (uint32_t kt = 0; kt < kz; ++kt) {
             rowio::read_pages(g_addr, 4096, kt * nct + col0, nt, g + kt * nt * 4096);
         }
         noc_async_read_barrier();
+        if constexpr (f_w > 0) {
+            cb_push_back(6, 1);
+        }
         cb_push_back(cb_g, kz * nt);
     }
     {
