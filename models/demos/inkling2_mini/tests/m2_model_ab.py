@@ -153,6 +153,7 @@ try:
             max_cores=mc,
             exclude_rows=xr,
             gates=gates,
+            budget=None,  # M2 mode (equal pieces on single-core hosts)
         )
         try:
             m.step()  # two eager steps: the attach pattern is periodic from the 2nd step on (capture must not see new

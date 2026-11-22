@@ -5,14 +5,15 @@
 message gates, attention prep / out, window), the next app's weights of that projection stream from DRAM into L1
 (tt/mk/stage.py), so the next app's projection program reads them from L1.
 
-    ov = install(model, weights=("w_all",), parts=4)   # before capture; ov.stats() after steps; ov.uninstall(model)
+    ov = install(model)   # before capture; ov.stats() after steps; ov.uninstall(model)
 
 How: for each staged projection (attention w_all and / or w_o), every layer's BankLinear is re-split over more cores
 (same weight tensor, placed off the hosting programs' rows) and gets a staged reader over ONE staging tensor shared
-by the 24 layers. ``ttnn.generic_op`` is wrapped: after app i's projection ran, app i+1's fill for it is queued in
-``parts`` pieces; each later eligible program carries the oldest queued piece. Eligible = at most ``max_cores``
-cores, none of them a staging core (asserted again per attach), no weight-streaming kernel (bank / MoE streams). App i+1's projection
-reads whatever prefix was filled. Bytes into every CB slot are unchanged, so outputs are bit-equal.
+by the 24 layers. ``ttnn.generic_op`` is wrapped: after app i's projection ran, app i+1's fill for it is queued;
+each later DRAM-light program in HOST_KB carries the next piece of it, sized to end inside that program (budget mode,
+the default; M2 mode: ``parts`` equal pieces on programs of at most ``max_cores`` cores). Fill and host cores are
+disjoint (asserted). App i+1's projection reads whatever prefix was filled. Bytes into every CB slot are unchanged,
+so outputs are bit-equal.
 
 App order: model.APPS (one pointer per projection, advanced by every call): decode steps only.
 """
@@ -27,6 +28,27 @@ from models.demos.inkling2_mini.tt.mk.stage import StagedBankLinear, coalesce, p
 
 _orig_generic_op = ttnn.generic_op
 _STREAMS = "bank_"  # bank_linear_*, moe_bank_*: weight streams
+
+# Budget mode (Overlap(budget=...), the default): DRAM-light programs that may carry a fill, with the bytes per core
+# one piece may fill there. Keyed by (sorted kernel basenames, core count). Sized from the M3 device profiles (4K,
+# integrate c99577bf5b7): ~7.5 KB/us per core (2 KB x 1 read in flight on each RISC) x the program's time, then cut
+# where the profile showed the host stretched more than the staged bytes saved. Measured and left out: attn_bias
+# (32 cores, 14.5 us: 90 KB stretched it to 20.2 us), attn_near / attn_comb (global layers), the router (its cores
+# overlap w_all's staging block).
+HOST_KB = {
+    ("conv_compute", "conv_reader", "conv_writer", 1): 89,  # 10.6 us -> 11.5 with a fill
+    ("attnres_compute", "attnres_reader", "attnres_writer", 1): 89,  # 10.8 -> 13.3
+    ("attnres_compute", "attnres_reader", "rownorm_writer", 1): 89,
+    ("attnres_compute", "attnres_reader", "rownorm_writer", 3): 37,  # 5.8 -> 8.7
+    ("attnres_compute", "attnres_reader", "attnres_writer", 12): 60,
+    ("attn_window", 8): 30,  # 5.4 -> 5.9
+    ("attn_out_compute", "attn_out_reader", "attn_out_writer", 8): 33,  # 6.6 -> 7.1
+    ("gatez_compute", "gatez_reader", "gatez_writer", 18): 60,  # 14.3 -> 16.1 (mlp gate 8.7, QKV gate 18.8)
+}
+
+
+def host_key(prog, n_cores):
+    return tuple(sorted({os.path.basename(k.kernel_source).rsplit(".", 1)[0] for k in prog.kernels})) + (n_cores,)
 
 
 class _Proxy:
@@ -80,12 +102,29 @@ class Overlap:
         split=3,
         exclude_rows=(0, 1, 2, 3, 4, 5),
         gates=None,
+        budget=1.0,
+        host_kb=None,
+        host_scale=None,
     ):
         """max_cores: hosts have at most this many cores (1 = the single-core residual programs, ~22 us each with DRAM
         idle; wider small programs are short, so a fill piece makes them longer instead of hiding). gates: also stage
         the message gates' F / G (tt/mk/gate_stage.py) on their combine cores outside row 0 and outside the
-        projections' staging cores; default INKLING_STAGE_GATES (off)."""
+        projections' staging cores; default INKLING_STAGE_GATES (off).
+        budget: None = M2 mode (single-core hosts, ``parts`` equal pieces). A number (default 1.0) = budget mode:
+        every program in ``host_kb`` (default HOST_KB) carries fill bytes up to budget x its KB per core, oldest
+        queued item first, then the next items on cores disjoint from the ones it filled."""
         self.parts, self.max_cores = parts, max_cores
+        self.budget = budget
+        # host_scale: {"<kernel basename>[:<cores>]": factor} for the hosts with that kernel (and core count), on top of
+        # budget (0 = not a host); for A/B runs
+        self.host_kb = dict(HOST_KB if host_kb is None else host_kb)
+        for k in list(self.host_kb):
+            for name, f in (host_scale or {}).items():
+                n, _, c = name.partition(":")
+                if n in k[:-1] and (not c or int(c) == k[-1]):
+                    self.host_kb[k] *= f
+            if self.host_kb[k] <= 0:
+                del self.host_kb[k]
         self.order = [L for L, _ in MD.APPS]
         gx = model.device.compute_with_storage_grid_size().x
         # "w_all@480": stage at most 480 KB per core of that projection (the staging tensors take their L1 range on
@@ -147,7 +186,8 @@ class Overlap:
         assert self.order[t.ptr] == proxy.L, (t.name, "app order out of step", t.ptr, proxy.L)
         # pieces of this proxy still queued were not attached in time: dropped (the prefix stays shorter)
         self.queue = [q for q in self.queue if q[0] is not proxy]
-        staged = proxy.st.part_bytes(t.filled / self.parts) if t.filled_for is proxy else 0
+        frac = t.filled if self.budget is not None else t.filled / self.parts
+        staged = proxy.st.part_bytes(frac) if t.filled_for is proxy else 0
         self.in_own = True
         try:
             y = proxy.st(x, out, staged=staged)
@@ -158,7 +198,10 @@ class Overlap:
         t.ptr = (t.ptr + 1) % len(self.order)
         nxt = t.proxies[self.order[t.ptr]]
         t.filled, t.filled_for = 0, nxt
-        self.queue += [(nxt, k) for k in range(self.parts)]
+        if self.budget is not None:
+            self.queue.append((nxt, None))  # filled in host-sized pieces (t.filled = fraction done)
+        else:
+            self.queue += [(nxt, k) for k in range(self.parts)]
         return y
 
     def _consume_gate(self, gs, z, h, m):
@@ -174,7 +217,7 @@ class Overlap:
         self.gstaged += int(staged)
         self.gptr = (self.gptr + 1) % len(self.gorder)
         self.gfilled = None
-        nxt = (self.gstages[id(self.gorder[self.gptr])], 0)
+        nxt = (self.gstages[id(self.gorder[self.gptr])], None if self.budget is not None else 0)
         if self.gates_tail:
             self.queue.append(nxt)  # only hosts the w_all pieces leave
         else:
@@ -186,6 +229,8 @@ class Overlap:
             return _orig_generic_op(io, prog)
         cores = program_cores(prog)
         self.seen["programs"] += 1
+        if self.budget is not None:
+            return self._budget_op(io, prog, cores)
         if len(cores) > self.max_cores:
             self.seen["too_wide"] += 1
             return _orig_generic_op(io, prog)
@@ -207,6 +252,53 @@ class Overlap:
         proxy.track.filled = k + 1  # a proxy's pieces attach in order, so its filled prefix is k + 1 parts
         self.seen["attached"] += 1
         return _orig_generic_op(list(io[:-1]) + proxy.st.fill_io + [io[-1]], prog)
+
+    def _budget_op(self, io, prog, cores):
+        kb = self.host_kb.get(host_key(prog, len(cores)))
+        if kb is None or not self.queue:
+            self.seen["not_host" if kb is None else "idle_host"] = (
+                self.seen.get("not_host" if kb is None else "idle_host", 0) + 1
+            )
+            return _orig_generic_op(io, prog)
+        left, used, kernels, extra, take = kb * self.budget * 1024, set(cores), [], [], []
+        for item in list(self.queue):
+            obj = item[0]
+            if left < 4096:
+                break
+            gate = isinstance(obj, GateStage)
+            icores = obj.stage_cores if gate else obj.st.cores
+            if icores & used:
+                continue
+            if gate:
+                if obj.bytes > left:  # whole F + G in one piece
+                    continue
+                kernels += obj.fill_kernels()
+                extra += obj.fill_io
+                self.gfilled = obj
+                left -= obj.bytes
+                take.append(item)
+            else:
+                t = obj.track
+                lo = t.filled if t.filled_for is obj else 0.0
+                hi = min(1.0, lo + left / obj.st.staged)
+                if obj.st.part_bytes(hi) <= obj.st.part_bytes(lo):
+                    continue
+                kernels += obj.st.fill_kernels((lo, hi))
+                extra += obj.st.fill_io
+                left -= (hi - lo) * obj.st.staged
+                t.filled = hi
+                if hi >= 1.0:
+                    take.append(item)
+            used |= icores
+        if not kernels:
+            self.seen["clash"] += 1
+            return _orig_generic_op(io, prog)
+        self.queue = [q for q in self.queue if not any(q is x for x in take)]
+        self.seen["attached"] += 1
+        prog = ttnn.ProgramDescriptor(
+            kernels=list(prog.kernels) + kernels, semaphores=list(prog.semaphores), cbs=list(prog.cbs)
+        )
+        return _orig_generic_op(list(io[:-1]) + extra + [io[-1]], prog)
 
     def stats(self):
         out = dict(self.seen)
