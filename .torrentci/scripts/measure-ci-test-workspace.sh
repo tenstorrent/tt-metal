@@ -58,7 +58,7 @@ build() { # name file target [extra args]
   start="$(date +%s)"
   # shellcheck disable=SC2086
   buildctl --addr "$addr" build --progress=plain --frontend dockerfile.v0 \
-    --local context=. --local dockerfile=dockerfile --opt "filename=$file" --opt platform=linux/amd64 \
+    --local context=. --local dockerfile=/tmp/dockerfile --opt "filename=$file" --opt platform=linux/amd64 \
     --opt "target=$target" $args "$@" --metadata-file "/tmp/$name.meta.json" \
     --output "type=oci,dest=$layouts/$name.oci,compression=gzip,oci-mediatypes=true" >"/tmp/$name.log" 2>&1 \
     || { tail -n 200 "/tmp/$name.log"; exit 1; }
@@ -67,6 +67,13 @@ build() { # name file target [extra args]
   echo "$digest" >"$ctx/$name.digest"
   echo "measure: built $name in $(($(date +%s) - start)) s: layout $(($(du -k "$layouts/$name.oci" | cut -f1) / 1024)) MiB, root $(($(du -sxk "$root" | cut -f1) / 1024)) MiB"
 }
+# The runner strips each Dockerfile's `# syntax=` line and builds with the
+# built-in frontend; do the same.
+mkdir -p /tmp/dockerfile
+for f in dockerfile/Dockerfile dockerfile/Dockerfile.tools dockerfile/Dockerfile.python; do
+  sed '1{/^# *syntax=/d}' "$f" >"/tmp/dockerfile/${f#dockerfile/}"
+done
+cp dockerfile/*.dockerignore /tmp/dockerfile/ 2>/dev/null || true
 tools="ccache mold doxygen clangbuildanalyzer iwyu gdb cmake yq zstd curl sfpi openmpi"
 for t in $tools; do build "$t" Dockerfile.tools "$t"; done
 build ci-test-venv Dockerfile.python ci-test-venv
