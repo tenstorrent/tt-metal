@@ -23,7 +23,7 @@ import torch
 
 import ttnn
 from models.demos.inkling2_mini.tt.dram_sharded import BankLocalExperts
-from models.demos.inkling2_mini.tt.fused.moe_bank import BankMoeExperts
+from models.demos.inkling2_mini.tt.fused.moe_bank import BankMoeExperts, pf_memory_config
 from models.demos.inkling2_mini.tt.fused.moe_expert import FusedMoeExperts
 from models.demos.inkling2_mini.tt.fused.router import FusedRouter
 
@@ -124,7 +124,8 @@ class Inkling2MoE:
         )
         self.router = FusedRouter(device, self.router_w, bias, TOP_K, ROUTE_SCALE, 1e-20) if fused_router else None
         gu = weights["experts.w_gate_up"]
-        self.w_down = ttnn.to_device(weights["experts.w_down"], device, dram)
+        if layout != "PF":
+            self.w_down = ttnn.to_device(weights["experts.w_down"], device, dram)
         # The whole expert step (gate_up + SwiGLU + down + weighted sum) is one fused program.
         self.fused = None
         self.bank_local = False
@@ -132,7 +133,15 @@ class Inkling2MoE:
         # step reads them.
         sticks = all(tuple(t.shape)[:2] == (1, 1) and t.shape[-1] == 32 for t in (gu, weights["experts.w_down"]))
         assert fused or not sticks, "stick-layout expert weights need the fused expert step"
-        if layout == "BANK":  # bank-layout cache (convert/bank_layout.py): every read from the reader's own bank
+        if layout == "PF":  # PF-layout cache (convert/pf_layout.py): the bank expert step, prefetchable by expert
+            tune = {} if bank_tune else dict(x_mcast=False, noc1_banks=())
+            dn = weights["experts.w_down"]
+            self.w_gate_up = ttnn.to_device(gu, device, pf_memory_config(gu.shape[1], gu.shape[2]))
+            self.w_down = ttnn.to_device(dn, device, pf_memory_config(dn.shape[1], dn.shape[2]))
+            x = {k: ttnn.to_device(weights[k + ".x"], device, dram) for k in ("experts.w_gate_up", "experts.w_down")}
+            self.fused = BankMoeExperts(device, (self.w_gate_up, x["experts.w_gate_up"]),
+                                        (self.w_down, x["experts.w_down"]), **tune)  # fmt: skip
+        elif layout == "BANK":  # bank-layout cache (convert/bank_layout.py): every read from the reader's own bank
             self.w_gate_up = ttnn.to_device(gu, device, dram)
             self.fused = BankMoeExperts(
                 device, self.w_gate_up, self.w_down, **({} if bank_tune else dict(x_mcast=False, noc1_banks=()))
