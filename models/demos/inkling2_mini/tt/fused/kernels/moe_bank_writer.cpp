@@ -10,6 +10,8 @@
 //     (the collector waits for all 8 * 36).
 //   down core (F_DN): waits sem_r (the collector multicast the whole hidden), hands cb_hid to compute, then writes its
 //     output tile (1x32 row -> row 0 of a zeroed 32x32 bf16 tile) to page n.
+//   X_MCAST, gate_up core: first waits sem_x (the collector multicast x into cb_x) and pushes cb_x for compute.
+//   IDS_FROM_SEM: the extra cores take the ids from cb_scr bytes 0..15 after sem_ids (see the reader).
 // Runtime args: flags, j, partner x, y, collector x, y, out address, n, ids address, bank.
 
 #include <cstdint>
@@ -29,6 +31,14 @@ constexpr uint32_t topk = get_named_compile_time_arg_val("topk");
 constexpr uint32_t hid_tiles = get_named_compile_time_arg_val("hid_tiles");  // 36 * 8
 constexpr uint32_t nb = get_named_compile_time_arg_val("n_banks");
 constexpr uint32_t x_lo = get_named_compile_time_arg_val("x_lo");
+#ifdef X_MCAST
+constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");
+constexpr uint32_t x_tiles = get_named_compile_time_arg_val("x_tiles");
+constexpr uint32_t sem_x_id = get_named_compile_time_arg_val("sem_x");
+#endif
+#ifdef IDS_FROM_SEM
+constexpr uint32_t sem_ids_id = get_named_compile_time_arg_val("sem_ids");
+#endif
 constexpr uint32_t F_GU = 1, F_GATE = 2, F_EXTRA = 4, F_DN = 8;
 constexpr uint32_t SLOT = 512;  // 8 tiny tiles of 64 B
 
@@ -50,6 +60,13 @@ void kernel_main() {
     const auto ids = TensorAccessor(ids_args, ids_addr);
 
     const uint32_t hid_base = get_write_ptr(cb_hid);
+#ifdef X_MCAST
+    if (flags & F_GU) {
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_x_id)), 1);
+        cb_reserve_back(cb_x, x_tiles);
+        cb_push_back(cb_x, x_tiles);
+    }
+#endif
 
     // zero the output staging tile while compute works
     const uint32_t z = get_write_ptr(cb_z);
@@ -63,9 +80,15 @@ void kernel_main() {
     if (flags & F_GATE) {
         uint32_t send = 0xff;  // experts whose h this core sends
         if (flags & F_EXTRA) {
+#ifdef IDS_FROM_SEM
+            const uint32_t scr = get_write_ptr(cb_scr);
+            noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ids_id)), 1);
+            invalidate_l1_cache();
+#else
             const uint32_t scr = get_write_ptr(cb_scr) + 64;  // the reader's scratch uses bytes 0..63
             noc_async_read(ids.get_noc_addr(0), scr, 32);
             noc_async_read_barrier();
+#endif
             volatile tt_l1_ptr uint16_t* id16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr);
             send = 0;
             for (uint32_t e = 0; e < topk; ++e) {

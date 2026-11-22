@@ -12,6 +12,10 @@
 //      for e: the column (kt_gu tiles), blocks of SBK, nbuf - 1 blocks in flight; then their down column.
 // Runtime args: x, routing weights, ids, w_gate_up, w_down addresses; flags (F_* below); bank; kslot;
 //   col_off (0: gate column, kt_gu: up column); dn slot.
+// IDS_FROM_SEM (for a program that routes in the same program, tt/mk): ids (cb_scr bytes 0..15) and routing
+//   weights (32..47) arrive by multicast and sem_ids is set, instead of being read from their tensors.
+// X_MCAST: x is not read here; the collector multicasts it into cb_x and the writer pushes it, so the weight
+//   stream starts right after the ids (82 cores no longer queue for the x tensor's core).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -34,6 +38,9 @@ constexpr uint32_t x_lo = get_named_compile_time_arg_val("x_lo");          // fi
 constexpr uint32_t dn_slots = get_named_compile_time_arg_val("dn_slots");  // down column slots per expert (11)
 
 constexpr uint32_t F_GU = 1, F_GATE = 2, F_EXTRA = 4, F_DN = 8;
+#ifdef IDS_FROM_SEM
+constexpr uint32_t sem_ids_id = get_named_compile_time_arg_val("sem_ids");
+#endif
 constexpr uint32_t TINY = 64;
 constexpr uint32_t FACE_BYTES = 512;
 
@@ -46,7 +53,7 @@ FORCE_INLINE uint32_t gu_slot(uint32_t e, uint32_t b, uint32_t k) {
 
 void kernel_main() {
     uint32_t a = 0;
-    const uint32_t x_addr = get_arg_val<uint32_t>(a++);
+    [[maybe_unused]] const uint32_t x_addr = get_arg_val<uint32_t>(a++);  // unused with X_MCAST
     const uint32_t wts_addr = get_arg_val<uint32_t>(a++);
     const uint32_t ids_addr = get_arg_val<uint32_t>(a++);
     const uint32_t gu_addr = get_arg_val<uint32_t>(a++);
@@ -62,7 +69,9 @@ void kernel_main() {
     constexpr auto ids_args = TensorAccessorArgs<wts_args.next_compile_time_args_offset()>();
     constexpr auto gu_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
     constexpr auto dn_args = TensorAccessorArgs<gu_args.next_compile_time_args_offset()>();
+#ifndef X_MCAST
     const auto xs = TensorAccessor(x_args, x_addr);
+#endif
     const auto wts = TensorAccessor(wts_args, wts_addr);
     const auto ids = TensorAccessor(ids_args, ids_addr);
     const auto gu = TensorAccessor(gu_args, gu_addr);
@@ -71,9 +80,19 @@ void kernel_main() {
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
     const uint32_t scr = get_write_ptr(cb_scr);
+#ifdef IDS_FROM_SEM
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ids_id)), 1);
+    invalidate_l1_cache();
+#else
     noc_async_read(ids.get_noc_addr(0), scr, 32);
     if (flags & F_GU) {
         noc_async_read(wts.get_noc_addr(0), scr + 32, 32);
+    }
+#endif
+#ifdef X_MCAST
+    noc_async_read_barrier();
+#else
+    if (flags & F_GU) {
         cb_reserve_back(cb_x, x_tiles);
         const uint32_t xl = get_write_ptr(cb_x);
         for (uint32_t t = 0; t < x_tiles; ++t) {
@@ -85,6 +104,7 @@ void kernel_main() {
     } else {
         noc_async_read_barrier();
     }
+#endif
 
     uint32_t eid[topk];
     volatile tt_l1_ptr uint16_t* id16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr);

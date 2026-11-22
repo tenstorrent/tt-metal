@@ -19,6 +19,16 @@ others): 82 workers, each reading one gate_up column and / or one down column of
 an up core hands its 8 u tiles to its gate core, the gate core computes the SwiGLU and sends h to the collector, the
 collector multicasts the hidden [8][36] to the whole grid, and every down core runs its column over K = 8 x 36 hidden
 tiles in the same order as the stick-layout FusedMoeExperts, so the output is the same.
+
+Measured on p100a (traced, per op; the module default has both changes below, the output is the same either way):
+the op ends when the slowest bank has streamed its share, so the start and the NOC paths matter, the compute
+(~35 us of the BFP8 step) does not.
+* x: the collector reads x once and multicasts it (X_MCAST); before, all 82 workers read the x tensor's core
+  (2 x 72 reads each) before their first weight read, which delayed the streams by 3-8 us.
+* bank 0's workers (its whole row) read on NOC1, their writers on NOC0: BFP8 179 -> 164 us, BFP4 94 -> 88,
+  mixed 127 -> 118 (any other single bank: about half of that; two or more banks: no better, or much worse).
+Fewer readers per bank (gate and up of a pair on one core, 6 per bank) read slower (340-367 GB/s vs ~400), as did
+any other row for a bank.
 """
 
 import torch
@@ -53,6 +63,8 @@ from models.demos.inkling2_mini.tt.fused.moe_expert import (
 )
 
 F_GU, F_GATE, F_EXTRA, F_DN = 1, 2, 4, 8  # worker flags (moe_bank_*.cpp)
+SEM_X = 3  # x multicast done (X_MCAST)
+NOC1_BANKS = (0,)  # banks whose workers read on NOC1 (module doc)
 X_LO = 2  # convert/bank_layout.extra_bank: first bank holding extra pairs
 
 
@@ -98,9 +110,14 @@ def row_placement(device, per_bank):
 
 
 class BankMoeExperts:
-    def __init__(self, device, w_gate_up, w_down, sbk=18, nbuf=3, bfp8_fidelity=ttnn.MathFidelity.HiFi2):
+    def __init__(
+        self, device, w_gate_up, w_down, sbk=18, nbuf=3, bfp8_fidelity=ttnn.MathFidelity.HiFi2, x_mcast=True,
+        noc1_banks=NOC1_BANKS,
+    ):  # fmt: skip
         """``w_gate_up`` / ``w_down``: bank-layout DRAM tensors (``bank_weights`` or the bank cache), BFP4 or BFP8
-        (each its own). Placement and flags: module doc."""
+        (each its own). Placement and flags: module doc. x_mcast: the collector reads x once and multicasts it
+        (otherwise every gate_up core reads it). noc1_banks: banks whose workers read on NOC1 (writer on NOC0)."""
+        self.x_mcast, self.noc1_banks = x_mcast, tuple(noc1_banks)
         nb = device.dram_grid_size().x
         assert nb == BL.N_BANKS, nb
         assert (2 * KT_GU) % sbk == 0 and HID_TILES % sbk == 0, sbk
@@ -178,8 +195,9 @@ class BankMoeExperts:
             )
 
         w = self.workers
+        wc = _range_set([c for c, *_ in self.workers_info] + [self.collector])  # the collector multicasts x
         return [
-            cb(w, KT_GU * 64, (CB_X, bf, 64, tiny)),
+            cb(wc, KT_GU * 64, (CB_X, bf, 64, tiny)),
             cb(w, self.nbuf * self.sbk * gtile, (CB_W, gu_dtype, gtile, t32)),
             cb(w, HID_TILES * dtile, (CB_WD, dn_dtype, dtile, t32)),  # the whole down column of the 8 experts
             cb(w, 2048, (CB_G, bf, 64, tiny), (CB_G32, bf, 2048, t32)),
@@ -211,7 +229,7 @@ class BankMoeExperts:
         w_named = {
             "cb_g": CB_G, "cb_u16": CB_U16, "sem_u": SEM_U,
             "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O, "cb_z": CB_Z, "cb_scr": CB_SCR, "sem_g": SEM_G,
-            "sem_r": SEM_R, "n_banks": self.nb, "x_lo": X_LO, **common,
+            "sem_r": SEM_R, "n_banks": self.nb, "x_lo": X_LO, "cb_x": CB_X, "x_tiles": KT_GU, "sem_x": SEM_X, **common,
         }  # fmt: skip
         c_named = {
             "cb_x": CB_X, "cb_w": CB_W, "cb_wd": CB_WD, "cb_g": CB_G, "cb_g32": CB_G32, "cb_u16": CB_U16,
@@ -229,23 +247,35 @@ class BankMoeExperts:
             c_args.append((core, [f]))
         (x0, y0), (x1, y1) = self.mcast_rect
         dm = ttnn.DataMovementConfigDescriptor
-        kernels = [
-            ttnn.KernelDescriptor(
-                kernel_source=f"{KDIR}/moe_bank_reader.cpp",
-                core_ranges=self.workers,
-                compile_time_args=acc(x) + acc(weights) + acc(indices) + acc(self.w_gate_up) + acc(self.w_down),
-                named_compile_time_args=list(r_named.items()),
-                runtime_args=r_args,
-                config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=f"{KDIR}/moe_bank_writer.cpp",
-                core_ranges=self.workers,
-                compile_time_args=acc(out) + acc(indices),
-                named_compile_time_args=list(w_named.items()),
-                runtime_args=w_args,
-                config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
-            ),
+        xdef = [("X_MCAST", "1")] * self.x_mcast
+        flip = {(w[0][0], w[0][1]) for w in self.workers_info if w[2] in self.noc1_banks}
+        dm_kernels = []
+        for sel, rnoc, wnoc in ((False, ttnn.NOC.NOC_0, ttnn.NOC.NOC_1), (True, ttnn.NOC.NOC_1, ttnn.NOC.NOC_0)):
+            cores = [c for c, *_ in self.workers_info if ((c[0], c[1]) in flip) == sel]
+            if not cores:
+                continue
+            pick = lambda args: [(k, v) for k, v in args if ((k.x, k.y) in flip) == sel]  # noqa: E731
+            dm_kernels += [
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/moe_bank_reader.cpp",
+                    core_ranges=_range_set(cores),
+                    compile_time_args=acc(x) + acc(weights) + acc(indices) + acc(self.w_gate_up) + acc(self.w_down),
+                    named_compile_time_args=list(r_named.items()),
+                    defines=xdef,
+                    runtime_args=pick(r_args),
+                    config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=rnoc),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/moe_bank_writer.cpp",
+                    core_ranges=_range_set(cores),
+                    compile_time_args=acc(out) + acc(indices),
+                    named_compile_time_args=list(w_named.items()),
+                    defines=xdef,
+                    runtime_args=pick(w_args),
+                    config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=wnoc),
+                ),
+            ]
+        kernels = dm_kernels + [
             ttnn.KernelDescriptor(
                 kernel_source=f"{KDIR}/moe_bank_compute.cpp",
                 core_ranges=self.workers,
@@ -257,19 +287,27 @@ class BankMoeExperts:
             ttnn.KernelDescriptor(
                 kernel_source=f"{KDIR}/moe_expert_collector.cpp",
                 core_ranges=_range_set([self.collector]),
+                compile_time_args=acc(x) if self.x_mcast else [],
+                defines=xdef,
                 named_compile_time_args=[
                     ("cb_hid", CB_HID),
                     ("sem_g", SEM_G),
                     ("sem_r", SEM_R),
                     ("n_senders", HID_TILES),  # one count per hidden tile written
                     ("hid_bytes", HID_TILES * 64),
+                    ("cb_x", CB_X),
+                    ("x_tiles", KT_GU),
+                    ("sem_x", SEM_X),
                 ],
-                runtime_args=[(ttnn.CoreCoord(*self.collector), [x0, y0, x1, y1, self.mcast_dests])],
+                runtime_args=[
+                    (ttnn.CoreCoord(*self.collector), [x0, y0, x1, y1, self.mcast_dests, x.buffer_address()])
+                ],
                 config=ttnn.WriterConfigDescriptor(),
             ),
         ]
         sems = [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all_cores, initial_value=0) for i in (SEM_U, SEM_G, SEM_R)
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all_cores, initial_value=0)
+            for i in (SEM_U, SEM_G, SEM_R, SEM_X)
         ]
         prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=self.cbs)
         return ttnn.generic_op([x, weights, indices, self.w_gate_up, self.w_down, out], prog)

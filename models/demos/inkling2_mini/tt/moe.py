@@ -42,6 +42,9 @@ ROUTER_SPLIT = 9  # K chunks of the router GEMM (256 each)
 # in one run; 101 -> 77 us for BFP4 (E7). down stays on sparse_matmul (bank-local was no faster: 54 vs 55 us).
 # INKLING_MOE_BANK=0 turns it off (A/B runs).
 BANK_LOCAL = os.environ.get("INKLING_MOE_BANK", "1") != "0"
+# Bank expert step (tt/fused/moe_bank.py): x multicast by the collector + bank 0's workers on NOC1 (same output);
+# INKLING_MOE_BANK_TUNE=0 gives the earlier setup (A/B runs).
+BANK_TUNE = {} if os.environ.get("INKLING_MOE_BANK_TUNE", "1") != "0" else dict(x_mcast=False, noc1_banks=())
 # The fused expert step (tt/fused/moe_expert.py) serves every layer: BFP4, BFP8 and BFP4 gate_up + BFP8 down.
 # Inkling2MoE(..., fused=False) falls back to the sparse_matmul / bank-local path above (A/B runs, TILE caches only).
 # Workers on rows 3..9 and collector (10, 9): clear of the tensor prefetcher's receiver ring (cores 0..6, 0..2).
@@ -124,7 +127,7 @@ class Inkling2MoE:
         assert fused or not sticks, "stick-layout expert weights need the fused expert step"
         if layout == "BANK":  # bank-layout cache (convert/bank_layout.py): every read from the reader's own bank
             self.w_gate_up = ttnn.to_device(gu, device, dram)
-            self.fused = BankMoeExperts(device, self.w_gate_up, self.w_down)
+            self.fused = BankMoeExperts(device, self.w_gate_up, self.w_down, **BANK_TUNE)
         elif fused:  # any of BFP4 / BFP8 / BFP4 gate_up + BFP8 down
             self.w_gate_up = ttnn.to_device(gu, device, dram)
             self.fused = FusedMoeExperts(device, self.w_gate_up, self.w_down, sticks=sticks, **FUSED_PLACEMENT)
