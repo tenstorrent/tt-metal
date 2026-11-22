@@ -2,9 +2,6 @@
 # PR Gate build-docs (docs-latest-public.yaml, dry run): import ttnn in place
 # from asan-build's precompiled libraries, check that every registered ttnn op
 # is documented, then build the Sphinx docs with warnings as errors.
-# GitHub runs it in the ci-test image, whose venv adds CPU torch and the dev
-# and docs requirements to ci-build's. TorrentCI cannot build ci-test yet
-# (torrentci#3506), so the job installs ttnn's Python dependencies itself.
 jobs:
   - id: build-docs
     name: Build docs
@@ -15,7 +12,7 @@ jobs:
       kubernetes:
         os: linux
         arch: amd64
-        image: {from-job: ci-build-image, image: ci-build}
+        image: {from-job: ci-test-image, image: ci-test}
         resources:
           requests: {cpu: '4', memory: 16Gi, ephemeral-storage: 20Gi}
           limits: {memory: 16Gi, ephemeral-storage: 30Gi}
@@ -39,7 +36,8 @@ jobs:
         shell:
           run:
             # build/lib and runtime, the TT_FROM_PRECOMPILED_DIR layout.
-            - tar -I zstd -xf ttnn-import.tar.zst -C .
+            # The archive's root entry is the workspace itself; keep its owner and mode.
+            - tar -I zstd -xf ttnn-import.tar.zst --no-overwrite-dir -C .
             - TT_FROM_PRECOMPILED_DIR=$PWD uv pip install .
       - id: undocumented-ops
         kind: shell
