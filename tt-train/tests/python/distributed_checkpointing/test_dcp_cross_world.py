@@ -10,8 +10,9 @@ through ``dcp_driver.py`` (this directory) in a child process. The save child tr
 layout plus the logits on a fixed batch; the load child builds the destination world, loads, and compares. This
 module holds no device fixture of its own: the children need the chips.
 
-The two tt-run modules (``test_dcp_multirank``, ``test_dcp_multimesh``) skip under plain pytest; this module runs each
-of them whole on two ranks of this host, so CI runs every one of their tests.
+The tt-run modules (``test_dcp_multirank``, ``test_dcp_multirank_uneven_failure``, ``test_dcp_multimesh``) skip under
+plain pytest; this module runs each of them whole, in a tt-run world of its own, on two ranks of this host, so CI runs
+every one of their tests.
 """
 
 import os
@@ -260,6 +261,16 @@ def test_the_two_mesh_module_passes_on_two_ranks(release_metal_env, skip_if_host
     skip_if_host_too_small((4,), "the two-mesh module")
     release_metal_env()
     _run_module_on_two_ranks("test_dcp_multimesh.py", TWO_MESH_MGD, dict(os.environ))
+
+
+@pytest.mark.timeout(MODULE_TIMEOUT_S + 60)
+def test_the_uneven_load_failure_module_passes_on_two_ranks(release_metal_env, skip_if_host_too_small):
+    """The test_dcp_multirank_uneven_failure module: its load leaves the two ranks' device allocations out of step, so
+    it runs in a tt-run world of its own, where nothing runs after it."""
+    skip_if_host_too_small((4,), "the uneven-failure module")
+    release_metal_env()
+    mgd = os.path.join(os.environ.get("TT_METAL_HOME", os.getcwd()), DUAL_RANK_MGD)
+    _run_module_on_two_ranks("test_dcp_multirank_uneven_failure.py", mgd, dict(os.environ))
 
 
 def test_non_finite_values_fail_the_comparison_on_either_side():
