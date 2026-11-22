@@ -82,6 +82,11 @@ void RemoteCompileCoordinator::submit(
     }
 }
 
+void RemoteCompileCoordinator::forget(std::size_t kernel_hash) {
+    std::lock_guard lock(s_dedup_mutex_);
+    s_dedup_cache_.erase(kernel_hash);
+}
+
 void RemoteCompileCoordinator::finish() {
     // Phase 1: Collect responses per endpoint, write ELFs and markers, fulfill dedup promises.
     for (std::size_t ep_idx = 0; ep_idx < pending_by_endpoint_.size(); ++ep_idx) {

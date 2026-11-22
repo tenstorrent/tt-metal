@@ -52,6 +52,7 @@ enum class EnvVarID {
     // ========================================
 
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
+    TT_METAL_CACHE_MAX_SIZE,                  // Seeds max_size in the kernel cache's tt-metal-cache.conf
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
@@ -514,6 +515,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Callers append "<build_key>/..." directly, so the directory must end in a separator.
             this->cache_dir_ = normalize_path(value, "tt-metal-cache") + "/";
             break;
+
+        // TT_METAL_CACHE_MAX_SIZE
+        // Size cap of the JIT kernel cache, e.g. 20G. The cap lives in <cache>/tt-metal-cache.conf; this
+        // variable writes it there when the file does not exist yet. When the file exists, the file wins and
+        // a different value here only logs a warning. Parsed and applied by the JIT build at init.
+        // Default: not set (the file alone decides; no file means no cap)
+        // Usage: export TT_METAL_CACHE_MAX_SIZE=20G
+        case EnvVarID::TT_METAL_CACHE_MAX_SIZE: this->cache_max_size_ = value; break;
 
         // TT_METAL_KERNEL_PATH
         // Path to kernel source files.

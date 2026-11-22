@@ -63,6 +63,7 @@
 #include "jit_build/build_cache_telemetry.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
+#include "jit_build/kernel_cache_eviction.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
@@ -417,6 +418,22 @@ KernelCompileDescriptor build_kernel_descriptor(
     return desc;
 }
 
+void build_kernel_binaries(
+    const std::shared_ptr<Kernel>& kernel,
+    IDevice* device,
+    JitBuildOptions& build_options,
+    const DeviceBuildEnv& build_env) {
+    try {
+        // With a cache cap, what the build adds to the variant directory goes into the cache's size counter.
+        track_kernel_cache_growth(build_env.build_env.get_out_kernel_root_path() + kernel->get_full_kernel_name(), [&] {
+            jit_build_genfiles_descriptors(build_env.build_env, build_options);
+            kernel->generate_binaries(device, build_options);
+        });
+    } catch (std::runtime_error& ex) {
+        TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+    }
+}
+
 // With no_wait, returns nullopt instead of waiting while another thread builds kernel_hash.
 std::optional<std::string> ensure_kernel_binaries(
     const std::shared_ptr<Kernel>& kernel,
@@ -442,14 +459,7 @@ std::optional<std::string> ensure_kernel_binaries(
         }
     }
 
-    auto build = [&] {
-        try {
-            jit_build_genfiles_descriptors(build_env.build_env, build_options);
-            kernel->generate_binaries(device, build_options);
-        } catch (std::runtime_error& ex) {
-            TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
-        }
-    };
+    auto build = [&] { build_kernel_binaries(kernel, device, build_options, build_env); };
     if (no_wait) {
         if (!jit_build_once_no_wait(kernel_hash, build)) {
             return std::nullopt;
@@ -3438,6 +3448,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
         kernel->set_full_name(kernel_path_suffix);
         build_options.set_name(kernel_path_suffix);
+        // Before the cache-hit check, so a process trimming a shared cache sees this variant as in use.
+        note_kernel_cache_dir_used(build_env.build_env.get_out_kernel_root_path() + kernel_path_suffix);
 
         return std::pair{std::move(build_options), kernel_hash};
     };
@@ -3445,9 +3457,45 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     auto load_kernel_binaries = [&](const std::shared_ptr<Kernel>& kernel,
                                     const JitBuildOptions& build_options,
                                     const std::string& binary_root) {
-        kernel->read_binaries(device, binary_root);
+        if (binary_root == build_env.build_env.get_out_kernel_root_path()) {
+            kernel_cache_race_point("load", binary_root + kernel->get_full_kernel_name());
+            // Loading writes beside the ELF too (<elf>.xip.elf); with a cache cap, that goes into the size counter.
+            track_kernel_cache_growth(
+                binary_root + kernel->get_full_kernel_name(), [&] { kernel->read_binaries(device, binary_root); });
+        } else {
+            kernel->read_binaries(device, binary_root);
+        }
         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
         Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+    };
+
+    // A process trimming a shared cache with a cap can evict a variant after this process's cache check (in this
+    // compile, or a build earlier in this process), up to while it reads the ELFs. An ELF missing before the load,
+    // or a load that fails with an ELF missing, is a cache miss: build the variant again with rebuild, once, then
+    // load it. (Checked before the load too: a load can succeed from ELFs this process read earlier, which would
+    // leave the watcher pointing at files that are gone.)
+    auto load_or_rebuild_kernel_binaries = [&](const std::shared_ptr<Kernel>& kernel,
+                                               const JitBuildOptions& build_options,
+                                               const std::string& binary_root,
+                                               const std::function<void()>& rebuild) {
+        if (binary_root == build_env.build_env.get_out_kernel_root_path()) {
+            if (kernel->binaries_exist_on_disk(device, binary_root)) {
+                try {
+                    load_kernel_binaries(kernel, build_options, binary_root);
+                    return;
+                } catch (const std::exception&) {
+                    if (kernel->binaries_exist_on_disk(device, binary_root)) {
+                        throw;
+                    }
+                }
+            }
+            log_warning(
+                tt::LogBuildKernels,
+                "Kernel {} was removed from the JIT kernel cache after its cache check; building it again",
+                kernel->get_full_kernel_name());
+            rebuild();
+        }
+        load_kernel_binaries(kernel, build_options, binary_root);
     };
 
     // Validate every kernel before starting any build: a throw after a local task launches would unwind
@@ -3468,10 +3516,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
             "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
         RemoteCompileCoordinator coordinator(
-            std::move(endpoints), extract_context_id(device), device->build_id(), build_env.build_key());
+            endpoints, extract_context_id(device), device->build_id(), build_env.build_key());
 
         static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
-        std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
+        std::vector<std::tuple<std::shared_ptr<Kernel>, JitBuildOptions, size_t>> submitted_kernels;
         // Kernels preprocess-and-shipped this run, whose reuse cache is written once the compile
         // succeeds (from the .d files left by the -E step).
         std::vector<std::shared_ptr<Kernel>> preprocessed_kernels;
@@ -3497,7 +3545,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     }
                 }
                 // Always recorded: cached kernels still need read_binaries() to load the on-disk ELF.
-                submitted_kernels.emplace_back(kernel, std::move(build_options));
+                submitted_kernels.emplace_back(kernel, std::move(build_options), kernel_hash);
             }
         }
 
@@ -3511,10 +3559,29 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         }
 
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
-        for (const auto& [kernel, build_options] : submitted_kernels) {
-            load_kernel_binaries(kernel, build_options, binary_root);
+        for (const auto& [kernel, build_options, kernel_hash] : submitted_kernels) {
+            load_or_rebuild_kernel_binaries(kernel, build_options, binary_root, [&] {
+                // The dedup cache still says this hash was compiled; compile it remotely again.
+                RemoteCompileCoordinator::forget(kernel_hash);
+                RemoteCompileCoordinator again(
+                    endpoints, extract_context_id(device), device->build_id(), build_env.build_key());
+                again.submit(kernel_hash, [&]() {
+                    generate_kernel_source_files(device, build_options, kernel);
+                    return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                });
+                again.finish();
+                if (preprocess_and_ship) {
+                    finalize_preprocess_reuse_cache(device, kernel);
+                }
+            });
         }
     } else {
+        auto load_local_kernel_binaries =
+            [&](const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, const std::string& binary_root) {
+                load_or_rebuild_kernel_binaries(kernel, build_options, binary_root, [&] {
+                    build_kernel_binaries(kernel, device, build_options, build_env);
+                });
+            };
         // Local path: parallel build via thread pool.
         std::mutex deferred_mutex;
         std::vector<std::tuple<std::shared_ptr<Kernel>, JitBuildOptions, size_t>> deferred;
@@ -3532,7 +3599,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             deferred.emplace_back(kernel, std::move(build_options), kernel_hash);
                             return;
                         }
-                        load_kernel_binaries(kernel, build_options, *binary_root);
+                        load_local_kernel_binaries(kernel, build_options, *binary_root);
                     },
                     events);
             }
@@ -3540,7 +3607,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         sync_build_steps(events);
         // Join in-progress builds only now, once this Program's tasks have released their compile workers.
         for (auto& [kernel, build_options, kernel_hash] : deferred) {
-            load_kernel_binaries(
+            load_local_kernel_binaries(
                 kernel, build_options, *ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash));
         }
     }

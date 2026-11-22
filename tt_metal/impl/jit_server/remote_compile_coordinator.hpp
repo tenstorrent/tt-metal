@@ -55,6 +55,10 @@ public:
     // make_descriptor() is invoked only by the owning caller.
     void submit(std::size_t kernel_hash, const std::function<KernelCompileDescriptor()>& make_descriptor);
 
+    // Drops kernel_hash from the dedup cache, so the next submit() compiles it again (its ELFs were removed
+    // from the local cache after it was compiled).
+    static void forget(std::size_t kernel_hash);
+
     // Collect all outstanding RPC responses, write ELF blobs to disk,
     // and wait for any dedup'd kernels to complete.
     void finish();

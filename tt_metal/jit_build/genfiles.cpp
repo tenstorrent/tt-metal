@@ -35,6 +35,7 @@
 #include <tt_stl/unreachable.hpp>
 #include "build.hpp"
 #include "hlk_desc.hpp"
+#include "kernel_cache_eviction.hpp"
 #include "jit_build/jit_build_utils.hpp"
 #include "jit_build/kernel_signature_parser.hpp"
 #include "jit_build_options.hpp"
@@ -1305,7 +1306,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
     TTZoneScopedDN(JIT, "generate_descriptors");
     TTZoneTextD(JIT, options.name.c_str(), options.name.length());
-    fs::create_directories(options.path);
+    create_kernel_cache_dir(options.path);
     generate_all_descriptors(env, options);
 }
 

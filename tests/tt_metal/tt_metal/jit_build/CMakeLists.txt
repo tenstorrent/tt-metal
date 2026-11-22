@@ -5,7 +5,14 @@ add_executable(unit_tests_jit_build ${UNIT_TESTS_JIT_BUILD_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_jit_build)
 tt_reuse_precompile_headers(unit_tests_jit_build metal_test_pch)
 
-target_link_libraries(unit_tests_jit_build PUBLIC test_metal_common_libs)
+target_link_libraries(
+    unit_tests_jit_build
+    PUBLIC
+        test_metal_common_libs
+    PRIVATE
+        capnp
+        capnp-rpc
+)
 target_include_directories(
     unit_tests_jit_build
     PRIVATE

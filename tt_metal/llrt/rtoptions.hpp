@@ -186,6 +186,7 @@ class RunTimeOptions {
 
     bool is_cache_dir_env_var_set = false;
     std::string cache_dir_;
+    std::optional<std::string> cache_max_size_;
 
     std::string logs_dir_ = (std::filesystem::current_path() / "").string();
 
@@ -500,6 +501,8 @@ public:
 
     bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
     const std::string& get_cache_dir() const;
+    // TT_METAL_CACHE_MAX_SIZE as written, unparsed; nullopt when not set.
+    const std::optional<std::string>& get_cache_max_size() const { return this->cache_max_size_; }
 
     // Returns the logs directory for generated output (dprint, watcher, profiler, etc.)
     // Uses TT_METAL_LOGS_PATH if set, otherwise defaults to current working directory
