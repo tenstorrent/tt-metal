@@ -146,6 +146,42 @@ def _is_sticks(t):
     return tuple(t.shape)[:2] == (1, 1) and t.shape[-1] == 32
 
 
+def _has_r2(dev):
+    """Does this build's indexed sparse_matmul take more (sorted, repeated) ids than groups (B2 fd5b414d4d8)? Older
+    builds reject that in validation."""
+    put = lambda t, dt, lay: ttnn.from_torch(t, dtype=dt, layout=lay, device=dev)  # noqa: E731
+    a = put(torch.ones(1, 3, 32, 32), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    w = put(torch.ones(1, 2, 32, 32), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    try:
+        out = ttnn.sparse_matmul(
+            a,
+            w,
+            sparsity=put(torch.ones(1, 1, 1, 2), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+            indices=put(
+                torch.tensor([0, 0, 1], dtype=torch.int32).view(1, 1, 1, 3), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT
+            ),
+            is_input_a_sparse=True,
+            is_input_b_sparse=True,
+            program_config=pc,
+        )
+    except RuntimeError:
+        return False
+    return bool(ttnn.to_torch(out).float().flatten()[0] == 32.0)
+
+
 def _host(t):
     return (ttnn.to_torch(t) if isinstance(t, ttnn.Tensor) else t).float()
 
@@ -298,11 +334,11 @@ class Inkling2Prefill:
         model,
         root=wcache.DEFAULT_ROOT,
         chunk=2048,
-        r3=False,
-        r2=False,
+        r3=None,
+        r2=None,
         slot_rows=64,
         group_grid=(9, 4),
-        group_ibw=(12, 18),
+        group_ibw=None,
         r3_chunks=(128, 128),
         weighted_reduce=False,
         profile=False,
@@ -311,16 +347,20 @@ class Inkling2Prefill:
         """model: a built Inkling2Model, before any Generator.capture(). chunk: max tokens per pass (a multiple of 128
         that divides 1024 or is a multiple of it); prefill(ids, chunk=...) may use any smaller valid size.
         r3: banded-bias SDPA (needs a build whose SDPA takes `rel_logits`; None: use it when it does).
-        r2: one indexed sparse_matmul call with repeated sorted expert ids (needs that build; pair with
-        group_ibw=(72, 36), whole K per block).
+        r2: one indexed sparse_matmul call with repeated sorted expert ids, weights read once per run of equal
+        ids (needs that build; None: probe for it).
         slot_rows: rows per expert slot. group_grid / group_ibw: grouped expert matmul grid and in0 block widths
-        (gate_up, down). weighted_reduce: MoE combine by attn_res_weighted_reduce_nc. profile: synchronized
-        per-section times in self.times. debug: print each application."""
+        (gate_up, down); None: whole K with r2 (the weight reuse needs it), else (12, 18).
+        weighted_reduce: MoE combine by attn_res_weighted_reduce_nc. profile: synchronized per-section times in
+        self.times. debug: print each application."""
         assert self._chunk_ok(chunk), chunk
         self.m = model
         self.device = dev = model.device
         self.chunk = chunk
         self.gm = slot_rows
+        if r2 is None:
+            r2 = _has_r2(dev)
+        self.r2 = r2
         if r3 is None:
             r3 = "rel_logits" in (ttnn.transformer.scaled_dot_product_attention.__doc__ or "")
         self.r3 = r3
@@ -353,6 +393,7 @@ class Inkling2Prefill:
         )
         self._sdpa_pc = {}
         self.group_grid = tuple(group_grid)  # 9x4: T4 decode tuning (N = 72 tiles over 36 cores)
+        group_ibw = group_ibw or ((HIDDEN // 32, INTER // 32) if r2 else (12, 18))
         self.group_ibw = {HIDDEN: group_ibw[0], INTER: group_ibw[1]}
         self.logits_cb = None
         self.wred = weighted_reduce
