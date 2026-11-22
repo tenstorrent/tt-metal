@@ -511,9 +511,16 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(
     }
 }
 
-// Whether BF16 DEST runs the generated exp kernel as one call over the whole tile.
-inline constexpr bool exp_bf16_whole_tile = false;
+}  // namespace sfpu
+}  // namespace ckernel
 
+#include "ckernel_sfpu_exp_bf16.h"
+
+namespace ckernel {
+namespace sfpu {
+
+// Whether BF16 DEST runs the generated exp kernel as one call over the whole tile.
+inline constexpr bool exp_bf16_whole_tile = true;
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -521,6 +528,13 @@ template <
     int ITERATIONS = 8,
     bool CLAMP_NEGATIVE = true>
 void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+    if constexpr (
+        !is_fp32_dest_acc_en && !APPROXIMATION_MODE && !SCALE_EN && CLAMP_NEGATIVE == true && ITERATIONS == 32) {
+        if (bf16_dest_exp()) {
+            calculate_exp_bf16<ITERATIONS>();
+            return;
+        }
+    }
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.

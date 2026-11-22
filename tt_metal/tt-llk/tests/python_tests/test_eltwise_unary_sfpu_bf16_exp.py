@@ -6,18 +6,15 @@
 import pytest
 import test_eltwise_unary_sfpu as _unary
 from helpers.bf16_sweep import bf16_exhaustive_sweep, replaced_instance_params
-from helpers.chip_architecture import ChipArchitecture
 from helpers.llk_params import ApproximationMode, DestSync, FastMode, MathOperation
 from helpers.param_config import build_param_id
 
 # (operation, approximation mode of the replaced instance, max ULP); max ULP 0 is an exact fit.
 _BF16_EXHAUSTIVE_OPS = [
-    (MathOperation.Exp, ApproximationMode.No, 1),
+    (MathOperation.Exp, ApproximationMode.No, 0),
 ]
 # Boards where the op keeps its stock kernel, which this sweep does not test.
-_BF16_STOCK_BOARDS = {
-    MathOperation.Exp: (ChipArchitecture.WORMHOLE,),
-}
+_BF16_STOCK_BOARDS = {}
 # Per board, the word stored at each special input class where the kernel returns stock's result.
 _BF16_STOCK_SPECIALS = {}
 
