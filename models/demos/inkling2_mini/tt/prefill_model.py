@@ -66,6 +66,7 @@ from models.demos.inkling2_mini.tt.fused.pf_gateout import PfGateOut
 from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, half_proj, half_scale_rows, scale_rows
 from models.demos.inkling2_mini.tt.fused.pf_rel import PfRel, skew_proj
 from models.demos.inkling2_mini.tt.fused.pf_route import PfRoute
+from models.demos.inkling2_mini.tt.fused.pf_swiglu import PfSwiglu
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, SOFTCAP, VOCAB_REAL
 from models.demos.inkling2_mini.tt.moe import INTER, NUM_EXPERTS, RMS_EPS, ROUTE_SCALE, TOP_K, softcapped_swiglu
 from models.demos.inkling2_mini.tt.residual import cache_index
@@ -431,6 +432,7 @@ class Inkling2Prefill:
         self.r3 = r3
         self.fused_glue = fused_glue
         self._pfconv = PfConv(dev) if fused_glue else None
+        self._pfswiglu = PfSwiglu(dev) if fused_glue else None  # sparse experts: slices + softcapped SwiGLU in one
         self._pfheads = PfHeads(dev) if fused_heads else None
         self._pfgate = PfGateOut(dev) if fused_heads else None
         # skewed rel bias (PfRel + scaled_dot_product_attention(rel_skewed=True)): needs a build with rel_skewed
@@ -1093,11 +1095,15 @@ class Inkling2Prefill:
         # DRAM is nearly full: free each slot buffer once read (python refs alone keep them past the next one)
         gu = self._grouped_mm(xs, lp.w_gate_up, moe, ei, 2 * INTER, HIDDEN)
         ttnn.deallocate(xs)
-        g, u = _cols(gu, 0, INTER), _cols(gu, INTER, 2 * INTER)
-        ttnn.deallocate(gu)
-        hid = softcapped_swiglu(g, u)
-        ttnn.deallocate(g)
-        ttnn.deallocate(u)
+        if self._pfswiglu is not None:
+            hid = self._pfswiglu(gu)
+            ttnn.deallocate(gu)
+        else:
+            g, u = _cols(gu, 0, INTER), _cols(gu, INTER, 2 * INTER)
+            ttnn.deallocate(gu)
+            hid = softcapped_swiglu(g, u)
+            ttnn.deallocate(g)
+            ttnn.deallocate(u)
         self._tick("moe.gate_up")
         y = self._grouped_mm(hid, lp.w_down, moe, ei, HIDDEN, INTER)
         ttnn.deallocate(hid)
