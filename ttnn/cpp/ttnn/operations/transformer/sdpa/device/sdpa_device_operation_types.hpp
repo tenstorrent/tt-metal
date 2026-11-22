@@ -34,6 +34,8 @@ struct SDPAParams {
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
     bool output_concat_heads = false;
+    // rel_logits in the skewed layout (see scaled_dot_product_attention).
+    bool rel_skewed = false;
 };
 
 struct SDPAInputs {

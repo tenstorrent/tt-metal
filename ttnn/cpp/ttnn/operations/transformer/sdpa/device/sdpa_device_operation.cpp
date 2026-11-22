@@ -538,11 +538,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         // offset >= 0, so it is checked in both offset forms.
         const auto q_rows = static_cast<uint32_t>(q.logical_shape()[-2]);
         const auto k_rows = static_cast<uint32_t>(k.logical_shape()[-2]);
-        TT_FATAL(
-            q_rows <= k_rows,
-            "windowed Q shard has {} rows, more than the K sequence length {}.",
-            q_rows,
-            k_rows);
+        TT_FATAL(q_rows <= k_rows, "windowed Q shard has {} rows, more than the K sequence length {}.", q_rows, k_rows);
         if (!tensors.windowed_q_token_offset_tensor.has_value()) {
             // Scalar form. (When the tensor is supplied it overrides the scalar on device, and its
             // per-device values cannot be validated here without a readback -- tile alignment and
@@ -619,6 +615,10 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             "rel_logits must be [B, NQH, Sq, W] with W a multiple of 32; got {} for Q {}",
             rel_shape,
             q_shape);
+        TT_FATAL(
+            !attrs.rel_skewed || rel_shape[3] >= 2 * tt::constants::TILE_WIDTH,
+            "skewed rel_logits must be [B, NQH, Sq, W + 32] with W >= 32; got {}",
+            rel_shape);
         TT_FATAL(
             q_shape[2] % tt::constants::TILE_HEIGHT == 0 && k_shape[2] % tt::constants::TILE_HEIGHT == 0 &&
                 k_shape[2] >= q_shape[2],
@@ -768,7 +768,8 @@ Tensor sdpa(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     bool output_concat_heads,
     const std::optional<Tensor>& attn_mask_block_map,
-    const std::optional<Tensor>& rel_logits) {
+    const std::optional<Tensor>& rel_logits,
+    bool rel_skewed) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -789,6 +790,7 @@ Tensor sdpa(
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
             .output_concat_heads = output_concat_heads,
+            .rel_skewed = rel_skewed,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

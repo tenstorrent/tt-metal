@@ -47,7 +47,10 @@ ttnn::Tensor scaled_dot_product_attention(
     /// Banded relative bias [B, NQH, Sq, W] bf16 ROW_MAJOR (requires is_causal, no attn_mask). Query row i sits at
     /// position i + Sk - Sq; rel_logits[b, h, i, d] is added to its logit for the key at distance d, 0 <= d < W.
     /// attention_sink may then be per query: [B or 1, NQH, Sq, 1].
-    const std::optional<ttnn::Tensor>& rel_logits = std::nullopt);
+    const std::optional<ttnn::Tensor>& rel_logits = std::nullopt,
+    /// rel_logits in the skewed layout [B, NQH, Sq, W + 32]: row i holds rel[i, d] at column W - d + (i % 32), so
+    /// the 32 rows of a mask tile read the same columns (aligned word copies instead of a reversed gather).
+    bool rel_skewed = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

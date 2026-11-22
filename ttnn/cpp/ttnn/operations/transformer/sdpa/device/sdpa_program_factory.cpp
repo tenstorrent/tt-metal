@@ -1600,7 +1600,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(kv_chain_mode);                                // arg 34
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_mask_block_map));    // arg 35
     reader_compile_time_args.push_back(kv_slots);                                     // arg 36: K/V CB depth in chunks
-    reader_compile_time_args.push_back(0);  // arg 37: fwd_done_semaphore_id placeholder
+    reader_compile_time_args.push_back(0);          // arg 37: fwd_done_semaphore_id placeholder
     reader_compile_time_args.push_back(kv_retain);  // arg 38: K/V retention, Q heads per retention key (0 = off)
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1735,7 +1735,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         // Reader-only: band width W, query row 0's position (Sk - Sq), row bytes of the scratch, and a per-query sink.
         const auto& rel_shape = tensor_args.rel_logits->logical_shape();
         defines_map["SDPA_REL_BIAS"] = "1";
-        defines_map["SDPA_REL_W"] = std::to_string(rel_shape[3]);
+        const bool skewed = operation_attributes.rel_skewed;
+        defines_map["SDPA_REL_W"] = std::to_string(rel_shape[3] - (skewed ? TILE_WIDTH : 0));
+        if (skewed) {
+            defines_map["SDPA_REL_SKEW"] = "1";
+        }
         defines_map["SDPA_REL_Q_OFF"] = std::to_string(k_shape[2] - q_shape[2]);
         defines_map["SDPA_REL_ROW_BYTES"] = std::to_string(rel_row_bytes);
         if (attention_sink.has_value() && attention_sink->logical_shape()[2] == q_shape[2]) {

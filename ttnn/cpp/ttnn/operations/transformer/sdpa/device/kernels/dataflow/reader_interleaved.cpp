@@ -97,6 +97,13 @@ FORCE_INLINE void rel_read_rows(
             row_base[r] = 0;
             continue;
         }
+#ifdef SDPA_REL_SKEW
+        // Skewed rows: d sits at column W - d + r, so columns [W - hi + r, W - lo + r] (the same for every row).
+        const int32_t c_lo = static_cast<int32_t>(kRelW) - hi + static_cast<int32_t>(r);
+        const int32_t c_hi = static_cast<int32_t>(kRelW) - lo + static_cast<int32_t>(r);
+        lo = c_lo;
+        hi = c_hi;
+#endif
         const uint32_t a_lo = (static_cast<uint32_t>(lo) * 2) & ~63u;
         const uint32_t a_hi = (static_cast<uint32_t>(hi) * 2 + 2 + 63) & ~63u;
         row_base[r] = a_lo / 2;
@@ -132,6 +139,35 @@ FORCE_INLINE void rel_fill_tile(
     // The scratch rows were written by the NoC (after a read barrier) and the tile is pushed to compute next: keep the
     // compiler from moving the plain loads and stores below across either.
     asm volatile("" ::: "memory");
+#ifdef SDPA_REL_SKEW
+    if (interior) {
+        // Every element is a bias value: row r, column c is column W - D0 + c of the skewed row, a forward run of
+        // 32 at the same column for every row. Word copies when that run starts on an even element.
+        const int32_t y0 = static_cast<int32_t>(kRelW) - D0;
+        for (uint32_t r = 0; r < 32; ++r) {
+            const int32_t e = y0 - static_cast<int32_t>(row_base[r]);  // element of c = 0 in the scratch row
+            const tt_l1_ptr uint32_t* src = reinterpret_cast<const tt_l1_ptr uint32_t*>(scratch + r * kRelRowBytes);
+            tt_l1_ptr uint32_t* dst = reinterpret_cast<tt_l1_ptr uint32_t*>(tile) + (r >> 4) * 256 + (r & 15) * 8;
+            const int32_t k = e >> 1;
+            if (e & 1) {
+                uint32_t a = src[k];
+#pragma GCC unroll 16
+                for (int32_t w = 0; w < 16; ++w) {
+                    const uint32_t b = src[k + w + 1];
+                    dst[(w >> 3) * 128 + (w & 7)] = (a >> 16) | (b << 16);
+                    a = b;
+                }
+            } else {
+#pragma GCC unroll 16
+                for (int32_t w = 0; w < 16; ++w) {
+                    dst[(w >> 3) * 128 + (w & 7)] = src[k + w];
+                }
+            }
+        }
+        asm volatile("" ::: "memory");
+        return;
+    }
+#else
     if (interior) {
         // Every element is a bias value: row r, column c is element D - c of the row, a reversed run of 32. Build
         // each 32-bit pair (c even in the low half) from at most one new word load.
@@ -159,6 +195,7 @@ FORCE_INLINE void rel_fill_tile(
         asm volatile("" ::: "memory");
         return;
     }
+#endif
     for (uint32_t r = 0; r < 32; ++r) {
         const int32_t D = D0 + static_cast<int32_t>(r);  // d at column c is D - c
         const tt_l1_ptr uint16_t* src =
@@ -172,7 +209,11 @@ FORCE_INLINE void rel_fill_tile(
             } else if (d >= static_cast<int32_t>(kRelW)) {
                 v = 0;
             } else {
+#ifdef SDPA_REL_SKEW
+                v = src[static_cast<int32_t>(kRelW) - d + static_cast<int32_t>(r)];
+#else
                 v = src[d];
+#endif
             }
             dst[(c >> 4) * 256 + (c & 15)] = v;
         }
