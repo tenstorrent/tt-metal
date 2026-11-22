@@ -160,8 +160,14 @@ constexpr bool any_first_level_ack_channel = [] {
 
 // The remote sender channel that sent a packet. In Tensix mux mode the remote router sends everything from its worker
 // channel and leaves the header field as the previous hop wrote it, so the field is not used.
+// A router with one sender channel credits only remote sender channel 0: the credit counts are indexed by the header's
+// source channel and sized by this router's sender channels (ReceiverChannelCounterBasedResponseCreditSender), so 0 is
+// the only source a remote router may name (a neighbor-exchange fabric: every router has its worker channel only).
+// Its slots then need no per-slot source record.
+constexpr bool single_source = NUM_SENDER_CHANNELS == 1;
+
 FORCE_INLINE uint8_t source_channel(uint8_t header_src_ch_id) {
-    if constexpr (skip_src_ch_id_update) {
+    if constexpr (skip_src_ch_id_update || single_source) {
         return 0;
     } else {
         return header_src_ch_id;
@@ -362,7 +368,9 @@ FORCE_INLINE bool accumulate_first_level_acks(ReceiverChannelProgress& progress,
 // its packets-received count (already done at the ack under first-level acks), move on.
 template <size_t VC>
 FORCE_INLINE void retire(ReceiverChannelProgress& progress, SlotSourcesOf<VC>& sources, uint8_t source) {
-    sources.set(progress.next_index, source);
+    if constexpr (!single_source) {
+        sources.set(progress.next_index, source);
+    }
     progress.uncredited++;
     if constexpr (trailer_arrival) {
         // The next slot's trailer is the next seq.
@@ -708,7 +716,9 @@ slots_due_for_credit(ReceiverChannelProgress& progress, uint32_t next_index, boo
 template <uint32_t GROUP_SIZE, uint32_t NUM_SLOTS, typename CreditSender>
 FORCE_INLINE void accumulate_completion_credits(
     const SlotSources<NUM_SLOTS>& sources, uint32_t first, uint32_t count, CreditSender& credits) {
-    if constexpr (GROUP_SIZE == 1) {
+    if constexpr (single_source) {
+        credits.accumulate_completion_credit(0, count);
+    } else if constexpr (GROUP_SIZE == 1) {
         credits.accumulate_completion_credit(static_cast<uint8_t>(sources.source_of(first)), 1);
     } else {
         // All from one sender channel: every byte of `group` equals the first.
