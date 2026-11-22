@@ -1010,7 +1010,8 @@ def test_chain_vs_trace_scores_hand_made_differences_incrementally(tmp_path: Pat
     layer-1 set loses its FP64 rank-1 expert (recall 1/2, that expert's weight dropped, miss rank 1), the index key is
     twice the FP64 one (PCC 1, NRMSE exactly 1), row 7's selection loses the FP64 best key (recall 5/6, miss rank 0,
     spread share 1); everything else is exact (KV PCC 1, recall 1). Scoring with two of three segments landed and
-    then all three reuses the cached segments; a score directory of another chain is refused."""
+    then all three reuses the cached segments; each trend's worst follows its metric's direction; the FP64 cut gap;
+    a score directory of another chain, or of the same chain path at another producer version, is refused."""
     from models.demos.deepseek_v3_d_p.tests.kimi_k3 import chain_vs_trace, fp64_chain
 
     model, _ = _tiny_chain()
@@ -1019,7 +1020,17 @@ def test_chain_vs_trace_scores_hand_made_differences_incrementally(tmp_path: Pat
     with torch.no_grad():
         fp64_chain.run_chain(run_dir=chain, model=model, token_ids=ids, segment=4, sampled=[3, 9], identity={})
     p = fp64_chain.load_products(
-        chain, ["routing_ids_1", "routing_weights_1", "routing_ids_2", "latent", "kpe", "index_key", "topk_indices_3"]
+        chain,
+        [
+            "routing_ids_1",
+            "routing_weights_1",
+            "routing_ids_2",
+            "latent",
+            "kpe",
+            "index_key",
+            "topk_indices_3",
+            "topk_scores_3",
+        ],
     )
     r1 = p["routing_ids_1"].clone()
     spare = next(e for e in range(6) if e not in r1[2].tolist())
@@ -1058,6 +1069,23 @@ def test_chain_vs_trace_scores_hand_made_differences_incrementally(tmp_path: Pat
     assert o["topk_miss_share_median"] == pytest.approx(0.99)
     assert o["routing_3_sampled_rows"] == 0  # (the chain ran without trace checks, so it recorded none)
     assert s["trend"]["routing_1_recall_mean"]["worst_at"] == 0
+    # worst follows each metric's direction: a smaller miss rank is worse; FP64 margins have no worst
+    d = chain_vs_trace.direction
+    assert d("topk_miss_rank_median") == d("routing_2_miss_rank_median") == d("latent_pcc") == -1
+    assert d("routing_2_dropped_p99") == d("index_key_nrmse") == d("topk_miss_top_half_fraction") == 1
+    assert d("routing_1_margin_median_all") is None and d("topk_cut_gap_median") is None
+    assert "routing_1_margin_median_all" in s["trend"] and "worst" not in s["trend"]["routing_1_margin_median_all"]
+    # the cut gap: FP64 score at rank k-1-min(100, k-1) minus the cut (here k = 6: the top minus the 6th)
+    full = torch.arange(10) >= topk.shape[1] - 1
+    ordered = p["topk_scores_3"][full].double().sort(dim=1, descending=True).values
+    assert o["topk_cut_gap_median"] == pytest.approx(float((ordered[:, 0] - ordered[:, -1]).float().median()))
+    identity = json.loads((out / "identity.json").read_text())
+    assert identity["scorer_version"] == chain_vs_trace.SCORER_VERSION and identity["chain_producer_version"] == 2
+    # a chain rebuilt at the same path by another producer version is not mixed with its cached scores
+    (chain / MANIFEST).write_text(json.dumps({**manifest, "producer_version": 99}))
+    with expect_error(ValueError, "another chain or trace"):
+        chain_vs_trace.score_landed(chain, trace, out)
+    (chain / MANIFEST).write_text(json.dumps(manifest))
     (out / "identity.json").write_text(json.dumps({"chain": "another"}))
     with expect_error(ValueError, "another chain or trace"):
         chain_vs_trace.score_landed(chain, trace, out)

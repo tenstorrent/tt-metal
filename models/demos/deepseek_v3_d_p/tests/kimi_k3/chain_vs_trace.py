@@ -18,7 +18,16 @@ Measures, GPU (trace) against FP64 (chain):
 * DSA layer 3 keys: KV latent, k_pe and index key PCC and NRMSE per window (exact, from per-row sums).
 * DSA layer 3 top-2048 (rows with a full selection, row >= 2047): recall of the FP64 selection, and each missed
   key's rank in the FP64 order and its spread share ``(score - cut) / (top - cut)`` in FP64 scores (near 0: a near-tie
-  at the cut), as histograms so windows combine exactly.
+  at the cut), as histograms so windows combine exactly. And the FP64 cut density, the score gap between FP64
+  ranks k-1-``CUT_GAP_RANKS`` and k-1 (median per window): a smaller gap means the same score error swaps more keys
+  across the cut, so recall falls with context even at constant key error (review r1 m4). It is a property of FP64
+  alone, not of the GPU.
+
+Each metric's ``trend`` gives first, last and last over first; ``worst`` (and where) only for metrics with a
+direction (``DIRECTION``), the others (FP64 properties: margins, the cut gap) have none.
+
+The score directory records the chain's identity (path, producer version, model digest, token digest), the trace and
+``SCORER_VERSION``, and refuses to mix scores of another; bump ``SCORER_VERSION`` when a per-segment measure changes.
 
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace --chain G --trace T --out S
 """
@@ -26,6 +35,7 @@ Measures, GPU (trace) against FP64 (chain):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -38,6 +48,32 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, misse
 
 SHARE_BINS = 100  # spread-share histogram bins over [0, 1]
 KEYS = ("latent", "kpe", "index_key")
+CUT_GAP_RANKS = 100  # the cut density: FP64 score gap between ranks k-1-CUT_GAP_RANKS and k-1 (from rank 0 if k <= 100)
+SCORER_VERSION = 2  # 2: the cut gap
+# Which way is worse, by metric-name suffix: +1 larger is worse, -1 smaller is worse. A missed key or expert ranked
+# deeper (larger rank) is nearer the cut, so smaller ranks are worse. Metrics with no entry (FP64 margins and cut
+# gap) get no "worst" in the trend.
+DIRECTION = {
+    "recall_mean": -1,
+    "recall_p01": -1,
+    "set_equal": -1,
+    "pcc": -1,
+    "nrmse": +1,
+    "dropped_mean": +1,
+    "dropped_p99": +1,
+    "miss_rank_median": -1,
+    "miss_rank_p10": -1,
+    "miss_top_half_fraction": +1,
+    "misses_per_row": +1,
+    "miss_share_median": +1,
+    "miss_share_p90": +1,
+}
+
+
+def direction(key: str) -> int | None:
+    """``DIRECTION`` of metric ``key`` (the longest matching suffix), or None."""
+    hits = [s for s in DIRECTION if key.endswith(s)]
+    return DIRECTION[max(hits, key=len)] if hits else None
 
 
 def key_sums(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
@@ -90,8 +126,11 @@ def score_segment(chain: Path, index: int, trace: Trace, checks: dict) -> dict:
     topk = want.shape[1]
     full = torch.arange(lo, hi) >= topk - 1  # rows with a full selection on both sides
     recall = topk_recall(got, want)
-    m = missed_keys(got[full], want[full], seg["topk_scores_3"][full].double())
+    scores = seg["topk_scores_3"][full].double()
+    m = missed_keys(got[full], want[full], scores)
+    ordered = scores.sort(dim=1, descending=True).values
     out["topk"] = {
+        "cut_gap": (ordered[:, topk - 1 - min(CUT_GAP_RANKS, topk - 1)] - ordered[:, topk - 1]).float(),
         "recall": recall.float(),
         "full": full,
         "miss_rank_hist": torch.bincount(m["rank"], minlength=topk),
@@ -108,7 +147,14 @@ def score_landed(chain: Path, trace: Trace, out: Path, log=print) -> list[dict]:
     """Score (or read from ``out``'s cache) every segment the chain's manifest lists as complete."""
     manifest = json.loads((chain / MANIFEST).read_text())
     out.mkdir(parents=True, exist_ok=True)
-    identity = {"chain": str(chain), "chain_token_ids_sha256": manifest["token_ids_sha256"], "trace": str(trace.path)}
+    identity = {
+        "chain": str(chain),
+        "chain_producer_version": manifest["producer_version"],
+        "chain_model_sha256": hashlib.sha256(json.dumps(manifest["model"], sort_keys=True).encode()).hexdigest(),
+        "chain_token_ids_sha256": manifest["token_ids_sha256"],
+        "trace": str(trace.path),
+        "scorer_version": SCORER_VERSION,
+    }
     id_path = out / "identity.json"
     if id_path.is_file() and json.loads(id_path.read_text()) != identity:
         raise ValueError(f"{out} holds scores of another chain or trace: {json.loads(id_path.read_text())}")
@@ -184,6 +230,8 @@ def summarize(results: list[dict], window: int) -> dict:
         )
         m["topk_miss_share_median"] = _hist_quantile(share, 0.5, 1 / SHARE_BINS)
         m["topk_miss_share_p90"] = _hist_quantile(share, 0.9, 1 / SHARE_BINS)
+        gap = torch.cat([r["topk"]["cut_gap"] for r in rs])
+        m["topk_cut_gap_median"] = float(gap.median()) if gap.numel() else float("nan")
         return m
 
     windows = [measures(g) for g in groups]
@@ -195,14 +243,11 @@ def summarize(results: list[dict], window: int) -> dict:
         if len(values) < 2:
             continue
         first, last = values[0][0], values[-1][0]
-        worst = max(values) if "recall" not in key and "pcc" not in key and "set_equal" not in key else min(values)
-        trend[key] = {
-            "first": first,
-            "last": last,
-            "last_over_first": last / first if first else float("nan"),
-            "worst": worst[0],
-            "worst_at": worst[1],
-        }
+        trend[key] = {"first": first, "last": last, "last_over_first": last / first if first else float("nan")}
+        sign = direction(key)
+        if sign is not None:
+            worst = max(values, key=lambda v: sign * v[0])
+            trend[key].update(worst=worst[0], worst_at=worst[1])
     return {
         "count": count,
         "window": window,
