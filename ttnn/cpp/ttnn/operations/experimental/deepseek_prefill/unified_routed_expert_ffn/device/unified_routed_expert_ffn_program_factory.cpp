@@ -181,11 +181,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // This expert's M (not x's allocated M): x may be a shared buffer wider
     // than one expert's region. K still comes from x's last dim (emb).
     const uint32_t M_tiles_full = op.m_tiles;
-    const uint32_t K_gate_tiles = x_shape[-1] / TILE;          // = N_gate K = emb / TILE
+    const uint32_t K_gate_tiles = x_shape[-1] / TILE;  // = N_gate K = emb / TILE
     // Stacked experts: gate_projs[0] is the whole [.., E, K, 2*hidden] gate_up tensor (gate = left half).
     const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE / (op.stacked_experts ? 2 : 1);  // = hidden / TILE
-    const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
-    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
+    const uint32_t K_down_tiles = down_shape[-2] / TILE;                                      // = hidden / TILE
+    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;                                 // = emb / TILE
 
     // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
     // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
@@ -331,7 +331,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // Precise mode (compute_kernel_config.fp32_dest_acc_en): fp32 DEST and K-loop partials, bf16 activations and
     // intermediates. Default: bf16 DEST, bf16 partials, bf8_b activations / intermediates.
     const bool kFp32DestAccEn = op.precise;
-    const uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
+    // Precise mode on a down width with no divisor in 3..4 (e.g. per_core_N_d = 7) would fall to 1x1 down subblocks
+    // (28% of op time, see below): use the full 8-tile fp32 DST (no math / pack overlap) so the exact 1x7 fits.
+    const bool kFullSync = kFp32DestAccEn && per_core_N_d % 4 != 0 && per_core_N_d % 3 != 0 && per_core_N_d <= 8;
+    const uint32_t DST_CAPACITY = (kFp32DestAccEn && !kFullSync) ? 4u : 8u;
     const uint32_t gu_out_subblock_h = 1;
     uint32_t gu_sub_w = 1;
     for (uint32_t cand = DST_CAPACITY; cand >= 1; --cand) {
@@ -1264,7 +1267,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
         .fp32_dest_acc_en = kFp32DestAccEn,
-        .dst_full_sync_en = false,
+        .dst_full_sync_en = kFullSync,
         .math_approx_mode = false,
     };
 
