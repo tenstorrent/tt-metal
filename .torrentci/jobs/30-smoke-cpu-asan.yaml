@@ -3,7 +3,8 @@
 # product tt-metalium, test-category pr_gate; the github_hosted_cpu entry in
 # tests/pipeline_reorg/runtime_validation_pr_gate_tests.yaml): the host-only
 # CPU_* cases of tt-metalium-validation-smoke against asan-build's packages.
-# No Tenstorrent device: TT_METAL_MOCK_CLUSTER_DESC_PATH keeps MetalContext
+# No Tenstorrent device: TT_METAL_MOCK_CLUSTER_DESC_PATH (found under the
+# installed UMD tree, whose layout moves between UMD bumps) keeps MetalContext
 # in mock mode, as on the GitHub-hosted runner.
 #
 # `packages` puts the job on TorrentCI's VM path (torrentci#1849): the
@@ -45,8 +46,6 @@ jobs:
       - {name: TT_LOGGER_LEVEL, value: warn}
       - {name: TT_METAL_RUNTIME_ROOT, value: /usr/libexec/tt-metalium}
       - {name: LSAN_OPTIONS, value: "suppressions=/usr/share/tt-metalium/lsan.supp"}
-      - name: TT_METAL_MOCK_CLUSTER_DESC_PATH
-        value: /usr/libexec/tt-metalium/tt_metal/third_party/umd/tests/cluster_descriptor_examples/wormhole_N150.yaml
     steps:
       - id: smoke-cpu
         kind: shell
@@ -56,6 +55,10 @@ jobs:
             # platform writes one.
             - cat .torrentci/packages.json 2>/dev/null || true
             - dpkg -s tt-metalium tt-metalium-validation | grep -e '^Package' -e '^Version'
-            - test -f "$TT_METAL_MOCK_CLUSTER_DESC_PATH"
             - mkdir -p test-reports
-            - tt-metalium-validation-smoke --gtest_filter='*CPU_*' --gtest_output=xml:test-reports/
+            - >-
+              TT_METAL_MOCK_CLUSTER_DESC_PATH=$(find /usr/libexec/tt-metalium/tt_metal/third_party/umd
+              -path '*/cluster_descriptor_examples/wormhole_N150.yaml' -print -quit)
+              && echo "mock cluster: $TT_METAL_MOCK_CLUSTER_DESC_PATH"
+              && test -f "$TT_METAL_MOCK_CLUSTER_DESC_PATH" && export TT_METAL_MOCK_CLUSTER_DESC_PATH
+              && tt-metalium-validation-smoke --gtest_filter='*CPU_*' --gtest_output=xml:test-reports/

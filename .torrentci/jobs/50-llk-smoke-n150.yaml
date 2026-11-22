@@ -16,6 +16,8 @@
 #   used to exhaust the runner's event budget (torrentci#2321).
 # The two pytest-split groups run as separate jobs on two cards, as on GitHub.
 # Run them by hand.
+# Memory 32 GiB: at 24 GiB the suite on 2026-11-21 main peaked at 23.1-23.5 GB
+# anon and xdist workers were killed (21.3 GB on 11-18).
 jobs:
 - id: llk-smoke-n150-g1
   description: Run PR Gate LLK smoke tests group 1/2 on one n150 (VM path, vfio-vm)
@@ -27,8 +29,8 @@ jobs:
       image: {from-job: ci-build-image, image: ci-build}
       accelerator: {type: n150, count: 1}
       resources:
-        requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
-        limits: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
+        requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+        limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
   env:
   - {name: HOME, value: /tmp/home}
   - {name: CHIP_ARCH, value: wormhole}
@@ -57,8 +59,8 @@ jobs:
       image: {from-job: ci-build-image, image: ci-build}
       accelerator: {type: n150, count: 1}
       resources:
-        requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
-        limits: {cpu: '16', memory: 24Gi, ephemeral-storage: 30Gi}
+        requests: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
+        limits: {cpu: '16', memory: 32Gi, ephemeral-storage: 30Gi}
   env:
   - {name: HOME, value: /tmp/home}
   - {name: CHIP_ARCH, value: wormhole}
