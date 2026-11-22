@@ -235,13 +235,17 @@ void kernel_main() {
     // (kBatched) state write-back i (user r) to DRAM. A write-back is acked lazily (before the next one is issued, so
     // its latency stays off compute's path): sem_state counts the landed ones for the reader, which re-reads a copy's
     // state only after its write-back; eager when the reader's next state may be the one just written (copies x n = 1).
-    const bool eager = copies * n <= 1 || verify;
+    // (verify rows: sem_state is only the chain's — the next row copies this state from L1 as soon as it is packed,
+    // its DRAM write-back (the slot, re-read only by the next step) flushed before the pop and barriered at the end)
+    const bool eager = copies * n <= 1 && !kVRows;
     uint32_t landed = 0;
     auto write_state = [&](uint32_t i, uint32_t r) {
         const uint32_t slot = kVRows ? (r / batch) * batch + (cur + r % batch) % batch : r;
         const uint32_t first = ((i / n % copies * num_heads + head) * kUsers + slot) * st;
         cb_wait_front(cb_s_new_out, st);
-        if (landed < i) {
+        if constexpr (kVRows) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_state)) = i + 1;
+        } else if (landed < i) {
             noc_async_write_barrier();
             landed = i;
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_state)) = landed;
