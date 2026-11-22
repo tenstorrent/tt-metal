@@ -331,63 +331,63 @@
           "@2k": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.05
+            "chunk_time_ms": 0.1
           },
           "@50k": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.05
+            "chunk_time_ms": 0.1
           },
           "@100k": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.05
+            "chunk_time_ms": 0.1
           },
           "@252k": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.05
+            "chunk_time_ms": 0.1
           },
           "@512k": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.05
+            "chunk_time_ms": 0.1
           },
           "@1M": {
             "throughput_tok_s": 0.05,
             "ttft_s": 0.05,
-            "chunk_time_ms": 0.05
+            "chunk_time_ms": 0.1
           }
         },
         "8kw": {
           "@2k": {
-            "throughput_tok_s": 33065,
-            "chunk_time_ms": 527
+            "throughput_tok_s": 32849,
+            "chunk_time_ms": 529
           },
           "@50k": {
-            "throughput_tok_s": 33926,
+            "throughput_tok_s": 33866,
             "ttft_s": 1.97,
-            "chunk_time_ms": 621
+            "chunk_time_ms": 615
           },
           "@100k": {
-            "throughput_tok_s": 33318,
-            "ttft_s": 3.48,
-            "chunk_time_ms": 681
+            "throughput_tok_s": 32993,
+            "ttft_s": 3.51,
+            "chunk_time_ms": 658
           },
           "@252k": {
-            "throughput_tok_s": 32025,
-            "ttft_s": 8.25,
-            "chunk_time_ms": 763
+            "throughput_tok_s": 31197,
+            "ttft_s": 8.37,
+            "chunk_time_ms": 765
           },
           "@512k": {
-            "throughput_tok_s": 28603,
-            "ttft_s": 17.08,
-            "chunk_time_ms": 824
+            "throughput_tok_s": 27919,
+            "ttft_s": 17.4,
+            "chunk_time_ms": 855
           },
           "@1M": {
-            "throughput_tok_s": 23548,
-            "ttft_s": 37.45,
-            "chunk_time_ms": 868
+            "throughput_tok_s": 23022,
+            "ttft_s": 38.2,
+            "chunk_time_ms": 921
           }
         }
       },
