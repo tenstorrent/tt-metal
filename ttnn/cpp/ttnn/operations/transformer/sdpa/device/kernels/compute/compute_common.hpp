@@ -422,8 +422,12 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
 #else
     constexpr bool approx_exp = EXP_APPROX_MODE || vector_mode != VectorMode::RC;
 #endif
+    // scale 1.0 (q pre-scaled): x * 1.0 == x, so the accurate branch skips the multiply and its per-tile re-init
+    constexpr bool unit_scale = scale_fp32 == 0x3F800000;
     if constexpr (approx_exp) {
         exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+    } else if constexpr (unit_scale) {
+        exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
     }
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
@@ -459,9 +463,11 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                     // Apply the full FP32 attention scale once before accurate exponentiation.
                     // The init scale 0x3F800000 is the IEEE-754 encoding of 1.0f.
                     // Negative clamping protects masked/large-negative scores in accurate BF16 exp.
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(j, scale_fp32);
-                    exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
+                    if constexpr (!unit_scale) {
+                        binop_with_scalar_tile_init();
+                        mul_unary_tile(j, scale_fp32);
+                        exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
+                    }
                     exp_tile<false, false, InputClamping::ClampToNegative, iterations>(j, vector_mode_exp);
                 }
             }
