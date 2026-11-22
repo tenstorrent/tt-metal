@@ -22,10 +22,12 @@ Weights come as host tensors in the weight-cache contract (design.md §4).
 """
 
 import math
+import os
 
 import torch
 
 import ttnn
+from models.demos.inkling2_mini.tt.fused.bank_linear import BankLinear
 
 HIDDEN = 2304
 N_HEADS = 24
@@ -111,6 +113,11 @@ class DecodePositions:
         self.ring = inp["ring"]
 
 
+# Projections (w_all, w_o) as one bank-streamed program each, bit-equal to the DRAM-sharded matmul;
+# INKLING_PROJ_BANK=0: the ttnn.linear path (A/B runs).
+PROJ_BANK = os.environ.get("INKLING_PROJ_BANK", "1") != "0"
+
+
 class _DramShardedLinear:
     """Decode linear [32, K] x [K, N] with the weight width-sharded over the DRAM banks (one row tile of
     activations). Two pipelined readers per bank: 2304x6560 70 -> 45 us, 3072x2304 70 -> 24 us (traced)."""
@@ -130,8 +137,19 @@ class _DramShardedLinear:
             ttnn.ShardSpec(grid, (k, bank_w), ttnn.ShardOrientation.ROW_MAJOR),
         )
         self.n = n if trim and bank_w * banks != n else None
-        w = torch.nn.functional.pad(w, (0, bank_w * banks - n)).view(1, 1, k, -1)
-        self.weight = ttnn.from_torch(w, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        self.bank = None
+        if PROJ_BANK:  # same output bit for bit, one bank-streamed program (tt/fused/bank_linear.py), DRAM out
+            ckc = ttnn.init_device_compute_kernel_config(
+                device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False,
+                fp32_dest_acc_en=True, packer_l1_acc=True,
+            )  # fmt: skip
+            self.bank = BankLinear(device, w, dtype, bank_w * banks, kb=2, cores_per_bank=self.READERS,
+                                   compute_kernel_config=ckc, out_cols=n if trim else bank_w * banks,
+                                   out_dtype=ttnn.bfloat16)  # fmt: skip
+            self.bank_ckc = ckc
+        else:
+            w = torch.nn.functional.pad(w, (0, bank_w * banks - n)).view(1, 1, k, -1)
+            self.weight = ttnn.from_torch(w, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
         assert k % (32 * self.CORES) == 0, k
         self.act_mem = ttnn.create_sharded_memory_config(
             (32, k // self.CORES),
@@ -150,6 +168,11 @@ class _DramShardedLinear:
         self.cfg.use_multicore_pipeline = True
 
     def __call__(self, x, dtype, ckc, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        if self.bank is not None and dtype == ttnn.bfloat16 and memory_config == ttnn.DRAM_MEMORY_CONFIG:
+            assert ckc.math_fidelity == self.bank_ckc.math_fidelity and ckc.fp32_dest_acc_en, ckc
+            assert x.shape[-2] <= 32, x.shape  # one tile row (decode)
+            return self.bank(x)
+        assert self.bank is None, "bank-streamed projection: bf16 DRAM output only"
         y = ttnn.linear(
             x if x.is_sharded() else ttnn.to_memory_config(x, self.act_mem),  # sharded: already in act_mem
             self.weight,
