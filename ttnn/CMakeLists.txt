@@ -98,9 +98,8 @@ add_library(TTNN::Core ALIAS ttnn_core)
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
-# These declare ttnn::experimental and include tt-metalium/experimental/command_list.hpp, which declares
-# tt::tt_metal::experimental::detail. Either changes unqualified `experimental::` / `detail::` lookup in files that
-# share a unity translation unit with them.
+# These include tt-metalium/experimental/command_list.hpp, which declares tt::tt_metal::experimental::detail. That
+# changes unqualified `detail::` lookup in files that share a unity translation unit with them.
 set_source_files_properties(
     core/command_list.cpp
     cpp/ttnn-nanobind/operations/command_list.cpp

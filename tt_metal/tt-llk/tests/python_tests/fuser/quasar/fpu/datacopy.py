@@ -11,6 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.datacopy import datacopy_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
+from fuser.quasar.fpu.common import configure_alu_cfg
 
 
 class DatacopyFpu(Fpu):
@@ -32,8 +33,10 @@ class DatacopyFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        # Metal's datacopy init programs the ALU before the unpack-to-dest guard.
+        alu_cfg = configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT")
         if compute_unit.unpack_to_dest.value:
-            return ""
+            return alu_cfg
 
         stage = operation.stage_id
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
@@ -43,7 +46,7 @@ class DatacopyFpu(Fpu):
         en_32bit_dest = config.dest_acc.cpp_enum_value
         num_matrices = block.block_cols
 
-        return (
+        return alu_cfg + (
             f"// Operation {stage}: Datacopy FPU\n"
             f"_llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {en_32bit_dest}>"
             f"({num_rows_per_matrix}, {num_matrices});\n"

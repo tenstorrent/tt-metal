@@ -805,6 +805,13 @@ MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::create_program_artifacts
     TT_FATAL(per_core_M == M, "For batch sharding, per_core_M ({}) must equal M ({})", per_core_M, M);
     TT_FATAL(per_core_N == N, "For batch sharding, per_core_N ({}) must equal N ({})", per_core_N, N);
     TT_FATAL(K % in0_block_w == 0, "K ({}) must be divisible by in0_block_w ({})", K, in0_block_w);
+    // The in0 reader takes each K block as one contiguous run of the row-major shard.
+    TT_FATAL(
+        per_core_M == 1 || in0_block_w == K,
+        "For batch sharding with per_core_M ({}) > 1, in0_block_w ({}) must equal K ({})",
+        per_core_M,
+        in0_block_w,
+        K);
 
     return reuse_batched_hs_dram_sharded_optimized_helpers::create_program_batch_sharded_spec(
         device,

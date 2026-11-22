@@ -26,14 +26,17 @@ struct RelayAffinePrefixOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-std::tuple<Tensor, Tensor> relay_affine_prefix(
+std::tuple<Tensor, Tensor, Tensor> relay_affine_prefix(
     const Tensor& packed,
     const Tensor& initial_state,
+    const Tensor& final_e,
+    const Tensor& final_b,
     const Tensor& actual_start,
+    const std::optional<Tensor>& actual_end,
     const Tensor& landing,
     const tt::tt_metal::MemoryConfig& entry_memory_config,
     const DeviceComputeKernelConfig&,
-    const std::array<uint32_t, 2>& semaphore_addresses,
+    const std::array<uint32_t, 3>& semaphore_addresses,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
