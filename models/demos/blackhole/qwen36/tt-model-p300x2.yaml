@@ -126,6 +126,10 @@ serve_profiles:
       # the rows build's core split: 28 attention workers, 4 GDN head groups
       RESIDENT_ATTN_WORKERS: "28"
       RESIDENT_HEAD_GROUPS: "4"
+      # prefix caching in host memory (GB; 0 = off): a prompt's state at its last 1,024-token boundary (GDN states,
+      # conv history, KV) is kept in host RAM, and a later prompt that starts with it (the next turn of a conversation,
+      # a re-sent document) restores it instead of prefilling it; LRU within the budget
+      RESIDENT_PREFIX_CACHE_GB: "32"
     additional_config:
       tt:                                # deep-merged over serve.additional_config.tt
         prefill_chunk_tokens: 1024       # the TT chunk core: a prompt over the gang cap splits into 1024-token spans
@@ -137,7 +141,7 @@ card:
   description: >-
     [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) on a P300x2 (4 Blackhole chips) with vLLM, on the
     resident decode engine: one persistent program per chip per decode step. Profiles: 1 to 32 users in one decode
-    launch with a shared KV pool (the default), and one user with lossless
+    launch with a shared KV pool and prefix caching in host memory (the default), and one user with lossless
     [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding (up to 256K context).
   quickstart: |
     ### At a glance
@@ -249,6 +253,11 @@ card:
     (median 1343 MHz, at most 61 °C). `single-user` decode speed follows how predictable the text is (DFlash2
     acceptance), so it varies by prompt. Accuracy: teacher-forced on natural text, the `batch` engine's next-token
     NLL / top-1 matched the previous release's within noise (1.5269 / 0.6548 vs 1.5278 / 0.6562 at 128-384 tokens).
+
+    Prefix caching (`batch`, on by default: `RESIDENT_PREFIX_CACHE_GB`, 32 GB of host RAM, 0 turns it off): a prompt's
+    state at its last 1,024-token boundary is kept in host memory, and a later prompt that starts with it restores it
+    instead of prefilling it. A 3-turn chat over a 12,021-token document (greedy, served, 2026-11-22): TTFT 1.97 / 0.68 /
+    0.70 s with the cache vs 1.42 / 1.38 / 1.37 s without; the answers are identical.
   limitations: |
     - `single-user` decodes every request greedily (temperature and sampling parameters are ignored, with one
       logged warning).
@@ -257,7 +266,8 @@ card:
       host sampling for every user in it: a 16-user step goes from 27.9 to about 62 ms (one penalized request) or 68 ms
       (one logprobs request).
     - `batch` fits the users' contexts in a 1,408,000-token KV pool; requests that do not fit wait.
-    - No prefix caching: a repeated long prompt is prefilled again (131,072 tokens: about 21 s for one user).
+    - Prefix caching is `batch` only, at 1,024-token boundaries, and the first prompt that stores a prefix pays for it
+      (about +0.5 s at 12K tokens); `single-user` prefills a repeated long prompt again (131,072 tokens: about 21 s).
     - On an earlier test machine with a failed fan, one card dropped off PCIe under heavy 32-request prefill;
       `tt-smi -r` or a reboot brings it back.
 
