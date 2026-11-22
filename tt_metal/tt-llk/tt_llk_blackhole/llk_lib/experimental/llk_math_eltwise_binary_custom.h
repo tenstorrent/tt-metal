@@ -19,7 +19,8 @@ using namespace ckernel;
  * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>. Ignored on BH:
+ *       kept for signature parity with WH, whose init programs the bcast addr-mods off it.
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4> (ELWMUL only)
  * @param num_faces: Number of faces to process (1, 2, or 4)
  * @note Establishes the operand-driven default Src zero-substitution state, which the bcast-col compute asserts
@@ -100,6 +101,8 @@ inline void _bcast_cols_op_()
  *                   callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
  *                   lands on its own dest slots; single-tile-row callers leave it at 0.
  * @note Canonical description of the shared blocked bcast-col mechanism; other files reference this one.
+ * @note Programs ADDR_MOD_7 (+8/+8/+8) for the walk and restores its zero-advance invariant on return.
+ *       Every later op depends on that restore: nothing else re-establishes slot 7.
  * @note Call @ref _llk_math_eltwise_binary_init_custom_ first; re-run it after any op that leaves the Src zero flag
  *       at keep.
  */

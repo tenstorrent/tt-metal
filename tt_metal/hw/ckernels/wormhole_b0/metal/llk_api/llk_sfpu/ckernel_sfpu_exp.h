@@ -998,7 +998,8 @@ inline __attribute__((always_inline)) void exp_init() {
         // avoiding race conditions from dest bank conflicts or other pipeline hiccups.
         TTI_SFPCONFIG(0xF00, 0x8, 0x1);
 
-        // Each recorded LOADMACRO advances DEST by 2 through ADDR_MOD_6.
+        // Each recorded LOADMACRO advances DEST by 2 through ADDR_MOD_6/2
+        // (the recordings' sfpu_addr_mode literal 2 + SFPU base 4 = slot 6).
         addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 
         // ===================================================================

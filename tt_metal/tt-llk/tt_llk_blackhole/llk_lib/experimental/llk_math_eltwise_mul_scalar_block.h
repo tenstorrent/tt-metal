@@ -20,6 +20,14 @@ inline void _llk_math_eltwise_mul_scalar_block_init_()
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+/**
+ * @brief Multiply a block of tiles by one reused scalar SrcB: Output[i] = SrcA[i] * SrcB.
+ *
+ * The per-call set/restore of ADDR_MOD_7 around the walk is deliberate: slots 0-5 all have
+ * other owners, so none can be programmed once in the init. Measured cost: ~+23% MATH_ISOLATE
+ * at one tile per block (perf_eltwise_mul_scalar_block, BH p150b) — accepted as the fixed
+ * price of keeping slot 7 at its zero-advance invariant between calls.
+ */
 inline void _llk_math_eltwise_mul_scalar_block_(const std::uint32_t dst_index, const std::uint32_t block_size)
 {
     constexpr std::uint32_t kOpsPerTile = 8;

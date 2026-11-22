@@ -20,12 +20,14 @@ namespace ckernel {
 // Kept for callers that size DEST slots against the rope's tile geometry.
 constexpr std::uint32_t ROPE_SFPU_TILE_ROWS = 64;
 
-// Nothing to program: the rope only uses ADDR_MOD_7, which hw_configure leaves at zero advance.
-ALWI void rope_sfpu_init() {}
+// No init entry: the rope loads/stores through ADDR_MOD_7 only, which hw_configure
+// (compute_kernel_hw_startup) leaves at zero advance.
 
 /**
  * Rotate in place, x tiles laid out at an arbitrary DEST stride.
- * Requires rope_sfpu_init(). See sfpu_rope_all_rows for the operand layout.
+ * Requires compute_kernel_hw_startup: hw_configure establishes the load formats and the
+ * ADDR_MOD_7 zero-advance invariant the cos/sin and x loads walk through. See
+ * sfpu_rope_all_rows for the operand layout.
  *
  * With has_scale, scale_fp32 (an fp32 bit pattern, read from L1 at runtime) is
  * folded into cos/sin for a deferred normalization. scale_fp32 is required, not
@@ -60,7 +62,7 @@ ALWI void rope_sfpu_inplace() {
     rope_sfpu_inplace_rows<Ht, Wt, 0, T, (Ht * Wt) * T, (Ht * Wt + Wt) * T, T>(/*scale_fp32=*/0);
 }
 
-// Generic unary SFPU init (config reg + ADDR_MOD_7 + counters). Same entry
+// Generic unary SFPU init (config reg + counters; ADDR_MOD_7 comes from hw_configure). Same entry
 // sinkhorn uses; RoPE has no extra LUT/constants.
 ALWI void rope_sfpu_fused_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>())); }
 
