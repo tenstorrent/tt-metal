@@ -21,6 +21,30 @@ COL_GROUPS = 3  # column tiles per unit = 72 / 3
 
 
 class PfAttnRes:
+    # Logits tables of sealed states: id(normed) -> (normed, [T, 32 M] fp32 table). A sealed state never changes and
+    # every module's queries are fixed, so its logits for all M modules come from one matmul when it is sealed
+    # (seal()); each call then only computes the logits of its partial state. Cleared per chunk (clear()).
+    TABLES = {}
+
+    @staticmethod
+    def clear():
+        PfAttnRes.TABLES.clear()
+
+    @staticmethod
+    def seal(normed, q_all, ckc):
+        """Logits of a sealed normed state for every module (q_all: all_queries() on device)."""
+        PfAttnRes.TABLES[id(normed)] = (
+            normed,
+            ttnn.matmul(normed, q_all, dtype=ttnn.float32, compute_kernel_config=ckc),
+        )
+
+    @staticmethod
+    def all_queries(modules):
+        """Index the modules (module i reads columns [32 i, 32 i + 32) of a table); [1, 1, C, 32 M] fp32 queries."""
+        for i, m in enumerate(modules):
+            m.index, m.n_modules = i, len(modules)
+        return ttnn.concat([m.qT for m in modules], dim=-1)
+
     def __init__(self, dev, q, nq, ckc):
         """q: host [.., 32, C] (row j = query j); nq queries used; ckc: compute config of the norm / logits ops."""
         q = (ttnn.to_torch(q) if isinstance(q, ttnn.Tensor) else q).float().reshape(-1, HIDDEN)[:32].clone()
@@ -30,12 +54,20 @@ class PfAttnRes:
         self.qT = ttnn.from_torch(qT, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev)
         self.ckc = ckc
         self.dev = dev
+        self.index = None  # set by all_queries
 
     def __call__(self, normed, partial):
         """normed: list of rms-normed sealed states, fp32 [1,1,T,C] DRAM. Returns nq fp32 [1,1,T,C] outputs."""
         p32 = partial if partial.dtype == ttnn.float32 else ttnn.typecast(partial, ttnn.float32)
         ns = list(normed) + [ttnn.rms_norm(p32, epsilon=EPS, compute_kernel_config=self.ckc)]
-        lg = [ttnn.matmul(n, self.qT, dtype=ttnn.float32, compute_kernel_config=self.ckc) for n in ns]
+        lg, stride, off, own = [], [], [], []
+        for n in ns:
+            e = PfAttnRes.TABLES.get(id(n)) if self.index is not None else None
+            if e is not None and e[0] is n:  # sealed: this module's columns of the state's table
+                lg.append(e[1]), stride.append(self.n_modules), off.append(self.index)
+            else:
+                lg.append(ttnn.matmul(n, self.qT, dtype=ttnn.float32, compute_kernel_config=self.ckc))
+                stride.append(1), off.append(0), own.append(lg[-1])
         for t in ns + lg:
             assert t.dtype == ttnn.float32 and t.layout == ttnn.TILE_LAYOUT, (t.dtype, t.layout)
             assert t.memory_config().buffer_type == ttnn.BufferType.DRAM and not t.is_sharded(), t.memory_config()
@@ -56,7 +88,9 @@ class PfAttnRes:
         r_args, w_args, c_args = {}, {}, {}
         for c, us in zip(cores, per):
             flat = [v for unit in us for v in unit]
-            r_args[c] = [n.buffer_address() for n in ns] + [x.buffer_address() for x in lg] + [len(us)] + flat
+            r_args[c] = (
+                [n.buffer_address() for n in ns] + [x.buffer_address() for x in lg] + stride + off + [len(us)] + flat
+            )
             w_args[c] = [o.buffer_address() for o in outs] + [len(us)] + flat
             c_args[c] = [len(us)] + [j1 - j0 for _, j0, j1 in us]
         named = F.fixed_rt(dict(d1=d1, nq=nq, wt=wt), r_args, w_args, c_args)
@@ -71,6 +105,6 @@ class PfAttnRes:
                F.cb(3, fp, d1 * nq, cores=crs), F.cb(4, fp, d1 * nq, cores=crs), F.cb(5, fp, 2 * d1, cores=crs),
                F.cb(6, fp, 1, cores=crs), F.cb(7, fp, 1, cores=crs), F.cb(16, fp, 2 * nq, cores=crs)]  # fmt: skip
         F.run(ns + lg + outs, kernels, cbs)
-        for x in lg + [ns[-1]]:
+        for x in own + [ns[-1]]:
             ttnn.deallocate(x)
         return outs

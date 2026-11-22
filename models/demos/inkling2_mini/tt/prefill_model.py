@@ -452,6 +452,11 @@ class Inkling2Prefill:
         )
         g = _load(root, None, {"final_res_q", "msg_q"})
         self.final_res = (PfAttnRes if self.fused_glue else _AttnRes)(dev, g["final_res_q"], 1, self.ckc)
+        # one logits table per sealed state for every attn-res module (PfAttnRes.seal)
+        self._q_all = None
+        if self.fused_glue:
+            mods = [r for lp in self.layers for r in (lp.attn_res, lp.mlp_res) if r is not None] + [self.final_res]
+            self._q_all = PfAttnRes.all_queries(mods)
         # cross-pass message queries [C, 64] (rows 4l+j = loop layer l, message j), 1/sqrt(C) folded
         mq = _host(g["msg_q"]).reshape(LOOP_END - LOOP_START, 32, HIDDEN)[:, :4].reshape(-1, HIDDEN)
         mq = torch.nn.functional.pad(mq * HIDDEN**-0.5, (0, 0, 0, 64 - mq.shape[0]))
@@ -1159,7 +1164,10 @@ class Inkling2Prefill:
 
         if lay.boundary:
             hf = _f32(h)
-            stack = stack + [(hf, ttnn.rms_norm(hf, epsilon=EPS, compute_kernel_config=self.ckc))]
+            nn = ttnn.rms_norm(hf, epsilon=EPS, compute_kernel_config=self.ckc)
+            if self._q_all is not None:
+                PfAttnRes.seal(nn, self._q_all, self.ckc)
+            stack = stack + [(hf, nn)]
             resid = a
         else:
             resid = a if self.fused_glue else ttnn.add(_f32(h), a)
@@ -1293,6 +1301,7 @@ class Inkling2Prefill:
         e = ttnn.embedding(self._cur["tok"], m.embed, layout=ttnn.TILE_LAYOUT)
         h = self._rms(ttnn.reshape(e, [1, 1, t, HIDDEN]), m.embed_norm)
         tau = self._cur["tau"]
+        PfAttnRes.clear()  # logits tables of the last chunk's sealed states
         stack = []
         pre = None
         h12_in = None
