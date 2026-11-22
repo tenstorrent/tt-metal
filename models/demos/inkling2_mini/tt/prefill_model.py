@@ -7,7 +7,7 @@ continues at pos = len(prompt):
 - attention (per HF cache index c): 1024-slot ring (slot = pos % 1024), global full cache, k/v conv inputs at lag 0-2;
 - post-attn / post-mlp ShortConv state rows 0-3 = inputs at lag 0-3 (fp32).
 
-A chunk is T tokens (default 2048; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128). Pad
+A chunk is T tokens (default 8192; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128). Pad
 rows (positions >= len(prompt)) keep the old ring slots, but kv_full gets all T rows: decode writes position P before
 any read of it, so those rows are never read. Per application, everything is a [1,1,T,C] sequence tensor:
 - block / message attn-res: per-token softmax over depth (no cross-token mixing);
@@ -61,6 +61,7 @@ from models.demos.inkling2_mini.tt.fused.common import dense_matrix
 from models.demos.inkling2_mini.tt.fused.pf_attnres import PfAttnRes
 from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
 from models.demos.inkling2_mini.tt.fused.pf_gate import PfGateTail
+from models.demos.inkling2_mini.tt.fused.pf_gateout import PfGateOut
 from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, scale_rows
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, SOFTCAP, VOCAB_REAL
 from models.demos.inkling2_mini.tt.moe import INTER, NUM_EXPERTS, RMS_EPS, ROUTE_SCALE, TOP_K, softcapped_swiglu
@@ -376,7 +377,7 @@ class Inkling2Prefill:
         self,
         model,
         root=wcache.DEFAULT_ROOT,
-        chunk=2048,
+        chunk=8192,
         r3=None,
         r2=None,
         slot_rows=64,
@@ -421,6 +422,7 @@ class Inkling2Prefill:
         self.fused_glue = fused_glue
         self._pfconv = PfConv(dev) if fused_glue else None
         self._pfheads = PfHeads(dev) if fused_heads else None
+        self._pfgate = PfGateOut(dev) if fused_heads else None
         self.ckc = model.rows.ckc  # HiFi4, fp32 acc
         self.hifi4 = model.hifi4
         self.mm_cfg = model.mm_cfg
@@ -650,7 +652,6 @@ class Inkling2Prefill:
         else:
             q = self._scaled_clip(_heads(_cols(qgrs, 0, 3072), N_HEADS, HEAD_DIM), lp.q_scale, QK_CLIP, tau_g)
         rel = self._scaled_clip(_heads(_cols(qgrs, 6144, 6528), N_HEADS, D_REL), lp.rel_scale, REL_CLIP, tau_g)
-        gate = _cols(qgrs, 3072, 6144)
         sink = ttnn.permute(_cols(qgrs, 6528, 6552), (0, 3, 2, 1))  # [1,24,T,1]
 
         self._tick("a.q_rel_prep")
@@ -680,8 +681,10 @@ class Inkling2Prefill:
         self._write_ring(st.v_ring, v, s, n)
 
         self._tick("a.cache_write")
+        if self._pfgate is not None:  # heads -> rows, * sigmoid(gate), bf16 in one program
+            return self._linear(self._pfgate(_bf16(attn), qgrs, 3072), lp.w_o)
         attn = _unheads(_bf16(attn))  # [1,1,T,3072]
-        gated = ttnn.multiply(_f32(attn), ttnn.sigmoid(_f32(gate)))
+        gated = ttnn.multiply(_f32(attn), ttnn.sigmoid(_f32(_cols(qgrs, 3072, 6144))))
         return self._linear(ttnn.typecast(gated, ttnn.bfloat16), lp.w_o)
 
     def _attention_r3(self, lp, qs, rel, sink, st, k_c, v_c, s, t):
