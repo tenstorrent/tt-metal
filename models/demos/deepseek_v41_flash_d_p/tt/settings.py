@@ -1539,6 +1539,19 @@ TABLE = {
         "same top-k. off = PB.7C: the one-call ring moves every segment's keys around the SP ring to every chip. "
         "Single-request chunks are unchanged either way",
     ),
+    "PACKED_CWRITE_FAST": Setting(
+        "on",
+        ("on", "off"),
+        "PB.GAP (OWNER 2026-11-22: the largest item of a chip-aligned 4 x 2k chunk over one single 8192 chunk at "
+        "139264 was its compressor section: +15 ms of launch host, +1.9 ms device), read per call (CALL-TIME, listed in "
+        "bringup/hooks.py batch_call_settings and refreshed in batch_call_apply). on = (1) the glued chunk's "
+        "compressed-row keep mask (tt/glued_derive.py ckeep, once a chunk) zeroes its L1 batch once and writes 8 tiles "
+        "behind one barrier (was 2 KB zeroed and a barrier a tile: 1.13 ms on one core for 4096 rows); (2) the packed "
+        "served writes (tt/compressor.TtServedRows.write_lanes, every segment's KV and index-key rows of a layer) read "
+        "each segment's rows through update_padded_kv_cache's input row window (a runtime value) instead of a ttnn.slice "
+        "copy a segment and cache kind (~0.4 ms of host a slice). The same bytes either way. off = PB.KR's code. "
+        "Single-request chunks are unchanged",
+    ),
     "HIST_OWNED_LINKS": Setting(
         "2",
         ("2", "1"),

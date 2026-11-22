@@ -1477,3 +1477,54 @@
 - Next lever (not built): the 4 x 2k attention section's other +11 ms (probe (a)): the 12 key decodes (+3.7 ms) and
   packs (+1.7) are 4x work per chip by design (each chip is the source of its rows for every segment); the window region
   send waits ~2.5 ms for the slowest peer.
+
+## PB.GAP perf (attempt 1): the cost of a chip-aligned 4 x 2k chunk over one single 8192 chunk, item by item, then the largest item removed
+- Read first: OV-3 / OV-58 / OV-61, PACKED_RULES.md, rule 20, perf_guide s1-4 / s10, PB.KR / PB.BM sections above,
+  DS41-371 (rebuilt after the 03:11 branch switch before any device run), DS41-353 / DS41-380 (reloaded modules).
+- Load reason (1): tests/perf/test_gap_probe.py on the ladder's load (layers 0-20, decode, 8192, resident engram):
+  "the per-op device rows + launch host of a real 4 x 2k and single chunk need the executed layer stack at 139264 and
+  1024000 histories; both positions and both paths in one held load".
+- Probe (tests/perf/test_gap_probe.py, PB.KR code, one held load): wall single / 4 x 2k 102.9 / 114.2 ms at 139264
+  (device 88.5 / 95.9, host enqueue 79.8 / 98.1), 129.4 / 142.3 at 1024000 (device 115.5 / 125.9, enqueue 94.4 /
+  105.2). Gap table: results/PB.GAP_ladder.md. Largest item at 139264: the compressor section's per-segment served
+  writes, +15.0 ms launch host (12 slices 4 x 1 x 512 x 512 at 0.41 ms each, 31 slices in all, 32
+  update_padded_kv_cache vs 8) and +1.9 ms device, of which 1.13 ms one glued_derive program (ckeep: 128 tiles, one core,
+  2 KB zeroed and a write barrier a tile). At 1024000 the plain top-k (+8.8 ms device; single runs block-select) is
+  larger, but it is not bit-identical to switch (top-k tie order, PB.BM) and the brief ranks 139264 first.
+- Expected saving per chunk (written before the change's first device run; perf_guide s2): device -1.1 ms (ckeep
+  batched: 128 barriers -> 16) and -0.13 (31 slices) at both positions; host launch -7.7 ms (the slices) at 139264,
+  ~-6 at 1M; the wall moves by the device part plus whatever of the host part is exposed (4 x 2k is host-bound in
+  spans, DS41-364): -2..-5 ms wall expected.
+- Item split (GAP_PP=1: prepared programs booked by caller): the compressor's "(other)" 1.13 ms is ONE glued_derive
+  program (ckeep, DS41-386); attn_region 2.63 ms the glued send (min chip 2.60) vs single's fused window write 1.24;
+  ffn_residual's snapshot multi 2.58 (min chip 1.77) vs 1.04; history owned sends 0.85 exposed; key sends 0.62 (3.24 at
+  1M). Table: results/PB.GAP_ladder.md section 2.
+- DECIDED (OV-58): attack the compressor item (largest at 139264 by device + host, exact by construction); the 1M
+  top-k (+6.8 ms device net of the single's block-select) is not bit-identical to switch (PB.BM tie order) and needs the
+  score op's compute-kernel block max first (PB.BM's note).
+- What (PACKED_CWRITE_FAST=on, call-time: batch_call_settings + batch_call_apply; off = PB.KR's code): (1)
+  tt/glued_derive.py D_CKEEP with CKEEP_FAST: zero the 8-tile L1 batch once, a 32-bit row mask a tile, column 0 only,
+  8 tiles a barrier: 1.134 -> 0.139 ms (1 core); (2) tt/compressor.TtServedRows._write_lanes_window: update_padded's
+  input row window (offset j W / r) instead of a ttnn.slice a segment and kind (-24 launches a chunk); fork
+  update_padded_kv_cache: the window allowed with tp_axis (validation only, DS41-387, CHANGELOG PB.GAP, rebuilt).
+- Gotcha: the first A/B died on the fork's TT_FATAL (window + tp_axis); my first op test's non-TP cache was too
+  shallow for its starts (a test bug: tp_axis None stripes over SP only).
+- Checks: tests/test_cwrite_window_ops.py (mesh only) 9 of 9 window == slice; test_gap_probe.py test_gap_ab (GAP_AB=1)
+  on vs off on fresh slots at 139264: 32 of 32 served records equal (both kernel versions).
+- Measured, one held load, probe off -> on (4 x 2k): 139264 wall 111.8 -> 109.9, enqueue 95.0 -> 91.7, compressor
+  section (with ckeep) 3.88 -> 2.83; 1M wall 139.7 -> 139.5, enqueue 99.7 -> 97.8. Expected (above) device -1.2 ms:
+  measured ckeep -1.0, slices -0.08; launch host -2.2 (24 slices at ~0.09 ms; probe 1's 0.41 ms a slice included
+  stalls, DS41-388) instead of -7.7.
+- Gate `gate PB.GAP --check` (devjob gapgate, after the last code edit, hooks clean): PASS PB.GAP. Oracle alone vs
+  today 0.0, lane equivalence 0.0, slot digests 0, packed determinism 0.0, determinism 0.0, cold strict no-rebuild 0
+  builds on every path. Ladder steady (PB.KR -> PB.GAP): single 99.2 -> 99.7 / 123.3 -> 122.7 ms; 4 x 2k 112.4 ->
+  111.5 (device 95.55 -> 93.45) / 141.8 -> 139.7 (128.23 -> 126.26) at 139264 / 1024000. `orchestrator measure --task
+  PB.GAP`: quick rc 0.
+- Rule 20, per-chunk values this change touches: each segment's row offset in the gathered rows (j W / r: an
+  update_padded_kv_cache runtime value, not hashed; the gathered input's shape follows the segment count n = 1..6, a
+  bounded set warmed by runtime.compile); slot / start / valid as before (DeviceScalars picks); ckeep reads the chunk
+  header on the device as before (its program key: shapes + the switch). Nothing new is uploaded.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.GAP --spec $BRINGUP_SPEC --check` (devjob);
+  gap probe: `resident submit --cmd "<walls env> [GAP_PP=1] [GAP_CPROF=<dir> GAP_PROF=0] scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_gap_probe.py"`; A/B: `GAP_AB=1` same
+  file; op check: tests/test_cwrite_window_ops.py.

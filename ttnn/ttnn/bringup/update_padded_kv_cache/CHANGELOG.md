@@ -70,3 +70,17 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - What: a 3-way merge per file (base = fork_op.py's mechanical copy of the source @ `6b80daf43e3`, the fork's last sync / fork point, no skipped commits; upstream = the same copy @ `107f838f379` (origin/llk_helper_library); ours = this fork). Merged clean, no conflicts. Taken (1 commit): `19da1202a49` #62567 (`tensor.buffer() != nullptr` -> `tensor.is_allocated()` in validation / asserts).
 - Behaviour: none. The fork's max_grid and ROW_MAJOR row-granular copy merged clean.
 - Files: device/update_padded_kv_cache_device_operation.cpp
+
+### The input row window with tp_axis (deepseek_v41_flash_d_p PB.GAP)
+- What: the tensor form's input row window (`input_row_offset` / `input_rows`, upstream #61236) is accepted with
+  `tp_axis` (validation only; rope / scales / sharded inputs stay refused). No kernel change: the reader's TP source-row
+  mapping already runs on the window's rows (common arg 3 = window_Ht, chunk_local_t = window_Ht / tp) and adds the
+  offset to a row below window_Ht. Calls valid before run the same program (same hash).
+- Why: a packed chunk's served writes (deepseek_v41_flash_d_p tt/compressor.TtServedRows._write_lanes_window) read
+  each segment's rows of one gathered input through the window instead of a ttnn.slice copy a segment (~0.4 ms of host
+  a slice on 32 chips, 31 slices a 4 x 2k chunk); the compressed KV caches are TP-deduped.
+- Measured: window vs slice, bit for bit on every chip of the 8x4 (deepseek_v41_flash_d_p
+  tests/test_cwrite_window_ops.py: bf16 512 tp_axis 1, uint8 192 tp_axis None / 1, starts 69632 / 10608 / 245760, 4
+  segments each: 9 of 9 equal). Fork suite not run (its cases are 2x2 meshes; PACKED_RULES: no fork suites on the 8x4).
+- Needed by: deepseek_v41_flash_d_p PB.GAP
+- Files: device/update_padded_kv_cache_device_operation.cpp

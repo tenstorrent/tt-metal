@@ -717,8 +717,15 @@ class TtServedRows:
             dealloc(tile)
         region.free()
 
-    def _put_into(self, target: CacheSlab, slab: ttnn.Tensor, start: int, end: int) -> None:
+    def _put_into(
+        self, target: CacheSlab, slab: ttnn.Tensor, start: int, end: int, window: tuple | None = None
+    ) -> None:
+        """``window`` (PB.GAP, PACKED_CWRITE_FAST=on; ratio > 1 only): (first row, rows) of ``slab`` written as if that
+        slice were the input (update_padded_kv_cache's input row window: the offset is a runtime value, not hashed)."""
         args = dict(layer_idx=target.row, num_layers=target.layers, cluster_axis=SP_AXIS, tp_axis=self.tp_axis)
+        if window is not None:
+            assert self.ratio != 1, "the input row window is the op's tensor form (ratio > 1)"
+            args.update(input_row_offset=int(window[0]), input_rows=int(window[1]))
         if self.ratio == 1:
             ttnn.bringup.update_padded_kv_cache(
                 target.tensor,
@@ -799,6 +806,10 @@ class TtServedRows:
         for c, start, end in items:
             assert c0.lanes_ok(c) and c.k8 is None and c.table is None, "write_lanes: one geometry, no k8 / table"
             assert start % 32 == 0 and start < end <= start + g.chunk and end <= c.max_seq, (start, end, c.max_seq)
+        from .glued_derive import cwrite_fast
+
+        if cwrite_fast() and c0.ratio != 1 and cr % 32 == 0:
+            return TtServedRows._write_lanes_window(items, rows_rm, idx_all, group)
         rows = ttnn.bringup.embedding(
             ttnn.reshape(idx_all, [1, n * g.w], sub_core_grids=sub_cores(idx_all)),
             ttnn.reshape(rows_rm, [g.chunk, c0.tok_width], sub_core_grids=sub_cores(rows_rm)),
@@ -846,6 +857,57 @@ class TtServedRows:
                 if s8 is not t8:
                     dealloc(s8)
         dealloc(slab)
+        for _, _, t8 in r8:
+            dealloc(t8)
+
+    @staticmethod
+    def _write_lanes_window(items: list, rows_rm: ttnn.Tensor, idx_all: ttnn.Tensor, group: int | None) -> None:
+        """PB.GAP (PACKED_CWRITE_FAST=on): ``write_lanes`` without a slice a cache: the gathered rows stay one
+        [1, 1, n W / r, width] tensor (and the encoded rows one [1, 1, m W / r, 192] tensor a group) and each cache's
+        update_padded_kv_cache reads its rows [j W / r, (j + 1) W / r) through the op's input row window (a runtime
+        value, not in the program key: rule 20). The same bytes as ``write_lanes``'s slices (a slice is a copy of those
+        rows)."""
+        c0 = items[0][0]
+        g, n = c0.geo, len(items)
+        cr = g.w // c0.ratio
+        rows = ttnn.bringup.embedding(
+            ttnn.reshape(idx_all, [1, n * g.w], sub_core_grids=sub_cores(idx_all)),
+            ttnn.reshape(rows_rm, [g.chunk, c0.tok_width], sub_core_grids=sub_cores(rows_rm)),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=DRAM,
+            max_grid=max_grid(),
+        )  # [n W, tok_width]: cache j's server-order rows at [j W, (j + 1) W)
+        flat = ttnn.reshape(rows, [1, 1, n * cr, c0.width], sub_core_grids=sub_cores(rows))
+        if flat.buffer_address() != rows.buffer_address():
+            dealloc(rows)
+        r8 = []  # (first cache, caches, [1, 1, m cr, 192] the encoded rows of caches [first, first + m))
+        if c0.fp8:
+            gs = n if group is None else max(1, int(group))
+            for j0 in range(0, n, gs):
+                m = min(gs, n - j0)
+                if m == n:
+                    rows8 = fp8_rows(c0.mesh, flat)
+                else:
+                    src = ttnn.slice(
+                        flat,
+                        [0, 0, j0 * cr, 0],
+                        [1, 1, (j0 + m) * cr, c0.width],
+                        memory_config=DRAM,
+                        sub_core_grids=sub_cores(flat),
+                    )
+                    rows8 = fp8_rows(c0.mesh, src)
+                    dealloc(src)
+                r8.append((j0, m, rows8))
+        for j, (c, start, end) in enumerate(items):
+            c.version += 1  # (as ``_put``)
+            if not c.k_served:
+                c._put_into(c.slab, flat, start, end, window=(j * cr, cr))
+            if c.fp8:
+                j0, m, t8 = next(x for x in r8 if x[0] <= j < x[0] + x[1])
+                for target in (c.served, *c.mirrors):
+                    c._put_into(target, t8, start, end, window=((j - j0) * cr, cr))
+        dealloc(flat)
         for _, _, t8 in r8:
             dealloc(t8)
 

@@ -450,10 +450,12 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(input.layout() == Layout::ROW_MAJOR, "FP8_E4M3 requires ROW_MAJOR layout");
     }
     if (has_input_window(args, input.padded_shape()[-2])) {
+        // deepseek_v41_flash_d_p PB.GAP: tp_axis allowed. The reader's TP source-row mapping runs on the window's
+        // rows (common arg 3 = window_Ht, chunk_local_t = window_Ht / tp) and adds the offset to a row below
+        // window_Ht, so a windowed TP-dedup call writes what the same call on the sliced window would.
         TT_FATAL(
-            !tensor_args.rope.has_value() && !tensor_args.scales.has_value() && !args.tp_axis.has_value() &&
-                !input.is_sharded(),
-            "an input row window supports only the plain page copy of an interleaved input (no rope/scales/tp_axis)");
+            !tensor_args.rope.has_value() && !tensor_args.scales.has_value() && !input.is_sharded(),
+            "an input row window supports only the plain page copy of an interleaved input (no rope/scales)");
     }
     // The per-element-tensor (metadata) path works in both layouts: the writer's page-row unit is the
     // `writer_tile_height` compile arg (TILE_HEIGHT for TILE, 1 for ROW_MAJOR), so no layout guard is

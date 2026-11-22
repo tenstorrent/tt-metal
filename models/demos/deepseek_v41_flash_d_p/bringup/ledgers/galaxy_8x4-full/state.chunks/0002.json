@@ -625,6 +625,79 @@
   },
   "waiting": null
  },
+ "PB.GAP": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "628f0d7f358fe3d2f590d08789272f6c76673794",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "2b620f96-c547-4859-905f-b2f29c53b6f8"
+  },
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 3.0,
+  "history": [
+   {
+    "reused": [
+     "PB.GAP#test_determinism",
+     "PB.GAP#test_packed_fast_tier",
+     "PB.GAP#test_packed_oracle",
+     "PB.GAP#test_skip_positions",
+     "PB.GAP#test_packed_walls",
+     "PB.GAP#test_no_rebuild"
+    ],
+    "s": 3.0,
+    "status": "PASS",
+    "t": "2026-11-22T04:19:47"
+   }
+  ],
+  "last_run": "2026-11-22T04:19:45",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/PB.GAP.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": {
+   "reused": [
+    "PB.GAP#test_determinism",
+    "PB.GAP#test_packed_fast_tier",
+    "PB.GAP#test_packed_oracle",
+    "PB.GAP#test_skip_positions",
+    "PB.GAP#test_packed_walls",
+    "PB.GAP#test_no_rebuild"
+   ],
+   "units": {
+    "PB.GAP#test_determinism": "74372acbaf4dec42",
+    "PB.GAP#test_no_rebuild": "3a6dd88b1b1ddd1d",
+    "PB.GAP#test_packed_fast_tier": "1ac51cf6eda9c1a7",
+    "PB.GAP#test_packed_oracle": "9db196ad8791149a",
+    "PB.GAP#test_packed_walls": "801897c9d794dfe8",
+    "PB.GAP#test_skip_positions": "76bc03da9718a2ed"
+   }
+  },
+  "started": "2026-11-22T04:19:42",
+  "status": "PASS",
+  "units": {
+   "PB.GAP#test_determinism": "PASS",
+   "PB.GAP#test_no_rebuild": "PASS",
+   "PB.GAP#test_packed_fast_tier": "PASS",
+   "PB.GAP#test_packed_oracle": "PASS",
+   "PB.GAP#test_packed_walls": "PASS",
+   "PB.GAP#test_skip_positions": "PASS"
+  },
+  "waiting": null
+ },
  "PB.HG": {
   "ab_pending": null,
   "agent": {

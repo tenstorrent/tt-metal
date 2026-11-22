@@ -47,6 +47,14 @@ WINDOW = 128
 REGION_CORES = 16  # region rows split over this many cores a chip (data movement only)
 
 
+def cwrite_fast() -> bool:
+    """PB.GAP (PACKED_CWRITE_FAST=on, read per call): the batched ckeep kernel (and, in tt/compressor.write_lanes,
+    the packed served writes read through update_padded_kv_cache's input row window instead of a slice a segment)."""
+    from .settings import settings
+
+    return settings.get("PACKED_CWRITE_FAST") == "on"
+
+
 def _bsel(params: tuple) -> bool:
     """PB.BM (INDEXER_BLOCK_SELECT): an idx program of a plain indexer with a block (A3 > 1) also writes each pass's
     block counts (the valid length in blocks: lens / A3) at outputs GLUED_SEGS + p."""
@@ -249,7 +257,47 @@ void kernel_main() {
     }
 #endif
 
-#if D_CKEEP
+#if D_CKEEP && CKEEP_FAST
+    {
+        // PB.GAP (PACKED_CWRITE_FAST=on): the same tiles as below. Compressed row i is kept when its model row i RAT is
+        // in a segment's computed rows [off, off + rows), i.e. i in [ceil(off / RAT), ceil((off + rows) / RAT)): a
+        // tile's 32 rows as a bit mask (one OR of shifted runs a segment), only column 0 written (rows r < 16 at 16 r,
+        // rows 16..31 at 512 + 16 (r - 16); the rest of the L1 batch is zeroed once), CK_B tiles behind one write
+        // barrier (was: 2 KB zeroed, 32 x segments compares and a barrier a tile: 1.13 ms for 4096 rows on the 8x4)
+        const auto O0 = TensorAccessor(o0_args, get_arg_val<uint32_t>(1), P0);
+        constexpr uint32_t RAT = CHUNK / A0;  // (model rows a compressed row)
+        constexpr uint32_t CK_B = 8;           // tiles a batch (8 x 2 KB: the CB's 16 KB behind the header slot)
+        constexpr uint32_t NT = A0 / 32;
+        uint32_t lo[NSEG], hi[NSEG];
+        for (uint32_t j = 0; j < ns; ++j) {
+            lo[j] = (s[j].off + RAT - 1) / RAT;
+            hi[j] = (s[j].off + s[j].rows + RAT - 1) / RAT;
+        }
+        zero_words(buf, 512 * CK_B);
+        for (uint32_t t0 = 0; t0 < NT; t0 += CK_B) {
+            const uint32_t nb = (NT - t0) < CK_B ? (NT - t0) : CK_B;
+            for (uint32_t b = 0; b < nb; ++b) {
+                const uint32_t i0 = 32 * (t0 + b);
+                uint32_t mask = 0;
+                for (uint32_t j = 0; j < ns; ++j) {
+                    const uint32_t a = lo[j] > i0 ? lo[j] - i0 : 0;
+                    const uint32_t e = hi[j] > i0 ? (hi[j] - i0 < 32 ? hi[j] - i0 : 32) : 0;
+                    if (a < e) {
+                        const uint32_t run = e - a == 32 ? 0xFFFFFFFFu : ((1u << (e - a)) - 1u);
+                        mask |= run << a;
+                    }
+                }
+                volatile tt_l1_ptr uint16_t* t16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buf + b * 2048);
+                for (uint32_t r = 0; r < 16; ++r) {
+                    t16[r << 4] = ((mask >> r) & 1u) ? 0x3F80 : 0;
+                    t16[512 + (r << 4)] = ((mask >> (r + 16)) & 1u) ? 0x3F80 : 0;
+                }
+                noc_async_write(buf + b * 2048, O0.get_noc_addr(t0 + b), 2048);
+            }
+            noc_async_write_barrier();
+        }
+    }
+#elif D_CKEEP
     {
         const auto O0 = TensorAccessor(o0_args, get_arg_val<uint32_t>(1), P0);
         volatile tt_l1_ptr uint16_t* t16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(buf);
@@ -515,6 +563,7 @@ class Derive:
         if kind == "idx" and _bsel(params):
             flags["D_BSEL"] = 1
         head = "".join(f"#define {k} {v}\n" for k, v in flags.items())
+        head += f"#define CKEEP_FAST {int(kind == 'ckeep' and cwrite_fast())}\n"
         head += f"#define NOUT {len(outs)}\n"
         head += f"#define ALIGN_ROWS {self.align}\n"
         if kind == "idx":
@@ -579,6 +628,8 @@ class Derive:
         hpage = _page_bytes(hdr_t)
         io = [hdr_t] + outs
         key = (kind, params, hpage, tuple(ttnn.TensorAccessorArgs(hdr_t).get_compile_time_args()))
+        if kind == "ckeep":  # (PB.GAP: the batched ckeep kernel or the old one, PACKED_CWRITE_FAST)
+            key += (cwrite_fast(),)
         pp = self._pps.get(key)
         if pp is None:
             md, slots = self._build(kind, params, hdr_t, hpage, outs)

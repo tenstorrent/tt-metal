@@ -13,6 +13,8 @@ depth is not a multiple of 32 rows.
 ## Options
 - `max_grid` (ttnn.CoreCoord, default None) on `ttnn.bringup.update_padded_kv_cache` (scalar and tensor / metadata forms): the op's cores inside that rectangle of the grid (FIX.15, a Galaxy's 110-core cap: 11 x 10); default the whole grid.
 None (the relaxed check applies to ROW_MAJOR copy calls only; calls the stock op accepts run the same program).
+- The tensor form's input row window (`input_row_offset` / `input_rows`, upstream's) also with `tp_axis` (PB.GAP;
+  plain page copy only, as upstream's): window vs slice bit-identical on the 8x4 (CHANGELOG PB.GAP).
 
 ## Measured
 not measured (validation-only change; kernels unchanged). tests/unit/test_row_stripes.py: 8x4 exact vs torch.
@@ -28,7 +30,8 @@ As the stock op: `ttnn.bringup.update_padded_kv_cache(cache, input, slot, kv_act
 layer_idx=l, num_layers=L, cluster_axis=0, tp_axis=1)`; see tests/unit/test_row_stripes.py.
 
 ## Used by
-deepseek_v41_flash_d_p (W.1): tt/compressor.py TtServedRows (compressed caches), tt/attention.py (window cache).
+deepseek_v41_flash_d_p (W.1): tt/compressor.py TtServedRows (compressed caches), tt/attention.py (window cache);
+PB.GAP: TtServedRows._write_lanes_window (the input row window with tp_axis, packed chunks).
 
 ## History
 CHANGELOG.md

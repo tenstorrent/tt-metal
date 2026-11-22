@@ -1412,7 +1412,8 @@ def batch_call_settings(env=None) -> tuple:
     # (PB.HG: a segment's history to its own chips only, tt/owned_gather.py) likewise, refreshed like POS_DYNAMIC;
     # INDEXER_BLOCK_SELECT / _MIN / _MIN_PACKED (PB.BM: the index top-k by block-max pre-selection, read per indexer
     # call) likewise; PACKED_KEYS_OWNED (PB.KR: a segment's index keys to its own chips, local scoring) likewise,
-    # refreshed like POS_DYNAMIC
+    # refreshed like POS_DYNAMIC; PACKED_CWRITE_FAST (PB.GAP: the batched ckeep derive and the slice-free packed served
+    # writes, read per call) likewise, refreshed like POS_DYNAMIC
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1432,6 +1433,7 @@ def batch_call_settings(env=None) -> tuple:
         "PACKED_WARM_CONT1",
         "PACKED_HIST_OWNED",
         "PACKED_KEYS_OWNED",
+        "PACKED_CWRITE_FAST",
         "INDEXER_BLOCK_SELECT",
         "INDEXER_BLOCK_SELECT_MIN",
         "INDEXER_BLOCK_SELECT_MIN_PACKED",
@@ -1452,6 +1454,7 @@ def batch_call_apply(model) -> None:
         _settings.snap["MHC_POST_V2"] = _settings._read("MHC_POST_V2")  # PB.8R: likewise
         _settings.snap["PACKED_HIST_OWNED"] = _settings._read("PACKED_HIST_OWNED")  # PB.HG: likewise
         _settings.snap["PACKED_KEYS_OWNED"] = _settings._read("PACKED_KEYS_OWNED")  # PB.KR: likewise
+        _settings.snap["PACKED_CWRITE_FAST"] = _settings._read("PACKED_CWRITE_FAST")  # PB.GAP: likewise
         _settings.snap["INDEXER_BLOCK_SELECT"] = _settings._read("INDEXER_BLOCK_SELECT")  # PB.BM: likewise
         _settings.snap["INDEXER_BLOCK_SELECT_MIN"] = _settings._read("INDEXER_BLOCK_SELECT_MIN")  # PB.BM: likewise
         _settings.snap["INDEXER_BLOCK_SELECT_MIN_PACKED"] = _settings._read("INDEXER_BLOCK_SELECT_MIN_PACKED")

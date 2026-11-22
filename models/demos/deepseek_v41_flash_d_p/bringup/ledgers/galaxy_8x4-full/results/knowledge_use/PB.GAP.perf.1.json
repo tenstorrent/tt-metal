@@ -1,0 +1,95 @@
+{
+ "used": [
+  {
+   "id": "DS41-371",
+   "how": "rebuilt _ttnn (./build_metal.sh) before the first device run: the branch switch at 03:11 followed the 00:22 build",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-385",
+   "how": "judged the ckeep and slice changes only against the other side timed in the same held process (probe_off vs probe_on, one load)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-348",
+   "how": "the on / off bit-identity A/B (test_gap_ab) writes each side into slots nothing wrote before (0-3 off, 4-7 on)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-364",
+   "how": "read the 4 x 2k chunk as host-bound in spans (enqueue 98 vs device 96 ms): counted launch host per item next to device ms",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-369",
+   "how": "kept every per-chunk value of the new path a runtime value (the window offset is not hashed; ckeep's program key holds the switch only)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-353",
+   "how": "new behaviour as module functions (glued_derive.cwrite_fast, TtServedRows._write_lanes_window static) read per call, no held-object class change",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the real-time profiler books prepared programs (run_prepared) as '(other)' rows of the section: no per-program attribution without wrapping run_prepared (now DS41-386 / test_gap_probe GAP_PP=1)",
+  "rt-mode per-op host_ns includes host stalls; an op row can show hundreds of ms (DS41-388)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: the window reads each segment's own rows of the gathered input; the fork's validation was extended (CHANGELOG PB.GAP) instead of slicing around it"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; DECIDED lines in BREADCRUMBS PB.GAP (the 139264 item first; the 1M top-k left: block-select is not bit-identical to the plain top-k, PB.BM ties)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "every device test in this step ran on the ladder's one load (layers 0-20, decode, BRINGUP_CHUNK=8192, resident engram); new tests BATCH_SHARED, no load-time env; test_cwrite_window_ops is mesh-only"
+  }
+ ],
+ "cited_only": [
+  "DS41-386",
+  "DS41-387",
+  "DS41-388"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.GAP",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-22T04:17:32",
+  "head": "f72339ecd31",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.GAP.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.GAP_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.GAP.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_gap_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_cwrite_window_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/glued_derive.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/CHANGELOG.md",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/README.md",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/device/update_padded_kv_cache_device_operation.cpp"
+  ]
+ }
+}
