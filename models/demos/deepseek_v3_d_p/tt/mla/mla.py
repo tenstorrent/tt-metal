@@ -847,6 +847,9 @@ class ttMLA:
                     full_below = tokens
             full_slabs = min(divup(full_below, slab), max(0, full_rows // slab - 1))
             self._full_push_dense_below = full_slabs * slab
+            # A cutoff past the buffer never pushes: the layer then takes the plain gather path, without the dense-mode
+            # plan and the no-op push it would otherwise run every chunk.
+            self._full_push_never = divup(full_below, slab) > max(0, full_rows // slab - 1)
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
         # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2) every layer is
@@ -2152,6 +2155,7 @@ class ttMLA:
             indexer_indices is None
             and self._push is not None
             and os.environ.get("SPARSE_MLA_FULL_PUSH", _FULL_PUSH_DEFAULT) == "1"
+            and not self._full_push_never
         )
         # A full layer on the metadata path keeps top-k beside a gather that is active only below its cutoff.
         full_push_overlapped = (
