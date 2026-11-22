@@ -136,6 +136,7 @@ def test_device_weight_placement(
         beta = torch.cat((beta, beta.new_zeros(-local_heads % ttnn.TILE_SIZE, beta.shape[-1])))
         expected_auxiliary = torch.cat((state_dict["f_a_proj.weight"], beta), dim=0).T
         expected_gate = direct_gate[value_start:value_stop].T
+        fused_gate = () if separate_output_gate else (expected_gate,)
         expected_tap = torch.cat(
             (
                 state_dict["q_conv1d.weight"][key_start:key_stop, 0, 0],
@@ -144,12 +145,7 @@ def test_device_weight_placement(
             )
         ).reshape(1, 1, -1)
         expected = {
-            "input": torch.cat(
-                (expected_qkv, expected_auxiliary)
-                if separate_output_gate
-                else (expected_qkv, expected_auxiliary, expected_gate),
-                dim=-1,
-            ),
+            "input": torch.cat((expected_qkv, expected_auxiliary, *fused_gate), dim=-1),
             "decay_output": decay_output[:, key_start:key_stop],
             "output": state_dict["o_proj.weight"][:, value_start:value_stop].T,
             "decay_scale": decay_scale[..., key_start:key_stop],

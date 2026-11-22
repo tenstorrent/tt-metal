@@ -41,8 +41,8 @@ inline uint32_t relay_chunk_scan_sender_slots(uint32_t key_tiles, tt::ARCH arch)
     return std::min(4u, fabric_packet_headers_per_risc(arch) / relay_chunk_scan_column_packets(key_tiles));
 }
 
-// Heads one sender serves: each needs its own count semaphore on the sender core, and the fabric connection takes two
-// more of the core's 16 (tt::tt_metal::NUM_SEMAPHORES, which no public header exposes).
+// Heads one sender serves: each needs its own count semaphore on the sender core, and the fabric connection takes
+// two more of the core's 16 (tt::tt_metal::NUM_SEMAPHORES, which no public header exposes).
 inline constexpr uint32_t relay_chunk_scan_sender_semaphores = 16;
 inline constexpr uint32_t relay_chunk_scan_connection_semaphores = 2;
 inline constexpr uint32_t relay_chunk_scan_max_heads_per_link =

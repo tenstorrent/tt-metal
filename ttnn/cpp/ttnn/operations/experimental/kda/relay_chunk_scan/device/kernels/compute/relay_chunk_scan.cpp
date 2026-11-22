@@ -60,11 +60,10 @@ constexpr uint32_t cb_gin1 = get_compile_time_arg_val(23);
 constexpr uint32_t gate_kb = get_compile_time_arg_val(24);
 constexpr uint32_t gate_blocks = get_compile_time_arg_val(25);
 constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(26));
-// The partial sums of the pair's other head, and the pair's core's of this core's head (the output gate's heads pair
-// up, h with h ^ 1, each core forming both over its head's half of K).
+// With gate_ways 2 the heads pair up, h with h ^ 1, each core forming both over its head's half of K: the partial sums
+// of the pair's other head, and the pair's core's of this core's head (gate_matmul.hpp).
 constexpr uint32_t cb_gate_pair = get_compile_time_arg_val(27);
 constexpr uint32_t cb_gate_partial = get_compile_time_arg_val(28);
-// 2 where the heads pair up, else 1 (each core its head over all of K).
 constexpr uint32_t gate_ways = get_compile_time_arg_val(29);
 constexpr uint32_t state_tiles = kt * kt;
 // A chunk row of the outputs is formed in one DST pass (the op checks K against the DST).

@@ -41,7 +41,6 @@ private:
 };
 
 // One operand's K blocks of `block_bytes` through `cb` (`block_tiles` pages each, the CB a whole number of blocks).
-// step() never blocks, so one RISC can move two operands; all() moves one.
 class Share {
 public:
     Share(
@@ -87,6 +86,13 @@ public:
         }
     }
 
+    __attribute__((noinline)) void all(uint32_t blocks, const BlockRead& read) {
+        while (!step(blocks, read)) {
+        }
+        finish(blocks);
+    }
+
+private:
     // Take every free slot (a leader reads its block, a receiver tells its leader), and push each block to compute: a
     // receiver's as it lands, a leader's once it has sent it, as its receivers free their slots. True once `blocks`
     // blocks have moved.
@@ -160,13 +166,6 @@ public:
         }
     }
 
-    __attribute__((noinline)) void all(uint32_t blocks, const BlockRead& read) {
-        while (!step(blocks, read)) {
-        }
-        finish(blocks);
-    }
-
-private:
     FORCE_INLINE uint32_t receivers() const { return get_common_arg_val<uint32_t>(out_ + 1); }
 
     // Block b's slot: the CB holds whole blocks from its base, a block per push.

@@ -308,7 +308,6 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.input_projection_math_fidelity = program_config.input_projection_math_fidelity
         self.input_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=program_config.input_projection_math_fidelity,
@@ -691,7 +690,7 @@ class ttKDA:
         # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
         # keep an SP barrier between this reservation and the recurrence.
         self.recurrence.reserve_affine_relay()
-        # With SP the relay forms the output gate from the gathered input: it is freed after the relay.
+        # With SP the relay reads the gathered input for the output gate: it is freed after the relay.
         if gathered and not self.recurrence.applies_output_norm:
             ttnn.deallocate(hidden_states)
         convolution, convolution_slab = state.convolution, {}
@@ -719,7 +718,7 @@ class ttKDA:
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         # With sequence parallelism the relay forms the output gate from the gathered input (with the fused gather, its
-        # buffer, less this rank's slice: the shard itself) and applies the gated norm; otherwise its own program does.
+        # buffer, and this rank's slice from the shard) and applies the gated norm; otherwise its own program does.
         relay_norm = self.recurrence.applies_output_norm
         output_norm = None
         if relay_norm:
@@ -733,7 +732,7 @@ class ttKDA:
                 output_dtype=self.gated_rms_output_dtype,
                 memory_config=self.norm_output_memory_config,
                 gate_local=hidden_states if fused_gather else None,
-                gate_math_fidelity=self.input_projection_math_fidelity,
+                gate_math_fidelity=self.input_projection_compute_config.math_fidelity,
             )
         result = self.recurrence(
             q=q,
