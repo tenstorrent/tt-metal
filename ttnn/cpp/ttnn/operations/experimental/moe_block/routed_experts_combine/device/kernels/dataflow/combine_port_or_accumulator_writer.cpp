@@ -5,10 +5,13 @@
 // combine_port_or_accumulator_writer: the BRISC kernel of a core that is a combine port on some chips and an
 // accumulator on others - the port writer (the fabric sender) and the accumulator writer in one binary, running this
 // chip's role
-// Runs on: plan.port_or_accumulator_cores (separate accumulator cores only), RISCV_0 (BRISC), NoC 1
+// Runs on: plan.port_or_accumulator_cores (ports apart) or the accumulator cores (accumulators on the ports), RISCV_0
+//          (BRISC), NoC 1
 //          (combine dm_kernel: RISCV_0 is pinned to NoC 1)
 //
-// The same arrangement as combine_port_or_accumulator_reader.cpp, which runs the same role on the core:
+// The same arrangement as combine_port_or_accumulator_reader.cpp, which runs the same role on the core with ports apart
+// (with accumulators on the ports, every core's reader is the accumulator reader, and the port role's writer does the
+// accumulator writer's work too):
 //
 //   runtime arg 0 (role) | runs
 //   ---------------------+-------------------------------

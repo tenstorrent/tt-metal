@@ -13,6 +13,8 @@
 // With multicast, the first core of a row (or of all the cores) reads the A slices and multicasts them to the rest,
 // and the first core of a column (or of all) does the same with B; a receiving core reads none of that operand.
 // FUSE_BIAS: before a C slice's K chunks, one reader thread pushes the bias tiles of the C slice's columns.
+// B_FROM_PREFETCHER_PIPES: B arrives over prefetcher pipes, one entry per K chunk; after pushing a K chunk's A slice
+// this reader publishes the entry to the compute through B_relay, and acks it once the compute has popped it.
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <stdint.h>
@@ -28,6 +30,9 @@
 #include "api/semaphore.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+#ifdef B_FROM_PREFETCHER_PIPES
+#include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
+#endif
 
 template <
     uint32_t M_tiles,
@@ -75,7 +80,14 @@ TT_KERNEL void reader(
 
     Noc noc;
     DataflowBuffer A_slice(dfb::A_slice);
+#ifdef B_FROM_PREFETCHER_PIPES
+    static_assert(num_reader_threads == 1, "the pipes' receiver publishes and acks every K chunk itself");
+    // One accessor names every pipe; the one present on this core is bound here.
+    experimental::PrefetcherPipe B_pipe(pipe::B);
+    auto B_relay = B_pipe.bind_relay();
+#else
     DataflowBuffer B_slice(dfb::B_slice);
+#endif
 
     [[maybe_unused]] const auto A = TensorAccessor(tensor::A);
     [[maybe_unused]] const auto B = TensorAccessor(tensor::B);
@@ -91,15 +103,17 @@ TT_KERNEL void reader(
         A_slice.reserve_back(A_slice_tiles);
         A_slice.push_back(A_slice_tiles);
     }
+#ifndef B_FROM_PREFETCHER_PIPES
     if constexpr (B_borrowed) {
         B_slice.reserve_back(K_tiles * C_slice_N_tiles);
         B_slice.push_back(K_tiles * C_slice_N_tiles);
     }
+    const uint32_t B_tile_bytes = get_tile_size(dfb::B_slice);
+#endif
 
     // One DFB entry per tile: a slice is stored row-major in tiles, entry (row, column) at
     // (row * columns + column) * tile bytes, which is how the compute kernel indexes it.
     const uint32_t A_tile_bytes = get_tile_size(dfb::A_slice);
-    const uint32_t B_tile_bytes = get_tile_size(dfb::B_slice);
 
     // Multicast handshake per slice: a receiver clears its data_ready flag and, once its DFB has room, counts itself
     // into the sender's receivers_ready; the sender then multicasts the slice and its VALID flag along its row or
@@ -155,8 +169,10 @@ TT_KERNEL void reader(
                 if (K_chunk >= K_chunks_per_C_slice) {
                     A_slice.reserve_back(A_slice_tiles);
                     A_slice.push_back(A_slice_tiles);
+#ifndef B_FROM_PREFETCHER_PIPES
                     B_slice.reserve_back(B_slice_tiles);
                     B_slice.push_back(B_slice_tiles);
+#endif
                     continue;
                 }
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
@@ -188,6 +204,7 @@ TT_KERNEL void reader(
                         }
                     }
                 }
+#ifndef B_FROM_PREFETCHER_PIPES
                 if constexpr (!B_borrowed) {
                     // B slice: rows K_chunk_first_K_tile.., columns C_slice_first_N_tile.., entry (k_tile, n_tile).
                     // Columns past the edge of B are clipped; they keep their entry, which only feeds clipped C.
@@ -211,6 +228,7 @@ TT_KERNEL void reader(
                         }
                     }
                 }
+#endif
                 noc.async_read_barrier();
                 if constexpr (!A_borrowed && A_last_K_tile_valid_columns > 0) {
                     // K is not a tile multiple: in the last K chunk each row's last tile is A's last K tile, whose
@@ -245,6 +263,7 @@ TT_KERNEL void reader(
                             noc, A_mcast_sender_x, A_mcast_sender_y, A_mcast_end_x, A_mcast_end_y, A_mcast_num_dests);
                     }
                 }
+#ifndef B_FROM_PREFETCHER_PIPES
                 if constexpr (B_mcast_num_dests > 0) {
                     if (B_mcast_receiver) {
                         B_data_ready.wait(VALID);
@@ -266,17 +285,29 @@ TT_KERNEL void reader(
                             noc, B_mcast_sender_x, B_mcast_sender_y, B_mcast_end_x, B_mcast_end_y, B_mcast_num_dests);
                     }
                 }
+#endif
 
                 // A borrowed operand was published once above; only copied slices are pushed here.
                 if constexpr (!A_borrowed) {
                     A_slice.push_back(A_slice_tiles);
                 }
+#ifdef B_FROM_PREFETCHER_PIPES
+                publish_in1_block_from_pipe(B_pipe, B_relay, noc, K_chunk, B_slice_tiles);
+#else
                 if constexpr (!B_borrowed) {
                     B_slice.push_back(B_slice_tiles);
                 }
+#endif
             }
+#ifdef B_FROM_PREFETCHER_PIPES
+            drain_in1_pipe_window(B_pipe, noc, K_chunks_per_C_slice);
+#endif
         }
     }
+#ifdef B_FROM_PREFETCHER_PIPES
+    // The acks are non-posted NoC atomics.
+    noc.async_atomic_barrier();
+#endif
     if constexpr (A_mcast_num_dests > 0 || B_mcast_num_dests > 0) {
         noc.async_write_barrier();
         noc.async_atomic_barrier();

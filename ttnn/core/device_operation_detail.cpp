@@ -7,8 +7,11 @@
 #include "ttnn/device_operation_detail.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <functional>
+#include <numeric>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -231,6 +234,34 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
         }
     }
     return tensor_coordinates;
+}
+
+std::vector<std::uint32_t> compute_tensor_alias_signature(
+    const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors) {
+    // Tensors without an allocated MeshTensor never alias: no binding can reference them.
+    ttsl::SmallVector<std::pair<const tt::tt_metal::MeshTensor*, std::uint32_t>, 16> identities;
+    for (std::uint32_t i = 0; i < tensors.size(); ++i) {
+        const ttnn::Tensor& tensor = tensors[i].get();
+        if (tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated()) {
+            identities.emplace_back(&tensor.mesh_tensor(), i);
+        }
+    }
+    // Sorting by (MeshTensor, position) puts each MeshTensor's first position at the head of its run.
+    std::sort(identities.begin(), identities.end());
+
+    std::vector<std::uint32_t> signature;
+    for (std::size_t run_start = 0, i = 1; i < identities.size(); ++i) {
+        if (identities[i].first != identities[run_start].first) {
+            run_start = i;
+            continue;
+        }
+        if (signature.empty()) {
+            signature.resize(tensors.size());
+            std::iota(signature.begin(), signature.end(), 0u);
+        }
+        signature[identities[i].second] = identities[run_start].second;
+    }
+    return signature;
 }
 
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index) {

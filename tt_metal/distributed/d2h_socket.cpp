@@ -772,6 +772,8 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
             }
         }
     }
+    // The next read's wait starts from bytes_sent_.
+    bytes_sent_ = bytes_sent_value;
 }
 
 void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {

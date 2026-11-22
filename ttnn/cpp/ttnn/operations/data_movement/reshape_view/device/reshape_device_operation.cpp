@@ -25,8 +25,9 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::UINT32 or
-            input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::INT32,
-        "Can only work with bfloat16/float32 or int32/uint32 tensors");
+            input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::INT32 or
+            input_tensor_a.dtype() == DataType::UINT8,
+        "Can only work with bfloat16/float32 or int32/uint32/uint8 tensors");
 }
 
 ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(

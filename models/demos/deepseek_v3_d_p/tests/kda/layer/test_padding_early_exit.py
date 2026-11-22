@@ -41,6 +41,14 @@ pytestmark = run_for_blackhole()
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="SP4xTP4-torus-x-4x4",
         ),
+        pytest.param(
+            (4, 4),
+            1,
+            0,
+            kda_device_params((4, 4), wrap_both_axes=True),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-torus-xy-4x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
