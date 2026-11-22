@@ -109,9 +109,13 @@ class Inkling2MoE:
         # The whole expert step (gate_up + SwiGLU + down + weighted sum) is one fused program.
         self.fused = None
         self.bank_local = False
+        # Stick-layout caches (convert/stick.py) store both expert tensors as [1, 1, P*32, 32] sticks; only the fused
+        # step reads them.
+        sticks = all(tuple(t.shape)[:2] == (1, 1) and t.shape[-1] == 32 for t in (gu, weights["experts.w_down"]))
+        assert FUSED_EXPERTS or not sticks, "stick-layout expert weights need the fused expert step"
         if FUSED_EXPERTS:  # any of BFP4 / BFP8 / BFP4 gate_up + BFP8 down
             self.w_gate_up = ttnn.to_device(gu, device, dram)
-            self.fused = FusedMoeExperts(device, self.w_gate_up, self.w_down, **FUSED_PLACEMENT)
+            self.fused = FusedMoeExperts(device, self.w_gate_up, self.w_down, sticks=sticks, **FUSED_PLACEMENT)
         elif BANK_LOCAL and gu.dtype == ttnn.bfloat4_b:  # re-layout on load; the cache files are unchanged
             self.bank_local = True
             self.bank_gate_up = BankLocalExperts(device, gu, dtype=gu.dtype, slots=TOP_K)
