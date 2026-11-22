@@ -22,7 +22,6 @@ import ttnn
 
 from ...parallel.config import AudioTCParallelConfig, DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
-from ...utils import cache as cache_module
 from ...utils.conv3d import conv3d_blocking_hash
 from .bwe_ltx import MelSTFT, VocoderWithBWE
 from .mel_decoder_ltx import MelDecoder
@@ -64,9 +63,9 @@ class LTXAudioDecoderAdapter:
     audio parallel config, and loads/reloads their weights.
 
     ``mel_decoder`` / ``vocoder_with_bwe`` expose the underlying modules (both ``None`` when the
-    checkpoint requires an unsupported norm/causality). ``reload_weights`` is idempotent and driven
-    by the pipeline; it re-injects the mel-VAE per-channel stats after load (load-bearing — those
-    buffers are not carried by the binary cache).
+    checkpoint requires an unsupported norm/causality) and ``mel_decoder_spec`` / ``vocoder_spec``
+    their ``cache.load_model`` keywords. The pipeline loads them, then calls
+    ``reinject_per_channel_stats`` (load-bearing — those buffers are not carried by the binary cache).
     """
 
     def __init__(
@@ -100,8 +99,8 @@ class LTXAudioDecoderAdapter:
     def _build(self) -> None:
         """Construct audio decoder + vocoder module shells from checkpoint config.
 
-        No weights are loaded — ``reload_weights`` handles that via the disk cache the same way
-        the video VAE adapter does.
+        No weights are loaded — the pipeline loads them via the disk cache the same way it loads
+        the video VAE.
         """
         with safe_open(self._checkpoint_path, framework="pt") as f:
             config = json.loads(f.metadata()["config"])
@@ -237,50 +236,31 @@ class LTXAudioDecoderAdapter:
                     state[k.removeprefix("vocoder.")] = f.get_tensor(k).float()
         return state
 
-    def reload_weights(self) -> None:
-        """Load audio decoder + vocoder weights via the disk cache (mirrors ``reload_decoder``).
+    @property
+    def mel_decoder_spec(self) -> dict:
+        return self._spec("audio_dec", self._audio_decoder_state_provider)
 
-        The per-channel denormalize stats are re-injected separately after load: they are
-        non-Parameter buffers, so the binary cache path doesn't carry them and would otherwise
-        leave garbage stats (and a garbage audio track).
-        """
-        if self._mel_decoder is None or self._vocoder_with_bwe is None:
-            return
-        if self._mel_decoder.is_loaded() and self._vocoder_with_bwe.is_loaded():
-            return
+    @property
+    def vocoder_spec(self) -> dict:
+        return self._spec("audio_voc", self._vocoder_state_provider)
 
-        model_name = os.path.basename(self._checkpoint_path).removesuffix(".safetensors")
+    def _spec(self, subfolder: str, get_torch_state_dict) -> dict:
         blocking_key = conv3d_blocking_hash(self._vocoder_with_bwe)
-        dec_subfolder = f"audio_dec_{blocking_key}" if blocking_key else "audio_dec"
-        voc_subfolder = f"audio_voc_{blocking_key}" if blocking_key else "audio_voc"
+        return {
+            "model_name": os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+            "subfolder": f"{subfolder}_{blocking_key}" if blocking_key else subfolder,
+            "parallel_config": self._dit_parallel_config,
+            "mesh_shape": tuple(self._mesh_device.shape),
+            "mesh_device": self._mesh_device,
+            "get_torch_state_dict": get_torch_state_dict,
+        }
 
-        if not self._mel_decoder.is_loaded():
-            cache_module.load_model(
-                self._mel_decoder,
-                model_name=model_name,
-                subfolder=dec_subfolder,
-                parallel_config=self._dit_parallel_config,
-                mesh_shape=tuple(self._mesh_device.shape),
-                mesh_device=self._mesh_device,
-                get_torch_state_dict=self._audio_decoder_state_provider,
-            )
-
-        if not self._vocoder_with_bwe.is_loaded():
-            cache_module.load_model(
-                self._vocoder_with_bwe,
-                model_name=model_name,
-                subfolder=voc_subfolder,
-                parallel_config=self._dit_parallel_config,
-                mesh_shape=tuple(self._mesh_device.shape),
-                mesh_device=self._mesh_device,
-                get_torch_state_dict=self._vocoder_state_provider,
-            )
-
-        # Re-inject the mel-VAE per-channel stats from the checkpoint — see docstring.
+    def reinject_per_channel_stats(self) -> None:
+        """Re-inject the mel-VAE per-channel denormalize stats after a load: they are non-Parameter
+        buffers, so the binary cache path doesn't carry them and would otherwise leave garbage stats
+        (and a garbage audio track)."""
         with safe_open(self._checkpoint_path, framework="pt") as f:
             self._mel_decoder.set_per_channel_stats(
                 f.get_tensor("audio_vae.per_channel_statistics.std-of-means"),
                 f.get_tensor("audio_vae.per_channel_statistics.mean-of-means"),
             )
-
-        logger.info("Loaded TTNN audio decoder + vocoder")

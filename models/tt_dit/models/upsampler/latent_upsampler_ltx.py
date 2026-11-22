@@ -20,7 +20,6 @@ from ...layers.module import Module, ModuleList
 from ...layers.normalization import GroupNorm3D
 from ...parallel.config import DiTParallelConfig, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache as cache_module
 from ...utils.conv3d import ConvDims, conv3d_blocking_hash, conv_pad_height, conv_pad_width
 from ...utils.tensor import fast_device_to_host, typed_tensor_2dshard
 from ..vae.vae_ltx import LTXCausalConv3d
@@ -266,7 +265,7 @@ class LTXLatentUpsampler(Module):
             mid_channels, in_channels, kernel_size=3, stride=1, conv_dims=post_dims, **block_kwargs
         )
 
-        # Set by ``from_checkpoint`` for ``reload_weights`` (the disk-cache path).
+        # Set by ``from_checkpoint`` for ``spec`` (the disk-cache path).
         self._checkpoint_path: str | None = None
         self._dit_parallel_config: DiTParallelConfig | None = None
 
@@ -286,7 +285,7 @@ class LTXLatentUpsampler(Module):
 
         Stage-1 shape math (``input_hw`` / ``latent_frames``) is computed by the caller and passed
         in — the model never reads pipeline state. ``dit_parallel_config`` is retained for the cache
-        key used by ``reload_weights``.
+        key in ``spec``.
         """
         with safe_open(upsampler_path, framework="pt") as f:
             cfg = json.loads(f.metadata()["config"])
@@ -308,29 +307,25 @@ class LTXLatentUpsampler(Module):
         ups._dit_parallel_config = dit_parallel_config
         return ups
 
-    def reload_weights(self) -> None:
-        """Push upsampler weights onto the mesh via the disk cache. Blocking-hash subfolder
-        invalidates the cache when conv3d ``C_in_block`` changes. Idempotent (no-op if loaded)."""
-        if self.is_loaded():
-            return
-        assert self._checkpoint_path is not None, "reload_weights requires construction via from_checkpoint"
+    @property
+    def spec(self) -> dict:
+        """``cache.load_model`` keywords of the upsampler. The blocking-hash subfolder invalidates the
+        cache when conv3d ``C_in_block`` changes."""
+        assert self._checkpoint_path is not None, "spec requires construction via from_checkpoint"
 
         def _state_provider() -> dict[str, torch.Tensor]:
             logger.info(f"Upsampler cache miss — loading safetensors: {self._checkpoint_path}")
             return load_file(self._checkpoint_path)
 
         blocking_key = conv3d_blocking_hash(self)
-        subfolder = f"upsampler_{blocking_key}" if blocking_key else "upsampler"
-        cache_module.load_model(
-            self,
-            model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
-            subfolder=subfolder,
-            parallel_config=self._dit_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            mesh_device=self.mesh_device,
-            get_torch_state_dict=_state_provider,
-        )
-        logger.info("Loaded TTNN latent upsampler")
+        return {
+            "model_name": os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+            "subfolder": f"upsampler_{blocking_key}" if blocking_key else "upsampler",
+            "parallel_config": self._dit_parallel_config,
+            "mesh_shape": tuple(self.mesh_device.shape),
+            "mesh_device": self.mesh_device,
+            "get_torch_state_dict": _state_provider,
+        }
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Reference upsampler is ``Sequential[Conv2d, PixelShuffleND]``; flatten to Conv3d."""

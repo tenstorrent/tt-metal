@@ -32,6 +32,7 @@ from safetensors import safe_open
 import ttnn
 from models.tt_dit.encoders.gemma.model_gemma import GemmaEncoderLayer
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
+from models.tt_dit.utils import cache
 from models.tt_dit.utils.check import assert_quality
 
 
@@ -185,18 +186,10 @@ def test_gemma_encoder(*, mesh_device):
         mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av", dynamic_load=False
     )
 
-    # On-device Gemma encoder (full 48 layers). TP follows the T5 pattern (axis-1 width):
-    # TP=1 on 1x1, TP=4 on 2x4 — set inside the loader, no override needed.
-    pipe.gemma_encoder_pair.load_gemma_encoder(gemma)
-
-    # Load only the connector weights from the 46GB checkpoint.
-    conn_state = {}
-    with safe_open(ckpt, "pt") as f:
-        for k in f.keys():
-            if k.startswith(CONNECTOR_PREFIXES):
-                conn_state[k] = f.get_tensor(k)
-    logger.info(f"connector weights: {len(conn_state)} tensors")
-    pipe.gemma_encoder_pair.load_embeddings_connectors(conn_state, audio_num_blocks=8)
+    # On-device Gemma encoder (full 48 layers) and connectors; the connector weights are read from
+    # the 46GB checkpoint on a cache miss only. TP follows the T5 pattern (axis-1 width): TP=1 on
+    # 1x1, TP=4 on 2x4 — set inside the loader, no override needed.
+    _load_encoder_pair(pipe, ckpt)
 
     # Reference embeds (HF Gemma-3 + diffusers LTX2TextConnectors), local to this test.
     v_ref, a_ref = _encode_prompts_reference(ckpt, gemma, [PROMPT])
@@ -221,6 +214,13 @@ def test_gemma_encoder(*, mesh_device):
     # fp32 connector weights (HiFi4) match the host reference, so audio holds ~0.9999 like video.
     logger.info(f"AUDIO  ref={tuple(a_ref.shape)} dev={tuple(a_dev.shape)}")
     assert_quality(a_ref, a_dev, pcc=0.9995)
+
+
+def _load_encoder_pair(pipe, ckpt):
+    pair = pipe.gemma_encoder_pair
+    pair.checkpoint_name = ckpt
+    for module, spec in pair.module_specs:
+        cache.load_model(module, **spec)
 
 
 def _walk(m):
@@ -262,14 +262,7 @@ def test_prof_gemma_ltx_devicetime(mesh_device, device_params):
         pytest.skip("LTX checkpoint not found")
 
     pipe = LTXPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
-    pipe.gemma_encoder_pair.load_gemma_encoder(gemma)
-
-    conn_state = {}
-    with safe_open(ckpt, "pt") as f:
-        for k in f.keys():
-            if k.startswith(CONNECTOR_PREFIXES):
-                conn_state[k] = f.get_tensor(k)
-    pipe.gemma_encoder_pair.load_embeddings_connectors(conn_state, audio_num_blocks=8)
+    _load_encoder_pair(pipe, ckpt)
 
     # Flush after each decoder layer plus the feature extractor and each connector — keeps every
     # window well under Tracy's 1000-zone buffer.

@@ -239,11 +239,6 @@ class VocoderWithBWE(Module):
         self.use_trace = False
         self.use_trace_bwe = False
 
-    def release_trace(self) -> None:
-        """Free both generators' captured traces; safe to call when none is active."""
-        self.vocoder.release_trace()
-        self.bwe_generator.release_trace()
-
     def _compute_mel_device(self, x_BCT_torch: torch.Tensor) -> torch.Tensor:
         """Compute log-mel from waveform on device.
 

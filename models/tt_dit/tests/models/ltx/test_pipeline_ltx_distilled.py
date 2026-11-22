@@ -698,6 +698,8 @@ def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_loa
         dit_parallel_config=pipeline.parallel_config,
         traced=pipeline._traced,
     )
+    pipeline.residency.register(pipeline.tt_mel_decoder, pipeline._audio_adapter.mel_decoder_spec)
+    pipeline.residency.register(pipeline.tt_vocoder_with_bwe, pipeline._audio_adapter.vocoder_spec)
     pipeline._prepare_audio_decoder()
 
     vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)

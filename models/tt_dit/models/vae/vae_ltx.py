@@ -24,7 +24,6 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import DiTParallelConfig, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import cache as cache_module
 from ...utils.conv3d import (
     ConvDims,
     _ntuple,
@@ -948,11 +947,6 @@ class LTXVideoDecoder(Module):
         # logical_h/logical_w have grown through the upsample blocks
         return out, logical_h, logical_w
 
-    def release_trace(self) -> None:
-        """Free all captured decode traces (call on shutdown or before re-warming)."""
-        for tracer in type(self).decode_device._tracers_keyed.get(self, {}).values():
-            tracer.release_trace()
-
     def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float") -> torch.Tensor:
         """Decode latent (B, 128, F', H', W') → video.
 
@@ -1537,9 +1531,8 @@ class LTXVideoVAEAdapter:
     Decoder and encoder share ``vae.per_channel_statistics.*`` and the VAE H/W parallel config,
     so a single adapter owns both (mirrors ``WanVAEDecoderAdapter``, which owns just the decoder).
     Either submodule may be ``None`` when the checkpoint lacks the corresponding blocks (or when the
-    encoder has no concrete H/W). ``reload_decoder`` / ``reload_encoder`` are idempotent and driven
-    by the pipeline; ``decoder`` / ``encoder`` expose the underlying ``Module`` for coresident
-    exclusion registration.
+    encoder has no concrete H/W). ``decoder`` / ``encoder`` expose the underlying ``Module``s and
+    ``decoder_spec`` / ``encoder_spec`` their ``cache.load_model`` keywords; the pipeline loads them.
     """
 
     def __init__(
@@ -1619,70 +1612,50 @@ class LTXVideoVAEAdapter:
             self._pcs_cache = read_vae_per_channel_stats(self._checkpoint_path)
         return self._pcs_cache
 
-    def reload_decoder(self) -> None:
-        """Push VAE decoder weights onto the mesh via the disk cache. Blocking-hash subfolder
-        forces re-load when conv3d ``C_in_block`` changes (mirrors Wan). A static load keeps the
-        VAE resident across the audio decode — skip the per-request reload once loaded."""
-        if self._decoder is None or self._decoder.is_loaded():
-            return
-
-        def _state_provider() -> dict[str, torch.Tensor]:
-            logger.info(f"VAE cache miss — loading safetensors: {self._checkpoint_path}")
-            raw = load_file(self._checkpoint_path)
-            vae_state = {}
-            for k, v in raw.items():
-                if k.startswith("vae.decoder."):
-                    vae_state[k.removeprefix("vae.decoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        vae_state[short_key] = v
-            return vae_state
-
+    @property
+    def decoder_spec(self) -> dict:
+        """``cache.load_model`` keywords of ``decoder``. The blocking-hash subfolder forces a re-load
+        when conv3d ``C_in_block`` changes (mirrors Wan)."""
+        assert self._decoder is not None
         blocking_key = conv3d_blocking_hash(self._decoder)
-        subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
-        cache_module.load_model(
-            self._decoder,
-            model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
-            subfolder=subfolder,
-            parallel_config=self._dit_parallel_config,
-            mesh_shape=tuple(self._mesh_device.shape),
-            mesh_device=self._mesh_device,
-            get_torch_state_dict=_state_provider,
+        return self._spec(
+            subfolder=f"vae_{blocking_key}" if blocking_key else "vae", prefix="vae.decoder.", label="VAE decoder"
         )
-        logger.info(f"Loaded TTNN VAE decoder ({len(self.decoder_blocks)} blocks)")
 
-    def reload_encoder(self) -> None:
-        """Push VAE encoder weights onto the mesh (I2V image conditioning). Mirrors
-        ``reload_decoder``; shares the decoder's ``vae.per_channel_statistics.*``."""
-        if self._encoder is None or self._encoder.is_loaded():
-            return
+    @property
+    def encoder_spec(self) -> dict:
+        """``cache.load_model`` keywords of ``encoder`` (I2V image conditioning). Shares the decoder's
+        ``vae.per_channel_statistics.*``."""
+        assert self._encoder is not None
+        blocking_key = conv3d_blocking_hash(self._encoder)
+        return self._spec(
+            subfolder=f"vae_enc_{blocking_key}" if blocking_key else "vae_enc",
+            prefix="vae.encoder.",
+            label="VAE encoder",
+        )
 
+    def _spec(self, *, subfolder: str, prefix: str, label: str) -> dict:
         def _state_provider() -> dict[str, torch.Tensor]:
-            logger.info(f"VAE encoder cache miss — loading safetensors: {self._checkpoint_path}")
+            logger.info(f"{label} cache miss — loading safetensors: {self._checkpoint_path}")
             raw = load_file(self._checkpoint_path)
-            enc_state = {}
+            state = {}
             for k, v in raw.items():
-                if k.startswith("vae.encoder."):
-                    enc_state[k.removeprefix("vae.encoder.")] = v
+                if k.startswith(prefix):
+                    state[k.removeprefix(prefix)] = v
                 elif k.startswith("vae.per_channel_statistics."):
                     short_key = k.removeprefix("vae.")
                     if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        enc_state[short_key] = v
-            return enc_state
+                        state[short_key] = v
+            return state
 
-        blocking_key = conv3d_blocking_hash(self._encoder)
-        subfolder = f"vae_enc_{blocking_key}" if blocking_key else "vae_enc"
-        cache_module.load_model(
-            self._encoder,
-            model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
-            subfolder=subfolder,
-            parallel_config=self._dit_parallel_config,
-            mesh_shape=tuple(self._mesh_device.shape),
-            mesh_device=self._mesh_device,
-            get_torch_state_dict=_state_provider,
-        )
-        logger.info(f"Loaded TTNN VAE encoder ({len(self.encoder_blocks)} blocks)")
+        return {
+            "model_name": os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+            "subfolder": subfolder,
+            "parallel_config": self._dit_parallel_config,
+            "mesh_shape": tuple(self._mesh_device.shape),
+            "mesh_device": self._mesh_device,
+            "get_torch_state_dict": _state_provider,
+        }
 
 
 def upsample_latent(

@@ -45,6 +45,7 @@ from ...utils.tensor import bf16_tensor
 from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
+from ..pipeline_api import PipelineAPIMixin
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
@@ -184,7 +185,7 @@ def euler_step(
 # =============================================================================
 
 
-class LTXPipeline:
+class LTXPipeline(PipelineAPIMixin):
     """
     LTX-2 text-to-audio-video generation pipeline.
 
@@ -333,7 +334,7 @@ class LTXPipeline:
             # than typecast afterward by a post-load hook.
             self._resolve_quant_config()
             self._instantiate_modules(extra_transformer_variants or [])
-            self._register_coresident_exclusions()
+            self._register_residency()
             self._prime_caches()
             valid_shape = num_frames > 0 and height > 0 and width > 0
             if (run_warmup or traced) and valid_shape:
@@ -346,42 +347,34 @@ class LTXPipeline:
                     "skipping forced warmup — trace capture will likely fail"
                 )
 
-    def release_traces(self) -> None:
-        """Release captured denoise traces and free their device trace memory."""
-        if self.transformer is not None:
-            for tracer in LTXTransformerModel.inner_step._tracers_keyed.get(self.transformer, {}).values():
-                tracer.release_trace()
-        if self.tt_vocoder_with_bwe is not None:
-            self.tt_vocoder_with_bwe.release_trace()
-        if self.tt_mel_decoder is not None:
-            self.tt_mel_decoder.release_trace()
-        if self.vae_decoder is not None:
-            self.vae_decoder.release_trace()
+    def _reset_trace_state(self) -> None:
+        """Drop the transformer's per-shape trace inputs and the prompt buffers the distilled pipeline
+        writes under tracing; they go with the transformer's traces."""
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
 
     @property
     def vae_decoder(self):
-        """Underlying VAE decoder ``Module`` (or ``None``) — used by coresident exclusions,
+        """Underlying VAE decoder ``Module`` (or ``None``) — used by residency registration,
         warmup, and ``decode_latents``."""
         return self.vae.decoder if self.vae is not None else None
 
     @property
     def vae_encoder(self):
-        """Underlying VAE encoder ``Module`` (or ``None``) — used by coresident exclusions,
+        """Underlying VAE encoder ``Module`` (or ``None``) — used by residency registration,
         warmup, and ``encode_image``."""
         return self.vae.encoder if self.vae is not None else None
 
     @property
     def tt_mel_decoder(self):
-        """Underlying mel-VAE decoder ``Module`` (or ``None``) — used by ``release_traces``,
+        """Underlying mel-VAE decoder ``Module`` (or ``None``) — used by ``_prepare_audio_decoder``,
         ``_decode_mel``, and ``decode_audio``."""
         return self._audio_adapter.mel_decoder if self._audio_adapter is not None else None
 
     @property
     def tt_vocoder_with_bwe(self):
-        """Underlying vocoder+BWE ``Module`` (or ``None``) — used by ``release_traces`` and
+        """Underlying vocoder+BWE ``Module`` (or ``None``) — used by ``_prepare_audio_decoder`` and
         ``decode_audio``."""
         return self._audio_adapter.vocoder_with_bwe if self._audio_adapter is not None else None
 
@@ -607,31 +600,49 @@ class LTXPipeline:
                 traced=self._traced,
             )
 
-    def _register_coresident_exclusions(self) -> None:
+    def _register_residency(self) -> None:
         """All transformer variants exclude each other AND the VAE. LTX-22B +
         LTX-VAE don't both fit on BH LB; VAE must evict the active transformer
-        before decode. LTX needs the eviction on both WH and BH."""
-        if not self.dynamic_load:
-            return
+        before decode. LTX needs the eviction on both WH and BH. Without
+        ``dynamic_load`` every module is permanent."""
+        dynamic = self.dynamic_load
+
+        def evicts(*modules) -> list:
+            return [m for m in modules if m is not None] if dynamic else []
+
         models = [s.model for s in self.transformer_states]
-
-        for i, m in enumerate(models):
-            m._coresident_peers = [*models[:i], *models[i + 1 :], self.vae_decoder, self.vae_encoder]
-        if self.vae_decoder is not None:
-            self.vae_decoder._coresident_peers = [*models, self.upsampler, self.vae_encoder]
-        if self.upsampler is not None:
-            self.upsampler._coresident_peers = [self.vae_decoder, self.vae_encoder]
-        if self.vae_encoder is not None:
-            self.vae_encoder._coresident_peers = [*models, self.vae_decoder, self.upsampler]
-
-        for m in [*models, self.vae_decoder, self.upsampler, self.vae_encoder]:
-            if m is not None:
-                for peer in m._coresident_peers:
-                    if peer is not None:
-                        m.register_coresident_exclusions(peer)
-
-        encoder_peers = [*models] + ([self.vae_decoder] if self.vae_decoder is not None else [])
-        self.gemma_encoder_pair.register_coresident_peers(encoder_peers)
+        vae_dec, vae_enc, upsampler = self.vae_decoder, self.vae_encoder, self.upsampler
+        gemma = self.gemma_encoder_pair.module_specs
+        gemma_modules = [m for m, _ in gemma]
+        quant_tag = getattr(self, "_quant_cache_tag", None)
+        for i, state in enumerate(self.transformer_states):
+            self.residency.register(
+                state.model,
+                {
+                    "model_name": state.checkpoint.cache_name(state.lora_specs, quant_tag),
+                    "subfolder": state.model.weight_cache_subfolder(),
+                    "parallel_config": self.parallel_config,
+                    "mesh_shape": tuple(self.mesh_device.shape),
+                    "mesh_device": state.model.mesh_device,
+                    "is_fsdp": self.is_fsdp,
+                    "get_torch_state_dict": lambda state=state: state.checkpoint.state_dict(state.lora_specs),
+                },
+                evicts=evicts(*models[:i], *models[i + 1 :], vae_dec, vae_enc, *gemma_modules),
+                on_evict=(self.release_traces, self._reset_trace_state),
+            )
+        if vae_dec is not None:
+            self.residency.register(
+                vae_dec, self.vae.decoder_spec, evicts=evicts(*models, upsampler, vae_enc, *gemma_modules)
+            )
+        if vae_enc is not None:
+            self.residency.register(vae_enc, self.vae.encoder_spec, evicts=evicts(*models, vae_dec, upsampler))
+        if upsampler is not None:
+            self.residency.register(upsampler, upsampler.spec, evicts=evicts(vae_dec, vae_enc))
+        for module, spec in gemma:
+            self.residency.register(module, spec, evicts=evicts(*models, vae_dec))
+        if self.tt_mel_decoder is not None:
+            self.residency.register(self.tt_mel_decoder, self._audio_adapter.mel_decoder_spec)
+            self.residency.register(self.tt_vocoder_with_bwe, self._audio_adapter.vocoder_spec)
 
     def _prime_caches(self) -> None:
         """Load every module in reverse use order so variant 0 is resident in
@@ -672,16 +683,9 @@ class LTXPipeline:
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
         # The transformer is built with the quant config, so a cache miss loads weights direct-to-quant
-        # and the write holds the quantized tensorbins. quant_tag keeps that cache separate from the
-        # bf16 baseline.
-        state.checkpoint.load(
-            state.model,
-            parallel_config=self.parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            is_fsdp=self.is_fsdp,
-            lora_specs=state.lora_specs,
-            quant_tag=getattr(self, "_quant_cache_tag", None),
-        )
+        # and the write holds the quantized tensorbins. The quant tag in its cache name keeps that
+        # cache separate from the bf16 baseline.
+        self.residency.load(state.model)
         self.transformer = state.model
         # dynamic_load restores the cached (LoRA-free) base weights on every
         # page-in, so re-merge the active adapter's delta onto the fresh weights.
@@ -785,15 +789,20 @@ class LTXPipeline:
             logger.info(f"Cached device embeddings to {cache_path}")
         return results
 
+    def _prepare_gemma(self) -> None:
+        """Make the Gemma encoder, feature extractor and connectors resident."""
+        for module, _ in self.gemma_encoder_pair.module_specs:
+            self.residency.load(module)
+
     def _prepare_vae(self) -> None:
-        """Delegate: push VAE decoder weights onto the mesh (see ``LTXVideoVAEAdapter``)."""
-        if self.vae is not None:
-            self.vae.reload_decoder()
+        """Make the VAE decoder resident."""
+        if self.vae_decoder is not None:
+            self.residency.load(self.vae_decoder)
 
     def _prepare_vae_encoder(self) -> None:
-        """Delegate: push VAE encoder weights onto the mesh (see ``LTXVideoVAEAdapter``)."""
-        if self.vae is not None:
-            self.vae.reload_encoder()
+        """Make the VAE encoder resident."""
+        if self.vae_encoder is not None:
+            self.residency.load(self.vae_encoder)
 
     def encode_image(self, image_BCFHW: torch.Tensor) -> torch.Tensor:
         """Encode a conditioning image/clip ``(B, 3, F, H, W)`` in [-1, 1] to a normalized
@@ -843,9 +852,9 @@ class LTXPipeline:
         return self.vae.per_channel_stats()
 
     def _prepare_upsampler(self) -> None:
-        """Delegate: push upsampler weights onto the mesh (see ``LTXLatentUpsampler.reload_weights``)."""
+        """Make the latent upsampler resident."""
         if self.upsampler is not None:
-            self.upsampler.reload_weights()
+            self.residency.load(self.upsampler)
 
     def _warmup_upsample(self, num_frames: int, height: int, width: int) -> None:
         """JIT-compile the upsampler at the stage-1 half-res shape."""
@@ -1325,9 +1334,14 @@ class LTXPipeline:
         return video_lat[:, :video_N_real, :], audio_lat[:, :audio_N_real, :]
 
     def _prepare_audio_decoder(self) -> None:
-        """Delegate: load audio decoder + vocoder weights (see ``LTXAudioDecoderAdapter``)."""
-        if self._audio_adapter is not None:
-            self._audio_adapter.reload_weights()
+        """Make the audio decoder + vocoder resident, then re-inject the mel-VAE stats the cache lacks."""
+        if self.tt_mel_decoder is None:
+            return
+        reloaded = not self.tt_mel_decoder.is_loaded()
+        self.residency.load(self.tt_mel_decoder)
+        self.residency.load(self.tt_vocoder_with_bwe)
+        if reloaded:
+            self._audio_adapter.reinject_per_channel_stats()
 
     def _decode_mel(self, audio_spatial: torch.Tensor) -> torch.Tensor:
         """Run the mel-VAE decoder, traced (capture-once/replay) when the pipeline is traced."""
