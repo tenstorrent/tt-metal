@@ -7,7 +7,7 @@ continues at pos = len(prompt):
 - attention (per HF cache index c): 1024-slot ring (slot = pos % 1024), global full cache, k/v conv inputs at lag 0-2;
 - post-attn / post-mlp ShortConv state rows 0-3 = inputs at lag 0-3 (fp32).
 
-A chunk is T tokens (default 2048; T divides 1024 or is 2048; the last chunk is rounded up to 128 and its pad rows
+A chunk is T tokens (default 2048; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128; pad rows
 are never written to a cache). Per application, everything is a [1,1,T,C] sequence tensor:
 - block / message attn-res: per-token softmax over depth (no cross-token mixing);
 - k=4 short convs: exact unaligned row slices of [3 history rows ++ chunk];
@@ -261,7 +261,7 @@ class _LayerPF:
 class Inkling2Prefill:
     def __init__(self, model, root=wcache.DEFAULT_ROOT, chunk=2048):
         chunk = int(os.environ.get("PF_CHUNK", chunk))
-        assert chunk % QB == 0 and (WINDOW % chunk == 0 or chunk == 2 * WINDOW), chunk
+        assert chunk % QB == 0 and (WINDOW % chunk == 0 or chunk % WINDOW == 0), chunk
         self.m = model
         self.device = dev = model.device
         self.chunk = chunk
@@ -380,18 +380,25 @@ class Inkling2Prefill:
         """Chunk rows [0, n) -> ring slots s%1024 ...; pad rows keep the old slot contents."""
         t = k.shape[2]
         o = s % WINDOW
-        if t > WINDOW:  # 2048-chunk (s % 1024 == 0): slot j < n-1024 gets row 1024+j, else row j
-            assert o == 0 and WINDOW < n <= t <= 2 * WINDOW, (s, n, t)
-            a = _bf16(_rows(k, 0, WINDOW))
-            b = _bf16(_rows(k, WINDOW, t))
-            if t < 2 * WINDOW:
-                zb = self._const(
-                    ("zring", 2 * WINDOW - t),
-                    lambda: self._put(torch.zeros(1, N_KV, 2 * WINDOW - t, HEAD_DIM), ttnn.bfloat16),
-                )
-                b = ttnn.concat([b, zb], dim=2)
-            m = self._put((torch.arange(WINDOW) < n - WINDOW).float().view(1, 1, WINDOW, 1), ttnn.bfloat16)
-            new = ttnn.add(a, ttnn.multiply(ttnn.subtract(b, a), m))
+        if t > WINDOW:  # long chunk (s % 1024 == 0): slot q gets the last real row j < n with j % 1024 == q
+            assert o == 0 and WINDOW < n <= t, (s, n, t)
+            q = torch.arange(WINDOW)
+            src = q + WINDOW * ((n - 1 - q) // WINDOW)  # chunk row per slot
+            new = None
+            for blk in range(-(-t // WINDOW)):
+                lo, hi = blk * WINDOW, min(t, (blk + 1) * WINDOW)
+                if not bool(((src >= lo) & (src < hi)).any()):
+                    continue
+                part = _bf16(_rows(k, lo, hi))
+                if hi - lo < WINDOW:
+                    zb = self._const(
+                        ("zring", WINDOW - (hi - lo)),
+                        lambda w=WINDOW - (hi - lo): self._put(torch.zeros(1, N_KV, w, HEAD_DIM), ttnn.bfloat16),
+                    )
+                    part = ttnn.concat([part, zb], dim=2)
+                m = self._put(((src >= lo) & (src < hi)).float().view(1, 1, WINDOW, 1), ttnn.bfloat16)
+                term = ttnn.multiply(part, m)
+                new = term if new is None else ttnn.add(new, term)
             ttnn.fill_cache(
                 ring, ttnn.typecast(new, ring.dtype) if ring.dtype != ttnn.bfloat16 else new, 0, update_idx=0
             )
