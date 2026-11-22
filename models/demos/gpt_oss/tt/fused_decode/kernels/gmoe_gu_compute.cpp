@@ -18,6 +18,9 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "gmoe_swiglu.hpp"
+#ifdef GMOE_GU_GMAJOR
+#include "gmoe_common.hpp"
+#endif
 
 // GMOE_W_TRANSPOSED: the weight tiles are stored transposed within themselves (the batched dense decode experts in
 // K-GPTQ, experts/weights.py DenseDecodeExpertWeights.tile_transposed); the matmuls transpose them back on unpack.
@@ -75,35 +78,44 @@ void kernel_main() {
             tile_regs_release();
         }
     };
+#ifdef GMOE_GU_GMAJOR
+    // fine units (512 / 1024-row passes, gmoe_common.hpp): every unit is one in0 block of at most GROUP slots, a new
+    // block when the unit's (expert, group) changes (gmoe_gu_reader.cpp loads them in the same order)
+    {
+        gmoe::Plan p;
+        gmoe::meta_plan(meta, p);
+        constexpr uint32_t NONE = 0xFFFFFFFFu;
+        uint32_t loaded_key = NONE;
+        for (uint32_t u = u0; u < u1; ++u) {
+            uint32_t e, g, j;
+            gmoe::fine_unit(p, NU, u, e, g, j);
+            const uint32_t key = e * 64 + g;
+            if (key != loaded_key) {
+                if (loaded_key != NONE) {
+                    cb_pop_front(cb_x, GROUP * KT);
+                }
+                cb_wait_front(cb_x, GROUP * KT);
+                loaded_key = key;
+            }
+            cb_wait_front(cb_w, 2 * KT);
+            cb_wait_front(cb_b, 2);
+            block(gmoe::group_slots(p.tiles[e], g));
+            cb_pop_front(cb_w, 2 * KT);
+            cb_pop_front(cb_b, 2);
+        }
+        if (loaded_key != NONE) {
+            cb_pop_front(cb_x, GROUP * KT);
+        }
+        cb_pop_front(cb_meta, 1);
+        return;
+    }
+#endif
     uint32_t loaded = E;
     for (uint32_t u = u0; u < u1; ++u) {
         const uint32_t e = u / NU, m = meta[2 + e];
         if (m == 0) {
             continue;
         }
-#ifdef GMOE_GU_GMAJOR
-        if (m > GROUP) {
-            // a big expert (512 / 1024-row passes; gmoe_gu_reader.cpp): per group of GROUP slots, this core's units
-            if (loaded != E) {
-                cb_pop_front(cb_x, GROUP * KT);
-                loaded = E;
-            }
-            const uint32_t ue1 = u1 < (e + 1) * NU ? u1 : (e + 1) * NU;
-            for (uint32_t g = 0; g < m; g += GROUP) {
-                cb_wait_front(cb_x, GROUP * KT);
-                for (uint32_t uu = u; uu < ue1; ++uu) {
-                    cb_wait_front(cb_w, 2 * KT);
-                    cb_wait_front(cb_b, 2);
-                    block(m - g < GROUP ? m - g : GROUP);
-                    cb_pop_front(cb_w, 2 * KT);
-                    cb_pop_front(cb_b, 2);
-                }
-                cb_pop_front(cb_x, GROUP * KT);
-            }
-            u = ue1 - 1;
-            continue;
-        }
-#endif
         if (m <= GROUP && e != loaded) {
             if (loaded != E) {
                 cb_pop_front(cb_x, GROUP * KT);

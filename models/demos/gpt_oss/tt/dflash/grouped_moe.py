@@ -286,8 +286,9 @@ class GroupedMoE:
         rca = [t.buffer_address() for t in io]
         xg_arg = len(rca)
         rca += self.xg_noc
-        # (512 / 1024-row passes: an expert with more than GROUP slots in groups of GROUP, each with its units' weights,
-        # instead of its rows of X_g reloaded per unit: gate|up 4.1 -> 8.1 ms per pass at 512 rows otherwise)
+        # (512 / 1024-row passes: units of one GROUP-slot group of an expert x one column tile, balanced over the cores
+        # by cost (gmoe_common.hpp fine units), each group's rows of X_g loaded once per core instead of an expert's
+        # rows reloaded per unit: gate|up 4.1 -> 8.1 ms per pass at 512 rows otherwise)
         gmajor = [("GMOE_GU_GMAJOR", "1")] if self.rows > 256 else []
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
@@ -301,7 +302,7 @@ class GroupedMoE:
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_writer.cpp"), core_ranges=cores, compile_time_args=wct,
                 runtime_args=[], common_runtime_args=[self.ag.buffer_address()],
-                defines=[("GMOE_CAP", str(GROUP))] if gmajor else [],
+                defines=[("GMOE_FINE", "1")] if gmajor else [],
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC),
             ),
             ttnn.KernelDescriptor(

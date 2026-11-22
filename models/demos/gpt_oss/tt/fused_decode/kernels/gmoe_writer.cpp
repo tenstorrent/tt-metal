@@ -10,6 +10,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#ifdef GMOE_FINE
+#include "gmoe_common.hpp"
+#endif
 
 void kernel_main() {
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
@@ -25,6 +28,25 @@ void kernel_main() {
     invalidate_l1_cache();
     volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_meta));
     const uint32_t u0 = meta[0], u1 = meta[1];
+#ifdef GMOE_FINE
+    // the gate|up's fine units (512 / 1024-row passes, gmoe_common.hpp): unit (e, g, j)'s group slots to their tiles
+    gmoe::Plan p;
+    gmoe::meta_plan(meta, p);
+    for (uint32_t u = u0; u < u1; ++u) {
+        uint32_t e, g, j;
+        gmoe::fine_unit(p, NU, u, e, g, j);
+        const uint32_t s0 = p.base[e] + g * gmoe::GROUP, n = gmoe::group_slots(p.tiles[e], g);
+        for (uint32_t s = 0; s < n; ++s) {
+            cb_wait_front(cb_out, 1);
+            noc_async_write(get_read_ptr(cb_out), s_out.get_noc_addr((s0 + s) * NU + j), tile);
+            noc_async_writes_flushed();
+            cb_pop_front(cb_out, 1);
+        }
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_meta, 1);
+    return;
+#endif
     for (uint32_t u = u0; u < u1; ++u) {
         const uint32_t e = u / NU, j = u % NU, m = meta[2 + e], base = meta[2 + E + e];
 #ifdef GMOE_CAP
