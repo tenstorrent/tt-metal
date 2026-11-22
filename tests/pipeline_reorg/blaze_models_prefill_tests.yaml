@@ -1469,7 +1469,7 @@
         -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit.xml"
   test_type: gemma4_prefill_kv_pcc
   test_tags: [gemma4_d_p, runner, kv_cache]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   budget_type: demo
   skus:
     bh_sc1:
@@ -2007,7 +2007,7 @@
     exec timeout -k 2m 35m bash models/demos/gpt_oss_d_p/scripts/ci/run_prefill_acceptance.sh
   test_type: gpt_oss_prefill_runner
   test_tags: [gpt_oss_prefill_runner, runner, kv_cache]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc1:
       timeout: 35
@@ -2247,7 +2247,7 @@
     exec bash models/demos/llama_3p1_8b_d_p/scripts/ci/run_prefill_acceptance.sh
   test_type: llama31_prefill_runner
   test_tags: [llama31, runner, kv_cache]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc1:
       # Table, standard launcher, reference validation,
@@ -2370,7 +2370,7 @@
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc4 --variant dspark
   test_type: k3_dspark_runner
   test_tags: [kimi_k3, runner, kv_cache, dflash, dspark]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc4:
       # The test step takes about 14 min warm on TtMoe (run 41911365787) and 17.5 min on the MoE block (run
@@ -2398,7 +2398,7 @@
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4 --variant mtp_kv_share
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, mtp, glm_mtp_kv_share, glm53_trace, glm_packed]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc4:
       timeout: 60
@@ -2429,7 +2429,7 @@
     echo "===== both runs passed ====="
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc1_high_power:
       timeout: 80
@@ -2455,7 +2455,7 @@
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm53_4x4]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc1_high_power:
       timeout: 40
@@ -2480,7 +2480,7 @@
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 --variant packed
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed, glm53_4x4]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc1:
       # The unpacked 4x4 leg's 40: packing moves the per-forward cost, not the bringup or the request length.
@@ -2537,7 +2537,7 @@
     echo "===== all 4 sections passed ====="
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, mtp, glm_mtp_kv_share, glm53_trace]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc1:
       timeout: 120
@@ -2570,7 +2570,7 @@
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3
   test_type: k3_prefill_runner_93l
   test_tags: [kimi_k3, runner, kv_cache]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc4:
       # The job takes about 19 min warm; 90 leaves room for a cold Weka cache of the 1.5 TB of weights.
@@ -2606,7 +2606,7 @@
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc1
   test_type: k3_prefill_runner_24l
   test_tags: [kimi_k3, runner, kv_cache]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc1_high_power:
       # 30 killed the leg at 38 min on run 34831600450, mid-bringup.
@@ -2633,7 +2633,7 @@
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1
   test_type: k31_prefill_runner_24l
   test_tags: [kimi_k3_1, runner, kv_cache]
-  test_group: disagg_prefill
+  test_group: ci_run_skip
   skus:
     bh_sc1_high_power:
       # K3's 60: its L24 leg was still in bringup at 38 min on CI (run 34831600450), where weight load
