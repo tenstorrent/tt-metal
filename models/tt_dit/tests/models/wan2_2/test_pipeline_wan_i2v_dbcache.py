@@ -269,9 +269,8 @@ def test_wan_i2v_dbcache_ab(
             if ts.model.is_loaded():
                 ts.model.deallocate_weights()
                 logger.info(f"mem probe: transformer[{idx}] evicted -> {_dram(mesh_device)}")
-        pipeline._vae.deallocate_weights()  # noqa: SLF001
+        pipeline._vae.decoder.deallocate_weights()  # noqa: SLF001
         logger.info(f"mem probe: VAE decoder evicted -> {_dram(mesh_device)}")
-        pipeline._vae.reload_weights()  # noqa: SLF001 - __call__ does not reload the decoder
     if evict_t5:
         t5 = pipeline._text_encoder._tt_encoder  # noqa: SLF001
         pipeline.transformer.register_coresident_exclusions(t5)

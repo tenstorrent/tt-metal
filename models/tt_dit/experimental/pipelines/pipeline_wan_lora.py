@@ -28,7 +28,6 @@ from models.tt_dit.experimental.utils.lightx2v_loader import wan_lightx2v_to_dif
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.solvers.factory import CustomSigmaScheduler
-from models.tt_dit.utils import cache
 
 if TYPE_CHECKING:
     from diffusers.schedulers import SchedulerMixin
@@ -329,8 +328,6 @@ class WanPipelineI2VLora(WanPipelineI2V):
 
         self._lora_specs: dict[int, list[LoRASpec]] = {0: high_specs, 1: low_specs}
         self._cache_namespace = _lora_stack_cache_namespace(self._lora_specs)
-        # Cleared after TT cache handoff (see _prepare_transformer) to free CPU memory.
-        self._fused_state_dicts: dict[int, dict[str, torch.Tensor] | None] = {0: None, 1: None}
         self.custom_sigmas = None
 
         if scheduler is None:
@@ -386,29 +383,12 @@ class WanPipelineI2VLora(WanPipelineI2V):
             verify_fusion_changed_weights(previous_sd, fused_sd, label=label)
         return fused_sd
 
-    def _prepare_transformer(self, idx: int):
-        state = self.transformer_states[idx]
-
+    def _transformer_spec(self, idx: int) -> dict:
+        spec = super()._transformer_spec(idx)
         if not self._lora_specs[idx]:
-            super()._prepare_transformer(idx)
-            return
-
-        def _get_state_dict(idx_=idx):
-            cached = self._fused_state_dicts.get(idx_)
-            if cached is not None:
-                return cached
-            sd = self._build_fused_state_dict(idx_)
-            self._fused_state_dicts[idx_] = sd
-            return sd
-
-        cache.load_model(
-            state.model,
-            model_name=self._cache_namespace,
-            subfolder=state.checkpoint.subfolder,
-            parallel_config=self.parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            mesh_device=self.mesh_device,
-            is_fsdp=self.is_fsdp,
-            get_torch_state_dict=_get_state_dict,
-        )
-        self._fused_state_dicts[idx] = None
+            return spec
+        return {
+            **spec,
+            "model_name": self._cache_namespace,
+            "get_torch_state_dict": lambda: self._build_fused_state_dict(idx),
+        }

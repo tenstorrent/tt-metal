@@ -243,10 +243,6 @@ class ExpertCacheRunner:
             if forecaster is not None:
                 forecaster.reset()
 
-    def release_traces(self) -> None:
-        for tracer in (self.head, self.body, self.tail):
-            tracer.release_trace()
-
     # ------------------------------------------------------------------ step
     def run_step(
         self,
