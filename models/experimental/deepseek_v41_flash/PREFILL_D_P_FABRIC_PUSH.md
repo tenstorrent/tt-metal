@@ -124,21 +124,20 @@ zero or more `{"progress"}`, then `{"seq_len", "base", "cached", "seconds", "pus
 
 ### 5.3 Prefill side (`demo/prefill_server.py`, `tt/prefill/d_p_bridge.py`, new `tt/prefill/d_p_push.py`)
 
-* `DPPrefill.push_targets(slot, T, base, targets)`: builds and runs one mesh program over mesh 0, then
-  `synchronize_device`; returns bytes and seconds.
-* Sender assignment: each (decode stage, decode chip) target is served by a fixed prefill chip so every prefill chip
-  sends about the same volume; KV pages are sent by their owner chip (dedup slab: each chip owns 1/32 of every
-  source), key blocks by one of their owner row's 4 chips (round-robin over columns), ring tiles from a staging tensor.
-* One kernel (generalising `sender_write.py`'s): per destination chip a route (`fabric_set_unicast_route` per packet,
-  one connection: every mesh-1 chip is behind the same exit), work lists as runtime args:
-  * KV: runs of source pages (slab page ids via `TensorAccessor`) -> destination page ids, 1 KiB packets;
-  * keys: per block, 64 source rows read as 32-byte face rows straight into tile order in L1 (8 tiles), then 8 x
-    2 KiB packets;
-  * rings: 64 tile pages from a staging tensor -> page `slot*64`.
-  Work lists too long for runtime args (1M tokens: hundreds of thousands of pages) go in a DRAM table the kernel
-  streams (block ids only: destination pages follow from `page_rows`, so the table is `page_rows` itself plus ranges).
-* Rings: read on the host (`_window_rows`, ~2.5 MiB for 20 layers), tilized on the host, uploaded as one TILE staging
-  tensor on the sending chips. Cheap; a device path only if it shows in the profile.
+As written (`d_p_push.push(d_p, targets, slot)`; no `DPPrefill` method):
+
+* Sources, all DRAM interleaved so one `TensorAccessorArgs` set serves them: per kv source the slab rows of the
+  owner-stripe blocks the entries reach (`CacheSlab.slice_rows`, 1 KiB rows), the index-key slab rows tilized on the
+  device (`ttnn.to_layout`: an owner stripe is a multiple of 64 rows, so a 64-entry block is 8 consecutive tiles in
+  decode's order), and one TILE staging tensor of the rings (read on the host by `_window_rows`, tilized by
+  `from_torch`, replicated: 2.5 MiB for 20 layers).
+* Sender assignment: KV pages by their owner chip (dedup: chip-linear owner); key blocks and ring tiles by one of the
+  chips holding them, rotated by destination chip so the replicas share the load.
+* One kernel a sending chip (core (0, 0)): a DRAM work table of 16-byte entries (source | destination << 8, source
+  page, destination buffer, destination page), `K` = 32 a NoC batch, a destination table (fabric chip, mesh, bank
+  table) read into L1 once. One connection: a remote mesh's route is the route to this mesh's exit chip
+  (`fabric_set_unicast_route`), so every decode chip is behind the same first hop (the host checks it with
+  `get_eth_forwarding_direction`); the route is rewritten when the destination changes.
 * `PrefillService.prefill_push`: same lock / prefix-cache flow as `prefill`, then the push instead of
   `host_states` + `send_states`.
 
@@ -151,7 +150,7 @@ turns the timing assumption into a check.
 
 ## 6. Work plan
 
-Each phase ends with a run the user launches (device commands are not run by the agent).
+Each phase ends with a two-rank run on hosts 40 and 41.
 
 ### Phase 0: prerequisites (no new feature code)
 
@@ -181,11 +180,14 @@ Each phase ends with a run the user launches (device commands are not run by the
 
 ### Phase 2: prefill-side push from metal_2's caches
 
-1. `d_p_push.py` kernel + `DPPrefill.push_targets` (section 5.3).
-2. Test `tests/xhost_kv/d_p_push.py` (two ranks, real models): rank 0 prefills a 16k prompt with `DPPrefill`, then
-   both pushes it into session A and replies with `host_states`; rank 1 commits the host states into session B with
-   `to_prefill_states` + `commit_prefill_state` and compares A with B (rings of 0-19, every consuming stage's
-   paged entries and keys). Gate: byte-exact at 16k and 128k; push time and GB/s logged.
+1. `tt/prefill/d_p_push.py` (section 5.3; written).
+2. Test `tests/xhost_kv/d_p_push.py` (two ranks, real models; written): rank 0 prefills a seeded random prompt with
+   `DPPrefill`, pushes it into session A and replies with `host_states`; rank 1 commits the host states into session
+   B with `commit_host_prefill_state` and compares A with the states and with B (`decode_commit.check`). Gate:
+   byte-exact at 16k and 128k; push time and GB/s logged. 16k: PASS, 189440 pages / 210 MiB to 32 chips of 8
+   stages, device 671 ms (0.33 GB/s incl. launch and the kernel's compile), 1.7 s in all (0.93 s of it slicing /
+   tilizing the sources). 128k: PASS, 1479680 pages / 1610 MiB, device 168 ms (10 GB/s over the 32 senders), 1.96 s
+   in all (host: 1.40 s slicing / tilizing the sources, 0.35 s building the work tables).
 3. Scale: 1M tokens; measure push time vs the host path (readback + send + decode commit). Gate: faster than the host
    path, or a profile saying where the time goes (exit chips, small packets, work-list streaming).
 
