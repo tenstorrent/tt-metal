@@ -16,7 +16,8 @@ from pathlib import Path
 
 import ttnn
 
-DEFAULT_ROOT = Path(os.environ.get("INKLING_CACHE", "/work/inkling-bringup/cache/v1"))
+# v1-stick = v1 with the single-dtype expert layers in the stick layout (relayout_sticks.py; other files hard-linked)
+DEFAULT_ROOT = Path(os.environ.get("INKLING_CACHE", "/work/inkling-bringup/cache/v1-stick"))
 
 
 def manifest(root: Path | str = DEFAULT_ROOT) -> dict:
