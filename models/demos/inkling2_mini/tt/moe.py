@@ -23,6 +23,7 @@ import torch
 
 import ttnn
 from models.demos.inkling2_mini.tt.dram_sharded import BankLocalExperts
+from models.demos.inkling2_mini.tt.fused.moe_expert import FusedMoeExperts
 
 HIDDEN = 2304
 INTER = 1152
@@ -39,6 +40,8 @@ ROUTER_SPLIT = 9  # K chunks of the router GEMM (256 each)
 # in one run; 101 -> 77 us for BFP4 (E7). down stays on sparse_matmul (bank-local was no faster: 54 vs 55 us).
 # INKLING_MOE_BANK=0 turns it off (A/B runs).
 BANK_LOCAL = os.environ.get("INKLING_MOE_BANK", "1") != "0"
+# Fused expert step for BFP4 layers (tt/fused/moe_expert.py); INKLING_MOE_FUSED=0 falls back to the path above.
+FUSED_EXPERTS = os.environ.get("INKLING_MOE_FUSED", "1") != "0"
 
 WEIGHT_NAMES = ("mlp_norm", "router.w", "router.bias", "experts.w_gate_up", "experts.w_down")
 
@@ -100,12 +103,20 @@ class Inkling2MoE:
             bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
         )
         gu = weights["experts.w_gate_up"]
-        self.bank_local = BANK_LOCAL and gu.dtype == ttnn.bfloat4_b  # BFP8 layers keep the measured v1 path
-        if self.bank_local:  # re-layout on load; the section-4 cache files are unchanged
+        self.w_down = ttnn.to_device(weights["experts.w_down"], device, dram)
+        # The whole expert step (gate_up + SwiGLU + down + weighted sum) is one fused program.
+        self.fused = None
+        self.bank_local = False
+        # FusedMoeExperts needs one dtype for gate_up and down (BFP4/BFP4 or BFP8/BFP8 layers); BFP4 gate_up with
+        # BFP8 down stays bank-local.
+        if gu.dtype == self.w_down.dtype and FUSED_EXPERTS:
+            self.w_gate_up = ttnn.to_device(gu, device, dram)
+            self.fused = FusedMoeExperts(device, self.w_gate_up, self.w_down)
+        elif BANK_LOCAL and gu.dtype == ttnn.bfloat4_b:  # re-layout on load; the cache files are unchanged
+            self.bank_local = True
             self.bank_gate_up = BankLocalExperts(device, gu, dtype=gu.dtype, slots=TOP_K)
         else:
             self.w_gate_up = ttnn.to_device(gu, device, dram)
-        self.w_down = ttnn.to_device(weights["experts.w_down"], device, dram)
         # Indexed sparse_matmul still takes a sparsity operand but never reads it.
         self.sparsity = ttnn.from_torch(
             torch.ones(1, 1, 1, NUM_EXPERTS),
@@ -208,6 +219,8 @@ class Inkling2MoE:
 
     def experts(self, x, weights, indices):
         """x [1,1,1,H] bf16, top-k weights / ids from route() -> [1,1,1,H] bf16 (sum of the 8 weighted experts)."""
+        if self.fused is not None:
+            return self.fused(x, weights, indices)
         mem = ttnn.L1_MEMORY_CONFIG
         down = self.expert_matmuls(x, indices)
         scale = ttnn.reshape(ttnn.permute(weights, (0, 3, 2, 1)), (1, TOP_K, 1, 1))
