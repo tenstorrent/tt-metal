@@ -131,8 +131,9 @@ def placements():
 
 def stage_4x4_placements(**extra_device_params):
     """One 4x4 prefill stage, a single Galaxy tray half: SP=4 on the axis-1 ring, TP=4 on the
-    axis-0 line, so the op's TP collective runs on a line. It runs only on a Galaxy narrowed to one
-    tray half (see run_4x4_stage_tests.sh) and skips on the unnarrowed 8x4 mesh."""
+    axis-0 line, so the op's TP collective runs on a line. The `torusxy` row is the single-Galaxy
+    [RING, RING] carve (`SUBTORUS_4X4_ENV`), whose TP axis rings too. Both run only on a Galaxy
+    narrowed to 16 chips and skip on the unnarrowed 8x4 mesh."""
     return [
         pytest.param(
             (4, 4),
@@ -140,6 +141,13 @@ def stage_4x4_placements(**extra_device_params):
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torusx-mesh-4x4-sp1",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX, **extra_device_params),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torusxy-mesh-4x4-sp1",
         ),
     ]
 

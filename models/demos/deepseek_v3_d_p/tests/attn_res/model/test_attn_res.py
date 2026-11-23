@@ -54,6 +54,7 @@ from models.demos.deepseek_v3_d_p.tests.attn_res.model.harness import (
     random_queries,
     read_block,
 )
+from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import AttnResWeights, walk_sites
 
@@ -98,7 +99,8 @@ def _queries(op, checkpoint_dir, seed=0):
     which is what makes `merge`'s site index observable.
     """
     if checkpoint_dir is not None:
-        return fold_queries(load_attn_res_state_dict(checkpoint_dir, LAYERS), LAYERS)
+        root = resolve_model_root(checkpoint_dir)
+        return fold_queries(load_attn_res_state_dict(checkpoint_dir, LAYERS, root), LAYERS, root)
 
     if op.weights is not None:
         # Composing a TP-sharded row also stacks the SP copies of it; they are identical.
@@ -132,8 +134,14 @@ def _make_op(mesh_device, checkpoint_dir, sp_axis):
     if not AttnResWeights.check_cache_complete(cache_path, CACHE_PREFIX, num_layers=LAYERS):
         if checkpoint_dir is None:
             return build()
+        root = resolve_model_root(checkpoint_dir)
         AttnResWeights.build_ttnn_cache(
-            load_attn_res_state_dict(checkpoint_dir, LAYERS), cache_path, CACHE_PREFIX, mesh_device, **cache_args
+            load_attn_res_state_dict(checkpoint_dir, LAYERS, root),
+            cache_path,
+            CACHE_PREFIX,
+            mesh_device,
+            prefix=root,
+            **cache_args,
         )
     logger.info(f"AttnRes weights from {cache_path}")
     return build(weights=AttnResWeights.from_cache(mesh_device, cache_path, CACHE_PREFIX, **cache_args))

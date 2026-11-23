@@ -47,6 +47,10 @@ inline constexpr std::array logical_right_shift{DT::UINT32, DT::INT32};
 inline constexpr std::array arithmetic_fpu{
     DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::UINT16, DT::INT32};
 
+// FPU arithmetic that also takes UINT8/INT8 (SUB).
+inline constexpr std::array arithmetic_fpu_and_int8{
+    DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::UINT16, DT::INT32, DT::UINT8, DT::INT8};
+
 inline constexpr std::array relational{
     DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::UINT8, DT::UINT16, DT::INT32};
 

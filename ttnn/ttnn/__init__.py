@@ -50,21 +50,21 @@ def manage_config(name: str, value):
     global CONFIG
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
-    logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
+    logger.trace(f"Set ttnn.CONFIG.{name} to {value}")
     try:
         yield
     finally:
         # Restore even when the block raises, or the value leaks into everything that runs afterwards.
         try:
             setattr(CONFIG, name, original_value)
-            logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+            logger.trace(f"Restored ttnn.CONFIG.{name} to {original_value}")
         except Exception as e:
             # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
             # afuller
             if original_value is None:
                 try:
                     setattr(CONFIG, name, "")
-                    logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
+                    logger.trace(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
                 except Exception as e2:
                     logger.error(
                         f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)"
@@ -646,17 +646,23 @@ experimental.create_prefetcher_pipe_spaces = _prefetcher_pipe.create_prefetcher_
 
 # Command lists (Metal 2.0 replacement for trace). Experimental-only surface.
 from ttnn._ttnn.operations import command_list as _command_list
+from ttnn.command_list import CmdListParam as _CmdListParam
 
 experimental.CommandListBuilder = _command_list.CommandListBuilder
 experimental.CommandList = _command_list.CommandList
+experimental.CmdListParam = _CmdListParam
 
-# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use. Experimental-only surface.
+# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use, and generic_op's MeshProgramSpec and
+# MeshProgramRunArgs, for ttnn.experimental.generic_op.
+# Experimental-only surface.
 from ttnn._ttnn import program_spec as _program_spec
 
 for _name in dir(_program_spec):
     if not _name.startswith("_"):
         setattr(experimental, _name, getattr(_program_spec, _name))
 del _name
+# generic_op's program-cache hash; ttnn.experimental.generic_op itself is registered by its binding.
+experimental.compute_program_spec_hash = ttnn._ttnn.operations.experimental.compute_program_spec_hash
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
@@ -719,6 +725,11 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         root_dir = this_dir
 
     SetRootDir(str(root_dir))
+
+# The matmul config model's default path, and its download when ttnn.CONFIG.matmul_model_config is on
+from ttnn import matmul_model as _matmul_model
+
+_matmul_model.on_import(os.environ.get("TT_METAL_RUNTIME_ROOT") or root_dir)
 
 import atexit as _atexit
 

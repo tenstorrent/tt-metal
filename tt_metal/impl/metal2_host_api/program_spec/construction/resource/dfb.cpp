@@ -128,7 +128,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     // With multi-binding, all same-role KernelSpecs share kind (DM/compute), access_pattern,
     // num_threads, and risc_mask. The first three are enforced in ValidateProgramSpec; the
     // fourth is solver-guaranteed on Gen2 (the coupling-group equivalence-class constraint)
-    // and user-validated on Gen1 (see Step 2b in MakeProgramFromSpec). So any
+    // and user-validated on Gen1 (see Step 2b in the Program constructor). So any
     // representative producer/consumer gives the correct DFB config — we take the first.
     const KernelSpec* producer = dfb_endpoint_info.producers.front().kernel;
     const KernelSpec* consumer = dfb_endpoint_info.consumers.front().kernel;

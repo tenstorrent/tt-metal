@@ -17,6 +17,7 @@ import torch
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from models.common.ci_failure import assert_perf_gate
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 
@@ -1032,7 +1033,7 @@ def _run_high_bw_all_gather_perf(
         pages_per_device = rows_per_device
     bandwidth_gbps = pages_per_device * page_size * (axis_size - 1) / median_ns
     print(
-        f"HIGH_BW_ALL_GATHER fabric={ttnn.get_fabric_config()} dtype={dtype} "
+        f"HIGH_BW_ALL_GATHER fabric={ttnn.get_fabric_config(mesh_device)} dtype={dtype} "
         f"layout={layout} num_links={num_links} mesh={tuple(mesh_device.shape)} rows_per_device={rows_per_device} "
         f"capacity_rows_per_device={capacity_rows_per_device} cache_slots={cache_slots} page_size={page_size}B "
         f"median={median_ns / 1e6:.3f}ms effective_receive_bw={bandwidth_gbps:.3f}GB/s "
@@ -1284,6 +1285,65 @@ def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device):
     )
 
 
+# The 16-chip stage meshes of one Galaxy: the [RING, RING] sub-torus carve (SUBTORUS_4X4_ENV, TorusXY) and one tray half,
+# [LINE, RING] (TorusX, run_4x4_stage_tests.sh). Same payload matrix as the 8x4 cylinder gate, 2 links.
+_STAGE_4X4_PERF_NEEDS_16_CHIPS = pytest.mark.skipif(
+    ttnn.get_num_devices() != 16,
+    reason="needs a 16-chip stage mesh (TT_VISIBLE_DEVICES + a 4x4 descriptor: SUBTORUS_4X4_ENV or run_4x4_stage_tests.sh)",
+)
+
+# [RING, RING] floors per case, for the high-power (14 kW) Galaxies the GLM chunked perf leg runs on: 95% of the lowest
+# reading over three runs on three 14 kW runners. Lowest: 55K 150.5 / 141.3 / 151.0 / 136.9 GB/s and 512K 170.4 / 166.6
+# / 167.8 / 166.3 (bf16 row-major, fp8, bf16 tiled, bfloat8). The runners agree within 2% at 55K; at 512K one reads
+# about 4% under the other two. The 8 kW runners read the 512K cases as low as 150, under these floors, which is why the
+# gates need a 14 kW host. The same gather on a [LINE, RING] 4x4 reads 126 / 118 / 125 / 114 and 138 / 137 / 138 / 137,
+# so each floor is above the line layout's: a carve that falls back to the cylinder's cycles fails. Override every
+# floor with TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS when recalibrating.
+_RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS = {
+    55_040: {"bf16_row_major": 143.0, "fp8_row_major": 134.0, "bf16_tiled": 143.0, "bfloat8_tiled": 130.0},
+    512 * 1024: {"bf16_row_major": 161.0, "fp8_row_major": 158.0, "bf16_tiled": 159.0, "bfloat8_tiled": 158.0},
+}
+if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS") is not None:
+    _RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS = float(os.environ["TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS"])
+
+
+@run_for_blackhole("Blackhole Galaxy 4x4 [RING, RING] perf requires Blackhole")
+@_STAGE_4X4_PERF_NEEDS_16_CHIPS
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], indirect=True)
+def test_high_bw_all_gather_ring_ring_4x4_perf(mesh_device):
+    """Bandwidth floors of the 16-rank full-mesh gather on the [RING, RING] carve, each paired with a correctness run."""
+    require_high_power("[RING, RING] 4x4 high_bw_all_gather perf")
+    assert tuple(mesh_device.shape) == (4, 4)
+    _run_high_bw_all_gather_ci_perf(
+        mesh_device,
+        cluster_axis=None,
+        min_bandwidth_gbps=_RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS,
+        global_rows_cases=_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS,
+        num_links=2,
+    )
+
+
+@run_for_blackhole("Blackhole Galaxy 4x4 [LINE, RING] perf requires Blackhole")
+@_STAGE_4X4_PERF_NEEDS_16_CHIPS
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_X), id="fabric_2d_torus_x")],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], indirect=True)
+def test_high_bw_all_gather_line_ring_4x4_perf(mesh_device):
+    """The [RING, RING] carve's measurement on one tray half, [LINE, RING]. Record-only: the comparison."""
+    assert tuple(mesh_device.shape) == (4, 4)
+    _run_high_bw_all_gather_ci_perf(
+        mesh_device,
+        cluster_axis=None,
+        min_bandwidth_gbps=0.0,
+        global_rows_cases=_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS,
+        num_links=2,
+    )
+
+
 @run_for_blackhole("32-rank whole-mesh ring coverage requires Blackhole")
 @pytest.mark.skipif(
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
@@ -1410,6 +1470,38 @@ def test_high_bw_all_gather_full_mesh_outer_axis_accuracy(mesh_device, submesh_s
     )
 
 
+@run_for_blackhole("[RING, RING] 4x4 whole-mesh coverage requires Blackhole")
+@pytest.mark.skipif(
+    ttnn.get_num_devices() != 16,
+    reason="needs the 16-chip [RING, RING] carve (TT_VISIBLE_DEVICES + a 4x4 Ring/Ring descriptor)",
+)
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], indirect=True)
+@pytest.mark.parametrize("full_mesh_outer_axis", [0, 1], ids=["row-major", "column-major"])
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
+@pytest.mark.parametrize("ag_traced", [False, True], ids=["eager", "traced"])
+def test_high_bw_all_gather_ring_ring_4x4_whole_mesh_accuracy(mesh_device, full_mesh_outer_axis, num_links, ag_traced):
+    """cluster_axis=None over a whole 4x4 mesh that wraps on both axes.
+
+    With Ring on both axes and a mesh of at least 3x3 the gather leaves the single snake and runs two
+    edge-disjoint Hamiltonian cycles. Every rank's shard differs, so a wrong order for either
+    `full_mesh_outer_axis` is a data mismatch.
+    """
+    assert tuple(mesh_device.shape) == (4, 4)
+    _run_high_bw_all_gather_accuracy(
+        mesh_device,
+        ttnn.bfloat16,
+        width=576,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        expected_page_size=1152,
+        cluster_axis=None,
+        rows_per_device=64,
+        num_links=num_links,
+        ag_traced=ag_traced,
+        full_mesh_outer_axis=full_mesh_outer_axis,
+    )
+
+
 @run_for_blackhole("axis-ring regression requires Blackhole")
 @pytest.mark.skipif(
     not os.getenv("TT_METAL_SIMULATOR") and os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY") != "1",
@@ -1485,7 +1577,7 @@ def test_high_bw_all_gather_512k(mesh_device, axis_0_min_bandwidth_gbps, axis_1_
     min_bandwidth_gbps = (axis_0_min_bandwidth_gbps, axis_1_min_bandwidth_gbps)[cluster_axis]
 
     _run_high_bw_all_gather_test_cases(rank_line, min_bandwidth_gbps, cluster_axis)
-    if ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING:
+    if ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_1D_RING:
         # Cover the Blackhole four-worker region without another device setup. The old 4.5 MB/link heuristic chose
         # eight workers here and measured below this floor; four bank-owning workers sustain more than 60 GB/s.
         if ttnn.device.IsProgramRealtimeProfilerActive():
@@ -2273,7 +2365,7 @@ def _run_high_bw_all_gather_token_sweep(
         ).split(",")
     ]
     axis_size = mesh_device.shape[cluster_axis]
-    fabric_config = str(ttnn.get_fabric_config()).removeprefix("FabricConfig.")
+    fabric_config = str(ttnn.get_fabric_config(mesh_device)).removeprefix("FabricConfig.")
 
     for global_tokens in token_sizes:
         assert global_tokens % axis_size == 0

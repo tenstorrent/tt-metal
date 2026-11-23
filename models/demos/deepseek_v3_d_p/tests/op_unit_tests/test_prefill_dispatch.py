@@ -488,6 +488,7 @@ _MESH_IDS = (
     "fabric2d-torus-y-4x1-2link",
     "fabric2d-torus-y-8x1-2link",
     "fabric2d-torus-x-4x4-2link",
+    "fabric2d-torus-xy-4x4-2link",
     "fabric2d-torus-xy-8x4-2link",
 )
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS]
