@@ -5605,7 +5605,11 @@ class UntilizeGolden:
         # untilize_block's plain torch cast wraps; the packer saturates, to a sign-magnitude range
         # with no INT_MIN. Callers that omit input_format are reshaping a device result, not
         # modelling a pack, so leave those untouched.
-        if input_format is not None and input_format.is_integer() and data_format.is_integer():
+        if (
+            input_format is not None
+            and input_format.is_integer()
+            and data_format.is_integer()
+        ):
             operand = saturate_integer(operand, data_format)
 
         result = untilize_block(
