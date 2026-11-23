@@ -57,7 +57,7 @@ side needs nothing beyond `python_env`.
 
     # CPU, in the reference environment: host pipeline and dataflow re-implementation against tfc-t0
     env -u VIRTUAL_ENV PYTHONPATH=$PWD /path/to/t0-reference/bin/python -m pytest -p no:cacheprovider -c /dev/null \
-        models/experimental/t0_forecast/tests/golden/test_dataflow.py
+        --noconftest models/experimental/t0_forecast/tests/golden/test_dataflow.py
 
 The PCC suite scores the read-out quantiles in asinh space (`pcc_normalized`, the quantile spread `pcc_spread`,
 per-row PCC) and the final data-space quantiles (`pcc_final`, `pcc_final_spread`), with floors per case class in

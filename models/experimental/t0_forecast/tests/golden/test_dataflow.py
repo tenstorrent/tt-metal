@@ -3,10 +3,11 @@
 
 """CPU checks of the host pipeline and the dataflow re-implementation against the pinned reference (fp32).
 
-Runs in the reference venv (it imports the upstream ``t0`` package; README.md), from the tt-metal root:
+Runs in the reference venv (it imports the upstream ``t0`` package; README.md), from the tt-metal root, without the
+repo's conftest (it imports device-side packages the reference venv does not have):
 
-    env -u VIRTUAL_ENV PYTHONPATH=$PWD <reference venv>/bin/python -m pytest \
-        -p no:cacheprovider -c /dev/null models/experimental/t0_forecast/tests/golden/test_dataflow.py
+    env -u VIRTUAL_ENV PYTHONPATH=$PWD <reference venv>/bin/python -m pytest -p no:cacheprovider -c /dev/null \
+        --noconftest models/experimental/t0_forecast/tests/golden/test_dataflow.py
 
 Tolerances: the host scaler at rtol 1e-5 per element; network tensors at 1e-5 relative (Frobenius norm of the
 difference over the norm of the reference), on real (not all-PAD) tokens.
