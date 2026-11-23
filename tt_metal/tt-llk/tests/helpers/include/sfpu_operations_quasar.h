@@ -138,7 +138,10 @@
 #include "llk_sfpu/ckernel_sfpu_acos_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_asin_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_asinh_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_atanh_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_cosh_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_elu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_erfinv_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_exp2_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_expm1_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_hardshrink_bw_bf16.h"
@@ -146,13 +149,21 @@
 #include "llk_sfpu/ckernel_sfpu_hardswish_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_hardtanh_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_leaky_relu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_log10_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_log1p_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_log2_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_log_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_log_sigmoid_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_logit_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_multigammaln_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_reciprocal_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_relu6_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_relu_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_selu_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_silu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_sinh_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_softplus_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_softshrink_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt_bw_bf16.h"
@@ -160,30 +171,41 @@
 #include "llk_sfpu/ckernel_sfpu_tanh_bw_bf16.h"
 
 // X(BinaryOp enumerator, kernel name): calculate_<name>_bw_bf16.
-#define SFPU_BW_BF16_OPS(X)        \
-    X(ABS_BW, abs)                 \
-    X(ACOS_BW, acos)               \
-    X(ASIN_BW, asin)               \
-    X(ASINH_BW, asinh)             \
-    X(ELU_BW, elu)                 \
-    X(EXP2_BW, exp2)               \
-    X(EXPM1_BW, expm1)             \
-    X(HARDSHRINK_BW, hardshrink)   \
-    X(HARDSIGMOID_BW, hardsigmoid) \
-    X(HARDSWISH_BW, hardswish)     \
-    X(HARDTANH_BW, hardtanh)       \
-    X(LEAKY_RELU_BW, leaky_relu)   \
-    X(LOG_SIGMOID_BW, log_sigmoid) \
-    X(RELU_BW, relu)               \
-    X(RELU6_BW, relu6)             \
-    X(RSQRT_BW, rsqrt)             \
-    X(SELU_BW, selu)               \
-    X(SIGMOID_BW, sigmoid)         \
-    X(SILU_BW, silu)               \
-    X(SOFTPLUS_BW, softplus)       \
-    X(SOFTSHRINK_BW, softshrink)   \
-    X(SQRT_BW, sqrt)               \
-    X(SQUARE_BW, square)           \
+#define SFPU_BW_BF16_OPS(X)          \
+    X(ABS_BW, abs)                   \
+    X(ACOS_BW, acos)                 \
+    X(ASIN_BW, asin)                 \
+    X(ASINH_BW, asinh)               \
+    X(ATANH_BW, atanh)               \
+    X(COSH_BW, cosh)                 \
+    X(ELU_BW, elu)                   \
+    X(ERFINV_BW, erfinv)             \
+    X(EXP2_BW, exp2)                 \
+    X(EXPM1_BW, expm1)               \
+    X(HARDSHRINK_BW, hardshrink)     \
+    X(HARDSIGMOID_BW, hardsigmoid)   \
+    X(HARDSWISH_BW, hardswish)       \
+    X(HARDTANH_BW, hardtanh)         \
+    X(LEAKY_RELU_BW, leaky_relu)     \
+    X(LOG_BW, log)                   \
+    X(LOG10_BW, log10)               \
+    X(LOG1P_BW, log1p)               \
+    X(LOG2_BW, log2)                 \
+    X(LOG_SIGMOID_BW, log_sigmoid)   \
+    X(LOGIT_BW, logit)               \
+    X(MULTIGAMMALN_BW, multigammaln) \
+    X(RECIPROCAL_BW, reciprocal)     \
+    X(RELU_BW, relu)                 \
+    X(RELU6_BW, relu6)               \
+    X(RSQRT_BW, rsqrt)               \
+    X(SELU_BW, selu)                 \
+    X(SIGMOID_BW, sigmoid)           \
+    X(SILU_BW, silu)                 \
+    X(SINH_BW, sinh)                 \
+    X(SOFTPLUS_BW, softplus)         \
+    X(SOFTSHRINK_BW, softshrink)     \
+    X(SQRT_BW, sqrt)                 \
+    X(SQUARE_BW, square)             \
     X(TANH_BW, tanh)
 
 // Ternary SFPU op headers (consumed by the ternary dispatchers below).
