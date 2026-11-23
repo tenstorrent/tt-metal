@@ -20,14 +20,13 @@ from __future__ import annotations
 
 import os
 import re
-import signal
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .common import emit_result, emit_running, log
+from .common import emit_result, emit_running, log, start_group, stop_group
 from .model import FAIL, PASS, SKIP, Check, Phase
 
 GALAXY_DIR = Path(__file__).resolve().parent.parent / "galaxy"
@@ -286,19 +285,13 @@ def run_step(step: Step, out: Path, dry_run: bool = False, test: str = "busbar")
     t0, rc, limit = time.time(), None, step.seconds + SETUP_S
     with open(log_path, "w") as f:
         # An argv list, no shell: a galaxy/ program and plan()'s args, every override checked by _overrides().
-        p = subprocess.Popen(
-            argv,
-            cwd=GALAXY_DIR,
-            env={**os.environ, **dict(step.env)},
-            stdout=f,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        p = start_group(argv, cwd=GALAXY_DIR, env={**os.environ, **dict(step.env)}, stdout=f, stderr=subprocess.STDOUT)
         try:
             rc = p.wait(timeout=limit)
         except subprocess.TimeoutExpired:
-            os.killpg(p.pid, signal.SIGKILL)
-            p.wait()
+            pass
+        finally:
+            stop_group(p)
     dt = time.time() - t0
     text = log_path.read_text(errors="replace").splitlines()
     bad = [ln.strip() for ln in text if FAIL_LINE.search(ln)]

@@ -21,7 +21,7 @@ sys.path.insert(0, str(SUITE_DIR))
 from diag import resets  # noqa: E402
 from diag.aer import AerWindow, aer_check, aer_new, read_aer  # noqa: E402
 from diag.galaxy import TRAY_TO_UBB_NIBBLE, expected_bdf  # noqa: E402
-from diag.model import FAIL, PASS, WARN, Phase  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, WARN, Phase  # noqa: E402
 from diag.naming import chip  # noqa: E402
 from diag.snapshot_checks import _thermal_and_telemetry  # noqa: E402
 
@@ -191,22 +191,64 @@ class TestAer(unittest.TestCase):
         self.assertEqual(c.status, FAIL)
         self.assertEqual(c.data["flagged"], [{**chip("0000:02:00.0"), "nonfatal": 4}])
 
+    def _window(self, *nonfatal):
+        """An AerWindow over reads of one chip's full set of counters, nonfatal taking the given values in turn."""
+        reads = iter([{"0000:02:00.0": {"corr": 0, "nonfatal": n, "fatal": 0}} for n in nonfatal])
+        return AerWindow(lambda: next(reads))
+
     def test_a_reset_restarts_the_counts_and_the_window_keeps_what_came_before(self):
-        reads = iter(
-            [
-                {"0000:02:00.0": {"nonfatal": 5}},  # window opens
-                {"0000:02:00.0": {"nonfatal": 6}},  # marked before a reset
-                {"0000:02:00.0": {"nonfatal": 0}},  # counts restarted by the reset
-                {"0000:02:00.0": {"nonfatal": 2}},  # the end
-            ]
-        )
-        w = AerWindow(lambda: next(reads))
+        w = self._window(5, 6, 0, 2)  # opens; marked before a reset; as the reset left it; the end
         w.mark()
-        w.mark()
+        w.rebase()
         self.assertEqual(w.new, {"0000:02:00.0": {"nonfatal": 1}})
         c = w.check()
         self.assertEqual(w.new, {"0000:02:00.0": {"nonfatal": 3}})
         self.assertEqual(c.status, FAIL)
+
+    def test_errors_after_a_reset_count_even_when_they_reach_the_old_total(self):
+        for end, total in ((6, 7), (9, 10)):
+            with self.subTest(end=end):
+                w = self._window(5, 6, 0, end)
+                w.mark()
+                w.rebase()
+                self.assertEqual((w.check().status, w.new["0000:02:00.0"]["nonfatal"]), (FAIL, total))
+
+    def test_a_reset_that_keeps_the_counts_does_not_count_them_twice(self):
+        w = self._window(5, 6, 6, 8)
+        w.mark()
+        w.rebase()
+        w.check()
+        self.assertEqual(w.new, {"0000:02:00.0": {"nonfatal": 3}})
+
+    def test_no_counter_readable_is_skip_not_pass(self):
+        for read in ({}, {"0000:02:00.0": {}}):
+            with self.subTest(read=read):
+                c = AerWindow(lambda: read).check()
+                self.assertEqual(c.status, SKIP)
+                self.assertIn("no PCIe AER counter readable", c.details)
+
+    def test_counters_not_read_warn_and_are_named(self):
+        full = {"corr": 0, "nonfatal": 0, "fatal": 0}
+        reads = iter(
+            [
+                {"0000:02:00.0": full, "0000:03:00.0": {"corr": 0}},
+                {"0000:02:00.0": full, "0000:03:00.0": {"corr": 0}},
+            ]
+        )
+        c = AerWindow(lambda: next(reads)).check()
+        self.assertEqual(c.status, WARN)
+        self.assertIn("0000:03:00.0: nonfatal, fatal not read", c.details)
+        self.assertEqual(c.data["missing"], [{**chip("0000:03:00.0"), "counters": ["nonfatal", "fatal"]}])
+
+    def test_a_chip_gone_at_the_end_has_its_counters_not_read(self):
+        full = {"corr": 0, "nonfatal": 0, "fatal": 0}
+        reads = iter([{"0000:02:00.0": full, "0000:03:00.0": full}, {"0000:02:00.0": full}])
+        c = AerWindow(lambda: next(reads)).check()
+        self.assertEqual(c.status, WARN)
+        self.assertEqual([m["bdf"] for m in c.data["missing"]], ["0000:03:00.0"])
+
+    def test_uncorrectable_errors_still_fail_with_counters_missing(self):
+        self.assertEqual(aer_check({"0000:02:00.0": {"fatal": 1}}, 1.0, 2, {"0000:03:00.0": ["corr"]}).status, FAIL)
 
 
 if __name__ == "__main__":

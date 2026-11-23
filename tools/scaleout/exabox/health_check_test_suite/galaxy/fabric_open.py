@@ -150,11 +150,9 @@ try:
                 r, c = divmod(i, C)
                 v = ttnn.to_torch(d).float()
 
-                def rd(
-                    y, x
-                ):  # NaN, inf or an unreadable element is a wrong value of this chip, not a crash of the check
+                def rd(y, x):  # an unreadable element is a wrong value of this chip, not a crash of the check
                     try:
-                        return int(v[0, 0, y, x].item())
+                        return v[0, 0, y, x].item()  # as read: 1.5, NaN or inf compare unequal to the integer wanted
                     except Exception:  # noqa: BLE001
                         return -1
 

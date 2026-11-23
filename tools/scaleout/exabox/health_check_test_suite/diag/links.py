@@ -14,14 +14,13 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 from .busbar import GALAXY_DIR, SETUP_S, Step, run_step
-from .common import emit_result, emit_running, log
+from .common import emit_result, emit_running, log, start_group, stop_group
 from .model import FAIL, PASS, SKIP, Check, Phase
 from .naming import chip, link_end
 
@@ -105,6 +104,32 @@ def name_chips(report: dict) -> None:
             c["link_ends"] = ends
 
 
+def _start_pair(d: Path, lab: str, idx: list[int], seconds: int) -> subprocess.Popen:
+    """The 2-chip all-gather of the chips at UMD indices *idx*, logging to <d>/<lab>.log."""
+    env = {
+        **os.environ,
+        "TT_VISIBLE_DEVICES": ",".join(map(str, idx)),
+        "TT_METAL_OPERATION_TIMEOUT_SECONDS": str(OP_TIMEOUT_S),
+    }
+    # Run as an argv list, no shell: a galaxy/ program, ints, paths under *d* and a label of UMD's BDFs.
+    argv = [
+        sys.executable,
+        str(GALAXY_DIR / "fabric_repro.py"),
+        "--n",
+        "2",
+        "--seconds",
+        str(seconds),
+        "--rows",
+        str(d / f"{lab}.rows"),
+        "--beat",
+        str(d / f"{lab}.beat"),
+        "--label",
+        lab,
+    ]
+    with open(d / f"{lab}.log", "w") as f:
+        return start_group(argv, cwd=GALAXY_DIR, env=env, stdout=f, stderr=subprocess.STDOUT)
+
+
 def pair_test(
     phase: Phase, out: Path, name: str, seconds: int, disc: dict, dry_run: bool = False, sys_root: str = "/sys"
 ) -> bool:
@@ -122,58 +147,31 @@ def pair_test(
     t0 = time.time()
     for r in rounds:
         jobs = []
-        for a, b, ch in r:
-            ba, bb, ends = disc["bdfs"][a], disc["bdfs"][b], link_ends(disc, a, b, ch)
-            lab, idx = f"{_short(ba)}-{_short(bb)}", umd_index([ba, bb], sys_root)
-            if idx is None:
-                failed.append(
-                    {"pair": lab, "channels": ch, "why": "a chip has no tt-kmd node: not opened", "ends": ends}
-                )
-                continue
-            env = {
-                **os.environ,
-                "TT_VISIBLE_DEVICES": ",".join(map(str, idx)),
-                "TT_METAL_OPERATION_TIMEOUT_SECONDS": str(OP_TIMEOUT_S),
-            }
-            # Run as an argv list, no shell: a galaxy/ program, ints, paths under *out* and a label of UMD's BDFs.
-            argv = [
-                sys.executable,
-                str(GALAXY_DIR / "fabric_repro.py"),
-                "--n",
-                "2",
-                "--seconds",
-                str(seconds),
-                "--rows",
-                str(d / f"{lab}.rows"),
-                "--beat",
-                str(d / f"{lab}.beat"),
-                "--label",
-                lab,
-            ]
-            with open(d / f"{lab}.log", "w") as f:
-                jobs.append(
-                    (
-                        lab,
-                        ch,
-                        ends,
-                        subprocess.Popen(
-                            argv, cwd=GALAXY_DIR, env=env, stdout=f, stderr=subprocess.STDOUT, start_new_session=True
-                        ),
+        try:
+            for a, b, ch in r:
+                ba, bb, ends = disc["bdfs"][a], disc["bdfs"][b], link_ends(disc, a, b, ch)
+                lab, idx = f"{_short(ba)}-{_short(bb)}", umd_index([ba, bb], sys_root)
+                if idx is None:
+                    failed.append(
+                        {"pair": lab, "channels": ch, "why": "a chip has no tt-kmd node: not opened", "ends": ends}
                     )
-                )
-        for lab, ch, ends, p in jobs:
-            try:
-                rc = p.wait(timeout=seconds + SETUP_S)
-            except subprocess.TimeoutExpired:
-                os.killpg(p.pid, signal.SIGKILL)
-                p.wait()
-                rc = None
-            if rc:
-                failed.append(
-                    {"pair": lab, "channels": ch, "why": "data mismatch" if rc == 4 else f"rc {rc}", "ends": ends}
-                )
-            elif rc is None:
-                failed.append({"pair": lab, "channels": ch, "why": "hung", "ends": ends})
+                    continue
+                jobs.append((lab, ch, ends, _start_pair(d, lab, idx, seconds), time.monotonic() + seconds + SETUP_S))
+            for lab, ch, ends, p, deadline in jobs:
+                try:
+                    rc = p.wait(timeout=max(0.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    rc = None
+                    stop_group(p)
+                if rc:
+                    failed.append(
+                        {"pair": lab, "channels": ch, "why": "data mismatch" if rc == 4 else f"rc {rc}", "ends": ends}
+                    )
+                elif rc is None:
+                    failed.append({"pair": lab, "channels": ch, "why": "hung", "ends": ends})
+        finally:
+            for *_, p, _ in jobs:
+                stop_group(p)
     what = "; ".join(f"{f['pair']} (channels {','.join(map(str, f['channels']))}): {f['why']}" for f in failed)
     emit_result(check, FAIL if failed else PASS, suffix=f"({time.time() - t0:.1f}s, {n} pairs)")
     phase.add(
@@ -210,20 +208,28 @@ def fabric_open(phase: Phase, out: Path, dry_run: bool = False) -> None:
     )
 
 
+def _discover(phase: Phase, check: str, dry_run: bool) -> dict | None:
+    """discover(), or None after adding a FAIL *check* that says why."""
+    if dry_run:
+        return {"bdfs": {}, "links": {}}
+    try:
+        return discover()
+    except Exception as e:
+        phase.add(Check(name=check, status=FAIL, details=f"UMD discovery failed: {e!r}"[:400], ip="eth"))
+        return None
+
+
 def run_links(phase: Phase, out: Path, fault: bool, reset, dry_run: bool = False) -> None:
     """Pair test; on a fault here or in the bus-bar test, *reset* (the glx_reset; "" when it ran clean, else why not) and the
-    sweep, which is skipped with that reason; then the fabric open/close."""
-    try:
-        disc = discover() if not dry_run else {"bdfs": {}, "links": {}}
-    except Exception as e:
-        phase.add(Check(name="links_pair", status=FAIL, details=f"UMD discovery failed: {e!r}"[:400], ip="eth"))
-        disc = None
+    sweep, which is skipped with that reason; then the fabric open/close. The sweep tests the links discovered after
+    the reset, which can bring back a tray that dropped under the load."""
+    disc = _discover(phase, "links_pair", dry_run)
     if disc is not None:
         fault |= pair_test(phase, out / "links", "pair", PAIR_S, disc, dry_run)
     if fault and disc is not None:
         why = reset()
         if why:
             phase.add(Check(name="links_sweep", status=SKIP, details=why, ip="eth"))
-        else:
+        elif (disc := _discover(phase, "links_sweep", dry_run)) is not None:
             pair_test(phase, out / "links", "sweep", SWEEP_S, disc, dry_run)
     fabric_open(phase, out / "links", dry_run)

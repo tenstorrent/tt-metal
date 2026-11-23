@@ -70,10 +70,18 @@ def same(torch, a, b):
     return a.shape == b.shape and bool(torch.equal(torch.nan_to_num(a, 1e30), torch.nan_to_num(b, 1e30)))
 
 
-def classify(reads, torch):
-    """reads: the wrong positions ([r, c] tensors) of the first wrong held output, read 1 then the two re-reads. Both
-    re-reads show read 1's words: written-wrong; both right: read-path (read 1 came back wrong); else transient."""
-    keys = [frozenset(map(tuple, r.tolist())) for r in reads]
+def words(torch, got, want):
+    """The wrong words of got (2-D) against want: [((row, col), value)], NaN as "nan" so two NaNs compare equal."""
+    pos = wrong(torch, got, want)
+    vals = got[pos[:, 0], pos[:, 1]].tolist() if len(pos) else []
+    return [(tuple(p), "nan" if v != v else v) for p, v in zip(pos.tolist(), vals)]
+
+
+def classify(reads):
+    """reads: the wrong words (see words()) of the first wrong held output, read 1 then the two re-reads. Both
+    re-reads show read 1's words, the same values at the same places: written-wrong; both right: read-path (read 1
+    came back wrong); else transient."""
+    keys = [frozenset(r) for r in reads]
     if all(k == keys[0] for k in keys[1:]):
         return "written-wrong"
     return "read-path" if not any(keys[1:]) else "transient"
@@ -116,7 +124,7 @@ def capture(ad, torch, cs, j, i, ctl, held, pv=None):
             g = ad.read(t, i).reshape(-1, W)
             pos = wrong(torch, g, wi2)
             if len(pos):
-                first = (launch, t, pos)
+                first = (launch, t, pos, g)
                 break
         if first is None:
             again = [wrong(torch, ad.read(t, i).reshape(-1, W), wi2) for _, t in held]
@@ -125,11 +133,11 @@ def capture(ad, torch, cs, j, i, ctl, held, pv=None):
             pos = torch.nonzero(c)
             ev["map_from"] = "device counter"
         else:
-            launch, t, pos = first
-            reads = [pos] + [wrong(torch, ad.read(t, i).reshape(-1, W), wi2) for _ in range(2)]
+            launch, t, pos, g = first
+            reads = [words(torch, g, wi2)] + [words(torch, ad.read(t, i).reshape(-1, W), wi2) for _ in range(2)]
             ev.update(
                 {
-                    "class": classify(reads, torch),
+                    "class": classify(reads),
                     "launch": launch,
                     "reads_wrong": [len(r) for r in reads],
                     "map_from": "held output",

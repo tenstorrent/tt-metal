@@ -13,9 +13,11 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -34,6 +36,22 @@ from diag.naming import chip, link_end  # noqa: E402
 
 def _steps(mode, **kw):
     return {s.name: s for s in busbar.plan(mode, **kw)}
+
+
+# A galaxy/ program stand-in that never ends: it starts a child of its own that appends to the --beat file every
+# 50 ms, so the beat stops only when the whole process group is gone.
+TREE = """import subprocess, sys, time
+child = "import sys, time\\nwhile True:\\n    open(sys.argv[1], 'a').write('.')\\n    time.sleep(0.05)"
+subprocess.Popen([sys.executable, "-c", child, sys.argv[sys.argv.index("--beat") + 1]])
+time.sleep(60)
+"""
+
+
+def _beating(beat: Path) -> bool:
+    """Whether something still appends to *beat*."""
+    n = beat.stat().st_size
+    time.sleep(0.3)
+    return beat.stat().st_size != n
 
 
 class TestPlan(unittest.TestCase):
@@ -218,6 +236,42 @@ class TestRunStep(unittest.TestCase):
         self.assertEqual(c.status, FAIL)
         self.assertTrue(c.data["hung"])
 
+    def _tree_step(self, d, seconds, start=None):
+        (Path(d) / "prog.py").write_text(TREE)
+        step = busbar.Step("x", "test", ("prog.py", "--beat", "{out}/beat"), seconds)
+        with mock.patch.object(busbar, "GALAXY_DIR", Path(d)), mock.patch.object(
+            busbar, "SETUP_S", 0
+        ), mock.patch.object(busbar, "start_group", start or busbar.start_group), contextlib.redirect_stdout(
+            io.StringIO()
+        ):
+            return busbar.run_step(step, Path(d))
+
+    def test_a_hung_step_leaves_nothing_running(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertTrue(self._tree_step(d, 1).data["hung"])
+            self.assertFalse(_beating(Path(d, "x", "beat")))
+
+    def test_an_interrupted_step_leaves_nothing_running(self):
+        real = busbar.start_group
+
+        def start(argv, **kw):
+            p = real(argv, **kw)
+            wait = p.wait
+
+            def interrupted(timeout=None):
+                if timeout is None:
+                    return wait()
+                time.sleep(0.5)  # the program has started its child
+                raise KeyboardInterrupt
+
+            p.wait = interrupted
+            return p
+
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(KeyboardInterrupt):
+                self._tree_step(d, 30, start)
+            self.assertFalse(_beating(Path(d, "x", "beat")))
+
     def test_step_env_reaches_the_program(self):
         with tempfile.TemporaryDirectory() as d:
             prog = Path(d) / "prog.py"
@@ -304,18 +358,90 @@ class TestLinks(unittest.TestCase):
         sweep = [c for c in phase.checks if c.name == "links_sweep"]
         self.assertEqual([(c.status, c.details) for c in sweep], [(SKIP, "no reset (--skip-reset)")])
 
+    def test_the_sweep_tests_the_links_found_after_the_reset(self):
+        before = {"bdfs": {0: "0000:01:00.0"}, "links": {}}
+        after = {"bdfs": {0: "0000:01:00.0", 1: "0000:41:00.0"}, "links": {}}
+        tested = []
+
+        def fake_pair_test(phase, out, name, seconds, disc, dry_run):
+            tested.append((name, disc))
+            return False
+
+        with mock.patch.object(links, "discover", side_effect=[before, after]), mock.patch.object(
+            links, "pair_test", fake_pair_test
+        ), mock.patch.object(links, "fabric_open"):
+            links.run_links(Phase(name="links"), Path("/tmp"), True, lambda: "")
+        self.assertEqual(tested, [("pair", before), ("sweep", after)])
+
+    def test_a_failed_rediscovery_fails_the_sweep(self):
+        phase = Phase(name="links")
+        with mock.patch.object(
+            links, "discover", side_effect=[{"bdfs": {}, "links": {}}, RuntimeError("no chips")]
+        ), mock.patch.object(links, "pair_test", return_value=False) as pt, mock.patch.object(links, "fabric_open"):
+            links.run_links(phase, Path("/tmp"), True, lambda: "")
+        self.assertEqual(pt.call_count, 1)
+        sweep = [c for c in phase.checks if c.name == "links_sweep"]
+        self.assertEqual([c.status for c in sweep], [FAIL])
+        self.assertIn("UMD discovery failed", sweep[0].details)
+
+    def test_hung_probes_share_one_budget_and_leave_nothing_running(self):
+        bdfs = [f"0000:0{a}:00.0" for a in range(1, 7)]
+        disc = {"bdfs": dict(enumerate(bdfs)), "links": {c: {0: [c ^ 1, 0]} for c in range(6)}}  # 3 pairs, 1 round
+        with tempfile.TemporaryDirectory() as d:
+            for n, bdf in enumerate(bdfs):
+                Path(d, "bus/pci/devices", bdf, "tenstorrent", f"tenstorrent!{n}").mkdir(parents=True)
+            Path(d, "fabric_repro.py").write_text(TREE)
+            phase = Phase(name="links")
+            with mock.patch.object(links, "GALAXY_DIR", Path(d)), mock.patch.object(
+                links, "SETUP_S", 0
+            ), contextlib.redirect_stdout(io.StringIO()):
+                t0 = time.monotonic()
+                self.assertTrue(links.pair_test(phase, Path(d), "pair", 1, disc, sys_root=d))
+                took = time.monotonic() - t0
+            self.assertLess(took, 2.5)  # one 1 s budget for the round, not one per probe
+            self.assertEqual([f["why"] for f in phase.checks[0].data["failed"]], ["hung"] * 3)
+            beats = sorted(Path(d, "pair").glob("*.beat"))
+            self.assertEqual(len(beats), 3)
+            for beat in beats:
+                self.assertFalse(_beating(beat), beat.name)
+
     def _sweep_reset(self, reset_fails=False, skip_reset=False):
         return self._run_load(reset_fails=reset_fails, skip_reset=skip_reset)["why"]
 
-    def _run_load(self, tier="full", reset_fails=False, skip_reset=False, busbar_fails=True, skip_tests=False):
+    def _run_load(
+        self,
+        tier="full",
+        reset_fails=False,
+        skip_reset=False,
+        busbar_fails=True,
+        skip_tests=False,
+        skip_triage=True,
+        live_aer=False,
+    ):
         """run_diag on *tier* with its device tests, bus-bar and links tests stubbed: ``order`` is what ran, in
         order, ``device`` the names run_tests got, ``mode`` the length the bus-bar test was given, ``fault`` whether
         the links test was told of a bus-bar fault, ``why`` what its reset callback said after a failed pair test
-        (the real run_post_test_reset over a glx_reset that fails or not) and ``report`` the run's report."""
+        (the real run_post_test_reset over a glx_reset that fails or not) and ``report`` the run's report.
+        *live_aer*: not a dry run, so the AER window opens (stubbed, its calls in ``aer``) and the resets, FRU read
+        and triage tools are stubbed too."""
         import diag_runner
         from diag import resets
 
-        got = {"order": [], "device": None, "mode": None, "fault": None, "why": None}
+        got = {"order": [], "device": None, "mode": None, "fault": None, "why": None, "aer": []}
+
+        class FakeWindow:
+            def __init__(self):
+                got["aer"].append("open")
+
+            def mark(self):
+                got["aer"].append("mark")
+
+            def rebase(self):
+                got["aer"].append("rebase")
+
+            def check(self):
+                got["aer"].append("check")
+                return Check(name="pcie_aer_delta", status=PASS, ip="pcie")
 
         def fake_tests(tt_metal, names, phase, dry_run, logs_dir):
             got["order"].append("device")
@@ -345,6 +471,14 @@ class TestLinks(unittest.TestCase):
             resets, "resolve_tt_smi", return_value="tt-smi"
         ), mock.patch.object(
             resets, "reset_loop", fake_loop
+        ), mock.patch.object(
+            diag_runner, "reset_loop"
+        ), mock.patch.object(
+            diag_runner, "collect_fru_info"
+        ), mock.patch.object(
+            diag_runner, "run_triage"
+        ), mock.patch.object(
+            diag_runner, "AerWindow", FakeWindow
         ), contextlib.redirect_stdout(
             io.StringIO()
         ), contextlib.redirect_stderr(
@@ -353,10 +487,10 @@ class TestLinks(unittest.TestCase):
             d = Path(tmp)
             _rc, got["report"] = diag_runner.run_diag(
                 tier,
-                dry_run=True,
+                dry_run=not live_aer,
                 input_snapshot=d / "missing.json",
                 skip_tests=skip_tests,
-                skip_triage=True,
+                skip_triage=skip_triage,
                 skip_eth_status=True,
                 skip_qsfp_tests=True,
                 skip_sys_triage=True,
@@ -386,6 +520,29 @@ class TestLinks(unittest.TestCase):
         for tier in ("flash", "pre_bmc_reboot", "post_bmc_reboot"):
             with self.subTest(tier=tier):
                 self.assertEqual(self._run_load(tier)["order"], [])
+
+    def test_aer_counts_across_each_reset_and_is_judged_last(self):
+        for skip_triage, events in (
+            (False, ["open", "mark", "rebase", "mark", "rebase", "check"]),  # the sweep's reset, the post-test reset
+            (True, ["open", "mark", "rebase", "check"]),  # no post-test reset, the verdict all the same
+        ):
+            with self.subTest(skip_triage=skip_triage):
+                got = self._run_load(live_aer=True, skip_triage=skip_triage)
+                self.assertEqual(got["aer"], events)
+                self.assertEqual(list(got["report"]["phases"])[-1], "pcie_aer")
+                triage = [c["name"] for c in got["report"]["phases"]["triage"]["checks"]]
+                self.assertNotIn("pcie_aer_delta", triage)
+
+    def test_no_aer_phase_without_a_window(self):
+        self.assertNotIn("pcie_aer", self._run_load("weekly", live_aer=True)["report"]["phases"])
+        self.assertNotIn("pcie_aer", self._run_load("full")["report"]["phases"])  # a dry run opens none
+
+    def test_sigterm_is_an_exit_that_runs_the_cleanups(self):
+        import diag_runner
+
+        with self.assertRaises(SystemExit) as e:
+            diag_runner._exit_on_sigterm(signal.SIGTERM, None)
+        self.assertEqual(e.exception.code, 128 + signal.SIGTERM)
 
     def test_a_bus_bar_fault_makes_the_links_test_sweep(self):
         self.assertTrue(self._run_load(busbar_fails=True)["fault"])
@@ -590,7 +747,7 @@ class TestTierAndAer(unittest.TestCase):
 
     def test_aer_data_holds_only_the_diff(self):
         c = aer_check(aer_new({"0000:01:00.0": {"corr": 0}}, {"0000:01:00.0": {"corr": 1}}), 1.0)
-        self.assertEqual(set(c.data), {"hours", "new", "flagged", "blamed_chips"})
+        self.assertEqual(set(c.data), {"hours", "new", "flagged", "missing", "blamed_chips"})
 
 
 if __name__ == "__main__":

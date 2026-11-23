@@ -7,14 +7,14 @@ add, move or drop a step in one.
 
 The phases always run in the same order, fixed in diag_runner.run_diag():
 
-    snapshot -> resets -> tests -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage
+    snapshot -> resets -> tests -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage -> pcie_aer
 
 The order is load-bearing (the triage probes, the ETH status read, the QSFP
 collector and sys-triage all open every chip, so they must not overlap the tests,
 and must come after a discrete reset; see the comments on each field below), so a tier does not
 reorder phases. It only picks what each one does. A phase a tier leaves empty is
-still in the report, as a SKIP that names the tier — except post_test_resets,
-whose phase is left out of the report when there is nothing to run.
+still in the report, as a SKIP that names the tier — except post_test_resets and
+pcie_aer, whose phases are left out of the report when there is nothing to run.
 
 Where the steps a tier can name are defined:
 
@@ -86,8 +86,9 @@ class Tier:
     qsfp_tests: bool = False
 
     # Judge the new PCIe AER errors per chip over the whole run (diag/aer.py
-    # AerWindow): marked after the pre-test resets and before each later reset,
-    # so errors from the tests survive the post-test reset.
+    # AerWindow), from after the pre-test resets to the end, across each later
+    # reset, in a pcie_aer phase of its own after the last one. Left out of the
+    # report when there is no window to judge (a dry run).
     aer_diff: bool = False
 
     # Collect the syseng sys-triage bundle. It is the record of a unit's state

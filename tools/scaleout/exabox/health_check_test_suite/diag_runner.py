@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import signal
 import socket
 import sys
 import time
@@ -311,7 +312,7 @@ def run_diag(
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
     overrides: dict | None = None,
 ) -> tuple[int, dict]:
-    """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
+    """Run the full pipeline (snapshot → resets → tests → triage → ETH status → QSFP tests → sys-triage → AER).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -398,13 +399,18 @@ def run_diag(
     _finish(report, reset_phase, t0, summary=False)
     fold_post_reset_snapshots(report, post_reset_phases)
 
-    # The AER errors over the run (pcie_aer_delta): counted from here, after the resets above, and marked before
-    # each reset below, which restarts the kernel's counts.
+    # The AER errors over the run (pcie_aer_delta): counted from here, after the resets above, to the end of the
+    # run. Every reset below goes through aer_reset(), which counts up to it and from what it left.
     aer = AerWindow() if plan.aer_diff and not dry_run else None
 
-    def aer_mark() -> None:
+    def aer_reset(reset: Callable[[], bool]) -> bool:
         if aer:
             aer.mark()
+        try:
+            return reset()
+        finally:
+            if aer:
+                aer.rebase()
 
     # Phase 3: the tests, in the tier's order: gtests and pytests, then the
     # galaxy load (the bus-bar steps, then the pair link test, its sweep on a
@@ -415,8 +421,8 @@ def run_diag(
         """The links sweep's tt-smi -glx_reset: "" when it ran clean, else why the sweep is skipped."""
         if skip_reset:
             return "no reset (--skip-reset)"
-        aer_mark()
-        return "" if run_post_test_reset(tt_smi_path, ("-glx_reset",), test_phase, dry_run) else "reset failed"
+        ok = aer_reset(lambda: run_post_test_reset(tt_smi_path, ("-glx_reset",), test_phase, dry_run))
+        return "" if ok else "reset failed"
 
     t0 = time.time()
     if skip_tests:
@@ -453,8 +459,6 @@ def run_diag(
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
 
-    aer_mark()
-
     # Phase 4: post-test reset. Its job is to hand phase 5 a freshly reset unit
     # and to guarantee the triage probes, which open every chip read-write,
     # never run concurrently with the tests.
@@ -462,7 +466,7 @@ def run_diag(
     if post_test_plan:
         post_reset_phase = Phase(name="post_test_reset")
         t0 = time.time()
-        run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run)
+        aer_reset(lambda: run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run))
         _finish(report, post_reset_phase, t0, summary=False)
 
     # Phase 5: triage tools, from tools/scaleout/kmd_triage in this repo.
@@ -481,8 +485,6 @@ def run_diag(
             WARN,
             lambda: run_triage(triage_dir, plan.triage, triage_phase, dry_run, logs_dir, triage_gating, tt_metal_path),
         )
-    if aer and not skip_triage:
-        triage_phase.add(aer.check())
     _finish(report, triage_phase, t0, summary=True)
 
     # Phase 6: the ETH status read. After the post-test reset and the triage
@@ -573,6 +575,14 @@ def run_diag(
         )
     _finish(report, sys_triage_phase, t0, summary=True, all_skip_stays_skip=True)
 
+    # Phase 9: the AER errors over the run, on a tier with aer_diff. Last, so the window spans every phase that
+    # opens the chips, and whatever was skipped. Left out of the report when there is no window (dry run).
+    if aer:
+        aer_phase = Phase(name="pcie_aer")
+        t0 = time.time()
+        _guarded(aer_phase, "pcie_aer_delta", WARN, lambda: aer_phase.add(aer.check()))
+        _finish(report, aer_phase, t0, summary=True, all_skip_stays_skip=True)
+
     ended = datetime.now(timezone.utc)
     report["ended_utc"] = ended.isoformat()
     report["total_duration_s"] = (ended - started).total_seconds()
@@ -602,7 +612,14 @@ def run_diag(
     return (0 if report["overall_status"] != FAIL else 1), report
 
 
+def _exit_on_sigterm(signum, frame) -> None:
+    """SIGTERM (the whole-run timeout, docker stop) as an exit, so the galaxy load stops the process groups of its
+    programs on the way out: they are out of reach of a signal to this process's group."""
+    raise SystemExit(128 + signum)
+
+
 def main() -> int:
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
     ap = build_diag_arg_parser()
     args = ap.parse_args()
     overrides = {k: getattr(args, k) for k in OVERRIDES}

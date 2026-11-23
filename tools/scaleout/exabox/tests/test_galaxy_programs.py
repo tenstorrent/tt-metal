@@ -16,7 +16,6 @@ from __future__ import annotations
 import ast
 import importlib
 import os
-import re
 import sys
 import tempfile
 import unittest
@@ -76,6 +75,14 @@ class GalaxyPrograms(unittest.TestCase):
             [cs.tray_of(b) for b in ("0000:01:00.0", "0000:41:00.0", "0000:c1:00.0", "0000:88:00.0", "zz")],
             [1, 2, 3, 4, None],
         )
+
+    def test_classify_compares_the_wrong_values_not_only_their_places(self):
+        import numeric_capture as nc
+
+        first = [((0, 1), 2.5), ((3, 4), "nan")]
+        self.assertEqual(nc.classify([first, list(first), list(first)]), "written-wrong")
+        self.assertEqual(nc.classify([first, [((0, 1), 2.5), ((3, 4), 7.0)], list(first)]), "transient")
+        self.assertEqual(nc.classify([first, [], []]), "read-path")
 
     def test_fault_cut_by_tray(self):
         import load_line as ll

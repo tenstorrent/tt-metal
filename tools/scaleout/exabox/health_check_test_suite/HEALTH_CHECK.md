@@ -90,7 +90,7 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | `flash` | none | — | — | 2 reads, 30 s apart | — | — | snapshot + 2 triage reads + 30 s | Quick ETH link health, the unit read as found |
 | `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1) + the [galaxy load](#the-galaxy-load) at `smoke`: `busbar` (the `qb`, `mix`, `step`, `heavy` and `code` steps, ~1 min planned) + `links` (pair link test, sweep on a fault, fabric open/close) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~5 min + galaxy load (~10 min at `smoke`, estimated) + triage + ~7 min | The scheduled fleet run |
 | `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, bf16 and bf8 variants, ~12 min measured) + fabric_all_gather_matmul_galaxy (pytest, ~1 min measured) + the galaxy load at `plain` (~19 min planned) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~17 min measured + galaxy load (~30 min at `plain`, estimated) + triage + ~7 min | Every test, less often |
-| `full` | as `weekly` | as `weekly`, with the galaxy load at `full` (~56 min planned) | host_side + device_side + AER diff over the whole run | yes | yes, if installed | yes, if installed and BMC credentials set | `weekly`'s other tests + galaxy load (~65 min at `full`, estimated) + triage + ~7 min + ETH status + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
+| `full` | as `weekly` | as `weekly`, with the galaxy load at `full` (~56 min planned) | host_side + device_side, then the AER diff over the whole run (`pcie_aer`, the last phase) | yes | yes, if installed | yes, if installed and BMC credentials set | `weekly`'s other tests + galaxy load (~65 min at `full`, estimated) + triage + ~7 min + ETH status + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
 
@@ -144,9 +144,11 @@ independently.
 then `links`, the last two names in their `tests` (`LOAD_TESTS` in
 `diag/busbar.py`). They run in the tests phase after the gtests and pytests, so
 the HSC reads and the chip recount [around the tests](#around-the-tests) cover
-them too. On `full`, a `pcie_aer_delta` check in the triage phase counts the
-new PCIe AER errors per chip over the whole run, from after the pre-test resets
-to the end, across every reset in between.
+them too. On `full`, a `pcie_aer_delta` check counts the new PCIe AER errors
+per chip over the whole run, from after the pre-test resets to the end, in a
+`pcie_aer` phase of its own after every other phase. A reset can restart a
+chip's counters or keep them, so the count is taken up to each reset and again
+from the counters as the reset left them.
 
 - `busbar` (`diag/busbar.py`): the steps `qb`, `mix`, `step`, `heavy` and
   `code`, in that order, each one program from `galaxy/` and its own check
@@ -154,10 +156,17 @@ to the end, across every reset in between.
   its output, or no exit within its planned length plus 300 s. A failed step
   does not stop the next ones.
 - `links` (`diag/links.py`): a 2-chip all-gather on every linked chip pair UMD
-  finds (10 s per pair, in rounds: `links_pair`). After a fault here or in
-  `busbar`, it runs `tt-smi -glx_reset` and the pair test again at 300 s per
-  pair (`links_sweep`; skipped under `--skip-reset`). Then one whole-box fabric
-  open and close (`links_fabric`).
+  finds (10 s per pair, in rounds: `links_pair`). The probes of a round run
+  side by side, each within its 10 s plus 300 s of setup from its start. After a
+  fault here or in `busbar`, it runs `tt-smi -glx_reset`, asks UMD for the links
+  again (the reset can bring back a tray that dropped under the load) and runs
+  the pair test on them at 300 s per pair (`links_sweep`; skipped under
+  `--skip-reset`). Then one whole-box fabric open and close (`links_fabric`).
+
+Each program runs in a process group of its own, so that a hung one is stopped
+with everything it started. The suite stops those groups on its way out too:
+on an error, Ctrl-C, or the SIGTERM of `run_health_check.py`'s whole-run
+timeout, which would otherwise not reach them.
 
 Each tier runs the load at its own length, `load_mode` in `tiers.py`:
 
@@ -746,7 +755,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 |---|---|---|
 | `pcie_enum_count` | All 32 chips enumerated | **FAIL** |
 | `recount_N` (reset loop) | After reset N, `lspci` lists all 32 chips; each missing one is named by BDF, tray and ASIC (`data.missing`) | **FAIL** |
-| `pcie_aer_delta` (triage phase, `full`) | New AER errors per chip over the whole run, from a mark taken after the pre-test resets and before each later reset (a reset restarts the counters), so errors from the tests survive the post-test reset. Any uncorrectable: **FAIL**. Correctable: **WARN** at 2 or more and 6 or more per hour. | **FAIL** / **WARN** |
+| `pcie_aer_delta` (`pcie_aer` phase, `full`) | New AER errors per chip over the whole run, from after the pre-test resets to the end, counted up to each later reset and again from the counters as it left them. Any uncorrectable: **FAIL**. Correctable: **WARN** at 2 or more and 6 or more per hour. | **FAIL** / **WARN**. Also **WARN** naming the chips whose counters were not read at the start or the end (errors on them were not counted). **SKIP** when no chip's counters could be read (AER off in the kernel or BIOS). |
 | `pcie_lane_width` | x8 on host-PCIe chips (`ASIC_LOCATION==0x6`); x1 elsewhere | **FAIL** |
 | `pcie_gen` | Host-PCIe (U6) chips trained to at least the rev's expected gen (Gen4 on RevA/B, Gen5 on RevC). Above-spec is rendered with `(^)` but doesn't degrade status; under-spec is rendered with `(!)` and WARNs. | **WARN** (known: occasional Gen1 fallback). **SKIP** when `board_rev` is indeterminate. |
 
@@ -761,7 +770,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 |---|---|---|
 | `busbar_<step>` (`qb`, `mix`, `step`, `heavy`, `code`) | The step's program exits 0, prints no `<NAME> FAIL` line, and exits within its planned length plus 300 s | **FAIL** with the first FAIL line, or the exit code or hang and the last line of the log. **SKIP** on a dry run. |
 | `links_pair` | Every linked chip pair passes a 2-chip all-gather, data checked bit for bit | **FAIL** naming the pairs and channels; each link end, by tray, ASIC, port and BDF, in `link_ends` |
-| `links_sweep` | After a bus-bar or pair fault: a `tt-smi -glx_reset`, then the pair test again at 300 s per pair | **FAIL** as `links_pair`. **SKIP** when the reset failed or under `--skip-reset`. |
+| `links_sweep` | After a bus-bar or pair fault: a `tt-smi -glx_reset`, then the pair test again at 300 s per pair, on the links UMD finds after the reset | **FAIL** as `links_pair`, or when UMD discovery after the reset fails. **SKIP** when the reset failed or under `--skip-reset`. |
 | `links_fabric` | One whole-box fabric open and close | **FAIL** on a non-zero exit, a FAIL line or a hang |
 
 ### GDDR
@@ -968,7 +977,7 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── hsc.py              # phase 3: tray HSC input-voltage flags, read before and after the tests
 │   ├── busbar.py           # phase 3: the galaxy load's bus-bar test (LOAD_TESTS), its plan and steps
 │   ├── links.py            # phase 3: the galaxy load's links test: pair test, sweep, fabric open/close
-│   ├── aer.py              # phase 5: PCIe AER errors over the run (pcie_aer_delta)
+│   ├── aer.py              # phase 9: PCIe AER errors over the run (pcie_aer_delta)
 │   ├── external.py         # ingesting checks written by external tools
 │   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)
 │   ├── eth_status.py       # phase 6: ETH status read: PCIe gate, two tt-triage reads, and the
