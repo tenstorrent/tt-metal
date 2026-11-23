@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kimi-K3.1's Gated DSA layers run inside the Kimi-K3 stack: finite and deterministic on 8x4.
+"""Kimi-K3.1's Gated DSA layers run inside the Kimi-K3 stack: finite and deterministic on an 8x4 and a 4x4 stage.
 
 K3.1 is K3 with its 24 full-attention layers turned into Gated DSA (`ttMLA` with K3.1's NoPE
 indexer, scaled-FP8 KVPE cache and a bf8 indexer key cache). `ttMLA` itself is covered against the
@@ -13,8 +13,9 @@ K3.1's accuracy against vLLM is gated by its golden (`test_transformer_depth.py:
 test_k31_depth_ladder_matches_golden`, rungs L24 and L24-128k: layers 0-23). This test checks what that
 golden does not: a repeated request bit-identical, a pipeline stage's KV-only last layer, and a DSA-only
 window reading the earlier chunk from its caches. The bar is the K3 layer tests' structural one: two
-5120-token chunks of chunked prefill (the second chunk's indexer selects its top-2048 from a 10240
-token prefix and reads the first chunk's cache), every output and cache finite, and a second run of
+chunks of chunked prefill at the stage's production chunk (5120 tokens on 8x4, 2560 on 4x4; the second
+chunk's indexer selects its top-2048 from a two-chunk prefix and reads the first chunk's cache), every
+output and cache finite, and a second run of
 the same sequence bit-identical to the first. In the DSA-only window, chunk 1's output must change when only
 chunk 0's tokens do: the stack-level proof that a later chunk reads the earlier chunks' kvpe cache. It does
 not prove the index-key read (an indexer ignoring its cached keys would still pass); that is left to
@@ -32,7 +33,7 @@ collision leaves a zero row.
 The caches and KDA slabs come from the serving allocator (`KimiK31Adapter.allocate_kv_cache`: TP-deduped
 scaled-FP8 KVPE and bf8 index-key caches, one slot per DSA layer of the rank). The capacity must be a
 multiple of 8192 tokens (the allocator's paging alignment) and of the chunk (the cache write), so the two
-chunks fill 10240 of a 40960-token cache.
+chunks fill 10240 (8x4) or 5120 (4x4) of a 40960-token cache.
 """
 
 import pytest
@@ -41,12 +42,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
-    CHUNK,
     build_stack,
     compose,
     hf_config,
     placements,
     release,
+    stage_layout,
     synthetic_state_dict,
     token_ids,
     upload_tokens,
@@ -68,23 +69,24 @@ def _shards(mesh_device, tensor) -> torch.Tensor:
 
 
 def _run_sequence(model, mesh_device, ids, kvpe, index) -> list[torch.Tensor | None]:
+    chunk_len = stage_layout(mesh_device).chunk
     outputs = []
     for chunk in range(NUM_CHUNKS):
-        start = chunk * CHUNK
-        tokens_tt = upload_tokens(mesh_device, ids[start : start + CHUNK])
+        start = chunk * chunk_len
+        tokens_tt = upload_tokens(mesh_device, ids[start : start + chunk_len])
         logger.info(f"chunk {chunk}: forward at actual_start={start}")
         out = model.forward(
             tokens_tt,
             kvpe_cache=kvpe,
             index_kv_cache=index,
             actual_start=start,
-            actual_end=start + CHUNK,
+            actual_end=start + chunk_len,
         )
         ttnn.deallocate(tokens_tt)
         if out is None:
             outputs.append(None)
         else:
-            outputs.append(compose(mesh_device, out, CHUNK))
+            outputs.append(compose(mesh_device, out, chunk_len))
             ttnn.deallocate(out)
     return outputs
 
@@ -103,8 +105,9 @@ def test_k31_dsa_block_finite_and_deterministic(mesh_device, device_params, wind
     dsa_layers = [layer for layer in stack.layers if layer.attention.writes_kv]
     assert dsa_layers and all(layer.attention.mla._has_indexer for layer in dsa_layers), "K3.1 layers must be DSA"
     kvpe, index = caches.kvpe, caches.index
+    chunk_len = stage_layout(mesh_device).chunk
 
-    ids = token_ids(NUM_CHUNKS * CHUNK)
+    ids = token_ids(NUM_CHUNKS * chunk_len)
     runs = []
     try:
         for run in range(2):
@@ -118,7 +121,7 @@ def test_k31_dsa_block_finite_and_deterministic(mesh_device, device_params, wind
         reads_prefix_only_from_caches = not kv_only and not stack.schedule.rank_kda_layer_ids()
         if reads_prefix_only_from_caches:
             logger.info(f"{window}: chunk 0 re-tokenized, chunk 1 unchanged")
-            other_prefix = token_ids(CHUNK, seed=8) + ids[CHUNK:]
+            other_prefix = token_ids(chunk_len, seed=8) + ids[chunk_len:]
             prefix_outputs = _run_sequence(stack, mesh_device, other_prefix, kvpe, index)
     finally:
         release(stack, caches)
@@ -135,9 +138,9 @@ def test_k31_dsa_block_finite_and_deterministic(mesh_device, device_params, wind
     kvpe_logical = kvpe.unpack_host(kvpe_raw)
     assert torch.isfinite(kvpe_logical).all(), "non-finite KVPE cache"
     assert torch.isfinite(index_raw.float()).all(), "non-finite index cache"
-    # Both chunks of every DSA slot were written: each chunk fills its first CHUNK / (SP*TP) rows on every
+    # Both chunks of every DSA slot were written: each chunk fills its first chunk / (SP*TP) rows on every
     # chip (TP-deduped, block-cyclic), so no all-zero row survives below that; the rest is still empty.
-    written = NUM_CHUNKS * CHUNK // mesh_device.get_num_devices()
+    written = NUM_CHUNKS * chunk_len // mesh_device.get_num_devices()
     for name, cache in (("KVPE", kvpe_logical), ("index", index_raw.float())):
         assert (cache[..., :written, :].abs().amax(dim=-1) > 0).all(), f"a written {name} cache row is zero"
         assert not cache[..., written:, :].any(), f"{name} cache rows past the two chunks were written"

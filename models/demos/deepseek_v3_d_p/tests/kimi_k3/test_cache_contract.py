@@ -229,3 +229,58 @@ def test_stale_k31_attention_layer_loads_only_its_attention_weights(monkeypatch,
     assert set(state) == {"mla_weights"}
     assert TtIndexer.has_host_weights(state["mla_weights"])
     assert requested["indexer.k_norm_bias.weight"] == f"model.layers.{_MLA_LAYER}.self_attn.indexer.k_norm.bias"
+
+
+# --- One directory listing per check ---------------------------------------------------------
+#
+# The preflight answers from one FastCacheChecker listing instead of a Path.glob per tensorbin per layer (a full
+# directory scan each; minutes on a 17.6k-file Weka cache). It must give the verdict the per-file globs gave.
+
+
+def _glob_reference(root, layers, model_cfg):
+    """The preflight as it was: one `Path.glob` per attention tensorbin of each marked layer."""
+    return all(
+        (root / f".layer_{idx}.complete").is_file()
+        and all(any(root.glob(pattern)) for pattern in kimi_k3_weights._attention_cache_globs(idx, model_cfg))
+        for idx in layers
+    )
+
+
+@pytest.mark.parametrize("model_cfg", [KimiK3Config, KimiK31Config], ids=["kimi_k3", "kimi_k3_1"])
+def test_preflight_matches_per_file_globs_with_each_file_removed(tmp_path, model_cfg):
+    """A complete slice of KDA layers and one attention layer; remove each file in turn (markers included)."""
+    layers = range(_MLA_LAYER + 1)
+    for idx in layers:
+        mark_layer_cached(tmp_path, idx)
+        if idx != _MLA_LAYER:
+            _write_kda_cache(tmp_path, idx, **_CURRENT)
+    _write_kda_cache(tmp_path, _KDA_LAYER, **_LEGACY_BF16)  # leftovers that must not stand in for current files
+    _write_indexer_cache(tmp_path, _MLA_LAYER)
+    preflight = dict(first_layer_idx=layers[0], num_layers=len(layers), model_cfg=model_cfg)
+    assert TtKimiK3Transformer.check_cache_complete(tmp_path, **preflight)
+    assert _glob_reference(tmp_path, layers, model_cfg)
+
+    for name in sorted(p.name for p in tmp_path.iterdir()):
+        (tmp_path / name).unlink()
+        assert TtKimiK3Transformer.check_cache_complete(tmp_path, **preflight) is _glob_reference(
+            tmp_path, layers, model_cfg
+        ), name
+        for idx in layers:
+            marked = (tmp_path / f".layer_{idx}.complete").is_file()
+            assert layer_is_stale(tmp_path, idx, model_cfg) is (
+                marked and not _glob_reference(tmp_path, [idx], model_cfg)
+            )
+        (tmp_path / name).touch()
+
+
+@pytest.mark.parametrize("missing", [None, *_INDEXER_NAMES], ids=lambda m: f"missing_{m or 'none'}")
+def test_indexer_check_matches_per_file_globs(tmp_path, missing):
+    """`TtIndexer.check_cache_complete` (also DeepSeek-V3.2 / GLM's sparse-layer check) answers from one listing."""
+    _write_indexer_cache(tmp_path, _MLA_LAYER, names=[n for n in _INDEXER_NAMES if n != missing])
+    # decoys at a dtype no indexer weight uses
+    _write_indexer_cache(tmp_path, _MLA_LAYER, dtypes=dict.fromkeys(_INDEXER_NAMES, ttnn.float32))
+    prefix = f"layer_{_MLA_LAYER}.mla"
+    expected = all(any(tmp_path.glob(pattern)) for pattern in TtIndexer.cache_globs(prefix))
+    assert expected is (missing is None)
+    assert TtIndexer.check_cache_complete(tmp_path, prefix) is expected
+    assert not TtIndexer.check_cache_complete(tmp_path / "absent", prefix)
