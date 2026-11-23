@@ -52,6 +52,9 @@ FLOAT_OPS = [
 def test_new_scalar_value_reuses_program(device, isolate_program_cache, name, ttnn_op, torch_op, positive):
     torch.manual_seed(0)
     torch_x = torch.rand(1, 1, 64, 96) + 0.5 if positive else torch.randn(1, 1, 64, 96) * 3
+    if name == "heaviside":
+        # heaviside returns the scalar only where x == 0, so put exact zeros in the input.
+        torch_x[torch.rand_like(torch_x) < 0.1] = 0
     torch_x = torch_x.to(torch.bfloat16)
     tt_x = ttnn.from_torch(torch_x, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -63,6 +66,9 @@ def test_new_scalar_value_reuses_program(device, isolate_program_cache, name, tt
         result = ttnn.to_torch(ttnn_op(tt_x, value))
         expected = torch_op(torch_x.float(), value)
         assert_with_pcc(expected, result.float(), 0.999)
+        if name == "heaviside":
+            # Every value is exact in bfloat16, so a stale scalar shows up as a mismatch at the zeros.
+            assert torch.equal(result.float(), expected), f"heaviside with {value}"
         if name == "rdiv":
             # PCC cannot see a stale numerator (c / x correlates with any other c' / x), so check the magnitude too.
             assert torch.allclose(result.float(), expected, rtol=0.02, atol=1e-3), f"rdiv with {value}"
