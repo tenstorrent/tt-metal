@@ -109,14 +109,28 @@ def g5_lane_cores(l5: L5Cfg, g):
     return [(x0 + c, y0 + r) for c in range(NCOL) for r in range(NR)]
 
 
-# Blackhole ethernet channel -> NoC x (the ethernet row, y 1)
+# Blackhole ethernet channel -> NoC x (the ethernet row, y 1), every channel (unharvested order)
 BH_ETH_X = (1, 16, 2, 15, 3, 14, 4, 13, 5, 12, 6, 11, 7, 10)
 NOC_W = 17  # (Blackhole NoC columns: the row wraps)
+_ETH_HARVEST = {}
+
+
+def eth_harvest_mask(mesh, rc):
+    """The chip's fused-off ethernet channels (bit i: BH_ETH_X[i]), from the cluster descriptor (a P150: channels 5 / 8;
+    a Galaxy chip: its own)."""
+    if not _ETH_HARVEST:
+        import yaml
+
+        d = yaml.safe_load(open(ttnn.cluster.serialize_cluster_descriptor()))
+        for chip, h in (d.get("harvesting") or {}).items():
+            _ETH_HARVEST[int(chip)] = int(h.get("eth_harvesting_mask", 0))
+    return _ETH_HARVEST.get(int(mesh.get_device_id(ttnn.MeshCoordinate(*rc))), 0)
 
 
 def eth_x(mesh, mcfg, src_rc, dst_rc, link):
     """NoC x of the ethernet core the fabric uses from chip src_rc towards dst_rc on link (the routing plane the mux
-    kernel's runtime args name: after the regions to clear, the connection's ethernet channel)."""
+    kernel's runtime args name: after the regions to clear, the connection's ethernet channel). The fabric's channel
+    ids count the chip's unharvested channels only (checked against NoC traces)."""
     a = list(
         mcfg.kernel_runtime_args(
             source_node_id=node(mesh, src_rc),
@@ -127,8 +141,10 @@ def eth_x(mesh, mcfg, src_rc, dst_rc, link):
         )
     )
     chan = a[1 + 2 * a[0]]
-    assert chan < len(BH_ETH_X), chan
-    return BH_ETH_X[chan]
+    mask = eth_harvest_mask(mesh, src_rc)
+    live = [x for i, x in enumerate(BH_ETH_X) if not mask >> i & 1]
+    assert chan < len(live), (chan, mask)
+    return live[chan]
 
 
 def row_load(flows):

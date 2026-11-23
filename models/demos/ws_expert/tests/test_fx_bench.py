@@ -518,3 +518,27 @@ def test_fx_phys_placed(mesh_device):
 
 
 CTRL.update({"north_2link": [((1, 0), (0, 0), 0, (1, 0), 1), ((1, 0), (0, 0), 1, (2, 0), 1)]})
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dev_params(8704)], ids=["pay8704"], indirect=True)
+def test_eth_x_check(mesh_device):
+    """ws_lane5.eth_x against the NoC-trace ground truth (bh-lb-09): (0,0) -> (0,1) link 0 at x 12, (0,0) -> (1,0)
+    link 0 at x 7, (1,0) -> (0,0) links 0 / 1 at x 11 / 10."""
+    from models.demos.ws_expert.ws_lane5 import eth_x
+
+    fabric_mux = ttnn.experimental.fabric_mux
+    mcfg = fabric_mux.Config(
+        num_full_size_channels=1,
+        num_header_only_channels=0,
+        num_buffers_per_full_size_channel=2,
+        num_buffers_per_header_only_channel=0,
+        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh_device),
+        base_l1_address=ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1),
+    )
+    got = [
+        eth_x(mesh_device, mcfg, s, d, l)
+        for s, d, l in [((0, 0), (0, 1), 0), ((0, 0), (1, 0), 0), ((1, 0), (0, 0), 0), ((1, 0), (0, 0), 1)]
+    ]
+    logger.info(f"ETHX {got}")
+    assert got == [12, 7, 11, 10], got

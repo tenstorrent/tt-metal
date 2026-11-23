@@ -1950,3 +1950,20 @@ link both ways at once (40 one-hop flows, each its own sender / receiver core), 
   stack 4+ streams on a NoC link.
 - Ring (test_fr2 RISC split / test_fr_best shared core), one or two links, 8704 / 15232: 23.1-23.6 / 24.0 a link
   direction; the senders wait on router space most of the time (1.3-2.0 of 2.8 ms): link-bound in every variant.
+
+### The WS 5 x 5 lane at 200G after the eth_x fix (2026-11-23 ~22:10, bh-lb-09 galaxy-like 200G)
+- ws_lane5.eth_x now maps the fabric's channel id through the chip's ethernet harvest (cluster descriptor
+  eth_harvesting_mask; P150: 0x120) - test_fx_bench test_eth_x_check against the NoC-trace ground truth. It feeds
+  L5Cfg.place (hmc builds only; the bidirectional tray test does not place).
+| test (3 + 3 or 20 + 5 launches) | before the fix (same box, 200G) | after |
+|---|---|---|
+| tray G 2, M 586: util / end to end | 46.8% / 2,365 us | 46.3% / 2,389 us |
+| tray G 2, M 2048 | 74.2% / 4,863 us | 74.4% / 4,855 us |
+| tray G 2, M 0: NCRISC end lane 0 / 1 | 1,649 / 1,632 us | 1,657 / 1,641 us (17.6 GB/s a link direction) |
+| one-way G 4 snake, M 586 (PCC 0.99988) | 11.02 ms | 10.63 ms |
+| one-way G 4 snake, M 0, placed | 6.80-6.87 ms | 6.82-6.84 ms (21.2 GB/s a link direction) |
+| one-way G 4 snake, M 0, fixed (place 0) | - | 9.02-9.32 ms |
+| one-way G 4 two 4-chip rings, M 0: placed / fixed | - | 5.80 / 7.03-7.08 ms (21.4 / 17.6 GB/s) |
+- WL5_WHY at M 0 (one-way, placed): the group NCRISCs are busy ~0.38 ms of 6.3; idle on mux space 2.0-4.3 ms and on
+  downstream credits 0.1-2.5 ms on every chip: the mux -> router path paces the lanes at ~21 GB/s a link direction
+  (85% of 25), where the forwarding ring (test_fr2, test_fr_best) and the raw fabric reach 23.5-24.0 (94-96%).
