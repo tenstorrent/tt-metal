@@ -64,6 +64,7 @@ from models.demos.inkling2_mini.tt.fused.pf_combine import PfCombine
 from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
 from models.demos.inkling2_mini.tt.fused.pf_gate import PfGateTail
 from models.demos.inkling2_mini.tt.fused.pf_gateout import PfGateOut
+from models.demos.inkling2_mini.tt.fused.pf_handoff import PfHandoff
 from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, half_proj, half_scale_rows, scale_rows
 from models.demos.inkling2_mini.tt.fused.pf_msg import PfMessages
 from models.demos.inkling2_mini.tt.fused.pf_rel import PfRel, skew_proj
@@ -465,6 +466,7 @@ class Inkling2Prefill:
         self.fused_glue = fused_glue
         self._pfconv = PfConv(dev) if fused_glue else None
         self._pfmsg = PfMessages(dev) if fused_glue else None
+        self._pfhand = PfHandoff(dev) if fused_glue else None  # one-program decode handoff (bit-equal)
         self._pfswiglu = PfSwiglu(dev) if fused_glue else None  # sparse experts: slices + softcapped SwiGLU in one
         self._pfheads = PfHeads(dev) if fused_heads else None
         self._pfgate = PfGateOut(dev) if fused_heads else None
@@ -1487,6 +1489,8 @@ class Inkling2Prefill:
           0..3 of the shared input; triple = row 0 q, rows 1..4 k lags, rows 5..8 v lags);
         - post-attn / post-mlp FusedShortConv rings: ring[(P - k) % 4] = conv input at lag k, dense fp32 pages."""
         P = ctx["L"] - 1
+        if self._pfhand is not None and self._handoff_one(ctx, n, P):
+            return
         zero = self.c_zero_row
         conv_rows = []
         for c, tails in ctx["tails"].items():
@@ -1523,6 +1527,38 @@ class Inkling2Prefill:
                         ring[(P - k) % TAPS],
                     )
                 i += 1
+
+    def _handoff_one(self, ctx, n, P):
+        """_handoff as one PfHandoff program (same rows, bit-equal). False (nothing done) if a source is not a bf16
+        TILE DRAM tensor: the caller then runs the op chain."""
+        jobs = []
+        pad = ctx["t"] - n
+        for c, tails in ctx["tails"].items():
+            st, ca, cm = self.m.states[c]
+            lo, xend = tails["xend"]
+            prev = tails.get("xprev")
+
+            def lag(i, k):  # (tensor, row) of the q/k/v input at position P - k, or None (zero) before position 0
+                r = n - 1 - k
+                if r >= 0:
+                    return xend[i], r - lo
+                return None if prev is None else (prev[i], 3 + r)
+
+            if tails["triple"]:
+                xrows = [lag(0, 0)] + [lag(1, k) for k in range(TAPS)] + [lag(2, k) for k in range(TAPS)]
+            else:
+                xrows = [lag(1, k) for k in range(TAPS)]
+            vecs = []
+            for name, ring in (("attn", ca), ("mlp", cm)):
+                ext = ctx["ext"][c][name]  # last KEEP rows of [old tail ++ chunk]
+                e = ext.shape[2] - pad
+                vecs += [(ring[(P - k) % TAPS], ext, e - 1 - k) for k in range(TAPS)]
+            srcs = [x[0] for x in xrows if x is not None] + [v[1] for v in vecs]
+            if not all(PfHandoff.ok(t) for t in srcs) or st.x_hist.dtype != ttnn.bfloat16:
+                return False
+            jobs.append((st.x_hist, xrows, vecs))
+        self._pfhand(jobs)
+        return True
 
     # ------------------------------------------------------------------ traced chunks
     # A chunk's device work is captured as segments split at each MoE routing (the host reads the expert ids,
