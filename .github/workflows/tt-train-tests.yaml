@@ -88,8 +88,7 @@ on:
         value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
 # No workflow-level permissions: the tt-train-tests job inherits the caller's, so only callers
-# that grant id-token: write (L2 nightly) get the Hugging Face OIDC exchange. Callers must
-# restrict their job permissions themselves.
+# that grant id-token: write (L2 nightly) get the Hugging Face OIDC exchange.
 jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
