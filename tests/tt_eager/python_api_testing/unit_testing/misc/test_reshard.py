@@ -384,11 +384,16 @@ def test_reshard_with_program_cache(
 
 
 def skip_if_dram_shard_grid_too_wide(device, *configs):
-    """Skip a DRAM-sharded case whose shard grid needs more DRAM banks than the device has (a P100 has 7)."""
-    num_dram_banks = device.dram_grid_size().x
+    """Skip a DRAM-sharded case whose shard grid falls outside the device's DRAM grid (a P100 has 7 banks)."""
+    dram_grid = device.dram_grid_size()
     for shard_grid, buffer_type in configs:
-        if buffer_type == ttnn.BufferType.DRAM and shard_grid.bounding_box().end.x >= num_dram_banks:
-            pytest.skip(f"DRAM shard grid needs more than the device's {num_dram_banks} DRAM banks")
+        if buffer_type != ttnn.BufferType.DRAM:
+            continue
+        end = shard_grid.bounding_box().end
+        if end.x >= dram_grid.x or end.y >= dram_grid.y:
+            pytest.skip(
+                f"DRAM shard grid ends at ({end.x}, {end.y}), outside the device's {dram_grid.x}x{dram_grid.y} DRAM grid"
+            )
 
 
 @pytest.mark.parametrize(
