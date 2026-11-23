@@ -50,30 +50,27 @@ needs_device_compiler = pytest.mark.skipif(
 )
 
 
-def _compile(*args):
-    return subprocess.run(
-        [
-            str(_DEVICE_COMPILER),
-            *_FLAGS,
-            *_INCLUDES,
-            "-fsyntax-only",
-            *args,
-            str(_SOURCE),
-        ],
-        capture_output=True,
-        text=True,
-    )
+# The two commands this file runs, built once from the constants above.
+_CHECK = [str(_DEVICE_COMPILER), *_FLAGS, *_INCLUDES, "-fsyntax-only", str(_SOURCE)]
+_CHECK_WITH_A_WRONG_PART = [
+    str(_DEVICE_COMPILER),
+    *_FLAGS,
+    *_INCLUDES,
+    "-fsyntax-only",
+    "-DEXPECT_FAIL=1",
+    str(_SOURCE),
+]
 
 
 @needs_device_compiler
 def test_each_refused_call_names_its_part():
-    built = _compile()
+    built = subprocess.run(_CHECK, capture_output=True, text=True)
     assert built.returncode == 0, built.stderr
 
 
 @needs_device_compiler
 def test_a_wrong_part_fails_the_build():
     """The checks can fail: with the expected part of one case changed, the build stops at that case."""
-    built = _compile("-DEXPECT_FAIL=1")
+    built = subprocess.run(_CHECK_WITH_A_WRONG_PART, capture_output=True, text=True)
     assert built.returncode != 0, "EXPECT_FAIL=1 compiled"
     assert "refused by layout alone: matmul_op(a24, t11)" in built.stderr, built.stderr
