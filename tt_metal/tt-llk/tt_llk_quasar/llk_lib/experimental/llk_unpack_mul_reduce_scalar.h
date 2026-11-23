@@ -9,19 +9,12 @@
 
 using namespace ckernel;
 
-/*************************************************************************
- * LLK MUL REDUCE SCALAR UNPACK (Quasar)
- *************************************************************************/
-
 /**
- * @brief Hand cleared SrcA and SrcB banks to the math thread for the mul_reduce_scalar reduce tail.
+ * @brief Give math a zeroed SrcA and SrcB bank for the mul_reduce_scalar reduce tail.
  *
- * The reduce tail fills both source registers from DEST with MOVD2A/MOVD2B. Each bank is zeroed
- * first, so rows the moves do not write (past a tiny tile's face rows) pool as zeros, and its
- * dvalid is set.
+ * Math fills them from DEST, and the zeros cover rows that short faces leave empty.
  *
- * @note Call after the multiply (or copy) phase. On the math thread, pair with
- *       @ref _llk_math_mul_reduce_scalar_init_ (T1), which runs the reduce tail.
+ * @note Call after the multiply or copy phase. Pairs with @ref _llk_math_mul_reduce_scalar_init_ (T1).
  */
 inline void _llk_unpack_mul_reduce_scalar_switch_to_reduce_()
 {

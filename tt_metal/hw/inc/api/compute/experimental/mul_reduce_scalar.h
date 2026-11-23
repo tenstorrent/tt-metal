@@ -21,7 +21,7 @@
 namespace ckernel {
 
 #ifdef ARCH_QUASAR
-// Quasar keeps the DEST capacity helpers in ckernel::trisc; not every TRISC build pulls them into scope.
+// Quasar keeps these in ckernel::trisc, and not every TRISC build has them in scope.
 using trisc::DstTileShape;
 using trisc::get_dest_max_tiles;
 #endif
@@ -88,7 +88,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
 
     // Step 3: Initialize reduce operation
 #ifdef ARCH_QUASAR
-    // Quasar resolves the pool fidelity schedule from the reduced operand's format.
+    // Quasar picks the pool fidelity from the operand's format.
     MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, reduce_f>(icb0)));
 #else
     MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, reduce_f>()));

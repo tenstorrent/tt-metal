@@ -82,7 +82,7 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
 
     // Step 3: Initialize reduce operation
 #ifdef ARCH_QUASAR
-    // Quasar resolves the pool fidelity schedule from the reduced operand's format.
+    // Quasar picks the pool fidelity from the operand's format.
     MATH((llk_math_mul_reduce_scalar_reduce_init<DST_ACCUM_MODE, MATH_FIDELITY>(icb)));
 #else
     MATH((llk_math_mul_reduce_scalar_reduce_init<DST_ACCUM_MODE, MATH_FIDELITY>()));

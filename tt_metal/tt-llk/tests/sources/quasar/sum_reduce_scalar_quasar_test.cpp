@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Sum + reduce-to-scalar on Quasar: copy every input tile into DEST, then run the mul_reduce_scalar
-// reduce tail, which leaves sum(A) * scaler^2 in datum 0 of DEST tile 0.
-//
-// Math and pack hand DEST over with the MATH_PACK semaphore, as tt-metal does. The reduce tail
-// interleaves FPU and SFPU work inside one section, and the semaphore scheme moves both to the
-// next half of DEST together; the dvalid chain flips only the client that sets dvalid.
+// Copies every input tile into DEST and sums them into datum 0 with the mul_reduce_scalar reduce tail.
+// DEST is handed over with semaphores because the tail mixes FPU and SFPU work in one section.
 
 #include <cstdint>
 
@@ -47,7 +43,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
         if constexpr (is_fp32_dest_acc_en)
         {
-            // A 32-bit Dest datacopy runs as ELWADD, so SrcB needs a format too.
+            // A 32-bit DEST datacopy runs as ELWADD, so SrcB needs a format too.
             _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
                 static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
         }
@@ -111,7 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
             _llk_math_wait_for_dest_available_();
-            // The reduce tail reprograms the MOP and address modifiers, so the copy re-inits each pass.
+            // The reduce tail reprograms the MOP, so the copy init runs every pass.
             _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 tensor_shape.face_r_dim * tensor_shape.total_num_faces() /*num_rows_per_matrix*/, 1 /*num_matrices*/);
@@ -122,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, MATH_FIDELITY>(math_format, tensor_shape);
             _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0);
-            // SrcB row 0 carries the scaler: fill DEST tile 0 with it, move it, then clear the accumulator row.
+            // Load the scaler into SrcB through DEST tile 0, then zero that tile for the sums.
             _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<2 /*ITERATIONS*/>, 0 /*dst_index*/, VectorMode::RC_custom, scaler);
             _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0);
             _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<2 /*ITERATIONS*/>, 0 /*dst_index*/, VectorMode::RC_custom, 0.0f);

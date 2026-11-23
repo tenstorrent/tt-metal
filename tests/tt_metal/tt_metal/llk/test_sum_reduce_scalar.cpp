@@ -41,7 +41,7 @@ struct SumReduceScalarConfig {
     // Tile row height. 32 -> standard 32x32 tiles (4 faces); 16 -> 16x32 "tiny
     // tiles" (2 faces, one face-row). Column dimension is always 32.
     uint32_t tile_height = 32;
-    // Tile column width. 16 gives a single-face tile; only the Quasar runner supports it.
+    // Tile width. 16 gives a single-face tile, which only the Quasar runner supports.
     uint32_t tile_width = 32;
     float scaler = 1.0f;
     // Native fp32 DEST. The reduce tail is templated on DST_ACCUM_MODE, so this
@@ -125,11 +125,11 @@ bool check_result(
     return std::abs(device_scalar - golden_scalar) < tolerance;
 }
 
-// Quasar runs the 2.0 host API: DataflowBuffers, named compile-time args, no DataMovementKernel.
+// Quasar only accepts the 2.0 host API.
 bool run_sum_reduce_scalar_test_quasar(distributed::MeshDevice& mesh_device, const SumReduceScalarConfig& config) {
     namespace sn = tt::tt_metal::unit_tests::llk::single_node_dfb;
     const tt::DataFormat out_format = config.fp32_dest_acc ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    // A tile shorter than 32 rows is described through the DFB tile metadata, so the kernel derives its faces.
+    // Smaller tiles go in the DFB tile metadata, so the kernel sees the right faces.
     const std::optional<tt::tt_metal::Tile> tile =
         config.tile_height == tt::constants::TILE_HEIGHT && config.tile_width == tt::constants::TILE_WIDTH
             ? std::nullopt
@@ -256,7 +256,7 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
 
 using namespace tt::tt_metal::unit_tests::compute::sum_reduce_scalar;
 
-// All architectures; Quasar runs the 2.0 host API path.
+// Runs on all architectures.
 //
 // Match Blaze LayerNorm's interpreted-tile selection exactly. It picks the tallest
 // legal height in {32, 16, 8, 4, 2, 1} that covers the width with at most eight
@@ -364,8 +364,7 @@ INSTANTIATE_TEST_SUITE_P(
         return info.param ? "SumReduceScalar_Scaler_2_fp32dest" : "SumReduceScalar_Scaler_0p5";
     });
 
-// Single-face tiles shorter than 16 rows (Quasar only). The copy phase places them 16 rows apart in
-// DEST, wider than one padded face, so the reduce tail must walk them with the copy phase's stride.
+// Single-face tiles shorter than 16 rows still sit 16 rows apart in DEST, so this checks the tile stride.
 class SumReduceScalarSingleFaceTest : public LLKQuasarMeshDeviceSingleCardFixture,
                                       public testing::WithParamInterface<SumReduceScalarConfig> {};
 

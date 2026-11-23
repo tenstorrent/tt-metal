@@ -8,7 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-// sum_reduce_scalar.cpp over the 2.0 host API (DataflowBuffer bindings, named compile-time args).
+// sum_reduce_scalar.cpp for the 2.0 host API.
 void kernel_main() {
     constexpr uint32_t num_tiles = get_arg(args::num_tiles);
     const float scaler = __builtin_bit_cast(float, static_cast<uint32_t>(get_arg(args::scaler_bits)));
@@ -36,6 +36,6 @@ void kernel_main() {
     dfb_in.pop_front(num_tiles);
     dfb_out.push_back(1);
 
-    // sum_reduce_scalar shares the reduce tail, and therefore the teardown, with mul_reduce_scalar.
+    // Same teardown as mul_reduce_scalar, since the reduce tail is shared.
     ckernel::mul_reduce_scalar_uninit();
 }

@@ -10,17 +10,13 @@
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_mul_reduce_scalar.h"
 
-/*************************************************************************
- * LLK MUL REDUCE SCALAR - Fused multiply and scalar reduction (Quasar)
- *************************************************************************/
-
 /**
- * @brief Init the multiply phase (ELWMUL of operand_A and operand_B into DEST).
+ * @brief Init the multiply phase, an ELWMUL of operand_A and operand_B into DEST.
  *
  * @tparam math_fidelity: Fidelity of the multiply.
  * @param operand_A: DFB id of the first input.
  * @param acc_to_dest: Accumulate the product into DEST instead of overwriting it.
- * @param operand_B: DFB id of the second input; Quasar needs its format for the ALU state and fidelity schedule.
+ * @param operand_B: DFB id of the second input. Quasar needs its format.
  */
 template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_mul_reduce_scalar_init(
@@ -30,7 +26,7 @@ inline void llk_math_eltwise_mul_reduce_scalar_init(
 }
 
 /**
- * @brief Multiply the current SrcA/SrcB tiles into DEST tile dst_index.
+ * @brief Multiply the current SrcA and SrcB tiles into DEST tile dst_index.
  */
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void llk_math_eltwise_mul_reduce_scalar(
@@ -42,8 +38,7 @@ inline void llk_math_eltwise_mul_reduce_scalar(
 /**
  * @brief Init the reduce tail.
  *
- * @param operand: DFB id of the reduced input; its format sets the pool fidelity schedule and its tile
- *        shape the DEST layout of the moves.
+ * @param operand: DFB id of the reduced input, which sets the pool fidelity and tile shape.
  */
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void llk_math_mul_reduce_scalar_reduce_init(const std::uint32_t operand) {
@@ -54,7 +49,7 @@ inline void llk_math_mul_reduce_scalar_reduce_init(const std::uint32_t operand) 
 }
 
 /**
- * @brief Column-pool the tile in SrcA into DEST tile dst_index, accumulating.
+ * @brief Add the column sums of the tile in SrcA to DEST tile dst_index.
  */
 template <MathFidelity math_fidelity>
 inline void llk_math_mul_reduce_column(const std::uint32_t dst_index, const std::uint32_t icb0) {
@@ -63,7 +58,7 @@ inline void llk_math_mul_reduce_column(const std::uint32_t dst_index, const std:
 }
 
 /**
- * @brief Collapse the column sums in DEST tile 0 into datum 0.
+ * @brief Sum the column sums in DEST tile 0 into datum 0.
  */
 template <MathFidelity math_fidelity, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 inline void llk_math_mul_reduce_scalar() {
@@ -76,7 +71,7 @@ inline void llk_math_mul_reduce_scalar() {
 inline void llk_math_mul_reduce_scalar_clear_dvalid() { _llk_math_mul_reduce_scalar_clear_dvalid_(); }
 
 /**
- * @brief Move DEST tile idst into SrcA (DEST_TO_SRCA) or row 0 of DEST tile 0 into SrcB (DEST_TO_SRCB).
+ * @brief Move DEST tile idst into SrcA, or its row 0 into SrcB.
  */
 template <EltwiseBinaryReuseDestType binary_reuse_dest>
 inline void llk_math_mul_reduce_scalar_move_dest_to_src(const std::uint32_t idst = 0) {

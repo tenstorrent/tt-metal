@@ -6,11 +6,7 @@
 
 #include "experimental/llk_unpack_mul_reduce_scalar.h"
 
-/*************************************************************************
- * LLK UNPACK MUL REDUCE SCALAR (Quasar)
- *************************************************************************/
-
 /**
- * @brief Give the math thread dummy SrcA/SrcB dvalids for the reduce tail.
+ * @brief Give math a zeroed SrcA and SrcB bank for the reduce tail.
  */
 inline void llk_unpack_mul_reduce_scalar_switch_to_reduce() { _llk_unpack_mul_reduce_scalar_switch_to_reduce_(); }

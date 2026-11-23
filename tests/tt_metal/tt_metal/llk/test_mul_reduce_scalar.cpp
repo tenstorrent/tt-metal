@@ -55,7 +55,7 @@ struct MulReduceScalarConfig {
 
 using InputPair = std::pair<std::vector<uint32_t>, std::vector<uint32_t>>;
 
-// in0 is uniform random in [0, 1); in1 is all ones, so the result is the sum of in0.
+// in0 is random in [0, 1) and in1 is all ones, so the result is the sum of in0.
 InputPair make_inputs(const MulReduceScalarConfig& config, uint32_t byte_size) {
     auto packed_input0 = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
@@ -102,7 +102,7 @@ bool check_result(
     return pass;
 }
 
-// Quasar runs the 2.0 host API: DataflowBuffers, named compile-time args, no DataMovementKernel.
+// Quasar only accepts the 2.0 host API.
 bool run_mul_reduce_scalar_test_quasar(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
     namespace sn = tt::tt_metal::unit_tests::llk::single_node_dfb;
     const uint32_t tile_byte_size = tt::tile_size(tt::DataFormat::Float16_b);
@@ -234,7 +234,7 @@ float one_tile_rel_tol(int num_tiles) { return 0.01f + 0.001f * static_cast<floa
 
 using namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar;
 
-// All architectures; Quasar runs the 2.0 host API path.
+// Runs on all architectures.
 class MulReduceScalarTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
 
 // Standard 32x32-tile suite parametrized by tile count.

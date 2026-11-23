@@ -32,7 +32,7 @@ struct Input {
     std::uint32_t num_tiles = 0;
     std::string accessor;
     std::uint32_t num_entries = 0;
-    // Tile shape; unset means a full 32x32 tile.
+    // Tile shape, or a full 32x32 tile when unset.
     std::optional<Tile> tile = std::nullopt;
 };
 

@@ -8,7 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-// mul_reduce_scalar.cpp over the 2.0 host API (DataflowBuffer bindings, named compile-time args).
+// mul_reduce_scalar.cpp for the 2.0 host API.
 void kernel_main() {
     constexpr uint32_t num_tiles = get_arg(args::num_tiles);
 

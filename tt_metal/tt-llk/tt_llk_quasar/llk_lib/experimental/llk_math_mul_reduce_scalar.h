@@ -16,18 +16,11 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
-/*************************************************************************
- * LLK MUL REDUCE SCALAR (Quasar) - reduce tail of the fused mul + scalar reduce
- *
- * The multiply phase is the regular ELWMUL into one DEST tile per input tile. The reduce tail then
- * runs entirely on the math thread: each product tile is moved from DEST into SrcA, column-pooled
- * into DEST tile 0 row 0 (all faces pool into the same 16-wide row), and the final row is
- * transposed through SrcB and pooled once more into datum 0. The scaler sits in SrcB row 0 for
- * both pool stages, so it multiplies the result twice.
- *************************************************************************/
+// Reduce tail of mul_reduce_scalar. Each DEST tile is pooled into row 0 of tile 0, and that row is
+// pooled once more into datum 0. The scaler in SrcB row 0 applies to both pools.
 
 /**
- * @brief Fidelity phase counts for the two pool stages, resolved from the source formats at init.
+ * @brief Fidelity phase counts of the two pool stages.
  */
 struct MulReduceScalarPhases
 {
@@ -38,15 +31,12 @@ struct MulReduceScalarPhases
 inline MulReduceScalarPhases mul_reduce_scalar_phases {};
 
 /**
- * @brief Shape of the reduced tiles, captured at init for the DEST-to-SrcA moves.
+ * @brief Shape of the reduced tiles, used by the moves into SrcA.
  */
 inline ckernel::TensorShape mul_reduce_scalar_shape = ckernel::DEFAULT_TENSOR_SHAPE;
 
 /**
- * @brief Issue one pool over a 16x16 face with the given number of fidelity phases.
- *
- * The phases before the last advance the fidelity counter with ADDR_MOD_2; the last uses
- * @p last_addr_mod, which clears it.
+ * @brief Pool one 16x16 face over @p num_phases fidelity phases, ending with @p last_addr_mod.
  */
 inline void mul_reduce_scalar_pool_(const std::uint32_t num_phases, const std::uint8_t last_addr_mod)
 {
@@ -60,23 +50,20 @@ inline void mul_reduce_scalar_pool_(const std::uint32_t num_phases, const std::u
 /**
  * @brief Initialize the reduce tail of mul_reduce_scalar.
  *
- * Programs the address modifiers and resolves the fidelity phase counts. Both pool stages read
- * operands that were moved out of DEST, so the schedule uses the DEST-derived source format.
+ * The pools read operands moved out of DEST, so the fidelity follows the DEST format.
  *
  * @tparam EN_32BIT_DEST: Set when DEST holds 32-bit datums.
  * @tparam MATH_FIDELITY_TYPE: Requested fidelity for both pool stages.
  * @param src_format: Unpacked source format of the reduced operand.
  * @param tensor_shape: Shape of the reduced tiles.
  * @note On the unpack thread, pair with @ref _llk_unpack_mul_reduce_scalar_switch_to_reduce_ (T0).
- * @note Run the multiply or copy phase's init first: the tail reuses the DEST tile stride it programmed.
+ * @note Call after the multiply or copy init, whose DEST tile stride the tail reuses.
  */
 template <bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_mul_reduce_scalar_init_(const DataFormat src_format, const ckernel::TensorShape& tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    // The DEST tile stride is left as the producing phase's init programmed it (TILE_SHAPE_IDX):
-    // the datacopy and binary inits use different strides for small tiles, and the tail must read
-    // the tiles where they were written.
+    // Keep the DEST tile stride from the multiply or copy init. They differ for small tiles.
     mul_reduce_scalar_shape = tensor_shape;
 
     const DataFormat dest_src = dest_src_format<EN_32BIT_DEST>(src_format);
@@ -85,26 +72,24 @@ inline void _llk_math_mul_reduce_scalar_init_(const DataFormat src_format, const
     mul_reduce_scalar_phases.column = fidelity.phase_count;
     mul_reduce_scalar_phases.final  = fidelity.phase_count;
 
-    // ADDR_MOD_0: no counter moves, fidelity cleared (last phase of a pool, and every move).
+    // Last phase of a pool, and every move
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 0, .clr = 1}}.set(ADDR_MOD_0);
-    // ADDR_MOD_1: last phase of a column pool; steps SrcA to the next face.
+    // Last phase of a column pool, which also steps SrcA to the next face
     addr_mod_t {.srca = {.incr = FACE_R_DIM}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = 0, .clr = 1}}.set(ADDR_MOD_1);
-    // ADDR_MOD_2: every phase before the last.
+    // Every phase before the last
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}, .fidelity = {.incr = fidelity.phase_increment}}.set(ADDR_MOD_2);
 
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
 /**
- * @brief Move one DEST tile into SrcA (DEST_TO_SRCA) or the first rows of DEST tile 0 into SrcB (DEST_TO_SRCB).
+ * @brief Move DEST tile @p tile_idx into SrcA, or row 0 of it into SrcB.
  *
- * SrcA receives each face's valid rows at a 16-row stride, one face per pool. The rest of SrcA stays as
- * the unpacker cleared it, so a face shorter than 16 rows pools zeros. SrcB only needs row 0, which
- * carries the scaler for both pool stages.
+ * Each face goes to its own 16 rows of SrcA. Rows a short face leaves untouched stay zero.
  *
  * @tparam BINARY_REUSE_DEST: DEST_TO_SRCA or DEST_TO_SRCB.
  * @param tile_idx: DEST tile to move.
- * @note The source register must hold the cleared, dvalid bank from @ref _llk_unpack_mul_reduce_scalar_switch_to_reduce_.
+ * @note Needs the cleared bank from @ref _llk_unpack_mul_reduce_scalar_switch_to_reduce_.
  */
 template <EltwiseBinaryReuseDestType BINARY_REUSE_DEST>
 inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(const std::uint32_t tile_idx)
@@ -113,15 +98,13 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(const std::uint32_t ti
         BINARY_REUSE_DEST == EltwiseBinaryReuseDestType::DEST_TO_SRCA || BINARY_REUSE_DEST == EltwiseBinaryReuseDestType::DEST_TO_SRCB,
         "move_dest_to_src needs DEST_TO_SRCA or DEST_TO_SRCB");
 
-    // The source row of a move is offset by the SrcA/SrcB counter, which the column pool leaves at
-    // the end of the tile, so reset it along with the DEST counter.
+    // The column pool leaves the SrcA counter past the tile, and moves are relative to it.
     _set_dst_write_addr_by_rows_(tile_idx);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0 /*rwc_cr*/, 0 /*rwc_val*/, p_setrwc::SET_ABD);
 
     if constexpr (BINARY_REUSE_DEST == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
     {
-        // Drain the FPU (earlier pools still read SrcA) and the SFPU (it may have just written DEST),
-        // then wait until math owns the SrcA bank.
+        // Wait for earlier pools and the SFPU to finish, and for math to own the SrcA bank.
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCA_VLD);
 
         const ckernel::TensorShape& shape  = mul_reduce_scalar_shape;
@@ -145,17 +128,14 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(const std::uint32_t ti
 }
 
 /**
- * @brief Column-pool the tile in SrcA into row 0 of DEST tile @p dst_index, accumulating.
- *
- * Every face pools into the same 16-wide row, so the row ends up holding per-column sums over the
- * whole tile. Call once per product tile after moving it into SrcA.
+ * @brief Add the column sums of the tile in SrcA to row 0 of DEST tile @p dst_index.
  *
  * @param dst_index: DEST tile that accumulates the column sums (normally 0).
  * @param tensor_shape: Shape of the reduced tile.
  */
 inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
 {
-    // The SFPU may have just zeroed the accumulator row; the pool adds into it.
+    // The pool adds into the row the SFPU just zeroed.
     TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::WAIT_SFPU);
     _set_dst_write_addr_by_rows_(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0 /*rwc_cr*/, 0 /*rwc_val*/, p_setrwc::SET_ABD_F);
@@ -167,17 +147,14 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
 }
 
 /**
- * @brief Collapse the column sums in DEST tile 0 row 0 into datum 0.
- *
- * The row is transposed into SrcB rows 32..47, copied to SrcA rows 0..15, and pooled once more.
- * SrcB rows 0..15 still hold the scaler.
+ * @brief Sum row 0 of DEST tile 0 into datum 0, by transposing it through SrcB and pooling again.
  *
  * @tparam EN_32BIT_DEST: Set when DEST holds 32-bit datums.
  */
 template <bool EN_32BIT_DEST>
 inline void _llk_math_mul_reduce_scalar_()
 {
-    // Earlier pools must have written row 0 before it is read back.
+    // Row 0 must be fully written before it is read back.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD);
     _set_dst_write_addr_by_rows_(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0 /*rwc_cr*/, 0 /*rwc_val*/, p_setrwc::SET_ABD_F);
@@ -189,14 +166,14 @@ inline void _llk_math_mul_reduce_scalar_()
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + row, ADDR_MOD_0, FPU_MOV_ROWS, p_movb2a::SRCB_ROW32_OFFSET + row);
     }
 
-    // The final pool accumulates, so clear the row it lands in.
+    // The final pool adds into row 0, so clear it first.
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, EN_32BIT_DEST, 0 /*clear_zero_flags*/, ADDR_MOD_0, 0 /*where*/);
 
     mul_reduce_scalar_pool_(mul_reduce_scalar_phases.final, ADDR_MOD_0);
 }
 
 /**
- * @brief Release the SrcA/SrcB banks the reduce tail held and reset the counters.
+ * @brief Release the SrcA and SrcB banks held by the reduce tail.
  */
 inline void _llk_math_mul_reduce_scalar_clear_dvalid_()
 {

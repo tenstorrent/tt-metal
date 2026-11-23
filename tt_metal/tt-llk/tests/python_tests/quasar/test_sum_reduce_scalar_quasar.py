@@ -2,19 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Sum + reduce-to-scalar on Quasar: the experimental mul_reduce_scalar reduce tail.
-
-Every input tile is copied into DEST (A2D datacopy), then the reduce tail moves each tile
-into SrcA, column-pools it into DEST tile 0 row 0, and collapses that row into datum 0:
-
-    result = sum_over_all_tiles_and_elements(A) * scaler^2
-
-with scaler == 1.0 in the kernel. Only datum 0 of the output tile is defined, so only it
-is checked. Every tile must be resident in one DEST section, so num_tiles stays within
-the half-sync capacity; LOOP_FACTOR 2 runs the op twice so the second pass lands in the
-other DEST bank.
-"""
+"""Sum every input tile into one scalar with the mul_reduce_scalar reduce tail on Quasar."""
 
 import pytest
 import torch
@@ -46,17 +34,16 @@ FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
 ]
 
-# Each shape is a distinct DEST face layout: 4/2/1 faces, dense 16- and 8-row faces, and
-# 1/2/4-row faces padded to 8-row slots.
+# Each shape puts its faces in DEST differently.
 ALL_TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16], [8, 32], [4, 32], [2, 32], [1, 32]]
 FP32_DEST_TILE_DIMENSIONS = [[32, 32], [8, 32], [1, 32]]
 
 _TTSIM_MOVD2A_1_ROW_REASON = (
-    "Quasar ttsim does not implement tensix_movd2a instr_mod=0 (one row), which moves faces "
+    "Quasar ttsim does not implement tensix_movd2a instr_mod=0, which moves faces "
     "shorter than an FPU row group. Covered on the emulator and silicon."
 )
 
-# Poison tiles after the input catch a read past the last tile.
+# Poison tiles after the input catch a read past the last tile
 POISON_TILES = 2
 POISON_VALUE = 100.0
 
@@ -68,7 +55,7 @@ def _tile_dimensions_for_format(formats):
 
 
 def _num_tiles_for_format(formats):
-    # One tile, and a full DEST half-sync section: 8 tiles at 16-bit DEST, 4 at 32-bit.
+    # One tile, and a full DEST half section
     return (
         [1, 4]
         if dest_acc_for(formats.output_format) == DestAccumulation.Yes
@@ -83,6 +70,7 @@ def _num_tiles_for_format(formats):
     num_tiles=_num_tiles_for_format,
     tile_dimensions=_tile_dimensions_for_format,
     run_types=[[PerfRunType.L1_TO_L1]],
+    # Two passes, so the second one uses the other half of DEST
     loop_factor=[2],
 )
 def test_sum_reduce_scalar_quasar(
