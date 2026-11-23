@@ -45,12 +45,12 @@ _TIMING_SAMPLES = 5
 # traced one replay, both with the CPU clock held. LoudBox SP8xTP1 and QuietBox SP4xTP1 report until a CI run gives
 # their targets with the fused relay.
 _TARGETS_MS = {
-    ("SP8xTP4", "untraced"): 1.150,
-    ("SP8xTP4", "traced"): 1.064,
-    ("SP4xTP4", "untraced"): 1.179,
-    ("SP4xTP4", "traced"): 1.064,
-    ("SP4xTP4-subtorus", "untraced"): 1.123,
-    ("SP4xTP4-subtorus", "traced"): 1.026,
+    ("SP8xTP4", "untraced"): 1.129,
+    ("SP8xTP4", "traced"): 1.040,
+    ("SP4xTP4", "untraced"): 1.154,
+    ("SP4xTP4", "traced"): 1.059,
+    ("SP4xTP4-subtorus", "untraced"): 1.104,
+    ("SP4xTP4-subtorus", "traced"): 0.996,
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
 _REPORT_ONLY_LAYOUTS = ("SP4xTP2", "SP2xTP2", "SP4xTP4-sp-axis0", "SP4xTP4-sp-axis0-subtorus")
