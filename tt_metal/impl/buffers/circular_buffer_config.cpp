@@ -69,6 +69,13 @@ CircularBufferConfig::CircularBufferConfig(
     this->set_config(data_format_spec);
 }
 
+CircularBufferConfig::CircularBufferConfig(
+    uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec, const MeshTensor& tensor) :
+    total_size_(total_size) {
+    this->set_globally_allocated_address(tensor);
+    this->set_config(data_format_spec);
+}
+
 CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : total_size_(descriptor.total_size) {
     TT_FATAL(
         !(descriptor.buffer && descriptor.tensor),
@@ -190,12 +197,18 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const MeshTensor& tensor) {
-    return set_globally_allocated_address(*tensor.mesh_buffer().get_reference_buffer());
+    return this->set_globally_allocated_address_and_total_size(tensor, this->total_size_);
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const MeshTensor& tensor, uint32_t total_size) {
-    return set_globally_allocated_address_and_total_size(*tensor.mesh_buffer().get_reference_buffer(), total_size);
+    return set_globally_allocated_address_and_total_size(tensor, total_size, address_offset_);
+}
+
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
+    const MeshTensor& tensor, uint32_t total_size, uint32_t address_offset) {
+    return set_globally_allocated_address_and_total_size(
+        *tensor.mesh_buffer().get_reference_buffer(), total_size, address_offset);
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(

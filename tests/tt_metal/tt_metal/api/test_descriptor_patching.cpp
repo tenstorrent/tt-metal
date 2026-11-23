@@ -28,6 +28,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt_stl/optional_reference.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -128,6 +129,31 @@ TEST(DescriptorPatching, CPU_EmplaceCommonRuntimeArgs_NullBuffer_EmitsZero_NoBin
 
     EXPECT_EQ(kd.common_runtime_args, (std::vector<uint32_t>{7u, 0u, 9u}));
     EXPECT_TRUE(kd.common_buffer_bindings.empty());
+}
+
+// An empty optional MeshTensor is the MeshTensor form of a null Buffer*: it emits 0u and registers no binding.
+TEST(DescriptorPatching, CPU_RTArgList_EmptyMeshTensor_CommonArgs_EmitsZero_NoBinding) {
+    KernelDescriptor kd;
+    KernelDescriptor::RTArgList args;
+    args.push_back(4u);
+    args.push_back(ttsl::optional_reference<const MeshTensor>{});
+    args.push_back(6u);
+    kd.emplace_common_runtime_args(args);
+
+    EXPECT_EQ(kd.common_runtime_args, (std::vector<uint32_t>{4u, 0u, 6u}));
+    EXPECT_TRUE(kd.common_buffer_bindings.empty());
+}
+
+TEST(DescriptorPatching, CPU_RTArgList_EmptyMeshTensor_EmitsZero_NoBinding) {
+    KernelDescriptor kd;
+    KernelDescriptor::RTArgList args;
+    args.push_back(1u);
+    args.push_back(ttsl::optional_reference<const MeshTensor>{});
+    kd.emplace_runtime_args({0, 0}, args);
+
+    ASSERT_EQ(kd.runtime_args.size(), 1u);
+    EXPECT_EQ(kd.runtime_args[0].second, (std::vector<uint32_t>{1u, 0u}));
+    EXPECT_TRUE(kd.buffer_bindings.empty());
 }
 
 TEST(DescriptorPatching, CPU_RTArgList_Uint32Only_NoBufferBindings) {
@@ -315,6 +341,52 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonMeshTensorArg_
     EXPECT_EQ(b.arg_idx, 1u);
     EXPECT_EQ(b.tensor_buffer_idx, 0u);
     EXPECT_TRUE(b.is_common);
+}
+
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_RTArgListOptionalMeshTensor_CorrectTuples) {
+    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
+    Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
+    ASSERT_NE(tensor_buffer, nullptr);
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    KernelDescriptor::RTArgList args;
+    args.push_back(ttsl::optional_reference<const MeshTensor>{});
+    args.push_back(ttsl::optional_reference<const MeshTensor>{tensor});
+    kd.emplace_runtime_args({0, 0}, args);
+    ASSERT_EQ(kd.runtime_args.size(), 1u);
+    EXPECT_EQ(kd.runtime_args[0].second, (std::vector<uint32_t>{0u, static_cast<uint32_t>(tensor_buffer->address())}));
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{tensor_buffer});
+
+    ASSERT_EQ(resolved.rt_args.size(), 1u);
+    EXPECT_EQ(resolved.rt_args[0].arg_idx, 1u);
+    EXPECT_FALSE(resolved.rt_args[0].is_common);
+}
+
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CommonRTArgListOptionalMeshTensor_IsCommonTrue) {
+    auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
+    Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
+    ASSERT_NE(tensor_buffer, nullptr);
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    KernelDescriptor::RTArgList args;
+    args.push_back(7u);
+    args.push_back(ttsl::optional_reference<const MeshTensor>{tensor});
+    kd.emplace_common_runtime_args(args);
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    ResolvedBindings resolved = resolve_bindings(program, desc, std::vector<Buffer*>{tensor_buffer});
+
+    ASSERT_EQ(resolved.rt_args.size(), 1u);
+    EXPECT_EQ(resolved.rt_args[0].arg_idx, 1u);
+    EXPECT_TRUE(resolved.rt_args[0].is_common);
 }
 
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_CbTensor_ResolvesToTensorBufferSlot) {
