@@ -35,6 +35,7 @@ from loguru import logger
 
 from qwen36_resident import weights as Q
 from qwen36_resident.model import TOP_K
+from qwen36_resident.adaptive import taps_usable
 from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, expand_blocks, resident_capabilities
 
 SPEC_USERS = 8
@@ -60,6 +61,9 @@ PROMOTE_ACC = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_ACC", "2.7"))
 PROMOTE_OUT = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_OUT", "256"))
 REFILL_MS_FIXED, REFILL_MS_PER_TOKEN = 20.0, 0.13  # (defaults: tests/refill_batch.py, 2026-11-23)
 SPEC_MS_DEFAULT = lambda n: 28.0 + 3.5 * (n - 1)  # noqa: E731  (served verify steps, 2026-11-23: 1 / 4 / 8 users)
+# P2d: promotions fill the drafter from the prefill's taps when kept (RESIDENT_ADAPTIVE_P2D, default on); a fill's cost
+P2D = os.environ.get("RESIDENT_ADAPTIVE_P2D", "1") == "1"
+P2D_FILL_MS = 20.0
 OUT_ALPHA = 0.05  # (the output-length EMA starts at PROMOTE_OUT: a few short requests, e.g. a warm-up, do not flip it)
 OUTLIER = 3.0  # (a time sample over this x the estimate, or the default model's for the first one, is skipped: a
 # first-time trace capture, a prefill's device time an async call left in a step)
@@ -160,6 +164,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # (the acceptance-aware policy's measurements: EMAs of tokens per spec user-step and of step times per kind)
         self._pay = self._new_pay()
         self.prompt_len = {}  # slot -> its prompt's length (generated tokens = history - prompt)
+        self.taps_of = {}  # (P2d) slot -> its prefill's window taps (ResidentDFlashRows.capture_taps)
         # the plain build's hub-fed inputs do not hold every live row's next token (a move into it, a step served by
         # the spec build): its next ordinary call rebuilds them from the history instead of a steady replay
         self._plain_stale = False
@@ -192,7 +197,23 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         self.engine = _PlainRowsEngine(
             self.ae.plain, self.ae.pp, self.ae.emb, self.vocab, d.vocab_chip, PLAIN_ROWS, CHUNK_UNIT, self.mesh
         )
+        if P2D:
+            self.engine.on_taps = self._on_taps
         return []
+
+    def _on_taps(self, r, lo, n):
+        """(P2d) a prompt just prefilled into plain row r: keep its window's taps (ResidentDFlashRows.capture_taps, ~18 ms)
+        when the pass covered the window and the user may be promoted (a spec user free); a later promotion fills its
+        drafter from them instead of re-prefilling the window (~0.35 s at 2K+ tokens)"""
+        import time
+
+        t0 = time.perf_counter()
+        self.taps_of.pop(r, None)
+        e = self.ae.spec
+        if lo > max(0, n - e.window) // 64 * 64 or len(self.live) >= SPEC_USERS:
+            return
+        self.taps_of[r] = e.capture_taps(n)
+        self._lap("capture_taps", t0)
 
     def warmup_model_prefill(self, *args, **kwargs):
         pass
@@ -265,8 +286,10 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             max(out - (len(self.history[r]) - self.prompt_len.get(r, len(self.history[r]))), out / 4) for r in cands
         ]
         window = getattr(getattr(self.ae, "spec", None), "window", 2048)
-        toks = sum(min(len(self.history[r]) - 1, window) for r in cands)
-        refill = REFILL_MS_FIXED + (pay["refill_tpt"] or REFILL_MS_PER_TOKEN) * toks
+        # (P2d: a user with usable prefill taps costs a fill, ~15-20 ms; the others the window's PP pass)
+        quick = [r for r in cands if taps_usable(self.taps_of.get(r), len(self.history[r]) - 1, window)]
+        toks = sum(min(len(self.history[r]) - 1, window) for r in cands if r not in quick)
+        refill = REFILL_MS_FIXED + (pay["refill_tpt"] or REFILL_MS_PER_TOKEN) * toks + P2D_FILL_MS * len(quick)
         gain, cost = sum(left) * save, refill * n
         line = (
             f"{len(cands)} of {n} users: ~{sum(left) / len(cands):.0f} tokens left each x {save:.1f} ms saved a token "
@@ -331,12 +354,15 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             items.append((r, u, self.tables[r], self.history[r]))
             self.spec_of[r], self.last_acc[r] = u, 1
         window = getattr(getattr(self.ae, "spec", None), "window", 2048)
-        toks = sum(min(len(h) - 1, window) for _, _, _, h in items)
-        self.ae.move_to_spec_many(items)  # (one batched refill for every user promoted now)
+        taps = {j: self.taps_of.pop(j) for j, _, _, _ in items if j in self.taps_of}
+        quick = {j for j, _, _, h in items if taps_usable(taps.get(j), len(h) - 1, window)}
+        toks = sum(min(len(h) - 1, window) for j, _, _, h in items if j not in quick)
+        self.ae.move_to_spec_many(items, taps=taps)  # (P2d fills, then one batched refill for the others)
         dt = time.perf_counter() - t0
         self._pay["excl"] += dt
-        tpt = max(0.0, dt * 1000 - REFILL_MS_FIXED) / max(1, toks)
-        self._pay["refill_tpt"] = robust_ema(self._pay["refill_tpt"], tpt, REFILL_MS_PER_TOKEN, a=0.3)
+        if toks:  # (the PP-pass refills' ms per token; the P2d fills' share taken out)
+            tpt = max(0.0, dt * 1000 - REFILL_MS_FIXED - P2D_FILL_MS * len(quick)) / toks
+            self._pay["refill_tpt"] = robust_ema(self._pay["refill_tpt"], tpt, REFILL_MS_PER_TOKEN, a=0.3)
 
     @staticmethod
     def _non_speculable(sp, i):
@@ -647,6 +673,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             if r in self.spec_of:
                 u = self.spec_of.pop(r)
                 self.ae._set_spec_table(u, [0])
+            self.taps_of.pop(r, None)
             h, plen = self.history.pop(r, None), self.prompt_len.pop(r, None)
             if h is not None and plen is not None and len(h) > plen:
                 self._note_output(len(h) - plen)

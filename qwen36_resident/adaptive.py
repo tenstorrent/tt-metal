@@ -38,6 +38,15 @@ class User:
         return self.tokens[-1]
 
 
+P2D_HOLES = 8  # (P2d: at most this many consumed positions without taps; more -> the option-B refill)
+
+
+def taps_usable(rec, n, window):
+    """whether a ResidentDFlashRows.capture_taps record serves a promotion at n consumed tokens: its window still covers
+    the drafter's (n - window ..) and at most P2D_HOLES positions since lack taps"""
+    return rec is not None and rec["n"] <= n <= rec["n"] + P2D_HOLES and n - rec["s0"] <= window + 128
+
+
 class AdaptiveEngine:
     SPEC_USERS, PLAIN_ROWS = 8, 32
 
@@ -215,13 +224,14 @@ class AdaptiveEngine:
         """plain row j's state into spec user u (see move_to_spec_many)"""
         self.move_to_spec_many([(j, u, table, tokens)])
 
-    def move_to_spec_many(self, items):
+    def move_to_spec_many(self, items, taps=None):
         """items [(plain row j, spec user u, block table, tokens)]: each row's state into its spec user (ring 0, slot 0),
         their drafter windows refilled from the last `window` of tokens[:-1] (the run tokens; tokens[-1] is the next,
         at position len(tokens) - 1) re-prefilled as fresh prompts at their absolute positions (option B) — in as few
         PP passes as the tap ring holds (PPPrefill.run_batch taps only: each tail at its own ring offset)"""
         e, s = self.spec, self.sess
         tails = []
+        taps = taps or {}
         for j, u, table, tokens in items:
             snap = self.plain.snapshot_slot(j)
             self._set_spec_table(u, table)
@@ -229,10 +239,15 @@ class AdaptiveEngine:
             for k in ("state", "hist"):
                 ttnn.deallocate(snap[k])
             n = len(tokens) - 1
-            s0 = max(0, n - e.window) // 64 * 64
-            tails.append((u, s0, n, list(tokens[s0:n])))
             e.ring[u], e.slot[u], e.prev[u] = 0, 0, None
             s.pos[u], s.started[u], s.committed[u], s.last[u] = n, True, 1, None
+            rec = taps.get(j)
+            if rec is not None and taps_usable(rec, n, e.window):
+                # (P2d: the prefill's taps, the positions consumed since without taps zeroed — no PP pass)
+                e.fill_from_taps(u, rec, n)
+                continue
+            s0 = max(0, n - e.window) // 64 * 64
+            tails.append((u, s0, n, list(tokens[s0:n])))
         cap = self.pp.tap_ring * self.pp.block  # (ring positions)
         while tails:
             group, C = [], None

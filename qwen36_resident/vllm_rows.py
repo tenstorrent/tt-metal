@@ -556,11 +556,12 @@ class ResidentRowsAdapter:
                     pp.run_from(torch.as_tensor(tokens[:upto]), start, chunk=c)
                     pp.handoff(model, upto, block_table=blocks, slot=r)
             else:
-                eng.prefill_end(tokens[start:upto], start // c, upto, r, blocks, c)
+                eng.prefill_end(tokens[start:upto], start // c, upto, r, blocks, c, taps=False)
         if not final:
             self.pp_partial = (r, end, total, c, calls + 1)
             return None
         self.pp_partial, self.pp_cache = None, None
+        eng._taps(r, st["h"], end - 1)
         logger.info(f"split prefill (prefix cache): resident slot {r}, {end} tokens, cached prefix {st['h']}")
         return r, int(ids[end - 1]), end - 1, table_row
 
@@ -783,6 +784,9 @@ class RowsEngine:
 
             self.prefix_cache = PrefixCache(int(PREFIX_CACHE_GB * 1e9))
         self.swap = None  # (Strata S3, RESIDENT_SWAP_GB > 0)
+        # (P2d) on_taps(slot, lo, n): called right after a single prompt's PP pass handed it off — the PP's tap ring then
+        # holds that prompt's taps of positions lo .. n - 1 (its last ring-full); a drafter-serving class keeps them
+        self.on_taps = None
         if SWAP_GB > 0 and hasattr(model, "snapshot_slot"):
             from qwen36_resident.prefix_cache import SwapStore
 
@@ -833,6 +837,11 @@ class RowsEngine:
         self.pp.reset()
         self.pp.run(torch.as_tensor(ids), chunk=chunk)
         self.pp.handoff(self.model, len(ids), block_table=blocks, slot=r)
+        self._taps(r, 0, len(ids))
+
+    def _taps(self, r, lo, n):
+        if self.on_taps is not None:
+            self.on_taps(r, lo, n)
 
     def _prefill_cached(self, ids, r, blocks, chunk):
         """prefill_whole through the host-tier prefix cache: the longest cached prefix h (a multiple of its block)
@@ -853,6 +862,7 @@ class RowsEngine:
         ids = [int(t) for t in ids]
         n, ids_t = len(ids), torch.as_tensor(ids)
         h, snap = pc.lookup(ids)
+        h0 = h  # (this pass's taps start at the restored prefix)
         H = max(pc.boundaries(n), default=0)
         if h and H - h < PREFIX_CACHE_STEP:
             H = 0
@@ -888,6 +898,7 @@ class RowsEngine:
         lap("prefill of the rest")
         pp.handoff(model, n, block_table=blocks, slot=r)
         lap("handoff")
+        self._taps(r, h0, n)
         if H and H == n and H > h:  # (a prompt of whole blocks: its handed-off state is the boundary's)
             host = model.snapshot_to_host(model.snapshot_slot(r, n_tokens=H, table=blocks))
             pc.insert(ids, H, host, _host_bytes(host))
@@ -930,9 +941,11 @@ class RowsEngine:
     def prefill_span(self, ids, first_chunk, n_seen, chunk):
         self.pp.run_span(torch.as_tensor(ids), first_chunk, n_seen, drain=False, chunk=chunk)
 
-    def prefill_end(self, ids, first_chunk, n_tokens, r, blocks, chunk):
+    def prefill_end(self, ids, first_chunk, n_tokens, r, blocks, chunk, taps=True):
         self.pp.run_span(torch.as_tensor(ids), first_chunk, n_tokens, drain=True, chunk=chunk)
         self.pp.handoff(self.model, n_tokens, block_table=blocks, slot=r)
+        if taps:  # (the prefix-cache split path reports its own range)
+            self._taps(r, 0, n_tokens)
 
     def swap_out(self, r, table, q, tokens, device_tok, seen=None):
         """Strata S3: slot r's state (positions < q consumed) into the swap store, keyed by those q tokens, with its next

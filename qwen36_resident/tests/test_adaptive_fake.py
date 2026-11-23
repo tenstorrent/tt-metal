@@ -98,7 +98,8 @@ class FakeAE:
             pf.pool[(table[q // BLOCK], q % BLOCK)] = (j, seq[q])
         self.moves.append(("to_plain", u, j))
 
-    def move_to_spec_many(self, items):
+    def move_to_spec_many(self, items, taps=None):
+        self.taps_used = getattr(self, "taps_used", []) + [j for j, _, _, _ in items if j in (taps or {})]
         for j, u, table, tokens in items:
             self.move_to_spec(j, u, table, tokens)
 
@@ -125,7 +126,7 @@ def make(monkeypatch, gate=False):
     m.ae.plain_tables = m.tables
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
     m.sampled, m._t, m._plain_stale, m.greedy_ok, m._calls = set(), {}, False, set(), [0, 0]
-    m._pay, m.prompt_len = m._new_pay(), {}
+    m._pay, m.prompt_len, m.taps_of = m._new_pay(), {}, {}
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
 
@@ -515,6 +516,33 @@ def test_preempted_user_swaps_and_resumes(monkeypatch, while_spec):
         run.step()
     run.req[0]["prompt"] = run.req[0]["prompt"][:8]  # (the reference from the original prompt)
     run.check()
+
+
+def test_p2d_promotions_use_the_prefill_taps(monkeypatch):
+    """P2d: a prompt's prefill reports its taps (RowsEngine.on_taps); the class keeps the window's capture and the
+    promotion hands it to move_to_spec_many (no PP refill for that user); the gate counts it as a fill; a released
+    slot drops it; a pass that did not cover the window (a restored prefix past its start) keeps none"""
+    m, pf = make(monkeypatch)
+    caps = []
+    m.ae.spec = SimpleNamespace(
+        window=2048, capture_taps=lambda n: caps.append(n) or dict(s0=max(0, n - 2048) // 64 * 64, hb=n, n=n)
+    )
+    m.engine.on_taps = m._on_taps
+    run = Runner(m)
+    run.arrive([0], [[3, 1, 4, 1, 5, 9, 2, 6]])  # (one prompt a call: a batched gang's pass keeps no taps)
+    run.arrive([1], [[2, 7, 1, 8, 2, 8]])
+    assert sorted(m.taps_of) == [0, 1] and caps == [7, 5], (m.taps_of, caps)
+    ok, line = m._promotion_pays([0, 1])
+    assert "(0 tokens)" in line, line  # (both quick: no PP-pass tokens in the refill estimate)
+    for _ in range(3):
+        run.step()
+    assert set(m.spec_of) == {0, 1} and sorted(m.ae.taps_used) == [0, 1] and not m.taps_of, (m.spec_of, m.ae.taps_used)
+    m._on_taps(5, 7168, 8192)  # (the pass started past the window's start, 6144: nothing kept)
+    assert 5 not in m.taps_of
+    run.arrive([2], [[1, 6, 1, 8, 0, 3, 3]])
+    assert 2 in m.taps_of
+    run.finish(2)
+    assert 2 not in m.taps_of
 
 
 def test_no_promotion_with_a_step_in_flight(monkeypatch):

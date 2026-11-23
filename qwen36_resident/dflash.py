@@ -27,6 +27,7 @@ FULL_RESET = os.environ.get("RESIDENT_PREFILL_FULL_RESET", "0") == "1"
 # 0: no host synchronization between the drafter's context fill and the prompt's verify step (the first-step race, A/B
 # only; see _fill_context)
 FILL_SYNC = os.environ.get("RESIDENT_DFLASH_FILL_SYNC", "1") == "1"
+P2D_TAIL = 128  # (P2d: the last partial block + the positions without taps, one bucket of two blocks)
 # verify rows (ResidentDFlashRows): the drafter's KV as a per-user ring of window + 2 blocks (DFlash2 is all
 # sliding-window: a key older than the window is never read), not max_pos per user (20 KB / token: 8 users x 256K =
 # 42 GB). 0: each user's own max_pos blocks (the A/B reference)
@@ -590,6 +591,12 @@ class ResidentDFlashRows:
         self.drafter.draft([0] * users, [1] * users, traced=False)
         ttnn.synchronize_device(mesh)
         if self.pp is not None:  # (the prefill's programs before any trace: a fill, a capture, a handoff)
+            # (P2d: persistent upload buffers for fill_from_taps — allocated before any trace, so a promotion allocates
+            # nothing a traced replay may overwrite — and its two fill buckets compiled now)
+            nt = len(self.tap_masks)
+            self._p2d_main, self._p2d_tail = tap_buffers(mesh, nt, self.fill_rows), tap_buffers(mesh, nt, P2D_TAIL)
+            self.drafter.fill_context(self._p2d_main, 0, phys=0, valid_len=64)
+            self.drafter.fill_context(self._p2d_tail, 0, phys=0, valid_len=64)
             self._fill_context(1, phys=0)
             self.pp.capture()
             self.pp.handoff(self.m, 1, slot=0, block_table=self.m.block_tables[0])
@@ -602,6 +609,63 @@ class ResidentDFlashRows:
 
     def _context_taps(self, s0, n_tokens):
         return ResidentDFlash._context_taps(self, s0, n_tokens)
+
+    # ------------------------------------------------------------------ P2d: promotions from the prefill's taps
+    def capture_taps(self, n_tokens):
+        """the last prefill's taps of its window (positions s0 .. n_tokens - 1, s0 = n_tokens - window down to a block),
+        kept for a later fill (fill_from_taps): the whole blocks as device-format host tensors (the fractured taps the
+        fill reads: no host conversion either way, ~18 ms out / ~15 ms back for a full window), the last partial
+        block's rows as torch [taps, rows, H] (its fill pads them with zeros). Must run before the next prefill
+        overwrites the ring"""
+        s0 = max(0, n_tokens - self.window) // 64 * 64
+        hb = n_tokens // 64 * 64  # (the last whole block's end)
+        dev = self._context_taps(s0, n_tokens)
+        rec = dict(s0=s0, hb=hb, n=n_tokens, main=None, tail=None)
+        if hb > s0:
+            rec["main"] = [ttnn.from_device(x) for x in dev]
+        if n_tokens > hb:
+            comp = ttnn.ConcatMeshToTensor(self.mesh, dim=-1)
+            rec["tail"] = torch.stack(
+                [
+                    ttnn.to_torch(
+                        ttnn.slice(x, (0, 0, hb - s0, 0), (1, 1, n_tokens - s0, x.shape[-1])), mesh_composer=comp
+                    )
+                    .reshape(n_tokens - hb, -1)
+                    .to(torch.bfloat16)
+                    for x in dev
+                ]
+            )
+        for x in dev:
+            ttnn.deallocate(x)
+        return rec
+
+    def fill_from_taps(self, phys, rec, n_hist):
+        """user phys's drafter window from a capture_taps record: positions rec's s0 .. n - 1 exact, n .. n_hist - 1
+        (consumed since without taps: the first-token launch, plain steps) zero rows (acceptance 3.06 vs exact 3.08 for
+        two such positions, results/20261124-p2d-probe). n_hist - s0 must fit the drafter's ring (window + 2 blocks)"""
+        s0, hb, n = rec["s0"], rec["hb"], rec["n"]
+        assert n <= n_hist <= hb + P2D_TAIL and n_hist - s0 <= self.window + 128, (s0, n, n_hist)
+        # (copies into the persistent buffers: no device allocation while traces exist)
+        if rec["main"] is not None:
+            for h, d in zip(rec["main"], self._p2d_main):
+                ttnn.copy_host_to_device_tensor(h, d)
+            self.drafter.fill_context(self._p2d_main, s0, phys=phys, valid_len=hb - s0)
+        if n_hist > hb:  # (the partial block's exact rows, then zeros: the P2D_TAIL bucket)
+            vals = torch.zeros(len(self._p2d_tail), P2D_TAIL, H)
+            if rec["tail"] is not None:
+                vals[:, : n - hb] = rec["tail"].float()
+            shard = ttnn.ShardTensorToMesh(self.mesh, dim=-1)
+            for v, d in zip(vals, self._p2d_tail):
+                host = ttnn.from_torch(
+                    v.reshape(1, 1, P2D_TAIL, H).to(torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=shard,
+                )
+                ttnn.copy_host_to_device_tensor(host, d)
+            self.drafter.fill_context(self._p2d_tail, hb, phys=phys, valid_len=n_hist - hb)
+        if FILL_SYNC:  # (every chip done with the fill before the verify step: see ResidentDFlash._fill_context)
+            ttnn.synchronize_device(self.mesh)
 
     def _reset_ptrs(self):
         U = self.U
