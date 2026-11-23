@@ -52,7 +52,7 @@ void bind_quantize(nb::module_& mod) {
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
-            When :attr:`scale` and :attr:`zero_point` are tensors, they must be FLOAT32.
+            When :attr:`scale` is a tensor it must have a floating-point, non-block-float dtype (BFLOAT16 or FLOAT32); a :attr:`zero_point` tensor must be INT32.
         )doc",
         "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32");
 
@@ -106,7 +106,7 @@ void bind_requantize(nb::module_& mod) {
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
-            Input tensor dtype must be INT32. When scale and zero-point parameters are tensors, they must be FLOAT32.
+            Input tensor dtype must be INT32, INT8 or UINT8. When the scale parameters are tensors they must have a floating-point, non-block-float dtype (BFLOAT16 or FLOAT32); zero-point tensors must be INT32.
 
             **Mixed Quantization Support:**
 
@@ -136,7 +136,7 @@ void bind_requantize(nb::module_& mod) {
             - Falls back to a composite operation path.
             - Decomposes requantization into separate dequantize and quantize operations.
         )doc",
-        "INT32");
+        "INT32, INT8, UINT8");
 
     ttnn::bind_function<"requantize">(
         mod,
@@ -187,9 +187,9 @@ void bind_dequantize(nb::module_& mod) {
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
-            Input tensor dtype must be INT32. When :attr:`scale` and :attr:`zero_point` are tensors, they must be FLOAT32.
+            Input tensor dtype must be INT32, INT8 or UINT8. When :attr:`scale` is a tensor it must have a floating-point, non-block-float dtype (BFLOAT16 or FLOAT32); a :attr:`zero_point` tensor must be INT32.
         )doc",
-        "INT32");
+        "INT32, INT8, UINT8");
 
     ttnn::bind_function<"dequantize">(
         mod,
