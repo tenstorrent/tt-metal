@@ -27,6 +27,13 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("R_gather");
+#ifdef ATTNRES_WAIT_SEM  // joined program (common.py joined): the partial is written by the part before this one
+        {
+            volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
+            noc_semaphore_wait(s, 1);
+            noc_semaphore_set(s, 0);
+        }
+#endif
         cb_reserve_back(cb_scaler, 1);
         rowio::read_pages(scaler_addr, 4096, 0, 1, get_write_ptr(cb_scaler));
         cb_reserve_back(cb_p, T);
@@ -79,7 +86,8 @@ void kernel_main() {
     }
 
     if constexpr (get_named_compile_time_arg_val("has_norm")) {
-        // MoE input norm (args 9..13): its weight (dense fp32), then the first half of the bf16 L1 output row
+        // weighted norm of output 0 (args 9..13): its weight (dense fp32), then the first half of the bf16 output row
+        // (has_norm 1: L1, the MoE input; 2: DRAM, the attention input)
         const uint32_t nw_addr = get_arg_val<uint32_t>(9), n_addr = get_arg_val<uint32_t>(10);
         const uint32_t n_tile = get_arg_val<uint32_t>(11), n_es = get_arg_val<uint32_t>(12);
         const uint32_t n_row = get_arg_val<uint32_t>(13);  // tile row of the output (verify row r: r)
@@ -89,7 +97,8 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_nw, T);
         cb_wait_front(cb_nn, T);
-        rowio::scatter_row<false>(n_addr, n_tile, n_es, ntc, n_row, get_read_ptr(cb_nn), 0, ntc / 2);
+        constexpr bool n_dram = get_named_compile_time_arg_val("has_norm") == 2;  // 2: DRAM output row
+        rowio::scatter_row<n_dram>(n_addr, n_tile, n_es, ntc, n_row, get_read_ptr(cb_nn), 0, ntc / 2);
         noc_async_write_barrier();
     }
 }

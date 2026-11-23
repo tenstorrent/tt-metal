@@ -49,14 +49,17 @@ class FusedShortConv:
         """x: row at position t, phase = t % 4. Writes fp32 x into ring[phase]; returns the output row in x's dtype."""
         return self.conv_add(x, ring, phase)
 
-    def conv_add(self, x, ring, phase, resid=None, out_dtype=None, row_out=True, x_row=0, slot=None):
+    def conv_add(self, x, ring, phase, resid=None, out_dtype=None, row_out=True, x_row=0, slot=None, signal=None):
         """out = conv(x) rounded to x's dtype, plus resid (fp32 add) if given, in out_dtype (default: x's dtype;
         with resid: resid's dtype).
 
         Verify row r of an R-row step (inside F.per_row, phase = (pos + r) % 4): x_row = r picks row r of an R-row x;
         lags 1..min(r, 3) are rows r-1.. of x itself (the ring does not hold them yet), older lags come from the
         ring, and fp32 x goes to `slot` (pending_slot(); commit() puts accepted rows into the ring) instead of
-        ring[phase]: the ring is not written, so every row reads it as it was before the step."""
+        ring[phase]: the ring is not written, so every row reads it as it was before the step.
+
+        signal: (noc x, noc y) of a core in the same joined program (common.py joined) whose semaphore the writer
+        increments once the output has landed."""
         F.check_row_input(x, l1_ok=True)  # the MoE output y straight from L1
         if resid is not None:
             F.check_row_input(resid)
@@ -88,7 +91,16 @@ class FusedShortConv:
             "conv_writer.cpp",
             ttnn.WriterConfigDescriptor(),
             # row_out 0: dense twin only (fused consumers)
-            dict(ntc=ntc, pages=T, cb_out=cb_out, row_out=int(row_out), has_resid=int(resid is not None)),
+            dict(
+                ntc=ntc,
+                pages=T,
+                cb_out=cb_out,
+                row_out=int(row_out),
+                has_resid=int(resid is not None),
+                sig=int(signal is not None),
+                sig_x=signal[0] if signal else 0,
+                sig_y=signal[1] if signal else 0,
+            ),
             [
                 slots[0].buffer_address(),
                 out.buffer_address(),

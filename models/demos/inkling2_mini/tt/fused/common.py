@@ -95,9 +95,10 @@ def compute_config(fp32_cbs, full_sync=False):
     return cfg
 
 
-def kernel(name, config, named, rt=None, cores=None):
+def kernel(name, config, named, rt=None, cores=None, defines=None):
     """rt: runtime args of the single CORE, or {CoreCoord: args} with cores = their CoreRangeSet."""
     if _REC is not None:
+        assert not defines, "per_row records no defines"
         return _KSpec(name, config, named, rt, cores)
     args = ttnn.RuntimeArgs()
     if rt is not None:
@@ -109,6 +110,7 @@ def kernel(name, config, named, rt=None, cores=None):
         named_compile_time_args=list(named.items()),
         runtime_args=args,
         config=config,
+        defines=list(defines or []),
     )
 
 
@@ -138,6 +140,9 @@ def run(io_tensors, kernels, cbs):
     Inside per_row(): recorded for the merged R-row program instead."""
     if _REC is not None:
         _REC[_ROW].append((io_tensors, kernels, cbs))
+        return io_tensors[-1]
+    if _JOIN is not None:
+        _JOIN.append((io_tensors, kernels, cbs))
         return io_tensors[-1]
     return ttnn.generic_op(io_tensors, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 
@@ -231,6 +236,46 @@ def rms_norm_f32(x, **kw):
         except TypeError:
             _RMS_DTYPE = False
     return ttnn.rms_norm(x if x.dtype == ttnn.float32 else ttnn.typecast(x, ttnn.float32), **kw)
+
+
+# ---------------------------------------------------------------- joined programs (decode glue)
+# joined(device, [(core, fn), ...]) runs each fn with the single-core default CORE moved to its core and the F.run
+# calls recorded, then launches ONE program holding all of them (their kernels, CBs and io tensors) plus semaphore
+# JOIN_SEM on those cores. The parts hand data over through DRAM as separate programs do; a part that reads an
+# earlier part's output waits on JOIN_SEM, which that part's last writer increments after its write barrier
+# (conv_writer `sig`, attnres_reader ATTNRES_WAIT_SEM). Same kernels and inputs, so the same bits as separate programs.
+_JOIN = None
+JOIN_SEM = 0
+
+
+def joined(device, parts):
+    global _JOIN, CORE, CORES
+    assert _REC is None and _JOIN is None, "joined does not nest or run inside per_row"
+    rec, outs, saved = [], [], (CORE, CORES)
+    _JOIN = rec
+    try:
+        for core, fn in parts:
+            CORE, CORES = core, ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+            outs.append(fn())
+    finally:
+        _JOIN = None
+        CORE, CORES = saved
+    io, seen = [], set()
+    for t in (t for p in rec for t in p[0]):
+        if id(t) not in seen:
+            seen.add(id(t))
+            io.append(t)
+    crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c, _ in parts])
+    sems = [ttnn.SemaphoreDescriptor(id=JOIN_SEM, core_ranges=crs, initial_value=0)]
+    kernels = [k for p in rec for k in p[1]]
+    cbs = [c for p in rec for c in p[2]]
+    ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems))
+    return outs
+
+
+def noc_xy(device, core):
+    c = device.worker_core_from_logical_core(core)
+    return c.x, c.y
 
 
 # ---------------------------------------------------------------- R rows (speculative verify)

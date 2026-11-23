@@ -59,12 +59,13 @@ void kernel_main() {
         }
     }
     if constexpr (get_named_compile_time_arg_val("has_norm")) {
-        // MoE input norm (args 3..6): second half of the bf16 L1 output row (the reader writes the first)
+        // weighted norm of output 0 (args 3..6): second half of its bf16 output row (the reader writes the first)
         constexpr uint32_t cb_nn = 19;
         const uint32_t n_addr = get_arg_val<uint32_t>(3), n_tile = get_arg_val<uint32_t>(4);
         const uint32_t n_es = get_arg_val<uint32_t>(5), n_row = get_arg_val<uint32_t>(6);
         cb_wait_front(cb_nn, T);
-        rowio::scatter_row<false>(n_addr, n_tile, n_es, ntc, n_row, get_read_ptr(cb_nn), ntc / 2, ntc);
+        constexpr bool n_dram = get_named_compile_time_arg_val("has_norm") == 2;
+        rowio::scatter_row<n_dram>(n_addr, n_tile, n_es, ntc, n_row, get_read_ptr(cb_nn), ntc / 2, ntc);
     }
     noc_async_write_barrier();
 }

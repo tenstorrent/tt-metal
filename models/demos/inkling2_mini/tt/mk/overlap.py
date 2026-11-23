@@ -39,6 +39,7 @@ _STREAMS = "bank_"  # bank_linear_*, moe_bank_*: weight streams
 # budget 0.8 on all hosts is best (router 150 KB: 16.70 ms vs 16.93 without; budget 1.0: 16.98; 0.75 and router
 # 180-200 KB worse), then router 130 KB with window / out pieces x1.5: 16.63 (x2: 16.65; attn-res x0.85 or conv
 # x1.3: worse).
+JOIN_KEY = ("attnres_compute", "attnres_reader", "attnres_writer", "conv_compute", "conv_reader", "conv_writer", 2)
 HOST_KB = {
     ("conv_compute", "conv_reader", "conv_writer", 1): 89,  # 10.6 us -> 11.5 with a fill
     ("attnres_compute", "attnres_reader", "attnres_writer", 1): 89,  # 10.8 -> 13.3
@@ -54,6 +55,7 @@ HOST_KB = {
         "router_writer",
         36,
     ): 100,  # 130 before its weights were staged (router_stage.py)
+    JOIN_KEY: 178,  # post-MLP conv + next attn-res joined (model.GLUE_JOIN): the two programs' 89 + 89
 }
 # R verify rows (fused/common.py per_row): the 1-row program once per row, on R x its cores (logical rows 0..5, off
 # the staging block), about as long as the 1-row program (alpha ~ 0, M6-report.md): the same KB per staging core

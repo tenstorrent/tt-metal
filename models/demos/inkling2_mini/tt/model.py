@@ -16,6 +16,8 @@ the in-place stack of tt/fused/attnres.py (FusedRowOps).
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -46,6 +48,28 @@ SOFTCAP = 30.0
 UNEMBED_CHUNK = 14336  # columns per DRAM-sharded unembed matmul (7 banks x 64 tiles; fp32 out fits L1)
 UNEMBED_SPLIT = 1  # bank-streamed unembed: cores per DRAM-sharded column group (1: 1183 us, 2: 1234 us)
 EPS = 1e-6
+# Decode glue in fewer programs (same kernels' math, same rounding points; outputs bit-equal):
+# GLUE_PRE: the attention input norm runs inside the attn-res program (local layers without message gates)
+GLUE_PRE = os.environ.get("INKLING_GLUE_PRE", "0") == "1"
+# GLUE_JOIN: the post-MLP conv of an app and the next app's attn-res run as ONE program (two cores, semaphore hand-off)
+GLUE_JOIN = os.environ.get("INKLING_GLUE_JOIN", "0") == "1"
+JOIN_CORE = ttnn.CoreCoord(1, 0)  # the attn-res part's core (the conv keeps F.CORE); off the staging rows
+
+
+class _PendingConv:
+    """An app's post-MLP conv + residual, not launched yet: the next app runs it joined with its attn-res."""
+
+    def __init__(self, conv, y, ring, phase, resid):
+        self.args = (conv, y, ring, phase, resid)
+
+    def run(self, signal=None):
+        conv, y, ring, phase, resid = self.args
+        return conv.conv_add(y, ring, phase, resid, ttnn.bfloat16, row_out=False, signal=signal)
+
+
+def materialize(h):
+    return h.run() if isinstance(h, _PendingConv) else h
+
 
 # (layer, pass) of each of the 48 applications, in call order (= golden hidden_XX order)
 APPS = (
@@ -258,18 +282,43 @@ class Inkling2Model:
         stack, n_sealed) after this layer."""
         lay = self.layers[L]
         attn_st, conv_a, conv_m = self.states[cache_index(L, p)]
+        fold = GLUE_PRE and msgs is None and not lay.is_global  # attn-res + input norm in one program
+        pend = h if isinstance(h, _PendingConv) else None
+        if pend is not None:  # the previous app's conv joined with this app's attn-res (h: the conv's output)
+            assert lay.attn_res is not None
+            rep = 3 if (msgs is not None and not lay.is_global) else None
+            box = {}
+
+            def conv():
+                box["h"] = pend.run(signal=F.noc_xy(self.device, JOIN_CORE))
+                return box["h"]
+
+            def ares():
+                if fold:
+                    return [lay.attn_res(stack, box["h"], n_sealed + 1, norm=lay.norm, wait=True)]
+                return lay.attn_res(
+                    stack, box["h"], n_sealed + 1, split=False, repeat_rows=rep, row_out=False, wait=True
+                )
+
+            h, res = F.joined(self.device, [(F.CORE, conv), (JOIN_CORE, ares)])
 
         # attention inputs. Multi-row tensors: row 0/1/2 = q/k/v input. The fused modules use frows.stack
         # (`stack` is only passed through); outputs are per-module buffers, valid until that module runs again.
         if lay.attn_res is None:
             x = h
+        elif pend is not None:
+            x, xs = (None, res) if fold else (res, None)
+        elif fold:
+            x = None
+            xs = [lay.attn_res(stack, h, n_sealed + 1, norm=lay.norm)]
         else:
             rep = 3 if (msgs is not None and not lay.is_global) else None  # same input in rows 0..2
             # row_out=False: x feeds only fused ops (FusedQKVGate or FusedRowNorm), which read its dense twin
             x = lay.attn_res(stack, h, n_sealed + 1, split=False, repeat_rows=rep, row_out=False)
         if msgs is not None:
             x = lay.qkv_gate(x, msgs[0])
-        xs = lay.norm(x)  # one bf16 row per input row (row i uses norm min(i, n_norms - 1))
+        if x is not None:
+            xs = lay.norm(x)  # one bf16 row per input row (row i uses norm min(i, n_norms - 1))
         qn, kn, vn = xs if len(xs) == 3 else xs * 3
 
         # resid = [h +] bf16(conv(a)), fp32 (no row form), a = attention output; the fused attention runs the conv
@@ -290,6 +339,8 @@ class Inkling2Model:
         y, _ = lay.moe(x, normed=True)  # bf16 row (L1); conv_mlp reads it from L1
         # fp32 add, bf16 out. Every decode consumer of out is a fused kernel reading its dense twin, so the row form
         # is written only when the caller reads it (collect)
+        if GLUE_JOIN and not row_out:
+            return _PendingConv(lay.conv_mlp, y, conv_m, self.phase, resid), stack, n_sealed
         out = lay.conv_mlp.conv_add(y, conv_m, self.phase, resid, ttnn.bfloat16, row_out=row_out)
         return out, stack, n_sealed
 
@@ -314,6 +365,8 @@ class Inkling2Model:
         h12_in = None
         msgs = None
         for a, (L, p) in enumerate(APPS):
+            if L in (LOOP_START, 12) or force is not None:
+                h = materialize(h)  # kept as a message key / pass restart, or overwritten (its ring write stays)
             if L == LOOP_START:
                 if p == 1:
                     pre = (h, stack, n)
@@ -332,6 +385,7 @@ class Inkling2Model:
             if collect:
                 res["apps"].append(ttnn.clone(h))  # h is a module buffer: later loop passes overwrite it
 
+        h = materialize(h)
         x = self.final_res(stack, h, n + 1)[0]
         x = self._rms(x, self.final_norm)
         if self.head_tail is not None:

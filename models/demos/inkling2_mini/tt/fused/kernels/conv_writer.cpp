@@ -78,6 +78,13 @@ void kernel_main() {
         }
         noc_async_write_barrier();
     }
+    if constexpr (get_named_compile_time_arg_val("sig")) {
+        // joined program (common.py joined): the next part reads this output; its writes have landed (barrier above)
+        const uint64_t s = get_noc_addr(
+            get_named_compile_time_arg_val("sig_x"), get_named_compile_time_arg_val("sig_y"), get_semaphore(0));
+        noc_semaphore_inc(s, 1);
+        noc_async_atomic_barrier();
+    }
     cb_pop_front(cb_xf, T);
     cb_pop_front(cb_out, T);
 }
