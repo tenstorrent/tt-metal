@@ -2450,6 +2450,8 @@ def _run_fp32_to_int_edge_case(
                 tile_count_B=1,
                 tile_count_res=1,
                 num_faces=MAX_NUM_FACES,
+                # Int32 is two's complement on Quasar; Int8/Int16 stay sign-magnitude.
+                twos_complement=out_format == DataFormat.Int32,
             ),
             "unpack_to_dest": variant.unpack_to_dest,
             "dest_acc": variant.dest_acc,
