@@ -50,6 +50,10 @@ class _Seed:
 
 
 class Hy4Engine:
+    cap = None  # capacity tiers (hy4_capacity.Capacity), set in warm() when HY4_TAILPARK / HY4_HOSTTIER
+    tail_on = host_on = False
+    tail_stats = {}
+
     def __init__(self, md, max_num_seqs, max_seq_len, k=None, log=None):
         from models.demos.blackhole.hy4_preview.tt import hy4_pool_decode as pool_decode
         from models.demos.blackhole.hy4_preview.tt.hy4_attn_opt import Opt
@@ -569,6 +573,11 @@ class Hy4Engine:
             for r in range(ROWS):
                 self.bcopy._ctl_row(r)
         be = DeviceBackend(self.md, self._pool_tensors(), xrow=self.xrow, bcopy=self.bcopy)
+        if self.xrow is None:
+            logger.warning(
+                "HY4 cap: HY4_XROW=1 is off: tail entries only on the SAME row (row-local copy), host tier disabled (needs the xrow stage tensors)"
+            )
+            self.host_on = False
         store = CS.ChainStore(
             ROWS,
             self.pages,
