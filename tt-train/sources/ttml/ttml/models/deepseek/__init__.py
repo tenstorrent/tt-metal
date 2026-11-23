@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 import ttml
+from ttml.common.utils import round_up_to_tile
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, Embedding, LinearLayer, ModuleList
 
 from .. import RunnerType, memory_efficient_runner
@@ -90,9 +91,7 @@ class DeepSeek(AbstractModuleBase):
             tp_size = ttml.mesh().axis_size("tp")
             self._validate_tp(config, tp_size)
             # The head splits the vocab across TP, so each rank's share must be whole tiles: a multiple of 32 * tp_size.
-            # lcm(32, tp_size) only makes the whole vocab divisible by both (see test_tp_vocab_padding.py).
-            align = 32 * tp_size
-            self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
+            self.padded_vocab_size = round_up_to_tile(config.vocab_size, 32 * tp_size)
             self.head = ColumnParallelLinear(
                 config.dim,
                 self.padded_vocab_size,
@@ -101,7 +100,7 @@ class DeepSeek(AbstractModuleBase):
                 axis_name="tp",
             )
         else:
-            self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
+            self.padded_vocab_size = round_up_to_tile(config.vocab_size)
             self.head = LinearLayer(config.dim, self.padded_vocab_size, has_bias=False)
 
         self.tok_emb = Embedding(self.padded_vocab_size, config.dim)
