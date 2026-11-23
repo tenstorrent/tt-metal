@@ -65,12 +65,12 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn, release_blocks
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import to_mesh_order
+from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import TtMoEBlockFfn, release_blocks
 from models.demos.deepseek_v3_d_p.tt.moe_impl import BLOCK, moe_block_fabric_payload_size
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
@@ -630,7 +630,7 @@ def _capture_packed_counts(monkeypatch):
     one total per MoE call. The planner counts only the rows the forward's chunk bounds call real, and dispatch, the
     routed experts and the combine run its plan, so a routed pad row (or a dropped real row) changes the total."""
     calls = []
-    call = TtK3MoEBlockFfn.__call__
+    call = TtMoEBlockFfn.__call__
 
     def capture(self, x, *args, chunks=None, forward_chunks=None, **kwargs):
         assert chunks is not None, "this hook reads eager packed forwards only"
@@ -647,7 +647,7 @@ def _capture_packed_counts(monkeypatch):
         calls.append(total)
         return y
 
-    monkeypatch.setattr(TtK3MoEBlockFfn, "__call__", capture)
+    monkeypatch.setattr(TtMoEBlockFfn, "__call__", capture)
     return calls
 
 
