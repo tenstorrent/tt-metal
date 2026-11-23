@@ -110,8 +110,8 @@ _SIM_HOST_PID_KEY = "llk_sim_host_pid"
 
 
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
-# In a nutshell, everything except Tensix GPRs is accessible over NoC, thus ignoring that allows us to dump
-# most of the Tensix state, without causing any runtime issues.
+# In a nutshell, everything except Tensix GPRs is accessible over NoC; TensixState.fetch reads GPRs
+# from a BRISC-made L1 copy instead (silicon only).
 # Quasar is a no-op: ttexalens has no Tensix register description yet
 # (hardware/quasar/device.py raises NotImplementedError).
 def override_gprs_used_by_tensix_dump():
@@ -254,6 +254,13 @@ def pytest_addoption(parser):
         "truncated at session start; one that cannot be is a usage error). Reporting "
         "only, except that the sweep's records are required: a sweep cell whose record "
         "is not written fails.",
+    )
+    parser.addoption(
+        "--ulp-variants",
+        default=None,
+        metavar="PATH",
+        help="Write one JSON record per SFPU ULP sweep cell built (its node, op, key and "
+        "build directory) to PATH, truncated at session start; for helpers.ulp_affected.",
     )
     parser.addoption(
         "--ulp-emit",
@@ -551,6 +558,11 @@ def pytest_configure(config):
     if config.getoption("--ulp-measure"):
         # Set in the workers too; only the file preparation below is master-only.
         utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
+    if config.getoption("--ulp-variants"):
+        from . import ulp_affected
+
+        # Set in the workers too; only the truncation below is master-only.
+        ulp_affected.VARIANTS_PATH = Path(config.getoption("--ulp-variants")).absolute()
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
@@ -566,6 +578,9 @@ def pytest_configure(config):
             raise pytest.UsageError(
                 f"--ulp-measure: cannot prepare the file: {exc}"
             ) from exc
+        if config.getoption("--ulp-variants"):
+            ulp_affected.VARIANTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            ulp_affected.VARIANTS_PATH.write_text("")
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):

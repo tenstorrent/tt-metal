@@ -539,4 +539,16 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
         "accumulation_tile_axis");
 }
 
+ttnn::command_list::CmdListBindings AccumulationProgramFactory::map_cmd_list_parameters(
+    const AccumulationParams& attributes,
+    const AccumulationInputs&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    // cumsum and cumprod share this factory but name their input keyword differently.
+    const char* input_keyword = attributes.op == AccumulationOp::CUMSUM ? "input" : "input_tensor";
+    binder.tensor(/*invoke_name=*/input_keyword, /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    return binder.finish();
+}
+
 }  // namespace ttnn::prim
