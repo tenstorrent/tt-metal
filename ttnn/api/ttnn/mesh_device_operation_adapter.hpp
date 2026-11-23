@@ -18,6 +18,7 @@
 #include "ttnn/per_device_run_args.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -1075,7 +1076,7 @@ public:
             const tensor_args_t& tensor_args,
             const tt::tt_metal::ProgramSpec& spec,
             const tt::tt_metal::ProgramRunArgs& run_params) {
-            if constexpr (requires { &Factory::map_cmd_list_parameters; }) {
+            if constexpr (detail::MapsCmdListParameters<Factory>) {
                 auto bindings = Factory::map_cmd_list_parameters(attrs, tensor_args, spec, run_params);
                 bindings.factory_name = ttsl::long_type_name<Factory>;
                 return std::make_shared<const ttnn::command_list::CmdListBindings>(std::move(bindings));
@@ -1177,6 +1178,13 @@ public:
         // Match each TensorArgument's MeshTensor reference back to its index in the combined
         // enumeration (io tensors followed by op-owned tensors). Cache-miss path only.
         //
+        // When several slots hold the same MeshTensor, pointer identity cannot tell which of them a
+        // TensorArgument came from (ProgramRunArgs::tensor_args is a Table with no promised order).
+        // Any of them is correct for both readers of these bindings on a hit, the tensor refresh and
+        // command-list recording: compute_mesh_workload_cache_key keys such ops by which tensor_args
+        // slots alias (compute_tensor_alias_signature), so every hit of this entry repeats the miss's
+        // aliasing.
+        //
         // NOTE on host perf: the index-based binding scheme is what makes a fast cache-hit path
         // possible, but the current straightforward implementation isn't there yet -- the
         // enumeration returns a heap std::vector, and apply_descriptor builds a fresh
@@ -1187,32 +1195,18 @@ public:
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
             std::vector<ResolvedTensorBinding> bindings;
             bindings.reserve(factory_tensor_args.size());
-            // Tracks which enumeration slots have already been claimed by an earlier
-            // TensorParameter in this loop. Without this, two parameters aliasing the same
-            // tensor (e.g. batch_norm's running_mean == running_var) would both resolve to
-            // the *first* matching slot via find_if, collapsing their indices together. On a
-            // later cache hit with distinct-but-same-spec tensors, the collapsed index map is
-            // replayed verbatim, silently rebinding the second parameter to the first tensor.
-            // Scanning left-to-right and skipping claimed slots recovers the intended
-            // positional binding (first occurrence -> first slot, second occurrence -> next
-            // matching unclaimed slot) instead of aliasing both onto the same index.
-            std::vector<bool> claimed(mesh_tensors.size(), false);
             // The name is the Table key; the TensorArgument value carries only the tensor ref.
             for (const auto& [tensor_parameter_name, tensor_arg] : factory_tensor_args) {
                 const auto* target = &tt::tt_metal::mesh_tensor_of(tensor_arg);
-                std::size_t idx = 0;
-                for (; idx < mesh_tensors.size(); ++idx) {
-                    if (!claimed[idx] && &mesh_tensors[idx].get() == target) {
-                        break;
-                    }
-                }
+                const auto it = std::find_if(
+                    mesh_tensors.begin(), mesh_tensors.end(), [target](const auto& t) { return &t.get() == target; });
                 TT_FATAL(
-                    idx != mesh_tensors.size(),
+                    it != mesh_tensors.end(),
                     "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args / "
                     "tensor_return_value, or one of the factory's op_owned_tensors (got an unowned MeshTensor)",
                     tensor_parameter_name);
-                claimed[idx] = true;
-                bindings.push_back({tensor_parameter_name, idx});
+                bindings.push_back(
+                    {tensor_parameter_name, static_cast<std::size_t>(std::distance(mesh_tensors.begin(), it))});
             }
             return bindings;
         }
@@ -1755,42 +1749,71 @@ public:
         }
     };
 
-    static ttsl::hash::hash_t compute_mesh_workload_hash(
-        tt::tt_metal::distributed::MeshDevice* mesh_device,
-        const operation_attributes_t& attrs,
-        const tensor_args_t& tensor_args) {
-        ttsl::hash::hash_t hash = compute_program_hash(attrs, tensor_args);
-        const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
-        std::for_each(
-            coords.begin(), coords.end(), [&](const auto& coord) { hash = ttsl::hash::hash_objects(hash, coord); });
-        return hash;
+    // A spec factory's cache hit replays the io slot each TensorArgument was matched to on the miss in
+    // its tensor refresh, unless it re-derives its run args with override_runtime_arguments, and in a
+    // command-list recording, if it defines map_cmd_list_parameters. When the miss passed one MeshTensor
+    // in several slots, that match could have picked any of them (#57248), so ops with a factory that
+    // replays it key the cache on which tensor_args slots alias: an entry is then only reused by calls whose
+    // aliased slots again hold one tensor, where every pick is right. Outputs need no entry in the
+    // signature: the cache is keyed on tensor_args only, a new output aliases nothing, and an output
+    // that aliases an input (e.g. a preallocated one) is passed in a tensor_args slot. Whether an op
+    // returns one of its inputs outside of tensor_args is part of the op and must not vary per call:
+    // a hit would replay the slot the miss matched.
+    static constexpr bool keys_on_tensor_aliasing =
+        []<typename... Factories>(std::type_identity<std::variant<Factories...>>) {
+            return (
+                ((ProgramSpecFactoryConcept<Factories> || CustomProgramSpecFactoryConcept<Factories> ||
+                  MeshWorkloadSpecFactoryConcept<Factories>) &&
+                 (!detail::HasSpecRuntimeArgsOverride<Factories> || detail::MapsCmdListParameters<Factories>)) ||
+                ...);
+        }(std::type_identity<program_factory_t>{});
+
+    // Empty unless the op keys on tensor aliasing and some tensors alias, so other calls hash as before.
+    static std::vector<std::uint32_t> tensor_alias_signature(
+        const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors) {
+        if constexpr (keys_on_tensor_aliasing) {
+            return detail::compute_tensor_alias_signature(tensors);
+        } else {
+            return {};
+        }
     }
 
-    // Exact, collision-free companion to compute_mesh_workload_hash: the cache compares this on a
-    // hash hit so a 64-bit collision is resolved to a correct (rebuild) miss instead of a wrong
-    // hit (issue #45821). It must mirror the SAME inputs the hash combines.
+    // The program cache key: a 64-bit hash plus an exact, collision-free canonical encoding. The
+    // cache compares the canonical part on a hash hit so a 64-bit collision is resolved to a
+    // correct (rebuild) miss instead of a wrong hit (issue #45821), so it must mirror the SAME
+    // inputs the hash combines.
     //
-    // The key is prefixed with op_type_name (the DeviceOperation's type name) so distinct ops can
-    // never alias on a hash collision.
+    // The canonical key is prefixed with op_type_name (the DeviceOperation's type name) so distinct
+    // ops can never alias on a hash collision.
     // For ops with a custom compute_program_hash we can't infer which fields it keyed on (it may
-    // deliberately exclude some, e.g. an RNG seed), so we return only the op-identity prefix --
-    // opting that op out of attribute-level collision resolution. The default reflection-hash
-    // path is mirrored exactly.
-    static std::string compute_mesh_workload_canonical_key(
-        [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
+    // deliberately exclude some, e.g. an RNG seed), so the canonical key holds only the op-identity
+    // prefix plus the tensor alias signature, which this adapter rather than the op folds into the
+    // hash -- opting that op out of attribute-level collision resolution. The default
+    // reflection-hash path is mirrored exactly.
+    static tt::tt_metal::program_cache::detail::ProgramCacheKey compute_mesh_workload_cache_key(
+        tt::tt_metal::distributed::MeshDevice* mesh_device,
         std::string_view op_type_name,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        std::string key{op_type_name};
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            return key;  // custom hash -> opt out beyond the op-identity prefix
-        } else {
-            key += ttsl::hash::canonical_key(attrs, tensor_args);
-            const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
-            std::for_each(
-                coords.begin(), coords.end(), [&](const auto& coord) { key += ttsl::hash::canonical_key(coord); });
-            return key;
+        const auto tensors = mesh_device_operation_utils::collect_tensors(tensor_args);
+        const auto coords = detail::extract_tensor_coordinates_impl(tensors, mesh_device);
+        const auto alias_signature = tensor_alias_signature(tensors);
+
+        ttsl::hash::hash_t hash = compute_program_hash(attrs, tensor_args);
+        std::string canonical{op_type_name};
+        std::for_each(
+            coords.begin(), coords.end(), [&](const auto& coord) { hash = ttsl::hash::hash_objects(hash, coord); });
+        if constexpr (!requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+            canonical += ttsl::hash::canonical_key(attrs, tensor_args);
+            std::for_each(coords.begin(), coords.end(), [&](const auto& coord) {
+                canonical += ttsl::hash::canonical_key(coord);
+            });
         }
+        if (!alias_signature.empty()) {
+            hash = ttsl::hash::hash_objects(hash, alias_signature);
+            canonical += ttsl::hash::canonical_key(alias_signature);
+        }
+        return {hash, std::move(canonical)};
     }
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
