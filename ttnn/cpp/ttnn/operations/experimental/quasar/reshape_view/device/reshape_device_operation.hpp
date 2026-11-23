@@ -37,13 +37,15 @@ struct ReshapeViewDeviceOperation {
 
 // Reshape `input` (rank 2 for ROW_MAJOR, rank 3 for TILE: the views the host entry builds) into
 // `logical_output_shape` of the same rank and volume. `num_threads` DM harts per node move the data.
+// `pad_word` is what the tile padding of a TILE output holds (the pad element replicated to 32 bits).
 ttnn::Tensor reshape_view(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    uint32_t num_threads = RESHAPE_MAX_DM_THREADS);
+    uint32_t num_threads = RESHAPE_MAX_DM_THREADS,
+    uint32_t pad_word = 0);
 
 // The default hart count, or the TTNN_QSR_RESHAPE_THREADS override (experiments only).
 uint32_t reshape_threads_from_env();

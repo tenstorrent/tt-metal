@@ -15,7 +15,6 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded.hpp"
@@ -62,7 +61,7 @@ static uint32_t find_best_n_1d(uint32_t dim, uint32_t max_n, uint32_t align) {
     return 0;
 }
 
-// Flatten PadValue to float for fill_implicit_tile_padding.
+// Flatten PadValue to float for pack_scalar_into_uint32.
 //   - uint32 + FLOAT32: caller-supplied uint32 is the bit pattern of the desired float, use bit_cast.
 //   - Otherwise: caller-supplied value is a numeric integer or float, use static_cast.
 // Note: integer pad values > 2^24 lose precision through this float bottleneck.
@@ -78,12 +77,6 @@ static float pad_value_as_float(const PadValue& pad_value, DataType dtype) {
             return static_cast<float>(v);
         },
         pad_value);
-}
-
-// True if the inner-2D of `shape` is not tile-aligned, i.e. the tiled output has implicit padding lanes.
-static bool has_inner_2d_tile_padding(const ttnn::Shape& shape) {
-    TT_ASSERT(shape.rank() >= 2, "has_inner_2d_tile_padding requires rank >= 2");
-    return (shape[-1] % tt::constants::TILE_WIDTH != 0) || (shape[-2] % tt::constants::TILE_HEIGHT != 0);
 }
 
 // Returns a sharded output MemoryConfig, or INTERLEAVED if no valid grid exists.
@@ -393,8 +386,12 @@ ttnn::Tensor reshape_tiled(
         "Only metadata-only (view) reshapes of such tensors are supported.",
         tensor.dtype());
     const uint32_t num_threads = ttnn::prim::qsr::reshape_threads_from_env();
-    // fill_implicit_tile_padding takes float; integer pad is not bit-exact for all dtypes/values.
-    const float fill_value = detail::pad_value_as_float(pad_value, tensor.dtype());
+    // The TILE kernel writes the tile padding of the output itself: the caller's pad_value when one was
+    // passed (and the fill was not skipped), zero otherwise, so padding never carries stale data.
+    const uint32_t pad_word = tensor.layout() == Layout::TILE && pad_value_explicit && !skip_padding_fill
+                                  ? ttnn::operations::data_movement::pack_scalar_into_uint32(
+                                        tensor.dtype(), detail::pad_value_as_float(pad_value, tensor.dtype()))
+                                  : 0;
     // squeeze input tensor and requested shape to 3D
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
         if (shape.rank() > 3) {
@@ -450,29 +447,8 @@ ttnn::Tensor reshape_tiled(
             requested_padded_shape_3d,
             target_output_mem_config,
             sub_core_grid,
-            num_threads);
-
-        // Fill implicit tile padding only when the caller explicitly asked for it (pad_value_explicit).
-        // Default-on fill would write into "padding" lanes of prim::reshape_view, which can be a zero-cost
-        // alias of the input buffer; in extreme low-rank cases (e.g. inner-2D (1, 1)) this clobbers
-        // logical lanes of aliased tensors. Output may be sharded (typical) or INTERLEAVED if
-        // recompute fell back; handle both. Tensors here are rank-3, so the fill stays
-        // on its non-recursive path and cannot loop back into ttnn::reshape.
-        if (pad_value_explicit && !skip_padding_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
-            if (output_tensor_3d.memory_config().is_sharded()) {
-                // TODO(#43090): drop this s2i/i2s detour once prim::fill_pad supports sharded buffers
-                // without overflowing fill_pad_writer's per-core runtime-arg cap (341).
-                const auto sharded_mem_config = output_tensor_3d.memory_config();
-                MemoryConfig interleaved_mem{TensorMemoryLayout::INTERLEAVED, sharded_mem_config.buffer_type()};
-                auto interleaved = ttnn::operations::experimental::quasar::sharded_to_interleaved(
-                    output_tensor_3d, interleaved_mem, std::nullopt);
-                interleaved = ttnn::fill_implicit_tile_padding(interleaved, fill_value, std::nullopt);
-                output_tensor_3d = ttnn::operations::experimental::quasar::interleaved_to_sharded(
-                    interleaved, sharded_mem_config, std::nullopt);
-            } else {
-                output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
-            }
-        }
+            num_threads,
+            pad_word);
 
         return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
     }
@@ -504,15 +480,13 @@ ttnn::Tensor reshape_tiled(
     }
 
     auto output_tensor_3d = ttnn::prim::qsr::reshape_view(
-        tensor3d, requested_shape_3d, requested_padded_shape_3d, updated_mem_config, sub_core_grid, num_threads);
-
-    // Fill only when the caller EXPLICITLY passed pad_value. A default-on fill writes into "padding" lanes
-    // of prim::reshape_view, which can be a zero-cost alias of the input buffer; in extreme low-rank cases
-    // (e.g. inner-2D (1, 1)) this clobbers logical lanes of aliased tensors and silently corrupts unrelated
-    // callers (e.g. tt-train AdamW / ColumnParallel). skip_padding_fill suppresses the fill as well.
-    if (pad_value_explicit && !skip_padding_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
-        output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
-    }
+        tensor3d,
+        requested_shape_3d,
+        requested_padded_shape_3d,
+        updated_mem_config,
+        sub_core_grid,
+        num_threads,
+        pad_word);
 
     return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
 }

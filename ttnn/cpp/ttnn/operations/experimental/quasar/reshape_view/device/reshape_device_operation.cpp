@@ -150,9 +150,11 @@ ttnn::Tensor reshape_view(
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    uint32_t num_threads) {
+    uint32_t num_threads,
+    uint32_t pad_word) {
     return ttnn::device_operation::launch<ReshapeViewDeviceOperation>(
-        ReshapeViewParams{logical_output_shape, padded_output_shape, output_mem_config, sub_core_grid, num_threads},
+        ReshapeViewParams{
+            logical_output_shape, padded_output_shape, output_mem_config, sub_core_grid, num_threads, pad_word},
         ReshapeViewInputs{input});
 }
 

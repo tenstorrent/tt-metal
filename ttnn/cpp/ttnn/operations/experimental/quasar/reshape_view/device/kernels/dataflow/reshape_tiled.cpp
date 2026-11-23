@@ -12,8 +12,11 @@
 // tile, so it is fetched with one NOC read straight from that tile into its place in the output tile (the
 // Quasar NOC reads and writes at byte granularity). Pieces that continue each other in both the input
 // tile and the output tile (the usual case when the last dimension is unchanged: whole face columns) are
-// merged into one read. No RISC ever touches the payload. Padding elements of an output tile are not
-// written and keep whatever the stage held.
+// merged into one read. No RISC ever touches the payload.
+//
+// An output tile with padding (the last tile row or column of a shape that is not tile aligned) is first
+// filled with pad_word, so its padding is defined: the hart stores the fill for the whole window under a
+// stage lock, and only then issues the window's reads, which overwrite the logical elements.
 //
 // Hart t of T owns windows (tiles_per_window consecutive output tiles) t, t + T, ... of this node's range
 // and tags its transfers with transaction id t + 1, so its barrier waits on its own transfers only. Each
@@ -21,7 +24,8 @@
 // k + 1 fill the other half, and the one barrier per window covers both.
 //
 // Compile-time args: element_bytes, in_h, in_w, out_h, out_w (logical), in_tiles_h, in_tiles_w,
-//                    out_tiles_h, out_tiles_w, num_out_tiles, tiles_per_window
+//                    out_tiles_h, out_tiles_w, num_out_tiles, tiles_per_window, hart_stage_bytes,
+//                    pad_word (the pad element replicated to 32 bits)
 // Runtime args:      window_start, num_windows
 
 #include <cstdint>
@@ -63,6 +67,9 @@ void kernel_main() {
     constexpr uint32_t out_tiles_w = get_arg(args::out_tiles_w);
     constexpr uint32_t num_out_tiles = get_arg(args::num_out_tiles);
     constexpr uint32_t tiles_per_window = get_arg(args::tiles_per_window);
+    constexpr uint32_t hart_stage_bytes = get_arg(args::hart_stage_bytes);
+    constexpr uint32_t pad_word = get_arg(args::pad_word);
+    constexpr bool has_padding = out_h % TILE != 0 || out_w % TILE != 0;
     constexpr uint32_t tile_bytes = TILE_ELEMENTS * element_bytes;
     constexpr uint32_t window_bytes = tiles_per_window * tile_bytes;
 
@@ -75,9 +82,10 @@ void kernel_main() {
     Noc noc;
     const auto src = TensorAccessor(tensor::input);
     const auto dst = TensorAccessor(tensor::output);
-    // One Scratchpad per node: hart t owns bytes [t * 2 * window_bytes, (t + 1) * 2 * window_bytes).
+    // One Scratchpad per node: hart t owns bytes [t * hart_stage_bytes, (t + 1) * hart_stage_bytes), two
+    // halves of window_bytes and a guard cache line.
     Scratchpad<uint8_t> stage(scratch::stage);
-    const uint32_t stage_base = t * 2 * window_bytes;
+    const uint32_t stage_base = t * hart_stage_bytes;
     const NocOptVals txn{.trid = t + 1};
 
     Run run{};
@@ -100,6 +108,22 @@ void kernel_main() {
         const uint32_t tile_end =
             num_out_tiles - tile_first < tiles_per_window ? num_out_tiles : tile_first + tiles_per_window;
         const uint32_t base = stage_base + half * window_bytes;
+
+        if (has_padding) {
+            for (uint32_t tile = tile_first; tile < tile_end; ++tile) {
+                const uint32_t in_plane = tile % (out_tiles_h * out_tiles_w);
+                const bool last_row = in_plane / out_tiles_w == out_tiles_h - 1 && out_h % TILE != 0;
+                const bool last_col = in_plane % out_tiles_w == out_tiles_w - 1 && out_w % TILE != 0;
+                if (last_row || last_col) {
+                    const uint32_t tile_base = base + (tile - tile_first) * tile_bytes;
+                    const auto lock = stage.scoped_lock(tile_base, tile_bytes);
+                    uint32_t* words = reinterpret_cast<uint32_t*>(&stage[tile_base]);
+                    for (uint32_t i = 0; i < tile_bytes / sizeof(uint32_t); ++i) {
+                        words[i] = pad_word;
+                    }
+                }
+            }
+        }
 
         for (uint32_t tile = tile_first; tile < tile_end; ++tile) {
             const uint32_t tile_base = base + (tile - tile_first) * tile_bytes;

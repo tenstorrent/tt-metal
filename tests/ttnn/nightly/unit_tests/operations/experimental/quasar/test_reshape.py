@@ -248,13 +248,47 @@ def test_quasar_reshape_tile_mode_is_accepted(device):
     )
 
 
-def test_quasar_reshape_tile_explicit_pad_value(device):
-    """An explicit pad_value runs the padding fill after the reshape; the logical data must survive it."""
+def _padding_of(out, logical_shape):
+    """The tile-padding elements of a TILE tensor, as float64."""
+    padded = out.cpu().to_torch_with_padded_shape()
+    mask = torch.ones(padded.shape, dtype=torch.bool)
+    mask[tuple(slice(0, n) for n in logical_shape)] = False
+    assert mask.any()
+    return padded[mask].to(torch.float64)
+
+
+# The kernel fills the tile padding of the output itself: pad_value when given, zero otherwise. The first
+# reshape of each pair leaves non-zero data in the hart stages, so stale stage bytes would show up.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8])
+@pytest.mark.parametrize("pad_value", [None, 3], ids=["default_zero", "explicit_3"])
+@pytest.mark.parametrize(
+    "in_shape, out_shape",
+    [((1, 1, 40, 50), (1, 1, 50, 40)), ((1, 32, 32), (1, 16, 64)), ((3, 70, 33), (1, 99, 70))],
+    ids=["both_ragged", "short_rows", "many_tiles"],
+)
+def test_quasar_reshape_tile_padding(device, dtype, pad_value, in_shape, out_shape):
     _quasar(device)
-    x = torch.randn((1, 1, 40, 50), dtype=torch.bfloat16)
-    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=TILE, device=device)
-    out = ttnn.experimental.quasar.reshape(tx, (1, 1, 50, 40), pad_value=3.0)
-    assert torch.equal(ttnn.to_torch(out).float(), x.reshape(1, 1, 50, 40).float())
+    _run(device, (1, 1, 64, 96), (1, 1, 96, 64), TILE, dtype=dtype)
+    kwargs = {} if pad_value is None else {"pad_value": float(pad_value)}
+    out = _run(device, in_shape, out_shape, TILE, dtype=dtype, **kwargs)
+    assert torch.all(_padding_of(out, out_shape) == (pad_value or 0))
+
+
+@pytest.mark.parametrize("num_threads", [1, 6])
+def test_quasar_reshape_tile_padding_threads(device, monkeypatch, num_threads):
+    _quasar(device)
+    monkeypatch.setenv("TTNN_QSR_RESHAPE_THREADS", str(num_threads))
+    out = _run(device, (4, 100, 90), (6, 60, 100), TILE, pad_value=-2.5)
+    assert torch.all(_padding_of(out, (6, 60, 100)) == -2.5)
+
+
+def test_quasar_reshape_tile_padding_height_sharded(device):
+    _quasar(device)
+    x = torch.randn((1, 1, 128, 40), dtype=torch.bfloat16)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=TILE, device=device, memory_config=_height_sharded(4, (32, 64)))
+    out = ttnn.experimental.quasar.reshape(tx, (1, 1, 64, 80), pad_value=7.0)
+    assert torch.equal(ttnn.to_torch(out).float(), x.reshape(1, 1, 64, 80).float())
+    assert torch.all(_padding_of(out, (1, 1, 64, 80)) == 7.0)
 
 
 def test_quasar_reshape_bfloat8_is_rejected(device, expect_error):

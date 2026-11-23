@@ -39,10 +39,11 @@ constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar
 constexpr uint32_t WINDOW_BYTES = 8192;
 // Cap on row-major pages per window: with tiny pages the window is bounded by its NOC writes, not its bytes.
 constexpr uint32_t MAX_PAGES_PER_WINDOW = 64;
+constexpr uint32_t CACHE_LINE_BYTES = 64;
 
 // One DM kernel of `num_threads` harts on every node that draws work. The `num_windows` windows of the
 // output are dealt to the nodes in contiguous ranges; hart t of a node takes windows t, t + T, ... of its
-// range. Each hart owns two stage halves of `window_bytes`.
+// range. Each hart owns `hart_stage_bytes` of the stage, which hold its two halves of `window_bytes`.
 ttnn::device_operation::ProgramArtifacts build(
     const char* program_name,
     const char* kernel_file,
@@ -50,7 +51,7 @@ ttnn::device_operation::ProgramArtifacts build(
     const Tensor& input,
     const Tensor& output,
     uint32_t num_windows,
-    uint32_t window_bytes,
+    uint32_t hart_stage_bytes,
     KernelSpec::CompileTimeArgs compile_time_args) {
     const uint32_t T = operation_attributes.num_threads;
 
@@ -67,7 +68,7 @@ ttnn::device_operation::ProgramArtifacts build(
         TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
         TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
     };
-    spec.scratchpads = {ScratchpadSpec{.unique_id = STAGE, .size_per_node = T * 2 * window_bytes}};
+    spec.scratchpads = {ScratchpadSpec{.unique_id = STAGE, .size_per_node = T * hart_stage_bytes}};
 
     spec.kernels = {KernelSpec{
         .unique_id = MOVER,
@@ -145,7 +146,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRowMajorProgramFactory::crea
         input,
         output,
         num_windows,
-        window_bytes,
+        2 * window_bytes,
         {{"src_page_bytes", src_page_bytes},
          {"dst_page_bytes", dst_page_bytes},
          {"window_bytes", window_bytes},
@@ -174,6 +175,9 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
 
     const uint32_t tiles_per_window = WINDOW_BYTES / tile_bytes;
     const uint32_t num_windows = tt::div_up(num_out_tiles, tiles_per_window);
+    // The harts fill tile padding with stores, which reach L1 through a cache of 64-byte lines. One guard
+    // line per hart keeps a line one hart writes back clear of the bytes another hart's NOC reads land in.
+    const uint32_t hart_stage_bytes = 2 * tiles_per_window * tile_bytes + CACHE_LINE_BYTES;
 
     return build(
         "quasar_reshape_tiled",
@@ -182,8 +186,10 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
         input,
         output,
         num_windows,
-        tiles_per_window * tile_bytes,
+        hart_stage_bytes,
         {{"element_bytes", element_bytes},
+         {"hart_stage_bytes", hart_stage_bytes},
+         {"pad_word", operation_attributes.pad_word},
          {"in_h", in_shape[-2]},
          {"in_w", in_shape[-1]},
          {"out_h", out_shape[-2]},

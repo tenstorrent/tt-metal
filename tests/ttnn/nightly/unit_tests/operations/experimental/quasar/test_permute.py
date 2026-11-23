@@ -183,6 +183,31 @@ def test_quasar_permute_tile_padding(device, dims, pad_value):
     assert torch.all(padded[mask].float() == pad_value)
 
 
+# The pad value is converted the way the data type stores it: BFLOAT16 rounds to nearest, UINT32 keeps
+# values above the int32 range, the narrow integers saturate.
+@pytest.mark.parametrize(
+    "dtype, pad_value, stored",
+    [
+        (ttnn.bfloat16, 1.1, float(torch.tensor(1.1, dtype=torch.bfloat16))),
+        (ttnn.float32, 1.1, float(torch.tensor(1.1, dtype=torch.float32))),
+        (ttnn.uint32, 3000000000.0, 3000000000.0),
+        (ttnn.int32, -7.0, -7.0),
+        (ttnn.uint16, 70000.0, 65535.0),
+        (ttnn.uint8, 300.0, 255.0),
+    ],
+    ids=["bf16_rounds", "f32", "u32_above_int32", "i32_negative", "u16_saturates", "u8_saturates"],
+)
+def test_quasar_permute_tile_padding_dtypes(device, dtype, pad_value, stored):
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip(QUASAR_ONLY)
+    shape, dims = (2, 3, 36, 70), (0, 2, 3, 1)
+    out = _run_permute(device, shape, dims, ttnn.TILE_LAYOUT, dtype=dtype, pad_value=pad_value)
+    padded = out.cpu().to_torch_with_padded_shape()
+    mask = torch.ones(padded.shape, dtype=torch.bool)
+    mask[tuple(slice(0, n) for n in torch.permute(torch.zeros(shape), dims).shape)] = False
+    assert torch.all(padded[mask].to(torch.float64) == stored)
+
+
 def test_quasar_permute_negative_dims_and_cache(device):
     if device.arch() != ttnn.device.Arch.QUASAR:
         pytest.skip(QUASAR_ONLY)

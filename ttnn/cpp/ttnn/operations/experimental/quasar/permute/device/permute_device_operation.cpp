@@ -4,7 +4,8 @@
 
 #include "permute_device_operation.hpp"
 
-#include <bit>
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -12,6 +13,7 @@
 #include <tt-metalium/tile.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -33,12 +35,16 @@ bool is_plain_element_dtype(DataType dtype) {
     }
 }
 
+// The pad element in the low bits of a word. Rounds BFLOAT16 and saturates the integer types.
 uint32_t pad_word_of(DataType dtype, float pad_value) {
-    switch (dtype) {
-        case DataType::BFLOAT16: return std::bit_cast<uint32_t>(pad_value) >> 16;
-        case DataType::FLOAT32: return std::bit_cast<uint32_t>(pad_value);
-        default: return static_cast<uint32_t>(static_cast<int32_t>(pad_value));
+    if (!is_plain_element_dtype(dtype)) {
+        return 0;  // whole-page moves do not use a pad word
     }
+    if (dtype == DataType::INT8) {
+        const float clamped = std::clamp(std::trunc(pad_value), -128.0f, 127.0f);
+        return static_cast<uint8_t>(static_cast<int8_t>(std::isnan(pad_value) ? 0.0f : clamped));
+    }
+    return ttnn::operations::data_movement::pack_scalar_into_uint32(dtype, pad_value);
 }
 
 // The shape the plan works on: the logical shape, except that a rank 1 TILE tensor carries an implicit

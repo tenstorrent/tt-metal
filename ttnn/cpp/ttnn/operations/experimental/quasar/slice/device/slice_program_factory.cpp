@@ -281,6 +281,7 @@ ttnn::device_operation::ProgramArtifacts SliceProgramFactory::create_program_art
     auto step_of = [&](uint32_t d) { return args.use_tensor_args ? 1u : args.step[d]; };
     const uint32_t num_index_dims = tile ? rank - 2 : rank - 1;  // dims above the page
     std::vector<PageDim> dims;
+    dims.reserve(num_index_dims + 2);
     // Per input dim: the divisor that turns a begin index into page units, for the tensor-args arm.
     std::vector<uint32_t> start_div(rank, 1);
     for (uint32_t d = 0; d < num_index_dims; ++d) {
