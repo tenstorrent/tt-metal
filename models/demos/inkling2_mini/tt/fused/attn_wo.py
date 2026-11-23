@@ -13,10 +13,14 @@ conv_add(a, ring, phase, resid, fp32, row_out=False). (This replaces a dense twi
 the conv no longer reads a from DRAM at all.)
 """
 
+import os
+
 import ttnn
 from models.demos.inkling2_mini.tt.fused import common as F
 
 TILE = 32
+# the conv's SFPU ops on the rows of the core's columns only (attn_wo_compute.cpp IT)
+WO_ROWS = os.environ.get("INKLING_WO_ROWS", "1") == "1"
 
 
 class AttnWo:
@@ -48,7 +52,7 @@ class AttnWo:
         tb = ttnn.Tile([TILE, TILE]).get_tile_size(b.dtype)
         otb = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
         named = dict(kt=b.Kt, kb=b.KB, nblk=b.nblk, n_banks=b.nb, max_ncq=b.max_ncq, out_tile=otb, cols=self.cols,
-                     res_es=res_es, slots=self.slots)  # fmt: skip
+                     res_es=res_es, slots=self.slots, wo_it=int(WO_ROWS))  # fmt: skip
         r_args, c_args, w_args = {}, {}, {}
         for c, i in b.cores:
             bank, rot, part = b.items[i]

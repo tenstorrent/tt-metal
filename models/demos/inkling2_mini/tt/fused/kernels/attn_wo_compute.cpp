@@ -27,6 +27,9 @@ constexpr uint32_t max_ncq = get_named_compile_time_arg_val("max_ncq");
 constexpr uint32_t has_resid = get_named_compile_time_arg_val("res_es") != 0;
 constexpr uint32_t slots = get_named_compile_time_arg_val("slots");  // used elements = 32 * slots
 constexpr VectorMode vm = slots <= 8 ? VectorMode::None : slots <= 16 ? VectorMode::R : VectorMode::RC;
+// face 0 only (slots <= 8): its first 2 slots rows, IT 4-row groups (2 per 4 rows); the writer reads 32 slots
+// elements. wo_it 0 = the whole face.
+constexpr int IT = get_named_compile_time_arg_val("wo_it") && slots <= 8 ? (2 * slots + 3) / 4 * 2 : 8;
 constexpr uint32_t SLOT = kb * max_ncq;
 constexpr uint32_t DST_TILES = 8;
 
@@ -82,14 +85,14 @@ void kernel_main() {
         load(cb_a, 0, 0);
         load(cb_taps, 0, 1);
         mul_binary_tile_init();
-        mul_binary_tile(0, 1, 1, vm);
+        mul_binary_tile<DST_ACCUM_MODE, IT>(0, 1, 1, vm);
         for (uint32_t k = 1; k < 4; ++k) {
             load(cb_ring, k - 1, 2);
             load(cb_taps, k, 3);
             mul_binary_tile_init();
-            mul_binary_tile(2, 3, 2, vm);
+            mul_binary_tile<DST_ACCUM_MODE, IT>(2, 3, 2, vm);
             add_binary_tile_init();
-            add_binary_tile(1, 2, 1, vm);
+            add_binary_tile<ckernel::DstRoundingMode::Default, DST_ACCUM_MODE, IT>(1, 2, 1, vm);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -109,7 +112,7 @@ void kernel_main() {
         if constexpr (has_resid) {
             load(cb_res, 0, 1);
             add_binary_tile_init();
-            add_binary_tile(0, 1, 0, vm);
+            add_binary_tile<ckernel::DstRoundingMode::Default, DST_ACCUM_MODE, IT>(0, 1, 0, vm);
         }
         tile_regs_commit();
         tile_regs_wait();
