@@ -194,7 +194,8 @@ jobs:
                     | [.name, .conclusion // \"in_progress\",
                        (if .started_at and .completed_at
                         then ((.completed_at | fromdate) - (.started_at | fromdate)) / 60 | floor
-                        else \"\" end)] | @tsv") || LEGS=""
+                        else \"\" end),
+                       ([.steps[]? | select(.conclusion == \"success\")] | length)] | @tsv") || LEGS=""
             if [ -z "$LEGS" ]; then
               REASON="The measurement did not complete (${MEASURE_RESULT}), and no ${ARCH} leg was found in this run."
             else
@@ -203,15 +204,25 @@ jobs:
                 COMPLETE=true
                 echo "::notice::Every ${ARCH} leg succeeded, so the gate compares ${ARCH}. A leg of another architecture did not (${MEASURE_RESULT})."
               else
-                while IFS=$'\t' read -r NAME CONCLUSION MINUTES; do
+                while IFS=$'\t' read -r NAME CONCLUSION MINUTES STEPS; do
                   LINE="${NAME##*/ }: ${CONCLUSION}${MINUTES:+ after ${MINUTES} min}"
                   # The gate does not run in a cancelled run, so a cancelled leg most likely ran out of time.
                   if [ "$CONCLUSION" = cancelled ]; then LINE="${LINE}, most likely at its timeout"; fi
-                  # The suite stops at the first failing test (-x), so a failed leg is a test or the runner.
-                  if [ "$CONCLUSION" = failure ]; then LINE="${LINE}, a failing perf test or a runner fault (see the leg's log)"; fi
+                  # A leg that failed with no step of its own done never reached the suite: the
+                  # runner or the action download failed. That is infrastructure, not performance.
+                  if [ "$CONCLUSION" = failure ] && [ "${STEPS:-0}" -le 1 ]; then
+                    LINE="${LINE}, before any step ran — a runner or action-download fault, not a performance result"
+                    INFRA=true
+                  elif [ "$CONCLUSION" = failure ]; then
+                    # The suite stops at the first failing test (-x), so a failed leg is a test or the runner.
+                    LINE="${LINE}, a failing perf test or a runner fault (see the leg's log)"
+                  fi
                   REASON="${REASON:+${REASON}; }${LINE}"
                 done <<< "$BAD"
                 REASON="A ${ARCH} measuring leg did not complete: ${REASON}."
+                if [ "${INFRA:-false}" = true ]; then
+                  REASON="${REASON} This is an infrastructure fault, not a performance result."
+                fi
               fi
             fi
           fi
