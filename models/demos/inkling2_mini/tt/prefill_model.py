@@ -61,8 +61,10 @@ from models.demos.inkling2_mini.tt.attention_fast import KV_WIDTH, V_WIDTH
 from models.demos.inkling2_mini.tt.fused.common import (
     dense_matrix,
     probe_rms_bf16,
+    rms_fan,
     rms_norm_bf16,
     rms_norm_bf16_cat,
+    rms_norm_bf16_fan,
     rms_norm_f32,
     rms_window,
 )
@@ -312,11 +314,20 @@ class _Gate:
         whose gates share h (q / k / v of a local loop layer) pass it to each call as nh."""
         return rms_norm_bf16(_f32(h), epsilon=EPS, compute_kernel_config=self.ckc)
 
-    def __call__(self, h, m, nh=None, bf16=False):
+    def norm_fan(self, h, n):
+        """The down-matmul inputs of n gates that share h, rms(h) written to each by one norm program."""
+        return rms_norm_bf16_fan(_f32(h), n, epsilon=EPS, compute_kernel_config=self.ckc)
+
+    def __call__(self, h, m, nh=None, bf16=False, cat=None):
         """bf16: opt-in bf16 gate path (Inkling2Prefill.gate_bf16): m may be bf16, bf16 output. Changes output."""
         h = _f32(h)
         m = m if bf16 and m.dtype == ttnn.bfloat16 else _f32(m)
-        if nh is None and rms_window():  # the two norms write the halves of x: no concat
+        if cat is not None:  # x with rms(h) in place (norm_fan): rms(m) into its other half
+            x = cat
+            ttnn.rms_norm(
+                m, output_tensor=x, output_col_tiles=HIDDEN // 32, epsilon=EPS, compute_kernel_config=self.ckc
+            )
+        elif nh is None and rms_window():  # the two norms write the halves of x: no concat
             x = rms_norm_bf16_cat([h, m], epsilon=EPS, compute_kernel_config=self.ckc)
         else:
             nm = rms_norm_bf16(m, epsilon=EPS, compute_kernel_config=self.ckc)
@@ -1288,7 +1299,12 @@ class Inkling2Prefill:
         else:
             xs = lp.attn_res(normed, h)  # 1 or 3 fp32
         if msgs is not None:
-            if len(xs) == 1:  # one input for the 3 gates: its norm once (rms_window: once per gate, no concats)
+            if len(xs) == 1 and rms_fan():  # one input for the 3 gates: one norm writes it to the 3 matmul inputs
+                cats = lp.gates["q"].norm_fan(xs[0], 3)
+                xs = [
+                    lp.gates[g](xs[0], msgs[i], bf16=self.gate_bf16, cat=cats[i]) for i, g in enumerate(("q", "k", "v"))
+                ]
+            elif len(xs) == 1:  # its norm once (rms_window: once per gate, no concats)
                 nh = None if rms_window() else lp.gates["q"].norm(xs[0])
                 xs = [lp.gates[g](xs[0], msgs[i], nh, self.gate_bf16) for i, g in enumerate(("q", "k", "v"))]
             else:

@@ -478,6 +478,7 @@ def probe_rms_bf16(device, ckc):
 
 
 RMS_WINDOW = True  # tests: False runs the norm + concat chain
+RMS_FAN = True  # tests: False runs one norm per gate that shares h
 
 
 def rms_window():
@@ -496,6 +497,25 @@ def rms_norm_bf16_cat(xs, **kw):
     for i, x in enumerate(xs):
         ttnn.rms_norm(x, output_tensor=out, output_col_tiles=i * c // 32, **kw)
     return out
+
+
+def rms_fan():
+    """rms_window() and the norm can store its result to more tensors in the same program (extra_output_tensors)."""
+    return RMS_FAN and rms_window() and "extra_output_tensors" in (ttnn.rms_norm.__doc__ or "")
+
+
+def rms_norm_bf16_fan(x, n, parts=2, **kw):
+    """n tensors [1, 1, T, parts * C] bf16 whose first C columns hold rms_norm_bf16(x): one norm program that
+    writes every tile n times (rms_fan() builds). The other columns are for later rms_norm(output_tensor=...)."""
+    t, c = x.shape[2], x.shape[3]
+    outs = [
+        ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, t, c * parts]), ttnn.bfloat16, ttnn.TILE_LAYOUT, x.device(), ttnn.DRAM_MEMORY_CONFIG
+        )
+        for _ in range(n)
+    ]
+    ttnn.rms_norm(x, output_tensor=outs[0], extra_output_tensors=outs[1:], **kw)
+    return outs
 
 
 def rms_norm_bf16(x, **kw):

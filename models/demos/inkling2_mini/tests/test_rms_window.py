@@ -30,3 +30,8 @@ def test_rms_window(device, t):
         new = F.rms_norm_bf16_cat(xs, epsilon=1e-6, compute_kernel_config=ckc)
         a, b = ttnn.to_torch(ref), ttnn.to_torch(new)
         assert a.shape == b.shape and torch.equal(a, b), float((a - b).abs().max())
+        if F.rms_fan():  # one norm program, three destinations
+            fan = F.rms_norm_bf16_fan(xs[0], 3, epsilon=1e-6, compute_kernel_config=ckc)
+            for o in fan:
+                ttnn.rms_norm(xs[1], output_tensor=o, output_col_tiles=72, epsilon=1e-6, compute_kernel_config=ckc)
+                assert torch.equal(a, ttnn.to_torch(o))
