@@ -172,6 +172,8 @@ class TwoBankIndex:
         source = torch.zeros(sp, tp, query_rows, self.width + 1, dtype=torch.int64)
         source[..., -1] = -1  # 0xFFFFFFFF through int32
         self._source = per_chip(source, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        self._perm = None  # the current chunk's compacting permutation (start_chunk)
+        self._joint = None  # (top-k buffer address, index list) held for the set's other pass-2 layers
 
     def ring_write_metadata(self, metadata) -> list[list[ttnn.Tensor]]:
         """The ring writes of the chunk (slot, start, end) in ``metadata``: one metadata triple per copy, whose start and
@@ -188,11 +190,21 @@ class TwoBankIndex:
         ]
 
     def index_list(self, topk_indices: ttnn.Tensor, chunk_start: ttnn.Tensor, chunk_end: ttnn.Tensor) -> ttnn.Tensor:
-        """This chunk's natural index list ``[1, 1, query_rows, W + top-k]`` uint32: ring ids of each query row's
-        window, then its pass-1 top-k, compacted for rows before position W - 1. ``chunk_start`` is the chunk's start
-        as a ``[1, 1, 1, 1]`` uint32 device tensor (metadata[1]) and ``chunk_end`` its end (metadata[2]); everything
-        derived from them is computed here on device, in float32, exact below 2**24 (floors are taken half a step
-        above an integer quotient). A new tensor.
+        """This chunk's natural index list ``[1, 1, query_rows, W + top-k]`` uint32 for one top-k set: ``start_chunk``
+        then ``joint_list``. A new tensor."""
+        self.start_chunk(chunk_start, chunk_end)
+        return self.joint_list(topk_indices)
+
+    def start_chunk(self, chunk_start: ttnn.Tensor, chunk_end: ttnn.Tensor) -> None:
+        """The chunk's window part of every index list, shared by all pass-2 layers and top-k sets of the chunk (it
+        depends only on the start and end): the window ring ids (written into the gather source) and the compacting
+        permutation. Index lists of the chunk (``joint_list``) are valid only after this call for the chunk.
+
+        An index list is ``[1, 1, query_rows, W + top-k]`` uint32: ring ids of each query row's window, then its
+        pass-1 top-k, compacted for rows before position W - 1. ``chunk_start`` is the chunk's start as a
+        ``[1, 1, 1, 1]`` uint32 device tensor (metadata[1]) and ``chunk_end`` its end (metadata[2]); everything derived
+        from them is computed here on device, in float32, exact below 2**24 (floors are taken half a step above an
+        integer quotient).
 
         Per query row (chip s, shard row i) and column c (window slot j = c):
             sigma_s = start mod chunk; S, off = the boundary chip's block base and the start's offset in it
@@ -227,10 +239,34 @@ class TwoBankIndex:
         ttnn.experimental.slice_write(
             to_rm_u32(ids, W), self._source, start=[0, 0, 0, 0], end=[1, 1, rows, W], step=[1, 1, 1, 1]
         )
+        # Held until the next chunk's call: every joint_list of this chunk gathers through it.
+        if self._perm is not None:
+            ttnn.deallocate(self._perm)
+        self._perm = to_rm_u32(perm, self.width)
+
+    def joint_for(self, topk_indices: ttnn.Tensor, rebuild: bool) -> tuple[ttnn.Tensor, bool]:
+        """The chunk's index list for the top-k set in ``topk_indices`` and whether it was built now: the held one when
+        it was built from this set (same buffer) this chunk, else ``joint_list`` (held, the previous one freed).
+        ``rebuild`` forces a new one; the chunk's first pass-2 layer passes it, as the set's buffer is the same across
+        chunks while its contents change. The loop's top-k sets are distinct live buffers within a chunk."""
+        source = topk_indices.buffer_address()
+        if rebuild or self._joint is None or self._joint[0] != source:
+            if self._joint is not None:
+                ttnn.deallocate(self._joint[1])
+            self._joint = (source, self.joint_list(topk_indices))
+            return self._joint[1], True
+        return self._joint[1], False
+
+    def joint_list(self, topk_indices: ttnn.Tensor) -> ttnn.Tensor:
+        """The chunk's index list for one pass-1 top-k set ``[1, 1, query_rows, top-k]``: ``[window ids | top-k]``
+        compacted (see the module docstring), after ``start_chunk`` for the chunk. A new tensor."""
+        if self._perm is None:
+            raise ValueError("joint_list needs the chunk's window: call start_chunk first")
+        rows = self._source.shape[2]
         ttnn.experimental.slice_write(
-            topk_indices, self._source, start=[0, 0, 0, W], end=[1, 1, rows, self.width], step=[1, 1, 1, 1]
+            topk_indices, self._source, start=[0, 0, 0, self.window], end=[1, 1, rows, self.width], step=[1, 1, 1, 1]
         )
-        return ttnn.gather(self._source, -1, to_rm_u32(perm, self.width))
+        return ttnn.gather(self._source, -1, self._perm)
 
 
 def _scalar_f32(t: ttnn.Tensor) -> ttnn.Tensor:

@@ -2613,9 +2613,16 @@ class ttMLA:
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
             ttnn.deallocate(value)
 
-        joint = index.index_list(indices, metadata[1], metadata[2])
-        # The joint list is a new tensor every call, so a cached plan keyed by its address could be another layer's.
-        self._push.invalidate()
+        # The window part of the index list depends only on the chunk, the joint list and its push plan only on the
+        # chunk and the pass-1 top-k set. The loop's first layer starts the chunk; a layer whose top-k set is not the
+        # one the held joint list was built from builds it (and drops the planner's cached plan and any pass-1 pre-send
+        # record); the set's other layers reuse both (the plan through the planner's address-keyed cache).
+        start = self.layer_idx == self.config.loop_first_layer
+        if start:
+            index.start_chunk(metadata[1], metadata[2])
+        joint, built = index.joint_for(indices, rebuild=start)
+        if built:
+            self._push.invalidate()
         plan = self._sparse_push_plan(joint, None, metadata)
         cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
         storage = kvpe_cache.storage
@@ -2641,7 +2648,6 @@ class ttMLA:
             seq_len_local=seq_len_local,
             compact=True,
         )
-        ttnn.deallocate(joint)
         if host_metadata:
             for t in metadata:
                 ttnn.deallocate(t)
