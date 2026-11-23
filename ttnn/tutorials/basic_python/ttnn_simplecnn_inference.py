@@ -98,7 +98,7 @@ def main():
             logger.info(f"  input_height: {input_NHWC[1]}")
             logger.info(f"  input_width: {input_NHWC[2]}")
             logger.info(f"  conv_config: {conv_config}")
-            logger.info(f"  groups: {0}")
+            logger.info(f"  groups: {1}")
 
         # Perform convolution
         conv1_out = ttnn.conv2d(
@@ -115,7 +115,7 @@ def main():
             input_height=input_NHWC[1],
             input_width=input_NHWC[2],
             conv_config=conv_config,
-            groups=0,
+            groups=1,
         )
 
         # Define max pooling parameters
