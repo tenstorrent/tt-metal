@@ -48,7 +48,8 @@ Read before you start:
 5. **Measure** (only when asked to optimise, or for the final report): run each affected `perf_*.py` with
    `--perf --impl tt` and `--perf --impl hal --tag <unique>`, then compare the two reports with
    `scripts/perf_compare.py <tt-run-dir> <hal-run-dir>` (geomean %, per run type and zone, faster/slower counts).
-6. **Report** in this order: files changed; per function its production source and any deviation; HAL-GAPs;
+6. **Keep working files** (job lists, logs, notes) in `/tmp/bh-port/val/<your-wp>-work/`, never in a shared scratchpad.
+7. **Report** in this order: files changed; per function its production source and any deviation; HAL-GAPs;
    allowed improvements applied with their instruction-count effect; compare_codegen header lines; functional
    verdict lines (hal and tt) per test; for optimisation work the perf table. Never commit; the plan owner merges.
 

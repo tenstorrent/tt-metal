@@ -28,7 +28,7 @@ import sys, glob, hashlib, os, re, subprocess, difflib
 out, thread, match, od, sz = sys.argv[1:]
 def idx(r):
     d = {}
-    for b in glob.glob(f'{r}/tt-llk-build/sources/*/*/build.h'):
+    for b in glob.glob(f'{r}/tt-llk-build/sources/**/build.h', recursive=True):
         v = os.path.dirname(b)
         if os.path.exists(f'{v}/elf/{thread}.elf'):
             d[hashlib.md5(open(b, 'rb').read()).hexdigest()] = v
