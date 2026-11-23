@@ -80,7 +80,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTran
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
-from models.demos.minimax_m3.tt.packed_rows import packed_routed_pad_rows
+from models.demos.minimax_m3.tt.packed_rows import packed_real_row_mask, packed_routed_pad_rows
 from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 NUM_LAYERS = 4
@@ -624,27 +624,68 @@ def test_glm_packed_forward_matches_one_chunk_forwards(variant, config_only, mes
         single.release_sub_device_managers()
 
 
+# A real row with a zero route word: its top-k experts all live on its own chip (8 or 16 of GLM-5.3's 256 here), so
+# well under 1% of rows; more means real rows were dropped.
+MAX_LOCAL_ONLY_REAL_ROWS = 0.01
+
+
 def _capture_packed_counts(monkeypatch):
-    """Wrap the MoE block's FFN to read, after every eager packed MoE call, how many (row, expert) picks its routing
-    planner counted: each chip's slice of the head's per-expert counts (its own experts), summed over the mesh. A list,
-    one total per MoE call. The planner counts only the rows the forward's chunk bounds call real, and dispatch, the
-    routed experts and the combine run its plan, so a routed pad row (or a dropped real row) changes the total."""
+    """Wrap the MoE block's FFN to read its routing after every eager packed MoE call. One entry per MoE call:
+
+    - ``total``: how many (row, expert) picks the routing planner counted, each chip's slice of the head's per-expert
+      counts (its own experts) summed over the mesh. Dispatch, the routed experts and the combine run that plan.
+    - per row (packed_real_row_mask), from the head's route words: one per owned row, naming the other chips the row
+      is dispatched to, mapped back to its SP row's packed order. ``routed_pad_rows``: pad rows with a nonzero word,
+      which must be none. ``unrouted_real_rows``: real rows with a zero word. A real row whose top-k experts all live
+      on its own chip has one too, so these are counted rather than failed one by one; the pick total stays exact."""
     calls = []
     call = TtMoEBlockFfn.__call__
 
     def capture(self, x, *args, chunks=None, forward_chunks=None, **kwargs):
         assert chunks is not None, "this hook reads eager packed forwards only"
         y = call(self, x, *args, chunks=chunks, forward_chunks=forward_chunks, **kwargs)
-        R = tuple(self.mesh.shape)[self.options.sp_axis]
-        block = self._block(int(x.shape[-2]) * R, forward_chunks if forward_chunks is not None else len(chunks))
-        epc = self.dims.num_experts // self.mesh.get_num_devices()
+        shape = tuple(self.mesh.shape)
+        R, C = shape[self.options.sp_axis], shape[1 - self.options.sp_axis]  # SP rows, TP chips a row
+        n_chips = self.mesh.get_num_devices()
+        rows = int(x.shape[-2])  # an SP row's packed rows (every chunk's chunk_local rows back to back)
+        F = forward_chunks if forward_chunks is not None else len(chunks)
+        block = self._block(rows * R, F)
+        assert block.splits == 1, "the routing check reads one head call per MoE call"
+        head = block.last_head
+        epc = self.dims.num_experts // n_chips
         # (device i holds the block's chip chips[i]: the identity with SP on axis 0, transposed on a 4x4 sp1 stage)
-        chips = to_mesh_order(list(range(self.mesh.get_num_devices())), self.mesh.shape, self.options.sp_axis)
+        chips = to_mesh_order(list(range(n_chips)), self.mesh.shape, self.options.sp_axis)
         total = 0
-        for i, d in enumerate(ttnn.get_device_tensors(block.last_head.counts)):
+        for i, d in enumerate(ttnn.get_device_tensors(head.counts)):
             n = chips[i]
             total += int(ttnn.to_torch(d).reshape(-1)[n * epc : (n + 1) * epc].to(torch.int64).sum())
-        calls.append(total)
+
+        # Block chip n = r C + p (SP row r, TP position p) owns, in each of the head's k row blocks, s rows of its SP
+        # row: block b's rows [b s C + p s, b s C + (p + 1) s) (moe_head README, Row blocks).
+        rw = ttnn._ttnn.operations.experimental.moe_block.route_words(n_chips)
+        k = int(head.row_blocks)
+        mask = packed_real_row_mask(chunks, R, rows // F)
+        routed = [[None] * rows for _ in range(R)]
+        for i, d in enumerate(ttnn.get_device_tensors(head.route_words)):
+            r, p = divmod(chips[i], C)
+            words = ttnn.to_torch(d).reshape(-1).to(torch.int64) & 0xFFFFFFFF
+            owned = words.numel() // rw
+            assert owned * C == rows and owned % k == 0, (owned, C, rows, k)
+            s = owned // k
+            # A row's destination chips: the low 16 bits of its one word, or the first of its two words past 16 chips.
+            dests = words[0::rw] & 0xFFFF if rw == 1 else words[0::rw]
+            for o in range(owned):
+                b, t = divmod(o, s)
+                routed[r][b * s * C + p * s + t] = bool(dests[o])
+        cells = [(r, j) for r in range(R) for j in range(rows)]
+        calls.append(
+            {
+                "total": total,
+                "real_rows": sum(int(mask[r][j]) for r, j in cells),
+                "routed_pad_rows": [(r, j) for r, j in cells if routed[r][j] and not mask[r][j]],
+                "unrouted_real_rows": [(r, j) for r, j in cells if mask[r][j] and not routed[r][j]],
+            }
+        )
         return y
 
     monkeypatch.setattr(TtMoEBlockFfn, "__call__", capture)
@@ -716,13 +757,27 @@ def test_glm_packed_pad_rows_skip_the_moe(variant, config_only, mesh_device, dev
             real = sum(c.actual_end - c.actual_start for c in chunks)
             topk = _TestGLM53Config.NUM_EXPERTS_PER_TOKEN
             assert calls, "no MoE layer ran"
-            for layer, total in enumerate(calls):
+            for layer, got in enumerate(calls):
+                total, pad_routed, real_unrouted = got["total"], got["routed_pad_rows"], got["unrouted_real_rows"]
                 logger.info(
                     f"[pad rows] forward {f} MoE call {layer}: planner counted {total} picks, "
-                    f"{real} real rows x {topk} = {real * topk}"
+                    f"{real} real rows x {topk} = {real * topk}; routed pad rows {len(pad_routed)}, "
+                    f"real rows with no remote expert {len(real_unrouted)} of {got['real_rows']}"
                 )
                 if total != real * topk:
                     failures.append(f"forward {f} MoE call {layer}: {total} picks counted, want {real * topk}")
+                if got["real_rows"] != real:
+                    failures.append(f"forward {f} MoE call {layer}: {got['real_rows']} rows masked real, want {real}")
+                if pad_routed:
+                    failures.append(
+                        f"forward {f} MoE call {layer}: {len(pad_routed)} pad rows dispatched "
+                        f"(SP row, row): {pad_routed[:8]}"
+                    )
+                if len(real_unrouted) > MAX_LOCAL_ONLY_REAL_ROWS * real:
+                    failures.append(
+                        f"forward {f} MoE call {layer}: {len(real_unrouted)} of {real} real rows not dispatched "
+                        f"(SP row, row): {real_unrouted[:8]}"
+                    )
         assert not failures, f"[pad rows] {len(failures)} routing error(s):\n" + "\n".join(failures)
         monkeypatch.undo()
 
