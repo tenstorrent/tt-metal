@@ -876,11 +876,12 @@ void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
     if (mesh_device_ && !mesh_device_->is_local(recv_core_.device_coord)) {
         return;
     }
-    // Re-sync bytes_sent_ from connector SHM each iteration (mirrors D2HSocket::barrier).
+    // Re-sync bytes_sent_ and write_ptr_ from connector SHM each iteration (mirrors D2HSocket::barrier).
     auto refresh_connector_write_state = [this]() {
         if (connector_state_) {
             tt_driver_atomics::mfence();
             bytes_sent_ = connector_state_->bytes_sent;
+            write_ptr_ = connector_state_->write_ptr;
         }
     };
     refresh_connector_write_state();
@@ -907,6 +908,8 @@ void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
             }
         }
     }
+    // The next write's free-space check starts from bytes_acked_.
+    bytes_acked_ = bytes_acked_value;
 }
 
 void H2DSocketImpl::write(void* data, uint32_t num_pages) {

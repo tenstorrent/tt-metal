@@ -73,6 +73,13 @@ _MESHES = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="torus-x-4x4-sp1",
     ),
+    pytest.param(
+        (4, 4),
+        torus_xy_device_params(),
+        1,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-xy-4x4-sp1",
+    ),
 ]
 _MESH_ARGNAMES = "mesh_device,device_params,sp_axis"
 _MESH_INDIRECT = ["mesh_device", "device_params"]
@@ -200,6 +207,13 @@ def _assert_cache_windows(
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-sp1",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
         ),
     ],
     indirect=_MESH_INDIRECT,
@@ -582,6 +596,14 @@ def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device, sp_axis):
             1536,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-sp1",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(),
+            1,
+            1536,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],

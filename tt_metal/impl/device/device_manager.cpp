@@ -13,7 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "context/metal_env_accessor.hpp"
 #include "dispatch/dispatch_query_manager.hpp"
-#include "dprint_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_descriptor.hpp"

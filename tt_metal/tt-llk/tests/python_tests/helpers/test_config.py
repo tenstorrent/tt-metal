@@ -1359,7 +1359,8 @@ class TestConfig:
             "run_configs",
             "variant_id",
             "unshifted_variant_id",
-            "runtime_arguments_struct",
+            # runtime_arguments_struct stays in: build.h compiles the RuntimeParams layout in, so two
+            # variants that order their runtimes differently need different ELFs.
             "runtime_format",
             "passed_templates",
             "passed_runtimes",

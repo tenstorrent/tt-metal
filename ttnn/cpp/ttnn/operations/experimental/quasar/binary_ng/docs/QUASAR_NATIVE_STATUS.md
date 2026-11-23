@@ -12,10 +12,40 @@
 *Slide-style status deck. Each `---` is a slide. Keep slides to one screen.*
 ***Chronological: newest week first.***
 
-Two platforms, and the distinction runs through everything below.** *craq-sim* is a fast functional
-simulator (~15 s/run, deterministic) with no transfer latency and no contention — it is where all development
-happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
-less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
+**Two platforms, and the distinction runs through everything below.** *ttsim*, the release that
+`tt_metal/ttsim-version` pins, is a fast functional simulator (deterministic) with no transfer latency and no
+contention. All development has run on it since 2026-11-10. Its cycles count simulator steps, not time. Results
+before 2026-11-10 ran on *craq-sim*, a fork of ttsim with the same limits, unless they name ttsim. The owner
+retired craq-sim on 2026-11-13. The *hardware emulator* is the closest thing to real behaviour we can get; it is
+available but far less accessible, so it is spent deliberately and rarely. **Never mix numbers from the simulator
+and the emulator.**
+
+# ► Week of 2026-11-09 — MX formats run native
+
+## 1. TL;DR
+
+- **The native gate admits MX.** a and b in one MX format with that format or bf16 out, and bf16 a and b with an MX
+  out, for add, subtract, multiply, divide, maximum and minimum, on the FPU and the SFPU kernel. The gate uses one
+  predicate, `is_mx()`, for the eight MX formats.
+- **What stays out.** For MX, the gate refuses a scalar, a subtile broadcast and an activation on a, on b or on the
+  result. It also refuses fp32 at either end, two MX formats, MX beside bf16, and an MX output in another format than
+  the input's. A refused op raises an error or runs on the deprecated Metal 2.0 factory, as before. An outer-dim
+  broadcast stays admitted.
+- **No kernel change.** The unpacker converts MX to Float16_b and the packer converts Float16_b to MX, so an MX
+  program has the 16-bit DST of bf16. The factory adds two guards from the Metal 2.0 factory: no fused TYPECAST when
+  MX is in or out, and Float16_b activation rings for an MX operand.
+- **98 new exact MX cases**, each of which also checks which factory ran the op: the 48 conversion
+  cases (8 MX formats, 3 directions, 2 shapes), the SFPU kernel (multiply), the three MX tile sizes (1,056, 544 and
+  288 B) at five placements, an outer-dim broadcast, two program-cache sequences, the special codes of all 8 MX
+  formats in both directions, and 14 gate refusals: 11 classes, and 3 cases that only the MX rule refuses.
+- **The oracle shares no code with ttnn's codec.** A reference codec, written from the format's spec, decodes each
+  MX operand and encodes each MX result. The kernel's bf16 model (§6.1 of the design doc) computes in between. The
+  compare is exact: 0 differing elements.
+- **Green on ttsim v1.16.0:** 98 of 98 passed.
+- **The planted defects were caught.** At least one defect per check was planted in the gate, the factory or the
+  kernels (11 plants on 7 checks), and each failed the cases that it was predicted to fail.
+
+---
 
 # ► Week of 2026-11-02 — maximum and minimum run native, and the Metal 2.0 factory is deprecated on Quasar
 

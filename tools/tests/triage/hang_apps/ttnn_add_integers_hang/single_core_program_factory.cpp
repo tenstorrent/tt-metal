@@ -112,7 +112,7 @@ ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::c
     // needs none; the writer's one runtime arg is the GlobalSemaphore it bumps, and its ct_marker, rt_marker
     // and unnamed runtime arg are checked by triage, same as in add_2_integers_hang. Kernels without runtime
     // args may be left out.
-    // The framework applies these run args for us; the factory must not call SetProgramRunArgs itself.
+    // The framework applies these run args for us; the factory must not call Program::set_program_run_args itself.
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{

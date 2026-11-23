@@ -9,6 +9,7 @@ Replaces sequential Path.glob() calls which each scan the entire directory (~24m
 For 2303 pattern checks: 2303 × 24ms = 56s with glob, vs 240ms with this approach (230x speedup).
 """
 
+import bisect
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -39,29 +40,44 @@ class FastCacheChecker:
 
     def __init__(self, cache_path: Path):
         self.cache_path = cache_path
-        self._files: set[str] | None = None
+        self._files: list[str] | None = None  # sorted, so a literal prefix is one bisect
         self._timings: dict[str, list[tuple[str, float]]] = defaultdict(list)
         self._iterdir_ms: float = 0.0
 
-    def _ensure_files_loaded(self) -> set[str]:
+    def _ensure_files_loaded(self) -> list[str]:
         if self._files is None:
             start = time.perf_counter()
-            self._files = set(f.name for f in self.cache_path.iterdir())
+            self._files = sorted(f.name for f in self.cache_path.iterdir())
             self._iterdir_ms = (time.perf_counter() - start) * 1000
             logger.debug(f"FastCacheChecker: loaded {len(self._files)} files in {self._iterdir_ms:.1f}ms")
         return self._files
 
     def pattern_exists(self, pattern: str, component: str = "unknown") -> bool:
-        """Check if any file matches glob pattern (e.g., 'layer_0.mla.q_a_proj*.tensorbin')."""
+        """Whether a directory entry's name matches ``pattern``: a name with at most one ``*``
+        (e.g. 'layer_0.mla.q_a_proj*.tensorbin'), matched as ``any(cache_path.glob(pattern))`` matches it. Other
+        glob syntax is rejected rather than matched literally; a pattern without ``*`` must equal a name.
+        """
+        if pattern.count("*") > 1 or any(c in pattern for c in "?[]/"):
+            raise ValueError(f"FastCacheChecker supports one '*' and no other glob syntax, got {pattern!r}")
         files = self._ensure_files_loaded()
 
         start = time.perf_counter()
-        if "*" in pattern:
-            prefix, suffix = pattern.split("*", 1)
+        prefix, star, suffix = pattern.partition("*")
+        if not star:
+            index = bisect.bisect_left(files, pattern)
+            result = index < len(files) and files[index] == pattern
         else:
-            prefix, suffix = pattern, ""
-
-        result = any(f.startswith(prefix) and f.endswith(suffix) for f in files)
+            # Candidates share the literal prefix, so they are contiguous in sorted order. The length bound keeps
+            # prefix and suffix from overlapping, which '*' (zero or more characters) never allows.
+            min_len = len(prefix) + len(suffix)
+            result = False
+            for index in range(bisect.bisect_left(files, prefix), len(files)):
+                name = files[index]
+                if not name.startswith(prefix):
+                    break
+                if len(name) >= min_len and name.endswith(suffix):
+                    result = True
+                    break
         elapsed_ms = (time.perf_counter() - start) * 1000
         self._timings[component].append((pattern, elapsed_ms))
         return result
