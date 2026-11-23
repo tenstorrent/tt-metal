@@ -80,17 +80,24 @@ void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
     const auto& opt_reduced = tensor_args.optional_output_reduced_tensor;
     if (opt_mapping.has_value() || opt_reduced.has_value()) {
         const auto expected_specs = compute_output_specs(operation_attributes, tensor_args);
-        if (opt_mapping.has_value()) {
+        auto check_output = [](const Tensor& t, const TensorSpec& expected, const char* name) {
             TT_FATAL(
-                opt_mapping.value().tensor_spec() == expected_specs[0],
-                "Invalid optional_output_mapping_tensor spec, expected {}",
-                expected_specs[0]);
+                t.logical_shape() == expected.logical_shape() && t.dtype() == expected.data_type() &&
+                    t.layout() == expected.layout() && !t.memory_config().is_sharded(),
+                "Invalid {} spec: got shape {} dtype {} layout {}, expected shape {} dtype {} layout {} (interleaved)",
+                name,
+                t.logical_shape(),
+                t.dtype(),
+                t.layout(),
+                expected.logical_shape(),
+                expected.data_type(),
+                expected.layout());
+        };
+        if (opt_mapping.has_value()) {
+            check_output(opt_mapping.value(), expected_specs[0], "optional_output_mapping_tensor");
         }
         if (opt_reduced.has_value()) {
-            TT_FATAL(
-                opt_reduced.value().tensor_spec() == expected_specs[1],
-                "Invalid optional_output_reduced_tensor spec, expected {}",
-                expected_specs[1]);
+            check_output(opt_reduced.value(), expected_specs[1], "optional_output_reduced_tensor");
         }
     }
 }
