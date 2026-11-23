@@ -19,7 +19,7 @@
 #include "device/device_manager.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
-#include "profiler_state_manager.hpp"
+#include "impl/profiler/profiler_state_manager.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"

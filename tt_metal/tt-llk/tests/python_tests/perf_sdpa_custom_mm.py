@@ -6,7 +6,7 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
-from test_sdpa_custom_mm import SHAPES, _run, _skip_on_simulator
+from test_sdpa_custom_mm import SHAPES, _run
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
@@ -29,10 +29,7 @@ def _shape(shape):
     shape=SHAPES,
     **PERF_MEASUREMENT_AXES,
 )
-def test_perf_sdpa_custom_mm(
-    perf_report, request, shape, run_types, loop_factor, is_perf
-):
-    _skip_on_simulator(request)
+def test_perf_sdpa_custom_mm(perf_report, shape, run_types, loop_factor, is_perf):
     M, K, N = _shape(shape)
     _run(
         M,
@@ -51,9 +48,8 @@ def test_perf_sdpa_custom_mm(
     **PERF_MEASUREMENT_AXES,
 )
 def test_perf_sdpa_custom_mm_read_transposed(
-    perf_report, request, shape, run_types, loop_factor, is_perf
+    perf_report, shape, run_types, loop_factor, is_perf
 ):
-    _skip_on_simulator(request)
     M, K, N = _shape(shape)
     if N // DEFAULT_TILE_C_DIM == 1:
         pytest.skip(
@@ -80,9 +76,8 @@ def test_perf_sdpa_custom_mm_read_transposed(
     **PERF_MEASUREMENT_AXES,
 )
 def test_perf_sdpa_custom_mm_signal_granularity(
-    perf_report, request, shape_sg, run_types, loop_factor, is_perf
+    perf_report, shape_sg, run_types, loop_factor, is_perf
 ):
-    _skip_on_simulator(request)
     (shape, sg) = (
         shape_sg[0]
         if len(shape_sg) == 1 and isinstance(shape_sg[0], tuple)
@@ -112,7 +107,6 @@ def test_perf_sdpa_custom_mm_signal_granularity(
 )
 def test_perf_sdpa_custom_mm_row_stride(
     perf_report,
-    request,
     shape,
     stride_mode,
     read_transposed,
@@ -121,7 +115,6 @@ def test_perf_sdpa_custom_mm_row_stride(
     loop_factor,
     is_perf,
 ):
-    _skip_on_simulator(request)
     M, K, N = shape
     kt = K // DEFAULT_TILE_R_DIM
     row_stride = {"implicit": None, "zero": 0, "tight": kt, "padded": kt + 2}[

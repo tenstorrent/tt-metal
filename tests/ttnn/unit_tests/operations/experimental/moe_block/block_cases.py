@@ -14,6 +14,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.moe import glm_moe_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -104,8 +105,8 @@ def _glm_reference(x, sd):
 
 
 def _k3_weights(chips):
-    """test_kimi_k3_moe's creators and seeds; the routed experts one chip's worth repeated on every chip (896 distinct
-    experts would take the host ~120 GB)."""
+    """K3's weights from init_helpers' creators and seeds (as TtMoe's K3 test made them); the routed experts one chip's
+    worth repeated on every chip (896 distinct experts would take the host ~120 GB)."""
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
         create_gate_weights,
         create_latent_weights,
@@ -255,6 +256,8 @@ class BlockModel:
 MODELS = {
     "glm53": BlockModel("glm53", GLM53Config, _glm_weights, _glm_reference, pcc=0.982, layer=6, x_scale=0.5),
     "kimi_k3": BlockModel("kimi_k3", KimiK3Config, _k3_weights, _k3_reference, pcc=0.965, weka=True),
+    # K3.1: K3's MoE through K3.1's adapter, with K3.1's L1_SMALL_SIZE
+    "kimi_k3_1": BlockModel("kimi_k3_1", KimiK31Config, _k3_weights, _k3_reference, pcc=0.965),
     "dsv41_flash": BlockModel("dsv41_flash", DeepSeekV41FlashConfig, _dsv41_weights, _dsv41_reference, pcc=0.98),
     "minimax_m3": BlockModel("minimax_m3", MiniMaxM3BlockConfig, _m3_weights, _m3_reference, pcc=0.98, layer=3),
 }

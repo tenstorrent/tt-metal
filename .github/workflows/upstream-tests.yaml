@@ -43,6 +43,9 @@ on:
   schedule:
     - cron: "0 12 * * *"
 
+permissions:
+  contents: read
+
 # any reason to bake the test script in as entrypoint??? WHY NOT ONE IMAGE
 # well, that's because of the two builds...
 env:
@@ -219,7 +222,7 @@ jobs:
           ls -la .
       # Do not set up docker buildx because of https://github.com/docker/setup-buildx-action/issues/57
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -237,7 +240,7 @@ jobs:
             > dockerfile/upstream_test_images/Dockerfile-generated
           cat dockerfile/upstream_test_images/Dockerfile-generated
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           file: dockerfile/upstream_test_images/Dockerfile-generated
           platforms: linux/amd64
@@ -269,7 +272,7 @@ jobs:
           tar --zstd -xf ttm_any.tar.zst -C _tt-metal/
           ls -hal _tt-metal/build/tools/scaleout/run_cabling_generator
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -295,7 +298,7 @@ jobs:
           platform="${{ inputs.platform || 'Ubuntu 22.04' }}"
           echo "ubuntu-version=${platform#Ubuntu }" >> "$GITHUB_OUTPUT"
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           file: dockerfile/scaleout_cabling_generator/Dockerfile
           platforms: linux/amd64
@@ -464,6 +467,8 @@ jobs:
       - name: Calculate images to publish
         id: calculate-images
         shell: bash
+        env:
+          REQUEST_INPUT: ${{ inputs.request-force-publish || 'passing-only' }}
         run: |
           set -euo pipefail
 
@@ -501,9 +506,7 @@ jobs:
           # Initialize array for images to push (optimized approach)
           images_to_push_array=()
 
-          # Parse the request-force-publish input
-          # Single-quotes because of the doubles in this string for JSON
-          request_input='${{ inputs.request-force-publish || 'passing-only' }}'
+          request_input="$REQUEST_INPUT"
 
           echo "Processing request: $request_input"
 
@@ -516,7 +519,7 @@ jobs:
 
             # Get image outputs for this hw_topology from config
             local image_outputs
-            image_outputs=($(jq -r ".hw_topologies[\"$hw_topology\"].image_outputs[]" "$config_file"))
+            image_outputs=($(jq -r --arg t "$hw_topology" '.hw_topologies[$t].image_outputs[]' "$config_file"))
 
             # Add each image to our array
             for image_output in "${image_outputs[@]}"; do
@@ -536,7 +539,7 @@ jobs:
 
             # Check each hw_topology's test job result
             for hw_topology in "${hw_topologies[@]}"; do
-              test_job=$(jq -r ".hw_topologies[\"$hw_topology\"].test_job" "$config_file")
+              test_job=$(jq -r --arg t "$hw_topology" '.hw_topologies[$t].test_job' "$config_file")
               test_result="${test_job_results[$test_job]}"
 
               echo "Checking $hw_topology (test job: $test_job, result: $test_result)"
@@ -560,7 +563,7 @@ jobs:
             echo "Mode: Publishing specific hw_topology list"
 
             # Validate it's a JSON array
-            if [[ $(echo ${request_input} | jq 'type') != '"array"' ]]; then
+            if [[ $(jq 'type' <<< "$request_input") != '"array"' ]]; then
               echo "ERROR: When providing specific hw_topology values," \
                 "input must be a JSON array like [\"wh-6u\", \"bh\"]" >&2
               exit 1
@@ -576,13 +579,13 @@ jobs:
               echo "Processing requested hw_topology: $requested_hw_topology"
 
               # Validate requested_hw_topology exists in config
-              if ! jq -e ".hw_topologies[\"$requested_hw_topology\"]" "$config_file" >/dev/null; then
+              if ! jq -e --arg t "$requested_hw_topology" '.hw_topologies[$t]' "$config_file" >/dev/null; then
                 echo "ERROR: Unknown hw_topology '$requested_hw_topology'. Valid values are: $valid_topologies" >&2
                 exit 1
               fi
 
               add_images_for_topology "$requested_hw_topology" "forced specific"
-            done < <(echo ${request_input} | jq -r '.[]')
+            done < <(jq -r '.[]' <<< "$request_input")
           fi
 
           # Convert bash array to JSON (optimized single conversion)

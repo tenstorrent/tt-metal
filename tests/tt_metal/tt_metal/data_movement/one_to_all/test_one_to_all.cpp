@@ -18,6 +18,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include <tt-metalium/math.hpp>
 #include "test_one_to_all.hpp"
 
 namespace tt::tt_metal {
@@ -27,6 +28,9 @@ using namespace tt;
 using namespace test_utils;
 
 namespace unit_tests::dm::core_to_all {
+
+// One row of Blackhole L1: 32 banks of 16 B.
+constexpr uint32_t bh_l1_bank_row_bytes = 512;
 
 // Test config, i.e. test parameters
 struct OneToAllConfig {
@@ -109,8 +113,13 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
 
     // Obtain L1 Address for Storing Data
     L1AddressInfo mst_l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.mst_core_coord);
+    // A loopback multicast runs ~25% slower from some Blackhole start banks, so start at bank 0 rather than wherever
+    // the firmware below it happens to end.
+    uint32_t mst_l1_base_address = mesh_device.arch() == ARCH::BLACKHOLE
+                                       ? tt::align(mst_l1_info.base_address, bh_l1_bank_row_bytes)
+                                       : mst_l1_info.base_address;
     // Check if the L1 size is sufficient for the test configuration
-    if (mst_l1_info.size < bytes_per_transaction) {
+    if (mst_l1_info.size - (mst_l1_base_address - mst_l1_info.base_address) < bytes_per_transaction) {
         log_error(LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
@@ -135,7 +144,6 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
     // Assigns an L1 local address for the master and subordinate cores
     // An offset if needed for the subordinate L1 base address if loopback is enabled,
     // as both blocks must be distinct in that case to avoid overwriting data
-    uint32_t mst_l1_base_address = mst_l1_info.base_address;
     uint32_t sub_l1_base_address =
         test_config.loopback ? mst_l1_base_address : mst_l1_base_address + (bytes_per_transaction);
 

@@ -1264,3 +1264,110 @@ def test_reshape_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert output.layout == layout
     assert output.memory_config().buffer_type == buffer_type
     assert_exact(ttnn.to_torch(input_tensor).reshape(1, 1, 100, 64), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((4,), (1, 1, 2, 2)),
+        ((1, 1, 2, 2), (4,)),
+        ((1, 3, 5, 7), (7, 5, 3)),
+        ((2, 32, 17), (2, 17, 32)),
+        ((1, 256, 1024), (1, 256, 16, 64)),
+        ((16, 33, 1), (176, 3, 1)),
+    ],
+)
+# Row-major reshape ignores pad_value, so it runs once; tile padding runs with each value (a fractional value
+# truncates, an out-of-range one saturates).
+@pytest.mark.parametrize(
+    "layout, pad_value",
+    [(ttnn.ROW_MAJOR_LAYOUT, None)] + [(ttnn.TILE_LAYOUT, value) for value in (None, 0, 255, 1.999, 300.0)],
+)
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_reshape_uint8(device, input_shape, output_shape, layout, memory_config, pad_value):
+    torch_input = full_range_input(input_shape, ttnn.uint8)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.uint8, layout=layout, device=device, memory_config=memory_config
+    )
+    output = ttnn.reshape(input_tensor, output_shape, pad_value=pad_value)
+
+    assert output.dtype == ttnn.uint8
+    assert output.layout == layout
+    assert_exact(torch_input.reshape(output_shape), ttnn.to_torch(output))
+
+    # to_torch drops tile padding, so read the physical tile and check the lanes outside the logical h x w.
+    if layout == ttnn.TILE_LAYOUT and pad_value is not None:
+        h, w = ((1,) + tuple(output_shape))[-2:]
+        padded = output.cpu().to_torch_with_padded_shape()
+        padded = padded.reshape(-1, padded.shape[-2], padded.shape[-1])
+        in_padding = torch.ones(padded.shape[-2:], dtype=torch.bool)
+        in_padding[:h, :w] = False
+        expected = min(int(pad_value), 255)
+        assert (padded[:, in_padding] == expected).all(), f"expected tile padding to equal {expected}"
+
+
+@pytest.mark.parametrize(
+    "strategy, core_grid",
+    [
+        (ttnn.ShardStrategy.HEIGHT, ttnn.CoreGrid(y=4, x=1)),
+        (ttnn.ShardStrategy.WIDTH, ttnn.CoreGrid(y=1, x=3)),
+        (ttnn.ShardStrategy.BLOCK, ttnn.CoreGrid(y=2, x=3)),
+    ],
+)
+@pytest.mark.parametrize("pad_value", [None, 5, 1.999])
+def test_reshape_uint8_sharded(device, strategy, core_grid, pad_value):
+    # The output height 48 is not a tile multiple, so an explicit pad_value takes the sharded fill branch.
+    input_shape, output_shape = (1, 1, 128, 96), (1, 1, 48, 256)
+    torch_input = full_range_input(input_shape, ttnn.uint8)
+    sharded_config = ttnn.create_sharded_memory_config(
+        shape=input_shape,
+        core_grid=core_grid,
+        strategy=strategy,
+        use_height_and_width_as_shard_shape=False,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_config
+    )
+    output = ttnn.reshape(input_tensor, output_shape, pad_value=pad_value)
+
+    assert output.dtype == ttnn.uint8
+    assert output.memory_config().is_sharded()
+    assert_exact(torch_input.reshape(output_shape), ttnn.to_torch(output))
+
+    if pad_value is not None:
+        h, w = output_shape[-2:]
+        interleaved = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
+        padded = interleaved.cpu().to_torch_with_padded_shape()
+        padded = padded.reshape(-1, padded.shape[-2], padded.shape[-1])
+        in_padding = torch.ones(padded.shape[-2:], dtype=torch.bool)
+        in_padding[:h, :w] = False
+        expected = min(int(pad_value), 255)
+        assert (padded[:, in_padding] == expected).all(), f"expected tile padding to equal {expected}"
+
+
+@pytest.mark.parametrize("pad_value", [None, 5])
+def test_reshape_uint8_interleaved_to_sharded(device, pad_value):
+    # Interleaved input, sharded output: the padded output height 48 takes the sharded fill branch.
+    input_shape, output_shape = (1, 1, 128, 96), (1, 1, 48, 256)
+    torch_input = full_range_input(input_shape, ttnn.uint8)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    output_config = ttnn.create_sharded_memory_config(
+        shape=output_shape,
+        core_grid=ttnn.CoreGrid(y=2, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=False,
+    )
+    output = ttnn.reshape(input_tensor, output_shape, memory_config=output_config, pad_value=pad_value)
+
+    assert output.memory_config().is_sharded()
+    assert_exact(torch_input.reshape(output_shape), ttnn.to_torch(output))
+
+    if pad_value is not None:
+        h, w = output_shape[-2:]
+        padded = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG).cpu().to_torch_with_padded_shape()
+        padded = padded.reshape(-1, padded.shape[-2], padded.shape[-1])
+        in_padding = torch.ones(padded.shape[-2:], dtype=torch.bool)
+        in_padding[:h, :w] = False
+        assert (padded[:, in_padding] == pad_value).all(), f"expected tile padding to equal {pad_value}"
