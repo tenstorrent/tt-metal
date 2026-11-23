@@ -62,6 +62,9 @@ HOST_KB = {
 for _key, _kb in list(HOST_KB.items()):
     for _r in (2, 3, 4):
         HOST_KB.setdefault(_key[:-1] + (_key[-1] * _r,), _kb)
+# verify-only programs (one per pass and app, all R tokens): the R-token window and output gate / merge
+HOST_KB[("attn_window_rows", 8)] = 45
+HOST_KB[("attn_out_rows_compute", "attn_out_rows_reader", "attn_out_rows_writer", 8)] = 100
 BUDGET = 0.8
 # per-host fill read shape (bytes, reads in flight per RISC) where it differs from StagedBankLinear's (stage.py FILL):
 # the PRE join is fill-bound (own ~22 us, fill ~27): 2 KB x 2 there, 4K 14.63 -> 14.60 ms (x 3, 4 KB x 2 and a global

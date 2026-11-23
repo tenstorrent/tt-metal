@@ -63,6 +63,9 @@ from models.demos.inkling2_mini.tt.fused.attn_wo import AttnWo
 V_WIDTH = 160  # v(128) + mass column block
 KV_WIDTH = V_WIDTH + HEAD_DIM  # 288: the far call's q and the cache rows as the kernel sees them
 SCALE = HEAD_DIM**-0.5
+# verify (decode_rows): the output gate / merge of all R tokens in one program (fused/attn.py AttnOut.rows) instead of
+# one per token; INKLING_OUT_ROWS=0: one per token
+OUT_ROWS = os.environ.get("INKLING_OUT_ROWS", "1") == "1"
 FAR_CHUNK = 128  # sdpa K chunk of the far cache (measured at 120K: 128 beats 256 and 512)
 # needs the sdpa_decode options of the custom C++ build; a stock build has neither field
 FAR_OPTS = (
@@ -510,6 +513,7 @@ class Inkling2AttentionFast(Inkling2Attention):
         assert self.window is not None, "decode_rows needs the fused window (not the prefetcher projection)"
         act, rows.win_g = self.window.rows(state.x_hist, xs, rows.win)
         bank = getattr(self.w_all, "bank", None)
+        bank = getattr(bank, "st", None) and bank.st.bl or bank  # decode staging proxy: its BankLinear
         x_rows = bank.x_rows if bank is not None else None
         if bank is not None:
             bank.x_rows = 0  # every row of the activation tiles
@@ -604,6 +608,9 @@ class Inkling2AttentionFast(Inkling2Attention):
                     program_config=self.far_rows_cfg,
                     compute_kernel_config=self.hifi4,
                 )
+                if OUT_ROWS:  # every token's output merge in one program
+                    items = [(far, (rows.o_near[t], rows.r[t], positions[t].far_grp[1]), GROUPS * t) for t in range(R)]
+                    return self.out.rows(proj, items, rows.win_g)
                 for t in range(R):
                     self.out(
                         far,
@@ -635,6 +642,8 @@ class Inkling2AttentionFast(Inkling2Attention):
                     pending_pos=positions[0].pos,
                 )
             )
+        if OUT_ROWS:  # every token's output gate in one program
+            return self.out.rows(proj, [(outs[rows.local(t)[0]], rows.local(t)[1]) for t in range(rows.R)], rows.win_g)
         for t in range(rows.R):
             k, lt = rows.local(t)
             self.out(outs[k], proj, row=t, proj_row=rows.win_g * t, batch=lt)

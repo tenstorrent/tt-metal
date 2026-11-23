@@ -147,13 +147,17 @@ class SpecGenerator(Generator):
             m.step()
         d.set_draft_pos(1)
         d.tokens = d.draft(d.anchor)
-        for V in Vs:
+        snap = self._stage_snap()  # every verify pass, eager or captured, starts from this staging state, so the
+        for V in Vs:  # fills its host programs carry (their program variants) are the same in both
             R = V.R
             p_sp = next(q for q in range(p_shared, p_shared + 256) if not self._shared(q, R))
             for p in (p_shared, p_sp):
                 V.set_inputs([0] * R, p)
+                self._stage_begin(snap)
                 self._feed(V)
                 ttnn.copy(V.step()["token"][0], self.vtok[R])
+                self._stage_topup(snap)
+                self._stage_restore(snap)
                 ttnn.synchronize_device(self.device)
                 say("S6 eager verify", R, p, flush=True)
             for n in range(1, R + 1):
@@ -167,7 +171,9 @@ class SpecGenerator(Generator):
             m.step()
         super().capture()
         say("S6 plain captured", flush=True)
+        snap = self._stage_snap(snap)  # the same state after the plain captures (asserted)
         d.capture(compile=False)
+        self._stage_restore(snap)
         say("S6 draft captured", flush=True)
         for V in Vs:
             R = V.R
@@ -180,11 +186,14 @@ class SpecGenerator(Generator):
                     if p is None:
                         continue
                     V.set_positions(p)
+                    self._stage_begin(snap)
                     tid = ttnn.begin_trace_capture(self.device, cq_id=0)
                     self._feed(V)
                     out = V.step()
                     ttnn.copy(out["token"][0], self.vtok[R])
+                    self._stage_topup(snap)
                     ttnn.end_trace_capture(self.device, tid, cq_id=0)
+                    self._stage_restore(snap)
                     self.vtrace[(R, ph, shared)] = (tid, out)
                     say("S6 verify captured", R, ph, shared, flush=True)
                 for n in range(1, R + 1):
@@ -193,8 +202,56 @@ class SpecGenerator(Generator):
                     V.commit(n)
                     self._set_anchor(R, n)
                     ttnn.end_trace_capture(self.device, tid, cq_id=0)
+                    self._stage_restore(snap)
                     self.ctrace[(R, ph, n)] = tid
         ttnn.synchronize_device(self.device)
+
+    # ------------------------------------------------------------ decode staging across traces (tt/mk/overlap.py)
+    # A staged projection reads the prefix of the shared staging tensor that the host programs before it filled, as
+    # recorded at capture. The spec loop replays plain, draft, verify and commit traces in any order, so every trace
+    # starts from the state a plain step ends with (snap: app 0's prefix filled up to a fraction, its fill queued),
+    # and a verify trace whose own tail filled less of app 0 fills the rest at its end (_stage_topup).
+    def _stage_snap(self, like=None):
+        ov = self.overlap
+        if ov is None:
+            return None
+        snap = [(t, t.ptr, t.filled, t.filled_for) for t in ov.tracks], list(ov.queue)
+        if like is not None:  # same app, same queued items; the filled fraction may differ (a runtime arg)
+            assert [(t, p, f) for t, p, _, f in snap[0]] == [(t, p, f) for t, p, _, f in like[0]]
+            assert [id(q[0]) for q in snap[1]] == [id(q[0]) for q in like[1]], "staging queue differs"
+        return snap
+
+    def _stage_begin(self, snap):
+        """Before a verify pass (eager or captured)."""
+        from models.demos.inkling2_mini.tt import verify as VF
+
+        self._stage_restore(snap)
+        if snap is not None and not VF.STAGE:  # raw-bank verify (A/B): its programs carry no fills
+            self.overlap.queue = []
+
+    def _stage_restore(self, snap):
+        if snap is None:
+            return
+        tracks, queue = snap
+        for t, ptr, filled, filled_for in tracks:
+            assert t.ptr == ptr, ("staging: app order out of step after a trace", t.name, t.ptr, ptr)
+            t.filled, t.filled_for = filled, filled_for
+        self.overlap.queue = list(queue)
+
+    def _stage_topup(self, snap):
+        if snap is None:
+            return
+        from models.demos.inkling2_mini.tt import verify as VF
+
+        if not VF.STAGE:
+            return
+        for t, ptr, filled, proxy in snap[0]:
+            if proxy is None:
+                continue
+            # always the same program (a pass that filled enough tops up zero bytes)
+            have = min(filled, t.filled if t.filled_for is proxy else 0.0)
+            prog = ttnn.ProgramDescriptor(kernels=proxy.st.fill_kernels((have, filled)), semaphores=[], cbs=[])
+            ttnn.generic_op(proxy.st.fill_io, prog)
 
     def generate_rows(self, prompt_ids, max_new, on_pass=None, early_stop=None):
         """Greedy tokens through draft + one verify pass + commit per pass; output identical to Generator.generate.

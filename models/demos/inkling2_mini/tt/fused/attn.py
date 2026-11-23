@@ -576,6 +576,51 @@ class AttnOut:
         ttnn.generic_op(io + [self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         return self.act
 
+    def rows(self, proj, items, proj_row):
+        """All T tokens of a multi-token verify pass in one program (attn_out_rows_*.cpp): token t's row as
+        __call__(attn, proj, merge, row=t, far_row, proj_row=proj_row * t, batch) writes it, in token order.
+        items[t]: (attn, batch) for local layers, or (attn, (o_near, r, far_valid), far_row) for global layers (far
+        partial per kv group). Returns self.act."""
+        merge = len(items[0]) == 3
+        nh = N_HEADS // len(self.cores)
+        tensors, rt = [proj], [[proj.buffer_address(), i * nh] for i in range(len(self.cores))]
+        for t, it in enumerate(items):
+            attn = it[0]
+            F.check_row_input(attn)
+            assert t < 16 and attn.dtype == ttnn.bfloat16, (t, attn.dtype)
+            tensors.append(attn)
+            if merge:
+                assert attn.padded_shape[1] == N_KV and tuple(attn.padded_shape)[-2:] == (32, HEAD_DIM + 32)
+                o_near, r, valid = it[1]
+                for x in it[1]:
+                    F.check_row_input(x)
+                    assert x.dtype == ttnn.float32, x.dtype
+                tensors += list(it[1])
+                for i, a in enumerate(rt):
+                    a += [attn.buffer_address(), proj_row * t, o_near.buffer_address(), r.buffer_address(),
+                          valid.buffer_address(), i, it[2]]  # fmt: skip
+            else:
+                assert tuple(attn.padded_shape)[-2:] == (32, HEAD_DIM), attn.padded_shape
+                for a in rt:
+                    a += [attn.buffer_address(), proj_row * t, it[1]]
+        T = len(items)
+        crs = _crs(self.cores)
+        kernels = [
+            _kernel("attn_out_rows_reader.cpp", self.cores,
+                    dict(nh=nh, gate_tile=self.GATE_COL // 32, merge=int(merge), tokens=T, proj_dram=_is_dram(proj)),
+                    rt, ttnn.ReaderConfigDescriptor()),
+            _kernel("attn_out_rows_writer.cpp", self.cores, dict(nh=nh, tokens=T),
+                    [[self.act.buffer_address()] + list(range(T))] * len(self.cores), ttnn.WriterConfigDescriptor()),
+            _kernel("attn_out_rows_compute.cpp", self.cores, dict(merge=int(merge), fr=int(OUT_FR and nh <= 4), tokens=T),
+                    [[]] * len(self.cores), F.compute_config([2, 3, 4], full_sync=True)),
+        ]  # fmt: skip
+        cbs = [_cb(0, ttnn.bfloat16, 2, crs), _cb(1, ttnn.bfloat16, 2, crs), _cb(16, ttnn.bfloat16, 2, crs)]
+        cbs += [_cb(i, ttnn.float32, 2, crs) for i in (2, 3, 4)] if merge else []
+        cbs.append(_stage(24, crs, 5184))
+        io = list({id(x): x for x in tensors}.values())
+        ttnn.generic_op(io + [self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
+        return self.act
+
 
 class AttnWindow:
     """Conv window update straight into the projection input: one data-movement program on the 8 cores of the

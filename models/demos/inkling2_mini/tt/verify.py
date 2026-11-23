@@ -22,6 +22,8 @@ Off by default: only `SpecGenerator.generate_rows` (tt/spec_generator.py) uses i
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -37,6 +39,7 @@ from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVG
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, cache_index
 
 R_MAX = 3
+STAGE = os.environ.get("INKLING_VERIFY_STAGE", "1") == "1"  # w_all of a verify pass reads the staged prefix
 
 
 def _gate_weights(root, L):
@@ -162,10 +165,12 @@ class VerifyStep:
         else:
             normed = F.per_row(dev, R, lambda r: lay.norm(xs_in[r], num_rows=nq, first_row=nq * r))
         xs = [list(n) if triple else n[0] for n in normed]
-        # decode staging (mk/overlap.py) swaps w_all.bank for a proxy that reads the app's weights from L1 where host
-        # programs filled them; no verify program hosts those fills, so the pass projects through the raw bank
+        # with decode staging (mk/overlap.py) w_all reads the app's weights from L1 where this pass's host programs
+        # (R-row residual / gate / out programs, overlap.HOST_KB) filled them, as in the plain step; the spec
+        # generator keeps app 0's staged prefix the same at every trace boundary (spec_generator._stage_*)
         proxy = lay.attn.w_all.bank
-        lay.attn.w_all.bank = proxy.st.bl if hasattr(proxy, "st") else proxy
+        if not STAGE and hasattr(proxy, "st"):  # A/B: project through the raw bank (no staged prefix)
+            lay.attn.w_all.bank = proxy.st.bl
         try:
             act = lay.attn.decode_rows(xs, attn_st, self.positions, self.rows[c], p0=self.p0)
         finally:
