@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Regenerate the cells where the half sync closed block of the matmul pack reads slower than main from matmul_closed_off_rows.csv (the measured rows: ABBA x2 and 3 pure-shift arms per side).
 
 A key (fidelity, A, B, output, rt, ct, kt, throttle, packer L1 accumulate) with a closed-slow row takes the per-tile pack (matmul_pack_closed_off_cells / _PACK_CLOSED_OFF) when the per-tile pack is not slower in

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 # Coverage sweep on perf_math_matmul's kernel: the tile shapes the swept grids never vary (in1 32x16, in0 32x16 with in1 16x32,
 # in0 16x32 or r<16 with in1 32x16, an in1 partial face) and tiny in0 tiles (face height 1 to 16) with in1 transpose, plus a nonzero
 # DEST tile index. Bfp4_b only at face height >= 4. It runs on both arms: main's tree takes the same module.
