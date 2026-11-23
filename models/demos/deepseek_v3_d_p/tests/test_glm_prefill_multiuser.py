@@ -1313,6 +1313,7 @@ class _RandomMTPRuntime(TtPrefillRuntime):
             slot_num=cfg.cache_num_users,
             layer_num=cfg.num_layers + cfg.mtp_levels,
             forward_chunks=cfg.forward_chunks,
+            moe_impl=cfg.moe_impl,  # (the trunk's MoE: a packed forward's padding is one kind for both)
         )
 
 
