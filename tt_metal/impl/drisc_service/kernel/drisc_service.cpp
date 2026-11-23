@@ -296,13 +296,13 @@ FORCE_INLINE void start_transaction(
 FORCE_INLINE void accept_transactions(TransactionRing& txn_ring, BounceArena& bounce_arena, DmaInFlight& dma) {
     while (!txn_ring.full()) {
         if (turn_bytes >= l1::CHUNK_SIZE) {
-            if (drain::running() && drain_turns >= drain::hold_turns) {
+            if (drain::active() && drain_turns >= drain::hold_turns) {
                 request_drain_turn();
                 return;
             }
             uint32_t picked;
             if (!pick_client(picked)) {
-                if (drain::running()) {
+                if (drain::active()) {
                     request_drain_turn();
                 }
                 return;
@@ -598,7 +598,7 @@ int main() {
             ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, PUBLISH_TRID)) {
             drain::hold();
             rearm_after_hold();
-            if (drain::running()) {
+            if (drain::active()) {
                 drain::note_handover(static_cast<uint32_t>(get_timestamp()) - drain_handover_at);
             }
             drain_handover = false;

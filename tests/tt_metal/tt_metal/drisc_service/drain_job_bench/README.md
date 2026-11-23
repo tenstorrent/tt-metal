@@ -105,5 +105,8 @@ checks place it at the profiler's close, not in normal operation:
   exactly one slow probe, its client's control page silent for the whole of it, and on bh-17 it falls in the 50 ms
   window ending 30-43 ms after "workload done", where the close begins.
 
-So the finishing hold keeps the seat for about 9 ms while the host takes the spool's tail. Making it hand the seat
-back between chunks, like any other hold, would remove it.
+So the finishing hold kept the seat for about 9 ms while the host took the spool's tail. The finish now runs over the
+job's turns, at most 100 µs of draining per turn, and the counters cover every hold. On bh-17 the idle probe's worst
+case went from about 9.5 ms to 0.24-0.25 ms, no hold exceeded 22 µs, and full-grid runs at delays 100 and 50 stayed
+lossless. Closing (from "workload done" to the capture summary) took about 30 ms idle, 341 ms at delay 50 and about
+525 ms at delay 100; there is no figure from the single-hold finish on bh-17 to compare.

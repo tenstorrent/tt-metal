@@ -751,7 +751,7 @@ uint32_t gen_shipped;  // bit g: generation g's last frame may still be leaving 
 uint32_t gen_dma_mark[kNGens];
 bool seeded;
 
-enum State : uint32_t { kIdle = 0, kRunning = 1, kFinished = 2 };
+enum State : uint32_t { kIdle = 0, kRunning = 1, kDraining = 2, kFinished = 3 };
 uint32_t state;  // kIdle until start()
 
 // The owner's exit mailbox and the word the KMD writes there when the owner's process ends. Every wait on the host
@@ -973,21 +973,28 @@ static void leave_clean() {
     }
 }
 
-// The spool drains, then the socket barrier holds until the host has acked every byte.
-static void finish() {
-    retire_gen(0);
-    retire_gen(1);
-    while (!pump.drained() && !owner_gone()) {
+// The finish, spread over the job's turns once its stop sweeps are done: each turn moves spool bytes toward the host
+// for at most kDrainStepCycles, and once the spool is empty, looks once for the host's acks of every byte. A turn
+// never waits on the host beyond what leave_clean() does for the bounces in flight, so other clients are served
+// between turns while the host takes the spool's tail.
+constexpr uint32_t kDrainStepCycles = 135000;  // 100 us at the 1.35 GHz AICLK
+
+static void drain_step() {
+    const uint32_t step_start = static_cast<uint32_t>(get_timestamp());
+    while (!pump.drained() && !owner_gone() &&
+           static_cast<uint32_t>(get_timestamp()) - step_start < kDrainStepCycles) {
         beat();
         pump.pass_cold();
         pump.notify();
     }
+    if (!pump.drained() || owner_gone()) {
+        return;
+    }
     pump.notify();
     ctrl()->done = kernel_profiler::kResidentAwaitingAcksWord;
-    volatile tt_l1_ptr uint32_t* acked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender.bytes_acked_base_addr);
-    while (sender.bytes_sent != *acked && !owner_gone()) {
-        beat();
-        invalidate_l1_cache();
+    invalidate_l1_cache();
+    if (sender.bytes_sent != *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender.bytes_acked_base_addr)) {
+        return;
     }
     while (!ncrisc_noc_nonposted_writes_flushed(kEgressNoc)) {
     }
@@ -1036,7 +1043,8 @@ inline void start(volatile uint32_t* exit_mailbox, uint32_t exit_word, volatile 
     state = kRunning;
 }
 
-inline bool running() { return state == kRunning; }
+// Running or draining: the job still takes turns.
+inline bool active() { return state == kRunning || state == kDraining; }
 
 constexpr uint32_t kOneMsCycles = 1350000;  // at the 1.35 GHz AICLK
 
@@ -1049,28 +1057,29 @@ inline void hold() {
     }
     program_command_buffers(cv_src);
     zero_stage_prefixes();
-    if (!seeded) {
-        seed_heads();
-        seeded = true;
-    } else {
-        refresh_first_batch();
-    }
-    for (uint32_t m = 0; m < hold_sweeps; m++) {
-        invalidate_l1_cache();
-        if (ctrl()->stop != 0) {
-            if (stop_sweeps == 2) {
-                finish();
-                break;
-            }
-            stop_sweeps++;
+    if (state == kRunning) {
+        if (!seeded) {
+            seed_heads();
+            seeded = true;
+        } else {
+            refresh_first_batch();
         }
-        sweep();
+        for (uint32_t m = 0; m < hold_sweeps; m++) {
+            invalidate_l1_cache();
+            if (ctrl()->stop != 0) {
+                if (stop_sweeps == 2) {
+                    state = kDraining;
+                    break;
+                }
+                stop_sweeps++;
+            }
+            sweep();
+        }
+    }
+    if (state == kDraining) {
+        drain_step();
     }
     leave_clean();
-    // The finishing hold drains the whole spool to the host; it says nothing about the holds a running job takes.
-    if (state != kRunning) {
-        return;
-    }
     const uint32_t cycles = static_cast<uint32_t>(get_timestamp()) - start;
     volatile abi::DrainJobBlock* job = job_block();
     job->stat_holds = job->stat_holds + 1;
