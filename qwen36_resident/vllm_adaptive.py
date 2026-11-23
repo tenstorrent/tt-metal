@@ -37,12 +37,8 @@ PLAIN_ROWS = 32
 
 
 class _PlainRowsEngine(RowsEngine):
-    """the rows adapter's engine over the plain build. The PP prefill carries the drafter's taps, which its batched pass
-    does not run: prompts prefill one at a time (a taps-off batch pass is a later item)"""
-
-    @property
-    def can_batch(self):
-        return False
+    """the rows adapter's engine over the plain build (the PP prefill's batched pass runs with the drafter's tap writes
+    sent to scratch: plain-geometry prompts need no drafter context)"""
 
 
 class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
@@ -218,15 +214,23 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         W = int(tokens.shape[1]) if tokens.dim() > 1 else 1
         pos = start_pos.reshape(B, -1)
         rows = {i: res_of[i] for i in range(B) if int(pos[i, 0]) >= 0 and res_of.get(i) in self.live}
+        tok0 = tokens.reshape(B, -1)[:, 0].tolist()
         for i, r in rows.items():
-            self._note(r, int(pos[i, 0]), int(tokens.reshape(B, -1)[i, 0]))
-            if page_table is not None:
+            self._note(r, int(pos[i, 0]), tok0[i])
+        # (the spec users' tables here; the plain rows' the rows adapter keeps — every row's 4,096-entry table converted
+        # and compared each call cost several ms a step at 32 users)
+        if page_table is not None and (spec_mode is not None or self.spec_of):
+            changed = False
+            for i, r in rows.items():
+                if r not in self.spec_of and spec_mode is None:
+                    continue
                 tbl = expand_blocks(page_table[i].tolist(), self.pages_per_block)
                 if tbl != self.tables[r]:
-                    self.tables[r] = tbl
-                    self._write_tables()
+                    self.tables[r], changed = tbl, True
                     if r in self.spec_of:
                         self.ae._set_spec_table(self.spec_of[r], tbl)
+            if changed:
+                self._write_tables()
         if spec_mode is None:
             if self.mode == "PLAIN" and self.spec_of:
                 self._to_plain_all()

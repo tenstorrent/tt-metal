@@ -268,6 +268,7 @@ class PPPrefill:
         self.S, self.carry, self.K, self.V = {}, {}, {}, {}
         self.tap_js = sorted({L % self.Ls for L in self.taps})
         self.tap_ring = -(-(tap_window + C) // block)  # blocks of the ring; C // block scratch blocks after it
+        self._taps_scratch = False  # (run_batch on a prefill with taps: the tap writes to the scratch blocks)
         self.tap_cache = {
             j: device_zeros(mesh, [self.tap_ring + C // block, 1, block, HIDDEN], ttnn.bfloat16, DRAM)
             for j in self.tap_js
@@ -982,7 +983,7 @@ class PPPrefill:
         for p in range(n):
             if work[p] is not None:
                 c, n_tokens = work[p]
-                if self.tap_cache:
+                if self.tap_cache and not self._taps_scratch:
                     taps[p] = torch.arange(c * C // blk, (c + 1) * C // blk) % self.tap_ring
                 valid = min(C, n_tokens - c * C)
                 ctrl[p, 0, 0, :2] = torch.tensor([valid, 1])
@@ -1312,13 +1313,20 @@ class PPPrefill:
         size: the same programs on the same data (a real chunk only reads its own prompt's states, KV positions and
         stage inputs; idle chips' chunks exist only in the pass's fill and drain).
 
-        All items at one chunk size (default: pick_chunk of the longest); no taps (a drafter's context is one
-        prompt's); nothing else may use the prefill meanwhile, and no split prompt may be in flight (run_span).
+        All items at one chunk size (default: pick_chunk of the longest); with taps the items get no drafter context
+        (see below); nothing else may use the prefill meanwhile, and no split prompt may be in flight (run_span).
         timings, if given, gets the seconds of the ticks (with the boundary handoffs) and of the history scatter"""
+        # (a prefill with taps: the batch's tap writes go to the scratch blocks past the ring, which keeps the last
+        # single prompt's taps; the items get no drafter context — a plain-geometry destination, DB3 phase 2)
+        self._taps_scratch = bool(self.tap_cache)
+        try:
+            return self._run_batch(items, model, chunk, timings)
+        finally:
+            self._taps_scratch = False
+
+    def _run_batch(self, items, model, chunk=None, timings=None):
         import time
 
-        if self.tap_cache:
-            raise ValueError("run_batch: a prefill with taps (a drafter's context) runs one prompt at a time")
         items = [(torch.as_tensor(ids).reshape(-1), table, slot) for ids, table, slot in items]
         Ts = [int(ids.shape[0]) for ids, _, _ in items]
         if not items or min(Ts) < 1 or max(Ts) > self.max_len:
