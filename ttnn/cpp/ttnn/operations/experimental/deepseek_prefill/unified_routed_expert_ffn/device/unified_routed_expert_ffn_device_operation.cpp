@@ -75,6 +75,10 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         "unified_routed_expert_ffn: core_grid_x must be 9..{}, got {}",
         kCoreGridX,
         op.grid_x);
+    TT_FATAL(
+        op.row_groups == 1 || op.row_groups == 2 || op.row_groups == 4,
+        "unified_routed_expert_ffn: core_row_groups must be 1 or 2, got {}",
+        op.row_groups);
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
     if (op.activation == RoutedExpertActivation::SituGlu || op.activation == RoutedExpertActivation::ClampedSiluGlu) {
@@ -521,7 +525,8 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t l1_end,
     const std::optional<ttnn::Tensor>& x_row_index,
     uint32_t zero_output_row,
-    uint32_t core_grid_x) {
+    uint32_t core_grid_x,
+    uint32_t core_row_groups) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::
         UnifiedRoutedExpertFfnDeviceOperation;
     // Checked here, not in validate_on_program_cache_miss, so it also runs on cache hits: the reader uses
@@ -551,7 +556,8 @@ ttnn::Tensor unified_routed_expert_moe(
                                                                : tt::tt_metal::MathFidelity::LoFi,
             .grid_x = core_grid_x == 0
                           ? ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::kCoreGridX
-                          : core_grid_x},
+                          : core_grid_x,
+            .row_groups = core_row_groups},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

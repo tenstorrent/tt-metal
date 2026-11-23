@@ -975,6 +975,9 @@ void kernel_main() {
     const uint32_t my_gx = get_arg_val<uint32_t>(2);
     const uint32_t grid_x = get_arg_val<uint32_t>(3);
     const uint32_t my_gy = get_arg_val<uint32_t>(4);
+    // row group of this core and the expert -> group schedule (as the reader's; run on UNPACK only)
+    [[maybe_unused]] const uint32_t my_group = get_arg_val<uint32_t>(5);
+    [[maybe_unused]] adaptive_chunk::RowGroupSchedule row_groups;
 
     // Phase 1 (gate)
     constexpr uint32_t g_in0_block_w = get_compile_time_arg_val(0);
@@ -1120,8 +1123,9 @@ void kernel_main() {
             const uint32_t global_expert_id = idx_ptr[local_expert_id];
             // Hybrid dispatch: experts outside this op's band belong to the other
             // routed-expert op and are dropped here exactly like a zero count.
-            count_value =
-                adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
+            count_value = row_groups.take(
+                adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens),
+                my_group);
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
         }));

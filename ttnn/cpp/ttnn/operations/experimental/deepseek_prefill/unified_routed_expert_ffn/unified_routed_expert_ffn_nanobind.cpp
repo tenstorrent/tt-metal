@@ -77,6 +77,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 It must not hold a routed token (it is never written with expert output).
             core_grid_x (int, optional): worker columns, 9 to 11 (0: 11). Rows stay 8. A narrower grid can
                 split N with less padding; the outputs do not change.
+            core_row_groups (int, optional): 1, or 2: the 8 worker rows as two 4-row grids that run
+                different experts, so a tail of an expert rounds up to 4 tile-rows instead of 8.
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -106,7 +108,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("x_row_index") = nb::none(),
         nb::arg("output_row_major") = false,
         nb::arg("zero_output_row") = std::numeric_limits<uint32_t>::max(),
-        nb::arg("core_grid_x") = 0);
+        nb::arg("core_grid_x") = 0,
+        nb::arg("core_row_groups") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

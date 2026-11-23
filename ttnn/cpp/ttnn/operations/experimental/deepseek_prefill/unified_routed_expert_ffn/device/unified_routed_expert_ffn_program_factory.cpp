@@ -212,6 +212,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // simply uses fewer of the reserved tiles.
     uint32_t GRID_X = op.grid_x;  // <= kCoreGridX (validated)
     uint32_t GRID_Y = kCoreGridY;
+    // Row groups (op.row_groups): the rows split into independent grids of RY rows, each running its own experts
+    // (adaptive_chunk::RowGroupSchedule). All M math is per group.
+    const uint32_t ROW_GROUPS = op.row_groups;
+    const uint32_t RY = GRID_Y / ROW_GROUPS;
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
@@ -233,7 +237,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     //
     // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
     // chunks to divisors of per_core_M_max.
-    constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
+    const uint32_t kMaxChunkMTiles = 4 * RY;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
@@ -247,12 +251,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
     // below may shrink per_core_M / in0_block_w_gu (and hence chunk_M_tiles) to
     // fit the device's per-core L1 on large models.
-    const uint32_t per_core_M_max = chunk_M_tiles / GRID_Y;
+    const uint32_t per_core_M_max = chunk_M_tiles / RY;
     TT_FATAL(
-        per_core_M_max * GRID_Y == chunk_M_tiles && per_core_M_max >= 1,
-        "chunk_M_tiles ({}) must be a positive multiple of GRID_Y ({})",
+        per_core_M_max * RY == chunk_M_tiles && per_core_M_max >= 1,
+        "chunk_M_tiles ({}) must be a positive multiple of the group rows ({})",
         chunk_M_tiles,
-        GRID_Y);
+        RY);
     // Effective (CB-sized) per_core_M. The L1 guard below may reduce it to fit L1.
     uint32_t per_core_M = per_core_M_max;
     // M_tiles_full is NOT required to divide chunk_M_tiles. The kernels run
@@ -575,7 +579,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     per_core_M = fit_M;
     in0_block_w_gu = fit_w;
-    chunk_M_tiles = per_core_M * GRID_Y;
+    chunk_M_tiles = per_core_M * RY;
 
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
     // divisor-snap after the short_seq picker and the L1 guard above both
@@ -1047,6 +1051,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             reader_defines.push_back(d);
         }
     }
+    // row-group geometry for adaptive_chunk.hpp (reader and writer; the compute gets its own copy)
+    for (auto* defs : {&reader_defines, &stacked_defines}) {
+        defs->emplace_back("UNIFIED_RE_GRID_Y", std::to_string(RY));
+        defs->emplace_back("UNIFIED_RE_ROW_GROUPS", std::to_string(ROW_GROUPS));
+    }
     // x_row_index accessor: last in the reader's accessor stream (after the optional bias block).
     if (op.x_indexed) {
         tt::tt_metal::TensorAccessorArgs(t.x_row_index->buffer()).append_to(reader_ct_args);
@@ -1227,6 +1236,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     tt::tt_metal::KernelDescriptor::Defines compute_defines;
     compute_defines.emplace_back("PACKER_L1_ACC", "1");
+    compute_defines.emplace_back("UNIFIED_RE_GRID_Y", std::to_string(RY));
+    compute_defines.emplace_back("UNIFIED_RE_ROW_GROUPS", std::to_string(ROW_GROUPS));
     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
     // the SFPU fp32-dest template derive from this, staying in sync with
     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).
@@ -1291,7 +1302,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         const auto& core = cores[idx];
         const uint32_t gy = idx / GRID_X;
         const uint32_t gx = idx % GRID_X;
-        const uint32_t my_mt = gy;
+        const uint32_t grp = gy / RY, ly = gy % RY, gy0 = grp * RY;  // row group, row within it, its first row
+        const uint32_t my_mt = ly;
         const uint32_t my_nt_gu = gx;
         const uint32_t my_nt_d = gx;
 
@@ -1313,8 +1325,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         //   x      sender for row    gy -> column (gy + 1) % GRID_X
         // A core is in both only if gx == (gx % GRID_Y + 1) % GRID_X, which has no
         // solution on the 11x8 grid; the TT_FATAL keeps that honest for other grids.
-        const uint32_t in1_sender_row = gx % GRID_Y;
-        const uint32_t in0_sender_col = (gy + 1) % GRID_X;
+        const uint32_t in1_sender_row = gy0 + gx % RY;
+        const uint32_t in0_sender_col = (ly + 1) % GRID_X;
         TT_FATAL(
             !(gy == in1_sender_row && gx == in0_sender_col),
             "sender placement collision at ({}, {}): a core must not own both the weight and x DRAM read",
@@ -1328,9 +1340,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // but the sender" is not expressible as one rectangle. The non-loopback
         // multicast drops the sender's own copy (it already holds the block), so
         // num_dests stays GRID_Y - 1.
-        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
-        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, GRID_Y - 1});
-        const uint32_t in1_num_receivers = GRID_Y - 1;
+        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, gy0});
+        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, gy0 + RY - 1});
+        const uint32_t in1_num_receivers = RY - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
         const uint32_t in1_mcast_nx_end = last_recv_noc.x;
@@ -1416,6 +1428,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
+        reader_args.push_back(grp);  // row group (after the M-row NoC table)
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.append(reader_args);
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
@@ -1437,6 +1450,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         writer_args.push_back(in1_valid_sem_id);
         writer_args.push_back(mcast_go_sem_id);
         writer_args.push_back(mcast_done_sem_id);
+        writer_args.push_back(grp);  // row group, after the 9 IN1_WRITER_MCAST args
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
         writer_rt_args.append(writer_args);
         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
@@ -1460,7 +1474,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             (valid_n_d + d_out_subblock_w - 1) / d_out_subblock_w,     // 1 down valid N subblocks
             gx,                                                        // 2 tilize-once: own column
             GRID_X,                                                    // 3 tilize-once: M-row width
-            gy,                                                        // 4 tilize-once: own row
+            ly,                                                        // 4 tilize-once: own row (in its group)
+            grp,                                                       // 5 row group
         };
         tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
         compute_rt_args.append(compute_args);

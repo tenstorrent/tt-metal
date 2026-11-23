@@ -258,6 +258,9 @@ void kernel_main() {
     Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(IN1_WM_RT + 8));
     // Gate/up blocks only, for the same cross-chunk reason down_seq exists.
     uint32_t mc_seq = 0;
+    // row group of this core and the expert -> group schedule (as the reader's)
+    const uint32_t my_group = get_arg_val<uint32_t>(IN1_WM_RT + 9);  // after the 9 IN1_WRITER_MCAST args
+    adaptive_chunk::RowGroupSchedule row_groups;
 
     // ======================= per-local-expert loop =======================
     // Drain every local expert's down-matmul output (and, for UP_SPLIT sender
@@ -280,8 +283,9 @@ void kernel_main() {
 #endif
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
-        const uint32_t count_value =
-            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
+        const uint32_t count_value = row_groups.take(
+            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens),
+            my_group);
         // Same capacity clamp the reader and compute apply to the device-produced
         // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
         // the chunk loop in Release too, where ASSERT is a no-op.

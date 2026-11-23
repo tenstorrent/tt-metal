@@ -440,6 +440,9 @@ void kernel_main() {
     Semaphore<> mcast_go_sem(get_arg_val<uint32_t>(MCAST_SEM_RT));
     Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(MCAST_SEM_RT + 1));
     uint32_t mc_seq = 0;
+    // row group of this core (after the M-row NoC table) and the expert -> group schedule
+    const uint32_t my_group = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC);
+    adaptive_chunk::RowGroupSchedule row_groups;
 
     // ======================= per-local-expert loop =======================
     // Per expert we resolve its global id (idx_table[e]), token count
@@ -471,8 +474,9 @@ void kernel_main() {
 #endif
         // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
         // op and are dropped here exactly like a zero count.
-        const uint32_t count_value =
-            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
+        const uint32_t count_value = row_groups.take(
+            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens),
+            my_group);
         // counts[] is device-produced and unvalidated: bound it by the capacity
         // this program was built for (num_chunks_max * chunk_M_max tile-rows)
         // BEFORE deriving anything from it. The clamp is arithmetic so it also

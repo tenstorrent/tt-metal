@@ -77,7 +77,9 @@ ttnn::Tensor unified_routed_expert_moe(
     bool output_row_major = false,
     uint32_t zero_output_row = std::numeric_limits<uint32_t>::max(),
     // Worker columns, 0: kCoreGridX.
-    uint32_t core_grid_x = 0);
+    uint32_t core_grid_x = 0,
+    // Row groups: 1, or 2 (the 8 rows as two 4-row grids running different experts).
+    uint32_t core_row_groups = 1);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

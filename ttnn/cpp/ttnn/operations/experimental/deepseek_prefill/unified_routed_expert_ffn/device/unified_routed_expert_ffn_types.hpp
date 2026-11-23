@@ -138,6 +138,11 @@ struct UnifiedRoutedExpertFfnParams {
     // 36 gate tiles: 4 per column on 9 columns, 44 padded on 11). Part of the key.
     uint32_t grid_x = kCoreGridX;
 
+    // Row groups (1 or 2): the kCoreGridY rows split into independent grids that run different experts, so an
+    // expert's tail rounds up to kCoreGridY / row_groups tile-rows per core row (adaptive_chunk.hpp). Part of the
+    // key.
+    uint32_t row_groups = 1;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -153,7 +158,8 @@ struct UnifiedRoutedExpertFfnParams {
         "stacked_experts",
         "precise",
         "math_fidelity",
-        "grid_x");
+        "grid_x",
+        "row_groups");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -170,7 +176,8 @@ struct UnifiedRoutedExpertFfnParams {
             stacked_experts,
             precise,
             math_fidelity,
-            grid_x);
+            grid_x,
+            row_groups);
     }
 };
 
