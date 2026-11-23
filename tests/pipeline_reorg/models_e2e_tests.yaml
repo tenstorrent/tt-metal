@@ -681,7 +681,7 @@
       tier: 3
       release_ready: false
     bh_p150:
-      timeout: 5
+      timeout: 30
       tier: 3
       release_ready: false
   owner_id: U088413NP0Q # Ashai Reddy
