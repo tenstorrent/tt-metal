@@ -330,7 +330,7 @@ def test_hy4_attention_sublayer_vs_hf(mesh_device, device_params, sp_axis, seq_l
             f"dsa/dsa_topk_indices_layer_{FULL_LAYER}", f"dsa_topk_indices_layer_{FULL_LAYER}", seq_len
         )
     # TtIndexer all-gathers its TP-sharded index head dim, which must be whole tiles per chip: 128 / TP=8 = 16 is
-    # not (#65887 layout item). There the full layer's attention runs as a shared layer fed the golden top-k
+    # not. (The tp32 layout's TtIndexer2D keeps whole heads per chip instead: test_hy4_indexer_2d.py.) There the full layer's attention runs as a shared layer fed the golden top-k
     # (or, without a golden, a sliding causal window), which still checks sparse MLA + sink + gate on that layout.
     # HY4_ATTN_INJECT_TOPK=1 forces the injected path on any layout (isolates the layout from the top-k source).
     device_indexer = (

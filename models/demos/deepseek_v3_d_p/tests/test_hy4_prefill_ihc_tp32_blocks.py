@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Hy4-preview prefill blocks with iHC on the TP32 layout (#65884, #65891), layers 0..N-1 vs the fp32 reference.
 
-The TP32 pieces do not compose in ``TtPrefillTransformer`` yet (``tt/hy4/layout.py`` TP32_BLOCKERS): the DSA indexer has
-no 2D layout (#65887), so a full-indexer layer cannot build ``ttMLA2DTP``, and the embedding is not vocab-sharded
-(#65892). This test runs the blocks themselves on the TP32 placement instead, with those two pieces from the host:
+The TP32 pieces do not compose in ``TtPrefillTransformer`` yet (``tt/hy4/layout.py`` TP32_BLOCKERS): the embedding is
+not vocab-sharded (#65892). This test runs the blocks themselves on the TP32 placement instead, the embedding from the
+host:
 
   * mesh: the physical 8x4 torus with #65884's split: the residual's hidden over axis 1 (4 chips), heads (8 per chip)
     and the prefill sequence over axis 0 (8 chips); residual ``[S / 8, 6144 / 4]`` per chip. NOT RUN YET: it needs
@@ -12,8 +12,10 @@ no 2D layout (#65887), so a full-indexer layer cannot build ``ttMLA2DTP``, and t
   * ``TtPrefillBlock`` per layer, built through ``mla_class(config)`` with ``config.mla_2d_tp`` (``ttMLA2DTP``) and
     ``Hy4TP32Config`` (``TtMlp2D`` dense layer 0 / 2D-TP shared expert, EP32 routed experts), iHC with its hidden on
     axis 1 (``hidden_tp`` 4);
-  * every layer is built as a ``shared`` indexer layer and fed the golden top-k (layer 0's for layer 0, layer 1's for
-    layers 1..3, as Hy4's indexer map reuses them);
+  * the full-indexer layers (0, 1) run ``ttMLA2DTP``'s own ``TtIndexer2D`` (#65887: every indexer weight sharded once
+    over the 32 chips) and write the index-key cache; the shared layers (2, 3) reuse layer 1's device top-k, as Hy4's
+    indexer map does. ``HY4_TP32_GOLDEN_TOPK=1`` instead builds every layer as a shared layer fed the golden top-k
+    (the test before #65887);
   * the embedding is gathered on the host (BF16 table -> fp32), expanded to the 4 streams and uploaded.
 
 Scored per iHC site against the fp32 CPU reference's streams (``HY4_IHC_REF_STREAMS``; see
@@ -39,6 +41,7 @@ from models.demos.deepseek_v3_d_p.reference.hy4_config import Hy4TP32Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.test_hy4_prefill_ihc_layers import MOE_UPDATE_FLOOR, REF_DIR, _SiteRecorder
 from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
+from models.demos.deepseek_v3_d_p.tt.hy4.layout import HY4_L1_SMALL_SIZE
 
 CHECKPOINT = Path(os.environ.get("HY4_HF_MODEL", "/mnt/tt-data/Hy4-Preview"))
 GOLDEN = Path(os.environ.get("PREFILL_TRACE_DIR", "/mnt/tt-data/dwadhwani/hy4-golden/hy4-bf16-longbench-4k-ropeint"))
@@ -52,7 +55,8 @@ CACHE = Path(
 NUM_LAYERS = int(os.environ.get("HY4_TP32_LAYERS", "4"))
 S = 4096
 SP_AXIS, TP_AXIS = 0, 1  # sequence + heads on the 8-chip axis, hidden on the 4-chip axis (#65884)
-L1_SMALL = 1536  # the prefill's
+# The Hy4 prefill's L1_SMALL (Hy4Adapter.l1_small_size); 1536 B (GLM-5.3's) runs out on the full-indexer layers.
+L1_SMALL = int(os.environ.get("HY4_TP32_L1_SMALL", str(HY4_L1_SMALL_SIZE)))
 PCC_FLOOR = 0.99
 
 pytestmark = [
@@ -85,20 +89,39 @@ def _golden_topk(layer: int) -> torch.Tensor:
 @pytest.mark.parametrize("variant", ["hy4_preview"], indirect=True, ids=["hy4"])
 @pytest.mark.timeout(0)
 def test_hy4_prefill_ihc_tp32_blocks(variant, config_only, mesh_device, device_params, monkeypatch):
-    from models.demos.deepseek_v3_d_p.tests.test_hy4_attention import host_indices_to_device
+    from models.demos.deepseek_v3_d_p.tests.test_hy4_attention import (
+        _topk_agreement,
+        device_indices_to_host,
+        golden_tensor,
+        host_indices_to_device,
+    )
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+        full_indexer_rank,
+        indexer_layer_is_reused,
+        normalized_hadamard_matrix,
+    )
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer_2d import TtIndexer2D
     from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import MLA_2D_TP_FLAG, ttMLA2DTP
     from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
     from models.demos.deepseek_v3_d_p.tt.runners import hy4_checkpoint as hc
     from models.demos.deepseek_v3_d_p.tt.runners import weight_categories as wc
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
-    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+    from models.demos.deepseek_v3_d_p.utils.test_utils import (
+        cache_half_pccs,
+        gather_cache_natural,
+        unrotate_cache_layer,
+    )
 
     model_cfg = Hy4TP32Config
     config = copy.deepcopy(config_only)
     setattr(config, MLA_2D_TP_FLAG, True)
-    config.indexer_types = ["shared"] * len(config.indexer_types)  # top-k from the golden (#65887)
+    golden_topk = os.environ.get("HY4_TP32_GOLDEN_TOPK") == "1"
+    if golden_topk:
+        config.indexer_types = ["shared"] * len(config.indexer_types)  # top-k from the golden, no TtIndexer2D
     config.max_seq_len = S
     sp, tp = mesh_device.shape[SP_AXIS], mesh_device.shape[TP_AXIS]
     assert (sp, tp) == (8, 4)
@@ -165,6 +188,17 @@ def test_hy4_prefill_ihc_tp32_blocks(variant, config_only, mesh_device, device_p
         del sd
         assert isinstance(blocks[-1].mla, ttMLA2DTP) and blocks[-1].ihc and blocks[-1].ihc_attn.plan.hidden_tp == 4
 
+    index_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=S,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=SP_AXIS,
+        num_kvpe_cache_layers=max(1, sum(t == "full" for t in config.indexer_types)),
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+        tp_axis=TP_AXIS,
+    )
     rope = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False)
     rope_tensors = rope.get_rope_tensors_indexed(cache_seq_len_global=S, chunk_size_global=S)
 
@@ -187,8 +221,12 @@ def test_hy4_prefill_ihc_tp32_blocks(variant, config_only, mesh_device, device_p
 
     ihc_weights = {i: hy4_ihc.read_layer_ihc(ckpt, i) for i in range(NUM_LAYERS)}
     sites = _SiteRecorder(monkeypatch, mesh_device, SP_AXIS, ihc_weights)
+    indices, topk_agree = None, {}
     for i, block in enumerate(blocks):
-        out, _ = block(
+        full = not indexer_layer_is_reused(config, i)
+        if golden_topk:
+            indices = host_indices_to_device(_golden_topk(i), mesh_device, SP_AXIS)
+        out, _, idx = block(
             x,
             rope_tensors,
             kvpe_cache,
@@ -196,11 +234,36 @@ def test_hy4_prefill_ihc_tp32_blocks(variant, config_only, mesh_device, device_p
             actual_start=0,
             actual_end=S,
             actual_isl=S,
-            indexer_indices=host_indices_to_device(_golden_topk(i), mesh_device, SP_AXIS),
+            indexer_indices=None if full else indices,
+            return_indexer_indices=True,
+            index_kv_cache=index_kv_cache,
         )
+        if full:
+            assert isinstance(block.mla._indexer, TtIndexer2D)
+            indices = idx
+            topk_agree[i] = _topk_agreement(
+                device_indices_to_host(idx, mesh_device, SP_AXIS, S), _golden_topk(i), config.index_topk
+            )
+            logger.info(f"[tp32] layer {i}: device top-k vs golden, rows >= {config.index_topk}: {topk_agree[i]:.4f}")
         ttnn.deallocate(x)
         x = out
+        view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL)
+        logger.info(
+            f"[tp32] after layer {i}: L1_SMALL {view.total_bytes_allocated_per_bank} / {view.total_bytes_per_bank} B "
+            "per bank allocated (CCL program semaphores)"
+        )
     ttnn.synchronize_device(mesh_device)
+    index_k = {}
+    if not golden_topk:  # the index-key cache the full layers wrote, vs the golden (device frame)
+        cache, stripes = gather_cache_natural(index_kv_cache, mesh_device, tp_shard_kv=True, sp_axis=SP_AXIS)
+        hadamard = normalized_hadamard_matrix(config.index_head_dim).float()
+        for i in topk_agree:
+            k = unrotate_cache_layer(cache[full_indexer_rank(config, i)], blockcyclic_positions(stripes, S, S), S)
+            k = ((k.float() @ hadamard).to(torch.bfloat16)).float()
+            gold = golden_tensor(f"dsa/indexer_k_layer_{i}", f"indexer_k_layer_{i}", S).float()
+            rope_pcc, nope_pcc = cache_half_pccs(gold, k, config.index_head_dim // 2, pe_interleave=False)
+            index_k[i] = {"index_k_rope": rope_pcc, "index_k_nope": nope_pcc, "topk_agreement": topk_agree[i]}
+            logger.info(f"[tp32] layer {i}: index-K PCC rope {rope_pcc:.6f} nope {nope_pcc:.6f}")
 
     logger.info(
         "Hy4 prefill blocks with iHC, TP32 layout (8x4 torus: sequence + heads on axis 0, hidden on axis 1), golden top-k:"
@@ -213,7 +276,15 @@ def test_hy4_prefill_ihc_tp32_blocks(variant, config_only, mesh_device, device_p
         )
     if os.environ.get("HY4_IHC_REPORT"):
         Path(os.environ["HY4_IHC_REPORT"]).write_text(
-            json.dumps({"layout": "tp32-blocks", "sites": sites.rows}, indent=1)
+            json.dumps(
+                {
+                    "layout": "tp32-blocks",
+                    "topk": "golden" if golden_topk else "device (TtIndexer2D)",
+                    "indexer": index_k,
+                    "sites": sites.rows,
+                },
+                indent=1,
+            )
         )
     for b in blocks:
         b.release_sub_device_managers()
@@ -228,5 +299,8 @@ def test_hy4_prefill_ihc_tp32_blocks(variant, config_only, mesh_device, device_p
         for k, r in sites.rows.items()
         for m, v in r.items()
         if m != "max_abs_out" and v < floor(k, m)
+    ]
+    bad += [
+        f"L{i} {k}={v:.4f}" for i, r in index_k.items() for k, v in r.items() if k != "topk_agreement" and v < PCC_FLOOR
     ]
     assert not bad, f"below {PCC_FLOOR} (MoE update: {MOE_UPDATE_FLOOR}): {bad}"

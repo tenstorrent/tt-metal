@@ -352,7 +352,10 @@ def test_layouts_and_heads_per_chip():
     assert dev.heads_per_chip(64) == 16  # heads over the 4-chip TP axis, with the hidden
     # TP32 is blocked until the shared stack has its placement; every blocker names its owning issue.
     assert not tp32.runnable
-    assert {issue for _, issue in tp32.blockers} == {"#65885", "#65887", "#65892"}
+    # 2D TP attention (#65885) and its indexer (#65887) landed; the vocab-sharded embedding (#65892) is left.
+    assert {issue for _, issue in tp32.blockers} == {"#65892"}
+    # The layouts differ in the attention / FFN modules too: tp32 builds ttMLA2DTP (+ TtIndexer2D) and TtMlp2D.
+    assert (tp32.mla_2d_tp, tp32.ffn_2d_tp) == (True, True) and (dev.mla_2d_tp, dev.ffn_2d_tp) == (False, False)
 
 
 def test_layout_cache_keys_differ():
@@ -366,7 +369,7 @@ def test_resolve_layout(monkeypatch, expect_error):
     monkeypatch.delenv(hy4_layout.LAYOUT_ENV, raising=False)
     # Unset on a full Galaxy means tp32, which fails fast naming its blockers and the dev override.
     for mesh in ((4, 8, 0), (8, 4, 0)):
-        with expect_error(NotImplementedError, "tp32 .*#65885, #65887, #65892.*glm_prefill_sp8_tp4"):
+        with expect_error(NotImplementedError, "tp32 .*#65892.*glm_prefill_sp8_tp4"):
             hy4_layout.resolve_layout(*mesh, 64)
     assert hy4_layout.resolve_layout(2, 4, 0, 64) is None  # small test mesh, nothing requested
     monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "tp32")
@@ -424,6 +427,8 @@ def test_adapter_identity(adapter):
     # iHC: a pipeline stage hands the next the 4 packed fp32 streams, not one bf16 hidden.
     assert (adapter.pipeline_activation_streams, adapter.pipeline_activation_dtype) == (4, "float32")
     assert adapter.builds_missing_weight_cache is True
+    # The tp32 blocks with their 2D indexers fill more L1_SMALL than GLM-5.3's 1536 B (tt/hy4/layout.py).
+    assert adapter.l1_small_size == hy4_layout.HY4_L1_SMALL_SIZE >= 2048 and adapter.routing_use_l1_small_for_semaphores
     assert adapter.supports_tp_shard_kv and adapter.tp_shard_kv_default
     # Must not inherit GLM-5.3's golden trace or checkpoint.
     assert "GLM" not in adapter.prefill_trace_default and "GLM" not in adapter.test_prefill_trace_default
@@ -445,9 +450,9 @@ def test_adapter_layout_gate_and_cache_key(adapter, tmp_path, monkeypatch, expec
     monkeypatch.setenv("PREFILL_TTNN_CACHE", str(tmp_path))
     monkeypatch.setattr(ttnn, "get_num_devices", lambda: 32)
     monkeypatch.delenv(hy4_layout.LAYOUT_ENV, raising=False)
-    with expect_error(NotImplementedError, "#65885"):
+    with expect_error(NotImplementedError, "#65892"):
         adapter.weight_cache_path((4, 8), sp_axis=0)
-    with expect_error(NotImplementedError, "#65885"):
+    with expect_error(NotImplementedError, "#65892"):
         adapter.weight_cache_path((8, 4), sp_axis=0)
     monkeypatch.setenv(hy4_layout.LAYOUT_ENV, "glm_prefill_sp8_tp4")
     arch = "bh" if is_blackhole() else "wh"

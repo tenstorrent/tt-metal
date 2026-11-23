@@ -281,12 +281,37 @@ def test_adapter_picks_model_config_by_layout(monkeypatch):
     assert adapter.model_config_for(mesh) is Hy4Config
     monkeypatch.delenv(hy4_layout.LAYOUT_ENV)
     assert adapter.model_config_for(SimpleNamespace(sp_factor=2, tp_factor=4, sp_axis=0)) is Hy4Config  # test mesh
-    # tp32 is still blocked by #65885 / #65887 / #65892; with those cleared it runs the 2D-TP config.
+    # tp32 is still blocked by #65892; with that cleared it runs the 2D-TP config.
     tp32 = hy4_layout.HY4_PREFILL_LAYOUTS[hy4_layout.TP32_LAYOUT]
     monkeypatch.setitem(hy4_layout.HY4_PREFILL_LAYOUTS, hy4_layout.TP32_LAYOUT, dataclasses.replace(tp32, blockers=()))
     assert adapter.model_config_for(mesh) is Hy4TP32Config
     monkeypatch.setenv(hy4_layout.LAYOUT_ENV, hy4_layout.TP32_LAYOUT)
     assert adapter.model_config_for(mesh) is Hy4TP32Config
+
+
+def test_adapter_sets_mla_2d_tp_by_layout(monkeypatch):
+    """tp32 builds ttMLA2DTP (with TtIndexer2D on full-indexer layers) through ``config.mla_2d_tp``; the dev layout and
+    test meshes keep ttMLA."""
+    from types import SimpleNamespace
+
+    from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
+    from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import mla_class, ttMLA2DTP
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.hy4_preview import Hy4Adapter
+
+    adapter = Hy4Adapter()
+    mesh = SimpleNamespace(sp_factor=8, tp_factor=4, sp_axis=0)
+    monkeypatch.setenv(hy4_layout.LAYOUT_ENV, hy4_layout.DEV_LAYOUT)
+    cfg = SimpleNamespace()
+    adapter.apply_layout_to_config(cfg, mesh)
+    assert mla_class(cfg) is ttMLA
+    monkeypatch.delenv(hy4_layout.LAYOUT_ENV)
+    cfg = SimpleNamespace()
+    adapter.apply_layout_to_config(cfg, SimpleNamespace(sp_factor=2, tp_factor=4, sp_axis=0))  # test mesh
+    assert mla_class(cfg) is ttMLA
+    tp32 = hy4_layout.HY4_PREFILL_LAYOUTS[hy4_layout.TP32_LAYOUT]
+    monkeypatch.setitem(hy4_layout.HY4_PREFILL_LAYOUTS, hy4_layout.TP32_LAYOUT, dataclasses.replace(tp32, blockers=()))
+    adapter.apply_layout_to_config(cfg, mesh)
+    assert mla_class(cfg) is ttMLA2DTP
 
 
 def test_2d_cache_names_come_from_the_layout():

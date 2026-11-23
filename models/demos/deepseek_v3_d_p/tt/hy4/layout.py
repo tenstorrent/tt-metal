@@ -66,27 +66,24 @@ SC1_CHIPS = 32
 # The 2D-TP shared expert and dense layer-0 FFN (#65890) are ``TtMlp2D`` (tt/moe/tt_mlp_2d.py: hidden over TP, axis 1,
 # intermediate over SP, axis 0), which the prefill block builds when the model config sets FFN_2D_TP; the tp32 layout
 # does (``ffn_2d_tp`` below, ``Hy4TP32Config``).
+# 2D TP attention (#65885) and its DSA indexer (#65887) are ttMLA2DTP + TtIndexer2D (tt/mla/mla_2d.py, indexer_2d.py):
+# every attention and indexer weight sharded once over the 32 chips, residual in and out [S/8, 6144/4]. TtPrefillBlock
+# builds them through mla_class(config) when the config sets mla_2d_tp, which the adapter does for a layout with
+# ``mla_2d_tp`` (tp32, ``Hy4PrefillLayout.apply_to_config``).
 TP32_BLOCKERS = (
-    (
-        "2D TP attention in the prefill block: the projections, output gate and sink are 2D TP in ttMLA2DTP "
-        "(tt/mla/mla_2d.py: every attention weight sharded once over all 32 chips, the hidden over TP (axis 1, 4 "
-        "chips), 8 heads per chip over SP (axis 0, 8 chips), validated against HF as a module) and it takes and "
-        "returns the block's residual [S/sp, hidden/tp] = [S/8, 6144/4], as TtMlp2D (#65890) does; TtPrefillBlock "
-        "builds it through mla_class(config), but nothing sets config.mla_2d_tp for tp32 yet and ttMLA2DTP does not "
-        "build the DSA indexer (#65887), so a full-indexer layer cannot run 2D TP",
-        "#65885",
-    ),
-    (
-        "DSA indexer on the 2D layout: TtIndexer runs on this mesh (128 index dims / TP 4 = 32 per chip, tile "
-        "aligned) but shards its weights over TP only and replicates them over the 8 SP chips (indexer.py)",
-        "#65887",
-    ),
     (
         "vocab-sharded embedding over 32 chips: TtParallelEmbedding shards the hidden dim over the TP axis and "
         "replicates over the other",
         "#65892",
     ),
 )
+
+# L1_SMALL carve-out (B per bank) the Hy4 prefill opens the mesh with: GLM-5.3's 1536 B (glm_5_3.py) is exactly full
+# on the tp32 blocks with the golden top-k (2D attention, 2D FFN, EP32 MoE, iHC: every all_to_all_async_generic /
+# high_bw_all_gather program without external semaphores parks two 16 B semaphores there), and the 2D indexer's full
+# layers (the overlap profile's semaphores, the push prefetch) need 1664 B on layers 0-3
+# (test_hy4_prefill_ihc_tp32_blocks.py logs it per layer).
+HY4_L1_SMALL_SIZE = 2048
 
 TP32_LAYOUT = "tp32"
 DEV_LAYOUT = "glm_prefill_sp8_tp4"
@@ -112,6 +109,9 @@ class Hy4PrefillLayout:
     # Shared expert and dense layer-0 FFN 2D tensor parallel (TtMlp2D: hidden over the TP axis, intermediate over the
     # SP axis, nothing replicated; #65890). The dev layout keeps GLM-5.3's TP-only modules and caches.
     ffn_2d_tp: bool = False
+    # Attention 2D tensor parallel (ttMLA2DTP with its TtIndexer2D: every attention / indexer weight sharded once over
+    # the mesh; #65885, #65887). The dev layout keeps ttMLA / TtIndexer and their caches.
+    mla_2d_tp: bool = False
 
     @property
     def runnable(self) -> bool:
@@ -128,6 +128,12 @@ class Hy4PrefillLayout:
         if num_heads % n:
             raise ValueError(f"{num_heads} heads do not split over {self.heads_over.upper()}={n}")
         return num_heads // n
+
+    def apply_to_config(self, hf_config) -> None:
+        """Set the model-config switches this layout implies (``mla_2d_tp``: TtPrefillBlock builds ttMLA2DTP)."""
+        from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import MLA_2D_TP_FLAG
+
+        setattr(hf_config, MLA_2D_TP_FLAG, self.mla_2d_tp)
 
     def matches(self, sp: int, tp: int, sp_axis: int) -> bool:
         return (self.sp, self.tp, self.sp_axis) == (sp, tp, sp_axis)
@@ -164,6 +170,7 @@ HY4_PREFILL_LAYOUTS = {
             blockers=TP32_BLOCKERS,
             heads_over="sp",
             ffn_2d_tp=True,
+            mla_2d_tp=True,
         ),
         Hy4PrefillLayout(
             name=DEV_LAYOUT,

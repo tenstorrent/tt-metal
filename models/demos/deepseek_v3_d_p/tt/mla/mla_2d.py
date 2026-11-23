@@ -42,6 +42,8 @@ Per-weight sharding (``sp`` = 8, ``tp`` = 4; per-chip shapes for Hy4):
 Collectives (every reduce accumulates in fp32 inside ``matmul_reduce_scatter_prefill``):
 
   in:    all-gather(SP, sequence): x [S, hidden / tp]
+  index: (full layers) TtIndexer2D on x and the q_a row: q all-to-all(SP) + all-to-all(TP), k / weights
+         reduce-scatter(SP) + TP reduce, the full-mesh ring score, local top-k (indexer_2d.py)
   q_a:   x @ Wqa -> reduce-scatter(TP, N) -> all-gather(TP) -> all-gather(SP) -> q_a_layernorm on the full row
   q_b:   q_lat[:, K_t] @ Wqb -> reduce-scatter(TP, N): this chip's 2 heads, every token -> wkv_b1 (2 heads)
          -> all-to-all(SP) + all-to-all(TP), heads -> sequence: [64 heads, S / 32] -> RoPE -> the sparse core
@@ -64,8 +66,11 @@ context-parallel stripe-and-LSE-merge core of #65884 (each chip attends over its
 LSE) is NOT used here; if it lands (#65886 / #65887) the sink must move to the merge,
 ``out = merged * sigmoid(lse - sink)`` (``tests/test_hy4_attention_math.py::test_lse_fold_is_the_same_function``).
 
-Not here: the DSA indexer on this layout (#65887; TtIndexer tiles at TP 4 but shards over TP only, replicated over
-SP); this module takes the top-k as ``indexer_indices``.
+DSA indexer (#65887): a ``full`` indexer layer builds ``TtIndexer2D`` (indexer_2d.py, ``INDEXER_CLASS``), its weights
+sharded once over the mesh too (wq_b one whole index head per chip, wk / weights_proj K over TP x SP). It runs between
+q_a and q_b on the same gathered x and full q_a row and hands ttMLA's sparse core its top-k as ``[S / 32, 2048]`` per
+chip, the q layout above; a ``shared`` layer takes the last full layer's top-k as ``indexer_indices``. With the
+config's overlap profile the local top-k runs beside the KV-prefix gather, as in ttMLA.
 
 Cache files: ``layer_{i}.mla2d_{layout}.*`` with the layout in the name (``cache_name``: mesh, SP / TP sizes and axes,
 e.g. ``mla2d_8x4_sp8ax0_tp4ax1`` on SC1) and a stamp ``layer_{i}.mla2d_{layout}.layout.stamp`` next to them holding the
@@ -85,6 +90,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer, indexer_layer_is_reused, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer_2d import TtIndexer2D
 from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache
 from models.demos.deepseek_v3_d_p.utils.sharded_cache import (
@@ -124,6 +131,8 @@ def mla_class(config):
 
 
 class ttMLA2DTP(ttMLA):
+    # A full-indexer layer's DSA indexer: every indexer weight sharded once over the mesh too (indexer_2d.py, #65887).
+    INDEXER_CLASS = TtIndexer2D
     CACHE_PREFIX = "mla2d"  # + the layout tag (cache_name); never ttMLA's TP-only shards
     CACHE_FORMAT = 3  # bump when the shards change without an axis moving (module docstring)
     # RoPE pairing of the q_b / kv_a rope rows as cached: the checkpoint's own interleaved (2i, 2i+1) pairs, which the
@@ -272,7 +281,6 @@ class ttMLA2DTP(ttMLA):
         """``cache_name_prefix`` is ttMLA's ``.../layer_{i}.mla``; the 2D shards live under
         ``layer_{i}.{cache_name(...)}``, so the mesh layout is required. Complete means every shard plus a matching
         layout stamp."""
-        from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
         if mesh_shape is None or sp_axis is None or tp_axis is None:
@@ -289,7 +297,9 @@ class ttMLA2DTP(ttMLA):
                 return False
         if not ttMLA2DTP.cache_guard(cache_path, layer_idx, mesh_shape, sp_axis, tp_axis).stamped():
             return False
-        return not has_indexer or TtIndexer.check_cache_complete(cache_path, cache_name_prefix)
+        return not has_indexer or TtIndexer2D.check_cache_complete(
+            cache_path, cache_name_prefix, mesh_shape=mesh_shape, sp_axis=sp_axis, tp_axis=tp_axis
+        )
 
     @staticmethod
     def _convert_and_cache_weights(
@@ -373,21 +383,36 @@ class ttMLA2DTP(ttMLA):
         has_indexer: bool | None = None,
         use_fused_rmsnorm: bool = False,
     ):
-        """The 2D shards only: the DSA indexer has no 2D layout yet (#65887)."""
+        """The 2D shards, plus the 2D indexer's on a ``full`` indexer layer (a ``shared`` one owns none)."""
         ttMLA2DTP._convert_and_cache_weights(
             state_dict, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path, device=None, kv_only=kv_only
         )
+        if resolve_has_indexer(config, state_dict=state_dict, explicit=has_indexer) and not indexer_layer_is_reused(
+            config, layer_idx
+        ):
+            if not TtIndexer.has_host_weights(state_dict):
+                raise ValueError(
+                    f"2D TP MLA cache build for layer {layer_idx}: a full indexer layer, but the state dict lacks the "
+                    f"indexer weights {TtIndexer.WEIGHT_NAMES}"
+                )
+            TtIndexer2D.build_ttnn_cache(
+                TtIndexer.extract_host_weights(state_dict),
+                cache_path,
+                mesh_device,
+                config,
+                layer_idx,
+                sp_axis,
+                tp_axis,
+                kv_only=kv_only,
+            )
 
     # ------------------------------------------------------------------------------------------- device
     def __init__(self, config, state_dict, mesh_device, *args, **kwargs):
         super().__init__(config, state_dict, mesh_device, *args, **kwargs)
         if not self._has_indexer:
             raise NotImplementedError("2D TP MLA runs the sparse (DSA) core only")
-        if not isinstance(self._indexer, type(None)) and type(self._indexer).__name__ == "TtIndexer":
-            raise NotImplementedError(
-                f"layer {self.layer_idx}: the DSA indexer has no 2D-TP layout yet (#65887); build the layer as a "
-                "shared layer and pass its top-k as indexer_indices"
-            )
+        # A full-indexer layer builds TtIndexer2D (INDEXER_CLASS); a shared one a ReuseIndexer.
+        assert self._indexer_reuse or isinstance(self._indexer, TtIndexer2D), type(self._indexer).__name__
         # The K-over-both-axes shard loads as [1, 1, K, 576]; matmul_reduce_scatter_prefill takes a rank-2 weight.
         kv_a = self.kv_a_proj_with_mqa_weight
         self.kv_a_proj_with_mqa_weight = ttnn.reshape(kv_a, (kv_a.shape[-2], kv_a.shape[-1]))
@@ -413,6 +438,9 @@ class ttMLA2DTP(ttMLA):
             f"MLA layer {self.layer_idx}: 2D TP, residual [S/{self.sp_factor}, hidden/{self.tp_factor}] (SP axis "
             f"{self.sp_axis}, TP axis {self.tp_axis}), {self.heads_per_chip} heads per chip in the per-head ops"
         )
+
+    def _indexer_extra_kwargs(self) -> dict:
+        return {"kv_only": self.kv_only}
 
     def _axis_topology(self, axis: int):
         return self.sp_ccl_topology if axis == self.sp_axis else self.tp_ccl_topology
@@ -552,8 +580,10 @@ class ttMLA2DTP(ttMLA):
         force_kv_only: bool = False,
     ):
         """``hidden_states``: the residual layout, ``[1, 1, S / sp, hidden / tp]`` (the prefill block's, ttMLA's and
-        TtMlp2D's). Returns the same layout. ``indexer_indices``: this chunk's top-k as ttMLA takes it,
-        ``[1, 1, S / (sp * tp), k]`` per chip."""
+        TtMlp2D's). Returns the same layout. ``indexer_indices``: another layer's top-k for a shared layer, as ttMLA
+        takes it, ``[1, 1, S / (sp * tp), k]`` per chip; None on a full layer runs its TtIndexer2D, whose top-k
+        ``return_indexer_indices`` returns in the same layout. ``index_kv_cache``: the context-parallel index-key cache
+        (full layers write it, kv_only included)."""
         if kvpe_cache.geometry != self.kv_cache_geometry:
             raise ValueError(f"MLA configured for KV geometry {self.kv_cache_geometry}, got {kvpe_cache.geometry}")
         assert kvpe_cache.format == self.sparse_kv_cache_format
@@ -567,6 +597,20 @@ class ttMLA2DTP(ttMLA):
         hidden_states = self._all_gather(hidden_states, self.sp_axis, "x", dim=2)  # [S, hidden / tp]
 
         if self.kv_only or force_kv_only:
+            # A full-indexer layer still writes its index keys (decode reads them), as ttMLA._forward_kv_only does.
+            if not self._indexer_reuse and indexer_indices is None:
+                assert index_kv_cache is not None, "sparse kv_only requires the caller-owned index key cache"
+                self._indexer.write_k(
+                    hidden_states,
+                    seq_len_local,
+                    kv_actual_isl,
+                    rope_tensors=rope_tensors,
+                    cache_user_id=cache_user_id,
+                    cache_layer_idx=cache_layer_idx,
+                    index_kbuf=index_kv_cache,
+                    actual_end=actual_end,
+                    metadata=metadata,
+                )
             tt_kvpe, tt_kv_nope, _ = self._kv_stem(
                 hidden_states, rope_tensors, kv_actual_isl, seq_len_local, False, kvpe_cache, metadata=metadata
             )
@@ -586,12 +630,32 @@ class ttMLA2DTP(ttMLA):
                 ttnn.deallocate(value)
             return None
 
-        if indexer_indices is None:
-            raise NotImplementedError("2D TP MLA takes its top-k as indexer_indices (indexer layout: #65887)")
-        if self.tt_ccl.sparse_kv_push_planner is not None and self.layer_idx == self._first_layer_idx:
+        # New indices in the shared buffer drop the cached push plan (ttMLA.forward): this layer's indexer rewrites
+        # them, and a pipeline stage's first layer receives them from the previous stage.
+        if self.tt_ccl.sparse_kv_push_planner is not None and (
+            indexer_indices is None or self.layer_idx == self._first_layer_idx
+        ):
             self.tt_ccl.sparse_kv_push_planner.invalidate()
 
         qr = self._q_a_latent_2d(hidden_states)
+        # The DSA indexer (a full layer, not fed another layer's top-k): q from the whole q_a row, k / weights from the
+        # gathered residual. It must run before _q_stem_2d, which frees qr. With an overlap profile only the scoring
+        # runs here; the local top-k runs beside the KV-prefix gather (ttMLA._sparse_chunked_attn_overlapped).
+        selection_state, indices = None, indexer_indices
+        if indices is None:
+            indexer_kwargs = dict(
+                start_pos=kv_actual_isl,
+                rope_tensors=rope_tensors,
+                cache_user_id=cache_user_id,
+                cache_layer_idx=cache_layer_idx,
+                index_kv_cache=index_kv_cache,
+                actual_end=actual_end,
+                metadata=metadata,
+            )
+            if self._sparse_mla_overlap is not None:
+                selection_state = self._indexer.score(hidden_states, qr, seq_len_local, **indexer_kwargs)
+            else:
+                indices = self._indexer.forward(hidden_states, qr, seq_len_local, **indexer_kwargs)
         tt_q = self._q_stem_2d(qr, rope_tensors, kv_actual_isl, seq_len_local, metadata)
         tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
             hidden_states,
@@ -602,11 +666,11 @@ class ttMLA2DTP(ttMLA):
             kvpe_cache,
             metadata=metadata,
         )
-        attn_out = self._attention(
+        attention_kwargs = dict(
             tt_q=tt_q,
             tt_kvpe=tt_kvpe,
             tt_kv_nope=tt_kv_nope,
-            indices=indexer_indices,
+            indices=indices,
             kvpe_cache=kvpe_cache,
             cache_layer_idx=cache_layer_idx,
             cache_user_id=cache_user_id,
@@ -614,8 +678,14 @@ class ttMLA2DTP(ttMLA):
             kv_actual_isl=kv_actual_isl,
             actual_end=actual_end,
             metadata=metadata,
-            injected=True,
+            injected=indexer_indices is not None,
         )
+        if selection_state is not None:
+            attn_out, indices = self._sparse_chunked_attn_overlapped(
+                selection_state=selection_state, **attention_kwargs
+            )
+        else:
+            attn_out = self._attention(**attention_kwargs)
         out = self._o_proj_epilogue(attn_out, seq_len_local, hidden_states=hidden_states)
         ttnn.deallocate(attn_out)
         ttnn.tracy_message("`TT_SIGNPOST: MLA_END`")
@@ -623,5 +693,5 @@ class ttMLA2DTP(ttMLA):
         if return_kv_intermediates:
             result += (kv_intermediates,)
         if return_indexer_indices:
-            result += (indexer_indices,)
+            result += (indices,)
         return result[0] if len(result) == 1 else result
