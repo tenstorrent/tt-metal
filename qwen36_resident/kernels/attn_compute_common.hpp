@@ -289,20 +289,26 @@ FORCE_INLINE void norm_rope(
 constexpr uint32_t kBatch = 4;
 static_assert(Dt % kBatch == 0, "tail tiles go in DST batches");
 
+// (the tail's k tiles come in cb_tail8 (bf8), its v tiles in cb_tail8v (V's format: bf8, or bfp4 with S0): each
+// unpack is reconfigured to its CB's format, and the pack to cb_tailk / cb_tailv's)
 FORCE_INLINE void update_tail(uint32_t sel = 0) {
-    cb_wait_front(cb_tail8, 2 * Dt);
+    cb_wait_front(cb_tail8, Dt);
+    cb_wait_front(cb_tail8v, Dt);
     cb_wait_front(cb_knew, Dt);
     cb_wait_front(cb_vraw, Dt);
     cb_reserve_back(cb_tailk, Dt);
     cb_reserve_back(cb_tailv, Dt);
-    pack_reconfig_data_format(cb_tailk);
     for (uint32_t i0 = 0; i0 < 2 * Dt; i0 += kBatch) {
         const uint32_t row_cb = i0 < Dt ? cb_knew : cb_vraw;
+        const uint32_t src = i0 < Dt ? cb_tail8 : cb_tail8v;
+        if (i0 % Dt == 0) {
+            pack_reconfig_data_format(i0 < Dt ? cb_tailk : cb_tailv);
+        }
         tile_regs_acquire();
-        reconfig_data_format(cb_tail8, cb_rowsel);
-        mul_init(cb_tail8, cb_rowsel, false);
+        reconfig_data_format(src, cb_rowsel);
+        mul_init(src, cb_rowsel, false);
         for (uint32_t i = 0; i < kBatch; i++) {
-            mul_tiles(cb_tail8, cb_rowsel, i0 + i, sel + 1, i);
+            mul_tiles(src, cb_rowsel, (i0 + i) % Dt, sel + 1, i);
         }
         reconfig_data_format(cb_rowsel, row_cb);
         mul_bcast_rows_init(cb_rowsel, row_cb);
@@ -322,7 +328,8 @@ FORCE_INLINE void update_tail(uint32_t sel = 0) {
     }
     cb_push_back(cb_tailk, Dt);
     cb_push_back(cb_tailv, Dt);
-    cb_pop_front(cb_tail8, 2 * Dt);
+    cb_pop_front(cb_tail8, Dt);
+    cb_pop_front(cb_tail8v, Dt);
     cb_pop_front(cb_knew, Dt);
     cb_pop_front(cb_vraw, Dt);
 }
@@ -333,21 +340,23 @@ FORCE_INLINE void update_tail(uint32_t sel = 0) {
 // (verify rows: the user's placement / keep tiles from sel0 of cb_rowsel)
 FORCE_INLINE void update_tail_rows(uint32_t n_tail, uint32_t sel0 = 0) {
     const uint32_t tp = tail_pages(n_tail);
-    cb_wait_front(cb_tail8, 2 * tp * Dt);
+    cb_wait_front(cb_tail8, tp * Dt);
+    cb_wait_front(cb_tail8v, tp * Dt);
     cb_wait_front(cb_knew, Dt);
     cb_wait_front(cb_vraw, Dt);
     cb_reserve_back(cb_tailk, tp * Dt);
     cb_reserve_back(cb_tailv, tp * Dt);
-    pack_reconfig_data_format(cb_tailk);
     for (uint32_t kv = 0; kv < 2; kv++) {
         const uint32_t row_cb = kv == 0 ? cb_knew : cb_vraw;
+        const uint32_t src = kv == 0 ? cb_tail8 : cb_tail8v;
+        pack_reconfig_data_format(kv == 0 ? cb_tailk : cb_tailv);
         for (uint32_t j = 0; j < n_tail; j++) {
             for (uint32_t d0 = 0; d0 < Dt; d0 += kBatch) {
                 tile_regs_acquire();
-                reconfig_data_format(cb_tail8, cb_rowsel);
-                mul_init(cb_tail8, cb_rowsel, false);
+                reconfig_data_format(src, cb_rowsel);
+                mul_init(src, cb_rowsel, false);
                 for (uint32_t i = 0; i < kBatch; i++) {
-                    mul_tiles(cb_tail8, cb_rowsel, (kv * n_tail + j) * Dt + d0 + i, sel0 + 2 * j + 1, i);
+                    mul_tiles(src, cb_rowsel, j * Dt + d0 + i, sel0 + 2 * j + 1, i);
                 }
                 reconfig_data_format(row_cb, cb_rowsel);
                 matmul_init(cb_rowsel, row_cb, 0);
@@ -365,7 +374,8 @@ FORCE_INLINE void update_tail_rows(uint32_t n_tail, uint32_t sel0 = 0) {
     }
     cb_push_back(cb_tailk, tp * Dt);
     cb_push_back(cb_tailv, tp * Dt);
-    cb_pop_front(cb_tail8, 2 * tp * Dt);
+    cb_pop_front(cb_tail8, tp * Dt);
+    cb_pop_front(cb_tail8v, tp * Dt);
     cb_pop_front(cb_knew, Dt);
     cb_pop_front(cb_vraw, Dt);
 }
@@ -374,18 +384,20 @@ FORCE_INLINE void update_tail_rows(uint32_t n_tail, uint32_t sel0 = 0) {
 // (cb_knew / cb_vraw, user u in row u; waited for by the caller, kept for the layer's other users): tail (x) keep +
 // P_u @ new, P_u / keep at tiles sel / sel + 1 of cb_rowsel (exact: 0/1 products)
 FORCE_INLINE void update_tail_user(uint32_t sel) {
-    cb_wait_front(cb_tail8, 2 * Dt);
+    cb_wait_front(cb_tail8, Dt);
+    cb_wait_front(cb_tail8v, Dt);
     cb_reserve_back(cb_tailk, Dt);
     cb_reserve_back(cb_tailv, Dt);
-    pack_reconfig_data_format(cb_tailk);
     for (uint32_t kv = 0; kv < 2; kv++) {
         const uint32_t row_cb = kv == 0 ? cb_knew : cb_vraw;
+        const uint32_t src = kv == 0 ? cb_tail8 : cb_tail8v;
+        pack_reconfig_data_format(kv == 0 ? cb_tailk : cb_tailv);
         for (uint32_t d0 = 0; d0 < Dt; d0 += kBatch) {
             tile_regs_acquire();
-            reconfig_data_format(cb_tail8, cb_rowsel);
-            mul_init(cb_tail8, cb_rowsel, false);
+            reconfig_data_format(src, cb_rowsel);
+            mul_init(src, cb_rowsel, false);
             for (uint32_t i = 0; i < kBatch; i++) {
-                mul_tiles(cb_tail8, cb_rowsel, kv * Dt + d0 + i, sel + 1, i);
+                mul_tiles(src, cb_rowsel, d0 + i, sel + 1, i);
             }
             reconfig_data_format(row_cb, cb_rowsel);
             matmul_init(cb_rowsel, row_cb, 0);
@@ -402,25 +414,32 @@ FORCE_INLINE void update_tail_user(uint32_t sel) {
     }
     cb_push_back(cb_tailk, Dt);
     cb_push_back(cb_tailv, Dt);
-    cb_pop_front(cb_tail8, 2 * Dt);
+    cb_pop_front(cb_tail8, Dt);
+    cb_pop_front(cb_tail8v, Dt);
 }
 
-// the updated tail tiles (n_tail of them) as bf8 for the DRAM write-back, k of each tile then v; pops them
+// the updated tail tiles (n_tail of them) for the DRAM write-back: k as bf8 into cb_flush, v in V's format (bf8, or
+// bfp4 with S0) into cb_flushv; pops them
 FORCE_INLINE void pack_tail_bf8(uint32_t n_tail = 1) {
     const uint32_t tp = tail_pages(n_tail);  // (verify rows: a fixed 2 tiles' pages)
-    cb_reserve_back(cb_flush, 2 * tp * Dt);
-    reconfig_data_format(cb_tailk, cb_tailk);
-    pack_reconfig_data_format(cb_flush);
-    copy_init(cb_tailk);
-    for (uint32_t i = 0; i < 2 * n_tail * Dt; i++) {
-        tile_regs_acquire();
-        copy_tile(i < n_tail * Dt ? cb_tailk : cb_tailv, i % (n_tail * Dt), 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_flush);
-        tile_regs_release();
+    cb_reserve_back(cb_flush, tp * Dt);
+    cb_reserve_back(cb_flushv, tp * Dt);
+    for (uint32_t kv = 0; kv < 2; kv++) {
+        const uint32_t src = kv == 0 ? cb_tailk : cb_tailv, dst = kv == 0 ? cb_flush : cb_flushv;
+        reconfig_data_format(src, src);
+        pack_reconfig_data_format(dst);
+        copy_init(src);
+        for (uint32_t i = 0; i < n_tail * Dt; i++) {
+            tile_regs_acquire();
+            copy_tile(src, i, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, dst);
+            tile_regs_release();
+        }
     }
-    cb_push_back(cb_flush, 2 * tp * Dt);
+    cb_push_back(cb_flush, tp * Dt);
+    cb_push_back(cb_flushv, tp * Dt);
     cb_pop_front(cb_tailk, tp * Dt);
     cb_pop_front(cb_tailv, tp * Dt);
 }

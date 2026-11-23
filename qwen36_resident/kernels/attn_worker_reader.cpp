@@ -265,24 +265,25 @@ void kernel_main() {
         noc_local_state_init(other_noc);
     }
     // tiles from, from + 1, ... of chunk ch (tile t: row t / banks of bank t % banks; paged: page copy_page +
-    // pages[k] of the pool at addr, attn_paged.hpp), one kv_row each
+    // pages[k] of the pool at addr, attn_paged.hpp), one row (kKvRow for K, kVRow for V) each
     auto read_rows = [&](const Chunk& ch,
                          uint32_t addr,
                          uint32_t from,
                          uint32_t n,
                          uint32_t l1,
                          volatile tt_l1_ptr uint32_t* pages,
-                         uint32_t copy_page) {
-        for (uint32_t k = from; k < from + n; k++, l1 += kKvRow) {
+                         uint32_t copy_page,
+                         uint32_t row) {
+        for (uint32_t k = from; k < from + n; k++, l1 += row) {
             const uint8_t noc = dual && (k & 1) ? other_noc : noc_index;
             uint64_t src;
             if constexpr (kv_paged) {
-                src = page_noc_addr(addr, copy_page + pages[k], noc);
+                src = page_noc_addr(addr, copy_page + pages[k], noc, row);
             } else {
                 const uint32_t t = ch.t0 + k * ch.dt;
-                src = get_noc_addr_from_bank_id<true>(t % banks, addr + (t / banks) * kKvRow, noc);
+                src = get_noc_addr_from_bank_id<true>(t % banks, addr + (t / banks) * row, noc);
             }
-            noc_async_read(src, l1, kKvRow, noc);
+            noc_async_read(src, l1, row, noc);
         }
     };
 
@@ -312,8 +313,8 @@ void kernel_main() {
                 const uint32_t nb = ch.n - b0 < chunk_max ? ch.n - b0 : chunk_max;
                 cb_reserve_back(cb_k, chunk_max * Dt);
                 cb_reserve_back(cb_v, chunk_max * Dt);
-                read_rows(ch, k_addr, b0, nb, get_write_ptr(cb_k), pages, copy_page);
-                read_rows(ch, v_addr, b0, nb, get_write_ptr(cb_v), pages, copy_page);
+                read_rows(ch, k_addr, b0, nb, get_write_ptr(cb_k), pages, copy_page, kKvRow);
+                read_rows(ch, v_addr, b0, nb, get_write_ptr(cb_v), pages, copy_page, kVRow);
                 noc_async_read_barrier();
                 if (dual) {
                     noc_async_read_barrier(other_noc);
@@ -335,15 +336,17 @@ void kernel_main() {
             // (verify rows: per user, at its first pass; its rows in its group's block of the row buffer)
             const uint32_t n_tail = n_tail_of(u / kPPU);
             if (u % kPPU == 0) {
-                cb_reserve_back(cb_tail8, 2 * tail_pages(n_tail) * Dt);
-                read_rows(ch, k_addr, 0, n_tail, get_write_ptr(cb_tail8), pages, copy_page);
-                read_rows(ch, v_addr, 0, n_tail, get_write_ptr(cb_tail8) + n_tail * kKvRow, pages, copy_page);
+                cb_reserve_back(cb_tail8, tail_pages(n_tail) * Dt);
+                cb_reserve_back(cb_tail8v, tail_pages(n_tail) * Dt);
+                read_rows(ch, k_addr, 0, n_tail, get_write_ptr(cb_tail8), pages, copy_page, kKvRow);
+                read_rows(ch, v_addr, 0, n_tail, get_write_ptr(cb_tail8v), pages, copy_page, kVRow);
                 cb_reserve_back(cb_kw, Dt);
                 for (uint32_t d = 0; d < Dt; d++) {
                     noc_async_read_page((l % copies) * Dt + d, kw_dram, get_write_ptr(cb_kw) + d * kTile);
                 }
                 noc_async_read_barrier();
-                cb_push_back(cb_tail8, 2 * tail_pages(n_tail) * Dt);
+                cb_push_back(cb_tail8, tail_pages(n_tail) * Dt);
+                cb_push_back(cb_tail8v, tail_pages(n_tail) * Dt);
                 cb_push_back(cb_kw, Dt);
                 noc_semaphore_wait_min(rows_sem, num_streamers * (l + 1));
                 cb_reserve_back(cb_kraw, Dt);
@@ -373,9 +376,10 @@ void kernel_main() {
                 noc_semaphore_wait_min(tail_sem, i - copies * n_act + 1);
             }
             if (mine) {
-                cb_reserve_back(cb_tail8, 2 * Dt);
-                read_rows(ch, k_addr, 0, 1, get_write_ptr(cb_tail8), pages, copy_page);
-                read_rows(ch, v_addr, 0, 1, get_write_ptr(cb_tail8) + kKvRow, pages, copy_page);
+                cb_reserve_back(cb_tail8, Dt);
+                cb_reserve_back(cb_tail8v, Dt);
+                read_rows(ch, k_addr, 0, 1, get_write_ptr(cb_tail8), pages, copy_page, kKvRow);
+                read_rows(ch, v_addr, 0, 1, get_write_ptr(cb_tail8v), pages, copy_page, kVRow);
             }
             // (kTailBatched: the k norm weight and every user's new rows once per layer)
             const bool per_user = !kTailBatched || ka == 0;
@@ -387,7 +391,8 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             if (mine) {
-                cb_push_back(cb_tail8, 2 * Dt);
+                cb_push_back(cb_tail8, Dt);
+                cb_push_back(cb_tail8v, Dt);
             }
             if (per_user) {
                 cb_push_back(cb_kw, Dt);

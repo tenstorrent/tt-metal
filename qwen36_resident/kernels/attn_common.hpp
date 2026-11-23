@@ -139,11 +139,14 @@ constexpr uint32_t kPart = Dt + 1;         // a partial: Dt output tiles, then t
 constexpr uint32_t kMSlot = top_faces ? 256 : 1024;
 constexpr uint32_t kMRows0 = (qrows < 16 ? qrows : 16) * 32, kMRows2 = top_faces ? 0 : (qrows - 16) * 32;
 constexpr uint32_t kTile = 2048;           // bf16 32x32 tile
-constexpr uint32_t kKvTile = 1088;         // bf8 32x32 tile
+constexpr uint32_t kKvTile = 1088;         // bf8 32x32 tile (the K cache)
+// the V cache's tile: bf8 (1088 B), or bfp4 (576 B) with S0's RESIDENT_KV_V_BFP4 (named arg kv_v_tile)
+constexpr uint32_t kVTile = get_named_compile_time_arg_val("kv_v_tile");
 constexpr uint32_t kFaceRow = 32;          // bytes of one 16-element face row (bf16)
 constexpr uint32_t kFace = 512;            // bytes of one bf16 face
 constexpr uint32_t kRowTile = 64 * batch;  // a batch x 32 bf16 tile (streamer rows, leader output)
-constexpr uint32_t kKvRow = Dt * kKvTile;  // one position tile of k (or v) in the cache
+constexpr uint32_t kKvRow = Dt * kKvTile;  // one position tile of k in the cache
+constexpr uint32_t kVRow = Dt * kVTile;    // one position tile of v in the cache
 
 // shared CBs
 constexpr uint32_t cb_q = 0;  // worker: q (Dt tiles, multicast target); leader: its own copy of q
@@ -221,7 +224,8 @@ constexpr uint32_t cb_gs_pass = 42;
 // after out(k - 1) is staged, i.e. after the leader compute consumed partials(k - 1) — the half k + 1 reuses.
 constexpr bool kLeadPipelined = kLeadBatched;
 constexpr uint32_t cb_knew = 18;    // normalized + rotated k row (row 0)
-constexpr uint32_t cb_tail8 = 31;   // tail core: tail k | v tiles as read from DRAM (2 Dt bf8)
+constexpr uint32_t cb_tail8 = 31;   // tail core: tail k tiles as read from DRAM (Dt bf8 per tail tile)
+constexpr uint32_t cb_tail8v = 32;  // tail core: tail v tiles as read from DRAM (Dt per tail tile, V's format)
 constexpr uint32_t cb_rowsel = 12;  // tail core: per user R (ones in row r), 1 - R (packed: per tail tile the
                                     // placement matrix of the new rows and the rows it keeps)
 constexpr uint32_t cb_tailk = 19;   // tail tiles with the new row (bf16, Dt)
@@ -233,7 +237,8 @@ constexpr uint32_t cb_gs = 26;     // leader: sigmoid(gate)
 constexpr uint32_t cb_osum = 25;   // own + children's partials (kPart)
 constexpr uint32_t cb_rl = 30;     // leader: 1 / row sum
 constexpr uint32_t cb_out = 27;    // gated output (Dt)
-constexpr uint32_t cb_flush = 28;  // updated tail k | v as bf8 (2 Dt), written back to DRAM
+constexpr uint32_t cb_flush = 28;  // updated tail k as bf8 (Dt per tail tile), written back to DRAM
+constexpr uint32_t cb_flushv = 33;  // updated tail v in V's format (Dt per tail tile), written back to DRAM
 constexpr uint32_t cb_mean = 29;   // reduce scaler 1 / (32 Dt)
 constexpr uint32_t cb_stage = 2;   // leader: gated output rows as batch x 32 tiles (heads x Dt)
 

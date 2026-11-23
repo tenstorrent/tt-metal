@@ -35,7 +35,7 @@ from qwen36_resident import PKG_DIR
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from qwen36_resident.prefill import pp_weights as PW
 from qwen36_resident.prefill.smm import SmallMatmul
-from qwen36_resident.common import EPS, HIDDEN, INTER, device_zeros, zero_dram
+from qwen36_resident.common import EPS, HIDDEN, INTER, TILE_BYTES, device_zeros, zero_dram
 from qwen36_resident.model import (
     CONV_K,
     DK,
@@ -48,6 +48,7 @@ from qwen36_resident.model import (
     ROPE_THETA,
     ROT,
     State,
+    V_DT,
     TraceL1Guard,
     is_attn,
     l1_layout,
@@ -55,6 +56,8 @@ from qwen36_resident.model import (
 )
 
 KDIR = f"{PKG_DIR}/prefill/kernels/"
+# the decode pools' tile bytes, K (bf8) and V (bf8, or bfp4 with S0's RESIDENT_KV_V_BFP4): the handoff copies raw pages
+KV_TILE_BYTES = (TILE_BYTES[ttnn.bfloat8_b], TILE_BYTES[V_DT])
 # 1: reset() uploads host zeros (~65 MB / chip) instead of zero-filling on device (A/B)
 HOST_ZERO = os.environ.get("RESIDENT_PP_HOST_ZERO", "0") == "1"
 QD, VD = NK * DK, NV * DV  # 2048, 6144
@@ -277,8 +280,8 @@ class PPPrefill:
         for j, attn in enumerate(self.kinds):
             if attn:
                 # zero-filled on device: at max_len 256K a host image would be 4.3 GB of fp32 per cache
-                kv = lambda: device_zeros(mesh, [kv_blocks, NKV, block, HD], ttnn.bfloat8_b, DRAM)
-                self.K[j], self.V[j] = kv(), kv()
+                kv = lambda dt: device_zeros(mesh, [kv_blocks, NKV, block, HD], dt, DRAM)
+                self.K[j], self.V[j] = kv(ttnn.bfloat8_b), kv(V_DT)  # (S0: V in the decode pool's format)
             else:
                 self.S[j] = dev(torch.zeros(n, NV, DK, DV), ttnn.float32)
                 self.carry[j] = dev(torch.zeros(n, 1, TILE, CONV_CH), ttnn.bfloat16)
@@ -925,7 +928,7 @@ class PPPrefill:
         q = self._qkrope(q, w["wq"])
         k = self._qkrope(k, w["wk"])
         ttnn.experimental.paged_fill_cache(self.K[j], ttnn.typecast(k, ttnn.bfloat8_b), self.fill_pt, batch_idx=0)
-        ttnn.experimental.paged_fill_cache(self.V[j], ttnn.typecast(v, ttnn.bfloat8_b), self.fill_pt, batch_idx=0)
+        ttnn.experimental.paged_fill_cache(self.V[j], ttnn.typecast(v, V_DT), self.fill_pt, batch_idx=0)
         o = ttnn.transformer.chunked_scaled_dot_product_attention(
             q,
             self.K[j],
@@ -1130,7 +1133,7 @@ class PPPrefill:
         table = torch.as_tensor(list(model.block_tables[slot] if block_table is None else block_table))
         tiles = h // TILE
         assert len(table) * model.kv_tpb >= tiles, "the block table does not cover the prefix"
-        banks, kv_row, per_block, LR = d.banks, (HD // TILE) * 1088, self.block // TILE, model.launch_rows
+        banks, per_block, LR = d.banks, self.block // TILE, model.launch_rows
         t = torch.arange(tiles, dtype=torch.int64)
         bk, rt = t // per_block, t % per_block
         jobs, pks = [[] for _ in range(n)], [[] for _ in range(n)]  # per decode chip c (its KV head, its GDN heads)
@@ -1141,12 +1144,13 @@ class PPPrefill:
                 a = a_i % model._attn_copies
                 page = a * model.kv_copy_pages + table[t // model.kv_tpb] * model.kv_tpb + t % model.kv_tpb
                 for pool, dst in ((model.K_t, self.K[j]), (model.V_t, self.V[j])):
+                    tb = KV_TILE_BYTES[pool is model.V_t]  # (S0: V's tile bytes)
                     for c in range(n):
                         r = torch.empty(tiles, 8, dtype=torch.int64)
                         r[:, 0] = p
-                        r[:, 1] = pool.buffer_address() + (page // banks) * kv_row
+                        r[:, 1] = pool.buffer_address() + (page // banks) * (HD // TILE) * tb
                         r[:, 2] = page % banks
-                        r[:, 3] = 1088
+                        r[:, 3] = tb
                         r[:, 4] = 2
                         r[:, 5] = dst.buffer_address()
                         r[:, 6] = ((bk * NKV + c) * per_block + rt) * (HD // TILE)
@@ -1695,7 +1699,6 @@ class PPPrefill:
             self._ho.update(hit)
             return
         banks = d.banks
-        kv_row = (HD // TILE) * 1088
         rows, tile_of, pk = [[] for _ in range(n)], [[] for _ in range(n)], [[] for _ in range(n)]
         kv_of = [[] for _ in range(n)]
         tiles_max = self.max_len // TILE
@@ -1707,12 +1710,14 @@ class PPPrefill:
             p, j = divmod(i, Ls)
             if self.kinds[j]:
                 for src, dst in ((self.K[j], model.K_t), (self.V[j], model.V_t)):
+                    tb = KV_TILE_BYTES[dst is model.V_t]  # (S0: V's tile bytes; its fabric packets below)
+                    kv_row = (HD // TILE) * tb
                     for c in range(n):
                         r = torch.empty(tiles_max, 8, dtype=torch.int64)
                         r[:, 0] = c
                         r[:, 1] = src.buffer_address()
                         r[:, 2] = ((bk * NKV + c) * per_block + rt) * (HD // TILE)
-                        r[:, 3] = 1088
+                        r[:, 3] = tb
                         r[:, 4] = 1
                         r[:, 5] = dst.buffer_address() + (a_i * model.rpb + t // banks) * kv_row
                         r[:, 6] = t % banks
@@ -1858,12 +1863,12 @@ class PPPrefill:
             table = torch.as_tensor(list(model.block_tables[slot] if block_table is None else block_table))
             assert len(table) * model.kv_tpb >= tiles, "the block table does not cover the prompt"
             pools = torch.tensor([model.K_t.buffer_address(), model.V_t.buffer_address()])
-            banks, kv_row = model.d.banks, (HD // TILE) * 1088
+            banks, kv_rows = model.d.banks, torch.tensor([(HD // TILE) * tb for tb in KV_TILE_BYTES])
             kv, t = self._ho["kv_of"][p][sel], self._ho["tile_of"][p][sel]
             is_kv = kv[:, 0] >= 0
             t, which, a = t[is_kv], kv[is_kv, 0], kv[is_kv, 1] % model._attn_copies
             page = a * model.kv_copy_pages + table[t // model.kv_tpb] * model.kv_tpb + t % model.kv_tpb
-            jobs[is_kv, 5] = pools[which] + (page // banks) * kv_row
+            jobs[is_kv, 5] = pools[which] + (page // banks) * kv_rows[which]
             jobs[is_kv, 6] = page % banks
             if rows_mode:  # GDN state jobs: the slot's launch and row
                 jobs[~is_kv, 5] = target["state"].buffer_address()

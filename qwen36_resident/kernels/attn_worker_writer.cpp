@@ -160,24 +160,28 @@ void kernel_main() {
             // through its last pass's page list)
             const uint32_t copy_stride = get_arg_val<uint32_t>(tail_args + 2);
             const uint32_t tp0 = tile_of((u / kPPU) * kVR), n_tail = n_tail_of(u / kPPU);
-            cb_wait_front(cb_flush, 2 * tail_pages(n_tail) * Dt);
+            cb_wait_front(cb_flush, tail_pages(n_tail) * Dt);
+            cb_wait_front(cb_flushv, tail_pages(n_tail) * Dt);
             for (uint32_t kv = 0; kv < 2; kv++) {
+                // (k from cb_flush in bf8 rows, v from cb_flushv in V's rows: kVRow)
+                const uint32_t row = kv == 0 ? kKvRow : kVRow, from = get_read_ptr(kv == 0 ? cb_flush : cb_flushv);
                 for (uint32_t j = 0; j < n_tail; j++) {
                     const uint32_t t = tp0 + j;
                     uint64_t dst;
                     if constexpr (kv_paged) {
                         const uint32_t page = (l % copies) * kv_copy_pages + page_list(kVRows ? u : 0)[j];
-                        dst = page_noc_addr(get_arg_val<uint32_t>(tail_args + kv), page);
+                        dst = page_noc_addr(get_arg_val<uint32_t>(tail_args + kv), page, noc_index, row);
                     } else {
                         const uint32_t addr =
-                            get_arg_val<uint32_t>(tail_args + kv) + (l % copies) * copy_stride + (t / banks) * kKvRow;
+                            get_arg_val<uint32_t>(tail_args + kv) + (l % copies) * copy_stride + (t / banks) * row;
                         dst = get_noc_addr_from_bank_id<true>(t % banks, addr);
                     }
-                    noc_async_write(get_read_ptr(cb_flush) + (kv * n_tail + j) * kKvRow, dst, kKvRow);
+                    noc_async_write(from + j * row, dst, row);
                 }
             }
             noc_async_write_barrier();
-            cb_pop_front(cb_flush, 2 * tail_pages(n_tail) * Dt);
+            cb_pop_front(cb_flush, tail_pages(n_tail) * Dt);
+            cb_pop_front(cb_flushv, tail_pages(n_tail) * Dt);
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = l + 1;
         }
         if (!packed && role >= 2 && !has_chunk) {
@@ -186,21 +190,25 @@ void kernel_main() {
         }
         if (!packed && role >= 2 && has_chunk) {
             const uint32_t copy_stride = get_arg_val<uint32_t>(tail_args + 2);
-            const uint32_t copy_off = ((verify ? 0 : u) * copies + l % copies) * copy_stride + tail_row[u] * kKvRow;
-            cb_wait_front(cb_flush, 2 * Dt);
+            cb_wait_front(cb_flush, Dt);
+            cb_wait_front(cb_flushv, Dt);
             for (uint32_t kv = 0; kv < 2; kv++) {
+                // (k from cb_flush in bf8 rows, v from cb_flushv in V's rows: kVRow)
+                const uint32_t row = kv == 0 ? kKvRow : kVRow;
+                const uint32_t copy_off = ((verify ? 0 : u) * copies + l % copies) * copy_stride + tail_row[u] * row;
                 const uint32_t addr = get_arg_val<uint32_t>(tail_args + kv) + copy_off;
                 uint64_t dst;
                 if constexpr (kv_paged) {
                     const uint32_t page = (l % copies) * kv_copy_pages + page_list(u)[0];
-                    dst = page_noc_addr(get_arg_val<uint32_t>(tail_args + kv), page);
+                    dst = page_noc_addr(get_arg_val<uint32_t>(tail_args + kv), page, noc_index, row);
                 } else {
                     dst = get_noc_addr_from_bank_id<true>(tail_bank[u], addr);
                 }
-                noc_async_write(get_read_ptr(cb_flush) + kv * kKvRow, dst, kKvRow);
+                noc_async_write(get_read_ptr(kv == 0 ? cb_flush : cb_flushv), dst, row);
             }
             noc_async_write_barrier();
-            cb_pop_front(cb_flush, 2 * Dt);
+            cb_pop_front(cb_flush, Dt);
+            cb_pop_front(cb_flushv, Dt);
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_tail)) = i + 1;
             if (owner_sem && u == last) {
                 noc_semaphore_inc(owner_sem, 1);

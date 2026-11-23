@@ -135,7 +135,12 @@ TOK_SLOT = 4  # token state word: the GDN state slot of row 0 (verify)
 TOK_SLOT_ROWS = 15  # the same for a verify of R > 2 rows (words 1 .. R hold their positions)
 TOK_ACTIVE, TOK_PRESERVE = 9, 10  # rows mode token state words (kernels/active_rows.hpp)
 TOP_K = 32  # sampling::kTopK: the candidates of on-device sampling, the largest top-k it serves
-KV_ROW = (HD // TILE) * TILE_BYTES[ttnn.bfloat8_b]
+KV_ROW = (HD // TILE) * TILE_BYTES[ttnn.bfloat8_b]  # one position tile of a K cache page (bf8)
+# Strata S0 step 1 (RESIDENT_KV_V_BFP4, default off): the V caches / pool in bfp4 tiles, K stays bf8 (V tolerates 4-bit
+# mantissas: corpus NLL +0.13% at 8K, within noise at 32K; the pool holds ~34% more tokens per byte)
+V_BFP4 = os.environ.get("RESIDENT_KV_V_BFP4", "0") == "1"
+V_DT = ttnn.bfloat4_b if V_BFP4 else ttnn.bfloat8_b
+V_ROW = (HD // TILE) * TILE_BYTES[V_DT]  # one position tile of a V cache page
 
 
 def bf16(t):
@@ -312,7 +317,7 @@ class State:
         for _ in range(attn_copies if kv else 0):
             ks, vs = [], []
             for _ in range(d.n):
-                k, v = quantize_rows(rn(max_pos, HD)), quantize_rows(rn(max_pos, HD))
+                k, v = quantize_rows(rn(max_pos, HD)), quantize_rows(rn(max_pos, HD), V_DT)
                 k[pos:], v[pos:] = 0, 0
                 ks.append(k)
                 vs.append(v)
@@ -390,7 +395,7 @@ def torch_step(x0, d, w, st, layers, interval, lm_head=False, attn_out=None, xs=
                 if attn_out is not None:
                     attn_out.append((l, chip, o))
                 st.K[c][chip][pos] = quantize_rows(kn[None])[0]
-                st.V[c][chip][pos] = quantize_rows(v[None])[0]
+                st.V[c][chip][pos] = quantize_rows(v[None], V_DT)[0]
                 parts.append(o @ w["out"][l % len(w["out"])][chip] + (x if chip == 0 else 0))
             a_i += 1
         else:
@@ -1023,6 +1028,7 @@ class ResidentModel:
         )
 
         def cache(which, sts_=sts):
+            assert not V_BFP4, "RESIDENT_KV_V_BFP4: paged KV only (the contiguous caches share one K / V stride)"
             if sts_[0].K is None:
                 # no host images: zero-filled on device (stale rows are only ever read masked, but must be finite)
                 return device_zeros(
@@ -1459,7 +1465,7 @@ class ResidentModel:
                 T(3, M_t),
                 T(4, one_t),
                 cb(1, work_grid, 2 * kv_block * Dt, ttnn.bfloat8_b, kv_page),
-                cb(2, work_grid, 2 * kv_block * Dt, ttnn.bfloat8_b, kv_page),
+                cb(2, work_grid, 2 * kv_block * Dt, V_DT, TILE_BYTES[V_DT]),  # (S0: V's format)
                 cb(5, work_grid, kv_block, *f32),
                 cb(6, work_grid, kv_block),
                 cb(9, chunk_grid, 2 * Dt, *f32),
@@ -1520,15 +1526,18 @@ class ResidentModel:
                 *(
                     [
                         cb(19, tail_grid, 2 * Dt, ttnn.bfloat8_b, kv_page),
-                        cb(20, tail_grid, 2 * Dt, ttnn.bfloat8_b, kv_page),
+                        cb(20, tail_grid, 2 * Dt, V_DT, TILE_BYTES[V_DT]),
                     ]
                     if self.vrows
                     else [cb(19, tail_grid, (2 if packed else 1) * Dt), cb(20, tail_grid, (2 if packed else 1) * Dt)]
                 ),
                 cb(21, tail_grid, Dt),
                 cb(22, tail_grid, 2 * attn_users * groups if packed else LR),
-                cb(28, tail_grid, (4 if packed else 2) * Dt, ttnn.bfloat8_b, kv_page),
-                cb(31, tail_grid, (4 if packed else 2) * Dt, ttnn.bfloat8_b, kv_page),
+                # the tail's k (bf8) and v (V's format) as read (31 / 32) and as written back (28 / 33)
+                cb(28, tail_grid, (2 if packed else 1) * Dt, ttnn.bfloat8_b, kv_page),
+                cb(31, tail_grid, (2 if packed else 1) * Dt, ttnn.bfloat8_b, kv_page),
+                cb(32, tail_grid, (2 if packed else 1) * Dt, V_DT, TILE_BYTES[V_DT]),
+                cb(33, tail_grid, (2 if packed else 1) * Dt, V_DT, TILE_BYTES[V_DT]),
             ]
             if self.kv_paged:
                 # page lists of the workers' tiles, then a page-table window (attn_paged.hpp cb_pages)
@@ -1574,6 +1583,7 @@ class ResidentModel:
                 ("vrows_r", R if self.vrows else 0),  # verify rows: rows per user (active_rows.hpp)
                 ("sem_raddr", SEM_RADDR),
                 ("attn_tails", self.attn_tails),  # (attn_common.hpp kTails)
+                ("kv_v_tile", TILE_BYTES[V_DT]),  # (attn_common.hpp kVTile: the V cache's tile, S0)
             ]
 
             def kernel(src, core_ranges, ct, rt, config, named=()):
@@ -2272,23 +2282,23 @@ class ResidentModel:
             runs.append((int(table[t0 // tpb]) * tpb, t0, min(tpb, n_tiles - t0)))
         return runs
 
-    def _kv_copies(self, table, n_tiles, staging, save):
-        """page copies between the pools' pages of the first n_tiles tiles (every attention copy, K then V) and the
-        staging tensor (page (kv * copies + c) * n_tiles + t)"""
+    def _kv_copies(self, table, n_tiles, staging, staging_v, save):
+        """page copies between the pools' pages of the first n_tiles tiles (every attention copy) and the staging
+        tensors: K's in `staging` (page c * n_tiles + t, KV_ROW B), V's in `staging_v` (V_ROW B pages: S0's format)"""
         out, C = [], self._attn_copies
-        for kv, pool in enumerate((self.K_t, self.V_t)):
+        for pool, stg, row in ((self.K_t, staging, KV_ROW), (self.V_t, staging_v, V_ROW)):
             for c in range(C):
                 for page, t, cnt in self._kv_page_runs(table, n_tiles):
-                    pp, sp = c * self.kv_copy_pages + page, (kv * C + c) * n_tiles + t
-                    out.append((pool, pp, staging, sp, cnt, KV_ROW) if save else (staging, sp, pool, pp, cnt, KV_ROW))
+                    pp, sp = c * self.kv_copy_pages + page, c * n_tiles + t
+                    out.append((pool, pp, stg, sp, cnt, row) if save else (stg, sp, pool, pp, cnt, row))
         return out
 
     def snapshot_slot(self, s, n_tokens=0, table=None):
         """rows mode: slot s's recurrent state as device staging tensors {state: its GDN states (per chip copies x
         heads x 16 fp32 tiles), hist: its conv history row (per chip copies x 3 x K compact 64 B pages)} and, with
-        n_tokens (paged KV), {kv: its K / V pages of positions < n_tokens (per chip 2 x attention copies x tiles pages
-        of KV_ROW B)} — restore_slot puts them into any slot (a prefix cache entry / a swapped-out user, Strata
-        S1 / S3)"""
+        n_tokens (paged KV), {kv / kvv: its K / V pages of positions < n_tokens (per chip attention copies x tiles
+        pages of KV_ROW / V_ROW B)} — restore_slot puts them into any slot (a prefix cache entry / a swapped-out
+        user, Strata S1 / S3)"""
         assert self.rows
         d, mesh, G = self.d, self.mesh, self._gdn_copies
         k, r = divmod(s, self.launch_rows)
@@ -2310,12 +2320,11 @@ class ResidentModel:
         if n_tokens:
             assert self.kv_paged
             n_tiles = -(-n_tokens // TILE)
-            kv = ttnn.empty(
-                [2 * self._attn_copies * n_tiles, KV_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram
-            )
+            kv = ttnn.empty([self._attn_copies * n_tiles, KV_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
+            kvv = ttnn.empty([self._attn_copies * n_tiles, V_ROW // 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
             tbl = self.block_tables[s] if table is None else table
-            self._page_copy(self._kv_copies(tbl, n_tiles, kv, save=True))
-            snap.update(kv=kv, n_tokens=n_tokens)
+            self._page_copy(self._kv_copies(tbl, n_tiles, kv, kvv, save=True))
+            snap.update(kv=kv, kvv=kvv, n_tokens=n_tokens)
         return snap
 
     def restore_slot(self, s, snap, table=None):
@@ -2336,7 +2345,7 @@ class ResidentModel:
         if snap.get("n_tokens"):
             n_tiles = -(-snap["n_tokens"] // TILE)
             tbl = self.block_tables[s] if table is None else table
-            self._page_copy(self._kv_copies(tbl, n_tiles, snap["kv"], save=False))
+            self._page_copy(self._kv_copies(tbl, n_tiles, snap["kv"], snap["kvv"], save=False))
 
     def _hist_one(self, gr, row, hslot, compact, cslot, cstride, gather):
         """one conv-history slot of one row of every (streamer, copy) row <-> compact slot cslot of a snapshot
@@ -2426,7 +2435,7 @@ class ResidentModel:
         for j in range(CONV_K - 1):
             self._hist_one(gr, base + j % R, j // R, snap["hist"], j, CONV_K - 1, gather=False)
 
-    SNAP_TENSORS = ("state", "hist", "kv")
+    SNAP_TENSORS = ("state", "hist", "kv", "kvv")
 
     def snapshot_to_host(self, snap):
         """a snapshot's staging tensors to host memory (ttnn host tensors, one shard per chip), the device copies freed
@@ -2669,18 +2678,20 @@ class ResidentModel:
                 self._kv_pool_rows,
             ), "share: another KV pool geometry"
             assert sts[0].K is None, "share: no host KV images (the pool is the shared model's)"
+            assert sh.V_t.dtype == V_DT, "share: a V pool of another format"
             self.K_t, self.V_t = sh.K_t, sh.V_t
             return
         pools = []
         for which in ("K", "V"):
+            dt = V_DT if which == "V" else ttnn.bfloat8_b  # (S0: V's format)
             if sts[0].K is None:  # no host images (State kv=False): zero-filled on device
                 shape = [banks * self._kv_pool_rows * TILE, HD]
-                pools.append(device_zeros(self.mesh, shape, ttnn.bfloat8_b, self._pool_mc))
+                pools.append(device_zeros(self.mesh, shape, dt, self._pool_mc))
             else:
                 pools.append(
                     ttnn.from_torch(
                         self._kv_pool_host(sts, which),
-                        dtype=ttnn.bfloat8_b,
+                        dtype=dt,
                         layout=ttnn.TILE_LAYOUT,
                         device=self.mesh,
                         memory_config=self._pool_mc,
@@ -2819,7 +2830,10 @@ class ResidentModel:
             writes.append(
                 (
                     ttnn.from_torch(
-                        pool.reshape(-1, HD), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, mesh_mapper=per_chip
+                        pool.reshape(-1, HD),
+                        dtype=V_DT if which == "V" else ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=per_chip,
                     ),
                     dev,
                 )
@@ -2851,7 +2865,15 @@ class ResidentModel:
             # (paged: the whole pool, st's caches through user 0's block table)
             kv = self._kv_pool_host([st], which) if self.kv_paged else self._kv_host(st, which)
             hosts.append(
-                (ttnn.from_torch(kv, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, mesh_mapper=per_chip), dev)
+                (
+                    ttnn.from_torch(
+                        kv,
+                        dtype=V_DT if which == "V" else ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=per_chip,
+                    ),
+                    dev,
+                )
             )
         for host, dev in hosts:
             ttnn.copy_host_to_device_tensor(host, dev)

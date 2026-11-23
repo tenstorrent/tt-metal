@@ -53,8 +53,9 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* page_list(uint32_t u) {
 }
 
 // NoC address of page `page` of the pool at `pool`
-FORCE_INLINE uint64_t page_noc_addr(uint32_t pool, uint32_t page, uint8_t noc = noc_index) {
-    return get_noc_addr_from_bank_id<true>(page % banks, pool + (page / banks) * kKvRow, noc);
+// (row: the pool's page bytes, kKvRow for K, kVRow for V)
+FORCE_INLINE uint64_t page_noc_addr(uint32_t pool, uint32_t page, uint8_t noc = noc_index, uint32_t row = kKvRow) {
+    return get_noc_addr_from_bank_id<true>(page % banks, pool + (page / banks) * row, noc);
 }
 
 // fills user u's page list from page-table row `row` for the n tiles of chunk ch (ascending, so the table is
