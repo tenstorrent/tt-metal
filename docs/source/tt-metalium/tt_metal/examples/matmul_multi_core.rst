@@ -12,7 +12,7 @@ changes to:
 - Set up each core to process a subset of the tiles.
 - What changes (and what doesn't change) in the API usage to achieve this.
 
-It is important to note that this example builds on top of the previous single core matmul example, so it is recommended to understand the single core matmul example first. The single core matmul example is available under the ``tt_metal/programming_examples/matmul_single_core/`` directory.
+It is important to note that this example builds on top of the previous single core matmul example, so it is recommended to understand the single core matmul example first. The single core matmul example is available under the ``tt_metal/programming_examples/matmul/matmul_single_core/`` directory.
 
 The full source code for this example is available under the ``tt_metal/programming_examples/matmul/matmul_multi_core/`` directory.
 

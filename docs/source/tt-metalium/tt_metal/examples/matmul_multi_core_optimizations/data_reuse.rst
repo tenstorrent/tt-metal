@@ -36,7 +36,7 @@ Take note of the example's use of "subblocks" above. Recall that until now, we h
 Intermediate Circular Buffer Configuration
 ------------------------------------------
 
-In addition to our double-buffer config, we introduce a third circular buffer denoted as ``interm0_cb_index``. Out of the 32 possible circular buffers provided by the API (which you can view in the ``$TT_METAL_HOME/tt_metal/hostdevcommon/kernel_structs.h`` file), this one belongs to a subset of intermediate CBs. This buffer acts as a temporary storage for the intermediate results of matrix multiplication before they are combined into the final output.
+In addition to our double-buffer config, we introduce a third circular buffer denoted as ``interm0_cb_index``. Out of the 32 possible circular buffers provided by the API (which you can view in the ``$TT_METAL_HOME/tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h`` file), this one belongs to a subset of intermediate CBs. This buffer acts as a temporary storage for the intermediate results of matrix multiplication before they are combined into the final output.
 
 .. code-block:: cpp
 
@@ -64,20 +64,20 @@ The runtime arguments for the read, write, and compute kernels are set up in a c
     // Create reader and writer kernels per core
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout.cpp",
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     // Create compute kernel
     auto mm_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
+        "tt_metal/programming_examples/matmul/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args}
     );
