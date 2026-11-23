@@ -10,9 +10,10 @@ Accuracy tests for OpenVLA pieces that the PCC tests with random weights do not 
 3. Vision backbone: DINOv2 and SigLIP features match the reference on the checkpoint (needs OPENVLA_WEIGHTS)
 4. Language model prefill: logits after the first decoder layers match HF Llama on the checkpoint
    (needs OPENVLA_WEIGHTS)
-5. predict_action: returns the generated action tokens in order, decoded to actions; teacher-forced on the HF
-   reference tokens, each TT top-1 is in the reference top-5 (needs OPENVLA_WEIGHTS)
+5. predict_action: returns only action tokens, decoded to actions; teacher-forced on the HF reference tokens, each
+   TT top-1 is in the reference top-5 (needs OPENVLA_WEIGHTS). One case crosses a KV-cache block during decode.
 6. predict_action on device rejects generation options it cannot honour (host only)
+7. predict_action returns the generated tokens in order, first the prefill's, and rejects non-action tokens (host only)
 
 Reference for 5: references/generate_reference_actions.py (HF, bfloat16 on CPU, revision 47a0ec7f).
 Reference for 3 and 4: openvla/openvla-7b (revision 47a0ec7f) on CPU in float32, through the timm towers of
@@ -37,6 +38,8 @@ from models.experimental.openvla.tt.open_vla import (
     TIMM_OVERRIDE_ACT_LAYER,
     VISION_BACKBONE_TO_RESOLUTION,
     VISION_BACKBONE_TO_TIMM_ID,
+    OPENVLA_FABRIC_CONFIG,
+    OPENVLA_MESH_DEVICE,
     OpenVLAConfig,
     OpenVLALanguageModel,
     PrismaticProjector,
@@ -49,22 +52,18 @@ from models.experimental.openvla.tt.open_vla import (
 BACKBONE_ID = "dinosiglip-vit-so-224px"
 PROMPT = "In: What action should the robot take to pick up the red block?\nOut:"
 OPENVLA_DEVICE_PARAMS = {
-    "fabric_config": ttnn.FabricConfig.FABRIC_1D if len(ttnn.get_device_ids()) > 1 else None,
+    "fabric_config": OPENVLA_FABRIC_CONFIG,
     "trace_region_size": 30000000,
     "num_command_queues": 1,
     "l1_small_size": 81920,
 }
-OPENVLA_MESH_DEVICE = {
-    "N150": (1, 1),
-    "N300": (1, 2),
-    "N150x4": (1, 4),
-    "T3K": (1, 8),
-    "TG": (8, 4),
-    "P150": (1, 1),
-    "P300": (1, 2),
-    "P150x4": (1, 4),
-    "P150x8": (1, 8),
-}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+
+
+@pytest.fixture
+def llama2_hf_model():
+    """The language model loads its config and tokenizer from HF_MODEL, which must be Llama-2-7B."""
+    if os.environ.get("HF_MODEL") != "meta-llama/Llama-2-7b-hf":
+        pytest.skip("Set HF_MODEL=meta-llama/Llama-2-7b-hf")
 
 
 def vision_backbone_args():
@@ -231,7 +230,7 @@ def test_vision_backbone_checkpoint_pcc(device, openvla_weights_path):
 @pytest.mark.parametrize("device_params", [OPENVLA_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [OPENVLA_MESH_DEVICE], indirect=True)
 @pytest.mark.parametrize("num_layers", [2])
-def test_language_model_prefill_checkpoint_pcc(mesh_device, openvla_weights_path, num_layers):
+def test_language_model_prefill_checkpoint_pcc(mesh_device, openvla_weights_path, llama2_hf_model, num_layers):
     """
     Last-position logits of the language model cut to its first decoder layers vs HF LlamaForCausalLM with the
     checkpoint's weights, on the input predict_action builds: BOS, the projected patches of a fixed image, the prompt.
@@ -317,6 +316,21 @@ REFERENCE_ACTIONS = {
             [31744, 31872, 31745, 31785, 31758],
         ],
     },
+    # 283 positions, so decode writes past the 9 KV-cache blocks the prompt fills
+    "green_ketchup_basket": {
+        "rgb": (60, 160, 70),
+        "instruction": "pick up the ketchup and place it in the basket",
+        "tokens": [31872, 31872, 31872, 31884, 31867, 31871, 31872],
+        "top5": [
+            [31872, 31849, 31846, 31853, 31851],
+            [31872, 31894, 31901, 31893, 31892],
+            [31872, 31899, 31891, 31875, 31897],
+            [31884, 31863, 31865, 31895, 31898],
+            [31867, 31859, 31878, 31872, 31863],
+            [31871, 31865, 31867, 31868, 31870],
+            [31872, 31744, 31754, 31865, 31753],
+        ],
+    },
 }
 OPENVLA_VOCAB_SIZE = 32000
 OPENVLA_ACTION_BINS = 256
@@ -334,12 +348,11 @@ def reference_unnormalized_actions(tokens, stats):
 
 @pytest.mark.parametrize("device_params", [OPENVLA_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [OPENVLA_MESH_DEVICE], indirect=True)
-def test_predict_action_tokens(mesh_device, openvla_weights_path):
+def test_predict_action_tokens(mesh_device, openvla_weights_path, llama2_hf_model):
     """
-    For each reference case, greedy predict_action must return the tokens the language model generated, starting
-    with the one the prefill picked, all of them action tokens (an end-of-sequence token here means the actions are
-    shifted by one), decoded to actions. Then, with the reference tokens fed back in (teacher forcing), the model's
-    top-1 at every step must be in the reference top-5.
+    For each reference case, greedy predict_action must return action tokens only, decoded to actions. Then, with the
+    reference tokens fed back in (teacher forcing), the model's top-1 at every step must be in the reference top-5.
+    The third case is long enough that decode writes past the KV-cache blocks the prompt filled.
     """
     merged_tensors = load_openvla_weights(openvla_weights_path, ("",))
     kwargs = {
@@ -370,7 +383,6 @@ def test_predict_action_tokens(mesh_device, openvla_weights_path):
             "return_tokens": True,
         }
         actions, action_tokens = vla.predict_action(**predict_kwargs)
-        generated_tokens = vla.language_model._last_generated_tokens
 
         vla.language_model.forced_tokens = reference["tokens"]
         try:
@@ -390,7 +402,6 @@ def test_predict_action_tokens(mesh_device, openvla_weights_path):
         print(f"{'='*60}\n")
 
         assert len(action_tokens) == vla.get_action_dim("bridge_orig")
-        assert action_tokens == generated_tokens, f"{case}: predict_action did not return the generated tokens"
         assert all(
             first_action_token <= token < OPENVLA_VOCAB_SIZE for token in action_tokens
         ), f"{case}: non-action token in {action_tokens}"
@@ -409,10 +420,63 @@ def test_predict_action_tokens(mesh_device, openvla_weights_path):
         {"attention_mask": torch.tensor([[0, 1, 1]])},
     ],
 )
-def test_predict_action_rejects_unsupported_generate_options(kwargs):
+def test_predict_action_rejects_unsupported_generate_options(kwargs, expect_error):
     """The device path decodes greedily in one forward call, so options it would ignore must raise."""
     vla = SimpleNamespace(ttnn_device=object(), cached_output=None, _skip_kv_reset=True)
-    with pytest.raises(ValueError, match="decodes greedily"):
+    with expect_error(ValueError, "decodes greedily"):
         TTOpenVLAForActionPrediction.predict_action(
             vla, input_ids=torch.tensor([[1, 2, 29871]]), unnorm_key="bridge_orig", pixel_values=None, **kwargs
         )
+
+
+class FakeOpenVLA:
+    """Stands in for TTOpenVLAForActionPrediction around predict_action: the forward call just records `tokens` as
+    the language model's generated tokens, the first being the one the prefill picks."""
+
+    _check_unnorm_key = staticmethod(TTOpenVLAForActionPrediction._check_unnorm_key)
+    get_action_dim = TTOpenVLAForActionPrediction.get_action_dim
+    get_action_stats = TTOpenVLAForActionPrediction.get_action_stats
+
+    def __init__(self, tokens):
+        self.ttnn_device = object()
+        self.cached_output = None
+        self._skip_kv_reset = True
+        self.vocab_size = OPENVLA_VOCAB_SIZE
+        bins = np.linspace(-1, 1, OPENVLA_ACTION_BINS)
+        self.bin_centers = (bins[:-1] + bins[1:]) / 2.0
+        action = {"q01": [-0.5, -1.0, -0.2, -0.3, -0.4, -0.6, 0.0], "q99": [0.5, 1.0, 0.2, 0.3, 0.4, 0.6, 1.0]}
+        self.norm_stats = {"bridge_orig": {"action": {**action, "mask": [True] * 6 + [False]}}}
+        self.language_model = SimpleNamespace(num_actions=None, _last_generated_tokens=None)
+        self.tokens = tokens
+
+    def __call__(self, **kwargs):
+        self.language_model._last_generated_tokens = list(self.tokens)
+
+
+def predict_with_tokens(tokens):
+    return TTOpenVLAForActionPrediction.predict_action(
+        FakeOpenVLA(tokens),
+        input_ids=torch.tensor([[1, 2, 29871]]),
+        unnorm_key="bridge_orig",
+        pixel_values=None,
+        return_tokens=True,
+    )
+
+
+def test_predict_action_token_order():
+    """predict_action returns the generated tokens in generation order, the prefill's first, decoded in that order."""
+    tokens = [31999, 31990, 31900, 31850, 31800, 31760, 31744]
+    actions, action_tokens = predict_with_tokens(tokens)
+    stats = FakeOpenVLA(tokens).norm_stats["bridge_orig"]["action"]
+    assert action_tokens == [31999, 31990, 31900, 31850, 31800, 31760, 31744]
+    assert np.allclose(actions, reference_unnormalized_actions(tokens, stats))
+    # Token 31999 is the lowest bin (center -1 + 1/255), 31744 the highest (center 1 - 1/255, gripper not unnormalized)
+    assert actions[0] == pytest.approx(-0.5 + 1 / 510)
+    assert actions[6] == pytest.approx(1 - 1 / 255)
+
+
+@pytest.mark.parametrize("bad_token", [2, 31743, 32000])
+def test_predict_action_rejects_non_action_tokens(bad_token, expect_error):
+    """An end-of-sequence or other non-action token among the generated tokens must not be decoded as an action."""
+    with expect_error(ValueError, "non-action tokens"):
+        predict_with_tokens([31868, 31744, 31947, 31864, 31834, 31823, bad_token])

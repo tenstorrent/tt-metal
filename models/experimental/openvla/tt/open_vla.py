@@ -292,6 +292,8 @@ def get_LLama2OpenVLAArgs(state_dict, use_bf16_lm_head=True):
         def load_state_dict(self):
             if state_dict is None:
                 return super().load_state_dict()
+            # map_openvla_hf_to_meta_keys permutes Q/K for the Meta-layout RoPE
+            assert not self.use_hf_rope, "OpenVLA's Q/K mapping assumes use_hf_rope=False"
             new_state_dict = map_openvla_hf_to_meta_keys(state_dict, self.head_dim)
             return new_state_dict
 
@@ -701,7 +703,7 @@ class OpenVLALanguageModel(GenerationMixin):
         CHECKPOINTS.checkpoint("end_PREFILL")
         decode_tokens = [prefilled_token.item()]
 
-        # Use cropped page_table_user for decode (same as prefill)
+        # Decode writes past the blocks the prefill filled, so it takes the full page table (as predict_text does)
         for i in range(self.num_actions - 1):
             # Run decode forward
             # CUse self.tt_kv_cache[0] to match what prefill write to
@@ -711,7 +713,7 @@ class OpenVLALanguageModel(GenerationMixin):
             decode_output = self.generator.decode_forward(
                 out_tok,
                 current_pos,
-                page_table=page_table_user,
+                page_table=self.page_table,
                 kv_cache=[self.tt_kv_cache[0]],
                 sampling_params=None,
                 enable_trace=False,
@@ -1610,7 +1612,7 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
         return_tokens: bool = False,
         **kwargs: str,
     ) -> np.ndarray:
-        """Thin wrapper around .generate() that decodes predicted actions and unnormalizes them."""
+        """Generates the action tokens (greedily on device, with .generate() on CPU), decodes and unnormalizes them."""
         # Reset cached output to ensure fresh start (prevents stale state between runs)
         self.cached_output = (None, None)
         # Reset KV cache to prevent state leakage between predict_action calls
@@ -1653,6 +1655,12 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
         action_token_ids = (
             generated_ids[0, -action_dim:].tolist() if generated_ids.dim() > 1 else generated_ids[-action_dim:].tolist()
         )
+        first_action_token = self.vocab_size - len(self.bin_centers) - 1
+        if not all(first_action_token <= token < self.vocab_size for token in action_token_ids):
+            raise ValueError(
+                f"predict_action generated non-action tokens {action_token_ids} "
+                f"(action tokens are {first_action_token}..{self.vocab_size - 1})"
+            )
 
         # get final actions
         actions = get_final_action(
@@ -1694,11 +1702,26 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
         return self.norm_stats[unnorm_key]["action"]
 
 
+# The mesh the tests open; fabric only when it has more than one chip, whatever the host has
+OPENVLA_MESH_DEVICE = {
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+    "TG": (8, 4),
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "P150x4": (1, 4),
+    "P150x8": (1, 8),
+}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+OPENVLA_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D if np.prod(OPENVLA_MESH_DEVICE) > 1 else None
+
+
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D if len(ttnn.get_device_ids()) > 1 else None,
+            "fabric_config": OPENVLA_FABRIC_CONFIG,
             "trace_region_size": 30000000,
             "num_command_queues": 1,
             "l1_small_size": 81920,
@@ -1708,19 +1731,7 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "N150x4": (1, 4),
-            "T3K": (1, 8),
-            "TG": (8, 4),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P150x8": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
-    ],
+    [OPENVLA_MESH_DEVICE],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -1739,7 +1750,7 @@ def test_language_model(mesh_device, prompt):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D if len(ttnn.get_device_ids()) > 1 else None,
+            "fabric_config": OPENVLA_FABRIC_CONFIG,
             "trace_region_size": 30000000,
             "num_command_queues": 1,
             "l1_small_size": 81920,
@@ -1749,19 +1760,7 @@ def test_language_model(mesh_device, prompt):
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "N150x4": (1, 4),
-            "T3K": (1, 8),
-            "TG": (8, 4),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P150x8": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
-    ],
+    [OPENVLA_MESH_DEVICE],
     indirect=True,
 )
 @pytest.mark.parametrize(

@@ -22,6 +22,8 @@ from transformers import AutoModelForVision2Seq, AutoTokenizer
 CASES = {
     "orange_red_block": {"rgb": (255, 100, 50), "instruction": "pick up the red block"},
     "blue_put_cup": {"rgb": (40, 90, 200), "instruction": "put the cup on the plate"},
+    # 283 positions: decode writes past the 9 KV-cache blocks the prompt fills
+    "green_ketchup_basket": {"rgb": (60, 160, 70), "instruction": "pick up the ketchup and place it in the basket"},
 }
 
 
