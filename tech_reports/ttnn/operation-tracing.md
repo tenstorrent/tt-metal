@@ -29,7 +29,7 @@ ttnn.operation_tracer.enable_tracing(True)
 result = ttnn.add(tensor_a, tensor_b)
 ```
 
-Trace files are saved to `generated/ttnn/operation_parameters/` by default.
+Trace files are saved to `generated/ttnn/reports/operation_parameters/` by default (see [Custom Output Directory](#custom-output-directory)).
 
 ## API Reference
 
@@ -86,8 +86,13 @@ Each trace file contains:
 
 ### Custom Output Directory
 
+The output directory is chosen in this order:
+
+1. The `TTNN_OPERATION_TRACE_DIR` environment variable, if set.
+2. Otherwise `<ttnn.CONFIG.root_report_path>/operation_parameters` (default `root_report_path` is `generated/ttnn/reports`).
+
 ```python
-ttnn.CONFIG.root_report_path = "/path/to/traces"
+ttnn.CONFIG.root_report_path = "/path/to/reports"  # traces go to /path/to/reports/operation_parameters/
 ```
 
 ### Tensor Value Serialization
