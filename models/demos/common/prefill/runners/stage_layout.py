@@ -181,8 +181,8 @@ def single_peer(pairs: list, mesh_rows: int, direction: str, rank: int) -> int |
         raise NotImplementedError(
             f"[pp rank {rank}] {direction} boundary needs {len(pairs)} D2D services over rows "
             f"{[p.rows for p in pairs]} of {mesh_rows}: D2DStreamService connects whole meshes rank to rank, "
-            "so a boundary between stages with different host counts needs one service per host row block, on a submesh "
-            "(models/demos/deepseek_v3_d_p/tests/test_rr_prefill_d2d_seam.py), and the runner does not yet move activations "
-            "between the stage mesh and those submeshes"
+            "so this path covers only boundaries where one rank faces one peer over the whole mesh. A boundary "
+            "between stages with different host counts needs one service per host row block, on a submesh "
+            "(models/demos/deepseek_v3_d_p/tests/test_rr_prefill_d2d_seam.py)"
         )
     return peers.pop()

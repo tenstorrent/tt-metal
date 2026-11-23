@@ -151,7 +151,7 @@ def test_equal_host_stages_have_one_peer_per_side():
 
 
 @pytest.mark.parametrize("rank, direction", [(0, "outbound"), (3, "inbound")])
-def test_a_boundary_split_over_two_peers_is_refused_until_ttnn_can_serve_it(rank, direction, expect_error):
+def test_a_boundary_split_over_two_peers_is_refused_on_the_whole_mesh_path(rank, direction, expect_error):
     pairs = TSR.outbound_pairs(rank, 4) if direction == "outbound" else TSR.inbound_pairs(rank, 4)
     with expect_error(NotImplementedError, "one service per host row block"):
         single_peer(pairs, 4, direction, rank)
