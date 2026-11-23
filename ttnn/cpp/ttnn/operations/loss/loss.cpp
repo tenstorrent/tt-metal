@@ -27,7 +27,11 @@ Tensor loss_function(
     const std::optional<Tensor>& optional_output_tensor) {
     std::vector<EltwiseUnaryWithParam> fused_ops;
     switch (loss_kind) {
-        case LossFunction::MAE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::ABS}); break;
+        case LossFunction::MAE:
+            // INT32 needs the integer ABS; the float ABS clears the sign bit of the two's-complement difference.
+            fused_ops.push_back(
+                EltwiseUnaryWithParam{ref.dtype() == DataType::INT32 ? UnaryOpType::ABS_INT32 : UnaryOpType::ABS});
+            break;
         case LossFunction::MSE: fused_ops.push_back(EltwiseUnaryWithParam{UnaryOpType::SQUARE}); break;
         default: TT_THROW("unsupported loss function {}. Please change.", loss_kind);
     }
