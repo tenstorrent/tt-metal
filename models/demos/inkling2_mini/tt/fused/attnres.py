@@ -139,6 +139,7 @@ class FusedRowOps:
             "attnres_compute.cpp",
             F.compute_config([5] if norm is not None else [], full_sync=True),
             dict(
+                sit=F.SCALAR_IT,
                 pages=T,
                 nq=nq,
                 k=k,

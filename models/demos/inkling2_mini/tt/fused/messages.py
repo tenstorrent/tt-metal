@@ -97,7 +97,8 @@ class FusedMessages:
                         r.scaler.buffer_address(), 0]  # fmt: skip
             wr[core] = writer_args([r.stack.buffer_address(), qr.buffer_address(), qd.buffer_address(),
                                     mr.buffer_address(), md.buffer_address()], 3 * F.row_index(), F.row_index())  # fmt: skip
-        cnamed = dict(pages=T, nq=nq, k=k, has_weight=0, has_norm=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(r.eps))
+        cnamed = dict(pages=T, nq=nq, k=k, has_weight=0, has_norm=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(r.eps),
+                      sit=F.SCALAR_IT)  # fmt: skip
         kernels = [
             F.kernel("attnres_reader.cpp", ttnn.ReaderConfigDescriptor(), named, rd, crs),
             F.kernel("attnres_writer.cpp", ttnn.WriterConfigDescriptor(), named, wr, crs),

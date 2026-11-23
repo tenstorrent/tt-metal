@@ -158,7 +158,14 @@ class _FusedGate:
         tws = [t[0] for t in (F.twin(h), F.twin(m)) if t is not None]
         io = [h, m, *tws, self.scaler]
         cnamed = dict(
-            pages=T, nq=0, k=0, has_weight=0, has_norm=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(self.eps)
+            pages=T,
+            nq=0,
+            k=0,
+            has_weight=0,
+            has_norm=0,
+            inv_c=f32_bits(1.0 / self.c),
+            eps=f32_bits(self.eps),
+            sit=F.SCALAR_IT,
         )
         return dict(rd=[rd[c] for c in cores], wr=[wr[c] for c in cores], named=named, cnamed=cnamed, cbs=cbs, io=io)
 

@@ -257,6 +257,7 @@ class AttnPrep:
             inv=f32_bits(self.q_inv if q else (1.0 / HEAD_DIM if kind == "v" else self.k_inv)),
             eps=f32_bits(self.eps),
             cs=f32_bits(self.cs),
+            sit=F.SCALAR_IT,
         )
         crs = _crs(cores)
         n = nitems * nlag

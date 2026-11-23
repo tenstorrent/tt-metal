@@ -84,7 +84,14 @@ class FusedRowNorm:
                 "attnres_compute.cpp",
                 F.compute_config([4], full_sync=True),
                 dict(
-                    pages=T, nq=0, k=0, has_weight=1, has_norm=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(self.eps)
+                    pages=T,
+                    nq=0,
+                    k=0,
+                    has_weight=1,
+                    has_norm=0,
+                    inv_c=f32_bits(1.0 / self.c),
+                    eps=f32_bits(self.eps),
+                    sit=F.SCALAR_IT,
                 ),
                 None,
                 crs,

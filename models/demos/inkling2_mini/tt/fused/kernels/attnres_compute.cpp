@@ -27,9 +27,11 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "scalar_sfpu.hpp"
 
 namespace {
-constexpr VectorMode SCALAR = VectorMode::None;
+// scalar SFPU ops (scalar_sfpu.hpp): SIT iterations of face 0 (8 = the whole face, as before; 1 = the rows of [0, 0])
+constexpr int SIT = get_named_compile_time_arg_val("sit");
 constexpr uint32_t cb_p = 0, cb_q = 1, cb_s = 2, cb_scaler = 3, cb_wt = 4, cb_np = 16, cb_out = 17;
 constexpr uint32_t cb_sq = 25, cb_inv = 26, cb_prod = 27, cb_w = 28;
 
@@ -119,10 +121,10 @@ void kernel_main() {
         tile_regs_acquire();
         reduce_scalars(cb_sq, 0, 1, cb_inv);
         binop_with_scalar_tile_init();
-        mul_unary_tile(0, inv_c, SCALAR);  // scalars sit at [0, 0]: SFPU on face 0 only
-        add_unary_tile(0, eps, SCALAR);
+        scal::mul_unary<SIT>(0, inv_c);  // scalars sit at [0, 0]: SFPU on face 0 only
+        scal::add_unary<SIT>(0, eps);
         rsqrt_tile_init();
-        rsqrt_tile(0, SCALAR);
+        scal::rsqrt<SIT>(0);
         tile_regs_commit();
         tile_regs_wait();
         put(0, cb_inv);
@@ -209,28 +211,28 @@ void kernel_main() {
             if constexpr (d > 1) {
                 constexpr uint32_t m = 7, s = 6;
                 binary_max_tile_init();
-                binary_max_tile(0, 1, m, SCALAR);
+                scal::bmax<SIT>(0, 1, m);
                 for (uint32_t j = 2; j < d; ++j) {
-                    binary_max_tile(m, j, m, SCALAR);
+                    scal::bmax<SIT>(m, j, m);
                 }
                 sub_binary_tile_init();
                 for (uint32_t j = 0; j < d; ++j) {
-                    sub_binary_tile(j, m, j, SCALAR);
+                    scal::sub<SIT>(j, m, j);
                 }
                 exp_tile_init();
                 for (uint32_t j = 0; j < d; ++j) {
-                    exp_tile(j, SCALAR);
+                    scal::exp<SIT>(j);
                 }
                 add_binary_tile_init();
-                add_binary_tile(0, 1, s, SCALAR);
+                scal::add<SIT>(0, 1, s);
                 for (uint32_t j = 2; j < d; ++j) {
-                    add_binary_tile(s, j, s, SCALAR);
+                    scal::add<SIT>(s, j, s);
                 }
                 recip_tile_init();
-                recip_tile(s, SCALAR);
+                scal::recip<SIT>(s);
                 mul_binary_tile_init();
                 for (uint32_t j = 0; j < d; ++j) {
-                    mul_binary_tile(j, s, j, SCALAR);
+                    scal::mul<SIT>(j, s, j);
                 }
             }
             tile_regs_commit();
@@ -299,10 +301,10 @@ void kernel_main() {
         tile_regs_acquire();
         reduce_scalars(cb_sq, 0, 1, cb_inv);
         binop_with_scalar_tile_init();
-        mul_unary_tile(0, inv_c, SCALAR);
-        add_unary_tile(0, eps, SCALAR);
+        scal::mul_unary<SIT>(0, inv_c);
+        scal::add_unary<SIT>(0, eps);
         rsqrt_tile_init();
-        rsqrt_tile(0, SCALAR);
+        scal::rsqrt<SIT>(0);
         tile_regs_commit();
         tile_regs_wait();
         put(0, cb_inv);

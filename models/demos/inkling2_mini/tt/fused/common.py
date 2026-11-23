@@ -135,6 +135,12 @@ def core_list(device, n, first_row=0):
     return cores, ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
 
 
+# SFPU iterations of scalar ops (a value at [0, 0], read by bcast-scalar ops) in attnres_compute.cpp and
+# attn_head_compute.cpp (kernels/scalar_sfpu.hpp): 1 = rows 0..3 of face 0, the same op on [0, 0]; 8 = the whole face
+# (attnres) / the old R-mode ops (attn head).
+SCALAR_IT = int(os.environ.get("INKLING_SCALAR_IT", "1"))
+
+
 # One-shot kernels for the next bank-streamed linear program (BankLinear / StagedBankLinear): a callable
 # busy -> (kernels, io tensors), busy = the {(x, y)} logical cores the linear uses (the kernels must avoid them). The
 # attention prep's input fetch rides in the w_all program this way (fused/attn.py PREP_PRE).

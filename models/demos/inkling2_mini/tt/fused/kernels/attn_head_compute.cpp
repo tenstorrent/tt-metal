@@ -21,6 +21,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "scalar_sfpu.hpp"
 
 namespace {
 constexpr uint32_t cb_x = 0, cb_t = 1, cb_d = 2, cb_scaler = 3, cb_tau = 4, cb_massin = 5;
@@ -54,6 +55,7 @@ void kernel_main() {
     constexpr uint32_t eps = get_named_compile_time_arg_val("eps");  // fp32 bits
     constexpr uint32_t cs = get_named_compile_time_arg_val("cs");    // fp32 bits (dyn only)
     constexpr uint32_t one = 0x3f800000u;
+    constexpr int sit = get_named_compile_time_arg_val("sit") == 8 ? 0 : get_named_compile_time_arg_val("sit");
     constexpr uint32_t n = nitems * nlag;
 
     compute_kernel_hw_startup(cb_x, cb_y);
@@ -104,20 +106,42 @@ void kernel_main() {
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(cb_sq, cb_scaler, cb_f);
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_SCALAR>(cb_sq, cb_scaler, 0, 0, 0);
         reduce_uninit();
+        // the factor is read at [0, 0] only (mul_tiles_bcast_scalar): sit > 0 runs these ops on face 0, sit 4-row
+        // groups (scalar_sfpu.hpp; 1 = the rows of [0, 0]), sit 0 as before (faces 0, 1; the max on all four)
         binop_with_scalar_tile_init();
-        mul_unary_tile(0, inv, R);
+        if constexpr (sit) {
+            scal::mul_unary<sit>(0, inv);
+        } else {
+            mul_unary_tile(0, inv, R);
+        }
         if constexpr (norm == 1) {
-            add_unary_tile(0, eps, R);
+            if constexpr (sit) {
+                scal::add_unary<sit>(0, eps);
+            } else {
+                add_unary_tile(0, eps, R);
+            }
         } else {
             unary_max_tile_init();
-            unary_max_tile(0, one);
+            if constexpr (sit) {
+                scal::max_unary<sit>(0, one);
+            } else {
+                unary_max_tile(0, one);
+            }
         }
         rsqrt_tile_init();
-        rsqrt_tile(0, R);
+        if constexpr (sit) {
+            scal::rsqrt<sit>(0);
+        } else {
+            rsqrt_tile(0, R);
+        }
         if constexpr (has_tau) {
             load(cb_tau, 0, 1);
             mul_binary_tile_init();
-            mul_binary_tile(0, 1, 0, R);
+            if constexpr (sit) {
+                scal::mul<sit>(0, 1, 0);
+            } else {
+                mul_binary_tile(0, 1, 0, R);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
