@@ -17,18 +17,18 @@ namespace ttnn::operations::data_movement::detail {
 
 void bind_move(nb::module_& mod) {
     const auto* doc = R"doc(
-            Moves the elements of the input tensor ``arg0`` to a location in memory with specified memory layout.
+            Moves the elements of the input tensor ``input_tensor`` to a location in memory with specified memory layout.
 
             If no memory layout is specified, output memory will be the same as the input tensor memory config.
 
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | Argument | Description                | Data type                  | Valid range                     | Required |
-            +==========+============================+============================+=================================+==========+
-            | arg0     | Tensor to move             | Tensor                     | Tensor of shape [W, Z, Y, X]    | Yes      |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | arg1     | MemoryConfig of tensor of  | tt_lib.tensor.MemoryConfig | Default is same as input tensor | No       |
-            |          | TT accelerator device      |                            |                                 |          |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
+            +---------------+----------------------------+--------------------+---------------------------------+----------+
+            | Argument      | Description                | Data type          | Valid range                     | Required |
+            +===============+============================+====================+=================================+==========+
+            | input_tensor  | Tensor to move             | ttnn.Tensor        | Tensor of shape [W, Z, Y, X]    | Yes      |
+            +---------------+----------------------------+--------------------+---------------------------------+----------+
+            | memory_config | MemoryConfig of tensor of  | ttnn.MemoryConfig  | Default is same as input tensor | No       |
+            | (keyword)     | TT accelerator device      |                    |                                 |          |
+            +---------------+----------------------------+--------------------+---------------------------------+----------+
         )doc";
 
     ttnn::bind_function<"move">(

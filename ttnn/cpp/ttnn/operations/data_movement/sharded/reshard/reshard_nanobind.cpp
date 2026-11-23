@@ -23,20 +23,23 @@ void bind_reshard(nb::module_& mod) {
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): input tensor
             * :attr:`output_memory_config` (MemoryConfig): Memory config with shard spec of output tensor
+            * :attr:`output_tensor` (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`, which allocates one.
 
         Example:
-            >>> sharded_memory_config_dict = dict(
-                core_grid=ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)
-                        ),
-                    }
-                ),
-                strategy=ttnn.ShardStrategy.BLOCK,
-            ),
-            >>> shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
-            >>> sharded_tensor = ttnn.reshard(tensor, shard_memory_config)
+            >>> shape = (1, 1, 64, 64)
+            >>> height_sharded = ttnn.create_sharded_memory_config(
+            ...     shape, core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.HEIGHT
+            ... )
+            >>> block_sharded = ttnn.create_sharded_memory_config(
+            ...     shape, core_grid=ttnn.CoreGrid(y=2, x=2), strategy=ttnn.ShardStrategy.BLOCK
+            ... )
+            >>> tensor = ttnn.from_torch(
+            ...     torch.rand(shape, dtype=torch.bfloat16),
+            ...     layout=ttnn.TILE_LAYOUT,
+            ...     device=device,
+            ...     memory_config=height_sharded,
+            ... )
+            >>> resharded = ttnn.reshard(tensor, block_sharded)
 
         )doc";
 

@@ -60,8 +60,8 @@ void bind_reshape(nb::module_& mod) {
 
         Example:
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 4), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.reshape(tensor, 1, 1, 2, 2)
+            >>> tensor = ttnn.from_torch(torch.rand((1, 1, 4, 2), dtype=torch.bfloat16), device=device)
+            >>> output = ttnn.reshape_on_device(tensor, 1, 2, 2, 2)
 
         )doc";
 
