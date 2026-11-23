@@ -201,8 +201,8 @@ case "${MODEL}" in
           PP_RANKS=1
           SC1_NUM_LAYERS=38
           RUNNER_ENV+=" export PREFILL_FABRIC_MODE=2d_torus_xy;"
-          # The same unfused norm and L1_SMALL as the SC4 [RING,RING] stages.
-          RUNNER_ENV+=" export PREFILL_FUSED_RMSNORM=0; export PREFILL_L1_SMALL_SIZE=2048;"
+          # The same unfused norm and MoE implementation as the SC4 [RING,RING] stages.
+          RUNNER_ENV+=" export PREFILL_FUSED_RMSNORM=0; export MOE_IMPL=ttmoe;"
         elif [ "${CONFIG}" = sc4_rr ]; then
           # [RING,RING]: 8 stages, the odd (seam) ones on two hosts each, so 12 ranks; the 4x4 tray-half cache
           # serves it (same mesh coordinates, only the fabric differs).
@@ -222,8 +222,10 @@ case "${MODEL}" in
           fi
           # dit_fused_distributed_rmsnorm resolves every chip of the mesh, which a seam host cannot; use the unfused norm.
           RUNNER_ENV+=" export PREFILL_FUSED_RMSNORM=0;"
-          # The unfused norm's all-gathers put more semaphores in L1_SMALL; packed forwards overflowed 1664 B.
-          RUNNER_ENV+=" export PREFILL_L1_SMALL_SIZE=2048;"
+          # TtMoe: the MoE block's port placement asks every chip of the mesh for its device, which a seam host cannot
+          # (the prefill CCL ops exchange placements across hosts instead). The adapter's L1_SMALL, sized for the MoE
+          # block's words slab, also covers the unfused norm's extra all-gather semaphores.
+          RUNNER_ENV+=" export MOE_IMPL=ttmoe;"
           PRODUCER_ENV+=" export PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2;"
         fi
         # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
@@ -242,7 +244,8 @@ case "${MODEL}" in
     # is the deepest depth the golden's decoder-output stream covers, so sc1 is a real accuracy gate
     # rather than a smaller copy of sc4. sc1 keeps the default 256k context, so its perf probes are
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
-    # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
+    # baseline for sc4 -- 24 layers against 93. CI's sc4 leg and summary now run K3.1 (kimi_k3_1 below);
+    # K3's sc4 stays runnable by hand and keeps its perf_baselines.json entry.
     SC1_NUM_LAYERS=24
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized; \
       export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
@@ -277,10 +280,13 @@ case "${MODEL}" in
     # The cache root is the adapter's ttnn_cache_default; 76 slots measured for the 8x4 stage.
     kimi_layout "${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3.1-Cache/Kimi-K3.1-Cache-prefill}" \
       kimi_k3_1 76
-    # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare. 10240 tokens is
-    # whole chunks in both layouts (4 of 2560 at 4x4, 2 of 5120 at 8x4), so every one of the 8192 golden
-    # positions is compared, the gate reads earlier chunks' KV from later ones, and the tail past 8192 is timed.
-    REQUEST_LEN=10240
+    # K3's 1M request, as K3 times it: whole chunks in both layouts (410 of 2560 at 4x4, 205 of 5120 at 8x4).
+    # The golden is the 8192-token prompt of a vLLM capture and its span bounds the compare, so the first 8192
+    # positions are PCC'd and the rest of the request (the trace's tokens repeated) is timed.
+    REQUEST_LEN=1049600
+    # Demand a measurement: until perf_baselines.json has a kimi_k3_1 entry for the config, the gate otherwise
+    # returns before reading the metrics, and a leg that measured nothing would pass green.
+    REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-1}"
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
