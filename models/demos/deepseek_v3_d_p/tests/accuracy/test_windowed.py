@@ -37,7 +37,7 @@ def test_row_sums_and_metrics_match_hand_values() -> None:
     assert nrmse(sums[:1]) == 0.0 and nrmse(sums[2:3]) == 0.0  # exact, also on the all-zero row
     assert nrmse(row_sums(torch.zeros(1, 2), torch.ones(1, 2))) == math.inf
     assert pcc(row_sums(torch.tensor([[1.0, 2.0, 3.0]]), torch.tensor([[2.0, 4.0, 6.0]]))) == pytest.approx(1.0)
-    assert math.isnan(pcc(row_sums(torch.ones(1, 3), torch.ones(1, 3))))
+    assert math.isnan(pcc(row_sums(torch.ones(1, 3), torch.ones(1, 3))))  # constant golden: undefined
     # Per row: 0, 1/5, 0 (exact zero row), 1/5; a floor of 10 caps the denominator from below.
     assert row_nrmse(sums, floor=0.5).tolist() == pytest.approx([0.0, 0.2, 0.0, 0.2])
     assert row_nrmse(sums, floor=10.0).tolist() == pytest.approx([0.0, 0.1, 0.0, 0.1])
@@ -70,8 +70,23 @@ def test_absolute_error_is_the_rms_over_elements_next_to_the_golden_rms() -> Non
     assert errors(whole, "out_") == pytest.approx(
         {"out_nrmse": math.sqrt(2 / 75), "out_rms_err": 0.5, "out_rms_ref": math.sqrt(75 / 8), "out_pcc": pcc(whole)}
     )
-    # PCC is undefined when one side is constant: left out, not NaN
+    # PCC is undefined only when the golden is constant: left out, not NaN
     assert errors(row_sums(torch.ones(1, 3), torch.ones(1, 3))) == {"nrmse": 0.0, "rms_err": 0.0, "rms_ref": 1.0}
+    assert "pcc" not in errors(row_sums(torch.ones(1, 3), torch.tensor([[1.0, 2.0, 3.0]])))
+
+
+def test_pcc_fails_closed_on_a_constant_or_non_finite_device_side() -> None:
+    """Golden (1, 2, 3) against a device side never written (0, 0, 0): no correlation, PCC 0, so a minimum-PCC bar
+    fails that window; NRMSE 1 (‖e‖ = ‖y‖). A NaN on the device side is reported as NaN and fails too."""
+    golden = torch.tensor([[1.0, 2.0, 3.0]])
+    zero = errors(row_sums(golden, torch.zeros(1, 3)), "kv_")
+    assert zero["kv_pcc"] == 0.0 and zero["kv_nrmse"] == 1.0
+    assert check([{"start": 0, "end": 1, **zero}], [Bar("kv_pcc", "min", 0.999)]) == ["kv_pcc 0 < 0.999 in [0, 1)"]
+    broken = errors(row_sums(golden, torch.tensor([[1.0, float("nan"), 3.0]])), "kv_")
+    assert math.isnan(broken["kv_pcc"])
+    assert check([{"start": 0, "end": 1, **broken}], [Bar("kv_pcc", "min", 0.999)]) == [
+        "kv_pcc nan is not finite in [0, 1)"
+    ]
 
 
 def test_quantile_interpolates_and_is_nan_when_empty() -> None:
