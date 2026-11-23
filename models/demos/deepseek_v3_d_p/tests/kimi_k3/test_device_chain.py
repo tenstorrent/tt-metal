@@ -46,7 +46,14 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, provenance, token_ids_sha256
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import CHAIN, INPUTS, TRACE, chain_taps, load_token_ids
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import (
+    CHAIN,
+    INPUTS,
+    LAYERS_0_3,
+    TRACE,
+    chain_taps,
+    load_token_ids,
+)
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import chunk_path, finish_run, start_run
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_kda_chain_feed import read_carry
@@ -98,7 +105,7 @@ def test_k31_layers_run_free(mesh_device, device_params):
         manifests[name] = {**common, "tap": name}
         if name != "stream":
             manifests[name]["layer"] = int(name.split("-l")[1])
-        if name in INPUTS and chain == Path(CHAIN):
+        if name in INPUTS and spec is LAYERS_0_3:
             layer, source = INPUTS[name]
             built = json.loads((source / MANIFEST).read_text())
             keep = ("trace", "trace_commit", "input", "checkpoint", "rebuild", "chain")

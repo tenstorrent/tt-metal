@@ -209,17 +209,23 @@ DEEP_REBUILD_VERSION = 1
 DEEP_PRODUCT_BAR = 1e-5
 
 
-def deep_products(chain: Path, layer: int, site: str, names: list[str], start: int, end: int) -> dict:
-    """Products ``names`` of the deep chain's pass (``layer``, ``site``) for rows ``[start, end)``; the pass's
-    segments are ``<chain>/L<layer>_<site>/segment_<i>.pt`` of ``manifest["segment"]`` rows each."""
-    seg = json.loads((chain / MANIFEST).read_text())["segment"]
+def segment_rows(path_of, segment: int, names: list[str], start: int, end: int) -> dict:
+    """Rows ``[start, end)`` of ``names`` from per-segment files ``path_of(i)`` of ``segment`` rows each, each holding
+    its own ``start`` / ``end``."""
     parts: dict[str, list[torch.Tensor]] = {n: [] for n in names}
-    for index in range(start // seg, -(-end // seg)):
-        d = torch.load(chain / f"L{layer}_{site}" / f"segment_{index:06d}.pt", weights_only=True, mmap=True)
+    for index in range(start // segment, -(-end // segment)):
+        d = torch.load(path_of(index), weights_only=True, mmap=True)
         a, b = max(start, d["start"]) - d["start"], min(end, d["end"]) - d["start"]
         for n in names:
             parts[n].append(d[n][a:b])
     return {n: torch.cat(v) for n, v in parts.items()}
+
+
+def deep_products(chain: Path, layer: int, site: str, names: list[str], start: int, end: int) -> dict:
+    """Products ``names`` of the deep chain's pass (``layer``, ``site``) for rows ``[start, end)``; the pass's
+    segments are ``<chain>/L<layer>_<site>/segment_<i>.pt`` of ``manifest["segment"]`` rows each."""
+    seg = json.loads((chain / MANIFEST).read_text())["segment"]
+    return segment_rows(lambda i: chain / f"L{layer}_{site}" / f"segment_{i:06d}.pt", seg, names, start, end)
 
 
 def deep_complete(chain: Path, layers: int | None = None) -> dict:
@@ -350,18 +356,11 @@ def rebuild_deep(
         )
 
 
-def rows_of(directory: Path, names: list[str], start: int, end: int, path=rebuilt_path) -> dict:
-    """Rows ``[start, end)`` of ``names`` from per-segment files ``path(directory, i)`` that hold ``start`` / ``end``
-    (a KDA rebuild's ``rebuilt_<i>.pt``)."""
+def rows_of(directory: Path, names: list[str], start: int, end: int) -> dict:
+    """Rows ``[start, end)`` of ``names`` from a KDA rebuild's per-segment ``rebuilt_<i>.pt``."""
     seg_rows = json.loads((directory / MANIFEST).read_text())["segment_rows"]
     segment = seg_rows[0][1] - seg_rows[0][0]
-    parts: dict[str, list[torch.Tensor]] = {n: [] for n in names}
-    for index in range(start // segment, -(-end // segment)):
-        d = torch.load(path(directory, index), weights_only=True, mmap=True)
-        a, b = max(start, d["start"]) - d["start"], min(end, d["end"]) - d["start"]
-        for n in names:
-            parts[n].append(d[n][a:b])
-    return {n: torch.cat(v) for n, v in parts.items()}
+    return segment_rows(lambda i: rebuilt_path(directory, i), segment, names, start, end)
 
 
 def deep_references(
