@@ -7,6 +7,8 @@
 //   cb_p:     nj profile tiles, rows = ring slots 32j .. 32j + 31, cols = rel dim: rows of the reversed profile
 //             table starting at (32j - ring) mod 1024 (a contiguous run of 32 rows of 16 bf16)
 //   cb_near:  the near-mask tiles of those slots (fp32, row 0)
+// slim: read only the bytes the compute uses, zeros elsewhere (as in the tensors), G built in L1: rel_scale rows
+// 0..23 of columns 0..15 (faces 0, 2), the near tiles' row 0 (the compute broadcasts it).
 #include "attn_io.hpp"
 
 constexpr bool proj_dram = get_named_compile_time_arg_val("proj_dram");  // projection output in DRAM (else L1)
@@ -16,6 +18,7 @@ void kernel_main() {
     constexpr uint32_t has_tau = get_named_compile_time_arg_val("has_tau");
     constexpr uint32_t rel_tile = get_named_compile_time_arg_val("rel_tile");  // projection tile of rel column 0
     constexpr uint32_t prow = get_named_compile_time_arg_val("prow");          // projection row (4 t: shared window)
+    constexpr uint32_t slim = get_named_compile_time_arg_val("slim");
     constexpr uint32_t cb_rel = 0, cb_rs = 1, cb_g = 2, cb_tau = 3, cb_p = 4, cb_near = 5, cb_stage = 24;
 
     uint32_t a = 0;
@@ -38,9 +41,31 @@ void kernel_main() {
     cb_reserve_back(cb_rel, 1);
     const uint32_t pw = get_write_ptr(cb_p), rw = get_write_ptr(cb_rel);
     // wave 1: constants, zeros, rel row blocks, tau, ring slot - one read barrier
-    attnio::read_pages(rs, 4096, 0, 1, get_write_ptr(cb_rs));
-    attnio::read_pages(g, 2048, 0, 1, get_write_ptr(cb_g));
-    attnio::read_pages(near, 4096, j0, nj, get_write_ptr(cb_near));
+    if constexpr (slim) {
+        const uint32_t rsw = get_write_ptr(cb_rs), gw = get_write_ptr(cb_g), nw = get_write_ptr(cb_near);
+        const InterleavedAddrGen<true> rs_a = {.bank_base_address = rs, .page_size = 4096};
+        noc_async_read(rs_a.get_noc_addr(0, 0), rsw, 1024);           // face 0: rows 0..15
+        noc_async_read(rs_a.get_noc_addr(0, 2048), rsw + 2048, 512);  // face 2: rows 16..23
+        attnio::zero_l1(rsw + 1024, 1024);
+        attnio::zero_l1(rsw + 2560, 4096 - 2560);
+        attnio::zero_l1(gw + 512, 2048 - 512);  // G: bf16 1.0 on face 0 (rows, cols 0..15), zero elsewhere
+        volatile tt_l1_ptr uint32_t* gp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gw);
+        for (uint32_t k = 0; k < 128; ++k) {
+            gp[k] = 0x3f803f80u;
+        }
+        const InterleavedAddrGen<true> near_a = {.bank_base_address = near, .page_size = 4096};
+        for (uint32_t j = 0; j < nj; ++j) {  // row 0 = face 0 row 0 + face 1 row 0
+            const uint32_t dst = nw + j * 4096;
+            noc_async_read(near_a.get_noc_addr(j0 + j, 0), dst, 64);
+            noc_async_read(near_a.get_noc_addr(j0 + j, 1024), dst + 1024, 64);
+            attnio::zero_l1(dst + 64, 1024 - 64);
+            attnio::zero_l1(dst + 1088, 4096 - 1088);
+        }
+    } else {
+        attnio::read_pages(rs, 4096, 0, 1, get_write_ptr(cb_rs));
+        attnio::read_pages(g, 2048, 0, 1, get_write_ptr(cb_g));
+        attnio::read_pages(near, 4096, j0, nj, get_write_ptr(cb_near));
+    }
     attnio::zero_l1(pw, nj * 2048);
     attnio::zero_l1(rw, 2048);
     attnio::stage_row<proj_dram>(proj, 2048, 2, rel_tile, 12, prow, stage);

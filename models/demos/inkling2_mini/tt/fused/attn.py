@@ -12,6 +12,7 @@ replacing ~45 ttnn ops per layer application:
 `AttnOut`: attention output * sigmoid(gate) -> row 0 of the o-projection's L1 input shards (8 cores).
 """
 
+import os
 import struct
 
 import torch
@@ -27,7 +28,14 @@ D_REL = 16
 WINDOW = 1024
 TAPS = 4
 TABLE_ROWS = WINDOW + 34  # wrap rows so a 1088-byte aligned read never runs past the end
-NJ = 4  # bias slot tiles per core
+# Bias cores of the prep: 32 = one slot tile each (8: four each). Same per-tile math, so the same bits.
+# 4K / 128K ms with slim reads: 8 cores 15.14 / 20.49, 32 cores 15.11 / 20.46. (q one head per core, 24 cores:
+# slower, its readers' DRAM waits grow.)
+BIAS_CORES = int(os.environ.get("INKLING_PREP_BIAS_CORES", "32"))
+# Slim prep reads: only the bytes of the constant pages the compute uses, the rest zeroed / built in L1 (same CB
+# bytes). The expert stream keeps DRAM busy while the prep runs, so its reads end sooner: 4K 15.28 -> 15.14 ms,
+# 128K 20.59 -> 20.49 (8 bias cores).
+PREP_SLIM = os.environ.get("INKLING_PREP_SLIM", "1") == "1"
 NEG = -1.0e9  # masked logit (attention.py)
 
 
@@ -148,7 +156,8 @@ class AttnPrep:
         mass[0, 0] = 1.0  # far-cache mass chunk [1, 0 x 15] (+ a zero chunk), packed like the v row
         self.mass = F.dense_tensor(device, mass)
 
-        cores, _ = F.core_list(device, 3 * N_KV + N_KV, first_row=1)
+        assert (WINDOW // 32) % BIAS_CORES == 0, BIAS_CORES
+        cores, _ = F.core_list(device, 3 * N_KV + BIAS_CORES, first_row=1)
         self.q_cores, self.k_cores = cores[:N_KV], cores[N_KV : 2 * N_KV]
         self.v_cores, self.b_cores = cores[2 * N_KV : 3 * N_KV], cores[3 * N_KV :]
         self.cache = {}
@@ -209,6 +218,7 @@ class AttnPrep:
             r_rt.append(r)
             w_rt.append(w)
         named = dict(nitems=nitems, nlag=nlag, dyn=dyn, has_tau=has_tau, mass=mass, proj_dram=_is_dram(proj))
+        r_named = dict(named, slim=int(PREP_SLIM))
         c_named = dict(
             named,
             norm=int(kind == "v"),
@@ -236,7 +246,7 @@ class AttnPrep:
             writer = _kernel("attn_kv_writer.cpp", cores, named_w, w_rt, ttnn.WriterConfigDescriptor())
         out_page = 1088 if out_dtype == ttnn.bfloat8_b else 2048
         kernels = [
-            _kernel("attn_head_reader.cpp", cores, named, r_rt, ttnn.ReaderConfigDescriptor()),
+            _kernel("attn_head_reader.cpp", cores, r_named, r_rt, ttnn.ReaderConfigDescriptor()),
             writer,
             _kernel("attn_head_compute.cpp", cores, c_named, [[]] * len(cores), _compute_config([1, 2, 4, 5])),
         ]
@@ -259,8 +269,10 @@ class AttnPrep:
 
     def _bias_group(self, proj, positions, tau, rows=None, prow=0, cores=None):
         cores = self.b_cores if cores is None else cores
+        nj = WINDOW // 32 // len(cores)  # slot tiles per core
         has_tau = int(self.dyn)
-        named = dict(nj=NJ, has_tau=has_tau, rel_tile=6144 // 32, proj_dram=_is_dram(proj), prow=prow)
+        named = dict(nj=nj, has_tau=has_tau, rel_tile=6144 // 32, proj_dram=_is_dram(proj), prow=prow)
+        named["slim"] = int(PREP_SLIM)
         r_rt, w_rt = [], []
         for i, _ in enumerate(cores):
             r_rt.append(
@@ -272,14 +284,14 @@ class AttnPrep:
                     positions.near_mask.buffer_address(),
                     positions.ring.buffer_address(),
                     self.table.buffer_address(),
-                    i * NJ,
+                    i * nj,
                 ]
             )
             blk = self.sink_blk.buffer_address() if self.dyn else 0
             if rows is not None and self.dyn:  # global: this token's near inputs
                 t, ro = rows
                 w_rt.append(
-                    [ro.mask_g[t].buffer_address(), i * NJ, proj.buffer_address(), self.sink.buffer_address()]
+                    [ro.mask_g[t].buffer_address(), i * nj, proj.buffer_address(), self.sink.buffer_address()]
                     + [ro.sink_blk[t].buffer_address()]
                 )
                 continue
@@ -287,13 +299,13 @@ class AttnPrep:
                 t, ro = rows
                 k, lt = ro.local(t)
                 w_rt.append(
-                    [ro.maskc[k].buffer_address(), i * NJ, proj.buffer_address(), ro.sinkc[k].buffer_address(), 0, lt]
+                    [ro.maskc[k].buffer_address(), i * nj, proj.buffer_address(), ro.sinkc[k].buffer_address(), 0, lt]
                 )
                 continue
-            w_rt.append([self.mask.buffer_address(), i * NJ, proj.buffer_address(), self.sink.buffer_address(), blk])
+            w_rt.append([self.mask.buffer_address(), i * nj, proj.buffer_address(), self.sink.buffer_address(), blk])
         crs = _crs(cores)
         sink_core, rest = cores[:1], cores[1:]
-        w_named = dict(nj=NJ, sink_tile=6528 // 32, sink_blk=int(self.dyn), neg=f32_bits(NEG), grp=int(self.dyn),
+        w_named = dict(nj=nj, sink_tile=6528 // 32, sink_blk=int(self.dyn), neg=f32_bits(NEG), grp=int(self.dyn),
                        proj_dram=_is_dram(proj))  # fmt: skip
         w_named["rows"] = int(rows is not None and not self.dyn)
         w_named["prow"] = prow
@@ -306,7 +318,7 @@ class AttnPrep:
             _kernel(
                 "attn_bias_compute.cpp",
                 cores,
-                dict(nj=NJ, has_tau=has_tau, inv=f32_bits(self.rel_inv)),
+                dict(nj=nj, has_tau=has_tau, inv=f32_bits(self.rel_inv)),
                 [[]] * len(cores),
                 _compute_config([1, 3, 16]),
             ),
@@ -316,8 +328,8 @@ class AttnPrep:
             _cb(1, ttnn.float32, 1, crs),
             _cb(2, ttnn.bfloat16, 1, crs),
             _cb(3, ttnn.float32, 1, crs),
-            _cb(4, ttnn.bfloat16, NJ, crs),
-            _cb(5, ttnn.float32, NJ, crs),
+            _cb(4, ttnn.bfloat16, nj, crs),
+            _cb(5, ttnn.float32, nj, crs),
             _cb(6, ttnn.bfloat16, 1, crs),
             _cb(7, ttnn.float32, 1, crs, page=24 * 128),
             _cb(16, ttnn.float32, 1, crs),
@@ -325,7 +337,7 @@ class AttnPrep:
             _cb(19, ttnn.bfloat16, 1, crs),
             _cb(20, ttnn.bfloat16, 1, crs),
             _cb(21, ttnn.bfloat16, 1, crs),
-            _stage(24, crs, 1664 + NJ * 1088 + 64),  # rel blocks, tau, ring slot, NJ profile row runs
+            _stage(24, crs, 1664 + nj * 1088 + 64),  # rel blocks, tau, ring slot, nj profile row runs
             _stage(25, crs, 512),
         ]
         return kernels, cbs

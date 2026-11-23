@@ -5,6 +5,9 @@
 // pages (cb_x), their taps / scale (dense fp32 pages, cb_t), and with `dyn` the per-token taps of global layers as
 // dense fp32 pages filled with d_l (cb_d). Plus the reduce scaler, (has_tau) the tau tile and (mass) the
 // far-cache mass page.
+// slim: read only the bytes the compute uses and build the constant pages in L1 (same CB bytes as reading the
+// whole pages): taps 512 of 4096 bytes per page, tau its first 64 bytes; the scaler and the mass page are built.
+// The DRAM is busy with the expert stream here, so fewer bytes ends the reads sooner.
 #include "attn_io.hpp"
 
 constexpr bool proj_dram = get_named_compile_time_arg_val("proj_dram");  // projection output in DRAM (else L1)
@@ -15,6 +18,7 @@ void kernel_main() {
     constexpr uint32_t dyn = get_named_compile_time_arg_val("dyn");
     constexpr uint32_t has_tau = get_named_compile_time_arg_val("has_tau");
     constexpr uint32_t mass = get_named_compile_time_arg_val("mass");  // far-cache mass chunk page (cb_mass)
+    constexpr uint32_t slim = get_named_compile_time_arg_val("slim");
     constexpr uint32_t cb_x = 0, cb_t = 1, cb_d = 2, cb_scaler = 3, cb_tau = 4, cb_mass = 5, cb_stage = 24;
     constexpr uint32_t n = nitems * nlag;
 
@@ -27,14 +31,30 @@ void kernel_main() {
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), attnio::ALIGN);
 
     cb_reserve_back(cb_scaler, 1);
-    attnio::read_pages(scaler, 4096, 0, 1, get_write_ptr(cb_scaler));
     if constexpr (has_tau) {
         cb_reserve_back(cb_tau, 1);
-        attnio::read_pages(tau, 4096, 0, 1, get_write_ptr(cb_tau));
     }
     if constexpr (mass) {
         cb_reserve_back(cb_mass, 1);
-        attnio::read_pages(mass_addr, 4096, 0, 1, get_write_ptr(cb_mass));
+    }
+    if constexpr (slim) {
+        attnio::zero_l1(get_write_ptr(cb_scaler), 4096);  // built after the wave 1 barrier
+        if constexpr (has_tau) {                          // tau at [0, 0]: the compute uses f[0, 0] only
+            attnio::zero_l1(get_write_ptr(cb_tau) + 64, 4096 - 64);
+            const InterleavedAddrGen<true> tau_a = {.bank_base_address = tau, .page_size = 4096};
+            noc_async_read(tau_a.get_noc_addr(0, 0), get_write_ptr(cb_tau), 64);
+        }
+        if constexpr (mass) {
+            attnio::zero_l1(get_write_ptr(cb_mass), 4096);
+        }
+    } else {
+        attnio::read_pages(scaler, 4096, 0, 1, get_write_ptr(cb_scaler));
+        if constexpr (has_tau) {
+            attnio::read_pages(tau, 4096, 0, 1, get_write_ptr(cb_tau));
+        }
+        if constexpr (mass) {
+            attnio::read_pages(mass_addr, 4096, 0, 1, get_write_ptr(cb_mass));
+        }
     }
     cb_reserve_back(cb_t, n);
     cb_reserve_back(cb_x, n);
@@ -47,7 +67,16 @@ void kernel_main() {
         t0s[i] = get_arg_val<uint32_t>(a++);               // projection tile of the head's first column
         r0s[i] = get_arg_val<uint32_t>(a++);               // window row of lag 0
         const uint32_t page = get_arg_val<uint32_t>(a++);  // first taps page
-        attnio::read_pages(taps, 4096, page, nlag, tw + i * nlag * 4096);
+        if constexpr (slim) {  // a head's 128 taps are the page's first 512 bytes, the rest is zero
+            const InterleavedAddrGen<true> taps_a = {.bank_base_address = taps, .page_size = 4096};
+            for (uint32_t l = 0; l < nlag; ++l) {
+                const uint32_t dst = tw + (i * nlag + l) * 4096;
+                attnio::zero_l1(dst + 512, 4096 - 512);
+                noc_async_read(taps_a.get_noc_addr(page + l, 0), dst, 512);
+            }
+        } else {
+            attnio::read_pages(taps, 4096, page, nlag, tw + i * nlag * 4096);
+        }
         for (uint32_t l = 0; l < nlag; ++l) {
             attnio::stage_row<proj_dram>(proj, 2048, 2, t0s[i], 4, r0s[i] + l, stage + (i * nlag + l) * 512);
         }
@@ -60,6 +89,17 @@ void kernel_main() {
         }
     }
     noc_async_read_barrier();
+    if constexpr (slim) {  // scaler: 1.0 on tile rows 0 and 16 (faces 0..3, row 0 of each); mass: 1.0 at [0, 0]
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scaler));
+        for (uint32_t f = 0; f < 4; ++f) {
+            for (uint32_t k = 0; k < 16; ++k) {
+                p[f * 256 + k] = 0x3f800000u;
+            }
+        }
+        if constexpr (mass) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_mass)) = 0x3f800000u;
+        }
+    }
     // wave 2: chunks into the zeroed pages, d pages filled
     for (uint32_t i = 0; i < nitems; ++i) {
         for (uint32_t l = 0; l < nlag; ++l) {
