@@ -236,13 +236,15 @@ share a host with the same CPU mask therefore pin their workers onto the same co
 put 32 slow-dispatch write threads on CPUs 0-7.
 
 By default (`--rank-cpu-binding auto`), when MPI leaves ranks unbound, each rank starts through
-`rank_cpu_binding.py`. It splits the host's CPUs into whole physical cores, gives each local rank a contiguous,
-disjoint run of them, and runs the program pinned there. It does nothing on a host with one rank, or when the ranks
-would get fewer than two cores each, as in oversubscribed CPU-only runs. When `--mpi-args` already binds ranks
-(`--bind-to core`, rankfile slots), tt-run leaves MPI's binding alone.
+`rank_cpu_binding.py`. It splits the host's CPUs into whole physical cores, gives each local rank a disjoint share
+of every NUMA node's cores, and runs the program pinned there. It does not split on a host with one rank, or when the
+ranks would get fewer than two cores each, as in oversubscribed CPU-only runs. When `--mpi-args` already binds ranks
+(`--bind-to core`, rankfile slots), tt-run leaves MPI's binding alone. The script runs with the same Python as
+tt-run, from the same path, so every host needs that path.
 
 - `--rank-cpu-exclude 1,2` keeps every rank off the listed CPUs and their hyperthread siblings, for example cores a
-  storage client keeps busy. Takes a Linux CPU list (`1,2`, `0-3`).
+  storage client keeps busy, also when ranks are not split. Takes a Linux CPU list (`1,2`, `0-3`). It is an error
+  together with `--rank-cpu-binding none` or an MPI binding.
 - `--rank-cpu-binding none` leaves ranks unbound.
 
 ## Launcher Selection and Exit Codes

@@ -10,9 +10,9 @@ Giving each local rank a disjoint set of whole physical cores keeps them apart.
 
     python rank_cpu_binding.py [--exclude CPULIST] -- PROGRAM [ARGS...]
 
-The rank pins itself only when Open MPI reports at least two ranks on this host and every rank gets at least
-MIN_CORES_PER_RANK cores; otherwise it runs PROGRAM unchanged. ``--exclude`` takes CPUs out of every rank's share,
-together with their hyperthread siblings, for example cores a storage client keeps busy.
+The rank takes its share only when Open MPI reports at least two ranks on this host and every rank gets at least
+MIN_CORES_PER_RANK cores. ``--exclude`` takes CPUs and their hyperthread siblings away from the process, for example
+cores a storage client keeps busy, whether or not the ranks are split.
 
 This file runs before PROGRAM in every rank, so it imports only the standard library.
 """
@@ -28,6 +28,7 @@ PREFIX = "[tt-run]"
 MIN_CORES_PER_RANK = 2
 LOCAL_RANK_ENV = "OMPI_COMM_WORLD_LOCAL_RANK"
 LOCAL_SIZE_ENV = "OMPI_COMM_WORLD_LOCAL_SIZE"
+EXEC_FAILED_EXIT_CODE = 127
 
 
 def parse_cpu_list(text: str) -> set[int]:
@@ -68,6 +69,17 @@ def thread_siblings(cpu: int) -> set[int]:
         return {cpu}
 
 
+def numa_node(cpu: int) -> int:
+    """The NUMA node ``cpu`` belongs to, or 0 when the kernel does not say."""
+    try:
+        for entry in os.listdir(f"/sys/devices/system/cpu/cpu{cpu}"):
+            if entry.startswith("node") and entry[4:].isdigit():
+                return int(entry[4:])
+    except OSError:
+        pass
+    return 0
+
+
 def physical_cores(cpus: Iterable[int], siblings: Callable[[int], set[int]] = thread_siblings) -> list[list[int]]:
     """Group ``cpus`` into physical cores, each as its sorted CPUs, ordered by lowest CPU."""
     cores: dict[int, list[int]] = {}
@@ -79,31 +91,49 @@ def physical_cores(cpus: Iterable[int], siblings: Callable[[int], set[int]] = th
     return [cores[first] for first in sorted(cores)]
 
 
+def usable_cores(
+    allowed: Iterable[int], exclude: Iterable[int] = (), siblings: Callable[[int], set[int]] = thread_siblings
+) -> list[list[int]]:
+    """Physical cores in ``allowed`` with no CPU in ``exclude`` or sharing a core with one."""
+    excluded = set()
+    for cpu in exclude:
+        excluded |= siblings(cpu) | {cpu}
+    return [core for core in physical_cores(allowed, siblings) if not excluded.intersection(core)]
+
+
 def cpus_for_local_rank(
     allowed: Iterable[int],
     local_rank: int,
     local_size: int,
     exclude: Iterable[int] = (),
     siblings: Callable[[int], set[int]] = thread_siblings,
+    node_of: Callable[[int], int] = numa_node,
 ) -> Optional[set[int]]:
-    """The CPUs local rank ``local_rank`` of ``local_size`` should run on, or None to leave the process unpinned.
+    """The CPUs local rank ``local_rank`` of ``local_size`` should run on, or None when the ranks are not split.
 
-    Whole physical cores are split into ``local_size`` contiguous runs, the first ``len(cores) % local_size`` ranks
-    taking one extra core. Every rank on a host computes the same split from the same inputs, so the runs never
-    overlap. A core is left out when any of its CPUs is excluded.
+    Each NUMA node's usable cores are split into ``local_size`` contiguous runs, so every rank keeps CPUs on every
+    node; tt-metal pins a device's workers to CPUs on the device's node. A node's leftover cores go to the next ranks
+    in turn, keeping every rank's total within one core of the others. Every rank on a host computes the same split
+    from the same inputs, so the shares never overlap.
     """
     if local_size < 2 or not 0 <= local_rank < local_size:
         return None
-    excluded = set()
-    for cpu in exclude:
-        excluded |= siblings(cpu) | {cpu}
-    cores = [core for core in physical_cores(allowed, siblings) if not excluded.intersection(core)]
-    per_rank, extra = divmod(len(cores), local_size)
-    if per_rank < MIN_CORES_PER_RANK:
+    cores = usable_cores(allowed, exclude, siblings)
+    if len(cores) // local_size < MIN_CORES_PER_RANK:
         return None
-    start = local_rank * per_rank + min(local_rank, extra)
-    count = per_rank + (1 if local_rank < extra else 0)
-    return {cpu for core in cores[start : start + count] for cpu in core}
+    by_node: dict[int, list[list[int]]] = {}
+    for core in cores:
+        by_node.setdefault(node_of(core[0]), []).append(core)
+    share: list[list[int]] = []
+    first_extra = 0
+    for node in sorted(by_node):
+        node_cores = by_node[node]
+        per_rank, extra = divmod(len(node_cores), local_size)
+        counts = [per_rank + (1 if (rank - first_extra) % local_size < extra else 0) for rank in range(local_size)]
+        start = sum(counts[:local_rank])
+        share += node_cores[start : start + counts[local_rank]]
+        first_extra = (first_extra + extra) % local_size
+    return {cpu for core in share for cpu in core}
 
 
 def _split_args(argv: list[str]) -> tuple[set[int], list[str]]:
@@ -111,13 +141,17 @@ def _split_args(argv: list[str]) -> tuple[set[int], list[str]]:
     args = list(argv)
     while args and args[0] != "--":
         if args[0] == "--exclude" and len(args) >= 2:
-            exclude = parse_cpu_list(args[1])
+            exclude |= parse_cpu_list(args[1])
             args = args[2:]
         else:
             raise SystemExit(f"{PREFIX} rank_cpu_binding: unexpected argument {args[0]!r}")
-    if not args or len(args) < 2:
+    if len(args) < 2:
         raise SystemExit(f"{PREFIX} rank_cpu_binding: expected -- PROGRAM [ARGS...]")
     return exclude, args[1:]
+
+
+def _say(message: str) -> None:
+    print(f"{PREFIX} {message}", file=sys.stderr, flush=True)
 
 
 def main(argv: list[str]) -> None:
@@ -128,22 +162,28 @@ def main(argv: list[str]) -> None:
     except (KeyError, ValueError):
         local_rank, local_size = 0, 1
     allowed = os.sched_getaffinity(0)
-    cpus = cpus_for_local_rank(allowed, local_rank, local_size, exclude)
+    cpus = cpus_for_local_rank(allowed, local_rank, local_size, exclude, thread_siblings, numa_node)
     if cpus is not None:
         os.sched_setaffinity(0, cpus)
-        print(
-            f"{PREFIX} local rank {local_rank} of {local_size} on CPUs {format_cpu_list(cpus)}",
-            file=sys.stderr,
-            flush=True,
-        )
-    elif local_size >= 2 and local_rank == 0:
-        print(
-            f"{PREFIX} {local_size} ranks share this host but its CPUs {format_cpu_list(allowed)} (excluding "
-            f"{format_cpu_list(exclude) or 'none'}) give fewer than {MIN_CORES_PER_RANK} cores each; not pinning",
-            file=sys.stderr,
-            flush=True,
-        )
-    os.execvp(program[0], program)
+        _say(f"local rank {local_rank} of {local_size} on CPUs {format_cpu_list(cpus)}")
+    else:
+        if local_size >= 2 and local_rank == 0:
+            _say(
+                f"{local_size} ranks share this host but its usable CPUs give fewer than {MIN_CORES_PER_RANK} "
+                "cores each; not splitting them"
+            )
+        if exclude:
+            kept = {cpu for core in usable_cores(allowed, exclude, thread_siblings) for cpu in core}
+            if kept:
+                os.sched_setaffinity(0, kept)
+                _say(f"local rank {local_rank} on CPUs {format_cpu_list(kept)}, without {format_cpu_list(exclude)}")
+            else:
+                _say(f"excluding {format_cpu_list(exclude)} leaves no CPUs; ignoring --exclude")
+    try:
+        os.execvp(program[0], program)
+    except OSError as e:
+        _say(f"cannot run {program[0]!r}: {e.strerror}")
+        sys.exit(EXEC_FAILED_EXIT_CODE)
 
 
 if __name__ == "__main__":

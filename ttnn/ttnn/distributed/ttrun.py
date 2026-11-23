@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.util
 import json
@@ -266,39 +267,38 @@ def detect_rankfile_syntax(mpi_launcher: str, _subprocess_run=subprocess.run) ->
     return RankfileSyntax.RANKFILE
 
 
-def mpi_args_specify_bind_to(mpi_args: Optional[List[str]]) -> bool:
-    """True if ``mpi_args`` already sets a binding policy (``--bind-to`` / ``-bind-to``)."""
-    if not mpi_args:
-        return False
-    for arg in mpi_args:
-        if arg in ("--bind-to", "-bind-to"):
-            return True
-        if arg.startswith("--bind-to=") or arg.startswith("-bind-to="):
-            return True
-    return False
-
-
 def mpi_args_bind_to_value(mpi_args: Optional[List[str]]) -> Optional[str]:
-    """The binding policy ``mpi_args`` sets (e.g. ``"none"``, ``"core"``), or None when it sets none."""
+    """The binding policy ``mpi_args`` sets (e.g. ``"none"``, ``"core:overload-allowed"``), ``""`` for a bare
+    trailing ``--bind-to``, or None when it sets none."""
     args = list(mpi_args or [])
     for i, arg in enumerate(args):
-        if arg in ("--bind-to", "-bind-to") and i + 1 < len(args):
-            return args[i + 1]
+        if arg in ("--bind-to", "-bind-to"):
+            return args[i + 1] if i + 1 < len(args) else ""
         for flag in ("--bind-to=", "-bind-to="):
             if arg.startswith(flag):
                 return arg[len(flag) :]
     return None
 
 
+def mpi_args_specify_bind_to(mpi_args: Optional[List[str]]) -> bool:
+    """True if ``mpi_args`` already sets a binding policy (``--bind-to`` / ``-bind-to``)."""
+    return mpi_args_bind_to_value(mpi_args) is not None
+
+
+@functools.lru_cache(maxsize=None)
+def _rank_cpu_binding_module():
+    spec = importlib.util.spec_from_file_location("rank_cpu_binding", RANK_CPU_BINDING_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def parse_rank_cpu_exclude(value: Optional[str]) -> Optional[str]:
     """Validate a ``--rank-cpu-exclude`` CPU list (``"1,2"``, ``"0-3"``) and return it unchanged."""
     if not value:
         return None
-    spec = importlib.util.spec_from_file_location("rank_cpu_binding", RANK_CPU_BINDING_SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
     try:
-        module.parse_cpu_list(value)
+        _rank_cpu_binding_module().parse_cpu_list(value)
     except ValueError as e:
         raise click.BadParameter(str(e))
     return value
@@ -2144,12 +2144,14 @@ def build_mpi_command(
         )
 
     # When MPI binds the ranks itself, its binding stands.
-    ranks_unbound = (not bind_to_already_specified and not rankfile_placement) or mpi_args_bind_to_value(
-        effective_mpi_args
-    ) == "none"
+    bind_to_policy = (mpi_args_bind_to_value(effective_mpi_args) or "").split(":")[0]
+    ranks_unbound = (not bind_to_already_specified and not rankfile_placement) or bind_to_policy == "none"
     bind_rank_cpus = rank_cpu_binding == "auto" and ranks_unbound
     if rank_cpu_binding == "auto" and not ranks_unbound:
         logger.debug(f"{TT_RUN_PREFIX} Skipping per-rank CPU binding because MPI binds the ranks")
+    if rank_cpu_exclude and not bind_rank_cpus:
+        reason = "--rank-cpu-binding none" if rank_cpu_binding == "none" else "MPI binding the ranks itself"
+        raise click.UsageError(f"--rank-cpu-exclude has no effect with {reason}")
 
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
@@ -2189,7 +2191,7 @@ def build_mpi_command(
         if bind_rank_cpus:
             # Outermost, so everything the rank starts inherits its CPUs.
             exclude_args = ["--exclude", rank_cpu_exclude] if rank_cpu_exclude else []
-            rank_program = [sys.executable, str(RANK_CPU_BINDING_SCRIPT), *exclude_args, "--", *rank_program]
+            rank_program = [sys.executable, "-I", str(RANK_CPU_BINDING_SCRIPT), *exclude_args, "--", *rank_program]
         cmd.extend(rank_program)
 
     return cmd
@@ -3220,8 +3222,8 @@ def new_mode_flow(
     "--rank-cpu-exclude",
     callback=lambda ctx, param, value: parse_rank_cpu_exclude(value),
     default=None,
-    help="CPUs to keep every rank off, with their hyperthread siblings, e.g. '1,2' or '0-3'. "
-    "Applies with --rank-cpu-binding auto.",
+    help="CPUs to keep every rank off, with their hyperthread siblings, e.g. '1,2' or '0-3', also when ranks are "
+    "not split (one rank per host). Needs --rank-cpu-binding auto and ranks MPI leaves unbound.",
 )
 @click.pass_context
 def main(

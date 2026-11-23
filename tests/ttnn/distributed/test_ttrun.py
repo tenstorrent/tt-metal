@@ -12,6 +12,7 @@ import importlib
 from pathlib import Path
 from unittest.mock import patch
 import pytest
+import click
 from click.testing import CliRunner
 
 from ttnn.distributed.ttrun import (
@@ -559,26 +560,27 @@ class TestRankCpuBinding:
     """tt-run starts each rank through rank_cpu_binding.py unless MPI binds the ranks or the user opts out."""
 
     def _wrapped(self, *exclude):
-        return [sys.executable, str(ttrun_module.RANK_CPU_BINDING_SCRIPT), *exclude, "--", "echo", "hello"]
+        return [sys.executable, "-I", str(ttrun_module.RANK_CPU_BINDING_SCRIPT), *exclude, "--", "echo", "hello"]
 
-    def test_unbound_ranks_start_through_the_binding_script(self, sample_rank_binding_yaml):
-        config = parse_binding_config(sample_rank_binding_yaml)
-        cmd = build_mpi_command(config, ["echo", "hello"], rankfile_syntax=RankfileSyntax.RANKFILE)
-        assert _rank_tails(cmd, 5) == [self._wrapped(), self._wrapped()]
+    def _tails(self, cmd, *exclude):
+        return _rank_tails(cmd, len(self._wrapped(*exclude)))
 
-    def test_explicit_bind_to_none_still_binds_rank_cpus(self, sample_rank_binding_yaml):
+    @pytest.mark.parametrize(
+        "mpi_args",
+        [None, ["--bind-to", "none"], ["--bind-to=none:overload-allowed"]],
+        ids=["default", "explicit_none", "none_with_qualifier"],
+    )
+    def test_unbound_ranks_start_through_the_binding_script(self, sample_rank_binding_yaml, mpi_args):
         config = parse_binding_config(sample_rank_binding_yaml)
-        cmd = build_mpi_command(
-            config, ["echo", "hello"], ["--bind-to", "none"], rankfile_syntax=RankfileSyntax.RANKFILE
-        )
-        assert _rank_tails(cmd, 5) == [self._wrapped(), self._wrapped()]
+        cmd = build_mpi_command(config, ["echo", "hello"], mpi_args, rankfile_syntax=RankfileSyntax.RANKFILE)
+        assert self._tails(cmd) == [self._wrapped(), self._wrapped()]
 
     def test_exclude_reaches_every_rank(self, sample_rank_binding_yaml):
         config = parse_binding_config(sample_rank_binding_yaml)
         cmd = build_mpi_command(
             config, ["echo", "hello"], rankfile_syntax=RankfileSyntax.RANKFILE, rank_cpu_exclude="1,2"
         )
-        assert _rank_tails(cmd, 7) == [self._wrapped("--exclude", "1,2")] * 2
+        assert self._tails(cmd, "--exclude", "1,2") == [self._wrapped("--exclude", "1,2")] * 2
 
     @pytest.mark.parametrize(
         "mpi_args, binding",
@@ -592,6 +594,23 @@ class TestRankCpuBinding:
         )
         assert _rank_tails(cmd, 2) == [["echo", "hello"], ["echo", "hello"]]
         assert str(ttrun_module.RANK_CPU_BINDING_SCRIPT) not in cmd
+
+    @pytest.mark.parametrize(
+        "mpi_args, binding",
+        [(None, "none"), (["--bind-to", "core"], "auto")],
+        ids=["opted_out", "mpi_binds_cores"],
+    )
+    def test_exclude_without_the_binding_script_is_an_error(self, sample_rank_binding_yaml, mpi_args, binding):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        with pytest.raises(click.UsageError, match="--rank-cpu-exclude has no effect"):
+            build_mpi_command(
+                config,
+                ["echo", "hello"],
+                mpi_args,
+                rankfile_syntax=RankfileSyntax.RANKFILE,
+                rank_cpu_binding=binding,
+                rank_cpu_exclude="1,2",
+            )
 
     def test_rankfile_placement_keeps_mpi_binding(self, sample_rank_binding_yaml, temp_dir):
         config = parse_binding_config(sample_rank_binding_yaml)
@@ -607,8 +626,8 @@ class TestRankCpuBinding:
         cmd = build_mpi_command(
             config, ["echo", "hello"], rankfile_syntax=RankfileSyntax.RANKFILE, debug_gdbserver=True
         )
-        first = _rank_tails(cmd, 6)[0]
-        assert first[:5] == [sys.executable, str(ttrun_module.RANK_CPU_BINDING_SCRIPT), "--", "bash", "-c"]
+        first = _rank_tails(cmd, 7)[0]
+        assert first[:6] == [sys.executable, "-I", str(ttrun_module.RANK_CPU_BINDING_SCRIPT), "--", "bash", "-c"]
 
     def test_invalid_exclude_is_rejected(self, runner, sample_rank_binding_yaml):
         result = runner.invoke(
