@@ -169,7 +169,8 @@ void py_module(nb::module_& mod) {
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
-            input_tensor_c (ttnn.Tensor or Number): the input tensor.
+            input_tensor_c (ttnn.Tensor): the weight tensor (tensor weight overload).
+            scalar (float): the weight (scalar weight overload, passed instead of input_tensor_c).
 
 
         Keyword args:
