@@ -33,7 +33,7 @@ import time
 import uuid
 from pathlib import Path
 
-ROOT = Path(os.environ.get("CHIP_QUEUE_ROOT", "/tmp/bh-port/queue"))
+ROOT = Path(os.environ.get("CHIP_QUEUE_ROOT", str(Path.home() / "bh-port" / "queue")))
 STAGES = ["pending", "compiling", "compiled", "running", "done"]
 LOCK = threading.Lock()
 

@@ -42,13 +42,15 @@ Read before you start:
    0 only on PASS. Submit several jobs with `submit` and collect them with `wait <id>` to keep all chips busy.
    Every test that includes one of your headers must pass with `--impl hal`, with the same pass/skip counts as
    `--impl tt`. While other threads are still being ported elsewhere, validate your thread alone with a thread view:
-   `bash .claude/skills/hal-port/scripts/thread_view.sh <unpack|math|pack> /tmp/bh-port/val/<your-wp>` and pass
+   `bash .claude/skills/hal-port/scripts/thread_view.sh <unpack|math|pack> ~/bh-port/val/<your-wp>` and pass
    that directory as `--impl` (your thread's headers from tests/hal_llk, the other threads' from production). Known flaky/hanging-on-production tests are listed in the plan; check against `--impl tt` before
    blaming the port.
 5. **Measure** (only when asked to optimise, or for the final report): run each affected `perf_*.py` with
    `--perf --impl tt` and `--perf --impl hal --tag <unique>`, then compare the two reports with
    `scripts/perf_compare.py <tt-run-dir> <hal-run-dir>` (geomean %, per run type and zone, faster/slower counts).
-6. **Keep working files** (job lists, logs, notes) in `/tmp/bh-port/val/<your-wp>-work/`, never in a shared scratchpad.
+6. **Keep working files** (job lists, logs, notes) in `~/bh-port/val/<your-wp>-work/`, never in a shared scratchpad. Everything lives under `~/bh-port` (worktrees in `~/bh-port/wt/`), never `/tmp`,
+   which a reboot wipes. Commit work in progress on your own work-package branch after every step that compiles
+   (one-sentence message, no trailers); the plan owner squashes when merging.
 7. **Report** in this order: files changed; per function its production source and any deviation; HAL-GAPs;
    allowed improvements applied with their instruction-count effect; compare_codegen header lines; functional
    verdict lines (hal and tt) per test; for optimisation work the perf table. Never commit; the plan owner merges.
