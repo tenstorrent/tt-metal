@@ -659,8 +659,17 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
+        # TT_LLK_IMPL_INCLUDE_DIRS (colon-separated, relative to tests/) puts header dirs ahead of the
+        # LLK tree, so a test compiles unchanged against another implementation of the same LLK API,
+        # e.g. TT_LLK_IMPL_INCLUDE_DIRS=hal_llk. INCLUDES feeds the variant hash, so builds stay apart.
+        impl_includes = [
+            f"-I{p}"
+            for p in os.environ.get("TT_LLK_IMPL_INCLUDE_DIRS", "").split(":")
+            if p
+        ]
         TestConfig.INCLUDES = (
-            [
+            impl_includes
+            + [
                 "-Isfpi/include",
                 # Relative to tests/ (compile cwd), not pytest's cwd.
                 *[
