@@ -32,6 +32,8 @@
 //--- common.h
 #pragma once
 
+#include <cstdint>
+
 #include "hal/tensix_counters.h"
 
 namespace counters = hal::counters;
