@@ -338,11 +338,10 @@ def _glm54_stages(stage_alone: bool = False, g3_mtp: bool = True) -> list[Stage]
     # layer's KVPE cache slot, TP-deduped like the cache: ring_rows / chips rows of 704 B per chip.
     ring = ring_rows(5120)
     window = n_loop * (ring // rows.chips) * KVPE_PAGE_BYTES
-    # The KVPE cache length grows by the ring, and so does the replicated dense gather buffer sized from it; pass 2's
-    # push writes [window | top-k] rows of its 160 query rows into its own compact buffer (q171.3.8 may fold it into
-    # the idle dense gather buffer).
+    # The KVPE cache length grows by the ring, and so does the replicated dense gather buffer sized from it. Pass 2's
+    # push output ([window | top-k] rows of 160 query rows, ~245 MB) goes into that dense buffer, idle while pass 2
+    # runs (q171.3.8), so it adds nothing.
     gather_ring_rows = ring * KVPE_PAGE_BYTES
-    pass2_push = q_rows * (C54.LOOP_WINDOW_SIZE + C.INDEX_TOPK) * KVPE_PAGE_BYTES
     return [
         Stage("G0", (0, loop[0] - 1), embedding=True),
         Stage(
@@ -364,7 +363,6 @@ def _glm54_stages(stage_alone: bool = False, g3_mtp: bool = True) -> list[Stage]
                 "topk_receive": topk_sets,
                 "kvpe_receive": kvpe_rows,
                 "gather_buffer_ring_rows": gather_ring_rows,
-                "pass2_push_buffer": pass2_push,
             },
         ),
         Stage("G3", (loop[1] + 1, C.NUM_LAYERS - 1), mtp=g3_mtp, embedding=stage_alone),
@@ -409,8 +407,8 @@ ASSUMPTIONS = [
     "user on G2.",
     "G2 pass-2 window carry (q171.2.6) is a 4-chunk ring (20,480 positions) past each slot's pass-1 rows in every "
     "loop layer's KVPE cache slot, TP-deduped: 640 rows x 704 B per loop layer per user per chip (12.6 MB per user). "
-    "G2 also holds the dense gather buffer's ring rows (14.4 MB) and pass 2's own push buffer (160 query rows x 2176 "
-    "keys x 704 B, 245 MB per chip; q171.3.8 may fold it into the idle dense gather buffer).",
+    "G2 also holds the dense gather buffer's ring rows (14.4 MB); pass 2's push output (160 query rows x 2176 keys x "
+    "704 B, about 245 MB per chip) lives in that dense buffer, idle while pass 2 runs (q171.3.8), so it is not counted.",
     "Damp gates use the scalar width (synthetic weights); a per-channel gate adds at most 75.5 MB per chip on G1 "
     "and G2 (0.1 user).",
     "G3 holds one MTP level as GLM-5.3 (A7): embedding + LM head + one MoE layer + eh_proj, and one more KVPE and "

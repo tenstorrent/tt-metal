@@ -79,9 +79,9 @@ SCHEDULES = {
 FORMATS = list(WINDOW_FORMATS)
 
 
-def _config(window_format: str):
+def _config(window_format: str, capacity: int = CAPACITY):
     """The tier-1 reduced stack with loop layers 1-2 both owning an indexer (two top-k sets)."""
-    c = glm54_reduced_config(CAPACITY)
+    c = glm54_reduced_config(capacity)
     c.indexer_types = ["full"] * c.num_hidden_layers
     c.loop_window_format = window_format
     return c
@@ -269,16 +269,17 @@ def test_two_bank_index_list(mesh_device):
 class _Stage:
     """Pass-1 and pass-2 ttMLA for the loop layers over one cache of NUM_SLOTS user slots, and host conversions."""
 
-    def __init__(self, mesh_device, window_format: str):
+    def __init__(self, mesh_device, window_format: str, positions: int = MAX_POSITIONS):
         self.mesh = mesh_device
-        self.config = _config(window_format)
+        self.capacity = positions + ring_rows(CHUNK)  # cache positions per slot: pass 1, then the window ring
+        self.config = _config(window_format, self.capacity)
         self.kv_format = WINDOW_FORMATS[window_format]
         self.sp_axis, self.tp_axis = 0, 1
         self.shape = tuple(mesh_device.shape)
         topology = per_axis_topology(ttnn.FabricConfig.FABRIC_2D_TORUS_XY)
         self.weights = {L: glm_random_mla_weights(self.config, L, GLM54_SYNTHETIC_SEED) for L in LOOP_LAYERS}
         common = dict(
-            seq_len=CAPACITY,
+            seq_len=self.capacity,
             sp_axis=self.sp_axis,
             tp_axis=self.tp_axis,
             topology=topology,
@@ -298,7 +299,7 @@ class _Stage:
             cache_format=self.kv_format,
             hf_config=self.config,
             mesh_device=mesh_device,
-            seq_len=CAPACITY,
+            seq_len=self.capacity,
             mesh_shape=list(self.shape),
             sp_axis=self.sp_axis,
             num_kvpe_cache_layers=len(LOOP_LAYERS),
@@ -308,7 +309,7 @@ class _Stage:
         self.index_cache = init_kvpe_cache(
             kvpe_cache_head_dim=self.config.index_head_dim,
             mesh_device=mesh_device,
-            seq_len=CAPACITY,
+            seq_len=self.capacity,
             mesh_shape=list(self.shape),
             sp_axis=self.sp_axis,
             num_kvpe_cache_layers=num_full_indexer_layers(self.config),
@@ -318,7 +319,7 @@ class _Stage:
         )
         self.rope = RotarySetup(
             self.config, mesh_device, sp_axis=self.sp_axis, is_balanced=False
-        ).get_rope_tensors_indexed(CAPACITY, CHUNK)
+        ).get_rope_tensors_indexed(self.capacity, CHUNK)
         self.shard_dims = [None, None]
         self.shard_dims[self.tp_axis], self.shard_dims[self.sp_axis] = -1, -2
 
@@ -357,7 +358,7 @@ class _Stage:
         flat = striped_cache_to_host(self.cache.storage, self.mesh, self.sp_axis)  # [slots*layers, CAPACITY, row]
         nat = torch.empty_like(flat)
         nat[:, blockcyclic_positions(self.shape[0] * self.shape[1], CHUNK, flat.shape[1])] = flat
-        return nat.view(NUM_SLOTS, len(LOOP_LAYERS), CAPACITY, -1)
+        return nat.view(NUM_SLOTS, len(LOOP_LAYERS), self.capacity, -1)
 
     def logical(self, physical: torch.Tensor) -> torch.Tensor:
         """Physical cache rows [..., row] -> logical bf16 [..., 576]."""
@@ -589,3 +590,50 @@ def test_two_bank_traced(mesh_device, window_format):
             logger.info(f"[{window_format}] traced replay slot {slot} chunk {start}-{end}: bit-identical to eager")
     finally:
         ttnn.release_trace(mesh_device, tid)
+
+
+def _dram_bytes_per_chip(mesh_device) -> int:
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    return view.total_bytes_allocated_per_bank * view.num_banks
+
+
+@pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (sparse SDPA, push) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_two_bank_push_reuses_dense_buffer(mesh_device):
+    """At a cache in the production regime (70 chunks of pass-1 positions: the dense gather buffer holds more rows than
+    pass 2's push output needs, as at 1M), pass 2 pushes into the idle dense gather buffer: its outputs are
+    bit-identical to pushing into a buffer of its own, which costs exactly that buffer's bytes per chip."""
+    stage = _Stage(mesh_device, "scaled_fp8", positions=70 * CHUNK)
+    layers = [stage.pass2[L] for L in LOOP_LAYERS]
+    assert all(m._pass2_push_reuses_dense for m in layers), "pass 2 should reuse the dense gather buffer here"
+    schedule = [(0, 0, CHUNK), (0, CHUNK, 2 * CHUNK)]
+
+    def run():
+        outs = []
+        for slot, start, end in schedule:
+            sets = stage.pass1_chunk(slot, start, end)
+            for L in LOOP_LAYERS:
+                outs.append(stage.output_to_torch(stage.pass2_forward(L, slot, start, end, sets), start))
+            for t in sets:
+                ttnn.deallocate(t)
+        ttnn.synchronize_device(mesh_device)
+        return outs
+
+    reused = run()
+    in_use_reused = _dram_bytes_per_chip(mesh_device)
+    for m in layers:
+        m._pass2_push_reuses_dense = False  # the pre-q171.3.8 placement: a push buffer of its own
+    own = run()
+    in_use_own = _dram_bytes_per_chip(mesh_device)
+    for k, (a, b) in enumerate(zip(reused, own)):
+        assert torch.equal(a, b), f"pass-2 output {k} differs between the dense buffer and a buffer of its own"
+    own_buffer = layers[0]._push.buffer_spec(layers[0]._sparse_kv_gather_buffer, **layers[0]._pass2_push_geometry)
+    expected = own_buffer.shape[2] * layers[0]._sparse_kv_gather_buffer.buffer_aligned_page_size()
+    saving = in_use_own - in_use_reused
+    logger.info(
+        f"pass-2 push output: dense buffer {layers[0]._sparse_kv_gather_buffer.shape[2]} rows, own buffer "
+        f"{own_buffer.shape[2]} rows; DRAM in use per chip {in_use_reused} (reused) vs {in_use_own} (own): "
+        f"saving {saving} B ({saving / 2**20:.1f} MiB), own buffer {expected} B"
+    )
+    assert saving >= expected, f"reusing the dense buffer saved {saving} B, less than the {expected} B buffer"
