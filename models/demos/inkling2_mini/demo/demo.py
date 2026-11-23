@@ -63,7 +63,13 @@ def trace_one_app(model, L=11, p=1, pos=5):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--max-ctx", type=int, default=131072)
+    ap.add_argument(
+        "--max-ctx",
+        type=int,
+        default=196608,
+        help="context limit. The far KV cache takes 19,584 B per token of it: 196608 leaves ~2.4 GiB of DRAM free "
+        "(decode only); 327680 is the largest that fits (0.05 GiB free). Decode cost follows the position, not this.",
+    )
     ap.add_argument("--trace-mib", type=int, default=512)
     ap.add_argument("--gen", type=int, default=64)
     ap.add_argument("--prompts", type=int, nargs="*", default=[0, 1])
