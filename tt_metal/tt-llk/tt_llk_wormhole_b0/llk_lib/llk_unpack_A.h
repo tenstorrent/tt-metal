@@ -299,9 +299,8 @@ inline void _llk_unpack_A_init_(
     // Within-face transpose swaps rows and columns of a 16x16 face; a face with fewer rows gives wrong
     // output. Broadcast MOPs read L1 through SrcB, which the within-face transpose does not touch.
     LLK_ASSERT(BType != BroadcastType::NONE || within_face_16x16_transpose == 0 || face_r_dim == MAX_FACE_R_DIM, "Within-face transpose requires 16-row faces");
-    // The ROW acc_to_dest MOP unpacks SrcB faces 0, 1, 0, 1 as for a 32x32 tile; on smaller tiles
-    // the repeats land in SrcB banks the tile never reads. A 2x1 face grid is asserted, matching
-    // the math-side ROW datacopy assert (tt-metal#47328).
+    // The ROW acc_to_dest MOP unpacks SrcB faces 0, 1, 0, 1; on a 2x1 face grid face 1 is the bottom face,
+    // so its half of the output takes the wrong row (same limit as the math-side ROW datacopy assert).
     LLK_ASSERT(
         !(BType == BroadcastType::ROW && acc_to_dest && is_tensor_shape_2x1_face_grid(tensor_shape)),
         "Row broadcast with acc_to_dest does not support 32x16 tiles");
