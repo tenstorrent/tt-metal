@@ -30,7 +30,7 @@ namespace ckernel::sfpu {
 // LREG1 (B), row 1 in LREG3 (A) / LREG7 (B); the init constants (LREG2, LREG4,
 // LREG5, LREG6, LREG12, LREG13) are shared. The two rows' instruction chains are
 // interleaved so that every 2-cycle producer (SFPMAD/SFPADD/SFPMUL) is
-// followed by the other row's independent instruction instead of an SFPNOP:
+// followed by the other row's independent instruction, so no SFPNOP is needed:
 // each consumer still issues >= 2 slots after its producer, and the per-element
 // instruction sequence and operand order are unchanged.
 //
@@ -71,7 +71,7 @@ constexpr std::uint32_t QUANT_ROW1_B = p_sfpu::LREG7;
 // Int8 L1 pack path:
 // Int8 output is packed through the UInt8 packer, which saturates the dest word to [0, 255].
 // So the SFPU leaves the 2's complement byte there as a
-// value in [0, 255]: b = (n + 128) ^ 0x80, with n + 128 in [0, 255] after the SFPSWAP clamp.
+// value in [0, 255]: b = (n + 128) ^ 0x80, with n + 128 in [0, 255] after the clamp.
 // The byte is stored via INT32_2S_COMP and the UInt8 packer then emits raw b. (FP32_TO_INT8
 // rounding cannot be used: its sign-magnitude result has a 7-bit magnitude. It saturates at
 // +/-127 and cannot represent -128.)
@@ -97,14 +97,16 @@ constexpr std::uint32_t INT8_SIGN_MASK = 0x00000080u;
 // For requantization, the out_zp is added after RNE. We split out_zp the same way as above.
 //
 // Saturate to output dtype range:
-// FP32_TO_INT8 mode cannot produce -128. So we clamp m to [t + LO, t + HI] before subtracting to saturate
-// where LO/HI are [-128, 127] for int32/int8 and [0, 255] for uint8.
+// FP32_TO_INT8 mode cannot produce -128. So we clamp m from below to t + LO before subtracting, where
+// LO/HI are [-128, 127] for int32/int8 and [0, 255] for uint8. The upper bound is an SFPSWAP against
+// t + HI for Int32 output and an SFP_STOCH_RND saturation of the integer for UInt8 / Int8 output
+// (see _quant_clamp_convert_row_pair_).
 constexpr std::uint32_t RNE_MAGIC_FP32 = 0x4b400000u;  // 12582912.0f = 1.5 * 2^23
 constexpr std::uint32_t ZP_SPLIT_FP32 = 0x4c400000u;  // 50331648.0f = 1.5 * 2^25
 
 // T_LREG holds the zero point on entry. LREG0 and LREG1 are scratch.
 // On exit, LREG5 = RNE_MAGIC + zp_hi. This is the addend that rounds.
-// LREG12 = t + LO and LREG13 = t + HI, where t = RNE_MAGIC - zp_lo.
+// LREG12 = t + LO and, for Int32 output only, LREG13 = t + HI, where t = RNE_MAGIC - zp_lo.
 // T_LREG = -bits(t) with +128 for the int8 output.
 template <DataFormat OUTPUT_FORMAT, std::uint32_t T_LREG>
 inline void _rne_clamp_init_() {
@@ -128,8 +130,10 @@ inline void _rne_clamp_init_() {
     TTI_SFPNOP;
     TTI_SFPIADD(LO & IMM12_MASK, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-    TTI_SFPIADD(HI & IMM12_MASK, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    if constexpr (OUTPUT_FORMAT == DataFormat::Int32) {
+        TTI_SFPIADD(HI & IMM12_MASK, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
+    }
     TTI_SFPIADD(0, p_sfpu::LCONST_0, T_LREG, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         TTI_SFPIADD(-LO, T_LREG, T_LREG, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
@@ -379,9 +383,10 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
 //
 // For the 8-bit outputs HI - LO = 255, so the upper clamp is done on the integer instead: after the
 // lower SFPSWAP, m >= t + LO > 0 and bits(m) grows with m, so n - LO = bits(m) - bits(t) - LO is a
-// non-negative integer below 2^31 (also for +inf / +NaN m), and SFP_STOCH_RND INT32_TO_UINT8 (shift 0,
-// exact) saturates it to 255 exactly where min(m, t + HI) would have. One 1-cycle round replaces a
-// 2-cycle SFPSWAP. The Int32 output needs n in [-128, 127] 2's complement, which this can't produce.
+// non-negative integer below 2^31 (also for +inf m), and SFP_STOCH_RND INT32_TO_UINT8 (shift 0, exact)
+// saturates it to 255 exactly where min(m, t + HI) would have. NaN m gives an unspecified byte. One
+// 1-cycle round replaces a 2-cycle SFPSWAP. The Int32 output needs n in [-128, 127] 2's complement,
+// which this can't produce.
 template <DataFormat OUTPUT_FORMAT, std::uint32_t T_LREG>
 inline void _quant_clamp_convert_row_pair_() {
     TTI_SFPSWAP(0, p_sfpu::LREG12, QUANT_ROW0_A, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // m = max(m, t + LO)
@@ -394,6 +399,8 @@ inline void _quant_clamp_convert_row_pair_() {
     TTI_SFPIADD(0, T_LREG, QUANT_ROW0_A, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
     TTI_SFPIADD(0, T_LREG, QUANT_ROW1_A, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
     if constexpr (OUTPUT_FORMAT != DataFormat::Int32) {
+        // SFP_STOCH_RND must not directly follow SFPSWAP: their LReg writes can collide (WH SFPSWAP.md).
+        // The two SFPIADDs above keep them apart.
         // n - LO = min(n - LO, 255)
         TTI_SFP_STOCH_RND(
             sfpi::SFPSTOCHRND_RND_NEAREST,
@@ -425,8 +432,8 @@ inline void _int8_out_xor_row_pair_() {
 }
 
 // OUTPUT_FORMAT selects the quantized output tensor dtype: Int32 (the default), UInt8, or Int8. All
-// three round to nearest even and saturate with the SFPSWAP clamp: Int32 holds int8-range values
-// [-128, 127] in an int32 container, UInt8 [0, 255], and Int8 packs the 2's complement byte.
+// three round to nearest even and saturate (see _quant_clamp_convert_row_pair_): Int32 holds int8-range
+// values [-128, 127] in an int32 container, UInt8 [0, 255], and Int8 packs the 2's complement byte.
 template <
     bool APPROXIMATION_MODE /*unused*/,
     bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false,
@@ -435,7 +442,7 @@ void quant_init(const uint zero_point) {
     static_assert(
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "quant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
-    // LREG2 holds the zero point. _rne_clamp_init_ sets up LREG5, LREG12, LREG13 and LREG2 for the body.
+    // LREG2 holds the zero point. _rne_clamp_init_ sets up LREG5, LREG12, LREG13 (Int32 out), LREG2.
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG2>();
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
@@ -443,14 +450,12 @@ void quant_init(const uint zero_point) {
     }
     _quant_kernels_configure_dest_incr_addrmod_();
 
-    // The replay buffer feeds the SFPU pipe directly. The recorded bodies use TTI_SFPNOP (SFPU NOP)
-    // rather than the generic Tensix TTI_NOP for their pipeline bubbles.
     constexpr std::uint32_t REPLAY_LEN =
         OUTPUT_FORMAT == DataFormat::Int8 ? QUANT_REPLAY_LEN_INT8_OUT : QUANT_REPLAY_LEN;
     lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
     {
         // m = RNE(A * B + zp_hi) + RNE_MAGIC: the single rounding step of the MAD rounds to nearest even.
-        // The row-1 MAD fills the row-0 MAD's 2-cycle write-latency slot (formerly an SFPNOP).
+        // The row-1 MAD fills the row-0 MAD's 2-cycle write-latency slot.
         TTI_SFPMAD(QUANT_ROW0_A, QUANT_ROW0_B, p_sfpu::LREG5, QUANT_ROW0_A, 0 /*mod1*/);
         TTI_SFPMAD(QUANT_ROW1_A, QUANT_ROW1_B, p_sfpu::LREG5, QUANT_ROW1_A, 0 /*mod1*/);
         _quant_clamp_convert_row_pair_<OUTPUT_FORMAT, p_sfpu::LREG2>();
@@ -471,7 +476,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         "requant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
     // The body rounds v = q * (s_in / s_out) + zp to nearest even and then adds out_zero_point.
     // zp is the host-folded -z_in * (s_in / s_out) in LREG2.
-    // LREG6 holds out_zero_point. _rne_clamp_init_ sets up LREG5, LREG12, LREG13 and LREG6 for the body.
+    // LREG6 holds out_zero_point. _rne_clamp_init_ sets up LREG5, LREG12, LREG13 (Int32 out), LREG6.
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     _sfpu_load_imm32_(p_sfpu::LREG6, out_zero_point);
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG6>();
