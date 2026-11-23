@@ -428,7 +428,9 @@ def main(argv=None):
     n = sub.add_parser("nodes")
     n.add_argument("--candidates", required=True)
     n.add_argument("--map", required=True)
-    n.add_argument("--cap", type=int, required=True, help="PLACEMENT_CAP in llk-perf-gate.yaml")
+    n.add_argument(
+        "--cap", type=int, required=True, help="PLACEMENT_CAP in llk-perf-gate.yaml"
+    )
     n.add_argument("--out", required=True)
     d = sub.add_parser("decide")
     d.add_argument("--candidates", required=True)
@@ -439,7 +441,9 @@ def main(argv=None):
     d.add_argument("--module-threshold", default="")
     d.add_argument("--arch", default="")
     d.add_argument(
-        "--positions", default="", help="the code shifts both sides measured at, e.g. '0 4 20 36 52'"
+        "--positions",
+        default="",
+        help="the code shifts both sides measured at, e.g. '0 4 20 36 52'",
     )
     d.add_argument(
         "--over-cap", default="", help="file of candidate indices left out by the cap"

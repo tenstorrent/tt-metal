@@ -327,9 +327,9 @@ def test_require_full_coverage_ignores_points_with_no_baseline(tmp_path):
     _csv(tmp_path, "c3.csv", _INIT, _TILE_LOOP, tile_cnt=4)
     _csv(tmp_path, "c4.csv", _INIT, _TILE_LOOP, tile_cnt=8)
 
-    with pytest.raises(
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         SystemExit
-    ) as exc:  # allow-pytest.raises: no expect_error in LLK suite
+    ) as exc:
         main(
             [
                 "--current",
@@ -359,15 +359,15 @@ def test_require_full_coverage_exits_two_on_a_short_run(tmp_path):
         "--require-full-coverage",
     ]
 
-    with pytest.raises(
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         SystemExit
-    ) as exc:  # allow-pytest.raises: no expect_error in LLK suite
+    ) as exc:
         main(argv)
     assert exc.value.code == 2
 
-    with pytest.raises(
+    with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite
         SystemExit
-    ) as exc:  # allow-pytest.raises: no expect_error in LLK suite
+    ) as exc:
         main(argv[:-1])
     assert exc.value.code == 0
 
