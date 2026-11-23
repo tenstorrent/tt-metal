@@ -309,6 +309,7 @@ set(TT_METAL_SOURCES
     impl/streaming_profiler/decode.cpp
     impl/streaming_profiler/device_programs.cpp
     impl/streaming_profiler/ops_csv.cpp
+    impl/streaming_profiler/device_wall_clock.cpp
     impl/streaming_profiler/receiver.cpp
     impl/streaming_profiler/service.cpp
     impl/streaming_profiler/sync/check.cpp

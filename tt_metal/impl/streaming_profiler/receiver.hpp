@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "impl/streaming_profiler/device_wall_clock.hpp"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -112,7 +113,7 @@ private:
     std::unique_ptr<DevicePrograms> programs_;
     RootRefclkWindow root_refclk_;
     // The window onto the root chip's wall clock when that chip has no Ethernet cores (p100a), and null otherwise.
-    std::unique_ptr<tt::umd::IoWindow> fallback_wall_clock_;
+    std::unique_ptr<DeviceWallClock> fallback_wall_clock_;
     ClockSolver clock_solver_;
     std::vector<std::unique_ptr<Stream>> streams_;
     std::vector<ReceiverStream> streams_view_;
