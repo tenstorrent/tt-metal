@@ -58,17 +58,33 @@ class FusedMessages:
         self.rows = FusedRowOps(device, c)
         self.q = [F.dense_tensor(device, q[l]) for l in range(n_layers)]
         self.out = F.OutCache(device)
-        self.bufs = [
-            (self.out.get_twin(("qkv", l), 3, c, ttnn.float32), self.out.get_twin(("mlp", l), 1, c, ttnn.float32))
-            for l in range(n_layers)
+        self.bufs = self._bufs()
+
+    def _bufs(self):
+        """Output rows + twins: self.bufs, or inside F.per_row one shared set for all R verify rows (qkv rows 3r..,
+        mlp row r of verify row r)."""
+        c, f32 = self.c, ttnn.float32
+        nr = F.n_rows()
+        if nr > 1:
+            return [
+                (
+                    self.out.shared_twin(("qkv", l), 3 * nr, c, f32, 3 * nr),
+                    self.out.shared_twin(("mlp", l), nr, c, f32, nr),
+                )
+                for l in range(self.n_layers)
+            ]
+        return [
+            (self.out.get_twin(("qkv", l), 3, c, f32), self.out.get_twin(("mlp", l), 1, c, f32))
+            for l in range(self.n_layers)
         ]
 
     def __call__(self, h12_in, h17_out):
         """h12_in, h17_out: [1,1,1,C] rows (the previous pass's input of L12 and output of L17).
         Returns [(qkv [1,1,3,C], mlp [1,1,1,C])] per loop layer (cached: valid until the next call)."""
-        from models.demos.inkling2_mini.tt.fused.attnres import f32_bits
+        from models.demos.inkling2_mini.tt.fused.attnres import f32_bits, writer_args
 
         r = self.rows
+        bufs = self._bufs()
         r.run(h12_in, 0)  # rms(h12_in) -> stack row 0
         F.check_row_input(h17_out)
         T, ntc, nq, k = r.T, self.c // 32, 4, 1
@@ -76,11 +92,11 @@ class FusedMessages:
         named = dict(ntc=ntc, pages=T, nq=nq, k=k, has_weight=0, has_norm=0, out_rows=3, split3=1, split_out=0)
         rd, wr = {}, {}
         for l, core in enumerate(cores):
-            (qr, qd), (mr, md) = self.bufs[l]
+            (qr, qd), (mr, md) = bufs[l]
             rd[core] = [*F.input_args(h17_out), self.q[l].buffer_address(), r.stack.buffer_address(),
                         r.scaler.buffer_address(), 0]  # fmt: skip
-            wr[core] = [r.stack.buffer_address(), qr.buffer_address(), qd.buffer_address(), mr.buffer_address(),
-                        md.buffer_address()]  # fmt: skip
+            wr[core] = writer_args([r.stack.buffer_address(), qr.buffer_address(), qd.buffer_address(),
+                                    mr.buffer_address(), md.buffer_address()], 3 * F.row_index(), F.row_index())  # fmt: skip
         cnamed = dict(pages=T, nq=nq, k=k, has_weight=0, has_norm=0, inv_c=f32_bits(1.0 / self.c), eps=f32_bits(r.eps))
         kernels = [
             F.kernel("attnres_reader.cpp", ttnn.ReaderConfigDescriptor(), named, rd, crs),
@@ -103,7 +119,7 @@ class FusedMessages:
         ]
         tw = F.twin(h17_out)
         io = [h17_out] + ([tw[0]] if tw else []) + [r.scaler, *self.q, r.stack]
-        io += [t for pair in self.bufs for (a, b) in pair for t in (a, b)]
+        io += [t for pair in bufs for (a, b) in pair for t in (a, b)]
         F.run(io, kernels, cbs)
         r.fresh.clear()  # the stack rows now hold rms(h12_in), rms(h17_out) of this call only
-        return [(q, m) for (q, _), (m, _) in self.bufs]
+        return [(q, m) for (q, _), (m, _) in bufs]

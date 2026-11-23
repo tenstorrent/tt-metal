@@ -40,17 +40,47 @@ void kernel_main() {
     }
     cb_reserve_back(cb_taps, 4 * T);
     rowio::read_pages(taps, 4096, 0, 4 * T, get_write_ptr(cb_taps));
+    // own > 0 (verify row r of an R-row step): lags 1..own are the x of rows r-1.. of this step (args 12.., 5 per
+    // row, as x's), not ring slots; the compute takes them from cb_px exactly as the ring would hold them
+    constexpr uint32_t own = get_named_compile_time_arg_val("own");
+    constexpr uint32_t cb_px = 4;
     cb_reserve_back(cb_ring, 3 * T);
     const uint32_t ring = get_write_ptr(cb_ring);
-    rowio::read_pages(r1, 4096, 0, T, ring);
-    rowio::read_pages(r2, 4096, 0, T, ring + T * 4096);
-    rowio::read_pages(r3, 4096, 0, T, ring + 2 * T * 4096);
+    if constexpr (own < 1) {
+        rowio::read_pages(r1, 4096, 0, T, ring);
+    }
+    if constexpr (own < 2) {
+        rowio::read_pages(r2, 4096, 0, T, ring + T * 4096);
+    }
+    if constexpr (own < 3) {
+        rowio::read_pages(r3, 4096, 0, T, ring + 2 * T * 4096);
+    }
+    if constexpr (own > 0) {
+        cb_reserve_back(cb_px, own * T);
+        for (uint32_t k = 0; k < own; ++k) {
+            const uint32_t a = 12 + 5 * k;
+            const uint32_t p_addr = get_arg_val<uint32_t>(a), p_tile = get_arg_val<uint32_t>(a + 1);
+            const uint32_t p_es = get_arg_val<uint32_t>(a + 2), p_row = get_arg_val<uint32_t>(a + 3);
+            const uint32_t p_kind = get_arg_val<uint32_t>(a + 4);
+            const uint32_t dst = get_write_ptr(cb_px) + k * T * 1024 * p_es;
+            if (p_kind == 1) {
+                rowio::read_pages(p_addr, p_tile, p_row, T, dst);
+            } else if (p_kind == 2) {
+                rowio::gather_row<false>(p_addr, p_tile, p_es, ntc, p_row, dst, T * 1024 * p_es, stage);
+            } else {
+                rowio::gather_row(p_addr, p_tile, p_es, ntc, p_row, dst, T * 1024 * p_es, stage);
+            }
+        }
+    }
     noc_async_read_barrier();
     cb_wait_front(cb_sync, 1);  // the writer's half has landed
     cb_pop_front(cb_sync, 1);
     cb_push_back(cb_x, T);
     cb_push_back(cb_taps, 4 * T);
     cb_push_back(cb_ring, 3 * T);
+    if constexpr (own > 0) {
+        cb_push_back(cb_px, own * T);
+    }
 
     // first half of the output row scatter (the writer does the rest)
     constexpr uint32_t row_out = get_named_compile_time_arg_val("row_out");

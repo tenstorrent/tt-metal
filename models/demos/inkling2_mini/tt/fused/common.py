@@ -71,6 +71,8 @@ def tile_bytes(dtype):
 
 def cb(index, dtype, n_pages, page_bytes=None, cores=None):
     page_bytes = page_bytes or tile_bytes(dtype)
+    if _REC is not None:
+        return _CSpec(index, dtype, n_pages, page_bytes, cores)
     fmt = ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_bytes)
     return ttnn.CBDescriptor(total_size=n_pages * page_bytes, core_ranges=cores or CORES, format_descriptors=[fmt])
 
@@ -95,6 +97,8 @@ def compute_config(fp32_cbs, full_sync=False):
 
 def kernel(name, config, named, rt=None, cores=None):
     """rt: runtime args of the single CORE, or {CoreCoord: args} with cores = their CoreRangeSet."""
+    if _REC is not None:
+        return _KSpec(name, config, named, rt, cores)
     args = ttnn.RuntimeArgs()
     if rt is not None:
         for core, vals in rt.items() if isinstance(rt, dict) else [(CORE, rt)]:
@@ -130,7 +134,11 @@ def core_list(device, n, first_row=0):
 
 
 def run(io_tensors, kernels, cbs):
-    """io_tensors: every tensor the kernels touch (keeps them alive / tracked); the last one is returned."""
+    """io_tensors: every tensor the kernels touch (keeps them alive / tracked); the last one is returned.
+    Inside per_row(): recorded for the merged R-row program instead."""
+    if _REC is not None:
+        _REC[_ROW].append((io_tensors, kernels, cbs))
+        return io_tensors[-1]
     return ttnn.generic_op(io_tensors, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 
 
@@ -181,14 +189,25 @@ class OutCache:
         self.bufs = {}
 
     def get(self, key, rows, c, dtype):
+        key = row_key(key)
         if key not in self.bufs:
             self.bufs[key] = zeros_row_form(self.device, rows, c, dtype)
         return self.bufs[key]
 
+    def shared_twin(self, key, rows, c, dtype, nvec):
+        """One row-form output + dense twin for ALL verify rows of an F.per_row call (not keyed by row): each row's
+        program writes its vectors at its own offset."""
+        k = ("shared", key, n_rows())
+        if k not in self.bufs:
+            self.bufs[k] = zeros_row_form(self.device, rows, c, dtype)
+            self.bufs[("twin", k)] = dense_tensor(self.device, torch.zeros(nvec, c), dtype)
+            set_twin(self.bufs[k], self.bufs[("twin", k)], nvec)
+        return self.bufs[k], self.bufs[("twin", k)]
+
     def get_twin(self, key, rows, c, dtype, nvec=None):
         """Row-form output buffer plus its dense twin (nvec vectors, default rows)."""
         out = self.get(key, rows, c, dtype)
-        tkey = ("twin", key)
+        tkey = ("twin", row_key(key))
         if tkey not in self.bufs:
             nvec = nvec or rows
             self.bufs[tkey] = dense_tensor(self.device, torch.zeros(nvec, c), dtype)
@@ -212,3 +231,145 @@ def rms_norm_f32(x, **kw):
         except TypeError:
             _RMS_DTYPE = False
     return ttnn.rms_norm(x if x.dtype == ttnn.float32 else ttnn.typecast(x, ttnn.float32), **kw)
+
+
+# ---------------------------------------------------------------- R rows (speculative verify)
+# per_row(R, fn) runs fn(r) for every verify row r with the F.kernel / F.cb / F.run calls recorded, then launches
+# each recorded program ONCE for all rows: row r's copy of the 1-row program on its own cores (same kernels, same
+# compile-time args, its own buffers). Every row computes exactly what the 1-row call computes on its inputs.
+# Buffers: OutCache keys and FusedRowOps stacks are per row (row 0 shares the 1-row buffers).
+_ROW = None  # row being recorded
+_REC = None  # per row: [(io, kernels, cbs)] in call order
+
+
+def n_rows():
+    """Number of verify rows of the per_row call being recorded (1 outside)."""
+    return len(_REC) if _REC is not None else 1
+
+
+def row_index():
+    """Verify row being recorded inside per_row (0 outside)."""
+    return _ROW or 0
+
+
+def row_key(key):
+    return key if not _ROW else (key, "row", _ROW)
+
+
+class Rows(list):
+    """An R-row value: one tensor per verify row."""
+
+
+class _KSpec:
+    def __init__(self, name, config, named, rt, cores):
+        self.name, self.config, self.named = name, config, dict(named)
+        if rt is None:
+            self.rt = None
+        elif isinstance(rt, dict):
+            self.rt = {(c.x, c.y): [int(v) for v in a] for c, a in rt.items()}
+        else:
+            self.rt = {(CORE.x, CORE.y): [int(v) for v in rt]}
+        self.cores = _xy(cores or CORES)
+        self.common_runtime_args = None
+
+
+class _CSpec:
+    def __init__(self, index, dtype, n_pages, page_bytes, cores):
+        self.key = (index, dtype, n_pages, page_bytes)
+        self.cores = _xy(cores or CORES)
+
+
+def _xy(crs):
+    return sorted(
+        {(x, y) for r in crs.ranges() for y in range(r.start.y, r.end.y + 1) for x in range(r.start.x, r.end.x + 1)},
+        key=lambda c: (c[1], c[0]),
+    )
+
+
+def _crs(cores):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
+
+
+ROW_POOL_ROWS = 6  # logical rows 0..5 hold the rows' cores: off the w_all staging block (rows 6..9, mk/overlap.py)
+
+
+def _pool(device):
+    gx = device.compute_with_storage_grid_size().x
+    return [(x, y) for y in range(ROW_POOL_ROWS) for x in range(gx)]
+
+
+def per_row(device, n_rows, fn):
+    """Rows(fn(r) for r < n_rows), each recorded program launched once for all rows (see above)."""
+    global _ROW, _REC
+    assert _REC is None, "per_row does not nest"
+    rec = [[] for _ in range(n_rows)]
+    outs = Rows()
+    _REC = rec
+    try:
+        for r in range(n_rows):
+            _ROW = r
+            outs.append(fn(r))
+    finally:
+        _ROW, _REC = None, None
+    n = len(rec[0])
+    assert all(len(p) == n for p in rec), [len(p) for p in rec]
+    for i in range(n):
+        _launch(device, [p[i] for p in rec])
+    return outs
+
+
+def _launch(device, progs):
+    """One program from the rows' copies of one recorded program."""
+
+    def cores_of(prog):
+        _, ks, cs = prog
+        return sorted({c for k in ks for c in k.cores} | {c for b in cs for c in b.cores}, key=lambda c: (c[1], c[0]))
+
+    base = cores_of(progs[0])
+    pool = _pool(device)
+    assert len(base) * len(progs) <= len(pool), (len(base), len(progs))
+    maps = []
+    for r, prog in enumerate(progs):
+        assert cores_of(prog) == base, "rows must use the same cores"
+        maps.append({c: pool[r * len(base) + i] for i, c in enumerate(base)})
+    kernels, cbs = [], []
+    for j in range(len(progs[0][1])):
+        groups = {}  # (source, named) -> [(row, spec)]
+        for r, (_, ks, _) in enumerate(progs):
+            k = ks[j]
+            groups.setdefault((k.name, tuple(sorted(k.named.items()))), []).append((r, k))
+        for (name, _), members in groups.items():
+            k0 = members[0][1]
+            cores = [maps[r][c] for r, k in members for c in k.cores]
+            args = ttnn.RuntimeArgs()
+            for r, k in members:
+                assert k.common_runtime_args == k0.common_runtime_args
+                for c, a in (k.rt or {}).items():
+                    m = maps[r][c]
+                    args[m[0]][m[1]] = a
+            kd = ttnn.KernelDescriptor(
+                kernel_source=os.path.join(KDIR, name),
+                core_ranges=_crs(cores),
+                named_compile_time_args=list(k0.named.items()),
+                runtime_args=args,
+                config=k0.config,
+            )
+            if k0.common_runtime_args is not None:
+                kd.common_runtime_args = k0.common_runtime_args
+            kernels.append(kd)
+    groups = {}  # CB (index, format, size) -> cores; rows may differ (e.g. conv's own-lag CB on rows 1..)
+    for r, (_, _, cs) in enumerate(progs):
+        for b in cs:
+            groups.setdefault(b.key, []).extend(maps[r][c] for c in b.cores)
+    for (index, dtype, n_pages, page_bytes), cores in groups.items():
+        fmt = ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_bytes)
+        cbs.append(
+            ttnn.CBDescriptor(total_size=n_pages * page_bytes, core_ranges=_crs(cores), format_descriptors=[fmt])
+        )
+    io, seen = [], set()
+    for prog in progs:
+        for t in prog[0]:
+            if id(t) not in seen:
+                seen.add(id(t))
+                io.append(t)
+    return ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))

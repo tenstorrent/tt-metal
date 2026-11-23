@@ -29,7 +29,20 @@ class FusedRowNorm:
         self.out_l1 = out_l1  # L1-interleaved output rows (e.g. the MoE input), not DRAM
 
     def l1_rows(self, n):
-        """The n cached L1-interleaved output rows (out_l1)."""
+        """The n cached L1-interleaved output rows (out_l1). Inside F.per_row (n = 1): one [1, 1, R, C] tensor for all
+        R verify rows, row r written by row r's program (the R-row MoE input)."""
+        if F.n_rows() > 1:
+            assert n == 1
+            key = ("rows_l1", F.n_rows())
+            if key not in self.out.bufs:
+                self.out.bufs[key] = ttnn.from_torch(
+                    torch.zeros(1, 1, F.n_rows(), self.c),
+                    dtype=self.out_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )  # fmt: skip
+            return [self.out.bufs[key]]
         key = ("row_l1", n)
         if key not in self.out.bufs:
             self.out.bufs[key] = [
@@ -44,10 +57,11 @@ class FusedRowNorm:
             ]
         return self.out.bufs[key]
 
-    def __call__(self, x, num_rows=None):
-        """x: [1,1,R,C] row-form (fp32 or bf16). Returns a list of num_rows (default R) rows."""
+    def __call__(self, x, num_rows=None, first_row=0):
+        """x: [1,1,R,C] row-form (fp32 or bf16). Returns a list of num_rows (default R) rows: x rows first_row..
+        (row i uses weight min(i, n_weights - 1), i counted from first_row)."""
         F.check_row_input(x)
-        n = num_rows or x.shape[-2]
+        n = num_rows or x.shape[-2] - first_row
         T, ntc = F.pages(self.c), self.c // 32
         cores, crs = F.core_list(self.device, n)
         if self.out_l1:
@@ -57,9 +71,11 @@ class FusedRowNorm:
         rd, wr = {}, {}
         for i, core in enumerate(cores):
             w = self.w[min(i, len(self.w) - 1)]
-            rd[core] = [*F.input_args(x, i), 0, 0, self.scaler.buffer_address(), w.buffer_address()]
-            rd[core] += [outs[i].buffer_address(), F.tile_bytes(self.out_dtype), F.ES[self.out_dtype]]
-            wr[core] = [outs[i].buffer_address(), F.tile_bytes(self.out_dtype), F.ES[self.out_dtype]]
+            o = outs[i]
+            row = F.row_index() if o.shape[-2] > 1 else 0  # the R-row L1 output (l1_rows inside F.per_row)
+            rd[core] = [*F.input_args(x, first_row + i), 0, 0, self.scaler.buffer_address(), w.buffer_address()]
+            rd[core] += [o.buffer_address(), F.tile_bytes(self.out_dtype), F.ES[self.out_dtype], row]
+            wr[core] = [o.buffer_address(), F.tile_bytes(self.out_dtype), F.ES[self.out_dtype], row]
         named = dict(ntc=ntc, pages=T, nq=0, k=0, has_weight=1, has_norm=0, split_out=2 if self.out_l1 else 1)
         kernels = [
             F.kernel("attnres_reader.cpp", ttnn.ReaderConfigDescriptor(), named, rd, crs),

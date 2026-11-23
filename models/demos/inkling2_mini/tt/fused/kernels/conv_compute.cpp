@@ -36,11 +36,17 @@ void kernel_main() {
     constexpr uint32_t tail = get_named_compile_time_arg_val("tail");      // elements in the last page
     constexpr VectorMode tail_mode = tail <= 256 ? VectorMode::None : tail <= 512 ? VectorMode::R : VectorMode::RC;
     constexpr uint32_t cb_x = 0, cb_ring = 1, cb_taps = 2, cb_resid = 3, cb_xf = 16, cb_y = 17, cb_yr = 18;
+    // verify row r of an R-row step: lags 1..own from the earlier rows' x (cb_px, x's format), unpacked to DEST as
+    // cb_x is: the same DEST values the ring slot (that x packed as fp32) gives
+    constexpr uint32_t own = get_named_compile_time_arg_val("own"), cb_px = 4;
 
     compute_kernel_hw_startup(cb_x, cb_xf);
     cb_wait_front(cb_x, T);
     cb_wait_front(cb_taps, 4 * T);
     cb_wait_front(cb_ring, 3 * T);
+    if constexpr (own > 0) {
+        cb_wait_front(cb_px, own * T);
+    }
     {
         DeviceZoneScopedN("C_conv");
         for (uint32_t t = 0; t < T; ++t) {
@@ -53,7 +59,11 @@ void kernel_main() {
             mul_binary_tile_init();
             mul_binary_tile(0, 1, 1, vm);
             for (uint32_t k = 1; k < 4; ++k) {
-                load(cb_ring, (k - 1) * T + t, 2);
+                if (k <= own) {
+                    load(cb_px, (k - 1) * T + t, 2);
+                } else {
+                    load(cb_ring, (k - 1) * T + t, 2);
+                }
                 load(cb_taps, k * T + t, 3);
                 mul_binary_tile_init();
                 mul_binary_tile(2, 3, 2, vm);
@@ -69,6 +79,9 @@ void kernel_main() {
         cb_pop_front(cb_x, T);
         cb_pop_front(cb_taps, 4 * T);
         cb_pop_front(cb_ring, 3 * T);
+        if constexpr (own > 0) {
+            cb_pop_front(cb_px, own * T);
+        }
     }
     if constexpr (stage2) {
         DeviceZoneScopedN("C_stage2");
