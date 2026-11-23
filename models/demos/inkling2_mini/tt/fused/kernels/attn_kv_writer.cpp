@@ -8,6 +8,10 @@
 //   bfp8:  the packed tile holds the chunk's shared exponent (byte = face row) and 16 mantissa bytes; the cache
 //          tile's exponent block (64 B) is read, patched and written back, the mantissas written in place.
 // mass: also write the far-cache mass chunk [1, 0 x 15] (packed in the same way, cb_mass) at tile t0_mass.
+// chain (multi-token verify prep, tokens in one program): the bfp8 exponent blocks are read, patched and written
+// back, so tokens that write rows of the same tile must not overlap. Runtime args after the destinations: wait,
+// next_x, next_y, has_next. With wait, the core waits on semaphore 0 (the previous token's writer) before it
+// reads the exponent blocks; after its writes land it increments the next token's semaphore.
 #include "attn_io.hpp"
 
 namespace {
@@ -56,6 +60,7 @@ void kernel_main() {
     constexpr uint32_t ndst = get_named_compile_time_arg_val("ndst");
     constexpr uint32_t bfp8 = get_named_compile_time_arg_val("bfp8");
     constexpr uint32_t mass = get_named_compile_time_arg_val("mass");
+    constexpr uint32_t chain = get_named_compile_time_arg_val("chain");
     constexpr uint32_t cb_out = 19, cb_mass = 20, cb_stage = 25;
     constexpr uint32_t tile_bytes = bfp8 ? 1088 : 2048;
 
@@ -68,6 +73,13 @@ void kernel_main() {
         noc_async_read(pa.get_noc_addr(0, 0), stage + 64 * d, 64);
     }
     noc_async_read_barrier();
+    if constexpr (chain) {
+        if (get_arg_val<uint32_t>(1 + ndst * 5)) {
+            volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
+            noc_semaphore_wait(sem, 1);
+            noc_semaphore_set(sem, 0);
+        }
+    }
     for (uint32_t d = 0; d < ndst; ++d) {
         const uint32_t a = 1 + d * 5;
         base[d] = get_arg_val<uint32_t>(a);
@@ -100,6 +112,14 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+    if constexpr (chain) {
+        const uint32_t c = 1 + ndst * 5;
+        if (get_arg_val<uint32_t>(c + 3)) {
+            noc_semaphore_inc(
+                get_noc_addr(get_arg_val<uint32_t>(c + 1), get_arg_val<uint32_t>(c + 2), get_semaphore(0)), 1);
+            noc_async_atomic_barrier();
+        }
+    }
     cb_pop_front(cb_out, 1);
     if constexpr (mass) {
         cb_pop_front(cb_mass, 1);

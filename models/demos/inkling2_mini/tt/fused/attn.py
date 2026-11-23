@@ -153,10 +153,11 @@ class AttnPrep:
         self.v_cores, self.b_cores = cores[2 * N_KV : 3 * N_KV], cores[3 * N_KV :]
         self.cache = {}
 
-    def _head_group(self, cores, proj, kind, mode_rows, tau, state, positions, rows=None):
+    def _head_group(self, cores, proj, kind, mode_rows, tau, state, positions, rows=None, chain=None):
         """kind: q / k / v. Returns (kernels, cbs) for one group of 8 cores. rows = (t, RowsOut): token t of a
         multi-token verify pass (local layers): q into batch t * 8 + g of rows.q, k / v into row t of rows.pending
-        instead of the ring."""
+        instead of the ring. chain = (wait, next token's cores or None): k / v writers of tokens in one program
+        (rows()) take turns (attn_kv_writer.cpp)."""
         q = kind == "q"
         nitems, nlag = (GROUPS, 1) if q else (1, TAPS)
         dyn = int(self.dyn and not q)
@@ -200,6 +201,10 @@ class AttnPrep:
                     seq = full.padded_shape[-2] // 32
                     w += [full.buffer_address(), seq, full.padded_shape[-1] // 32, 5 if kind == "k" else 0]
                     w += [positions.pos.buffer_address()]
+            if chain is not None and not q:
+                wait, nxt = chain
+                c = self.device.worker_core_from_logical_core(nxt[g]) if nxt is not None else None
+                w += [int(wait), c.x if c else 0, c.y if c else 0, int(c is not None)]
             r_rt.append(r)
             w_rt.append(w)
         named = dict(nitems=nitems, nlag=nlag, dyn=dyn, has_tau=has_tau, mass=mass, proj_dram=_is_dram(proj))
@@ -226,6 +231,7 @@ class AttnPrep:
             assert out_dtype in (ttnn.bfloat16, ttnn.bfloat8_b), out_dtype
             assert not self.dyn or state.kv_full.dtype == out_dtype
             named_w = dict(ndst=1 + int(self.dyn), bfp8=int(out_dtype == ttnn.bfloat8_b), mass=mass)
+            named_w["chain"] = int(chain is not None)
             writer = _kernel("attn_kv_writer.cpp", cores, named_w, w_rt, ttnn.WriterConfigDescriptor())
         out_page = 1088 if out_dtype == ttnn.bfloat8_b else 2048
         kernels = [
@@ -250,8 +256,8 @@ class AttnPrep:
         ]
         return kernels, cbs
 
-    def _bias_group(self, proj, positions, tau, rows=None, prow=0):
-        cores = self.b_cores
+    def _bias_group(self, proj, positions, tau, rows=None, prow=0, cores=None):
+        cores = self.b_cores if cores is None else cores
         has_tau = int(self.dyn)
         named = dict(nj=NJ, has_tau=has_tau, rel_tile=6144 // 32, proj_dram=_is_dram(proj), prow=prow)
         r_rt, w_rt = [], []
@@ -351,6 +357,36 @@ class AttnPrep:
         if rows is not None and not self.dyn:
             return None
         return self.q, self.mask, self.sink_blk if self.dyn else self.sink
+
+    def rows(self, proj, positions, sels, state, rows):
+        """Multi-token verify: the R tokens' preps (__call__ with rows = (t, rows[t])) as one program, token t on its
+        own 32 cores. rows: one RowsOut-like per token (a RowsOut, or _NoFar for a per-token far call). The k / v
+        writers of the tokens run in token order (shared pending / far-cache tiles)."""
+        R = len(positions)
+        cores, _ = F.core_list(self.device, 4 * N_KV * R, first_row=1)
+        sets = [cores[4 * N_KV * t : 4 * N_KV * (t + 1)] for t in range(R)]
+        grp = lambda t, j: sets[t][j * N_KV : (j + 1) * N_KV]  # noqa: E731  j: 0 q, 1 k, 2 v, 3 bias
+        kernels, cbs = [], []
+        for t in range(R):
+            tau = positions[t].tau
+            for j, kind in ((0, "q"), (1, "k"), (2, "v")):
+                chain = (t > 0, grp(t + 1, j) if t + 1 < R else None)
+                k, c = self._head_group(
+                    grp(t, j), proj, kind, sels[t], tau, state, positions[t], (t, rows[t]), chain=chain
+                )
+                kernels += k
+                cbs += c
+            k, c = self._bias_group(proj, positions[t], tau, (t, rows[t]), prow=sels[t]["q"], cores=grp(t, 3))
+            kernels += k
+            cbs += c
+        io = [proj, self.q_taps, self.kv_taps["k"], self.kv_taps["v"], self.scaler, self.rel_scale, self.g]
+        io += [self.table, self.mass, self.sink, self.mask, state.k_ring, state.v_ring]
+        io += [state.kv_full, self.sink_blk, self.q_grp, self.q_far] if self.dyn else []
+        for t, pos in enumerate(positions):
+            io += [pos.tau, pos.near_mask, pos.ring, pos.pos] + rows[t].tensors(t)
+        io += [self.q]
+        sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=_crs(cores), initial_value=0)]
+        ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems))
 
 
 class AttnOut:

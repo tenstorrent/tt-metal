@@ -466,7 +466,7 @@ class Inkling2AttentionFast(Inkling2Attention):
     def decode_rows(self, xs, state, positions, rows, p0=None):
         """Multi-token verify, local layers: R = len(xs) <= 3 tokens at consecutive positions; xs[t] the token's input
         row (xq = xk = xv), positions[t] its prepared DecodePositionsFast, rows a rows_out(R). Each token's window /
-        projection / prep runs in order (its k / v rows go to rows.pending, the ring is not written), then one
+        projection and the prep run as one program each (its k / v rows go to rows.pending, the ring is not written), then one
         sdpa_decode over the ring with the pending rows, then each token's output gate into o-projection input row t.
         Returns that input (self.out.act, rows 0 .. R-1): row t is bit-equal to row 0 after plain decode of token t.
         Call commit_rows after the accept to write the accepted rows into the ring.
@@ -486,9 +486,8 @@ class Inkling2AttentionFast(Inkling2Attention):
                 and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
             )
             proj = self._rows_proj(xs, state, rows)
-            for t, pos in enumerate(positions):
-                prep_rows = (t, rows) if shared else (t, _NoFar(rows, t))
-                self.prep(proj, pos, self._rows_sel(rows, t), state, rows=prep_rows)
+            sels = [self._rows_sel(rows, t) for t in range(R)]
+            self.prep.rows(proj, positions, sels, state, [rows if shared else _NoFar(rows, t) for t in range(R)])
             # near + combine of all tokens in one program each (token t reads pending rows 0 .. t)
             sinks = [rows.sink_far if shared else rows.sink_tok[t] for t in range(R)]
             items = [
@@ -542,8 +541,8 @@ class Inkling2AttentionFast(Inkling2Attention):
                     )
             return self.out.act
         proj = self._rows_proj(xs, state, rows)
-        for t, pos in enumerate(positions):
-            self.prep(proj, pos, self._rows_sel(rows, t), state, rows=(t, rows))
+        R = rows.R
+        self.prep.rows(proj, positions, [self._rows_sel(rows, t) for t in range(R)], state, [rows] * R)
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
             rows.q,
             state.k_grp,
