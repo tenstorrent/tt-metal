@@ -12,6 +12,7 @@
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 
@@ -22,6 +23,54 @@ constexpr uint32_t nblk = get_named_compile_time_arg_val("nblk");
 constexpr uint32_t max_ncq = get_named_compile_time_arg_val("max_ncq");
 constexpr uint32_t SLOT = kb * max_ncq;
 constexpr uint32_t DST_TILES = 8;
+// softcap (the LM head, tt/fused/head.py): y = tanh(x * inv) * cap on the finished Dest tiles before packing, the
+// SFPU math of the logits tail (fp32 multiplies by the fp32 scalars, tanh) on the same fp32 values. Faces 0, 1
+// only (the head's rows 0..15). Defines (head mode only): BL_SOFTCAP = fp32 bits of 1 / cap, BL_CAP = of cap.
+#ifdef BL_SOFTCAP
+constexpr uint32_t softcap = 1, inv_cap = BL_SOFTCAP, cap = BL_CAP;
+#else
+constexpr uint32_t softcap = 0, inv_cap = 0, cap = 0;
+#endif
+
+// BL_SFPU_IT: SFPU iterations per face: 2 per 4-row group (even / odd columns), 2 ceil(rows / 4): only the head's rows
+#ifndef BL_SFPU_IT
+#define BL_SFPU_IT 8
+#endif
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+// the first IT iterations (2 rows each) of a face with the stock per-element function, then the Dest pointer to the
+// face's end as the full function leaves it (the face loop steps relative to it)
+template <int IT>
+inline void bl_tanh_rows() {
+    calculate_tanh<false, DST_ACCUM_MODE, IT>();
+    for (int i = IT; i < 8; ++i) {
+        sfpi::dst_reg++;
+    }
+}
+template <int IT>
+inline void bl_mul_rows(uint32_t param) {
+    calculate_binop_with_scalar<APPROX, MUL_UNARY, IT, DST_ACCUM_MODE>(param);
+    for (int i = IT; i < 8; ++i) {
+        sfpi::dst_reg++;
+    }
+}
+}  // namespace ckernel::sfpu
+#endif
+
+FORCE_INLINE void softcap_dst(uint32_t ncq) {
+    binop_with_scalar_tile_init();
+    for (uint32_t t = 0; t < ncq; ++t) {
+        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, bl_mul_rows, (BL_SFPU_IT), t, VectorMode::R, inv_cap));
+    }
+    tanh_tile_init();
+    for (uint32_t t = 0; t < ncq; ++t) {
+        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, bl_tanh_rows, (BL_SFPU_IT), t, VectorMode::R));
+    }
+    binop_with_scalar_tile_init();
+    for (uint32_t t = 0; t < ncq; ++t) {
+        MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, bl_mul_rows, (BL_SFPU_IT), t, VectorMode::R, cap));
+    }
+}
 
 void kernel_main() {
     uint32_t a = 0;
@@ -41,6 +90,9 @@ void kernel_main() {
                 matmul_block(cb_x, cb_w, p * kb + r, r * ncq, 0, false, ncq, 1, 1);
             }
             cb_pop_front(cb_w, SLOT);
+        }
+        if constexpr (softcap) {
+            softcap_dst(ncq);
         }
         tile_regs_commit();
         cb_reserve_back(cb_out, DST_TILES);

@@ -11,8 +11,13 @@ multiply, vocab-mask add, untilize and argmax, each over the 32-row padded [1, 1
      tanh(x * (1/cap)) * cap with the same SFPU calls as the ttnn op chain, writes its part of the logits row,
      and sends its (max, index) to a master core, which writes the token.
 
+FUSED (bank unembed, the default): no tail programs. The unembed applies the softcap to its finished fp32 Dest tiles
+(the tail's SFPU ops on the same values) and writes the logits; its writers scan each row's argmax while the stream
+runs and worker 0 merges them (the tail's tie rule). Logits are then a [1, 1, 1, vocab_pad] fp32 TILE tensor (row 0
+of each tile: its pages spread over the DRAM banks); same values.
+
 Outputs (module buffers, allocated on the first call, which must be eager):
-  logits [1, 1, 1, vocab_pad] fp32 ROW_MAJOR DRAM: softcap(x), bit-equal to the ttnn op chain; columns
+  logits [1, 1, 1, vocab_pad] fp32 ROW_MAJOR DRAM (FUSED: TILE): softcap(x), bit-equal to the ttnn op chain; columns
     >= vocab_real are not masked (readers cut at vocab_real), they are left out of the argmax.
   token  [1, 1, 1, 1] uint32 ROW_MAJOR DRAM: argmax over the vocab_real columns, ttnn.argmax tie rule.
 """
@@ -26,6 +31,8 @@ from models.demos.inkling2_mini.tt.fused import common as F
 from models.demos.inkling2_mini.tt.fused.bank_linear import BankLinear
 
 PAGES_PER_CORE = 2
+# bank unembed: softcap in its Dest and the argmax on its writers (bank_linear head mode), no tail program
+FUSED = True
 
 
 class FusedLogitsTail:
@@ -42,6 +49,11 @@ class FusedLogitsTail:
         self.n_pages = math.ceil(width / F.PAGE)
         self.raw_width = self.n_pages * F.PAGE
         cap = torch.tensor(softcap, dtype=torch.float32)
+        # bank unembed with the tail inside it (FUSED): the scalars' fp32 bits, as the tail's scalar pages hold them
+        bits = lambda t: int(t.view(torch.int32))  # noqa: E731
+        self.head_args = dict(
+            inv=bits(torch.tensor(1.0 / softcap, dtype=torch.float32)), cap=bits(cap), n_arg=vocab_real
+        )
         self.scal = F.dense_tensor(device, torch.stack([torch.full((F.PAGE,), 1.0 / softcap), cap.expand(F.PAGE)]))
         dram = ttnn.DRAM_MEMORY_CONFIG
         rm = ttnn.ROW_MAJOR_LAYOUT
@@ -50,11 +62,17 @@ class FusedLogitsTail:
             z = torch.zeros(1, 1, 1, n, dtype=tdtype)
             return ttnn.from_torch(z, dtype=dtype, layout=rm, device=device, memory_config=dram)
 
-        self._row = row
+        def tile_row(n):  # the fused head's logits: TILE, so its pages spread over the DRAM banks
+            z = torch.zeros(1, 1, 1, n)
+            return ttnn.from_torch(z, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+
+        self._row, self._tile_row = row, tile_row
         self.raw = row(self.raw_width)
         self.logits = row(vocab_pad)
+        self.logits_t = tile_row(vocab_pad) if self.bank else None
         self.token = row(1, ttnn.uint32, torch.int32)
         self.rows_bufs = [(self.raw, self.logits, self.token)]  # per verify row (rows()); row 0 = the 1-row buffers
+        self.rows_tiles = []  # FUSED: per verify row TILE logits (row 0: logits_t)
         n_cores = math.ceil(self.n_pages / PAGES_PER_CORE)
         self.cores, self.grid = F.core_list(device, n_cores)
         self.master = device.worker_core_from_logical_core(self.cores[0])
@@ -62,6 +80,9 @@ class FusedLogitsTail:
     def __call__(self, x):
         """x [1,1,1,K] bf16 (final-norm output) -> (logits, token) module buffers."""
         mm = self.mm
+        if self.bank and FUSED:
+            mm(x, self.logits_t, head=dict(self.head_args, tokens=[self.token]))
+            return self.logits_t, self.token
         if self.bank:
             mm(x, self.raw)
             self._cap()
@@ -92,6 +113,12 @@ class FusedLogitsTail:
                 (self._row(self.raw_width), self._row(self.vocab_pad), self._row(1, ttnn.uint32, torch.int32))
             )
         bufs = self.rows_bufs[:n]
+        if FUSED:
+            while len(self.rows_tiles) < n:
+                self.rows_tiles.append(self.logits_t if not self.rows_tiles else self._tile_row(self.vocab_pad))
+            lgs = self.rows_tiles[:n]
+            self.mm(x, lgs, head=dict(self.head_args, tokens=[b[2] for b in bufs]))
+            return [(lg, b[2]) for lg, b in zip(lgs, bufs)]
         self.mm(x, [b[0] for b in bufs])
         self._cap(*zip(*bufs))  # one tail program for all rows
         return [(lg, tk) for _, lg, tk in bufs]

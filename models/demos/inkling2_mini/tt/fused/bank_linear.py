@@ -191,11 +191,15 @@ class BankLinear:
     def reader_defines(self):
         return [("W_SPREAD", "1")] * self.spreads()
 
-    def __call__(self, x, out=None):
+    def __call__(self, x, out=None, head=None):
         """x [1,1,M,K] bf16 TILE, M <= 32 (any memory). out=None: returns [1,1,M,out_cols] TILE DRAM interleaved
         in out_dtype (the reference's output after to_memory_config(DRAM) + slice: every row of each tile). out given:
         a dense fp32 ROW_MAJOR [1,1,1,W] row (W >= out_cols) receiving row 0 only (tt/fused/head.py's raw row), or a
-        list of M such rows (R verify rows: row r of x -> out[r])."""
+        list of M such rows (R verify rows: row r of x -> out[r]); the rows may also be [1,1,1,W] fp32 TILE tensors
+        (row 0 of each tile written; the pages spread over the DRAM banks).
+        head (with out rows): the LM head in this program: dict(inv, cap: fp32 bits of 1 / softcap and softcap,
+        n_arg: argmax columns, tokens: one uint32 [1] DRAM tensor per row): out rows get tanh(x W * inv) * cap and
+        tokens[r] the argmax of row r (bank_linear_compute / _writer: the logits tail's math and tie rule)."""
         outs = out if isinstance(out, (list, tuple)) else [out]
         out = outs[0]
         tb = ttnn.Tile([TILE, TILE]).get_tile_size(self.dtype)
@@ -210,16 +214,26 @@ class BankLinear:
         else:
             assert self.out_dtype == ttnn.float32 and x.shape[-2] == len(outs)
         otb = ttnn.Tile([TILE, TILE]).get_tile_size(self.out_dtype)
+        row_tiles = not tiles_out and out.layout == ttnn.TILE_LAYOUT  # out rows as [1, 1, 1, W] TILE tensors
         named = dict(kt=self.Kt, kb=self.KB, nblk=self.nblk, n_banks=self.nb, out_cols=self.out_cols,
-                     out_page=otb if tiles_out else out.shape[-1] * 4, max_ncq=self.max_ncq, tiles_out=int(tiles_out),
+                     out_page=otb if (tiles_out or row_tiles) else out.shape[-1] * 4, max_ncq=self.max_ncq, tiles_out=int(tiles_out),
                      out_tile=otb, x_rows=self.x_rows, raw_rows=1 if tiles_out else len(outs))  # fmt: skip
         r_args, c_args, w_args = {}, {}, {}
-        for c, i in self.cores:
+        if head is not None:
+            assert not tiles_out and len(head["tokens"]) == len(outs)
+            # the merging worker: the one with the fewest output tiles (it waits for the others at the end)
+            load = [sum(n for n, _ in self.items[i][2]) for _, i in self.cores]
+            mi = min(range(len(load)), key=lambda k: load[k])
+            m = self.device.worker_core_from_logical_core(ttnn.CoreCoord(*self.cores[mi][0]))
+        for k, (c, i) in enumerate(self.cores):
+            slot = (k - mi) % len(self.cores) if head is not None else k  # the merging worker is slot 0
             b, rot, part = self.items[i]
             core = ttnn.CoreCoord(*c)
             r_args[core] = self.reader_args(i)
             c_args[core] = [rot, len(part)] + [n for n, _ in part]
             w_args[core] = [x.buffer_address(), rot, out.buffer_address(), len(part)] + [v for p_ in part for v in p_]
+            if head is not None:
+                w_args[core] += [slot, m.x, m.y, len(self.cores)]
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         blk = self.KB * self.max_ncq
         kernels = [
@@ -232,11 +246,14 @@ class BankLinear:
             ttnn.KernelDescriptor(
                 kernel_source=f"{F.KDIR}/bank_linear_compute.cpp", core_ranges=self.grid,
                 named_compile_time_args=list(named.items()), runtime_args=[(k, v) for k, v in c_args.items()],
+                defines=[("BL_SOFTCAP", str(head["inv"])), ("BL_CAP", str(head["cap"])),
+                         ("BL_SFPU_IT", str(2 * -(-x.shape[-2] // 4)))] if head else [],  # fmt: skip
                 config=self.compute,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=f"{F.KDIR}/bank_linear_writer.cpp", core_ranges=self.grid,
                 compile_time_args=acc(x) + acc(out), named_compile_time_args=list(named.items()),
+                defines=([("BL_HEAD", str(head["n_arg"]))] if head else []) + ([("BL_ROW_TILES", "1")] if row_tiles else []),
                 runtime_args=[(k, v) for k, v in w_args.items()],
                 config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
             ),
@@ -252,7 +269,15 @@ class BankLinear:
             cb(1, self.dtype, tb, 4 * blk),  # weight blocks: 4 fixed slots (reader keeps 3 in flight)
             cb(16, self.out_dtype, otb, 2 * DST_TILES),  # output tiles of a pass
         ]
-        if len(outs) > 1:
-            kernels[2].common_runtime_args = [o.buffer_address() for o in outs[1:]]
-        prog = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[])
-        return ttnn.generic_op([x, self.weight, *outs[1:], out], prog)
+        common = [o.buffer_address() for o in outs[1:]]
+        sems, extra = [], []
+        if head is not None:
+            common += [t.buffer_address() for t in head["tokens"]]
+            n = len(self.cores)
+            cbs.append(cb(17, ttnn.float32, 16 * len(outs) * (n + 1), 1))  # argmax slots (bank_linear_writer)
+            sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=self.grid, initial_value=0)]
+            extra = list(head["tokens"])
+        if common:
+            kernels[2].common_runtime_args = common
+        prog = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems)
+        return ttnn.generic_op([x, self.weight, *outs[1:], *extra, out], prog)
