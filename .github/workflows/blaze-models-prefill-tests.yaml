@@ -326,6 +326,15 @@ jobs:
             title: "(GLM-5.3-744B) disaggregated prefill SC4 vs SC1 scaling"
           - model: glm53_mtp_kv_share
             title: "(GLM-5.3-744B) MTP KV share prefill SC4 vs SC1 scaling"
+          # The 4x4 legs: 8x[4,4] on SC4 over 2x[4,4] on SC1, unpacked and packed (two 2.5k chunks per forward).
+          - model: glm53
+            title: "(GLM-5.3-744B) disaggregated prefill 4x4 SC4 vs SC1 scaling"
+            ref: sc4_4x4
+            base: sc1_4x4
+          - model: glm53_packed
+            title: "(GLM-5.3-744B) packed prefill 4x4 SC4 vs SC1 scaling"
+            ref: sc4_4x4
+            base: sc1_4x4
           # sc4 alone: K3's sc1 leg runs 24 of 93 layers, so there is no sc1 baseline to scale from.
           - model: kimi_k3
             title: "(Kimi-K3-2.8T) disaggregated prefill SC4 perf"
@@ -355,13 +364,16 @@ jobs:
       - name: Plot chunk_time@ISL
         id: plot
         continue-on-error: true
+        env:
+          # Unique per matrix entry: one model can report two layouts (glm53 8x4 and 4x4), and the upload is unzipped.
+          PNG: ${{ matrix.model }}${{ matrix.ref && format('_{0}', matrix.ref) || '' }}_chunk_time.png
         run: |
           python3 -m venv "${RUNNER_TEMP}/plot-venv"
           "${RUNNER_TEMP}/plot-venv/bin/pip" install --quiet matplotlib
           "${RUNNER_TEMP}/plot-venv/bin/python" models/demos/common/prefill/runners/ci/plot_chunk_time.py \
-            --metrics-dir perf_metrics --model "${{ matrix.model }}" -o "${{ matrix.model }}_chunk_time.png"
-          if [ -f "${{ matrix.model }}_chunk_time.png" ]; then
-            echo "png=${{ matrix.model }}_chunk_time.png" >> "$GITHUB_OUTPUT"
+            --metrics-dir perf_metrics --model "${{ matrix.model }}" -o "${PNG}"
+          if [ -f "${PNG}" ]; then
+            echo "png=${PNG}" >> "$GITHUB_OUTPUT"
           fi
       - name: Upload chunk_time@ISL plot
         id: chunk-time
