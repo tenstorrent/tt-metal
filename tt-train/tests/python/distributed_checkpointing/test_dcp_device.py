@@ -349,7 +349,8 @@ def test_save_refuses_bad_state_before_writing_and_leaks_nothing(tp_mesh, tmp_pa
 
 
 def test_failed_load_says_model_is_partly_restored(tp_mesh, tmp_path, monkeypatch, expect_error):
-    """A load that fails after placing tensors says the model is partly restored."""
+    """A load that fails after placing tensors says the model is partly restored and, the process holding its mesh
+    whole, that it can be loaded again: the restart a shared mesh needs is not asked for."""
     model, params, opt = fresh_tp(DIM)
     path = str(tmp_path / "step_0000001")
     dcp.save(path, model=model, optimizer=opt)
@@ -366,7 +367,8 @@ def test_failed_load_says_model_is_partly_restored(tp_mesh, tmp_path, monkeypatc
     monkeypatch.setattr(_load, "_place", place_then_fail)
     with expect_error(
         dcp.CheckpointError,
-        r"load failed at .* \(RuntimeError: simulated device out of memory\) after 1 of \d+ tensors were placed",
+        r"load failed at .* \(RuntimeError: simulated device out of memory\) after 1 of \d+ tensors were placed "
+        r"\(the first: .*\); the model and optimizer are partly restored: load again or discard them$",
     ):
         dcp.load(path, model=model2, optimizer=opt2)
 
