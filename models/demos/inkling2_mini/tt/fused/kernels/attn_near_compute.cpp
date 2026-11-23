@@ -27,6 +27,9 @@ constexpr uint32_t dt = 4;
 // SFPU ops on the top two faces only (rows 0..15): the group's heads are rows 0..2, and every op here is per
 // element or per row, so rows 16..31 (left as loaded) never reach rows 0..2
 constexpr VectorMode VM = VectorMode::R;
+// and of those, rows 0..3 (IT 4-row groups per face; 8 = the whole face): the writer's row max reads rows 0..2, the
+// rows below only reach rows below in z and O (row-wise products), which the combine never reads
+constexpr int IT = get_named_compile_time_arg_val("it");
 
 FORCE_INLINE void load(uint32_t cb, uint32_t tile, uint32_t dst) {
     reconfig_data_format_srca(cb);
@@ -61,7 +64,7 @@ void kernel_main() {
         }
         load(cb_mask, j, 1);
         add_binary_tile_init();
-        add_binary_tile(0, 1, 0, VM);
+        add_binary_tile<ckernel::DstRoundingMode::Default, DST_ACCUM_MODE, IT>(0, 1, 0, VM);
         tile_regs_commit();
         tile_regs_wait();
         put(0, cb_s);
@@ -78,9 +81,9 @@ void kernel_main() {
         load(j < nj ? cb_s : cb_sink, j < nj ? j : 0, 0);
         load(cb_c, 0, 1);
         sub_binary_tile_init();
-        sub_binary_tile(0, 1, 0, VM);
+        sub_binary_tile<ckernel::DstRoundingMode::Default, DST_ACCUM_MODE, IT>(0, 1, 0, VM);
         exp_tile_init();
-        exp_tile(0, VM);
+        exp_tile<false, false, InputClamping::ClampToNegative, IT>(0, VM);
         tile_regs_commit();
         tile_regs_wait();
         put(0, j < nj ? cb_e : cb_es);

@@ -51,6 +51,7 @@ NEG = -1.0e9  # masked logit (attention.py)
 # Near combine SFPU rows: 4-row groups per face of the ops in attn_comb_compute.cpp (2 = rows 0..3, the 3 heads of a
 # kv group; 8 = whole faces). Same per-element ops on the rows the consumers read.
 COMB_IT = int(os.environ.get("INKLING_COMB_IT", "2"))
+NEAR_IT = int(os.environ.get("INKLING_NEAR_IT", "2"))  # the same for the near partial's SFPU ops
 
 
 def f32_bits(x):
@@ -704,7 +705,11 @@ class AttnNear:
             kernels.append(
                 _kernel("attn_near_writer.cpp", cs, named, [w_rt[p] for p in ps], ttnn.WriterConfigDescriptor())
             )
-            kernels.append(_kernel("attn_near_compute.cpp", cs, named, [[]] * len(cs), F.compute_config([4, 8, 16])))
+            kernels.append(
+                _kernel(
+                    "attn_near_compute.cpp", cs, dict(named, it=NEAR_IT), [[]] * len(cs), F.compute_config([4, 8, 16])
+                )
+            )
         crs = _crs(self.cores)
         cbs = [
             _cb(0, bf, 4, crs),
@@ -825,7 +830,13 @@ class AttnNear:
                     _kernel("attn_near_writer.cpp", cs, named, [w_rt[p] for p in ps], ttnn.WriterConfigDescriptor())
                 )
                 kernels.append(
-                    _kernel("attn_near_compute.cpp", cs, named, [[]] * len(cs), F.compute_config([4, 8, 16]))
+                    _kernel(
+                        "attn_near_compute.cpp",
+                        cs,
+                        dict(named, it=NEAR_IT),
+                        [[]] * len(cs),
+                        F.compute_config([4, 8, 16]),
+                    )
                 )
         crs = _crs(all_cores)
         cbs = [
