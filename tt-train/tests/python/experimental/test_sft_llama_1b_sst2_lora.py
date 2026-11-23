@@ -30,8 +30,7 @@ from ttml.experimental.trainer.__main__ import main
 from ttml.experimental.trainer.configs import load_config
 from ttml.experimental.trainer.managers.checkpoint import HISTORY_FILE
 from ttml.experimental.trainer.managers.logging import TrainingLogger
-from ttml.experimental.models.utils.checkpoint import tt_metal_version
-from ttml.experimental.trainer.utils import TRAINER_STATE
+from ttml.experimental.trainer.utils import TRAINER_STATE, tt_metal_version
 
 RECIPE = Path(ttml.experimental.__file__).parent / "training_configs" / "llama_3_2_1b_instruct_sst2_lora.yaml"
 MODEL_SOURCE = "unsloth/Llama-3.2-1B-Instruct"  # not gated

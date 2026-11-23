@@ -239,12 +239,12 @@ and so on, in list order.
 
 ## Checkpoints
 
-A checkpoint is a directory holding the model's weights in the format `checkpoint.format` picks, and
-`trainer_state.json`, both written by the model provider. `trainer_state.json` holds the step, epoch and metrics at the
-save, the format, the run's full config (`config`), the tt-metal version it ran on (`tt_metal_version`), and what
-the provider records about the model, for Llama the base model the run trains (`base_model.name_or_path`; see
-[Adding a model](#adding-a-model)). The version is the installed `ttnn` package's, `null` if ttnn isn't installed as a
-package. An editable install, as `create_venv.sh` makes, keeps the version it was installed at.
+A checkpoint is a directory holding the model's weights in the format `checkpoint.format` picks, which the model
+provider writes, and `trainer_state.json`, which the trainer writes. `trainer_state.json` holds the step, epoch and
+metrics at the save, the format, the run's full config (`config`), the tt-metal version it ran on
+(`tt_metal_version`), and the model the run trains (`base_model.name_or_path`, its `model.name`). The version is the
+installed `ttnn` package's, `null` if ttnn isn't installed as a package. An editable install, as `create_venv.sh`
+makes, keeps the version it was installed at.
 
 ```yaml
 checkpoint:
@@ -268,13 +268,13 @@ k and v fused, the q and k rows permuted for RoPE, and the vocabulary padded.
 
 The base model comes back from what the checkpoint records:
 
-- A PEFT adapter names it in `adapter_config.json`, as `base_model_name_or_path`, so
+- `trainer_state.json` names it for every checkpoint a run saved, and the trainer checks it before the weights load.
+  A checkpoint without one, such as a model from the hub, is taken as the run's model.
+- A PEFT adapter also names it in `adapter_config.json`, as `base_model_name_or_path`, so
   `AutoPeftModelForCausalLM.from_pretrained(path)` loads the adapter on the model it was trained on. It records the
   provider's `model_source()`: the hub id, or for a model that isn't on the hub, the local directory, which must be
   there wherever the adapter is loaded.
-- A `tt` checkpoint names it in the header of `checkpoint.pkl`, with the LoRA `r`, `alpha` and `target_modules`.
-- A full `hf` model names it in `trainer_state.json`. A model without one, such as one from the hub, is taken as the
-  run's model.
+- A `tt` checkpoint also names it in the header of `checkpoint.pkl`, with the LoRA `r`, `alpha` and `target_modules`.
 
 The `checkpoint` section:
 
@@ -422,11 +422,9 @@ its four methods:
   `device.mesh` it can't be built on. It must not download weights or open the device.
 - `build()`: the model, with the pretrained weights at `model_source()`.
 - `load_weights(model, directory)`: the weights `export_weights` wrote to `directory`, into a model `build` made.
-- `export_weights(model, directory, metadata)`: reads the weights from the device and writes them to `directory`,
-  with `trainer_state.json`. `metadata` is what the caller of `save_checkpoint` passes: the step, epoch and metrics.
-  The provider writes `trainer_state(metadata)`, the format, config and tt-metal version with `metadata`, together with
-  what it records about the model for `load_weights` to read back, using `write_trainer_state`; Llama adds
-  `"base_model": {"name_or_path": "meta-llama/Llama-3.2-1B-Instruct"}`.
+- `export_weights(model, directory)`: reads the weights from the device and writes them to `directory`.
+
+A provider deals only in the weights' files; the trainer writes and checks `trainer_state.json`.
 
 `model_source()` is where the pretrained model's files are: an HF hub id, or a local directory laid out as
 `save_pretrained` writes one. By default it is `model.name`, so the files come from the hub; a provider whose model

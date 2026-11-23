@@ -11,7 +11,6 @@ from types import SimpleNamespace
 import pytest
 
 import ttml.experimental.models.provider as model_provider
-import ttml.experimental.models.provider.base as model_provider_base
 from ttml.experimental.errors import UnsupportedTrainingConfig
 from ttml.experimental.models.provider import (
     LlamaProvider,
@@ -19,8 +18,7 @@ from ttml.experimental.models.provider import (
     providers,
     register_provider,
 )
-from ttml.experimental.models.utils.checkpoint import AdapterState, read_trainer_state
-from ttml.experimental.trainer import SFTTrainerConfig
+from ttml.experimental.models.utils.checkpoint import AdapterState
 
 
 @pytest.fixture(autouse=True)
@@ -75,90 +73,6 @@ def test_a_provider_registered_from_outside_takes_back_checkpoints_of_its_model(
     provider._check_base_model(tmp_path, "mistralai/Mistral-7B-v0.1")
     with expect_error(UnsupportedTrainingConfig, r"^checkpoint: .* is for 'meta-llama/Llama-3.2-1B'"):
         provider._check_base_model(tmp_path, "meta-llama/Llama-3.2-1B")
-
-
-@pytest.mark.parametrize(
-    "recorded, loads",
-    [(None, True), ("acme/acme-7b", True), ("meta-llama/Llama-3.2-1B", False)],
-    ids=["no-trainer-state", "same-model", "other-model"],
-)
-def test_a_full_hf_checkpoint_is_loaded_only_onto_the_model_it_records(
-    tmp_path, monkeypatch, expect_error, recorded, loads
-):
-    import ttml.models.llama
-
-    source = _local_model(tmp_path / "acme-7b")
-
-    class AcmeProvider(LlamaProvider):
-        def model_source(self) -> str:
-            return source
-
-    register_provider("acme/acme-7b", AcmeProvider)
-    config = _config("acme/acme-7b")
-    config.model.lora = None
-    config.checkpoint = SimpleNamespace(format=SimpleNamespace(type="hf"))
-    provider = get_provider(config)
-
-    checkpoint = tmp_path / "checkpoint"
-    checkpoint.mkdir()
-    if recorded is not None:
-        (checkpoint / "trainer_state.json").write_text(json.dumps({"base_model": {"name_or_path": recorded}}))
-    loaded = []
-    monkeypatch.setattr(ttml.models.llama, "load_from_safetensors", lambda model, directory: loaded.append(directory))
-
-    if loads:
-        provider.load_weights(object(), checkpoint)
-        assert loaded == [checkpoint]
-    else:
-        with expect_error(UnsupportedTrainingConfig, r"^checkpoint: .* is for 'meta-llama/Llama-3.2-1B'"):
-            provider.load_weights(object(), checkpoint)
-        assert loaded == []
-
-
-def _acme_provider(tmp_path):
-    """A full fine-tuning Llama provider for ``acme/acme-7b``, with an ``hf`` checkpoint format."""
-    source = _local_model(tmp_path / "acme-7b")
-
-    class AcmeProvider(LlamaProvider):
-        def model_source(self) -> str:
-            return source
-
-    register_provider("acme/acme-7b", AcmeProvider)
-    config = SFTTrainerConfig(
-        model={"name": "acme/acme-7b"}, dataset={"id": "alpaca"}, optimizer={"lr": 1e-3}, batch_size=1, max_length=32
-    )
-    return get_provider(config)
-
-
-def test_a_full_hf_checkpoint_records_the_run_and_its_base_model(tmp_path, monkeypatch):
-    import ttml.models.llama
-
-    provider = _acme_provider(tmp_path)
-    monkeypatch.setattr(model_provider_base, "tt_metal_version", lambda: "0.64.0")
-    monkeypatch.setattr(ttml.models.llama, "export_hf_model", lambda model, directory, hf_source_dir: None)
-    monkeypatch.setattr(ttml.models.llama, "load_from_safetensors", lambda model, directory: None)
-
-    checkpoint = tmp_path / "checkpoint"
-    checkpoint.mkdir()
-    provider.export_weights(object(), checkpoint, {"step": 3, "epoch": 0, "metrics": {"train/loss": 1.5}})
-
-    assert read_trainer_state(checkpoint) == {
-        "format": {"type": "hf"},
-        "config": provider.config.model_dump(mode="json"),
-        "tt_metal_version": "0.64.0",
-        "step": 3,
-        "epoch": 0,
-        "metrics": {"train/loss": 1.5},
-        "base_model": {"name_or_path": "acme/acme-7b"},
-    }
-    provider.load_weights(object(), checkpoint)
-
-
-def test_metadata_wins_over_the_run_fields(tmp_path, monkeypatch):
-    provider = _acme_provider(tmp_path)
-    monkeypatch.setattr(model_provider_base, "tt_metal_version", lambda: None)
-    assert provider.trainer_state({"tt_metal_version": "host"})["tt_metal_version"] == "host"
-    assert provider.trainer_state()["tt_metal_version"] is None
 
 
 @pytest.mark.parametrize("pattern", ["rank_pattern", "alpha_pattern"])

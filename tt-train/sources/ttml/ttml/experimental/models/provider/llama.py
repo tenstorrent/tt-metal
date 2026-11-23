@@ -16,8 +16,8 @@ The weights a checkpoint holds, by ``checkpoint.format.type`` and whether ``mode
 - ``tt`` without: every parameter, in ``checkpoint.pkl``.
 
 ``checkpoint.pkl`` has a header naming the base model and the LoRA settings, which a load must match. A PEFT adapter
-names its base model in ``adapter_config.json``; a full ``hf`` model, in the ``trainer_state.json`` ``export_weights``
-writes beside every checkpoint.
+names its base model in ``adapter_config.json``. A full ``hf`` model doesn't name one; the trainer checks the
+``trainer_state.json`` it writes beside every checkpoint.
 """
 
 from __future__ import annotations
@@ -34,9 +34,7 @@ from ..utils.checkpoint import (
     AdapterState,
     PathLike,
     read_adapter,
-    read_trainer_state,
     write_adapter,
-    write_trainer_state,
 )
 from ..utils.hub import load_hf_config, model_dir
 from ..utils.peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
@@ -226,12 +224,9 @@ class LlamaProvider(ModelProvider):
         else:
             from ttml.models.llama import load_from_safetensors
 
-            # A model saved by a trainer records its base model; one from elsewhere doesn't, and is taken as is.
-            state = read_trainer_state(directory) or {}
-            self._check_base_model(directory, (state.get("base_model") or {}).get("name_or_path"))
             load_from_safetensors(model, directory)
 
-    def export_weights(self, model: Any, directory: PathLike, metadata: Optional[dict[str, Any]] = None) -> None:
+    def export_weights(self, model: Any, directory: PathLike) -> None:
         directory = Path(directory)
         if self.config.checkpoint.format.type == "tt":
             from ttml import checkpointing
@@ -245,10 +240,9 @@ class LlamaProvider(ModelProvider):
             from ttml.models.llama import export_hf_model
 
             export_hf_model(model, directory, hf_source_dir=model_dir(self.model_source(), local_only=True))
-        write_trainer_state(directory, {**self.trainer_state(metadata), "base_model": self._base_model()})
 
     def _base_model(self) -> dict:
-        """The model the run trains, as a ``tt`` checkpoint's header and ``trainer_state.json`` record it."""
+        """The model the run trains, as a ``tt`` checkpoint's header records it."""
         return {"name_or_path": self.config.model.name}
 
     # ------------------------------------------------------------------ tt checkpoints
@@ -297,7 +291,7 @@ class LlamaProvider(ModelProvider):
 
     def _check_base_model(self, directory: Path, base: Optional[str]) -> None:
         """A checkpoint that records no base model is taken as this model's. A PEFT adapter records
-        ``model_source()``; a ``tt`` checkpoint and ``trainer_state.json``, ``model.name``."""
+        ``model_source()``; a ``tt`` checkpoint, ``model.name``."""
         name = self.config.model.name
         if base and base not in (name, self.model_source()):
             _fail("checkpoint", f"{directory} is for {base!r}, this model is {name!r}")

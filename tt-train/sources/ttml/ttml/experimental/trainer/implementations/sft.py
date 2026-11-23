@@ -18,7 +18,14 @@ from ttml.experimental.errors import UnsupportedTrainingConfig
 from ttml.experimental.models.provider import get_provider as get_model_provider
 from ..configs import SFTTrainerConfig
 from ..managers.device import DeviceManager
-from ..utils import CombinedOptimizer, assign_parameters, staged_directory
+from ..utils import (
+    CombinedOptimizer,
+    assign_parameters,
+    read_trainer_state,
+    staged_directory,
+    tt_metal_version,
+    write_trainer_state,
+)
 from .base import Trainer
 
 # Device layout and dtype of each key of a dataset provider's batches.
@@ -78,6 +85,7 @@ class SFTTrainer(Trainer):
         model = self.provider.build()
         init = self.config.checkpoint.init_strategy
         if init is not None:
+            self._check_base_model(init.path)
             # Weights only: training still starts at step 0, with a fresh optimizer.
             self.provider.load_weights(model, init.path)
             self.logger.info(f"Initialized the weights from {init.path}")
@@ -169,8 +177,41 @@ class SFTTrainer(Trainer):
         return [float(lr) for lr in self.optimizer.get_group_lrs()]
 
     def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:
-        """A checkpoint directory, which the model provider writes: the model's weights in the format
-        ``checkpoint.format`` picks, and ``trainer_state.json`` with ``metadata``; see ``ModelProvider.export_weights``.
+        """A checkpoint directory: the model's weights in the format ``checkpoint.format`` picks, which the model
+        provider writes (see ``ModelProvider.export_weights``), and ``trainer_state.json`` with
+        ``trainer_state(metadata)``.
         """
         with staged_directory(path) as directory:
-            self.provider.export_weights(self.model, directory, metadata)
+            self.provider.export_weights(self.model, directory)
+            write_trainer_state(directory, self.trainer_state(metadata))
+
+    def trainer_state(self, metadata: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        """What ``trainer_state.json`` records: the format, the run's full config, the tt-metal version
+        (``tt_metal_version()``) and the model the run trains, then ``metadata``, whose keys win. For example::
+
+            {
+                "format": {"type": "hf"},
+                "config": {...},
+                "tt_metal_version": "0.64.0",
+                "base_model": {"name_or_path": "meta-llama/Llama-3.2-1B-Instruct"},
+                "step": 100,
+                "epoch": 0,
+                "metrics": {"train/loss": 1.23, "val/loss": 1.31}
+            }
+        """
+        return {
+            "format": self.config.checkpoint.format.model_dump(),
+            "config": self.config.model_dump(mode="json"),
+            "tt_metal_version": tt_metal_version(),
+            "base_model": {"name_or_path": self.config.model.name},
+            **(metadata or {}),
+        }
+
+    def _check_base_model(self, directory: str) -> None:
+        """Raise ``UnsupportedTrainingConfig`` if the checkpoint at ``directory`` was saved by a run of another model.
+        One without ``trainer_state.json``, such as a model from elsewhere, is taken as this model's."""
+        state = read_trainer_state(directory) or {}
+        base = (state.get("base_model") or {}).get("name_or_path")
+        name = self.config.model.name
+        if base and base not in (name, self.provider.model_source()):
+            raise UnsupportedTrainingConfig(f"checkpoint: {directory} is for {base!r}, this model is {name!r}")

@@ -4,20 +4,44 @@
 
 """Writing checkpoint directories.
 
-A checkpoint holds the model's weights and its ``trainer_state.json``, both of which the model provider writes.
+A checkpoint holds the model's weights, which the model provider writes, and ``trainer_state.json``, which the
+trainer writes: the run, and the step, epoch and metrics at the save.
 """
 
 from __future__ import annotations
 
+import importlib.metadata
+import json
 import os
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Union
-
-from ttml.experimental.models.utils.checkpoint import TRAINER_STATE
+from typing import Any, Iterator, Optional, Union
 
 PathLike = Union[str, os.PathLike]
+
+TRAINER_STATE = "trainer_state.json"
+
+
+def tt_metal_version() -> Optional[str]:
+    """The version of the installed ``ttnn`` package, or ``None`` if ttnn isn't installed as one. An editable install
+    keeps the version it was installed at."""
+    try:
+        return importlib.metadata.version("ttnn")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def write_trainer_state(directory: PathLike, state: dict[str, Any]) -> None:
+    (Path(directory) / TRAINER_STATE).write_text(json.dumps(state, indent=2) + "\n")
+
+
+def read_trainer_state(directory: PathLike) -> Optional[dict[str, Any]]:
+    """The contents of ``trainer_state.json``, or ``None`` for a checkpoint without one, such as a model from the hub."""
+    path = Path(directory) / TRAINER_STATE
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text())
 
 
 def _remove(path: Path) -> None:

@@ -3,20 +3,31 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Saving checkpoint directories: a failed or interrupted save never leaves a partial checkpoint, a run never saves
-over another run's, and the trainer has the model provider write the checkpoint. Device-free."""
+over another run's, the model provider writes the weights and the trainer ``trainer_state.json``, and a checkpoint
+loads only onto the model it records. Device-free."""
 
 import importlib.metadata
+import json
 import os
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
+import ttml.experimental.trainer.implementations.sft as sft
 import ttml.experimental.trainer.managers.checkpoint as checkpoint_manager
-from ttml.experimental.models.utils.checkpoint import tt_metal_version
-from ttml.experimental.trainer import SFTTrainer
+from ttml.experimental.errors import UnsupportedTrainingConfig
+from ttml.experimental.models.provider.base import ModelProvider
+from ttml.experimental.trainer import SFTTrainer, SFTTrainerConfig
 from ttml.experimental.trainer.configs import CheckpointConfig
 from ttml.experimental.trainer.managers.checkpoint import CheckpointManager
-from ttml.experimental.trainer.utils import checkpoint_exists, staged_directory
+from ttml.experimental.trainer.utils import (
+    TRAINER_STATE,
+    checkpoint_exists,
+    read_trainer_state,
+    staged_directory,
+    tt_metal_version,
+)
 
 
 def _write_checkpoint(path, content):
@@ -126,25 +137,90 @@ def test_tt_metal_version_is_the_ttnn_packages(monkeypatch):
     assert tt_metal_version() is None
 
 
-class _Provider:
-    """Records what each ``export_weights`` gets, and writes ``weights``."""
+class _Provider(ModelProvider):
+    """Writes ``weights`` from ``export_weights`` and nothing else; records the directories ``load_weights`` gets.
+    Its model's files are at ``acme-7b/``."""
 
-    def __init__(self):
-        self.calls = []
+    def __init__(self, config):
+        super().__init__(config)
+        self.loaded = []
 
-    def export_weights(self, model, directory, metadata=None):
-        self.calls.append((model, metadata))
+    def model_source(self):
+        return "acme-7b/"
+
+    def check(self):
+        pass
+
+    def build(self):
+        return object()
+
+    def load_weights(self, model, directory):
+        self.loaded.append(directory)
+
+    def export_weights(self, model, directory):
         (directory / "weights").write_text("new")
 
 
-def test_save_checkpoint_has_the_provider_export_into_a_staged_directory(tmp_path):
+def _trainer(init=None):
+    """A trainer of ``acme/acme-7b`` with ``_Provider``, starting from the checkpoint at ``init``, if given."""
+    config = SFTTrainerConfig(
+        model={"name": "acme/acme-7b"},
+        dataset={"id": "alpaca"},
+        optimizer={"lr": 1e-3},
+        batch_size=1,
+        max_length=32,
+        checkpoint={"init_strategy": {"path": str(init)}} if init else {},
+    )
     trainer = SFTTrainer()
-    model, metadata = object(), {"step": 3, "epoch": 0, "metrics": {"train/loss": 1.5}}
-    trainer.provider, trainer.model = _Provider(), model
+    trainer.config, trainer.provider = config, _Provider(config)
+    trainer.logger = SimpleNamespace(info=lambda message: None)
+    return trainer
+
+
+def test_save_checkpoint_has_the_provider_export_the_weights_into_a_staged_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(sft, "tt_metal_version", lambda: "0.64.0")
+    trainer = _trainer()
+    trainer.model = object()
     final = tmp_path / "checkpoint"
     _write_checkpoint(final, "old")
-    trainer.save_checkpoint(str(final), metadata)
+    trainer.save_checkpoint(str(final), {"step": 3, "epoch": 0, "metrics": {"train/loss": 1.5}})
 
-    assert trainer.provider.calls == [(model, metadata)]
     assert (final / "weights").read_text() == "new"
+    assert read_trainer_state(final) == {
+        "format": {"type": "hf"},
+        "config": trainer.config.model_dump(mode="json"),
+        "tt_metal_version": "0.64.0",
+        "base_model": {"name_or_path": "acme/acme-7b"},
+        "step": 3,
+        "epoch": 0,
+        "metrics": {"train/loss": 1.5},
+    }
     assert _entries(tmp_path) == ["checkpoint"]
+
+
+def test_metadata_wins_over_the_run_fields(monkeypatch):
+    monkeypatch.setattr(sft, "tt_metal_version", lambda: None)
+    trainer = _trainer()
+    assert trainer.trainer_state({"tt_metal_version": "host"})["tt_metal_version"] == "host"
+    assert trainer.trainer_state()["tt_metal_version"] is None
+
+
+@pytest.mark.parametrize(
+    "recorded, loads",
+    [(None, True), ("acme/acme-7b", True), ("acme-7b/", True), ("meta-llama/Llama-3.2-1B", False)],
+    ids=["no-trainer-state", "model-name", "model-source", "other-model"],
+)
+def test_a_checkpoint_is_loaded_only_onto_the_model_it_records(tmp_path, expect_error, recorded, loads):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    if recorded is not None:
+        (checkpoint / TRAINER_STATE).write_text(json.dumps({"base_model": {"name_or_path": recorded}}))
+    trainer = _trainer(init=checkpoint)
+
+    if loads:
+        trainer._load_model()
+        assert trainer.provider.loaded == [str(checkpoint)]
+    else:
+        with expect_error(UnsupportedTrainingConfig, r"^checkpoint: .* is for 'meta-llama/Llama-3.2-1B'"):
+            trainer._load_model()
+        assert trainer.provider.loaded == []
