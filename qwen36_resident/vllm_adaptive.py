@@ -60,6 +60,19 @@ PROMOTE_ACC = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_ACC", "2.7"))
 PROMOTE_OUT = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_OUT", "256"))
 REFILL_MS_FIXED, REFILL_MS_PER_TOKEN = 20.0, 0.13  # (defaults: tests/refill_batch.py, 2026-11-23)
 SPEC_MS_DEFAULT = lambda n: 28.0 + 3.5 * (n - 1)  # noqa: E731  (served verify steps, 2026-11-23: 1 / 4 / 8 users)
+OUT_ALPHA = 0.05  # (the output-length EMA starts at PROMOTE_OUT: a few short requests, e.g. a warm-up, do not flip it)
+OUTLIER = 3.0  # (a time sample over this x the estimate, or the default model's for the first one, is skipped: a
+# first-time trace capture, a prefill's device time an async call left in a step)
+
+
+def robust_ema(old, x, default, a=0.1):
+    """an EMA of times that skips outliers (OUTLIER) — one stray sample must not set the policy's estimates"""
+    ref = default if old is None else old
+    if ref is not None and x > OUTLIER * ref:
+        return old
+    return x if old is None else old + a * (x - old)
+
+
 # (log the per-step host / call times every 64 steps)
 TIMING = os.environ.get("RESIDENT_ADAPTIVE_TIMING", "0") == "1"
 # (0: synchronous serving, the first served version)
@@ -220,6 +233,11 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             gate=True,
         )
 
+    def _note_output(self, n_out):
+        """a finished request's output length, for the promotion gate's expected remaining tokens"""
+        old = self._pay["out"] or PROMOTE_OUT
+        self._pay["out"] = old + OUT_ALPHA * (n_out - old)
+
     def _promotion_pays(self, cands):
         """the promotion gate (PROMOTE_GATE): (verdict, its log line)"""
         pay, n = self._pay, max(1, len(self.live))
@@ -246,18 +264,19 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         (True until PAY_MIN verify steps are in)"""
         import time
 
-        pay, now, ema = self._pay, time.perf_counter(), lambda old, x, a=0.1: x if old is None else old + a * (x - old)
+        pay, now = self._pay, time.perf_counter()
+        ema = lambda old, x, a=0.1: x if old is None else old + a * (x - old)  # noqa: E731  (tokens: no outliers)
         # (a promotion's refill and a prefill between the steps are no step's cost: excluded)
         dt_ms = None if pay["last_t"] is None else (now - pay["last_t"] - pay.get("excl", 0.0)) * 1000
         pay["last_t"], pay["excl"] = now, 0.0
         n = max(1, pay["n"])
         if dt_ms is not None and dt_ms < 5000:  # (an idle gap is no step)
             if pay["kind"] == "verify" and spec_accepts:
-                pay["spec_ms"][n] = ema(pay["spec_ms"].get(n), dt_ms)
+                pay["spec_ms"][n] = robust_ema(pay["spec_ms"].get(n), dt_ms, SPEC_MS_DEFAULT(n))
                 pay["acc"] = ema(pay["acc"], sum(spec_accepts) / len(spec_accepts))
                 pay["verifies"] += 1
             elif pay["kind"] == "plain":
-                pay["plain_ms"][n] = ema(pay["plain_ms"].get(n), dt_ms)
+                pay["plain_ms"][n] = robust_ema(pay["plain_ms"].get(n), dt_ms, PLAIN_MS_DEFAULT(n))
         if pay["verifies"] < PAY_MIN or pay["acc"] is None or n not in pay["spec_ms"]:
             return True
         plain = pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n))
@@ -301,8 +320,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         dt = time.perf_counter() - t0
         self._pay["excl"] += dt
         tpt = max(0.0, dt * 1000 - REFILL_MS_FIXED) / max(1, toks)
-        old = self._pay["refill_tpt"]
-        self._pay["refill_tpt"] = tpt if old is None else old + 0.3 * (tpt - old)
+        self._pay["refill_tpt"] = robust_ema(self._pay["refill_tpt"], tpt, REFILL_MS_PER_TOKEN, a=0.3)
 
     @staticmethod
     def _non_speculable(sp, i):
@@ -587,9 +605,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 u = self.spec_of.pop(r)
                 self.ae._set_spec_table(u, [0])
             h, plen = self.history.pop(r, None), self.prompt_len.pop(r, None)
-            if h is not None and plen is not None and len(h) > plen:  # (its output length, for the promotion gate)
-                old = self._pay["out"]
-                self._pay["out"] = (len(h) - plen) if old is None else old + 0.2 * ((len(h) - plen) - old)
+            if h is not None and plen is not None and len(h) > plen:
+                self._note_output(len(h) - plen)
             self.last_acc.pop(r, None)
             self.sampled.discard(r)
             self.greedy_ok.discard(r)

@@ -426,6 +426,25 @@ def test_promotion_gate(monkeypatch, n_live, ctx, generated, out, expect):
     assert ok is expect, line
 
 
+def test_promotion_gate_estimates_are_robust(monkeypatch):
+    """a warm-up's two 16-token answers do not stop a single user's promotion (the output EMA starts at PROMOTE_OUT
+    and moves slowly); a stray step / refill time (a trace capture, a prefill's device time) does not set an estimate"""
+    m = _gate_case(monkeypatch, 1, 8192, 1)
+    m._note_output(16)
+    m._note_output(16)
+    assert m._promotion_pays([0])[0], m._promotion_pays([0])[1]
+    m.history[0], m.prompt_len[0] = [1] * 128, 127
+    assert A.robust_ema(None, 270.0, A.PLAIN_MS_DEFAULT(1)) is None  # (first sample 16x the default: skipped)
+    assert A.robust_ema(None, 18.0, A.PLAIN_MS_DEFAULT(1)) == 18.0
+    assert A.robust_ema(18.0, 201.0, A.PLAIN_MS_DEFAULT(1)) == 18.0
+    assert A.robust_ema(None, 4.4, A.REFILL_MS_PER_TOKEN, a=0.3) is None
+    for _ in range(80):
+        m._note_output(16)
+    assert m._promotion_pays([0])[0], "a short prompt's refill is cheap: still pays for short answers"
+    m.history[0], m.prompt_len[0] = [1] * 12000, 11999
+    assert not m._promotion_pays([0])[0], "short answers learned: a long context's refill does not pay"
+
+
 def test_promotion_gate_blocks_moves(monkeypatch):
     """a gate that says no: nobody moves, the mode stays SPEC (steps run plain); a measured spec step that saves
     nothing keeps it closed for a single short prompt too"""
