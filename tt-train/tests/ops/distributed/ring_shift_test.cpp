@@ -10,11 +10,14 @@
  * - Backward: device i sends to device (i-1+ring_size) % ring_size
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <core/xtensor_utils.hpp>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-umd-workload/cluster.hpp>
 #include <vector>
@@ -27,6 +30,7 @@
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
@@ -319,6 +323,48 @@ TEST_F(GalaxyRingShiftTest, ChainedShiftsOfLargeShardsAlongRows) {
 TEST_F(GalaxyRingShiftTest, ChainedShiftsOfLargeShardsAlongColumns) {
     TestChainedRingShifts(
         1, 4 * 45056, 1024, /*cluster_axis=*/1, /*shard_dim=*/2, /*num_shifts=*/3, /*both_directions=*/false);
+}
+
+// A device without the input would never send, and its receiving neighbour would wait forever. ring_shift must throw
+// before dispatching any socket op, so a valid shift right after still completes.
+static void ExpectRingShiftRejected(const ttnn::Tensor& tensor, const std::string& message) {
+    using namespace ttml;
+    EXPECT_THAT(
+        [&]() { (void)ttnn_fixed::distributed::ring_shift(tensor, /*cluster_axis=*/0, RingShiftDirection::Forward); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(message)));
+    TestChainedRingShifts(1, 2048, 64, /*cluster_axis=*/0, /*shard_dim=*/2, /*num_shifts=*/1);
+}
+
+static ttnn::Tensor MakeTileTensor(
+    ttnn::distributed::MeshDevice& device, const ttnn::distributed::TensorToMesh& mapper) {
+    const xt::xarray<float> data =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1UL, 1UL, 32UL, 32UL}, 0.0F, 1.0F, 0);
+    return ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(data, &device, ttnn::Layout::TILE, &mapper);
+}
+
+TEST_F(GalaxyRingShiftTest, RejectsTensorOnAnotherMesh) {
+    auto& device = ttml::autograd::ctx().get_device();
+    const auto valid = MakeTileTensor(device, *ttnn::distributed::replicate_tensor_to_mesh_mapper(device));
+    const auto other_mesh = device.create_submesh(device.shape());
+    const auto tensor = ttnn::create_device_tensor(valid.tensor_spec(), other_mesh.get());
+
+    ExpectRingShiftRejected(tensor, "on the context's mesh device");
+}
+
+TEST_F(GalaxyRingShiftTest, RejectsTensorOnPartOfTheMesh) {
+    using ttnn::distributed::MeshMapperConfig;
+    auto& device = ttml::autograd::ctx().get_device();
+    const auto shape = device.shape();
+    const auto half_columns = ttnn::distributed::create_mesh_mapper(
+        device,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Replicate{}},
+            .mesh_shape_override = ttnn::MeshShape(shape[0], shape[1] / 2)});
+    const auto tensor = MakeTileTensor(device, *half_columns);
+    ASSERT_EQ(tensor.device(), &device);
+    ASSERT_FALSE(tensor.device_storage().is_uniform_storage());
+
+    ExpectRingShiftRejected(tensor, "on every device");
 }
 
 // The socket manager outlives the device, and its intra-mesh sockets hold buffers of the mesh they were created on.
