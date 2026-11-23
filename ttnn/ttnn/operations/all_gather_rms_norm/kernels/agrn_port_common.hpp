@@ -59,7 +59,10 @@ constexpr uint32_t own_bands = get_compile_time_arg_val(25);
 // 1: after issuing a packet's reads, push every in-flight packet whose reads already landed (non-blocking trid
 // check); 0: push only when read_depth packets are in flight (or before a blocking wait)
 constexpr bool eager_push = get_compile_time_arg_val(26) != 0;
-constexpr uint32_t PORT_CT_ARGS = 27;  // TensorAccessorArgs(dst) follow
+// own-entry staging (Perf 1): the workers write the own walk in run_pages chunks into cb_stage of the active workers
+constexpr uint32_t cb_stage = get_compile_time_arg_val(27);
+constexpr bool stage_on = get_compile_time_arg_val(28) != 0;
+constexpr uint32_t PORT_CT_ARGS = 29;  // TensorAccessorArgs(dst) follow
 static_assert(own_bands >= 1 && own_bands <= 32, "band mask");
 constexpr uint32_t run_stride = shard_w ? 1 : nb;        // page-id step between the pages of one run
 constexpr uint32_t shard_w_div = shard_w ? shard_w : 1;  // (the interleaved walk never divides by it)

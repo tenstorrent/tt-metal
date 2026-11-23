@@ -59,7 +59,30 @@ constexpr uint32_t own_bands = get_compile_time_arg_val(34);
 // RMS with gamma (OVERLAP): x * gamma is computed into cb_xg while the stats round runs (x * r * g = (x * g) * r),
 // leaving one multiply per tile on the critical path after the stats arrive
 constexpr bool xg_pre = get_compile_time_arg_val(35) != 0;
-constexpr uint32_t WORKER_CT_ARGS = 36;  // TensorAccessorArgs follow (reader / writer)
+// Own-entry staging (Perf 1, OVERLAP): each port's own-entry walk is cut into chunks of st_rp (= run_pages) pages;
+// chunk g = lane * st_nch + c lives in cb_stage of one active worker (stage_chunk_home). Every worker writes each of
+// its normalized pages to its chunk home at the page's walk position, then increments one counter on every port, so the
+// port reads each own packet with at most 2 L1 reads instead of DRAM bank-run reads after the own write.
+// Raw NoC on purpose (no kernel_lib helper scatters block pages to per-chunk L1 homes in another core's walk order):
+// measured Perf 1 — focus 29.18 -> 28.37 us, 640x1792 105.2 -> 79.2 us, 2048x1280 255.2 -> 181.9 us (changelog).
+constexpr bool stage_on = get_compile_time_arg_val(36) != 0;
+constexpr uint32_t st_L = get_compile_time_arg_val(37);  // links (lanes)
+constexpr uint32_t st_nb = get_compile_time_arg_val(38);
+constexpr uint32_t st_cols = get_compile_time_arg_val(39);  // walk cols_eff
+constexpr uint32_t st_row_stride = get_compile_time_arg_val(40);
+constexpr uint32_t st_slot_stride = get_compile_time_arg_val(41);
+constexpr bool st_by_row = get_compile_time_arg_val(42) != 0;  // sharded output: lane units are tile-rows
+constexpr uint32_t ST_MAX_LANES = 4;
+constexpr uint32_t ST_MAX_NB = 16;
+constexpr uint32_t ST_LANES_IDX = 43;                              // staged units per lane
+constexpr uint32_t ST_UNIT_OFF_IDX = ST_LANES_IDX + ST_MAX_LANES;  // per bank: its first page in the lane walk
+constexpr uint32_t ST_TAIL_IDX = ST_UNIT_OFF_IDX + ST_MAX_NB;
+constexpr uint32_t st_rp = get_compile_time_arg_val(ST_TAIL_IDX);        // pages per chunk (= run_pages)
+constexpr uint32_t st_nch = get_compile_time_arg_val(ST_TAIL_IDX + 1);   // chunks per lane (max over lanes)
+constexpr uint32_t st_nact = get_compile_time_arg_val(ST_TAIL_IDX + 2);  // staging cores (active workers)
+constexpr uint32_t st_tbl = get_compile_time_arg_val(ST_TAIL_IDX + 3);   // common-arg index of their NoC coords
+constexpr uint32_t st_ctr = get_compile_time_arg_val(ST_TAIL_IDX + 4);   // port readiness counter (L1 address)
+constexpr uint32_t WORKER_CT_ARGS = ST_TAIL_IDX + 5;                     // TensorAccessorArgs follow (reader / writer)
 
 constexpr uint32_t KT = pre_combine ? 1 : K;  // members per (slot, row) in the stats table
 constexpr uint32_t P = G * KT;                // stats partitions per row of the cross-chip combine
@@ -123,5 +146,114 @@ inline uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
 // Valid columns of the member's last tile (the slice's W tail sits in the last member's last tile).
 inline uint32_t member_owns_tail(const WorkerId& w) { return (w_valid_last < TILE) && (w.w_start + w.cw == Wlt); }
+
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+// Own-entry staging. The lane walk of the own slot (agrn_port_common.hpp for_each_packet: bank-major, then slot row,
+// then column; sharded output: lane row-major).
+// Position of the block page (tr, local column jc) in its lane's own-entry walk: returns false if not staged.
+struct StagePos {
+    uint32_t l, i, idx;
+};
+inline bool stage_pos(uint32_t p, uint32_t tr, uint32_t jc, StagePos& o) {
+    const uint32_t base = p * st_slot_stride;
+    const uint32_t base_mod = base % st_nb;
+    const uint32_t rs_mod = st_row_stride % st_nb;
+    const uint32_t rr = is_ru ? 0u : tr;
+    const uint32_t jj = is_ru ? tr * Wlt + jc : jc;
+    if constexpr (st_by_row) {
+        o.l = rr % st_L;
+        o.i = rr / st_L;
+        if (o.i >= kernel_compile_time_args[ST_LANES_IDX + o.l]) {
+            return false;
+        }
+        o.idx = o.i * st_cols + jj;
+        return true;
+    }
+    uint32_t T = 1;  // rows per residue period of (base + rr * row_stride) % nb
+    {
+        uint32_t m = rs_mod;
+        while (m != 0) {
+            m += rs_mod;
+            if (m >= st_nb) {
+                m -= st_nb;
+            }
+            ++T;
+        }
+    }
+    auto cnt_row = [&](uint32_t rbm, uint32_t b) -> uint32_t {
+        const uint32_t j0 = b >= rbm ? b - rbm : b + st_nb - rbm;
+        return j0 < st_cols ? (st_cols - 1 - j0) / st_nb + 1 : 0u;
+    };
+    const uint32_t P = base + rr * st_row_stride + jj;
+    const uint32_t b = P % st_nb;
+    o.l = b % st_L;
+    o.i = b / st_L;
+    if (o.i >= kernel_compile_time_args[ST_LANES_IDX + o.l]) {
+        return false;
+    }
+    const uint32_t q = rr / T, rem = rr - q * T;
+    uint32_t sum_t = 0, part = 0, m = base_mod;
+    for (uint32_t u = 0; u < T; ++u) {
+        const uint32_t c = cnt_row(m, b);
+        sum_t += c;
+        part += u < rem ? c : 0u;
+        m += rs_mod;
+        if (m >= st_nb) {
+            m -= st_nb;
+        }
+    }
+    const uint32_t rbm = (base_mod + rem * rs_mod) % st_nb;
+    const uint32_t j0 = b >= rbm ? b - rbm : b + st_nb - rbm;
+    o.idx = kernel_compile_time_args[ST_UNIT_OFF_IDX + b] + q * sum_t + part + (jj - j0) / st_nb;
+    return true;
+}
+
+// Home of chunk g (of st_L * st_nch): spread evenly over the staging cores (one each while they suffice),
+// else round-robin with slot g / n_act. Must match the port reader.
+inline void stage_chunk_home(uint32_t g, uint32_t& core, uint32_t& slot) {
+    constexpr uint32_t n_ch = st_L * st_nch;
+    if constexpr (n_ch <= st_nact) {
+        core = g * st_nact / n_ch;
+        slot = 0;
+    } else {
+        core = g % st_nact;
+        slot = g / st_nact;
+    }
+}
+
+// Each page of the normalized block (cb_out_block, waited page by page, never popped here) to the staging core of its
+// walk chunk, then one increment of the readiness counter on every port (after the write barrier); the atomic barrier
+// keeps the increments ahead of the DRAM own-write burst on this NoC (measured: without it the call is slower).
+inline void stage_dist_block(const WorkerId& w, uint32_t p) {
+    const uint32_t blk = get_read_ptr(cb_out_block);
+    const uint32_t stage = get_write_ptr(cb_stage);  // same address on every core
+    for (uint32_t r = 0; r < w.crt; ++r) {
+        for (uint32_t j = 0; j < w.cw; ++j) {
+            StagePos o;
+            if (!stage_pos(p, w.row_start + r, w.w_start + j, o)) {
+                continue;
+            }
+            const uint32_t t = r * w.cw + j;
+            const uint32_t c = o.idx / st_rp;
+            uint32_t core, slot;
+            stage_chunk_home(o.l * st_nch + c, core, slot);
+            const uint32_t xy = get_common_arg_val<uint32_t>(st_tbl + core);
+            const uint32_t dst_l1 = stage + (slot * st_rp + (o.idx - c * st_rp)) * out_page_bytes;
+            cb_wait_front(cb_out_block, t + 1);
+            noc_async_write(blk + t * out_page_bytes, get_noc_addr(xy & 0xFFFF, xy >> 16, dst_l1), out_page_bytes);
+        }
+    }
+    {
+        AGRN_ZONE("wr_stage_bar");
+        noc_async_write_barrier();
+    }
+    AGRN_ZONE("wr_stage_inc");
+    for (uint32_t i = 0; i < 2 * st_L; ++i) {
+        const uint32_t x = get_common_arg_val<uint32_t>(CRT_PORT_NOC + i);
+        noc_semaphore_inc(get_noc_addr(x & 0xFFFF, x >> 16, st_ctr), 1);
+    }
+    noc_async_atomic_barrier();
+}
+#endif
 
 }  // namespace agrn

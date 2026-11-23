@@ -67,6 +67,21 @@ void kernel_main() {
     const uint32_t band_end_idx = a + own_bands;
     const uint32_t band_addr_idx = a + 2 * own_bands;
     a += 3 * own_bands;
+    // own-entry staging (Perf 1, OVERLAP): my lane's own walk lies in run_pages chunks in cb_stage of the active
+    // workers (chunk g = lane * nch + c, home: agrn_worker_args.hpp stage_chunk_home); every worker increments my
+    // readiness counter (st_ctr, this core's L1) once its pages landed there. Every port re-arms it, staged or not.
+    const bool st_on = get_arg_val<uint32_t>(a++) != 0;
+    uint32_t st_pages = 0, st_ctr = 0, st_nact = 1, st_nch = 0, st_lane = 0, st_L = 1, st_cp = 1;
+    if (st_on) {
+        st_pages = get_arg_val<uint32_t>(a++);  // staged pages of my lane walk (a prefix)
+        st_ctr = get_arg_val<uint32_t>(a++);
+        st_nact = get_arg_val<uint32_t>(a++);
+        st_nch = get_arg_val<uint32_t>(a++);
+        st_lane = get_arg_val<uint32_t>(a++);
+        st_L = get_arg_val<uint32_t>(a++);
+        st_cp = get_arg_val<uint32_t>(a++);
+    }
+    const uint32_t st_tbl = workers_idx;  // the staging cores are the active workers (same NoC coord list)
 
     const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
     // NoC address of every destination bank's first page and the bank page pitch: a run's read address is then
@@ -161,6 +176,8 @@ void kernel_main() {
     // own-ready bands: a band, once seen complete, is never polled again; after the first few packets all are
     constexpr uint32_t all_bands = own_bands >= 32 ? 0xFFFFFFFFu : (1u << own_bands) - 1u;
     uint32_t bands_ready = 0;
+    const uint32_t stage_base = stage_on ? get_write_ptr(cb_stage) : 0u;  // same address on every core
+    bool st_ready = false, own_waited = false;
     auto wait_bands = [&](const Packet& pk) {
         for (uint32_t ri = 0; ri < pk.nr; ++ri) {
             const uint32_t r = flat_slot ? 0u : pk.rr[ri];
@@ -177,6 +194,12 @@ void kernel_main() {
         }
     };
     auto retire_oldest = [&]() {
+#if defined(AGRN_PROFILE_ZONES)
+        if (pushed == 0) {
+            AGRN_ZONE("pr_push0");
+            noc_async_read_barrier_with_trid(1 + (issued - inflight) % read_depth);
+        }
+#endif
         noc_async_read_barrier_with_trid(1 + (issued - inflight) % read_depth);
         cb_push_back(cb_chunks, run_pages);
         ++pushed;
@@ -187,7 +210,7 @@ void kernel_main() {
         const uint32_t A = get_arg_val<uint32_t>(entries_idx + 3 * k + 1);
         const uint32_t B = get_arg_val<uint32_t>(entries_idx + 3 * k + 2);
         const uint32_t q = e & 0xFFFF, part = e >> 16;
-        if (k == 0 && own_bands == 1) {
+        if (k == 0 && own_bands == 1 && !(stage_on && st_pages > 0)) {
             AGRN_ZONE("pr_wait_own");
 #if !defined(AGRN_ABL_NO_OWN_WAIT)  // ablation: the bulk starts without the normalized slice (output garbage)
             noc_semaphore_wait_min(own_ready, n_active);
@@ -197,7 +220,28 @@ void kernel_main() {
             AGRN_ZONE("pr_own_first");  // marker: own entry starts
         }
         uint32_t c = 0;
+        uint32_t s_pages = 0;  // own entry: pages walked so far (staging position)
         for_each_packet(q, part, first_bank, bank_stride, [&](const Packet& pk) {
+            bool staged = false;
+            uint32_t st_s = 0;
+            if constexpr (stage_on) {
+                if (k == 0) {
+                    if (s_pages + pk.pages <= st_pages) {
+                        staged = true;
+                        st_s = s_pages;
+                        if (!st_ready) {
+                            AGRN_ZONE("pr_stage_wait");
+                            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st_ctr), n_active);
+                            st_ready = true;
+                        }
+                    } else if (!own_waited) {
+                        // past the staged prefix (L1 budget): the DRAM read-back after the own write
+                        noc_semaphore_wait_min(own_ready, n_active);
+                        own_waited = true;
+                    }
+                    s_pages += pk.pages;
+                }
+            }
             if constexpr (own_bands > 1) {
                 if (k == 0 && bands_ready != all_bands) {
                     wait_bands(pk);
@@ -230,7 +274,26 @@ void kernel_main() {
                 }
             }
             noc_async_read_set_trid(1 + issued % read_depth);
-            for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+            if (staged) {
+                // one L1 read per chunk piece (the packet's pages are consecutive in the lane walk: <= 2 pieces)
+                uint32_t s0 = st_s;
+                const uint32_t s1 = st_s + pk.pages;
+                const uint32_t n_ch = st_L * st_nch;
+                while (s0 < s1) {
+                    const uint32_t c = s0 / st_cp;
+                    const uint32_t ce = (c + 1) * st_cp;
+                    const uint32_t e = ce < s1 ? ce : s1;
+                    const uint32_t g = st_lane * st_nch + c;
+                    const uint32_t core = n_ch <= st_nact ? g * st_nact / n_ch : g % st_nact;
+                    const uint32_t slot = n_ch <= st_nact ? 0u : g / st_nact;
+                    const uint32_t xy = get_arg_val<uint32_t>(st_tbl + core);
+                    const uint32_t src = stage_base + (slot * st_cp + (s0 - c * st_cp)) * page_bytes;
+                    noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, src), l1, (e - s0) * page_bytes);
+                    l1 += (e - s0) * page_bytes;
+                    s0 = e;
+                }
+            }
+            for (uint32_t ri = 0; ri < (staged ? 0u : pk.nr); ++ri) {
                 const uint32_t n = pk.n[ri];
                 if (k == 0 && !own_from_dst) {
                     for (uint32_t t = 0; t < n; ++t) {
@@ -291,6 +354,12 @@ void kernel_main() {
     }
     if (expect_in > 0) {
         noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect_in);
+    }
+    if (st_on) {
+        // re-arm the readiness counter (persistent, trace-safe): every worker's increment of this call has landed
+        volatile tt_l1_ptr uint32_t* ctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st_ctr);
+        noc_semaphore_wait_min(ctr, n_active);
+        *ctr = 0;
     }
     if constexpr (own_bands > 1) {
         // re-arm every band counter (persistent, trace-safe) once all its workers announced — also on a port whose

@@ -60,6 +60,7 @@ constexpr uint32_t cb_final_table = 28;    // member: [row][final stat] 128 B re
 constexpr uint32_t cb_final_inv = 29;      // reader -> compute: RMS inv / LN rstd in column 0, one row chunk
 constexpr uint32_t cb_final_mean = 30;     // reader -> compute: LN mean in column 0, one row chunk
 constexpr uint32_t cb_stat_consts_x = 31;  // LN: n_q of the cross-chip partitions (one per chip)
+constexpr uint32_t cb_stage = 34;          // own-entry staging: run_pages-page chunks of the ports' own walks
 constexpr uint32_t cb_xg = 33;             // RMS (xg_pre): x * gamma of the block, computed in the stats shadow (T_acc)
 
 // ---- program-local semaphores ----

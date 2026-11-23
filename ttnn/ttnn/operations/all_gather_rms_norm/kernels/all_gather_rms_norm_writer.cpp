@@ -200,6 +200,11 @@ void kernel_main() {
             AGRN_ZONE("wr_wait_out");
             cb_wait_front(cb_out_block, 1);
         }
+        if constexpr (stage_on) {
+            // own-entry staging (Perf 1): the pages go to their chunk homes before the DRAM own write
+            AGRN_ZONE("wr_stage");
+            stage_dist_block(w, get_common_arg_val<uint32_t>(CRT_P));
+        }
         AGRN_ZONE("wr_own");
         const auto dst = TensorAccessor(dst_args, get_common_arg_val<uint32_t>(CRT_DST_ADDR), out_page_bytes);
         if constexpr (out_in_place) {

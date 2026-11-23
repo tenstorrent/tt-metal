@@ -292,3 +292,94 @@ pages / 4 DRAM writes), relay ~4 µs, landing tail ~3 µs. LN 640×32: local sta
   column-chunked T (chain + accumulating reduce per column window) and a γ / β-streaming column-chunked normalize to
   fit. That is a scheme change outside R4's scope.
 - Tests added: none.
+
+## Perf 1
+- Date: 2026-11-23
+- **Focus cases** (LOOSE_CASES, both perf-flagged, both measured; QB2 1×4 ring, FABRIC_2D_TORUS_XY, 2 links, bf16,
+  fp32 DEST, γ ROW_MAJOR sticks, interleaved DRAM): RMS 640×384 (960 output tiles) and LN 640×32 + γ + β (80 tiles).
+  The config was optimized exactly as declared (every knob in SUPPORTED); no proxy.
+- **Instrumentation**: the op's permanent `AGRN_ZONE` scopes (agrn_common.hpp; free unless `AGRN_PROFILE_ZONES=1`;
+  `perf_instrumentation.hpp` / `MaybeDeviceZoneScope` does not exist in this tree, AGRN_ZONE is its equivalent) cover
+  every stage; added `wr_stage`, `wr_stage_bar`, `wr_stage_inc`, `pr_stage_wait`, `pr_push0` for the new path.
+  Ablation switches (`AGRN_ABLATE=NO_BULK,NO_OWN_WAIT` → kernel defines, output garbage) + harness copy
+  `tests/.../all_gather_rms_norm/perf_ablate/perf_ablate.py` (eval ccl_perf protocol, golden check skipped when ablated).
+
+### Measured breakdown (eval harness, traced, fastest chip; zone timelines from the perf probe)
+| case | full | chain alone (`NO_BULK`) | bulk unblocked (`NO_OWN_WAIT`) | overlap loss (full − slowest part) |
+|---|---|---|---|---|
+| focus 640×384 RMS | 29.18 µs (slowest 29.99) | 10.39 | 25.58 | 3.6 |
+| LN 640×32 | 21.27 µs (slowest 21.68) | 12.58 | 17.05 | 4.2 |
+
+| part (focus) | measured | part SOL | gap |
+|---|---|---|---|
+| bulk (own entry 10 µs / 24 pkts per port at ~420 ns, relay ~5 µs / 12 pkts, landing tail ~3 µs) | ~18.5 | 7.6 (links, roofline) | ~11 |
+| chain: x read 1.7 → records 3.2 → stats round → 7.0 → combine + normalize → 8.3 → own DRAM write → 10.4 → first packet 11.2 | 10.4 | ~4.5 (x 0.49 MB + 1 relay hop + compute + own write 0.49 MB) | ~6 |
+| LN bulk (2-hop store-and-forward of 40 KB slots) | ~8.6–10 | 0.6 link + ~1 hop latency | ~8 |
+| LN chain (local stats 2.6, stats round ~3.5, combine 2.0, normalize 1.0, own write 1.1, hand-off 1.0) | 12.6 | ~6 | ~6.5 |
+
+Ranked: (1) bulk relay + tail (TRANSPORT, both cases); (2) the own write → own_ready → DRAM read-back hand-off into
+the own entry (OVERLAP, both cases, ~3 µs on focus); (3) stats-round relay; (4) LN compute chain.
+The chain and the bulk are strictly serial (the bulk waits for own_ready): the whole overlap loss is that hand-off.
+
+### Portfolio (cap: 2 experiments)
+1. **fabric_mcast_relay** (TRANSPORT): replace the store-and-forward relay of the far slot (and the stats round) by
+   2D chip-level multicast.
+2. **own_entry_port_l1_staging** (OVERLAP): workers write their normalized pages straight into L1 staging in the
+   port's packet order, so the own entry needs no DRAM read-back after the own write.
+Not tested (cap): interleaving relay packets with the own entry, bidirectional stats round, LN combine chain.
+
+### Verdicts
+| idea | kind | verdict | before → after (fastest / slowest, µs) | domain |
+|---|---|---|---|---|
+| fabric_mcast_relay | TRANSPORT | WIN in isolation on LN-size slots only; **not graduated** | isolated bulk bench: 640×32 10.68 → 9.15 (−14.8 %); 640×384 19.72 → 19.57 (flat); 2 KB stats-size slot 5.97 → 6.51 (+9 %, the 2-hop ready in the fence) | QB2's 1×4 ring is a 2×2 square: every hop turns, and the 2D router only turns N/S → E/W, so straight 2-chip ranges are **inexpressible** here; each chip has one direction with an expressible 2-chip path, so the busiest link carries 2 lanes instead of 1.5 (why the focus is flat). Galaxy torus rings untested. Not graduated this round: the integration is a scheme change of the transport (per-chip route direction from `get_eth_forwarding_direction`, 2-hop ready fence, arrival thresholds per segment, new sender) for a ~1.5 µs LN-only gain; the subagent's sketch is in `perf_experiments/fabric_mcast_relay/` — a round-2 candidate. |
+| own_entry_port_l1_staging, staging on the 4 port cores | OVERLAP | REGRESSION | focus 29.21 → 36.61 | 80 workers into 4 cores: ~30 GB/s ingress per core, staging 6.4 µs median vs 1–2 µs DRAM write |
+| own_entry_port_l1_staging, **distributed staging** (chunks of run_pages on the active workers, one readiness counter per port) | OVERLAP | **WIN — graduated** | see below | everywhere (feasibility carve-out only: L > 4 or interleaved nb > 16, the CT tables) |
+Other measured options of the staging bench (focus): per-chunk counters 29.56–29.60 (atomics ~0.7 µs); chunks on the
+first 36 workers 30.45; chunk 4 pages 28.87 (flat vs 7); first 14 pages on the ports 30.03; first packet handed over
+early 29.56; no atomic barrier before the DRAM own write: worse on Linear (43.56).
+
+### Graduated: own-entry staging on the active workers (one path, no dual path)
+- Each port's own walk is cut into `run_pages`-page chunks; chunk g = lane·nch + c lives in `cb_stage` (CB 34) of
+  active worker g·n_active/(L·nch) (round-robin with slots once chunks outnumber workers). Each worker computes every
+  page's walk position from compile-time args (per-bank lane offsets, no per-core runtime args), writes it to its
+  chunk home (NoC1), barriers, increments one readiness counter on every port (a new global semaphore), atomic
+  barrier, then the unchanged DRAM own write + own_ready. The port reader waits the counter once and reads each own
+  packet with ≤ 2 L1 reads instead of ≤ 4 DRAM bank runs; it re-arms the counter every call (trace-safe). Past
+  `STAGE_L1_BUDGET` (128 KiB of `cb_stage` per core) a lane's walk tail keeps the DRAM read-back.
+- Replaced code: the per-packet DRAM read-back is gone from every staged packet; it survives only for an unstaged
+  walk tail and the CT-table carve-out. No knob, no predicate on shape / topology / placement.
+- Carve-outs: none earned by measurement (the subagent's Linear 640×384 +3.9 % did not reproduce on the graduated
+  code: +0.8 % fastest, −2.7 % slowest).
+- Precision: transport only (same pages, same values) — no numeric change.
+
+| cell (bf16, RMS, γ RM, cluster_axis 1, 2 links) | before (fastest / slowest) | after | Δ fastest |
+|---|---|---|---|
+| **focus 640×384 Ring, interleaved** | 29.182 / 29.993 | **28.365 / 28.777** | −0.82 (−2.8 %), slowest −1.22; `ccl_perf compare`: win |
+| **LN 640×32 + γ + β Ring** | 21.268 / 21.675 | **20.784 / 21.154** | −0.48 (−2.3 %), slowest −0.52; `ccl_perf compare`: win |
+| 640×384 Linear | 40.972 / 44.241 | 41.295 / 43.046 | +0.8 % (noise), slowest −2.7 % |
+| 640×384 HEIGHT_SHARDED Ring | 31.618 / 32.338 | 31.852 / 32.546 | +0.7 % (noise) |
+| 640×1792 Ring | 105.192 / 107.982 | 79.198 / 81.397 | **−24.7 %** |
+| 640×1792 Linear | 127.812 / 148.281 | 108.856 / 114.216 | **−14.8 %** |
+| 640×1792 HEIGHT_SHARDED Ring | 127.431 / 130.908 | 127.445 / 129.483 | flat |
+| 2048×1280 Ring | 255.224 / 259.626 | 181.869 / 184.154 | **−28.7 %** |
+| 2048×1280 Linear | 342.733 / 391.715 | 314.538 / 344.234 | **−8.2 %** |
+| 2048×1280 HEIGHT_SHARDED Ring | 197.518 / 201.849 | 195.423 / 198.350 | −1.1 % |
+(5 experiments each, same session; before = commit b018d64bbba. Subagent sweep on its copy, also flat: cluster_axis 0,
+1 link, R_U 64×1000.) Not dispatch-bound.
+
+- Golden: gate tier 1425 passed, 123 xfailed, 11 skipped, 1 failed — the pre-existing `128x8192` bf8b HEIGHT_SHARDED
+  LN L1 clash (CB region still ends at 1,389,248 B, identical to R4b: staging adds nothing there);
+  test_regression + test_ring_mock 32 passed / 128 skipped.
+- Summary: all ideas measured; 1 graduated, 1 isolated win deferred (mcast, LN-only, scheme change), 1 variant
+  regression; focus −0.82 µs (−2.8 %), LN −0.48 µs (−2.3 %), wide slices −8…−29 %; no regression on the guard set.
+- Remaining headroom for round 2: bulk relay + tail (~8 µs focus; LN relay turnaround — the mcast sketch), stats round
+  (~3.5 µs), LN compute chain (~5.6 µs on one tile per row).
+- Artifacts: `perf_experiments/{fabric_mcast_relay, own_entry_port_l1_staging, coordinator_round1}/`,
+  `tests/.../all_gather_rms_norm/{perf_ablate, perf_experiments}/`.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| no helper covers this (dataflow "scatter block pages to per-chunk L1 homes in a consumer's walk order" — would belong with `kernel_lib/ccl` / `local_copy_helpers_dataflow`) | capability | no helper maps a block page to its position in another core's packet walk or scatters pages to per-chunk L1 homes with a single completion counter; the path is raw `noc_async_write` + `noc_semaphore_inc` | — (no helper path) | focus 28365 (vs 29182 DRAM read-back) | `kernels/agrn_worker_args.hpp` `stage_dist_block` |
+| no helper covers this (port-side chunked L1 gather into the fabric packet CB) | capability | the port reader's chunk reads (≤ 2 L1 pieces per packet, chunk-home arithmetic) have no kernel_lib counterpart; raw `noc_async_read` under the existing transaction-id pipeline | — | as above | `kernels/all_gather_rms_norm_port_reader.cpp` staged branch of the own entry |
+No raw LLK (compute) was added this round.

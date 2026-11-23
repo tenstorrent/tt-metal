@@ -79,6 +79,7 @@ CB_FINAL_MEAN = 30  # reader -> compute: LN mean (col 0) of one row chunk
 CB_STAT_CONSTS_X = 31  # LN: n_q of the cross-chip partitions (one per chip)
 CB_PORT_DESC = 32  # port reader -> sender: one packet descriptor (runs) per port-CB chunk slot
 CB_XG = 33  # RMS xg_pre: x * gamma of the block (T_acc), computed in the stats shadow
+CB_STAGE = 34  # own-entry staging: run_pages-page chunks of the ports' own walks, on the active workers
 PORT_DESC_BYTES = 64  # agrn_port_common.hpp DESC_BYTES
 
 # ---- program-local semaphores (declared before the fabric connections take theirs) ----
@@ -130,6 +131,15 @@ EAGER_PUSH = 1
 XG_PRE = 0
 XG_L1_BUDGET = 128 * 1024
 OWN_BANDS_MAX = 16  # persistent band counters (global semaphores) per port core
+# Own-entry staging (Perf 1, OVERLAP): each port's own-entry walk is cut into chunks of run_pages pages, chunk
+# g = l * nch + c lives in cb_stage of active worker g * n_active // (L * nch) (round-robin, slot g // n_active, once
+# chunks outnumber workers). Every worker writes each normalized page to its chunk home, then increments one readiness
+# counter on every port; the port reads each own packet with <= 2 L1 reads instead of DRAM bank runs after the own
+# write. cb_stage is capped by STAGE_L1_BUDGET per core: past it, a lane's walk tail goes the DRAM read-back way.
+STAGE_L1_BUDGET = 128 * 1024
+STAGE_MAX_LANES = 4
+STAGE_MAX_NB = 16
+STAGE_CT = 7 + STAGE_MAX_LANES + STAGE_MAX_NB + 5  # agrn_worker_args.hpp stage block
 NOC_READER = ttnn.NOC.RISCV_0_default  # NoC0 (fabric_all_gather's convention)
 NOC_WRITER = ttnn.NOC.RISCV_1_default  # NoC1
 
@@ -481,10 +491,10 @@ def global_semaphores(mesh_device, plan):
     key = ("sems", id(mesh_device), tuple(sorted(port_cores)))
     if key not in _RES_CACHE:
         cores = _single_cores(port_cores)
-        sems = tuple(ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3 + OWN_BANDS_MAX))
+        sems = tuple(ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3 + OWN_BANDS_MAX + 1))
         ttnn.synchronize_device(mesh_device)  # every chip's counters are 0 before any chip's first call
         _RES_CACHE[key] = (mesh_device, sems)
-    # ready, bulk, stats, then OWN_BANDS_MAX own-ready band counters
+    # ready, bulk, stats, then OWN_BANDS_MAX own-ready band counters, then the own-entry staging readiness counter
     return [int(ttnn.get_global_semaphore_address(s)) for s in _RES_CACHE[key][1]]
 
 
@@ -685,11 +695,14 @@ def create_mesh_program_descriptor(
                 pages.add((q, (g_ - q * geo.W_local) // TILE))
             src_max = max(src_max, len(pages))
 
-    ready_addr, bulk_addr, stats_addr, *band_addrs = global_semaphores(mesh_device, plan)
+    ready_addr, bulk_addr, stats_addr, *band_addrs, stage_ctr_addr = global_semaphores(mesh_device, plan)
     # own-ready bands (OVERLAP): band of row-group g = g * own_bands // n_groups (same formula on the workers); the
     # staged (R_U) slot is flat and the WIDTH pre-combine has one group: one counter (the program semaphore) there
+    stage_on = L <= STAGE_MAX_LANES and (walk.shard_w > 0 or nb <= STAGE_MAX_NB)  # CT tables cap (feasibility)
     own_bands = (
-        1 if (is_ru or pre_combine) else max(1, min(_knob("OWN_BANDS", OWN_BANDS), split.n_groups, OWN_BANDS_MAX))
+        1
+        if (is_ru or pre_combine or stage_on)
+        else max(1, min(_knob("OWN_BANDS", OWN_BANDS), split.n_groups, OWN_BANDS_MAX))
     )
     band_need = [0] * own_bands  # announcements per band: k per row-group
     band_row_end = [0] * own_bands  # first tile-row after the band
@@ -742,6 +755,7 @@ def create_mesh_program_descriptor(
         own_bands,
         int(xg_pre),
     ]
+    worker_ct_base = list(worker_ct)
     # Sharded: the local shard is consumed in place, never through an accessor -> empty accessor args.
     acc_ct = list(
         (ttnn.TensorAccessorArgs() if x_sharded else ttnn.TensorAccessorArgs(input_tensor)).get_compile_time_args()
@@ -788,7 +802,59 @@ def create_mesh_program_descriptor(
         split_runs,
         own_bands,
         _knob("EAGER_PUSH", EAGER_PUSH),
+        CB_STAGE,
+        0,  # stage_on (set per chip below)
     ] + list(ttnn.TensorAccessorArgs(dst_tensor).get_compile_time_args())
+    port_ct_base = list(port_ct)
+
+    # ---- own-entry staging plan (per chip: the own slot's walk depends on p) ----
+    stage_cp = run_pages  # pages per staging chunk
+
+    def stage_plan(p):
+        """Per lane l: unit page counts (walk order), staged unit count (a prefix within the L1 budget), per-bank lane
+        offsets; the chunk count and cb_stage slots per core."""
+        if not stage_on:
+            return None
+        base = p * walk.slot_stride
+        unit_off = [0] * STAGE_MAX_NB
+        lane_pages = []
+        for l in range(L):
+            if walk.shard_w:
+                units = list(range(l, walk.rows_eff, L))
+                pages = [walk.cols_eff for _ in units]
+            else:
+                units = list(range(l, nb, L))
+                pages = []
+                for b in units:
+                    c = 0
+                    for rr in range(walk.rows_eff):
+                        rb = base + rr * walk.row_stride
+                        j0 = (b - rb) % nb
+                        c += (walk.cols_eff - 1 - j0) // nb + 1 if j0 < walk.cols_eff else 0
+                    pages.append(c)
+                off = 0
+                for b, c in zip(units, pages):
+                    unit_off[b] = off
+                    off += c
+            lane_pages.append(pages)
+        # cap: at most max_slots chunks per core over the active workers, whole lane units (a lane's staged prefix)
+        max_slots = max(1, _knob("STAGE_L1_BUDGET", STAGE_L1_BUDGET) // (stage_cp * out_page))
+        cap = (max_slots * split.n_active // L) * stage_cp
+        lanes = []
+        for pages in lane_pages:
+            n_st, tot = 0, 0
+            while n_st < len(pages) and tot + pages[n_st] <= cap:
+                tot += pages[n_st]
+                n_st += 1
+            lanes.append(dict(n_st=n_st, tot=tot))
+        if max(ln["tot"] for ln in lanes) == 0:
+            return None
+        nch_max = max(-(-ln["tot"] // stage_cp) for ln in lanes)
+        slots = -(-(L * nch_max) // split.n_active)
+        return dict(lanes=lanes, unit_off=unit_off, max_pages=slots * stage_cp, nch_max=nch_max)
+
+    stage_plans = {coord: stage_plan(ch["p"]) for coord, ch in chips.items()}
+    stage_max_pages = max([sp["max_pages"] for sp in stage_plans.values() if sp] + [0])
 
     # ---- compute config ----
     cfg = ttnn.ComputeConfigDescriptor()
@@ -833,6 +899,36 @@ def create_mesh_program_descriptor(
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ch in chips.items():
         p = ch["p"]
+        sp = stage_plans[coord]
+        st_lanes = [0] * STAGE_MAX_LANES
+        if sp:
+            for l in range(L):
+                st_lanes[l] = sp["lanes"][l]["n_st"]
+        worker_ct = (
+            worker_ct_base
+            + [
+                int(sp is not None),
+                L,
+                nb,
+                walk.cols_eff,
+                walk.row_stride,
+                walk.slot_stride,
+                int(walk.shard_w > 0),
+            ]
+            + st_lanes
+            + (sp["unit_off"] if sp else [0] * STAGE_MAX_NB)
+            + [
+                stage_cp,
+                sp["nch_max"] if sp else 1,
+                split.n_active,
+                0,  # common-arg index of the staging core table (patched below)
+                stage_ctr_addr,
+            ]
+        )
+        ST_TBL_CT = len(worker_ct) - 2
+        assert len(worker_ct) == len(worker_ct_base) + STAGE_CT
+        port_ct = list(port_ct_base)
+        port_ct[28] = int(sp is not None)
         ports = ch["ports"]
         port_list = [ports[(d, l)] for d in ("fwd", "bwd") for l in range(L)]
         port_set = {(c.x, c.y) for c in port_list}
@@ -907,6 +1003,7 @@ def create_mesh_program_descriptor(
             ),
             _cb(CB_PORT_CHUNKS, 2 * batch_chunks * run_pages, out_page, out_dtype, full),
             _cb(CB_PORT_DESC, 2 * batch_chunks, PORT_DESC_BYTES, ttnn.float32, full),
+            *([_cb(CB_STAGE, stage_max_pages, out_page, out_dtype, full)] if stage_max_pages else []),
             # program-scoped: same address on every core of every chip, no persistent L1 (see agrn_common.hpp)
             _cb(CB_STATS_TABLE, table_bytes // RECORD_BYTES, RECORD_BYTES, ttnn.float32, full),
         ]
@@ -990,6 +1087,9 @@ def create_mesh_program_descriptor(
             common += [
                 wmap[i] | wmap[i + 1] << 8 | wmap[i + 2] << 16 | wmap[i + 3] << 24 for i in range(0, len(wmap), 4)
             ]
+        if sp:
+            worker_ct[ST_TBL_CT] = len(common)
+            common += active_noc  # staging cores (worker order)
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_reader.cpp"),
@@ -1053,6 +1153,11 @@ def create_mesh_program_descriptor(
                     len(recv_slots),
                 ] + list(recv_slots)
                 r_args += band_need + band_row_end + band_addrs  # own_bands > 1: band gating of the own entry
+                # own-entry staging: my lane's staged pages, readiness counter, chunk-home geometry
+                if sp:
+                    r_args += [1, sp["lanes"][l]["tot"], stage_ctr_addr, split.n_active, sp["nch_max"], l, L, stage_cp]
+                else:
+                    r_args += [0]
                 reader_rt[core.x][core.y] = r_args
 
                 is_hub = l == 0

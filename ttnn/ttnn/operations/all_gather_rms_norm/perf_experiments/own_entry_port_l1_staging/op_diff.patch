@@ -1,0 +1,854 @@
+diff -ru -x __pycache__ -x __init__.py -x all_gather_rms_norm.py ttnn/ttnn/operations/all_gather_rms_norm/kernels/agrn_common.hpp ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/agrn_common.hpp
+--- ttnn/ttnn/operations/all_gather_rms_norm/kernels/agrn_common.hpp	2026-11-23 19:29:14.837161668 +0000
++++ ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/agrn_common.hpp	2026-11-23 21:31:41.745575600 +0000
+@@ -60,6 +60,7 @@
+ constexpr uint32_t cb_final_inv = 29;      // reader -> compute: RMS inv / LN rstd in column 0, one row chunk
+ constexpr uint32_t cb_final_mean = 30;     // reader -> compute: LN mean in column 0, one row chunk
+ constexpr uint32_t cb_stat_consts_x = 31;  // LN: n_q of the cross-chip partitions (one per chip)
++constexpr uint32_t cb_stage = 34;          // EXPERIMENT: ports: the own entry staged in walk order
+ constexpr uint32_t cb_xg = 33;             // RMS (xg_pre): x * gamma of the block, computed in the stats shadow (T_acc)
+ 
+ // ---- program-local semaphores ----
+diff -ru -x __pycache__ -x __init__.py -x all_gather_rms_norm.py ttnn/ttnn/operations/all_gather_rms_norm/kernels/agrn_port_common.hpp ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/agrn_port_common.hpp
+--- ttnn/ttnn/operations/all_gather_rms_norm/kernels/agrn_port_common.hpp	2026-11-23 19:23:01.507494882 +0000
++++ ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/agrn_port_common.hpp	2026-11-23 21:31:19.721169862 +0000
+@@ -59,7 +59,10 @@
+ // 1: after issuing a packet's reads, push every in-flight packet whose reads already landed (non-blocking trid
+ // check); 0: push only when read_depth packets are in flight (or before a blocking wait)
+ constexpr bool eager_push = get_compile_time_arg_val(26) != 0;
+-constexpr uint32_t PORT_CT_ARGS = 27;  // TensorAccessorArgs(dst) follow
++// EXPERIMENT own_entry_port_l1_staging: the workers write the own entry's leading pages into cb_stage (walk order)
++constexpr uint32_t cb_stage = get_compile_time_arg_val(27);
++constexpr bool stage_on = get_compile_time_arg_val(28) != 0;
++constexpr uint32_t PORT_CT_ARGS = 29;  // TensorAccessorArgs(dst) follow
+ static_assert(own_bands >= 1 && own_bands <= 32, "band mask");
+ constexpr uint32_t run_stride = shard_w ? 1 : nb;        // page-id step between the pages of one run
+ constexpr uint32_t shard_w_div = shard_w ? shard_w : 1;  // (the interleaved walk never divides by it)
+@@ -86,6 +89,7 @@
+     uint32_t pages;
+     uint32_t first[4];
+     uint32_t n[4];
++    uint32_t src;  // EXPERIMENT: != 0 — send from this L1 address (staged own packet), else from the chunk slot
+ };
+ static_assert(sizeof(PacketDesc) <= 64, "cb_desc page");
+ constexpr uint32_t DESC_BYTES = 64;
+diff -ru -x __pycache__ -x __init__.py -x all_gather_rms_norm.py ttnn/ttnn/operations/all_gather_rms_norm/kernels/agrn_worker_args.hpp ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/agrn_worker_args.hpp
+--- ttnn/ttnn/operations/all_gather_rms_norm/kernels/agrn_worker_args.hpp	2026-11-23 19:25:49.286417698 +0000
++++ ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/agrn_worker_args.hpp	2026-11-23 22:03:12.319962229 +0000
+@@ -59,7 +59,35 @@
+ // RMS with gamma (OVERLAP): x * gamma is computed into cb_xg while the stats round runs (x * r * g = (x * g) * r),
+ // leaving one multiply per tile on the critical path after the stats arrive
+ constexpr bool xg_pre = get_compile_time_arg_val(35) != 0;
+-constexpr uint32_t WORKER_CT_ARGS = 36;  // TensorAccessorArgs follow (reader / writer)
++// EXPERIMENT own_entry_port_l1_staging: the own slot's walk on the ports (agrn_port_common.hpp), so a worker can place
++// each of its pages at its position in its lane's own-entry packet sequence (cb_stage on the lane's two ports)
++constexpr bool stage_on = get_compile_time_arg_val(36) != 0;
++constexpr uint32_t st_L = get_compile_time_arg_val(37);  // links (lanes)
++constexpr uint32_t st_nb = get_compile_time_arg_val(38);
++constexpr uint32_t st_cols = get_compile_time_arg_val(39);  // walk cols_eff
++constexpr uint32_t st_row_stride = get_compile_time_arg_val(40);
++constexpr uint32_t st_slot_stride = get_compile_time_arg_val(41);
++constexpr uint32_t st_nctr = get_compile_time_arg_val(42) & 0xFF;
++constexpr bool st_by_row = ((get_compile_time_arg_val(42) >> 8) & 0xFF) != 0;  // sharded output: lane units are tile-rows
++constexpr uint32_t ST_MAX_LANES = 4;
++constexpr uint32_t ST_MAX_NB = 16;
++constexpr uint32_t ST_LANES_IDX = 43;                         // staged units per lane
++constexpr uint32_t ST_UNIT_OFF_IDX = ST_LANES_IDX + ST_MAX_LANES;  // per bank: its first page in the lane walk
++constexpr uint32_t ST_CTR_IDX = ST_UNIT_OFF_IDX + ST_MAX_NB;       // counter L1 addresses (port cores)
++constexpr uint32_t st_copies = (get_compile_time_arg_val(42) >> 16) & 0xFF;  // 2: fwd + bwd ports, 1: fwd only
++constexpr bool st_split = ((get_compile_time_arg_val(42) >> 24) & 0xFF) != 0;   // bwd copies by the worker reader
++constexpr uint32_t ST_M2_IDX = ST_CTR_IDX + ST_MAX_NB;
++constexpr uint32_t st_mode = get_compile_time_arg_val(ST_M2_IDX) & 0xFF;       // 1: port L1, 2: distributed chunks
++constexpr uint32_t st_rp = get_compile_time_arg_val(ST_M2_IDX + 1);     // pages per chunk (= run_pages)
++constexpr uint32_t st_nch = get_compile_time_arg_val(ST_M2_IDX + 2);    // chunks per lane (max over lanes)
++constexpr uint32_t st_nact = get_compile_time_arg_val(ST_M2_IDX + 3);   // staging cores (active workers)
++constexpr uint32_t st_tbl = get_compile_time_arg_val(ST_M2_IDX + 4);    // common-arg index of their NoC coords
++constexpr uint32_t st_ctr = get_compile_time_arg_val(ST_M2_IDX + 5);    // port chunk counters (L1 address)
++constexpr bool st_m2_single = ((get_compile_time_arg_val(ST_M2_IDX) >> 8) & 1) != 0;  // one readiness counter per port
++constexpr bool st_m2_ack = ((get_compile_time_arg_val(ST_M2_IDX) >> 9) & 1) != 0;  // atomic barrier before DRAM writes
++constexpr uint32_t st_head = get_compile_time_arg_val(ST_M2_IDX + 6);   // walk pages staged on the ports themselves
++constexpr uint32_t st_head_off = get_compile_time_arg_val(ST_M2_IDX + 7);  // their cb_stage page offset
++constexpr uint32_t WORKER_CT_ARGS = ST_M2_IDX + 8;  // TensorAccessorArgs follow (reader / writer)
+ 
+ constexpr uint32_t KT = pre_combine ? 1 : K;  // members per (slot, row) in the stats table
+ constexpr uint32_t P = G * KT;                // stats partitions per row of the cross-chip combine
+@@ -124,4 +152,246 @@
+ // Valid columns of the member's last tile (the slice's W tail sits in the last member's last tile).
+ inline uint32_t member_owns_tail(const WorkerId& w) { return (w_valid_last < TILE) && (w.w_start + w.cw == Wlt); }
+ 
++#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
++// EXPERIMENT own_entry_port_l1_staging: write the normalized block's pages (cb_out_block, waited page by page, never
++// popped here) into cb_stage of the ports of their lane (fwd l = port l, bwd l = port L + l), each at its index in the
++// lane's own-entry walk (bank-major, then slot row, then column; sharded output: lane row-major), then one increment
++// per (lane, counter) of the selected ports. Uses the calling RISC's NoC.
++// Position of the block page (tr, local column jc) in its lane's own-entry walk: returns false if not staged.
++struct StagePos {
++    uint32_t l, i, idx;
++};
++inline bool stage_pos(uint32_t p, uint32_t tr, uint32_t jc, StagePos& o) {
++    const uint32_t base = p * st_slot_stride;
++    const uint32_t base_mod = base % st_nb;
++    const uint32_t rs_mod = st_row_stride % st_nb;
++    const uint32_t rr = is_ru ? 0u : tr;
++    const uint32_t jj = is_ru ? tr * Wlt + jc : jc;
++    if constexpr (st_by_row) {
++        o.l = rr % st_L;
++        o.i = rr / st_L;
++        if (o.i >= kernel_compile_time_args[ST_LANES_IDX + o.l]) {
++            return false;
++        }
++        o.idx = o.i * st_cols + jj;
++        return true;
++    }
++    uint32_t T = 1;  // rows per residue period of (base + rr * row_stride) % nb
++    {
++        uint32_t m = rs_mod;
++        while (m != 0) {
++            m += rs_mod;
++            if (m >= st_nb) {
++                m -= st_nb;
++            }
++            ++T;
++        }
++    }
++    auto cnt_row = [&](uint32_t rbm, uint32_t b) -> uint32_t {
++        const uint32_t j0 = b >= rbm ? b - rbm : b + st_nb - rbm;
++        return j0 < st_cols ? (st_cols - 1 - j0) / st_nb + 1 : 0u;
++    };
++    const uint32_t P = base + rr * st_row_stride + jj;
++    const uint32_t b = P % st_nb;
++    o.l = b % st_L;
++    o.i = b / st_L;
++    if (o.i >= kernel_compile_time_args[ST_LANES_IDX + o.l]) {
++        return false;
++    }
++    const uint32_t q = rr / T, rem = rr - q * T;
++    uint32_t sum_t = 0, part = 0, m = base_mod;
++    for (uint32_t u = 0; u < T; ++u) {
++        const uint32_t c = cnt_row(m, b);
++        sum_t += c;
++        part += u < rem ? c : 0u;
++        m += rs_mod;
++        if (m >= st_nb) {
++            m -= st_nb;
++        }
++    }
++    const uint32_t rbm = (base_mod + rem * rs_mod) % st_nb;
++    const uint32_t j0 = b >= rbm ? b - rbm : b + st_nb - rbm;
++    o.idx = kernel_compile_time_args[ST_UNIT_OFF_IDX + b] + q * sum_t + part + (jj - j0) / st_nb;
++    return true;
++}
++
++// STAGE_MODE 2: home of chunk g (of st_L * st_nch): spread evenly over the staging cores (one each while they suffice),
++// else round-robin with slot g / n_act. Must match the port reader.
++inline void stage_chunk_home(uint32_t g, uint32_t& core, uint32_t& slot) {
++    constexpr uint32_t n_ch = st_L * st_nch;
++    if constexpr (n_ch <= st_nact) {
++        core = g * st_nact / n_ch;
++        slot = 0;
++    } else {
++        core = g % st_nact;
++        slot = g / st_nact;
++    }
++}
++
++// STAGE_MODE 2: each page to the staging core of its walk chunk (one copy, shared by the lane's fwd and bwd port),
++// then one increment of that chunk's counter on both ports per page (after the barrier).
++inline void stage_dist_block(const WorkerId& w, uint32_t p) {
++    const uint32_t blk = get_read_ptr(cb_out_block);
++    const uint32_t stage = get_write_ptr(cb_stage);
++    for (uint32_t r = 0; r < w.crt; ++r) {
++        for (uint32_t j = 0; j < w.cw; ++j) {
++            StagePos o;
++            if (!stage_pos(p, w.row_start + r, w.w_start + j, o)) {
++                continue;
++            }
++            const uint32_t t = r * w.cw + j;
++            if (o.idx < st_head) {
++                // the walk's head: straight into both ports of the lane (sent from there, no port read)
++                const uint32_t d = stage + (st_head_off + o.idx) * out_page_bytes;
++                const uint32_t f = get_common_arg_val<uint32_t>(CRT_PORT_NOC + o.l);
++                const uint32_t bw = get_common_arg_val<uint32_t>(CRT_PORT_NOC + st_L + o.l);
++                cb_wait_front(cb_out_block, t + 1);
++                noc_async_write(blk + t * out_page_bytes, get_noc_addr(f & 0xFFFF, f >> 16, d), out_page_bytes);
++                noc_async_write(blk + t * out_page_bytes, get_noc_addr(bw & 0xFFFF, bw >> 16, d), out_page_bytes);
++                continue;
++            }
++            const uint32_t c = o.idx / st_rp;
++            const uint32_t g = o.l * st_nch + c;
++            uint32_t core, slot;
++            stage_chunk_home(g, core, slot);
++            const uint32_t xy = get_common_arg_val<uint32_t>(st_tbl + core);
++            const uint32_t dst_l1 = stage + (slot * st_rp + (o.idx - c * st_rp)) * out_page_bytes;
++            cb_wait_front(cb_out_block, t + 1);
++            noc_async_write(blk + t * out_page_bytes, get_noc_addr(xy & 0xFFFF, xy >> 16, dst_l1), out_page_bytes);
++        }
++    }
++    {
++        AGRN_ZONE("wr_stage_bar");
++        noc_async_write_barrier();
++    }
++    if constexpr (st_m2_single) {
++        AGRN_ZONE("wr_stage_inc");
++        // one counter (word 0) per port: one increment per worker on every port
++        for (uint32_t i = 0; i < 2 * st_L; ++i) {
++            const uint32_t x = get_common_arg_val<uint32_t>(CRT_PORT_NOC + i);
++            noc_semaphore_inc(get_noc_addr(x & 0xFFFF, x >> 16, st_ctr), 1);
++        }
++        if constexpr (st_m2_ack) {
++            noc_async_atomic_barrier();  // the increments land before the DRAM own-write burst starts on this NoC
++        }
++        return;
++    }
++    for (uint32_t r = 0; r < w.crt; ++r) {
++        for (uint32_t j = 0; j < w.cw; ++j) {
++            StagePos o;
++            if (!stage_pos(p, w.row_start + r, w.w_start + j, o)) {
++                continue;
++            }
++            const uint32_t a = st_ctr + (o.idx / st_rp) * 4;
++            const uint32_t f = get_common_arg_val<uint32_t>(CRT_PORT_NOC + o.l);
++            const uint32_t bw = get_common_arg_val<uint32_t>(CRT_PORT_NOC + st_L + o.l);
++            noc_semaphore_inc(get_noc_addr(f & 0xFFFF, f >> 16, a), 1);
++            noc_semaphore_inc(get_noc_addr(bw & 0xFFFF, bw >> 16, a), 1);
++        }
++    }
++    noc_async_atomic_barrier();
++}
++
++inline void stage_own_block(const WorkerId& w, uint32_t p, bool to_fwd, bool to_bwd) {
++    if (!to_fwd && !to_bwd) {
++        return;
++    }
++    const uint32_t blk = get_read_ptr(cb_out_block);  // nothing popped yet on this RISC: the block's first page
++    const uint32_t stage = get_write_ptr(cb_stage);   // same address on every core
++    const uint32_t base = p * st_slot_stride;
++    const uint32_t base_mod = base % st_nb;
++    const uint32_t rs_mod = st_row_stride % st_nb;
++    uint32_t T = 1;  // rows per residue period of (base + rr * row_stride) % nb
++    {
++        uint32_t m = rs_mod;
++        while (m != 0) {
++            m += rs_mod;
++            if (m >= st_nb) {
++                m -= st_nb;
++            }
++            ++T;
++        }
++    }
++    auto cnt_row = [&](uint32_t rbm, uint32_t b) -> uint32_t {
++        const uint32_t j0 = b >= rbm ? b - rbm : b + st_nb - rbm;
++        return j0 < st_cols ? (st_cols - 1 - j0) / st_nb + 1 : 0u;
++    };
++    uint32_t cnt[ST_MAX_LANES][16];
++    for (uint32_t l = 0; l < st_L; ++l) {
++        for (uint32_t c = 0; c < st_nctr; ++c) {
++            cnt[l][c] = 0;
++        }
++    }
++    for (uint32_t r = 0; r < w.crt; ++r) {
++        const uint32_t tr = w.row_start + r;
++        for (uint32_t j = 0; j < w.cw; ++j) {
++            const uint32_t t = r * w.cw + j;
++            const uint32_t rr = is_ru ? 0u : tr;
++            const uint32_t jj = is_ru ? tr * Wlt + w.w_start + j : w.w_start + j;
++            uint32_t l, i, idx;
++            if constexpr (st_by_row) {
++                l = rr % st_L;
++                i = rr / st_L;
++                if (i >= kernel_compile_time_args[ST_LANES_IDX + l]) {
++                    continue;
++                }
++                idx = i * st_cols + jj;
++            } else {
++                const uint32_t P = base + rr * st_row_stride + jj;
++                const uint32_t b = P % st_nb;
++                l = b % st_L;
++                i = b / st_L;
++                if (i >= kernel_compile_time_args[ST_LANES_IDX + l]) {
++                    continue;
++                }
++                // pages of bank b in the slot rows before rr (periodic in rr with period T)
++                const uint32_t q = rr / T, rem = rr - q * T;
++                uint32_t sum_t = 0, part = 0, m = base_mod;
++                for (uint32_t u = 0; u < T; ++u) {
++                    const uint32_t c = cnt_row(m, b);
++                    sum_t += c;
++                    part += u < rem ? c : 0u;
++                    m += rs_mod;
++                    if (m >= st_nb) {
++                        m -= st_nb;
++                    }
++                }
++                const uint32_t rbm = (base_mod + rem * rs_mod) % st_nb;
++                const uint32_t j0 = b >= rbm ? b - rbm : b + st_nb - rbm;
++                idx = kernel_compile_time_args[ST_UNIT_OFF_IDX + b] + q * sum_t + part + (jj - j0) / st_nb;
++            }
++            cb_wait_front(cb_out_block, t + 1);
++            const uint32_t src = blk + t * out_page_bytes;
++            const uint32_t dst_l1 = stage + idx * out_page_bytes;
++            if (to_fwd) {
++                const uint32_t c = get_common_arg_val<uint32_t>(CRT_PORT_NOC + l);
++                noc_async_write(src, get_noc_addr(c & 0xFFFF, c >> 16, dst_l1), out_page_bytes);
++            }
++            if (to_bwd) {
++                const uint32_t c = get_common_arg_val<uint32_t>(CRT_PORT_NOC + st_L + l);
++                noc_async_write(src, get_noc_addr(c & 0xFFFF, c >> 16, dst_l1), out_page_bytes);
++            }
++            ++cnt[l][i < st_nctr ? i : st_nctr - 1];
++        }
++    }
++    noc_async_write_barrier();
++    for (uint32_t l = 0; l < st_L; ++l) {
++        for (uint32_t c = 0; c < st_nctr; ++c) {
++            if (cnt[l][c] > 0) {
++                const uint32_t a = kernel_compile_time_args[ST_CTR_IDX + c];
++                if (to_fwd) {
++                    const uint32_t x = get_common_arg_val<uint32_t>(CRT_PORT_NOC + l);
++                    noc_semaphore_inc(get_noc_addr(x & 0xFFFF, x >> 16, a), cnt[l][c]);
++                }
++                if (to_bwd) {
++                    const uint32_t x = get_common_arg_val<uint32_t>(CRT_PORT_NOC + st_L + l);
++                    noc_semaphore_inc(get_noc_addr(x & 0xFFFF, x >> 16, a), cnt[l][c]);
++                }
++            }
++        }
++    }
++    noc_async_atomic_barrier();
++}
++#endif
++
+ }  // namespace agrn
+diff -ru -x __pycache__ -x __init__.py -x all_gather_rms_norm.py ttnn/ttnn/operations/all_gather_rms_norm/kernels/all_gather_rms_norm_port_reader.cpp ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/all_gather_rms_norm_port_reader.cpp
+--- ttnn/ttnn/operations/all_gather_rms_norm/kernels/all_gather_rms_norm_port_reader.cpp	2026-11-23 21:19:18.576582651 +0000
++++ ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/all_gather_rms_norm_port_reader.cpp	2026-11-23 22:37:29.741354514 +0000
+@@ -67,6 +67,31 @@
+     const uint32_t band_end_idx = a + own_bands;
+     const uint32_t band_addr_idx = a + 2 * own_bands;
+     a += 3 * own_bands;
++    // EXPERIMENT own_entry_port_l1_staging: staged pages of my lane (the walk's leading pages), counters
++    const uint32_t stage_pages = get_arg_val<uint32_t>(a++);
++    const uint32_t st_nctr = get_arg_val<uint32_t>(a++);
++    const uint32_t st_need_idx = a;
++    const uint32_t st_addr_idx = a + st_nctr;
++    a += 2 * st_nctr;
++    // EXPERIMENT STAGE_MODE 2: the lane's walk staged in run_pages chunks over the worker cores (chunk g = lane * nch +
++    // c on core g % n_act, slot g / n_act of cb_stage), one counter per chunk at m2_ctr + 4 c (this core's L1)
++    const bool m2_on = get_arg_val<uint32_t>(a++) != 0;  // every port re-arms its counter, staged lane or not
++    const uint32_t m2_pages = m2_on ? get_arg_val<uint32_t>(a++) : 0u;
++    bool first_now = false;
++    uint32_t m2_ctr = 0, m2_nact = 1, m2_nch = 0, m2_lane = 0, m2_L = 1, m2_tbl = 0, m2_single = 0, m2_cp = 1, m2_head = 0, m2_head_off = 0;
++    if (m2_on) {
++        m2_ctr = get_arg_val<uint32_t>(a++);
++        m2_nact = get_arg_val<uint32_t>(a++);
++        m2_nch = get_arg_val<uint32_t>(a++);
++        m2_lane = get_arg_val<uint32_t>(a++);
++        m2_L = get_arg_val<uint32_t>(a++);
++        m2_single = get_arg_val<uint32_t>(a++);  // > 0: one counter (word 0), this many worker increments
++        m2_cp = get_arg_val<uint32_t>(a++);  // pages per staging chunk
++        m2_head = get_arg_val<uint32_t>(a++);      // walk pages staged in my own cb_stage (no read)
++        m2_head_off = get_arg_val<uint32_t>(a++);  // their page offset in cb_stage
++        first_now = get_arg_val<uint32_t>(a++) != 0;
++        m2_tbl = workers_idx;  // the staging cores are the active workers (same NoC coord list)
++    }
+ 
+     const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
+     // NoC address of every destination bank's first page and the bank page pitch: a run's read address is then
+@@ -161,6 +186,11 @@
+     // own-ready bands: a band, once seen complete, is never polled again; after the first few packets all are
+     constexpr uint32_t all_bands = own_bands >= 32 ? 0xFFFFFFFFu : (1u << own_bands) - 1u;
+     uint32_t bands_ready = 0;
++    const uint32_t stage_base = stage_on ? get_write_ptr(cb_stage) : 0u;
++    const uint32_t st_all = st_nctr >= 32 ? 0xFFFFFFFFu : (1u << st_nctr) - 1u;
++    uint32_t st_ready = 0;
++    bool own_waited = false;
++    uint32_t m2_ready = 0;  // chunks [0, m2_ready) seen complete
+     auto wait_bands = [&](const Packet& pk) {
+         for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+             const uint32_t r = flat_slot ? 0u : pk.rr[ri];
+@@ -177,6 +207,12 @@
+         }
+     };
+     auto retire_oldest = [&]() {
++#if defined(AGRN_PROFILE_ZONES)
++        if (pushed == 0) {
++            AGRN_ZONE("pr_push0");
++            noc_async_read_barrier_with_trid(1 + (issued - inflight) % read_depth);
++        }
++#endif
+         noc_async_read_barrier_with_trid(1 + (issued - inflight) % read_depth);
+         cb_push_back(cb_chunks, run_pages);
+         ++pushed;
+@@ -187,7 +223,7 @@
+         const uint32_t A = get_arg_val<uint32_t>(entries_idx + 3 * k + 1);
+         const uint32_t B = get_arg_val<uint32_t>(entries_idx + 3 * k + 2);
+         const uint32_t q = e & 0xFFFF, part = e >> 16;
+-        if (k == 0 && own_bands == 1) {
++        if (k == 0 && own_bands == 1 && !(stage_on && (stage_pages > 0 || m2_pages > 0))) {
+             AGRN_ZONE("pr_wait_own");
+ #if !defined(AGRN_ABL_NO_OWN_WAIT)  // ablation: the bulk starts without the normalized slice (output garbage)
+             noc_semaphore_wait_min(own_ready, n_active);
+@@ -197,7 +233,60 @@
+             AGRN_ZONE("pr_own_first");  // marker: own entry starts
+         }
+         uint32_t c = 0;
++        uint32_t s_pages = 0;  // own entry: pages walked so far (staging position)
+         for_each_packet(q, part, first_bank, bank_stride, [&](const Packet& pk) {
++            uint32_t st_src = 0;
++            bool m2 = false;
++            uint32_t m2_s = 0;
++            if constexpr (stage_on) {
++                if (k == 0) {
++                    if (s_pages + pk.pages <= m2_pages) {
++                        // chunks [s / rp, (s + pages - 1) / rp] must have all their pages staged
++                        m2 = true;
++                        m2_s = s_pages;
++                        const uint32_t c1 = (s_pages + pk.pages - 1) / m2_cp;
++                        if (m2_single > 0 && m2_ready == 0) {
++                            {
++                                AGRN_ZONE("pr_m2_wait");
++                                noc_semaphore_wait_min(
++                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(m2_ctr), m2_single);
++                            }
++                            m2_ready = 0xFFFFFFFFu;
++                        }
++                        while (m2_ready <= c1) {
++                            const uint32_t left = m2_pages - m2_ready * m2_cp;
++                            noc_semaphore_wait_min(
++                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(m2_ctr + 4 * m2_ready),
++                                left < m2_cp ? left : m2_cp);
++                            ++m2_ready;
++                        }
++                        if (s_pages + pk.pages <= m2_head) {
++                            m2 = false;
++                            st_src = stage_base + (m2_head_off + s_pages) * page_bytes;
++                        }
++                    } else if (s_pages + pk.pages <= stage_pages) {
++                        // staged: wait the counters of the packet's lane units, send from cb_stage
++                        if (st_ready != st_all) {
++                            for (uint32_t ri = 0; ri < pk.nr; ++ri) {
++                                const uint32_t u = shard_w ? pk.rr[ri] / bank_stride : (pk.first[ri] % nb) / bank_stride;
++                                const uint32_t ci = u < st_nctr ? u : st_nctr - 1;
++                                if (!((st_ready >> ci) & 1u)) {
++                                    noc_semaphore_wait_min(
++                                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
++                                            get_arg_val<uint32_t>(st_addr_idx + ci)),
++                                        get_arg_val<uint32_t>(st_need_idx + ci));
++                                    st_ready |= 1u << ci;
++                                }
++                            }
++                        }
++                        st_src = stage_base + s_pages * page_bytes;
++                    } else if (!own_waited) {
++                        noc_semaphore_wait_min(own_ready, n_active);
++                        own_waited = true;
++                    }
++                    s_pages += pk.pages;
++                }
++            }
+             if constexpr (own_bands > 1) {
+                 if (k == 0 && bands_ready != all_bands) {
+                     wait_bands(pk);
+@@ -224,13 +313,43 @@
+                     reinterpret_cast<volatile tt_l1_ptr PacketDesc*>(desc_base + (issued % n_slots) * DESC_BYTES);
+                 dsc->nr = pk.nr;
+                 dsc->pages = pk.pages;
++                dsc->src = st_src;
+                 for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+                     dsc->first[ri] = pk.first[ri];
+                     dsc->n[ri] = pk.n[ri];
+                 }
+             }
+             noc_async_read_set_trid(1 + issued % read_depth);
+-            for (uint32_t ri = 0; ri < pk.nr; ++ri) {
++            if (m2) {
++                // one L1 read per chunk piece (the packet's pages are consecutive in the lane walk)
++                uint32_t s0 = m2_s;
++                const uint32_t s1 = m2_s + pk.pages;
++                if (s0 < m2_head) {
++                    // head pages: in my own cb_stage
++                    const uint32_t e = m2_head < s1 ? m2_head : s1;
++                    noc_async_read(
++                        get_noc_addr(my_x[noc_index], my_y[noc_index], stage_base + (m2_head_off + s0) * page_bytes),
++                        l1,
++                        (e - s0) * page_bytes);
++                    l1 += (e - s0) * page_bytes;
++                    s0 = e;
++                }
++                while (s0 < s1) {
++                    const uint32_t c = s0 / m2_cp;
++                    const uint32_t ce = (c + 1) * m2_cp;
++                    const uint32_t e = ce < s1 ? ce : s1;
++                    const uint32_t g = m2_lane * m2_nch + c;
++                    const uint32_t n_ch = m2_L * m2_nch;  // chunk homes: agrn_worker_args.hpp stage_chunk_home
++                    const uint32_t core = n_ch <= m2_nact ? g * m2_nact / n_ch : g % m2_nact;
++                    const uint32_t slot = n_ch <= m2_nact ? 0u : g / m2_nact;
++                    const uint32_t xy = get_arg_val<uint32_t>(m2_tbl + core);
++                    const uint32_t src = stage_base + (slot * m2_cp + (s0 - c * m2_cp)) * page_bytes;
++                    noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, src), l1, (e - s0) * page_bytes);
++                    l1 += (e - s0) * page_bytes;
++                    s0 = e;
++                }
++            }
++            for (uint32_t ri = 0; ri < ((st_src || m2) ? 0u : pk.nr); ++ri) {
+                 const uint32_t n = pk.n[ri];
+                 if (k == 0 && !own_from_dst) {
+                     for (uint32_t t = 0; t < n; ++t) {
+@@ -262,6 +381,11 @@
+             ++issued;
+             ++inflight;
+             ++c;
++            if (first_now && k == 0 && c == 1) {
++                // EXPERIMENT (STAGE_FIRST): the entry's first packet is handed over as soon as its reads land, before
++                // the next packet is walked (the sender is idle until then)
++                retire_oldest();
++            }
+             if constexpr (eager_push) {
+                 // hand over every packet whose reads already landed (non-blocking check), so the sender starts on
+                 // the first packet of an entry without waiting for read_depth packets to be issued
+@@ -292,6 +416,33 @@
+     if (expect_in > 0) {
+         noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect_in);
+     }
++    if (m2_on) {
++        // re-arm the chunk counters (persistent, trace-safe): every worker's increments for this call have landed
++        const uint32_t nch = m2_single > 0 ? 0u : (m2_pages + m2_cp - 1) / m2_cp;
++        if (m2_single > 0) {
++            volatile tt_l1_ptr uint32_t* ctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(m2_ctr);
++            noc_semaphore_wait_min(ctr, m2_single);
++            *ctr = 0;
++        }
++        for (uint32_t c = 0; c < nch; ++c) {
++            const uint32_t left = m2_pages - c * m2_cp;
++            volatile tt_l1_ptr uint32_t* ctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(m2_ctr + 4 * c);
++            noc_semaphore_wait_min(ctr, left < m2_cp ? left : m2_cp);
++            *ctr = 0;
++        }
++    }
++    if constexpr (stage_on) {
++        // re-arm the stage counters (persistent, trace-safe) once every worker's staged pages landed — also on a port
++        // with no own entry (its lane's workers wrote into it regardless)
++        for (uint32_t ci = 0; ci < st_nctr; ++ci) {
++            const uint32_t addr = get_arg_val<uint32_t>(st_addr_idx + ci);
++            const uint32_t need = get_arg_val<uint32_t>(st_need_idx + ci);
++            if (need > 0) {
++                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr), need);
++                noc_semaphore_inc(get_noc_addr(addr), 0u - need);
++            }
++        }
++    }
+     if constexpr (own_bands > 1) {
+         // re-arm every band counter (persistent, trace-safe) once all its workers announced — also on a port whose
+         // walk never touched the band, so a late announcement cannot leak into the next call
+diff -ru -x __pycache__ -x __init__.py -x all_gather_rms_norm.py ttnn/ttnn/operations/all_gather_rms_norm/kernels/all_gather_rms_norm_port_sender.cpp ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/all_gather_rms_norm_port_sender.cpp
+--- ttnn/ttnn/operations/all_gather_rms_norm/kernels/all_gather_rms_norm_port_sender.cpp	2026-11-23 21:19:25.267610446 +0000
++++ ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/all_gather_rms_norm_port_sender.cpp	2026-11-23 21:32:07.297094587 +0000
+@@ -266,18 +266,21 @@
+                 }
+                 invalidate_l1_cache();  // the slot's descriptor was written by the reader (NCRISC)
+                 Packet pk;
++                uint32_t pk_src;
+                 {
+                     volatile tt_l1_ptr PacketDesc* dsc =
+                         reinterpret_cast<volatile tt_l1_ptr PacketDesc*>(desc_base + (taken % n_slots) * DESC_BYTES);
+                     pk.nr = dsc->nr;
+                     pk.pages = dsc->pages;
++                    pk_src = dsc->src;
+                     for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+                         pk.first[ri] = dsc->first[ri];
+                         pk.n[ri] = dsc->n[ri];
+                     }
+                 }
+                 ++taken;
+-                const uint32_t src = get_read_ptr(cb_chunks) + unflushed * chunk_bytes;
++                // EXPERIMENT own_entry_port_l1_staging: a staged own packet is sent straight from cb_stage
++                const uint32_t src = pk_src ? pk_src : get_read_ptr(cb_chunks) + unflushed * chunk_bytes;
+                 // The increment lands only after the packet's writes (flush), stalling the receiving router, so only
+                 // every inc_every-th packet and each entry's last carry one (fabric_all_gather).
+                 const bool inc = (++sent % inc_every) == 0 || pi + 1 == entry_total;
+diff -ru -x __pycache__ -x __init__.py -x all_gather_rms_norm.py ttnn/ttnn/operations/all_gather_rms_norm/kernels/all_gather_rms_norm_reader.cpp ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/all_gather_rms_norm_reader.cpp
+--- ttnn/ttnn/operations/all_gather_rms_norm/kernels/all_gather_rms_norm_reader.cpp	2026-11-23 19:12:16.943034113 +0000
++++ ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/all_gather_rms_norm_reader.cpp	2026-11-23 21:51:50.833695099 +0000
+@@ -400,4 +400,10 @@
+             }
+         }
+     }
++    // EXPERIMENT own_entry_port_l1_staging (st_split): the bwd ports' copies on NoC0, from this RISC (it waits the
++    // normalized pages without popping them; the writer is cb_out_block's consumer)
++    if constexpr (stage_on && st_mode == 1 && st_split && st_copies == 2) {
++        AGRN_ZONE("rd_stage");
++        stage_own_block(w, get_common_arg_val<uint32_t>(CRT_P), false, true);
++    }
+ }
+diff -ru -x __pycache__ -x __init__.py -x all_gather_rms_norm.py ttnn/ttnn/operations/all_gather_rms_norm/kernels/all_gather_rms_norm_writer.cpp ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/all_gather_rms_norm_writer.cpp
+--- ttnn/ttnn/operations/all_gather_rms_norm/kernels/all_gather_rms_norm_writer.cpp	2026-11-23 19:15:50.922447732 +0000
++++ ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/kernels/all_gather_rms_norm_writer.cpp	2026-11-23 21:51:50.833620867 +0000
+@@ -200,6 +200,15 @@
+             AGRN_ZONE("wr_wait_out");
+             cb_wait_front(cb_out_block, 1);
+         }
++        if constexpr (stage_on) {
++            AGRN_ZONE("wr_stage");
++            // EXPERIMENT own_entry_port_l1_staging: fwd ports (and bwd ones unless the worker reader writes those)
++            if constexpr (st_mode == 2) {
++                stage_dist_block(w, get_common_arg_val<uint32_t>(CRT_P));
++            } else {
++                stage_own_block(w, get_common_arg_val<uint32_t>(CRT_P), true, !st_split && st_copies == 2);
++            }
++        }
+         AGRN_ZONE("wr_own");
+         const auto dst = TensorAccessor(dst_args, get_common_arg_val<uint32_t>(CRT_DST_ADDR), out_page_bytes);
+         if constexpr (out_in_place) {
+--- ttnn/ttnn/operations/all_gather_rms_norm/all_gather_rms_norm_program_descriptor.py	2026-11-23 21:19:25.267795861 +0000
++++ ttnn/ttnn/operations/all_gather_rms_norm/perf_experiments/own_entry_port_l1_staging/agrn_stage/all_gather_rms_norm_program_descriptor.py	2026-11-23 22:37:29.741544628 +0000
+@@ -79,6 +79,7 @@
+ CB_STAT_CONSTS_X = 31  # LN: n_q of the cross-chip partitions (one per chip)
+ CB_PORT_DESC = 32  # port reader -> sender: one packet descriptor (runs) per port-CB chunk slot
+ CB_XG = 33  # RMS xg_pre: x * gamma of the block (T_acc), computed in the stats shadow
++CB_STAGE = 34  # EXPERIMENT own_entry_port_l1_staging: the own entry's pages in packet (walk) order, port L1
+ PORT_DESC_BYTES = 64  # agrn_port_common.hpp DESC_BYTES
+ 
+ # ---- program-local semaphores (declared before the fabric connections take theirs) ----
+@@ -130,6 +131,25 @@
+ XG_PRE = 0
+ XG_L1_BUDGET = 128 * 1024
+ OWN_BANDS_MAX = 16  # persistent band counters (global semaphores) per port core
++# EXPERIMENT own_entry_port_l1_staging (OVERLAP): every worker also writes its normalized pages straight into a
++# staging CB on the ports of their lane, at the page's position in the port's own-entry walk (packets are then
++# contiguous there); the port sends those packets from staging (no DRAM read-back, no own_ready wait). Per lane, the
++# staged prefix is the leading lane units (banks; sharded output: tile-rows) that fit STAGE_L1_BUDGET; readiness is
++# one counter per lane unit (the OWN_BANDS global semaphores, the last one shared by the tail units).
++STAGE = 1
++STAGE_L1_BUDGET = 256 * 1024
++STAGE_NCTR = 16  # readiness counters per port (<= OWN_BANDS_MAX); 1 = one counter for the whole staged prefix
++STAGE_MAX_LANES = 4
++STAGE_MAX_NB = 16
++STAGE_CT = 7 + STAGE_MAX_LANES + 2 * STAGE_MAX_NB + 8  # agrn_worker_args.hpp stage block
++# STAGE_MODE 1: the staging lives on the lane's two port cores (many-to-one ingress into 4 cores);
++# STAGE_MODE 2: distributed — the lane's walk is cut into chunks of run_pages pages, chunk g = l * nch_max + c lives on
++# worker core g % n_active (slot g // n_active of its cb_stage); the port reads each packet with one L1 read per chunk
++# piece, readiness = one counter per chunk on each port of the lane (a persistent zeroed L1 buffer on the ports)
++STAGE_MODE = 2
++STAGE_CTR_MAX = 256
++STAGE_HEAD = 0  # mode 2: the lane walk's first STAGE_HEAD pages go straight into both ports' cb_stage
++STAGE_M2_SINGLE = 1  # one readiness counter per port (one increment per worker), not one per chunk (measured faster)
+ NOC_READER = ttnn.NOC.RISCV_0_default  # NoC0 (fabric_all_gather's convention)
+ NOC_WRITER = ttnn.NOC.RISCV_1_default  # NoC1
+ 
+@@ -488,6 +508,32 @@
+     return [int(ttnn.get_global_semaphore_address(s)) for s in _RES_CACHE[key][1]]
+ 
+ 
++def stage_counters(mesh_device, plan):
++    """EXPERIMENT (STAGE_MODE 2): STAGE_CTR_MAX zeroed uint32 counters on every port core (same L1 address), re-armed to
++    0 by the port reader at the end of each call."""
++    import torch
++
++    port_cores = sorted({(c.x, c.y) for ch in plan["chips"].values() for c in ch["ports"].values()})
++    key = ("stage_ctr", id(mesh_device), tuple(port_cores))
++    if key not in _RES_CACHE or not _RES_CACHE[key][1].is_allocated():
++        cores = _single_cores(port_cores)
++        mc = ttnn.MemoryConfig(
++            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
++            ttnn.BufferType.L1,
++            ttnn.ShardSpec(cores, [1, STAGE_CTR_MAX], ttnn.ShardOrientation.ROW_MAJOR),
++        )
++        t = ttnn.from_torch(
++            torch.zeros([len(port_cores), STAGE_CTR_MAX], dtype=torch.int32),
++            dtype=ttnn.uint32,
++            layout=ttnn.ROW_MAJOR_LAYOUT,
++            device=mesh_device,
++            memory_config=mc,
++        )
++        ttnn.synchronize_device(mesh_device)
++        _RES_CACHE[key] = (mesh_device, t)
++    return int(_RES_CACHE[key][1].buffer_address())
++
++
+ def staging_buffer(mesh_device, geo: Geometry, dtype):
+     key = ("staging", id(mesh_device), geo.G, geo.R, geo.Wlt, dtype)
+     # Re-create a cached buffer that is no longer allocated: the golden conftest deallocates the device tensors a
+@@ -688,8 +734,11 @@
+     ready_addr, bulk_addr, stats_addr, *band_addrs = global_semaphores(mesh_device, plan)
+     # own-ready bands (OVERLAP): band of row-group g = g * own_bands // n_groups (same formula on the workers); the
+     # staged (R_U) slot is flat and the WIDTH pre-combine has one group: one counter (the program semaphore) there
++    stage_on = _knob("STAGE", STAGE) != 0
+     own_bands = (
+-        1 if (is_ru or pre_combine) else max(1, min(_knob("OWN_BANDS", OWN_BANDS), split.n_groups, OWN_BANDS_MAX))
++        1
++        if (is_ru or pre_combine or stage_on)
++        else max(1, min(_knob("OWN_BANDS", OWN_BANDS), split.n_groups, OWN_BANDS_MAX))
+     )
+     band_need = [0] * own_bands  # announcements per band: k per row-group
+     band_row_end = [0] * own_bands  # first tile-row after the band
+@@ -701,6 +750,7 @@
+             row = geo.R
+         band_need[b] += k
+         band_row_end[b] = row
++    stage_ctr_addrs = list(band_addrs)  # all OWN_BANDS_MAX persistent counters (stage readiness)
+     band_addrs = band_addrs[:own_bands]
+ 
+     # ---- worker compile-time args (agrn_worker_args.hpp) ----
+@@ -742,6 +792,7 @@
+         own_bands,
+         int(xg_pre),
+     ]
++    worker_ct_base = list(worker_ct)
+     # Sharded: the local shard is consumed in place, never through an accessor -> empty accessor args.
+     acc_ct = list(
+         (ttnn.TensorAccessorArgs() if x_sharded else ttnn.TensorAccessorArgs(input_tensor)).get_compile_time_args()
+@@ -788,7 +839,71 @@
+         split_runs,
+         own_bands,
+         _knob("EAGER_PUSH", EAGER_PUSH),
++        CB_STAGE,
++        0,  # stage_on (set per chip below)
+     ] + list(ttnn.TensorAccessorArgs(dst_tensor).get_compile_time_args())
++    port_ct_base = list(port_ct)
++
++    # ---- EXPERIMENT: own-entry staging plan (per chip: the own slot's walk depends on p) ----
++    out_page_b = out_page
++    stage_cap_pages = _knob("STAGE_L1_BUDGET", STAGE_L1_BUDGET) // out_page_b
++    stage_nctr_knob = max(1, min(_knob("STAGE_NCTR", STAGE_NCTR), OWN_BANDS_MAX))
++    stage_copies = 1 if _knob("STAGE_COPIES", 2) == 1 else 2  # 1: only the fwd ports are staged
++    stage_mode = _knob("STAGE_MODE", STAGE_MODE)
++    stage_cp = max(1, min(_knob("STAGE_CHUNK", run_pages), run_pages))  # pages per staging chunk (mode 2)
++    stage_head = _knob("STAGE_HEAD", STAGE_HEAD)  # walk pages staged on the ports themselves (mode 2)
++
++    def stage_plan(p):
++        """Per lane l: unit page counts (walk order), staged unit count, per-bank lane offsets, per-counter needs."""
++        if not stage_on or L > STAGE_MAX_LANES or (walk.shard_w == 0 and nb > STAGE_MAX_NB):
++            return None
++        base = p * walk.slot_stride
++        lanes = []
++        unit_off = [0] * STAGE_MAX_NB
++        for l in range(L):
++            if walk.shard_w:
++                units = list(range(l, walk.rows_eff, L))
++                pages = [walk.cols_eff for _ in units]
++            else:
++                units = list(range(l, nb, L))
++                pages = []
++                for b in units:
++                    c = 0
++                    for rr in range(walk.rows_eff):
++                        rb = base + rr * walk.row_stride
++                        j0 = (b - rb) % nb
++                        c += (walk.cols_eff - 1 - j0) // nb + 1 if j0 < walk.cols_eff else 0
++                    pages.append(c)
++                off = 0
++                for b, c in zip(units, pages):
++                    unit_off[b] = off
++                    off += c
++            n_st, tot = 0, 0
++            cap = STAGE_CTR_MAX * stage_cp if stage_mode == 2 else stage_cap_pages
++            while n_st < len(units) and tot + pages[n_st] <= cap:
++                tot += pages[n_st]
++                n_st += 1
++            lanes.append(dict(pages=pages, n_st=n_st, tot=tot))
++        if max(ln["tot"] for ln in lanes) == 0:
++            return None
++        nctr = max(1, min(stage_nctr_knob, max(ln["n_st"] for ln in lanes)))
++        for ln in lanes:
++            need = [0] * nctr
++            for i in range(ln["n_st"]):
++                need[min(i, nctr - 1)] += ln["pages"][i]
++            ln["need"] = need
++        nch_max = max(-(-ln["tot"] // stage_cp) for ln in lanes)
++        slots = -(-(L * nch_max) // split.n_active)
++        head = min(stage_head, min(ln["tot"] for ln in lanes)) if stage_mode == 2 else 0
++        max_pages = slots * stage_cp + head if stage_mode == 2 else max(ln["tot"] for ln in lanes)
++        return dict(
++            lanes=lanes, nctr=nctr, unit_off=unit_off, max_pages=max_pages, nch_max=nch_max, head=head,
++            head_off=slots * stage_cp,
++        )
++
++    stage_plans = {coord: stage_plan(ch["p"]) for coord, ch in chips.items()}
++    stage_max_pages = max([sp["max_pages"] for sp in stage_plans.values() if sp] + [0])
++    stage_ctr_base = stage_counters(mesh_device, plan) if (stage_mode == 2 and stage_max_pages) else 0
+ 
+     # ---- compute config ----
+     cfg = ttnn.ComputeConfigDescriptor()
+@@ -833,6 +948,38 @@
+     mesh_desc = ttnn.MeshProgramDescriptor()
+     for coord, ch in chips.items():
+         p = ch["p"]
++        sp = stage_plans[coord]
++        st_lanes = [0] * STAGE_MAX_LANES
++        if sp:
++            for l in range(L):
++                st_lanes[l] = sp["lanes"][l]["n_st"]
++        worker_ct = worker_ct_base + [
++            int(sp is not None),
++            L,
++            nb,
++            walk.cols_eff,
++            walk.row_stride,
++            walk.slot_stride,
++            (sp["nctr"] if sp else 1)
++            | (int(walk.shard_w > 0) << 8)
++            | (stage_copies << 16)
++            | (_knob("STAGE_SPLIT", 0) << 24),
++        ] + st_lanes + (sp["unit_off"] if sp else [0] * STAGE_MAX_NB) + (
++            stage_ctr_addrs[:STAGE_MAX_NB] + [0] * (STAGE_MAX_NB - len(stage_ctr_addrs[:STAGE_MAX_NB]))
++        ) + [
++            (stage_mode | (_knob("STAGE_M2_SINGLE", STAGE_M2_SINGLE) << 8) | (_knob("STAGE_M2_ACK", 1) << 9)) if sp else 0,
++            stage_cp,
++            sp["nch_max"] if sp else 1,
++            split.n_active,
++            0,  # common-arg index of the staging core table (patched below)
++            stage_ctr_base,
++            sp["head"] if sp else 0,
++            sp["head_off"] if sp else 0,
++        ]
++        ST_TBL_CT = len(worker_ct) - 4
++        assert len(worker_ct) == len(worker_ct_base) + STAGE_CT
++        port_ct = list(port_ct_base)
++        port_ct[28] = int(sp is not None)
+         ports = ch["ports"]
+         port_list = [ports[(d, l)] for d in ("fwd", "bwd") for l in range(L)]
+         port_set = {(c.x, c.y) for c in port_list}
+@@ -907,6 +1054,7 @@
+             ),
+             _cb(CB_PORT_CHUNKS, 2 * batch_chunks * run_pages, out_page, out_dtype, full),
+             _cb(CB_PORT_DESC, 2 * batch_chunks, PORT_DESC_BYTES, ttnn.float32, full),
++            *([_cb(CB_STAGE, stage_max_pages, out_page, out_dtype, full)] if stage_max_pages else []),
+             # program-scoped: same address on every core of every chip, no persistent L1 (see agrn_common.hpp)
+             _cb(CB_STATS_TABLE, table_bytes // RECORD_BYTES, RECORD_BYTES, ttnn.float32, full),
+         ]
+@@ -990,6 +1138,9 @@
+             common += [
+                 wmap[i] | wmap[i + 1] << 8 | wmap[i + 2] << 16 | wmap[i + 3] << 24 for i in range(0, len(wmap), 4)
+             ]
++        if sp and stage_mode == 2:
++            worker_ct[ST_TBL_CT] = len(common)
++            common += active_noc  # staging cores (worker order)
+         kernels = [
+             ttnn.KernelDescriptor(
+                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_reader.cpp"),
+@@ -1053,6 +1204,17 @@
+                     len(recv_slots),
+                 ] + list(recv_slots)
+                 r_args += band_need + band_row_end + band_addrs  # own_bands > 1: band gating of the own entry
++                # EXPERIMENT stage: staged pages of my lane, counters, their needs and addresses
++                if sp and stage_mode == 1 and (d == "fwd" or stage_copies == 2):
++                    ln = sp["lanes"][l]
++                    r_args += [ln["tot"], sp["nctr"]] + ln["need"] + stage_ctr_addrs[: sp["nctr"]]
++                else:
++                    r_args += [0, 0]
++                if sp and stage_mode == 2:
++                    r_args += [1, sp["lanes"][l]["tot"], stage_ctr_base, split.n_active, sp["nch_max"], l, L]
++                    r_args += [split.n_active if _knob("STAGE_M2_SINGLE", STAGE_M2_SINGLE) else 0, stage_cp, sp["head"], sp["head_off"], _knob("STAGE_FIRST", 0)]
++                else:
++                    r_args += [0]
+                 reader_rt[core.x][core.y] = r_args
+ 
+                 is_hub = l == 0
+@@ -1138,6 +1300,7 @@
+                     crt_max,
+                     cw_max,
+                     tuple(defines),
++                    "own_entry_port_l1_staging",
+                 )
+             ).encode()
+         ).digest()
