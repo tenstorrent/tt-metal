@@ -538,9 +538,12 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     (rank, mesh coordinate) pairs, at least one of which must exist. The box's owner is the one pair that writes it.
 
     The owners even out the bytes written, since the slowest rank ends the write: a box with one holder is that
-    holder's, and the others, largest first, go to the rank among their holders with the fewest bytes so far and to
-    that rank's device with the fewest. A few large keys (a vocab matrix and its moments) would otherwise decide where
-    most of the bytes land. Ties go to the lower rank and coordinate, so the same parts always elect the same owners.
+    holder's, and the others, largest first, go to the holder whose rank has the fewest bytes so far and, among the
+    holders of ranks tied on bytes, whose device has the fewest. A few large keys (a vocab matrix and its moments) would
+    otherwise decide where most of the bytes land. Equal boxes (a TP key's columns) leave the ranks tied after every
+    round, so the devices' bytes then pick the rank: a rank's bytes spread over all its devices, each one file and one
+    writer thread, rather than always landing on the devices of the same columns. Ties go to the lower rank and
+    coordinate, so the same parts always elect the same owners.
     """
     parts = sorted(parts, key=lambda p: p.record.rank)
     differing = [p.record.rank for p in parts if p.scheduler_hash != parts[0].scheduler_hash]
@@ -602,8 +605,7 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     forced = [box for box in boxes if len(box[3]) == 1]
     free = sorted((box for box in boxes if len(box[3]) > 1), key=lambda box: (-box[0], box[1], box[2]))
     for nbytes, key, group_key, holders in forced + free:
-        rank = min({r for r, _ in holders}, key=lambda r: (rank_bytes[r], r))
-        chosen = min((h for h in holders if h[0] == rank), key=lambda h: (device_bytes[h], h))
+        chosen = min(holders, key=lambda h: (rank_bytes[h[0]], device_bytes[h], h))
         owners[key][group_key] = chosen
         rank_bytes[chosen[0]] += nbytes
         device_bytes[chosen] += nbytes

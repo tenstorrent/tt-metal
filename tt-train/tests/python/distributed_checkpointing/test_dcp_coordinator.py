@@ -115,7 +115,7 @@ def test_the_election_gives_every_box_one_owner_that_holds_it():
 
 def test_the_election_evens_out_the_bytes_each_rank_and_device_writes():
     """A few large replicated keys decide where most bytes land. The boxes one holder has are charged first, then the
-    others, largest first, go to the least-loaded rank among their holders and its least-loaded device, so two ranks
+    others, largest first, go to the holder on the least-loaded rank, its device's bytes breaking a tie, so two ranks
     end up writing equal shares and their devices similar ones."""
     coords = {0: [(0, 0), (0, 1)], 1: [(0, 2), (0, 3)]}
     sharded = _info("model/w", [R, S(3)], (1, 4), (1, 1, 32, 16))  # one box per device: forced
@@ -136,6 +136,22 @@ def test_the_election_evens_out_the_bytes_each_rank_and_device_writes():
     alone = _info("model/alone", [R, R], (1, 4), (1, 1, 512, 64))
     election = merge_plan_parts([PlanPart(_record(0, coords[0]), [alone]), PlanPart(_record(1, coords[1]), [])])
     assert {r for r, _ in election.owners["model/alone"].values()} == {0}
+
+
+def test_equal_boxes_rotate_over_the_devices_of_tied_ranks():
+    """Equal boxes, a TP key's columns, leave the ranks tied after every round. Were the lower rank always to take
+    the tie, each rank would write the same columns of every key, all on the few devices holding them, and most of
+    its writer threads would idle: the devices' bytes break the tie instead, so every device writes one box."""
+    coords = [(0, 0), (0, 1), (1, 0), (1, 1)]
+    keys = [_info(f"model/w{i}", [R, S(3)], (2, 2), (1, 1, 32, 64)) for i in range(4)]  # columns on the second axis
+    parts = [PlanPart(_record(r, coords, mesh_id=r, shape=(2, 2)), keys) for r in (0, 1)]
+    election = merge_plan_parts(parts)
+    written = {}
+    for key in keys:
+        for owner in election.owners[key.key].values():
+            written[owner] = written.get(owner, 0) + 1
+    assert sorted(written) == [(r, c) for r in (0, 1) for c in coords], written
+    assert set(written.values()) == {1}, written
 
 
 def test_each_rank_plans_only_its_owned_chunks_and_files():
