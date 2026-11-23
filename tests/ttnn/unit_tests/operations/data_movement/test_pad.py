@@ -925,6 +925,30 @@ def test_pad_tile(shape, padding, dtype, device):
     assert torch.equal(out_tt, torch_output)
 
 
+# A nonzero fill of a block-float tensor whose width is not a multiple of 16 is padded in bfloat16 and encoded once,
+# because encoding zeroes the tile padding of such a tensor. Ones and fives share a block exponent exactly in
+# BFLOAT4_B, so the result compares exactly.
+@pytest.mark.parametrize(
+    "shape, padding",
+    [
+        ([2, 8], [0, 8]),  # width stays within the input's tile
+        ([30, 60], [2, 4]),  # height and width stay within the input's tiles
+        ([2, 8], [0, 64]),  # width crosses tile boundaries
+        ([30, 60], [3, 40]),  # height and width cross tile boundaries
+    ],
+)
+def test_pad_tile_bfloat4_b_nonzero_fill(shape, padding, device):
+    input = torch.ones(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input, dtype=ttnn.bfloat4_b, device=device, layout=ttnn.TILE_LAYOUT)
+
+    output = ttnn.pad(input_tensor, [(0, p) for p in padding], value=5)
+
+    torch_output = torch.nn.functional.pad(input, [0, padding[1], 0, padding[0]], value=5)
+    assert output.dtype == ttnn.bfloat4_b
+    assert list(output.shape) == list(torch_output.shape)
+    assert torch.equal(ttnn.to_torch(output), torch_output)
+
+
 def pad_reference(input_torch, padded_shape, input_tensor_start, pad_value):
     """PyTorch reference for ttnn.pad using shape-based API."""
     rank = len(padded_shape)
