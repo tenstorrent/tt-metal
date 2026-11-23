@@ -50,9 +50,9 @@ UNEMBED_SPLIT = 1  # bank-streamed unembed: cores per DRAM-sharded column group 
 EPS = 1e-6
 # Decode glue in fewer programs (same kernels' math, same rounding points; outputs bit-equal):
 # GLUE_PRE: the attention input norm runs inside the attn-res program (local layers without message gates)
-GLUE_PRE = os.environ.get("INKLING_GLUE_PRE", "0") == "1"
+GLUE_PRE = os.environ.get("INKLING_GLUE_PRE", "1") == "1"
 # GLUE_JOIN: the post-MLP conv of an app and the next app's attn-res run as ONE program (two cores, semaphore hand-off)
-GLUE_JOIN = os.environ.get("INKLING_GLUE_JOIN", "0") == "1"
+GLUE_JOIN = os.environ.get("INKLING_GLUE_JOIN", "1") == "1"
 JOIN_CORE = ttnn.CoreCoord(1, 0)  # the attn-res part's core (the conv keeps F.CORE); off the staging rows
 
 
