@@ -50,7 +50,10 @@ constexpr uint32_t own_from_dst_ct = get_compile_time_arg_val(22);
 // per chunk slot, the packet's runs (PacketDesc): written by the reader with the slot's reads, read by the sender once
 // the slot is pushed, so only the reader walks the slot (the sender is bound by per-packet work)
 constexpr uint32_t cb_desc = get_compile_time_arg_val(23);
-constexpr uint32_t PORT_CT_ARGS = 24;                        // TensorAccessorArgs(dst) follow
+// 1: a run that does not fit the open packet is split (its head fills the packet, the rest opens the next), so packets
+// carry run_pages pages unless the scatter_runs limit closes them; 0: a run that does not fit closes the packet
+constexpr bool split_runs = get_compile_time_arg_val(24) != 0;
+constexpr uint32_t PORT_CT_ARGS = 25;                        // TensorAccessorArgs(dst) follow
 constexpr uint32_t run_stride = shard_w ? 1 : nb;            // page-id step between the pages of one run
 constexpr uint32_t shard_w_div = shard_w ? shard_w : 1;      // (the interleaved walk never divides by it)
 constexpr uint32_t chunk_bytes = run_pages * page_bytes;
@@ -103,6 +106,37 @@ inline void for_each_packet(uint32_t q, uint32_t part, uint32_t first_bank, uint
             pk.pages = 0;
         }
     };
+    // one run of n pages (first, first + run_stride, ...): appended to the open packet, split over packets if allowed
+    auto add_run = [&](uint32_t first, uint32_t n, uint32_t rr, uint32_t jj) {
+        if constexpr (!split_runs) {
+            if (pk.nr == scatter_runs || pk.pages + n > run_pages) {
+                flush();
+            }
+            pk.first[pk.nr] = first;
+            pk.n[pk.nr] = n;
+            pk.rr[pk.nr] = rr;
+            pk.jj[pk.nr] = jj;
+            ++pk.nr;
+            pk.pages += n;
+            return;
+        }
+        while (n > 0) {
+            if (pk.nr == scatter_runs || pk.pages == run_pages) {
+                flush();
+            }
+            const uint32_t room = run_pages - pk.pages;
+            const uint32_t m = n < room ? n : room;
+            pk.first[pk.nr] = first;
+            pk.n[pk.nr] = m;
+            pk.rr[pk.nr] = rr;
+            pk.jj[pk.nr] = jj;
+            ++pk.nr;
+            pk.pages += m;
+            first += m * run_stride;
+            jj += m * run_stride;
+            n -= m;
+        }
+    };
     if constexpr (shard_w > 0) {
         // lane = tile-rows; a run never crosses a shard-column boundary of the destination
         for (uint32_t i = lo; i < hi; ++i) {
@@ -117,15 +151,7 @@ inline void for_each_packet(uint32_t q, uint32_t part, uint32_t first_bank, uint
                 uint32_t seg_end = (gc / shard_w_div + 1) * shard_w_div - base;
                 seg_end = seg_end < cols_eff ? seg_end : cols_eff;
                 const uint32_t n = (seg_end - jj) < run_pages ? seg_end - jj : run_pages;
-                if (pk.nr == scatter_runs || pk.pages + n > run_pages) {
-                    flush();
-                }
-                pk.first[pk.nr] = rb + jj;
-                pk.n[pk.nr] = n;
-                pk.rr[pk.nr] = rr;
-                pk.jj[pk.nr] = jj;
-                ++pk.nr;
-                pk.pages += n;
+                add_run(rb + jj, n, rr, jj);
                 jj += n;
             }
         }
@@ -143,15 +169,7 @@ inline void for_each_packet(uint32_t q, uint32_t part, uint32_t first_bank, uint
             while (jj < cols_eff) {
                 const uint32_t avail = (cols_eff - 1 - jj) / nb + 1;
                 const uint32_t n = avail < run_pages ? avail : run_pages;
-                if (pk.nr == scatter_runs || pk.pages + n > run_pages) {
-                    flush();
-                }
-                pk.first[pk.nr] = rb + jj;
-                pk.n[pk.nr] = n;
-                pk.rr[pk.nr] = rr;
-                pk.jj[pk.nr] = jj;
-                ++pk.nr;
-                pk.pages += n;
+                add_run(rb + jj, n, rr, jj);
                 jj += n * nb;
             }
         }

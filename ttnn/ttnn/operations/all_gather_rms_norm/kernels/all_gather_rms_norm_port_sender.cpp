@@ -19,6 +19,7 @@
 //                                 last carry a fused increment of the downstream port's arrival counter.
 // fabric_all_gather's sender + fabric_ring_exchange's stats round, ported.
 
+#include <cstddef>
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -44,6 +45,14 @@ constexpr bool abl_dst = true;
 #else
 constexpr bool abl_dst = false;
 #endif
+
+constexpr uint8_t scatter_enc =
+    expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
+static_assert(
+    sizeof(NocUnicastScatterCommandHeader) == 40 && offsetof(NocUnicastScatterCommandHeader, chunk_size) == 32 &&
+        offsetof(NocUnicastScatterCommandHeader, chunk_count) == 38 &&
+        offsetof(NocUnicastScatterCommandHeader, chunk_encoding) == 39,
+    "scatter command field layout (word stores below)");
 
 namespace {
 inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id) {
@@ -295,18 +304,19 @@ void kernel_main() {
                         hdr->command_fields.unicast_write.noc_address =
                             bank_base[pk.first[0] % nb] + (pk.first[0] / nb) * bank_pitch;
                     } else {
+                        // the scatter command fields as ten 32-bit stores (layout pinned by the static_asserts above)
                         hdr->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
-                        volatile auto& sc = hdr->command_fields.unicast_scatter_write;
-                        sc.chunk_count = static_cast<uint8_t>(pnr);
-                        sc.chunk_encoding =
-                            expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
+                        volatile tt_l1_ptr uint32_t* w =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(&hdr->command_fields.unicast_scatter_write);
                         for (uint32_t ri = 0; ri < NOC_SCATTER_WRITE_MAX_CHUNKS; ++ri) {
-                            sc.noc_address[ri] =
+                            const uint64_t a =
                                 ri < pnr ? bank_base[pk.first[ri] % nb] + (pk.first[ri] / nb) * bank_pitch : 0;
+                            w[2 * ri] = static_cast<uint32_t>(a);
+                            w[2 * ri + 1] = static_cast<uint32_t>(a >> 32);
                         }
-                        for (uint32_t ri = 0; ri + 1 < NOC_SCATTER_WRITE_MAX_CHUNKS; ++ri) {
-                            sc.chunk_size[ri] = ri + 1 < pnr ? sz[ri] : 0;
-                        }
+                        const uint32_t s1 = pnr > 2 ? sz[1] : 0, s2 = pnr > 3 ? sz[2] : 0;
+                        w[8] = static_cast<uint32_t>(sz[0]) | (s1 << 16);
+                        w[9] = s2 | (pnr << 16) | (static_cast<uint32_t>(scatter_enc) << 24);
                     }
                     hdr->payload_size_bytes = static_cast<uint16_t>(bytes);
                 } else if (pnr == 1) {

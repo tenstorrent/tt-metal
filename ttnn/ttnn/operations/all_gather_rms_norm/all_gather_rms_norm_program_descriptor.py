@@ -112,6 +112,8 @@ BALANCE_MIN_TILES = 64  # balance an even ring's far slot from this many tiles p
 SCATTER_RUNS = 4  # destination runs per bulk packet (fabric scatter write, <= NOC_SCATTER_WRITE_MAX_CHUNKS)
 READ_DEPTH = 4  # port reader: packets with reads in flight (one NoC transaction id each), <= BATCH_CHUNKS (the
 #                sender pops whole groups: deeper would hold the CB space its pop waits for)
+SPLIT_RUNS = 0  # bulk packets: 1 = split a run that does not fit the open packet (fewer, fuller packets with more
+#                scatter chunks: measured +1.2 us on the focus case), 0 = a run that does not fit closes the packet
 OWN_SRC_DST = 1  # port reader own entry: 1 = read back the own final pages (one read per bank run, measured faster),
 #                 0 = pull page by page from the workers' L1 blocks
 
@@ -371,6 +373,25 @@ class Walk:
     run_pages: int
     scatter_runs: int
     shard_w: int = 0  # > 0: sharded output — lanes are tile-rows, runs split at shard_w-tile column boundaries
+    split_runs: int = 1  # agrn_port_common.hpp split_runs
+
+    def _add(self, st, n):
+        """Append a run of n pages to the open packet st = [count, runs, pages] (agrn_port_common.hpp add_run)."""
+        if not self.split_runs:
+            if st[1] == self.scatter_runs or st[2] + n > self.run_pages:
+                st[0] += 1
+                st[1] = st[2] = 0
+            st[1] += 1
+            st[2] += n
+            return
+        while n:
+            if st[1] == self.scatter_runs or st[2] == self.run_pages:
+                st[0] += 1
+                st[1] = st[2] = 0
+            m = min(n, self.run_pages - st[2])
+            st[1] += 1
+            st[2] += m
+            n -= m
 
     def chunks(self, q, part, first_bank, stride):
         """Packets of slot q for one lane / part (host replica of agrn_port_common.hpp for_each_packet)."""
@@ -382,26 +403,20 @@ class Walk:
         nl = (nb - first_bank + stride - 1) // stride
         lo = nl // 2 if part == 2 else 0
         hi = nl // 2 if part == 1 else nl
-        cnt = 0
-        nr = pages = 0
+        st = [0, 0, 0]
         base = q * self.slot_stride
         for i in range(lo, hi):
-            if i == nl // 2 and nr:
-                cnt += 1
-                nr = pages = 0
+            if i == nl // 2 and st[1]:
+                st = [st[0] + 1, 0, 0]
             b = first_bank + i * stride
             for rr in range(self.rows_eff):
                 rb = base + rr * self.row_stride
                 jj = (b - rb) % nb
                 while jj < self.cols_eff:
                     n = min((self.cols_eff - 1 - jj) // nb + 1, self.run_pages)
-                    if nr == self.scatter_runs or pages + n > self.run_pages:
-                        cnt += 1
-                        nr = pages = 0
-                    nr += 1
-                    pages += n
+                    self._add(st, n)
                     jj += n * nb
-        return cnt + (1 if nr else 0)
+        return st[0] + (1 if st[1] else 0)
 
     def _chunks_sharded(self, q, part, first_row, stride):
         if first_row >= self.rows_eff:
@@ -409,24 +424,19 @@ class Walk:
         nl = (self.rows_eff - first_row + stride - 1) // stride
         lo = nl // 2 if part == 2 else 0
         hi = nl // 2 if part == 1 else nl
-        cnt = nr = pages = 0
+        st = [0, 0, 0]
         base = q * self.slot_stride
         for i in range(lo, hi):
-            if i == nl // 2 and nr:
-                cnt += 1
-                nr = pages = 0
+            if i == nl // 2 and st[1]:
+                st = [st[0] + 1, 0, 0]
             jj = 0
             while jj < self.cols_eff:
                 gc = base + jj
                 seg_end = min(self.cols_eff, (gc // self.shard_w + 1) * self.shard_w - base)
                 n = min(seg_end - jj, self.run_pages)
-                if nr == self.scatter_runs or pages + n > self.run_pages:
-                    cnt += 1
-                    nr = pages = 0
-                nr += 1
-                pages += n
+                self._add(st, n)
                 jj += n
-        return cnt + (1 if nr else 0)
+        return st[0] + (1 if st[1] else 0)
 
 
 def _inc_sim(counts, inc_every):
@@ -608,6 +618,7 @@ def create_mesh_program_descriptor(
     scatter_runs = _knob("SCATTER_RUNS", SCATTER_RUNS)
     read_depth = max(1, min(_knob("READ_DEPTH", READ_DEPTH), batch_chunks, 15))
     own_from_dst = _knob("OWN_SRC_DST", OWN_SRC_DST)
+    split_runs = _knob("SPLIT_RUNS", SPLIT_RUNS)
     payload_bytes = run_pages * out_page
     stats_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
     out_sharded = output_tensor.memory_config().is_sharded()
@@ -627,14 +638,14 @@ def create_mesh_program_descriptor(
         o_order = _ordered_shard_cores(o_ss.grid, o_ss.orientation == ttnn.ShardOrientation.ROW_MAJOR)
         out_in_place = int(o_ss.shape[0]) == TILE and o_order[: len(shard_order)] == list(shard_order)
     if is_ru:
-        walk = Walk(nb, 1, geo.R * geo.Wlt, geo.R * geo.Wlt, geo.R * geo.Wlt, run_pages, scatter_runs)
+        walk = Walk(nb, 1, geo.R * geo.Wlt, geo.R * geo.Wlt, geo.R * geo.Wlt, run_pages, scatter_runs, 0, split_runs)
     elif out_sharded:
         # final pages in L1 shards: a run is a tile-row's columns inside one shard core (HEIGHT: the whole slot row)
         out_ss = output_tensor.memory_config().shard_spec
         shard_w = int(out_ss.shape[1]) // TILE
-        walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, scatter_runs, shard_w)
+        walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, scatter_runs, shard_w, split_runs)
     else:
-        walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, scatter_runs)
+        walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, scatter_runs, 0, split_runs)
     balance = ring and G % 2 == 0 and G >= 4 and geo.R * geo.Wlt >= BALANCE_MIN_TILES
 
     # R_U assembly: max distinct source tiles per output tile
@@ -732,6 +743,7 @@ def create_mesh_program_descriptor(
         read_depth,
         own_from_dst,
         CB_PORT_DESC,
+        split_runs,
     ] + list(ttnn.TensorAccessorArgs(dst_tensor).get_compile_time_args())
 
     # ---- compute config ----

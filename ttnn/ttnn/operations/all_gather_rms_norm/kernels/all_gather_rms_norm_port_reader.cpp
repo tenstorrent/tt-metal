@@ -55,6 +55,17 @@ void kernel_main() {
     const uint32_t mc_dests = get_arg_val<uint32_t>(a++);  // cores in the rectangle, excluding this one
 
     const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
+    // NoC address of every destination bank's first page and the bank page pitch: a run's read address is then
+    // base + offset (no accessor lookup per run; interleaved DRAM destination)
+    constexpr bool fast_banks = shard_w == 0 && nb <= 16;
+    uint64_t bank_base[fast_banks ? nb : 1];
+    uint32_t bank_pitch = 0;
+    if constexpr (fast_banks) {
+        for (uint32_t b = 0; b < nb; ++b) {
+            bank_base[b] = dst.get_noc_addr(b);
+        }
+        bank_pitch = static_cast<uint32_t>(dst.get_noc_addr(nb) - dst.get_noc_addr(0));
+    }
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
     volatile tt_l1_ptr uint32_t* own_ready =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_own_ready));
@@ -172,6 +183,8 @@ void kernel_main() {
                         const uint32_t src = out_block_base + ((r - rs) * wm + (j - ws)) * page_bytes;
                         noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, src), l1 + t * page_bytes, page_bytes);
                     }
+                } else if constexpr (fast_banks) {
+                    noc_async_read(bank_base[pk.first[ri] % nb] + (pk.first[ri] / nb) * bank_pitch, l1, n * page_bytes);
                 } else {
                     noc_async_read(dst.get_noc_addr(pk.first[ri]), l1, n * page_bytes);
                 }
