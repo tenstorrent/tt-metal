@@ -22,6 +22,7 @@ import functools
 import os
 
 import ttnn
+from models.demos.inkling2_mini.tt import attention_fast as AF
 from models.demos.inkling2_mini.tt import model as MD
 from models.demos.inkling2_mini.tt.mk.gate_stage import GateStage
 from models.demos.inkling2_mini.tt.mk.stage import StagedBankLinear, coalesce, program_cores, range_bytes, resplit
@@ -55,6 +56,15 @@ HOST_KB = {
     ): 100,  # 130 before its weights were staged (router_stage.py)
 }
 BUDGET = 0.8
+# KB per staging core one piece may fill inside a local sdpa call (sdpa_decode extra_kernels; 0 = off)
+SDPA_KB = 200  # 150 / 200 / 250 / 300: 16.18 / 16.09 / 16.24 / 16.41 ms at 4K (11 us delay); 0 / no hook: 16.29
+SDPA_DELAY_US = 11.0  # fill start inside the sdpa call: after its K / V reads (~11 us of 31, G3), DRAM idle after
+
+
+def sdpa_extra_kernels():
+    """Whether this ttnn build's sdpa_decode takes extra_kernels (R9). Checked before any fill piece is taken: a call
+    that then failed would leave the staged consumer reading bytes that were never filled."""
+    return "extra_kernels" in (ttnn.transformer.scaled_dot_product_attention_decode.__doc__ or "")
 
 
 def host_key(prog, n_cores):
@@ -115,6 +125,7 @@ class Overlap:
         budget=BUDGET,
         host_kb=None,
         host_scale=None,
+        sdpa_kb=None,
     ):
         """max_cores: hosts have at most this many cores (1 = the single-core residual programs, ~22 us each with DRAM
         idle; wider small programs are short, so a fill piece makes them longer instead of hiding). gates: also stage
@@ -178,12 +189,15 @@ class Overlap:
             gs = self.gstages[id(g)]
             gs.stage = self.stage
             g._combine = functools.partial(self._consume_gate, gs)  # instance attribute over the class method
+        self.sdpa_kb = SDPA_KB if sdpa_kb is None else sdpa_kb
+        AF.SDPA_HOST = self.sdpa_piece if (AF.LOCAL_GRID is not None and sdpa_extra_kernels()) else None
         self.queue = []  # [(proxy, part index)]: pieces still to attach, oldest first
         self.in_own = False
         self.seen = {"programs": 0, "too_wide": 0, "clash": 0, "attached": 0}
         ttnn.generic_op = self._generic_op
 
     def uninstall(self, model):
+        AF.SDPA_HOST = None
         ttnn.generic_op = _orig_generic_op
         for t in self.tracks:
             t.restore()
@@ -270,6 +284,20 @@ class Overlap:
                 self.seen.get("not_host" if kb is None else "idle_host", 0) + 1
             )
             return _orig_generic_op(io, prog)
+        pieces = self._pieces(cores, kb)
+        if pieces is None:
+            self.seen["clash"] += 1
+            return _orig_generic_op(io, prog)
+        kernels, extra = pieces
+        self.seen["attached"] += 1
+        prog = ttnn.ProgramDescriptor(
+            kernels=list(prog.kernels) + kernels, semaphores=list(prog.semaphores), cbs=list(prog.cbs)
+        )
+        return _orig_generic_op(list(io[:-1]) + extra + [io[-1]], prog)
+
+    def _pieces(self, cores, kb, delay=0):
+        """Fill kernels (and their tensors) for a host program on `cores`: up to budget x kb KB per staging core,
+        oldest queued item first, then the next items on cores disjoint from the ones filled. None if none fit."""
         left, used, kernels, extra, take = kb * self.budget * 1024, set(cores), [], [], []
         for item in list(self.queue):
             obj = item[0]
@@ -293,7 +321,7 @@ class Overlap:
                 hi = min(1.0, lo + left / obj.st.staged)
                 if obj.st.part_bytes(hi) <= obj.st.part_bytes(lo):
                     continue
-                kernels += obj.st.fill_kernels((lo, hi))
+                kernels += obj.st.fill_kernels((lo, hi), delay=delay)
                 extra += obj.st.fill_io
                 left -= (hi - lo) * obj.st.staged
                 t.filled = hi
@@ -301,14 +329,21 @@ class Overlap:
                     take.append(item)
             used |= icores
         if not kernels:
-            self.seen["clash"] += 1
-            return _orig_generic_op(io, prog)
+            return None
         self.queue = [q for q in self.queue if not any(q is x for x in take)]
-        self.seen["attached"] += 1
-        prog = ttnn.ProgramDescriptor(
-            kernels=list(prog.kernels) + kernels, semaphores=list(prog.semaphores), cbs=list(prog.cbs)
-        )
-        return _orig_generic_op(list(io[:-1]) + extra + [io[-1]], prog)
+        return kernels, extra
+
+    def sdpa_piece(self, cores):
+        """attention_fast.SDPA_HOST: fill kernels riding inside a local sdpa call on `cores` (its ~20 us of exact math
+        after the KV reads leave DRAM idle), as a ttnn.ProgramDescriptor (the tensors they touch are persistent
+        weights and the staging tensor)."""
+        if self.sdpa_kb <= 0 or not self.queue:
+            return None
+        pieces = self._pieces(cores, self.sdpa_kb, delay=int(SDPA_DELAY_US * 1350))
+        if pieces is None:
+            return None
+        self.seen["sdpa_hosted"] = self.seen.get("sdpa_hosted", 0) + 1
+        return ttnn.ProgramDescriptor(kernels=pieces[0], semaphores=[], cbs=[])
 
     def stats(self):
         out = dict(self.seen)

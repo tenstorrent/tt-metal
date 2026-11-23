@@ -6,7 +6,8 @@
 // Runs as an extra data-movement kernel inside another program (on cores that program does not use), so the copy
 // overlaps that program's compute. Reads in `piece`-byte pieces, `in_flight` outstanding (a host program that
 // waits on small DRAM reads itself slows down behind deep fill queues).
-// Runtime args: weight address, bank, first tile slot, staging L1 address, byte offset, bytes.
+// Runtime args: weight address, bank, first tile slot, staging L1 address, byte offset, bytes, start delay (cycles:
+// inside an sdpa call the fill waits until the call's own K / V reads are done).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -21,6 +22,10 @@ void kernel_main() {
     const uint32_t stage = get_arg_val<uint32_t>(3);
     const uint32_t off = get_arg_val<uint32_t>(4);
     const uint32_t n = get_arg_val<uint32_t>(5);
+    const uint32_t delay = get_arg_val<uint32_t>(6);
+    if (delay != 0 && n != 0) {
+        riscv_wait(delay);
+    }
     constexpr auto w_args = TensorAccessorArgs<0>();
     const auto ws = TensorAccessor(w_args, w_addr);
     const uint64_t src = ws.get_noc_addr(slot * nb + bank);  // the range is contiguous in the bank

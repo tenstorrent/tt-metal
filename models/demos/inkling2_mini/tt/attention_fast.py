@@ -73,6 +73,12 @@ FAR_GRP = hasattr(ttnn.SDPAProgramConfig, "exact_exp_half_tile")
 # (each of 13 cores got < 1 chunk; the tree reduction dominated)
 LOCAL_CHUNK = 256
 LOCAL_CORES_PER_HEAD = 4
+# Local sdpa on an 8 x 4 grid (its 32 work cores, rows 0..3): bit-equal to the full grid (same cores per head and
+# chunking) and leaves the other cores free for fill kernels riding inside the call (SDPA_HOST). None = full grid.
+LOCAL_GRID = (8, 4)
+# SDPA_HOST(cores) -> ttnn.ProgramDescriptor | None: extra kernels for the local sdpa program (tt/mk/overlap.py sets
+# it while staging is installed); cores = the (x, y) set the sdpa call uses.
+SDPA_HOST = None
 
 
 class DecodePositionsFast(DecodePositions):
@@ -167,9 +173,9 @@ class Inkling2AttentionFast(Inkling2Attention):
 
         grid = device.compute_with_storage_grid_size()
 
-        def sdpa_cfg(chunk, cores_per_head=16, **kw):
+        def sdpa_cfg(chunk, cores_per_head=16, g=None, **kw):
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=grid,
+                compute_with_storage_grid_size=g or grid,
                 q_chunk_size=0,
                 k_chunk_size=chunk,
                 exp_approx_mode=False,
@@ -178,7 +184,9 @@ class Inkling2AttentionFast(Inkling2Attention):
             )
 
         self.sink_cols = put(torch.ones(1, 1, N_HEADS, 32), ttnn.float32)
-        self.local_cfg = sdpa_cfg(LOCAL_CHUNK, LOCAL_CORES_PER_HEAD)
+        lg = ttnn.CoreCoord(*LOCAL_GRID) if LOCAL_GRID is not None else grid
+        self.local_cfg = sdpa_cfg(LOCAL_CHUNK, LOCAL_CORES_PER_HEAD, g=lg)
+        self.local_cores = {(x, y) for x in range(lg.x) for y in range(lg.y)}
         # k and v ring writes in one paged_fused_update_cache program: k's row on core (0, 0), v's on (0, 1)
         self.kv_shard_v = ttnn.create_sharded_memory_config(
             shape=(32, HEAD_DIM),
@@ -369,6 +377,7 @@ class Inkling2AttentionFast(Inkling2Attention):
                 compute_kernel_config=self.hifi4,
             )
             return self._out_proj(self.out(far, proj, (o_near, r, valid)), post)
+        extra = SDPA_HOST(self.local_cores) if SDPA_HOST is not None else None
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
             q,
             state.k_ring,
@@ -379,6 +388,7 @@ class Inkling2AttentionFast(Inkling2Attention):
             scale=1.0,
             program_config=self.local_cfg,
             compute_kernel_config=self.hifi4,
+            **({"extra_kernels": extra} if extra is not None else {}),  # builds without R9 lack the argument
         )
         return self._out_proj(self.out(attn, proj), post)
 

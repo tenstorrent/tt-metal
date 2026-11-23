@@ -143,7 +143,7 @@ class StagedBankLinear:
         self.stage = stage
         self.fill_io = [bl.weight, self.stage]
 
-    def fill_kernels(self, part=(0.0, 1.0)):
+    def fill_kernels(self, part=(0.0, 1.0), delay=0):
         """Data-movement kernels that stage bytes [part[0], part[1]) x staged of every core's range (both RISCs, each
         half). Several programs can each carry a part."""
         acc = list(ttnn.TensorAccessorArgs(self.bl.weight).get_compile_time_args())
@@ -159,7 +159,7 @@ class StagedBankLinear:
             for c, bank, slot, n in self.ranges:
                 n_core = max(0, min(b, n, self.staged) - a)
                 rt.append((ttnn.CoreCoord(*c), [self.bl.weight.buffer_address(), bank, slot,
-                                                self.stage.buffer_address(), a, n_core]))  # fmt: skip
+                                                self.stage.buffer_address(), a, n_core, delay]))  # fmt: skip
             kernels.append(ttnn.KernelDescriptor(
                 kernel_source=f"{MKDIR}/stage_fill.cpp", core_ranges=self.bl.grid, compile_time_args=acc,
                 named_compile_time_args=[("n_banks", self.bl.nb), ("piece", self.fill[0]), ("in_flight", self.fill[1])], runtime_args=rt,
