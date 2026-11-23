@@ -15,12 +15,17 @@ void kernel_main() {
     const uint32_t first = get_arg_val<uint32_t>(1);
     const uint32_t scal = get_arg_val<uint32_t>(2);
 
+    // R verify rows (rows > 1): the same pages of every row's raw row (args 3..: rows 1.. raw addresses)
+    constexpr uint32_t R = get_named_compile_time_arg_val("rows");
     cb_reserve_back(cb_s, 2);
-    cb_reserve_back(cb_in, T);
+    cb_reserve_back(cb_in, T * R);
     rowio::read_pages(scal, 4096, 0, 2, get_write_ptr(cb_s));
-    const InterleavedAddrGen<true> row = {.bank_base_address = raw, .page_size = row_page};
-    noc_async_read(row.get_noc_addr(0, first * 4096), get_write_ptr(cb_in), T * 4096);
+    for (uint32_t r = 0; r < R; ++r) {
+        const InterleavedAddrGen<true> row = {
+            .bank_base_address = r == 0 ? raw : get_arg_val<uint32_t>(2 + r), .page_size = row_page};
+        noc_async_read(row.get_noc_addr(0, first * 4096), get_write_ptr(cb_in) + r * T * 4096, T * 4096);
+    }
     noc_async_read_barrier();
     cb_push_back(cb_s, 2);
-    cb_push_back(cb_in, T);
+    cb_push_back(cb_in, T * R);
 }

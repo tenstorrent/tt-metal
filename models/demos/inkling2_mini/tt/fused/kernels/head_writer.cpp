@@ -39,37 +39,43 @@ void kernel_main() {
     const uint32_t n_cores = get_arg_val<uint32_t>(7);
     const uint32_t token = get_arg_val<uint32_t>(8);
 
-    cb_wait_front(cb_out, T);
-    const uint32_t src = get_read_ptr(cb_out);
-    const InterleavedAddrGen<true> lg = {.bank_base_address = logits, .page_size = logits_page};
-    if (n_write) {
-        noc_async_write(src, lg.get_noc_addr(0, col0 * 4), n_write * 4);
-    }
+    // R verify rows (rows > 1): every row's logits and (max, index) slot; args 9..: rows 1.. logits, token
+    constexpr uint32_t R = get_named_compile_time_arg_val("rows");
+    cb_wait_front(cb_out, T * R);
+    const uint32_t scr = get_write_ptr(cb_scr);  // same address on every core; slots of row r at 16 * r * n_cores
+    for (uint32_t r = 0; r < R; ++r) {
+        const uint32_t src = get_read_ptr(cb_out) + r * T * 4096;
+        const InterleavedAddrGen<true> lg = {
+            .bank_base_address = r == 0 ? logits : get_arg_val<uint32_t>(7 + 2 * r), .page_size = logits_page};
+        if (n_write) {
+            noc_async_write(src, lg.get_noc_addr(0, col0 * 4), n_write * 4);
+        }
 
-    // a strict-compare scan over ordered keys; the first NaN, if any, wins outright
-    const uint32_t* v = reinterpret_cast<const uint32_t*>(src);
-    uint32_t bk = 0, bi = 0;
-    for (uint32_t i = 0; i < n_arg; ++i) {
-        const uint32_t a = v[i];
-        if (is_nan(a)) {
-            bi = i;
-            break;
+        // a strict-compare scan over ordered keys; the first NaN, if any, wins outright
+        const uint32_t* v = reinterpret_cast<const uint32_t*>(src);
+        uint32_t bk = 0, bi = 0;
+        for (uint32_t i = 0; i < n_arg; ++i) {
+            const uint32_t a = v[i];
+            if (is_nan(a)) {
+                bi = i;
+                break;
+            }
+            const uint32_t kv = key(a);
+            if (kv > bk || i == 0) {
+                bk = kv;
+                bi = i;
+            }
         }
-        const uint32_t kv = key(a);
-        if (kv > bk || i == 0) {
-            bk = kv;
-            bi = i;
-        }
+        const uint32_t own = scr + 16 * (R * n_cores + r);
+        volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own);
+        s[0] = n_arg ? v[bi] : 0;
+        s[1] = col0 + bi;
+        s[2] = n_arg ? 1 : 0;
+        s[3] = 0;
+        noc_async_write(own, get_noc_addr(mx, my, scr + 16 * (r * n_cores + slot)), 16);
     }
-    const uint32_t scr = get_write_ptr(cb_scr);  // same address on every core
-    volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + 16 * n_cores);
-    s[0] = n_arg ? v[bi] : 0;
-    s[1] = col0 + bi;
-    s[2] = n_arg ? 1 : 0;
-    s[3] = 0;
-    noc_async_write(scr + 16 * n_cores, get_noc_addr(mx, my, scr + 16 * slot), 16);
     noc_async_write_barrier();
-    cb_pop_front(cb_out, T);
+    cb_pop_front(cb_out, T * R);
     if (slot != 0) {
         noc_semaphore_inc(get_noc_addr(mx, my, get_semaphore(sem_id)), 1);
         noc_async_atomic_barrier();
@@ -77,19 +83,23 @@ void kernel_main() {
     }
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
     noc_semaphore_wait(sem, n_cores - 1);
-    volatile tt_l1_ptr uint32_t* a = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr);
-    uint32_t gb = 0, gi = 0;
-    bool ghave = false;
-    for (uint32_t k = 0; k < n_cores; ++k) {
-        volatile tt_l1_ptr uint32_t* e = a + k * 4;
-        if (e[2] && (!ghave || greater(e[0], gb))) {
-            gb = e[0];
-            gi = e[1];
-            ghave = true;
+    for (uint32_t r = 0; r < R; ++r) {
+        volatile tt_l1_ptr uint32_t* a = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr + 16 * r * n_cores);
+        uint32_t gb = 0, gi = 0;
+        bool ghave = false;
+        for (uint32_t k = 0; k < n_cores; ++k) {
+            volatile tt_l1_ptr uint32_t* e = a + k * 4;
+            if (e[2] && (!ghave || greater(e[0], gb))) {
+                gb = e[0];
+                gi = e[1];
+                ghave = true;
+            }
         }
+        const uint32_t own = scr + 16 * (R * n_cores + r);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(own) = gi;
+        const InterleavedAddrGen<true> tk = {
+            .bank_base_address = r == 0 ? token : get_arg_val<uint32_t>(8 + 2 * r), .page_size = 4};
+        noc_async_write(own, tk.get_noc_addr(0), 4);
     }
-    s[0] = gi;
-    const InterleavedAddrGen<true> tk = {.bank_base_address = token, .page_size = 4};
-    noc_async_write(scr + 16 * n_cores, tk.get_noc_addr(0), 4);
     noc_async_write_barrier();
 }

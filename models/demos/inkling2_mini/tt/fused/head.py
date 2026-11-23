@@ -93,8 +93,7 @@ class FusedLogitsTail:
             )
         bufs = self.rows_bufs[:n]
         self.mm(x, [b[0] for b in bufs])
-        for raw, logits, token in bufs:
-            self._cap(raw, logits, token)
+        self._cap(*zip(*bufs))  # one tail program for all rows
         return [(lg, tk) for _, lg, tk in bufs]
 
     def _pack(self, y, i):
@@ -111,30 +110,35 @@ class FusedLogitsTail:
         cbs = [F.cb(0, ttnn.float32, 1, w * 4, cores=spec.grid)]
         ttnn.generic_op([y, self.raw], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 
-    def _cap(self, raw=None, logits=None, token=None):
-        if raw is None:
-            raw, logits, token = self.raw, self.logits, self.token
-        T, n = PAGES_PER_CORE, len(self.cores)
+    def _cap(self, raws=None, logitss=None, tokens=None):
+        """Softcap + argmax of raw rows (default: the 1-row buffers); R verify rows: lists, one program."""
+        if raws is None:
+            raws, logitss, tokens = [self.raw], [self.logits], [self.token]
+        T, n, R = PAGES_PER_CORE, len(self.cores), len(raws)
         r_args, w_args = {}, {}
         for k, c in enumerate(self.cores):
             col0 = k * T * F.PAGE
             n_write = max(0, min(T * F.PAGE, self.vocab_pad - col0))
             n_arg = max(0, min(T * F.PAGE, self.vocab_real - col0))
-            r_args[c] = [raw.buffer_address(), k * T, self.scal.buffer_address()]
-            w_args[c] = [logits.buffer_address(), col0, n_write, n_arg, k, self.master.x, self.master.y, n,
-                         token.buffer_address()]  # fmt: skip
-        named = dict(pages=T, row_page=self.raw_width * 4, logits_page=self.vocab_pad * 4, sem=0)
+            r_args[c] = [raws[0].buffer_address(), k * T, self.scal.buffer_address()]
+            r_args[c] += [t.buffer_address() for t in raws[1:]]
+            w_args[c] = [logitss[0].buffer_address(), col0, n_write, n_arg, k, self.master.x, self.master.y, n,
+                         tokens[0].buffer_address()]  # fmt: skip
+            w_args[c] += [
+                a for lg, tk in zip(logitss[1:], tokens[1:]) for a in (lg.buffer_address(), tk.buffer_address())
+            ]
+        named = dict(pages=T, row_page=self.raw_width * 4, logits_page=self.vocab_pad * 4, sem=0, rows=R)
         kernels = [
             F.kernel("head_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, self.grid),
             F.kernel("head_writer.cpp", ttnn.WriterConfigDescriptor(), named, w_args, self.grid),
-            F.kernel("head_compute.cpp", F.compute_config([0, 1]), dict(pages=T), None, self.grid),
+            F.kernel("head_compute.cpp", F.compute_config([0, 1]), dict(pages=T * R), None, self.grid),
         ]
         cbs = [
-            F.cb(0, ttnn.float32, T, cores=self.grid),
+            F.cb(0, ttnn.float32, T * R, cores=self.grid),
             F.cb(1, ttnn.float32, 2, cores=self.grid),
-            F.cb(16, ttnn.float32, T, cores=self.grid),
-            F.cb(17, ttnn.float32, 1, 16 * (n + 1), cores=self.grid),
+            F.cb(16, ttnn.float32, T * R, cores=self.grid),
+            F.cb(17, ttnn.float32, 1, 16 * R * (n + 1), cores=self.grid),
         ]
         sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=self.grid, initial_value=0)]
-        io = [raw, self.scal, token, logits]
+        io = [*raws, self.scal, *tokens[1:], *logitss[1:], tokens[0], logitss[0]]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems))
