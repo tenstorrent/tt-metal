@@ -1,25 +1,33 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.4 whole-trunk probe launcher: the stock prefill runner with two checks added (tt_metal_tracker-q171.2.9).
+"""GLM-5.4 probe launcher: the stock prefill runner with checks added (tt_metal_tracker-q171.2.9, q171.2.10).
 
 Use with ``STAGE_PROBE_MODEL=glm54 STAGE_PROBE_RUNNER_MODULE=models.demos.deepseek_v3_d_p.scripts.stage_probe.
-trunk_probe_runner run_stage_probe.sh <name> 0 106``: all 106 layer passes on one rank. Nothing here changes what
-the runner computes or when; both checks only observe.
+trunk_probe_runner run_stage_probe.sh <name> <first_pass> <num_passes>``: all 106 layer passes on one rank (0 106),
+or one stage alone (G3 = 82 24). With PREFILL_MTP_LEVELS set the last rank runs GLM-5.3's MTP after the stage.
+Nothing here changes what the runner computes or when; every check only observes.
 
-* Pass-2 push reuse (q171.3.8 review m1). Every loop pass-2 ttMLA logs whether its push output reuses the dense
+* Pass-2 push reuse (q171.3.8 review m1), on a stage that runs loop pass 2 (else ``N/A``). Every loop pass-2 ttMLA logs whether its push output reuses the dense
   gather buffer (``_pass2_push_reuses_dense``), every ``_pass2_push_output`` call records whether it returned that
   buffer and whether it ran inside trace capture, and an own ``loop_pass2`` push buffer being created is recorded.
   Before the trace is released one ``TRUNK_ASSERT push_reuse PASS|FAIL`` line states the verdict: PASS needs every
   pass-2 layer to choose reuse, the trace to be captured with every pass-2 push writing the dense buffer, and no
   own pass-2 buffer. A FAIL is logged, not raised, so the run's timing survives; the probe's checker reads it.
 * KV digest (finite, deterministic). After the request, before the trace is released, user 0's KVPE rows of every
-  layer (78 cache layers; a loop layer's pass-1 rows) are read for each chunk in ``TRUNK_DIGEST_CHUNKS`` (default the
-  probe chunks 0,9,19,50,101,203), plus the loop layers' pass-2 window ring (G2's own KV, the last chunks' pass 2),
-  with ``read_padded_kv_cache`` (the G1->G2 handoff's reader), and logged per chunk as ``TRUNK_KV_DIGEST chunk=<c>
-  sha256=<hex> finite=<bool> nonzero_rows=<n> rows=<n>``. The cache starts zero-filled and two runs feed identical
-  tokens, so equal digests across runs mean bit-identical KV; the last chunk's layer-77 rows depend on every pass of
-  every chunk.
+  trunk cache slot of the stage (78 on the whole trunk; a loop layer's pass-1 rows) are read for each chunk in
+  ``TRUNK_DIGEST_CHUNKS`` (default the probe chunks 0,9,19,50,101,203), plus, on a stage that runs pass 2, the loop
+  layers' pass-2 window ring (G2's own KV, the last chunks' pass 2), with ``read_padded_kv_cache`` (the G1->G2
+  handoff's reader), and logged per chunk as ``TRUNK_KV_DIGEST chunk=<c> sha256=<hex> finite=<bool> nonzero_rows=<n>
+  rows=<n>``. With MTP its K slots (past the trunk's) are digested per chunk as ``chunk=<c>mtp``: nonzero rows show
+  MTP wrote its KV there. The cache starts zero-filled and two runs feed identical tokens, so equal digests across
+  runs mean bit-identical KV; the last chunk's layer-77 rows depend on every pass of every chunk.
+* MTP wiring (q171.2.10), with MTP on. Every forward records the blocks it runs, the trunk norm's input and output, and
+  the tensor MTP is seeded with. ``TRUNK_ASSERT mtp_input PASS|FAIL`` (logged with the checks above) needs, in every
+  forward that ran MTP: MTP ran once, after every pass-schedule step of the stage (``model.steps``, in order: 106 on
+  the whole trunk), with the last step the coda's last layer (L77, not a loop pass), and its seed the trunk norm's
+  output of that step's output (h^0 = norm(trunk output), as GLM-5.3). ``TRUNK_MTP_LAYOUT`` logs the cache slots
+  (trunk + MTP), the MTP slot and layer, the index-cache slots, and this rank's layer-ack ids.
 """
 
 from __future__ import annotations
@@ -33,7 +41,8 @@ from loguru import logger
 _PASS2 = {}  # layer -> (reuses_dense, push spec rows, dense rows)
 _CALLS = {"capture": [], "other": []}  # (layer, returned the dense buffer)
 _OWN_BUFFERS = []
-_STATE = {"in_capture": False, "captured": False, "use_trace": None, "caches": None, "num_layers": None}
+_STATE = {"in_capture": False, "captured": False, "use_trace": None, "caches": None, "params": None, "runtime": None}
+_FWD = {"blocks": [], "norm": None, "mtp_seeds": [], "results": []}  # per forward: MTP wiring observations
 
 
 def _patch_mla() -> None:
@@ -74,6 +83,10 @@ def _patch_mla() -> None:
 
 
 def _push_reuse_verdict() -> None:
+    model = getattr(_STATE["runtime"], "model", None)
+    if model is not None and not getattr(model, "_pass2_layers", None) and not _PASS2:
+        logger.info("TRUNK_ASSERT push_reuse N/A: this stage runs no loop pass-2 layer")
+        return
     reuse = sorted(l for l, (r, _, _) in _PASS2.items() if r)
     no_reuse = sorted(l for l, (r, _, _) in _PASS2.items() if not r)
     cap = _CALLS["capture"]
@@ -99,18 +112,15 @@ def _push_reuse_verdict() -> None:
     )
 
 
-def _digest_rows(runtime, kv, start: int, ring: bool) -> tuple:
-    """sha256, finite, nonzero rows and rows of user 0's KVPE rows of one chunk at cache row ``start``, every layer
-    (``ring``: only the loop layers, whose slots hold the window ring), from every chip."""
+def _digest_rows(runtime, kv, start: int, first: int, count: int) -> tuple:
+    """sha256, finite, nonzero rows and rows of user 0's KVPE rows of one chunk at cache row ``start``, cache slots
+    [first, first + count) of the stage, from every chip."""
     import torch
 
     import ttnn
-    from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import GLM54Config
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, unpack_scaled_fp8_kv_cache
 
     storage = kv.storage
-    num_layers = _STATE["num_layers"]
-    first, count = (GLM54Config.LOOP_FIRST_LAYER, len(GLM54Config.loop_layers())) if ring else (0, num_layers)
     chunk = runtime.config.chunk_size
     meta = [runtime._meta1_dev(v) for v in (0, start, start + chunk)]
     rows = ttnn.experimental.deepseek_prefill.read_padded_kv_cache(
@@ -119,7 +129,7 @@ def _digest_rows(runtime, kv, start: int, ring: bool) -> tuple:
         meta[1],
         first_layer=first,
         num_read_layers=count,
-        num_layers=num_layers,
+        num_layers=_cache_slots(),
         chunk_size_global=chunk,
         cluster_axis=0,
         tp_axis=1,
@@ -138,6 +148,17 @@ def _digest_rows(runtime, kv, start: int, ring: bool) -> tuple:
     return digest, finite, int(flat.any(dim=-1).sum()), int(flat.shape[0])
 
 
+def _mtp_slots() -> int:
+    """KVPE slots MTP writes past the trunk's on this rank (the cache allocator's count)."""
+    params = _STATE["params"]
+    return params.mtp_levels if params.is_last_rank else 0
+
+
+def _cache_slots() -> int:
+    """KVPE cache slots per user: the stage's blocks, then MTP's."""
+    return _STATE["params"].num_layers + _mtp_slots()
+
+
 def _kv_digest(runtime) -> None:
     from models.demos.deepseek_v3_d_p.tt.mla.two_bank import RING_CHUNKS
 
@@ -147,18 +168,138 @@ def _kv_digest(runtime) -> None:
         return
     chunk, max_seq = runtime.config.chunk_size, runtime.config.max_seq_len
     chunks = [int(x) for x in os.environ.get("TRUNK_DIGEST_CHUNKS", "0,9,19,50,101,203").split(",") if x]
+    trunk_slots, mtp_slots = _STATE["params"].num_layers, _mtp_slots()
+    # The loop layers that run pass 2 on this stage hold the window ring past max_seq_len: one contiguous slot range.
+    model = runtime.model
+    ring_slots = sorted(layer - model.first_layer_idx for layer in model._pass2_layers)
+    assert ring_slots == list(range(ring_slots[0], ring_slots[-1] + 1)) if ring_slots else True, ring_slots
     logger.info(
         f"TRUNK_KV_DIGEST storage shape={list(kv.storage.shape)} format={kv.format} chunks={chunks} "
-        f"ring={RING_CHUNKS} chunks at row {max_seq}"
+        f"slots={trunk_slots}+{mtp_slots} mtp ring={RING_CHUNKS if ring_slots else 0} chunks at row {max_seq} "
+        f"over slots {ring_slots[:1] + ring_slots[-1:]}"
     )
-    reads = [(f"chunk={c}", c * chunk, False) for c in chunks]
-    reads += [(f"chunk=ring{j}", max_seq + j * chunk, True) for j in range(RING_CHUNKS)]
-    for label, start, ring in reads:
+    reads = [(f"chunk={c}", c * chunk, 0, trunk_slots) for c in chunks]
+    if mtp_slots:
+        reads += [(f"chunk={c}mtp", c * chunk, trunk_slots, mtp_slots) for c in chunks]
+    if ring_slots:
+        reads += [(f"chunk=ring{j}", max_seq + j * chunk, ring_slots[0], len(ring_slots)) for j in range(RING_CHUNKS)]
+    for label, start, first, count in reads:
         try:
-            digest, finite, nonzero, n = _digest_rows(runtime, kv, start, ring)
+            digest, finite, nonzero, n = _digest_rows(runtime, kv, start, first, count)
             logger.info(f"TRUNK_KV_DIGEST {label} sha256={digest} finite={finite} nonzero_rows={nonzero} rows={n}")
         except Exception as exc:  # report, never fail the timing run
             logger.error(f"TRUNK_KV_DIGEST {label} failed: {type(exc).__name__}: {exc}")
+
+
+def _first(out):
+    return out[0] if isinstance(out, tuple) else out
+
+
+def _patch_mtp_wiring() -> None:
+    """Record, per transformer forward, the blocks run (global layer, loop pass 2?, output id), the trunk norm's input
+    and output ids, and every MTP seed (the h_normed run_mtp / run_mtp_traced receive)."""
+    import models.demos.common.prefill.runners.layer_completion_layout as lcl
+    from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+
+    fwd, block_fwd, norm_fwd = TtPrefillTransformer.forward, TtPrefillBlock.forward, TtDistributedRmsNorm.forward
+    run_mtp, run_mtp_traced, layout = (
+        TtPrefillTransformer.run_mtp,
+        TtPrefillTransformer.run_mtp_traced,
+        lcl.layer_completion_layout,
+    )
+
+    def forward(self, *args, **kwargs):
+        _FWD.update(model=self, blocks=[], norm=None, mtp_seeds=[])
+        out = fwd(self, *args, **kwargs)
+        if _FWD["mtp_seeds"]:
+            _FWD["results"].append(_check_forward(self))
+        _FWD["model"] = None
+        return out
+
+    def block_forward(self, *args, **kwargs):
+        out = block_fwd(self, *args, **kwargs)
+        if _FWD.get("model") is not None:
+            _FWD["blocks"].append((self.mla.layer_idx, bool(kwargs.get("loop_pass2")), id(_first(out))))
+        return out
+
+    def norm_forward(self, x):
+        out = norm_fwd(self, x)
+        model = _FWD.get("model")
+        if model is not None and self is model.norm:
+            _FWD["norm"] = (len(_FWD["blocks"]), id(x), id(out))
+        return out
+
+    def seed(h_normed):
+        _FWD["mtp_seeds"].append((len(_FWD["blocks"]), id(h_normed), _FWD["norm"]))
+
+    def mtp(self, h_normed, *args, **kwargs):
+        seed(h_normed)
+        return run_mtp(self, h_normed, *args, **kwargs)
+
+    def mtp_traced(self, h_normed, *args, **kwargs):
+        seed(h_normed)
+        return run_mtp_traced(self, h_normed, *args, **kwargs)
+
+    def layer_completion_layout(*args, **kwargs):
+        out = layout(*args, **kwargs)
+        logger.info(
+            f"TRUNK_MTP_LAYOUT ack ids: completions_per_chunk={out.completions_per_chunk} "
+            f"rank_record_count={out.rank_record_count} rank_layer_ids={out.rank_layer_ids}"
+        )
+        return out
+
+    TtPrefillTransformer.forward = forward
+    TtPrefillBlock.forward = block_forward
+    TtDistributedRmsNorm.forward = norm_forward
+    TtPrefillTransformer.run_mtp = mtp
+    TtPrefillTransformer.run_mtp_traced = mtp_traced
+    lcl.layer_completion_layout = layer_completion_layout
+
+
+def _check_forward(model) -> str:
+    """'' when this forward seeded MTP once, after every pass-schedule step in order ending on the coda's last layer,
+    with norm(that step's output); else what differs."""
+    expected = [(s.layer, s.loop_pass >= 2) for s in model.steps if s.kind == "layer"]
+    blocks, seeds = _FWD["blocks"], _FWD["mtp_seeds"]
+    if len(seeds) != 1:
+        return f"{len(seeds)} MTP seeds"
+    n_before, seed_id, norm = seeds[0]
+    ran = [(layer, pass2) for layer, pass2, _ in blocks[:n_before]]
+    if ran != expected:
+        return f"blocks before MTP {ran[:3]}..{ran[-3:]} ({len(ran)}) != steps {expected[:3]}..{expected[-3:]} ({len(expected)})"
+    last_layer, last_pass2, last_out = blocks[n_before - 1]
+    if (last_layer, last_pass2) != (model._num_model_layers - 1, False):
+        return f"last step L{last_layer} pass2={last_pass2}, not the coda's last layer"
+    if norm is None or norm[0] != n_before or norm[1] != last_out or norm[2] != seed_id:
+        return f"seed is not norm(last step output): norm={norm} last_out={last_out} seed={seed_id}"
+    return ""
+
+
+def _mtp_input_verdict() -> None:
+    model = _STATE["runtime"].model
+    if model.mtp_predictor is None:
+        logger.info("TRUNK_ASSERT mtp_input N/A: MTP off")
+        return
+    results = _FWD["results"]
+    bad = sorted({r for r in results if r})
+    steps = [s for s in model.steps if s.kind == "layer"]
+    params, kv, index = _STATE["params"], _STATE["caches"].kvpe, _STATE["caches"].index
+    pred = model.mtp_predictor
+    logger.info(
+        f"TRUNK_MTP_LAYOUT caches: trunk_slots={params.num_layers} mtp_slots={_mtp_slots()} "
+        f"model.num_kvpe_cache_layers={model.num_kvpe_cache_layers} mtp first_cache_slot={pred.first_cache_slot} "
+        f"layer_idx={pred.layer_idx} levels={pred.num_levels} mtp_block layer_num="
+        f"{getattr(pred.module.layer.mla, 'layer_num', None)} kvpe storage={list(kv.storage.shape)} "
+        f"index={list(index.shape) if index is not None else None} ack_base={model.first_layer_idx + pred.first_cache_slot}"
+    )
+    ok = bool(results) and not bad
+    logger.info(
+        f"TRUNK_ASSERT mtp_input {'PASS' if ok else 'FAIL'}: forwards_with_mtp={len(results)} failed={len(bad)} "
+        f"steps={len(steps)} ({steps[0].layer}..{steps[-1].layer}, loop pass-2 steps="
+        f"{sum(s.loop_pass >= 2 for s in steps)}) seed=norm(L{steps[-1].layer} output) {bad[:3]}"
+    )
 
 
 def _patch_runtime() -> None:
@@ -181,13 +322,15 @@ def _patch_runtime() -> None:
     def release_trace(self):
         if not _STATE.get("checked"):
             _STATE["checked"] = True
+            _STATE["runtime"] = self
             _push_reuse_verdict()
+            _mtp_input_verdict()
             _kv_digest(self)
         return release(self)
 
     def allocate_kv_cache(self, *, params, **kwargs):
         caches = allocate(self, params=params, **kwargs)
-        _STATE["caches"], _STATE["num_layers"] = caches, params.num_layers
+        _STATE["caches"], _STATE["params"] = caches, params
         return caches
 
     TtPrefillRuntime.capture_trace = capture_trace
@@ -200,6 +343,7 @@ def main() -> None:
     assert manifest.endswith("glm54.json"), f"the trunk probe runs GLM-5.4 (STAGE_PROBE_MODEL=glm54), got {manifest!r}"
     _patch_mla()
     _patch_runtime()
+    _patch_mtp_wiring()
     runpy.run_module("models.demos.common.prefill.runners.prefill_runner", run_name="__main__")
 
 
