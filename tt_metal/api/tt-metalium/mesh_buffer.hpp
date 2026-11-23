@@ -188,6 +188,7 @@ private:
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device->shared_from_this()),
+        devices_lifetime_(devices_lifetime_of(*mesh_device)),
         address_(backing_buffer->address()),
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
@@ -205,6 +206,7 @@ private:
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device->shared_from_this()),
+        devices_lifetime_(devices_lifetime_of(*mesh_device)),
         address_(address),
         device_local_size_(device_local_size),
         buffers_(MeshShape(mesh_device->shape())),
@@ -212,9 +214,14 @@ private:
         built_device_buffers_(std::make_unique<std::atomic<Buffer*>[]>(buffers_.shape().mesh_size())) {}
 
     void initialize_device_buffers();
+    static std::weak_ptr<const void> devices_lifetime_of(MeshDevice& mesh_device);
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
     std::weak_ptr<MeshDevice> mesh_device_;
+    // A handle to the devices' lifetime, which expires when every MeshDevice that held them, such as a submesh and its
+    // parent, has released them. Separate from mesh_device_, because a submesh's MeshDevice can be gone while its
+    // parent keeps the devices open.
+    std::weak_ptr<const void> devices_lifetime_;
     DeviceAddr address_ = 0;
     DeviceAddr device_local_size_ = 0;
 
@@ -249,22 +256,6 @@ private:
         const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
         tt::tt_metal::distributed::MeshDevice*,
         const tt::tt_metal::distributed::MeshCoordinate&);
-};
-
-class [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-22.")]] AnyBuffer {
-public:
-    AnyBuffer() = default;
-
-    Buffer* get_buffer() const;
-    bool is_mesh_buffer() const;
-    std::shared_ptr<MeshBuffer> get_mesh_buffer() const;
-
-private:
-    AnyBuffer(std::shared_ptr<Buffer> buffer);
-    AnyBuffer(std::shared_ptr<MeshBuffer> buffer);
-
-    Buffer* buffer_ = nullptr;
-    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> holder_;
 };
 
 }  // namespace tt::tt_metal::distributed

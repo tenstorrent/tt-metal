@@ -128,9 +128,8 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     auto* counts_buffer = token_count_aware ? expert_token_counts->buffer() : nullptr;
     auto* table_buffer = token_count_aware ? global_expert_idx_table->buffer() : nullptr;
 
-    Program program{};
-
     auto* device = input_e4m3.device();
+    Program program = CreateProgram(*device);
     auto compute_grid = device->compute_with_storage_grid_size();
 
     // Split the work across the cores.

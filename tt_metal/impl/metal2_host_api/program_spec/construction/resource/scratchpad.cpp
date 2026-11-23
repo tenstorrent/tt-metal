@@ -16,7 +16,7 @@
 
 #include "impl/metal2_host_api/llk_metadata.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -37,6 +37,7 @@ std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec)
 
 ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     const KernelSpec& kernel,
+    const CoreRangeSet& kernel_nodes,
     const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
     size_t scratchpad_base_crta_word) {
     ScratchpadBindingsForKernel out;
@@ -54,7 +55,9 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         if (const auto& source = scratchpad_spec->advanced_options.allocation_override) {
             handle.allocation_override = SRAMArenaSource{.arena = source->arena, .offset = source->offset};
         }
-        if (scratchpad_spec->advanced_options.allow_instance_multi_binding) {
+        handle.placement = scratchpad_spec->advanced_options.override_placement.value_or(kernel_nodes);
+        if (scratchpad_spec->advanced_options.allow_instance_multi_binding ||
+            scratchpad_spec->advanced_options.override_placement.has_value()) {
             handle.shared_allocation_identifier = scratchpad_spec->unique_id;
         }
         // The address stays 0 until local allocation or SRAMArena argument binding.
@@ -66,4 +69,4 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     return out;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

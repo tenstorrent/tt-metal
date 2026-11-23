@@ -1088,10 +1088,13 @@ inline uint64_t debug_att_cmd_buf_src(uint8_t noc_id, uint32_t cmd_buf) {
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l) debug_sanitize_eth(src_addr, dst_addr, l)
 
 // Validate a user-stamped NoC transaction id.
-// WH/BH: [0, NOC_MAX_TRANSACTION_ID]. Quasar: [0, USER_TXN_ID_MAX] (DFB owns the upper pool).
+// WH/BH: [0, NOC_MAX_TRANSACTION_ID]. Quasar: [0, USER_TXN_ID_MAX] (DFB owns the upper pool); fast dispatch's own
+// kernels (DISPATCH_KERNEL) are runtime too, so they may also take ids from the upper pool, [0, HW_TXN_ID_MAX].
 // On failure, l1_addr holds the bad trid and len holds the max allowed.
 inline void debug_sanitize_noc_txn_id(uint8_t noc_id, uint32_t trid) {
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && defined(DISPATCH_KERNEL)
+    constexpr uint32_t max_trid = HW_TXN_ID_MAX;
+#elif defined(ARCH_QUASAR)
     constexpr uint32_t max_trid = USER_TXN_ID_MAX;
 #else
     constexpr uint32_t max_trid = NOC_MAX_TRANSACTION_ID;

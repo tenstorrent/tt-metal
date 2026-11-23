@@ -247,7 +247,8 @@ PoolCBSizes calculate_pool_cb_sizes(
     const std::array<uint32_t, 2>& output_shard_shape,
     bool config_tensor_in_dram,
     std::optional<uint32_t> reader_indices_actual_page_size,
-    std::optional<uint32_t> scalar_config_actual_page_size) {
+    std::optional<uint32_t> scalar_config_actual_page_size,
+    uint32_t pre_tilize_tile_rows) {
     PoolCBSizes sizes;
     const bool is_output_tiled = output_layout == Layout::TILE;
 
@@ -293,7 +294,7 @@ PoolCBSizes calculate_pool_cb_sizes(
     sizes.has_pre_tilize = is_output_tiled;
     if (is_output_tiled) {
         sizes.pre_tilize_cb_pagesize = tt::constants::TILE_WIDTH * params.nbytes;
-        sizes.pre_tilize_cb_npages = tt::constants::TILE_HEIGHT * params.in_ntiles_c;
+        sizes.pre_tilize_cb_npages = pre_tilize_tile_rows * tt::constants::TILE_HEIGHT * params.in_ntiles_c;
     } else {
         sizes.pre_tilize_cb_pagesize = 0;
         sizes.pre_tilize_cb_npages = 0;
@@ -360,7 +361,8 @@ pool_op_l1_usage calculate_L1_usage(
     std::optional<int32_t> divisor_override,
     const Layout& output_layout,
     const DataType& output_dtype,
-    bool config_tensor_in_dram) {
+    bool config_tensor_in_dram,
+    uint32_t pre_tilize_tile_rows) {
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -399,7 +401,10 @@ pool_op_l1_usage calculate_L1_usage(
         output_layout,
         output_dtype,
         {output_shard_shape[0], output_shard_shape[1]},
-        config_tensor_in_dram);
+        config_tensor_in_dram,
+        /*reader_indices_actual_page_size=*/std::nullopt,
+        /*scalar_config_actual_page_size=*/std::nullopt,
+        pre_tilize_tile_rows);
 
     log_trace(
         tt::LogOp,
@@ -422,7 +427,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     bool return_indices,
     const Layout& output_layout,
     const DataType& output_dtype,
-    bool config_tensor_in_dram) {
+    bool config_tensor_in_dram,
+    uint32_t pre_tilize_tile_rows) {
     uint32_t batch_size = sliding_window_config.batch_size;
     uint32_t channels = sliding_window_config.channels;
     auto output_shape = sliding_window_config.get_output_shape();
@@ -491,7 +497,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             divisor_override,
             output_layout,
             output_dtype,
-            config_tensor_in_dram);
+            config_tensor_in_dram,
+            pre_tilize_tile_rows);
 
         return {.l1_usage = l1_usage, .config = input_parallel_config};
     };
@@ -632,7 +639,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
     Layout output_layout,
     const tt::tt_metal::MemoryConfig& input_memory_config,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
-    bool config_tensor_in_dram) {
+    bool config_tensor_in_dram,
+    uint32_t pre_tilize_tile_rows) {
     // The input_memory_config passed in is already computed for the SLICED input dimensions
     // (see get_input_memory_config in generic_pools.cpp which calls get_pool_input_memory_config
     // with the sliced shape). So we can use its shard_spec directly.
@@ -774,7 +782,8 @@ pool2d_slice_l1_usage calculate_L1_usage_for_pool2d_slice(
         divisor_override,
         output_layout,
         dtype,
-        config_tensor_in_dram);
+        config_tensor_in_dram,
+        pre_tilize_tile_rows);
     uint32_t pool_cb_usage = pool_l1.total();
 
     // Calculate actual pool output tensor size for memory tracking

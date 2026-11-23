@@ -260,7 +260,12 @@ void kernel_main() {
     constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
     constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_height);
 
-    for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
-        perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);
+    // Each core processes num_slices / num_cores channel slices in turn (matches reader/writer striding).
+    const uint32_t num_slices = ceil(ctas.num_channels, ctas.tile_width);
+    const uint32_t slices_per_core = num_slices / (ctas.cores_x * ctas.cores_y);
+    for (uint32_t slice_i = 0; slice_i < slices_per_core; ++slice_i) {
+        for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
+            perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);
+        }
     }
 }

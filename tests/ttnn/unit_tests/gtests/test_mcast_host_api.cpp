@@ -10,9 +10,9 @@
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "distributed/mesh_device_impl.hpp"
@@ -24,7 +24,7 @@ using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::NOC;
 namespace wire = dataflow_kernel_lib::mcast_wire;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 class McastFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastFixture> {};
 
@@ -231,7 +231,7 @@ TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
     const auto snapshot = emitted(copy);
     EXPECT_EQ(snapshot.compile_time_args.at(1), 0u);
     EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).mcast.ack_count, UINT32_MAX);
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
     tt::tt_metal::DataMovementConfig kernel_config;
     std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> rt{{{0, 0}, {}}, {{3, 0}, {}}};
     copy.attach(
@@ -363,7 +363,7 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     auto direct_ct = kernel.compile_time_args;
     channel.attach(descriptor, "channel", std::array{std::ref(kernel)}, 0);
     auto direct = channel;
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
     const auto ct_offset = static_cast<uint32_t>(direct_ct.size());
     const auto rt_offset = static_cast<uint32_t>(
         std::max_element(direct_rt.begin(), direct_rt.end(), [](const auto& lhs, const auto& rhs) {
@@ -547,7 +547,7 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
         .work_units = {{.name = "mixed", .kernels = {targets.front()}, .target_nodes = receivers}}};
     m2::ProgramRunArgs args;
     channel.attach(spec, args, "channel", targets);
-    auto workload = m2::MakeMeshWorkloadFromSpec(device, spec);
+    m2::distributed::MeshWorkload workload(device, spec);
     auto* physical = device.impl().get_devices().front();
     for (uint32_t run = 0; run < 3; ++run) {
         auto invocation = args;
@@ -562,7 +562,7 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
             tt::tt_metal::detail::WriteToDeviceL1(physical, core, report_addr, zero);
         }
         for (auto& [region, program] : workload.get_programs()) {
-            m2::SetProgramRunArgs(program, invocation);
+            program.set_program_run_args(invocation);
         }
         EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
         for (const auto& core : corerange_to_cores(receivers)) {

@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 _SEED = 42
 # Shortest legal prompt, the pad granularity, one needing no padding, the chunk width, and two lengths

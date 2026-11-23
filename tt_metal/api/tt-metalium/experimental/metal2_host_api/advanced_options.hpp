@@ -10,11 +10,11 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/workload/utils/group.hpp>
+#include <tt-metalium/workload/utils/table.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // ============================================================================
@@ -39,20 +39,24 @@
 // ============================================================================
 
 // Handles to experimental user-managed resource objects.
-// NOTE: These will remain experimental when the Metal 2.0 host API graduates.
+// NOTE: These remain experimental independently of the stable Metal 2.0 specification API.
 //       These class names will need to retain an explicit experimental:: name scope.
 namespace tt::tt_metal::experimental {
 class PrefetcherPipe;
 struct SRAMArena;
 }  // namespace tt::tt_metal::experimental
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 // NOTE: DFBSpecName is also declared at the top of dataflow_buffer_spec.hpp, but is
 //       re-declared here for use in AdvancedOptions to avoid circular dependency.
 //       This is legal so long as the declarations are identical, which is compiler-enforced.
+
+}  // namespace tt::tt_metal
+
+namespace tt::tt_metal::experimental {
 
 struct ProgramAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -200,8 +204,8 @@ struct KernelAdvancedOptions {
     //
     // Each binding reserves one pipe slot: a per-Program id (carried by the token) backed by one
     // kernel-config entry [config_page_addr, entry_size, relay_dfb_id] on every node the kernel
-    // runs on. The slot is reserved from the parameter's geometry at MakeProgramFromSpec, so the
-    // Program compiles without a live pipe, and bound to a PrefetcherPipe at SetProgramRunArgs,
+    // runs on. The slot is reserved from the parameter's geometry at Program construction, so the
+    // Program compiles without a live pipe, and bound to a PrefetcherPipe at Program::set_program_run_args,
     // which fills config_page_addr per node. Every node's slot must be bound before enqueue.
     //
     // Several pipes may share one slot when they tile the kernel's nodes (exactly one present per
@@ -225,8 +229,8 @@ struct KernelAdvancedOptions {
         // its other nodes.
         //
         // Each extra node must be one of the kernel's nodes and must not be a receiver of any
-        // pipe in the group (MakeProgramFromSpec checks this) or a pipe's sender
-        // (SetProgramRunArgs checks this, when the pipe objects are supplied).
+        // pipe in the group (Program construction checks this) or a pipe's sender
+        // (Program::set_program_run_args checks this, when the pipe objects are supplied).
         //
         // An extra node owns no part of any pipe. Its slot entry is copied from
         // pipe_parameter_names[0], so its config-page address can hold another pipe's page.
@@ -277,8 +281,9 @@ struct DFBAdvancedOptions {
     // Rules for aliased DFBs:
     //   - Every DFB in the alias group must list every other member as an alias
     //   - Aliased DFBs must have the same total size (num_entries * entry_size).
-    //   - All members must target the same node set
-    //     (derived from their bound kernels' WorkUnitSpecs).
+    //   - All members must allocate backing memory on the same node set.
+    //     Each member can derive its placement from its bound kernels or specify
+    //     override_placement.
     //   - If any member overrides allocation, all members must use the same arena parameter and byte offset.
     Group<DFBSpecName> alias_with;
 
@@ -344,7 +349,7 @@ struct DFBAdvancedOptions {
     // copying: the DM kernel is the DFB's PRODUCER (it pushes each entry it receives from the
     // pipe), the compute kernel is its CONSUMER. Empty = ordinary local DFB.
     //
-    // Requirements (validated at MakeProgramFromSpec):
+    // Requirements (validated at Program construction):
     //  - mutually exclusive with DataflowBufferSpec::borrowed_from and allocation_override
     //  - entry_size == pipe entry_size and entry_size * num_entries == pipe ring_size, for every
     //    named pipe (all named pipes share ring_size and entry_size)
@@ -360,11 +365,36 @@ struct DFBAdvancedOptions {
     // tile the DFB's nodes (one relay for a whole grid fed by several senders), mirroring the
     // producer kernel's multi-pipe accessor. The pipes then supplied via ProgramRunArgs must
     // share ring and config addresses (come from one space); that is checked at
-    // SetProgramRunArgs, when the objects exist.
+    // Program::set_program_run_args, when the objects exist.
     //
     // CAUTION: The relay's storage is the pipe's ring, owned outside the Program. The DFB cannot
     //          be resized by DFBRunOverrides, and its address is only known once the pipe is bound.
     Group<PrefetcherPipeParamName> prefetcher_pipe_relays;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Placement override
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Restrict the nodes on which DFB instances (and their backing memory) exist.
+    // By default, a DFB has an instance on every node where its bound kernels run.
+    // With an override, it has instances only on the override's nodes.
+    //
+    // CAUTION: With an override, kernel instances on the excluded nodes hold a "dangling binding":
+    // a DFB binding with no DFB instance behind it. The kernel author must handle this explicitly;
+    // the runtime provides no device-side checks. It is undefined behavior for a kernel instance
+    // to access the binding of an absent DFB instance.
+    //
+    // Invariants:
+    //  - The override is a non-empty subset of the bound kernels' nodes (equality is allowed).
+    //  - Every overridden node has at least one producer and one consumer bound to this DFB.
+    //  - Cannot be combined with borrowed_from or prefetcher_pipe_relays.
+    //
+    // Notes:
+    //  - The per-instance endpoint rules (see dataflow_buffer_spec.hpp) and
+    //    allow_instance_multi_binding apply on the nodes that have a DFB instance.
+    //  - Placement is fixed for the Program lifetime. DFBRunOverrides can still change
+    //    entry_size and num_entries.
+    std::optional<NodeRangeSet> override_placement = std::nullopt;
 };
 
 struct ScratchpadAdvancedOptions {
@@ -389,6 +419,24 @@ struct ScratchpadAdvancedOptions {
     // DM cores and Compute cores have cache coherency misalignment that currently
     // lacks ways to synchronize. See: #62551
     bool allow_instance_multi_binding = false;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Placement override
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Restrict the nodes on which scratchpad instances (and their backing memory) exist.
+    // By default, a scratchpad has an instance on every node where its bound kernels run.
+    // With an override, it has instances only on the override's nodes, all at the same
+    // local L1 address.
+    //
+    // CAUTION: With an override, kernel instances on the excluded nodes hold a "dangling binding":
+    // a scratchpad binding with no scratchpad instance behind it. The kernel author must handle
+    // this explicitly; the runtime provides no device-side checks. It is undefined behavior for a
+    // kernel instance to access the binding of an absent scratchpad instance.
+    //
+    // Invariants:
+    //  - The override is a non-empty subset of the bound kernels' nodes (equality is allowed).
+    std::optional<NodeRangeSet> override_placement = std::nullopt;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Allocation override (experimental)
@@ -438,8 +486,8 @@ struct AdvancedProgramRunArgs {
     using SRAMArenaArgument = std::reference_wrapper<const tt::tt_metal::experimental::SRAMArena>;
 
     // An SRAMArenaArgument must be specified:
-    //  For EVERY SRAMArenaParameter in the ProgramSpec, when calling SetProgramRunArgs.
-    //  For any SUBSET of SRAMArenaParameters, when calling UpdateProgramRunArgs.
+    //  For EVERY SRAMArenaParameter in the ProgramSpec, when calling Program::set_program_run_args.
+    //  For any SUBSET of SRAMArenaParameters, when calling Program::update_program_run_args.
     //
     // The supplied SRAMArena MUST live on the MeshDevice the Program was built for, and its
     // properties MUST match the SRAMArenaParameter's (see sram_arena_parameter.hpp).
@@ -450,7 +498,7 @@ struct AdvancedProgramRunArgs {
     //
     // CAUTION: SRAMArena is an RAII object. The user is responsible for keeping it alive until
     //          the last Program execution that uses it has completed on the device. A stale binding
-    //          to a destroyed SRAMArena (e.g. one retained by an UpdateProgramRunArgs call that
+    //          to a destroyed SRAMArena (e.g. one retained by a Program::update_program_run_args call that
     //          omits it) will produce undefined behavior.
     Table<SRAMArenaParamName, SRAMArenaArgument> sram_arena_args;
 
@@ -460,13 +508,13 @@ struct AdvancedProgramRunArgs {
 
     // The actual PrefetcherPipe argument.
     // (Non-owning reference. Non-const: binding a Program records program-side state on the pipe.)
-    using PrefetcherPipeArgument = std::reference_wrapper<tt::tt_metal::experimental::PrefetcherPipe>;
+    using PrefetcherPipeArgument = std::reference_wrapper<PrefetcherPipe>;
 
     // A PrefetcherPipeArgument must be specified:
     //  For EVERY PrefetcherPipeParameter in the ProgramSpec that is not yet bound, when calling
-    //  SetProgramRunArgs. The binding is sticky (see below), so a later SetProgramRunArgs on the same
-    //  Program MAY omit a parameter it already bound; the first call must supply them all.
-    //  It MAY be omitted when calling UpdateProgramRunArgs.
+    //  Program::set_program_run_args. The binding is sticky (see below), so a later Program::set_program_run_args on
+    //  the same Program MAY omit a parameter it already bound; the first call must supply them all. It MAY be omitted
+    //  when calling Program::update_program_run_args.
     //
     // The supplied pipe MUST live on the MeshDevice the Program was built for, and its geometry
     // (receivers, ring size) MUST match the parameter's; its ring must accommodate the parameter's

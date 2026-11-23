@@ -125,7 +125,7 @@ int main(int argc, char** argv) {
         const distributed::ReplicatedBufferConfig replicated_config{.size = PAGE_SIZE};
         auto dram_buffer = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
 
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         CircularBufferConfig cb_config =
             CircularBufferConfig(PAGE_SIZE, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, PAGE_SIZE);
         CreateCircularBuffer(program, core, cb_config);

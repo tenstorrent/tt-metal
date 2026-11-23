@@ -36,9 +36,9 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATH_OP,
@@ -93,9 +93,20 @@ def _num_tiles_for_format(formats):
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     num_tiles=_num_tiles_for_format,
     tile_dimensions=TILE_DIMENSIONS,
-    math_op=list(GOLDEN_OPS),
+    mathop=list(GOLDEN_OPS),
 )
-def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions, math_op):
+def test_mul_reduce_scalar(
+    formats,
+    math_fidelity,
+    num_tiles,
+    tile_dimensions,
+    mathop,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     tile_shape = construct_tile_shape(tile_dimensions)
     elements_per_tile = tile_shape.total_tile_size()
     dest_acc = dest_acc_for(formats.output_format)
@@ -116,18 +127,20 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions, m
     # ELWMUL: B == 1.0 everywhere (matching the gtest and fpu_reduce_scalar.yaml):
     # A * B == A, so the fused op reduces to sum(A) over all tiles/elements.
     # ELWADD and ELWSUB keep B ~ U[0, 0.25] (see the module docstring).
-    if math_op == MathOperation.Elwmul:
+    if mathop == MathOperation.Elwmul:
         src_B = torch.ones(
             tile_cnt_B * elements_per_tile, dtype=format_dict[formats.input_format]
         )
 
-    # Golden mirrors the on-silicon reference (test_mul_reduce_scalar.cpp): the
-    # element-wise result summed over every element of every tile, in fp32.
-    golden_scalar = float(
-        GOLDEN_OPS[math_op](src_A.to(torch.float32), src_B.to(torch.float32))
-        .sum()
-        .item()
-    )
+    golden_scalar = None
+    if not is_perf:
+        # Golden mirrors the on-silicon reference (test_mul_reduce_scalar.cpp): the
+        # element-wise result summed over every element of every tile, in fp32.
+        golden_scalar = float(
+            GOLDEN_OPS[mathop](src_A.to(torch.float32), src_B.to(torch.float32))
+            .sum()
+            .item()
+        )
 
     # The SrcA poison, then the SrcB poison, follow the input tiles in buffer_A as full tiles.
     poison = torch.cat(
@@ -137,38 +150,45 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions, m
         ]
     )
 
-    configuration = TestConfig(
-        "sources/mul_reduce_scalar_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=math_op),
-        ],
-        runtimes=[
-            TILE_COUNT(num_tiles),
-            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
-            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
-            TEST_FACE_DIMS(face_r_dim=tile_shape.face_r_dim),
-        ],
-        variant_stimuli=StimuliConfig(
-            torch.cat([src_A, poison]),
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A + len(poison) // elements_per_tile,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=1,
-            num_faces=tile_shape.total_num_faces(),
-            face_r_dim=tile_shape.face_r_dim,
-            tile_dimensions=tile_dimensions,
-            use_dense_tile_dimensions=True,
-            sfpu=False,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/mul_reduce_scalar_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_FIDELITY(math_fidelity),
+                MATH_OP(mathop=mathop),
+            ],
+            runtimes=[
+                TILE_COUNT(num_tiles),
+                NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
+                NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
+                TEST_FACE_DIMS(face_r_dim=tile_shape.face_r_dim),
+            ],
+            variant_stimuli=StimuliConfig(
+                torch.cat([src_A, poison]),
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A + len(poison) // elements_per_tile,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=1,
+                num_faces=tile_shape.total_num_faces(),
+                face_r_dim=tile_shape.face_r_dim,
+                tile_dimensions=tile_dimensions,
+                use_dense_tile_dimensions=True,
+                sfpu=False,
+            ),
+            dest_acc=dest_acc,
         ),
-        dest_acc=dest_acc,
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     assert (
         len(res_from_L1) == elements_per_tile
@@ -181,5 +201,5 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions, m
         golden_scalar
     ), (
         f"mul_reduce_scalar mismatch: device={device_scalar} golden={golden_scalar} "
-        f"(op={math_op.name}, num_tiles={num_tiles}, tile={tile_dimensions}, fidelity={math_fidelity.name})"
+        f"(op={mathop.name}, num_tiles={num_tiles}, tile={tile_dimensions}, fidelity={math_fidelity.name})"
     )

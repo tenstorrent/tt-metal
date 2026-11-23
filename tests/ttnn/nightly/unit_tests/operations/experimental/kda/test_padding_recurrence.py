@@ -12,6 +12,11 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = run_for_blackhole()
 
 
+def _valid(tensor: ttnn.Tensor, length: int) -> torch.Tensor:
+    host = ttnn.to_torch(tensor)
+    return host[:, :length] if host.dim() == 3 else host[:, : length // 32]
+
+
 def test_padding_preparation_and_scan(device):
     generator = torch.Generator().manual_seed(183)
     sequence, heads, width = 256, 2, 32
@@ -67,9 +72,7 @@ def test_padding_preparation_and_scan(device):
             )
             expected_summary = ttnn.experimental.kda.summarize_chunk_recurrence(*expected_terms, actual_start=start)
             for observed, expected in zip(outputs[:8], (*expected_terms, expected_output), strict=True):
-                torch.testing.assert_close(
-                    ttnn.to_torch(observed)[:, : length // 32], ttnn.to_torch(expected), rtol=0, atol=0
-                )
+                torch.testing.assert_close(_valid(observed, length), ttnn.to_torch(expected), rtol=0, atol=0)
             torch.testing.assert_close(ttnn.to_torch(outputs[8]), ttnn.to_torch(expected_state), rtol=0, atol=0)
             torch.testing.assert_close(ttnn.to_torch(outputs[9]), ttnn.to_torch(expected_summary), rtol=0, atol=0)
             # Rebind cached programs to fresh scalar addresses while the captured
@@ -80,9 +83,7 @@ def test_padding_preparation_and_scan(device):
             fresh_start, fresh_end = scalar(1024), scalar(1024 + length)
             rebound = run(fresh_start, fresh_end)
             for observed, expected in zip(rebound[:8], (*expected_terms, expected_output), strict=True):
-                torch.testing.assert_close(
-                    ttnn.to_torch(observed)[:, : length // 32], ttnn.to_torch(expected), rtol=0, atol=0
-                )
+                torch.testing.assert_close(_valid(observed, length), ttnn.to_torch(expected), rtol=0, atol=0)
             torch.testing.assert_close(ttnn.to_torch(rebound[8]), ttnn.to_torch(expected_state), rtol=0, atol=0)
             torch.testing.assert_close(ttnn.to_torch(rebound[9]), ttnn.to_torch(expected_summary), rtol=0, atol=0)
             for tensor in (*rebound, fresh_start, fresh_end):
@@ -234,6 +235,8 @@ def test_padding_unaligned_end_ignores_padding_values(device):
         host = ttnn.to_torch(tensor)
         if name in ("state", "summaries"):
             return host
+        if host.dim() == 3:
+            return host[:, :length]
         host = host[:, : -(-length // 32)]
         if name in _QUERY_ROW_TERMS:
             host = host.reshape(host.shape[0], -1, host.shape[-1])[:, :length]
