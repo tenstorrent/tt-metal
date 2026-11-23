@@ -61,8 +61,9 @@ including future allocator changes.
 
 | Env var | Effect |
 |---|---|
-| `TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC=1` | Throws instead of warning on every unsafe allocation. Use in CI so the hang becomes a named failure. |
-| `TT_METAL_TRACE_ALLOC_TRACKING=1` | Populates the allocation context stack so the warning / fatal message names the originating op and its attributes. Also enables `trace_allocation_tracker` for programmatic inspection. |
+| `TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC=1` | Throws (instead of warning) on **program-cache-origin** allocations made while a trace is active. Normal op outputs and `from_torch` uploads are not affected. Auto-enables `TT_METAL_TRACE_ALLOC_TRACKING` so the throw can identify the originating op. |
+| `TT_METAL_TRACE_ALLOC_TRACKING=1` | Populates the allocation context stack and enables `trace_allocation_tracker` for programmatic inspection. Set this by itself for warn-only mode with op attribution. |
 
-Running the two flags together is the recommended CI configuration for any
-nightly that exercises `execute_trace`.
+Set `TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC=1` in any CI nightly that exercises
+`execute_trace`; the hang in #61727 becomes a named failure pointing at the
+offending op's cache-miss context (e.g., `program_cache: ReshapeView ...`).

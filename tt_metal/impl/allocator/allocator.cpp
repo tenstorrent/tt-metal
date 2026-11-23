@@ -127,22 +127,22 @@ void AllocatorImpl::init_one_bank_per_l1() {
 }
 
 void AllocatorImpl::verify_safe_allocation() const {
-    if (!allocations_unsafe_ || allocation_context_contains("trace_storage")) {
+    // Use the set directly: allocations_unsafe_ only gets set with tracking off, so it would silently
+    // disable the fatal under the recommended CI config (fail flag forces tracking on).
+    if (active_traces_by_manager_.empty() || allocation_context_contains("trace_storage")) {
         return;
     }
 
-    // Opt-in via TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC turns the silent hang in #61727 into a named failure.
-    if (fail_on_unsafe_trace_alloc_enabled()) {
-        // Context is non-empty only when TT_METAL_TRACE_ALLOC_TRACKING=1.
-        const auto& ctx = current_allocation_context();
-        if (ctx.empty()) {
-            TT_THROW(
-                "Unsafe device allocation while a trace is active (#61727). Warm up this op before "
-                "begin_trace_capture; set TT_METAL_TRACE_ALLOC_TRACKING=1 for op attribution.");
-        }
+    const auto& ctx = current_allocation_context();
+
+    // Scope the fatal to program-cache-origin allocations (the #61727 class). Normal op outputs and
+    // from_torch uploads legitimately allocate between end_trace_capture and release_trace; only the
+    // cached op-owned buffers cause the hang. The fail flag implies tracking (rtoptions snapshot),
+    // so ctx is populated whenever fail_on_unsafe_trace_alloc_enabled() is true.
+    if (fail_on_unsafe_trace_alloc_enabled() && ctx.starts_with(kProgramCacheAllocationContextPrefix)) {
         TT_THROW(
-            "Unsafe device allocation while a trace is active (#61727). Warm up this op before "
-            "begin_trace_capture. Context: {}",
+            "Unsafe program-cache allocation while a trace is active (#61727). Warm up this op "
+            "before begin_trace_capture. Context: {}",
             ctx);
     }
 
@@ -152,8 +152,7 @@ void AllocatorImpl::verify_safe_allocation() const {
             tt::LogMetal,
             "Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers "
             "may be corrupted once a trace is executed if they are not released before then. Set "
-            "TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC=1 to fail instead, or TT_METAL_TRACE_ALLOC_TRACKING=1 for per-op "
-            "attribution (#61727).");
+            "TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC=1 to fail on program-cache-origin allocations instead (#61727).");
         warning_generated = true;
     }
 }

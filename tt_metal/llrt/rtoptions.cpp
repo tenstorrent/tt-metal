@@ -436,13 +436,17 @@ const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocati
     // RunTimeOptions instance. Keep their parsing owned by RunTimeOptions, but cache all related values in one
     // process-wide snapshot so TTNN and Metal cannot observe different settings.
     static const TraceAllocationOptions options = [] {
-        const bool tracking_enabled = is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACKING"));
+        // Fail flag implies tracking: the allocator uses the pushed context to scope the throw to
+        // program-cache-origin allocations only; without tracking the context stack is empty (#61727).
+        const bool fail_on_unsafe_alloc = is_env_enabled(std::getenv("TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC"));
+        const bool tracking_enabled =
+            is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACKING")) || fail_on_unsafe_alloc;
         return TraceAllocationOptions{
             .tracking_enabled = tracking_enabled,
             .diagnostics_enabled = tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS")),
             .skip_program_cache =
                 tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE")),
-            .fail_on_unsafe_alloc = is_env_enabled(std::getenv("TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC")),
+            .fail_on_unsafe_alloc = fail_on_unsafe_alloc,
         };
     }();
     return options;
