@@ -7,8 +7,9 @@
 
 For both pairings: the device's computation (a vector in the device frame, the interleaved cos / sin tables, the
 quarter-turn matrix frames.rope_swap: what tt/ and the fused kernels do) equals the reference's apply_rope carried
-into the device frame; q . k is the reference's; the default is unchanged ("half_split": the goldens recorded so
-far); under "interleaved" no row of a projection moves and the pairs are (2 i, 2 i + 1) of the checkpoint's order.
+into the device frame; q . k is the reference's; the default is "interleaved" (the checkpoint's pairing and the
+prefill stack's); under "interleaved" no row of a projection moves and the pairs are (2 i, 2 i + 1) of the
+checkpoint's order.
 """
 
 import pytest
@@ -16,6 +17,15 @@ import torch
 
 from models.experimental.hy4_preview.reference import attention as RA
 from models.experimental.hy4_preview.tt import frames
+
+
+def test_default(monkeypatch):
+    """Without HY4_ROPE_PAIRING the process runs the checkpoint's pairing; the variable still selects the other."""
+    monkeypatch.delenv(RA.ROPE_PAIRING_ENV, raising=False)
+    assert RA.rope_pairing() == "interleaved"
+    monkeypatch.setenv(RA.ROPE_PAIRING_ENV, "half_split")
+    assert RA.rope_pairing() == "half_split"
+    assert RA.rope_pairing("interleaved") == "interleaved"
 
 
 @pytest.mark.parametrize("pairing", RA.ROPE_PAIRINGS)

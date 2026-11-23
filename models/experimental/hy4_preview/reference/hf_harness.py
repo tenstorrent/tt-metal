@@ -62,7 +62,8 @@ import torch
 from models.experimental.hy4_preview.reference.attention import ROPE_PAIRING_ENV, rope_pairing
 from models.experimental.hy4_preview.reference.decoder import STAGES
 
-GOLDEN_ROOT = Path(os.environ.get("HY4_GOLDEN_DIR", "generated/hy4_preview/golden"))
+# (the goldens of the default RoPE pairing, "interleaved"; the half-split ones recorded before are another directory)
+GOLDEN_ROOT = Path(os.environ.get("HY4_GOLDEN_DIR", "generated/hy4_preview/golden_interleaved"))
 HY4_HF_MODEL_ENV = "HY4_HF_MODEL"
 
 # The default prompt: a little over 128 tokens through the chat template, cut to the first 128.

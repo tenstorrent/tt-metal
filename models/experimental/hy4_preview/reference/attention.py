@@ -71,10 +71,11 @@ class AttentionConfig:
 
 # Which dims of the roped part form a rotated pair. ONE switch for the reference, the frames (tt/frames.py) and so
 # for everything built on them:
-#   "half_split"   pairs (i, i + d / 2): HF's modeling_hy_v4.py as it runs here; every golden recorded so far
 #   "interleaved"  pairs (2 i, 2 i + 1): vLLM's hy_v4 and what the checkpoint's rows say (the reference-health probes,
-#                  fused/README.md section 49)
-# The default stays "half_split" until the goldens are recorded again: the two must change together.
+#                  fused/README.md section 49). THE DEFAULT: the checkpoint's pairing, and the prefill stack's.
+#   "half_split"   pairs (i, i + d / 2): HF's modeling_hy_v4.py as it runs here, and the goldens recorded before
+#                  2026-11-20. Kept to read those goldens (HY4_ROPE_PAIRING=half_split with their HY4_GOLDEN_DIR:
+#                  the two change together); it is not this checkpoint's model.
 ROPE_PAIRING_ENV = "HY4_ROPE_PAIRING"
 ROPE_PAIRINGS = ("half_split", "interleaved")
 
@@ -83,7 +84,7 @@ def rope_pairing(pairing: str | None = None) -> str:
     """``pairing`` if given, else the process's (HY4_ROPE_PAIRING, read at every call)."""
     import os
 
-    value = pairing or os.environ.get(ROPE_PAIRING_ENV) or "half_split"
+    value = pairing or os.environ.get(ROPE_PAIRING_ENV) or "interleaved"
     assert value in ROPE_PAIRINGS, f"{ROPE_PAIRING_ENV}={value!r}: one of {ROPE_PAIRINGS}"
     return value
 
