@@ -22,9 +22,8 @@ class Program;
 class MetalContext;
 }  // namespace tt::tt_metal
 
-// Measured ethernet link traffic: a host snapshot of the queue counters and the firmware link counters of every active
-// ethernet core, taken around each slow-dispatch program and around the whole device lifetime, written as deltas to
-// eth_traffic.csv and eth_run.csv in the profiler log directory.
+// Host snapshots of the ethernet queue and firmware link counters, taken around each slow-dispatch program and
+// around the device lifetime, written as deltas to eth_traffic.csv and eth_run.csv.
 // Reference: tt_metal/tt-llk/docs/performance_counters/eth_counters.md.
 namespace tt::tt_metal::eth_counters {
 
@@ -87,9 +86,8 @@ struct Delta {
     uint64_t count;
 };
 
-// Nonzero differences only. A 32-bit value wraps; a 64-bit value that went down is dropped and sets FLAG_RESET in
-// *flags. When the firmware poll counter of a core did not move, the values read from its L1 are stale: those rows
-// are dropped and FLAG_STALE is set.
+// Nonzero differences only. A 64-bit value that went down is dropped and sets FLAG_RESET; stale L1 values of a core
+// are dropped and set FLAG_STALE.
 std::vector<Delta> diff(const Plan& plan, const Reading& before, const Reading& after, uint32_t* flags);
 
 // Adds the wrapped difference of every register value to totals, which is reading_size() long. Summed snapshot by
@@ -98,9 +96,8 @@ void add_register_deltas(const Plan& plan, const Reading& before, const Reading&
 
 std::string counter_name(llk::perf::eth::EthCounter counter);
 
-// Hooks, no-ops unless TT_METAL_PROFILE_ETH_COUNTERS is set. begin_run is the first snapshot of a device and end_run
-// the last one, written as one set of rows. begin_program snapshots right before the go signal of a slow-dispatch
-// program; end_pending closes the program in flight on the chip once its cores are idle.
+// Hooks, no-ops unless TT_METAL_PROFILE_ETH_COUNTERS is set. begin_program snapshots before the go signal of a
+// slow-dispatch program; end_pending closes the program in flight once its cores are idle.
 void begin_run(MetalContext& ctx, IDevice& device);
 void end_run(MetalContext& ctx, IDevice& device);
 void begin_program(MetalContext& ctx, IDevice& device, const Program& program);

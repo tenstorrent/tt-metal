@@ -11,7 +11,7 @@
 
 // Wormhole ethernet core counters. Include through perf_counters/eth_counters_inventory.h.
 // Two TX and two RX queues, 0x1000 apart: TX queues from 0xFFB90000, RX queues from 0xFFB92000. One queue word is
-// 16 bytes by the controller description (the MAC data path is 128 bits wide); a host read on silicon has not been tried.
+// 16 bytes (the MAC data path is 128 bits wide); host reads on an N300 moved with the traffic.
 // The base firmware keeps four values in L1, the 64-bit ones as high word, then low word; they exist on ethernet
 // firmware 6.14.0 and newer.
 

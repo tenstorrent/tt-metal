@@ -7,7 +7,7 @@ Reference for the counters of an ethernet core and for `TT_METAL_PROFILE_ETH_COU
 | Architecture | Queue registers | Firmware link counters in L1 | Captured |
 |---|---|---|---|
 | Blackhole | 3 TX and 3 RX queues; packets, words, transfers, resends, drops, payload bytes; one TX or RX word is 96 B | frames, bytes, bad FCS, dropped, corrected and uncorrected codewords, retrain, flap, TX resend and RX drop copies; ethernet firmware 1.5.0 or newer | yes |
-| Wormhole | 2 TX and 2 RX queues; packets, words, transfers, resends, drops; one word is 16 B; not read from a host on silicon yet | retrain count, CRC errors, corrected and uncorrected codewords; ethernet firmware 6.14.0 or newer | yes, untested |
+| Wormhole | 2 TX and 2 RX queues; packets, words, transfers, resends, drops; one word is 16 B; read from a host on an N300, the counters moved with the traffic | retrain count, CRC errors, corrected and uncorrected codewords; ethernet firmware 6.14.0 or newer | yes |
 | Quasar | register map not known | not validated | no, the tables are empty and the option logs a warning |
 
 Not captured, on any architecture:
@@ -82,7 +82,12 @@ Two kinds of window:
 
 Limits:
 
-- Fast dispatch is not captured per program (the option logs a warning); the run totals are written.
+- Fast dispatch is not captured per program (the option logs a warning); the run totals are written. No host call runs per program or per finish under fast dispatch, so a fast dispatch run has only the open and close snapshots and no background thread reads in between.
+- Run totals under fast dispatch are exact only if no queue register wrapped between the two snapshots; each missed wrap loses 2^32 counts. The shortest period of a register is 2^32 divided by the highest count rate it can reach, taking the link rate as the most the link carries and one count per word:
+  - Blackhole words, packets, transfers: 400 Gb/s = 50 GB/s, 96 B per word, so at most 5.2e8 counts/s and a period of 2^32 / 5.2e8 = 8.2 s.
+  - Wormhole: 100 Gb/s = 12.5 GB/s, 16 B per word, so at most 7.8e8 counts/s and a period of 5.5 s.
+  - Blackhole `RXQ_BYTE_CNT` (16 B steps): 50 GB/s / 16 B = 3.1e9 counts/s, a period of 1.4 s.
+  A run longer than these periods can undercount by whole periods when the link is saturated for that long, so for fast dispatch totals keep the run under about 8 s (Blackhole) or 5 s (Wormhole) of saturated traffic, or at lower rates in proportion; a lightly loaded link (the idle rate is about 1e5 to 5e5 counts/s) wraps only after hours. Link rates here are the nominal ones, not measured. Slow dispatch runs are not affected: every program adds snapshots. A cheap check on Blackhole when the firmware block is live: `FW_BYTES_TXD` and `FW_BYTES_RXD` are 64-bit and do not wrap, so a run whose queue words times 96 B falls well below the firmware byte count of the same run (beyond framing and padding) lost a period.
 - Other traffic in the window lands in the number, including links that carry a second program of another process or traffic of other chips that cross this chip.
 - Receive counters on the far chip of a link are read when that chip's own program ends, so a transfer is complete on both sides only in the run totals, or when both chips' programs end together.
 - No settle loop is used, unlike the DRAM capture: the receiving side of a link is on another chip and keeps moving.
@@ -131,7 +136,7 @@ for r in eth_counters.per_run(eth_counters.read_run("generated/profiler/.logs/et
 
 ## 7. What has to be checked on hardware
 
-Nothing here has run on a device. `tools/eth_counters_probe/README.md` lists the scripts; each must show:
+Items 1 and 3 ran on four Blackhole P150 cards and on an N300 (two chips); a single-card Blackhole p100a has no active links and captured nothing. `tools/eth_counters_probe/README.md` lists the scripts; each must show:
 
 1. Single Blackhole card, any connected port: `eth_idle_drift.py` shows the queue registers readable (never `0xFFFFFFFF`), monotonic, and the idle rate of `TXQ_WORD_CNT` and `RXQ_WORD_CNT` per queue; the L1 block refreshes (`FW_LINK_POLL_ALIVE_COUNT` moves about once a second; on a QuietBox with a 19.x firmware bundle it did not move, which the runtime reports as stale) and its 64-bit queue copies agree with the registers over a window of several seconds.
 2. `eth_mib_config.py`: the two MAC configuration registers, which decides whether any statistics counter can be read without disturbing the firmware.
