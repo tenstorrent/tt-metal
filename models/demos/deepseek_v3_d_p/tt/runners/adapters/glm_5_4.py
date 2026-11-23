@@ -72,24 +72,24 @@ class GLM54Adapter(GLM53Adapter):
         """GLM-5.3's caches, sized for the stage: a stage running the loop only in passes >= 2 (G2) has no indexer,
         so no index cache; its KVPE cache holds the loop layers' pass-1 KV copy (bank A), never migrated."""
         from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
-            runs_loop_without_indexer,
+            runs_only_later_loop_passes,
             stage_indexer_types,
         )
 
-        loop_passes = params.loop_passes or ()
-        if not runs_loop_without_indexer(hf_config, loop_passes):
+        if not runs_only_later_loop_passes(params.loop_passes):
             return super().allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
         assert not (params.mtp_levels and params.is_last_rank), "MTP runs after the coda, not on a loop pass-2 stage"
-        stage_config = _with_indexer_types(hf_config, stage_indexer_types(hf_config, loop_passes))
+        stage_config = _with_indexer_types(hf_config, stage_indexer_types(hf_config, params.loop_passes))
         return super().allocate_kv_cache(mesh_device=mesh_device, hf_config=stage_config, params=params)
 
     def kv_cache_slot_rows(self, hf_config, params) -> tuple[int, bool]:
         """A stage that runs loop pass 2 (one rank, or G2) keeps pass 2's window in a ring past each slot's pass-1
         positions (tt.mla.two_bank). Such a cache is never migrated (prefill_runner builds no chunk table for a looped
         model), so its slots need no bank alignment."""
+        from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import runs_later_loop_pass
         from models.demos.deepseek_v3_d_p.tt.mla.two_bank import pass2_kv_cache_seq_len
 
-        if not any(p >= 2 for p in params.loop_passes or ()):
+        if not runs_later_loop_pass(params.loop_passes):
             return super().kv_cache_slot_rows(hf_config, params)
         return pass2_kv_cache_seq_len(params.max_seq_len, params.chunk_size), False
 

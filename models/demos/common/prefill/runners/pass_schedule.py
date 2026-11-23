@@ -14,14 +14,28 @@ Contracts kept here, because the runner, the producer and the runtime must agree
 * A rank holds whole loop passes: a pass's gate reads the pass input, and the next pass needs every layer's KV and
   top-k of this one. So no rank starts strictly inside a loop pass (``valid_starts``).
 * Layer acks: a position of loop pass ``k >= 2`` acks as ``layer + (k - 1) * num_layers``, never as its layer, so it
-  cannot collide with pass 1, the coda or the MTP rows (ids ``num_layers ..``) and is never a migrated layer.
-* KV migration: a layer's migrated KV is its pass-1 KV (the cache the layer itself writes). A rank whose loop layers
-  run only in passes ``>= 2`` holds a copy of pass 1's KV (GLM-5.4 G2's bank A), which is never migrated.
+  cannot collide with pass 1, the coda or the MTP rows (ids ``num_layers ..``).
+* KV migration: a looped model publishes no KV chunk table (``builds_kv_chunk_table``). Its decode KV handoff is not
+  defined yet (GLM-5.4 Q2.3), and no table could tell a layer's own KV from a rank's copy of it (G2's bank A) or
+  describe a pass-2 cache's window ring.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+
+def builds_kv_chunk_table(pass_schedule, *, migration_requested: bool, model_name: str) -> bool:
+    """Whether the runner builds a KV chunk table: always for a plain model (``pass_schedule`` None), never for a looped
+    one, which then refuses a run that asks for KV migration (publish or file export) rather than skip it silently."""
+    if pass_schedule is None:
+        return True
+    if migration_requested:
+        raise RuntimeError(
+            f"{model_name}: KV migration of a looped model is not supported (its decode KV handoff is deferred); "
+            "run with PREFILL_ENABLE_MIGRATION=0 PREFILL_MIGRATION_EXPORT_TO_FILE=0"
+        )
+    return False
 
 
 def loop_ack_id(layer: int, loop_pass: int, num_layers: int) -> int:
@@ -103,7 +117,3 @@ class PassSchedule:
     def ack_id_bound(self) -> int:
         """One past the largest ack id any position takes: the layer-id axis a completion reader must accept."""
         return max(self.ack_ids(0, len(self))) + 1
-
-    def migrated_layers(self, first: int, count: int) -> list:
-        """Layers whose own (pass <= 1) KV positions ``[first, first + count)`` write, in order."""
-        return [layer for layer, k in self.passes[first : first + count] if k <= 1]

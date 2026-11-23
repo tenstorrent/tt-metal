@@ -15,10 +15,15 @@
 import pytest
 
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
-from models.demos.common.prefill.runners.pass_schedule import PassSchedule, RankSlice
+from models.demos.common.prefill.runners.pass_schedule import PassSchedule, RankSlice, builds_kv_chunk_table
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.glm_5_4 import LoopStep
-from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import pass_schedule, stage_indexer_types
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
+    pass_schedule,
+    runs_later_loop_pass,
+    runs_only_later_loop_passes,
+    stage_indexer_types,
+)
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import glm_5_4_hf_config
 from models.demos.deepseek_v3_d_p.tt.mla.two_bank import pass1_index_set
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_4 import GLM54Adapter
@@ -116,10 +121,13 @@ def test_mtp_rows_must_not_reach_the_loop_ack_ids(schedule, expect_error):
         layer_completion_layout(STAGES, 3, extra_layers=27, pass_schedule=schedule)
 
 
-def test_g2_migrates_no_layer(schedule):
-    assert schedule.migrated_layers(*G1) == list(range(26, 54))
-    assert schedule.migrated_layers(*G2) == []
-    assert schedule.migrated_layers(0, 106) == list(range(78))
+def test_a_looped_model_publishes_no_kv_table(schedule, expect_error):
+    """The runner's guard (prefill_runner, migration setup): G2's bank-A copy can never reach the migration table,
+    because a looped model builds none, and a run asking for migration is refused rather than silently unmigrated."""
+    assert builds_kv_chunk_table(None, migration_requested=True, model_name="glm_5_3")
+    assert not builds_kv_chunk_table(schedule, migration_requested=False, model_name="glm_5_4")
+    with expect_error(RuntimeError, "KV migration of a looped model is not supported"):
+        builds_kv_chunk_table(schedule, migration_requested=True, model_name="glm_5_4")
 
 
 def test_g2_runs_no_indexer_and_injects_layer_ls_own_set():
@@ -201,15 +209,27 @@ def test_transformer_runs_each_stage_and_its_gate(monkeypatch):
 def test_transformer_handoff_roles():
     import models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer as tpt
 
-    def roles(gates):
+    def roles(loop_passes, gates):
         t = tpt.TtPrefillTransformer.__new__(tpt.TtPrefillTransformer)
-        t.loop_gates, t._loop_count = gates, 2
+        t._loop_passes, t.loop_gates, t._loop_count = loop_passes, gates, 2
         return t.sends_loop_handoff, t.receives_loop_handoff
 
-    assert roles({1: None}) == (True, False)  # G1
-    assert roles({2: None}) == (False, True)  # G2
-    assert roles({1: None, 2: None}) == (False, False)  # whole loop on one rank
-    assert roles({}) == (False, False)  # G0, G3
+    assert roles((1,), {1: None}) == (True, False)  # G1
+    assert roles((2,), {2: None}) == (False, True)  # G2
+    assert roles(None, {1: None, 2: None}) == (False, False)  # whole loop on one rank
+    assert roles((), {}) == (False, False)  # G0, G3
+
+
+def test_stage_loop_predicates():
+    """One decision per fact, shared by the model and the cache allocator (None: every pass, the whole loop)."""
+    assert [runs_later_loop_pass(p) for p in (None, (1, 2), (1,), (2,), ())] == [True, True, False, True, False]
+    assert [runs_only_later_loop_passes(p) for p in (None, (1, 2), (1,), (2,), ())] == [
+        False,
+        False,
+        False,
+        True,
+        False,
+    ]
 
 
 def test_completion_readers_accept_every_ack_id(schedule):

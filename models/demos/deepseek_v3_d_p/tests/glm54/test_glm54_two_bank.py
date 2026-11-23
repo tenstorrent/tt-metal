@@ -34,6 +34,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.chunk_layout import rotated_chunk_positions
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
 from models.demos.deepseek_v3_d_p.reference.glm_5_4 import LoopPass2MLAReference
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import stage_indexer_types
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.synthetic_gates import GLM54_SYNTHETIC_SEED
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import glm_5_4_hf_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
@@ -46,7 +47,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.two_bank import (
     WINDOW_FORMATS,
     TwoBankIndex,
     pass1_index_set,
-    pass2_indexer_types,
     ring_id,
     ring_rows,
 )
@@ -89,7 +89,7 @@ def _config(window_format: str, capacity: int = CAPACITY):
 
 def _pass2_config(config):
     c = copy.deepcopy(config)
-    c.indexer_types = pass2_indexer_types(config)
+    c.indexer_types = stage_indexer_types(config, (2,))  # G2's map: the loop layers shared
     return c
 
 
@@ -113,7 +113,7 @@ def test_pass1_index_set_maps_loop_layers_to_groups(expect_error):
     """GLM-5.4: pass-2 layers L26-53 reuse the 7 pass-1 sets in groups of 4 (full layers 26, 30, ..., 50)."""
     c = glm_5_4_hf_config()
     assert [pass1_index_set(c, L) for L in range(26, 54)] == [k for k in range(7) for _ in range(4)]
-    assert set(pass2_indexer_types(c)) == {"shared"}
+    assert set(stage_indexer_types(c, (2,))[26:54]) == {"shared"}
     with expect_error(ValueError, "outside the loop"):
         pass1_index_set(c, 25)
 

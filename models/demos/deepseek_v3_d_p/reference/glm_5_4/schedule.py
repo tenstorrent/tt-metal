@@ -44,17 +44,25 @@ def pass_schedule(config):
     )
 
 
-def runs_loop_without_indexer(config, loop_passes: tuple) -> bool:
-    """A stage running the loop only in passes >= 2 (GLM-5.4 G2) runs no indexer: every pass-2 layer reuses its
-    pass-1 layer's top-k (A5), received from the pass-1 stage."""
-    return bool(loop_passes) and 1 not in loop_passes
+def runs_later_loop_pass(loop_passes) -> bool:
+    """A stage running some loop pass >= 2 (the whole loop on one stage, or GLM-5.4 G2): it holds pass-2 state, a
+    window ring past each cache slot's pass-1 positions (tt.mla.two_bank). ``loop_passes`` is the stage's loop passes
+    (``PassSchedule.rank_slice``); None means every pass. The model and the cache allocator both decide by this."""
+    return loop_passes is None or any(p >= 2 for p in loop_passes)
+
+
+def runs_only_later_loop_passes(loop_passes) -> bool:
+    """A stage running the loop only in passes >= 2 (GLM-5.4 G2): it runs no indexer (every pass-2 layer reuses its
+    pass-1 layer's top-k, A5) and receives pass 1's KV and top-k from the pass-1 stage (the loop handoff). None means
+    every pass."""
+    return loop_passes is not None and bool(loop_passes) and 1 not in loop_passes
 
 
 def stage_indexer_types(config, loop_passes: tuple) -> list:
     """The full/shared map a stage builds its blocks with: the model's, except that a stage running the loop only
     in passes >= 2 marks every loop layer ``shared`` (no indexer weights, no index-cache slot)."""
     types = list(config.indexer_types)
-    if runs_loop_without_indexer(config, loop_passes):
+    if runs_only_later_loop_passes(loop_passes):
         for layer in range(config.loop_first_layer, config.loop_last_layer + 1):
             types[layer] = "shared"
     return types

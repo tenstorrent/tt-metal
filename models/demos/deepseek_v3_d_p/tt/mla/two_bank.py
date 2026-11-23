@@ -95,15 +95,10 @@ def ring_id(position: int, ring_base: int, chunk_global: int) -> int:
     return ring_base + period + position % period
 
 
-def pass2_indexer_types(config) -> list[str]:
-    """G2's indexer map: every layer 'shared', so pass-2 layers bind no indexer and take injected top-k (A5)."""
-    return ["shared"] * len(config.indexer_types)
-
-
 def pass1_index_set(config, layer: int) -> int:
     """Which of the loop's pass-1 top-k sets (the full layers of the loop, in layer order, as
     ``tt.loop_handoff`` sends them) pass-2 layer ``layer`` reuses: its pass-1 reuse group's (A5). ``config`` is the
-    model config, whose ``indexer_types`` is pass 1's map (not G2's ``pass2_indexer_types``)."""
+    model config, whose ``indexer_types`` is pass 1's map (not G2's stage map, ``schedule.stage_indexer_types``)."""
     first, last = config.loop_first_layer, config.loop_last_layer
     if not first <= layer <= last:
         raise ValueError(f"layer {layer} is outside the loop {first}..{last}")

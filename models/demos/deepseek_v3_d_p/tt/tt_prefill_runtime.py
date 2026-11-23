@@ -889,8 +889,14 @@ class TtPrefillRuntime:
         if self.sends_loop_handoff:
             self._loop_sender = self._new_loop_sender(self.model.loop_index_sets)
         if self.receives_loop_handoff:
-            # The traced forward's inbound buffers; the eager warm-up reads them too (zeros: an empty bank A).
+            # The traced forward's inbound buffers. Zeroed once (allocation does not clear): a stage-alone probe of G2
+            # (first rank past layer 0) has no upstream and reads them as its placeholder handoff, an empty bank A and
+            # top-k sets of position 0. [1:] are the model's own sets, so this zeroes those too.
             self._loop_handoff_in = self._new_loop_sender(self.model.loop_index_sets).segments()
+            for t in self._loop_handoff_in:
+                zeros = ttnn.zeros_like(t)
+                ttnn.copy(zeros, t)
+                ttnn.deallocate(zeros)
 
     def _new_loop_sender(self, index_sets: list) -> LoopHandoffSender:
         return LoopHandoffSender(self.mesh_device, self._loop_handoff, index_sets=index_sets, **self._loop_kv_layers)
@@ -2260,7 +2266,10 @@ class TtPrefillRuntime:
             mtp_owns_input = self.config.is_first_rank
 
         loop_md, loop_sender = None, None
-        if loop_handoff is not None or self.sends_loop_handoff:
+        # Eager G1 builds a fresh handoff per chunk for its caller to send; a last rank (a stage-alone probe) has no
+        # downstream, so it builds none (the traced path still collects into its persistent sender: production cost).
+        eager_sends = self.sends_loop_handoff and not self.config.is_last_rank
+        if loop_handoff is not None or eager_sends:
             loop_md = self._loop_metadata_dev(slot_id, actual_start, actual_end)
         if loop_handoff is not None:
             assert len(loop_handoff) == len(self._loop_handoff.segments()), "loop handoff segments missing"
@@ -2291,7 +2300,7 @@ class TtPrefillRuntime:
             ttnn.deallocate(model_input)
         if indexer_indices is not None and indexer_indices is not getattr(self.model, "last_indexer_indices", None):
             ttnn.deallocate(indexer_indices)
-        if self.sends_loop_handoff:
+        if eager_sends:
             # Fresh buffers per eager chunk (copies of the model's sets): the caller owns (and frees) what this call
             # returns.
             loop_sender = self._new_loop_sender([ttnn.clone(t) for t in self.model.loop_index_sets])

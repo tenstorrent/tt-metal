@@ -28,7 +28,8 @@ from models.demos.common.prefill.runners.pass_schedule import loop_ack_id
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
     LoopStep,
     loop_schedule,
-    runs_loop_without_indexer,
+    runs_later_loop_pass,
+    runs_only_later_loop_passes,
     stage_indexer_types,
 )
 from models.demos.deepseek_v3_d_p.tt.glm54.damp_gate import TtDampGate
@@ -219,7 +220,7 @@ class TtPrefillTransformer(LightweightModule):
         # indexer and takes pass 1's top-k sets instead (A5), so its blocks see the stage's full/shared map.
         self._loop_passes = None if loop_passes is None else tuple(loop_passes)
         model_config = config  # the model's own full/shared map: pass 1's top-k sets are numbered by it
-        if self._loop_passes is not None and runs_loop_without_indexer(config, self._loop_passes):
+        if runs_only_later_loop_passes(self._loop_passes):
             config = copy.copy(config)
             config.indexer_types = stage_indexer_types(config, self._loop_passes)
         self.mesh_device = mesh_device
@@ -284,9 +285,10 @@ class TtPrefillTransformer(LightweightModule):
         # in a ring past each cache slot's pass-1 positions, so the KVPE cache holds kv_cache_seq_len positions per
         # slot; allocate it (and the index cache) with that (pass2_kv_cache_seq_len).
         self._model_config = model_config
-        runs_pass2 = self._loop_passes is None or any(p >= 2 for p in self._loop_passes)
         self._pass2_layers = [
-            i for i in loop_pass2_layers(config) if runs_pass2 and first_layer_idx <= i < first_layer_idx + num_layers
+            i
+            for i in loop_pass2_layers(config)
+            if runs_later_loop_pass(self._loop_passes) and first_layer_idx <= i < first_layer_idx + num_layers
         ]
         if self._pass2_layers:
             assert is_chunked and max_seq_len is not None, "loop pass 2 runs chunked over a max_seq_len cache"
@@ -609,7 +611,7 @@ class TtPrefillTransformer(LightweightModule):
     def receives_loop_handoff(self) -> bool:
         """A stage running the loop only in passes >= 2 (GLM-5.4 G2): its loop layers read pass 1's KV (a copy in
         this stage's cache) at pass 1's top-k, both sent by the previous pass's stage (tt/loop_handoff.py)."""
-        return bool(self.loop_gates) and 1 not in self.loop_gates
+        return bool(self.loop_gates) and runs_only_later_loop_passes(self._loop_passes)
 
     @property
     def sends_loop_handoff(self) -> bool:

@@ -268,13 +268,6 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
 
     rt["G2"].model.forward = g2_forward_snapshot
     sent_sets, got_sets = [], []
-    g2_pc = rt["G2"].prefill_chunk
-
-    def g2_prefill_chunk(*args, loop_handoff=None, **kwargs):
-        got_sets.append([_raw(t) for t in loop_handoff[1:]])
-        return g2_pc(*args, loop_handoff=loop_handoff, **kwargs)
-
-    rt["G2"].prefill_chunk = g2_prefill_chunk
     shadow = init_mla_kv_cache(
         cache_format=FORMAT,
         hf_config=config,
@@ -311,6 +304,8 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
             write_kvpe_copy(shadow.storage, kvpe_rows, md, rt["G1"]._loop_handoff, first_kv_layer=0, num_kv_layers=2)
             outs[f"shadow.{c}"] = _raw(shadow.storage)
             x2 = rt["G2"].prefill_chunk(x1, rig.caches["G2"], loop_handoff=[kvpe_rows, *sets], **kw)
+            # What G2's pass 2 read: its model's own sets, which the runtime copied the received ones into.
+            got_sets.append([_raw(t) for t in rt["G2"].model.loop_index_sets])
             outs[f"G2.{c}"] = _raw(x2)
             x2_host = _host(mesh_device, x2)
             rt["G3"].prefill_chunk(x2, rig.caches["G3"], **kw)
@@ -362,7 +357,7 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
         # Handoff.
         if not _same(first[f"shadow.{c}"], first[f"G1.cache.{c}"]):
             failures.append(f"chunk {c}: KVPE rows G1 sends do not rebuild its cache")
-        if not all(_same(a, b) for a, b in zip(got_sets[c], sent_sets[c])):
+        if len(got_sets[c]) != len(sent_sets[c]) or not all(_same(a, b) for a, b in zip(got_sets[c], sent_sets[c])):
             failures.append(f"chunk {c}: G2 received other top-k sets than G1 sent")
     if not _same(g2_bank_a["before"], first["G1.rows.0"]):
         failures.append("chunk 0: G2's bank A rows before its forward differ from the rows G1 sent")

@@ -40,6 +40,7 @@ from models.demos.common.prefill.runners.migration import (
     migration_table_path,
     setup_kv_chunk_table,
 )
+from models.demos.common.prefill.runners.pass_schedule import builds_kv_chunk_table
 from models.demos.common.prefill.runners.runner_utils import (
     MTP_PAD_TOKEN_ID,
     activation_global_spec,
@@ -1543,15 +1544,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         + (f"(owns scheduler shm {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
     )
 
-    if PASS_SCHEDULE is not None:
-        # A looped model's decode KV handoff is not defined yet (GLM-5.4 Q2.3, deferred): no chunk table, so a loop
-        # pass-2 stage's copy of pass 1's KV (G2's bank A) can never be published as a layer's KV, and no table
-        # describes a pass-2 cache's slots (pass-1 positions, then the window ring: two_bank.pass2_kv_cache_seq_len).
-        if migration_publish_enabled() or migration_file_export_enabled():
-            raise RuntimeError(
-                f"{ADAPTER.name}: KV migration of a looped model is not supported (its decode KV handoff is "
-                "deferred); run with PREFILL_ENABLE_MIGRATION=0 PREFILL_MIGRATION_EXPORT_TO_FILE=0"
-            )
+    if not builds_kv_chunk_table(
+        PASS_SCHEDULE,
+        migration_requested=migration_publish_enabled() or migration_file_export_enabled(),
+        model_name=ADAPTER.name,
+    ):
+        # A looped model: G2's copy of pass 1's KV (bank A) can never be published as a layer's KV.
         logger.info(f"[migration] rank {rank}: looped model, no KV chunk table")
         migration_endpoint = None
     else:
