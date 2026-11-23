@@ -444,10 +444,10 @@ The SFT trainer calls the model `build()` returns as `model(input_ids, None)`, t
 | `loss_mask` | `[B, 1, T, 1]` | TILE, BFLOAT16      | Multiplies the `[B, 1, T, 1]` per-token loss; 0 at padding.      |
 
 The second argument is the attention mask. `None` means the model applies causal attention itself; that is exact
-because padding comes after every real token. `T` is not always a multiple of 32, so a model whose ops need
-tile-aligned sequences pads and slices internally, as the Llama model does around its embedding. The model must also
-provide `parameters()`, `train()` and `eval()`, which the trainer uses for the optimizer, gradient clipping and
-validation.
+because padding comes after every real token. The trainer only requires `T` to be positive; a provider whose model
+needs tile-aligned sequences rejects other lengths in `check()`, as `LlamaProvider` does for a `max_length` that isn't
+a multiple of 32, or pads and slices inside the model. The model must also provide `parameters()`, `train()` and
+`eval()`, which the trainer uses for the optimizer, gradient clipping and validation.
 
 What a checkpoint holds and how it is laid out is the provider's: `LlamaProvider` writes the layouts in the table under
 [Checkpoints](#checkpoints). Anything else a provider needs it reads itself: `LlamaProvider` reads the model's HF
