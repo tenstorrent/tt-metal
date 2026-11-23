@@ -2261,7 +2261,7 @@
   sp_config: sc1
 
 
-# CI-ONLY: [RING,RING] 4x4 SC4 bring-up (do not merge).
+# CI-ONLY: [RING,RING] 4x4 SC4 runner, unpacked then packed (do not merge).
 - name: "(GLM-5.3-744B) RR 4x4 SC4 bring-up diagnostics"
   cmd: |
     set -uo pipefail
@@ -2270,16 +2270,20 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    RR_DIAG_STEPS="3" bash models/demos/common/prefill/runners/ci/rr_sc4_diag.sh
-    echo "===== [runner] (GLM-5.3-744B) 8x[4,4] RING,RING KV accuracy 1M tail@2.5k, SC4 ====="
     export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr
+    echo "===== [1/2] (GLM-5.3-744B) 8x[4,4] RING,RING KV accuracy 1M tail@2.5k, one chunk per forward, SC4 ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr; rc1=$?
+    echo "===== [1/2] rc=${rc1} ====="
+    echo "===== [2/2] (GLM-5.3-744B) 8x[4,4] RING,RING packed KV accuracy 1M tail@2.5k, two chunks per forward, SC4 ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr --variant packed; rc2=$?
+    echo "===== [2/2] rc=${rc2} ====="
+    exit $(( rc1 != 0 || rc2 != 0 ))
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner]
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      timeout: 120
+      timeout: 150
       tier: 1
       release_ready: false
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
