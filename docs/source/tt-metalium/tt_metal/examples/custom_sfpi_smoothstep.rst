@@ -40,7 +40,7 @@ Run the example:
 
 .. code-block:: bash
 
-    ./build/programming_examples/metal_example_custom_sfpi_smoothstep
+    ./build/programming_examples/metal_example_custom_smoothstep
 
 .. warning::
 
