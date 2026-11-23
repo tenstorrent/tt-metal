@@ -50,3 +50,22 @@ def test_deferred_check_runs_after_on_the_saved_inputs(monkeypatch, tmp_path, ca
     empty = tmp_path / "empty"
     empty.mkdir()
     assert check_deferred_accuracy.main([str(empty)]) == 2
+
+
+def test_checker_reports_errors_and_continues(monkeypatch, tmp_path, capsys):
+    """A bundle that cannot be checked (saved at another checkout HEAD, or naming a check that no longer exists) is an
+    ERROR line counted as failed and kept; the checker goes on to the next bundle."""
+    monkeypatch.setenv(DEFER_ENV, str(tmp_path))
+    for name in ("a-stale", "b-renamed", "c-ok"):
+        run_or_defer(toy_check, name, x=torch.ones(3), expected=3.0, label=name)
+    stale, renamed, ok = sorted(tmp_path.glob("*.pt"))
+    b = torch.load(stale, weights_only=True)
+    torch.save({**b, "head": "0" * 40}, stale)
+    b = torch.load(renamed, weights_only=True)
+    torch.save({**b, "check": f"{__name__}:no_such_check"}, renamed)
+
+    assert check_deferred_accuracy.main([str(tmp_path)]) == 1
+    out = capsys.readouterr().out
+    assert out.count("GLM54_ACCURACY: ERROR") == 2 and "from HEAD 0000000000" in out and "AttributeError" in out
+    assert out.count("GLM54_ACCURACY: PASS") == 1 and CALLS == ["c-ok"]
+    assert sorted(tmp_path.glob("*.pt")) == [stale, renamed]

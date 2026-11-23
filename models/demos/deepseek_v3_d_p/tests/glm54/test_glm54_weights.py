@@ -289,6 +289,8 @@ def test_tier1_cache_round_trip_and_bounds(monkeypatch, tmp_path):
     first = gw.glm54_tier1_weights(c, seed=1)
     assert _same(first, expected[1]) and [p.name for p in root.glob("*.pt")] == [f"{gw.tier1_cache_key(c, 1)}.pt"]
     assert first.provenance["cache_key"] == gw.tier1_cache_key(c, 1)
+    del first  # no live object: the next request reads the disk entry
+    assert gw.tier1_cache_key(c, 1) not in gw._LIVE_TIER1
     with monkeypatch.context() as m:
         m.setattr(gw, "_generate_tier1", lambda *a: pytest.fail("a hit must not generate"))
         assert _same(gw.glm54_tier1_weights(c, seed=1), expected[1])
@@ -308,6 +310,84 @@ def test_tier1_cache_round_trip_and_bounds(monkeypatch, tmp_path):
     monkeypatch.setattr(gw, "TIER1_CACHE_MIN_FREE_GB", 1e9)
     assert _same(gw.glm54_tier1_weights(c, seed=2), expected[2])
     assert not (root / f"{gw.tier1_cache_key(c, 2)}.pt").exists()
+
+
+def _count_generations(monkeypatch) -> list:
+    calls = []
+    generate = gw._generate_tier1
+
+    def counted(config, seed):
+        calls.append(seed)
+        return generate(config, seed)
+
+    monkeypatch.setattr(gw, "_generate_tier1", counted)
+    return calls
+
+
+def test_tier1_cache_write_failure_leaves_nothing(monkeypatch, tmp_path):
+    """A write that fails partway (torch.save raising RuntimeError, as it does on a full disk) is 'not cached': the
+    generated weights are returned and neither an entry nor a temporary file stays behind."""
+    c = _tiny_tier1_config(monkeypatch)
+    monkeypatch.setenv("TT_GLM54_CACHE_DIR", str(tmp_path))
+    expected = gw.Glm54Weights(*gw._generate_tier1(c, 1))
+
+    def failing_save(obj, f):
+        Path(f).write_bytes(b"partial" * 1000)
+        raise RuntimeError("[enforce fail at inline_container.cc] PytorchStreamWriter failed writing file")
+
+    monkeypatch.setattr(torch, "save", failing_save)
+    assert _same(gw.glm54_tier1_weights(c, seed=1), expected)
+    assert list(gw.tier1_cache_dir().iterdir()) == []
+
+
+def test_tier1_one_object_per_key_while_held(monkeypatch, tmp_path):
+    """While a caller holds the weights, the same key returns that object: no second generation when the entry could
+    not be written (as test_glm54_loop_on_device's inline check asks again), no second mapping on a hit. Once
+    released, the next request generates or reads the disk again."""
+    c = _tiny_tier1_config(monkeypatch)
+    monkeypatch.setenv("TT_GLM54_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(gw, "TIER1_CACHE_MIN_FREE_GB", 1e9)  # nothing is written
+    calls = _count_generations(monkeypatch)
+    w = gw.glm54_tier1_weights(c, seed=1)
+    assert gw.glm54_tier1_weights(c, seed=1) is w and calls == [1]
+    assert gw.glm54_tier1_weights(c, seed=2) is not w and calls == [1, 2]
+    del w
+    gw.glm54_tier1_weights(c, seed=1)
+    assert calls == [1, 2, 1]
+
+
+def test_tier1_cache_tolerates_concurrent_eviction(monkeypatch, tmp_path):
+    """An entry evicted by another process between lookup and load is a miss, not an error; eviction skips entries
+    that vanish while it scans."""
+    c = _tiny_tier1_config(monkeypatch)
+    monkeypatch.setenv("TT_GLM54_CACHE_DIR", str(tmp_path))
+    assert gw._load(tmp_path / "absent.pt") is None
+    w = gw.glm54_tier1_weights(c, seed=1)
+    path = gw.tier1_cache_dir() / f"{gw.tier1_cache_key(c, 1)}.pt"
+    del w
+    real_load = torch.load
+
+    def load_after_eviction(f, **kw):  # the other process wins the race
+        Path(f).unlink()
+        return real_load(f, **kw)
+
+    calls = _count_generations(monkeypatch)
+    with monkeypatch.context() as m:
+        m.setattr(torch, "load", load_after_eviction)
+        m.setattr(gw, "_store", lambda *a: False)
+        gw.glm54_tier1_weights(c, seed=1)
+    assert calls == [1] and not path.exists()
+
+    real_stat = Path.stat
+    (gw.tier1_cache_dir() / "gone.pt").write_bytes(b"x")
+
+    def stat_vanishing(self, *a, **kw):
+        if self.name == "gone.pt":
+            raise FileNotFoundError(self)
+        return real_stat(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "stat", stat_vanishing)
+    gw._evict(gw.tier1_cache_dir(), 0)
 
 
 def test_tier2_provenance_follows_the_runner_environment(monkeypatch, tmp_path):

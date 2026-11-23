@@ -52,7 +52,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4 import (
 )
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.loop import _ffn_kwargs, _mla_weights_with_indexer
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.glm54.deferred_accuracy import run_or_defer
+from models.demos.deepseek_v3_d_p.tests.glm54.deferred_accuracy import accuracy_deferred, run_or_defer
 from models.demos.deepseek_v3_d_p.tests.glm54_weights import (
     GLM54ReducedConfig,
     glm54_reduced_config,
@@ -290,13 +290,17 @@ def _loop_config(max_seq: int):
     return config
 
 
-def loop_accuracy(dev: dict) -> None:
+def loop_accuracy(dev: dict, tier1_key: str) -> None:
     """test_glm54_loop_on_device's CPU checks on its device step outputs ``dev`` (rows < ROWS, natural order): the
-    teacher-forced step checks, the negative controls and the free-running report (module docstring). Runs in the
-    test or after the device lock (``deferred_accuracy``); raises AssertionError listing every failure."""
+    teacher-forced step checks, the negative controls and the free-running report (module docstring), on the tier-1
+    weights of key ``tier1_key`` (the device run's). Runs in the test or after the device lock (``deferred_accuracy``);
+    raises AssertionError listing every failure."""
     t0 = time.perf_counter()
     config = _loop_config(CHUNK)
     weights = glm54_tier1_weights(config)
+    assert (
+        weights.provenance["cache_key"] == tier1_key
+    ), f"tier-1 weights {weights.provenance['cache_key']} differ from the device run's {tier1_key}"
     names = _step_names(config)
     failures = []
     cpu = _CpuSteps(config, weights)
@@ -491,9 +495,10 @@ def test_glm54_loop_on_device(mesh_device, device_params, num_links):
 
     # --- accuracy on rows < ROWS: teacher-forced on the device's own step inputs (``loop_accuracy``).
     dev = {k: v[:ROWS] for k, v in first.items()}
-    DIAG_DIR.mkdir(parents=True, exist_ok=True)
-    torch.save(dev, DIAG_DIR / f"loop-device-rows{ROWS}-tokens{TOKEN_SEED}.pt")  # for diagnosis without the device
-    failures += run_or_defer(loop_accuracy, "loop_on_device", dev=dev)
+    if not accuracy_deferred():  # a deferred run's bundle holds the same tensors
+        DIAG_DIR.mkdir(parents=True, exist_ok=True)
+        torch.save(dev, DIAG_DIR / f"loop-device-rows{ROWS}-tokens{TOKEN_SEED}.pt")  # diagnosis without the device
+    failures += run_or_defer(loop_accuracy, "loop_on_device", dev=dev, tier1_key=weights.provenance["cache_key"])
     assert not failures, failures
 
 

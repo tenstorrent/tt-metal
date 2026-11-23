@@ -44,6 +44,7 @@ it would leave less than ``TIER1_CACHE_MIN_FREE_GB`` free on the disk. Fill the 
 ``python -m models.demos.deepseek_v3_d_p.tests.glm54_weights`` (host only, opens no device).
 """
 
+import contextlib
 import hashlib
 import inspect
 import json
@@ -51,6 +52,7 @@ import os
 import shutil
 import sys
 import time
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -186,8 +188,14 @@ def tier1_key_inputs(config, seed: int = GLM54_SYNTHETIC_SEED) -> dict:
     }
 
 
+def _tier1_key_and_inputs(config, seed: int) -> tuple[str, str]:
+    """(key, the JSON of ``tier1_key_inputs`` it hashes)."""
+    inputs = json.dumps(tier1_key_inputs(config, seed), sort_keys=True, default=repr)
+    return _sha256_text(inputs)[:24], inputs
+
+
 def tier1_cache_key(config, seed: int = GLM54_SYNTHETIC_SEED) -> str:
-    return _sha256_text(json.dumps(tier1_key_inputs(config, seed), sort_keys=True, default=repr))[:24]
+    return _tier1_key_and_inputs(config, seed)[0]
 
 
 def _tensor_bytes(obj) -> int:
@@ -213,14 +221,19 @@ def _evict(root: Path, budget: int) -> None:
     """Delete least recently used entries until the entries total at most ``budget`` bytes; delete writers'
     temporary files older than an hour (crashed writers)."""
     for tmp in root.glob(".*.tmp"):
-        if time.time() - tmp.stat().st_mtime > 3600:
-            tmp.unlink(missing_ok=True)
-    entries = sorted(root.glob("*.pt"), key=lambda p: p.stat().st_mtime)
-    total = sum(p.stat().st_size for p in entries)
-    for p in entries:
+        with contextlib.suppress(FileNotFoundError):
+            if time.time() - tmp.stat().st_mtime > 3600:
+                tmp.unlink(missing_ok=True)
+    entries = []  # (mtime, size, path); another process may evict concurrently
+    for p in root.glob("*.pt"):
+        with contextlib.suppress(FileNotFoundError):
+            st = p.stat()
+            entries.append((st.st_mtime, st.st_size, p))
+    total = sum(size for _, size, _ in entries)
+    for _, size, p in sorted(entries):
         if total <= budget:
             break
-        total -= p.stat().st_size
+        total -= size
         p.unlink(missing_ok=True)
         logger.info(f"tier-1 cache: evicted {p.name}")
 
@@ -244,41 +257,58 @@ def _store(path: Path, entry: dict) -> bool:
     try:
         torch.save(entry, tmp)
         os.replace(tmp, path)
-    except OSError as e:
-        tmp.unlink(missing_ok=True)
-        logger.warning(f"tier-1 cache: write to {path} failed ({e}); not cached")
+    except Exception as e:  # torch.save reports I/O failures as RuntimeError
+        logger.warning(f"tier-1 cache: write to {path} failed ({e!r}); not cached")
         return False
+    finally:
+        tmp.unlink(missing_ok=True)  # no-op after the rename; also runs on KeyboardInterrupt
     return True
 
 
-def _load(path: Path) -> dict:
-    entry = torch.load(path, mmap=True, weights_only=True)
-    os.utime(path)  # recency for eviction
+def _load(path: Path) -> dict | None:
+    """The entry at ``path``, memory-mapped; None when it is absent (or evicted by another process meanwhile)."""
+    try:
+        entry = torch.load(path, mmap=True, weights_only=True)
+    except FileNotFoundError:
+        return None
+    with contextlib.suppress(FileNotFoundError):
+        os.utime(path)  # recency for eviction
     return entry
+
+
+# One object per key per process while a caller holds it: a second request (a test's CPU check after its device
+# phase, a later test in the session) neither maps the entry again nor regenerates when the entry was not written.
+_LIVE_TIER1: "weakref.WeakValueDictionary[str, Glm54Weights]" = weakref.WeakValueDictionary()
 
 
 def glm54_tier1_weights(config, seed: int = GLM54_SYNTHETIC_SEED) -> Glm54Weights:
     """Seeded random weights for ``glm54_reduced_config``: embedding, 4 layers (MoE layers share one expert
-    set), and the scalar synthetic gates. About 23 GB, served from the tier-1 disk cache (module docstring)
-    when present; the returned tensors are then memory-mapped (copy on write)."""
+        set), and the scalar synthetic gates. About 23 GB, served from the tier-1 disk cache (module docstring)
+        when present; the returned tensors are then memory-mapped (copy on write). While a caller holds the returned
+    object, the same key returns that object."""
     if config.num_hidden_layers != GLM54ReducedConfig.NUM_LAYERS:
         raise ValueError(f"tier 1 is the {GLM54ReducedConfig.NUM_LAYERS}-layer reduced stack, got {config}")
-    key = tier1_cache_key(config, seed)
+    key, key_inputs = _tier1_key_and_inputs(config, seed)
+    live = _LIVE_TIER1.get(key)
+    if live is not None:
+        return live
     path = tier1_cache_dir() / f"{key}.pt"
     t0 = time.perf_counter()
-    if path.is_file():
-        entry = _load(path)
+    entry = _load(path)
+    if entry is not None:
         logger.info(f"tier-1 weights: cache hit {path} ({time.perf_counter() - t0:.1f} s)")
     else:
         state_dict, gates = _generate_tier1(config, seed)
         logger.info(f"tier-1 weights: cache miss {key}, generated in {time.perf_counter() - t0:.1f} s")
-        key_inputs = json.dumps(tier1_key_inputs(config, seed), sort_keys=True, default=repr)
         entry = {"key_inputs": key_inputs, "state_dict": state_dict, "gates": gates}
         t1 = time.perf_counter()
         if _store(path, entry):
-            entry = _load(path)  # page-cache backed instead of ~23 GB of process memory
+            # Page-cache backed instead of ~23 GB of process memory (unless another process evicted it already).
+            entry = _load(path) or entry
             logger.info(f"tier-1 weights: cached to {path} in {time.perf_counter() - t1:.1f} s")
-    return Glm54Weights(entry["state_dict"], entry["gates"], {**tier1_provenance(seed), "cache_key": key})
+    w = Glm54Weights(entry["state_dict"], entry["gates"], {**tier1_provenance(seed), "cache_key": key})
+    _LIVE_TIER1[key] = w
+    return w
 
 
 def _sha256(path: Path) -> str:

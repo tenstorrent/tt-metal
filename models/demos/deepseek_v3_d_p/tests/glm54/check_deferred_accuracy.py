@@ -5,8 +5,9 @@
 
     python -m models.demos.deepseek_v3_d_p.tests.glm54.check_deferred_accuracy <bundle or dir> [...]
 
-Prints ``GLM54_ACCURACY: PASS|FAIL <bundle>`` per bundle and deletes a bundle that passed (a failed one stays for
-diagnosis). Exit status 0: every bundle passed; 1: a bundle failed; 2: no bundle found.
+Prints ``GLM54_ACCURACY: PASS|FAIL|ERROR <bundle>`` per bundle and deletes a bundle that passed (a failed one stays for
+diagnosis). ERROR: the check could not run (a bundle from another checkout HEAD, an import or runtime error); it counts
+as failed. Exit status 0: every bundle passed; 1: a bundle failed or errored; 2: no bundle found.
 
 The check functions live in device test modules, whose import queries the device arch (``is_blackhole`` in
 decorators). Run as a command, it sets the mock Blackhole galaxy descriptor before any of them loads ttnn, so that
@@ -20,6 +21,8 @@ import time
 from pathlib import Path
 
 import torch
+
+from models.demos.deepseek_v3_d_p.tests.glm54.deferred_accuracy import checkout_head
 
 _MOCK_GALAXY = (
     Path(__file__).resolve().parents[5]
@@ -39,19 +42,25 @@ def main(args: list[str]) -> int:
     if not bundles:
         print(f"GLM54_ACCURACY: no bundles in {args}")
         return 2
-    failed = 0
+    head, failed = checkout_head(), 0
     for path in bundles:
-        bundle = torch.load(path, weights_only=True)
-        module, qualname = bundle["check"].split(":")
-        check = getattr(importlib.import_module(module), qualname)
         t0 = time.perf_counter()
         try:
+            bundle = torch.load(path, weights_only=True)
+            if bundle.get("head") != head:
+                raise RuntimeError(f"bundle from HEAD {bundle.get('head')}, checkout is at {head}")
+            module, qualname = bundle["check"].split(":")
+            check = getattr(importlib.import_module(module), qualname)
             check(**bundle["inputs"])
         except AssertionError as e:
             failed += 1
             print(f"GLM54_ACCURACY: FAIL {path} ({time.perf_counter() - t0:.1f} s): {e}", flush=True)
             continue
-        print(f"GLM54_ACCURACY: PASS {path} ({time.perf_counter() - t0:.1f} s)", flush=True)
+        except Exception as e:
+            failed += 1
+            print(f"GLM54_ACCURACY: ERROR {path}: {type(e).__name__}: {e}", flush=True)
+            continue
+        print(f"GLM54_ACCURACY: PASS {path} (head {head[:11]}, {time.perf_counter() - t0:.1f} s)", flush=True)
         path.unlink()
     return 1 if failed else 0
 
