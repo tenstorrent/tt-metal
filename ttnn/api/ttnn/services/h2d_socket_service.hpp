@@ -166,6 +166,9 @@ public:
     // core. Workers poll it; the service kernel multicasts an inc each transfer.
     DeviceAddr get_data_ready_sem_addr() const;
 
+    // True if this coord has a service core here. On a mesh that hosts share, each host serves only its own chips.
+    bool has_coord(const distributed::MeshCoordinate& coord) const;
+
     // L1 address of the consumed-counter on this coord's service core. Workers
     // atomic-inc it once per consumed iteration; the kernel polls it locally.
     // Per-coord because each device's service core may differ.

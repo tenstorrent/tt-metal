@@ -1160,6 +1160,10 @@ DeviceAddr H2DStreamService::get_data_ready_sem_addr() const {
     return data_ready_sem_->address();
 }
 
+bool H2DStreamService::has_coord(const distributed::MeshCoordinate& coord) const {
+    return service_cores_.contains(coord);
+}
+
 DeviceAddr H2DStreamService::get_consumed_counter_addr(const distributed::MeshCoordinate& coord) const {
     require_owner(is_owner_, "H2DStreamService::get_consumed_counter_addr");
     auto it = consumed_addrs_.find(coord);
