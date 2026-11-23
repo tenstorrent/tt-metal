@@ -36,6 +36,7 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
     ttnn_cache_default = ""
     config_builder_overrides_checkpoint = True
     prefill_trace_layout = "chunked_group_a_v1"
+    builds_missing_weight_cache = False  # TtV4Transformer reads its own checkpoint layout; no TTNN trunk cache
 
     @property
     def config_builder(self) -> Callable:
@@ -81,7 +82,7 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.tt.v4.runtime import TtV4Runtime
         from models.demos.deepseek_v3_d_p.tt.v4.weights import V4CheckpointLayers, v4_model_from_checkpoint
 
-        topology = per_axis_topology()
+        topology = per_axis_topology(mesh_device=mesh_device)
         checkpoint = self.checkpoint_path()
         logger.info(f"DeepSeek-V4 per-axis CCL topology (sp, tp) = {topology}; checkpoint {checkpoint}")
 

@@ -169,8 +169,15 @@ def make_token_spec(mesh_shape: tuple, row_len: int, sp_axis: int = 0) -> ttnn.T
     )
 
 
-def make_h2d_spec(mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0, sp_axis: int = 0) -> ttnn.TensorSpec:
+def make_h2d_spec(
+    mesh_shape: tuple, chunk_size: int, mtp_levels: int = 0, sp_axis: int = 0, forward_chunks: int = 1
+) -> ttnn.TensorSpec:
+    """One forward's H2D row per SP chip. ``chunk_size`` is the forward's tokens (forward_chunks chunks); with MTP the
+    row ends in one num_mtp_tokens(mtp_levels) lookahead block per chunk, after every chunk's ids."""
     sp_factor = mesh_shape[sp_axis]
+    if mtp_levels and forward_chunks > 1:
+        row = h2d_row_len(chunk_size, sp_factor) + forward_chunks * num_mtp_tokens(mtp_levels)
+        return make_token_spec(mesh_shape, row, sp_axis)
     if mtp_levels:
         return make_token_spec(mesh_shape, mtp_union_rows(chunk_size, sp_factor, mtp_levels), sp_axis)
     return make_token_spec(mesh_shape, h2d_row_len(chunk_size, sp_factor), sp_axis)
@@ -216,16 +223,18 @@ def activation_global_spec(rows: int, hidden_size: int, planes: int = 1) -> ttnn
     )
 
 
-def mtp_id_segment_specs(mesh_shape: tuple, chunk_size: int, mtp_levels: int, sp_axis: int = 0) -> list:
+def mtp_id_segment_specs(
+    mesh_shape: tuple, chunk_size: int, mtp_levels: int, sp_axis: int = 0, forward_chunks: int = 1
+) -> list:
     """Global specs of the D2D segments that carry a chunk's MTP ids next to the activation: the chunk ids,
     then the lookahead ids. The same per-chip split the first rank cuts its H2D row into, so the first
-    rank forwards those two tensors as-is and the last rank gathers the union from them. Empty when MTP is
-    off."""
+    rank forwards those two tensors as-is and the last rank gathers the union from them. ``chunk_size`` is the
+    forward's tokens; a packed forward's lookahead segment holds one block per chunk. Empty when MTP is off."""
     if not mtp_levels:
         return []
     return [
         make_token_spec(mesh_shape, h2d_row_len(chunk_size, mesh_shape[sp_axis]), sp_axis),
-        make_token_spec(mesh_shape, num_mtp_tokens(mtp_levels), sp_axis),
+        make_token_spec(mesh_shape, forward_chunks * num_mtp_tokens(mtp_levels), sp_axis),
     ]
 
 

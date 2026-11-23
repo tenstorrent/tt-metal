@@ -56,4 +56,21 @@ inline void _calculate_fill_bitcast_(const std::uint32_t value_bit_mask) {
         sfpi::dst_reg++;
     }
 }
+
+// The row-range fills (fill_rows_tile) are not ported to Quasar. The Compute API keeps their entry points on every
+// arch so fill.h stays includable; a kernel that calls one fails to build.
+[[gnu::error("fill_rows_tile is not supported on Quasar")]] void fill_rows_is_not_supported_on_quasar();
+
+template <bool APPROXIMATION_MODE>
+inline void _calculate_fill_rows_(
+    [[maybe_unused]] const std::uint32_t row_begin,
+    [[maybe_unused]] const std::uint32_t row_end,
+    [[maybe_unused]] const float value) {
+    fill_rows_is_not_supported_on_quasar();
+}
+
+template <bool APPROXIMATION_MODE, std::uint32_t ROW_BEGIN, std::uint32_t ROW_END>
+inline void _calculate_fill_rows_ct_([[maybe_unused]] const float value) {
+    fill_rows_is_not_supported_on_quasar();
+}
 }  // namespace ckernel::sfpu

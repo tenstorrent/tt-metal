@@ -1,7 +1,7 @@
 # Clang-Tidy in tt-metal
 
 tt-metal uses clang-tidy for static analysis. The CI runs it automatically on every PR
-and on `main` daily. This page explains how to run it locally and how to manage checks.
+and on `main` on a schedule. This page explains how to run it locally and how to manage checks.
 
 ## Running locally (dev container — recommended)
 
@@ -54,7 +54,7 @@ If you are building outside the dev container, you need:
 | clang / clang++ | **20** | `apt install clang-20` |
 | clang-tidy | **20** | `apt install clang-tidy-20` |
 | run-clang-tidy | **20** | `apt install clang-tools-20` |
-| cmake | ≥ 3.22 | `apt install cmake` |
+| cmake | ≥ 3.25 | `apt install cmake` |
 | ninja | any | `apt install ninja-build` |
 
 > **Version matters.** `apt install clang-tidy` without a version suffix installs an
@@ -66,7 +66,7 @@ The workflow ([`code-analysis.yaml`](../.github/workflows/code-analysis.yaml)) c
 between a full scan and an incremental scan depending on context.
 
 **Full scan** — runs when:
-- A commit lands on `main` (also runs daily at 2 AM UTC)
+- A commit lands on `main` (also runs on a schedule, every 2 hours)
 - The `.clang-tidy` config changes (even on a PR branch)
 
 Full scan analyzes the entire codebase in a single job (~25 minutes on CI runners).
@@ -130,7 +130,7 @@ cmake --build --preset clang-tidy-fix-parallel --target clean
 cmake --build --preset clang-tidy-fix-parallel
 
 # Step 2: apply all collected fixes atomically
-clang-apply-replacements-20 .build/clang-tidy-fix-parallel/fixes
+clang-apply-replacements-20 .build/clang-tidy/fixes
 ```
 
 This will take several hours on a 12-core machine. When complete, review the diffs and

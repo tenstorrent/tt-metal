@@ -23,6 +23,8 @@ class GLM53Config:
     EMB_SIZE = 6144  # embedding dimension
     # Callers can override this default with use_fused_rmsnorm at model initialization.
     USE_FUSED_PREFILL_RMSNORM = True
+    # The dense FFN (layers 0-2) fuses its TP gather and reduce-scatter into its matmuls (TtFfn fuse_tp_collectives).
+    FUSE_DENSE_FFN_TP_COLLECTIVES = True
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
@@ -41,9 +43,11 @@ class GLM53Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Depth of the MoE forwarding buffers. Any value would make model functional,
-    # but larger values make it faster and consume more DRAM, so it's a compromise.
-    MOE_FWD_VC_PAGES = 64
+    # Depth of the MoE forwarding buffers, in pages per channel. Before #63483 combine_fabric2d's depth scaled with
+    # the tokens a chip holds: about 66 pages at one 5,120-token chunk on 8x4, about 267 for a packed forward of four
+    # (2,560 rows a chip). At 64, packed 8x4 forwards hang in combine_fabric2d (one TP column never finishes the
+    # routed expert / combine op), so this keeps the depth packed forwards had.
+    MOE_FWD_VC_PAGES = 256
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1

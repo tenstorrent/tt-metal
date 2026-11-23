@@ -23,6 +23,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # DeepSeek 671B RMSNorm dimensions
 EMB_DIM = 7168
@@ -111,6 +112,7 @@ class TtDistributedRmsNorm(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
             cache_file_name=cache_file_name,
+            cache_dump_mode=weight_cache_dump_mode(),
         )
 
         if device is None:
@@ -203,6 +205,7 @@ class TtDistributedRmsNorm(LightweightModule):
         self._use_fused = False
         self.fused_weight = None
         self.tt_ccl = None
+        self._fused_resources_memo = [None, None, None]  # see TT_CCL.get_fused_rmsnorm_resources
 
         logger.debug(f"Initializing TtDistributedRmsNorm with emb_dim={emb_dim}, epsilon={epsilon}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -294,8 +297,6 @@ class TtDistributedRmsNorm(LightweightModule):
             Output tensor [batch, seq_len, emb_dim / num_devices]
             Normalized with same sharding as input.
         """
-        logger.debug(f"Forward pass: input shape={x.shape}")
-
         # Optional: Move input to specified memory config
         if self.input_memcfg is not None:
             x = ttnn.to_memory_config(x, memory_config=self.input_memcfg)
@@ -303,7 +304,7 @@ class TtDistributedRmsNorm(LightweightModule):
 
         if self.use_fused:
             semaphores, stats = self.tt_ccl.get_fused_rmsnorm_resources(
-                x, self.fused_weight, self.cluster_axis, self.num_links
+                x, self.fused_weight, self.cluster_axis, self.num_links, memo=self._fused_resources_memo
             )
             return ttnn.experimental.dit_fused_distributed_rmsnorm(
                 x,
