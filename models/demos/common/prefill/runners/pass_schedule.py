@@ -99,6 +99,11 @@ class PassSchedule:
     def ack_ids(self, first: int, count: int) -> list:
         return [self.ack_id(p) for p in range(first, first + count)]
 
+    @property
+    def ack_id_bound(self) -> int:
+        """One past the largest ack id any position takes: the layer-id axis a completion reader must accept."""
+        return max(self.ack_ids(0, len(self))) + 1
+
     def migrated_layers(self, first: int, count: int) -> list:
         """Layers whose own (pass <= 1) KV positions ``[first, first + count)`` write, in order."""
         return [layer for layer, k in self.passes[first : first + count] if k <= 1]

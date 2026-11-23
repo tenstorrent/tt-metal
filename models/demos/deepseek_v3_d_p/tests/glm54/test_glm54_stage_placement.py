@@ -210,3 +210,11 @@ def test_transformer_handoff_roles():
     assert roles({2: None}) == (False, True)  # G2
     assert roles({1: None, 2: None}) == (False, False)  # whole loop on one rank
     assert roles({}) == (False, False)  # G0, G3
+
+
+def test_completion_readers_accept_every_ack_id(schedule):
+    """The producer's ring reader takes layer ids in [0, bound): the bound covers pass 2's ids (G2 104-131), so a
+    four-rank run and a stage-alone probe (which acks under its real ids) both fit."""
+    assert schedule.ack_id_bound == 132
+    for first, n in STAGES:
+        assert max(schedule.ack_ids(first, n)) < schedule.ack_id_bound

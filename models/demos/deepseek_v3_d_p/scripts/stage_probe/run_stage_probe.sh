@@ -212,6 +212,12 @@ if [ "${RUNNER_CRASHED}" = 1 ]; then
   exit 1
 fi
 stage "producer rc=${PROD_RC}; $(grep -c 'CHUNK_RETIRE.*warmup=0' "${PRODUCER_LOG}" || true) measured chunks"
+if [ "${PROD_RC}" != 0 ]; then
+  # A failed producer sends no SHUTDOWN sentinel: stop the runner now (the exit trap kills its process group)
+  # rather than holding the device for the drain timeout.
+  RUNNER_RC=stopped
+  exit 1
+fi
 
 # The SHUTDOWN sentinel makes the runner drain, release its trace and close the mesh.
 if timeout 600 tail --pid="${RUNNER_PID}" -f /dev/null; then

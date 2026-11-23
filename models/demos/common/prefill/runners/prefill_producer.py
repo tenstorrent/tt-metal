@@ -112,7 +112,7 @@ def _apply_manifest_env(manifest_path: str) -> dict:
 
 def _load_env_config(check_budget: bool = True) -> None:
     global SP_FACTOR, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
-    global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES
+    global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES, PASS_SCHEDULE
     # The host payload is one row per SP chip, in SP order, whichever mesh axis SP runs on; the
     # runner's H2D mapper (PREFILL_SP_AXIS) places the rows, so the producer needs only the factor.
     SP_FACTOR = int(os.environ.get("PREFILL_SP", 8))
@@ -132,7 +132,10 @@ def _load_env_config(check_budget: bool = True) -> None:
     # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
     # pattern) rather than a literal -- a hardcoded default silently under-covers any model
     # deeper than that literal when a manifest omits PREFILL_NUM_LAYERS.
-    NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", ADAPTER.model_config.NUM_LAYERS))
+    # A looped model (GLM-5.4) counts layer PASSES, as the runner does (prefill_runner.MODEL_POSITIONS).
+    PASS_SCHEDULE = ADAPTER.pipeline_schedule()
+    model_depth = len(PASS_SCHEDULE) if PASS_SCHEDULE is not None else ADAPTER.model_config.NUM_LAYERS
+    NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", model_depth))
     NUM_ACK_LAYERS = NUM_LAYERS
 
 
@@ -389,8 +392,10 @@ def _completion_layers_per_chunk(kv_table) -> int:
 
 
 def _completion_layer_bound(chunk_layers: int) -> int:
-    """Global ack-layer axis per chunk: the model's layers plus the rows acked past them (MTP, DFlash)."""
-    return NUM_LAYERS + (chunk_layers - NUM_ACK_LAYERS)
+    """Global ack-layer axis per chunk: the model's layers plus the rows acked past them (MTP, DFlash). A looped
+    model's later passes ack under ids past its layers (pass_schedule.loop_ack_id), which the axis also covers."""
+    bound = NUM_LAYERS + (chunk_layers - NUM_ACK_LAYERS)
+    return bound if PASS_SCHEDULE is None else max(bound, PASS_SCHEDULE.ack_id_bound)
 
 
 def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
