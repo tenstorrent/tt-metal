@@ -185,15 +185,15 @@ def build_moe_input(
     )
 
 
-def chain_ffn(chain: Path, layer: int) -> tuple[Callable[[list[str], int, int], dict[str, torch.Tensor]], int]:
+def chain_ffn(chain: Path, layer: int) -> tuple[Callable[[list[str], int, int], dict[str, torch.Tensor]], int, str]:
     """How to read layer ``layer``'s MoE products (``moe_input_L``, ``moe_output_L``, ``routing_ids_L`` /
-    ``_weights_L`` / ``_margin_L``) from an FP64 chain: ``(read(names, start, end), rows)``. ``fp64_chain`` (layers
+    ``_weights_L`` / ``_margin_L``) from an FP64 chain: ``(read(names, start, end), rows, producer)``. ``fp64_chain`` (layers
     0-3, 1M) keeps them in its per-row segment files (MoE layers 1-2); ``fp64_deep_chain`` (layers 0-7, layer-major) in
     the layer's FFN pass, every row, read with either manifest shape (``device_chain.deep_manifest``)."""
     m = json.loads((Path(chain) / MANIFEST).read_text())
     if m["producer"] == "fp64_chain":
         rows = m["segments"][-1]["end"] if m["segments"] else 0
-        return (lambda names, lo, hi: load_products(chain, names, lo, hi)), rows
+        return (lambda names, lo, hi: load_products(chain, names, lo, hi)), rows, m["producer"]
     if m["producer"] != "fp64_deep_chain":
         raise ValueError(f"{chain}: producer {m['producer']} is not an FP64 chain")
     from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import deep_complete, deep_products
@@ -202,7 +202,7 @@ def chain_ffn(chain: Path, layer: int) -> tuple[Callable[[list[str], int, int], 
     kind = m["kinds"][str(layer)][1]
     if kind != "moe":
         raise ValueError(f"{chain}: layer {layer}'s FFN is {kind}, not a MoE")
-    return (lambda names, lo, hi: deep_products(chain, layer, "ffn", names, lo, hi)), m["rows"]
+    return (lambda names, lo, hi: deep_products(chain, layer, "ffn", names, lo, hi)), m["rows"], m["producer"]
 
 
 def build_moe_input_from_chain(*, chain: Path, checkpoint: Path, layer: int, count: int, out: Path, segment: int):
@@ -212,8 +212,7 @@ def build_moe_input_from_chain(*, chain: Path, checkpoint: Path, layer: int, cou
     chain's FP64 routing, and fails closed below ``INPUT_CHECK_RECALL``."""
     w = layer_weights(checkpoint, layer)
     gate, bias = w["block_sparse_moe.gate.weight"], w["block_sparse_moe.gate.e_score_correction_bias"]
-    read_chain, _ = chain_ffn(chain, layer)
-    producer = json.loads((Path(chain) / MANIFEST).read_text())["producer"]
+    read_chain, _, producer = chain_ffn(chain, layer)
 
     def make(start: int, end: int) -> tuple[torch.Tensor, dict[str, float]]:
         p = read_chain([f"moe_input_{layer}", f"routing_ids_{layer}"], start, end)
@@ -291,8 +290,8 @@ def moe_abs_error(err_sq: torch.Tensor, ref_sq: torch.Tensor, width: int, flippe
     kept = ~flipped
     total = float(err_sq.double().sum())
     e["flip_fraction"] = float(flipped.double().mean()) if flipped.numel() else nan
-    e["moe_rms_err_unflipped"] = float((err_sq[kept].double() / width).mean().sqrt()) if kept.any() else nan
-    e["moe_rms_err_flipped"] = float((err_sq[flipped].double() / width).mean().sqrt()) if flipped.any() else nan
+    e["moe_rms_err_unflipped"] = error_norms(err_sq[kept] / width, ref_sq[kept] / width)["rms_err"]
+    e["moe_rms_err_flipped"] = error_norms(err_sq[flipped] / width, ref_sq[flipped] / width)["rms_err"]
     e["flipped_error_share"] = float(err_sq[flipped].double().sum()) / total if total > 0 else nan
     return e
 
@@ -312,7 +311,7 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
     source = Path(manifest["input"])
     chain = json.loads((source / MANIFEST).read_text()).get("chain")
     if chain is not None:
-        read_chain, _ = chain_ffn(Path(chain), layer)
+        read_chain, _, _ = chain_ffn(Path(chain), layer)
     gate = gate.float()
     num_chunks = -(-count // chunk)
     moe = TokenErrorAccumulator()
@@ -361,6 +360,11 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
     err_sq, ref_sq = moe.squared_norms()
     per_row = {k: torch.cat(v) if v else torch.zeros(0) for k, v in per_row.items()}
     flipped = per_row["recall"] < 1
+
+    def margin_median(margins: torch.Tensor) -> dict:
+        """The median FP64 routing margin of a chain reference's rows; a trace reference has none."""
+        return {} if chain is None else {"reference_margin_median": quantile(margins, 0.5)}
+
     misses = {k: torch.cat([m[k] for m in misses]) for k in misses[0]}
     windows = []
     for lo in range(0, count, window):
@@ -378,7 +382,7 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
                 "moe_nrmse_max": float(row_nrmse[lo:hi].max()),
                 "moe_nrmse_median_unflipped": quantile(unflipped, 0.5),
                 **moe_abs_error(err_sq[lo:hi], ref_sq[lo:hi], width, flipped[lo:hi]),
-                "reference_margin_median": quantile(per_row["reference_margin"][lo:hi], 0.5),
+                **margin_median(per_row["reference_margin"][lo:hi]),
                 "recall_vs_reference_mean": float(recall.mean()),
                 "set_equal_vs_reference": float((recall == 1).float().mean()),
                 "recall_reference_vs_fp32_mean": float(per_row["recall_reference_vs_fp32"][lo:hi].mean()),
@@ -407,7 +411,7 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
             "moe_nrmse_median": float(row_nrmse.median()),
             "moe_nrmse_median_unflipped": quantile(row_nrmse[~flipped], 0.5),
             **moe_abs_error(err_sq, ref_sq, width, flipped),
-            "reference_margin_median": quantile(per_row["reference_margin"], 0.5),
+            **margin_median(per_row["reference_margin"]),
             "recall_vs_reference_mean": float(per_row["recall"].mean()),
             "set_equal_vs_reference": float((per_row["recall"] == 1).float().mean()),
             "recall_gpu_vs_reference_mean": _mean(per_row["recall_gpu_vs_reference"]),

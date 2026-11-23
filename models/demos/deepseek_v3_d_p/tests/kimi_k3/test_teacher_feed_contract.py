@@ -348,6 +348,7 @@ def test_moe_score_places_rows_and_misses_by_context_position(tmp_path: Path):
     assert [w["recall_vs_reference_mean"] for w in windows] == pytest.approx([1.0, 1.0, 15 / 16])
     assert [w["dropped_reference_weight_mean"] for w in windows] == pytest.approx([0.0, 0.0, 1 / 16])
     assert result["count"] == count and result["overall"]["misses"] == 1
+    assert "reference_margin_median" not in windows[0]  # (a trace has no FP64 routing margin)
 
 
 # --- FP64 golden (dsa_fp64_golden.py) ---------------------------------------------------------------------------
@@ -1548,6 +1549,7 @@ def test_moe_teacher_feed_from_the_deep_chain_scores_every_row_by_absolute_error
     assert (
         win[0]["flip_fraction"] == 0 and win[0]["flipped_error_share"] != win[0]["flipped_error_share"]
     )  # NaN: no error
+    assert win[0]["moe_rms_err_flipped"] != win[0]["moe_rms_err_flipped"]  # NaN: no flipped row
     margin = p["routing_margin_1"].float()
     assert win[1]["reference_margin_median"] == pytest.approx(float(margin[4:8].sort().values[1:3].mean()))
     # The registry's migrated manifest shape reads the same rows and scores the same.
