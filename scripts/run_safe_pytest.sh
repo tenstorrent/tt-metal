@@ -905,9 +905,9 @@ if [[ "$IS_HANG" == true ]]; then
     exit 2
 fi
 
-# A crash (killed by a signal, pytest interrupted or internal error) may have stopped mid device operation: reset
+# A crash (killed by a signal, or a pytest internal error) may have stopped mid device operation: reset
 # instead of handing the board on as clean.
-if [[ "$SIM_MODE" == false && ( $EXIT_CODE -ge 128 || $EXIT_CODE -eq 2 || $EXIT_CODE -eq 3 ) ]]; then
+if [[ "$SIM_MODE" == false && ( $EXIT_CODE -ge 128 || $EXIT_CODE -eq 3 ) ]]; then
     echo "SAFE_PYTEST: pytest crashed or was interrupted (exit $EXIT_CODE), resetting device..."
     if ds_reset fault "crash (exit ${EXIT_CODE}) in ${TEST_PATH}"; then
         rm -f "$DIRTY_FLAG"
