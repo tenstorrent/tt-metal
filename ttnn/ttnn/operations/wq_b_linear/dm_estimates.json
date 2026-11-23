@@ -1466,6 +1466,375 @@
      "note": "same, linked bursts per round (estimate tool has no linked option; closest candidate)"
     }
    ]
+  },
+  {
+   "id": "fd84887f",
+   "utc": "2026-11-23T01:22:03.750450+00:00",
+   "phase": "Refinement 2",
+   "label": "current_bankspread_2x1088",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "W stream [1536,4096] bfp8_b, 64 workers",
+    "groups": [
+     {
+      "name": "w_read",
+      "family": "dram_read",
+      "cores": 64,
+      "bytes": 1088,
+      "pages_per_core": 96,
+      "batch": 8,
+      "noc": 0,
+      "placement": "interleaved",
+      "page_map": {
+       "core_step": 1,
+       "run": 1,
+       "stride": 64
+      }
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "W stream [1536,4096] bfp8_b, 64 workers",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "w_read",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 16917.037037037036,
+      "details": {
+       "pass_cycles": 22838.0,
+       "steady_cycles_per_pass": 22493.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 22464.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 64
+      },
+      "steady_ns_per_pass": 16661.48148148148
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": [
+    {
+     "group": "w_read",
+     "measured_ns": 16670.0,
+     "measured_at": "2026-11-23T01:28:28+00:00",
+     "recorded_utc": "2026-11-23T01:28:28.790089+00:00",
+     "estimate_ns": 16917.037037037036,
+     "error_pct": 1.4819258370547983,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": ""
+    }
+   ]
+  },
+  {
+   "id": "85df0099",
+   "utc": "2026-11-23T01:22:05.560734+00:00",
+   "phase": "Refinement 2",
+   "label": "coalesced_2176",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "W stream [1536,4096] bfp8_b, 64 workers",
+    "groups": [
+     {
+      "name": "w_read",
+      "family": "dram_read",
+      "cores": 64,
+      "bytes": 2176,
+      "pages_per_core": 48,
+      "batch": 4,
+      "noc": 0,
+      "placement": "interleaved",
+      "page_map": {
+       "core_step": 1,
+       "run": 1,
+       "stride": 64
+      }
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "W stream [1536,4096] bfp8_b, 64 workers",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "w_read",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 16441.48148148148,
+      "details": {
+       "pass_cycles": 22196.0,
+       "steady_cycles_per_pass": 22027.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 21840.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 64
+      },
+      "steady_ns_per_pass": 16316.296296296297
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": [
+    {
+     "group": "w_read",
+     "measured_ns": 15434.0,
+     "measured_at": "2026-11-23T01:28:28+00:00",
+     "recorded_utc": "2026-11-23T01:28:28.863181+00:00",
+     "estimate_ns": 16441.48148148148,
+     "error_pct": 6.527675790342635,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": ""
+    }
+   ]
+  },
+  {
+   "id": "9234b73a",
+   "utc": "2026-11-23T01:22:09.287478+00:00",
+   "phase": "Refinement 2",
+   "label": "contiguous_2x1088",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "W stream [1536,4096] bfp8_b, 64 workers",
+    "groups": [
+     {
+      "name": "w_read",
+      "family": "dram_read",
+      "cores": 64,
+      "bytes": 1088,
+      "pages_per_core": 96,
+      "batch": 8,
+      "noc": 0,
+      "placement": "interleaved",
+      "page_map": {
+       "core_step": 2,
+       "run": 2,
+       "stride": 128
+      }
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "W stream [1536,4096] bfp8_b, 64 workers",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "w_read",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 15672.592592592591,
+      "details": {
+       "pass_cycles": 21158.0,
+       "steady_cycles_per_pass": 20751.0,
+       "binding": "NoC link ['link', 0, 0, 11, 1, 11]",
+       "lower_bounds_cycles": {
+        "noc_link": 20736.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 64
+      },
+      "steady_ns_per_pass": 15371.111111111111
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": []
+  },
+  {
+   "id": "eb21f858",
+   "utc": "2026-11-23T01:22:17.821353+00:00",
+   "phase": "Refinement 2",
+   "label": "coalesced_2176_nocsplit",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "W stream [1536,4096] bfp8_b, 64 workers",
+    "groups": [
+     {
+      "name": "w_read",
+      "family": "dram_read",
+      "cores": 64,
+      "bytes": 2176,
+      "pages_per_core": 48,
+      "batch": 4,
+      "noc": "split",
+      "placement": "interleaved",
+      "page_map": {
+       "core_step": 1,
+       "run": 1,
+       "stride": 64
+      }
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "W stream [1536,4096] bfp8_b, 64 workers",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "w_read",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 15172.592592592591,
+      "details": {
+       "pass_cycles": 20483.0,
+       "steady_cycles_per_pass": 20344.0,
+       "binding": "NoC link ['link', 1, 0, 7, 0, 6]",
+       "lower_bounds_cycles": {
+        "noc_link": 20160.0,
+        "dram_channel": 17664.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 64,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 15069.62962962963
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": []
+  },
+  {
+   "id": "025a6502",
+   "utc": "2026-11-23T01:22:18.328073+00:00",
+   "phase": "Refinement 2",
+   "label": "y_store_noc_1 (DRAM proxy; y is L1)",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "y store 64 workers x 10 tiles",
+    "groups": [
+     {
+      "name": "y_store",
+      "family": "dram_write",
+      "cores": 64,
+      "bytes": 2048,
+      "pages_per_core": 10,
+      "batch": 10,
+      "noc": 1,
+      "placement": "interleaved"
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "y store 64 workers x 10 tiles",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "y_store",
+      "family": "dram_write",
+      "status": "estimated",
+      "pass_ns": 3427.9938271604933,
+      "details": {
+       "pass_cycles": 4627.791666666666,
+       "steady_cycles_per_pass": 4120.802083333333,
+       "binding": "NoC link ['link', 1, 1, 4, 0, 4]",
+       "lower_bounds_cycles": {
+        "noc_link": 4149.0,
+        "dram_channel": 3520.0000000000005
+       },
+       "issue_cycles_per_request": [
+        0,
+        47.791666666666664
+       ],
+       "noc": 1,
+       "cores": 64
+      },
+      "steady_ns_per_pass": 3052.4459876543206
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": []
+  },
+  {
+   "id": "348d93d4",
+   "utc": "2026-11-23T01:22:18.854790+00:00",
+   "phase": "Refinement 2",
+   "label": "y_store_noc_split (DRAM proxy; y is L1)",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "y store 64 workers x 10 tiles",
+    "groups": [
+     {
+      "name": "y_store",
+      "family": "dram_write",
+      "cores": 64,
+      "bytes": 2048,
+      "pages_per_core": 10,
+      "batch": 10,
+      "noc": "split",
+      "placement": "interleaved"
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "y store 64 workers x 10 tiles",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "y_store",
+      "family": "dram_write",
+      "status": "estimated",
+      "pass_ns": 3410.787037037037,
+      "details": {
+       "pass_cycles": 4604.5625,
+       "steady_cycles_per_pass": 4389.0,
+       "binding": "NoC link ['link', 0, 0, 7, 0, 8]",
+       "lower_bounds_cycles": {
+        "noc_link": 4389.0,
+        "dram_channel": 3520.0000000000005
+       },
+       "issue_cycles_per_request": [
+        48.5625,
+        47.791666666666664
+       ],
+       "noc": "split",
+       "cores": 64
+      },
+      "steady_ns_per_pass": 3251.1111111111113
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": []
   }
  ]
 }

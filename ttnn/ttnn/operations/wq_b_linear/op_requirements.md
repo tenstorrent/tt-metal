@@ -88,7 +88,7 @@ The other part of the cost is per-round: each Counter-mode round pays a write ba
 - The critical path is: x round 0 at ~2.5 µs, then the worker matmul at ~15 µs for kb 4 (11.4 µs ideal), then the ~2 µs output-store tail. The span is set by the slowest worker, whose W bank share ends ~2.5 µs after the median.
 - Next: Refinement 2's tail and W-balance knobs (store overlap / NoC split, `bank_stagger`, column map), then the matmul's own efficiency (subblock 5×1 at kb 4). Not done here because they are outside x delivery and queued as Refinement 2.
 
-### [ ] Refinement 2 — Trim the tail and the W side on the perf-flagged profile
+### [x] Refinement 2 — Trim the tail and the W side on the perf-flagged profile
 
 **Type**: perf
 
@@ -114,6 +114,12 @@ Measure each knob and keep only the device-ns wins. No SUPPORTED change.
 - Measured device span on the flagged shape improves over Refinement 1's result, or each knob is recorded as measured-neutral with numbers in `changelog.md`.
 - PCC ≥ 0.9998, the golden suite is green, and the precision baseline passes.
 - No regression on the guard set (flagged shape, both call patterns).
+
+**Outcome**:
+- Device span 22.5 µs (R1 schedule, re-measured 22.4–22.7 µs this session) → **19.4 µs** (−14%, 1.39× the 14.0 µs SOL). Output bit-identical (PCC 0.999958).
+- Shipped: coalesced W read (one 2,176 B read per k-row; −1.6 µs), `W_DEPTH_BLOCKS` 4 (paces W to compute, so the slowest worker ends with the median; frees 70 KB), per-subblock output store overlapped with the last K-step, and output stores split over NoC0/NoC1. The last two are each ~0.5–1 µs once the slowest-worker outlier is gone.
+- Measured and not shipped: `contiguous` column map, 23.6 µs (vs 22.7 for `bank_spread`), kept as the `COLUMN_MAP` knob. `bank_stagger` was not built: compute and the x rounds both run in K order, so a rotated K start would wait on x, and depth 4 already fixes the bank unfairness it targets.
+- Bottleneck now: worker compute. The matmul runs from x round 0 (~2.5 µs) to ~18.4 µs, ~16 µs against 11.4 µs ideal; the store tail is ~0.7 µs. Next: matmul efficiency (5×1 subblock at kb 4, per-K-step pack/reload into L1 accumulation). Not done here because it is outside this refinement's tail/W scope.
 
 ## Not queued (documented in `verification_report.md`)
 

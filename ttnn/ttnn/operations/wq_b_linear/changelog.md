@@ -63,3 +63,41 @@
   - `Mcast.attach` binds a channel once, so channel s is attached to its sender kernel and the writer in one call (prefix `x_mcast` / `x_mcast_b`), with unused prefixes attached absent.
   - Two NoC1 trees and a NoC0 tree beside the W reads both measured worse than one NoC1 tree.
 - **Tests added**: none (`verify/span.py`, `verify/zones.py`: profile readers for the device span and custom zones).
+
+## Refinement 2 — Trim the tail and the W side on the perf-flagged profile
+- Date: 2026-11-23
+- **Calculator predictions (written before measuring)**, `estimate.py` W stream alone, 64 cores, phase "Refinement 2" in `dm_estimates.json`:
+  - Current, bank_spread, 2 × 1,088 B per k-row: 16.9 µs. Coalesced 2,176 B: 16.4 µs. Contiguous map: 15.7 µs. Coalesced + NoC split: 15.2 µs, with the tool's caveat that split reads on part of the grid measured 17–26% slower than estimated. All are within 10%, so they tie. The binding resource is the NoC link out of the DRAM column.
+  - y store as a DRAM-write proxy (y is L1, which the tool refuses): NoC1 3.43 µs vs split 3.41 µs, a tie. The op model rates `c_noc` split vs NoC1 at 1% (Refinement 2 entry).
+  - So the calculator gave no ranking. Every knob was measured on device.
+- **What was done** (all live knobs in `wq_b_linear_program_descriptor.py`; the Refinement 1 schedule is `COLUMN_MAP="bank_spread"`, `W_COALESCE=False`, `OUT_SUBBLOCK_MAJOR=False`, `Y_STORE_NOC_SPLIT=False`, `W_DEPTH_BLOCKS=None`):
+  - `W_COALESCE` (reader): one `noc_async_read` of `block_n_tiles · w_tile_bytes` per k-row. The host enables it only when the worker's columns are `c, c + num_banks, …` and `tensor_n_tiles % num_banks == 0`, which places them in consecutive slots of one bank.
+  - `W_DEPTH_BLOCKS` 4 (was whole slice resident).
+  - `OUT_SUBBLOCK_MAJOR`: compute's `matmul_block` uses `OutputCBLayout::SubblockMajor`, which pushes per 5×1 subblock on the last K-step. The writer waits cumulatively per subblock, stores it, and pops the block after the barrier.
+  - `Y_STORE_NOC_SPLIT`: the writer (BRISC/NoC1) issues every other y tile on NoC0, which is idle by then because the reader only does reads on NoC0. It barriers both NoCs.
+  - `COLUMN_MAP` knob: `bank_spread` (shipped) or `contiguous`.
+  - `_op_bench.py` takes `WQB_KNOBS="NAME=value,..."` overrides and prints PCC.
+- **Measurements** (device span, `verify/span.py`, median of 5 dispatches, p150; "slow" = slowest worker's TRISC_2 end):
+
+  | Variant | Span | Note |
+  |---|---|---|
+  | R1 schedule (2 runs) | 22.36 / 22.70 µs | slow worker compute ends 20.5–20.9, median 18.0–18.5 |
+  | + `W_COALESCE` | 21.09 µs | W end max 16.7 → 15.5 µs |
+  | + `OUT_SUBBLOCK_MAJOR` alone | 22.11 µs | median store end −0.9 µs; span held by slow worker |
+  | + `Y_STORE_NOC_SPLIT` alone | 22.65 µs | median store end −0.7 µs; span held by slow worker |
+  | `COLUMN_MAP="contiguous"` | 23.62 µs | W end max 18.6 µs: worse |
+  | coalesce + subblock store | 20.64 µs | |
+  | coalesce + subblock store + split | 20.69 µs | slow worker still binds |
+  | coalesce + subblock + depth 3 / 4 / 6 | 20.27 / 20.24 / 20.50 µs | depth 4: slow worker TRISC_2 18.8 vs median 18.6 |
+  | coalesce + depth 4 (no subblock store) | 21.12 µs | |
+  | coalesce + subblock + depth 2 + split | 19.51 µs | |
+  | **Shipped: coalesce + subblock + depth 4 + split** | **19.48 / 19.42 µs** | store end 0.7 µs after compute |
+
+  - Result: −14% vs R1's 22.55 µs, 1.39× the 14.0 µs SOL.
+  - The store levers only show once depth 4 removes the slow-worker outlier. Before that, the wall was the slowest worker's compute, which started late because its early W blocks were served last.
+- **Parts vs calculator** (`estimate.py measure`): W stream, slowest worker's last W read in the op, not an isolated ablation. Current 16.67 µs vs 16.9 estimated (+1.5%). Coalesced 15.43 µs vs 16.4 estimated (+6.5%). The order matches the estimate.
+- **Bottleneck now**: worker compute, ~16 µs from x round 0 to the last pack, vs 11.4 µs ideal. W reads end at ~14.4 µs median, and the store tail is ~0.7 µs.
+- **Accuracy achieved**: output bit-identical to Refinement 1 (bench PCC 0.9999583 for every variant). Precision baseline passes: `randn_s0` PCC=0.999957, relative RMS=0.00986. Shape [1,1,160,1536] × [1536,4096].
+- **Golden test progress**: 3/3 (2 registry cells + regression). Unit tests 14/14 plain, 10/10 `test_wq_b_linear.py` under `--dev`.
+- **Issues encountered**: the bench's first PCC print shows nan during the precompile pass; the real dispatch prints the valid value.
+- **Tests added**: none. `_op_bench.py` gained knob overrides and a PCC print.

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // wq_b_linear worker compute: one matmul_block over num_k_blocks K-steps, packer L1
-// accumulation into cb_interm_acc, last K-step packed TileRowMajor into cb_out_block.
+// accumulation into cb_interm_acc, last K-step packed into cb_out_block (TileRowMajor or per subblock).
 
 #include <cstdint>
 #include "api/compute/matmul.h"
@@ -20,19 +20,21 @@ void kernel_main() {
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(7);
     constexpr uint32_t block_k_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(9);
+    // out_subblock_major: last K-step pushes cb_out_block per subblock (writer stores each as it lands,
+    // overlapping the store with the rest of the last K-step); else one TileRowMajor push per row group.
+    constexpr bool out_subblock_major = get_compile_time_arg_val(10) != 0;
+    constexpr auto out_layout = out_subblock_major ? compute_kernel_lib::OutputCBLayout::SubblockMajor
+                                                   : compute_kernel_lib::OutputCBLayout::TileRowMajor;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_resident, cb_w_block, cb_out_block);
 
     CircularBuffer x_buf(cb_x_resident), w_buf(cb_w_block), out_buf(cb_out_block), interm_buf(cb_interm_acc);
-    compute_kernel_lib::matmul_block<
-        false /*transpose*/,
-        true /*packer_l1_acc*/,
-        compute_kernel_lib::LastBlockTarget::Out,
-        compute_kernel_lib::OutputCBLayout::TileRowMajor>(
-        x_buf,
-        w_buf,
-        out_buf,
-        interm_buf,
-        compute_kernel_lib::MatmulBlockShape::of(
-            in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, num_k_blocks));
+    compute_kernel_lib::
+        matmul_block<false /*transpose*/, true /*packer_l1_acc*/, compute_kernel_lib::LastBlockTarget::Out, out_layout>(
+            x_buf,
+            w_buf,
+            out_buf,
+            interm_buf,
+            compute_kernel_lib::MatmulBlockShape::of(
+                in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, num_k_blocks));
 }

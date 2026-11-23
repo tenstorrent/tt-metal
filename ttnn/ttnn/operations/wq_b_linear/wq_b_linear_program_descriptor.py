@@ -30,7 +30,10 @@ BLOCK_N_TILES = 2  # output columns per worker; num_workers = tensor_n_tiles / B
 # Refinement 1 measured 8 -> 4: the last K-step's compute after the final W block halves, and with the
 # ordered x signal a round costs no fixed ~1 us any more (kb 2: more, smaller rounds, measured slower).
 BLOCK_K_TILES = 4
-W_DEPTH_BLOCKS = None  # cb_w_block depth in K-steps; None = num_k_blocks (whole W slice resident)
+# cb_w_block depth in K-steps (None = num_k_blocks, whole W slice resident). Refinement 2: 4 paces each
+# worker's W stream to its compute, so early-served workers stop crowding the banks; the slowest worker
+# now finishes with the median (measured 20.6 -> 20.2 us; depth 2/3/6 tie or lose). Frees 70 KB L1.
+W_DEPTH_BLOCKS = 4
 OUT_DEPTH_BLOCKS = 1  # one output block per core
 MCAST_RECT_WIDTH_MAX = 8
 
@@ -53,6 +56,18 @@ NUM_X_SENDERS = 1
 X_SENDER_NOCS = (ttnn.NOC.NOC_1, ttnn.NOC.NOC_0)
 X_MCAST_PREFIXES = ("x_mcast", "x_mcast_b")  # worker channel names, one per sender slot
 W_WAIT_X0 = False  # hold each worker's W stream until x round 0 lands (measured slower; kept as a knob)
+
+# ---- Tail / W-side knobs (Refinement 2; numbers in changelog.md). The Refinement 1 schedule is
+# COLUMN_MAP = "bank_spread", W_COALESCE = False, OUT_SUBBLOCK_MAJOR = False, Y_STORE_NOC_SPLIT = False,
+# W_DEPTH_BLOCKS = None. ----
+# Column map: "bank_spread" (worker j: block_n_tiles columns of one bank, residue j % num_banks) or
+# "contiguous" (worker j: columns j*block_n_tiles .. +block_n_tiles-1, one per bank).
+COLUMN_MAP = "bank_spread"
+# One read per W k-row when the worker's columns sit in consecutive slots of one bank (bank_spread with
+# tensor_n_tiles % num_banks == 0); silently off otherwise.
+W_COALESCE = True
+OUT_SUBBLOCK_MAJOR = True  # store each output subblock as compute packs it (overlap with the last K-step)
+Y_STORE_NOC_SPLIT = True  # writer sends every other output tile on NoC0 (idle at the tail)
 
 
 def _dest_tile_limit(fp32_dest_acc_en):
@@ -153,7 +168,19 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
     all_crs = _crs(workers + senders)  # cb_x_resident: one address on every sender and worker
 
     num_banks = device.dram_grid_size().x
-    cols = _bank_spread_columns(tensor_n_tiles, block_n_tiles, num_workers, num_banks)
+    if COLUMN_MAP == "bank_spread":
+        cols = _bank_spread_columns(tensor_n_tiles, block_n_tiles, num_workers, num_banks)
+    elif COLUMN_MAP == "contiguous":
+        cols = [list(range(j * block_n_tiles, (j + 1) * block_n_tiles)) for j in range(num_workers)]
+    else:
+        raise ValueError(f"wq_b_linear: unknown COLUMN_MAP {COLUMN_MAP!r}")
+    # Coalescing needs page(k, c + i*num_banks) in consecutive slots of one bank: every row starts on the
+    # same bank (tensor_n_tiles % num_banks == 0) and the worker's columns step by num_banks.
+    w_coalesce = (
+        W_COALESCE
+        and tensor_n_tiles % num_banks == 0
+        and all(cs == [cs[0] + i * num_banks for i in range(block_n_tiles)] for cs in cols)
+    )
 
     # ---- Page sizes ----
     x_tile_bytes = x.buffer_page_size()
@@ -237,7 +264,15 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         )
 
     # ---- Worker reader (W columns per K-step), NCRISC / NoC0 ----
-    reader_ct = [CB_W_BLOCK, block_k_tiles, block_n_tiles, num_k_blocks, tensor_n_tiles, int(W_WAIT_X0)]
+    reader_ct = [
+        CB_W_BLOCK,
+        block_k_tiles,
+        block_n_tiles,
+        num_k_blocks,
+        tensor_n_tiles,
+        int(W_WAIT_X0),
+        int(w_coalesce),
+    ]
     reader_ct.extend(ttnn.TensorAccessorArgs(w).get_compile_time_args())
     reader_rt = ttnn.RuntimeArgs()
     for j, (cx, cy) in enumerate(workers):
@@ -252,6 +287,7 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
 
     # ---- Worker writer (x round arrival + output store), BRISC / NoC1 ----
     writer_ct = [CB_X_RESIDENT, CB_OUT_BLOCK, block_m_tiles, block_k_tiles, block_n_tiles, num_k_blocks, tensor_n_tiles]
+    writer_ct.extend([int(OUT_SUBBLOCK_MAJOR), sb_h, sb_w, int(Y_STORE_NOC_SPLIT)])
     writer_ct.extend(ttnn.TensorAccessorArgs(y).get_compile_time_args())
     writer_rt = ttnn.RuntimeArgs()
     for j, (cx, cy) in enumerate(workers):
@@ -276,6 +312,7 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         sb_w,
         block_k_tiles,
         num_k_blocks,
+        int(OUT_SUBBLOCK_MAJOR),
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "wq_b_linear_compute.cpp"),

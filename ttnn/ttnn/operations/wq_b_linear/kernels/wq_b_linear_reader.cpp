@@ -3,6 +3,9 @@
 
 // wq_b_linear worker reader (NCRISC / NoC0): stream this worker's block_n_tiles W columns,
 // one K-step (block_k_tiles x block_n_tiles tiles, (k, n_local) row-major) per barrier/push.
+// w_coalesce: the host guarantees this worker's columns are cols[0] + nn * num_banks (bank-adjacent
+// slots of one bank: page p and p + num_banks sit in consecutive slots), so each k-row is ONE read of
+// block_n_tiles * w_tile_bytes instead of block_n_tiles tile reads.
 // w_wait_x0: hold the W stream until x round 0 has landed here (x channel "x_mcast", Counter >= 1),
 // so the x senders' first DRAM reads do not share the banks with all 64 W streams; compute cannot
 // start before x round 0 anyway.
@@ -25,7 +28,8 @@ void kernel_main() {
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(3);
     constexpr uint32_t tensor_n_tiles = get_compile_time_arg_val(4);
     constexpr bool w_wait_x0 = get_compile_time_arg_val(5) != 0;
-    constexpr auto w_args = TensorAccessorArgs<6>();
+    constexpr bool w_coalesce = get_compile_time_arg_val(6) != 0;
+    constexpr auto w_args = TensorAccessorArgs<7>();
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("x_mcast_ct_offset"),
         get_named_compile_time_arg_val("x_mcast_rt_offset")>();
@@ -50,9 +54,14 @@ void kernel_main() {
         uint32_t dst = get_write_ptr(cb_w_block);
         for (uint32_t kk = 0; kk < block_k_tiles; ++kk) {
             const uint32_t row_page = (kb * block_k_tiles + kk) * tensor_n_tiles;
-            for (uint32_t nn = 0; nn < block_n_tiles; ++nn) {
-                noc_async_read_tile(row_page + cols[nn], w_acc, dst);
-                dst += w_tile_bytes;
+            if constexpr (w_coalesce) {
+                noc_async_read(w_acc.get_noc_addr(row_page + cols[0]), dst, block_n_tiles * w_tile_bytes);
+                dst += block_n_tiles * w_tile_bytes;
+            } else {
+                for (uint32_t nn = 0; nn < block_n_tiles; ++nn) {
+                    noc_async_read_tile(row_page + cols[nn], w_acc, dst);
+                    dst += w_tile_bytes;
+                }
             }
         }
         noc_async_read_barrier();
