@@ -56,8 +56,8 @@ class Trainer(ABC):
         """Validate ``config`` and build what a run needs: data, device, model and optimizer.
 
         Fails on an untrainable config before the device is opened or any weights are downloaded. Any
-        exception goes to every callback's ``on_setup_error`` and is re-raised; ``cleanup`` still frees what
-        was built.
+        exception, a ``KeyboardInterrupt`` too, goes to every callback's ``on_setup_error`` and is re-raised;
+        ``cleanup`` still frees what was built.
         """
         try:
             self._host_attributes()
@@ -73,7 +73,7 @@ class Trainer(ABC):
             self.device_manager = self._create_device_manager()
             self.model = self._load_model()
             self.optimizer = self._load_optimizer()
-        except Exception as exception:
+        except BaseException as exception:
             self.callback_handler("on_setup_error", exception)
             raise
 
@@ -83,14 +83,14 @@ class Trainer(ABC):
     def _train_lifecycle(self) -> Iterator[None]:
         """``on_train_start`` before the loop and ``on_train_end`` after it.
 
-        Any exception, also from ``on_train_start`` or ``on_train_end``, goes to every callback's ``on_train_error``
-        and is re-raised, so ``on_train_end`` never sees a half-trained model.
+        Any exception, also from ``on_train_start`` or ``on_train_end`` and a ``KeyboardInterrupt`` too, goes to every
+        callback's ``on_train_error`` and is re-raised, so ``on_train_end`` never sees a half-trained model.
         """
         try:
             self.callback_handler("on_train_start")
             yield
             self.callback_handler("on_train_end")
-        except Exception as exception:
+        except BaseException as exception:
             self.callback_handler("on_train_error", exception)
             raise
         finally:

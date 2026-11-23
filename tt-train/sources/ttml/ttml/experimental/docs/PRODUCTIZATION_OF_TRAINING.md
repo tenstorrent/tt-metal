@@ -380,7 +380,8 @@ finally:
   `on_validation_batch_end`, `on_validation_end`, `on_train_end` and `on_train_error`. They don't have to subclass
   `Callback`.
 - **Failures.** An exception in `setup` goes to every callback's `on_setup_error`, and one in `train` to
-  `on_train_error`; then the method re-raises it. So a host reports both through its callbacks, with nothing to catch.
+  `on_train_error`; then the method re-raises it. That includes `KeyboardInterrupt` and `SystemExit`. So a host
+  reports both through its callbacks, with nothing to catch.
   An error hook that raises fails too: the callbacks after it don't get theirs, and the method raises the hook's
   exception, with the run's exception as its `__context__`.
 - **Stopping.** An exception from a callback ends the run: `on_train_error` sees it, then `train` raises it. To

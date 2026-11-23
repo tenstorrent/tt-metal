@@ -25,16 +25,18 @@ class _Device:
 
 
 class _StubTrainer(Trainer):
-    """Trains on ``batches``, plain floats; ``fail_in`` names the step that raises, ``"train"`` on the last batch."""
+    """Trains on ``batches``, plain floats; ``fail_in`` names the step that raises ``error``, ``"train"`` on the last
+    batch."""
 
-    def __init__(self, callbacks, fail_in, batches=(1.0,)):
+    def __init__(self, callbacks, fail_in, batches=(1.0,), error=RuntimeError):
         super().__init__(callbacks)
         self.fail_in = fail_in
         self.batches = list(batches)
+        self.error = error
 
     def _load_dataloaders(self):
         if self.fail_in == "setup":
-            raise RuntimeError("setup failed")
+            raise self.error("setup failed")
         return self.batches, None
 
     def _create_device_manager(self):
@@ -51,7 +53,7 @@ class _StubTrainer(Trainer):
 
     def _forward(self, batch):
         if self.fail_in == "train" and batch == self.batches[-1]:
-            raise RuntimeError("train failed")
+            raise self.error("train failed")
         return batch
 
     def _backward(self, loss):
@@ -176,6 +178,34 @@ def test_failing_hook_stops_dispatch_and_ends_run(expect_error):
         ("first", "on_train_error", "first.on_train_start failed"),
         ("second", "on_train_error", "first.on_train_start failed"),
     ]
+
+
+def test_interrupt_goes_to_the_error_hooks(expect_error):
+    calls = []
+    # Two steps, so the interrupt lands with the first one's loss summed and not yet logged.
+    trainer = _StubTrainer(
+        [_Recorder("first", calls), MetricsCallback()], fail_in="train", batches=(1.0, 2.0), error=KeyboardInterrupt
+    )
+    trainer.setup(_config())
+    device = trainer.device_manager
+    try:
+        with expect_error(KeyboardInterrupt, "train failed"):
+            trainer.train()
+    finally:
+        trainer.cleanup()
+    assert calls == [("first", "on_train_start"), ("first", "on_train_error", "train failed")]
+    assert device.state_at_close == {}
+
+
+def test_interrupt_in_setup_goes_to_the_error_hooks(expect_error):
+    calls = []
+    trainer = _StubTrainer([_Recorder("first", calls)], fail_in="setup", error=SystemExit)
+    try:
+        with expect_error(SystemExit, "setup failed"):
+            trainer.setup(_config())
+    finally:
+        trainer.cleanup()
+    assert calls == [("first", "on_setup_error", "setup failed")]
 
 
 def test_metrics_log_the_summed_loss_from_callback_state():

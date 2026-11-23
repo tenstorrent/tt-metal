@@ -87,7 +87,7 @@ class Callback:
         """
 
     def on_train_error(self, trainer: Any, exception: BaseException) -> None:
-        """``train`` failed or a hook stopped it, and ``train`` will re-raise ``exception``.
+        """``train`` failed, was interrupted or a hook stopped it, and ``train`` will re-raise ``exception``.
 
         If it raises, the callbacks after it don't get ``on_train_error``, and ``train`` raises its exception, with
         ``exception`` as its ``__context__``.
