@@ -8,6 +8,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -313,21 +314,25 @@ inline void quant_family(
 //
 // api/compute/quantization.h reaches for the same ckernel::sfpu names on every architecture, so the
 // wrappers below give the kernels above their WH/BH spelling instead of making that header branch on
-// the arch. Only the Int32-output endpoints appear here: Quasar has no 8-bit pack or unbias kernel,
-// and quantization.h leaves those wrappers undeclared on this arch.
+// the arch. Quasar has neither an 8-bit pack nor an int8-input unbias kernel, so the endpoints that
+// need one keep the WH/BH signature and reject the call at runtime instead of disappearing, the way
+// ckernel_sfpu_sub_int.h does. A portable kernel naming those APIs still compiles here.
 //
 // The template parameters exist to match the WH/BH signatures. SIGN_MAGNITUDE_FORMAT is forwarded;
 // the Compute API leaves it false, which is what unpack-to-dest delivers (raw 32-bit words, i.e.
-// two's-complement Int32). The rest are pinned to the one combination these kernels implement.
+// two's-complement Int32).
 // ------------------------------------------------------------------------------------------------
 
 template <
     bool APPROXIMATION_MODE /*unused*/,
     bool SIGN_MAGNITUDE_FORMAT = false,
     DataFormat OUTPUT_FORMAT = DataFormat::Int32>
-inline void quant_init(const std::uint32_t zero_point) {
-    static_assert(OUTPUT_FORMAT == DataFormat::Int32, "Quasar quant_init supports an Int32 output only");
-    quant_family_init<QuantVariant::Quant, SIGN_MAGNITUDE_FORMAT>(zero_point);
+inline void quant_init([[maybe_unused]] const std::uint32_t zero_point) {
+    if constexpr (OUTPUT_FORMAT == DataFormat::Int32) {
+        quant_family_init<QuantVariant::Quant, SIGN_MAGNITUDE_FORMAT>(zero_point);
+    } else {
+        LLK_ASSERT(false, "Quasar quant has an Int32 output only");
+    }
 }
 
 template <
@@ -335,16 +340,22 @@ template <
     bool SIGN_MAGNITUDE_FORMAT = false,
     DataFormat OUTPUT_FORMAT = DataFormat::Int32,
     bool INT8_INPUT = false>
-inline void requant_init(const std::uint32_t zero_point, const std::uint32_t out_zero_point = 0) {
-    static_assert(OUTPUT_FORMAT == DataFormat::Int32, "Quasar requant_init supports an Int32 output only");
-    static_assert(!INT8_INPUT, "Quasar requant_init has no Int8 input path");
-    quant_family_init<QuantVariant::Requant, SIGN_MAGNITUDE_FORMAT>(zero_point, out_zero_point);
+inline void requant_init(
+    [[maybe_unused]] const std::uint32_t zero_point, [[maybe_unused]] const std::uint32_t out_zero_point = 0) {
+    if constexpr (OUTPUT_FORMAT == DataFormat::Int32 && !INT8_INPUT) {
+        quant_family_init<QuantVariant::Requant, SIGN_MAGNITUDE_FORMAT>(zero_point, out_zero_point);
+    } else {
+        LLK_ASSERT(false, "Quasar requant has an Int32 input and an Int32 output only");
+    }
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
-inline void dequant_init(const std::uint32_t zero_point) {
-    static_assert(!INT8_INPUT, "Quasar dequant_init has no Int8 input path");
-    quant_family_init<QuantVariant::Dequant, SIGN_MAGNITUDE_FORMAT>(zero_point);
+inline void dequant_init([[maybe_unused]] const std::uint32_t zero_point) {
+    if constexpr (!INT8_INPUT) {
+        quant_family_init<QuantVariant::Dequant, SIGN_MAGNITUDE_FORMAT>(zero_point);
+    } else {
+        LLK_ASSERT(false, "Quasar dequant has an Int32 input only");
+    }
 }
 
 template <
@@ -365,10 +376,15 @@ template <
     bool INT8_INPUT = false,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_requant_int32(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-    static_assert(!INT8_INPUT, "Quasar calculate_requant_int32 has no Int8 input path");
-    quant_family<QuantVariant::Requant, ITERATIONS, SIGN_MAGNITUDE_FORMAT, TILE_SHAPE>(
-        dst_index_in0, dst_index_in1, dst_index_out);
+    [[maybe_unused]] const std::uint32_t dst_index_in0,
+    [[maybe_unused]] const std::uint32_t dst_index_in1,
+    [[maybe_unused]] const std::uint32_t dst_index_out) {
+    if constexpr (!INT8_INPUT) {
+        quant_family<QuantVariant::Requant, ITERATIONS, SIGN_MAGNITUDE_FORMAT, TILE_SHAPE>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    } else {
+        LLK_ASSERT(false, "Quasar requant has no Int8 input path");
+    }
 }
 
 template <
@@ -378,10 +394,33 @@ template <
     bool INT8_INPUT = false,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 inline void calculate_dequant_int32(
-    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
-    static_assert(!INT8_INPUT, "Quasar calculate_dequant_int32 has no Int8 input path");
-    quant_family<QuantVariant::Dequant, ITERATIONS, SIGN_MAGNITUDE_FORMAT, TILE_SHAPE>(
-        dst_index_in0, dst_index_in1, dst_index_out);
+    [[maybe_unused]] const std::uint32_t dst_index_in0,
+    [[maybe_unused]] const std::uint32_t dst_index_in1,
+    [[maybe_unused]] const std::uint32_t dst_index_out) {
+    if constexpr (!INT8_INPUT) {
+        quant_family<QuantVariant::Dequant, ITERATIONS, SIGN_MAGNITUDE_FORMAT, TILE_SHAPE>(
+            dst_index_in0, dst_index_in1, dst_index_out);
+    } else {
+        LLK_ASSERT(false, "Quasar dequant has no Int8 input path");
+    }
+}
+
+// The int8-output endpoints. Quasar's packer has no 8-bit path, so there is nothing for these to
+// pack into; they exist so quant_int8_tile and the requant int8-out tiles stay declared here.
+template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_quant_int32_int8_pack(
+    [[maybe_unused]] const std::uint32_t dst_index_in0,
+    [[maybe_unused]] const std::uint32_t dst_index_in1,
+    [[maybe_unused]] const std::uint32_t dst_index_out) {
+    LLK_ASSERT(false, "quant_int8_tile is not supported on Quasar");
+}
+
+template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = SFPU_ITERATIONS, bool INT8_INPUT = false>
+inline void calculate_requant_int32_int8_pack(
+    [[maybe_unused]] const std::uint32_t dst_index_in0,
+    [[maybe_unused]] const std::uint32_t dst_index_in1,
+    [[maybe_unused]] const std::uint32_t dst_index_out) {
+    LLK_ASSERT(false, "requant_int8_tile is not supported on Quasar");
 }
 
 }  // namespace ckernel::sfpu
