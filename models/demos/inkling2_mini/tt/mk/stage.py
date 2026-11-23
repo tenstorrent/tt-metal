@@ -200,7 +200,7 @@ class StagedBankLinear:
         if tiles_out:
             shape = ttnn.Shape([1, 1, x.shape[-2], bl.out_cols])
             out = ttnn.allocate_tensor_on_device(
-                shape, bl.out_dtype, ttnn.TILE_LAYOUT, bl.device, ttnn.DRAM_MEMORY_CONFIG
+                shape, bl.out_dtype, ttnn.TILE_LAYOUT, bl.device, getattr(bl, "out_mem", ttnn.DRAM_MEMORY_CONFIG)
             )
         else:
             assert bl.out_dtype == ttnn.float32 and x.shape[-2] == 1

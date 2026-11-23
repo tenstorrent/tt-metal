@@ -20,6 +20,8 @@ FORCE_INLINE void fill(uint32_t dst, uint32_t bits, uint32_t n) {
 }
 }  // namespace
 
+constexpr bool proj_dram = get_named_compile_time_arg_val("proj_dram");  // projection output in DRAM (else L1)
+
 void kernel_main() {
     constexpr uint32_t nh = get_named_compile_time_arg_val("nh");
     constexpr uint32_t gate_tile = get_named_compile_time_arg_val("gate_tile");  // projection tile of gate col 0
@@ -45,7 +47,7 @@ void kernel_main() {
     // wave 1: zeros and every staged block - one read barrier
     attnio::zero_l1(aw + nh * 256, 2048 - nh * 256);
     attnio::zero_l1(gw + nh * 256, 2048 - nh * 256);
-    attnio::stage_row(proj, 2048, 2, gate_tile + h0 * 4, nh * 4, 0, stage);
+    attnio::stage_row<proj_dram>(proj, 2048, 2, gate_tile + h0 * 4, nh * 4, 0, stage);
     for (uint32_t k = 0; k < nh; ++k) {
         attnio::stage_row(attn, 2048, 2, t0, 4, r0 + k, stage + st_a + 512 * k);
     }

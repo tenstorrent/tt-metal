@@ -74,6 +74,10 @@ def _shared_l1(device, name, c, mem):
     return _SHARED[key][1]
 
 
+def _is_dram(t):
+    return int(t.memory_config().buffer_type == ttnn.BufferType.DRAM)
+
+
 def _compute_config(fp32_cbs):
     return F.compute_config(fp32_cbs)
 
@@ -183,7 +187,7 @@ class AttnPrep:
                     w += [positions.pos.buffer_address()]
             r_rt.append(r)
             w_rt.append(w)
-        named = dict(nitems=nitems, nlag=nlag, dyn=dyn, has_tau=has_tau, mass=mass)
+        named = dict(nitems=nitems, nlag=nlag, dyn=dyn, has_tau=has_tau, mass=mass, proj_dram=_is_dram(proj))
         c_named = dict(
             named,
             norm=int(kind == "v"),
@@ -234,7 +238,7 @@ class AttnPrep:
     def _bias_group(self, proj, positions, tau):
         cores = self.b_cores
         has_tau = int(self.dyn)
-        named = dict(nj=NJ, has_tau=has_tau, rel_tile=6144 // 32)
+        named = dict(nj=NJ, has_tau=has_tau, rel_tile=6144 // 32, proj_dram=_is_dram(proj))
         r_rt, w_rt = [], []
         for i, _ in enumerate(cores):
             r_rt.append(
@@ -253,7 +257,8 @@ class AttnPrep:
             w_rt.append([self.mask.buffer_address(), i * NJ, proj.buffer_address(), self.sink.buffer_address(), blk])
         crs = _crs(cores)
         sink_core, rest = cores[:1], cores[1:]
-        w_named = dict(nj=NJ, sink_tile=6528 // 32, sink_blk=int(self.dyn), neg=f32_bits(NEG), grp=int(self.dyn))
+        w_named = dict(nj=NJ, sink_tile=6528 // 32, sink_blk=int(self.dyn), neg=f32_bits(NEG), grp=int(self.dyn),
+                       proj_dram=_is_dram(proj))  # fmt: skip
         kernels = [
             _kernel("attn_bias_reader.cpp", cores, named, r_rt, ttnn.ReaderConfigDescriptor()),
             _kernel(
@@ -292,7 +297,7 @@ class AttnPrep:
         state's caches (ring slot, and the far cache at pos on global layers). Returns (q, mask, sink): local
         layers the sdpa mask [1, 1, 24, 1024] and sink tile [24, 32]; global layers AttnNear's inputs (with q_grp:
         mask in kv-group layout [1, 8, 32, 1024], sink block [1, 8, 3, 32] fp32)."""
-        F.check_row_input(proj)
+        F.check_row_input(proj, l1_ok=True)  # readers take proj_dram
         assert proj.dtype == ttnn.bfloat16
         tau = positions.tau
         kernels, cbs = [], []
@@ -351,7 +356,7 @@ class AttnOut:
             _kernel(
                 "attn_out_reader.cpp",
                 self.cores,
-                dict(nh=nh, gate_tile=self.GATE_COL // 32, merge=flag, far_grp=far_grp),
+                dict(nh=nh, gate_tile=self.GATE_COL // 32, merge=flag, far_grp=far_grp, proj_dram=_is_dram(proj)),
                 rt,
                 ttnn.ReaderConfigDescriptor(),
             ),

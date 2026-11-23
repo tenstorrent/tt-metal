@@ -8,6 +8,8 @@
 // cols 1..31 = neg (rows 3..31 of each tile stay as allocated, zero).
 #include "attn_io.hpp"
 
+constexpr bool proj_dram = get_named_compile_time_arg_val("proj_dram");  // projection output in DRAM (else L1)
+
 void kernel_main() {
     constexpr uint32_t nj = get_named_compile_time_arg_val("nj");
     constexpr uint32_t has_sink = get_named_compile_time_arg_val("has_sink");
@@ -28,7 +30,7 @@ void kernel_main() {
         cb_reserve_back(cb_sink, 1);
         const uint32_t w = get_write_ptr(cb_sink);
         attnio::zero_l1(w, 2048);
-        attnio::gather_row(proj, 2048, 2, sink_tile, 1, 0, stage + 256, stage);  // barriers (zeros too)
+        attnio::gather_row<proj_dram>(proj, 2048, 2, sink_tile, 1, 0, stage + 256, stage);  // barriers (zeros too)
         volatile tt_l1_ptr uint16_t* v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + 256);
         for (uint32_t h = 0; h < 24; ++h) {
             const uint32_t word = static_cast<uint32_t>(v[h]) * 0x10001u;

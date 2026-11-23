@@ -9,6 +9,8 @@
 //   cb_near:  the near-mask tiles of those slots (fp32, row 0)
 #include "attn_io.hpp"
 
+constexpr bool proj_dram = get_named_compile_time_arg_val("proj_dram");  // projection output in DRAM (else L1)
+
 void kernel_main() {
     constexpr uint32_t nj = get_named_compile_time_arg_val("nj");
     constexpr uint32_t has_tau = get_named_compile_time_arg_val("has_tau");
@@ -40,7 +42,7 @@ void kernel_main() {
     attnio::read_pages(near, 4096, j0, nj, get_write_ptr(cb_near));
     attnio::zero_l1(pw, nj * 2048);
     attnio::zero_l1(rw, 2048);
-    attnio::stage_row(proj, 2048, 2, rel_tile, 12, 0, stage);
+    attnio::stage_row<proj_dram>(proj, 2048, 2, rel_tile, 12, 0, stage);
     const InterleavedAddrGen<true> ring_a = {.bank_base_address = ring, .page_size = 4};
     noc_async_read(ring_a.get_noc_addr(0, 0), stage + st_ring, 64);
     if constexpr (has_tau) {

@@ -79,6 +79,7 @@ LOCAL_GRID = (8, 4)
 # SDPA_HOST(cores) -> ttnn.ProgramDescriptor | None: extra kernels for the local sdpa program (tt/mk/overlap.py sets
 # it while staging is installed); cores = the (x, y) set the sdpa call uses.
 SDPA_HOST = None
+W_ALL_OUT_MEM = ttnn.L1_MEMORY_CONFIG
 
 
 class DecodePositionsFast(DecodePositions):
@@ -256,6 +257,9 @@ class Inkling2AttentionFast(Inkling2Attention):
         # its CB with ~1/4 of the NOC traffic on the 8 shard cores. (w_o's 1-row input read this way was slower.)
         if self.window is not None and self.w_all.bank is not None:
             self.w_all.bank.x_rows = 9
+            # its output (550 KB of tiles, read by the prep and AttnOut programs right after) lives in L1: the prep's
+            # row reads no longer go to DRAM (same bytes)
+            self.w_all.bank.out_mem = W_ALL_OUT_MEM
 
     def new_state(self, max_ctx, cache_dtype=ttnn.bfloat16):
         if self.is_global and max_ctx % FAR_CHUNK:

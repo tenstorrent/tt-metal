@@ -121,6 +121,8 @@ class BankLinear:
         self.out_dtype = out_dtype
         # x_rows > 0: the caller guarantees only the first x_rows rows of every x are non-zero (x_rows.hpp)
         self.x_rows = 0
+        # tile output memory (decode consumers that read it right away may take it in L1)
+        self.out_mem = ttnn.DRAM_MEMORY_CONFIG
         cfg = compute_kernel_config
         self.compute = ttnn.ComputeConfigDescriptor(
             math_fidelity=cfg.math_fidelity, fp32_dest_acc_en=True, dst_full_sync_en=True,
@@ -137,7 +139,7 @@ class BankLinear:
         if tiles_out:
             shape = ttnn.Shape([1, 1, x.shape[-2], self.out_cols])
             out = ttnn.allocate_tensor_on_device(shape, self.out_dtype, ttnn.TILE_LAYOUT, self.device,
-                                                 ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
+                                                 self.out_mem)  # fmt: skip
         else:
             assert self.out_dtype == ttnn.float32 and x.shape[-2] == 1
         otb = ttnn.Tile([TILE, TILE]).get_tile_size(self.out_dtype)

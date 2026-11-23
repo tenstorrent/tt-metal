@@ -7,6 +7,8 @@
 // far-cache mass page.
 #include "attn_io.hpp"
 
+constexpr bool proj_dram = get_named_compile_time_arg_val("proj_dram");  // projection output in DRAM (else L1)
+
 void kernel_main() {
     constexpr uint32_t nitems = get_named_compile_time_arg_val("nitems");
     constexpr uint32_t nlag = get_named_compile_time_arg_val("nlag");
@@ -47,14 +49,14 @@ void kernel_main() {
         const uint32_t page = get_arg_val<uint32_t>(a++);  // first taps page
         attnio::read_pages(taps, 4096, page, nlag, tw + i * nlag * 4096);
         for (uint32_t l = 0; l < nlag; ++l) {
-            attnio::stage_row(proj, 2048, 2, t0s[i], 4, r0s[i] + l, stage + (i * nlag + l) * 512);
+            attnio::stage_row<proj_dram>(proj, 2048, 2, t0s[i], 4, r0s[i] + l, stage + (i * nlag + l) * 512);
         }
         if constexpr (dyn) {                    // nitems == 1
             dcol = get_arg_val<uint32_t>(a++);  // column of d_0 (lags follow) in row r0
             cb_reserve_back(cb_d, nlag);
             dw = get_write_ptr(cb_d);
             attnio::zero_l1(dw, nlag * 4096);
-            d_elem = attnio::stage_elem_block(proj, 2048, 2, r0s[i], dcol, stage + n * 512);
+            d_elem = attnio::stage_elem_block<proj_dram>(proj, 2048, 2, r0s[i], dcol, stage + n * 512);
         }
     }
     noc_async_read_barrier();
