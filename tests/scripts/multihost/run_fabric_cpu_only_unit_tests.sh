@@ -642,7 +642,7 @@ done
 for mock in \
     "${MGD_SUBTORUS}/SC2_32x4_revC_subtorus_aisleC_c07u08_c07u02_mapping.yaml" \
     "${MGD_SUBTORUS}/SC2_32x4_revAB_subtorus_aisleC_c01u02_c01u08_mapping.yaml"; do
-  run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_PREFILL_RR}/sc2_4x4_rr_seam_mgd.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/ttnn/multiprocess/unit_tests_dual_rank_4x4_ring
+  run_test tt-run --mesh-graph-descriptor "${MGD_PREFILL_RR}/sc2_4x4_rr_seam_mgd.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/ttnn/multiprocess/unit_tests_dual_rank_4x4_ring
 done
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_8x4_pipeline_4stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_8X4_PIPELINE}"
 
