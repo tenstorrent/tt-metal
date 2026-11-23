@@ -48,6 +48,24 @@ PACK_UNTILIZE_TILE_SIZES = [
     (2, 32),
 ]
 
+# Largest magnitude a sign-magnitude Int8 holds. The packer clamps to +/- this.
+INT8_SATURATION_BOUND = 127
+
+
+def stimuli_spec_for(formats: FormatConfig) -> StimuliSpec:
+    """Stimuli that stay distinct across the whole tile for this format pair.
+
+    The default 1, 2, 3, ... ramp clamps at 127 for an Int8 endpoint, so every datum past the
+    127th comes back equal and the comparison stops being able to see a misplaced row, face or
+    tile. Sweep the signed 8-bit range at random instead, and overshoot it when the pack narrows
+    so the saturation at both ends is exercised as well.
+    """
+    if DataFormat.Int8 not in (formats.input_format, formats.output_format):
+        return StimuliSpec.sequential()
+    narrowing = formats.input_format.is_32_bit()
+    bound = float(INT8_SATURATION_BOUND) * (1.5 if narrowing else 1.0)
+    return StimuliSpec.uniform(low=-bound, high=bound)
+
 
 def pack_untilize_perf_input_dimensions(dest_acc, dest_sync, tile_shape):
     return generate_perf_input_dimensions(
@@ -200,15 +218,15 @@ def test_pack_untilize_quasar(
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
 
-    sequential_spec = StimuliSpec.sequential()
+    spec = stimuli_spec_for(formats)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
         tile_dimensions=tile_dimensions,
-        spec_A=sequential_spec,
-        spec_B=sequential_spec,
+        spec_A=spec,
+        spec_B=spec,
     )
 
     generate_golden = get_golden_generator(UntilizeGolden)
