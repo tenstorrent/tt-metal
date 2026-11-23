@@ -664,6 +664,42 @@ class LaunchedJob:
                 logger.warning(f"{TT_RUN_PREFIX} the job is paused; fg or bg resumes it (the ranks get SIGCONT)")
                 self._pause_self()
 
+    def _pass_to(self, pids: List[int]) -> float:
+        """Pass the signals tt-run received on to these processes directly: the job's leftovers once the launcher has
+        returned, when there is no job control left to reach them through. Returns the seconds tt-run was paused."""
+        pending, self.passed[:] = list(self.passed), []
+        paused = 0.0
+        pids = [pid for pid in pids if self._parent(pid) not in pids]  # as the ranks got it, not their children
+        for i, signum in enumerate(pending):
+            if i > 0 and pending[i - 1] == signum:
+                continue
+            # The launcher is gone, so their process group is orphaned and the kernel drops a SIGTSTP: pause with SIGSTOP.
+            send = signal.SIGSTOP if signum == signal.SIGTSTP else signum
+            for pid in pids:
+                try:
+                    os.kill(pid, send)
+                except ProcessLookupError:
+                    pass
+            if pids:
+                name = signal.Signals(signum).name
+                logger.info(
+                    f"{TT_RUN_PREFIX} {name} received: passed it on to the {len(pids)} process(es) still exiting"
+                )
+            if signum == signal.SIGTSTP:
+                t = time.time()
+                self._pause_self()
+                paused += time.time() - t
+        return paused
+
+    @staticmethod
+    def _parent(pid: int) -> int:
+        """The parent pid of a process, or 0 when it is gone."""
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                return int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            return 0
+
     @staticmethod
     def _pause_self() -> None:
         """Pause tt-run as Ctrl-Z would have without the handler; the shell's fg / bg sends SIGCONT."""
@@ -848,14 +884,29 @@ class LaunchedJob:
                 "(Ctrl-C to end them now)"
             )
             wake_r, wake_w = os.pipe()
+            os.set_blocking(wake_r, False)
             os.set_blocking(wake_w, False)
-            previous_wakeup = signal.set_wakeup_fd(wake_w, warn_on_full_buffer=False)  # a signal at tt-run ends it
+            previous_wakeup = signal.set_wakeup_fd(wake_w, warn_on_full_buffer=False)  # every handled signal wakes it
+            settle_t0 = time.time()
+            deadline = settle_t0 + settle_s
             try:
-                self._wait_gone(survivors, settle_s, wake_r)  # let a rank still in its exit path leave on its own
+                # Let a rank still in its exit path leave on its own. Only a stop (Ctrl-C, SIGTERM) ends the wait
+                # early; any other signal goes on to these processes, as it would have to the ranks, and the wait goes
+                # on (a Ctrl-Z pauses its clock too).
+                while survivors and not self.forwarded and time.time() < deadline:
+                    self._wait_gone(survivors, deadline - time.time(), wake_r)
+                    try:
+                        while os.read(wake_r, 512):
+                            pass
+                    except BlockingIOError:
+                        pass
+                    survivors = self._survivors()
+                    deadline += self._pass_to(survivors)
             finally:
                 signal.set_wakeup_fd(previous_wakeup)
                 os.close(wake_r)
                 os.close(wake_w)
+            settle_s = time.time() - settle_t0  # what it waited, for the message below
             stopping = stopping or self.forwarded
             survivors = self._survivors()
         if not survivors:
@@ -2152,28 +2203,39 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
 
 
-def default_multihost_mpi_args(tcp_interface: Optional[str]) -> List[str]:
-    """OpenMPI MCA arguments for multi-host TCP (used by Phase 1 and legacy flow unless --bare).
-
-    When ``tcp_interface`` is set, uses ``btl_tcp_if_include``; otherwise excludes ``docker0,lo``.
-    """
-    if tcp_interface:
-        return [
-            "--mca",
-            "btl",
-            "self,tcp",
-            "--mca",
-            "btl_tcp_if_include",
-            tcp_interface,
-        ]
-    return [
-        "--mca",
-        "btl",
-        "self,tcp",
-        "--mca",
-        "btl_tcp_if_exclude",
-        "docker0,lo",
-    ]
+def default_multihost_mpi_args(tcp_interface: Optional[str], mpi_args: Optional[List[str]] = None) -> List[str]:
+    """The MCA arguments tt-run adds for multi-host TCP, for Phase 1 and Phase 2 alike (unless --bare); the caller puts
+    them before --mpi-args. Each is added only when nothing else already chose it, in this order of precedence:
+    --mpi-args, then --tcp-interface, then the environment (a site profile exporting OMPI_MCA_btl_tcp_if_include, as
+    the exabox hosts do), then the default: exclude docker0 and lo. Warns when one choice replaces another."""
+    user = list(mpi_args or [])
+    args = [] if has_mca_param(user, "btl") else ["--mca", "btl", "self,tcp"]
+    user_chose = [k for k in ("btl_tcp_if_include", "btl_tcp_if_exclude") if has_mca_param(user, k)]
+    env_chose = {
+        k: os.environ[f"OMPI_MCA_{k}"]
+        for k in ("btl_tcp_if_include", "btl_tcp_if_exclude")
+        if os.environ.get(f"OMPI_MCA_{k}")
+    }
+    if user_chose and tcp_interface:
+        logger.warning(
+            f"{TT_RUN_PREFIX} Ignoring --tcp-interface={tcp_interface} because --mpi-args already "
+            "specifies btl_tcp_if_include or btl_tcp_if_exclude."
+        )
+    if not user_chose and tcp_interface:
+        args += ["--mca", "btl_tcp_if_include", tcp_interface]
+    line_sets = user_chose or (["btl_tcp_if_include"] if tcp_interface else [])
+    for k in line_sets:  # the same parameter on the line silently wins; the opposite one is dropped by launch_env
+        if k in env_chose:
+            logger.warning(
+                f"{TT_RUN_PREFIX} the launch line's {k} replaces the environment's OMPI_MCA_{k}={env_chose[k]}"
+            )
+    if not line_sets:
+        if env_chose:
+            env_text = ", ".join(f"OMPI_MCA_{k}" for k in env_chose)
+            logger.info(f"{TT_RUN_PREFIX} TCP interface selection left to the environment ({env_text})")
+        else:
+            args += ["--mca", "btl_tcp_if_exclude", "docker0,lo"]
+    return args
 
 
 class RankBinding(BaseModel):
@@ -3476,42 +3538,8 @@ def legacy_flow(
     effective_rankfile_syntax = rankfile_syntax if rankfile_syntax is not None else detect_rankfile_syntax(mpi_launcher)
 
     if not bare:
-        user_has_btl_setting = has_mca_param(effective_mpi_args, "btl")
-        user_has_tcp_include = has_mca_param(effective_mpi_args, "btl_tcp_if_include")
-        user_has_tcp_exclude = has_mca_param(effective_mpi_args, "btl_tcp_if_exclude")
-
-        # Recommended MPI settings for multi-host clusters:
-        # - Use TCP for byte transfer layer (reliable for multi-host)
-        # - Exclude loopback and docker0 (can't route inter-node traffic)
-        # Note: Exclude both 'lo' (loopback) and 'docker0' (Docker bridge) by default.
-        # These interfaces cannot route traffic between hosts and can cause MPI
-        # process discovery issues if selected. For specific interface control,
-        # use --tcp-interface.
-        multihost_args = []
-        if not user_has_btl_setting:
-            multihost_args.extend(["--mca", "btl", "self,tcp"])
-
-        if tcp_interface:
-            if user_has_tcp_include or user_has_tcp_exclude:
-                logger.warning(
-                    f"{TT_RUN_PREFIX} Ignoring --tcp-interface={tcp_interface} because --mpi-args already "
-                    "specifies btl_tcp_if_include or btl_tcp_if_exclude."
-                )
-            else:
-                # If a specific interface is requested, use include instead of exclude
-                multihost_args.extend(["--mca", "btl_tcp_if_include", tcp_interface])
-        elif not user_has_tcp_include and not user_has_tcp_exclude:
-            # The site's own choice (a profile exporting OMPI_MCA_btl_tcp_if_include, as the exabox hosts do) wins over
-            # this default: replacing it lets the ranks pick an interface they cannot reach each other on.
-            env_choice = [
-                f"OMPI_MCA_{k}" for k in ("btl_tcp_if_include", "btl_tcp_if_exclude") if os.environ.get(f"OMPI_MCA_{k}")
-            ]
-            if env_choice:
-                logger.info(
-                    f"{TT_RUN_PREFIX} TCP interface selection left to the environment ({', '.join(env_choice)})"
-                )
-            else:
-                multihost_args.extend(["--mca", "btl_tcp_if_exclude", "docker0,lo"])
+        # The same multi-host TCP arguments as Phase 1 (default_multihost_mpi_args).
+        multihost_args = default_multihost_mpi_args(tcp_interface, effective_mpi_args)
 
         # Prepend multihost args so user-provided --mpi-args can override if needed
         effective_mpi_args = multihost_args + effective_mpi_args
@@ -3779,7 +3807,7 @@ def new_mode_flow(
     if tcp_interface and not bare:
         validate_network_interface(tcp_interface, verbose=verbose)
     if not bare:
-        multihost_args = default_multihost_mpi_args(tcp_interface)
+        multihost_args = default_multihost_mpi_args(tcp_interface, mpi_args)
         phase1_mpi_args = multihost_args + (mpi_args or [])
         if verbose:
             logger.info(f"{TT_RUN_PREFIX} Phase 1 using multihost MPI args: {' '.join(multihost_args)}")

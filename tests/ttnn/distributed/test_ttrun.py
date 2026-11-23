@@ -2116,6 +2116,135 @@ class TestJobOwnership:
         assert result.exit_code == 0, result.output
         assert ("btl_tcp_if_exclude" in result.output) == (site_include is None), result.output
 
+    @pytest.mark.parametrize(
+        "tcp_interface, mpi_args, env_include, adds, warns",
+        [
+            (None, [], None, ["btl_tcp_if_exclude", "docker0,lo"], None),  # nothing chose: the default
+            (None, [], "eth3", [], None),  # the site's choice is kept (no exclude)
+            ("eth0", [], None, ["btl_tcp_if_include", "eth0"], None),
+            (
+                "eth0",
+                [],
+                "eth3",
+                ["btl_tcp_if_include", "eth0"],
+                "replaces the environment's OMPI_MCA_btl_tcp_if_include=eth3",
+            ),
+            (
+                None,
+                ["--mca", "btl_tcp_if_include", "eth1"],
+                "eth3",
+                [],
+                "replaces the environment's OMPI_MCA_btl_tcp_if_include=eth3",
+            ),
+            ("eth0", ["--mca", "btl_tcp_if_include", "eth1"], None, [], "Ignoring --tcp-interface=eth0"),
+        ],
+        ids=[
+            "default",
+            "site_choice",
+            "tcp_interface",
+            "tcp_interface_over_site",
+            "mpi_args_over_site",
+            "mpi_args_over_flag",
+        ],
+    )
+    def test_phase1_and_phase2_take_the_same_tcp_choice(
+        self, tcp_interface, mpi_args, env_include, adds, warns, monkeypatch
+    ):
+        from ttnn.distributed import ttrun as m
+
+        # One helper decides the TCP interface for both phases: --mpi-args, then --tcp-interface, then the
+        # environment, then exclude docker0,lo; a choice that replaces another is warned about.
+        monkeypatch.delenv("OMPI_MCA_btl_tcp_if_exclude", raising=False)
+        if env_include:
+            monkeypatch.setenv("OMPI_MCA_btl_tcp_if_include", env_include)
+        else:
+            monkeypatch.delenv("OMPI_MCA_btl_tcp_if_include", raising=False)
+        out = {}
+        text = self._logged(lambda: out.setdefault("args", m.default_multihost_mpi_args(tcp_interface, mpi_args)))
+        assert out["args"] == ["--mca", "btl", "self,tcp"] + (["--mca"] + adds if adds else []), out["args"]
+        if warns:
+            assert warns in text, text
+        else:
+            assert "replaces the environment" not in text and "Ignoring --tcp-interface" not in text, text
+        # the site's include always reaches the launcher: no line here sets the opposite (exclude), which would drop it
+        line = ["mpirun"] + out["args"] + mpi_args
+        assert ("OMPI_MCA_btl_tcp_if_include" in m.LaunchedJob.launch_env(line)) == bool(env_include), line
+
+    @pytest.mark.parametrize("sig", ["SIGWINCH", "SIGUSR1", "SIGALRM", "SIGINT"])
+    def test_a_signal_during_the_leftover_wait_is_passed_on_not_taken_for_a_stop(self, sig, tmp_path):
+        import signal
+        import threading
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # The launcher exits 0 while one of its processes is still exiting (3 s). A signal at tt-run meanwhile (a
+        # terminal resize, Slurm's USR1 warning) is passed on to it and the wait goes on: the job ends 0, not as a
+        # leak. Only a stop (Ctrl-C) ends the wait early and ends the process.
+        rec = tmp_path / "got"
+        child = f'trap "echo got >> {rec}" USR1 WINCH ALRM; i=0; while [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done'
+        cmd = ["bash", "-c", f"(sh -c '{child}') & disown; exit 0"]
+        signum = getattr(signal, sig)
+
+        def poke():
+            time.sleep(1.0)
+            os.kill(os.getpid(), signum)
+
+        threading.Thread(target=poke, daemon=True).start()
+        t0 = time.time()
+        text, rc = self._logged_rc(lambda: run_launcher(cmd, cwd=tmp_path))
+        if sig == "SIGINT":
+            assert rc != 0 and time.time() - t0 < 2.5, text
+        else:
+            assert rc == 0 and time.time() - t0 >= 2.5, text
+            assert "a leak" not in text and "job end: outcome=clean exit=0" in text, text
+            # to the leftover itself, as a rank gets it; its own child (the sleep) is not signalled
+            assert f"{sig} received: passed it on to the 1 process(es) still exiting" in text, text
+            assert rec.read_text().strip() == "got", text
+
+    def test_ctrl_z_during_the_leftover_wait_pauses_the_leftover_and_fg_resumes_it(self, tmp_path):
+        import signal
+        import subprocess
+        import sys
+        import time
+
+        # Ctrl-Z while a process of the job is still exiting after the launcher returned: tt-run and the process pause
+        # (SIGSTOP: its process group is orphaned, so the kernel drops a SIGTSTP), fg resumes both, the time paused
+        # does not count against the wait, and the job ends 0. tt-run runs in its own process: paused, it cannot
+        # resume itself.
+        rec, log = tmp_path / "got", tmp_path / "log"
+        child = f'trap "echo cont >> {rec}" CONT; i=0; while [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done'
+        cmd = ["bash", "-c", f"(sh -c '{child}') & disown; exit 0"]
+        script = tmp_path / "ttrun.py"
+        script.write_text(
+            "import sys\nfrom pathlib import Path\nfrom ttnn.distributed.ttrun import run_launcher\n"
+            f"sys.exit(run_launcher({cmd!r}, cwd=Path({str(tmp_path)!r})))\n"
+        )
+        with open(log, "w") as out:
+            ttrun = subprocess.Popen([sys.executable, str(script)], stdout=out, stderr=subprocess.STDOUT)
+        try:
+            end = time.time() + 60
+            while "still running" not in log.read_text():
+                assert time.time() < end and ttrun.poll() is None, log.read_text()
+                time.sleep(0.05)
+            ttrun.send_signal(signal.SIGTSTP)
+            time.sleep(1.0)
+            states = subprocess.run(["ps", "-u", str(os.getuid()), "-o", "stat=,args="], capture_output=True, text=True)
+            leftover = [l.split()[0] for l in states.stdout.splitlines() if "sh -c trap" in l]
+            assert open(f"/proc/{ttrun.pid}/stat").read().rsplit(")", 1)[1].split()[0] == "T", "tt-run is not paused"
+            assert leftover and leftover[0].startswith("T"), f"the leftover is not paused: {states.stdout}"
+            time.sleep(3.5)  # longer than the leftover's own 3 s: paused, it must still be there
+            ttrun.send_signal(signal.SIGCONT)
+            assert ttrun.wait(timeout=30) == 0, log.read_text()
+        finally:
+            if ttrun.poll() is None:
+                ttrun.kill()
+        text = log.read_text()
+        assert "SIGTSTP received: passed it on to the 1 process(es) still exiting" in text, text
+        assert "SIGCONT received: passed it on to the 1 process(es) still exiting" in text, text
+        assert "a leak" not in text and "job end: outcome=clean exit=0" in text, text
+        assert rec.read_text().strip() == "cont", text
+
     def test_the_prterun_address_is_read_only_from_this_users_own_files(self, tmp_path, monkeypatch):
         import tempfile
 
