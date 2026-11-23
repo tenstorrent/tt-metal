@@ -45,7 +45,6 @@ from regression_compare import (  # noqa: E402
 )
 
 POSITIONS = ("p0", "p4", "p24", "p44", "p60")
-DEFAULT_CAP = 1000
 _STATS = ("current", "baseline", "delta_pct", "delta_cycles", "marker", "run_type")
 
 
@@ -428,7 +427,7 @@ def main(argv=None):
     n = sub.add_parser("nodes")
     n.add_argument("--candidates", required=True)
     n.add_argument("--map", required=True)
-    n.add_argument("--cap", type=int, default=DEFAULT_CAP)
+    n.add_argument("--cap", type=int, required=True, help="PLACEMENT_CAP in llk-perf-gate.yaml")
     n.add_argument("--out", required=True)
     d = sub.add_parser("decide")
     d.add_argument("--candidates", required=True)
