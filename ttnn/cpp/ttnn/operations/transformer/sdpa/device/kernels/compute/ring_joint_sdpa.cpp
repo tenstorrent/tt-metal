@@ -349,289 +349,295 @@ __attribute__((optimize("Os"))) void kernel_main() {
     // cannot take that (RecipeRingMask::reduce). A key at or before a Q chunk's first row is visible to all its rows
     // (no window), and a source's smallest key is its first sent chunk's first, so the smallest such key over the
     // finished ring iterations tells which Q chunks have every row seeded (the same for every Q chunk of the core).
-    seed_key_min = UINT32_MAX;
+    //
+    // Pass-outer, ring-inner (as the reader and writer): each pass runs one Q slot over every ring iteration, its state
+    // resident in L1 from its first K chunk to its normalization, so no state crosses passes. The reader pads the
+    // multicast group's longest Q count with slots this core only drains, after its own.
     RecipeAccumulatorState resident;
-    recipe_ring_reset_state(resident);
-    const bool staged = q_per_core > 1;
-    bool seen_active_iter = false;
     const uint32_t sdpa_ring_iterations = ring_joint::ring_pass_count(ring_size, has_sliding_window);
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
-        // Sliding folds all local and halo source ranges into one local pass; the reader waits for the halo.
-        const uint32_t ring_id =
-            has_sliding_window
-                ? ring_index
-                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                      fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-        // The host (or the reader, from device lengths) marks the ring iterations with work; the ring-id sequencing
-        // above still advances so compute stays aligned with the reader, writer and all-gather.
-        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
-            continue;
-        }
-        const bool first_active_iter = !seen_active_iter;
-        seen_active_iter = true;
-        const bool is_last_ring_iter = has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
-        // Sharded joint: one L/P shard per ring iteration. Replicated joint: all of L with the last device's K.
-        const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
-        uint32_t num_kv_chunks = num_local_k_chunks;
-        if constexpr (has_joint_k) {
-            if (do_joint_kv) {
-                num_kv_chunks += num_joint_k_chunks;
-            }
-        }
-        // Balanced causal: K from an earlier device is visible in its shard's early half only (the reader sends the
-        // chunks up to the one straddling the half); the early half's Q chunks see no K from a later device.
-        const bool earlier_balanced = is_causal && is_balanced && !has_sliding_window && ring_index > ring_id;
-        const bool skip_early = is_causal && is_balanced && !has_sliding_window && ring_index < ring_id;
-        const bool early_last = is_causal && is_balanced && !has_sliding_window && ring_iter == early_last_iter;
-        if (earlier_balanced) {
-            using Straddle = KCausalStraddleInfo<kv_local_padded_Nt_ct, Sk_chunk_t>;
-            if constexpr (Straddle::has_straddle) {
-                num_kv_chunks = Straddle::straddle_chunk_id + 1;
-            } else {
-                num_kv_chunks /= 2;
-            }
-        }
-        // Valid key rows of this shard's spatial K: the logical tail clipped to the shard (the balanced early half
-        // for an earlier device); chunked prefill caches pad only past the local slab.
-        uint32_t shard_rows = kv_local_padded_Nt * tt::constants::TILE_HEIGHT;
-        if constexpr (!chunked_enabled) {
-            const uint32_t n_origin = ring_id * kv_local_padded_Nt * tt::constants::TILE_HEIGHT;
-            shard_rows = valid_n_rows <= n_origin               ? 0
-                         : valid_n_rows - n_origin < shard_rows ? valid_n_rows - n_origin
-                                                                : shard_rows;
-            if (earlier_balanced && shard_rows > kv_local_padded_Nt * (tt::constants::TILE_HEIGHT / 2)) {
-                shard_rows = kv_local_padded_Nt * (tt::constants::TILE_HEIGHT / 2);
-            }
-        }
-        // Valid joint key rows of this iteration's joint shard.
-        const uint32_t joint_base_rows = (has_gathered_joint_k ? ring_id * Lt_local : 0u) * tt::constants::TILE_HEIGHT;
-        const uint32_t joint_shard_rows = (has_gathered_joint_k ? Lt_local : Lt) * tt::constants::TILE_HEIGHT;
-        const uint32_t joint_rows = !do_joint_kv || valid_l_rows <= joint_base_rows ? 0
-                                    : valid_l_rows - joint_base_rows < joint_shard_rows
-                                        ? valid_l_rows - joint_base_rows
-                                        : joint_shard_rows;
-        // Whether the reader sends iteration chunk k (spatial: the logical_n / causal skips; sharded joint: chunks
-        // past the logical joint length are skipped).
-        const auto chunk_sent = [&](uint32_t k_chunk) __attribute__((always_inline)) -> bool {
-            if (k_chunk < num_local_k_chunks) {
-                return local_chunk_sent(ring_id, k_chunk);
-            }
-            if constexpr (has_gathered_joint_k) {
-                return ring_id * Lt_local + (k_chunk - num_local_k_chunks) * Sk_chunk_t < logical_lt;
-            }
-            return true;
-        };
-
-        // This iteration's smallest key (sequence frame, without a window): its local tile 0. If the reader skips that
-        // chunk, the key lies past every Q row of the device (the logical / causal skips), so it seeds nothing.
-        if constexpr (recipe::ring_mask == 2 && !has_sliding_window) {
-            iter_key_min = ring_id * kv_region_Nt;
-        }
-        uint32_t chunks_popped = 0;  // every K/V pair this iteration pops, for the phase alignment below
-        for (uint32_t q_flat = global_q_start; q_flat < global_q_end; ++q_flat) {
-            const uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
-            const bool early = q_chunk < num_q_chunks / 2;
-            if (skip_early && early) {
+    for (uint32_t slot = 0; slot < q_per_core + padded_q_slots; ++slot) {
+        const bool padded_slot = slot >= q_per_core;
+        const uint32_t q_flat = padded_slot_flat_q<false>({}, global_q_start, q_per_core, slot, 1);
+        const uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
+        const bool early = q_chunk < num_q_chunks / 2;
+        recipe_ring_reset_state(resident);
+        seed_key_min = UINT32_MAX;
+        uint32_t chunks_popped = 0;  // every K/V pair this pass pops, for the phase alignment below
+        // The pass re-walks the ring order from its start (rebuilt in place: no second sequencer on the TRISC stacks).
+        fused_op_indexer =
+            RingSDPAOpIndexer(ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
+        for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+            // Sliding folds all local and halo source ranges into one local pass; the reader waits for the halo.
+            const uint32_t ring_id =
+                has_sliding_window
+                    ? ring_index
+                    : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                          fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            // The host (or the reader, from device lengths) marks the ring iterations with work; the ring-id sequencing
+            // above still advances so compute stays aligned with the reader, writer and all-gather.
+            if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
                 continue;
             }
-            const bool q_last = is_last_ring_iter || (early && early_last);
-            if constexpr (recipe::sink) {
-                if (q_last) {
-                    recipe_read_sink();
+            const bool is_last_ring_iter =
+                has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+            // Sharded joint: one L/P shard per ring iteration. Replicated joint: all of L with the last device's K.
+            const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
+            uint32_t num_kv_chunks = num_local_k_chunks;
+            if constexpr (has_joint_k) {
+                if (do_joint_kv) {
+                    num_kv_chunks += num_joint_k_chunks;
                 }
             }
-            const bool next_block_unrestored = first_active_iter && q_flat + 1 < global_q_end;
+            // Balanced causal: K from an earlier device is visible in its shard's early half only (the reader sends the
+            // chunks up to the one straddling the half); the early half's Q chunks see no K from a later device.
+            const bool earlier_balanced = is_causal && is_balanced && !has_sliding_window && ring_index > ring_id;
+            const bool skip_early = is_causal && is_balanced && !has_sliding_window && ring_index < ring_id;
+            const bool early_last = is_causal && is_balanced && !has_sliding_window && ring_iter == early_last_iter;
+            if (earlier_balanced) {
+                using Straddle = KCausalStraddleInfo<kv_local_padded_Nt_ct, Sk_chunk_t>;
+                if constexpr (Straddle::has_straddle) {
+                    num_kv_chunks = Straddle::straddle_chunk_id + 1;
+                } else {
+                    num_kv_chunks /= 2;
+                }
+            }
+            // Valid key rows of this shard's spatial K: the logical tail clipped to the shard (the balanced early half
+            // for an earlier device); chunked prefill caches pad only past the local slab.
+            uint32_t shard_rows = kv_local_padded_Nt * tt::constants::TILE_HEIGHT;
+            if constexpr (!chunked_enabled) {
+                const uint32_t n_origin = ring_id * kv_local_padded_Nt * tt::constants::TILE_HEIGHT;
+                shard_rows = valid_n_rows <= n_origin               ? 0
+                             : valid_n_rows - n_origin < shard_rows ? valid_n_rows - n_origin
+                                                                    : shard_rows;
+                if (earlier_balanced && shard_rows > kv_local_padded_Nt * (tt::constants::TILE_HEIGHT / 2)) {
+                    shard_rows = kv_local_padded_Nt * (tt::constants::TILE_HEIGHT / 2);
+                }
+            }
+            // Valid joint key rows of this iteration's joint shard.
+            const uint32_t joint_base_rows =
+                (has_gathered_joint_k ? ring_id * Lt_local : 0u) * tt::constants::TILE_HEIGHT;
+            const uint32_t joint_shard_rows = (has_gathered_joint_k ? Lt_local : Lt) * tt::constants::TILE_HEIGHT;
+            const uint32_t joint_rows = !do_joint_kv || valid_l_rows <= joint_base_rows ? 0
+                                        : valid_l_rows - joint_base_rows < joint_shard_rows
+                                            ? valid_l_rows - joint_base_rows
+                                            : joint_shard_rows;
+            // Whether the reader sends iteration chunk k (spatial: the logical_n / causal skips; sharded joint: chunks
+            // past the logical joint length are skipped).
+            const auto chunk_sent = [&](uint32_t k_chunk) __attribute__((always_inline)) -> bool {
+                if (k_chunk < num_local_k_chunks) {
+                    return local_chunk_sent(ring_id, k_chunk);
+                }
+                if constexpr (has_gathered_joint_k) {
+                    return ring_id * Lt_local + (k_chunk - num_local_k_chunks) * Sk_chunk_t < logical_lt;
+                }
+                return true;
+            };
 
-            if constexpr (has_sliding_window) {
-                // One pass over the Q chunk's work plan: the local slab and the halo, in the reader's order.
-                const ring_joint::ChunkedQMapping q_mapping{
-                    rotation.q_pre_wrap_start_tile,
-                    rotation.q_pre_wrap_tile_count,
-                    rotation.q_post_wrap_start_tile,
-                    rotation.q_valid_tile_count};
-                const auto plan = ring_joint::build_sliding_q_work_plan<sliding_max_source_ranges>(
-                    q_chunk * Sq_chunk_t,
-                    Sq_chunk_t,
-                    ring_index,
-                    q_local_padded_Nt,
-                    ring_size,
-                    sliding_window_size,
-                    tt::constants::TILE_HEIGHT,
-                    kv_local_padded_Nt,
-                    Sk_chunk_t,
-                    logical_nt,
-                    circular_kv_slab_count,
-                    kv_pad_rotation_enabled ? &q_mapping : nullptr,
-                    sliding_local_first);
-                ASSERT(plan.is_valid && plan.total_k_chunk_count > 0);
-                const uint32_t q_tile0 =
-                    kv_pad_rotation_enabled
-                        ? q_chunk * Sq_chunk_t
-                        : logical_nt - ring_size * q_local_padded_Nt + ring_index * q_local_padded_Nt + q_chunk * Sq_chunk_t;
-                // Q tile rows that have seen a visible key (RecipeRingMask::reduce); a row maps to no position counts
-                // as seen. Key tile k reaches every row of Q tile q iff k <= q and (q - k) * 32 < window.
-                static_assert(Sq_chunk_t <= 32, "one bit per Q tile row");
-                constexpr uint32_t all_rows = Sq_chunk_t == 32 ? UINT32_MAX : (1u << Sq_chunk_t) - 1;
-                seeded_rows = 0;
-                recipe_ring_q_block<Sq_chunk_t, vDHt>(
-                    resident,
-                    staged,
-                    true,
-                    true,
-                    q_flat,
-                    false,
-                    plan.total_k_chunk_count,
-                    [&](RecipeAccumulatorState& state, uint32_t chunk, bool last_k) __attribute__((always_inline)) {
-                        const auto ref = plan.k_chunk_at(chunk);
-                        recipe_ring_mask.valid_rows = k_chunk_rows;
-                        recipe_ring_mask.masked = true;
-                        recipe_ring_mask.positional = true;
-                        recipe_ring_mask.reduce = seeded_rows != all_rows;
-                        recipe_ring_mask.q_tile0 = q_tile0;
-                        recipe_ring_mask.k_tile0 = ref.source_k_chunk * Sk_chunk_t;
-                        if constexpr (circular_kv_slab_count > 1) {
-                            recipe_ring_mask.k_seq_tile0 = plan.global_k_chunk_at(chunk) * Sk_chunk_t;
+            // This iteration's smallest key (sequence frame, without a window): its local tile 0. If the reader skips
+            // that chunk, the key lies past every Q row of the device (the logical / causal skips), so it seeds
+            // nothing.
+            if constexpr (recipe::ring_mask == 2 && !has_sliding_window) {
+                iter_key_min = ring_id * kv_region_Nt;
+            }
+            if (padded_slot) {
+                // A padded multicast slot: the reader pushes the K/V chunks it receives, as for a real Q chunk (none
+                // for one it skips), so this core's CBs advance with the injector's. Pop them unread.
+                if (!(skip_early && early)) {
+                    for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
+                        if (chunk_sent(k_chunk)) {
+                            recipe_ring_pop_chunk<k_chunk_tiles, latent_v_in_k ? 0 : v_chunk_tiles>();
+                            chunks_popped++;
                         }
-                        recipe_ring_mask.ring_id = ref.source_ring_id;
-                        if (seeded_rows != all_rows) {
-                            for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                                const uint32_t q = q_global_tile_for_mask_row<kv_pad_rotation_enabled>(r, q_tile0, rotation);
-                                if (q == KV_PAD_ROTATION_INVALID_TILE) {
-                                    seeded_rows |= 1u << r;
-                                    continue;
-                                }
-                                for (uint32_t t = 0; t < Sk_chunk_t; ++t) {
-                                    const uint32_t local = recipe_ring_mask.k_tile0 + t;
-                                    if (kv_pad_rotation_enabled && local >= kv_local_padded_Nt) {
-                                        break;
-                                    }
-                                    const uint32_t k = circular_kv_slab_count > 1
-                                                           ? recipe_ring_mask.k_seq_tile0 + t
-                                                           : chunked_kv_global_tile_for_local(
-                                                                 ref.source_ring_id,
-                                                                 local,
-                                                                 q_chunk_group_tile_count,
-                                                                 kv_region_Nt);
-                                    if (k <= q && (q - k) * tt::constants::TILE_HEIGHT < sliding_window_size) {
+                    }
+                }
+            } else if (!(skip_early && early)) {
+                const bool q_last = is_last_ring_iter || (early && early_last);
+                if constexpr (recipe::sink) {
+                    if (q_last) {
+                        recipe_read_sink();
+                    }
+                }
+
+                if constexpr (has_sliding_window) {
+                    // One pass over the Q chunk's work plan: the local slab and the halo, in the reader's order.
+                    const ring_joint::ChunkedQMapping q_mapping{
+                        rotation.q_pre_wrap_start_tile,
+                        rotation.q_pre_wrap_tile_count,
+                        rotation.q_post_wrap_start_tile,
+                        rotation.q_valid_tile_count};
+                    const auto plan = ring_joint::build_sliding_q_work_plan<sliding_max_source_ranges>(
+                        q_chunk * Sq_chunk_t,
+                        Sq_chunk_t,
+                        ring_index,
+                        q_local_padded_Nt,
+                        ring_size,
+                        sliding_window_size,
+                        tt::constants::TILE_HEIGHT,
+                        kv_local_padded_Nt,
+                        Sk_chunk_t,
+                        logical_nt,
+                        circular_kv_slab_count,
+                        kv_pad_rotation_enabled ? &q_mapping : nullptr,
+                        sliding_local_first);
+                    ASSERT(plan.is_valid && plan.total_k_chunk_count > 0);
+                    const uint32_t q_tile0 = kv_pad_rotation_enabled
+                                                 ? q_chunk * Sq_chunk_t
+                                                 : logical_nt - ring_size * q_local_padded_Nt +
+                                                       ring_index * q_local_padded_Nt + q_chunk * Sq_chunk_t;
+                    // Q tile rows that have seen a visible key (RecipeRingMask::reduce); a row maps to no position
+                    // counts as seen. Key tile k reaches every row of Q tile q iff k <= q and (q - k) * 32 < window.
+                    static_assert(Sq_chunk_t <= 32, "one bit per Q tile row");
+                    constexpr uint32_t all_rows = Sq_chunk_t == 32 ? UINT32_MAX : (1u << Sq_chunk_t) - 1;
+                    seeded_rows = 0;
+                    recipe_ring_q_block<Sq_chunk_t, vDHt>(
+                        resident,
+                        false,
+                        true,
+                        true,
+                        q_flat,
+                        false,
+                        plan.total_k_chunk_count,
+                        [&](RecipeAccumulatorState& state, uint32_t chunk, bool last_k) __attribute__((always_inline)) {
+                            const auto ref = plan.k_chunk_at(chunk);
+                            recipe_ring_mask.valid_rows = k_chunk_rows;
+                            recipe_ring_mask.masked = true;
+                            recipe_ring_mask.positional = true;
+                            recipe_ring_mask.reduce = seeded_rows != all_rows;
+                            recipe_ring_mask.q_tile0 = q_tile0;
+                            recipe_ring_mask.k_tile0 = ref.source_k_chunk * Sk_chunk_t;
+                            if constexpr (circular_kv_slab_count > 1) {
+                                recipe_ring_mask.k_seq_tile0 = plan.global_k_chunk_at(chunk) * Sk_chunk_t;
+                            }
+                            recipe_ring_mask.ring_id = ref.source_ring_id;
+                            if (seeded_rows != all_rows) {
+                                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                                    const uint32_t q =
+                                        q_global_tile_for_mask_row<kv_pad_rotation_enabled>(r, q_tile0, rotation);
+                                    if (q == KV_PAD_ROTATION_INVALID_TILE) {
                                         seeded_rows |= 1u << r;
-                                        break;
+                                        continue;
+                                    }
+                                    for (uint32_t t = 0; t < Sk_chunk_t; ++t) {
+                                        const uint32_t local = recipe_ring_mask.k_tile0 + t;
+                                        if (kv_pad_rotation_enabled && local >= kv_local_padded_Nt) {
+                                            break;
+                                        }
+                                        const uint32_t k = circular_kv_slab_count > 1
+                                                               ? recipe_ring_mask.k_seq_tile0 + t
+                                                               : chunked_kv_global_tile_for_local(
+                                                                     ref.source_ring_id,
+                                                                     local,
+                                                                     q_chunk_group_tile_count,
+                                                                     kv_region_Nt);
+                                        if (k <= q && (q - k) * tt::constants::TILE_HEIGHT < sliding_window_size) {
+                                            seeded_rows |= 1u << r;
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                        }
-                        run_chunk(state, last_k, last_k);
-                    });
-                continue;
-            }
-
-            // The K chunks this Q chunk processes: those the reader sends, less (on the diagonal shard) the chunks
-            // starting past the Q chunk's last row, which are masked whole and popped unread.
-            const bool diagonal = is_causal && !chunked_enabled && ring_id == ring_index;
-            const uint32_t q_tile0 = chunked_enabled ? (kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t
-                                                                                : chunked_q_tile0 + q_chunk * Sq_chunk_t)
-                                                     : q_chunk * Sq_chunk_t;
-            const uint32_t k_end = diagonal ? (q_tile0 + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t : num_kv_chunks;
-            uint32_t live_chunks = 0;
-            for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
-                live_chunks += (chunk_sent(k_chunk) && k_chunk < k_end) ? 1 : 0;
-            }
-            ASSERT(live_chunks > 0);
-            // The Q chunk's first position (RecipeRingMask::reduce); rows mapping to no position do not count.
-            q_min = q_tile0;
-            if constexpr (recipe::ring_mask == 2 && kv_pad_rotation_enabled) {
-                q_min = UINT32_MAX;
-                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    const uint32_t q = q_global_tile_for_mask_row<true>(r, q_tile0, rotation);
-                    q_min = q != KV_PAD_ROTATION_INVALID_TILE && q < q_min ? q : q_min;
-                }
-            }
-            spatial_seen = false;
-            uint32_t k_chunk = 0;
-            recipe_ring_q_block<Sq_chunk_t, vDHt>(
-                resident,
-                staged,
-                first_active_iter,
-                q_last,
-                q_flat,
-                next_block_unrestored,
-                live_chunks,
-                [&](RecipeAccumulatorState& state, uint32_t, bool last_k) __attribute__((always_inline)) {
-                    // The next chunk the reader sent (processed chunks precede the masked-whole ones).
-                    while (!chunk_sent(k_chunk)) {
-                        k_chunk++;
+                            run_chunk(state, last_k, last_k);
+                        });
+                } else {
+                    // The K chunks this Q chunk processes: those the reader sends, less (on the diagonal shard) the
+                    // chunks starting past the Q chunk's last row, which are masked whole and popped unread.
+                    const bool diagonal = is_causal && !chunked_enabled && ring_id == ring_index;
+                    const uint32_t q_tile0 =
+                        chunked_enabled
+                            ? (kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : chunked_q_tile0 + q_chunk * Sq_chunk_t)
+                            : q_chunk * Sq_chunk_t;
+                    const uint32_t k_end =
+                        diagonal ? (q_tile0 + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t : num_kv_chunks;
+                    uint32_t live_chunks = 0;
+                    for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
+                        live_chunks += (chunk_sent(k_chunk) && k_chunk < k_end) ? 1 : 0;
                     }
-                    const bool joint = k_chunk >= num_local_k_chunks;
-                    const uint32_t origin =
-                        (joint ? k_chunk - num_local_k_chunks : k_chunk) * k_chunk_rows;
-                    const uint32_t rows = joint ? joint_rows : shard_rows;
-                    const uint32_t valid = origin >= rows ? 0 : (rows - origin < k_chunk_rows ? rows - origin : k_chunk_rows);
-                    bool positional = false;
-                    if constexpr (recipe::ring_mask == 1) {
-                        // The shard-frame diagonal: some key of the chunk lies past the Q chunk's first row.
-                        positional = diagonal && !joint && k_chunk * Sk_chunk_t + Sk_chunk_t > q_tile0;
-                    } else if constexpr (recipe::ring_mask == 2) {
-                        if (!joint) {
-                            if constexpr (kv_pad_rotation_enabled) {
-                                positional = true;
-                            } else {
-                                // Global keys grow with the local tile: the chunk's last key against the first Q row.
-                                const uint32_t last_local = k_chunk * Sk_chunk_t + Sk_chunk_t <= kv_local_padded_Nt
-                                                                ? k_chunk * Sk_chunk_t + Sk_chunk_t - 1
-                                                                : kv_local_padded_Nt - 1;
-                                positional = chunked_kv_global_tile_for_local(
-                                                 ring_id,
-                                                 last_local,
-                                                 q_chunk_group_tile_count,
-                                                 kv_region_Nt) >= q_tile0;
+                    ASSERT(live_chunks > 0);
+                    // The Q chunk's first position (RecipeRingMask::reduce); rows mapping to no position do not count.
+                    q_min = q_tile0;
+                    if constexpr (recipe::ring_mask == 2 && kv_pad_rotation_enabled) {
+                        q_min = UINT32_MAX;
+                        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                            const uint32_t q = q_global_tile_for_mask_row<true>(r, q_tile0, rotation);
+                            q_min = q != KV_PAD_ROTATION_INVALID_TILE && q < q_min ? q : q_min;
+                        }
+                    }
+                    spatial_seen = false;
+                    uint32_t k_chunk = 0;
+                    recipe_ring_q_block<Sq_chunk_t, vDHt>(
+                        resident,
+                        false,
+                        true,
+                        q_last,
+                        q_flat,
+                        false,
+                        live_chunks,
+                        [&](RecipeAccumulatorState& state, uint32_t, bool last_k) __attribute__((always_inline)) {
+                            // The next chunk the reader sent (processed chunks precede the masked-whole ones).
+                            while (!chunk_sent(k_chunk)) {
+                                k_chunk++;
                             }
+                            const bool joint = k_chunk >= num_local_k_chunks;
+                            const uint32_t origin = (joint ? k_chunk - num_local_k_chunks : k_chunk) * k_chunk_rows;
+                            const uint32_t rows = joint ? joint_rows : shard_rows;
+                            const uint32_t valid =
+                                origin >= rows ? 0 : (rows - origin < k_chunk_rows ? rows - origin : k_chunk_rows);
+                            bool positional = false;
+                            if constexpr (recipe::ring_mask == 1) {
+                                // The shard-frame diagonal: some key of the chunk lies past the Q chunk's first row.
+                                positional = diagonal && !joint && k_chunk * Sk_chunk_t + Sk_chunk_t > q_tile0;
+                            } else if constexpr (recipe::ring_mask == 2) {
+                                if (!joint) {
+                                    if constexpr (kv_pad_rotation_enabled) {
+                                        positional = true;
+                                    } else {
+                                        // Global keys grow with the local tile: the chunk's last key against the first
+                                        // Q row.
+                                        const uint32_t last_local =
+                                            k_chunk * Sk_chunk_t + Sk_chunk_t <= kv_local_padded_Nt
+                                                ? k_chunk * Sk_chunk_t + Sk_chunk_t - 1
+                                                : kv_local_padded_Nt - 1;
+                                        positional =
+                                            chunked_kv_global_tile_for_local(
+                                                ring_id, last_local, q_chunk_group_tile_count, kv_region_Nt) >= q_tile0;
+                                    }
+                                }
+                            }
+                            if constexpr (recipe::ring_mask == 2) {
+                                recipe_ring_mask.reduce =
+                                    !(seed_key_min <= q_min || (spatial_seen && iter_key_min <= q_min));
+                                spatial_seen |= !joint;
+                            }
+                            recipe_ring_mask.valid_rows = valid;
+                            recipe_ring_mask.positional = positional;
+                            recipe_ring_mask.masked = positional || valid < k_chunk_rows;
+                            recipe_ring_mask.q_tile0 = q_tile0;
+                            recipe_ring_mask.k_tile0 = k_chunk * Sk_chunk_t;
+                            recipe_ring_mask.ring_id = ring_id;
+                            chunks_popped++;
+                            k_chunk++;
+                            run_chunk(state, q_last && last_k, q_last && last_k);
+                        });
+                    // The masked-whole chunks after the last processed one.
+                    for (; k_chunk < num_kv_chunks; ++k_chunk) {
+                        if (chunk_sent(k_chunk)) {
+                            recipe_ring_pop_chunk<k_chunk_tiles, latent_v_in_k ? 0 : v_chunk_tiles>();
+                            chunks_popped++;
                         }
                     }
-                    if constexpr (recipe::ring_mask == 2) {
-                        recipe_ring_mask.reduce = !(seed_key_min <= q_min || (spatial_seen && iter_key_min <= q_min));
-                        spatial_seen |= !joint;
-                    }
-                    recipe_ring_mask.valid_rows = valid;
-                    recipe_ring_mask.positional = positional;
-                    recipe_ring_mask.masked = positional || valid < k_chunk_rows;
-                    recipe_ring_mask.q_tile0 = q_tile0;
-                    recipe_ring_mask.k_tile0 = k_chunk * Sk_chunk_t;
-                    recipe_ring_mask.ring_id = ring_id;
-                    chunks_popped++;
-                    k_chunk++;
-                    run_chunk(state, q_last && last_k, last_k && (staged || q_last));
-                });
-            // The masked-whole chunks after the last processed one.
-            for (; k_chunk < num_kv_chunks; ++k_chunk) {
-                if (chunk_sent(k_chunk)) {
-                    recipe_ring_pop_chunk<k_chunk_tiles, latent_v_in_k ? 0 : v_chunk_tiles>();
-                    chunks_popped++;
                 }
+            }
+            if constexpr (recipe::ring_mask == 2 && !has_sliding_window) {
+                seed_key_min = iter_key_min < seed_key_min ? iter_key_min : seed_key_min;
             }
         }
         if constexpr (!has_sliding_window) {
-            // Padded multicast slots: the reader runs its multicast group's longest Q count and pushes the K/V chunks
-            // each padded slot receives, as for a real Q chunk (none for one it skips), so this core's CBs advance with
-            // the injector's. Pop them unread.
-            for (uint32_t slot = 0; slot < padded_q_slots; ++slot) {
-                const uint32_t q_flat = padded_slot_flat_q<false>({}, global_q_start, q_per_core, q_per_core + slot, 1);
-                const uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
-                if (skip_early && q_chunk < num_q_chunks / 2) {
-                    continue;
-                }
-                for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
-                    if (chunk_sent(k_chunk)) {
-                        recipe_ring_pop_chunk<k_chunk_tiles, latent_v_in_k ? 0 : v_chunk_tiles>();
-                        chunks_popped++;
-                    }
-                }
-            }
-            // Dummy K/V traffic aligns the chained readers' CB phases (none with sliding: independent per-core reads).
-            for (uint32_t dummy = 0; dummy < dummy_kv_chunks_for_phase_alignment<false, k_cb_entries == 3>(chunks_popped); ++dummy) {
+            // Dummy K/V traffic pads each pass to a whole K CB cycle, as the reader does: chained readers then start
+            // every pass on the same CB phase (none with sliding: independent per-core reads).
+            const uint32_t dummies = chunks_until_next_multiple(chunks_popped, k_cb_entries);
+            for (uint32_t dummy = 0; dummy < dummies; ++dummy) {
                 recipe_ring_pop_chunk<k_chunk_tiles, latent_v_in_k ? 0 : v_chunk_tiles>();
             }
-        }
-        if constexpr (recipe::ring_mask == 2 && !has_sliding_window) {
-            seed_key_min = iter_key_min < seed_key_min ? iter_key_min : seed_key_min;
         }
     }
 }

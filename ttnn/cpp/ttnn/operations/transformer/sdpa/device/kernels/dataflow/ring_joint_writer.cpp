@@ -4,9 +4,7 @@
 
 // Ring joint SDPA writer (compute: ring_joint_sdpa.cpp, the precision recipes). It generates the reduce scaler and
 // the column identity, follows the ring order (all-gather handshake, the active ring iterations derived from the live
-// lengths), writes each Q chunk's normalized output on the iteration compute normalizes it, and services compute's
-// state checkpoints for cores with several Q chunks (recipe_state_transfer.hpp: raw state bytes to the internal state
-// tensor, common runtime arg 3, on the checkpoint request / ack CBs).
+// lengths), and writes each Q chunk's normalized output on the iteration compute normalizes it.
 
 // Size-optimized: the dataflow kernels leave the kernel config buffer to the recipe compute (the ring's masked recipe
 // builds sit within a few hundred bytes of it on Blackhole).
@@ -30,7 +28,6 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
 #include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
-#include "recipe_state_transfer.hpp"
 #include "ring_utils.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
@@ -73,18 +70,6 @@ inline uint32_t get_end_seq_tile(const QChunkInfo& qi, uint32_t ring_id, uint32_
         return qi.is_joint_q ? Lt : q_local_padded_Nt * (ring_id + 1);
     } else {
         return q_local_padded_Nt * (ring_id + 1);
-    }
-}
-
-// One raw state checkpoint request from compute: streamed (BF16 recipes with fused chunks) or synchronous.
-template <bool stream_state, bool fp32_state, uint32_t Sq_chunk_t, uint32_t vDHt, typename Accessor>
-FORCE_INLINE void transfer_state(Noc& noc, const RecipeStateStore<Accessor>& backing) {
-    if constexpr (stream_state) {
-        stream_recipe_state<Sq_chunk_t, recipe_ring_cb::checkpoint_request, recipe_ring_cb::checkpoint_ack, vDHt>(
-            noc, backing);
-    } else {
-        transfer_recipe_state<fp32_state, Sq_chunk_t, recipe_ring_cb::checkpoint_request, recipe_ring_cb::checkpoint_ack, vDHt>(
-            noc, backing);
     }
 }
 
@@ -139,10 +124,6 @@ void kernel_main() {
     constexpr bool has_logical_n_tensor = get_compile_time_arg_val(36) == 1;
     constexpr bool has_logical_l_tensor = get_compile_time_arg_val(37) == 1;
     constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
-    // The recipe's state planes (the host gives every ring kernel the recipe's named arguments): FP32 maxima for the
-    // FP32 recipes; streamed checkpoints for BF16 recipes with fused chunks.
-    constexpr bool fp32_state = get_named_compile_time_arg_val("recipe_fp32") != 0;
-    constexpr bool stream_state = get_named_compile_time_arg_val("recipe_ring_stream_state") != 0;
 
     // Joint-path compile-time gating. When zero, joint Q branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and the joint_out_generator.
@@ -150,16 +131,15 @@ void kernel_main() {
 
     // Slots 28-37: sliding_window_size, kv_pad_from_metadata, joint_is_sharded, logical_lt, the rank-mapping
     // descriptor, and the two logical-length transport flags. Output accessors start at slot 38: the output, the joint
-    // output, the stats tensor, the recipe state tensor.
+    // output, the stats tensor.
     constexpr uint32_t kFirstAccessorArgOffset = 38;
     constexpr auto out_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
-    constexpr auto state_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     // Metadata accessor (metadata path only) follows the output accessors; gate the offset on kv_pad_from_metadata so
     // the no-metadata program never names a non-accessor compile arg (fall back to a valid unused accessor offset).
     constexpr uint32_t meta_args_offset =
-        kv_pad_from_metadata ? state_args.next_compile_time_args_offset() : kFirstAccessorArgOffset;
+        kv_pad_from_metadata ? stats_args.next_compile_time_args_offset() : kFirstAccessorArgOffset;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();
     constexpr bool has_kv_valid_end = get_named_compile_time_arg_val("kv_valid_end") == 1 && kv_pad_from_metadata;
     constexpr uint32_t kv_valid_end_args_offset =
@@ -168,7 +148,7 @@ void kernel_main() {
     // logical_n / logical_l accessors follow the metadata accessor, appended as a pair so the offsets do
     // not depend on which one was supplied.
     constexpr uint32_t post_meta_args_offset = kv_pad_from_metadata ? kv_valid_end_args.next_compile_time_args_offset()
-                                                                    : state_args.next_compile_time_args_offset();
+                                                                    : stats_args.next_compile_time_args_offset();
     constexpr uint32_t logical_n_args_offset =
         has_logical_length_tensor ? post_meta_args_offset : kFirstAccessorArgOffset;
     constexpr auto logical_n_args = TensorAccessorArgs<logical_n_args_offset>();
@@ -182,7 +162,6 @@ void kernel_main() {
     const uint32_t out_addr = get_common_arg_val<uint32_t>(common_argidx++);
     const uint32_t joint_out_addr = get_common_arg_val<uint32_t>(common_argidx++);
     common_argidx++;  // the stats tensor (not written)
-    const uint32_t state_addr = get_common_arg_val<uint32_t>(common_argidx++);
     ASSERT(common_argidx == address_common_arg_count);
 
     const ring_joint::LocalNGeometry local_n =
@@ -333,15 +312,6 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);
-    const auto state_tensor = TensorAccessor(state_args, state_addr);
-    // The core's first state_cache_slots Q blocks checkpoint into L1 (the host sizes the cache from free L1).
-    constexpr uint32_t state_cache_slots = get_named_compile_time_arg_val("state_cache_slots");
-    const RecipeStateStore<decltype(state_tensor)> state_backing{
-        state_tensor,
-        state_cache_slots > 0 ? CircularBuffer(recipe_ring_cb::state_cache).get_write_ptr() : 0,
-        state_cache_slots,
-        global_q_start};
-
     constexpr bool output_has_no_padding =
         !dynamic_local_n && !has_joint_q && (q_local_padded_Nt_ct % Sq_chunk_t == 0);
     using StaticOutputTileShape = StaticTensorTileShape<B, NH, q_local_padded_Nt_ct, vDHt>;
@@ -403,44 +373,36 @@ void kernel_main() {
             /*flush_trid=*/0);
     };
 
-    // Several Q chunks on a core checkpoint their state between ring iterations; one stays resident in L1.
-    const bool staged = global_q_end - global_q_start > 1;
-    bool seen_active_iter = false;
+    // Pass-outer, ring-inner (ring_joint_sdpa.cpp): compute keeps each Q chunk's state in L1 over the ring and
+    // normalizes it once, on its last active ring iteration (balanced causal, early half: the last step on K from this
+    // or an earlier device). Write each Q chunk's output then, in the order compute packs them.
     const uint32_t sdpa_ring_iterations = ring_joint::ring_pass_count(ring_size, has_sliding_window);
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
-        // Sliding compute consumes all local/halo source ranges in one logical pass, so the writer sees exactly one
-        // final output per Q chunk and no checkpoint.
-        const uint32_t ring_id =
-            has_sliding_window
-                ? ring_index
-                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                      fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-        // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
-        // still advances above so writer stays aligned with reader, compute, and all-gather.
-        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
-            continue;
-        }
-        const bool first_active_iter = !seen_active_iter;
-        seen_active_iter = true;
-        const bool is_last_ring_iter = has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
-        const bool skip_early = is_causal && is_balanced && !has_sliding_window && ring_index < ring_id;
-        const bool early_last = is_causal && is_balanced && !has_sliding_window && ring_iter == early_last_iter;
-        for (uint32_t q_flat = global_q_start; q_flat < global_q_end; ++q_flat) {
-            const uint32_t q_chunk = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing).q_chunk;
-            const bool early = q_chunk < half_sequence;
+    for (uint32_t q_flat = global_q_start; q_flat < global_q_end; ++q_flat) {
+        const uint32_t q_chunk = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing).q_chunk;
+        const bool early = q_chunk < half_sequence;
+        RingIdSequencer order = fused_op_receiver.seq;
+        for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+            // Sliding compute consumes all local/halo source ranges in one logical pass.
+            const uint32_t ring_id =
+                has_sliding_window
+                    ? ring_index
+                    : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                          order.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
+            if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+                continue;
+            }
+            const bool is_last_ring_iter =
+                has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+            const bool skip_early = is_causal && is_balanced && !has_sliding_window && ring_index < ring_id;
+            const bool early_last = is_causal && is_balanced && !has_sliding_window && ring_iter == early_last_iter;
             if (skip_early && early) {
                 continue;
             }
-            if (staged && !first_active_iter) {
-                transfer_state<stream_state, fp32_state, Sq_chunk_t, vDHt>(noc, state_backing);  // restore
-            }
             if (is_last_ring_iter || (early && early_last)) {
                 write_output(q_flat, ring_id);
-            } else if (staged) {
-                transfer_state<stream_state, fp32_state, Sq_chunk_t, vDHt>(noc, state_backing);  // save
+                break;
             }
         }
-        // Every checkpoint saved this iteration lands before the next restores it.
-        noc.async_write_barrier();
     }
+    noc.async_write_barrier();
 }
