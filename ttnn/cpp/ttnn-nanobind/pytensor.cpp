@@ -425,8 +425,10 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
     auto preprocessed_py_tensor = parse_py_tensor(py_tensor, target_dtype);
     const auto& contiguous_py_tensor = preprocessed_py_tensor.contiguous_py_tensor;
     // The HostBuffer borrows the contiguous array's memory and pins the Python object; the pin and GIL rules are in
-    // py_buffer::borrow_py_buffer, shared with host_tensor_from_bytes.
-    return py_buffer::borrow_py_buffer(contiguous_py_tensor, target_dtype, contiguous_py_tensor.size());
+    // py_buffer::borrow_py_buffer, shared with host_tensor_from_bytes. Unaligned data (e.g. a view into a safetensors
+    // mmap at an odd offset) is copied rather than refused, as from_torch accepted it before the borrow was shared.
+    return py_buffer::borrow_py_buffer(
+        contiguous_py_tensor, target_dtype, contiguous_py_tensor.size(), /*copy_if_unaligned=*/true);
 }
 
 }  // namespace
