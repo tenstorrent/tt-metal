@@ -14,11 +14,15 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/layernorm_fw/device/layernorm_fw_device_operation.hpp"
 #include "metal/ops/layernorm_fw/layernorm_fw.hpp"
+#include "ops/layernorm_op.hpp"
+#include "ops/losses.hpp"
 #include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
+#include "utils/memory_utils.hpp"
 
 // Reference implementation using xtensor
 std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>> layernorm_forward_reference_(
@@ -61,6 +65,12 @@ public:
 
     static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().set_gradient_mode(ttml::autograd::GradMode::ENABLED);
+        ttml::autograd::ctx().reset_graph();
     }
 };
 
@@ -454,4 +464,110 @@ TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_EpsilonChangeOnCachedShape) {
 // return_mean_rstd decides whether the kernels are built with RETURN_MEAN_RSTD and whether mean/rstd are returned.
 TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_ReturnMeanRstdChangeOnCachedShape) {
     run_layernorm_fw_attribute_change({.return_mean_rstd = true}, {.return_mean_rstd = false}, /*seed=*/451U);
+}
+
+TEST_F(LayerNormForwardOpTest, AutogradLayerNorm_NoDeadAllocationsAndSkipsMeanRstdWhenNoGrad) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+
+    const std::array<std::size_t, 4> x_shape = {2, 1, 64, 64};
+    const std::array<std::size_t, 4> param_shape = {1, 1, 1, 64};
+    auto x_xt = test_utils::make_uniform_xarray<float>(x_shape, -1.0F, 1.0F, 42U);
+    auto g_xt = test_utils::make_uniform_xarray<float>(param_shape, 0.5F, 1.5F, 43U);
+    auto b_xt = test_utils::make_uniform_xarray<float>(param_shape, -0.1F, 0.1F, 44U);
+
+    auto x = autograd::create_tensor(core::from_xtensor(x_xt, device), /* requires_grad */ false);
+    auto gamma = autograd::create_tensor(core::from_xtensor(g_xt, device), /* requires_grad */ false);
+    auto beta = autograd::create_tensor(core::from_xtensor(b_xt, device), /* requires_grad */ false);
+
+    const auto& x_val = x->get_value();
+    const auto input_bytes = static_cast<long long>(x_val.padded_shape().volume()) * x_val.element_size();
+    const auto stat_bytes = (input_bytes / 64) * 32;
+
+    // Warm up program cache for return_mean_rstd = false
+    (void)ops::layernorm(x, gamma, beta);
+
+    utils::MemoryUsageTracker::clear();
+    utils::DRAMUsage usage_no_grad{};
+    {
+        const auto guard = utils::MemoryUsageTracker::begin_capture();
+        auto out_no_grad = ops::layernorm(x, gamma, beta);
+        utils::MemoryUsageTracker::end_capture("layernorm_no_grad");
+        usage_no_grad = utils::MemoryUsageTracker::get_dram_usage("layernorm_no_grad");
+        EXPECT_FALSE(out_no_grad->get_requires_grad());
+        EXPECT_FALSE(out_no_grad->get_node().has_value());
+    }
+    EXPECT_EQ(usage_no_grad.total_allocations, input_bytes);
+    EXPECT_EQ(usage_no_grad.total_deallocations, 0);
+
+    // Enable requires_grad and warm up program cache for return_mean_rstd = true
+    x->set_requires_grad(true);
+    gamma->set_requires_grad(true);
+    beta->set_requires_grad(true);
+    (void)ops::layernorm(x, gamma, beta);
+    autograd::ctx().reset_graph();
+
+    utils::MemoryUsageTracker::clear();
+    utils::DRAMUsage usage_with_grad{};
+    {
+        const auto guard = utils::MemoryUsageTracker::begin_capture();
+        auto out_with_grad = ops::layernorm(x, gamma, beta);
+        utils::MemoryUsageTracker::end_capture("layernorm_with_grad");
+        usage_with_grad = utils::MemoryUsageTracker::get_dram_usage("layernorm_with_grad");
+        EXPECT_TRUE(out_with_grad->get_requires_grad());
+        EXPECT_TRUE(out_with_grad->get_node().has_value());
+    }
+    EXPECT_EQ(usage_with_grad.total_allocations, input_bytes + 2 * stat_bytes);
+    EXPECT_EQ(usage_with_grad.total_deallocations, 0);
+    autograd::ctx().reset_graph();
+
+    // Under GradMode::DISABLED, mean and rstd allocations should also be skipped even if inputs require grad
+    autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED);
+    utils::MemoryUsageTracker::clear();
+    utils::DRAMUsage usage_disabled{};
+    {
+        const auto guard = utils::MemoryUsageTracker::begin_capture();
+        auto out_disabled = ops::layernorm(x, gamma, beta);
+        utils::MemoryUsageTracker::end_capture("layernorm_disabled");
+        usage_disabled = utils::MemoryUsageTracker::get_dram_usage("layernorm_disabled");
+        EXPECT_FALSE(out_disabled->get_node().has_value());
+    }
+    autograd::ctx().set_gradient_mode(autograd::GradMode::ENABLED);
+    EXPECT_EQ(usage_disabled.total_allocations, input_bytes);
+    EXPECT_EQ(usage_disabled.total_deallocations, 0);
+}
+
+TEST_F(LayerNormForwardOpTest, AutogradLayerNorm_NullBetaOptAndBackward) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+
+    const std::array<std::size_t, 4> x_shape = {1, 1, 32, 32};
+    const std::array<std::size_t, 4> param_shape = {1, 1, 1, 32};
+    auto x_xt = test_utils::make_uniform_xarray<float>(x_shape, -1.0F, 1.0F, 101U);
+    auto g_xt = test_utils::make_uniform_xarray<float>(param_shape, 0.5F, 1.5F, 102U);
+
+    auto x1 = autograd::create_tensor(core::from_xtensor(x_xt, device), /* requires_grad */ true);
+    auto g1 = autograd::create_tensor(core::from_xtensor(g_xt, device), /* requires_grad */ true);
+    auto out_nullopt = ops::layernorm(x1, g1, std::nullopt);
+    auto target = autograd::create_tensor(core::zeros_like(out_nullopt->get_value()));
+    ops::mse_loss(out_nullopt, target)->backward();
+
+    autograd::ctx().reset_graph();
+
+    auto x2 = autograd::create_tensor(core::from_xtensor(x_xt, device), /* requires_grad */ true);
+    auto g2 = autograd::create_tensor(core::from_xtensor(g_xt, device), /* requires_grad */ true);
+    std::optional<autograd::TensorPtr> null_beta_ptr = autograd::TensorPtr{nullptr};
+    auto out_nullptr = ops::layernorm(x2, g2, null_beta_ptr);
+    ops::mse_loss(out_nullptr, target)->backward();
+
+    auto out1_xt = core::to_xtensor(out_nullopt->get_value());
+    auto out2_xt = core::to_xtensor(out_nullptr->get_value());
+    EXPECT_TRUE(xt::allclose(out1_xt, out2_xt, 1e-3F, 1e-3F));
+
+    auto dx1_xt = core::to_xtensor(x1->get_grad());
+    auto dx2_xt = core::to_xtensor(x2->get_grad());
+    auto dg1_xt = core::to_xtensor(g1->get_grad());
+    auto dg2_xt = core::to_xtensor(g2->get_grad());
+    EXPECT_TRUE(xt::allclose(dx1_xt, dx2_xt, 1e-3F, 1e-3F));
+    EXPECT_TRUE(xt::allclose(dg1_xt, dg2_xt, 1e-3F, 1e-3F));
 }

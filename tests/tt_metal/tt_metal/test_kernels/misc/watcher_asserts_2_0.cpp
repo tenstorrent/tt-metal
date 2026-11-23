@@ -82,7 +82,10 @@ void kernel_main() {
 #if defined(COMPILE_FOR_TRISC) and defined(ARCH_QUASAR)
             case 8: TTI_INSN(TT_OP(0xbc, 0)); break;  // illegal instruction
             case 9:
+                // Initialize first so every run gets GET_UNDERFLOW: semaphores keep their state across programs.
+                // The second SEMINIT clears the latched error so later programs can report theirs.
                 RISCV_DEBUG_REGS->CHICKEN_BITS |= T6_DEBUG_REGS__CHICKEN_BITS__ALLOW_UNSAFE_SEMPOST_SEMGET_bm;
+                TTI_SEMINIT(3, 0, 0, 2);
                 TTI_SEMGET(0, 2);
                 TTI_SEMINIT(3, 0, 0, 2);
                 break;  // semaphore

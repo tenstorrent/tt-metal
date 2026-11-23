@@ -54,7 +54,7 @@ def test_reset_replaces_large_carry_exactly(mesh_device):
     for index, (y, state) in enumerate(zip(_shards(output), _shards(final_state), strict=True)):
         expected = 1.0 if _rank(index, mesh_device, 0) == 0 else float(2**26)
         assert torch.equal(state, torch.full_like(state, expected))
-        assert torch.equal(y[:, 1], torch.full_like(y[:, 1], expected))
+        assert torch.equal(y[:, 32:], torch.full_like(y[:, 32:], expected))
 
 
 def _shards(tensor: ttnn.Tensor) -> list[torch.Tensor]:

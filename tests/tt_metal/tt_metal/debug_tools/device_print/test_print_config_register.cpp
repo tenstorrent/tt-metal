@@ -294,7 +294,7 @@ static Program make_writer_program(distributed::MeshDevice& mesh_device, const C
         }},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {kKernel}, .target_nodes = NodeCoord{config.core}}},
     };
-    return tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
+    return tt_metal::Program(mesh_device, spec);
 }
 
 static std::string generate_golden_output(

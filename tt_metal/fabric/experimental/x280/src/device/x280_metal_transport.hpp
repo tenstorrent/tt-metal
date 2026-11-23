@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
 #include <cstddef>

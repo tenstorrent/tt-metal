@@ -13,7 +13,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <array>
 #include <cstddef>
-#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -21,6 +20,7 @@
 #include <optional>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -33,14 +33,13 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -54,7 +53,6 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/memory_pin.hpp>
@@ -462,12 +460,56 @@ TEST_F(MeshBufferTest2x4, Deallocation) {
     EXPECT_FALSE(buffer_view->is_allocated());
 }
 
+// Frees a MeshBuffer after its MeshDevice was closed and another MeshDevice opened the same chip. The free must not
+// reach the new MeshDevice's devices, where it would release an address that a buffer of the new MeshDevice holds.
+TEST(MeshBufferTest, DeallocationAfterMeshDeviceReopened) {
+    const MeshDeviceConfig config(MeshShape(1, 1));
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = 2048};
+
+    auto closed_mesh_device =
+        MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    auto stale = MeshBuffer::create(buffer_config, device_local_config, closed_mesh_device.get());
+    closed_mesh_device->close();
+
+    auto mesh_device =
+        MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    auto held = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+    // Its devices are closed, even though the chip is open again, so no device buffer can be built.
+    EXPECT_THAT(
+        [&] { (void)stale->get_device_buffer(MeshCoordinate(0, 0)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("the MeshBuffer's devices are closed")));
+    stale.reset();
+    auto next = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+    EXPECT_NE(next->address(), held->address());
+
+    next.reset();
+    held.reset();
+    mesh_device->close();
+}
+
+// A MeshBuffer of a closed submesh serves no device buffers, even though the parent keeps the devices open: the close
+// released its allocation, and a new submesh may since have allocated the same address.
+TEST_F(MeshBufferTestSuite, ClosedSubmeshServesNoDeviceBuffers) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = 1024};
+
+    auto closed_submesh = mesh_device_->create_submesh(MeshShape(1, 1));
+    auto stale = MeshBuffer::create(buffer_config, device_local_config, closed_submesh.get());
+    closed_submesh->close();
+
+    auto submesh = mesh_device_->create_submesh(MeshShape(1, 1));
+    auto live = MeshBuffer::create(buffer_config, device_local_config, submesh.get());
+    EXPECT_THAT(
+        [&] { (void)stale->get_device_buffer(MeshCoordinate(0, 0)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("the MeshBuffer's MeshDevice is closed")));
+    EXPECT_NE(live->get_device_buffer(MeshCoordinate(0, 0)), nullptr);
+}
+
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
-    // Repeated device init takes very long on TG. Lower the number of iterations.
-    int iterations = 100;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-        iterations = 10;
-    }
+    constexpr int iterations = 100;
 
     for (int i = 0; i < iterations; i++) {
         MeshDeviceConfig config(MeshShape(1, 1));
@@ -484,11 +526,7 @@ TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
 }
 
 TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
-    // Repeated device init takes very long on TG. Lower the number of iterations.
-    int iterations = 100;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-        iterations = 10;
-    }
+    constexpr int iterations = 100;
 
     for (int i = 0; i < iterations; i++) {
         MeshDeviceConfig config(MeshShape(1, 1));

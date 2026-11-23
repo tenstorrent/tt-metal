@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "llk_assert.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -23,7 +24,7 @@ using namespace ckernel::unpacker;
 // rt_dim: 1
 // ct_dim: any integer from 1 to 64, as long as the ct_dim output tiles fit in the DEST sync region
 //         (custom_mm_tile_rows of the CustomMmDestLayout each); nothing else bounds it
-// kt_dim: even number from 2 to 256 (inclusive)
+// kt_dim: even number from 2 to 254 (inclusive); one SrcB face walk covers at most 255 k-tiles
 // fidelity: LoFi only
 // throttle: not supported
 
@@ -175,7 +176,7 @@ constexpr std::uint32_t get_replay_insn_for_combo(const std::uint8_t combo)
  * @param base_address_meta: Byte address of the per-tile metadata, read by the RISC-V (so not L1_ADDRESS()). Each
  *                           word holds 10 tiles: the previous tile's format in bits 1:0, then per tile a use_b bit
  *                           and a 2-bit format (0 zero, 1 bfp2, 2 bfp4, 3 bfp8).
- * @param kt_dim: Inner dimension in tiles, an even number from 2 to 256.
+ * @param kt_dim: Inner dimension in tiles, an even number from 2 to 254.
  * @param ct_dim: Output width in tiles, 1 to 64; DEST capacity bounds it, see @ref _llk_math_compressed_custom_mm_.
  * @note Call @ref _llk_unpack_AB_compressed_custom_mm_init_ first.
  * @note Every call ends on the to/from-bfp2 format stall, so the next call's metadata can start from the
@@ -230,6 +231,8 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
         get_replay_insn_for_combo(0b111'10), // 0b111'10 bfp4 to bfp8 with b
         get_replay_insn_for_combo(0b111'11), // 0b111'11 bfp8 to bfp8 with b
     };
+
+    LLK_ASSERT(kt_dim <= 254, "compressed custom_mm: kt_dim above 254 needs the SrcB walk split");
 
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
