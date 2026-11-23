@@ -27,6 +27,7 @@ Python threads (torch indexing releases the GIL). Every mode gives EngramTable.r
 
 from __future__ import annotations
 
+import hashlib
 import mmap
 import os
 import threading
@@ -34,6 +35,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -106,10 +108,50 @@ def _drop_cache(fd: int, off: int, nbytes: int):
         pass
 
 
+def _shm_rows_path(ck, layer: int, nbytes: int) -> str | None:
+    """Where ENGRAM_SHM_DIR keeps the layer's packed rows (None: off): named by the table's place in the checkpoint
+    (file, dtype, shape, offset, bytes of weight and scale), so another checkpoint or row format never matches."""
+    root = settings.get("ENGRAM_SHM_DIR")
+    if root == "off":
+        return None
+    h = hashlib.sha1(repr(("bfp8 rows v1", nbytes)).encode())
+    for name in _names(layer):
+        h.update(repr((name, os.path.basename(ck.weight_map[name]), *map(str, ck.info(name)))).encode())
+    return os.path.join(root, f"L{layer:02d}.bfp8.{h.hexdigest()[:12]}.rows")
+
+
+def _shm_rows_file(path: str, nbytes: int):
+    """(name, shared mapping) of a new ``nbytes`` file next to ``path`` for a build to fill, its space reserved; it is
+    renamed to ``path`` once whole. (None, None), logged, when the file system has no room for it."""
+    root = os.path.dirname(path)
+    os.makedirs(root, exist_ok=True)
+    st = os.statvfs(root)
+    free = st.f_bavail * st.f_frsize
+    if free < nbytes:
+        logger.warning(
+            f"{root}: {free / 1e9:.1f} GB free, the packed engram rows need {nbytes / 1e9:.1f} GB: building them in "
+            f"anonymous memory (rebuilt every run)"
+        )
+        return None, None
+    tmp = f"{path}.building.{os.getpid()}"
+    fd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.posix_fallocate(fd, 0, nbytes)
+        return tmp, mmap.mmap(fd, nbytes, flags=mmap.MAP_SHARED)
+    except OSError as e:
+        os.unlink(tmp)
+        logger.warning(f"{tmp}: cannot reserve {nbytes / 1e9:.1f} GB ({e}): building in anonymous memory")
+        return None, None
+    finally:
+        os.close(fd)
+
+
 def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20, huge: bool | None = None):
-    """The layer's table as packed bfloat8_b rows [N, 272] uint8 in anonymous memory, built once a process: blocks of
-    ``block`` rows read with pread (``threads`` ahead; each block's file pages dropped from the page cache after it)
-    and packed by tt/engram_bfp8.pack_into. ``huge``: MADV_HUGEPAGE on the rows (default ENGRAM_HUGEPAGES)."""
+    """The layer's table as packed bfloat8_b rows [N, 272] uint8, once a process: mapped from ENGRAM_SHM_DIR when an
+    earlier run left them there, else built -- into a new file there when it has room, else into anonymous memory --
+    from blocks of ``block`` rows read with pread (``threads`` ahead; each block's file pages dropped from the page
+    cache after it) and packed by tt/engram_bfp8.pack_into. ``huge``: MADV_HUGEPAGE on anonymous rows (default
+    ENGRAM_HUGEPAGES)."""
     from collections import deque
 
     import numpy as np
@@ -124,7 +166,27 @@ def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20, huge:
         _, (n, d), woff, _ = ck.info(wname)
         _, (_, sd), soff, _ = ck.info(sname)
         width = d // 16 + d
-        buf = _anonymous(n * width, settings.get("ENGRAM_HUGEPAGES") == "on" if huge is None else huge)
+        stored = _shm_rows_path(ck, layer, n * width)
+        if stored is not None and os.path.isfile(stored) and os.path.getsize(stored) == n * width:
+            t0 = time.perf_counter()
+            fd = os.open(stored, os.O_RDWR)
+            try:
+                # Shared, so populating faults the tmpfs pages in instead of copying them.
+                buf = mmap.mmap(fd, n * width, flags=mmap.MAP_SHARED | mmap.MAP_POPULATE)
+            finally:
+                os.close(fd)
+            logger.info(
+                f"engram layer {layer}: packed rows mapped from {stored} "
+                f"({n * width / 1e9:.1f} GB in {time.perf_counter() - t0:.1f} s)"
+            )
+            t = torch.from_numpy(np.frombuffer(buf, dtype=np.uint8).reshape(n, width))
+            t._engram_buf = buf  # (keeps the mapping alive with the tensor)
+            _RESIDENT[key] = t
+            return t
+        building, buf = _shm_rows_file(stored, n * width) if stored is not None else (None, None)
+        if buf is None:
+            buf = _anonymous(n * width, settings.get("ENGRAM_HUGEPAGES") == "on" if huge is None else huge)
+        t0 = time.perf_counter()
         packed = np.frombuffer(buf, dtype=np.uint8).reshape(n, width)
         fw = os.open(os.path.join(ck.path, ck.weight_map[wname]), os.O_RDONLY)
         fs = os.open(os.path.join(ck.path, ck.weight_map[sname]), os.O_RDONLY)
@@ -151,9 +213,19 @@ def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20, huge:
                     if nxt is not None:
                         todo.append(ex.submit(read, nxt))
                     pack_into(w, s, packed[a : a + w.shape[0]], threads)
+        except BaseException:
+            if building is not None:
+                os.unlink(building)
+            raise
         finally:
             os.close(fw)
             os.close(fs)
+        if building is not None:
+            os.rename(building, stored)
+        logger.info(
+            f"engram layer {layer}: packed rows built in {time.perf_counter() - t0:.1f} s"
+            + (f", kept in {stored} for the next run" if building is not None else "")
+        )
         t = torch.from_numpy(packed)
         t._engram_buf = buf  # (keeps the mapping alive with the tensor)
         _RESIDENT[key] = t

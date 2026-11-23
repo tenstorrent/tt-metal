@@ -896,6 +896,16 @@ TABLE = {
         "packed by numba, nogil) overlaps the weight load; the first chunk's begin_chunk waits for whatever is left. "
         "load = in the constructor, blocking (the path before FIX.10). Same bytes either way",
     ),
+    "ENGRAM_SHM_DIR": Setting(
+        "/dev/shm/deepseek_v41_d_p_engram",
+        None,
+        "ENGRAM_TABLE=resident, ENGRAM_ROWS=bfp8: the tmpfs directory the packed rows are kept in across runs, one "
+        "file a layer named by the table's place in the checkpoint (2 x 104.4 GB). A run that finds a layer's file maps "
+        "it (MAP_POPULATE, seconds) instead of building it (~84 s a layer from the checkpoint); one that does not builds "
+        "into the file, so the next run finds it. Without room for the file the build goes to anonymous memory as "
+        "before (logged). off = always anonymous memory, nothing kept. Same bytes either way",
+        test="off",
+    ),
     "ENGRAM_ROWS": Setting(
         "bfp8",
         ("bf16", "bfp8"),
