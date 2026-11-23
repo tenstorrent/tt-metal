@@ -23,6 +23,13 @@
 //                      right behind its payload (same path + VC => lands after the data), instead of
 //                      a write barrier + atomic increment + atomic barrier per round (~1.1 us each,
 //                      measured). Rounds then stream back to back.
+//                      Perf 2: the whole stream is ONE linked sequence -- every payload burst and every count
+//                      write is linked except the last count write -- so the multicast path is reserved once
+//                      for all of x instead of once per round (x multicast alone 14.9 -> 10.3 us, whole op
+//                      18.7 -> 16.7 us). Each round's count goes out of its own L1 word (cb_count_src, sender
+//                      only), so no flush is needed before writing the next count. Holding the path while
+//                      waiting on the x-reader is safe: nothing else multicasts or writes on this NoC across
+//                      the receiver rect until x is done (verified under the watcher's NoC sanitizer).
 // Without x_ordered_signal the counter protocol is the helper's SenderPipe::send_signal() (Counter
 // inc_multicast + atomic barrier). Receivers always use ReceiverPipe::receive(r) (counter >= r + 1).
 // x_ordered_signal 0 + x_mcast_linked 0 + x_signal_lag 0 is the Phase 0 schedule.
@@ -54,6 +61,7 @@ void kernel_main() {
     constexpr uint32_t round_stride = get_compile_time_arg_val(7);
     constexpr bool x_ordered_signal = get_compile_time_arg_val(8) != 0;
     constexpr uint32_t data_ready_sem_id = get_compile_time_arg_val(9);  // this channel's Counter cell
+    constexpr uint32_t cb_count_src = get_compile_time_arg_val(10);      // sender-only, one 16 B word per round
     constexpr uint32_t my_rounds = (num_k_blocks - first_round + round_stride - 1) / round_stride;
     // This sender's channel: exactly one of the two slots is attached (the other is absent).
     using McA = McastArgs<
@@ -85,7 +93,7 @@ void kernel_main() {
         return;
 #endif
         if constexpr (x_ordered_signal) {
-            // Every burst linked: the counter write that follows terminates the sequence.
+            // Every burst linked: only the stream's final count write is unlinked (Perf 2).
             for (uint32_t off = 0; off < round_bytes; off += NOC_MAX_BURST_SIZE) {
                 const uint32_t len = round_bytes - off < NOC_MAX_BURST_SIZE ? round_bytes - off : NOC_MAX_BURST_SIZE;
                 noc_async_write_multicast(
@@ -126,14 +134,13 @@ void kernel_main() {
     };
 
     if constexpr (x_ordered_signal) {
-        // Publish round i (local) by multicasting the count i + 1 into every receiver's Counter cell,
-        // right behind the round's payload on the same NoC path and VC, so it lands after the data
-        // (the ordering the helper's Flag mode relies on). The value is monotone, so the helper's
-        // ReceiverPipe::receive(i) (wait counter >= i + 1) is unchanged, and no round waits for acks
-        // or an atomic. This core's own copy of the cell is the write's source.
+        // Publish local round i by multicasting the count i + 1 into every receiver's Counter cell, right
+        // behind the round's payload on the same NoC path and VC, so it lands after the data. The value is
+        // monotone, so ReceiverPipe::receive(i) (wait counter >= i + 1) is unchanged. The whole stream is one
+        // linked sequence (only the final count write is unlinked); round i's count source is its own word.
         const uint32_t cell_addr = get_semaphore(data_ready_sem_id);
-        volatile tt_l1_ptr uint32_t* cell = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cell_addr);
         const uint64_t cell_mcast = get_noc_multicast_addr(dst_x_start, dst_y_start, dst_x_end, dst_y_end, cell_addr);
+        const uint32_t count_src = get_write_ptr(cb_count_src);
         for (uint32_t i = 0; i < my_rounds; ++i) {
             const uint32_t r = first_round + i * round_stride;
             {
@@ -143,9 +150,9 @@ void kernel_main() {
             {
                 MaybeDeviceZoneScope("x_mcast_issue");
                 issue_payload(base + r * round_bytes);
-                noc_async_writes_flushed();  // the previous count's source read is done before rewriting it
-                *cell = i + 1;
-                noc_async_write_multicast(cell_addr, cell_mcast, sizeof(uint32_t), num_dests, /*linked=*/false);
+                const uint32_t src = count_src + i * 16;
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src) = i + 1;
+                noc_async_write_multicast(src, cell_mcast, sizeof(uint32_t), num_dests, /*linked=*/i + 1 < my_rounds);
             }
             cb_pop_front(cb_x_resident, round_tiles);  // slot is never rewritten (x resident)
         }

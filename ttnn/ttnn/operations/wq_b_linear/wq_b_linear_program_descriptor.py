@@ -99,6 +99,7 @@ def _dest_tile_limit(fp32_dest_acc_en):
 CB_X_RESIDENT = 0
 CB_W_BLOCK = 1
 CB_OUT_BLOCK = 2  # compute L1-accumulates every K-step straight into it (Perf 1; no separate interm CB)
+CB_COUNT_SRC = 3  # sender-only: one 16 B source word per x round for the linked count writes (Perf 2)
 
 
 def _crs(cores):
@@ -261,6 +262,7 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         # Channel s's Counter cell id: each no-handshake Counter channel takes one semaphore, allocated
         # in sender order from id 0 (asserted against the helper's allocation below).
         sender_ct.extend([int(X_ORDERED_SIGNAL), s_idx])
+        sender_ct.append(CB_COUNT_SRC)
         # Receiver rectangle in NoC coordinates, in routing order for the multicast NoC (NoC1 runs
         # high -> low, so its start is the high corner).
         mc_start, mc_end = (mc_hi, mc_lo) if mcast_noc == ttnn.NOC.NOC_1 else (mc_lo, mc_hi)
@@ -344,7 +346,13 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
     # ---- x multicast channels: one per sender, rect receivers, sender outside the rect, no handshake.
     # Channel s is attached as X_MCAST_PREFIXES[s] to sender s's kernel and to the worker writer; the
     # other prefixes are attached absent (each sender kernel uses its one active slot).
-    descriptor = ttnn.ProgramDescriptor(cbs=[cb_x_resident, cb_w_block, cb_out_block])
+    # Sender-only count words, allocated after cb_x_resident so its address still matches the workers'.
+    cb_count_src = ttnn.CBDescriptor(
+        total_size=16 * num_k_blocks,
+        core_ranges=_crs(senders),
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB_COUNT_SRC, data_format=x.dtype, page_size=16)],
+    )
+    descriptor = ttnn.ProgramDescriptor(cbs=[cb_x_resident, cb_w_block, cb_out_block, cb_count_src])
     next_sem = 0
     for s_idx, (scx, scy) in enumerate(senders):
         mcast = ttnn.Mcast(
