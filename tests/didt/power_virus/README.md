@@ -11,15 +11,16 @@ It needs slow dispatch.
 | Ethernet | Bidirectional traffic on every link between chips in the same run | `PV_ETH` |
 
 ```bash
-export TT_METAL_SLOW_DISPATCH_MODE=1
 # Everything at 100% on every chip for 60 s
-PV_TRISC=100 PV_DRAM=100 PV_NOC=100 PV_ETH=100 PV_SUPER_SYNC=1 PV_DURATION_S=60 \
-  ./build/test/didt/unit_tests_didt_power_virus --gtest_filter="*AllDevices*"
+TT_METAL_SLOW_DISPATCH_MODE=1 PV_TRISC=100 PV_DRAM=100 PV_NOC=100 PV_ETH=100 PV_SUPER_SYNC=1 PV_DURATION_S=60 \
+  ./build/test/didt/unit_tests_didt_power_virus --gtest_filter=MeshDispatchFixture.PowerVirus_AllDevices
+
 # One chip, FPU at 50% until Ctrl-C
-PV_TRISC=50 PV_DURATION_S=0 ./build/test/didt/unit_tests_didt_power_virus --gtest_filter="*SingleDevice*"
+TT_METAL_SLOW_DISPATCH_MODE=1 PV_TRISC=50 PV_DURATION_S=0 \
+  ./build/test/didt/unit_tests_didt_power_virus --gtest_filter=MeshDispatchFixture.PowerVirus_SingleDevice
 ```
 
-Tests:
+Tests (suite `MeshDispatchFixture`):
 - `PowerVirus_Smoke`: device 0 with TRISC, DRAM and NOC at 100% and super-sync, for 2 s.
 - `PowerVirus_SingleDevice`: device 0.
 - `PowerVirus_AllDevices`: every chip. Ethernet only runs here, because both ends of a link must run together. Links that leave the cluster are skipped.
