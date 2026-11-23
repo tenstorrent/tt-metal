@@ -827,8 +827,8 @@
   budget_type: unit
 
 # The prefill runner's media embedding store (models/common/multimedia_store), not tied to any model. Host-only:
-# a fake Mooncake client and a local Mooncake master, so the card goes unused. The install and the 39 tests take
-# about 15 s; the per-test timeout only catches a hang.
+# a fake Mooncake client and a local Mooncake master, so the card goes unused. The install and the tests take about
+# 15 s; the per-test timeout only catches a hang.
 - name: Media embedding store unit tests
   cmd: |
     uv pip install -r models/common/multimedia_store/requirements.txt
