@@ -60,7 +60,9 @@ MODES = ("untraced", "traced")
 # process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox, Galaxy and Galaxy 4x4: CI
 # hosts; Galaxy and Galaxy 4x4 then scaled by the q-in-L1 change's measured speedup (3 interleaved runs each of main and
 # the change on one Galaxy; ratios under 1% left unapplied), LoudBox by Galaxy's (same 160 q rows per chip, not
-# measured). Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
+# measured). Galaxy 4x4 subtorus: the GLM rows are the means of six runs on two 8 kW Galaxies, provisional until cut on
+# the 14 kW runners the GLM chunked perf leg runs on; the K3.1 row has no CI leg (measured on a subtorus-cabled Galaxy, 3
+# runs, unscaled).
 _TARGETS_MS = {
     "Galaxy": {
         "kimi_k3_1": (2.88, 2.54, 6.47, 6.18),
@@ -74,8 +76,8 @@ _TARGETS_MS = {
     },
     "Galaxy 4x4 subtorus": {
         "kimi_k3_1": (2.97, 2.80, 6.62, 6.37),
-        "glm_5_3": (2.78, 2.52, 6.43, 6.15),
-        "glm_5_3-no_indexer": (2.14, 1.98, 2.22, 2.08),
+        "glm_5_3": (2.62, 2.34, 6.47, 5.93),
+        "glm_5_3-no_indexer": (2.02, 1.88, 2.11, 1.97),
     },
     "LoudBox": {
         "kimi_k3_1": (2.57, 2.38, 3.82, 3.71),

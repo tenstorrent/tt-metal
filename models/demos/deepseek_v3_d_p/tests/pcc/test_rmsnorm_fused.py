@@ -196,11 +196,11 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, seq_len, emb_d
 
 # GLM-5.3's two fused norms on the [RING, RING] 4x4 stage, one 2,560-token chunk (640 rows a SP chip on mesh axis 1, the
 # hidden width over the TP ring on axis 0): the attention norm writes L1, the FFN norm DRAM. Device time of one call
-# (every program's slowest chip, summed). Ceilings in us: the slowest median over the calibration runs on 14 kW Galaxies
-# plus 10%; provisional until recalibrated on CI's runners. Override with TT_METAL_RMSNORM_RING_RING_4X4_MAX_US
+# (every program's slowest chip, summed). Ceilings in us: the slowest median over six runs on two 8 kW Galaxies (43-45 and
+# 47-49 us) plus 10%; provisional until recalibrated on the 14 kW runners. Override with TT_METAL_RMSNORM_RING_RING_4X4_MAX_US
 # (every case).
 RMSNORM_PERF_SAMPLES = 7
-RMSNORM_RING_RING_4X4_CEILING_US = {"attn-norm-l1": None, "ffn-norm-dram": None}
+RMSNORM_RING_RING_4X4_CEILING_US = {"attn-norm-l1": 50, "ffn-norm-dram": 55}
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
