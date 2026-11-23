@@ -18,7 +18,8 @@ class PfMessages:
     def __init__(self, device):
         self.device = device
 
-    def __call__(self, n1, diff, w, c0):
+    def __call__(self, n1, diff, w, c0, dtype=ttnn.float32):
+        """dtype: of the 4 outputs; bfloat16 is the opt-in bf16 gate path (rounds the messages: changes output)."""
         t, c = n1.shape[-2], n1.shape[-1]
         assert c0 % 4 == 0 and tuple(w.shape)[-2:] == (t, 64), (c0, w.shape)
         for a in (n1, diff, w):
@@ -26,7 +27,7 @@ class PfMessages:
             assert a.memory_config().buffer_type == ttnn.BufferType.DRAM, a
         assert tuple(diff.shape) == tuple(n1.shape), diff.shape
         dram = ttnn.DRAM_MEMORY_CONFIG
-        outs = [ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, t, c]), ttnn.float32, ttnn.TILE_LAYOUT, self.device, dram)
+        outs = [ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, t, c]), dtype, ttnn.TILE_LAYOUT, self.device, dram)
                 for _ in range(4)]  # fmt: skip
         wt, rows = c // 32, t // 32
         grid = self.device.compute_with_storage_grid_size()
@@ -38,7 +39,7 @@ class PfMessages:
             r_args[core] = [n1.buffer_address(), diff.buffer_address(), w.buffer_address(), c0, len(us)] + flat
             w_args[core] = [o.buffer_address() for o in outs] + [len(us)] + flat
             c_args[core] = [len(us)] + [j1 - j0 for _, j0, j1 in us]
-        named = F.fixed_rt(dict(wt=wt), r_args, w_args, c_args)
+        named = F.fixed_rt(dict(wt=wt, page=F.tile_bytes(dtype)), r_args, w_args, c_args)
         kernels = [
             F.kernel("pf_msg_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, crs),
             F.kernel("pf_msg_writer.cpp", ttnn.WriterConfigDescriptor(), named, w_args, crs),
@@ -46,6 +47,6 @@ class PfMessages:
         ]
         fp = ttnn.float32
         cbs = [F.cb(0, fp, 2, cores=crs), F.cb(1, fp, 2, cores=crs), F.cb(2, fp, 8, cores=crs),
-               F.cb(3, fp, 1, cores=crs), F.cb(16, fp, 4, cores=crs)]  # fmt: skip
+               F.cb(3, fp, 1, cores=crs), F.cb(16, dtype, 4, cores=crs)]  # fmt: skip
         F.run([n1, diff, w] + outs, kernels, cbs)
         return outs

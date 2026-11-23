@@ -305,13 +305,16 @@ class _Gate:
         whose gates share h (q / k / v of a local loop layer) pass it to each call as nh."""
         return rms_norm_bf16(_f32(h), epsilon=EPS, compute_kernel_config=self.ckc)
 
-    def __call__(self, h, m, nh=None):
-        h, m = _f32(h), _f32(m)
+    def __call__(self, h, m, nh=None, bf16=False):
+        """bf16: opt-in bf16 gate path (Inkling2Prefill.gate_bf16): m may be bf16, bf16 output. Changes output."""
+        h = _f32(h)
+        m = m if bf16 and m.dtype == ttnn.bfloat16 else _f32(m)
+        nm = rms_norm_bf16(m, epsilon=EPS, compute_kernel_config=self.ckc) if m.dtype == ttnn.bfloat16 else self.norm(m)
         # typecast(concat(fp32 norms)) == concat(bf16 norms): the typecast is per element; half the bytes moved
-        x = ttnn.concat([self.norm(h) if nh is None else nh, self.norm(m)], dim=-1)
+        x = ttnn.concat([self.norm(h) if nh is None else nh, nm], dim=-1)
         if self.tail is not None:  # typecast z .. addcmul in one program
             zb = ttnn.matmul(x, self.down, dtype=ttnn.bfloat16, compute_kernel_config=self.ckc)
-            return self.tail(zb, self.forget, self.gain, h, m)
+            return self.tail(zb, self.forget, self.gain, h, m, ttnn.bfloat16 if bf16 else ttnn.float32)
         z = ttnn.typecast(ttnn.matmul(x, self.down, dtype=ttnn.bfloat16, compute_kernel_config=self.ckc), ttnn.float32)
         f = ttnn.tanh(ttnn.matmul(z, self.forget, dtype=ttnn.float32, compute_kernel_config=self.ckc))
         g = ttnn.tanh(ttnn.matmul(z, self.gain, dtype=ttnn.float32, compute_kernel_config=self.ckc))
@@ -575,6 +578,9 @@ class Inkling2Prefill:
         # accumulate K in blocks of 4 tiles (else 1 / 2): other fp32 summation order, ~-1.3 ms per application at
         # 8K (perf/G5d-report.md). On by default; mm_blocked=False is the earlier default.
         self.mm_blocked = mm_blocked
+        # Opt-in, changes output: the loop message gates' messages and outputs stored bf16 (fp32 inside each
+        # program; tt/fused/pf_msg.py, pf_gate.py). Off by default.
+        self.gate_bf16 = False
         self.debug = debug
         self.profile = profile
         self.trace = trace
@@ -1274,9 +1280,9 @@ class Inkling2Prefill:
         if msgs is not None:
             if len(xs) == 1:  # one input for the 3 gates: its norm once
                 nh = lp.gates["q"].norm(xs[0])
-                xs = [lp.gates[g](xs[0], msgs[i], nh) for i, g in enumerate(("q", "k", "v"))]
+                xs = [lp.gates[g](xs[0], msgs[i], nh, self.gate_bf16) for i, g in enumerate(("q", "k", "v"))]
             else:
-                xs = [lp.gates[g](xs[i], msgs[i]) for i, g in enumerate(("q", "k", "v"))]
+                xs = [lp.gates[g](xs[i], msgs[i], bf16=self.gate_bf16) for i, g in enumerate(("q", "k", "v"))]
         if lay.is_global:
             qn, kn, vn = (self._rms(xs[i], w) for i, w in enumerate(lp.norms))
         elif len(xs) == 1:
@@ -1306,7 +1312,7 @@ class Inkling2Prefill:
             resid = a if self.fused_glue else ttnn.add(_f32(h), a)
         m = lp.mlp_res([nn for _, nn in stack], resid)[0]
         if msgs is not None:
-            m = lp.gates["mlp"](m, msgs[3])
+            m = lp.gates["mlp"](m, msgs[3], bf16=self.gate_bf16)
         self._tick("resid_mid")
         y = self._moe(lp, m, n)
         self._tick("moe")
@@ -1329,7 +1335,7 @@ class Inkling2Prefill:
 
         def get(l):
             if self._pfmsg is not None:  # the 4 messages of layer l in one program (bit-equal)
-                return self._pfmsg(n1, diff, w0, 4 * l)
+                return self._pfmsg(n1, diff, w0, 4 * l, ttnn.bfloat16 if self.gate_bf16 else ttnn.float32)
             return [ttnn.add(n1, ttnn.multiply(diff, _cols(w0, 4 * l + j, 4 * l + j + 1))) for j in range(4)]
 
         return get

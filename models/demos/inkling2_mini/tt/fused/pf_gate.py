@@ -26,19 +26,19 @@ class PfGateTail:
     def __init__(self, device):
         self.device = device
 
-    def __call__(self, z, forget, gain, h, m):
+    def __call__(self, z, forget, gain, h, m, out_dtype=ttnn.float32):
+        """m may be bf16 and out_dtype bf16 (opt-in bf16 gate path: changes output); default all fp32."""
         t, c = h.shape[-2], h.shape[-1]
         kz = RANK // 32
         assert z.dtype == ttnn.bfloat16 and tuple(z.shape)[-2:] == (t, RANK), z.shape
         assert tuple(forget.shape)[-2:] == (RANK, c) and tuple(gain.shape)[-2:] == (RANK, c), forget.shape
         for a in (z, forget, gain, h, m):
             assert a.layout == ttnn.TILE_LAYOUT and a.memory_config().buffer_type == ttnn.BufferType.DRAM, a
-        for a in (forget, gain, h, m):
+        for a in (forget, gain, h):
             assert a.dtype == ttnn.float32, a.dtype
+        assert m.dtype in (ttnn.float32, ttnn.bfloat16), m.dtype
         dram = ttnn.DRAM_MEMORY_CONFIG
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, t, c]), ttnn.float32, ttnn.TILE_LAYOUT, self.device, dram
-        )
+        out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, t, c]), out_dtype, ttnn.TILE_LAYOUT, self.device, dram)
         wt, rows = c // 32, t // 32
         grid = self.device.compute_with_storage_grid_size()
         per = F.balanced_runs(wt, rows, grid.x * grid.y)  # units (j, R0, R1), the same tile count per core
@@ -48,9 +48,9 @@ class PfGateTail:
             flat = [v for u in us for v in u]
             r_args[core] = [z.buffer_address(), forget.buffer_address(), gain.buffer_address(), h.buffer_address()]
             r_args[core] += [m.buffer_address(), len(us)] + flat
-            w_args[core] = [out.buffer_address(), 4096, len(us)] + flat
+            w_args[core] = [out.buffer_address(), F.tile_bytes(out_dtype), len(us)] + flat
             c_args[core] = [len(us)] + [r1 - r0 for _, r0, r1 in us]
-        named = dict(wt=wt, kz=kz, minus_one=_bits(-1.0), one=_bits(1.0))
+        named = dict(wt=wt, kz=kz, minus_one=_bits(-1.0), one=_bits(1.0), m_page=F.tile_bytes(m.dtype))
         named = F.fixed_rt(named, r_args, w_args, c_args)
         kernels = [
             F.kernel("pf_gate_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, crs),
@@ -59,5 +59,5 @@ class PfGateTail:
         ]
         bf, fp = ttnn.bfloat16, ttnn.float32
         cbs = [F.cb(0, bf, 2 * kz, cores=crs), F.cb(1, fp, kz, cores=crs), F.cb(2, fp, kz, cores=crs),
-               F.cb(3, fp, 2, cores=crs), F.cb(4, fp, 2, cores=crs), F.cb(16, fp, 2, cores=crs)]  # fmt: skip
+               F.cb(3, fp, 2, cores=crs), F.cb(4, m.dtype, 2, cores=crs), F.cb(16, out_dtype, 2, cores=crs)]  # fmt: skip
         return F.run([z, forget, gain, h, m, out], kernels, cbs)
