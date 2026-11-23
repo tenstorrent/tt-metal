@@ -47,9 +47,14 @@ def run_exp_ring_joint_sdpa(
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     # The op reserves the last column for the fabric MUX (sdpa_grid.x = x - 1) and needs one Q
-    # chunk per SDPA column, so size the grid from the chunk count.
+    # chunk per SDPA column, so size the grid from the chunk count. Chunks of 0 (as the models pass)
+    # leave the chunks and the grid width to the op on the full grid.
     local_padded_N = padded_seq_len // tuple(submesh.shape)[rp_axis]
-    sdpa_compute_grid = (math.ceil(local_padded_N / q_chunk_size) + 1, full_compute_grid.y)
+    sdpa_compute_grid = (
+        (full_compute_grid.x, full_compute_grid.y)
+        if q_chunk_size == 0
+        else (math.ceil(local_padded_N / q_chunk_size) + 1, full_compute_grid.y)
+    )
 
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -95,18 +100,7 @@ def run_exp_ring_joint_sdpa(
     ]
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=sdpa_compute_grid,
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
-    )
-
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        submesh.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        compute_with_storage_grid_size=sdpa_compute_grid, q_chunk_size=q_chunk_size, k_chunk_size=k_chunk_size
     )
 
     # Valid rows stay at fa_rand's unit scale, bf16-rounded so the torch golden shares the device's
@@ -206,7 +200,7 @@ def run_exp_ring_joint_sdpa(
                 joint_strategy="rear",
                 logical_n=base_seq_len,
                 program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
+                precision=ttnn.SDPAPrecision.STANDARD,
                 dim=2,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
@@ -403,6 +397,10 @@ def run_test_exp_ring_joint_sdpa(
         ((1, 4), 2, 10, 8960, 1, 4, 0, 1, 224, 512, None, None),
         # One Galaxy row: a single ring of 8 (TP=1 submesh), the per-device problem of 4x8.
         ((4, 8), 2, 10, 18944, 1, 8, 0, 1, 224, 512, None, None),
+        # Op-chosen chunks and grid width, as the Wan / H3 models call it.
+        ((4, 32), 2, 40, 75600, 1, 32, 0, 4, 0, 0, None, None),
+        ((4, 8), 2, 40, 18944, 1, 8, 0, 4, 0, 0, None, None),
+        ((4, 8), 2, 10, 18944, 1, 8, 0, 1, 0, 0, None, None),
     ],
     ids=[
         "4x32",
@@ -415,6 +413,9 @@ def run_test_exp_ring_joint_sdpa(
         "4x8_chunkskip",
         "1x4",
         "4x8_ring8",
+        "4x32_auto",
+        "4x8_auto",
+        "4x8_ring8_auto",
     ],
     indirect=["mesh_device"],
 )
@@ -659,17 +660,7 @@ def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
     ]
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=sdpa_compute_grid,
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
-    )
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        submesh.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        compute_with_storage_grid_size=sdpa_compute_grid, q_chunk_size=q_chunk_size, k_chunk_size=k_chunk_size
     )
 
     tt_logical_n = logical_length_tensor(submesh, logical_ns[0])
@@ -691,7 +682,7 @@ def test_exp_ring_joint_sdpa_logical_n_tensor_trace_replay(
             joint_strategy="rear",
             logical_n=logical_n,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
+            precision=ttnn.SDPAPrecision.STANDARD,
             dim=2,
             multi_device_global_semaphore=ccl_semaphore_handles,
             num_links=num_links,

@@ -120,8 +120,6 @@ def test_attention_motif(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor),
-        exp_approx_mode=MotifTransformer.SDPA_EXP_APPROX_MODE,
     )
 
     converted_state_dict = dict(torch_model.state_dict())
@@ -139,7 +137,7 @@ def test_attention_motif(
     prompt = torch.randn((batch_size, prompt_seq_len, query_dim))
 
     spatial_padded = tt_model.pad_spatial_sequence(
-        spatial, sp_factor=sp_factor, k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor)
+        spatial, sp_factor=sp_factor, multiple=MotifTransformer.sequence_padding_multiple(sp_factor)
     )
 
     tt_spatial = bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)

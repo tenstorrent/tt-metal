@@ -61,7 +61,6 @@ def run_ring_joint_sdpa_model_config(
     num_links,
     ccl_reserve_last_column,
     use_column_major_ccl,
-    use_wormhole_compute_kernel_config,
     pcc_threshold=0.999,
     fp32_dest_acc_en: bool = False,
 ):
@@ -122,29 +121,9 @@ def run_ring_joint_sdpa_model_config(
 
     # --- Program config: exact grid from model ---
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=sdpa_compute_grid,
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
+        compute_with_storage_grid_size=sdpa_compute_grid, q_chunk_size=q_chunk_size, k_chunk_size=k_chunk_size
     )
-
-    # --- Compute kernel config: match model exactly ---
-    if use_wormhole_compute_kernel_config:
-        # SD3.5 uses WormholeComputeKernelConfig directly
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-        )
-    else:
-        # Wan / Mochi use init_device_compute_kernel_config
-        compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            submesh.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            packer_l1_acc=False,
-        )
+    precision = ttnn.SDPAPrecision.ACCURATE if fp32_dest_acc_en else ttnn.SDPAPrecision.STANDARD
 
     # --- Create input tensors ---
     Q = fa_rand(b, nh, base_seq_len, d)
@@ -226,7 +205,7 @@ def run_ring_joint_sdpa_model_config(
         joint_strategy="rear",
         logical_n=base_seq_len,
         program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
+        precision=precision,
         dim=2,
         multi_device_global_semaphore=ccl_semaphore_handles,
         num_links=num_links,
@@ -311,7 +290,6 @@ def run_ring_joint_sdpa(
     fp32_dest_acc_en: bool = False,
     # logical_n as a device tensor instead of a host int (logical_l stays defaulted). Pure transport change.
     logical_as_tensor: bool = False,
-    min_blocked_pack_tiles: int | None = None,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -359,20 +337,9 @@ def run_ring_joint_sdpa(
     ]
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=sdpa_compute_grid,
-        q_chunk_size=q_chunk_size,
-        k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
-        min_blocked_pack_tiles=min_blocked_pack_tiles,
+        compute_with_storage_grid_size=sdpa_compute_grid, q_chunk_size=q_chunk_size, k_chunk_size=k_chunk_size
     )
-
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        submesh.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=fp32_dest_acc_en,
-        packer_l1_acc=False,
-    )
+    precision = ttnn.SDPAPrecision.ACCURATE if fp32_dest_acc_en else ttnn.SDPAPrecision.STANDARD
 
     Q = fa_rand(b, nh, base_seq_len, d)
     K = fa_rand(b, nh, base_seq_len, d)
@@ -468,7 +435,7 @@ def run_ring_joint_sdpa(
                     joint_strategy="rear",
                     logical_n=tt_logical_n,
                     program_config=program_config,
-                    compute_kernel_config=compute_kernel_config,
+                    precision=precision,
                     dim=2,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     num_links=num_links,
@@ -575,7 +542,6 @@ def run_test_ring_joint_sdpa(
     pcc_threshold=0.994,
     max_mse=None,
     fp32_dest_acc_en: bool = False,
-    min_blocked_pack_tiles: int | None = None,
 ):
     """Returns the last iteration's (spatial, joint) torch outputs when checked, else None."""
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
@@ -621,7 +587,6 @@ def run_test_ring_joint_sdpa(
         pcc_threshold,
         max_mse=max_mse,
         fp32_dest_acc_en=fp32_dest_acc_en,
-        min_blocked_pack_tiles=min_blocked_pack_tiles,
     )
 
 
@@ -961,23 +926,21 @@ def test_ring_joint_sdpa_shapes(
 
 
 wh_t3k_unit_test_params = pytest.mark.parametrize(
-    "input_shape, parallel_config, chunk_sizes, expected_correctness",
+    "input_shape, parallel_config, expected_correctness",
     [
         [
             benchmark_model_input_shapes["wan_14b_720p"],
             parallel_config_map["wh_t3k"]["wan_14b_720p"],
-            (256, 256),
             (0.9994, 7.5e-5),
         ],
         [
             benchmark_model_input_shapes["wan_14b_480p"],
             parallel_config_map["wh_t3k"]["wan_14b_480p"],
-            (256, 256),
             (0.9996, 5e-5),
         ],
-        [benchmark_model_input_shapes["mochi"], parallel_config_map["wh_t3k"]["mochi"], (128, 512), (0.9995, 6e-5)],
-        [benchmark_model_input_shapes["flux"], parallel_config_map["wh_t3k"]["flux"], (128, 512), (0.9997, 2.2e-5)],
-        [benchmark_model_input_shapes["sd35"], parallel_config_map["wh_t3k"]["sd35"], (256, 512), (0.9997, 3.5e-5)],
+        [benchmark_model_input_shapes["mochi"], parallel_config_map["wh_t3k"]["mochi"], (0.9995, 6e-5)],
+        [benchmark_model_input_shapes["flux"], parallel_config_map["wh_t3k"]["flux"], (0.9997, 2.2e-5)],
+        [benchmark_model_input_shapes["sd35"], parallel_config_map["wh_t3k"]["sd35"], (0.9997, 3.5e-5)],
     ],
     ids=[
         "wan_14b_720p",
@@ -1008,7 +971,6 @@ def test_ring_joint_sdpa_dit_wh_t3k(
     mesh_device,
     input_shape,
     parallel_config,
-    chunk_sizes,
     expected_correctness,
     num_links,
     all_gather_topology,
@@ -1019,7 +981,7 @@ def test_ring_joint_sdpa_dit_wh_t3k(
     trace_enabled = False
     skip_check = False
     pcc_threshold, max_mse = expected_correctness
-    q_chunk_size, k_chunk_size = chunk_sizes
+    q_chunk_size, k_chunk_size = 0, 0  # op-chosen, as the models call it
 
     run_test_ring_joint_sdpa(
         mesh_device,
@@ -1035,28 +997,25 @@ def test_ring_joint_sdpa_dit_wh_t3k(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
-        min_blocked_pack_tiles=2,
     )
 
 
 bh_qb_ge_unit_test_params = pytest.mark.parametrize(
-    "input_shape, parallel_config, chunk_sizes, expected_correctness",
+    "input_shape, parallel_config, expected_correctness",
     [
         [
             benchmark_model_input_shapes["wan_14b_720p"],
             parallel_config_map["bh_qb_ge"]["wan_14b_720p"],
-            (128, 512),
             (0.9994, 7e-5),
         ],
         [
             benchmark_model_input_shapes["wan_14b_480p"],
             parallel_config_map["bh_qb_ge"]["wan_14b_480p"],
-            (128, 512),
             (0.9996, 5e-5),
         ],
-        [benchmark_model_input_shapes["mochi"], parallel_config_map["bh_qb_ge"]["mochi"], (128, 512), (0.9995, 6e-5)],
-        [benchmark_model_input_shapes["flux"], parallel_config_map["bh_qb_ge"]["flux"], (128, 512), (0.9997, 2.2e-5)],
-        [benchmark_model_input_shapes["sd35"], parallel_config_map["bh_qb_ge"]["sd35"], (256, 512), (0.9997, 3.5e-5)],
+        [benchmark_model_input_shapes["mochi"], parallel_config_map["bh_qb_ge"]["mochi"], (0.9995, 6e-5)],
+        [benchmark_model_input_shapes["flux"], parallel_config_map["bh_qb_ge"]["flux"], (0.9997, 2.2e-5)],
+        [benchmark_model_input_shapes["sd35"], parallel_config_map["bh_qb_ge"]["sd35"], (0.9997, 3.5e-5)],
     ],
     ids=[
         "wan_14b_720p",
@@ -1087,7 +1046,6 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
     mesh_device,
     input_shape,
     parallel_config,
-    chunk_sizes,
     expected_correctness,
     num_links,
     all_gather_topology,
@@ -1098,7 +1056,7 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
     trace_enabled = False
     skip_check = False
     pcc_threshold, max_mse = expected_correctness
-    q_chunk_size, k_chunk_size = chunk_sizes
+    q_chunk_size, k_chunk_size = 0, 0  # op-chosen, as the models call it
 
     run_test_ring_joint_sdpa(
         mesh_device,
@@ -1114,28 +1072,25 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
-        min_blocked_pack_tiles=2,
     )
 
 
 wh_glx_unit_test_params = pytest.mark.parametrize(
-    "input_shape, parallel_config, chunk_sizes, expected_correctness",
+    "input_shape, parallel_config, expected_correctness",
     [
         [
             benchmark_model_input_shapes["wan_14b_720p"],
             parallel_config_map["wh_glx"]["wan_14b_720p"],
-            (256, 256),
             (0.9993, 8e-5),
         ],
         [
             benchmark_model_input_shapes["wan_14b_480p"],
             parallel_config_map["wh_glx"]["wan_14b_480p"],
-            (128, 512),
             (0.9995, 6e-5),
         ],
-        [benchmark_model_input_shapes["mochi"], parallel_config_map["wh_glx"]["mochi"], (128, 512), (0.9994, 7e-5)],
-        [benchmark_model_input_shapes["flux"], parallel_config_map["wh_glx"]["flux"], (128, 256), (0.9997, 3e-5)],
-        [benchmark_model_input_shapes["sd35"], parallel_config_map["wh_glx"]["sd35"], (256, 512), (0.9997, 4e-5)],
+        [benchmark_model_input_shapes["mochi"], parallel_config_map["wh_glx"]["mochi"], (0.9994, 7e-5)],
+        [benchmark_model_input_shapes["flux"], parallel_config_map["wh_glx"]["flux"], (0.9997, 3e-5)],
+        [benchmark_model_input_shapes["sd35"], parallel_config_map["wh_glx"]["sd35"], (0.9997, 4e-5)],
     ],
     ids=[
         "wan_14b_720p",
@@ -1170,7 +1125,6 @@ def test_ring_joint_sdpa_dit_wh_glx(
     mesh_device,
     input_shape,
     parallel_config,
-    chunk_sizes,
     expected_correctness,
     num_links,
     all_gather_topology,
@@ -1181,7 +1135,7 @@ def test_ring_joint_sdpa_dit_wh_glx(
     trace_enabled = False
     skip_check = False
     pcc_threshold, max_mse = expected_correctness
-    q_chunk_size, k_chunk_size = chunk_sizes
+    q_chunk_size, k_chunk_size = 0, 0  # op-chosen, as the models call it
 
     run_test_ring_joint_sdpa(
         mesh_device,
@@ -1197,28 +1151,25 @@ def test_ring_joint_sdpa_dit_wh_glx(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
-        min_blocked_pack_tiles=2,
     )
 
 
 bh_glx_unit_test_params = pytest.mark.parametrize(
-    "input_shape, parallel_config, chunk_sizes, expected_correctness",
+    "input_shape, parallel_config, expected_correctness",
     [
         [
             benchmark_model_input_shapes["wan_14b_720p"],
             parallel_config_map["bh_glx"]["wan_14b_720p"],
-            (128, 512),
             (0.9993, 8e-5),
         ],
         [
             benchmark_model_input_shapes["wan_14b_480p"],
             parallel_config_map["bh_glx"]["wan_14b_480p"],
-            (256, 256),
             (0.9995, 6e-5),
         ],
-        [benchmark_model_input_shapes["mochi"], parallel_config_map["bh_glx"]["mochi"], (128, 512), (0.9994, 7e-5)],
-        [benchmark_model_input_shapes["flux"], parallel_config_map["bh_glx"]["flux"], (64, 512), (0.9997, 3e-5)],
-        [benchmark_model_input_shapes["sd35"], parallel_config_map["bh_glx"]["sd35"], (128, 512), (0.9997, 4e-5)],
+        [benchmark_model_input_shapes["mochi"], parallel_config_map["bh_glx"]["mochi"], (0.9994, 7e-5)],
+        [benchmark_model_input_shapes["flux"], parallel_config_map["bh_glx"]["flux"], (0.9997, 3e-5)],
+        [benchmark_model_input_shapes["sd35"], parallel_config_map["bh_glx"]["sd35"], (0.9997, 4e-5)],
     ],
     ids=[
         "wan_14b_720p",
@@ -1253,7 +1204,6 @@ def test_ring_joint_sdpa_dit_bh_glx(
     mesh_device,
     input_shape,
     parallel_config,
-    chunk_sizes,
     expected_correctness,
     num_links,
     all_gather_topology,
@@ -1264,7 +1214,7 @@ def test_ring_joint_sdpa_dit_bh_glx(
     trace_enabled = False
     skip_check = False
     pcc_threshold, max_mse = expected_correctness
-    q_chunk_size, k_chunk_size = chunk_sizes
+    q_chunk_size, k_chunk_size = 0, 0  # op-chosen, as the models call it
 
     run_test_ring_joint_sdpa(
         mesh_device,
@@ -1280,68 +1230,7 @@ def test_ring_joint_sdpa_dit_bh_glx(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
-        min_blocked_pack_tiles=2,
     )
-
-
-@pytest.mark.parametrize(
-    "chunk_sizes", [(256, 512), (256, 256), (128, 512)], ids=["q256_k512", "q256_k256", "q128_k512"]
-)
-@pytest.mark.parametrize(
-    "device_params, all_gather_topology",
-    [
-        (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            ttnn.Topology.Linear,
-        ),
-    ],
-    indirect=["device_params"],
-    ids=["line"],
-)
-@pytest.mark.parametrize(
-    "mesh_name, mesh_device, num_links",
-    [
-        pytest.param(
-            name,
-            *mesh_device_map[name],
-            id=name,
-            marks=pytest.mark.skipif(
-                name.startswith("bh") != is_blackhole()
-                or mesh_device_map[name][0][0] * mesh_device_map[name][0][1] != ttnn.get_num_devices(),
-                reason=f"{name} needs a machine of exactly that architecture and size",
-            ),
-        )
-        for name in mesh_device_map
-    ],
-    indirect=["mesh_device"],
-)
-def test_ring_joint_sdpa_min_blocked_pack_tiles(
-    mesh_name, mesh_device, num_links, chunk_sizes, all_gather_topology, reset_seeds
-):
-    """tt_dit's min_blocked_pack_tiles=2 gives bit-identical outputs to the architecture default."""
-    q_chunk_size, k_chunk_size = chunk_sizes
-    outputs = []
-    for min_blocked_pack_tiles in (None, 2):
-        torch.manual_seed(0)
-        outputs.append(
-            run_test_ring_joint_sdpa(
-                mesh_device,
-                benchmark_model_input_shapes["flux"],
-                parallel_config_map[mesh_name]["flux"],
-                q_chunk_size,
-                k_chunk_size,
-                1,
-                False,
-                num_links,
-                all_gather_topology,
-                False,
-                ttnn.bfloat16,
-                pcc_threshold=0.999,
-                min_blocked_pack_tiles=min_blocked_pack_tiles,
-            )
-        )
-    for default, opted_in in zip(*outputs):
-        assert torch.equal(default, opted_in)
 
 
 def run_ring_joint_sdpa_sharded_prompt(
@@ -1477,15 +1366,8 @@ def run_ring_joint_sdpa_sharded_prompt(
         compute_with_storage_grid_size=sdpa_compute_grid,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
     )
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        submesh.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
+    precision = ttnn.SDPAPrecision.STANDARD
 
     tt_Q = ttnn.from_torch(
         padded_Q,
@@ -1554,7 +1436,7 @@ def run_ring_joint_sdpa_sharded_prompt(
         logical_n=logical_length_tensor(submesh, base_seq_len) if tensor_mode in ("both", "n") else base_seq_len,
         logical_l=logical_length_tensor(submesh, logical_l) if tensor_mode in ("both", "l") else logical_l,
         program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
+        precision=precision,
         dim=2,
         multi_device_global_semaphore=ccl_semaphore_handles,
         num_links=num_links,
@@ -1916,15 +1798,8 @@ def test_ring_joint_sdpa_logical_tensor_trace_replay(
         compute_with_storage_grid_size=sdpa_compute_grid,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
     )
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        submesh.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
+    precision = ttnn.SDPAPrecision.STANDARD
 
     tt_logical_n = logical_length_tensor(submesh, logical_pairs[0][0])
     tt_logical_l = logical_length_tensor(submesh, logical_pairs[0][1]) if joint_sharded else None
@@ -1957,7 +1832,7 @@ def test_ring_joint_sdpa_logical_tensor_trace_replay(
             joint_strategy="rear",
             logical_n=logical_n,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
+            precision=precision,
             dim=2,
             multi_device_global_semaphore=ccl_semaphore_handles,
             num_links=num_links,
