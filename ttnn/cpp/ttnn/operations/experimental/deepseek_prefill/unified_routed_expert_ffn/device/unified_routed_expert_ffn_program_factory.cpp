@@ -210,7 +210,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // per_core_M / num_chunks at runtime from the device token count, never
     // exceeding this max; the CBs below are sized to the max so a smaller pick
     // simply uses fewer of the reserved tiles.
-    uint32_t GRID_X = kCoreGridX;
+    uint32_t GRID_X = op.grid_x;  // <= kCoreGridX (validated)
     uint32_t GRID_Y = kCoreGridY;
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three

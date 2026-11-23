@@ -68,6 +68,13 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
     validate_compute_kernel_config(op.compute_kernel_config);
+    // shortcut: 9..11 columns are the widths run on device (Inkling-2-mini, 9 and 10 bit-equal to 11); 8 and 6 hung
+    // there (not root-caused), so they are rejected until someone finds why.
+    TT_FATAL(
+        op.grid_x >= 9 && op.grid_x <= kCoreGridX,
+        "unified_routed_expert_ffn: core_grid_x must be 9..{}, got {}",
+        kCoreGridX,
+        op.grid_x);
     // Scoped to Blackhole, matching ttnn::softcap / ttnn::situ_glu. The underlying SFPU
     // primitives exist on Wormhole, but that combination is unverified.
     if (op.activation == RoutedExpertActivation::SituGlu || op.activation == RoutedExpertActivation::ClampedSiluGlu) {
@@ -513,7 +520,8 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t max_active_tokens,
     uint32_t l1_end,
     const std::optional<ttnn::Tensor>& x_row_index,
-    uint32_t zero_output_row) {
+    uint32_t zero_output_row,
+    uint32_t core_grid_x) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::
         UnifiedRoutedExpertFfnDeviceOperation;
     // Checked here, not in validate_on_program_cache_miss, so it also runs on cache hits: the reader uses
@@ -540,7 +548,10 @@ ttnn::Tensor unified_routed_expert_moe(
                 !gate_projs.empty() && !up_projs.empty() && gate_projs[0].buffer() == up_projs[0].buffer(),
             .precise = compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en,
             .math_fidelity = compute_kernel_config.has_value() ? compute_kernel_config->math_fidelity
-                                                               : tt::tt_metal::MathFidelity::LoFi},
+                                                               : tt::tt_metal::MathFidelity::LoFi,
+            .grid_x = core_grid_x == 0
+                          ? ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::kCoreGridX
+                          : core_grid_x},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

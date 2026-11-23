@@ -134,6 +134,10 @@ struct UnifiedRoutedExpertFfnParams {
     // Matmul fidelity from compute_kernel_config.math_fidelity (default LoFi). Part of the key (the config is not).
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;
 
+    // Worker columns (<= kCoreGridX; rows stay kCoreGridY). A narrower grid can split N with less padding (e.g.
+    // 36 gate tiles: 4 per column on 9 columns, 44 padded on 11). Part of the key.
+    uint32_t grid_x = kCoreGridX;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -148,7 +152,8 @@ struct UnifiedRoutedExpertFfnParams {
         "zero_output_row",
         "stacked_experts",
         "precise",
-        "math_fidelity");
+        "math_fidelity",
+        "grid_x");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -164,7 +169,8 @@ struct UnifiedRoutedExpertFfnParams {
             zero_output_row,
             stacked_experts,
             precise,
-            math_fidelity);
+            math_fidelity,
+            grid_x);
     }
 };
 
