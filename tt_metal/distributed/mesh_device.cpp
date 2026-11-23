@@ -1804,12 +1804,13 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
     if (trace_region_size == 0) {
         this->allocator_impl()->begin_dram_high_water_mark_tracking();
     }
+    this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_desc);
+    // After record_begin: a capture that failed to begin must not leave a footprint recording every allocation.
     if (trace_allocation_overlap_only_enabled()) [[unlikely]] {
         for (auto* allocator : this->trace_allocators()) {
             allocator->begin_trace_footprint(trace_id);
         }
     }
-    this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_desc);
 }
 
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
