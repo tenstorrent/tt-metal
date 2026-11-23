@@ -471,6 +471,15 @@ def generate_pack_block_combinations():
     return combinations
 
 
+# Column names of the tuples ``generate_pack_block_combinations`` returns.
+PACK_BLOCK_FLAT_NAMES = (
+    "output_format",
+    "dest_acc",
+    "dest_sync",
+    "tile_dimensions",
+)
+
+
 @pytest.mark.quasar
 @parametrize(**flat_axes(PACK_FLAT_NAMES, PACK_DEST_DEPTH_COMBINATIONS))
 def test_pack_dest_depth_quasar(
@@ -490,12 +499,12 @@ def test_pack_dest_depth_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    format_dest_acc_sync_dims=generate_pack_block_combinations(),
+    **flat_axes(PACK_BLOCK_FLAT_NAMES, generate_pack_block_combinations()),
     loop_factor=[1],
 )
-def test_pack_block_quasar(format_dest_acc_sync_dims, loop_factor):
-    output_format, dest_acc, dest_sync, tile_dimensions = format_dest_acc_sync_dims
-
+def test_pack_block_quasar(
+    output_format, dest_acc, dest_sync, tile_dimensions, loop_factor
+):
     # Two DEST sections exercise back-to-back blocks without reinitialization.
     shape = construct_tile_shape(tile_dimensions)
     dest_rows = (

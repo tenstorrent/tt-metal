@@ -149,9 +149,7 @@ inline void llk_pack_dummy(const std::uint32_t pack_output) {
  * (asserted).
  */
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_output, std::uint32_t ntiles) {
-    if (ntiles == 0) {
-        return;
-    }
+    LLK_ASSERT(ntiles >= 1, "Pack block requires at least one tile");
     LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     LLK_REINIT_GUARD_ASSERT_MATCHES(
         ckernel::trisc::BFD_ID_PACK0,
