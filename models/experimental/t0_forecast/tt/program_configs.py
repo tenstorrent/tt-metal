@@ -4,7 +4,7 @@
 """Explicit matmul program configs for t0's per-token linears, ``(1, 1, M, K) @ (K, N)`` (pattern from Timestral).
 
 The auto config is a 1D config that re-reads the activation once per N block (QKV at M = 98304: 8 N blocks,
-12.99 ms at 15.7 % of peak). The families here, swept per role in ``tests/perf/sweep_matmul.py``:
+12.99 ms at 15.7 % of peak). The families here, swept per role at M = 98304:
 
     2D multicast     M over grid rows, N over grid columns; the activation is fused in the packer
     minimal_matmul   blocked M / K / N with an explicit subblock

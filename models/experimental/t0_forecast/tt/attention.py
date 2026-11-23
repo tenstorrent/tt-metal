@@ -38,8 +38,8 @@ _MAX_SDPA_CHUNK = 256
 # SDPA with a user mask over 768 keys was wrong at chunk 256 (PCC 0.985) and right at 128 (R2-1 micro, jobs 582, 584).
 # Every SDPA with a user mask (time or group) is capped at this chunk.
 _MAX_MASKED_CHUNK = 128
-# QKV on minimal_matmul: blocks M 16 / K 8 / N 4, subblock 4 x 1 (tests/perf/sweep_matmul.py at M = 98304,
-# doc/optimize/iter_01/matmul_sweep_qkv*.json: 4.24 ms against 12.67 ms for the auto 1D config).
+# QKV on minimal_matmul: blocks M 16 / K 8 / N 4, subblock 4 x 1 (swept at M = 98304: 4.24 ms against 12.67 ms for
+# the auto 1D config).
 QKV_BLOCKS = (16, 8, 4, 4, 1)
 WO_BLOCKS = (16, 8, 4, 4, 1)
 
@@ -134,7 +134,7 @@ class TtAttention:
     def _qk_rope(self, t, gain, cos, sin):
         """Per-head RMSNorm with a gain, then RoPE, in one pass: the post-all-gather RMSNorm on the
         ``(1, 1, batch * H * seq, hd)`` view (tile-aligned seq), each of its rows one head of one token.
-        Consumes ``t``. R2-3 micro: 8.19 against 9.76 ms per time layer (doc/optimize/iter_02/r2_3_micro.json)."""
+        Consumes ``t``. R2-3 micro-benchmark: 8.19 against 9.76 ms per time layer."""
         import ttnn
 
         shape = tuple(t.shape)

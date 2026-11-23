@@ -93,9 +93,8 @@ def final_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
     return {"pcc_final": pcc(expected, got), "pcc_final_spread": pcc(_centre(expected.double()), _centre(got.double()))}
 
 
-# Gate floors per case class, set by the orchestrator in D3 and D4 (/home/andy/avan/fleet/t0-gamma/DECISIONS.md). They
-# change only through a decision. Shared by the PCC suite (tests/pcc/test_model.py), the bench records (``floor_ok``) and
-# tests/perf/check_gates.py, which also applies the drift margins. A number is a lower bound; ``(lo, hi)`` a range.
+# Gate floors per case class, shared by the PCC suite (tests/pcc/test_model.py) and the bench records' ``floor_ok``
+# (tests/perf/test_forward_perf.py). A number is a lower bound; ``(lo, hi)`` an inclusive range.
 _BAND_ACCURACY = {  # D4: the bench shapes at accuracy
     "pcc_final_spread": 0.998,
     "spread_ratio_p01": 0.95,
@@ -147,11 +146,6 @@ FLOORS = {
     "single": {"pcc_normalized": 0.999, "pcc_spread": 0.999, "pcc_final": 0.99, **_BAND_SINGLE},
     "single_long": {"pcc_normalized": 0.9975, "pcc_spread": 0.998, "pcc_final": 0.9975, **_BAND_SINGLE},
 }
-# Drift margins on the target (paper-accuracy); twice these on every other bench record. D3: against round 0; D4: the
-# band metrics against the round-2 bench (job 614), since round 0 did not record them. Upper-bounded metrics (p99)
-# drift upwards.
-DRIFT = {"pcc_normalized": 0.0005, "pcc_spread": 0.002, "pcc_row_p01": 0.002, "pcc_row_min": 0.005, "pcc_final": 0.0005}
-DRIFT_BAND = {"pcc_final_spread": 0.002, "spread_ratio_p01": 0.02, "spread_ratio_p99": 0.02}
 
 
 def below(value: float, floor) -> bool:

@@ -8,9 +8,9 @@ reference : t0/torch/model/layers/transformer.py (``TransformerLayer.mlp``), fee
     return x + (silu(gate) * up) @ W2 + b2
 
 The front half is one ``minimal_matmul(fuse_swiglu=True)``: W1 and b1 are packed into gate / up tile pairs with
-``prepare_for_fused_swiglu(gate_is_first=True)``. Blocks M 8 / K 16 / N 2, subblock 2 x 2, from
-``tests/perf/sweep_swiglu.py`` at M = 98304 (``doc/optimize/iter_01/swiglu_sweep*.json``): 6.35 ms against 15.07 ms
-for gate + SiLU + up + MUL (accuracy), 5.50 against 14.61 ms (performance); PCC against the unfused path 0.999993.
+``prepare_for_fused_swiglu(gate_is_first=True)``. Blocks M 8 / K 16 / N 2, subblock 2 x 2, from a sweep at
+M = 98304: 6.35 ms against 15.07 ms for gate + SiLU + up + MUL (accuracy), 5.50 against 14.61 ms (performance); PCC
+against the unfused path 0.999993.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from models.experimental.t0_forecast.tt.common import (
 )
 from models.experimental.t0_forecast.tt.weights import MlpWeights
 
-# w_down on minimal_matmul with the residual add in its epilogue (R1-6); blocks from iter_01/matmul_sweep_ff2.json.
+# w_down on minimal_matmul with the residual add in its epilogue (R1-6); blocks from the per-role matmul sweep.
 FF2_BLOCKS = (16, 8, 4, 4, 1)
 
 

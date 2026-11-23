@@ -101,7 +101,8 @@ def test_time_layer_masked_long(device, patches):
     horizon). SDPA with a user mask must run at chunk 128 (chunk 256 was wrong, jobs 582, 584). Row 1 has its leading
     half PAD (trimmed history), so whole 128- and 256-key blocks are masked. Scored on the attention output alone
     (the device layer output minus its input; inputs are bf16-exact) against the fp32 dataflow, real tokens only.
-    ``tests/perf/neg_chunk256.py`` reruns this with the cap forced to 256 as the negative control."""
+    With the cap forced to 256 this test still passes: it covers the masked path at these lengths, and the cap stays
+    because chunk 256 was wrong with a user mask over 768 keys (``attention._MAX_MASKED_CHUNK``)."""
     g = torch.Generator().manual_seed(256)
     x = torch.randn(2, patches, 1024, generator=g).bfloat16().float()
     groups, vtype, mask = clean_fields(2, patches)
