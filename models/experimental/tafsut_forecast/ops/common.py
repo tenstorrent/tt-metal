@@ -11,7 +11,7 @@ from pathlib import Path
 import ttnn
 
 TILE = 32
-# absolute: TT_METAL_HOME points at the main checkout, not this worktree (WORKER.md)
+# absolute: TT_METAL_HOME may point at another checkout than the one this file is in
 KERNEL_ROOT = str(Path(__file__).resolve().parent)
 
 _TILE_BYTES = {
