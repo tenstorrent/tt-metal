@@ -24,7 +24,7 @@ struct SparseSDPAOperation {
     using tensor_return_value_t = Tensor;
 
     struct SparseSDPAProgramFactory {
-        // The split-K and L1 choices depend on the free L1, so compute_program_hash hashes them.
+        // The split-K and L1 choices depend on the free L1, so compute_program_hash hashes them (key()).
         struct Plan {
             bool split_k = false;
             uint32_t num_used = 0;   // cores that get work
@@ -33,8 +33,19 @@ struct SparseSDPAOperation {
             uint32_t group = 1;      // gathered chunks per recipe step (sparse_step_group)
             uint32_t q_rm_rows = 2;  // Q tile rows the reader stages (2: one ahead of compute's tilize; 1: L1 floor)
             uint32_t k_rm_rows = 0;  // cb_k_rm rows (0: one chunk / scaled two slabs; < one chunk: 32-row gathers)
+            // Every field in one word (num_used, k_rm_rows < 2^16; passes, group < 2^8; q_rm_rows < 2^4).
+            uint64_t key() const {
+                return static_cast<uint64_t>(num_used) | static_cast<uint64_t>(k_rm_rows) << 16 |
+                       static_cast<uint64_t>(passes) << 32 | static_cast<uint64_t>(group) << 40 |
+                       static_cast<uint64_t>(q_rm_rows) << 48 | static_cast<uint64_t>(split_k) << 52 |
+                       static_cast<uint64_t>(fused) << 53;
+            }
         };
-        static Plan select_plan(const operation_attributes_t& attrs, const tensor_args_t& t);
+        // The hash of everything the program depends on except the plan (and of everything the plan reads but the
+        // device and its free L1).
+        static ttsl::hash::hash_t input_hash(const operation_attributes_t& attrs, const tensor_args_t& t);
+        // inputs: input_hash(attrs, t).
+        static Plan select_plan(const operation_attributes_t& attrs, const tensor_args_t& t, ttsl::hash::hash_t inputs);
 
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& attrs, const tensor_args_t& t, tensor_return_value_t& output);
