@@ -466,29 +466,40 @@ def test_fp64_attention_matches_the_kimi_reference_layer(monkeypatch):
 def test_dsa_missed_weight_by_hand_and_on_a_small_layer():
     """``head_mass`` sums a head's weight on the marked keys: [[0.5, 0.3, 0.2], [0.1, 0.1, 0.8]] on keys {1, 2} is
     [0.5, 0.9]. On a small layer, the same selection on both sides misses nothing; a device that swaps the FP64
-    selection's lowest-scored key for another loses that key's FP64 weight, the bottom-1 mass is the same key's, and
-    the intruder's mass is its weight in the softmax over the device's selection."""
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_missed_weight import head_mass, row_weights
+    selection's last (lowest-scored, stored best first) key for another loses that key's FP64 weight, the bottom-1
+    mass is the same key's, and the intruder's mass is its weight in the softmax over the device's selection.
+    ``error_split`` of FP64 output [0, 0], FP64 output over the device's selection [3, 0], device output [3, 4]:
+    orthogonal parts, shares 9/25 and 16/25; with device output [6, 0] the parts are parallel (cos 1), shares 9/36
+    each and the cross term the other half."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_missed_weight import error_split, head_mass, row_weights
 
     got = head_mass(torch.tensor([[0.5, 0.3, 0.2], [0.1, 0.1, 0.8]]), torch.tensor([False, True, True]))
     assert torch.allclose(got, torch.tensor([0.5, 0.9]))
     w, _, keys, q = _small_layer()
     r = 15
-    fp64_sel, scores = torch.tensor([1, 4, 7, 9, 12, 15]), torch.tensor([6.0, 5.0, 4.0, 3.0, 1.0, 2.0])
-    same = row_weights(q, r, fp64_sel, scores, fp64_sel.sort().values, keys["latent"], keys["kpe"], w, SMALL)
+    fp64_sel = torch.tensor([1, 4, 7, 9, 15, 12])  # best first
+    same = row_weights(q, r, fp64_sel, fp64_sel.sort().values, keys["latent"], keys["kpe"], w, SMALL)
     assert same["missed"] == same["intruders"] == 0 and same["missed_key_max"] == 0.0
     assert float(same["missed_mass"].abs().max()) == float(same["intruder_mass"].abs().max()) == 0.0
-    assert torch.equal(same["out_fp64"], same["out_device_sel"])
+    # same keys in another order: equal up to FP64 summation order
+    assert torch.allclose(same["out_fp64"], same["out_device_sel"], rtol=1e-12, atol=1e-12)
     device_sel = torch.tensor([1, 4, 7, 9, 10, 15])  # 12 (the lowest FP64 score) missed, 10 intruded
-    res = row_weights(q, r, fp64_sel, scores, device_sel, keys["latent"], keys["kpe"], w, SMALL)
+    res = row_weights(q, r, fp64_sel, device_sel, keys["latent"], keys["kpe"], w, SMALL)
     wa = golden.attention_weights(q, r, keys["latent"][fp64_sel], keys["kpe"][fp64_sel], w, SMALL)
     wd = golden.attention_weights(q, r, keys["latent"][device_sel], keys["kpe"][device_sel], w, SMALL)
     assert res["missed"] == res["intruders"] == 1
-    assert torch.equal(res["missed_mass"], wa[:, 4]) and torch.equal(res["bottom_mass"], wa[:, 4])
-    assert torch.equal(res["intruder_mass"], wd[:, 4]) and res["missed_key_max"] == float(wa[:, 4].max())
+    assert torch.equal(res["missed_mass"], wa[:, 5]) and torch.equal(res["bottom_mass"], wa[:, 5])
+    assert torch.equal(res["intruder_mass"], wd[:, 4]) and res["missed_key_max"] == float(wa[:, 5].max())
     assert torch.allclose(wa.sum(-1), torch.ones(SMALL.heads, dtype=torch.float64))
     assert torch.equal(
         res["out_device_sel"], golden.attend(q, r, keys["latent"][device_sel], keys["kpe"][device_sel], w, SMALL)
+    )
+    zero, sel = torch.zeros(2, dtype=torch.float64), torch.tensor([3.0, 0.0], dtype=torch.float64)
+    assert error_split(zero, sel, torch.tensor([3.0, 4.0], dtype=torch.float64)) == pytest.approx(
+        {"selection_rest_cos": 0.0, "selection_share": 9 / 25, "rest_share": 16 / 25}
+    )
+    assert error_split(zero, sel, torch.tensor([6.0, 0.0], dtype=torch.float64)) == pytest.approx(
+        {"selection_rest_cos": 1.0, "selection_share": 0.25, "rest_share": 0.25}
     )
 
 

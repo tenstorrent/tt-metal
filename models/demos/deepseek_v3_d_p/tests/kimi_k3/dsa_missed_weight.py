@@ -11,11 +11,15 @@ with the chain's FP64 query (``input_layernorm`` of ``dsa_input_3``) and FP64 ke
 
 * ``missed_mass``: the weight on ``A \\ D`` of the FP64 softmax over ``A``;
 * ``bottom_mass``: the weight, of the same softmax, on the ``|A \\ D|`` keys of ``A`` the FP64 indexer ranks lowest
-  (what a pure near-tie miss would drop);
+  (the tail of ``A``, which the chain stores best first; what a pure near-tie miss would drop);
 * ``intruder_mass``: the weight on ``D \\ A`` of the FP64 softmax over ``D``;
 * ``missed_key_max``: the largest weight of one missed key in one head;
 * ``selection_nrmse``: the FP64 attention output over ``D`` against over ``A``, i.e. the output error the device's
-  selection alone causes, with the device score's NRMSE floor.
+  selection alone causes, with the device score's NRMSE floor;
+* ``rest_nrmse``: the device's attention output against the FP64 output over ``D``, the error its selection does not
+  explain (cache format and arithmetic);
+* ``selection_rest_cos``, ``selection_share``, ``rest_share``: the split of the device's error against the FP64 output
+  over ``A`` into those two parts (``error_split``); the shares sum to one with the cross term ``1 - both``.
 
 Masses are per head, reported as the mean over heads and the worst head. ``check_nrmse`` compares the recomputed
 FP64 output over ``A`` with the chain's stored ``attn_output_3`` (the chain's query came from its FP64 read, this
@@ -50,6 +54,10 @@ ROW_METRICS = (
     "intruder_mass_max",
     "missed_key_max",
     "selection_nrmse",
+    "rest_nrmse",
+    "selection_rest_cos",
+    "selection_share",
+    "rest_share",
     "check_nrmse",
     "device_nrmse",
 )
@@ -64,22 +72,21 @@ def row_weights(
     q: dict,
     i: int,
     fp64_sel: torch.Tensor,
-    fp64_scores: torch.Tensor,
     device_sel: torch.Tensor,
     latent: torch.Tensor,
     kpe: torch.Tensor,
     w: dict,
     dims: dsa.Dims,
 ) -> dict:
-    """The missed-key weights of query row ``i`` of ``q``: ``fp64_sel`` the FP64 selection (valid keys only) with its
-    indexer scores ``fp64_scores``, ``device_sel`` the device's (valid, distinct keys only); ``latent`` / ``kpe`` the
+    """The missed-key weights of query row ``i`` of ``q``: ``fp64_sel`` the FP64 selection (valid keys only, best first
+    by the FP64 indexer score), ``device_sel`` the device's (valid, distinct keys only); ``latent`` / ``kpe`` the
     FP64 keys of every causal row. Returns the per-row metrics (masses as ``[heads]`` tensors) and both outputs."""
     missed = ~torch.isin(fp64_sel, device_sel)
     intruder = ~torch.isin(device_sel, fp64_sel)
     n = int(missed.sum())
     bottom = torch.zeros_like(missed)
     if n:
-        bottom[fp64_scores.argsort()[:n]] = True
+        bottom[len(fp64_sel) - n :] = True
     wa = dsa.attention_weights(q, i, latent[fp64_sel], kpe[fp64_sel], w, dims)
     wd = dsa.attention_weights(q, i, latent[device_sel], kpe[device_sel], w, dims)
     return {
@@ -94,11 +101,27 @@ def row_weights(
     }
 
 
-def device_selection(device: Path, chunk: int, row: int) -> torch.Tensor:
-    """The device's top-k of absolute row ``row``: valid (causal, not the no-key sentinel), distinct keys."""
+def device_row(device: Path, chunk: int, row: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """The device's top-k of absolute row ``row`` (valid: causal, not the no-key sentinel; distinct keys) and its
+    attention output there (FP64)."""
     payload = torch.load(chunk_path(device, row // chunk), weights_only=True, mmap=True)
     sel = payload["topk"][row - payload["start"]].long()
-    return torch.unique(sel[(sel >= 0) & (sel <= row)])
+    return torch.unique(sel[(sel >= 0) & (sel <= row)]), payload["attn_out"][row - payload["start"]].double()
+
+
+def error_split(fp64: torch.Tensor, fp64_device_sel: torch.Tensor, device: torch.Tensor) -> dict[str, float]:
+    """Split the device output's error ``device - fp64`` into the selection part ``fp64_device_sel - fp64`` and the
+    rest ``device - fp64_device_sel``: their cosine (0 when a part is zero, e.g. identical selections) and each part's
+    share of the squared error (exact; the parts' shares plus the cross term ``2 cos |sel| |rest| / |total|^2`` sum to
+    one)."""
+    sel, rest = fp64_device_sel - fp64, device - fp64_device_sel
+    total = float((device - fp64).square().sum())
+    norms = float(sel.norm() * rest.norm())
+    return {
+        "selection_rest_cos": float(sel @ rest) / norms if norms else 0.0,
+        "selection_share": float(sel.square().sum()) / total,
+        "rest_share": float(rest.square().sum()) / total,
+    }
 
 
 def nrmse(want: torch.Tensor, got: torch.Tensor, floor: float) -> float:
@@ -133,7 +156,15 @@ def summarize(rows: dict[str, torch.Tensor], window: int, count: int, topk: int)
     dev = rows["device_nrmse"][past]
     correlation = {
         f"{m}_vs_device_nrmse": {"pearson": pearson(rows[m][past], dev), "spearman": spearman(rows[m][past], dev)}
-        for m in ("missed_mass_mean", "missed_mass_max", "selection_nrmse", "missed")
+        for m in (
+            "missed_mass_mean",
+            "missed_mass_max",
+            "missed_key_max",
+            "intruder_mass_max",
+            "selection_nrmse",
+            "rest_nrmse",
+            "missed",
+        )
     }
     correlation["row_vs_missed_mass_mean"] = {
         "pearson": pearson(rows["row"][past].double(), rows["missed_mass_mean"][past]),
@@ -177,23 +208,13 @@ def run(*, device: Path, out: Path, window: int, log) -> dict:
     records = {m: [] for m in ("row", *ROW_METRICS)}
     masses = {m: [] for m in ("missed_mass", "bottom_mass", "intruder_mass")}
     for n, (r, want) in enumerate(zip(sampled_rows, stored)):
-        p = load_products(chain, ["dsa_input_3", "topk_indices_3", "topk_scores_3"], r, r + 1)
+        p = load_products(chain, ["dsa_input_3", "topk_indices_3"], r, r + 1)
         read = p["dsa_input_3"].double()
         hidden = dsa.rms64(read, norm, dims.eps)
         q = dsa.layer_queries(hidden, w, dims)
         sel = p["topk_indices_3"][0].long()
-        valid = sel >= 0
-        res = row_weights(
-            q,
-            0,
-            sel[valid],
-            p["topk_scores_3"][0][valid].double(),
-            device_selection(device, chunk, r),
-            latent,
-            kpe,
-            w,
-            dims,
-        )
+        device_sel, device_out = device_row(device, chunk, r)
+        res = row_weights(q, 0, sel[sel >= 0], device_sel, latent, kpe, w, dims)
         records["row"].append(r)
         records["missed"].append(res["missed"])
         records["intruders"].append(res["intruders"])
@@ -203,6 +224,9 @@ def run(*, device: Path, out: Path, window: int, log) -> dict:
             records[f"{m}_max"].append(float(res[m].max()))
         records["missed_key_max"].append(res["missed_key_max"])
         records["selection_nrmse"].append(nrmse(res["out_fp64"], res["out_device_sel"], floor))
+        records["rest_nrmse"].append(nrmse(res["out_device_sel"], device_out, floor))
+        for k, v in error_split(res["out_fp64"], res["out_device_sel"], device_out).items():
+            records[k].append(v)
         records["check_nrmse"].append(nrmse(want, res["out_fp64"], floor))
         records["device_nrmse"].append(device_nrmse.get(r, float("nan")))
         if n % 32 == 0 or n == len(sampled_rows) - 1:
@@ -210,6 +234,7 @@ def run(*, device: Path, out: Path, window: int, log) -> dict:
                 f"row {n + 1}/{len(sampled_rows)} r={r} missed={res['missed']} "
                 f"missed_mass_mean={records['missed_mass_mean'][-1]:.3e} bottom_mass_mean={records['bottom_mass_mean'][-1]:.3e} "
                 f"intruder_mass_mean={records['intruder_mass_mean'][-1]:.3e} sel_nrmse={records['selection_nrmse'][-1]:.4f} "
+                f"rest_nrmse={records['rest_nrmse'][-1]:.4f} sel_share={records['selection_share'][-1]:.3f} "
                 f"check={records['check_nrmse'][-1]:.2e} device={records['device_nrmse'][-1]:.4f}"
             )
     rows = {
