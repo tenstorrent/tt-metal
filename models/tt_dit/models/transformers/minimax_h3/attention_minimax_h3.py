@@ -240,6 +240,7 @@ class MiniMaxH3Attention(Module):
                     q_chunk_size=chunks[cls.name][0],
                     k_chunk_size=chunks[cls.name][1],
                     exp_approx_mode=False,
+                    min_blocked_pack_tiles=2,
                 )
                 for cls in LENGTH_CLASSES
             }
@@ -364,6 +365,7 @@ class MiniMaxH3Attention(Module):
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
                 exp_approx_mode=False,  # NOTE: False is more correct
+                min_blocked_pack_tiles=2,
             )
         return self._sdpa_program_configs[key]
 
@@ -499,6 +501,7 @@ class MiniMaxH3Attention(Module):
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
             exp_approx_mode=False,  # NOTE: False is more correct
+            min_blocked_pack_tiles=2,
         )
 
     # ------------------------------------------------------------------ forward

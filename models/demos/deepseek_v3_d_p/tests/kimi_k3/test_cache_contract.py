@@ -18,27 +18,31 @@ import pytest
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
 from models.demos.deepseek_v3_d_p.tt.kimi_k3 import weights as kimi_k3_weights
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import (
+    INDEXER_KEYS,
     layer_is_cached,
     layer_is_stale,
     load_layer_state_dict_cached,
     mark_layer_cached,
 )
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
 from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 
 
 @pytest.mark.parametrize(
     "model_cfg, expected",
-    [(KimiK3Config, True), (KimiK26Config, False), (None, False)],
-    ids=["kimi_k3_gated", "kimi_k2_6_ungated", "no_model_cfg"],
+    [(KimiK3Config, True), (KimiK31Config, True), (KimiK26Config, False), (None, False)],
+    ids=["kimi_k3_gated", "kimi_k3_1_gated", "kimi_k2_6_ungated", "no_model_cfg"],
 )
 def test_block_cache_check_forwards_the_output_gate(monkeypatch, tmp_path, model_cfg, expected):
-    """K3 asks for `g_proj`; nothing else does, including a caller that passes no config at all."""
+    """K3 and K3.1 (K3's Gated DSA keeps the output gate) ask for `g_proj`; nothing else does, including a
+    caller that passes no config at all."""
     seen = {}
 
     def _spy(cache_path, prefix, has_indexer=False, has_output_gate=False):
@@ -155,3 +159,128 @@ def test_stale_layer_loads_only_its_kda_weights(monkeypatch, tmp_path):
     assert load_layer_state_dict_cached(tmp_path, _KDA_LAYER, tmp_path) == {"kda_weights": sentinel}
     _write_kda_cache(tmp_path, _KDA_LAYER, **_CURRENT)
     assert load_layer_state_dict_cached(tmp_path, _KDA_LAYER, tmp_path) == {}
+
+
+# --- K3.1 indexer ----------------------------------------------------------------------------
+#
+# A K3.1 attention layer marked without its indexer tensorbins (built before the indexer was wired, or
+# interrupted) would load `torch.empty` placeholders as indexer weights: no error, wrong top-k.
+
+_INDEXER_NAMES = TtIndexer.WEIGHT_NAMES
+
+
+def _write_indexer_cache(root, layer_idx, names=_INDEXER_NAMES, dtypes=TtIndexer.WEIGHT_DTYPES):
+    for name in names:
+        short = TtIndexer._cache_short_name(name)
+        (root / f"layer_{layer_idx}.mla.indexer_{short}_dtype_{dtypes[name].name}_layout_TILE.tensorbin").touch()
+
+
+def test_indexer_keys_are_ttindexer_names():
+    assert set(INDEXER_KEYS) == {f"{name}.weight" for name in _INDEXER_NAMES}
+
+
+def test_k31_attention_layer_with_indexer_cache_is_cached(tmp_path):
+    mark_layer_cached(tmp_path, _MLA_LAYER)
+    _write_indexer_cache(tmp_path, _MLA_LAYER)
+    assert layer_is_cached(tmp_path, _MLA_LAYER, KimiK31Config)
+    assert not layer_is_stale(tmp_path, _MLA_LAYER, KimiK31Config)
+
+
+@pytest.mark.parametrize("missing", [None, *_INDEXER_NAMES], ids=lambda m: f"missing_{m or 'all'}")
+def test_k31_attention_layer_missing_indexer_files_is_stale(tmp_path, missing):
+    mark_layer_cached(tmp_path, _MLA_LAYER)
+    if missing is not None:
+        _write_indexer_cache(tmp_path, _MLA_LAYER, names=[n for n in _INDEXER_NAMES if n != missing])
+    assert not layer_is_cached(tmp_path, _MLA_LAYER, KimiK31Config)
+    assert layer_is_stale(tmp_path, _MLA_LAYER, KimiK31Config)
+    # K3 has no indexer, so the same files are complete for it.
+    assert layer_is_cached(tmp_path, _MLA_LAYER, KimiK3Config)
+
+
+def test_k31_indexer_cache_at_the_wrong_dtype_is_stale(tmp_path):
+    mark_layer_cached(tmp_path, _MLA_LAYER)
+    _write_indexer_cache(tmp_path, _MLA_LAYER, dtypes=dict.fromkeys(_INDEXER_NAMES, ttnn.bfloat16))
+    assert layer_is_stale(tmp_path, _MLA_LAYER, KimiK31Config)
+
+
+def test_runtime_preflight_rejects_a_k31_layer_without_indexer(tmp_path):
+    mark_layer_cached(tmp_path, _MLA_LAYER)
+    preflight = dict(first_layer_idx=_MLA_LAYER, num_layers=1, model_cfg=KimiK31Config)
+    assert not TtKimiK3Transformer.check_cache_complete(tmp_path, **preflight)
+    _write_indexer_cache(tmp_path, _MLA_LAYER)
+    assert TtKimiK3Transformer.check_cache_complete(tmp_path, **preflight)
+
+
+def test_stale_k31_attention_layer_loads_only_its_attention_weights(monkeypatch, tmp_path):
+    """The indexer is rebuilt from the layer's attention weights, not its ~59 GB of experts."""
+    mark_layer_cached(tmp_path, _MLA_LAYER)
+    requested = {}
+
+    def _load_tensors(checkpoint_dir, names):
+        requested.update(names)
+        return dict.fromkeys(names)
+
+    monkeypatch.setattr(kimi_k3_weights, "resolve_model_root", lambda checkpoint_dir: "model.")
+    monkeypatch.setattr(kimi_k3_weights, "load_tensors", _load_tensors)
+    monkeypatch.setattr(
+        kimi_k3_weights, "load_layer_state_dict", lambda *a, **k: pytest.fail("opened the full layer checkpoint")
+    )
+    state = load_layer_state_dict_cached(tmp_path, _MLA_LAYER, tmp_path, model_cfg=KimiK31Config)
+    assert set(state) == {"mla_weights"}
+    assert TtIndexer.has_host_weights(state["mla_weights"])
+    assert requested["indexer.k_norm_bias.weight"] == f"model.layers.{_MLA_LAYER}.self_attn.indexer.k_norm.bias"
+
+
+# --- One directory listing per check ---------------------------------------------------------
+#
+# The preflight answers from one FastCacheChecker listing instead of a Path.glob per tensorbin per layer (a full
+# directory scan each; minutes on a 17.6k-file Weka cache). It must give the verdict the per-file globs gave.
+
+
+def _glob_reference(root, layers, model_cfg):
+    """The preflight as it was: one `Path.glob` per attention tensorbin of each marked layer."""
+    return all(
+        (root / f".layer_{idx}.complete").is_file()
+        and all(any(root.glob(pattern)) for pattern in kimi_k3_weights._attention_cache_globs(idx, model_cfg))
+        for idx in layers
+    )
+
+
+@pytest.mark.parametrize("model_cfg", [KimiK3Config, KimiK31Config], ids=["kimi_k3", "kimi_k3_1"])
+def test_preflight_matches_per_file_globs_with_each_file_removed(tmp_path, model_cfg):
+    """A complete slice of KDA layers and one attention layer; remove each file in turn (markers included)."""
+    layers = range(_MLA_LAYER + 1)
+    for idx in layers:
+        mark_layer_cached(tmp_path, idx)
+        if idx != _MLA_LAYER:
+            _write_kda_cache(tmp_path, idx, **_CURRENT)
+    _write_kda_cache(tmp_path, _KDA_LAYER, **_LEGACY_BF16)  # leftovers that must not stand in for current files
+    _write_indexer_cache(tmp_path, _MLA_LAYER)
+    preflight = dict(first_layer_idx=layers[0], num_layers=len(layers), model_cfg=model_cfg)
+    assert TtKimiK3Transformer.check_cache_complete(tmp_path, **preflight)
+    assert _glob_reference(tmp_path, layers, model_cfg)
+
+    for name in sorted(p.name for p in tmp_path.iterdir()):
+        (tmp_path / name).unlink()
+        assert TtKimiK3Transformer.check_cache_complete(tmp_path, **preflight) is _glob_reference(
+            tmp_path, layers, model_cfg
+        ), name
+        for idx in layers:
+            marked = (tmp_path / f".layer_{idx}.complete").is_file()
+            assert layer_is_stale(tmp_path, idx, model_cfg) is (
+                marked and not _glob_reference(tmp_path, [idx], model_cfg)
+            )
+        (tmp_path / name).touch()
+
+
+@pytest.mark.parametrize("missing", [None, *_INDEXER_NAMES], ids=lambda m: f"missing_{m or 'none'}")
+def test_indexer_check_matches_per_file_globs(tmp_path, missing):
+    """`TtIndexer.check_cache_complete` (also DeepSeek-V3.2 / GLM's sparse-layer check) answers from one listing."""
+    _write_indexer_cache(tmp_path, _MLA_LAYER, names=[n for n in _INDEXER_NAMES if n != missing])
+    # decoys at a dtype no indexer weight uses
+    _write_indexer_cache(tmp_path, _MLA_LAYER, dtypes=dict.fromkeys(_INDEXER_NAMES, ttnn.float32))
+    prefix = f"layer_{_MLA_LAYER}.mla"
+    expected = all(any(tmp_path.glob(pattern)) for pattern in TtIndexer.cache_globs(prefix))
+    assert expected is (missing is None)
+    assert TtIndexer.check_cache_complete(tmp_path, prefix) is expected
+    assert not TtIndexer.check_cache_complete(tmp_path / "absent", prefix)

@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -90,6 +91,20 @@ inline ttnn::Tensor zeros_on_device(const std::vector<uint32_t>& shape) {
     return ttml::core::zeros(ttnn::Shape(shape), &ttml::autograd::ctx().get_device());
 }
 
+// A bf16 TILE tensor of `value` in tiles of tile_shape ({height, width}) instead of the default 32x32 ones.
+inline ttnn::Tensor filled_on_device_in_tiles(
+    const std::vector<uint32_t>& shape, float value, const std::array<uint32_t, 2>& tile_shape) {
+    const ttnn::Shape tensor_shape(shape);
+    const tt::tt_metal::TensorSpec spec(
+        tensor_shape,
+        tt::tt_metal::TensorLayout(
+            ttnn::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(ttnn::Layout::TILE, tt::tt_metal::Tile(tile_shape)),
+            ttnn::DRAM_MEMORY_CONFIG));
+    return ttnn::Tensor::from_vector(
+        std::vector<float>(tensor_shape.volume(), value), spec, &ttml::autograd::ctx().get_device());
+}
+
 // A later launch's tensor must not share a buffer with an earlier one's, or a hit that kept the old address would pass.
 inline void expect_new_buffer(const ttnn::Tensor& earlier, const ttnn::Tensor& later, const std::string& label) {
     EXPECT_NE(later.buffer()->address(), earlier.buffer()->address()) << label;
@@ -119,12 +134,6 @@ inline void expect_cache(std::size_t entries_before, CacheExpectation expectatio
     }
 }
 
-// A later launch must not write into an earlier launch's tensors: `tensor` still holds `snapshot`.
-inline void expect_unchanged(const ttnn::Tensor& tensor, const xt::xarray<float>& snapshot, const std::string& label) {
-    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(tensor), snapshot)))
-        << label << " changed after a later launch";
-}
-
 // Equal bits: tells -0 from 0, and a NaN equals the same NaN.
 inline bool same_bits(float a, float b) {
     return std::bit_cast<uint32_t>(a) == std::bit_cast<uint32_t>(b);
@@ -140,6 +149,13 @@ inline std::size_t count_bit_mismatches(const xt::xarray<float>& expected, const
         mismatches += static_cast<std::size_t>(!same_bits(expected.flat(i), actual.flat(i)));
     }
     return mismatches;
+}
+
+// A later launch must not write into an earlier launch's tensors: `tensor` still holds `snapshot`, bit for bit, so
+// memory the op never writes still compares equal when it holds a NaN.
+inline void expect_unchanged(const ttnn::Tensor& tensor, const xt::xarray<float>& snapshot, const std::string& label) {
+    EXPECT_EQ(count_bit_mismatches(snapshot, ttml::core::to_xtensor(tensor)), 0U)
+        << label << " changed after a later launch";
 }
 
 // A suite that opens the device once for all of its tests.

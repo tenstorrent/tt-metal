@@ -64,6 +64,8 @@ void kernel_main() {
     const uint32_t sender_index = get_arg_val<uint32_t>(3);  // among this channel's senders
     const uint32_t senders = get_arg_val<uint32_t>(4);
     const uint32_t links = get_arg_val<uint32_t>(5);
+    // The chip's index among the cache's owners (the plan's block % num_devices); my_rank is its fabric rank.
+    const uint32_t my_owner = get_arg_val<uint32_t>(6);
     constexpr uint32_t dest_chip_ids[] = DEST_CHIP_ID;
     constexpr uint32_t dest_mesh_ids[] = DEST_MESH_ID;
 
@@ -106,15 +108,15 @@ void kernel_main() {
         return on_dir && nth_on_dir++ % links == link;
     };
 
-    // How many of this chip's blocks (global my_rank, my_rank + N, ...) lie below global block `global_block`. The
+    // How many of this chip's blocks (global my_owner, my_owner + N, ...) lie below global block `global_block`. The
     // split need not fall on a whole row of blocks, so owners below split % N get one more prefix block.
     auto owned_below = [&](uint32_t global_block) {
-        return global_block > my_rank ? (global_block - my_rank + num_devices - 1) / num_devices : 0;
+        return global_block > my_owner ? (global_block - my_owner + num_devices - 1) / num_devices : 0;
     };
 
-    // Byte offset, in a requester's table, of local block `block`'s bitmap words (global block my_rank + block * N).
+    // Byte offset, in a requester's table, of local block `block`'s bitmap words (global block my_owner + block * N).
     auto bitmap_offset = [&](uint32_t block) {
-        return (bitmap_off + (my_rank + block * num_devices) * words_per_block) * sizeof(uint32_t);
+        return (bitmap_off + (my_owner + block * num_devices) * words_per_block) * sizeof(uint32_t);
     };
 
     PacketBuilder<page_bytes, pages_per_packet, banks, out_pages, decltype(input)> packets(
@@ -136,11 +138,11 @@ void kernel_main() {
 
         // The requester's compact buffer holds one padded run per owner, in owner order, ours after the lower ones.
         uint32_t run_base = 0;
-        for (uint32_t owner = 0; owner < my_rank; ++owner) {
+        for (uint32_t owner = 0; owner < my_owner; ++owner) {
             run_base += padded_run_pages<pages_per_packet, banks>(owner_rows[owner]);
         }
-        const uint32_t my_rows = owner_rows[my_rank];
-        const uint32_t prefix_rows = owner_prefix_rows[my_rank];
+        const uint32_t my_rows = owner_rows[my_owner];
+        const uint32_t prefix_rows = owner_prefix_rows[my_owner];
         const uint32_t part_rows = part == PushPart::kAll      ? my_rows
                                    : part == PushPart::kPrefix ? prefix_rows
                                                                : my_rows - prefix_rows;
@@ -149,7 +151,7 @@ void kernel_main() {
         }
         packets.begin_run(requester, run_base, part == PushPart::kRest ? prefix_rows : 0);
 
-        // This chip owns global blocks my_rank, my_rank + N, ...: its local block j is global block my_rank + j * N
+        // This chip owns global blocks my_owner, my_owner + N, ...: its local block j is global block my_owner + j * N
         // and holds local rows [j * stripe_chunk, (j + 1) * stripe_chunk). The plan's bitmap is valid only below
         // active_blocks; kPrefix takes the blocks below the split block, kRest the others.
         const uint32_t plan_blocks = header[plan_table::kWordActiveBlocks];  // blocks the plan wrote

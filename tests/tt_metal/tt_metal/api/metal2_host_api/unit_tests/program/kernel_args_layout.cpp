@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 
 #include "impl/kernels/kernel.hpp"
@@ -53,7 +53,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_ShardedBindingTracksShapeCRTA
     spec.tensor_parameters = {tp};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     const auto& handles = kernel->tensor_binding_handles();
     ASSERT_EQ(handles.size(), 1u);
@@ -81,7 +81,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_InterleavedRowMajorBindingTra
         return spec;
     };
 
-    Program prog_dyn = MakeProgramFromSpec(*mesh_device_, make_spec(/*dynamic=*/true));
+    Program prog_dyn(*mesh_device_, make_spec(/*dynamic=*/true));
     auto kernel = prog_dyn.impl().get_kernel_by_spec_name("dm_kernel");
     const auto& handles = kernel->tensor_binding_handles();
     ASSERT_EQ(handles.size(), 1u);
@@ -101,7 +101,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_InterleavedRowMajorBindingTra
     // A-collapse: the dynamic binding omits the page-size CTA word that the static (bit-off) binding
     // carries, so the whole-kernel CTA count is exactly one shorter. The two specs are identical
     // apart from the flag, so the size delta is precisely the dropped page-size slot.
-    Program prog_static = MakeProgramFromSpec(*mesh_device_, make_spec(/*dynamic=*/false));
+    Program prog_static(*mesh_device_, make_spec(/*dynamic=*/false));
     const std::vector<uint32_t> static_ctas =
         prog_static.impl().get_kernel_by_spec_name("dm_kernel")->compile_time_args();
     EXPECT_EQ(static_ctas.size(), dyn_ctas.size() + 1u)
@@ -130,7 +130,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_InterleavedTileBindingHasNoRu
     spec.tensor_parameters = {tp};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     const auto& handles = kernel->tensor_binding_handles();
     ASSERT_EQ(handles.size(), 1u);
@@ -171,7 +171,7 @@ TEST_F(ProgramSpecTestGen1, CPU_KernelCrtaLayout_AllThreeSectionsConsistent) {
     BindTensorParameterToKernel(spec.kernels[0], "plain_tensor", "plain_ta");
     BindTensorParameterToKernel(spec.kernels[0], "dyn_tensor", "dyn_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     const KernelCrtaLayout layout = kernel->get_crta_layout();
 
@@ -219,7 +219,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ArrayArgsExtendNamedSectionAheadOfBindings) {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
 
     const KernelCrtaLayout crta = kernel->get_crta_layout();
@@ -253,7 +253,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ContiguousNdTensorBindingPacksDistributionFlag) 
         MakeNdShardedTensorParameter("input_tensor", Shape{64, 64}, Shape{32, 32}, /*num_cores=*/4)};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     const auto& handles = kernel->tensor_binding_handles();
     ASSERT_EQ(handles.size(), 1u);
@@ -278,7 +278,7 @@ TEST_F(ProgramSpecTestGen1, CPU_CompileTimeArgValuesLowerAsUint32Conversion) {
     const double real = 2.9;
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.kernels[0].compile_time_args = {{"neg", neg}, {"wide", wide}, {"flag", true}, {"real", real}};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const auto named = program.impl().get_kernel_by_spec_name("dm_kernel")->named_compile_time_args();
     EXPECT_EQ(named.at("neg"), 0xFFFFFFFFu);
@@ -292,7 +292,7 @@ TEST_F(ProgramSpecTestGen1, CPU_CompileTimeArgValuesLowerAsUint32Conversion) {
 TEST_F(ProgramSpecTestGen1, CPU_CompileTimeArrayArgsLowerToTheirOwnTable) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.kernels[0].compile_time_array_args = {{"sizes", {-1, true, 7}}};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     EXPECT_THAT(kernel->get_array_args().compile_time.at("sizes"), ::testing::ElementsAre(0xFFFFFFFFu, 1u, 7u));

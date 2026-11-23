@@ -1157,6 +1157,8 @@ _BINARY_SPECIALS_NOT_READY: frozenset[MathOperation] = frozenset(
         MathOperation.SfpuBinaryFmod,
         MathOperation.SfpuBinaryRemainder,
         MathOperation.SfpuAtan2,
+        # A Blackhole kernel only: the nightly edges sweep builds every board.
+        MathOperation.SfpuGegluTanh,
         MathOperation.SfpuLogaddexp,
         MathOperation.SfpuLogaddexp2,
         MathOperation.SfpuMask,

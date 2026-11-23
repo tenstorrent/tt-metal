@@ -63,6 +63,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     TT_FATAL(operation_attributes.output_dtype.has_value(), "Output dtype should have been provided");
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Bcast batch should have been provided");
+    TT_FATAL(
+        tensor_args.optional_input_tensors.empty() || !tensor_args.optional_input_tensors.at(0).has_value(),
+        "MatmulMultiCoreReuseProgramConfig has no fused bias; linear adds the bias after the matmul for this config");
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);

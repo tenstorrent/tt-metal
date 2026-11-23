@@ -225,9 +225,9 @@ A metric whose counters this architecture does not expose, or whose counter grou
 
 ## Notes and Caveats
 
-- **Two tests sit on a bistable L1 operating point.** `pack_dest_bank` and
+- **Two tests sit on a bistable L1 operating point.** `pack_l1_acc` and
   `pack_untilize` each land on one of two discrete levels, chosen deterministically per binary and re-rolled
-  by any change to code layout. Worst observed spread is about 31 percent on `pack_dest_bank`. This is build
+  by any change to code layout. Worst observed spread is about 31 percent on `pack_l1_acc`. This is build
   sensitivity, not counter cost: the same two levels appear when one no-counter build is compared against
   another that differs only in layout. If you see a large outlier on those two, check which level both
   sides landed on before treating it as a regression. Tracked in #51901.
