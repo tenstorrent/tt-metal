@@ -20,6 +20,9 @@ void kernel_main() {
     uint32_t* progress_counter = (uint32_t*)progress_counter_addr;
     *progress_counter = 0;
 
+    eth_send_bytes(send_l1_address, recv_l1_address, transfer_size, num_bytes_per_send, num_bytes_per_send >> 4);
+    eth_wait_for_receiver_done();
+
     uint64_t start = timestamp();
     for (uint32_t i = 0; i < transfer_count; i++) {
         eth_send_bytes(send_l1_address, recv_l1_address, transfer_size, num_bytes_per_send, num_bytes_per_send >> 4);

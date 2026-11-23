@@ -15,6 +15,9 @@ void kernel_main() {
     uint32_t* progress_counter = (uint32_t*)progress_counter_addr;
     *progress_counter = 0;
 
+    eth_wait_for_bytes(transfer_size);
+    eth_receiver_done();
+
     for (uint32_t i = 0; i < transfer_count; i++) {
         eth_wait_for_bytes(transfer_size);
         eth_receiver_done();
