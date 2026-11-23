@@ -212,12 +212,12 @@ void bind_unary_operation_overload_complex_return_complex(
             input_tensor (ttnn.Tensor or ComplexTensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`. Required when ``input_tensor`` is a ``ComplexTensor``.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`. When ``input_tensor`` is a ``ComplexTensor``, this argument is not supported.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor or ComplexTensor: the output tensor, a ``ComplexTensor`` when ``input_tensor`` is one.
 
         Note:
             Supported dtypes and layouts:
@@ -548,9 +548,9 @@ void bind_unary_operation_with_int_parameter(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            {2} (int): {3}.
 
         Keyword Args:
+            {2} (int, optional): {3}.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
@@ -1435,7 +1435,7 @@ void py_module(nb::module_& mod) {
             input_tensor (ttnn.Tensor or ComplexTensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`. Required when ``input_tensor`` is a ``ttnn.ComplexTensor``.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`. When ``input_tensor`` is a ``ttnn.ComplexTensor``, this argument is not supported.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`. When ``input_tensor`` is a ``ttnn.ComplexTensor``, this argument is not supported.
 
