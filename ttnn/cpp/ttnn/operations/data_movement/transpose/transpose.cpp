@@ -60,10 +60,10 @@ inline bool rm_wh_exceeds_l1_budget(
     const auto& allocator = device->allocator();
     if (output_mem_config.buffer_type() == BufferType::L1) {
         const auto output_spec = ttnn::prim::TransposeDeviceOperation::compute_output_specs(attributes, tensor_args);
-        // HYBRID mode aligns every L1 page to the DRAM alignment, so round each page, not just the
-        // total, using the larger of the two alignments.
-        const uint64_t page_alignment =
-            std::max<uint64_t>(allocator->get_alignment(BufferType::L1), allocator->get_alignment(BufferType::DRAM));
+        // The default (LOCKSTEP) allocator rounds each L1 page to the L1 alignment. Rounding to the DRAM
+        // alignment would overcount narrow RM pages (16 B -> 64 B on Blackhole) and send fitting transposes to
+        // permute. The opt-in HYBRID allocator rounds L1 pages to the DRAM alignment, which this does not model.
+        const uint64_t page_alignment = allocator->get_alignment(BufferType::L1);
         required += output_spec.compute_consumed_memory_bytes_per_bank(
             page_alignment, allocator->get_num_banks(BufferType::L1));
     }

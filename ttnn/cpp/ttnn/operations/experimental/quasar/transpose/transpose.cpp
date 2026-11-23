@@ -300,10 +300,9 @@ inline Tensor transpose_(
                         ttnn::prim::qsr::TransposeParams{
                             .dim = transpose_dim, .output_mem_config = output_mem_constructed, .pad_value = pad_value},
                         ttnn::prim::qsr::TransposeInputs{.input = a});
-                    // HYBRID mode aligns every L1 page to the DRAM alignment, so round each page,
-                    // not just the total, using the larger of the two alignments.
-                    const uint64_t page_alignment = std::max<uint64_t>(
-                        allocator->get_alignment(BufferType::L1), allocator->get_alignment(BufferType::DRAM));
+                    // The default (LOCKSTEP) allocator rounds each L1 page to the L1 alignment; the opt-in
+                    // HYBRID allocator rounds to the DRAM alignment, which this does not model.
+                    const uint64_t page_alignment = allocator->get_alignment(BufferType::L1);
                     required += output_spec.compute_consumed_memory_bytes_per_bank(
                         page_alignment, allocator->get_num_banks(BufferType::L1));
                 }
