@@ -18,6 +18,7 @@ other DEST bank.
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.constraints import get_valid_math_fidelities
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -26,6 +27,7 @@ from helpers.param_config import parametrize
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.target_config import TestTargetConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
@@ -48,6 +50,11 @@ FORMATS = [
 # 1/2/4-row faces padded to 8-row slots.
 ALL_TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16], [8, 32], [4, 32], [2, 32], [1, 32]]
 FP32_DEST_TILE_DIMENSIONS = [[32, 32], [8, 32], [1, 32]]
+
+_TTSIM_MOVD2A_1_ROW_REASON = (
+    "Quasar ttsim does not implement tensix_movd2a instr_mod=0 (one row), which moves faces "
+    "shorter than an FPU row group. Covered on the emulator and silicon."
+)
 
 # Poison tiles after the input catch a read past the last tile.
 POISON_TILES = 2
@@ -90,6 +97,9 @@ def test_sum_reduce_scalar_quasar(
     perf_report=None,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
+    fpu_rows = 4 if is_4row_arch() else 8
+    if tile_shape.face_r_dim % fpu_rows != 0 and TestTargetConfig().runs_on_ttsim():
+        pytest.skip(_TTSIM_MOVD2A_1_ROW_REASON)
     elements_per_tile = tile_shape.total_tile_size()
     dest_acc = dest_acc_for(formats.output_format)
     input_dimensions = [num_tiles * tile_dimensions[0], tile_dimensions[1]]
