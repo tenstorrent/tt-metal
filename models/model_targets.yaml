@@ -3003,3 +3003,16 @@ targets:
             perf: {}
             accuracy: {}
             team: models
+  mimo-v2.6-flash:
+    aliases: ["mimo-v2.6-flash", "MiMo-V2.6-Flash-MOPD", "XiaomiMiMo/MiMo-V2.6-Flash-MOPD"]
+    skus:
+      bh_galaxy:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            note: "Gap: the two Tier 1 entries are correctness tests (PCC and top-1 against the fp32 reference, asserted in the tests) and emit no benchmark payload yet; populate once they do."
+            owner_id: U0APWUMQBJ9
+            team: models
