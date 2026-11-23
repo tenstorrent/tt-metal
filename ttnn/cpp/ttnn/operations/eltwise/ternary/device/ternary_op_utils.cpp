@@ -588,7 +588,8 @@ std::map<std::string, std::string> make_dataflow_defines(
     return defines;
 }
 
-std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, DataType dtype) {
+std::map<std::string, std::string> get_compute_defines(
+    TernaryOpType op_type, DataType dtype, const bool fast_interpolate) {
     std::map<std::string, std::string> defines;
 
     switch (op_type) {
@@ -605,9 +606,16 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             }
             break;
         case TernaryOpType::LERP:
-            defines["TERNARY_SFPU_OP_INIT"] = "lerp_tile_init";
-            defines["TERNARY_SFPU_OP_FUNC"] =
-                (dtype == DataType::FLOAT32) ? "lerp_tile<DataFormat::Float32>" : "lerp_tile<DataFormat::Float16_b>";
+            if (fast_interpolate) {
+                defines["TERNARY_SFPU_OP_INIT"] = "lerp_tile_init<true>";
+                defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32)
+                                                      ? "lerp_tile<DataFormat::Float32, DST_ACCUM_MODE, true>"
+                                                      : "lerp_tile<DataFormat::Float16_b, DST_ACCUM_MODE, true>";
+            } else {
+                defines["TERNARY_SFPU_OP_INIT"] = "lerp_tile_init";
+                defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "lerp_tile<DataFormat::Float32>"
+                                                                               : "lerp_tile<DataFormat::Float16_b>";
+            }
             break;
         case TernaryOpType::ADDCMUL:
             defines["TERNARY_SFPU_OP_INIT"] = "addcmul_tile_init";

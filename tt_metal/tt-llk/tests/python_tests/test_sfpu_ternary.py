@@ -46,6 +46,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     DEST_SYNC,
     ITERATIONS,
+    LERP_FAST_INTERPOLATE,
     LOOP_FACTOR,
     MATH_OP,
     NUM_BLOCKS,
@@ -130,6 +131,9 @@ def _run_sfpu_ternary(
     perf_report=None,
     run_types=None,
     loop_factor=1,
+    explicit_inputs=None,
+    check_result=None,
+    fast_interpolate=False,
 ):
     """Drive sources/sfpu_ternary_test.cpp for one functional check or one perf row."""
     if run_types is None:
@@ -158,6 +162,7 @@ def _run_sfpu_ternary(
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
             VECTOR_MODE(VectorMode.RC),
             SFPU_CLOBBER_LREGS(clobber_lregs),
+            LERP_FAST_INTERPOLATE(fast_interpolate),
             DEST_SYNC(),
         ]
         runtimes = []
@@ -177,43 +182,48 @@ def _run_sfpu_ternary(
             tile_count_C=tile_count,
         )
     else:
-        # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
-        torch.manual_seed(0)
+        if explicit_inputs is not None:
+            # Caller-built operands and golden replace the spec-driven ones.
+            src_A, src_B, src_C, golden = explicit_inputs
+            tile_cnt_A = tile_cnt_B = tile_cnt_C = tile_count
+        else:
+            # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
+            torch.manual_seed(0)
 
-        default_A, default_B, default_C = _ternary_default_specs(
-            mathop, formats.input_format
-        )
-        spec_a = spec_A if spec_A is not None else default_A
-        spec_b = spec_B if spec_B is not None else default_B
-        spec_c = spec_C if spec_C is not None else default_C
+            default_A, default_B, default_C = _ternary_default_specs(
+                mathop, formats.input_format
+            )
+            spec_a = spec_A if spec_A is not None else default_A
+            spec_b = spec_B if spec_B is not None else default_B
+            spec_c = spec_C if spec_C is not None else default_C
 
-        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-            stimuli_format_A=formats.input_format,
-            input_dimensions_A=input_dimensions,
-            stimuli_format_B=formats.input_format,
-            input_dimensions_B=input_dimensions,
-            spec_A=spec_a,
-            spec_B=spec_b,
-        )
+            src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+                stimuli_format_A=formats.input_format,
+                input_dimensions_A=input_dimensions,
+                stimuli_format_B=formats.input_format,
+                input_dimensions_B=input_dimensions,
+                spec_A=spec_a,
+                spec_B=spec_b,
+            )
 
-        src_C, tile_cnt_C, _, _ = generate_stimuli(
-            stimuli_format_A=formats.input_format,
-            input_dimensions_A=input_dimensions,
-            stimuli_format_B=formats.input_format,
-            input_dimensions_B=input_dimensions,
-            spec_A=spec_c,
-            spec_B=spec_c,
-        )
+            src_C, tile_cnt_C, _, _ = generate_stimuli(
+                stimuli_format_A=formats.input_format,
+                input_dimensions_A=input_dimensions,
+                stimuli_format_B=formats.input_format,
+                input_dimensions_B=input_dimensions,
+                spec_A=spec_c,
+                spec_B=spec_c,
+            )
 
-        generate_golden = get_golden_generator(TernarySFPUGolden)
-        golden = generate_golden(
-            mathop,
-            src_A,
-            src_B,
-            src_C,
-            _SCALAR_VALUE_BITS,
-            formats.output_format,
-        )
+            generate_golden = get_golden_generator(TernarySFPUGolden)
+            golden = generate_golden(
+                mathop,
+                src_A,
+                src_B,
+                src_C,
+                _SCALAR_VALUE_BITS,
+                formats.output_format,
+            )
 
         templates = _sfpu_ternary_compile_params(
             mathop, approx_mode, tile_count, 1, faces_to_generate
@@ -222,6 +232,8 @@ def _run_sfpu_ternary(
         ]
         if clobber_lregs:
             templates.append(SFPU_CLOBBER_LREGS())
+        if fast_interpolate:
+            templates.append(LERP_FAST_INTERPOLATE())
         # Not named runtimes: that assignment would add block columns to the perf schema.
         functional_runtime_params = [
             NUM_BLOCKS(tile_cnt_A),
@@ -273,6 +285,10 @@ def _run_sfpu_ternary(
     torch_format = format_dict[formats.output_format]
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
+
+    if check_result is not None:
+        check_result(golden_tensor, res_tensor)
+        return
 
     # Pass approx_mode so a contract row keyed approx "No" still matches.
     assert_against_contract(
@@ -391,6 +407,139 @@ def test_sfpu_ternary_edges(formats, dest_acc, mathop, input_dimensions):
         spec_A=_TERNARY_NONZERO_A if nonzero else None,
         spec_B=_TERNARY_NONZERO_B if nonzero else None,
         spec_C=spec_C,
+    )
+
+
+def _ordered_bits(x):
+    """Bit patterns of *x* mapped to ints that increase with value, so differences are ULPs."""
+    bits = x.view(torch.int32 if x.dtype == torch.float32 else torch.int16)
+    bits = bits.to(torch.int64)
+    return torch.where(bits < 0, -(2**31) - bits, bits)
+
+
+# Opposite-sign operands near the Float32 max, where end - input overflows.
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.SfpuLerp,
+    input_dimensions=_INPUT_DIMENSIONS,
+)
+def test_sfpu_lerp_large_opposite_sign(formats, dest_acc, mathop, input_dimensions):
+    """lerp(a=+-m, b=-+m, c) stays finite and matches an overflow-free float64 golden."""
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+
+    torch_format = format_dict[formats.input_format]
+    count = input_dimensions[0] * input_dimensions[1]
+    idx = torch.arange(count)
+    magnitude = torch.tensor([2.0**127, 3.0e38], dtype=torch.float64)[(idx // 2) % 2]
+    sign = 1.0 - 2.0 * (idx % 2).to(torch.float64)
+    weights = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0], dtype=torch.float64)
+
+    src_A = (sign * magnitude).to(torch_format)
+    src_B = (-sign * magnitude).to(torch_format)
+    src_C = weights[(idx // 4) % 5].to(torch_format)
+
+    # (1 - c) * a + c * b cannot overflow for |a|, |b| <= m and c in [0, 1].
+    c64 = src_C.to(torch.float64)
+    golden = ((1.0 - c64) * src_A.to(torch.float64) + c64 * src_B.to(torch.float64)).to(
+        format_dict[formats.output_format]
+    )
+
+    def check_result(golden_tensor, res_tensor):
+        assert torch.isfinite(res_tensor).all(), "lerp produced inf or nan"
+        ulp_diff = (_ordered_bits(res_tensor) - _ordered_bits(golden_tensor)).abs()
+        max_ulp = 0 if formats.output_format == DataFormat.Float16_b else 1
+        assert (
+            ulp_diff.max() <= max_ulp
+        ), f"max ULP diff {ulp_diff.max()} exceeds {max_ulp}"
+
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        input_dimensions=input_dimensions,
+        explicit_inputs=(src_A, src_B, src_C, golden),
+        check_result=check_result,
+    )
+
+
+def _ulp_of(magnitude, torch_format):
+    """Spacing of *torch_format* at *magnitude* (float64), clamped to the normal range."""
+    finfo = torch.finfo(torch_format)
+    clamped = magnitude.abs().clamp(min=finfo.tiny, max=finfo.max)
+    return torch.ldexp(
+        torch.full_like(clamped, finfo.eps), torch.frexp(clamped).exponent - 1
+    )
+
+
+# FAST_INTERPOLATE lerp: weight in [0, 1] only.
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.SfpuLerp,
+    input_dimensions=_INPUT_DIMENSIONS,
+)
+def test_sfpu_lerp_fast_interpolate(formats, dest_acc, mathop, input_dimensions):
+    """c == 0 -> a and c == 1 -> b bit-exact, finite for opposite-sign operands up to
+    the format max. Float16_b equals the rounded float64 golden (within 1 ULP with
+    fp32 Dest); Float32 is within 1 ULP of max(|a|, |b|) everywhere."""
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+
+    torch_format = format_dict[formats.input_format]
+    count = input_dimensions[0] * input_dimensions[1]
+    idx = torch.arange(count)
+    generator = torch.Generator().manual_seed(0)
+    # First half random in [-1, 1], second half +-m / -+m near the format max.
+    random_a = torch.rand(count, generator=generator, dtype=torch.float64) * 2 - 1
+    random_b = torch.rand(count, generator=generator, dtype=torch.float64) * 2 - 1
+    magnitude = torch.tensor([2.0**127, 3.0e38], dtype=torch.float64)[(idx // 2) % 2]
+    sign = 1.0 - 2.0 * (idx % 2).to(torch.float64)
+    large = idx >= count // 2
+    src_A = torch.where(large, sign * magnitude, random_a).to(torch_format)
+    src_B = torch.where(large, -sign * magnitude, random_b).to(torch_format)
+    # Every fourth lane has weight 0, the next one weight 1.
+    weights = torch.rand(count, generator=generator, dtype=torch.float64)
+    weights = torch.where(idx % 4 == 0, 0.0, torch.where(idx % 4 == 1, 1.0, weights))
+    src_C = weights.to(torch_format)
+
+    a64, b64, c64 = (t.to(torch.float64) for t in (src_A, src_B, src_C))
+    output_format = format_dict[formats.output_format]
+    golden = ((1.0 - c64) * a64 + c64 * b64).to(output_format)
+
+    def check_result(golden_tensor, res_tensor):
+        assert torch.isfinite(res_tensor).all(), "lerp produced inf or nan"
+        assert torch.equal(
+            res_tensor[c64 == 0], src_A[c64 == 0].to(output_format)
+        ), "c == 0 must return a"
+        assert torch.equal(
+            res_tensor[c64 == 1], src_B[c64 == 1].to(output_format)
+        ), "c == 1 must return b"
+        if formats.output_format == DataFormat.Float16_b:
+            ulp_diff = (_ordered_bits(res_tensor) - _ordered_bits(golden_tensor)).abs()
+            # fp32 Dest adds a packer bf16 rounding on top of the kernel's fp32 rounding.
+            max_ulp = 1 if dest_acc == DestAccumulation.Yes else 0
+            assert (
+                ulp_diff.max() <= max_ulp
+            ), f"max ULP diff {ulp_diff.max()} exceeds {max_ulp}"
+            return
+        exact = (1.0 - c64) * a64 + c64 * b64
+        error = (res_tensor.to(torch.float64) - exact).abs() / _ulp_of(
+            torch.maximum(a64.abs(), b64.abs()), output_format
+        )
+        assert (
+            error.max() <= 1.0
+        ), f"error {error.max():.3f} ULP of max(|a|, |b|) exceeds 1"
+
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        input_dimensions=input_dimensions,
+        explicit_inputs=(src_A, src_B, src_C, golden),
+        check_result=check_result,
+        fast_interpolate=True,
     )
 
 

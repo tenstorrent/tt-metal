@@ -34,6 +34,9 @@ struct TernaryDeviceOperation {
         std::optional<ScalarVariant> scalar_input_a;
         std::optional<ScalarVariant> scalar_input_b;
 
+        // LERP only: selects the weight-in-[0, 1] kernel (Blackhole).
+        bool fast_interpolate = false;
+
         ttsl::hash::hash_t to_hash() const;
 
         DataType get_dtype() const;
@@ -83,7 +86,8 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool fast_interpolate = false);
 
 ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
     ttnn::operations::ternary::TernaryOpType op_type,
@@ -104,7 +108,8 @@ ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool fast_interpolate = false);
 
 ttnn::operations::ternary::TernaryDeviceOperation::tensor_return_value_t ternary(
     ttnn::operations::ternary::TernaryOpType op_type,

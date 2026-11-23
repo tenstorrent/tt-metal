@@ -53,14 +53,16 @@ Tensor lerp(
     const Tensor& end,
     float weight,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt);
+    const std::optional<Tensor>& output = std::nullopt,
+    bool fast_interpolate = false);
 
 Tensor lerp(
     const Tensor& input,
     const Tensor& end,
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt);
+    const std::optional<Tensor>& output = std::nullopt,
+    bool fast_interpolate = false);
 
 Tensor snake_beta(
     const Tensor& input_tensor,
