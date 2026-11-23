@@ -112,7 +112,7 @@ GLM54_ASSUMPTIONS: tuple[Assumption, ...] = (
     Assumption(
         "A4",
         "Pass 2 uses the pass-1 RoPE positions; no iteration embedding.",
-        {"rope_theta": 8e6},
+        {},
         "glm_5_4.loop.LoopPass2MLAReference (same absolute positions as pass 1)",
     ),
     Assumption(

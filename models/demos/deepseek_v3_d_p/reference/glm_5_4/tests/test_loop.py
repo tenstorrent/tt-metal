@@ -140,23 +140,37 @@ def test_pass2_window_carry_chunked_equals_single_shot(window, chunk, expect_err
     kvpe_a = torch.randn(seq, config.kv_lora_rank + config.qk_rope_head_dim, generator=g).to(torch.bfloat16)
     topk = torch.stack([torch.randperm(seq, generator=g)[: config.index_topk] for _ in range(seq)]).unsqueeze(0)
 
-    single = LoopPass2MLAReference(ref, window=window, latent_dim=config.kv_lora_rank)
-    want = single.forward(x, kvpe_a=kvpe_a, indices_a=pass1_indices(topk, 0, config.index_topk))
+    attn = LoopPass2MLAReference(ref, window=window, latent_dim=config.kv_lora_rank)
+    want = attn.forward(x, kvpe_a=kvpe_a, indices_a=pass1_indices(topk, 0, config.index_topk))
 
-    chunked = LoopPass2MLAReference(ref, window=window, latent_dim=config.kv_lora_rank)
-    got, kvpe_rows = [], []
+    got, carry, carries = [], None, {}
     for s in range(0, seq, chunk):
         idx_a = pass1_indices(topk[:, s : s + chunk], s, config.index_topk)
-        got.append(chunked.forward(x[:, s : s + chunk], kvpe_a=kvpe_a, indices_a=idx_a, actual_start=s))
-        kvpe_rows.append(chunked.last_kvpe)
-        # The carry is the last window-1 pass-2 KVPE rows seen so far.
-        seen = torch.cat(kvpe_rows)
-        assert torch.equal(chunked.window_carry, seen[seen.shape[0] - min(window - 1, seen.shape[0]) :])
-    torch.testing.assert_close(torch.cat(got, dim=1), want, rtol=0, atol=0)
-    assert torch.equal(torch.cat(kvpe_rows), single.last_kvpe)
+        r = attn.forward(x[:, s : s + chunk], kvpe_a=kvpe_a, indices_a=idx_a, actual_start=s, window_carry=carry)
+        got.append(r)
+        carries[s] = carry
+        carry = r.window_carry
+        # The carry is the last window-1 pass-2 KVPE rows of positions 0..end-1.
+        end = s + r.kvpe.shape[0]
+        assert torch.equal(carry, want.kvpe[max(0, end - (window - 1)) : end])
+    torch.testing.assert_close(torch.cat([r.output for r in got], dim=1), want.output, rtol=0, atol=0)
+    assert torch.equal(torch.cat([r.kvpe for r in got]), want.kvpe)
 
-    with expect_error(ValueError, "expected 15"):
-        chunked.forward(x[:, :chunk], kvpe_a=kvpe_a, indices_a=pass1_indices(topk[:, :chunk], 0, 8), actual_start=0)
+    # Teacher forcing: the last chunk alone, seeded with a carry cut from the single-shot pass-2 KVPE.
+    s = max(carries)
+    seed = want.kvpe[max(0, s - (window - 1)) : s]
+    tail = attn.forward(
+        x[:, s:], kvpe_a=kvpe_a, indices_a=pass1_indices(topk[:, s:], s, 8), actual_start=s, window_carry=seed
+    )
+    assert torch.equal(tail.output, want.output[:, s:])
+
+    # A carry that does not cover actual_start-W+1..actual_start-1 is rejected.
+    with expect_error(ValueError, "window carry has 0 rows"):
+        attn.forward(x[:, s:], kvpe_a=kvpe_a, indices_a=pass1_indices(topk[:, s:], s, 8), actual_start=s)
+    with expect_error(ValueError, f"needs positions {s - (window - 1)}"):
+        attn.forward(
+            x[:, s:], kvpe_a=kvpe_a, indices_a=pass1_indices(topk[:, s:], s, 8), actual_start=s, window_carry=seed[1:]
+        )
 
 
 # --- looped stack ---------------------------------------------------------------------------------------------

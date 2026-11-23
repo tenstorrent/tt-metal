@@ -9,6 +9,7 @@ runs the GLM-5.3 FFN half. Pass 2 runs no indexer: it reads pass-1 layer L's top
 """
 
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import torch
 
@@ -26,13 +27,21 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4.ops import (
 )
 
 
+class Pass2Result(NamedTuple):
+    """One pass-2 chunk: the output, the window carry for the next chunk, and this chunk's pass-2 KVPE rows."""
+
+    output: torch.Tensor  # [1, S, dim]
+    window_carry: torch.Tensor  # [n, D]: positions end-n .. end-1, n = min(window - 1, end)
+    kvpe: torch.Tensor  # [S, D]: pass-2 KVPE of positions actual_start .. end-1
+
+
 class LoopPass2MLAReference:
-    """Loop pass-2 sparse MLA for one layer, chunk by chunk, carrying the bank-B window across chunks.
+    """Loop pass-2 sparse MLA for one layer; the bank-B window carry is passed in and returned explicitly.
 
     ``mla_ref`` is the pass-1 layer's reference: its weights project the pass-2 queries and KVPE at the pass-1
-    RoPE positions (A4); its caches are not read or written here (bank A is passed in explicitly).
-    Chunks must arrive in order. Between chunks the carry holds the last ``window - 1`` pass-2 KVPE rows, all
-    that the next chunk's first row can see (A3).
+    RoPE positions (A4); its caches are not read or written here (bank A is passed in explicitly). Between
+    chunks the carry holds the last ``window - 1`` pass-2 KVPE rows, all that the next chunk's first row can see
+    (A3). Holding no state, it can check any chunk given the device's carry (teacher forcing).
     """
 
     def __init__(self, mla_ref: SparseMLAReference, *, window: int, latent_dim: int) -> None:
@@ -41,15 +50,6 @@ class LoopPass2MLAReference:
         self._mla_ref = mla_ref
         self._window = window
         self._latent_dim = latent_dim
-        self._carry: torch.Tensor | None = None
-        self._next_start = 0
-        self.last_kvpe: torch.Tensor | None = None
-
-    @property
-    def window_carry(self) -> torch.Tensor:
-        """Pass-2 KVPE rows [n, D] of positions next_start - n .. next_start - 1, n = min(window - 1, next_start)."""
-        assert self._carry is not None, "call forward() first"
-        return self._carry
 
     def forward(
         self,
@@ -58,28 +58,34 @@ class LoopPass2MLAReference:
         kvpe_a: torch.Tensor,
         indices_a: torch.Tensor,
         actual_start: int = 0,
-    ) -> torch.Tensor:
-        """Attention output [1, S, dim] for normed hidden states [1, S, dim] at positions actual_start.. .
+        window_carry: torch.Tensor | None = None,
+    ) -> Pass2Result:
+        """Pass-2 attention for normed hidden states [1, S, dim] at positions actual_start .. actual_start+S-1.
 
         Args:
             kvpe_a: bank A, the pass-1 KVPE cache of this layer [Ta, D] (or [1, 1, Ta, D]).
             indices_a: pass-1 top-k of this layer in device form [1, 1, S, k] (see ``ops.pass1_indices``).
+            window_carry: pass-2 KVPE rows [n, D] of positions actual_start-n .. actual_start-1 with
+                n = min(window - 1, actual_start), i.e. the previous chunk's ``Pass2Result.window_carry``.
+                None means no earlier rows (only valid at actual_start 0 or window 1).
         """
-        if actual_start != self._next_start:
-            raise ValueError(f"chunk starts at {actual_start}, expected {self._next_start} (chunks in order)")
         seq_len = hidden_states.shape[-2]
         q, kvpe_chunk = self._mla_ref.absorbed_query_and_kvpe(hidden_states, actual_start=actual_start)
-        carry = kvpe_chunk[:0] if self._carry is None else self._carry
-        kvpe_b = torch.cat([carry, kvpe_chunk], dim=0)
-        indices_b = window_indices(actual_start, seq_len, self._window, kv_start=actual_start - carry.shape[0])
+        carry = kvpe_chunk[:0] if window_carry is None else window_carry.reshape(-1, kvpe_chunk.shape[-1])
+        need = min(self._window - 1, actual_start)
+        if carry.shape[0] != need:
+            raise ValueError(
+                f"window carry has {carry.shape[0]} rows; a chunk at {actual_start} with window {self._window} "
+                f"needs positions {actual_start - need}..{actual_start - 1} ({need} rows)"
+            )
+        kvpe_b = torch.cat([carry.to(kvpe_chunk.dtype), kvpe_chunk], dim=0)
+        indices_b = window_indices(actual_start, seq_len, self._window, kv_start=actual_start - need)
         kvpe_a = kvpe_a.reshape(-1, kvpe_a.shape[-1])
         latent = two_bank_sparse_mla(
             q, kvpe_a, indices_a, kvpe_b, indices_b, self._mla_ref.softmax_scale, latent_dim=self._latent_dim
         )
-        self._carry = kvpe_b[kvpe_b.shape[0] - min(self._window - 1, kvpe_b.shape[0]) :]
-        self._next_start = actual_start + seq_len
-        self.last_kvpe = kvpe_chunk
-        return self._mla_ref.latent_attention_output(latent, hidden_states)
+        new_carry = kvpe_b[kvpe_b.shape[0] - min(self._window - 1, kvpe_b.shape[0]) :]
+        return Pass2Result(self._mla_ref.latent_attention_output(latent, hidden_states), new_carry, kvpe_chunk)
 
 
 @torch.no_grad()
@@ -93,20 +99,26 @@ def glm54_pass2_layer_reference(
     kvpe_a: torch.Tensor,
     indices_a: torch.Tensor,
     actual_start: int = 0,
+    window_carry: torch.Tensor | None = None,
     ffn_weights: dict | None = None,
     moe_weights: dict | None = None,
-) -> torch.Tensor:
-    """One loop pass-2 decoder layer: the GLM-5.3 layer with two-bank attention in place of indexer sparse MLA."""
+) -> Pass2Result:
+    """One loop pass-2 decoder layer: the GLM-5.3 layer with two-bank attention in place of indexer sparse MLA.
+
+    Returns the layer output with the attention's window carry and pass-2 KVPE (see ``LoopPass2MLAReference``).
+    """
     x = hidden_states
-    attn_out = attention.forward(
+    attn = attention.forward(
         rms_norm(x, attn_norm_weight, config.rms_norm_eps),
         kvpe_a=kvpe_a,
         indices_a=indices_a,
         actual_start=actual_start,
+        window_carry=window_carry,
     )
-    return glm_ffn_half_reference(
-        config, x + attn_out, ffn_norm_weight, ffn_weights=ffn_weights, moe_weights=moe_weights
+    out = glm_ffn_half_reference(
+        config, x + attn.output, ffn_norm_weight, ffn_weights=ffn_weights, moe_weights=moe_weights
     )
+    return attn._replace(output=out)
 
 
 @dataclass(frozen=True)
@@ -206,6 +218,7 @@ def glm54_stack_reference(
         i: LoopPass2MLAReference(mla[i], window=config.loop_window_size, latent_dim=config.kv_lora_rank)
         for i in range(first, last + 1)
     }
+    carries: dict[int, torch.Tensor | None] = {i: None for i in pass2}
     schedule = loop_schedule(num_layers, first, last, count)
     pieces: dict[str, list[torch.Tensor]] = {}
 
@@ -240,19 +253,19 @@ def glm54_stack_reference(
                 pass_in = x
                 keep(f"pass{step.loop_pass}.in", x)
             if step.loop_pass == 2:
-                kvpe_a = mla[i].kvpe_cache
-                x = glm54_pass2_layer_reference(
+                x, carries[i], kvpe2 = glm54_pass2_layer_reference(
                     config,
                     pass2[i],
                     w["attn_norm_weight"],
                     w["ffn_norm_weight"],
                     x,
-                    kvpe_a=kvpe_a,
+                    kvpe_a=mla[i].kvpe_cache,
                     indices_a=pass1_topk[i],
                     actual_start=start,
+                    window_carry=carries[i],
                     **_ffn_kwargs(w),
                 )
-                keep(f"L{i}.pass2.kvpe", pass2[i].last_kvpe)
+                keep(f"L{i}.pass2.kvpe", kvpe2)
                 continue
             shared = types[i] == "shared"
             x, kvpe, topk = glm_decoder_layer_reference(
