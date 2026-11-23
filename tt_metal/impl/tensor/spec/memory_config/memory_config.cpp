@@ -187,9 +187,9 @@ nlohmann::json ttsl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
 
 tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::operator()(
     const nlohmann::json& json_object) const {
-    auto memory_layout = json_object["memory_layout"].get<tt::tt_metal::TensorMemoryLayout>();
-    auto buffer_type = json_object["buffer_type"].get<tt::tt_metal::BufferType>();
-    auto created_with_nd_shard_spec = json_object["created_with_nd_shard_spec"].get<bool>();
+    auto memory_layout = json_object.at("memory_layout").get<tt::tt_metal::TensorMemoryLayout>();
+    auto buffer_type = json_object.at("buffer_type").get<tt::tt_metal::BufferType>();
+    auto created_with_nd_shard_spec = json_object.at("created_with_nd_shard_spec").get<bool>();
     // Absent in JSON written before per_core_allocation was serialized; those configs are lockstep.
     const bool per_core_allocation = json_object.value("per_core_allocation", false);
     // Likewise absent in JSON written before range_lockstep_allocation was serialized; those
@@ -198,7 +198,7 @@ tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::
     if (created_with_nd_shard_spec) {
         TT_FATAL(
             !per_core_allocation, "per_core_allocation is not supported with NdShardSpec, but JSON requested both");
-        auto nd_shard_spec = ttsl::json::from_json<tt::tt_metal::NdShardSpec>(json_object["nd_shard_spec"]);
+        auto nd_shard_spec = ttsl::json::from_json<tt::tt_metal::NdShardSpec>(json_object.at("nd_shard_spec"));
         auto memory_config = tt::tt_metal::MemoryConfig(buffer_type, std::move(nd_shard_spec));
         // Unlike per_core_allocation, range lockstep works with an NdShardSpec: it is served by the
         // buffer distribution spec branch in AllocatorImpl::allocate_buffer.
@@ -209,7 +209,7 @@ tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::
     }
     std::optional<tt::tt_metal::ShardSpec> shard_spec;
     if (json_object.contains("shard_spec")) {
-        shard_spec = ttsl::json::from_json<tt::tt_metal::ShardSpec>(json_object["shard_spec"]);
+        shard_spec = ttsl::json::from_json<tt::tt_metal::ShardSpec>(json_object.at("shard_spec"));
     }
     auto memory_config = tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
     if (per_core_allocation) {
