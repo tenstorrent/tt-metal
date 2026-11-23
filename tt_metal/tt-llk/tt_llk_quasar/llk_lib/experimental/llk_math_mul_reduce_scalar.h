@@ -38,6 +38,11 @@ struct MulReduceScalarPhases
 inline MulReduceScalarPhases mul_reduce_scalar_phases {};
 
 /**
+ * @brief Shape of the reduced tiles, captured at init for the DEST-to-SrcA moves.
+ */
+inline ckernel::TensorShape mul_reduce_scalar_shape = ckernel::DEFAULT_TENSOR_SHAPE;
+
+/**
  * @brief Issue one pool over a 16x16 face with the given number of fidelity phases.
  *
  * The phases before the last advance the fidelity counter with ADDR_MOD_2; the last uses
@@ -61,11 +66,17 @@ inline void mul_reduce_scalar_pool_(const std::uint32_t num_phases, const std::u
  * @tparam EN_32BIT_DEST: Set when DEST holds 32-bit datums.
  * @tparam MATH_FIDELITY_TYPE: Requested fidelity for both pool stages.
  * @param src_format: Unpacked source format of the reduced operand.
+ * @param tensor_shape: Shape of the reduced tiles.
  * @note On the unpack thread, pair with @ref _llk_unpack_mul_reduce_scalar_switch_to_reduce_ (T0).
  */
 template <bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_mul_reduce_scalar_init_(const DataFormat src_format)
+inline void _llk_math_mul_reduce_scalar_init_(const DataFormat src_format, const ckernel::TensorShape& tensor_shape)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    mul_reduce_scalar_shape = tensor_shape;
+    // Tiles sit padded_tile_rows apart in DEST, the layout the multiply and copy phases wrote.
+    _set_tile_shape_idx_gpr_(padded_tile_rows(tensor_shape));
+
     const DataFormat dest_src = dest_src_format<EN_32BIT_DEST>(src_format);
     const auto fidelity       = math_fidelity_schedule<MATH_FIDELITY_TYPE>(dest_src, dest_src);
 
@@ -83,14 +94,15 @@ inline void _llk_math_mul_reduce_scalar_init_(const DataFormat src_format)
 }
 
 /**
- * @brief Move one DEST tile into SrcA (DEST_TO_SRCA) or the first face of DEST tile into SrcB (DEST_TO_SRCB).
+ * @brief Move one DEST tile into SrcA (DEST_TO_SRCA) or the first rows of DEST tile 0 into SrcB (DEST_TO_SRCB).
  *
- * SrcA receives the whole tile so the column pool can walk its faces. SrcB only needs face 0, whose
- * row 0 carries the scaler for both pool stages.
+ * SrcA receives each face's valid rows at a 16-row stride, one face per pool. The rest of SrcA stays as
+ * the unpacker cleared it, so a face shorter than 16 rows pools zeros. SrcB only needs row 0, which
+ * carries the scaler for both pool stages.
  *
  * @tparam BINARY_REUSE_DEST: DEST_TO_SRCA or DEST_TO_SRCB.
  * @param tile_idx: DEST tile to move.
- * @note The source register must hold a dummy dvalid from @ref _llk_unpack_mul_reduce_scalar_switch_to_reduce_.
+ * @note The source register must hold the cleared, dvalid bank from @ref _llk_unpack_mul_reduce_scalar_switch_to_reduce_.
  */
 template <EltwiseBinaryReuseDestType BINARY_REUSE_DEST>
 inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(const std::uint32_t tile_idx)
@@ -101,7 +113,7 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(const std::uint32_t ti
 
     // The source row of a move is offset by the SrcA/SrcB counter, which the column pool leaves at
     // the end of the tile, so reset it along with the DEST counter.
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
+    _set_dst_write_addr_by_rows_(tile_idx);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0 /*rwc_cr*/, 0 /*rwc_val*/, p_setrwc::SET_ABD);
 
     if constexpr (BINARY_REUSE_DEST == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
@@ -109,20 +121,24 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(const std::uint32_t ti
         // Drain the FPU (earlier pools still read SrcA) and the SFPU (it may have just written DEST),
         // then wait until math owns the SrcA bank.
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCA_VLD);
-#pragma GCC unroll 8
-        for (const auto row : fpu_row_offsets<FACE_R_DIM * NUM_FACES>())
+
+        const ckernel::TensorShape& shape  = mul_reduce_scalar_shape;
+        const std::uint32_t face_dest_rows = padded_face_rows(shape);
+        const bool whole_fpu_groups        = (shape.face_r_dim % ELTWISE_MATH_ROWS) == 0;
+        const std::uint32_t rows_per_move  = whole_fpu_groups ? ELTWISE_MATH_ROWS : 1;
+        const std::uint32_t move_mode      = whole_fpu_groups ? FPU_MOV_ROWS : p_movd2a::MOV_1_ROW;
+        for (std::uint32_t face = 0; face < shape.total_num_faces(); face++)
         {
-            TTI_MOVD2A(0 /*dest_32b_lo*/, row /*src*/, ADDR_MOD_0, FPU_MOV_ROWS, row /*dst*/);
+            for (std::uint32_t row = 0; row < shape.face_r_dim; row += rows_per_move)
+            {
+                TT_MOVD2A(0 /*dest_32b_lo*/, face * FACE_R_DIM + row /*src*/, ADDR_MOD_0, move_mode, face * face_dest_rows + row /*dst*/);
+            }
         }
     }
     else
     {
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD);
-#pragma GCC unroll 4
-        for (const auto row : fpu_row_offsets<FACE_R_DIM>())
-        {
-            TTI_MOVD2B(0 /*dest_32b_lo*/, row /*src*/, ADDR_MOD_0, FPU_MOV_ROWS, 0 /*transpose*/, row /*dst*/);
-        }
+        TTI_MOVD2B(0 /*dest_32b_lo*/, 0 /*src*/, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0 /*transpose*/, 0 /*dst*/);
     }
 }
 
@@ -137,11 +153,9 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_(const std::uint32_t ti
  */
 inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
 {
-    LLK_ASSERT(tensor_shape.face_r_dim == FACE_R_DIM, "mul_reduce_scalar supports 16-row faces only");
-
     // The SFPU may have just zeroed the accumulator row; the pool adds into it.
     TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::WAIT_SFPU);
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(dst_index);
+    _set_dst_write_addr_by_rows_(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0 /*rwc_cr*/, 0 /*rwc_val*/, p_setrwc::SET_ABD_F);
 
     for (std::uint32_t face = 0; face < tensor_shape.total_num_faces(); face++)
@@ -163,7 +177,7 @@ inline void _llk_math_mul_reduce_scalar_()
 {
     // Earlier pools must have written row 0 before it is read back.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD);
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(0);
+    _set_dst_write_addr_by_rows_(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0 /*rwc_cr*/, 0 /*rwc_val*/, p_setrwc::SET_ABD_F);
 
     TTI_MOVD2B(0 /*dest_32b_lo*/, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 1 /*transpose*/, 0 /*dst*/);

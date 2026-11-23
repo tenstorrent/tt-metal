@@ -42,14 +42,15 @@ inline void llk_math_eltwise_mul_reduce_scalar(
 /**
  * @brief Init the reduce tail.
  *
- * @param operand: DFB id of the reduced input; its format sets the pool fidelity schedule.
+ * @param operand: DFB id of the reduced input; its format sets the pool fidelity schedule and its tile
+ *        shape the DEST layout of the moves.
  */
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void llk_math_mul_reduce_scalar_reduce_init(const std::uint32_t operand) {
     static_assert(!enforce_fp32_accumulation || is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
     const std::uint32_t operand_id = get_operand_id(operand);
     _llk_math_mul_reduce_scalar_init_<is_fp32_dest_acc_en, math_fidelity>(
-        static_cast<DataFormat>(get_operand_dst_format(operand_id)));
+        static_cast<DataFormat>(get_operand_dst_format(operand_id)), get_operand_tensor_shape(operand_id));
 }
 
 /**
@@ -75,7 +76,7 @@ inline void llk_math_mul_reduce_scalar() {
 inline void llk_math_mul_reduce_scalar_clear_dvalid() { _llk_math_mul_reduce_scalar_clear_dvalid_(); }
 
 /**
- * @brief Move DEST tile idst into SrcA (DEST_TO_SRCA) or its first face into SrcB (DEST_TO_SRCB).
+ * @brief Move DEST tile idst into SrcA (DEST_TO_SRCA) or row 0 of DEST tile 0 into SrcB (DEST_TO_SRCB).
  */
 template <EltwiseBinaryReuseDestType binary_reuse_dest>
 inline void llk_math_mul_reduce_scalar_move_dest_to_src(const std::uint32_t idst = 0) {

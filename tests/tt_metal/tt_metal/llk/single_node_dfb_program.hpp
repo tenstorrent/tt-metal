@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,6 +19,7 @@
 #include <tt-metalium/data_formats/data_format.hpp>
 #include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "impl/program/program_impl.hpp"
 
@@ -30,6 +32,8 @@ struct Input {
     std::uint32_t num_tiles = 0;
     std::string accessor;
     std::uint32_t num_entries = 0;
+    // Tile shape; unset means a full 32x32 tile.
+    std::optional<Tile> tile = std::nullopt;
 };
 
 struct Output {
@@ -37,7 +41,12 @@ struct Output {
     std::uint32_t num_tiles = 0;
     std::string accessor;
     std::uint32_t num_entries = 0;
+    std::optional<Tile> tile = std::nullopt;
 };
+
+inline std::uint32_t tile_bytes(tt::DataFormat format, const std::optional<Tile>& tile) {
+    return tile.has_value() ? tile->get_tile_size(format) : tt::tile_size(format);
+}
 
 struct Config {
     std::string name;
@@ -81,9 +90,10 @@ inline std::vector<std::uint32_t> run(distributed::MeshDevice& mesh_device, cons
         const KernelSpecName reader{"reader" + std::to_string(i)};
         spec.dataflow_buffers.push_back({
             .unique_id = dfb,
-            .entry_size = tt::tile_size(in.format),
+            .entry_size = tile_bytes(in.format, in.tile),
             .num_entries = in.num_entries,
             .data_format_metadata = in.format,
+            .tile_format_metadata = in.tile,
         });
         spec.kernels.push_back({
             .unique_id = reader,
@@ -96,15 +106,16 @@ inline std::vector<std::uint32_t> run(distributed::MeshDevice& mesh_device, cons
         compute_spec.dfb_bindings.push_back(ConsumerOf(dfb, in.accessor));
         wu.kernels.push_back(reader);
         readers.push_back(reader);
-        src_buffers.push_back(make_dram(in.num_tiles * tt::tile_size(in.format)));
+        src_buffers.push_back(make_dram(in.num_tiles * tile_bytes(in.format, in.tile)));
     }
-    const std::uint32_t out_tile_size = tt::tile_size(p.output.format);
+    const std::uint32_t out_tile_size = tile_bytes(p.output.format, p.output.tile);
     auto dst_buffer = make_dram(p.output.num_tiles * out_tile_size);
     spec.dataflow_buffers.push_back({
         .unique_id = OUT_DFB,
         .entry_size = out_tile_size,
         .num_entries = p.output.num_entries,
         .data_format_metadata = p.output.format,
+        .tile_format_metadata = p.output.tile,
     });
     spec.kernels.push_back({
         .unique_id = WRITER,
@@ -134,7 +145,7 @@ inline std::vector<std::uint32_t> run(distributed::MeshDevice& mesh_device, cons
                 {{"src_addr", src_buffers[i]->address()},
                  {"src_bank_id", 0u},
                  {"num_tiles", in.num_tiles},
-                 {"dram_page_stride", tt::tile_size(in.format)}}),
+                 {"dram_page_stride", tile_bytes(in.format, in.tile)}}),
         });
     }
     params.kernel_run_args.push_back({

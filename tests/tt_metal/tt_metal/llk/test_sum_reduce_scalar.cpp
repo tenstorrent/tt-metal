@@ -6,6 +6,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
@@ -126,8 +127,13 @@ bool check_result(
 bool run_sum_reduce_scalar_test_quasar(distributed::MeshDevice& mesh_device, const SumReduceScalarConfig& config) {
     namespace sn = tt::tt_metal::unit_tests::llk::single_node_dfb;
     const tt::DataFormat out_format = config.fp32_dest_acc ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // A tile shorter than 32 rows is described through the DFB tile metadata, so the kernel derives its faces.
+    const std::optional<tt::tt_metal::Tile> tile =
+        config.tile_height == tt::constants::TILE_HEIGHT
+            ? std::nullopt
+            : std::optional<tt::tt_metal::Tile>(tt::tt_metal::Tile({config.tile_height, tt::constants::TILE_WIDTH}));
     const std::vector<uint32_t> packed_input =
-        make_input(config, config.num_tiles * tt::tile_size(tt::DataFormat::Float16_b));
+        make_input(config, config.num_tiles * sn::tile_bytes(tt::DataFormat::Float16_b, tile));
     const std::vector<uint32_t> result_vec = sn::run(
         mesh_device,
         {.name = "sum_reduce_scalar_quasar",
@@ -136,8 +142,9 @@ bool run_sum_reduce_scalar_test_quasar(distributed::MeshDevice& mesh_device, con
                .format = tt::DataFormat::Float16_b,
                .num_tiles = config.num_tiles,
                .accessor = "in",
-               .num_entries = config.num_tiles}},
-         .output = {.format = out_format, .num_tiles = 1, .accessor = "out", .num_entries = 1},
+               .num_entries = config.num_tiles,
+               .tile = tile}},
+         .output = {.format = out_format, .num_tiles = 1, .accessor = "out", .num_entries = 1, .tile = tile},
          .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/sum_reduce_scalar_2_0.cpp",
          .compile_time_args =
              {{"num_tiles", config.num_tiles}, {"scaler_bits", std::bit_cast<uint32_t>(config.scaler)}},
@@ -247,7 +254,7 @@ bool run_sum_reduce_scalar_test(distributed::MeshDevice& mesh_device, const SumR
 
 using namespace tt::tt_metal::unit_tests::compute::sum_reduce_scalar;
 
-// All architectures; Quasar runs the 2.0 host API path (32x32 tiles only so far).
+// All architectures; Quasar runs the 2.0 host API path.
 //
 // Match Blaze LayerNorm's interpreted-tile selection exactly. It picks the tallest
 // legal height in {32, 16, 8, 4, 2, 1} that covers the width with at most eight
@@ -256,9 +263,6 @@ class SumReduceScalarBlazeShapeTest : public LLKMeshDeviceSingleCardFixture,
                                       public testing::WithParamInterface<SumReduceScalarConfig> {};
 
 TEST_P(SumReduceScalarBlazeShapeTest, SumReduceScalarBlazeShape) {
-    if (this->arch_ == ARCH::QUASAR && GetParam().tile_height != tt::constants::TILE_HEIGHT) {
-        GTEST_SKIP() << "tiny tiles are not ported to the Quasar runner yet (tenstorrent/tt-metal#59923)";
-    }
     ASSERT_TRUE(run_sum_reduce_scalar_test(this->device(), GetParam()));
 }
 

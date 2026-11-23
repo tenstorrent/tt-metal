@@ -255,7 +255,7 @@ class MulReduceScalarTinyTileTest : public LLKMeshDeviceSingleCardFixture, publi
 
 TEST_P(MulReduceScalarTinyTileTest, MulReduceScalarTinyTile) {
     if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+        GTEST_SKIP() << "the Quasar binary unpack supports full 32x32 tiles only (tenstorrent/tt-metal#47597)";
     }
     int num_tiles = GetParam();
     ASSERT_TRUE(run_mul_reduce_scalar_test(this->device(), {.num_tiles = num_tiles, .tile_height = 16}));
