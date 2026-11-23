@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -19,7 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils.device_constants import BLACKHOLE_COMPUTE_GRID, WORMHOLE_COMPUTE_GRID, compute_grid_key
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
-from ....utils.tensor import bf16_tensor, math_fidelity_from_env
+from ....utils.tensor import bf16_tensor
 from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
 
@@ -212,7 +213,8 @@ class MiniMaxH3Attention(Module):
         self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
         # QK^T and softmax @ V fidelity; unset keeps the op's HiFi2. Only the ring joint SDPA path honours it:
         # the exp ring path does not pass it.
-        self.sdpa_matmul_fidelity = math_fidelity_from_env("MINIMAX_H3_SDPA_MM_FIDELITY")
+        fid = os.environ.get("MINIMAX_H3_SDPA_MM_FIDELITY")
+        self.sdpa_matmul_fidelity = getattr(ttnn.MathFidelity, fid) if fid else None
 
         # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(

@@ -556,6 +556,10 @@ one model's measurement is not evidence about LTX, Wan or Ideogram-4, which keep
 the video not at all (40-48 dB PSNR frame-to-frame, identical anchor and CLIP numbers), so this is
 conditioner fidelity rather than output quality.
 
+`MINIMAX_H3_SDPA_MM_FIDELITY` (`LoFi`, `HiFi2`, `HiFi3` or `HiFi4`, exact case) sets the fidelity of the two
+matmuls inside the ring joint SDPA op (QK^T and softmax @ V). Unset keeps the op's HiFi2. The output is not
+bit-identical across values. The exp ring path (Blackhole, TP=4, SP=32, fixed length) ignores it.
+
 ## adaLN modulation knobs
 
 The adaLN scale/shift reach the fused norms as a dynamic weight and bias. Each block gathers them from its small
