@@ -121,6 +121,11 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         self.mode, self.low_calls = "SPEC", 0
         self.sampled = set()  # resident slots of non-speculable requests (temperature != 0 or a penalty)
         self.greedy_ok = set()  # resident slots a decode call showed greedy (promotable into the spec build)
+        # decode calls and propose calls so far: under async scheduling an ordinary step N + 1 is submitted before step
+        # N's propose, so the plain build is a token ahead of the history there; a promotion moves the plain state with
+        # the history, so it waits for a propose with no step in flight (a step the runner does not overlap: after a
+        # prefill / layout change, any speculative step)
+        self._calls = [0, 0]
         # (the acceptance-aware policy's measurements: EMAs of tokens per spec user-step and of step times per kind)
         self._pay = dict(acc=None, spec_ms={}, plain_ms={}, verifies=0, last_t=None, kind=None, n=0, hold=0, excl=0.0)
         # the plain build's hub-fed inputs do not hold every live row's next token (a move into it, a step served by
@@ -293,6 +298,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         import time
 
         t0 = time.perf_counter()
+        self._calls[0] += 1
         if TIMING and getattr(self, "_last_dec", None) is not None:
             self._lap("period", self._last_dec)  # (decode call to decode call: the step as the plugin runs it)
         self._last_dec = t0
@@ -480,7 +486,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 self._pay["hold"] = 0
                 logger.info(f"adaptive: {live} live users for {self.low_calls} steps -> SPEC")
                 self.mode, self.low_calls = "SPEC", 0
-        if self.mode == "SPEC":
+        self._calls[1] += 1
+        if self.mode == "SPEC" and self._calls[0] == self._calls[1]:
             self._promote()  # (known-greedy plain users into the spec build: state moves + drafter refill; drafts below)
         ids = torch.zeros(B, K, dtype=torch.int32)
         valid = torch.zeros(B, dtype=torch.int32)

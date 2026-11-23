@@ -123,7 +123,7 @@ def make(monkeypatch):
     m.sess = m.ae.sess
     m.ae.plain_tables = m.tables
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
-    m.sampled, m._t, m._plain_stale, m.greedy_ok = set(), {}, False, set()
+    m.sampled, m._t, m._plain_stale, m.greedy_ok, m._calls = set(), {}, False, set(), [0, 0]
     m._pay = dict(acc=None, spec_ms={}, plain_ms={}, verifies=0, last_t=None, kind=None, n=0, hold=0, excl=0.0)
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
@@ -366,3 +366,23 @@ def test_pay_policy(monkeypatch, acc, expect):
         m._pay["kind"], m._pay["n"] = "verify", 8
         pays = m._measure([acc] * 8)
     assert pays is expect, (m._pay, pays)
+
+
+def test_no_promotion_with_a_step_in_flight(monkeypatch):
+    """async scheduling submits ordinary step N + 1 before step N's propose: the plain build is a token ahead of the
+    history there, so a promotion (which moves the plain state with the history) waits for a propose with no step in
+    flight"""
+    m, pf = make(monkeypatch)
+    run = Runner(m)
+    prompts = [[(r * 11 + i * 5) % V for i in range(40)] for r in range(2)]
+    run.arrive([0, 1], prompts)
+    m._calls[0] += 1  # (a step submitted ahead of the next propose)
+    for _ in range(4):
+        run.step()
+        assert not m.spec_of, "promoted with a step in flight"
+    m._calls[0] -= 1
+    run.step()
+    assert len(m.spec_of) == 2
+    for _ in range(4):
+        run.step()
+    run.check()
