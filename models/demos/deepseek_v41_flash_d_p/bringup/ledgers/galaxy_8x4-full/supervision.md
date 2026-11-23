@@ -1351,3 +1351,15 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - Framework fixes today: F296 (determinism keeps the gate's chunk), F297 (build counters run cold), F298 (BATCH_MAX_SEQ),
   F299 (no timing-only A/B side reused as the accept gate), F300 (agent reports survive the gate); OPEN: test_perf_ab.py has
   15 pre-existing failures in this checkout (harness regression, to bisect).
+
+### 2026-11-23 13:40 UTC (projsplit overseer, session 38eaa954) back on the batching branch
+- Projsplit experiment stopped at PS.2 (KILL; dnijemcevic/model_bringup_projsplit c0c99de6537, not pushed; its dashboards
+  in stash 'projsplit dashboards'). Popped this branch's 'pre-projsplit' dashboards. Framework parity: F301-F303
+  cherry-picked (4d38a1f9552, a24ff23ff87, dc02a92a995; selftests 5 passed). Rebuilt for this branch (39 s).
+- OWNER: queue and measure the 8192 projection tuning (layers 0-20 only: DECODER_SKIP=decode). QUEUED PB.MM256 (perf, ab
+  DS41_MM_TUNED256 off/on, call-time): the projsplit probe's two 256-row configs (wq_b 252.0 -> 240.9 us, wo_b 181.2 ->
+  159.0 us a layer, bit-identical; ~0.67 ms device an 8192 chunk over layers 0-20) + sweep wo_a / q_a+wkv / other
+  attention matmuls at 256 rows; gate: off == on exact (single 8192 + packed 4x2k, layers 0-20), PB.LAD's ladder
+  (single, 4x2k, 4x1792s, 51200 .. 1024000), cold no-rebuild. Bit-identical + device win -> overseer accepts.
+- 13:42 launched orchestrator resume --until PB.MM256 (tmux orch_pb).
+- 13:45 tasks.yaml is 502 KB (> the 500 KB hook): PB.MM256's entry stays UNCOMMITTED until the run stops (an edit now would be charged to the agent); then trim old PB briefs to git-show pointers (as on 2026-11-20) and commit.
