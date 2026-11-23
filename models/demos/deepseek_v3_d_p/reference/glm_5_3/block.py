@@ -91,6 +91,24 @@ def glm_decoder_layer_reference(
     mla_out = ref.forward(attn_norm_out, actual_start=actual_start, actual_end=actual_end, indexer_topk=indexer_topk)
     x = x + mla_out
 
+    out = glm_ffn_half_reference(config, x, ffn_norm_weight, ffn_weights=ffn_weights, moe_weights=moe_weights)
+
+    if return_indexer_topk:
+        return out, ref.kvpe_cache, ref.indexer_topk
+    return out, ref.kvpe_cache
+
+
+def glm_ffn_half_reference(
+    config,
+    x: torch.Tensor,
+    ffn_norm_weight: torch.Tensor,
+    *,
+    ffn_weights: dict | None = None,
+    moe_weights: dict | None = None,
+) -> torch.Tensor:
+    """The FFN half of a GLM decoder layer: x + FFN(rms_norm(x)), dense or MoE (exactly one weight set)."""
+    if (ffn_weights is None) == (moe_weights is None):
+        raise ValueError("provide exactly one of ffn_weights (dense) or moe_weights (MoE)")
     ffn_norm_out = rms_norm(x, ffn_norm_weight, config.rms_norm_eps)
     if ffn_weights is not None:
         ffn_out = dense_ffn(ffn_norm_out, ffn_weights["gate_proj"], ffn_weights["up_proj"], ffn_weights["down_proj"])
@@ -106,7 +124,4 @@ def glm_decoder_layer_reference(
             topk_group=GLM53Config.NUM_LIMITED_GROUPS,
             routed_scaling_factor=GLM53Config.ROUTE_SCALE,
         )
-
-    if return_indexer_topk:
-        return x + ffn_out, ref.kvpe_cache, ref.indexer_topk
-    return x + ffn_out, ref.kvpe_cache
+    return x + ffn_out
