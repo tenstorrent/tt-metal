@@ -17,6 +17,8 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "ttnn/operations/ccl/common/host/mesh_chip_exchange.hpp"
+
 namespace ttnn::operations::experimental::moe_block {
 
 namespace placement_detail {
@@ -64,38 +66,90 @@ private:
     tt::tt_metal::NOC noc_;
 };
 
+// The port cores of one chip this rank owns, in (direction, link) order.
+std::vector<CoreCoord> place_chip(
+    MeshDevice& mesh_device,
+    const MeshPlan& plan,
+    ChipCoord chip,
+    tt::tt_metal::NOC noc,
+    const std::vector<CoreCoord>& allowed) {
+    std::vector<CoreCoord> out;
+    const EthDistance dist(mesh_device, plan.topo, chip, noc);
+    std::set<std::pair<size_t, size_t>> taken;
+    const auto& ports = plan.chips.at(chip);
+    for (Dir d : kDirs) {
+        const auto& port = ports[static_cast<size_t>(d)];
+        if (!port) {
+            continue;
+        }
+        for (uint32_t li = 0; li < port->links.size(); ++li) {
+            const auto closest = dist.closest(chip, port->peer, port->links[li]);
+            std::optional<CoreCoord> best;
+            uint32_t best_hops = std::numeric_limits<uint32_t>::max();
+            for (const auto& candidate : allowed) {  // (row-major: a tie keeps the lower row, then column)
+                if (taken.contains({candidate.x, candidate.y})) {
+                    continue;
+                }
+                const uint32_t h = dist.hops(candidate, closest);
+                if (h < best_hops) {
+                    best_hops = h;
+                    best = candidate;
+                }
+            }
+            TT_FATAL(
+                best.has_value(), "moe_block: too few allowed cores for the ports of chip ({}, {})", chip.r, chip.c);
+            taken.insert({best->x, best->y});
+            out.push_back(*best);
+        }
+    }
+    return out;
+}
+
+size_t port_count(const MeshPlan& plan, ChipCoord chip) {
+    size_t count = 0;
+    for (const auto& port : plan.chips.at(chip)) {
+        count += port ? port->links.size() : 0;
+    }
+    return count;
+}
+
+// Each chip's ports are placed by the rank that owns it (the hops come from that chip's NoC and Ethernet layout) and
+// exchanged, so every rank gets every chip's cores, its own included, decoded from the same words.
 PortCores place_nearest(
     MeshDevice& mesh_device, const MeshPlan& plan, tt::tt_metal::NOC noc, const std::vector<CoreCoord>& allowed) {
+    using ttnn::operations::ccl::common::RecordReader;
+    using ttnn::operations::ccl::common::RecordWriter;
+    constexpr uint32_t kWordsPerCore = 2;
+    size_t max_ports = 0;
+    for (const auto& [chip, ports] : plan.chips) {
+        max_ports = std::max(max_ports, port_count(plan, chip));
+    }
+    const uint32_t words_per_chip = static_cast<uint32_t>(max_ports * kWordsPerCore);
+    const auto records = ttnn::operations::ccl::common::exchange_chip_records(
+        mesh_device,
+        ttnn::operations::ccl::common::mesh_distributed_context(mesh_device),
+        words_per_chip,
+        [&mesh_device, &plan, noc, &allowed, words_per_chip](const MeshCoordinate& coord) {
+            RecordWriter writer(words_per_chip);
+            const ChipCoord chip = chip_of(coord, plan.topo);
+            if (plan.chips.contains(chip)) {
+                for (const auto& core : place_chip(mesh_device, plan, chip, noc, allowed)) {
+                    writer.put_core(core);
+                }
+            }
+            return writer.finish();
+        });
     PortCores out;
     for (const auto& [chip, ports] : plan.chips) {
-        const EthDistance dist(mesh_device, plan.topo, chip, noc);
-        std::set<std::pair<size_t, size_t>> taken;
+        const auto& record = records.at(mesh_coord(chip, plan.topo).to_linear_index(mesh_device.shape()));
+        RecordReader reader(record);
         for (Dir d : kDirs) {
             const auto& port = ports[static_cast<size_t>(d)];
             if (!port) {
                 continue;
             }
             for (uint32_t li = 0; li < port->links.size(); ++li) {
-                const auto closest = dist.closest(chip, port->peer, port->links[li]);
-                std::optional<CoreCoord> best;
-                uint32_t best_hops = std::numeric_limits<uint32_t>::max();
-                for (const auto& candidate : allowed) {  // (row-major: a tie keeps the lower row, then column)
-                    if (taken.contains({candidate.x, candidate.y})) {
-                        continue;
-                    }
-                    const uint32_t h = dist.hops(candidate, closest);
-                    if (h < best_hops) {
-                        best_hops = h;
-                        best = candidate;
-                    }
-                }
-                TT_FATAL(
-                    best.has_value(),
-                    "moe_block: too few allowed cores for the ports of chip ({}, {})",
-                    chip.r,
-                    chip.c);
-                taken.insert({best->x, best->y});
-                out[PortKey{chip, d, li}] = *best;
+                out[PortKey{chip, d, li}] = reader.get_core();
             }
         }
     }

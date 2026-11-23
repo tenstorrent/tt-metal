@@ -18,6 +18,7 @@
 #include <tuple>
 
 #include <fmt/format.h>
+#include "ttnn/operations/ccl/common/host/mesh_chip_exchange.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -38,11 +39,26 @@ constexpr int NOC_X = 17, NOC_Y = 12;  // Blackhole NoC torus
 
 uint32_t al(uint32_t b) { return (b + 2047) / 2048 * 2048; }
 
-// The first chip this rank drives: the plan is read from it.
-tt::tt_metal::distributed::MeshCoordinate flat_reference_coord(tt::tt_metal::distributed::MeshDevice& mesh_device) {
-    const auto ids = mesh_device.get_device_ids();
-    TT_FATAL(!ids.empty(), "flat_routed_expert: the mesh device has no local chip");
-    return mesh_device.get_view().find_device(ids.front());
+// The chip the plan is read from: the mesh's first coordinate, on every rank. Its owner computes the answers and
+// exchanges them (reference_answers), so every rank builds the same plan whichever chips it owns.
+tt::tt_metal::distributed::MeshCoordinate flat_reference_coord(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device.shape().dims());
+}
+
+// `words` uint32 words computed by `compute` on the reference chip's owner, returned on every rank.
+std::vector<uint32_t> reference_answers(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    uint32_t words,
+    const std::function<std::vector<uint32_t>(const tt::tt_metal::distributed::MeshCoordinate&)>& compute) {
+    const auto reference = flat_reference_coord(mesh_device);
+    const auto records = ttnn::operations::ccl::common::exchange_chip_records(
+        mesh_device,
+        ttnn::operations::ccl::common::mesh_distributed_context(mesh_device),
+        words,
+        [&reference, &compute](const tt::tt_metal::distributed::MeshCoordinate& coord) {
+            return coord == reference ? compute(coord) : std::vector<uint32_t>{};
+        });
+    return records.at(reference.to_linear_index(mesh_device.shape()));
 }
 int pmod(int a, int n) { return ((a % n) + n) % n; }
 // Python round(): half to even
@@ -247,12 +263,22 @@ FlatRoutedExpertPlan make_plan(
     // and the columns east of them (1, E + 1: the x relays).
     std::vector<Core> opt;
     {
-        const auto by_bank = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(
-            tt::tt_metal::NOC::NOC_0, flat_reference_coord(mesh_device));
-        opt.reserve(by_bank.size());
-        // (in bank id order: an unordered map)
-        for (uint32_t b = 0; b < by_bank.size(); ++b) {  // NOLINT(modernize-loop-convert)
-            opt.push_back(by_bank.at(b));
+        const uint32_t banks = p.dram_banks;
+        const auto words = reference_answers(
+            mesh_device, 2 * banks, [&mesh_device, banks](const tt::tt_metal::distributed::MeshCoordinate& coord) {
+                const auto by_bank = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(
+                    tt::tt_metal::NOC::NOC_0, coord);
+                ttnn::operations::ccl::common::RecordWriter writer(2 * banks);
+                // (in bank id order: an unordered map)
+                for (uint32_t b = 0; b < banks; ++b) {
+                    writer.put_core(by_bank.at(b));
+                }
+                return writer.finish();
+            });
+        ttnn::operations::ccl::common::RecordReader reader(words);
+        opt.reserve(banks);
+        for (uint32_t b = 0; b < banks; ++b) {
+            opt.push_back(reader.get_core());
         }
     }
     uint32_t east0 = 0;
@@ -528,16 +554,25 @@ FlatRoutedExpertPlan make_plan(
     std::vector<std::vector<uint32_t>> per_slot(n_slots);
     std::vector<bool> placed(gu_all.size(), false);
     {
-        const auto coord = flat_reference_coord(mesh_device);
+        const uint32_t n_cores = gu_all.size();
+        const auto hops = reference_answers(
+            mesh_device,
+            n_slots * n_cores,
+            [&mesh_device, &opt, &gu_all, n_slots, n_cores](const tt::tt_metal::distributed::MeshCoordinate& coord) {
+                std::vector<uint32_t> out;
+                out.reserve(n_slots * n_cores);
+                for (uint32_t r = 0; r < n_slots; ++r) {
+                    for (uint32_t ci = 0; ci < n_cores; ++ci) {
+                        out.push_back(tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                            &mesh_device, coord, opt.at(r), gu_all[ci], tt::tt_metal::NOC::NOC_0));
+                    }
+                }
+                return out;
+            });
         std::vector<std::tuple<uint32_t, uint32_t, uint32_t>> pairs;  // (hops, slot, core)
         for (uint32_t r = 0; r < n_slots; ++r) {
-            const Core anchor = opt.at(r);
-            for (uint32_t ci = 0; ci < gu_all.size(); ++ci) {
-                pairs.emplace_back(
-                    tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                        &mesh_device, coord, anchor, gu_all[ci], tt::tt_metal::NOC::NOC_0),
-                    r,
-                    ci);
+            for (uint32_t ci = 0; ci < n_cores; ++ci) {
+                pairs.emplace_back(hops.at(r * n_cores + ci), r, ci);
             }
         }
         std::sort(pairs.begin(), pairs.end());
