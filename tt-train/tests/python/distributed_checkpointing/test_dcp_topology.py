@@ -4,6 +4,7 @@
 
 """From a topology label to chunk boxes, replica groups and owners, for N-D and collapsed labels alike."""
 
+import os
 import zlib
 
 import numpy as np
@@ -190,6 +191,8 @@ def test_tp_split_counts_every_mesh_axis_but_fsdps():
 
 
 def test_crc31():
-    """crc31 is CRC32 without its top bit."""
+    """crc31 is CRC32 without its top bit. A path with non-UTF-8 bytes, which os.fsdecode turns into lone surrogates on
+    Linux, hashes as its bytes."""
     for text in ("", "model/x", "optimizer/exp_avg/model/blocks/0/weight"):
         assert crc31(text) == zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF < 2**31
+    assert crc31(os.fsdecode(b"ckpt_\xff/step_1")) == zlib.crc32(b"ckpt_\xff/step_1") & 0x7FFFFFFF

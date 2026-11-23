@@ -81,6 +81,17 @@ def test_float32_round_trip_records_the_device(tmp_path):
     assert_same_shards(model_shards(fresh.parameters()), model_shards(model.parameters()))
 
 
+def test_a_directory_with_non_utf8_bytes_in_its_name_round_trips(tmp_path):
+    """On Linux a directory name may hold bytes that are not UTF-8, which os.fsdecode turns into lone surrogates: save
+    and load take such a path as they take any other."""
+    model = _F32(seed=1)
+    path = os.path.join(str(tmp_path), os.fsdecode(b"ckpt_\xff"), "step_0000001")
+    dcp.save(path, model=model)
+    fresh = _F32(seed=2)
+    dcp.load(path, model=fresh)
+    assert_same_shards(model_shards(fresh.parameters()), model_shards(model.parameters()))
+
+
 def _adamw_amsgrad(params):
     cfg = ttml.optimizers.AdamWConfig.make(
         lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0, amsgrad=True
