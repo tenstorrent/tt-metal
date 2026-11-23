@@ -13,8 +13,8 @@
 //     "[tt-stop] rank R on HOST (pid P): <how it ended>; stopping the job (exit CODE)" line, which tt-run reads to
 //     name the rank and return CODE, then send SIGTERM to every rank through the launcher (PMIx job control). When
 //     the program was a tt-metal rank (its context wrote "context"), stay up in its place until the launcher ends the
-//     job once the other ranks have closed and exited (at most TT_METAL_STOP_TIMEOUT_S), so this exit does not make
-//     the launcher kill them mid-close.
+//     job once the other ranks have closed and exited, so this exit does not make the launcher kill them mid-close.
+//     It waits as long as that takes: a rank that never closes is ended by tt-run's force after the stop grace.
 // A program killed by a signal is reported with exit 128 + the signal. If the daemon that started this wrapper dies
 // (a killed prted), the program is sent SIGTERM, then SIGKILL 10 s later: a rank never outlives its daemon.
 //
@@ -75,19 +75,6 @@ void forward(int signal_number) {
         ::kill(g_child, signal_number);
     }
 }
-
-#ifdef TT_RUN_RANK_HAS_PMIX
-// The same bound as the ranks' exit wait (DistributedContext): TT_METAL_STOP_TIMEOUT_S, else tt-run's stop grace
-// (TT_RUN_STOP_GRACE_S, 120 s by default) plus 10 s.
-double stop_timeout_s() {
-    const char* v = std::getenv("TT_METAL_STOP_TIMEOUT_S");
-    if (v != nullptr && *v != '\0') {
-        return std::atof(v);
-    }
-    const char* grace = std::getenv("TT_RUN_STOP_GRACE_S");
-    return ((grace != nullptr && *grace != '\0') ? std::atof(grace) : 120.0) + 10.0;
-}
-#endif
 
 // Whether the process is writing a core dump right now (/proc/<pid>/status "CoreDumping: 1").
 bool core_dumping(pid_t pid) {
@@ -506,17 +493,11 @@ int main(int argc, char** argv) {
     // Stand in for the dead program at the other ranks' exit fence (DistributedContext::leave_stopped_job), so they
     // leave as soon as they have closed, then stay up: this rank's exit would make the launcher kill a rank that is
     // still closing. When they have exited (non-zero, so the launcher ends the job) the launcher ends this wrapper
-    // too; otherwise it leaves after TT_METAL_STOP_TIMEOUT_S. The fence alone cannot hold it: with this rank's own
-    // client gone it may return at once.
-    const double timeout = stop_timeout_s();
-    int seconds = static_cast<int>(timeout);
-    pmix_info_t bound;
-    PMIX_INFO_LOAD(&bound, PMIX_TIMEOUT, &seconds, PMIX_INT);
-    (void)PMIx_Fence(&all, 1, timeout > 0.0 ? &bound : nullptr, timeout > 0.0 ? 1 : 0);
-    PMIX_INFO_DESTRUCT(&bound);
-    for (double waited = 0.0; timeout <= 0.0 || waited < timeout; waited += 0.1) {
+    // too, or tt-run's force does after the stop grace; there is no timeout of its own. The fence alone cannot hold it:
+    // with this rank's own client gone it may return at once.
+    (void)PMIx_Fence(&all, 1, nullptr, 0);
+    for (;;) {
         ::usleep(100000);
     }
-    return code;
 #endif
 }
