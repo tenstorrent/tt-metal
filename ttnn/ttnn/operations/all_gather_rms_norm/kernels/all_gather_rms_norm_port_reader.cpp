@@ -231,12 +231,16 @@ void kernel_main() {
                         st_s = s_pages;
                         if (!st_ready) {
                             AGRN_ZONE("pr_stage_wait");
+#if !defined(AGRN_ABL_NO_OWN_WAIT)  // ablation: the bulk starts without the staged slice (output garbage)
                             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(st_ctr), n_active);
+#endif
                             st_ready = true;
                         }
                     } else if (!own_waited) {
                         // past the staged prefix (L1 budget): the DRAM read-back after the own write
+#if !defined(AGRN_ABL_NO_OWN_WAIT)
                         noc_semaphore_wait_min(own_ready, n_active);
+#endif
                         own_waited = true;
                     }
                     s_pages += pk.pages;
