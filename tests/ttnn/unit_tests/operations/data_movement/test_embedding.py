@@ -1202,8 +1202,9 @@ def _run_repeated_token_embedding(
 
 
 # Consecutive equal tokens reuse the row staged for the previous token instead of re-reading DRAM (row-major and
-# tilize readers). Random indices from a large vocabulary almost never repeat, so these patterns force that path;
-# hidden 17408 needs more than one chunk per row, which must keep reading from DRAM.
+# tilize readers). Random indices from a large vocabulary almost never repeat, so these patterns force that path.
+# With TILE output, hidden 17408 needs more than one chunk per row, which must keep reading from DRAM; the
+# row-major reader only chunks rows above 1 MiB, so for ROW_MAJOR both hidden sizes run as a single chunk.
 @pytest.mark.parametrize("pattern", ["all_zeros", "runs_across_blocks", "alternating"])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("hidden", [768, 17408])
