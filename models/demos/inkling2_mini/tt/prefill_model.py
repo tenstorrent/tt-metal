@@ -65,6 +65,7 @@ from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
 from models.demos.inkling2_mini.tt.fused.pf_gate import PfGateTail
 from models.demos.inkling2_mini.tt.fused.pf_gateout import PfGateOut
 from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, half_proj, half_scale_rows, scale_rows
+from models.demos.inkling2_mini.tt.fused.pf_msg import PfMessages
 from models.demos.inkling2_mini.tt.fused.pf_rel import PfRel, skew_proj
 from models.demos.inkling2_mini.tt.fused.pf_route import PfRoute
 from models.demos.inkling2_mini.tt.fused.pf_sink import PfSink
@@ -463,6 +464,7 @@ class Inkling2Prefill:
         self.r3 = r3
         self.fused_glue = fused_glue
         self._pfconv = PfConv(dev) if fused_glue else None
+        self._pfmsg = PfMessages(dev) if fused_glue else None
         self._pfswiglu = PfSwiglu(dev) if fused_glue else None  # sparse experts: slices + softcapped SwiGLU in one
         self._pfheads = PfHeads(dev) if fused_heads else None
         self._pfgate = PfGateOut(dev) if fused_heads else None
@@ -1320,6 +1322,8 @@ class Inkling2Prefill:
         diff = ttnn.subtract(n0, n1)
 
         def get(l):
+            if self._pfmsg is not None:  # the 4 messages of layer l in one program (bit-equal)
+                return self._pfmsg(n1, diff, w0, 4 * l)
             return [ttnn.add(n1, ttnn.multiply(diff, _cols(w0, 4 * l + j, 4 * l + j + 1))) for j in range(4)]
 
         return get
