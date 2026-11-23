@@ -1377,3 +1377,14 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   mm_configs / settings stay in the tree); brief step (3) rewritten: reuse P.19's per-card sweep, resident runner
   stopped first, bounded timeouts, grid 11 x 10 (FIX.15; the test's 12 x 10 note predates it), winners confirmed on the
   whole mesh once. MB.9's text (handoff_20261123/MB9_task.yaml) updated the same way. Resumed.
+- 13:51 heartbeat: PB.MM256 attempt 3 agent active (transcript live), no sweep processes yet; RAM used 51 GB, avail 508. tasks.yaml 464 KB, committed. (Correction: the entries stamped 13:58 and 14:10 above were really ~13:40 and ~13:45 UTC.)
+- 14:21 heartbeat: PB.MM256 attempt 3 active. The per-card sweep ran in parallel (single-card processes, 13:55-14:05; see count), all rc 0. Resident runner now holds layers 0-20 at 8192 (load 63 s) for the off/on checks. RAM used 55 GB, avail 504.
+- 14:35 PB.MM256 attempt 3 had: parallel per-card sweep (12 single-card processes, 13:57-14:05), ~1.2 ms device an
+  8192 chunk (layers 0-20) in same-order configs (q_a x20 79.4 -> 49.0 us, wo_b x20 180.9 -> 156.0, engram_kv, indexer,
+  hc.fn, compressor), and DROPPED every config that changes the fp32 summation order over K (wq_b minimal 252 -> 241,
+  a wo_a block_w variant), after finding DS41-390 (random inputs hide an order change; a wo_a variant was 1 bfp8 step off
+  at layer 17 on a real chunk). OWNER: bit-identity / summation order is NOT a criterion (standing rule 3; my brief's
+  "bit-identical to today's" was the error). Paused, aborted attempt 3 (work in the tree), brief and gate fixed: keep
+  every faster config; accuracy by test_chunk8192_reference.py with the switch on (reference limits) + the framework's
+  fresh-process determinism + on-repeats exact (mm256_repeat_max_abs_diff == 0) + ladder + cold no-rebuild; off vs on
+  rel L2 a diagnostic. MB.9's text fixed the same way (accuracy by test_ladder last rung). Resumed.
