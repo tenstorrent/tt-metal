@@ -244,6 +244,8 @@ jobs:
         if: ${{ inputs.package-artifact-name == '' }}
         timeout-minutes: 5
         uses: ./docker-job/.github/actions/hf-oidc-token
+        with:
+          resource: ${{ vars.HF_OIDC_RESOURCE }}
 
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
