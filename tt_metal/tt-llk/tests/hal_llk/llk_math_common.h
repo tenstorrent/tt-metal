@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// HAL port of tt_llk_blackhole/llk_lib/llk_math_common.h and the math helpers of common/inc/cmath_common.h
-// (only what eltwise_binary_test.cpp reaches). Same Tensix instruction sequence as production.
+// HAL port of tt_llk_blackhole/llk_lib/llk_math_common.h (every function) and the common/inc/cmath_common.h
+// helpers it and llk_math_eltwise_binary.h reach. Same Tensix instruction sequence as production.
 
 #pragma once
 
@@ -164,6 +164,14 @@ inline void set_dest_section_base()
     }
 }
 
+// Shared body of the three _llk_math_reconfig_data_format*_ functions (production repeats it inline).
+inline __attribute__((always_inline)) void reconfig_int8_math_enabled(const bool int8_math_enabled)
+{
+    // Only INT8_math_enabled is written here; it is FPU-only, so draining the FPU (MATH) suffices -- no WAIT_SFPU.
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::MathIdle>();
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::INT8_math_enabled, cfg::Sec::S0>(int8_math_enabled);
+}
+
 } // namespace hal_port
 
 /**
@@ -202,6 +210,27 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 }
 
 /**
+ * @brief Enable or disable the destination read-address remap (stride-of-16) used by untilize mode.
+ */
+inline void _llk_math_reconfig_remap_(const bool remap_enable)
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+
+    // Need to wait for all DEST accesses to be finished before changing
+    // remap_addrs and swizzle_32b bits
+    ckernel::tensix_sync(); // HAL-GAP: no public HAL API for the PC-buffer tensix_sync() RISC fence
+    while (sync::semaphore::read<hal_port::MATH_PACK_SEM>() > 0)
+    {
+    } // Wait for previous packs to finish before claiming all dest
+
+    // Untilize mode needs dest read access with a stride of 16
+    // remap_addrs and swizzle_32b share DEST_ACCESS_CFG byte 0 (production: two RMWs).
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::DestAccessCfg::remap_addrs, cfg::Sec::S0>(remap_enable), cfg::set<cfg::DestAccessCfg::swizzle_32b, cfg::Sec::S0>(remap_enable));
+}
+
+/**
  * @brief Block the math thread until the destination register is available for writing.
  */
 template <DstSync Dst>
@@ -224,6 +253,36 @@ inline void _llk_math_dest_section_done_()
         math_sync_tile_dst_index = 0;
         hal_port::dest_section_flip();
     }
+}
+
+/**
+ * @brief Clear the acquired DST section from MATH instead of clearing it on PACK release.
+ *
+ * Call immediately after acquiring the section, before any DST writes, and use PACK release without clearing throughout the kernel.
+ * DST writes must stay between acquire and commit; commit drains them before the next acquisition.
+ * Unpack-to-DST must wait for MATH's ready signal; there must be no independent DST writer.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_math_clear_dest_section_()
+{
+    namespace dst  = hal::dst;
+    namespace sync = hal::sync;
+
+    constexpr dst::DestWidth width = is_fp32_dest_acc_en ? dst::DestWidth::Bits32 : dst::DestWidth::Bits16;
+    // Startup or the preceding commit has already drained this thread's DST writes.
+    if constexpr (Dst == DstSync::SyncFull)
+    {
+        // TTI_ZEROACC(CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0)
+        dst::run<dst::Zero {.scope = dst::ZeroScope::All, .index = 0, .width = width, .address_mode = ADDR_MOD_1}>();
+    }
+    else
+    {
+        static_assert(Dst == DstSync::SyncHalf);
+        // TT_ZEROACC(CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2)
+        dst::run(dst::Zero {.scope = dst::ZeroScope::Half, .index = dest_offset_id % 2, .width = width, .address_mode = ADDR_MOD_1});
+    }
+    // Do not let SFPU writes or an unpack-to-DST ready signal overtake the clear.
+    sync::wait::stall<sync::StallTarget::Sfpu | sync::StallTarget::Sync, sync::StallCondition::MathIdle>();
 }
 
 /**
@@ -251,4 +310,81 @@ inline void _llk_math_pack_sync_init_()
         ckernel::reset_dest_offset_id();
         hal_port::set_dest_section_base<StartZero>();
     }
+}
+
+// Following functions do not need to program ALU_FORMAT_SPEC_REG0_SrcA/ALU_FORMAT_SPEC_REG1_SrcB
+// for blackhole since ALU format is inferred
+
+/**
+ * @brief Reconfigure the math thread for a new source A data format (re-derives INT8_math_enabled unless skip_int8).
+ */
+template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
+inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
+{
+    if constexpr (!skip_int8)
+    {
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || !(is_int8_or_int32_format(srca_data_format)),
+            "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
+        hal_port::reconfig_int8_math_enabled(is_int8_or_int32_format(srca_data_format));
+    }
+
+    // Re-establish the operand-driven baseline for the new format(s); refresh the cache(s) unconditionally.
+    ckernel::math::src_zero_flag_srca_fmt = srca_data_format;
+    hal_port::_configure_default_zero_flag_state_();
+}
+
+/**
+ * @brief Reconfigure the math thread for a new source B data format (re-derives INT8_math_enabled unless skip_int8).
+ */
+template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
+inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
+{
+    if constexpr (!skip_int8)
+    {
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || !(is_int8_or_int32_format(srcb_data_format)),
+            "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
+        hal_port::reconfig_int8_math_enabled(is_int8_or_int32_format(srcb_data_format));
+    }
+
+    // Re-establish the operand-driven baseline for the new format(s); refresh the cache(s) unconditionally.
+    ckernel::math::src_zero_flag_srcb_fmt = srcb_data_format;
+    hal_port::_configure_default_zero_flag_state_();
+}
+
+/**
+ * @brief Reconfigure the math thread for new source A and source B data formats (re-derives INT8_math_enabled unless skip_int8).
+ */
+template <bool is_fp32_dest_acc_en, bool skip_int8 = false>
+inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
+{
+    if constexpr (!skip_int8)
+    {
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || !(is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format)),
+            "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
+        hal_port::reconfig_int8_math_enabled(is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format));
+    }
+
+    // Re-establish the operand-driven baseline for the new format(s); refresh the cache(s) unconditionally.
+    ckernel::math::src_zero_flag_srca_fmt = srca_data_format;
+    ckernel::math::src_zero_flag_srcb_fmt = srcb_data_format;
+    hal_port::_configure_default_zero_flag_state_();
+}
+
+/**
+ * @brief Read the FPU sticky special-value flags (e.g. NaN/Inf detection) accumulated since the last clear.
+ */
+inline std::uint32_t _llk_math_get_compute_special_value_flags_()
+{
+    return reg_read(RISCV_DEBUG_REG_FPU_STICKY_BITS); // HAL-GAP: no public HAL API for RISC debug registers
+}
+
+/**
+ * @brief Clear the FPU sticky special-value flags register.
+ */
+inline void _llk_math_clear_compute_special_value_flags_()
+{
+    reg_write(RISCV_DEBUG_REG_FPU_STICKY_BITS, 0); // HAL-GAP: no public HAL API for RISC debug registers
 }
