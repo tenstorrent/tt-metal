@@ -20,6 +20,7 @@ from ...layers.conv2d import Conv2dBlocking, configure_conv2d
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
+from .vae import set_halo_fusion
 from .vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 
 SUBFOLDER = "vae"
@@ -60,6 +61,11 @@ def decoder_slice_params(sizes, h_factor: int, w_factor: int = 1) -> dict[tuple[
     return table
 
 
+# Decode sizes from which the 3 x 3 convs take their border from a boundary exchange in the halo and norm2 comes from
+# conv1's epilogue statistics (4096 decode -0.038 s; no gain at 1024 / 2048), on the mesh shapes it is
+# measured on (other shapes, e.g. a 4 x 4 half, clash its static circular buffers with L1)
+HALO_FUSION_MIN_SIZE = 4096
+HALO_FUSION_MESH_SHAPES = ((4, 8),)
 # Full-K weights plus the activation block a core can hold next to the resident DiT (the largest that fit: 1.33 MB)
 CONV_FULL_K_L1_BYTES = 1_350_000
 # Decoder convs whose double-buffered program clashes with the resident DiT's L1 (1024 x 1024, level 0)
@@ -160,6 +166,8 @@ class Flux3KleinVae:
             self._decoder, slice_params={mesh_shape: slice_table}, shape_blocking=decoder_conv_blocking(slice_table)
         )
         load(self._decoder, decoder_parallel, SUBFOLDER)
+        self._halo_fusion = False
+        self._halo_fusion_mesh = mesh_shape in HALO_FUSION_MESH_SHAPES
 
         encoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=None, w_axis=None)
         self._encoder = Flux2VaeEncoder(
@@ -197,6 +205,10 @@ class Flux3KleinVae:
         z = ttnn.mesh_partition(rows, dim=2, cluster_axis=self.w_axis, memory_config=rows.memory_config())
         ttnn.deallocate(rows)
         z = ttnn.to_layout(z, ttnn.TILE_LAYOUT)
+        halo_fusion = self._halo_fusion_mesh and size >= HALO_FUSION_MIN_SIZE
+        if halo_fusion != self._halo_fusion:
+            self._halo_fusion = halo_fusion
+            set_halo_fusion(decoder, self._halo_fusion)
         out = decoder.forward(z, traced=False, gather_hw=False)
         ttnn.deallocate(z)
         return out
