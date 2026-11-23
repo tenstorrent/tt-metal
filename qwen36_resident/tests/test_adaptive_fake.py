@@ -98,6 +98,10 @@ class FakeAE:
             pf.pool[(table[q // BLOCK], q % BLOCK)] = (j, seq[q])
         self.moves.append(("to_plain", u, j))
 
+    def move_to_spec_many(self, items):
+        for j, u, table, tokens in items:
+            self.move_to_spec(j, u, table, tokens)
+
     def move_to_spec(self, j, u, table, tokens):
         pf, s = self._pf, self.sess
         assert list(tokens[:-1]) == pf.hist[j], "the class's token history != the plain row's tokens"

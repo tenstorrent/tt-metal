@@ -212,22 +212,47 @@ class AdaptiveEngine:
         self._set_spec_table(u, [0])
 
     def move_to_spec(self, j, u, table, tokens):
-        """plain row j's state into spec user u (ring 0, slot 0), its drafter window refilled from the last `window`
-        of tokens[:-1] (the run tokens; tokens[-1] is the next, at position len(tokens) - 1) re-prefilled as a fresh
-        prompt at their absolute positions (option B)"""
+        """plain row j's state into spec user u (see move_to_spec_many)"""
+        self.move_to_spec_many([(j, u, table, tokens)])
+
+    def move_to_spec_many(self, items):
+        """items [(plain row j, spec user u, block table, tokens)]: each row's state into its spec user (ring 0, slot 0),
+        their drafter windows refilled from the last `window` of tokens[:-1] (the run tokens; tokens[-1] is the next,
+        at position len(tokens) - 1) re-prefilled as fresh prompts at their absolute positions (option B) — in as few
+        PP passes as the tap ring holds (PPPrefill.run_batch taps only: each tail at its own ring offset)"""
         e, s = self.spec, self.sess
-        snap = self.plain.snapshot_slot(j)
-        self._set_spec_table(u, table)
-        e.m.vrows_restore(u, snap)
-        for k in ("state", "hist"):
-            ttnn.deallocate(snap[k])
-        n = len(tokens) - 1
-        s0 = max(0, n - e.window) // 64 * 64
-        self.pp.reset()
-        self.pp.run(torch.as_tensor(list(tokens[s0:n])))
-        e._fill_context(n - s0, phys=u, offset=s0)
-        e.ring[u], e.slot[u], e.prev[u] = 0, 0, None
-        s.pos[u], s.started[u], s.committed[u], s.last[u] = n, True, 1, None
+        tails = []
+        for j, u, table, tokens in items:
+            snap = self.plain.snapshot_slot(j)
+            self._set_spec_table(u, table)
+            e.m.vrows_restore(u, snap)
+            for k in ("state", "hist"):
+                ttnn.deallocate(snap[k])
+            n = len(tokens) - 1
+            s0 = max(0, n - e.window) // 64 * 64
+            tails.append((u, s0, n, list(tokens[s0:n])))
+            e.ring[u], e.slot[u], e.prev[u] = 0, 0, None
+            s.pos[u], s.started[u], s.committed[u], s.last[u] = n, True, 1, None
+        cap = self.pp.tap_ring * self.pp.block  # (ring positions)
+        while tails:
+            group, C = [], None
+            for t in list(tails):  # (greedy packing: each tail at a chunk-aligned ring offset)
+                C_try = self.pp.pick_chunk(max([len(x[3]) for x in group + [t]]))
+                need = sum(-(-len(x[3]) // C_try) * C_try for x in group + [t])
+                if group and need > cap:
+                    break
+                group.append(t)
+                tails.remove(t)
+                C = C_try
+            bases, b = [], 0
+            for _, _, _, w in group:
+                bases.append(b)
+                b += -(-len(w) // C) * C
+            self.pp.run_batch(
+                [(torch.as_tensor(w), None, None) for _, _, _, w in group], None, chunk=C, tap_bases=bases
+            )
+            for (u, s0, n, w), b in zip(group, bases):  # (ring b .. b + len(w) - 1 are positions s0 .. n - 1)
+                e._fill_context(b + len(w), phys=u, offset=s0 - b, s0=b)
 
     def to_plain(self, uid):
         """a spec user into a free plain row (its KV stays: the block table goes with it)"""

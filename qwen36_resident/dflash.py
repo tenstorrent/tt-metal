@@ -302,12 +302,12 @@ class ResidentDFlash:
         ttnn.deallocate(fr)
         return dev
 
-    def _fill_context(self, n_tokens, host=False, phys=0, offset=0):
+    def _fill_context(self, n_tokens, host=False, phys=0, offset=0, s0=None):
         """the drafter's context (its window) from the last prefill's taps of positions < n_tokens, one fill of
-        fill_rows rows from s0 = the window's first block. On device: each tap's rows masked to the chip that holds
-        them, one reduce-scatter -> the taps dim-fractured as the drafter reads them. host: through the host
-        (read_taps; the reference)"""
-        s0 = max(0, n_tokens - self.window) // 64 * 64
+        fill_rows rows from s0 = the window's first block (s0 given: the taps' ring start, a batched refill's item).
+        On device: each tap's rows masked to the chip that holds them, one reduce-scatter -> the taps dim-fractured as
+        the drafter reads them. host: through the host (read_taps; the reference)"""
+        s0 = max(0, n_tokens - self.window) // 64 * 64 if s0 is None else s0
         rows, nt = self.fill_rows, len(self.tap_masks)
         if host:
             taps, _ = self.pp.read_taps(n_tokens, self.window)
@@ -597,8 +597,8 @@ class ResidentDFlashRows:
         self.m.capture_trace()
         self.drafter.arm_traces()
 
-    def _fill_context(self, n_tokens, phys=0, offset=0):
-        ResidentDFlash._fill_context(self, n_tokens, phys=phys, offset=offset)
+    def _fill_context(self, n_tokens, phys=0, offset=0, s0=None):
+        ResidentDFlash._fill_context(self, n_tokens, phys=phys, offset=offset, s0=s0)
 
     def _context_taps(self, s0, n_tokens):
         return ResidentDFlash._context_taps(self, s0, n_tokens)

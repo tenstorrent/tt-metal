@@ -220,13 +220,15 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         import time
 
         t0 = time.perf_counter()
-        free = self._free_spec()
+        free, items = self._free_spec(), []
         for r in sorted(self.live):
             if r in self.spec_of or r not in self.greedy_ok or r in self.sampled or not free:
                 continue
             u = free.pop(0)
-            self.ae.move_to_spec(r, u, self.tables[r], self.history[r])
+            items.append((r, u, self.tables[r], self.history[r]))
             self.spec_of[r], self.last_acc[r] = u, 1
+        if items:  # (one batched refill for every user promoted now)
+            self.ae.move_to_spec_many(items)
         self._pay["excl"] = self._pay.get("excl", 0.0) + time.perf_counter() - t0
 
     @staticmethod

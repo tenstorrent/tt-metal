@@ -269,6 +269,7 @@ class PPPrefill:
         self.tap_js = sorted({L % self.Ls for L in self.taps})
         self.tap_ring = -(-(tap_window + C) // block)  # blocks of the ring; C // block scratch blocks after it
         self._taps_scratch = False  # (run_batch on a prefill with taps: the tap writes to the scratch blocks)
+        self._tap_bases = None  # (run_batch taps only: each item's ring offset)
         self.tap_cache = {
             j: device_zeros(mesh, [self.tap_ring + C // block, 1, block, HIDDEN], ttnn.bfloat16, DRAM)
             for j in self.tap_js
@@ -982,9 +983,10 @@ class PPPrefill:
         taps = torch.arange(self.tap_ring, self.tap_ring + C // blk, dtype=torch.int32)[None].repeat(n, 1)
         for p in range(n):
             if work[p] is not None:
-                c, n_tokens = work[p]
+                c, n_tokens, *base = work[p]
                 if self.tap_cache and not self._taps_scratch:
-                    taps[p] = torch.arange(c * C // blk, (c + 1) * C // blk) % self.tap_ring
+                    b0 = base[0] // blk if base else 0  # (run_batch tap_bases: the item's ring offset)
+                    taps[p] = (torch.arange(c * C // blk, (c + 1) * C // blk) + b0) % self.tap_ring
                 valid = min(C, n_tokens - c * C)
                 ctrl[p, 0, 0, :2] = torch.tensor([valid, 1])
                 cos[p, 0], sin[p, 0] = rope_cos_sin(torch.arange(c * C, (c + 1) * C))
@@ -1299,7 +1301,7 @@ class PPPrefill:
         return n_tokens
 
     # ------------------------------------------------------------------ several prompts in one pass
-    def run_batch(self, items, model, chunk=None, timings=None):
+    def run_batch(self, items, model, chunk=None, timings=None, tap_bases=None):
         """prefill several prompts in one pipelined pass and hand each to its slot of the rows-mode decode `model`.
         items: [(token_ids [T >= 1], block_table, slot)], each a prompt's tokens but its last (as run + handoff).
 
@@ -1318,11 +1320,15 @@ class PPPrefill:
         timings, if given, gets the seconds of the ticks (with the boundary handoffs) and of the history scatter"""
         # (a prefill with taps: the batch's tap writes go to the scratch blocks past the ring, which keeps the last
         # single prompt's taps; the items get no drafter context — a plain-geometry destination, DB3 phase 2)
-        self._taps_scratch = bool(self.tap_cache)
+        # (taps only, model None: no handoff, item i's taps at ring positions tap_bases[i] + its own (a batch of drafter
+        # refills, DB3 phase 2: the items are sequences' tails as fresh prompts, read back with tap_rows)
+        if model is None and (tap_bases is None or len(tap_bases) != len(items) or not self.tap_cache):
+            raise ValueError("run_batch: taps only (model None) takes one ring base per item on a prefill with taps")
+        self._taps_scratch, self._tap_bases = bool(self.tap_cache) and model is not None, tap_bases
         try:
             return self._run_batch(items, model, chunk, timings)
         finally:
-            self._taps_scratch = False
+            self._taps_scratch, self._tap_bases = False, None
 
     def _run_batch(self, items, model, chunk=None, timings=None):
         import time
@@ -1331,7 +1337,7 @@ class PPPrefill:
         Ts = [int(ids.shape[0]) for ids, _, _ in items]
         if not items or min(Ts) < 1 or max(Ts) > self.max_len:
             raise ValueError(f"run_batch: prompt lengths {Ts} (each 1 .. max_len {self.max_len})")
-        if not getattr(model, "rows", False):
+        if model is not None and not getattr(model, "rows", False):
             raise ValueError("run_batch: the items go to slots of a rows-mode model")
         C = chunk or self.pick_chunk(max(Ts))
         if C not in self._geo:
@@ -1340,7 +1346,8 @@ class PPPrefill:
         self._check_trace_layout()
         self.reset()
         self._use(C)
-        self._ho_setup(model)
+        if model is not None:
+            self._ho_setup(model)
         n, mesh = self.n, self.mesh
         gdn_js = [j for j in range(self.Ls) if not self.kinds[j]]
         nchunks = [-(-T // C) for T in Ts]
@@ -1351,8 +1358,9 @@ class PPPrefill:
         free, stage_of, done_items = list(range(len(stages))), {}, []
         # the job table of a boundary's handoff: chip p's jobs for its layers of the longest item, and its carry copies
         tiles = -(-max(Ts) // TILE)
-        rows_max = max(len(self._ho_sel(p, tiles)) for p in range(n))
-        jobs_ts, most = self._jobs_buffer(rows_max + len(gdn_js))
+        if model is not None:
+            rows_max = max(len(self._ho_sel(p, tiles)) for p in range(n))
+            jobs_ts, most = self._jobs_buffer(rows_max + len(gdn_js))
         shard = ttnn.ShardTensorToMesh(mesh, dim=0)
 
         def scatter_histories():
@@ -1363,8 +1371,14 @@ class PPPrefill:
                 free.append(stage_of.pop(i))
             done_items.clear()
 
+        bases = self._tap_bases
         for t in range(S + n - 1):
-            work = [(sched[t - p][1], Ts[sched[t - p][0]]) if 0 <= t - p < S else None for p in range(n)]
+            work = [
+                (sched[t - p][1], Ts[sched[t - p][0]]) + ((bases[sched[t - p][0]],) if bases else ())
+                if 0 <= t - p < S
+                else None
+                for p in range(n)
+            ]
             chunk_ids = torch.zeros(n, 1, C, dtype=torch.int32)
             if t < S:
                 i, c = sched[t]
@@ -1384,6 +1398,11 @@ class PPPrefill:
                 self._body()
             finished = [(p, sched[t - p][0]) for p in range(n) if 0 <= t - p < S and t - p in last]
             if not finished:
+                continue
+            if model is None:  # (taps only: no handoff; the finished chips' states zeroed for the next item)
+                self._zero_chips(
+                    [p for p, _ in finished], [self.S[j] for j in gdn_js] + [self.carry[j] for j in gdn_js]
+                )
                 continue
             jobs = [torch.zeros(0, 8, dtype=torch.int64) for _ in range(n)]
             pks = [torch.zeros(0, dtype=torch.int64) for _ in range(n)]
@@ -1431,7 +1450,8 @@ class PPPrefill:
         if timings is not None:
             ttnn.synchronize_device(mesh)
             timings["ticks"] = time.perf_counter() - t_start
-        scatter_histories()
+        if model is not None:
+            scatter_histories()
         if timings is not None:
             timings["total"] = time.perf_counter() - t_start
             timings["histories"] = timings["total"] - timings["ticks"]
