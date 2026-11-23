@@ -79,11 +79,6 @@ TP32_BLOCKERS = (
     (
         "DSA indexer on the 2D layout: TtIndexer runs on this mesh (128 index dims / TP 4 = 32 per chip, tile "
         "aligned) but shards its weights over TP only and replicates them over the 8 SP chips (indexer.py)",
-        "#65885",
-    ),
-    (
-        "DSA indexer on the 2D layout: TtIndexer runs on this mesh (128 index dims / TP 4 = 32 per chip, tile "
-        "aligned) but shards its weights over TP only and replicates them over the 8 SP chips (indexer.py)",
         "#65887",
     ),
     (
