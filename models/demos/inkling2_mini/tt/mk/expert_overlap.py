@@ -51,8 +51,9 @@ class _Signal:
 
 
 class ExpertOverlap:
-    def __init__(self, model, ring_kb=300, guesses=None, release="w_all", dynamic=True, mpfe=None):
-        """guesses: {gate_up dtype: n_guess} override, e.g. {"BFP4": 3}; default 2 (4K: 1 -> 18.01 ms, 2 -> 17.81,
+    def __init__(self, model, ring_kb=240, guesses=None, release="w_all", dynamic=True, mpfe=None):
+        """ring_kb: per ring core; 240 holds 2 BFP8 guesses (230 KB). 300 no longer fits beside M3 staging and the
+        router stage (CB clash at capture). guesses: {gate_up dtype: n_guess} override, e.g. {"BFP4": 3}; default 2 (4K: 1 -> 18.01 ms, 2 -> 17.81,
         BFP4 3 -> 17.86, BFP4 4 -> 18.39). release: "w_all" (17.81 ms), "w_o" (18.48: too late), "moe" (18.26)."""
         from models.demos.inkling2_mini.tt import model as MD
 
