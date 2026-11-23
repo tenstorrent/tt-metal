@@ -56,7 +56,6 @@ CB_LN_SHIFT = 7
 CB_LN_SQ = 8
 CB_PARTIAL = 9
 CB_RECORD_STAGING = 10
-CB_RECORD_LANDING = 11
 CB_GATHERED = 12
 CB_STAT_CONSTS = 13
 CB_INV = 14
@@ -850,7 +849,6 @@ def create_mesh_program_descriptor(
             _cb(CB_PARTIAL, row_chunk * nstats, T32, ttnn.float32, full),
             _cb(CB_RECORD_STAGING, row_chunk * nstats, RECORD_BYTES, ttnn.float32, full),
             _cb(CB_GATHER_ROWS, row_chunk * nstats * gt_max, T32, ttnn.float32, full),
-            _cb(CB_RECORD_LANDING, G * kt * nstats, RECORD_BYTES, ttnn.float32, full),
             _cb(CB_GATHERED, row_chunk * nstats * gt_max, T32, ttnn.float32, full),
             _cb(CB_INV, row_chunk, T_acc, acc_dtype, full),
             (
@@ -995,6 +993,15 @@ def create_mesh_program_descriptor(
                 r_args += entries + active_noc
                 hub_sem = (SEM_STATS_READY if d == "fwd" else SEM_STATS_READY_BWD) + 1 if l == 0 else 0
                 r_args += [hub_sem, pack(mc0), pack(mc1), gx * gy - 1]
+                # hub: stats-table multicast — the fwd hub pushes the own slot, each hub the slots landing in it
+                recv_slots = recv[d] if l == 0 else []
+                r_args += [
+                    stats_addr,
+                    slot_bytes,
+                    p if (l == 0 and d == "fwd") else 0xFFFF,
+                    n_owners if pre_combine else split.n_active,
+                    len(recv_slots),
+                ] + list(recv_slots)
                 reader_rt[core.x][core.y] = r_args
 
                 is_hub = l == 0

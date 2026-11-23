@@ -44,6 +44,15 @@ void kernel_main() {
     const uint32_t mc_start = get_arg_val<uint32_t>(a++);  // program grid rectangle (NoC0 coords x | y << 16)
     const uint32_t mc_end = get_arg_val<uint32_t>(a++);
     const uint32_t mc_dests = get_arg_val<uint32_t>(a++);  // cores in the rectangle, excluding this one
+    // hubs: stats-table multicast (OVERLAP, Refinement 3) — every slot this hub holds is pushed into the same table
+    // address of every core of the program grid as soon as it is complete, so the workers gather from local L1
+    const uint32_t stats_arrived_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t slot_bytes = get_arg_val<uint32_t>(a++);
+    const uint32_t mc_own_slot = get_arg_val<uint32_t>(a++);  // 0xFFFF: not this hub's; else the own slot index
+    const uint32_t n_rec_writers = get_arg_val<uint32_t>(a++);
+    const uint32_t n_recv = get_arg_val<uint32_t>(a++);  // slots landing in my table, in arrival order
+    const uint32_t recv_idx = a;
+    a += n_recv;
 
     const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
     // NoC address of every destination bank's first page and the bank page pitch: a run's read address is then
@@ -64,13 +73,58 @@ void kernel_main() {
     const uint32_t out_block_base = get_write_ptr(agrn::cb_out_block);
 
     constexpr uint32_t rows_lo_div = rows_hi > 1 ? rows_hi - 1 : 1;
-    // announce_stats_ready (OVERLAP): once the sender saw the table complete, ONE multicast semaphore set over the
-    // whole program grid (this core included in the rectangle, not written: non-loopback) replaces a unicast per worker
+    // announce_stats_ready (OVERLAP): each slot of my table is multicast over the whole program grid as soon as it is
+    // complete (the own slot once every record writer wrote it — fwd hub only — and each upstream slot on its
+    // arrival), so every worker's own cb_stats_table holds the slots and the gather reads local L1 instead of 80+
+    // workers converging on the two hubs. Once the sender saw the table complete: ONE multicast semaphore set (this
+    // core included in the rectangle, not written: non-loopback).
     if (hub_sem > 0) {
         AGRN_ZONE("pr_stats_mcast");
+        const uint32_t table = get_write_ptr(agrn::cb_stats_table);  // same address on every core
+        auto mcast_slot = [&](uint32_t q, bool linked) {
+            const uint32_t src = table + q * slot_bytes;
+            noc_async_write_multicast(
+                src,
+                get_noc_multicast_addr(mc_start & 0xFFFF, mc_start >> 16, mc_end & 0xFFFF, mc_end >> 16, src),
+                slot_bytes,
+                mc_dests,
+                linked);
+        };
+        // every slot but the last is multicast as soon as it is complete; the last one goes out linked to the
+        // stats-ready flag (kernel_lib mcast pipe's Flag protocol: a linked payload terminated by an unlinked
+        // semaphore set lands before it, no ack round trip in between)
+        const bool has_own = mc_own_slot != 0xFFFF;
+        const uint32_t n_mc = (has_own ? 1u : 0u) + n_recv;
+        auto slot_of = [&](uint32_t i) {
+            if (has_own) {
+                return i == 0 ? mc_own_slot : get_arg_val<uint32_t>(recv_idx + i - 1);
+            }
+            return get_arg_val<uint32_t>(recv_idx + i);
+        };
+        volatile tt_l1_ptr uint32_t* st_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_arrived_addr);
+        auto wait_complete = [&](uint32_t i) {
+            if (has_own && i == 0) {
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_records_local)),
+                    n_rec_writers);
+            } else {
+                noc_semaphore_wait_min(st_arrived, i + 1 - (has_own ? 1u : 0u));  // upstream's slot landed
+            }
+        };
+        for (uint32_t i = 0; i + 1 < n_mc; ++i) {
+            wait_complete(i);
+            mcast_slot(slot_of(i), false);
+        }
+        if (n_mc > 0) {
+            wait_complete(n_mc - 1);
+        }
         volatile tt_l1_ptr uint32_t* done =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_stats_done));
-        noc_semaphore_wait_min(done, 1);
+        noc_semaphore_wait_min(done, 1);  // the sender is past its last wait on stats_arrived
+        noc_async_write_barrier();        // the earlier slots (long since landed)
+        if (n_mc > 0) {
+            mcast_slot(slot_of(n_mc - 1), true);
+        }
         const uint32_t sem = get_semaphore(hub_sem - 1);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem) = 1;
         noc_semaphore_set_multicast(
@@ -78,6 +132,10 @@ void kernel_main() {
             get_noc_multicast_addr(mc_start & 0xFFFF, mc_start >> 16, mc_end & 0xFFFF, mc_end >> 16, sem),
             mc_dests);
         noc_async_write_barrier();
+        if (n_recv > 0) {
+            noc_semaphore_inc(get_noc_addr(stats_arrived_addr), 0u - n_recv);  // re-arm (trace-safe)
+            noc_async_atomic_barrier();
+        }
     }
     // Pipelined reads: packet i is read into chunk slot (pushed + inflight) of the 2-group CB under NoC transaction id
     // 1 + i % read_depth; once read_depth packets are in flight the oldest is waited (its trid only) and pushed, so

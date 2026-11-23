@@ -34,7 +34,6 @@ constexpr uint32_t cb_ln_shift = 7;         // LN: K = tf32(m) broadcast to ever
 constexpr uint32_t cb_ln_sq = 8;            // LN: (x - K)^2 tiles of the block
 constexpr uint32_t cb_partial = 9;          // per-row stats (col 0), Float32 wire contract: [stat][row]
 constexpr uint32_t cb_record_staging = 10;  // writer scratch: 128 B records
-constexpr uint32_t cb_record_landing = 11;  // reader scratch: one tile-row's G slot blocks (K * nstats records each)
 constexpr uint32_t cb_gathered = 12;        // Float32 gather tiles: per row [stat][gather tile], col j = partition j
 constexpr uint32_t cb_stat_consts = 13;     // LN: n_j per partition column (Float32)
 constexpr uint32_t cb_inv = 14;             // RMS inv_rms / LN rstd (col 0)

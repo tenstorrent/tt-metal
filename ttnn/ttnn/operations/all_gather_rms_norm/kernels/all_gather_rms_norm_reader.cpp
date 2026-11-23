@@ -5,10 +5,10 @@
 //   constants            1.0 reduce scaler; LN: W-tail 0/1 mask (tail member), n_j partition-width tile
 //   load_gamma_beta_slice  this chip's / member's columns of the full-W gamma (and beta) -> compact row-0 pages
 //   load_x_block         crt x cw tiles of the own slice (one reserve / barrier / push per tile-row; W tail zeroed)
-//   gather_partials_block  after both hubs announce the stats table (cb_stats_table) complete: per tile-row, one
-//                        contiguous read per slot (k*nstats records of my rows) into the landing scratch, then local
-//                        NoC copies place each record as ROW j (= partition q*k + m) of a Float32 gather tile in
-//                        cb_gather_rows (rows >= P stay 0); compute transposes them exactly in DEST
+//   gather_partials_block  after both hubs multicast the stats table into this core's cb_stats_table and announce
+//                        it complete: per tile-row, local NoC copies place each record as ROW j (= partition
+//                        q*k + m) of a Float32 gather tile in cb_gather_rows (rows >= P stay 0); compute transposes
+//                        them exactly in DEST
 //
 // Raw dataflow (documented): the record gather / placement are NoC copies no helper expresses (op_design.md
 // "Helpers considered and rejected"; implementation notes: row-form gather).
@@ -267,7 +267,6 @@ void kernel_main() {
     }
 
     constexpr uint32_t f32_tile_bytes = TILE * TILE * 4;
-    const uint32_t landing = get_write_ptr(cb_record_landing);
     // ---- zero the gather tiles once, off the critical path (rows >= P must read 0) ----
     // (pre_combine: the gather CB holds one row chunk and is reused, so each chunk zeroes its own tiles)
     uint32_t gather_base = 0;
@@ -290,10 +289,7 @@ void kernel_main() {
         }
     }
 
-    const uint32_t table = get_write_ptr(cb_stats_table);  // same address on every core of every chip
-    const uint32_t hub_mask = get_common_arg_val<uint32_t>(CRT_HUB_MASK);
-    const uint32_t fwd_hub = get_common_arg_val<uint32_t>(CRT_FWD_HUB);
-    const uint32_t bwd_hub = get_common_arg_val<uint32_t>(CRT_BWD_HUB);
+    const uint32_t table = get_write_ptr(cb_stats_table);           // same address on every core of every chip
     constexpr uint32_t row_rec_bytes = KT * nstats * RECORD_BYTES;  // one tile-row of one slot
     constexpr uint32_t slot_bytes = R * row_rec_bytes;
     // Each 128 B record (32 per-row values of one partition j = q * KT + m and one stat s) becomes ROW j of gather
@@ -301,26 +297,18 @@ void kernel_main() {
     // a slot's members half-split ([values 0..15 of m = 0..KT-1][values 16..31 ...]), so the KT rows of one slot land
     // with one contiguous NoC read per half (split only where they cross a 16-row face boundary): no RISC-V copy, few
     // large requests to the hubs. Compute transposes the tiles (exact, in DEST).
-    // gather_partials (rows [tr0, tr0 + n) into the gather tiles at gbase0): one contiguous read per slot (its KT
-    // members x nstats records of the tile-row) into the landing buffer — G requests per tile-row at the hubs — then
-    // the local placement copies.
+    // gather_partials (rows [tr0, tr0 + n) into the gather tiles at gbase0): the hubs multicast every slot of the
+    // table into this core's own cb_stats_table before stats-ready (Refinement 3), so the records are placed straight
+    // from local L1 (no request to the hubs, no landing copy).
     auto gather_partials = [&](uint32_t tr0, uint32_t n, uint32_t gbase0) {
         for (uint32_t r = 0; r < n; ++r) {
             const uint32_t tr = tr0 + r;
             const uint32_t gbase = gbase0 + r * nstats * gather_tiles * f32_tile_bytes;
             for (uint32_t q = 0; q < G; ++q) {
-                const uint32_t hub = ((hub_mask >> q) & 1u) ? bwd_hub : fwd_hub;
-                noc_async_read(
-                    get_noc_addr(hub & 0xFFFF, hub >> 16, table + q * slot_bytes + tr * row_rec_bytes),
-                    landing + q * row_rec_bytes,
-                    row_rec_bytes);
-            }
-            noc_async_read_barrier();
-            for (uint32_t q = 0; q < G; ++q) {
                 for (uint32_t s = 0; s < nstats; ++s) {
                     for (uint32_t h = 0; h < 2; ++h) {
                         place_records(
-                            landing + q * row_rec_bytes + ((s * 2 + h) * KT) * (RECORD_BYTES / 2),
+                            table + q * slot_bytes + tr * row_rec_bytes + ((s * 2 + h) * KT) * (RECORD_BYTES / 2),
                             gbase + s * gather_tiles * f32_tile_bytes,
                             q * KT,
                             KT,

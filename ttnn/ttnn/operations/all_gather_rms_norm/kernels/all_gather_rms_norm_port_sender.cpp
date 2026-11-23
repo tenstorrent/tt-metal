@@ -167,11 +167,8 @@ void kernel_main() {
                 noc_semaphore_wait_min(stats_arrived, stats_expect_in);
             }
             // the hub's reader multicasts stats-ready over the program grid (NoC0, see the port reader)
+            // (the reader multicasts the table, then re-arms stats_arrived)
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_stats_done)) = 1;
-            if (stats_expect_in > 0) {
-                noc_semaphore_inc(get_noc_addr(stats_arrived_addr), 0u - stats_expect_in);
-            }
-            noc_async_atomic_barrier();
         }
         // ---- gather_normalized_slices ----
         const uint64_t arrival_noc = get_noc_addr(peer_xy & 0xFFFF, peer_xy >> 16, arrival_addr);
@@ -307,9 +304,5 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_records_local)), n_active);
         noc_semaphore_wait_min(stats_arrived, stats_expect_in);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_stats_done)) = 1;
-        if (stats_expect_in > 0) {
-            noc_semaphore_inc(get_noc_addr(stats_arrived_addr), 0u - stats_expect_in);
-        }
-        noc_async_atomic_barrier();
     }
 }

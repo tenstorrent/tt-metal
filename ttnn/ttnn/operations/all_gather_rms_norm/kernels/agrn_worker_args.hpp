@@ -72,7 +72,8 @@ constexpr uint32_t CRT_BETA_ADDR = 4;
 constexpr uint32_t CRT_EPS_BITS = 5;
 constexpr uint32_t CRT_INV_W_BITS = 6;
 constexpr uint32_t CRT_P = 7;
-constexpr uint32_t CRT_HUB_MASK = 8;  // bit q set: slot q is read from the bwd hub, else the fwd hub
+constexpr uint32_t CRT_HUB_MASK =
+    8;  // bit q set: slot q lands in the bwd hub (host check; the table is multicast to every core)
 constexpr uint32_t CRT_FWD_HUB = 9;   // NoC x | y << 16
 constexpr uint32_t CRT_BWD_HUB = 10;
 constexpr uint32_t CRT_PORTS = 11;                      // n_ports linear logical indices
