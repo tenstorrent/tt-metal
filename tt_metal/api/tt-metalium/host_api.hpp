@@ -102,12 +102,15 @@ ChipId GetPCIeDeviceID(ChipId device_id);
 /**
  * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
  *
- * The Program is bound to the default MetalContext, so this overload cannot be used with a MeshDevice that belongs to a
- * different MetalEnv. Prefer the overload that takes a MeshDevice.
+ * Deprecated: the Program is bound to the default MetalContext, so it cannot be used with a MeshDevice that belongs to a
+ * different MetalEnv. Use CreateProgram(distributed::MeshDevice&) instead.
  *
  * Return value: Program
  */
 // clang-format on
+[[deprecated(
+    "Use CreateProgram(distributed::MeshDevice&) instead, which binds the Program to the MetalEnv of the mesh "
+    "device. This API will be removed after 2026-12-31.")]]
 Program CreateProgram();
 
 // clang-format off
@@ -504,6 +507,11 @@ void ReadMeshDeviceProfilerResults(
  * | cq_id        | The command queue id to push.                                                     | uint8_t                       |                                    | Yes      |
  */
 // clang-format on
+[[deprecated(
+    "Metal is moving away from implicit (thread-local) command queue selection. Pass the command queue id explicitly "
+    "(for example mesh_command_queue(cq_id)); TTNN users should use ttnn::with_command_queue_id or "
+    "ttnn.command_queue, which now keep their own state and no longer set this one. This API will be removed after "
+    "2026-12-10.")]]
 void PushCurrentCommandQueueIdForThread(uint8_t cq_id);
 
 // clang-format off
@@ -512,6 +520,10 @@ void PushCurrentCommandQueueIdForThread(uint8_t cq_id);
  * Return value: uint8_t
  */
 // clang-format on
+[[deprecated(
+    "Metal is moving away from implicit (thread-local) command queue selection. Pass the command queue id explicitly "
+    "(for example mesh_command_queue(cq_id)); TTNN users should use ttnn::with_command_queue_id or "
+    "ttnn.command_queue. This API will be removed after 2026-12-10.")]]
 uint8_t PopCurrentCommandQueueIdForThread();
 
 // clang-format off
@@ -520,6 +532,10 @@ uint8_t PopCurrentCommandQueueIdForThread();
  * Return value: uint8_t
  */
 // clang-format on
+[[deprecated(
+    "Metal is moving away from implicit (thread-local) command queue selection. Pass the command queue id explicitly "
+    "(for example mesh_command_queue(cq_id)); TTNN users should use ttnn::get_current_command_queue_id_for_thread. "
+    "This API will be removed after 2026-12-10.")]]
 uint8_t GetCurrentCommandQueueIdForThread();
 
 }  // namespace tt::tt_metal

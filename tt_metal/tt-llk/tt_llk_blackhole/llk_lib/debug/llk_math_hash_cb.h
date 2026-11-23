@@ -56,19 +56,19 @@ using namespace ckernel;
 namespace ckernel::sfpu
 {
 
-static constexpr std::uint32_t FNV23_INIT  = 0x1C9DC5u; // 0x811C9DC5 & 0x7FFFFF
-static constexpr std::uint32_t FNV23_PRIME = 0x000193u; // 0x01000193 & 0x7FFFFF
+constexpr std::uint32_t FNV23_INIT  = 0x1C9DC5u; // 0x811C9DC5 & 0x7FFFFF
+constexpr std::uint32_t FNV23_PRIME = 0x000193u; // 0x01000193 & 0x7FFFFF
 
 // A 32x32 INT32 tile is 32 SFPU rows (32 lanes each); ADDR_MOD_1 advances the
 // DEST row counter by DEST_ROW_STRIDE per SFPLOAD/SFPSTORE. See file header.
-static constexpr int DEST_ROWS       = 32;
-static constexpr int DEST_ROW_STRIDE = 2;
+constexpr int DEST_ROWS       = 32;
+constexpr int DEST_ROW_STRIDE = 2;
 
 // LReg assignments. LReg7 reserved per ISA for indirect-mode encodings; use 0..6.
-static constexpr int LREG_W     = 0; // scratch / word load
-static constexpr int LREG_PRIME = 1; // FNV23 prime constant
-static constexpr int LREG_H     = 2; // per-lane accumulator (persists across tiles)
-static constexpr int LREG_ZERO  = 3; // 0 constant, for clearing dest rows
+constexpr int LREG_W     = 0; // scratch / word load
+constexpr int LREG_PRIME = 1; // FNV23 prime constant
+constexpr int LREG_H     = 2; // per-lane accumulator (persists across tiles)
+constexpr int LREG_ZERO  = 3; // 0 constant, for clearing dest rows
 
 /**
  * @brief Seed the per-lane FNV23 accumulators and configure DEST addressing.

@@ -6,6 +6,7 @@ set(UNIT_TESTS_LLK_SRC
     test_broadcast.cpp
     test_compute_kernel_sentinel.cpp
     test_copy_block_matmul_partials.cpp
+    test_copy_dest_rows.cpp
     test_csa_index_remap_compute.cpp
     test_cumsum.cpp
     test_custom_mm_operands.cpp

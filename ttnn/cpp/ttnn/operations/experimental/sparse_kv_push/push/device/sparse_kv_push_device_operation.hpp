@@ -57,6 +57,7 @@ Tensor sparse_kv_push(
     const std::optional<Tensor>& batch_index_tensor = std::nullopt,
     uint32_t batch_slot_num_layers = 1,
     uint32_t batch_slot_layer_idx = 0,
-    const std::optional<CoreRangeSet>& core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& core_grid = std::nullopt,
+    uint32_t sp_axis = 0);
 
 }  // namespace ttnn::prim

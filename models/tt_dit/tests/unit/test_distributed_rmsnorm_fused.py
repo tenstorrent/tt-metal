@@ -52,7 +52,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_program_cache_flat
+from tt_py_test_utils_common.utils_for_testing import assert_program_cache_flat
 
 from ...layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ...parallel.manager import CCLManager

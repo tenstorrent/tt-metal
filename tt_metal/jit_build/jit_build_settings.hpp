@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt_stl/assert.hpp>
 #include "impl/metal2_host_api/llk_metadata.hpp"
 
@@ -41,7 +41,7 @@ struct SemBindingEntry {
     uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;
     uint32_t total_binder_harts = 0;
-    std::vector<experimental::NodeRange> watcher_node_ranges;
+    std::vector<NodeRange> watcher_node_ranges;
 };
 
 // Watcher: each binding's node ranges as a constexpr array named after its accessor in `watcher_node_ranges::<kind>`.
@@ -59,7 +59,7 @@ inline void emit_watcher_node_ranges(std::ostream& os, std::string_view kind, co
         }
         os << "constexpr DebugNodeRange " << entry.name << "[] = {";
         for (size_t i = 0; i < entry.watcher_node_ranges.size(); ++i) {
-            const experimental::NodeRange& range = entry.watcher_node_ranges[i];
+            const NodeRange& range = entry.watcher_node_ranges[i];
             os << (i == 0 ? "" : ", ") << "{{" << range.start_coord.x << ", " << range.start_coord.y << "}, {"
                << range.end_coord.x << ", " << range.end_coord.y << "}}";
         }
@@ -72,7 +72,7 @@ inline void emit_watcher_node_ranges(std::ostream& os, std::string_view kind, co
 
 // A binding token's trailing constructor arguments for its node ranges, or "" without any.
 inline std::string watcher_node_ranges_args(
-    std::string_view kind, const std::string& name, const std::vector<experimental::NodeRange>& watcher_node_ranges) {
+    std::string_view kind, const std::string& name, const std::vector<NodeRange>& watcher_node_ranges) {
     if (watcher_node_ranges.empty()) {
         return "";
     }
@@ -130,7 +130,9 @@ struct KernelCrtaLayout {
     uint32_t binding_section_words = 0;
     // Section 3 size, in words. Equals the number of scratchpad bindings (one address word each).
     uint32_t scratchpad_section_words = 0;
-    // Start offset of section 4 (varargs), in words.
+    // Section 4 size, in words. Equals the number of GlobalSemaphore bindings (one address word each).
+    uint32_t global_semaphore_section_words = 0;
+    // Start offset of section 5 (varargs), in words.
     // Stored (not computed on demand) so it can be set from a known value at spec resolution
     // and asserted against the derived sum if a consumer wants belt-and-suspenders verification.
     uint32_t vararg_section_offset = 0;
@@ -251,10 +253,9 @@ public:
     // Watcher: the nodes each DFB and semaphore binding exists on, as rectangles in NoC coordinates. Empty without
     // Watcher NoC sanitizing.
     virtual void process_watcher_node_ranges(
-        const std::function<
-            void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>&,
-        const std::function<
-            void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>&) const {}
+        const std::function<void(const std::string& accessor_name, const std::vector<NodeRange>& node_ranges)>&,
+        const std::function<void(const std::string& accessor_name, const std::vector<NodeRange>& node_ranges)>&) const {
+    }
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace
@@ -288,6 +289,14 @@ public:
                                                         uint32_t size_bytes,
                                                         uint32_t addr_crta_word,
                                                         const std::optional<LLKMetadata>&)>&) const {}
+
+    // GlobalSemaphore binding callback (Metal 2.0):
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `global_sem::` namespace
+    //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
+    //    bound GlobalSemaphore's address
+    virtual void process_global_semaphore_binding_handles(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
+        std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>) const {}
 
     // PrefetcherPipe binding callback (Metal 2.0):
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
@@ -351,7 +360,7 @@ public:
     // Fence for Metal 2.0 kernel machinery. When false, the JIT build path must not emit or
     // reference any Metal 2.0 generated headers (kernel_bindings_generated.h, kernel_args_generated.h).
     // Legacy kernels created via the old host API default to false; kernels created via
-    // MakeProgramFromSpec set this to true. This flag exists to prevent cross-contamination
+    // the Program constructor set this to true. This flag exists to prevent cross-contamination
     // between the two API paths during the deprecation window of the legacy API.
     virtual bool is_metal2_kernel() const { return false; }
 

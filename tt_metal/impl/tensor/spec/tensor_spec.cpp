@@ -24,7 +24,23 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 std::optional<std::string> get_shape_fits_shard_grid_error(
     const TensorLayout& tensor_layout, const Shape& logical_shape) {
     const auto& memory_config = tensor_layout.get_memory_config();
-    if (!memory_config.is_sharded() or !memory_config.shard_spec().has_value()) {
+    if (!memory_config.is_sharded()) {
+        return std::nullopt;
+    }
+    if (memory_config.created_with_nd_shard_spec() && memory_config.nd_shard_spec().has_value()) {
+        const auto& nd_shard_shape = memory_config.nd_shard_spec()->shard_shape;
+        for (size_t i = 0; i < nd_shard_shape.rank(); i++) {
+            if (nd_shard_shape[i] == 0) {
+                return fmt::format("ND shard shape must be greater than 0 in every dim, got {}", nd_shard_shape);
+            }
+        }
+    }
+    if (!memory_config.shard_spec().has_value()) {
+        return std::nullopt;
+    }
+    // A 2D spec derived from an ND spec can describe another shape, when the config is reused. ND sharding fits any
+    // shape, and TensorSpec::populate_sharding_specs() derives the 2D spec again for this one.
+    if (memory_config.created_with_nd_shard_spec()) {
         return std::nullopt;
     }
 
@@ -288,7 +304,23 @@ TensorSpec TensorSpec::sharded(
 
 void TensorSpec::populate_sharding_specs() {
     if (memory_config().created_with_nd_shard_spec()) {
-        if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
+        auto upd_mem_config = populate_legacy_shard_spec_from_nd();
+        if (!upd_mem_config.has_value() && memory_config().shard_spec().has_value()) {
+            // Drop the 2D spec derived for another shape when the config is reused: there is none for this shape, and
+            // keeping it would describe a layout the buffer doesn't have.
+            const auto& mem_config = memory_config();
+            upd_mem_config = create_memory_config_with_prepopulated_shard_specs({
+                .memory_layout = TensorMemoryLayout::ND_SHARDED,
+                .buffer_type = mem_config.buffer_type(),
+                .shard_spec = std::nullopt,
+                .nd_shard_spec = mem_config.nd_shard_spec(),
+                .created_with_nd_shard_spec = true,
+                .per_core_allocation = experimental::per_core_allocation::is_per_core_allocation(mem_config),
+                .range_lockstep_allocation =
+                    experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config),
+            });
+        }
+        if (upd_mem_config.has_value()) {
             tensor_layout_ = experimental::tensor_layout_with_custom_alignment(
                 tensor_layout_.get_data_type(),
                 tensor_layout_.get_page_config(),
@@ -387,9 +419,6 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
     // Check that the number of shards fits onto the cores
     size_t num_shards_along_height = div_up(physical_shape().height(), shard_spec.shape[0]);
     size_t num_shards_along_width = div_up(physical_shape().width(), shard_spec.shape[1]);
-    if (shard_spec.orientation != ShardOrientation::ROW_MAJOR) {
-        std::swap(num_shards_along_height, num_shards_along_width);
-    }
     size_t total_num_shards = num_shards_along_height * num_shards_along_width;
     if (total_num_shards > shard_spec.grid.num_cores()) {
         return std::nullopt;
@@ -397,7 +426,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
 
     TensorMemoryLayout shard_kind = TensorMemoryLayout::BLOCK_SHARDED;
     if (nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D) {
-        if (shard_spec.shape[0] == padded_shape().volume() / padded_shape()[-1]) {
+        if (padded_shape()[-1] > 0 && shard_spec.shape[0] == padded_shape().volume() / padded_shape()[-1]) {
             shard_kind = TensorMemoryLayout::WIDTH_SHARDED;
         } else if (shard_spec.shape[1] == padded_shape()[-1]) {
             shard_kind = TensorMemoryLayout::HEIGHT_SHARDED;
@@ -422,16 +451,21 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         return std::nullopt;
     }
 
-    // If 1D distribution is used, we need the number of shards along width to match the grid width to guarantee the
-    // same distribution of shards
+    // Block sharding places a row of shards along the grid's x axis for ROW_MAJOR, and along its y axis for COL_MAJOR
     CoreCoord shard_grid = shard_spec.grid.ranges()[0].grid_size();
+    const bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    const size_t grid_size_along_width = row_major ? shard_grid.x : shard_grid.y;
+    const size_t grid_size_along_height = row_major ? shard_grid.y : shard_grid.x;
+
+    // If 1D distribution is used, we need the number of shards along width to match the grid size along it to
+    // guarantee the same distribution of shards
     if (nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D &&
-        num_shards_along_width != shard_grid.x) {
+        num_shards_along_width != grid_size_along_width) {
         return std::nullopt;
     }
 
     // To match the shard distribution, the number of shards along width and height must fit into the grid
-    if (num_shards_along_width > shard_grid.x || num_shards_along_height > shard_grid.y) {
+    if (num_shards_along_width > grid_size_along_width || num_shards_along_height > grid_size_along_height) {
         return std::nullopt;
     }
 

@@ -67,6 +67,7 @@ class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
+enum class DramSenderPlacement : uint8_t;
 namespace streaming_profiler {
 class Receiver;
 }
@@ -212,6 +213,11 @@ private:
     // if the MeshDevice closes before their owning pipes are destroyed (mirrors
     // the MeshBuffer / weak_ptr<MeshDevice> pattern).
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
+    // Where this mesh runs DRAM-sender endpoints, or nullopt when it runs none. Set by initialize_impl().
+    std::optional<::tt::tt_metal::DramSenderPlacement> dram_sender_placement_;
+    // Under DramSenderPlacement::DispatchEngine an endpoint names a role of its bank rather than a DRAM
+    // core. TT_FATALs unless `bank_id` is one of `device`'s DRAM banks.
+    void check_dram_bank(const IDevice* device, uint32_t bank_id) const;
 
     // Owns the Tensor prefetcher (DRISC) subsystem. Lazily constructed on first call
     // to experimental::StartTensorPrefetcher; torn down in close_impl() before the
@@ -396,6 +402,10 @@ public:
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
     ::tt::tt_metal::DriscL1Arena& drisc_l1_arena() const;
 
+    // Where this mesh runs the sender endpoints of DRAM-sender PrefetcherPipes, or nullopt when it can run
+    // none (impl/buffers/dram_sender_topology.hpp). Fixed for the mesh's lifetime.
+    std::optional<::tt::tt_metal::DramSenderPlacement> dram_sender_placement() const { return dram_sender_placement_; }
+
     // Lazily-constructed Tensor prefetcher (DRISC) subsystem. The first call materializes
     // the manager bound to this mesh device; subsequent calls return the same instance.
     // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
@@ -417,7 +427,8 @@ public:
     // prefetcher on `device`: element 0 is the free non-endpoint subchannel
     // (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
     // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
-    // pair lets two DRISC cores share a bank's receiver set.
+    // pair lets two DRISC cores share a bank's receiver set. Under
+    // DramSenderPlacement::DispatchEngine a bank has one endpoint, so the list has one element.
     //
     // The result names endpoint roles (see metal_SocDescriptor::dram_bank_endpoint_coords), so a
     // well-formed descriptor set returns the same coords for every `device` in a mesh; the
@@ -430,6 +441,12 @@ public:
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     static uint64_t close_count();  // MeshDevice closes so far.
+    /// A handle that expires when this MeshDevice's devices close: every MeshDevice that holds them, such as a submesh
+    /// and its parent, has released them.
+    std::weak_ptr<const void> devices_lifetime() const { return scoped_devices_; }
+    /// Whether close_impl() has closed this MeshDevice, which releases its allocations. Unlike devices_lifetime(), this
+    /// is true for a closed submesh even while its parent keeps the devices open.
+    bool is_closed() const { return scoped_devices_ == nullptr; }
     void enable_program_cache() override;
     void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
@@ -541,7 +558,9 @@ public:
 
     // This method will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
-    // If cq_id is not provided, the current command queue is returned from the current thread
+    // If cq_id is not provided, the queue selected through the deprecated PushCurrentCommandQueueIdForThread is
+    // returned (command queue 0 if none). Prefer passing cq_id explicitly: TTNN and Metal-internal code always do,
+    // and the implicit selection will be removed together with the deprecated Push/Pop/Get functions.
     MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const;
 
     // Same queue as mesh_command_queue() but returned as the internal

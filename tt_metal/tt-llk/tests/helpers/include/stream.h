@@ -88,7 +88,7 @@ public:
      */
     void push(const void* inputv, std::size_t size)
     {
-        const char* input     = reinterpret_cast<const char*>(inputv);
+        const char* input     = static_cast<const char*>(inputv);
         std::size_t remaining = size;
         std::size_t offset    = 0;
 
@@ -136,7 +136,7 @@ public:
      */
     void pop(void* outputv, std::size_t size)
     {
-        char* output          = reinterpret_cast<char*>(outputv);
+        char* output          = static_cast<char*>(outputv);
         std::size_t remaining = size;
         std::size_t offset    = 0;
 

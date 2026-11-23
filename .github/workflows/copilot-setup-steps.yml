@@ -106,7 +106,7 @@ jobs:
           cat "$out"/* 2>/dev/null
 
       - name: Checkout repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
         with:
           # build_metal.sh cannot configure without these.
           submodules: recursive
@@ -142,8 +142,10 @@ jobs:
         # The secrets context belongs to this job: Actions in a validation run,
         # Agents in a Copilot session. It does not identify the runtime's env.
         # Referenced at step level: job-level env resolves empty for agent runs.
+        # The access key ID is not secret, so it is an org variable, as in the
+        # other workflows that use Garage.
         env:
-          GARAGE_S3_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
+          GARAGE_S3_ACCESS_KEY: ${{ vars.GARAGE_S3_ACCESS_KEY_ID }}
           GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
         run: |
           # Both halves are required: copilot-build.sh enables the remote cache

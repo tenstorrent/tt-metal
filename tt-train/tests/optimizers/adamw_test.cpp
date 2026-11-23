@@ -5,6 +5,7 @@
 #include "optimizers/adamw.hpp"
 
 #include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -730,6 +731,30 @@ TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
         /* beta2_pow */ 0.999f,
         /* epsilon */ 1e-8f,
         /* weight_decay */ 0.0f));
+}
+
+TEST_F(AdamWValidationTest, RejectsTilesOtherThan32x32) {
+    // In 16x32 tiles a 32x32 param is 2 tiles, where the compute kernels' count, in 32x32 tiles, is 1.
+    const auto in_16x32_tiles = [] {
+        return ttml::test_utils::filled_on_device_in_tiles({1, 1, 32, 32}, 0.5F, {16, 32});
+    };
+    EXPECT_THAT(
+        [&] {
+            ttml::metal::adamw(
+                in_16x32_tiles(),
+                in_16x32_tiles(),
+                in_16x32_tiles(),
+                in_16x32_tiles(),
+                /* max_exp_avg_sq */ std::nullopt,
+                /* lr */ 1e-3f,
+                /* beta1 */ 0.9f,
+                /* beta2 */ 0.999f,
+                /* beta1_pow */ 0.9f,
+                /* beta2_pow */ 0.999f,
+                /* epsilon */ 1e-8f,
+                /* weight_decay */ 0.0f);
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("tiles must be 32x32, got 16x32")));
 }
 
 // ====================================================================

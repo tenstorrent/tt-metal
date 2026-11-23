@@ -20,7 +20,6 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input = tensor_args.input;
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
