@@ -27,7 +27,9 @@ mkdir -p "$LLK_OBJ_CACHE"
 mapfile -t FILES < <(cut -d: -f1 "$NODE_LIST" | sort -u)
 PYTEST_EXTRA=(-q --override-ini=log_cli=false -m "perf and not accuracy" --timeout=120 --node-list="$NODE_LIST")
 STATUS=0
-export LLK_CODE_SHIFTS="0 4 24 44 60"
+# The gate sends the positions, so both sides measure at the same ones even when the
+# branch point's copy of this script lists others. The default is for a run by hand.
+export LLK_CODE_SHIFTS="${LLK_CODE_SHIFTS:-0 4 24 44 60}"
 export RUNNER_TEMP="$TEMP_ROOT/placement"
 export PERF_RUN_TAG="p0"
 export LLK_WINDOW_HASH=1

@@ -59,6 +59,11 @@ on:
         required: false
         default: ""
         type: string
+      code-shifts:
+        description: "Stage 2: the code positions to measure at, as LLK_CODE_SHIFTS (blank = the script's own list)"
+        required: false
+        default: ""
+        type: string
       stage2-baseline-ref:
         description: "Merge gate: after stage 1, each leg re-measures its regressions against the merge baseline at this ref (blank = off)"
         required: false
@@ -474,6 +479,7 @@ jobs:
           PIPELINE: ${{ inputs.pipeline }}
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           LLK_PERF_PHASE: ${{ steps.offload-unpack.outcome == 'success' && 'run' || 'all' }}
+          LLK_CODE_SHIFTS: ${{ inputs.code-shifts }}
         run: |
           ${{ matrix.test-group.cmd }}
           mkdir -p perf_data/runs && touch perf_data/runs/leg-complete

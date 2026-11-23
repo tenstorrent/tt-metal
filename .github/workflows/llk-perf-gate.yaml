@@ -216,6 +216,7 @@ jobs:
     outputs:
       arches: ${{ steps.plan.outputs.arches }}
       legs: ${{ steps.plan.outputs.legs }}
+      shifts: ${{ steps.shifts.outputs.shifts }}
       run: ${{ steps.source.outputs.run }}
       head: ${{ steps.source.outputs.head }}
       base: ${{ steps.source.outputs.base }}
@@ -256,6 +257,39 @@ jobs:
             echo "cap=${CAP}"
           } >> "$GITHUB_OUTPUT"
       # One arch can have a report while the other has none, so a missing one is not a failure.
+      # Both sides must measure at the same code positions, or nothing pairs up and every
+      # candidate reads as "not measured on the base". The base leg runs the branch point's
+      # copy of the placement script: when that copy cannot take the list from the gate, the
+      # gate sends the list that copy has, so the two sides still line up.
+      - name: Pick the code positions both sides can measure at
+        id: shifts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCRIPT: tt_metal/tt-llk/tests/run_llk_perf_placement.sh
+          HEAD_SHA: ${{ steps.source.outputs.head }}
+          BASE_SHA: ${{ steps.source.outputs.base }}
+        run: |
+          read_script() {
+            gh api "repos/${GITHUB_REPOSITORY}/contents/${SCRIPT}?ref=$1" --jq .content 2>/dev/null \
+              | base64 -d 2>/dev/null || true
+          }
+          list_of() { sed -n 's/.*LLK_CODE_SHIFTS[:=-]*"\{0,1\}\([0-9][0-9 ]*\).*/\1/p' <<< "$1" | head -1; }
+
+          HEAD_SCRIPT=$(read_script "$HEAD_SHA")
+          BASE_SCRIPT=$(read_script "$BASE_SHA")
+          SHIFTS=$(list_of "$HEAD_SCRIPT")
+
+          if ! grep -q 'LLK_CODE_SHIFTS:-' <<< "$BASE_SCRIPT"; then
+            BASE_SHIFTS=$(sed -n 's/^for SHIFT in \([0-9][0-9 ]*\);.*/\1/p' <<< "$BASE_SCRIPT" | head -1)
+            [ -n "$BASE_SHIFTS" ] || BASE_SHIFTS=$(list_of "$BASE_SCRIPT")
+            if [ -n "$BASE_SHIFTS" ] && [ "$BASE_SHIFTS" != "$SHIFTS" ]; then
+              echo "::notice::The branch point measures at ${BASE_SHIFTS} and cannot take the list from the gate, so both sides use those positions. Rebase to get ${SHIFTS}."
+              SHIFTS="$BASE_SHIFTS"
+            fi
+          fi
+          echo "Stage 2 measures at: ${SHIFTS:-the script's own list}"
+          echo "shifts=$SHIFTS" >> "$GITHUB_OUTPUT"
+
       - name: Download the stage-1 Blackhole report
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -372,6 +406,7 @@ jobs:
       tests-yaml: ./tests/pipeline_reorg/llk_perf_placement_tests.yaml
       node-list-artifact: placement-nodes-${{ matrix.arch }}
       node-list-shard: "${{ matrix.shard }}/"
+      code-shifts: ${{ needs.placement-plan.outputs.shifts }}
       compile-quasar: false
       upload-to-warehouse: false
       pipeline: pr
@@ -395,6 +430,7 @@ jobs:
       tests-yaml: ./tests/pipeline_reorg/llk_perf_placement_tests.yaml
       node-list-artifact: placement-nodes-${{ matrix.arch }}
       node-list-shard: "${{ matrix.shard }}/"
+      code-shifts: ${{ needs.placement-plan.outputs.shifts }}
       compile-quasar: false
       upload-to-warehouse: false
       pipeline: pr
