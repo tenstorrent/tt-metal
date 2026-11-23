@@ -50,8 +50,7 @@ ALWI void relu_tile(uint32_t idst) {
  *
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | lower_limit    | Upper limit of relu_min                                                    | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
@@ -79,8 +78,7 @@ ALWI void relu_min_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
  *
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | upper_limit    | Upper limit of relu_min                                                    | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
@@ -199,9 +197,8 @@ ALWI void relu_tile_int32(uint32_t idst) {
  *
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | slope          | slope used in leaky relu - will reinterpret unsigned int to float          | uint32_t | Greater than 0                                        | True     |
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | slope          | slope used in leaky relu - will reinterpret unsigned int to float          | uint32_t | Any fp32 bit pattern; the default 0 gives plain relu  | False    |
  */
 // clang-format on
 ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope = 0) {
