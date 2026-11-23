@@ -123,8 +123,8 @@ carry id 0, and the BRISC drops them before they reach the host.
 | 24 | `kernel_end.id` | Same program runtime id |
 | 28 | `kernel_end.header` | Cycles dispatch_s waited for a free slot before publishing; 0 = no wait. The BRISC turns it into a stall marker and zeroes it |
 
-The BRISC never lets an end time go backwards: a slot that saw no completion while open is given the previous
-record's end time.
+Two cores on the dispatch tile stamp records, so around a wrap of the clock's low word a stamp's high word can come
+out off by one (2^32 cycles). The BRISC moves such a stamp back between the record's start and the clock.
 
 ### 4.2 Ring entries and markers
 

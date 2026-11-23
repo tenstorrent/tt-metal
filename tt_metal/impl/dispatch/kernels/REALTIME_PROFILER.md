@@ -71,10 +71,10 @@ This replaced an A/B ping-pong handoff that had no acknowledgement and dropped
 records whenever the reader fell behind dispatch_s (issue #57632).
 
 The **BRISC reader** polls its `record_wr_idx`. For each published slot it issues a
-`noc_async_read` of the 32-byte record into the next ring slot. A record ends at the
-latest worker completion seen, so the reader never lets an end time go backwards: a
-slot that saw no completion while open still holds its end from a full ring ago, and
-the reader replaces it with the previous record's end. It then advances
+`noc_async_read` of the 32-byte record into the next ring slot. Two cores on the
+dispatch tile stamp records, so around a wrap of the clock's low word a stamp's high word
+can come out off by one (2^32 cycles); the reader moves such a stamp back between the
+record's start and the clock. It then advances
 `write_index` (records for unprofiled programs are read but not committed). If
 the ring is full it spins
 (heartbeat `ring_full_wait_count`); in practice this does not happen, because the
