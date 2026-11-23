@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <type_traits>
 
@@ -169,7 +170,19 @@ void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_
 
     const bool use_pinned = CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*device(), local_shards.size_bytes);
 
+    std::optional<experimental::StagedWrite> staged;
     if (use_pinned) {
+        std::vector<experimental::StagingSource> sources;
+        sources.reserve(local_shards.shards.size());
+        for (auto& [coord, buf] : local_shards.shards) {
+            sources.push_back({distributed::MeshCoordinate(coord), buf.view_bytes().data(), buf.view_bytes().size()});
+        }
+        staged = experimental::PinnedMemoryCache::instance().stage_for_write(*mesh_device, sources);
+    }
+
+    if (staged) {
+        enqueue_write_shards(mesh_buffer, staged->transfers, /*blocking=*/true);
+    } else if (use_pinned) {
         std::vector<distributed::ShardDataTransfer> transfers;
         transfers.reserve(local_shards.shards.size());
         bool any_pinned = false;

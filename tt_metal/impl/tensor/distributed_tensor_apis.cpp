@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <optional>
 #include <type_traits>
 #include <unordered_set>
 #include <vector>
@@ -243,16 +244,28 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
             }
         }
 
-        HostBuffer pinned_buffer(*host_buffer);
-        auto pinned_memory = local_coords.empty() ? nullptr
-                                                  : experimental::PinnedMemoryCache::instance().try_pin(
-                                                        *mesh_device,
-                                                        local_range,
-                                                        pinned_buffer,
-                                                        /*map_to_noc=*/true,
-                                                        experimental::PinnedMemoryDeviceAccess::ReadOnly);
+        std::optional<experimental::StagedWrite> staged;
+        if (!local_coords.empty()) {
+            std::vector<experimental::StagingSource> sources;
+            sources.reserve(local_coords.size());
+            for (const auto& coord : local_coords) {
+                sources.push_back({coord, data_to_write.data(), data_to_write.size()});
+            }
+            staged = experimental::PinnedMemoryCache::instance().stage_for_write(*mesh_device, sources);
+        }
 
-        if (pinned_memory) {
+        HostBuffer pinned_buffer(*host_buffer);
+        auto pinned_memory = (staged || local_coords.empty()) ? nullptr
+                                                              : experimental::PinnedMemoryCache::instance().try_pin(
+                                                                    *mesh_device,
+                                                                    local_range,
+                                                                    pinned_buffer,
+                                                                    /*map_to_noc=*/true,
+                                                                    experimental::PinnedMemoryDeviceAccess::ReadOnly);
+
+        if (staged) {
+            command_queue.enqueue_write_shards(mesh_buffer, staged->transfers, /*blocking=*/true);
+        } else if (pinned_memory) {
             std::vector<distributed::ShardDataTransfer> transfers;
             transfers.reserve(local_coords.size());
             for (const auto& coord : local_coords) {
@@ -318,7 +331,19 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     const bool use_pinned =
         ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*cq.device(), local_shards.size_bytes);
 
+    std::optional<experimental::StagedWrite> staged;
     if (use_pinned) {
+        std::vector<experimental::StagingSource> sources;
+        sources.reserve(local_shards.shards.size());
+        for (auto& [coord, buf] : local_shards.shards) {
+            sources.push_back({distributed::MeshCoordinate(coord), buf.view_bytes().data(), buf.view_bytes().size()});
+        }
+        staged = experimental::PinnedMemoryCache::instance().stage_for_write(*mesh_device, sources);
+    }
+
+    if (staged) {
+        cq.enqueue_write_shards(mesh_buffer, staged->transfers, /*blocking=*/true);
+    } else if (use_pinned) {
         std::vector<distributed::ShardDataTransfer> transfers;
         transfers.reserve(local_shards.shards.size());
         bool any_pinned = false;
