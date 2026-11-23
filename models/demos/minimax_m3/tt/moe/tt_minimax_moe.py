@@ -331,8 +331,10 @@ class TtMiniMaxMoE(LightweightModule):
             expert_outputs = ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, dim=0), dim=0)
 
         with zone("combine"):
+            # The combine output holds this forward's rows: seq_len_per_chip at build time, fewer in a forward with
+            # empty chunks (its non-empty chunks' rows). The dispatch buffers stay at their build-time capacity.
             combined_output = self.combine_module(
-                expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets
+                expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets, seq_len_per_chip=s
             )
         # Fused weighted-sum over topk, then the TP reduce-scatter (see tt_reduce.py).
         with zone("moe_reduce"):

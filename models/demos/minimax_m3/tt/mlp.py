@@ -68,6 +68,7 @@ class MLP:
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
         overlap_shared_expert=True,
+        ep_chunk_len_per_chip=None,
     ):
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
@@ -93,6 +94,8 @@ class MLP:
             # Tokens per device per forward — lets the router size the fused gate's wide bias at init.
             num_tokens=ep_seq_len_per_chip,
             mesh_config=mesh_config,
+            # One chunk's rows per device: a forward with empty chunks routes only its non-empty chunks' rows.
+            chunk_tokens=ep_chunk_len_per_chip,
         )
 
         # Cache-only loading: an empty state_dict means "load every tilized weight from the on-disk
@@ -250,7 +253,8 @@ class MLP:
         # ONE padding config per forward, shared by the gate and the EP dispatch. Built (and memoized) by
         # the router; None when every row is real. Both consumers must see the SAME tensor — the gate
         # sentinel-marks the padded rows and dispatch shortens its token loop to match. See tt/topk.py.
-        padding_config = self.router.build_padding_config(chunks)
+        # The rows are the build-time width, or the non-empty chunks' rows of a forward with empty chunks.
+        padding_config = self.router.build_padding_config(chunks, num_tokens=hidden_states.shape[-2])
         with zone("router_topk"):
             idx, wts = self.router(hidden_states, padding_config=padding_config)  # per-row top-k
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device

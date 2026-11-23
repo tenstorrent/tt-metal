@@ -120,6 +120,7 @@ class Model:
         is_first_rank=True,
         is_last_rank=True,
         overlap_shared_expert=True,
+        ep_chunk_len_per_chip=None,
     ):
         """
         Initialize MiniMax-M3 model
@@ -235,6 +236,7 @@ class Model:
                 sequence_parallel=sequence_parallel,
                 cache_layer_idx=local_idx,
                 overlap_shared_expert=overlap_shared_expert,
+                ep_chunk_len_per_chip=ep_chunk_len_per_chip,
             )
             for local_idx, global_idx in enumerate(self.global_layer_indices)
         ]

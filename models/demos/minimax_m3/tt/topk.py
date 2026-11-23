@@ -85,11 +85,23 @@ def route_tokens_to_experts_fused(
 class TopKRouter:
     PADDING_CONFIG_CACHE_SIZE = 512  # each entry is one tiny [sp, 2] device tensor
 
-    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, num_tokens=None, mesh_config=None):
+    def __init__(
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        tensor_cache_path=None,
+        num_tokens=None,
+        mesh_config=None,
+        chunk_tokens=None,
+    ):
         """num_tokens: rows per device per forward. Every chunk of the forward puts chunk_size // sp_factor rows
         on each SP device, so a forward of forward_tokens_budget // chunk_size chunks gives
         forward_tokens_budget // sp_factor rows (chunk_size // sp_factor at the default budget). Required — the
         gate's bias is materialized at that width (see below).
+        chunk_tokens: rows per device of one chunk (chunk_size // sp_factor). A forward with empty chunks routes
+        only its non-empty chunks' rows, so a call may also have any multiple of chunk_tokens below num_tokens
+        rows. None: every call has exactly num_tokens rows.
         mesh_config: resolves which mesh axis is SP for build_padding_config; None assumes axis 0."""
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
@@ -165,6 +177,18 @@ class TopKRouter:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+        # A forward with empty chunks routes fewer rows than num_tokens (its non-empty chunks' rows). The wide bias
+        # of every allowed width is built here, one per width (n rows x num_experts fp32; weights shared), so a
+        # served forward never allocates one.
+        assert chunk_tokens is None or (
+            0 < chunk_tokens <= num_tokens and num_tokens % chunk_tokens == 0
+        ), f"num_tokens={num_tokens} is not a whole number of chunks of {chunk_tokens} rows"
+        self.chunk_tokens = chunk_tokens
+        self._score_bias_by_width = {num_tokens: self.score_bias_wide}
+        if chunk_tokens is not None:
+            for width in range(chunk_tokens, num_tokens, chunk_tokens):
+                self._score_bias_by_width[width] = self._build_score_bias(mesh_device, width)
+
         # Padding-config memo, keyed by the per-chip real-row counts (see build_padding_config). Ragged ends make
         # the key space large over a long run, so it is bounded (LRU).
         self.mesh_device = mesh_device
@@ -182,9 +206,39 @@ class TopKRouter:
             packer_l1_acc=True,
         )
 
-    def build_padding_config(self, chunks):
+    def _check_rows(self, num_tokens):
+        """The rows per device of a call: the build-time num_tokens, or a multiple of chunk_tokens below it (a
+        forward's non-empty chunks). Anything else means the router was built for a different shape than it is
+        called with: a wiring bug, which must fail rather than route differently."""
+        step = self.chunk_tokens or self.num_tokens
+        assert 0 < num_tokens <= self.num_tokens and num_tokens % step == 0, (
+            f"TopKRouter was built for {self.num_tokens} tokens/device in blocks of {step} but called with "
+            f"{num_tokens}. The gate's bias is materialized at those widths; pass the right num_tokens and "
+            f"chunk_tokens at construction."
+        )
+
+    def _build_score_bias(self, mesh_device, num_tokens):
+        """The fused gate's [num_tokens, num_experts] bias (its shape must equal the logits')."""
+        if self.score_bias is not None:
+            return ttnn.repeat(self.score_bias, ttnn.Shape([num_tokens, 1]))
+        return ttnn.zeros(
+            [num_tokens, self.num_experts],
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _score_bias_for(self, num_tokens):
+        """The bias for a call of num_tokens rows per device: the build-time width, or a smaller one of a forward
+        with empty chunks (all built in __init__)."""
+        self._check_rows(num_tokens)
+        return self._score_bias_by_width[num_tokens]
+
+    def build_padding_config(self, chunks, num_tokens=None):
         """Per-device ``[num_real_tokens, pad_side]`` for a forward over ``chunks`` (common/prefill/prefill_chunk.py), or
-        None when every row is real (nothing to mark).
+        None when every row is real (nothing to mark). ``num_tokens``: the forward's rows per device (None = the
+        build-time width; a forward with empty chunks passes its non-empty chunks' rows).
 
         The SAME tensor must go to the gate topk AND the dispatch op — see
         route_tokens_to_experts_fused. Owned here and memoized by the per-chip counts, so a chunked
@@ -198,12 +252,19 @@ class TopKRouter:
         so it costs one tiny [sp, 2] write per distinct count — but a traced runtime must derive the
         row on-device instead (the moe_padding_config op). Port that alongside any trace work.
         """
-        tokens_per_chip = self.num_tokens
+        if chunks is None:
+            return None
+        tokens_per_chip = self.num_tokens if num_tokens is None else num_tokens
+        # Each chunk holds chunk_rows rows per device, so the rows must be exactly len(chunks) chunks: a caller that
+        # slices the rows but not the chunk list would otherwise get wrong real-row counts with no error.
+        chunk_rows = self.chunk_tokens or self.num_tokens // len(chunks)
+        assert tokens_per_chip == len(chunks) * chunk_rows, (
+            f"{tokens_per_chip} rows per device for {len(chunks)} chunks of {chunk_rows} rows "
+            f"(TopKRouter built for {self.num_tokens} tokens/device)"
+        )
         sp_axis = self.mesh_config.sp_axis if self.mesh_config is not None else 0
         sp_factor = self.mesh_device.shape[sp_axis] if isinstance(self.mesh_device, ttnn.MeshDevice) else 1
-        if chunks is None or not tokens_per_chip:
-            return None
-        key = packed_real_rows(chunks, sp_factor, tokens_per_chip // len(chunks))
+        key = packed_real_rows(chunks, sp_factor, chunk_rows)
         if all(r == tokens_per_chip for r in key):
             return None  # every row is real
         if key in self._padding_config_cache:
@@ -249,16 +310,11 @@ class TopKRouter:
             compute_kernel_config=self.compute_config,
         )
 
-        # ONE routing path. `actual_tokens != num_tokens` cannot happen on the prefill path — a ragged
-        # chunk is still a full padded tensor and `padding_config` is what marks its tail — so a
-        # mismatch means the router was built for a different shape than it is being called with, which
-        # is a wiring bug and should say so rather than silently route differently.
-        assert actual_tokens == self.num_tokens, (
-            f"TopKRouter was built for {self.num_tokens} tokens/device but called with {actual_tokens}. "
-            f"The gate's bias is materialized at that width; pass the right num_tokens at construction."
-        )
+        # ONE routing path. A ragged chunk is still a full padded tensor and `padding_config` is what marks
+        # its tail, so the rows are the build-time num_tokens, or fewer in a forward with empty chunks (the
+        # non-empty chunks only; the bias is then built at that width). _check_rows asserts it.
         expert_indices, expert_weights = route_tokens_to_experts_fused(
-            router_logits, self.top_k, self.score_bias_wide, self.routed_scaling_factor, padding_config
+            router_logits, self.top_k, self._score_bias_for(actual_tokens), self.routed_scaling_factor, padding_config
         )
         ttnn.deallocate(router_logits)
         return expert_indices, expert_weights
