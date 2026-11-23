@@ -15,7 +15,8 @@ The weights a checkpoint holds, by ``checkpoint.format.type`` and whether ``mode
 - ``tt`` with LoRA: the adapters, in ``checkpoint.pkl``.
 - ``tt`` without: every parameter, in ``checkpoint.pkl``.
 
-``checkpoint.pkl`` has a header naming the base model and the LoRA settings, which a load must match.
+``checkpoint.pkl`` has a header naming the base model and the LoRA settings, which a load must match. A PEFT adapter
+names its base model in ``adapter_config.json``; a full ``hf`` model a trainer saved, in ``trainer_state.json``.
 """
 
 from __future__ import annotations
@@ -27,7 +28,14 @@ from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence
 import numpy as np
 
 from ...errors import UnsupportedTrainingConfig
-from ..utils.checkpoint import TT_CHECKPOINT, AdapterState, PathLike, read_adapter, write_adapter
+from ..utils.checkpoint import (
+    TT_CHECKPOINT,
+    AdapterState,
+    PathLike,
+    read_adapter,
+    read_trainer_state,
+    write_adapter,
+)
 from ..utils.hub import load_hf_config, model_dir
 from ..utils.peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
 from .base import ModelProvider
@@ -216,6 +224,9 @@ class LlamaProvider(ModelProvider):
         else:
             from ttml.models.llama import load_from_safetensors
 
+            # A model saved by a trainer records its base model; one from elsewhere doesn't, and is taken as is.
+            state = read_trainer_state(directory) or {}
+            self._check_base_model(directory, (state.get("base_model") or {}).get("name_or_path"))
             load_from_safetensors(model, directory)
 
     def export_weights(self, model: Any, directory: PathLike) -> None:
@@ -279,7 +290,7 @@ class LlamaProvider(ModelProvider):
 
     def _check_base_model(self, directory: Path, base: Optional[str]) -> None:
         """A checkpoint that records no base model is taken as this model's. A PEFT adapter records
-        ``model_source()``, a ``tt`` checkpoint ``model.name``."""
+        ``model_source()``; a ``tt`` checkpoint and ``trainer_state.json``, ``model.name``."""
         name = self.config.model.name
         if base and base not in (name, self.model_source()):
             _fail("checkpoint", f"{directory} is for {base!r}, this model is {name!r}")

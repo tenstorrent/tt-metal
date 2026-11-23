@@ -74,6 +74,44 @@ def test_a_provider_registered_from_outside_takes_back_checkpoints_of_its_model(
         provider._check_base_model(tmp_path, "meta-llama/Llama-3.2-1B")
 
 
+@pytest.mark.parametrize(
+    "recorded, loads",
+    [(None, True), ("acme/acme-7b", True), ("meta-llama/Llama-3.2-1B", False)],
+    ids=["no-trainer-state", "same-model", "other-model"],
+)
+def test_a_full_hf_checkpoint_is_loaded_only_onto_the_model_it_records(
+    tmp_path, monkeypatch, expect_error, recorded, loads
+):
+    import ttml.models.llama
+
+    source = _local_model(tmp_path / "acme-7b")
+
+    class AcmeProvider(LlamaProvider):
+        def model_source(self) -> str:
+            return source
+
+    register_provider("acme/acme-7b", AcmeProvider)
+    config = _config("acme/acme-7b")
+    config.model.lora = None
+    config.checkpoint = SimpleNamespace(format=SimpleNamespace(type="hf"))
+    provider = get_provider(config)
+
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    if recorded is not None:
+        (checkpoint / "trainer_state.json").write_text(json.dumps({"base_model": {"name_or_path": recorded}}))
+    loaded = []
+    monkeypatch.setattr(ttml.models.llama, "load_from_safetensors", lambda model, directory: loaded.append(directory))
+
+    if loads:
+        provider.load_weights(object(), checkpoint)
+        assert loaded == [checkpoint]
+    else:
+        with expect_error(UnsupportedTrainingConfig, r"^checkpoint: .* is for 'meta-llama/Llama-3.2-1B'"):
+            provider.load_weights(object(), checkpoint)
+        assert loaded == []
+
+
 def test_registering_the_same_provider_again_is_a_no_op():
     register_provider("meta-llama/Llama-3.2-1B", LlamaProvider)
     assert providers()["meta-llama/Llama-3.2-1B"] is LlamaProvider

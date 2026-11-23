@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Union
 
-TRAINER_STATE = "trainer_state.json"
+from ttml.experimental.models.utils.checkpoint import TRAINER_STATE
 
 PathLike = Union[str, os.PathLike]
 

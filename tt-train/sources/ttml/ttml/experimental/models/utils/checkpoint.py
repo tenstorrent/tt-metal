@@ -7,6 +7,8 @@
 - a PEFT adapter directory (``PeftModel.from_pretrained`` loads it): ``adapter_config.json`` and
   ``adapter_model.safetensors``;
 - ``checkpoint.pkl``: parameters as ``ttml.checkpointing`` writes them.
+
+Beside them, a checkpoint a trainer saved has ``trainer_state.json``, which records the base model.
 """
 
 from __future__ import annotations
@@ -15,13 +17,14 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 
 ADAPTER_CONFIG = "adapter_config.json"
 ADAPTER_WEIGHTS = "adapter_model.safetensors"
 TT_CHECKPOINT = "checkpoint.pkl"
+TRAINER_STATE = "trainer_state.json"
 
 PathLike = Union[str, os.PathLike]
 
@@ -54,3 +57,11 @@ def read_adapter(directory: PathLike) -> AdapterState:
     if not weights.is_file():
         raise FileNotFoundError(f"{directory} has no {ADAPTER_WEIGHTS}")
     return AdapterState(tensors=load_file(str(weights)), config=json.loads(config.read_text()))
+
+
+def read_trainer_state(directory: PathLike) -> Optional[dict[str, Any]]:
+    """The contents of ``trainer_state.json``, or ``None`` for a checkpoint without one, such as a model from the hub."""
+    path = Path(directory) / TRAINER_STATE
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text())

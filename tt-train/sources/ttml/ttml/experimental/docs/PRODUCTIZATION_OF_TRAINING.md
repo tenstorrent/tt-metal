@@ -267,6 +267,8 @@ The base model comes back from what the checkpoint records:
   provider's `model_source()`: the hub id, or for a model that isn't on the hub, the local directory, which must be
   there wherever the adapter is loaded.
 - A `tt` checkpoint names it in the header of `checkpoint.pkl`, with the LoRA `r`, `alpha` and `target_modules`.
+- A full `hf` model names it in `trainer_state.json`. A model without one, such as one from the hub, is taken as the
+  run's model.
 
 The `checkpoint` section:
 
