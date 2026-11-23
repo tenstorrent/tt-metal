@@ -8,7 +8,10 @@
         [--ci <split> <probe>=<tok_s> [...]] [--entry-overhead <split>/<stage> <split>/<stage>]
         [--note <key>=<text>] [...]
 
-A stage is layers [first, last] of a run (default: all of the run's layers). Every ack time is the producer's
+A stage is layers [first, last] of a run (default: all of the run's layers). For a GLM-5.4 run (command.txt
+probe_model=glm54) [first, last] are layer PASS positions of the 106-pass schedule (pass_schedule.py), and a chunk's
+acks are put in pass order from their ack ids (a loop pass-2 layer L acks as L + 78), so the whole trunk's stages are
+G0 0-25, G1 26-53, G2 54-81, G3 82-105. Every ack time is the producer's
 clock (time.perf_counter in one process) from the CHUNK_RETIRE lines; a chunk retires on its last ack. Per probe
 chunk d (the CI's probe chunks 0, 9, 19, 50, 101, 203 = 5k, 50k, 100k, 255k, 510k, 1020k tokens prefilled through
 that chunk) a stage reports:
@@ -22,7 +25,9 @@ composed: tok/s = 5120 / the slowest stage's period_ms (and / its ms) per probe.
 Per layer type: the layer ack is sent after layer i's attention half (indexer, KV write, sparse attention,
 output projection), so ack(i+1) - ack(i) = FFN(i) + attention(i+1). The least-squares fit
 delta(i) = P[ffn(i)] + Q[attn(i+1)] over a stage's layers and a chunk window gives each layer type's cost
-P[ffn] + Q[attn], which is the same for any split of a layer around its ack.
+P[ffn] + Q[attn], which is the same for any split of a layer around its ack. A GLM-5.4 run adds a pass-2 attention
+type (two-bank, no indexer) and leaves out the deltas that cross a damp gate (the end of each loop pass); those are
+reported per crossing as gate_crossing_ms instead.
 """
 
 import argparse
@@ -45,22 +50,45 @@ _LAYER = re.compile(r"(\d+)-(\d+)@([\d.]+)")
 FULL = {0, 1, 2} | set(range(6, 78, 4))
 
 
+def pass_order(cmd_text: str) -> tuple:
+    """(model, the run's (layer, loop_pass) per position, ack id per position) from its command.txt. GLM-5.3 runs are
+    not looped: a position is its layer, and acks are taken in ascending id (ack ids None)."""
+    model = re.search(r"probe_model=(\w+)", cmd_text)
+    model = model.group(1) if model else "glm53"
+    first, count = (int(x) for x in cmd_text.split()[2:4])
+    if model == "glm54":
+        from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import pass_schedule
+        from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import glm_5_4_hf_config
+
+        schedule = pass_schedule(glm_5_4_hf_config())
+        return model, schedule.passes[first : first + count], schedule.ack_ids(first, count)
+    return model, tuple((layer, 0) for layer in range(first, first + count)), None
+
+
 def read_run(run_dir: Path) -> dict:
     cmd_text = (run_dir / "command.txt").read_text()
+    model, passes, ack_ids = pass_order(cmd_text)
     chunks = []
     for line in (run_dir / "producer.log").read_text(errors="replace").splitlines():
         m = _RETIRE.search(line)
         if not m or m.group(6) != "0":
             continue
-        acks = sorted((int(a), float(t)) for a, _b, t in _LAYER.findall(m.group(8)))
-        # Absolute ms on the producer clock: first is the chunk's first ack, the layers are ms after it.
+        acks = {int(a): float(t) for a, _b, t in _LAYER.findall(m.group(8))}
+        if ack_ids is None:  # GLM-5.3: ascending id (older stage-alone runs ack under rank-local ids 0..)
+            order = sorted(acks)
+        else:
+            assert sorted(acks) == sorted(ack_ids), f"{run_dir}: chunk {m.group(2)} acks {sorted(acks)} != {ack_ids}"
+            order = ack_ids
+        # Absolute ms on the producer clock: first is the chunk's first ack, the layers are ms after it. In pass order.
         first_ms = float(m.group(4)) * 1000.0
-        chunks.append({"start": int(m.group(2)), "acks": [first_ms + t for _, t in acks]})
+        chunks.append({"start": int(m.group(2)), "acks": [first_ms + acks[i] for i in order]})
     chunks.sort(key=lambda c: c["start"])
     assert chunks and all(c["start"] == i * CHUNK for i, c in enumerate(chunks)), f"{run_dir}: chunk gaps"
     power = re.search(r"^power: (.*)$", cmd_text, re.M)
     return {
         "dir": run_dir,
+        "model": model,
+        "passes": passes,
         "first_layer": int(cmd_text.split()[2]),
         "chunks": chunks,
         "sha": re.search(r"sha=(\w+)", cmd_text).group(1),
@@ -112,27 +140,36 @@ def composed(stages: dict) -> dict:
 
 
 def fit_layer_types(run: dict, first: int, last: int, chunk_ids) -> dict:
-    """Per layer type cost P[ffn] + Q[attn] (ms) from the ack deltas of layers [first, last]."""
-    rows, ys = [], []
+    """Per layer type cost P[ffn] + Q[attn] (ms) from the ack deltas of positions [first, last]."""
+    passes = run["passes"]
+    rows, ys, gates = [], [], {}
     for c in (run["chunks"][i] for i in chunk_ids if i < len(run["chunks"])):
-        for layer in range(first, last):
-            i = layer - run["first_layer"]
-            row = [0.0] * 4  # P_dense, P_moe, Q_indexer, Q_reuse
+        for pos in range(first, last):
+            i = pos - run["first_layer"]
+            (layer, k), (nxt, k_next) = passes[i], passes[i + 1]
+            delta = c["acks"][i + 1] - c["acks"][i]
+            if k and k_next != k:  # loop pass k ends here: its damp gate runs between the two acks
+                gates.setdefault(f"pass{k}_gate: L{layer}->L{nxt}", []).append(delta)
+                continue
+            row = [0.0] * 5  # P_dense, P_moe, Q_indexer, Q_reuse, Q_pass2
             row[0 if layer < 3 else 1] = 1.0
-            row[2 if layer + 1 in FULL else 3] = 1.0
+            row[4 if k_next >= 2 else (2 if nxt in FULL else 3)] = 1.0
             rows.append(row)
-            ys.append(c["acks"][i + 1] - c["acks"][i])
+            ys.append(delta)
     a, y = np.array(rows), np.array(ys)
     x, *_ = np.linalg.lstsq(a, y, rcond=None)
-    layers = range(first, last + 1)
+    held = passes[first - run["first_layer"] : last - run["first_layer"] + 1]
     cost = {
-        "dense+indexer": (x[0] + x[2], any(l < 3 for l in layers)),
-        "moe+indexer": (x[1] + x[2], any(l >= 3 and l in FULL for l in layers)),
-        "moe+reuse": (x[1] + x[3], any(l >= 3 and l not in FULL for l in layers)),
+        "dense+indexer": (x[0] + x[2], any(l < 3 for l, _ in held)),
+        "moe+indexer": (x[1] + x[2], any(l >= 3 and l in FULL and k < 2 for l, k in held)),
+        "moe+reuse": (x[1] + x[3], any(l >= 3 and l not in FULL and k < 2 for l, k in held)),
+        "moe+pass2": (x[1] + x[4], any(k >= 2 for _, k in held)),
     }
     out = {t: round(float(v), 3) for t, (v, present) in cost.items() if present}
     out["fit_rms_ms"] = round(float(np.sqrt(np.mean((a @ x - y) ** 2))), 3)
     out["n_deltas"] = len(ys)
+    if gates:
+        out["gate_crossing_ms"] = {g: round(statistics.median(v), 3) for g, v in gates.items()}
     return out
 
 

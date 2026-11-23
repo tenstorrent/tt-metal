@@ -13,11 +13,13 @@ the runner computes or when; both checks only observe.
   Before the trace is released one ``TRUNK_ASSERT push_reuse PASS|FAIL`` line states the verdict: PASS needs every
   pass-2 layer to choose reuse, the trace to be captured with every pass-2 push writing the dense buffer, and no
   own pass-2 buffer. A FAIL is logged, not raised, so the run's timing survives; the probe's checker reads it.
-* KV digest (finite, deterministic). After the request, before the trace is released, the KVPE cache slots of user 0
-  for ``TRUNK_DIGEST_LAYERS`` (default 25,53,77: G0's, G1's and G3's last layers; a loop layer's slot also holds its
-  pass-2 window ring, i.e. G2's KV) are read whole from every chip and logged as ``TRUNK_KV_DIGEST layer=<l>
-  sha256=<hex> finite=<bool> nonzero_rows=<n>``. The cache starts zero-filled and two runs feed identical tokens, so
-  equal digests across runs mean bit-identical KV; layer 77's rows depend on every pass of every chunk.
+* KV digest (finite, deterministic). After the request, before the trace is released, user 0's KVPE rows of every
+  layer (78 cache layers; a loop layer's pass-1 rows) are read for each chunk in ``TRUNK_DIGEST_CHUNKS`` (default the
+  probe chunks 0,9,19,50,101,203), plus the loop layers' pass-2 window ring (G2's own KV, the last chunks' pass 2),
+  with ``read_padded_kv_cache`` (the G1->G2 handoff's reader), and logged per chunk as ``TRUNK_KV_DIGEST chunk=<c>
+  sha256=<hex> finite=<bool> nonzero_rows=<n> rows=<n>``. The cache starts zero-filled and two runs feed identical
+  tokens, so equal digests across runs mean bit-identical KV; the last chunk's layer-77 rows depend on every pass of
+  every chunk.
 """
 
 from __future__ import annotations
@@ -97,43 +99,66 @@ def _push_reuse_verdict() -> None:
     )
 
 
-def _kv_digest() -> None:
+def _digest_rows(runtime, kv, start: int, ring: bool) -> tuple:
+    """sha256, finite, nonzero rows and rows of user 0's KVPE rows of one chunk at cache row ``start``, every layer
+    (``ring``: only the loop layers, whose slots hold the window ring), from every chip."""
     import torch
 
     import ttnn
+    from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import GLM54Config
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, unpack_scaled_fp8_kv_cache
 
-    caches, num_layers = _STATE["caches"], _STATE["num_layers"]
-    if caches is None:
+    storage = kv.storage
+    num_layers = _STATE["num_layers"]
+    first, count = (GLM54Config.LOOP_FIRST_LAYER, len(GLM54Config.loop_layers())) if ring else (0, num_layers)
+    chunk = runtime.config.chunk_size
+    meta = [runtime._meta1_dev(v) for v in (0, start, start + chunk)]
+    rows = ttnn.experimental.deepseek_prefill.read_padded_kv_cache(
+        storage,
+        meta[0],
+        meta[1],
+        first_layer=first,
+        num_read_layers=count,
+        num_layers=num_layers,
+        chunk_size_global=chunk,
+        cluster_axis=0,
+        tp_axis=1,
+    )
+    host = ttnn.to_torch(rows, mesh_composer=ttnn.ConcatMeshToTensor(storage.device(), dim=0))
+    for t in (rows, *meta):
+        ttnn.deallocate(t)
+    raw = host.contiguous().view(torch.uint8)
+    flat = raw.reshape(-1, raw.shape[-1])
+    digest = hashlib.sha256(flat.numpy().tobytes()).hexdigest()
+    if kv.format == MlaKvCacheFormat.SCALED_FP8:
+        latent, scales, rope = unpack_scaled_fp8_kv_cache(flat.view(torch.float8_e4m3fn), kv.geometry)
+        finite = all(bool(torch.isfinite(t).all()) for t in (latent, scales, rope))
+    else:
+        finite = bool(torch.isfinite(flat.view(torch.bfloat16).float()).all())
+    return digest, finite, int(flat.any(dim=-1).sum()), int(flat.shape[0])
+
+
+def _kv_digest(runtime) -> None:
+    from models.demos.deepseek_v3_d_p.tt.mla.two_bank import RING_CHUNKS
+
+    kv = _STATE["caches"].kvpe if _STATE["caches"] is not None else None
+    if kv is None:
         logger.error("TRUNK_KV_DIGEST skipped: no KV caches recorded")
         return
-    kv = caches.kvpe
-    storage = kv.storage
-    mesh = storage.device()
-    shape = list(storage.shape)
-    layers = [int(x) for x in os.environ.get("TRUNK_DIGEST_LAYERS", "25,53,77").split(",") if x]
-    logger.info(f"TRUNK_KV_DIGEST storage shape={shape} format={kv.format} num_layers={num_layers} layers={layers}")
-    for layer in layers:
-        slot = layer  # user 0: slot = user * num_layers + layer
+    chunk, max_seq = runtime.config.chunk_size, runtime.config.max_seq_len
+    chunks = [int(x) for x in os.environ.get("TRUNK_DIGEST_CHUNKS", "0,9,19,50,101,203").split(",") if x]
+    logger.info(
+        f"TRUNK_KV_DIGEST storage shape={list(kv.storage.shape)} format={kv.format} chunks={chunks} "
+        f"ring={RING_CHUNKS} chunks at row {max_seq}"
+    )
+    reads = [(f"chunk={c}", c * chunk, False) for c in chunks]
+    reads += [(f"chunk=ring{j}", max_seq + j * chunk, True) for j in range(RING_CHUNKS)]
+    for label, start, ring in reads:
         try:
-            piece = ttnn.slice(storage, [slot, 0, 0, 0], [slot + 1, *shape[1:]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            host = ttnn.to_torch(piece, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
-            ttnn.deallocate(piece)
-            raw = host.contiguous().view(torch.uint8)
-            digest = hashlib.sha256(raw.numpy().tobytes()).hexdigest()
-            rows = raw.reshape(-1, raw.shape[-1])
-            nonzero = int(rows.any(dim=-1).sum())
-            if kv.format == MlaKvCacheFormat.SCALED_FP8:
-                latent, scales, rope = unpack_scaled_fp8_kv_cache(host, kv.geometry)
-                finite = all(bool(torch.isfinite(t).all()) for t in (latent, scales, rope))
-            else:
-                finite = bool(torch.isfinite(host.float()).all())
-            logger.info(
-                f"TRUNK_KV_DIGEST layer={layer} sha256={digest} finite={finite} nonzero_rows={nonzero} "
-                f"rows={rows.shape[0]} chips={mesh.get_num_devices()}"
-            )
+            digest, finite, nonzero, n = _digest_rows(runtime, kv, start, ring)
+            logger.info(f"TRUNK_KV_DIGEST {label} sha256={digest} finite={finite} nonzero_rows={nonzero} rows={n}")
         except Exception as exc:  # report, never fail the timing run
-            logger.error(f"TRUNK_KV_DIGEST layer={layer} failed: {type(exc).__name__}: {exc}")
+            logger.error(f"TRUNK_KV_DIGEST {label} failed: {type(exc).__name__}: {exc}")
 
 
 def _patch_runtime() -> None:
@@ -157,7 +182,7 @@ def _patch_runtime() -> None:
         if not _STATE.get("checked"):
             _STATE["checked"] = True
             _push_reuse_verdict()
-            _kv_digest()
+            _kv_digest(self)
         return release(self)
 
     def allocate_kv_cache(self, *, params, **kwargs):
