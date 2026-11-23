@@ -256,7 +256,8 @@ struct KvChunk {
 };
 
 KvChunk kv_chunk(const RecipeBlockingProblem& p, uint32_t k_tiles, bool dense) {
-    const uint32_t vd = dense && p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles;
+    // Latent V travels inside K.
+    const uint32_t vd = p.latent_v ? 0 : p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles;
     const uint32_t kb = kv_tile_bytes(p.policy.selection.kv_storage);
     const KVStorage v_storage =
         dense ? p.v_storage.value_or(p.policy.selection.kv_storage) : p.policy.selection.kv_storage;
@@ -280,7 +281,7 @@ double block_compute(
     const auto& policy = p.policy;
     const auto work = recipe_work(policy);
     const bool fp32 = policy.fp32_destination;
-    const uint32_t vd = dense && p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles;
+    const uint32_t vd = p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles;
     const double d = p.d_tiles, v = vd, r = rows, k = k_tiles;
     const double kb = kv_tile_bytes(policy.selection.kv_storage);
     const double vb =
@@ -323,7 +324,7 @@ double block_compute(
 // chunks, the first K chunk on the reduce path.
 double q_chunk_compute(
     const RecipeBlockingProblem& p, uint32_t rows, uint32_t k_tiles, const RecipeBuild& build, bool dense, bool fused) {
-    const uint32_t vd = dense && p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles;
+    const uint32_t vd = p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles;
     const double norm = static_cast<double>(rows) * vd *
                         (kFp32Tile / kUnpackBytesPerCycle + kFpuEltwiseCycles + kBf16Tile / kPackBytesPerCycle);
     const double first = fused ? block_compute(p, rows, k_tiles, build, dense, false, false) -
@@ -439,7 +440,7 @@ RecipeL1Estimate recipe_l1_bytes(
         case RecipeOp::Ring:
         case RecipeOp::ExpRing: {
             // The ring factories size K and V for two entries each (the recipe layout's FP32 recipes have one).
-            const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
+            const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles, context.vd_tiles);
             const uint32_t vd = context.vd_tiles != 0 ? context.vd_tiles : d_tiles;
             const uint64_t two_kv = 2ull * k_tiles * (d_tiles + vd) * kv_tile_bytes(policy.selection.kv_storage);
             const uint64_t layout = build.cb_bytes - build.kv_cb_bytes + two_kv;
@@ -465,8 +466,11 @@ bool recipe_program_fits(const RecipeBlockingProblem& p, uint32_t q_tiles, uint3
         // MLA-width rings (D576 Q/K with a narrower V, the DeepSeek MLA prefill shape) sit within ~100 B of the
         // buffer from Q160 up: causal balanced ACCURATE with BFP8 K/V on a 2x2 P150b mesh measured 70672 B at
         // Q160/K192 and K448, 70688 at Q160/K256, 70720 at Q160/K384 (K160, K224, K288, K320 and K512 fit by a few
-        // bytes) and 71184-71696 B at Q320; every Q32 and Q64 blocking fits.
-        return !(p.vd_tiles != 0 && p.vd_tiles < p.d_tiles && p.d_tiles >= 16 && q_tiles >= 5);
+        // bytes) and 71184-71696 B at Q320; every Q32 and Q64 blocking fits. STANDARD's MLA-width rings build the
+        // fused chunk's pack thread size-optimized (recipe_step.inc mla_width_ring) and fit: mla_100k Q160/K320
+        // causal balanced on the BH Galaxy left 2016 B or more (JIT telemetry over the ring_mla suite).
+        const bool mla_width = p.vd_tiles != 0 && p.vd_tiles < p.d_tiles && p.d_tiles >= 16;
+        return !(mla_width && q_tiles >= 5 && p.policy.selection.recipe != Recipe::B);
     }
     if (p.op != RecipeOp::Dense && p.op != RecipeOp::Joint) {
         return true;
@@ -558,6 +562,37 @@ double snake_makespan(const RecipeBlockingProblem& p, std::vector<double> job_co
     return *std::max_element(load.begin(), load.end());
 }
 
+// Causal ring: the K chunks a Q chunk processes over the ring on the busiest device, averaged over its Q chunks
+// (ring_joint_sdpa.cpp / ring_joint_reader.cpp). On its own shard a Q chunk processes the K chunks up to its last row
+// (the rest are popped unread); a later device's shard is invisible; an earlier device's is whole. Balanced (the zigzag
+// order: each device holds shard i and shard 2R-1-i of the sequence, and Q chunks pair low with high): from an earlier
+// device the first half of its shard, rounded up to whole K chunks (the straddle chunk), from a later device the whole
+// shard for the high half's Q chunks only; every device does the same work. Unbalanced: the last device sees every
+// earlier shard.
+struct RingKBlocks {
+    double computed;
+    double sent;
+};
+RingKBlocks ring_causal_k_blocks(const RecipeBlockingProblem& p, uint32_t q_tiles, uint32_t k_tiles) {
+    const uint32_t n = div_up(p.k_rows, kTile);  // shard tiles
+    const uint32_t full = div_up(n, k_tiles);
+    const uint32_t q_chunks = div_up(div_up(p.q_rows, kTile), q_tiles);
+    double diagonal = 0.0;
+    for (uint32_t i = 0; i < q_chunks; ++i) {
+        diagonal += std::min(full, div_up(std::min(n, (i + 1) * q_tiles), k_tiles));
+    }
+    diagonal /= q_chunks;
+    const double others = p.ring_size - 1.0;
+    if (!p.ring_balanced) {
+        return {others * full + diagonal, others * full + full};
+    }
+    const uint32_t half = div_up(n / 2, k_tiles);
+    // Per Q chunk, half of them high: (R - 1) / 2 earlier devices' halves and (R - 1) / 2 later devices' whole shards
+    // for the high half on the average device.
+    const double remote = others / 2 * half + others / 2 * full / 2;
+    return {remote + diagonal, remote + full};
+}
+
 // `widen`: search chunks down to one tile (the fallback when nothing in the searched range fits L1).
 std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, bool widen) {
     std::vector<RecipeBlocking> candidates;
@@ -588,7 +623,7 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
     const auto q_range = tile_range(p.fixed_q_tiles, q_floor, q_cap);
     const auto k_range = tile_range(p.fixed_k_tiles, k_floor, k_cap);
     const uint32_t kv_page = kv_tile_bytes(p.policy.selection.kv_storage);
-    const uint32_t vd = dense && p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles;
+    const uint32_t vd = p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles;
     for (const uint32_t qt : q_range) {
         if (p.q_chunk_divides != 0 && p.q_chunk_divides % (qt * kTile) != 0) {
             continue;
@@ -615,7 +650,7 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
             const uint32_t q_chunk = qt * kTile;
             const uint32_t k_chunk = kt * kTile;
             const RecipeBuild build =
-                recipe_build(p.policy, qt, kt, p.d_tiles, dense ? p.vd_tiles : 0, dense ? p.v_storage : std::nullopt);
+                recipe_build(p.policy, qt, kt, p.d_tiles, p.vd_tiles, dense ? p.v_storage : std::nullopt);
             const bool attn_mask = dense && p.mask_page_bytes > 0 && !p.key_range;
             // Dense/joint unfused STANDARD, and paired recipes with a key range, compute an odd Q chunk with one
             // padding row (recipe_compute_q_tiles).
@@ -730,14 +765,21 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                 case RecipeOp::ExpRing: {
                     // The ring factories deliver every ring step's K/V shard to each worker over the NoC (DRAM traffic
                     // depends on their K/V distribution and is not modeled).
-                    auto ring_work = [&](uint32_t jobs, uint32_t k_blocks, double stream) {
+                    auto ring_work = [&](uint32_t jobs, double k_blocks, double stream) {
                         return [&, jobs, k_blocks, stream](bool fused) {
                             const double compute = k_blocks * block(fused) + q_chunk_work(fused);
                             const double kv_noc = k_blocks * kv.bytes / arch.noc_bytes_per_cycle;
                             return jobs * q_chunk_time(p.policy, compute, kv_noc, stream);
                         };
                     };
-                    const uint32_t k_blocks = p.ring_size * div_up(p.k_rows, k_chunk) + div_up(p.joint_k_rows, k_chunk);
+                    // K blocks a Q chunk computes, and those its reader receives (the diagonal's masked chunks too).
+                    double k_blocks = p.ring_size * div_up(p.k_rows, k_chunk) + div_up(p.joint_k_rows, k_chunk);
+                    double sent_blocks = k_blocks;
+                    if (p.op == RecipeOp::Ring && p.ring_causal) {
+                        const auto causal = ring_causal_k_blocks(p, qt, kt);
+                        k_blocks = causal.computed + div_up(p.joint_k_rows, k_chunk);
+                        sent_blocks = causal.sent + div_up(p.joint_k_rows, k_chunk);
+                    }
                     if (p.op == RecipeOp::Ring) {
                         // ring_joint_sdpa_program_factory.cpp: all Q chunks of all heads split evenly over
                         // the worker grid; every ring iteration streams the local KV shard, the joint KV once.
@@ -748,7 +790,8 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                         // chain (ring_joint_kv_chains.hpp), which streams every K block once per Q chunk at the chain
                         // rate, as the dense chains do.
                         const bool chained = q_chunks > jobs;
-                        const double stream = chained ? k_blocks * kv.bytes / arch.chain_stream_bytes_per_cycle : 0.0;
+                        const double stream =
+                            chained ? sent_blocks * kv.bytes / arch.chain_stream_bytes_per_cycle : 0.0;
                         // Only a chain's first core reads K/V from DRAM (the pipeline fill).
                         const double readers = chained ? std::min<double>(cores, batch_heads) : cores;
                         admit(
@@ -852,6 +895,16 @@ std::optional<RecipeBlocking> choose_recipe_blocking(const RecipeBlockingProblem
             if (candidate.q_chunk_size == kDefaultQTiles * kTile && candidate.k_chunk_size == kDefaultKTiles * kTile) {
                 choice = candidate;
                 break;
+            }
+            // Ring ops first prefer fewer passes (Q chunks) per core: a core runs each Q chunk as one pass over the
+            // ring, and only its first pass overlaps the all-gather of the other devices' K/V.
+            const uint32_t passes = ring ? candidate.jobs_per_core : 0;
+            const uint32_t choice_passes = choice && ring ? choice->jobs_per_core : 0;
+            if (choice && passes != choice_passes) {
+                if (passes < choice_passes) {
+                    choice = candidate;
+                }
+                continue;
             }
             if (!choice || candidate.k_chunk_size > choice->k_chunk_size ||
                 (candidate.k_chunk_size == choice->k_chunk_size &&
@@ -1045,6 +1098,9 @@ SDPAProgramConfig resolve_ring_recipe_blocking(
     uint32_t joint_k_rows,
     uint32_t ring_size,
     uint32_t v_head_dim,
+    bool latent_v,
+    bool ring_causal,
+    bool ring_balanced,
     uint32_t q_chunk_divides,
     const SDPAProgramConfig& program_config) {
     if (!recipe_blocking_requested(program_config)) {
@@ -1052,6 +1108,9 @@ SDPAProgramConfig resolve_ring_recipe_blocking(
     }
     auto problem = base_problem(RecipeOp::Ring, policy, q, program_config);
     problem.vd_tiles = v_head_dim != 0 && v_head_dim != q.logical_shape()[3] ? div_up(v_head_dim, kTile) : 0;
+    problem.latent_v = latent_v;
+    problem.ring_causal = ring_causal;
+    problem.ring_balanced = ring_causal && ring_balanced;
     problem.q_rows = q_rows;
     problem.k_rows = k_rows;
     problem.joint_q_rows = joint_q_rows;
