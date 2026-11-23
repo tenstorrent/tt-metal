@@ -26,6 +26,9 @@ so the CPU reference needs only those rows):
 * Determinism: a second eager forward is bit-identical, every step.
 * Traced: the forward on the trace-safe metadata path captured once and replayed twice; every block output and
   every KVPE / index-cache slot is bit-identical to the same metadata forward run eagerly.
+
+The CPU checks (teacher-forced, controls, free-running: ``loop_accuracy``) can run after the device lock is released
+(``GLM54_DEFER_ACCURACY``, see ``deferred_accuracy``). Tier-1 weights come from the disk cache (``glm54_weights``).
 """
 
 import time
@@ -49,6 +52,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4 import (
 )
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.loop import _ffn_kwargs, _mla_weights_with_indexer
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.glm54.deferred_accuracy import accuracy_deferred, run_or_defer
 from models.demos.deepseek_v3_d_p.tests.glm54_weights import (
     GLM54ReducedConfig,
     glm54_reduced_config,
@@ -280,6 +284,96 @@ def _raw_host(t: ttnn.Tensor) -> list[torch.Tensor]:
     return [ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)]
 
 
+def _loop_config(max_seq: int):
+    config = glm54_reduced_config(max_seq)
+    config.loop_window_format = "bf16"  # the window lives in the KVPE cache, which this test keeps in BF16_RM
+    return config
+
+
+def loop_accuracy(dev: dict, tier1_key: str) -> None:
+    """test_glm54_loop_on_device's CPU checks on its device step outputs ``dev`` (rows < ROWS, natural order): the
+    teacher-forced step checks, the negative controls and the free-running report (module docstring), on the tier-1
+    weights of key ``tier1_key`` (the device run's). Runs in the test or after the device lock (``deferred_accuracy``);
+    raises AssertionError listing every failure."""
+    t0 = time.perf_counter()
+    config = _loop_config(CHUNK)
+    weights = glm54_tier1_weights(config)
+    assert (
+        weights.provenance["cache_key"] == tier1_key
+    ), f"tier-1 weights {weights.provenance['cache_key']} differ from the device run's {tier1_key}"
+    names = _step_names(config)
+    failures = []
+    cpu = _CpuSteps(config, weights)
+    report, prev, pass_in, topk, gate_inputs = {}, "embed", None, None, None
+    for name, s in names:
+        if s.kind == "gate":
+            ref_out, ref_beta = cpu.gate(s.loop_pass, dev[pass_in], dev[prev])
+            scores, fails = _gate_check(dev[pass_in], dev[prev], dev[name], ref_out, ref_beta)
+            gate_inputs = {"pass output (gate skipped)": prev, "pass input": pass_in}
+            pass_in = None
+        else:
+            if s.loop_pass and pass_in is None:
+                pass_in = prev
+            ref_out, topk_out = cpu.layer(s.layer, dev[prev], topk, loop_pass=s.loop_pass)
+            scores, fails = _layer_check(dev[prev], dev[name], ref_out)
+            if gate_inputs is not None:
+                # Attribution: the block after a gate must match the CPU step on the gate output better than on
+                # either gate input. The contribution bar alone cannot tell gate 2's output from its pass output
+                # (beta2 ~0.9 makes them close; CPU-measured 0.975 for the fault, above LAYER_DELTA_PCC).
+                for label, alt in gate_inputs.items():
+                    alt_ref = cpu.layer(s.layer, dev[alt], topk, loop_pass=s.loop_pass)[0]
+                    alt_pcc = _layer_check(dev[prev], dev[name], alt_ref)[0]["contribution"]
+                    scores[f"vs {label}"] = alt_pcc
+                    if alt_pcc >= scores["contribution"]:
+                        fails.append(f"output fits input '{alt}' ({alt_pcc:.5f}) as well as '{prev}'")
+                gate_inputs = None
+            topk = topk_out
+        report[name] = scores
+        failures += [f"{name}: {f}" for f in fails]
+        prev = name
+    for name, scores in report.items():
+        logger.info(f"teacher-forced {name}: {scores}")
+    _stage("teacher-forced checks done", t0)
+
+    # Negative controls (CPU): each fault must fail the check above that owns it.
+    controls = {
+        "pass 2 on another layer's weights (L3)": _layer_check(
+            dev["gate1"], dev["layer_1.pass2"], cpu.layer(1, dev["gate1"], weights_of=3, loop_pass=2)[0]
+        ),
+        "gate 2 with gate 1's weights": _gate_check(
+            dev["gate1"],
+            dev["layer_2.pass2"],
+            dev["gate2"],
+            *cpu.gate(2, dev["gate1"], dev["layer_2.pass2"], weights_of=1),
+        ),
+        "gate 2 reads x0": _gate_check(
+            dev["gate1"], dev["layer_2.pass2"], dev["gate2"], *cpu.gate(2, dev["layer_0"], dev["layer_2.pass2"])
+        ),
+    }
+    beta_h = cpu.gate(1, dev["layer_2"], dev["layer_2"])[1]
+    controls["gate 1 beta reads its pass output"] = _gate_check(
+        dev["layer_0"],
+        dev["layer_2"],
+        dev["gate1"],
+        (dev["layer_0"] + beta_h * (dev["layer_2"] - dev["layer_0"])).to(torch.bfloat16).float(),
+        beta_h,
+    )
+    for name, (scores, fails) in controls.items():
+        logger.info(f"control '{name}': {scores}")
+        if not fails:
+            failures.append(f"control '{name}' passes: the checks cannot see it")
+    _stage("negative controls done", t0)
+
+    # Free-running, reported only.
+    free_ref = _free_reference(cpu, names, dev["embed"])
+    logger.info(
+        "free-running device vs reference PCC: "
+        + ", ".join(f"{name} {_pcc(dev[name], free_ref[name]):.5f}" for name, _ in names)
+    )
+    _stage("free-running reference done", t0)
+    assert not failures, failures
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
@@ -303,13 +397,12 @@ def test_glm54_loop_on_device(mesh_device, device_params, num_links):
     sp = mesh_device.shape[0]
     assert sp == SP
     chunk_local = PREFILL_CHUNK_TOKENS_PER_CHIP
-    config = glm54_reduced_config(CHUNK)
-    config.loop_window_format = "bf16"  # the window lives in the KVPE cache, which this test keeps in BF16_RM
+    config = _loop_config(CHUNK)
     assert ROWS <= config.index_topk
     weights = glm54_tier1_weights(config)
     assert all(g["proj_weight"].shape[0] == 1 for g in weights.gates), "tier 1 uses scalar gates"
     logger.info(f"tier-1 provenance: {weights.provenance}")
-    _stage("weights generated", t0)
+    _stage("weights ready", t0)
     transformer, kvpe_cache, index_kv_cache = _build(mesh_device, device_params, num_links, config, weights)
     names = _step_names(config)
     assert [(s.kind, s.loop_pass, s.layer) for s in transformer.steps] == [
@@ -400,78 +493,12 @@ def test_glm54_loop_on_device(mesh_device, device_params, num_links):
                     failures.append(f"traced replay {rep}: {kind}s differ from the eager metadata forward")
     _stage("traced replays checked", t0)
 
-    # --- accuracy on rows < ROWS.
+    # --- accuracy on rows < ROWS: teacher-forced on the device's own step inputs (``loop_accuracy``).
     dev = {k: v[:ROWS] for k, v in first.items()}
-    DIAG_DIR.mkdir(parents=True, exist_ok=True)
-    torch.save(dev, DIAG_DIR / f"loop-device-rows{ROWS}-tokens{TOKEN_SEED}.pt")  # for diagnosis without the device
-    cpu = _CpuSteps(config, weights)
-    report, prev, pass_in, topk, gate_inputs = {}, "embed", None, None, None
-    for name, s in names:
-        if s.kind == "gate":
-            ref_out, ref_beta = cpu.gate(s.loop_pass, dev[pass_in], dev[prev])
-            scores, fails = _gate_check(dev[pass_in], dev[prev], dev[name], ref_out, ref_beta)
-            gate_inputs = {"pass output (gate skipped)": prev, "pass input": pass_in}
-            pass_in = None
-        else:
-            if s.loop_pass and pass_in is None:
-                pass_in = prev
-            ref_out, topk_out = cpu.layer(s.layer, dev[prev], topk, loop_pass=s.loop_pass)
-            scores, fails = _layer_check(dev[prev], dev[name], ref_out)
-            if gate_inputs is not None:
-                # Attribution: the block after a gate must match the CPU step on the gate output better than on
-                # either gate input. The contribution bar alone cannot tell gate 2's output from its pass output
-                # (beta2 ~0.9 makes them close; CPU-measured 0.975 for the fault, above LAYER_DELTA_PCC).
-                for label, alt in gate_inputs.items():
-                    alt_ref = cpu.layer(s.layer, dev[alt], topk, loop_pass=s.loop_pass)[0]
-                    alt_pcc = _layer_check(dev[prev], dev[name], alt_ref)[0]["contribution"]
-                    scores[f"vs {label}"] = alt_pcc
-                    if alt_pcc >= scores["contribution"]:
-                        fails.append(f"output fits input '{alt}' ({alt_pcc:.5f}) as well as '{prev}'")
-                gate_inputs = None
-            topk = topk_out
-        report[name] = scores
-        failures += [f"{name}: {f}" for f in fails]
-        prev = name
-    for name, scores in report.items():
-        logger.info(f"teacher-forced {name}: {scores}")
-    _stage("teacher-forced checks done", t0)
-
-    # Negative controls (CPU): each fault must fail the check above that owns it.
-    controls = {
-        "pass 2 on another layer's weights (L3)": _layer_check(
-            dev["gate1"], dev["layer_1.pass2"], cpu.layer(1, dev["gate1"], weights_of=3, loop_pass=2)[0]
-        ),
-        "gate 2 with gate 1's weights": _gate_check(
-            dev["gate1"],
-            dev["layer_2.pass2"],
-            dev["gate2"],
-            *cpu.gate(2, dev["gate1"], dev["layer_2.pass2"], weights_of=1),
-        ),
-        "gate 2 reads x0": _gate_check(
-            dev["gate1"], dev["layer_2.pass2"], dev["gate2"], *cpu.gate(2, dev["layer_0"], dev["layer_2.pass2"])
-        ),
-    }
-    beta_h = cpu.gate(1, dev["layer_2"], dev["layer_2"])[1]
-    controls["gate 1 beta reads its pass output"] = _gate_check(
-        dev["layer_0"],
-        dev["layer_2"],
-        dev["gate1"],
-        (dev["layer_0"] + beta_h * (dev["layer_2"] - dev["layer_0"])).to(torch.bfloat16).float(),
-        beta_h,
-    )
-    for name, (scores, fails) in controls.items():
-        logger.info(f"control '{name}': {scores}")
-        if not fails:
-            failures.append(f"control '{name}' passes: the checks cannot see it")
-    _stage("negative controls done", t0)
-
-    # Free-running, reported only.
-    free_ref = _free_reference(cpu, names, dev["embed"])
-    logger.info(
-        "free-running device vs reference PCC: "
-        + ", ".join(f"{name} {_pcc(dev[name], free_ref[name]):.5f}" for name, _ in names)
-    )
-    _stage("free-running reference done", t0)
+    if not accuracy_deferred():  # a deferred run's bundle holds the same tensors
+        DIAG_DIR.mkdir(parents=True, exist_ok=True)
+        torch.save(dev, DIAG_DIR / f"loop-device-rows{ROWS}-tokens{TOKEN_SEED}.pt")  # diagnosis without the device
+    failures += run_or_defer(loop_accuracy, "loop_on_device", dev=dev, tier1_key=weights.provenance["cache_key"])
     assert not failures, failures
 
 
@@ -507,10 +534,9 @@ def test_glm54_loop_chunks_on_device(mesh_device, device_params, num_links):
     sp = mesh_device.shape[0]
     chunk_local = PREFILL_CHUNK_TOKENS_PER_CHIP
     max_seq = 3 * CHUNK
-    config = glm54_reduced_config(max_seq)
-    config.loop_window_format = "bf16"  # the window lives in the KVPE cache, which this test keeps in BF16_RM
+    config = _loop_config(max_seq)
     weights = glm54_tier1_weights(config)
-    _stage("weights generated", t0)
+    _stage("weights ready", t0)
     transformer, kvpe_cache, index_kv_cache = _build(
         mesh_device, device_params, num_links, config, weights, num_slots=2, max_seq=max_seq
     )
