@@ -27,7 +27,7 @@ import numpy as np
 import pytest
 import torch
 import ttnn
-from dcp_oracle import Loader
+from dcp_oracle import Loader, advance_generators, host_draws
 from dcp_harness import ranks_in_step, two_rank_world
 from dcp_shards import assert_same_shards, model_shards, optimizer_shards
 from tp_block import TPBlock, fresh_tp, train_step
@@ -338,6 +338,21 @@ def test_differing_dataloaders_are_stored_per_rank(two_ranks, expect_error):
     ):
         dcp.load(path, model=model, dataloader=Loader(), rng=False)
     ttnn.distributed_context_barrier()
+
+
+def test_the_ranks_restore_their_generators_together_when_one_alone_resumes_a_dataloader(two_ranks):
+    """By default the generators come back with a scheduler or a dataloader, and the ranks agree on that default: when
+    rank 0 resumes its dataloader and rank 1 has none, rank 1 restores its own generators too, so both ranks take the
+    step they would have taken."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    path = os.path.join(root, "generators_with_one_loader")
+    dcp.save(path, model=model, dataloader=Loader() if rank == 0 else None)
+    expected = host_draws()
+    advance_generators()
+    result = dcp.load(path, model=model, dataloader=Loader() if rank == 0 else None)
+    assert "rng.python" in result.restored, result.restored
+    assert host_draws() == expected
 
 
 def test_a_failure_on_one_rank_stops_every_rank_and_names_it(two_ranks, monkeypatch, expect_error):

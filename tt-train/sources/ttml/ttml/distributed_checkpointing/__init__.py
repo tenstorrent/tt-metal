@@ -16,7 +16,7 @@ one mesh shape and parallelism strategy loads onto another.
 
 The scheduler, the dataloader and the random generators (the ttml generator, ttml.init's, python, numpy, torch) are
 saved beside the header. A load restores the scheduler and dataloader passed, and with them the generators (``rng``
-defaults to restoring them whenever a scheduler or dataloader is); see ``load`` and ``_train_state``.
+defaults to restoring them whenever any rank passes a scheduler or dataloader); see ``load`` and ``_train_state``.
 
 Under ``tt-run`` with several ranks (a mesh spread over hosts, or one mesh per host) ``save`` and ``load`` are
 collective: every rank of the world calls them at the same point, with the same directory and options (checked before

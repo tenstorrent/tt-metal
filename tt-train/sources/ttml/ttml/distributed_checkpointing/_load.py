@@ -411,8 +411,9 @@ def load(
     restored through their ``set_state_dict`` from the state ``save`` stored (a dataloader from this world rank's own
     when the saving ranks' states differed). With ``rng`` so is every random generator
     ``save`` captured for this world rank (ttml, ttml.init, python, numpy, torch when imported). By default (``None``)
-    the generators are restored whenever a scheduler or a dataloader is, since a resume that restores those but keeps
-    the current generators takes a different step; ``rng=False`` keeps them (a deliberate reseed), ``rng=True``
+    the generators are restored whenever a scheduler or a dataloader is, on any rank, since a resume that restores
+    those but keeps the current generators takes a different step (a rank that passes neither, while another rank
+    resumes its dataloader, restores its generators too); ``rng=False`` keeps them (a deliberate reseed), ``rng=True``
     restores them with only a model. A component asked for that the checkpoint lacks entirely is an error under
     ``strict`` and listed in ``missing`` otherwise; within the RNG block, a generator or a world rank the checkpoint
     holds no state for (torch imported only now, a world with more hosts than the save) keeps its current state with a
@@ -437,8 +438,6 @@ def load(
     """
     t0 = time.perf_counter()
     rng_by_default = rng is None
-    if rng_by_default:  # a resume: the generators come back with the scheduler or the dataloader
-        rng = scheduler is not None or dataloader is not None
     group = current_group()
     world_rank = group.world_rank
 
@@ -461,6 +460,11 @@ def load(
         int(bool(strict)) + 2 * int(optimizer is not None),
         shown=f"strict={bool(strict)}, optimizer={'passed' if optimizer is not None else 'none'}",
     )
+    # A resume: the generators come back with the scheduler or the dataloader, which some ranks may not pass (a
+    # dataloader on rank 0 alone): the default is agreed, so the ranks of one training restore theirs together.
+    resuming = group.allgather(int(scheduler is not None or dataloader is not None))
+    if rng_by_default:
+        rng = any(resuming)
 
     def open_and_collect():
         if not is_complete(ckpt_dir):
