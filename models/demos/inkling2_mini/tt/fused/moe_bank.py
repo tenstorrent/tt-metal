@@ -270,12 +270,12 @@ class BankMoeExperts:
         w_named = {
             "cb_ga": CB_GA, "cb_g32": CB_G32, "cb_u16": CB_U16, "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O,
             "cb_z": CB_Z, "cb_scr": CB_SCR, "sem_u": SEM_U, "sem_g": SEM_G, "sem_r": SEM_R, "n_banks": self.nb,
-            "x_lo": X_LO, "dense_pages": F.pages(HIDDEN), **common,
+            "x_lo": X_LO, "dense_pages": F.pages(HIDDEN), "cb_x": CB_X, "x_tiles": KT_GU, "sem_x": SEM_X, **common,
         }  # fmt: skip
         c_named = {
             "cb_x": CB_X, "cb_w": CB_W, "cb_wd": CB_WD, "cb_ga": CB_GA, "cb_g32": CB_G32, "cb_u16": CB_U16,
             "cb_ws16": CB_WS16, "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O, "cb_tok": CB_TOK, "cb_done": CB_DONE,
-            "sbk": self.sbk, "kt_gu": KT_GU, "kt_dn": KT_DN, **common,
+            "sbk": self.sbk, "kt_gu": KT_GU, "kt_dn": KT_DN, "dbg": int(os.environ.get("MOE_MR_DBG", "0")), **common,
         }  # fmt: skip
         dense = None
         if self.dense_out:  # one twin per row count, made on the first (eager) call
@@ -296,6 +296,7 @@ class BankMoeExperts:
         (x0, y0), (x1, y1) = self.mcast_rect
         dm = ttnn.DataMovementConfigDescriptor
         flip = {(w[0][0], w[0][1]) for w in self.workers_info if w[2] in self.noc1_banks}
+        xdef = [("X_MCAST", "1")] * self.x_mcast  # the collector multicasts all R rows of x
         kernels = []
         for sel, rnoc, wnoc in ((False, ttnn.NOC.NOC_0, ttnn.NOC.NOC_1), (True, ttnn.NOC.NOC_1, ttnn.NOC.NOC_0)):
             cores = [c for c, *_ in self.workers_info if ((c[0], c[1]) in flip) == sel]
@@ -306,13 +307,14 @@ class BankMoeExperts:
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KDIR}/moe_bank_mr_reader.cpp", core_ranges=_range_set(cores),
                     compile_time_args=acc(x) + acc(weights) + acc(indices) + acc(self.w_gate_up) + acc(self.w_down),
-                    named_compile_time_args=list(r_named.items()), runtime_args=pick(r_args),
+                    named_compile_time_args=list(r_named.items()), runtime_args=pick(r_args), defines=xdef,
                     config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=rnoc),
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KDIR}/moe_bank_mr_writer.cpp", core_ranges=_range_set(cores),
                     compile_time_args=acc(out) + acc(indices) + (acc(dense) if dense is not None else []),
-                    named_compile_time_args=list(w_named.items()), defines=[("DENSE_OUT", "1")] * (dense is not None),
+                    named_compile_time_args=list(w_named.items()),
+                    defines=xdef + [("DENSE_OUT", "1")] * (dense is not None),
                     runtime_args=pick(w_args), config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=wnoc),
                 ),
             ]  # fmt: skip
@@ -325,17 +327,19 @@ class BankMoeExperts:
             ),
             ttnn.KernelDescriptor(
                 kernel_source=f"{KDIR}/moe_expert_collector.cpp", core_ranges=_range_set([self.collector]),
+                compile_time_args=acc(x) if self.x_mcast else [], defines=xdef + [("X_ROWS", str(R))],
                 named_compile_time_args=[
                     ("cb_hid", CB_HID), ("sem_g", SEM_G), ("sem_r", SEM_R), ("n_senders", R * HID_TILES),
                     ("hid_bytes", R * HID_TILES * 64), ("cb_x", CB_X), ("x_tiles", KT_GU), ("sem_x", SEM_X),
                     ("topk", TOP_K), ("n_guess", 0), ("n_groups", 0), ("sem_pf", SEM_PF), ("n_ring", 0),
                 ],
-                runtime_args=[(ttnn.CoreCoord(*self.collector), [x0, y0, x1, y1, self.mcast_dests, 0, 0, 0, 0, 0])],
+                runtime_args=[(ttnn.CoreCoord(*self.collector), [x0, y0, x1, y1, self.mcast_dests, x.buffer_address(), 0, 0, 0, 0])],
                 config=ttnn.WriterConfigDescriptor(),
             ),
         ]  # fmt: skip
         sems = [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all_cores, initial_value=0) for i in (SEM_U, SEM_G, SEM_R)
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all_cores, initial_value=0)
+            for i in (SEM_U, SEM_G, SEM_R, SEM_X)
         ]
         prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=self._cbs_rows(R))
         io = [x, weights, indices, self.w_gate_up, self.w_down] + ([dense] if dense is not None else []) + [out]
@@ -361,7 +365,7 @@ class BankMoeExperts:
 
         w = self.workers
         return [
-            cb(w, R * KT_GU * 64, (CB_X, bf, 64, tiny)),
+            cb(_range_set([c for c, *_ in self.workers_info] + [self.collector]), R * KT_GU * 64, (CB_X, bf, 64, tiny)),
             cb(w, 2 * KT_GU * gtile, (CB_W, self.w_gate_up.dtype, gtile, t32)),  # two whole columns
             cb(w, HID_TILES * dtile, (CB_WD, self.w_down.dtype, dtile, t32)),  # 8 down slots
             cb(w, R * TOP_K * 64, (12, bf, 64, tiny)),  # A out, 8 R tiles

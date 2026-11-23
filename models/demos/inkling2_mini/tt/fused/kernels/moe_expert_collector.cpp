@@ -46,14 +46,21 @@ void kernel_main() {
         constexpr auto x_args = TensorAccessorArgs<0>();
         const auto xs = TensorAccessor(x_args, get_arg_val<uint32_t>(5));
         const uint32_t xl = get_write_ptr(cb_x);
-        for (uint32_t t = 0; t < x_tiles; ++t) {  // row 0 = 16 values of face 0 + 16 of face 1
-            noc_async_read(xs.get_noc_addr(t, 0), xl + t * 64, 32);
-            noc_async_read(xs.get_noc_addr(t, 512), xl + t * 64 + 32, 32);
+#ifdef X_ROWS  // multi-row expert step (moe_bank_mr_*.cpp): rows 0 .. X_ROWS - 1, row r's tile t at r * x_tiles + t
+        constexpr uint32_t x_rows = X_ROWS;
+#else
+        constexpr uint32_t x_rows = 1;
+#endif
+        for (uint32_t r = 0; r < x_rows; ++r) {
+            for (uint32_t t = 0; t < x_tiles; ++t) {  // row r = 16 values of face 0 + 16 of face 1
+                noc_async_read(xs.get_noc_addr(t, r * 32), xl + (r * x_tiles + t) * 64, 32);
+                noc_async_read(xs.get_noc_addr(t, 512 + r * 32), xl + (r * x_tiles + t) * 64 + 32, 32);
+            }
         }
         noc_async_read_barrier();
         const uint64_t x_mc =
             far ? get_noc_multicast_addr(x1, y1, x0, y0, xl) : get_noc_multicast_addr(x0, y0, x1, y1, xl);
-        noc_async_write_multicast(xl, x_mc, x_tiles * 64, num_dests);
+        noc_async_write_multicast(xl, x_mc, x_rows * x_tiles * 64, num_dests);
         noc_async_write_barrier();
         const uint32_t sem_x_addr = get_semaphore(sem_x_id);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_x_addr) = 1;

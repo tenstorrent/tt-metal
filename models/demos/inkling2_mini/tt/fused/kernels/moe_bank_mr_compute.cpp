@@ -44,6 +44,7 @@ constexpr uint32_t topk = get_named_compile_time_arg_val("topk");
 constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
 constexpr uint32_t hid_tiles = get_named_compile_time_arg_val("hid_tiles");  // per row, 288
 constexpr uint32_t F_GU = 1, F_GATE = 2, F_DN = 8;
+constexpr uint32_t DBG = get_named_compile_time_arg_val("dbg");  // timing probes only: 1 skip A, 2 skip C of rows > 0
 constexpr uint32_t P_POS = 1, P_MASK = 33, P_SLOT = 65;
 
 constexpr auto LAYOUT = CustomMmDestLayout::DefaultSplitAcc;
@@ -103,8 +104,10 @@ void kernel_main() {
                     continue;
                 }
                 tile_regs_acquire();
-                for (uint32_t k = 0; k < kt_gu; k += sbk) {
-                    mm_block<STD_GU>(cb_x, r * kt_gu + k, cb_w, k, k + sbk >= kt_gu);
+                if (!((DBG & 1) && r > 0)) {
+                    for (uint32_t k = 0; k < kt_gu; k += sbk) {
+                        mm_block<STD_GU>(cb_x, r * kt_gu + k, cb_w, k, k + sbk >= kt_gu);
+                    }
                 }
                 pack_out(cb_ga);
             }
@@ -184,7 +187,7 @@ void kernel_main() {
             cb_wait_front(cb_wd, topk * kt_dn);
         }
         tile_regs_acquire();
-        for (uint32_t e = 0; e < topk; ++e) {
+        for (uint32_t e = 0; e < topk && !((DBG & 2) && r > 0); ++e) {
             const uint32_t slot = read_tile_value(cb_plan, 0, P_SLOT + r * topk + e);
             for (uint32_t k = 0; k < kt_dn; k += sbk) {
                 mm_block<STD_DN>(

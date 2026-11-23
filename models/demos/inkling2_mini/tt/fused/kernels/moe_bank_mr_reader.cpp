@@ -48,7 +48,7 @@ FORCE_INLINE uint32_t gu_slot(uint32_t e, uint32_t b, uint32_t k) {
 
 void kernel_main() {
     uint32_t a = 0;
-    const uint32_t x_addr = get_arg_val<uint32_t>(a++);
+    [[maybe_unused]] const uint32_t x_addr = get_arg_val<uint32_t>(a++);  // unused with X_MCAST
     const uint32_t wts_addr = get_arg_val<uint32_t>(a++);
     const uint32_t ids_addr = get_arg_val<uint32_t>(a++);
     const uint32_t gu_addr = get_arg_val<uint32_t>(a++);
@@ -64,7 +64,9 @@ void kernel_main() {
     constexpr auto ids_args = TensorAccessorArgs<wts_args.next_compile_time_args_offset()>();
     constexpr auto gu_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
     constexpr auto dn_args = TensorAccessorArgs<gu_args.next_compile_time_args_offset()>();
+#ifndef X_MCAST
     const auto xs = TensorAccessor(x_args, x_addr);
+#endif
     const auto wts = TensorAccessor(wts_args, wts_addr);
     const auto ids = TensorAccessor(ids_args, ids_addr);
     const auto gu = TensorAccessor(gu_args, gu_addr);
@@ -76,6 +78,7 @@ void kernel_main() {
         noc_async_read(ids.get_noc_addr(0) + r * 32, scr + r * 16, 16);
         noc_async_read(wts.get_noc_addr(0) + r * 32, scr + 64 + r * 16, 16);
     }
+#ifndef X_MCAST  // else the collector multicasts all rows of x and the writer pushes cb_x
     if (flags & F_GU) {
         cb_reserve_back(cb_x, rows * x_tiles);
         const uint32_t xl = get_write_ptr(cb_x);
@@ -87,10 +90,13 @@ void kernel_main() {
             }
         }
     }
+#endif
     noc_async_read_barrier();
+#ifndef X_MCAST
     if (flags & F_GU) {
         cb_push_back(cb_x, rows * x_tiles);
     }
+#endif
     volatile tt_l1_ptr uint16_t* id16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr);
 
     // plan

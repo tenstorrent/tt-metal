@@ -59,6 +59,16 @@ void kernel_main() {
     const auto dense = TensorAccessor(dense_args, get_arg_val<uint32_t>(a++));
 #endif
     const uint32_t hid_base = get_write_ptr(cb_hid);
+#ifdef X_MCAST  // the collector multicast all rows of x into cb_x: hand them to compute
+    if (flags & F_GU) {
+        constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");
+        constexpr uint32_t x_tiles = get_named_compile_time_arg_val("x_tiles");
+        noc_semaphore_wait(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("sem_x"))), 1);
+        cb_reserve_back(cb_x, rows * x_tiles);
+        cb_push_back(cb_x, rows * x_tiles);
+    }
+#endif
 
     const uint32_t z = get_write_ptr(cb_z);
     if (flags & F_DN) {
