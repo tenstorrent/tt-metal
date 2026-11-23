@@ -49,6 +49,10 @@ PAY_MARGIN = float(os.environ.get("RESIDENT_ADAPTIVE_PAY_MARGIN", "1.05"))
 PAY_MIN = int(os.environ.get("RESIDENT_ADAPTIVE_PAY_MIN", "16"))
 PAY_HOLD = int(os.environ.get("RESIDENT_ADAPTIVE_PAY_HOLD", "512"))
 PLAIN_MS_DEFAULT = lambda n: 16.5 + 0.5 * (n - 1)  # noqa: E731  (the batch card's 128 / 128 TPOT, c1 .. c8)
+# a greedy user is promoted once it has generated min(window, its context) / PROMOTE_DIV tokens in the plain build: its
+# refill re-prefills that many tokens (~0.17 ms each) and speculation gains ~6 ms a token at c1, so a short answer on a
+# long context never pays a refill it cannot win back
+PROMOTE_DIV = int(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_DIV", "32"))
 # (log the per-step host / call times every 64 steps)
 TIMING = os.environ.get("RESIDENT_ADAPTIVE_TIMING", "0") == "1"
 # (0: synchronous serving, the first served version)
@@ -121,6 +125,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         self.mode, self.low_calls = "SPEC", 0
         self.sampled = set()  # resident slots of non-speculable requests (temperature != 0 or a penalty)
         self.greedy_ok = set()  # resident slots a decode call showed greedy (promotable into the spec build)
+        self.prompt_len = {}  # resident slot -> its prompt's length (the tokens generated since: history beyond it)
         # (the acceptance-aware policy's measurements: EMAs of tokens per spec user-step and of step times per kind)
         self._pay = dict(acc=None, spec_ms={}, plain_ms={}, verifies=0, last_t=None, kind=None, n=0, hold=0, excl=0.0)
         # the plain build's hub-fed inputs do not hold every live row's next token (a move into it, a step served by
@@ -224,6 +229,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         for r in sorted(self.live):
             if r in self.spec_of or r not in self.greedy_ok or r in self.sampled or not free:
                 continue
+            h = self.history.get(r, [])
+            if len(h) - self.prompt_len.get(r, 0) < min(self.ae.spec.window, len(h)) // PROMOTE_DIV:
+                continue  # (not yet: its refill would cost more than a short answer gains)
             u = free.pop(0)
             items.append((r, u, self.tables[r], self.history[r]))
             self.spec_of[r], self.last_acc[r] = u, 1
@@ -272,6 +280,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             if finals is None or bool(finals[j]):  # (a prompt handed off: its tokens, for the drafter refill)
                 r = self.slots.res_of[int(empty_slots[j])]
                 self.history[r] = [int(t) for t in tokens[j, : int(prompt_lens[j])]]
+                self.prompt_len[r] = int(prompt_lens[j])
         if len(self.live) > SPEC_USERS and self.mode == "SPEC":
             logger.info(f"adaptive: {len(self.live)} live users -> PLAIN")
             self.mode, self.low_calls = "PLAIN", 0
@@ -506,6 +515,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 u = self.spec_of.pop(r)
                 self.ae._set_spec_table(u, [0])
             self.history.pop(r, None)
+            self.prompt_len.pop(r, None)
             self.last_acc.pop(r, None)
             self.sampled.discard(r)
             self.greedy_ok.discard(r)

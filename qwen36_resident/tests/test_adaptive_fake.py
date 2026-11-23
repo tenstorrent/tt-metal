@@ -82,6 +82,7 @@ class FakeSpec:
 class FakeAE:
     def __init__(self, pf, plain, pp):
         self._pf, self.plain, self.pp = pf, plain, pp
+        self.spec = SimpleNamespace(window=2048)
         self.sess, self.spec_tables, self.plain_tables, self.moves = FakeSpec(), {}, None, []
 
     def _set_spec_table(self, u, table):
@@ -123,7 +124,7 @@ def make(monkeypatch):
     m.sess = m.ae.sess
     m.ae.plain_tables = m.tables
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
-    m.sampled, m._t, m._plain_stale, m.greedy_ok = set(), {}, False, set()
+    m.sampled, m._t, m._plain_stale, m.greedy_ok, m.prompt_len = set(), {}, False, set(), {}
     m._pay = dict(acc=None, spec_ms={}, plain_ms={}, verifies=0, last_t=None, kind=None, n=0, hold=0, excl=0.0)
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
@@ -366,3 +367,23 @@ def test_pay_policy(monkeypatch, acc, expect):
         m._pay["kind"], m._pay["n"] = "verify", 8
         pays = m._measure([acc] * 8)
     assert pays is expect, (m._pay, pays)
+
+
+def test_promotion_waits_on_long_contexts(monkeypatch):
+    """a greedy user with a 1,500-token prompt stays in the plain build until it has generated 1500 / PROMOTE_DIV
+    tokens (its refill would cost more than a short answer gains), then moves; its tokens stay its greedy chain"""
+    m, pf = make(monkeypatch)
+    run = Runner(m)
+    run.nb = 40  # (2,560 positions a table)
+    prompt = [(i * 7 + 3) % V for i in range(1500)]
+    run.arrive([0], [prompt])
+    need = 1500 // A.PROMOTE_DIV
+    while len(run.req[0]["tokens"]) - 1500 < need - 1:
+        run.step()
+        assert not m.spec_of, f"promoted after {len(run.req[0]['tokens']) - 1500} tokens, before {need}"
+    for _ in range(4):
+        run.step()
+    assert m.spec_of, "promoted once it has generated enough"
+    for _ in range(6):
+        run.step()
+    run.check()
