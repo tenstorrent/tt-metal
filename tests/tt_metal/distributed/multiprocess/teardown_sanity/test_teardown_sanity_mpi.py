@@ -222,11 +222,13 @@ def test_ttrun_stop_on_each_mpi_install(prefix):
 def _ttrun_stop(sig, case, mpi_prefix=None):
     env = {**NP, "PROBE_SCENARIO": "all_hang" if case == "delivered" else "victim_hang"}
     cwd = None
-    if case == "no_helper":  # a tree with the sources but no build/: tt-run finds no tt-run-rank
+    if case == "no_helper":  # a tree with the sources but no build/, and no installed copy: no tt-run-rank
         cwd = Path(tempfile.mkdtemp(prefix="sanity_nobuild_"))
         for d in ("tt_metal", "tests"):
             (cwd / d).symlink_to(ROOT / d)
         env["TT_METAL_HOME"] = str(cwd)
+        path = os.environ.get("PATH", "").split(os.pathsep)
+        env["PATH"] = os.pathsep.join(d for d in path if not os.access(os.path.join(d, "tt-run-rank"), os.X_OK))
     r = run_case(
         f"ttrun_stop_{signal.Signals(sig).name}_{case}",
         env,

@@ -194,20 +194,20 @@ PHASE1_CACHE_ID_HEX_LEN = 16
 
 
 def find_tt_run_rank_executable() -> Optional[str]:
-    """tt-run-rank from the build, found like generate_rank_bindings (TT_METAL_HOME, the launch directory, ./build);
-    None when it is not built."""
+    """tt-run-rank from the build tree (TT_METAL_HOME, the launch directory, ./build), else the installed one on PATH
+    (an install has no build tree); None when there is neither."""
     roots = [Path(os.environ["TT_METAL_HOME"])] if os.environ.get("TT_METAL_HOME") else []
     for root in roots + [ORIGINAL_CWD, Path(".")]:
         candidate = root / "build" / "tools" / "scaleout" / "tt-run-rank"
         if os.access(candidate, os.X_OK):
             return str(candidate.resolve())
-    return None
+    return shutil.which("tt-run-rank")
 
 
 def find_signal_helper() -> Tuple[Optional[str], str]:
     """(tt-run-rank, "") to signal the job with, or (None, why not)."""
     path = find_tt_run_rank_executable()
-    return (path, "") if path else (None, "tt-run-rank is not built (build/tools/scaleout/tt-run-rank)")
+    return (path, "") if path else (None, "no tt-run-rank in build/tools/scaleout or on PATH")
 
 
 def mpi_args_timeout(mpi_args: Optional[List[str]]) -> Optional[str]:

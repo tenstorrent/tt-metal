@@ -1496,6 +1496,31 @@ class TestJobOwnership:
         assert "the other ranks did not all exit in time and were killed" in text, text
         assert "job end: outcome=forced exit=5" in text, text
 
+    def test_tt_run_rank_is_found_in_the_build_tree_else_on_path(self, tmp_path, monkeypatch):
+        from ttnn.distributed import ttrun as m
+
+        # The build tree first; an install (cmake --install, the package) has none, so its bin on PATH next.
+        def exe(p):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("#!/bin/sh\n")
+            p.chmod(0o755)
+            return p
+
+        home, installed, empty = tmp_path / "home", tmp_path / "prefix" / "bin", tmp_path / "empty"
+        empty.mkdir()
+        built = exe(home / "build" / "tools" / "scaleout" / "tt-run-rank")
+        exe(installed / "tt-run-rank")
+        monkeypatch.setattr(m, "ORIGINAL_CWD", empty)
+        monkeypatch.chdir(empty)
+        monkeypatch.setenv("PATH", str(installed))
+        monkeypatch.setenv("TT_METAL_HOME", str(home))
+        assert m.find_tt_run_rank_executable() == str(built.resolve())
+        monkeypatch.delenv("TT_METAL_HOME")
+        assert m.find_tt_run_rank_executable() == str(installed / "tt-run-rank")
+        monkeypatch.setenv("PATH", str(empty))
+        assert m.find_tt_run_rank_executable() is None
+        assert m.find_signal_helper() == (None, "no tt-run-rank in build/tools/scaleout or on PATH")
+
     def test_build_mpi_command_runs_each_rank_in_the_wrapper(self, sample_rank_binding_yaml, tmp_path, monkeypatch):
         # Each rank's program runs under tt-run-rank, which stops the job if the program dies; gdbserver launches
         # and a build without tt-run-rank run the program bare.
