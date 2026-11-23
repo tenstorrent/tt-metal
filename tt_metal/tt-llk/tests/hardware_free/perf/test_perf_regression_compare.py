@@ -208,14 +208,21 @@ def test_renamed_module_and_column_match_together(tmp_path):
 
 
 def test_column_alias_only_applies_to_its_own_test(tmp_path):
-    # `ternary_mathop` is only a legacy name inside perf_sfpu_ternary.
-    baseline = [_column_csv(tmp_path, "b", "perf_x", "ternary_mathop", "X")]
-    current = [_column_csv(tmp_path, "c", "perf_x", "mathop", "X")]
+    # `ternary_mathop` is only a legacy name inside perf_sfpu_ternary. Two values per
+    # column: a one-sided column with a single value is dropped as not telling points apart.
+    baseline = [
+        _column_csv(tmp_path, "b", "perf_x", "ternary_mathop", "X"),
+        _column_csv(tmp_path, "b2", "perf_x", "ternary_mathop", "Y"),
+    ]
+    current = [
+        _column_csv(tmp_path, "c", "perf_x", "mathop", "X"),
+        _column_csv(tmp_path, "c2", "perf_x", "mathop", "Y"),
+    ]
 
     result = compare_runs(current, baseline)
 
     assert not result["records"]
-    assert len(result["new_points"]) == 1
+    assert len(result["new_points"]) == 2
 
 
 def test_missing_schema_catalog_stops_the_gate(tmp_path, monkeypatch):

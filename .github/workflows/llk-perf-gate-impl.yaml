@@ -205,6 +205,8 @@ jobs:
                 COMPLETE=true
                 echo "::notice::Every ${ARCH} leg succeeded, so the gate compares ${ARCH}. A leg of another architecture did not (${MEASURE_RESULT})."
               else
+                # Stays true only if every leg that did not complete failed before any step ran.
+                INFRA=true
                 while IFS=$'\t' read -r NAME CONCLUSION MINUTES STEPS; do
                   LINE="${NAME##*/ }: ${CONCLUSION}${MINUTES:+ after ${MINUTES} min}"
                   # The gate does not run in a cancelled run, so a cancelled leg most likely ran out of time.
@@ -213,15 +215,15 @@ jobs:
                   # runner or the action download failed. That is infrastructure, not performance.
                   if [ "$CONCLUSION" = failure ] && [ "${STEPS:-0}" -le 1 ]; then
                     LINE="${LINE}, before any step ran — a runner or action-download fault, not a performance result"
-                    INFRA=true
-                  elif [ "$CONCLUSION" = failure ]; then
+                  else
+                    INFRA=false
                     # The suite stops at the first failing test (-x), so a failed leg is a test or the runner.
-                    LINE="${LINE}, a failing perf test or a runner fault (see the leg's log)"
+                    if [ "$CONCLUSION" = failure ]; then LINE="${LINE}, a failing perf test or a runner fault (see the leg's log)"; fi
                   fi
                   REASON="${REASON:+${REASON}; }${LINE}"
                 done <<< "$BAD"
                 REASON="A ${ARCH} measuring leg did not complete: ${REASON}."
-                if [ "${INFRA:-false}" = true ]; then
+                if [ "$INFRA" = true ]; then
                   REASON="${REASON} This is an infrastructure fault, not a performance result."
                 fi
               fi
