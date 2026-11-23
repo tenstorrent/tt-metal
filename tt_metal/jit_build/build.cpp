@@ -447,9 +447,8 @@ void JitBuildEnv::init(
         TT_ASSERT(rtoptions.get_profiler_enabled());
         TT_FATAL(
             this->arch_ == tt::ARCH::BLACKHOLE || this->arch_ == tt::ARCH::QUASAR,
-            "TT_METAL_PROFILE_ROUTER_COUNTERS is only supported on Blackhole and Quasar, not {}: Wormhole has no "
-            "router "
-            "counters",
+            "TT_METAL_PROFILE_ROUTER_COUNTERS is only supported on Blackhole and Quasar, not {}: "
+            "Wormhole has no router counters",
             tt::arch_to_str(this->arch_));
         this->defines_ +=
             "-DPROFILE_ROUTER_COUNTERS=" + std::to_string(rtoptions.get_profiler_router_counters_mask()) + "u ";

@@ -213,6 +213,21 @@ def test_marker_ids_match_the_firmware_header():
     assert consts["ROUTER_COUNTERS_MAX_PAIRS"] == router_counters.MAX_PAIRS
 
 
+def test_firmware_pair_layout_matches_the_decoder():
+    path = _internal_dir() / "profiler" / "router_counters.hpp"
+    if not path.is_file():
+        pytest.skip("not inside a tt-metal checkout")
+    words = dict(re.findall(r"data\[w \+ ([23])\] = (.+?);", path.read_text()))
+    assert set(words) == {"2", "3"}
+    high, low = words["2"], words["3"]
+    assert "ROUTER_NOCS" in high and "kOption" in low
+    assert "values[j + 1]" in high and "values[j]" in low
+    flat = [11, 22, 33, 44]
+    pairs = {k: (flat[2 * k + 1] << 32) | flat[2 * k] for k in range(2)}
+    launch = router_counters.unpack_launch((1 << 32) | ON, pairs)
+    assert launch.values == flat
+
+
 def test_capture_core():
     assert router_counters.capture_core("blackhole", "BRISC")
     assert router_counters.capture_core("quasar", "QUASAR_DM0")

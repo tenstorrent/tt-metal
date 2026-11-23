@@ -10,10 +10,8 @@
 
 #include "perf_counters/router_counters_types.h"
 
-// Quasar Tensix router counters. Include through perf_counters/router_counters_inventory.h.
-// 32-bit counters, four output and four input ports. The design RTL counts every valid flit of a virtual channel,
-// head, body and tail, so a count is a flit and not a packet. That is read from RTL only: the A0 silicon behaviour is
-// not proven.
+// Quasar: 32-bit counters on four output and four input ports. A count is a flit (head, body or tail), not a packet;
+// unproven on silicon.
 
 namespace llk::perf::router
 {

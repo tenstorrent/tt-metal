@@ -10,10 +10,8 @@
 
 #include "perf_counters/router_counters_types.h"
 
-// Blackhole Tensix router counters. Include through perf_counters/router_counters_inventory.h.
-// The counters are 64-bit and count head flits, so one count is one packet. Only two output ports have them; a packet
-// that ejects into the tile's NoC interface is not counted and there is no input side. A capture reads the low word of
-// each, which gives a delta modulo 2^32.
+// Blackhole: 64-bit head flit counters (one count per packet) on two output ports, none on input or ejection.
+// A capture reads the low word.
 
 namespace llk::perf::router
 {

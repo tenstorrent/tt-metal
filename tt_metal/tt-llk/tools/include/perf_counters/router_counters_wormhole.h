@@ -10,8 +10,7 @@
 
 #include "perf_counters/router_counters_types.h"
 
-// Wormhole has no router counters in its register map, so the table is empty and the profiler option is refused.
-// Include through perf_counters/router_counters_inventory.h.
+// Wormhole has no router counters, so the table is empty and the option is refused.
 
 namespace llk::perf::router
 {
