@@ -12,6 +12,7 @@ from llk_pack_space import hw_undefined_reason, llkx_accs, llkx_formats
 from test_pack import test_pack as run_pack
 
 
+@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
 @skip_for_wormhole
 @parametrize(
     formats=llkx_formats(),
@@ -43,6 +44,7 @@ def test_pack_llkx(
         pytest.xfail(reason)
 
 
+@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
 @skip_for_wormhole
 @parametrize(
     formats=llkx_formats(),

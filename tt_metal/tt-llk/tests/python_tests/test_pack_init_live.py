@@ -72,6 +72,7 @@ def _golden(src, fmt, first_tile, tiles):
     return torch.cat(out)
 
 
+@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
 @skip_for_wormhole
 @parametrize(
     pair=PAIRS,

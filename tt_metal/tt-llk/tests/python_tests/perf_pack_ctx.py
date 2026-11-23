@@ -245,6 +245,7 @@ def test_perf_pack_ctx(perf_report, case, arm, run_types, loop_factor, is_perf):
 _EQ_REF = {}
 
 
+@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
 @skip_for_wormhole
 @parametrize(case=_cases(), arm=ARMS)
 def test_pack_ctx_equiv(case, arm):

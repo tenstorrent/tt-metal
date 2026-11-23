@@ -208,7 +208,10 @@ constexpr MathFidelity matmul_elided_fidelity() {
     // an unknown output of a kernel without 32-bit CBs is not Float32, which is all the keep rule asks
     constexpr DataFormat keep_out =
         out_format == DataFormat::Invalid && llk_matmul_kernel_no_32bit_cb() ? DataFormat::Float16_b : out_format;
-    return matmul_phase_fidelity<MATH_FIDELITY, in0_format, in1_format, keep_out, DST_ACCUM_MODE, MM_THROTTLE, true>();
+    constexpr MathFidelity elided =
+        matmul_phase_fidelity<MATH_FIDELITY, in0_format, in1_format, keep_out, DST_ACCUM_MODE, MM_THROTTLE, true>();
+    // a high-fidelity kernel keeps high-fidelity math forms: Bfp4_b x Bfp4_b on the LoFi forms hung bmm with reload
+    return (elided == MathFidelity::LoFi && MATH_FIDELITY != MathFidelity::LoFi) ? MathFidelity::HiFi2 : elided;
 #else
     return MathFidelity::LoFi;  // the pack thread has no MATH_FIDELITY and never reads this
 #endif
@@ -590,15 +593,12 @@ constexpr bool matmul_fe_tile_mop() {
         !row_mop_on && kt_key == 0 && MATH_FIDELITY == MathFidelity::LoFi && matmul_fe_mark::is_used_d<8, K>(0) &&
         !matmul_fe_mark::is_used_d<13, K>(0) && !matmul_fe_mark::is_used_d<15, K>(0) &&
         (DST_SYNC_MODE == DstSync::SyncHalf ? !matmul_kernel_lofi_mix(unpack_src_format)
-                                            : !matmul_operands_reorder(
-                                                  static_cast<DataFormat>(unpack_src_format[0]),
-                                                  static_cast<DataFormat>(unpack_src_format[1]),
-                                                  MM_THROTTLE != 0))) {
+                                            : !llk_matmul_kernel_mixes_32bit<MM_THROTTLE != 0>())) {
         // LoFi: the row form in a kernel with a constant block and no constant one-tile or kt-1 block, whose call it
         // slows (bmm's reload init passes its constant block through a helper's parameters, so tag 7 does not tell a
         // run-time-block kernel). Operands that can be held either way keep the tile MOP: their calls of run-time dims
         // stay on direction 3, while an init of constant dims folds it and would program the row MOP, which those calls
-        // would run once per tile.
+        // would run once per tile. At full sync any CB decides, as for the direction: a call may take a run-time cb.
         return false;
     } else if constexpr (
         !row_mop_on && kt_key == 0 && (MATH_FIDELITY == MathFidelity::HiFi2 || matmul_fe_hifi3_short_m_tile_mop()) &&

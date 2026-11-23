@@ -3,6 +3,7 @@
 
 from typing import List
 
+import pytest
 import torch
 from helpers.device import BootMode
 from helpers.format_config import (
@@ -105,6 +106,7 @@ MIX_COMBINATIONS = generate_format_aware_matmul_combinations(
 )
 
 
+@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
     format_dest_acc_and_dims=MIX_COMBINATIONS,

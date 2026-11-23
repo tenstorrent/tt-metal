@@ -194,6 +194,17 @@ constexpr bool matmul_kernel_bfp = []
     }
     return false;
 }();
+// llk_matmul_kernel_mixes_32bit over the production kernel's CBs: a 32-bit format beside one that streams fast
+constexpr bool matmul_prod_kernel_mixes_32bit = []
+{
+    bool wide = false, fast = false;
+    for (const std::uint8_t f : MATMUL_KERNEL_FORMATS)
+    {
+        wide = wide || ckernel::matmul_format_is_32bit(static_cast<DataFormat>(f));
+        fast = fast || ckernel::matmul_format_streams_fast(static_cast<DataFormat>(f), THROTTLE_LEVEL != 0);
+    }
+    return wide && fast;
+}();
 constexpr bool matmul_unkeyed_hoist = []
 {
     constexpr bool lofi = MATH_FIDELITY == ckernel::MathFidelity::LoFi;
@@ -318,9 +329,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_auto_ttsync, stream_narrow, stream_z, matmul_reuse_dir_k
 #if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_TILES)
     // minimal_matmul names its subblock: a 1x1 key's calls are one tile each (llk_unpack_AB_matmul_named_1x1)
-    constexpr bool matmul_one_tile_calls = MATMUL_PK_RT == 1 && MATMUL_PK_CT == 1;
+    [[maybe_unused]] constexpr bool matmul_one_tile_calls = MATMUL_PK_RT == 1 && MATMUL_PK_CT == 1;
 #else
-    constexpr bool matmul_one_tile_calls = false;
+    [[maybe_unused]] constexpr bool matmul_one_tile_calls = false;
 #endif
 #define MATMUL_UNPACK_TEMPLATE_ARGS \
     0, 0, unpack_auto_ttsync, MAX_TILES_DEST, matmul_hoist_rows, matmul_max_row_tiles, stream_z, matmul_reuse_dir_k, matmul_one_tile_calls
@@ -534,10 +545,7 @@ constexpr bool matmul_tile_mop =
            !(matmul_hifi2_half_wide(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncHalf, is_fp32_dest_acc_en, matmul_prod_may_pack_32bit) &&
              MATMUL_PK_KT >= 2 && !matmul_prod_dims_unseen) &&
            !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && !matmul_prod_dims_unseen && !(MATMUL_PK_RT == 1 && MATMUL_PK_CT == 1) && MATMUL_PK_KT != 1 &&
-             (dest_sync == ckernel::DstSync::SyncHalf
-                  ? !ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS)
-                  : !ckernel::matmul_operands_reorder(
-                        static_cast<DataFormat>(MATMUL_KERNEL_FORMATS[0]), static_cast<DataFormat>(MATMUL_KERNEL_FORMATS[1]), THROTTLE_LEVEL != 0))) &&
+             (dest_sync == ckernel::DstSync::SyncHalf ? !ckernel::matmul_kernel_lofi_mix(MATMUL_KERNEL_FORMATS) : !matmul_prod_kernel_mixes_32bit)) &&
            !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && dest_sync == ckernel::DstSync::SyncHalf && matmul_prod_dims_unseen && MATMUL_PK_KT >= 3)) ||
               MATMUL_PROD_RUNTIME_DIR
         : !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
@@ -622,7 +630,7 @@ constexpr bool matmul_prod_main_section_end = false;
 constexpr bool matmul_prod_no_32bit_cb = !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_A_IN)) &&
                                          !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_B_IN)) &&
                                          !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(PACK_OUT));
-constexpr ckernel::MathFidelity matmul_prod_fidelity = ckernel::matmul_phase_fidelity<
+constexpr ckernel::MathFidelity matmul_prod_elided = ckernel::matmul_phase_fidelity<
     MATH_FIDELITY,
     static_cast<DataFormat>(UNPACK_B_IN),
     static_cast<DataFormat>(UNPACK_A_IN),
@@ -630,6 +638,8 @@ constexpr ckernel::MathFidelity matmul_prod_fidelity = ckernel::matmul_phase_fid
     is_fp32_dest_acc_en,
     THROTTLE_LEVEL,
     true>();
+constexpr ckernel::MathFidelity matmul_prod_fidelity =
+    (matmul_prod_elided == ckernel::MathFidelity::LoFi && MATH_FIDELITY != ckernel::MathFidelity::LoFi) ? ckernel::MathFidelity::HiFi2 : matmul_prod_elided;
 #else
 constexpr ckernel::MathFidelity matmul_prod_fidelity = MATH_FIDELITY;
 #endif
