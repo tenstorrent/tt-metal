@@ -40,3 +40,55 @@ def test_isin_spans_two_subchunks(dtype, size, device):
     torch_result = torch.isin(elements, test_elements)
     ttnn_result = ttnn.to_torch(ttnn.experimental.isin(elements_ttnn, test_elements_ttnn))
     assert torch.equal(ttnn_result != 0, torch_result)
+
+
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        ("host_elements", "Elements tensor is not on a device"),
+        ("deallocated_elements", "Elements tensor's buffer is null"),
+        ("host_test_elements", "Test elements tensor is not on a device"),
+        ("deallocated_test_elements", "Test elements tensor's buffer is null"),
+    ],
+)
+def test_isin_rejects_inputs_not_on_device(case, message, expect_error, device):
+    elements = torch.arange(100, dtype=torch.int32)
+    test_elements = torch.tensor([3, 5, 7], dtype=torch.int32)
+    elements_ttnn = ttnn.from_torch(elements, dtype=ttnn.int32, device=None if case == "host_elements" else device)
+    test_elements_ttnn = ttnn.from_torch(
+        test_elements, dtype=ttnn.int32, device=None if case == "host_test_elements" else device
+    )
+    if case == "deallocated_elements":
+        ttnn.deallocate(elements_ttnn)
+    elif case == "deallocated_test_elements":
+        ttnn.deallocate(test_elements_ttnn)
+
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.isin(elements_ttnn, test_elements_ttnn)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_isin_rejects_block_float(dtype, expect_error, device):
+    values = ttnn.from_torch(torch.ones(32, 32), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "is not supported"):
+        ttnn.experimental.isin(values, values)
+
+
+@pytest.mark.parametrize("use_out", [False, True])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("shape", [[0], [2, 0, 3]])
+def test_isin_empty_elements(shape, layout, use_out, device):
+    elements = ttnn.from_torch(torch.zeros(shape, dtype=torch.int32), dtype=ttnn.int32, layout=layout, device=device)
+    test_elements = ttnn.from_torch(torch.tensor([0, 1], dtype=torch.int32), dtype=ttnn.int32, device=device)
+    out = (
+        ttnn.from_torch(torch.zeros(shape, dtype=torch.int64), dtype=ttnn.uint32, layout=layout, device=device)
+        if use_out
+        else None
+    )
+
+    result = ttnn.experimental.isin(elements, test_elements, out=out)
+
+    assert result.dtype == ttnn.uint32
+    assert result.layout == layout
+    assert list(result.shape) == shape
