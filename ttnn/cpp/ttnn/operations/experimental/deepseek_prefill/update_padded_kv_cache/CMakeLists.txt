@@ -35,7 +35,9 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         device/update_padded_kv_cache_device_operation.cpp
+        device/read_padded_kv_cache_device_operation.cpp
         update_padded_kv_cache.cpp
+        read_padded_kv_cache.cpp
 )
 
 target_link_libraries(

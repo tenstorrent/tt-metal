@@ -14,6 +14,17 @@
 
 namespace kv_cache_dataflow {
 
+// A global prefix maps to a staircase of local offsets in block-cyclic cache storage: the page-row at which this
+// chip (`coordinate` on the linearized axis of `factor` chips, `chunk` page-rows per chip per chunk) writes or reads
+// a chunk that starts at global page-row `prefix`. update_padded_kv_cache writes there and read_padded_kv_cache reads
+// the same rows back, so the two share this one definition.
+inline uint32_t local_cache_offset(uint32_t prefix, uint32_t coordinate, uint32_t factor, uint32_t chunk) {
+    const uint32_t slab = prefix / (factor * chunk);
+    const uint32_t boundary = (prefix / chunk) % factor;
+    const uint32_t offset = prefix % chunk;
+    return slab * chunk + (coordinate < boundary ? chunk : (coordinate == boundary ? offset : 0));
+}
+
 // Caller owns the scratch CB reservation and lifetime; successive metadata reads reuse its first word.
 template <uint32_t AccessorOffset>
 inline uint32_t read_metadata(Noc& noc, const CircularBuffer& scratch, uint32_t address) {

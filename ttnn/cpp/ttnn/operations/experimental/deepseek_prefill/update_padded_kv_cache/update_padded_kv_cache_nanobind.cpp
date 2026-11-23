@@ -11,6 +11,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "update_padded_kv_cache.hpp"
+#include "read_padded_kv_cache.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail {
 
@@ -151,12 +152,61 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("input_rows") = nb::none()));
 }
 
+void bind_read_padded_kv_cache(nb::module_& mod) {
+    using ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::read_padded_kv_cache;
+    ttnn::bind_function<"read_padded_kv_cache", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+            Read back the rows ``update_padded_kv_cache`` stored for one chunk: the read mirror of the write.
+
+            Each chip copies the page-rows it wrote for the chunk starting at ``kv_actual_global`` (same per-chip
+            offset, same block-cyclic math as the write) for layers ``[first_layer, first_layer +
+            num_read_layers)`` of user ``slot_idx`` into ``[1, 1, num_read_layers * chunk_local, width]``,
+            layer-major, with ``chunk_local = chunk_size_global / (sp * tp)``. Writing those rows back with
+            ``update_padded_kv_cache(cluster_axis=None, input_row_offset=l * chunk_local, input_rows=chunk_local)``
+            at the same slot / kv_actual_global / valid_global reproduces the cache bit for bit on a mesh of the same
+            shape when the source was written with SP on mesh axis 0 (``cluster_axis=0``): only then is its sp*tp chip
+            order the complete-mesh row-major order. Rows past the cache end are not read and stay unwritten in ``output``. An FP8_E4M3 cache is read
+            as UINT8 rows of the same width (its bytes; FP8 has no D2D stream or host-mapper path), which
+            ``update_padded_kv_cache`` accepts as the input of a plain copy into an FP8 cache.
+
+            Args:
+                cache (ttnn.Tensor): ROW_MAJOR KV cache ``[num_slots * num_layers, 1, rows, width]``.
+                slot_idx (ttnn.Tensor): 1-element uint32 DRAM tensor, the user slot; read on device.
+                kv_actual_global (ttnn.Tensor): 1-element uint32 DRAM tensor, the chunk start in tokens (the
+                    ``kv_actual_global`` its write was given); read on device, so the read is trace-safe.
+                first_layer (int): first cache layer read.
+                num_read_layers (int): number of consecutive layers read.
+                num_layers (int): layers per slot in the cache.
+                chunk_size_global (int): tokens one chunk spans across the mesh.
+                cluster_axis (Optional[int]): SP axis the cache was written with, or None for complete-mesh.
+                tp_axis (Optional[int]): TP dedup axis the cache was written with.
+                output (ttnn.Tensor, optional): preallocated destination with the read's spec.
+
+            Returns:
+                ttnn.Tensor: the rows, distributed like the cache's sequence dim.
+        )doc",
+        &read_padded_kv_cache,
+        nb::arg("cache").noconvert(),
+        nb::arg("slot_idx").noconvert(),
+        nb::arg("kv_actual_global").noconvert(),
+        nb::kw_only(),
+        nb::arg("first_layer"),
+        nb::arg("num_read_layers"),
+        nb::arg("num_layers"),
+        nb::arg("chunk_size_global"),
+        nb::arg("cluster_axis"),
+        nb::arg("tp_axis") = nb::none(),
+        nb::arg("output").noconvert() = nb::none());
+}
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail
 
 namespace ttnn::operations::experimental::deepseek_prefill::detail {
 
 void bind_update_padded_kv_cache(::nanobind::module_& mod) {
     update_padded_kv_cache::detail::bind_update_padded_kv_cache(mod);
+    update_padded_kv_cache::detail::bind_read_padded_kv_cache(mod);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::detail

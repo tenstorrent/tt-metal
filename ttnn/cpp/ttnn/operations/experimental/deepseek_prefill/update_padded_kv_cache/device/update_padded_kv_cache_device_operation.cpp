@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "update_padded_kv_cache_device_operation.hpp"
+#include "kv_cache_linearization.hpp"
+#include "kv_cache_metadata.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache.hpp"
 
 #include <algorithm>
@@ -28,18 +30,6 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace {
-
-// Mesh extent along a shard axis (0 = rows, 1 = cols). Both the SP factor and the TP factor are this
-// lookup; validate_runtime_args already rejects a non-2D mesh, so there are only the two axes.
-uint32_t mesh_axis_extent(const ttnn::distributed::MeshDeviceView& mesh_view, uint32_t axis) {
-    return (axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-}
-
-// TP dedup factor: the extent of the TP axis, or 1 when the cache is TP-replicated (tp_axis unset).
-// Every site that needs it goes through here so validation and the program factory cannot disagree.
-uint32_t tp_dedup_factor(const ttnn::distributed::MeshDeviceView& mesh_view, const std::optional<uint32_t>& tp_axis) {
-    return tp_axis.has_value() ? mesh_axis_extent(mesh_view, *tp_axis) : 1;
-}
 
 // Input rows this call writes: the window, or every row from the offset on. Validation and the program factory
 // share it so they agree.
@@ -97,30 +87,7 @@ uint32_t linear_coord_of(
     const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
     const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args,
     const ttnn::MeshCoordinate& coord) {
-    const auto& cache = tensor_args.cache;
-    uint32_t sp_coord;
-    if (args.cluster_axis.has_value()) {
-        sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
-    } else {
-        // Complete-mesh cache ownership follows the tensor's declared canonical row-major topology. An
-        // allocate-on-device tensor's storage coordinate vector may use a different internal order;
-        // using that order would rotate the wrong cache shard after a nonzero kv_actual_global.
-        //
-        // This value is ALREADY the linearized sp*tp position the block-cyclic math wants:
-        // row-major over the full mesh is exactly sp_coord*tp + tp_coord. tp_axis is rejected in this
-        // mode, so tp_factor collapses to 1 and linear_coord reduces to this index unchanged.
-        const auto& topology_coords = cache.tensor_topology().mesh_coords();
-        const auto it = std::find(topology_coords.begin(), topology_coords.end(), coord);
-        TT_FATAL(it != topology_coords.end(), "cache mesh coordinate {} is absent from its tensor topology", coord);
-        sp_coord = static_cast<uint32_t>(std::distance(topology_coords.begin(), it));
-    }
-    // KV dedup: linearize sp and tp into ONE block-cyclic axis of size sp*tp (linear = sp_coord*tp + tp_coord).
-    // tp_axis==nullopt => tp_factor=1 collapses this.
-    const uint32_t tp_factor = tp_dedup_factor(cache.device()->get_view(), args.tp_axis);
-    const uint32_t tp_coord = args.tp_axis.has_value()
-                                  ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis)
-                                  : 0;
-    return sp_coord * tp_factor + tp_coord;
+    return kv_cache_linear_coord(tensor_args.cache, coord, args.cluster_axis, args.tp_axis);
 }
 
 // The whole-mesh chip table, if any; create_descriptor and create_mesh_workload both decide through this.
@@ -264,8 +231,12 @@ void validate_runtime_args(
 
     // The copy path requires matching dtype/layout; the split-input path validates its
     // tiled BF16 inputs or row-major scaled-FP8 fields below. Check these on hits too.
+    // A plain copy into an FP8 cache also takes UINT8 rows: the same bytes, in the form FP8 rows travel in where
+    // FP8 has no path (D2D stream services, host mappers), e.g. read_padded_kv_cache's output.
+    const bool fp8_rows_as_bytes = cache.dtype() == DataType::FP8_E4M3 &&
+                                   tensor_args.input.dtype() == DataType::UINT8 && !tensor_args.rope.has_value();
     TT_FATAL(
-        cache.dtype() == tensor_args.input.dtype(),
+        cache.dtype() == tensor_args.input.dtype() || fp8_rows_as_bytes,
         "cache and input dtype must match (got {} and {})",
         cache.dtype(),
         tensor_args.input.dtype());
@@ -363,29 +334,7 @@ void validate_runtime_args(
     if (tensor_args.slot_idx.has_value()) {
         const auto& meta_memory_config = tensor_args.slot_idx->memory_config();
         auto validate_meta = [&cache, &meta_memory_config](const Tensor& meta, const char* name) {
-            TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
-            TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
-            TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
-            TT_FATAL(
-                meta.logical_volume() == 1,
-                "metadata tensor {} must be a single element (got {})",
-                name,
-                meta.logical_volume());
-            TT_FATAL(!meta.is_sharded(), "metadata tensor {} must not be sharded", name);
-            // The writer resolves meta.mesh_buffer().address() against cache.device(); a tensor on a
-            // different mesh device would bake the wrong address and fail obscurely downstream.
-            TT_FATAL(meta.device() == cache.device(), "metadata tensor {} must be on the same device as cache", name);
-            // create_descriptor emits a single TensorAccessorArgs built from slot_idx and the writer uses
-            // it for every metadata read, so a tensor carrying a different memory config would have its
-            // address resolved through the wrong bank table.
-            TT_FATAL(
-                meta.memory_config() == meta_memory_config,
-                "update_padded_kv_cache does not currently support metadata tensors with different memory "
-                "configs: one TensorAccessor serves every metadata read, so {} must match slot_idx (got "
-                "buffer types {} and {})",
-                name,
-                meta.memory_config().buffer_type(),
-                meta_memory_config.buffer_type());
+            validate_kv_cache_metadata_tensor(meta, cache, meta_memory_config, name);
         };
         validate_meta(tensor_args.slot_idx.value(), "slot_idx");
         validate_meta(tensor_args.kv_actual_global.value(), "kv_actual_global");
@@ -701,7 +650,8 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     const uint32_t sp_factor = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
     // KV dedup: sp and tp linearize to ONE block-cyclic axis of size sp*tp (tp_factor=1 without tp_axis).
     const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
-    const uint32_t linear_factor = sp_factor * tp_factor;  // effective block-cyclic chip count
+    // effective block-cyclic chip count
+    const uint32_t linear_factor = kv_cache_linear_factor(cache, args.cluster_axis, args.tp_axis);
     const uint32_t chunk_local_t = window_Ht / tp_factor;  // tile-rows THIS chip actually writes
 
     // Work split: one tile per "block", over the rows this chip WRITES (chunk_local_t == window_Ht at tp=1).
