@@ -631,6 +631,10 @@ class RunStats:
     total_chunks: int = 0
 
 
+# PREFILL_ACK_TRACE=1: CHUNK_RETIRE also lists each ack's ring transport lag (lag=, ms, in ack order).
+_ACK_TRACE = os.environ.get("PREFILL_ACK_TRACE") == "1"
+
+
 class _ChunkRetireClock:
     """Producer-clock span of each chunk: the drain seeing its first layer ack to seeing its last.
 
@@ -645,6 +649,7 @@ class _ChunkRetireClock:
         self._first_ack = {}
         self._acks = {}
         self._layer_acks = {}
+        self._ack_lag = {}
         self.warmup = False
 
     def on_push(self, key: tuple) -> None:
@@ -658,6 +663,9 @@ class _ChunkRetireClock:
             self._first_ack.setdefault(key, now)
             self._acks[key] = self._acks.get(key, 0) + 1
             self._layer_acks.setdefault(key, []).append((c.layer_start, c.layer_end, now))
+            if _ACK_TRACE:
+                # Ring transport lag: this process's receive time minus the sending rank's push stamp (system clock).
+                self._ack_lag.setdefault(key, []).append((time.time_ns() - int(c.host_timestamp_ns)) / 1e6)
 
     def on_retire(self, key: tuple, retire_ts: float) -> None:
         with self._lock:
@@ -668,6 +676,7 @@ class _ChunkRetireClock:
             first_ts = self._first_ack.pop(key, None)
             acks = self._acks.pop(key, 0)
             layer_acks = self._layer_acks.pop(key, [])
+            ack_lag = self._ack_lag.pop(key, [])
         if warmup is None or first_ts is None:
             logger.warning(f"[producer] CHUNK_RETIRE for unpushed chunk {key}")
             return
@@ -676,6 +685,7 @@ class _ChunkRetireClock:
             f"[producer] CHUNK_RETIRE slot={slot_id} start={pos_start} end={pos_end} first={first_ts:.6f} "
             f"retire={retire_ts:.6f} warmup={int(warmup)} acks={acks} "
             f"layers={','.join(f'{a}-{b}@{(t - first_ts) * 1000.0:.1f}' for a, b, t in layer_acks)}"
+            + (f" lag={','.join(f'{x:.1f}' for x in ack_lag)}" if ack_lag else "")
         )
 
 

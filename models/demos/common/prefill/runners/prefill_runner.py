@@ -360,9 +360,9 @@ def _layer_ack_record_bytes(rank: int) -> int:
     """The D2H layer-ack record: with more than one chunk per forward, each chunk's own 12 B record (whether
     the runner runs the chunks one by one or the adapter's prefill_forward runs them), else the metadata this
     rank received."""
-    if FORWARD_CHUNKS > 1:
-        return CHUNK_BYTES
-    return CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES
+    size = CHUNK_BYTES if FORWARD_CHUNKS > 1 else CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES
+    # PREFILL_ACK_DEVICE_TS: room for the chip's wall clock at +16 (outbound_socket_service_sync_writer stamps it).
+    return max(size, 24) if os.environ.get("PREFILL_ACK_DEVICE_TS") == "1" else size
 
 
 def _next_power_of_two(n: int) -> int:

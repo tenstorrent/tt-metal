@@ -5,6 +5,9 @@
 #include "ttnn/services/layer_ack_service.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
+#include <unistd.h>
 #include <chrono>
 #include <cstddef>
 #include <cstring>
@@ -112,6 +115,20 @@ void LayerAckService::reader_loop() {
     std::vector<std::byte> metadata(d2h_service_.metadata_size_bytes());
     const auto sockets = d2h_service_.get_sockets();
     internal::LayerAckDecoder decoder(layout_);
+    // PREFILL_ACK_TRACE_DIR: one CSV per service of every record's timing, for attributing layer-ack latency:
+    // device wall clock at publish (from a 24+ B record, PREFILL_ACK_DEVICE_TS), host time the record was read and
+    // host time it was pushed to the completion ring (system clock ns, the clock the ring messages carry).
+    std::unique_ptr<std::ofstream> trace;
+    if (const char* dir = std::getenv("PREFILL_ACK_TRACE_DIR"); dir != nullptr && *dir != '\0') {
+        const auto path = fmt::format("{}/ack_trace_{}_{}.csv", dir, ring_shm_name_, ::getpid());
+        trace = std::make_unique<std::ofstream>(path);
+        if (*trace) {
+            *trace << "layer,slot,pos_start,pos_end,device_ts,host_ready_ns,host_read_ns,host_push_ns\n";
+        } else {
+            trace.reset();
+        }
+    }
+    uint64_t trace_lines = 0;
 
     // Full-ring backpressure: wait, warning on entry and then every 10 s; only stop() ends it.
     const auto push_blocking = [this](const internal::LayerCompletionMessage& msg) {
@@ -146,6 +163,7 @@ void LayerAckService::reader_loop() {
             std::this_thread::sleep_for(std::chrono::microseconds(50));
             continue;
         }
+        const uint64_t host_ready_ns = trace ? internal::layer_completion_host_timestamp_ns() : 0;
         try {
             d2h_service_.read_metadata(ttsl::Span<std::byte>(metadata.data(), metadata.size()));
         } catch (...) {
@@ -174,6 +192,7 @@ void LayerAckService::reader_loop() {
             continue;
         }
         const auto& ack = std::get<internal::DecodedAck>(result);
+        const uint64_t host_read_ns = internal::layer_completion_host_timestamp_ns();
         const internal::LayerCompletionMessage msg{
             ack.identity.slot_id,
             ack.identity.pos_start,
@@ -184,6 +203,18 @@ void LayerAckService::reader_loop() {
             internal::layer_completion_host_timestamp_ns()};
         if (!push_blocking(msg)) {
             return;
+        }
+        if (trace) {
+            uint64_t device_ts = 0;
+            if (metadata.size() >= 24) {
+                std::memcpy(&device_ts, metadata.data() + 16, sizeof(device_ts));
+            }
+            *trace << ack.layer << ',' << ack.identity.slot_id << ',' << ack.identity.pos_start << ','
+                   << ack.identity.pos_end << ',' << device_ts << ',' << host_ready_ns << ',' << host_read_ns << ','
+                   << internal::layer_completion_host_timestamp_ns() << '\n';
+            if (++trace_lines % 64 == 0) {
+                trace->flush();
+            }
         }
     }
 }

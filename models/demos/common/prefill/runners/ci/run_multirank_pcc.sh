@@ -289,6 +289,13 @@ if [ -n "${VARIANT}" ]; then
   REQUIRE_TPS=0
   EXPECTED_TPS=""
 fi
+# PREFILL_ACK_TRACE=1: layer-ack latency attribution -- device wall clock in each D2H ack record, a per-rank CSV of
+# every record's read/push times (kept with the run's evidence), and the producer's per-ack transport lag.
+if [ "${PREFILL_ACK_TRACE:-0}" = 1 ]; then
+  mkdir -p "${EVIDENCE_DIR}/ack_trace"
+  RUNNER_ENV+=" export PREFILL_ACK_DEVICE_TS=1; export PREFILL_ACK_TRACE_DIR='${EVIDENCE_DIR}/ack_trace';"
+  PRODUCER_ENV+=" export PREFILL_ACK_TRACE=1;"
+fi
 PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
 
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.

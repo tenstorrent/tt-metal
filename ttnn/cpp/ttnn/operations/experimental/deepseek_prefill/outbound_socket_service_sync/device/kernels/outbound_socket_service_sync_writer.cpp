@@ -164,6 +164,21 @@ inline void forward_metadata(
                 {},
                 {.noc_x = service_noc_x, .noc_y = service_noc_y, .addr = record_addr});
             noc.async_write_barrier();
+            if constexpr (metadata_ring_slots > 1 && metadata_slot_stride >= 24 && MetadataSize <= 16) {
+                // A D2H ring sized for 24+ B per record (PREFILL_ACK_DEVICE_TS) carries this chip's wall clock at
+                // +16 when the record is published, for host-side latency attribution; the record's consumers read
+                // only the bytes before it.
+                const uint64_t ts = get_timestamp();
+                write_service_word(
+                    scratch_cb.get_write_ptr(), service_noc_x, service_noc_y, record_addr + 16, (uint32_t)ts, noc.get_noc_id());
+                write_service_word(
+                    scratch_cb.get_write_ptr(),
+                    service_noc_x,
+                    service_noc_y,
+                    record_addr + 20,
+                    (uint32_t)(ts >> 32),
+                    noc.get_noc_id());
+            }
             if constexpr (metadata_ring_slots > 1) {
                 write_service_word(
                     scratch_cb.get_write_ptr(),
