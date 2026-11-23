@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // What a capture's files promise: each read's offset finds its bytes in the .bin, and a capture never replaces another
-// or leaves a half-written one behind. And how a tool run beside a run finds its rank's manifest. No device.
+// or leaves a half-written one behind. And how a tool run beside a run finds its rank's manifest and capture record.
+// No device.
 
 #include <gtest/gtest.h>
 
@@ -229,6 +230,61 @@ TEST_F(CaptureFilesTest, FindsTheRanksManifestInTheNewestRunHoldingIt) {
     EXPECT_EQ(
         visualizer::find_latest_manifest(directory_, rank),
         visualizer::make_run_directory(directory_, "20261102T000000Z-bbbbbbbb") / file_name);
+}
+
+// Writes an empty file at `path`, and the folders it's in.
+void write_empty_file(const std::filesystem::path& path) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream(path) << "{}";
+}
+
+// A capture id's record is in the newest run that has it, whether or not a newer run has the rank's manifest.
+TEST_F(CaptureFilesTest, FindsACapturesRecordInTheNewestRunHoldingIt) {
+    const visualizer::JobRank rank{.mpi_rank = 1, .world_size = 2};
+    const std::string record_file_name = visualizer::make_capture_record_file_name(rank.mpi_rank, rank.world_size);
+    EXPECT_EQ(record_file_name, "fabric_capture_rank_2_of_2.json");
+    EXPECT_FALSE(visualizer::find_capture_record(directory_, rank, "first").has_value());
+
+    const std::filesystem::path older_run = visualizer::make_run_directory(directory_, "20261101T000000Z-aaaaaaaa");
+    const std::filesystem::path newer_run = visualizer::make_run_directory(directory_, "20261102T000000Z-bbbbbbbb");
+    write_empty_file(visualizer::make_capture_directory(older_run, "first") / record_file_name);
+    write_empty_file(visualizer::make_capture_directory(newer_run, "second") / record_file_name);
+    // Another rank's record of the same capture doesn't count.
+    write_empty_file(
+        visualizer::make_capture_directory(newer_run, "first") / visualizer::make_capture_record_file_name(0, 2));
+
+    EXPECT_EQ(
+        visualizer::find_capture_record(directory_, rank, "first"),
+        visualizer::make_capture_directory(older_run, "first") / record_file_name);
+    EXPECT_EQ(
+        visualizer::find_capture_record(directory_, rank, "second"),
+        visualizer::make_capture_directory(newer_run, "second") / record_file_name);
+    EXPECT_FALSE(visualizer::find_capture_record(directory_, rank, "third").has_value());
+}
+
+// With no capture id, the record is the rank's in the newest capture of the newest run with the rank's manifest: the
+// run capture finds by default. An older run's capture isn't taken when that run has none.
+TEST_F(CaptureFilesTest, FindsTheLatestCaptureRecordInTheNewestRunWithTheRanksManifest) {
+    const visualizer::JobRank rank{.mpi_rank = 1, .world_size = 2};
+    const std::string manifest_file_name = visualizer::make_manifest_file_name(rank.mpi_rank, rank.world_size);
+    const std::string record_file_name = visualizer::make_capture_record_file_name(rank.mpi_rank, rank.world_size);
+    EXPECT_FALSE(visualizer::find_latest_capture_record(directory_, rank).has_value());
+
+    const std::filesystem::path older_run = visualizer::make_run_directory(directory_, "20261101T000000Z-aaaaaaaa");
+    write_empty_file(older_run / manifest_file_name);
+    write_empty_file(visualizer::make_capture_directory(older_run, "20261101T010000Z") / record_file_name);
+    const std::filesystem::path newer_run = visualizer::make_run_directory(directory_, "20261102T000000Z-bbbbbbbb");
+    write_empty_file(newer_run / manifest_file_name);
+    EXPECT_FALSE(visualizer::find_latest_capture_record(directory_, rank).has_value());
+
+    write_empty_file(visualizer::make_capture_directory(newer_run, "20261102T010000Z") / record_file_name);
+    write_empty_file(visualizer::make_capture_directory(newer_run, "20261102T020000Z") / record_file_name);
+    // A newer capture without this rank's record, such as one another rank alone was captured in, is passed over.
+    const std::filesystem::path other_rank_capture = visualizer::make_capture_directory(newer_run, "20261102T030000Z");
+    write_empty_file(other_rank_capture / visualizer::make_capture_record_file_name(0, 2));
+    EXPECT_EQ(
+        visualizer::find_latest_capture_record(directory_, rank),
+        visualizer::make_capture_directory(newer_run, "20261102T020000Z") / record_file_name);
 }
 
 }  // namespace
