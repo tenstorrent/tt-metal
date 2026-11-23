@@ -268,6 +268,10 @@ def test_real(mesh_device):
         )
 
     g = TC.hf_harness.find_decode_golden(TC.LAYERS, TC.PROMPT)
+    if g is None:
+        pytest.skip(
+            f"no {TC.LAYERS}-layer decode golden of a {TC.PROMPT}-token prompt under {TC.hf_harness.GOLDEN_ROOT}"
+        )
     N, n, steps = g["meta"]["prompt_len"], TC.LAYERS, g["meta"]["steps"]
     layout = BlockCyclicLayout()
     tokens = [int(v) for v in g["input_ids"][: N + steps - 1]]

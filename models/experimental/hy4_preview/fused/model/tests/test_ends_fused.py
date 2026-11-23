@@ -371,6 +371,78 @@ def log_stamps(st, head, what):
         )
 
 
+def row_facts(chain, label, traced_rows, picked):
+    """Per row of step 1: the device's token against the golden's with both margins, and (when the other expert layout
+    of HY4_MLP_SPLIT has left its file for the same step and depth) the first MoE layer at which the row's picks differ
+    between the two layouts. Host only; the file is generated/hy4_preview/logs/tp8_dump/step_<layers>_<golden>_<split>.pt
+    (HY4_TP8_DUMP)."""
+    import re
+    from pathlib import Path
+
+    from models.experimental.hy4_preview.fused.model.tests import test_chain as TC
+
+    streams, dev, got = traced_rows
+    gl, want = chain.gold_top("logits").float(), chain.gold_top("cached_logits_argmax")
+    gold = chain.gold(chain.n - 1, "streams_out")
+    top = dev.topk(2, dim=-1)
+    g_top = gl.topk(2, dim=-1).values
+    facts = []
+    for u in range(8):
+        facts.append(
+            dict(
+                row=u,
+                token=int(got[u]),
+                golden=int(want[u]),
+                golden_margin=round(float(g_top[u, 0] - g_top[u, 1]), 3),
+                top2=[round(float(v), 3) for v in top.values[u]],
+                top2_ids=[int(v) for v in top.indices[u]],
+                gap=round(float(top.values[u, 0] - top.values[u, 1]), 3),
+                golden_token_below_top=round(float(top.values[u, 0] - dev[u, int(want[u])]), 3),
+                streams_pcc=round(pcc(gold[u], streams[u]), 5),
+            )
+        )
+    logger.info(
+        f"HY4_MK11 {label} ROW FACTS, traced step 1, per row (device token, the golden's token, the golden's own margin, the device's "
+        f"top-2 logits [ids], their gap, how far the golden's token is below the device's top, streams pcc): "
+        + "; ".join(
+            f"row {f['row']}: {f['token']} / {f['golden']}, {f['golden_margin']}, {f['top2']} {f['top2_ids']}, {f['gap']}, "
+            f"{f['golden_token_below_top']}, {f['streams_pcc']}"
+            for f in facts
+        )
+    )
+    split = TC.MLP_SPLIT
+    name = re.sub(r"[^0-9A-Za-z]+", "_", chain.label.replace(f" [{split}]", "")).strip("_")
+    root = Path(os.environ.get("HY4_TP8_DUMP", "generated/hy4_preview/logs/tp8_dump"))
+    root.mkdir(parents=True, exist_ok=True)
+    mine = dict(
+        split=split,
+        layers=[k for k, _ in picked],
+        picks=torch.stack([p for _, p in picked]) if picked else None,
+        facts=facts,
+    )
+    torch.save(mine, root / f"step_{chain.n}_{name}_{split}.pt")
+    other = [x for x in ("tp32", "tp8g4") if x != split][0]
+    path = root / f"step_{chain.n}_{name}_{other}.pt"
+    if not path.is_file() or mine["picks"] is None:
+        logger.info(f"HY4_MK11 {label} ROW FACTS: saved; no {other} run of this step to compare the picks with yet")
+        return
+    o = torch.load(path)
+    if o["picks"] is None or o["layers"] != mine["layers"]:
+        return
+    lines = []
+    for u in range(8):
+        same = [set(a[u].tolist()) == set(b[u].tolist()) for a, b in zip(mine["picks"], o["picks"])]
+        first = next((mine["layers"][i] for i, v in enumerate(same) if not v), None)
+        lines.append(
+            f"row {u}: first MoE layer with other picks {first}, layers with other picks {same.count(False)} of {len(same)}, token {split} "
+            f"{facts[u]['token']} / {other} {o['facts'][u]['token']} / golden {facts[u]['golden']}"
+        )
+    logger.info(
+        f"HY4_MK11 {label} ROW FACTS {split} against {other} (the device's own picks of step 1, as sets per row): "
+        + "; ".join(lines)
+    )
+
+
 VIRTUAL = {
     "vhead": dict(mode=EF.MODE_HEAD, n1=4, idx1=1, n2=8, idx2=3),
     "vroot": dict(mode=EF.MODE_ROOT, n1=4, idx1=0, n2=8, idx2=0),
@@ -668,6 +740,7 @@ def test_step(mesh_device):
         kept = [EF.logits_tensor(mesh) for _ in range(STEPS)]
         layer_programs = {}
         unions = []
+        picked = []  # (layer, the rows' picks [8, 8]) of step 1's MoE layers, untraced: row_facts
 
         def launch_reading_unions(programs):
             """The layer programs one by one; after every MoE layer's program the rows' picked experts are read from
@@ -681,6 +754,7 @@ def test_step(mesh_device):
                         ttnn.to_torch(ttnn.get_device_tensors(state.mlp.op.picks)[root_chip]).to(torch.int32) & 0xFFFF
                     )
                     unions.append(len(set(picks[:, :8].flatten().tolist())))
+                    picked.append((state.key, picks[:, :8].clone()))
 
         def step(k, keep, read_unions=False):
             ein.launch(T[k])
@@ -780,6 +854,7 @@ def test_step(mesh_device):
             assert not status, f"a status is left after the traced steps: {status}"
             check(results, "ONE trace")
             traced_rows = read(0, results)  # (streams, logits, ids of step 1 in the traced replay)
+            row_facts(chain, label, traced_rows, picked)
             canary = st.canary_summary()
             logger.info(
                 f"HY4_MK11 {label} canary: {canary}; the HEAD's canary on its landings: {head.canary_summary()}"
