@@ -3896,9 +3896,8 @@ void run_quasar_unpack_to_dest_dest_index(
     EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
 }
 
-// Tiny-tile unpack-to-dest: Nx32 tiles (1x2 faces) copied with copy_tile to DEST 0..section_ntiles-1 per acquire and
-// packed back from the same indices, three sections per run (bank 0 -> 1 -> 0 in SyncHalf). Every datum is unique, so
-// a tile or face at the wrong DEST rows fails the bit-exact compare.
+// Nx32 tiles copied to DEST 0..section_ntiles-1 and packed back, three sections per run; unique data, so any tile or
+// face at the wrong DEST rows fails the bit-exact compare.
 void run_quasar_unpack_to_dest_tiny_tile(
     distributed::MeshDevice& dev,
     tt::DataFormat fmt,
@@ -5047,10 +5046,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestDestIndex) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestTinyTile) {
-    // Per sync mode, 4 tiles and the section capacity for the shape (DEST rows: 256 / 512 for a 32-bit DEST, 512 / 1024
-    // for a 16-bit one, SyncHalf / SyncFull, over the rows one tile spans, faces under 8 rows taking 8-row slots), so
-    // the last tile of a SyncHalf section sits at the top of its bank. 16x32 Float32 and 1x32 Int32 on a 32-bit DEST;
-    // 1x32 Float16_b on a 16-bit DEST, its bank base and the tiny-face slot both differing from the 32-bit case.
+    // Per sync mode: 4 tiles, and a full section so the last SyncHalf tile sits at the top of its bank.
+    // 32-bit DEST: 16x32 Float32, 1x32 Int32; 16-bit DEST: 1x32 Float16_b.
     const std::array<std::pair<tt::DataFormat, std::uint32_t>, 3> cases = {
         {{tt::DataFormat::Float32, 16u}, {tt::DataFormat::Int32, 1u}, {tt::DataFormat::Float16_b, 1u}}};
     for (const auto& [fmt, face_r_dim] : cases) {
