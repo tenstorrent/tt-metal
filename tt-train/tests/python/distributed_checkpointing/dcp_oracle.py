@@ -27,7 +27,16 @@ import numpy as np
 import ttml.init
 from ttml.distributed_checkpointing._boxes import Box
 from ttml.distributed_checkpointing._errors import TopologyError
-from ttml.distributed_checkpointing._index import HEADER_NAME, FileRecord, Index, data_file_name
+from ttml.distributed_checkpointing._index import (
+    FORMAT,
+    HEADER_NAME,
+    VERSION,
+    FileRecord,
+    Index,
+    data_file_name,
+    write_header,
+    write_index,
+)
 from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
 from ttml.distributed_checkpointing._topology import Label, Placement, crc31, dist_coords
 
@@ -129,6 +138,7 @@ class FakeCheckpoint:
     def __init__(self) -> None:
         self.index: Index | None = None
         self.files: dict[int, bytearray] = {}
+        self.headers: dict[int, bytes] = {}
 
     def save(self, tensors: dict[str, tuple[np.ndarray, Label, object]]) -> Index:
         """``tensors[key] = (device-layout global array, label, transform)``. Each chunk's bytes are what its device
@@ -147,9 +157,21 @@ class FakeCheckpoint:
                 buf[item.data_offset : item.data_offset + item.nbytes] = chunk.tobytes()
                 crcs[(item.key, fplan.index)] = zlib.crc32(chunk.tobytes())
             self.files[fplan.index] = buf
+            self.headers[fplan.index] = fplan.header
             records.append(FileRecord(fplan.path, len(fplan.header) + fplan.data_bytes, 0, 0, fplan.coord))
         self.index = Index(checkpoint_id="fake", world={"group_size": 1}, files=records, entries=plan.entries(crcs))
         return self.index
+
+    def write(self, directory: str) -> None:
+        """The checkpoint as a save leaves it in ``directory``: the data files (header, then the data section),
+        ``index.json``, and a ``header.json`` with an empty user header and train state."""
+        for number, record in enumerate(self.index.files):
+            path = os.path.join(directory, record.path)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(self.headers[number] + bytes(self.files[number]))
+        write_index(directory, self.index)
+        write_header(directory, {"format": FORMAT, "version": VERSION, "user": {}, "train_state": {}})
 
     def load(self, dests: dict[str, tuple[Label, object, tuple]]):
         """``dests[key] = (label, transform, global shape)``; returns the plan and ``{key: {group: shard array}}``."""

@@ -3,22 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The multi-rank coordinator without MPI or devices: the owner election over the ranks' parts, the merge of the ranks'
-results into one index, and the phase protocol over an in-process transport (a failing rank stops every rank with its
-number; a failing collective is fatal and ends the exchanges)."""
+results into one index, the phase protocol over an in-process transport (a failing rank stops every rank with its
+number; a failing collective is fatal and ends the exchanges), and one load over four in-process ranks, its device
+faked."""
 
 import dataclasses
 import gc
 import json
 import os
+import re
 import threading
+from types import SimpleNamespace
 
 import pytest
 import ttnn
-from dcp_oracle import tp_split_of
+from dcp_oracle import FakeCheckpoint, arange, assert_shards_equal, expected_shards, info, tp_split_of, world
 
 import ttml.distributed_checkpointing as dcp
 from ttml.distributed_checkpointing._boxes import Box
-from ttml.distributed_checkpointing import _coordinator, _state_dict
+from ttml.distributed_checkpointing import _coordinator, _load, _state_dict
 from ttml.distributed_checkpointing._coordinator import (
     Election,
     Group,
@@ -39,7 +42,12 @@ from ttml.distributed_checkpointing._errors import (
 from ttml.distributed_checkpointing._index import ChunkRecord, Entry, FileRecord, data_file_name
 from ttml.distributed_checkpointing._layouts import Identity, Pad
 from ttml.distributed_checkpointing._planner import TensorInfo, create_save_plan
-from ttml.distributed_checkpointing._state_dict import check_param_groups, is_structural_scalar, restore_scalars
+from ttml.distributed_checkpointing._state_dict import (
+    LiveTensor,
+    check_param_groups,
+    is_structural_scalar,
+    restore_scalars,
+)
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
 from ttml.distributed_checkpointing._train_state import this_world_rank
 
@@ -858,3 +866,57 @@ def test_group_of_one_runs_phases_directly(expect_error):
     assert raised.value.__cause__ is None, "a CheckpointError propagates as raised"
     with expect_error(KeyboardInterrupt, ""):
         group.phase("reading", raising(KeyboardInterrupt()))
+
+
+def test_a_load_over_four_ranks_has_one_reader_check_each_chunk_they_all_read_in_part(tmp_path, monkeypatch):
+    """Four ranks each load a row quarter of a weight saved as two column halves, so every rank reads both chunks in
+    part, which the chunks' CRC32s cannot cover: the load elects one reader of each chunk to read it whole and check it.
+    The device is faked (each rank's shards land in a dict). The shards come back exact, and a flipped byte in a chunk
+    stops the load on every rank, naming the rank that checked it."""
+    shape = (1, 1, 8, 16)
+    saved, loaded = world([R, S(3)], (1, 2)), world([S(2), R], (4, 1))
+    src = arange(shape)
+    ckpt = FakeCheckpoint()
+    ckpt.save({"w": (src, saved, Identity())})
+    path = str(tmp_path / "step_0000001")
+    ckpt.write(path)
+
+    this = threading.local()
+    shards = {}
+    monkeypatch.setattr(_load, "current_group", lambda: this.group)
+    monkeypatch.setattr(_load, "local_coords", lambda: [(this.group.rank, 0)])
+    monkeypatch.setattr(_load, "mesh_device", lambda: SimpleNamespace(shape=(4, 1)))
+    monkeypatch.setattr(_load, "reshard_fsdp_modules", lambda model: [])
+    monkeypatch.setattr(
+        _load, "collect_model", lambda model: [LiveTensor("w", None, info("w", loaded, shape, Identity()))]
+    )
+    monkeypatch.setattr(
+        _load, "_place", lambda live, arrays, device, local: shards.__setitem__(this.group.rank, arrays)
+    )
+
+    def body(group, fake):
+        this.group = group
+        return _load.load(path, model=object())
+
+    _, errors = _run_ranks(4, body)
+    assert errors == {}, errors
+    expected = expected_shards(src, loaded)
+    for rank in range(4):
+        assert_shards_equal(shards[rank], {group: expected[group] for group in shards[rank]})
+        assert len(shards[rank]) == 1, "each rank places its own quarter"
+
+    record = ckpt.index.entries["w"].chunks[0]
+    with open(os.path.join(path, ckpt.index.files[record.file].path), "r+b") as f:
+        f.seek(len(ckpt.headers[record.file]) + record.data_offset + record.nbytes - 1)
+        last = f.read(1)
+        f.seek(-1, os.SEEK_CUR)
+        f.write(bytes([last[0] ^ 0xFF]))
+    _, errors = _run_ranks(4, body)
+    assert set(errors) == {0, 1, 2, 3}, errors
+    for rank, err in errors.items():
+        assert type(err) is CheckpointError, (rank, repr(err))
+        assert re.search(
+            r"^reading and placing the shards failed on rank\(s\) \[(\d)\] of 4: rank \1: CheckpointError: .*chunk 0 .*"
+            r"fails its CRC32 check",
+            str(err),
+        ), (rank, str(err))
