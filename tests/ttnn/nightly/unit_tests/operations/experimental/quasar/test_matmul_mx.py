@@ -297,10 +297,12 @@ def test_legacy_packer_l1_acc(device, family):
 
 @pytest.mark.parametrize("family", LEGACY_FAMILIES)
 def test_legacy_fp32_dest_acc(device, family):
-    pytest.skip(
-        "fp32_dest_acc_en fails host validation on every legacy Quasar factory for bf16 too: the compute KernelSpec "
-        "gives no unpack_modes entry for the Float32 partials DFB (hardware_config.cpp dfbs_with_entry)"
-    )
+    # Two K blocks: the Float32 partials spill to L1 and reload through SrcA between them.
+    if family == "reuse":
+        pytest.skip(
+            "fp32_dest_acc_en fails host validation on the reuse factory for bf16 too: the compute KernelSpec gives "
+            "no unpack_modes entry for the Float32 partials DFB (hardware_config.cpp dfbs_with_entry)"
+        )
     _run_legacy(device, family, ttnn.mxint8, ttnn.mxint8, ttnn.mxint8, fp32_dest_acc_en=True)
 
 
