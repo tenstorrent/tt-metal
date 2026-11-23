@@ -141,6 +141,7 @@
 #include "llk_sfpu/ckernel_sfpu_atanh_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_cosh_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_elu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_erf_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_erfinv_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_exp2_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_expm1_bw_bf16.h"
@@ -179,6 +180,7 @@
     X(ATANH_BW, atanh)               \
     X(COSH_BW, cosh)                 \
     X(ELU_BW, elu)                   \
+    X(ERF_BW, erf)                   \
     X(ERFINV_BW, erfinv)             \
     X(EXP2_BW, exp2)                 \
     X(EXPM1_BW, expm1)               \
@@ -2040,6 +2042,11 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         SFPU_BINARY_INIT_FN_NO_ARGS(bitwise_and, sfpu::binary_bitwise_init);
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
+    else if constexpr (OP == BinaryOp::ERF_BW)
+    {
+        // erf_bw_tile_init's kernel step (the other <op>_bw_tile_init need only the shared SFPU init).
+        init_erf_bw_bf16();
+    }
     else if constexpr (OP == BinaryOp::LOGSIGMOID)
     {
         // logsigmoid_tile_init: loads the polynomial tail d6..d8 into vConstFloatPrgm0..2.
