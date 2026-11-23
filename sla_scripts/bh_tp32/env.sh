@@ -28,7 +28,46 @@ export LLAMA_BH_PREFILL_NORM_BF8=1 LLAMA_BH_PREFILL_WO_MMRS=1
 # requests draining slowly through split prompts. vLLM (Nov 20, sla_cap1 vs sla_cpf3): 240 RPM TTFT 0.98/7.24 ->
 # 0.58/3.00 s, decode 23.4 -> 25.7 tok/s/u; 32 x 4K at once 4.26/7.60 -> 3.99/7.60 s; 60 RPM 0.50/0.94 -> 0.43/0.76 s;
 # 40% prefix 0.50/1.42 -> 0.46/1.04 s; cold 16K 1.81 -> 1.58 s. 8192 without the cap: 32 x 4K mean 5.1 s.
-export MAX_BATCHED_TOKENS=8192 TT_CFG_EXTRA='"max_new_prefills_per_step": 1'
+# Decode step after every prefill step (plugin default 2; Nov 22, il1_a / il1_b): decoding users then finish their
+# outputs staggered instead of together, so the closed-loop 32 x 4K line's later rounds stop arriving as bursts.
+# 32 x 4K 1.47 -> 1.13 / 1.16 s (later rounds 1.34 -> 0.80 s, round 0 1.74 -> 1.80 s); 32 x 16K, 60 RPM and 240 RPM
+# unchanged. Every 8 steps: 1.70 s. Two decode steps per insertion: 1.18 s.
+export MAX_BATCHED_TOKENS=8192 TT_CFG_EXTRA='"max_new_prefills_per_step": 1, "decode_interleave_prefill_steps": 1, "decode_interleave_decode_steps": 4'
+# Gio plugin scheduler (lane_scheduler.py): hold a prefill step up to 50 ms while users that finished together are still
+# re-arriving (8 ms quiet), use 1 decode step per prefill step instead of 4 while the next prompt is > 8K tokens, and
+# prefill a single group that arrived during the last prefill step at once (FRESH_SKIP: breaks a one-step backlog).
+export TT_PLUGIN_BUSY_GATHER_MS=${TT_PLUGIN_BUSY_GATHER_MS:-8} TT_PLUGIN_LONG_PROMPT_TOKENS=${TT_PLUGIN_LONG_PROMPT_TOKENS:-8192} TT_PLUGIN_FRESH_SKIP=${TT_PLUGIN_FRESH_SKIP:-1}
+# DP4 x TP8 cold prefill (models/demos/llama3_70b_galaxy/tt/prefill_dp4tp8.py): TP32 prefill is communication-bound (per
+# 4K layer ~1.7 ms all-gather / reduce-scatter vs ~0.95 ms matmul), so each mesh column prefills its own lane's prompt
+# with TP8 instead: the four prompts of a prefill step run at once and the KV lands in the TP32 decode layout. Cold prompts
+# >= 2048 tokens on >= 2 columns take it; single prompts and prefix hits stay on TP32. Step budget 16384 so 16K prompts
+# prefill in one pass. vLLM (Nov 20, runs/dp4_v4 vs sla_cap1): 32 x 4K 3.99/7.60 -> 2.53/4.92 s, 32 x 16K 28.7/49 ->
+# 12.8/21.1 s, 60 RPM and 240 RPM no regression; quick MMLU 81.84% (DP4 forced onto >= 1K prompts), needle 0 misses.
+# Second weight copy ~6.7 GB per chip (cache dp4tp8_*; first start builds it). Opt-in precision change:
+# LLAMA_BH_PREFILL_DP4_LOFI=ff2,wo,qkv (LoFi for those bf8 matmuls: 32 x 4K 2.45/4.54 s, quick MMLU 81.93%).
+export LLAMA_BH_PREFILL_DP4=1 MAX_BATCHED_TOKENS=16384
+# One-op rms_norm and bf16 accumulation for QKV / FF13 (K block 16 is the code default): with GIO=1 FLUSH=1
+# TT_PLUGIN_IDLE_GATHER_MS=150 TT_MRS_BF8_TRANSPORT=1 LLAMA_BH_PREFILL_DP4_LOFI=ff2,wo,qkv
+# LLAMA_BH_PREFILL_DP4_SDPA_FP32=0 (runs/dp4_opt1, Nov 21): 32 x 4K 1.80/3.59 s, 32 x 16K 8.22/14.35 s, quick MMLU
+# 82.11%, needle 0 misses.
+export LLAMA_BH_PREFILL_DP4_NORM=${LLAMA_BH_PREFILL_DP4_NORM:-rms} LLAMA_BH_PREFILL_DP4_FP32=${LLAMA_BH_PREFILL_DP4_FP32:-none}
+# Shipped DP4 precision settings (every run since dp4_ship used them on the command line). The code also defaults to
+# SDPA LoFi, QKV bf8 output and WO via all-to-all with fp32 accumulation from 8K tokens. Full MMLU with every prompt on DP4
+# (14042 questions): 82.99% before those three, 83.13% with them (150 lost / 170 gained). Served (api8_a, Nov 22):
+# 32 x 16K 6.80 s, 32 x 4K 1.47 s, 1 user 4K 0.42 s. Serving launch used for these numbers:
+#   SERVE_CLI=1 SERVER_ARGS=--api-server-count=8 GIO=1 FLUSH=1 TT_PLUGIN_IDLE_GATHER_MS=150 (see README)
+export TT_MRS_BF8_TRANSPORT=${TT_MRS_BF8_TRANSPORT:-1} LLAMA_BH_PREFILL_DP4_LOFI=${LLAMA_BH_PREFILL_DP4_LOFI-ff2,wo,qkv}
+export LLAMA_BH_PREFILL_DP4_SDPA_FP32=${LLAMA_BH_PREFILL_DP4_SDPA_FP32:-0}
+# matmul_reduce_scatter_prefill chunk splits for the DP4 WO / FF2 shapes ("Mt,Kt,Nt,n_m,n_n"): in the full model the
+# decode path's resident L1 caps the plan budget and the planner's cost model then picks slow splits. Column axis,
+# model-like budget (tests/test_mrs_chunks.py):
+#   FF2 16K: auto 3.74 ms, (4,6) 2.87 ms
+#   WO 16K: auto 1.80 ms, (3,4) 1.60 ms
+#   FF2 8K: auto 1.93 ms, (2,6) 1.49 ms
+#   WO 8K: auto 0.94 ms, (2,3) 0.83 ms
+# 4K is best on auto. Nov 22, ranked by energy at the power cap with bfp4 W2 (the 16K default; tests/test_mrs_energy.py):
+# FF2 16K (4,6) 233 mJ / 3.32 ms, (8,3) 224 mJ / 3.23 ms, (6,4) 224 mJ, (4,4) 225 mJ. 4K auto stays cheapest.
+export TT_MRS_FORCE_CHUNKS=${TT_MRS_FORCE_CHUNKS:-"512,112,256,8,3;512,32,256,3,4;256,112,256,2,6;256,32,256,2,3"}
 # Fabric: vLLM reads FABRIC (run_server.sh), pytest reads TT_FABRIC_OVERRIDE (conftest.py)
 export FABRIC=${FABRIC:-FABRIC_1D_RING} TT_FABRIC_OVERRIDE=${TT_FABRIC_OVERRIDE:-FABRIC_1D_RING}
 # vLLM async scheduling is on by default in run_server.sh (+13% decode vs off). MMLU 81.6% before and 82.9% after the

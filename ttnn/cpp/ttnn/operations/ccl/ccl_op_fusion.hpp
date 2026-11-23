@@ -7,6 +7,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <string>
+#include <array>
 #include <variant>
 #include <initializer_list>
 #include <tt-metalium/global_circular_buffer.hpp>
@@ -325,6 +326,17 @@ struct MinimalMatmulFusedOpSignaler {
 
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
+
+    /* Row-gather mode (all-gather along M, dim 2; see RowGatherMap in fabric_bound_matmul_dataflow_common.hpp). The
+       caller sets row_gather and rg_order (per arrival position: source slice, semaphore 0/1 = per-direction
+       gathered-tile count or 2 = own slice, target count); the matmul helper creates the 3 semaphores on the in0
+       injectors and fills the rest. */
+    bool row_gather = false;
+    std::vector<std::array<uint32_t, 3>> rg_order;
+    std::vector<uint32_t> rg_sem_ids;
+    std::vector<tt::tt_metal::CoreCoord> rg_injector_cores_noc;  // indexed by M band (in0_idx)
+    uint32_t rg_slice_tiles = 0;
+    uint32_t rg_sub_tiles = 0;
 
     MinimalMatmulFusedOpSignaler() = default;
 

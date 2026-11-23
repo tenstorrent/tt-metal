@@ -116,7 +116,8 @@ void bind_normalization_rms_norm(nb::module_& mod) {
         nb::arg("residual_input_tensor") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::normalization::detail

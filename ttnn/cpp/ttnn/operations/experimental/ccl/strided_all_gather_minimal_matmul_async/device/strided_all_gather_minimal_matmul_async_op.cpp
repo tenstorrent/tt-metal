@@ -18,9 +18,24 @@ using matmul_device_operation_t = ttnn::experimental::prim::MinimalMatmulDeviceO
 namespace ttnn::experimental::prim {
 void StridedAllGatherMinimalMatmulAsync::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const uint32_t dim = attributes.strided_all_gather_async_struct.dim;
     TT_FATAL(
-        attributes.strided_all_gather_async_struct.dim == 3,
-        "StridedAllGatherMinimalMatmulAsync requires dim=3 for the AllGather operations.");
+        dim == 3 || dim == 2,
+        "StridedAllGatherMinimalMatmulAsync requires dim=3 (K gather) or dim=2 (row gather), got {}.",
+        dim);
+    if (dim == 2) {
+        TT_FATAL(
+            !attributes.read_local_slice_from_input, "row gather (dim=2) does not support read_local_slice_from_input");
+        TT_FATAL(
+            attributes.strided_all_gather_async_struct.semaphore.size() >= 2,
+            "row gather (dim=2) needs 2 global semaphores (all-gather out-ready per direction), plus an optional "
+            "barrier");
+        TT_FATAL(
+            tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE &&
+                tensor_args.input_tensor.memory_config().is_dram() &&
+                !tensor_args.input_tensor.memory_config().is_sharded(),
+            "row gather (dim=2) needs a TILE, interleaved DRAM input");
+    }
     TT_FATAL(
         tensor_args.input_tensor.padded_shape()[0] == 1 && tensor_args.input_tensor.padded_shape()[1] == 1,
         "StridedAllGatherMinimalMatmulAsync requires input tensor to have batch size of 1.");
@@ -104,8 +119,16 @@ StridedAllGatherMinimalMatmulAsync::spec_return_value_t StridedAllGatherMinimalM
     spec_return_value_t specs;
     specs.reserve(1 + minimal_matmul_output_specs_vec.size());
     specs.push_back(strided_all_gather_output_shape);
+    const bool row_gather = attributes.strided_all_gather_async_struct.dim == 2;
     for (auto& spec : minimal_matmul_output_specs_vec) {
-        specs.push_back(spec);
+        if (row_gather) {
+            // The matmul runs on the gathered rows: M grows by the ring size
+            auto shape = spec.logical_shape();
+            shape[-2] *= attributes.strided_all_gather_async_struct.ring_size;
+            specs.push_back(tt::tt_metal::TensorSpec(shape, spec.tensor_layout()));
+        } else {
+            specs.push_back(spec);
+        }
     }
     return specs;
 }

@@ -221,6 +221,11 @@ void kernel_main() {
     }
 #endif
 
+#ifdef ROW_GATHER
+    RowGatherMap rg_map;
+    rg_map.init(out_addr_rt_arg_idx + N_chunks, M_start_tile, M_block_tiles);
+#endif
+
     in0_valid_sem.set(VALID);
 
     const uint64_t in0_sender_semaphore_noc_addr =
@@ -245,10 +250,18 @@ void kernel_main() {
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+#ifdef ROW_GATHER
+        rg_map.block(m_block_iter, M_block_tiles, m_tile, m_tile_end);
+#endif
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
 #ifdef FUSE_AG
         if constexpr (is_injector_core) {
             fused_op_receiver.reset();
+        }
+#endif
+#ifdef ROW_GATHER
+        if constexpr (is_injector_core) {
+            rg_map.wait(m_block_iter);
         }
 #endif
 
@@ -753,6 +766,11 @@ void kernel_main() {
             }
         }
     }
+#ifdef ROW_GATHER
+    if constexpr (is_injector_core) {
+        rg_map.reset();
+    }
+#endif
     noc.async_write_barrier();
     noc.async_atomic_barrier();
 }

@@ -203,6 +203,10 @@ void minimal_matmul_fabric_bound_factory_helper_common(
     auto* device = input_tensor.device();
 
     bool fuse_op = fused_op_signaler.has_value();
+    // Row-gather (M all-gather) fusion: the transport delivers whole M blocks and signals the in0 injectors, so none
+    // of the K-gather (FUSE_AG) machinery below applies.
+    const bool row_gather = fuse_op && fused_op_signaler->row_gather;
+    const bool fuse_k_gather = fuse_op && !row_gather;
 
     if (!config.has_value()) {
         log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");
@@ -303,6 +307,24 @@ void minimal_matmul_fabric_bound_factory_helper_common(
     // Transpose core grid if the output is wide (M > N) If transpose core grid
     const bool fuse_srs = srs_fused_op_signaler.has_value();
     bool transpose_core_grid = M > N && !fuse_srs;
+    if (row_gather) {
+        // Every M band (in0 parallel axis) must hold rows of exactly one source device, so the in0 axis must be a
+        // multiple of the ring size. TT_RG_TRANSPOSE=0/1 forces the orientation (default: rows if they divide).
+        const uint32_t ring = fused_op_signaler->ring_size;
+        const char* e = std::getenv("TT_RG_TRANSPOSE");
+        if (e != nullptr && (e[0] == '0' || e[0] == '1')) {
+            transpose_core_grid = e[0] == '1';
+        } else {
+            transpose_core_grid = (grid_size.y % ring) != 0;
+        }
+        const uint32_t axis = transpose_core_grid ? grid_size.x : grid_size.y;
+        TT_FATAL(
+            axis % ring == 0,
+            "row-gather matmul: the in0 parallel axis ({} cores, transposed={}) must be a multiple of the ring size {}",
+            axis,
+            transpose_core_grid,
+            ring);
+    }
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
@@ -364,7 +386,7 @@ void minimal_matmul_fabric_bound_factory_helper_common(
 
     // Sub-chunk (M-row band) count for the fused AG in0 delivery
     uint32_t in0_sub_chunks = 1;
-    if (fuse_op) {
+    if (fuse_k_gather) {
         if (const char* e = std::getenv("IN0_SUB_CHUNKS")) {
             long v = std::strtol(e, nullptr, 10);
             if (v > 1) {
@@ -373,7 +395,7 @@ void minimal_matmul_fabric_bound_factory_helper_common(
         }
     }
     // Band-interleave: process a forward remote k-block and the following backward one one-band-at-a-time
-    bool interleave_bands = fuse_op && in0_sub_chunks > 1;
+    bool interleave_bands = fuse_k_gather && in0_sub_chunks > 1;
     // Number of leading (self/local) k-block positions this device owns (see kernels)
     uint32_t num_local_k_blocks = K_blocks;
 
@@ -538,7 +560,37 @@ void minimal_matmul_fabric_bound_factory_helper_common(
         }
     }
 
-    if (fuse_op) {
+    if (row_gather) {
+        TT_FATAL(!fuse_srs, "row-gather matmul cannot also fuse a strided reduce-scatter");
+        auto& sig = fused_op_signaler.value();
+        const uint32_t S = sig.ring_size;
+        TT_FATAL(
+            in0_parallel_axis_cores == S,
+            "row-gather: the {} M bands must be one per ring device ({})",
+            in0_parallel_axis_cores,
+            S);
+        TT_FATAL(M_tiles == padded_M_tiles, "row-gather: M ({} tiles) must split evenly over the bands", M_tiles);
+        TT_FATAL(
+            M_tiles_per_core % S == 0 && (M_tiles_per_core / S) % M_block_tiles == 0,
+            "row-gather: each device's {} row tiles must split into {} sub-bands of whole M blocks ({} tiles)",
+            M_tiles_per_core,
+            S,
+            M_block_tiles);
+        TT_FATAL(sig.rg_order.size() == S, "row-gather: one arrival-order entry per ring device expected");
+        sig.rg_sem_ids.clear();
+        for (uint32_t c = 0; c < 3; c++) {
+            sig.rg_sem_ids.push_back(add_semaphore_descriptor(desc, CoreRangeSet(in0_sender_cores), 0));
+        }
+        sig.rg_injector_cores_noc.clear();
+        for (uint32_t a = 0; a < in0_parallel_axis_cores; a++) {
+            CoreCoord logical = transpose_core_grid ? CoreCoord{a, 0} : CoreCoord{0, a};
+            sig.rg_injector_cores_noc.push_back(device->worker_core_from_logical_core(logical));
+        }
+        sig.rg_slice_tiles = M_tiles_per_core;
+        sig.rg_sub_tiles = M_tiles_per_core / S;
+        sig.initialized_fused_op = true;
+        defines["ROW_GATHER"] = "1";
+    } else if (fuse_op) {
         fused_op_signaler->init_fused_op(desc, device, in0_sender_cores);
         defines["FUSE_AG"] = "1";
         // Stream the in0 read in this many M-row bands (parsed above), matching the AG's per-band delivery/signal
@@ -988,7 +1040,18 @@ void minimal_matmul_fabric_bound_factory_helper_common(
         };
         const auto append_signaler_args = [&](KernelDescriptor::RTArgList& args) {
             std::vector<uint32_t> signaler_args;
-            if (fuse_op) {
+            if (row_gather) {
+                const auto& sig = fused_op_signaler.value();
+                signaler_args.push_back(static_cast<uint32_t>(sig.rg_order.size()));
+                signaler_args.push_back(sig.rg_slice_tiles);
+                signaler_args.push_back(sig.rg_sub_tiles);
+                for (uint32_t id : sig.rg_sem_ids) {
+                    signaler_args.push_back(id);
+                }
+                for (const auto& e : sig.rg_order) {
+                    signaler_args.insert(signaler_args.end(), e.begin(), e.end());
+                }
+            } else if (fuse_op) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(
                     signaler_args, padded_K_tiles / K_block_tiles, K_block_tiles);
             }

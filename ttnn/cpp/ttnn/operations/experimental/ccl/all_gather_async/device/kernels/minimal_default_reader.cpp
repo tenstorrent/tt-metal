@@ -129,6 +129,37 @@ void kernel_main() {
         op_signaler = OpSignaler(arg_idx);
     }
 
+#ifdef ROW_PROGRESS
+    // Row-gather fusion (dim 2): after each arrival wait, add the tiles of this worker's range that have newly landed
+    // to this direction's gathered-tile counter (program-local semaphore rp_sem) on every matmul in0 injector. The
+    // injectors walk the slices in arrival order and start slice k of a direction once its counter reaches
+    // (k + 1) * slice tiles (see RowGatherMap in fabric_bound_matmul_dataflow_common.hpp).
+    constexpr bool row_progress = true;
+    const uint32_t rp_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t rp_noc_x[ring_size];
+    uint32_t rp_noc_y[ring_size];
+    for (uint32_t d = 0; d < ring_size; d++) {
+        rp_noc_x[d] = get_arg_val<uint32_t>(arg_idx++);
+        rp_noc_y[d] = get_arg_val<uint32_t>(arg_idx++);
+    }
+    const uint32_t rp_range_tiles = input_tile_id_end - input_tile_id_start;
+    uint32_t rp_reported = 0;
+    // After the wait that precedes chunk `chunk_idx` of a slice, every sync group up to and including chunk_idx's
+    // group has landed.
+    auto rp_report = [&](uint32_t /*slice*/, uint32_t chunk_idx) {
+        uint32_t covered = (chunk_idx / chunks_per_sync + 1) * chunks_per_sync * num_tiles_to_write_per_packet;
+        covered = covered < rp_range_tiles ? covered : rp_range_tiles;
+        if (covered > rp_reported) {
+            for (uint32_t d = 0; d < ring_size; d++) {
+                noc_semaphore_inc(get_noc_addr(rp_noc_x[d], rp_noc_y[d], rp_sem_addr), covered - rp_reported);
+            }
+            rp_reported = covered;
+        }
+    };
+#else
+    constexpr bool row_progress = false;
+#endif
+
     // Push out our local slice
     uint32_t tiles_read = input_tile_id_start;
     uint32_t tiles_to_read = input_tile_id_end;
@@ -190,7 +221,7 @@ void kernel_main() {
     //   - Backward receives 2 slices: device at +1 hop (full), device at +2 hops (SECOND HALF)
     //   Note: backward needs to receive an ADDITIONAL slice for the second half!
     bool split_forwarding_enabled = false;
-    if constexpr (topology == Topology::Ring && !fuse_op) {
+    if constexpr (topology == Topology::Ring && !fuse_op && !row_progress) {
         if (ring_size % 2 == 0 && ring_size > 2 &&
             input_tile_id_end - input_tile_id_start >= 2) {  // if ring size is even, we need to write the first half of
                                                              // the tiles, otherwise we write the entire packet
@@ -207,6 +238,9 @@ void kernel_main() {
     uint32_t sem_target = 0;
     uint32_t slices_forwarded = 0;  // Track forwarded slices separately for split-forwarding
     while (slices_received < slices_expected) {
+#ifdef ROW_PROGRESS
+        rp_reported = 0;  // running count restarts per slice (each slice is its own band)
+#endif
         // Check if this is the last slice and split forwarding applies
         bool is_last_slice = (slices_received == slices_expected - 1);
         bool is_split_slice = split_forwarding_enabled && is_last_slice;
@@ -314,6 +348,9 @@ void kernel_main() {
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                         sem_target++;
+#ifdef ROW_PROGRESS
+                        rp_report(actual_sender_chip_id, chunk_count);
+#endif
                     }
                     chunk_count++;
 
@@ -390,6 +427,9 @@ void kernel_main() {
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                         sem_target++;
+#ifdef ROW_PROGRESS
+                        rp_report(actual_sender_chip_id, chunk_count);
+#endif
                     }
                     chunk_count++;
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;

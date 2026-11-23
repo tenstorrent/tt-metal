@@ -13,6 +13,8 @@ struct RotaryEmbeddingLlamaParams {
     bool is_decode_mode{};
     tt::tt_metal::MemoryConfig output_mem_config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
+    // Output dtype (default: the input's, bfloat16); e.g. bfloat8_b packed straight out of the rotation
+    std::optional<tt::tt_metal::DataType> dtype = std::nullopt;
 };
 
 struct RotaryEmbeddingLlamaInputs {

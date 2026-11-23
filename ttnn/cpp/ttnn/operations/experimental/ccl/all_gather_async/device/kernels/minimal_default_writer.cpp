@@ -232,6 +232,26 @@ void kernel_main() {
         op_signaler_sender = OpSignaler(arg_idx);
     }
 
+#ifdef ROW_PROGRESS
+    // Row-gather fusion: the direction-1 writer also writes this device's own slice into the gathered output; add its
+    // progress to the own-slice counter on every matmul in0 injector (see minimal_default_reader.cpp).
+    constexpr bool row_progress = true;
+#ifndef USE_WORKER_MUX
+    arg_idx = arg_for_fab;
+#endif
+    const uint32_t rp_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t rp_noc_x[ring_size];
+    uint32_t rp_noc_y[ring_size];
+    for (uint32_t d = 0; d < ring_size; d++) {
+        rp_noc_x[d] = get_arg_val<uint32_t>(arg_idx++);
+        rp_noc_y[d] = get_arg_val<uint32_t>(arg_idx++);
+    }
+    uint32_t rp_written = 0;
+    uint32_t rp_reported = 0;
+#else
+    constexpr bool row_progress = false;
+#endif
+
 #ifdef USE_WORKER_MUX
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_connect(*fabric_direction_connection);
@@ -309,7 +329,7 @@ void kernel_main() {
 
     uint32_t slice_writes = 0;
     bool split_forwarding_enabled = false;
-    if constexpr (topology == Topology::Ring && !fuse_op) {
+    if constexpr (topology == Topology::Ring && !fuse_op && !row_progress) {
         if (ring_size % 2 == 0 && ring_size > 2 &&
             input_tile_id_end - input_tile_id_start >= 2) {  // if ring size is even, we need to write the first half of
                                                              // the tiles, otherwise we write the entire packet
@@ -427,6 +447,16 @@ void kernel_main() {
                     noc_async_write(l1_read_addr + i * page_size, local_noc_addrs[i], page_size);
                 }
                 noc_obj.async_write_barrier();
+#ifdef ROW_PROGRESS
+                rp_written += tiles_to_put_in_current_packet;
+                if (rp_written - rp_reported >= 64 || tiles_read + tiles_to_put_in_current_packet >= tiles_to_read) {
+                    for (uint32_t d = 0; d < ring_size; d++) {
+                        noc_semaphore_inc(
+                            get_noc_addr(rp_noc_x[d], rp_noc_y[d], rp_sem_addr), rp_written - rp_reported);
+                    }
+                    rp_reported = rp_written;
+                }
+#endif
             } else {
                 if constexpr (num_targets_forward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {

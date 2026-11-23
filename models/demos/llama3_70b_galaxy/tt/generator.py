@@ -29,6 +29,7 @@ from models.common.sampling import (
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.llama_attention import CPF_RING_ALIGN, cpf_ring_eligible, cpf_ring_warm_prefixes
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
+from models.demos.llama3_70b_galaxy.tt.prefill_dp4tp8 import dp4_min_len
 from models.demos.llama3_70b_galaxy.tt.prefill_padding import (
     cpf_pad512_on,
     cpf_pad512_seqlens,
@@ -460,6 +461,7 @@ class Generator(WarmupForwardMixin):
             )
             self._defer_trace_recording = False
             self._record_pending_traces()
+            self._dp4_warmup(kv_cache)
         except BaseException:
             self.already_warmed_up_prefill = False
             raise
@@ -886,6 +888,27 @@ class Generator(WarmupForwardMixin):
         if do_device_sampling and use_batched_prefill:
             self.tt_logits_accumulated_batched = []
 
+        # LLAMA_BH_PREFILL_DP4=1: cold prompts of >= LLAMA_BH_PREFILL_DP4_MIN tokens on different mesh columns
+        # prefill together, one per column, with TP8 inside each column (tt/prefill_dp4tp8.py).
+        dp4_done = self._dp4_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            prefill_seq_lens=prefill_seq_lens,
+            num_cached_tokens_list=num_cached_tokens_list,
+            empty_slots=empty_slots,
+            skip=use_batched_prefill
+            or bool(any(rep_fill_prefix))
+            or (explicit_seeded_prefill and not self._dp4_greedy_seed_ok(sampling_params)),
+            do_device_sampling=do_device_sampling,
+            save_logits_to_host=save_logits_to_host,
+            output_toks=output_toks,
+            tt_out_logits_all_users=tt_out_logits_all_users,
+        )
+        if dp4_done:
+            prefill_work_items = [w for w in prefill_work_items if w[0] or w[1][0] not in dp4_done]
+
         for work_use_batched_prefill, request_indices, request_slots in prefill_work_items:
             request_idx = request_indices[0]
             user_id = request_slots if work_use_batched_prefill else request_slots[0]
@@ -1282,6 +1305,153 @@ class Generator(WarmupForwardMixin):
         if prefill_log_probs is not None:
             return output_toks, prefill_log_probs
         return output_toks
+
+    def _dp4_warmup(self, kv_cache):
+        """Compile the DP4 x TP8 prefill for the lengths in LLAMA_BH_PREFILL_DP4_WARM (KV writes skipped: every
+        page-table row is -1), plus the 128-row LM-head input it hands to the model."""
+        dp4 = getattr(self.model, "dp4", None)
+        if dp4 is None:
+            return
+        if self.model.is_prefill_setup is False:
+            self.model.switch_mode("prefill")
+        kv = kv_cache[0] if kv_cache is not None else None
+        block_size = get_block_size(kv) if kv is not None else 64
+        warm = os.environ.get("LLAMA_BH_PREFILL_DP4_WARM", "2048,3072,4096,5120,6144,7168,8192,16384")
+        hidden = None
+        for M in sorted({((int(m) + 1023) // 1024) * 1024 for m in warm.split(",") if m.strip()}):
+            if M < dp4_min_len() or M > self.model_args.max_seq_len:
+                continue
+            for rep_i in range(2):  # compile, then (traced lengths) capture
+                t0 = time.perf_counter()
+                lastw = {c: M - 1 for c in range(4)}
+                x, owned = dp4.forward(
+                    torch.zeros(4, M, dtype=torch.long),
+                    M,
+                    torch.full((4, M // block_size), -1, dtype=torch.int32),
+                    kv,
+                    last_idx_cols=lastw,
+                )
+                hidden = dp4.last_hidden(x, M, lastw)
+                # compile the on-device LM-head input (and the LM head on it) for this length too, so the first
+                # serving step of the length does not pay for it
+                tt_dev = dp4.rows_to_logits_input(x) if dp4.rows_out else dp4.logits_input_device(x, M, lastw)
+                for t in self.model.process_output_prefill_logits(tt_dev, last_token_idx=32):
+                    ttnn.deallocate(t)
+                ttnn.deallocate(tt_dev)
+                if owned:
+                    ttnn.deallocate(x)
+                logger.info(f"DP4xTP8 warmup M={M} pass {rep_i}: {time.perf_counter() - t0:.2f} s")
+        if hidden is not None:
+            tt_in = dp4.logits_input(hidden[0])
+            logits = self.model.process_output_prefill_logits(tt_in, last_token_idx=0)
+            for t in logits:
+                ttnn.deallocate(t)
+            ttnn.deallocate(tt_in)
+
+    @staticmethod
+    def _dp4_greedy_seed_ok(sampling_params):
+        """LLAMA_BH_PREFILL_DP4_GREEDY_SEED=1 (accuracy runs): let seeded but all-greedy requests (lm_eval sends a seed
+        with temperature 0) take the DP4 prefill; a seed does not change a greedy token."""
+        if os.environ.get("LLAMA_BH_PREFILL_DP4_GREEDY_SEED") != "1" or sampling_params is None:
+            return False
+        temps = _as_list(getattr(sampling_params, "temperature", None))
+        return all(t is not None and float(t) == 0.0 for t in temps)
+
+    def _dp4_prefill(
+        self,
+        tokens,
+        page_table,
+        kv_cache,
+        prompt_lens,
+        prefill_seq_lens,
+        num_cached_tokens_list,
+        empty_slots,
+        skip,
+        do_device_sampling,
+        save_logits_to_host,
+        output_toks,
+        tt_out_logits_all_users,
+    ):
+        """DP4 x TP8 prefill of the eligible requests of this call; returns the set of request indices it handled."""
+        dp4 = getattr(self.model, "dp4", None)
+        if dp4 is None or skip or os.environ.get("LLAMA_BH_PREFILL_DP4_OFF", "0") == "1" or page_table is None:
+            return set()
+        min_len = dp4_min_len()
+        min_users = int(os.environ.get("LLAMA_BH_PREFILL_DP4_MIN_USERS", "2"))
+        by_col = {c: [] for c in range(4)}
+        for idx in range(len(prompt_lens)):
+            if num_cached_tokens_list[idx] == 0 and prefill_seq_lens[idx] >= min_len:
+                by_col[int(empty_slots[idx]) // 8].append(idx)
+        done = set()
+        block_size = get_block_size(kv_cache)
+        while sum(1 for c in by_col if by_col[c]) >= min_users:
+            group = {c: by_col[c].pop(0) for c in by_col if by_col[c]}
+            M = max(prefill_seq_lens[idx] for idx in group.values())
+            M = ((M + 1023) // 1024) * 1024
+            if os.environ.get("LLAMA_BH_PREFILL_DP4_COUNT") == "1":  # accuracy runs: show DP4 coverage
+                self._dp4_count = getattr(self, "_dp4_count", 0) + len(group)
+                logger.info(f"DP4xTP8 COUNT {self._dp4_count} prompts (this group {len(group)} at M={M})")
+            nb = M // block_size
+            tokens_cols = torch.zeros(4, M, dtype=torch.long)
+            pt_cols = torch.full((4, nb), -1, dtype=torch.int32)
+            last = {}
+            for c, idx in group.items():
+                L = int(prompt_lens[idx])
+                tokens_cols[c, :L] = tokens[idx, :L]
+                owned = num_blocks_in_seq(L, block_size)
+                row = torch.zeros(nb, dtype=torch.int32)  # block 0: vLLM's null block, sink for padding rows
+                n = min(owned, nb, page_table.shape[1])
+                row[:n] = page_table[idx, :n].to(torch.int32)
+                pt_cols[c] = row
+                last[c] = L - 1
+            logger.info(
+                f"DP4xTP8 prefill M={M}: "
+                + ", ".join(f"col {c} user {int(empty_slots[i])} len {int(prompt_lens[i])}" for c, i in group.items())
+            )
+            kv_layers = kv_cache if kv_cache is not None else [l.attention.layer_past for l in self.model.layers]
+            t0 = time.perf_counter()
+            x, owned = dp4.forward(tokens_cols, M, pt_cols, kv_layers, last_idx_cols=last)
+            device_tail = do_device_sampling and os.environ.get("LLAMA_BH_PREFILL_DP4_DEVICE_TAIL", "1") == "1"
+            if device_tail:
+                # LM-head input built on device (user on column c at row 32 c): the host does not wait for the
+                # forward here, so it queues the logits / sampling work while the forward runs
+                tt_in_dev = dp4.rows_to_logits_input(x) if dp4.rows_out else dp4.logits_input_device(x, M, last)
+                hidden = None
+            else:
+                hidden = dp4.last_hidden(x, M, last)  # host read: waits for the forward
+            t1 = time.perf_counter()
+            if owned:
+                ttnn.deallocate(x)
+            # one upload for the step: user k's last hidden row sits at row 32 k (device tail: row 32 c)
+            cols = list(group.keys())
+            if device_tail:
+                tt_in = tt_in_dev
+                rows = [32 * c for c in cols]
+            else:
+                tt_in = dp4.logits_inputs([hidden[c] for c in cols])
+                rows = [32 * k for k in range(len(cols))]
+            for k, c in enumerate(cols):
+                idx = group[c]
+                slot = int(empty_slots[idx])
+                if not do_device_sampling:
+                    saved = torch.zeros(1, self.model.args.padded_vocab_size) if save_logits_to_host else None
+                    tok = self.model.process_output_prefill(
+                        tt_in, last_token_idx=rows[k], tt_out_logits_saved=saved, user_id=slot
+                    )
+                    output_toks[idx] = tok
+                    if tt_out_logits_all_users is not None and saved is not None:
+                        tt_out_logits_all_users[idx] = saved
+                else:
+                    logits = self.model.process_output_prefill_logits(tt_in, last_token_idx=rows[k])
+                    ttnn.copy(input_a=logits[0], input_b=self.tt_logits_accumulated[slot])
+                    del logits
+                done.add(idx)
+            ttnn.deallocate(tt_in)
+            logger.info(
+                f"DP4xTP8 step M={M} users={len(group)}: forward {1e3 * (t1 - t0):.0f} ms, "
+                f"logits {1e3 * (time.perf_counter() - t1):.0f} ms (host time)"
+            )
+        return done
 
     def prefill_forward_single_user_text(
         self,

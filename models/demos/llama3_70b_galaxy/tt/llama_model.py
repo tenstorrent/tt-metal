@@ -21,6 +21,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.llama3_70b_galaxy.tt.prefill_dp4tp8 import DP4TP8Prefill, dp4_enabled
 from models.common.sampling.generator import SamplingGenerator
 
 
@@ -207,6 +208,12 @@ class TtTransformer(LightweightModule):
             torch.tensor([0, 0, 0, 0], dtype=torch.int32),
             device=self.mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        # LLAMA_BH_PREFILL_DP4=1: DP4 x TP8 cold prefill (each mesh column prefills its own lane's prompt with TP8).
+        self.dp4 = (
+            DP4TP8Prefill(self, args, mesh_device, state_dict, weight_cache_path)
+            if dp4_enabled() and not self.decode_mode_only
+            else None
         )
 
     def get_or_create_prefill_rot_mats(self):

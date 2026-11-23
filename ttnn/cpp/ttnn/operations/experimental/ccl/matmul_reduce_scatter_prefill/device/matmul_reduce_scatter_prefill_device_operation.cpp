@@ -4,6 +4,7 @@
 #include "matmul_reduce_scatter_prefill_device_operation.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <initializer_list>
 #include <string_view>
 
@@ -227,8 +228,10 @@ MatmulReduceScatterPrefillDeviceOperation::compute_output_specs(
     } else {
         out_shape[-1] = n / group;
     }
-    return TensorSpec(
-        out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_memory_config));
+    // TT_MRS_BF8_TRANSPORT=1: bfp8 staging, so the output (written straight from the staging tiles) is bfp8 too.
+    const char* bf8 = std::getenv("TT_MRS_BF8_TRANSPORT");
+    const DataType out_dtype = (bf8 != nullptr && bf8[0] == '1') ? DataType::BFLOAT8_B : DataType::BFLOAT16;
+    return TensorSpec(out_shape, TensorLayout(out_dtype, PageConfig(Layout::TILE), attrs.output_memory_config));
 }
 
 std::vector<TensorTopology> MatmulReduceScatterPrefillDeviceOperation::compute_output_topologies(

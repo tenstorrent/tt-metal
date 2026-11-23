@@ -57,8 +57,15 @@ constexpr uint32_t kBwd = 1;
 
 std::string mrs_kernel_path(const char* name) { return std::string(kMrsKernelDir) + name; }
 
-// bf16 tile: finished sub-blocks, arrival zones, port chunks, the zero tile and the output.
-uint32_t mrs_stage_tile_bytes() { return tt::tile_size(tt::DataFormat::Float16_b); }
+// Staging tile format: finished sub-blocks, arrival zones, port chunks, the zero tile and the output. bf16 by default;
+// TT_MRS_BF8_TRANSPORT=1 (experimental) uses bfp8 instead, which halves the bytes each hop moves (the partials still
+// accumulate in fp32 in the hold) and makes the output bfp8. Read per program build (not part of the program hash).
+bool mrs_bf8_transport() {
+    const char* v = std::getenv("TT_MRS_BF8_TRANSPORT");
+    return v != nullptr && v[0] == '1';
+}
+tt::DataFormat mrs_stage_format() { return mrs_bf8_transport() ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b; }
+uint32_t mrs_stage_tile_bytes() { return tt::tile_size(mrs_stage_format()); }
 
 using SlotValue = std::variant<uint32_t, Buffer*>;
 
@@ -895,12 +902,12 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     // The staging (finished slots and arrival zones) comes first on the matmul and port cores, so it starts at the
     // same address on every core of every chip: neighbours write their partials into it by that address.
     const CoreRangeSet staging_crs = mm_crs.merge(used_port_crs);
-    desc.cbs.push_back(mrs_plain_cb(
-        args::cb::FINISHED, detail::kDepthHandoff * P, tile_bytes, tt::DataFormat::Float16_b, staging_crs));
     desc.cbs.push_back(
-        mrs_plain_cb(args::cb::ARRIVALS_FWD, ring_slots[kFwd] * P, tile_bytes, tt::DataFormat::Float16_b, staging_crs));
+        mrs_plain_cb(args::cb::FINISHED, detail::kDepthHandoff * P, tile_bytes, mrs_stage_format(), staging_crs));
     desc.cbs.push_back(
-        mrs_plain_cb(args::cb::ARRIVALS_BWD, ring_slots[kBwd] * P, tile_bytes, tt::DataFormat::Float16_b, staging_crs));
+        mrs_plain_cb(args::cb::ARRIVALS_FWD, ring_slots[kFwd] * P, tile_bytes, mrs_stage_format(), staging_crs));
+    desc.cbs.push_back(
+        mrs_plain_cb(args::cb::ARRIVALS_BWD, ring_slots[kBwd] * P, tile_bytes, mrs_stage_format(), staging_crs));
     desc.cbs.push_back(
         mrs_plain_cb(args::cb::ACT_K_WINDOW, a_pages, tA, datatype_to_dataformat_converter(a.dtype()), mm_crs));
     desc.cbs.push_back(
@@ -912,12 +919,8 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
         tt::DataFormat::Float32,
         mm_crs));
     desc.cbs.push_back(mrs_plain_cb(
-        args::cb::PORT_CHUNKS,
-        2 * detail::kPortGroup * chunk_tiles,
-        tile_bytes,
-        tt::DataFormat::Float16_b,
-        used_port_crs));
-    desc.cbs.push_back(mrs_plain_cb(args::cb::ZERO, 1, tile_bytes, tt::DataFormat::Float16_b, mm_crs));
+        args::cb::PORT_CHUNKS, 2 * detail::kPortGroup * chunk_tiles, tile_bytes, mrs_stage_format(), used_port_crs));
+    desc.cbs.push_back(mrs_plain_cb(args::cb::ZERO, 1, tile_bytes, mrs_stage_format(), mm_crs));
     return desc;
 }
 

@@ -513,3 +513,60 @@ void write_block_sync_granular_split(
         cb_pop_front(cb_id_out, N_block_tiles);
     }
 }
+
+#ifdef ROW_GATHER
+// Row-gather fused matmul (all-gather along M fused in front): the M split is one band per core row, and a band is
+// a 1/num_slices sub-band of EVERY source device's slice, visited in the all-gather's arrival order (own slice, then
+// +-1, +-2, ... hops). Each slice step is 1/num_slices of the work, so later slices land while earlier ones compute.
+// Runtime args at `idx` (right after the output addresses):
+//   [num_slices, slice_tiles, sub_tiles, sem_id x3,
+//    then per arrival position j: slice id, semaphore (0/1 = gathered-tile count per direction, 2 = own slice), target]
+// The injector waits, before its first block of position j, for semaphore sel[j] to reach target[j].
+struct RowGatherMap {
+    static constexpr uint32_t kMaxSlices = 16;
+    uint32_t num_slices = 0;
+    uint32_t slice_tiles = 0;
+    uint32_t sub_tiles = 0;
+    uint32_t band = 0;
+    uint32_t blocks_per_slice = 1;
+    uint32_t sem_addr[3] = {0, 0, 0};
+    uint32_t order[kMaxSlices] = {};
+    uint32_t sel[kMaxSlices] = {};
+    uint32_t target[kMaxSlices] = {};
+
+    void init(uint32_t idx, uint32_t M_start_tile, uint32_t M_block_tiles) {
+        num_slices = get_arg_val<uint32_t>(idx++);
+        slice_tiles = get_arg_val<uint32_t>(idx++);
+        sub_tiles = get_arg_val<uint32_t>(idx++);
+        for (uint32_t c = 0; c < 3; c++) {
+            sem_addr[c] = get_semaphore(get_arg_val<uint32_t>(idx++));
+        }
+        for (uint32_t j = 0; j < num_slices; j++) {
+            order[j] = get_arg_val<uint32_t>(idx++);
+            sel[j] = get_arg_val<uint32_t>(idx++);
+            target[j] = get_arg_val<uint32_t>(idx++);
+        }
+        band = M_start_tile / slice_tiles;
+        blocks_per_slice = sub_tiles / M_block_tiles;
+    }
+    // Output/in0 row-tile range of this core's m_block_iter-th block
+    void block(uint32_t m_block_iter, uint32_t M_block_tiles, uint32_t& m_tile, uint32_t& m_tile_end) const {
+        const uint32_t j = m_block_iter / blocks_per_slice;
+        const uint32_t q = m_block_iter % blocks_per_slice;
+        m_tile = order[j] * slice_tiles + band * sub_tiles + q * M_block_tiles;
+        m_tile_end = m_tile + M_block_tiles;
+    }
+    void wait(uint32_t m_block_iter) const {
+        if (m_block_iter % blocks_per_slice == 0) {
+            const uint32_t j = m_block_iter / blocks_per_slice;
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr[sel[j]]), target[j]);
+        }
+    }
+    // Every increment has been consumed (each semaphore's last wait was for its full total): ready for the next run
+    void reset() const {
+        for (uint32_t c = 0; c < 3; c++) {
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr[c]), 0);
+        }
+    }
+};
+#endif

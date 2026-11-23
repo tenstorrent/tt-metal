@@ -1,0 +1,296 @@
+diff --git a/src/vllm_tt_plugin/config.py b/src/vllm_tt_plugin/config.py
+index 2fb456b..703466c 100644
+--- a/src/vllm_tt_plugin/config.py
++++ b/src/vllm_tt_plugin/config.py
+@@ -739,6 +739,24 @@ def get_tt_keep_decode_chain(vllm_config: "VllmConfig") -> bool:
+     return _read_tt_bool(get_tt_config(vllm_config), _KEEP_DECODE_CHAIN_KEY, False)
+ 
+ 
++_MAX_NEW_PREFILLS_PER_STEP_KEY = "max_new_prefills_per_step"
++
++
++def get_tt_max_new_prefills_per_step(vllm_config: "VllmConfig") -> int:
++    """Most new requests one prefill step admits per scheduler (lane); 0 = no cap.
++
++    The TT runner returns a step's first tokens only when the whole step ends, so a large token budget that admits
++    several whole prompts per step delays every first token in it. Capping admissions keeps a large budget (one long
++    prompt in one pass instead of chunks) without growing the step.
++    """
++    value = get_tt_config(vllm_config).get(_MAX_NEW_PREFILLS_PER_STEP_KEY, 0)
++    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
++        raise ValueError(
++            f"additional_config['tt']['{_MAX_NEW_PREFILLS_PER_STEP_KEY}'] must be an integer >= 0, got {value!r}"
++        )
++    return value
++
++
+ _LANE_PREFIX_CACHE_ROUTING_KEY = "lane_prefix_cache_routing"
+ _LANE_PREFIX_CACHE_ROUTING_DEFAULT = True
+ 
+diff --git a/src/vllm_tt_plugin/lane_scheduler.py b/src/vllm_tt_plugin/lane_scheduler.py
+index 805690d..5af1655 100644
+--- a/src/vllm_tt_plugin/lane_scheduler.py
++++ b/src/vllm_tt_plugin/lane_scheduler.py
+@@ -29,6 +29,8 @@ negotiates that mode before scheduling any lane.
+ from __future__ import annotations
+ 
+ import copy
++import os
++import time
+ from collections.abc import Iterable
+ from dataclasses import dataclass
+ from typing import TYPE_CHECKING
+@@ -281,6 +283,7 @@ class TTLaneCoordinator(SchedulerInterface):
+         self.num_lanes = get_tt_data_parallel_size(vllm_config)
+         # Max concurrent running requests a single lane may hold.
+         self._per_lane_max = get_tt_per_lane_max_num_seqs(vllm_config)
++        self._recv_mono: dict[str, float] = {}
+         self._req_to_lane: dict[str, int] = {}
+         self._req_to_row: dict[str, int] = {}
+         # Prompt tokens a request still had to prefill when it was routed (its
+@@ -523,6 +526,47 @@ class TTLaneCoordinator(SchedulerInterface):
+             any(not r.is_prefill_chunk for r in sched.running) for sched in self.lanes
+         )
+ 
++    def _fresh_arrivals_skip_interleave(self) -> bool:
++        """TT_PLUGIN_FRESH_SKIP=1: right after a prefill step, if every waiting prompt reached the engine while that
++        step ran, prefill them now instead of first running the decode interleave (at most once in a row, so a
++        steady stream of arrivals cannot starve decode).
++
++        Those prompts belong to users who finished just before the step began. The interleave's decode steps would
++        let the next users finish too, and they would then wait behind this prefill: the one-step backlog that
++        decode_interleave_decode_steps exists to prevent."""
++        if not int(self._policy().get("fresh_skip", os.environ.get("TT_PLUGIN_FRESH_SKIP", "0")) or 0):
++            return False
++        t_pf = getattr(self, "_last_prefill_mono", None)
++        if t_pf is None or not getattr(self, "_last_step_prefill", False) or getattr(self, "_skipped_last", False):
++            return False
++        per_lane = [[r for q in (sched.waiting, sched.kv_holding_waiting) for r in q] for sched in self.lanes]
++        waiting = [r for w in per_lane for r in w]
++        # one prefill step's worth (at most one prompt per lane): a group that just missed the step. A burst (round 0
++        # of a closed loop) has several per lane and keeps the interleave that spaces its users out.
++        if not waiting or max(len(w) for w in per_lane) > 1:
++            return False
++        if any(self._recv_mono.get(r.request_id, 0.0) < t_pf for r in waiting):
++            return False
++        self._skipped_last = True
++        return True
++
++    def _apply_long_prompt_dsteps(self) -> None:
++        """TT_PLUGIN_LONG_PROMPT_TOKENS (0 = off): while the next waiting prompt is longer than this, interleave one
++        decode step per prefill step instead of decode_interleave_decode_steps. The extra decode steps space the
++        finishes of users prefilled back to back (see _busy_gather_hold), which matters for short prompts that
++        recur every few seconds; on a long prompt they only add latency in front of a ~1.5 s prefill step."""
++        di = self._decode_interleave
++        if not hasattr(self, "_base_dsteps"):
++            self._base_dsteps = di._decode_steps
++        base = int(self._policy().get("dsteps", self._base_dsteps))
++        lim = int(os.environ.get("TT_PLUGIN_LONG_PROMPT_TOKENS", "0") or 0)
++        if lim <= 0 or base <= 1:
++            di._decode_steps = base
++            return
++        heads = [next(iter(q)) for sched in self.lanes for q in (sched.kv_holding_waiting, sched.waiting) if q]
++        nxt = min(heads, key=lambda r: r.arrival_time) if heads else None
++        di._decode_steps = 1 if nxt is not None and nxt.num_prompt_tokens > lim else base
++
+     def _negotiate_forced_mode(self) -> TTSchedulingMode:
+         """Pick the single mode (prefill- or decode-only) all lanes will run.
+ 
+@@ -536,6 +580,9 @@ class TTLaneCoordinator(SchedulerInterface):
+         bound and some lane holds a decode that a decode step can advance.
+         """
+         intent = max(self._local_prefill_intent(sched) for sched in self.lanes)
++        self._apply_long_prompt_dsteps()
++        if intent == 1 and self._fresh_arrivals_skip_interleave():
++            return TTSchedulingMode.PREFILL_ONLY
+         if intent == 1 and self._decode_interleave.wants_decode_step(
+             has_pending_prefill=True,
+             has_running_decode=self._has_running_decode(),
+@@ -730,7 +777,95 @@ class TTLaneCoordinator(SchedulerInterface):
+             decode_layout_changed=decode_layout_changed,
+         )
+ 
++    def _policy(self) -> dict:
++        """Experimental hot-reloaded scheduling knobs (TT_PLUGIN_POLICY_FILE, a JSON dict, re-read when its mtime
++        changes) so one server start can A/B several policies: dsteps / psteps (decode interleave), idle_gather_ms,
++        busy_gather_ms / busy_gather_max_ms (see _busy_gather_hold)."""
++        path = os.environ.get("TT_PLUGIN_POLICY_FILE")
++        if not path:
++            return {}
++        try:
++            mt = os.stat(path).st_mtime
++        except OSError:
++            return getattr(self, "_pol", {})
++        if mt != getattr(self, "_pol_mtime", None):
++            import json
++
++            try:
++                with open(path) as f:
++                    pol = json.load(f)
++            except (OSError, ValueError):
++                return getattr(self, "_pol", {})
++            self._pol, self._pol_mtime = pol, mt
++            di = self._decode_interleave
++            if not hasattr(self, "_pol_base"):
++                self._pol_base = (di._prefill_steps, di._decode_steps)
++            di._prefill_steps = int(pol.get("psteps", self._pol_base[0]))
++            di._decode_steps = int(pol.get("dsteps", self._pol_base[1]))
++            logger.warning("TT policy reloaded: %s", pol)
++        return self._pol
++
++    def _busy_gather_hold(self, pol: dict) -> bool:
++        """busy_gather_ms: while decodes run and a prompt waits, keep decoding while some lane still has a free slot
++        and nothing waiting, until no request has reached the engine for busy_gather_ms (at most busy_gather_max_ms
++        after the hold began). Users that finish together re-arrive a few ms apart; a prefill step started on the
++        first of them blocks the engine ~0.4 s and the others miss it, which knocks the lanes out of step for the
++        rest of a closed-loop run. Times are engine-side receipt times (the request's own arrival_time is the
++        frontend's, before tokenization)."""
++        ms = float(pol.get("busy_gather_ms", os.environ.get("TT_PLUGIN_BUSY_GATHER_MS", "0")) or 0)
++        if ms <= 0:
++            return False
++        any_waiting = False
++        open_lane = False
++        for sched in self.lanes:
++            n_run, n_wait = sched.get_request_counts()
++            any_waiting |= n_wait > 0
++            if n_wait == 0 and len(sched.running) < self._per_lane_max:
++                open_lane = True
++        running = any(any(not r.is_prefill_chunk for r in sched.running) for sched in self.lanes)
++        if not any_waiting or not open_lane or not running:
++            self._bg_t0 = None
++            return False
++        now = time.monotonic()
++        if getattr(self, "_bg_t0", None) is None:
++            self._bg_t0 = now
++        last = getattr(self, "_last_add_mono", 0.0)
++        if (now - last) * 1e3 < ms and (now - self._bg_t0) * 1e3 < float(
++            pol.get("busy_gather_max_ms", os.environ.get("TT_PLUGIN_BUSY_GATHER_MAX_MS", "50"))
++        ):
++            return True
++        self._bg_t0 = None
++        return False
++
++    def _idle_gather_hold(self) -> bool:
++        """TT_PLUGIN_IDLE_GATHER_MS (experimental, default off): when nothing runs on any lane and some lanes but
++        not all have a waiting request, hold prefill for up to that many ms after the first one was seen, so a burst
++        that trickles in (tokenization) lands in one prefill step per lane instead of a lone first step. Used with
++        the model's DP4 x TP8 prefill, which runs one prompt per lane at once."""
++        ms = float(self._policy().get("idle_gather_ms", os.environ.get("TT_PLUGIN_IDLE_GATHER_MS", "0")) or 0)
++        if ms <= 0:
++            return False
++        waiting = [sched.get_request_counts()[1] > 0 for sched in self.lanes]
++        idle = not any(sched.running for sched in self.lanes)
++        if not idle or not any(waiting) or all(waiting):
++            self._gather_t0 = None
++            return False
++        now = time.monotonic()
++        if getattr(self, "_gather_t0", None) is None:
++            self._gather_t0 = now
++        if (now - self._gather_t0) * 1e3 < ms:
++            return True
++        self._gather_t0 = None
++        return False
++
+     def schedule(self, throttle_prefills: bool = False) -> SchedulerOutput:
++        if self._idle_gather_hold() or self._busy_gather_hold(self._policy()):
++            lane_outputs = self._schedule_all_lanes(TTSchedulingMode.DECODE_ONLY)
++            merged = merge_lane_scheduler_outputs(lane_outputs)
++            plan = self._build_step_plan(lane_outputs, merged, True)
++            _set_tt_step_state(merged, _LaneStepState(lane_outputs=lane_outputs, plan=plan))
++            set_tt_prefill_step(merged, False)
++            return merged
+         prefill_intent = max(self._local_prefill_intent(sched) for sched in self.lanes)
+         forced_mode = self._negotiate_forced_mode()
+         admission_caps = None
+@@ -785,6 +920,19 @@ class TTLaneCoordinator(SchedulerInterface):
+                 set_tt_forced_reset_discard_counts(merged, current_reset_discards)
+ 
+         is_decode = forced_mode == TTSchedulingMode.DECODE_ONLY
++        if not is_decode:
++            self._last_prefill_mono = time.monotonic()
++        else:
++            self._skipped_last = False
++        self._last_step_prefill = not is_decode
++        if self._policy().get("trace") and (prefill_intent or not is_decode):
++            logger.warning(
++                "TTTR step t=%.4f mode=%s sched=%s lanes(run,wait)=%s",
++                time.time(),
++                "D" if is_decode else "P",
++                [len(o.num_scheduled_tokens) for o in lane_outputs],
++                [sched.get_request_counts() for sched in self.lanes],
++            )
+         self._decode_interleave.record_step(
+             is_decode=is_decode, prefill_pending=bool(prefill_intent)
+         )
+@@ -930,6 +1078,18 @@ class TTLaneCoordinator(SchedulerInterface):
+         if lane is None:
+             lane = self._pick_lane(request)
+             self._req_to_lane[request.request_id] = lane
++            self._last_add_mono = time.monotonic()
++            self._recv_mono[request.request_id] = self._last_add_mono
++            if len(self._recv_mono) > 4096:
++                live = {r.request_id for sched in self.lanes for q in (sched.waiting, sched.kv_holding_waiting) for r in q}
++                self._recv_mono = {k: v for k, v in self._recv_mono.items() if k in live}
++            if self._policy().get("trace"):
++                logger.warning(
++                    "TTTR add t=%.4f lane=%d counts=%s",
++                    time.time(),
++                    lane,
++                    [sched.get_request_counts() for sched in self.lanes],
++                )
+         self.lanes[lane].add_request(request)
+ 
+     def finish_requests(
+diff --git a/src/vllm_tt_plugin/platform.py b/src/vllm_tt_plugin/platform.py
+index 0ee327b..6d35464 100644
+--- a/src/vllm_tt_plugin/platform.py
++++ b/src/vllm_tt_plugin/platform.py
+@@ -2234,7 +2234,14 @@ class TTPlatform(Platform):
+         # strategy. Backend stays "auto" so schemas xgrammar cannot compile still
+         # fall back to guidance (which also honors this flag); outlines and
+         # lm-format-enforcer ignore it.
+-        vllm_config.structured_outputs_config.disable_any_whitespace = True
++        # Set it on a copy: the config object is shared with the engine args, which multi-process serving
++        # (vllm serve --api-server-count N) sends to each API server process to validate again, and the
++        # validator rejects the flag with backend "auto".
++        import copy
++
++        soc = copy.copy(vllm_config.structured_outputs_config)
++        soc.disable_any_whitespace = True
++        vllm_config.structured_outputs_config = soc
+ 
+         # Import and register models from tt-metal.
+         #
+diff --git a/src/vllm_tt_plugin/scheduler.py b/src/vllm_tt_plugin/scheduler.py
+index bbcccb0..4fddaaa 100644
+--- a/src/vllm_tt_plugin/scheduler.py
++++ b/src/vllm_tt_plugin/scheduler.py
+@@ -20,6 +20,7 @@ from vllm_tt_plugin.config import (
+     get_tt_block_kv_extent_tokens,
+     get_tt_decode_interleave_config,
+     get_tt_max_prefill_requests_per_step,
++    get_tt_max_new_prefills_per_step,
+     get_tt_output_tokens_per_step,
+     get_tt_prefill_chunk_alignment,
+     get_tt_spec_plan,
+@@ -424,6 +425,7 @@ class TTScheduler(AsyncScheduler):
+         # Per-step admission cap a lane coordinator sets in place of the
+         # configured one; ``None`` means use ``_max_prefill_requests_per_step``.
+         self._prefill_admission_cap_override: int | None = None
++        self._max_new_prefills = get_tt_max_new_prefills_per_step(self.vllm_config)
+         self._pending_forced_reset_discard_counts: dict[str, int] = {}
+         # Block-step decisions for the step currently being committed, read off
+         # its SchedulerOutput in update_from_output so _update_request_with_output
+@@ -1041,6 +1043,12 @@ class TTScheduler(AsyncScheduler):
+         self.running = cast(list[Request], partial_prefills)
+         self.max_num_running_reqs = running_cap
+         self.max_num_active_reqs = active_cap
++        if self._max_new_prefills > 0:
++            # Per-lane cap (max_new_prefills_per_step): the waiting loop admits while len(running) < the cap and
++            # running holds only the partial prefills here.
++            cap = len(partial_prefills) + self._max_new_prefills
++            self.max_num_running_reqs = min(self.max_num_running_reqs, cap)
++            self.max_num_active_reqs = min(self.max_num_active_reqs, cap)
+         try:
+             result = super().schedule()
+         finally:

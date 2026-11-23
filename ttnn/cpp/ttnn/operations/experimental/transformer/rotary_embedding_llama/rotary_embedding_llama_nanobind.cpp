@@ -42,7 +42,8 @@ void bind_rotary_embedding_llama(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("is_decode_mode") = false,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer

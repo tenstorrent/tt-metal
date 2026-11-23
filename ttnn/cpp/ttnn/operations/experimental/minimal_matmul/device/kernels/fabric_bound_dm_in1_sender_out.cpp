@@ -209,9 +209,16 @@ void kernel_main() {
     uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
+#ifdef ROW_GATHER
+    RowGatherMap rg_map;
+    rg_map.init(out_addr_rt_arg_idx + N_chunks, M_start_tile, M_block_tiles);
+#endif
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+#ifdef ROW_GATHER
+        rg_map.block(m_block_iter, M_block_tiles, m_tile, m_tile_end);
+#endif
 #ifdef FUSE_AG
         if constexpr (is_injector_core) {
             fused_op_receiver.reset();

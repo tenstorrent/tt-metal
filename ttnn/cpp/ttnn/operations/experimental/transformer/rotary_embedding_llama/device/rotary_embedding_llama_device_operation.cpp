@@ -69,10 +69,13 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
         "If head_dim is > 128, fp32_dest_acc_en must be False");
     TT_FATAL(head_dim <= 256, "Head dim must be less than 256");
 
+    // Interleaved prefill also takes a bfloat8_b input (cos/sin/trans_mat stay bfloat16; the intermediates are
+    // bfloat16 regardless of the input format).
     TT_FATAL(
-        input_tensor.dtype() == cos.dtype() && cos.dtype() == sin.dtype() && sin.dtype() == trans_mat.dtype() &&
-            trans_mat.dtype() == DataType::BFLOAT16,
-        "All input tensors must have dtype = bfloat16");
+        (input_tensor.dtype() == cos.dtype() || (input_tensor.dtype() == DataType::BFLOAT8_B &&
+                                                 !operation_attributes.is_decode_mode && !input_tensor.is_sharded())) &&
+            cos.dtype() == sin.dtype() && sin.dtype() == trans_mat.dtype() && trans_mat.dtype() == DataType::BFLOAT16,
+        "All input tensors must have dtype = bfloat16 (input may be bfloat8_b in interleaved prefill)");
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == operation_attributes.output_mem_config.memory_layout(),
         "Input tensor and output tensor must have same memory layout");
@@ -215,7 +218,7 @@ RotaryEmbeddingLlamaDeviceOperation::spec_return_value_t RotaryEmbeddingLlamaDev
     return {tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
-            input_tensor.dtype(),
+            operation_attributes.dtype.value_or(input_tensor.dtype()),
             tt::tt_metal::PageConfig(input_tensor.layout()),
             operation_attributes.output_mem_config))};
 }
@@ -237,7 +240,8 @@ ttnn::Tensor rotary_embedding_llama(
     const ttnn::Tensor& trans_mat,
     bool is_decode_mode,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<tt::tt_metal::DataType>& dtype) {
     using OperationType = ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation;
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
@@ -253,7 +257,8 @@ ttnn::Tensor rotary_embedding_llama(
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_decode_mode = is_decode_mode,
         .output_mem_config = memory_config.value_or(default_memory_config),
-        .compute_kernel_config = kernel_config_val};
+        .compute_kernel_config = kernel_config_val,
+        .dtype = dtype};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat};
 

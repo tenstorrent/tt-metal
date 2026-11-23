@@ -4,6 +4,9 @@
 #include "matmul_reduce_scatter_prefill_planner.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <map>
 #include <mutex>
 #include <set>
@@ -13,6 +16,7 @@
 #include <utility>
 
 #include <fmt/format.h>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -573,7 +577,44 @@ uint32_t staging_tiles(const Plan& plan) {
 
 namespace {
 
+// TT_MRS_FORCE_CHUNKS="Mt,Kt,Nt,n_m,n_n;...": use that chunk split for a matching shape when it fits L1. The cost model
+// misranks scatter-on-M splits (see below); with a tight L1 budget (the residents of a full model) its pick can be far
+// off: Llama-70B FF2 16384x3584x8192 on an 8-chip column, 1.08 MB budget: auto (2, 11) 3.8 ms.
+std::optional<Plan> forced_plan(const PlanInputs& in) {
+    const char* e = std::getenv("TT_MRS_FORCE_CHUNKS");
+    if (e == nullptr) {
+        return std::nullopt;
+    }
+    std::string spec(e);
+    size_t pos = 0;
+    while (pos < spec.size()) {
+        size_t end = spec.find(';', pos);
+        if (end == std::string::npos) {
+            end = spec.size();
+        }
+        uint32_t v[5] = {0, 0, 0, 0, 0};
+        if (std::sscanf(spec.substr(pos, end - pos).c_str(), "%u,%u,%u,%u,%u", &v[0], &v[1], &v[2], &v[3], &v[4]) ==
+                5 &&
+            v[0] == in.Mt && v[1] == in.Kt && v[2] == in.Nt) {
+            try {
+                return plan_chunk_geometry(v[3], v[4], in);
+            } catch (const L1Miss&) {
+                log_warning(tt::LogOp, "matmul_reduce_scatter_prefill: forced chunks ({}, {}) miss L1", v[3], v[4]);
+            } catch (const GeometryMiss&) {
+                log_warning(
+                    tt::LogOp, "matmul_reduce_scatter_prefill: forced chunks ({}, {}) have no geometry", v[3], v[4]);
+            }
+            return std::nullopt;
+        }
+        pos = end + 1;
+    }
+    return std::nullopt;
+}
+
 Plan solve_plan_uncached(const PlanInputs& in) {
+    if (auto forced = forced_plan(in)) {
+        return std::move(*forced);
+    }
     // Scatter on N: the unchunked plan (when it fits) competes with the chunk splits in chunk_cost_us (measured on 50
     // prefill shapes, QB2 1x4 ring: an unchunked plan whose K-block shrank to fit loses to a chunked one by up to 1.8x,
     // and the model never picked a split slower than the unchunked plan). Scatter on M keeps whatever fits unchunked:

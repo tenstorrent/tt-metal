@@ -6,7 +6,7 @@
 D=$(cd "$(dirname "$0")" && pwd)
 cd "$TT_METAL_DIR" && source python_env/bin/activate
 mkdir -p "$OUT"
-until curl -sf localhost:8000/v1/models >/dev/null; do
+until curl -sf ${API:-http://localhost:8000}/v1/models >/dev/null; do
   if [ -n "$SERVER_PID" ] && ! kill -0 "$SERVER_PID" 2>/dev/null; then echo "server exited, see $OUT/server.log"; exit 1; fi
   sleep 30
 done
@@ -16,7 +16,7 @@ python "$D/sanity_check.py" | tee -a "$OUT/progress.txt"
 b() {
   local tag=$1; shift
   echo "$(date +%T) START $tag" >> "$OUT/progress.txt"
-  vllm bench serve --backend openai --base-url http://localhost:8000 --model llama70b --tokenizer "$HF_MODEL" \
+  vllm bench serve --backend openai --base-url ${API:-http://localhost:8000} --model llama70b --tokenizer "$HF_MODEL" \
     --dataset-name random --ignore-eos --top-k 32 --top-p 0.9 --temperature 0.6 \
     --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,90,99 \
     --save-result --save-detailed --result-dir "$OUT" --result-filename "$tag.json" "$@" > "$OUT/$tag.log" 2>&1

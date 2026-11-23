@@ -6,12 +6,16 @@
 # a hard kill leaves the chips hung until a reset.
 : "${TT_METAL_DIR:?}" "${HF_MODEL:?}" "${TT_CACHE_PATH:?}" "${PLUGIN_DIR:?}" "${OUT:?}"
 cd "$TT_METAL_DIR" && source python_env/bin/activate
-export TT_METAL_HOME=$PWD PYTHONPATH=$PWD MESH_DEVICE=${MESH_DEVICE:-TG} TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000
+# PLUGIN_SRC (optional): a vllm-tt-plugin src/ dir imported ahead of the installed (editable) plugin.
+export TT_METAL_HOME=$PWD PYTHONPATH=$PWD${PLUGIN_SRC:+:$PLUGIN_SRC} MESH_DEVICE=${MESH_DEVICE:-TG} TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000
 # TT_CFG_EXTRA: more "tt" keys as JSON members, e.g. '"decode_interleave_enabled": false' (vllm-tt-plugin config.py).
 TT_CFG=$(printf '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "%s", "worker_l1_size": %s, "trace_region_size": %s%s}}' \
   "${FABRIC:-FABRIC_1D_RING}" "${WORKER_L1:-1345000}" "${TRACE_REGION:-700000000}" "${TT_CFG_EXTRA:+, $TT_CFG_EXTRA}")
 mkdir -p "$OUT"
-exec python "$PLUGIN_DIR/examples/server_example_tt.py" --model "$HF_MODEL" --served-model-name llama70b \
+# SERVE_CLI=1: start through the vllm serve CLI (same args), which can run several API server processes
+# (--api-server-count, in SERVER_ARGS): tokenizing a 16K prompt takes ~27 ms, and one frontend tokenizes serially
+if [ -n "$SERVE_CLI" ]; then ENTRY=(-m vllm.entrypoints.cli.main serve --block_size 64); else ENTRY=("$PLUGIN_DIR/examples/server_example_tt.py"); fi
+exec python "${ENTRY[@]}" --model "$HF_MODEL" --served-model-name llama70b \
   --data_parallel_size 4 --max_num_seqs 8 ${ASYNC_SCHED:---async-scheduling} --port 8000 \
   --enable-prompt-tokens-details --enable-chunked-prefill --max-num-batched-tokens "${MAX_BATCHED_TOKENS:-4096}" \
   --additional-config "$TT_CFG" "$@" > "$OUT/server.log" 2>&1

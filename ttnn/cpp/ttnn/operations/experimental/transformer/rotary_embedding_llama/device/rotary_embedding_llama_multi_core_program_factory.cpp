@@ -146,9 +146,9 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
         .data_format_metadata = trans_mat_cb_data_format};
     DataflowBufferSpec rotated_interm_dfb{
         .unique_id = ROTATED_INTERM_DFB,
-        .entry_size = input_single_tile_size,
+        .entry_size = cos_single_tile_size,  // bfloat16 even for a bfloat8_b input
         .num_entries = num_interm_tiles,
-        .data_format_metadata = input_cb_data_format};
+        .data_format_metadata = cos_cb_data_format};
     DataflowBufferSpec cos_interm_dfb{
         .unique_id = COS_INTERM_DFB,
         .entry_size = cos_single_tile_size,
