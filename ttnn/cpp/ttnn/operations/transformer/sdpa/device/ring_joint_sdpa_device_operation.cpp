@@ -493,6 +493,8 @@ void resolve_ring_joint_blocking(RingJointSDPAParams& args, const RingJointSDPAI
     const uint32_t joint_k_rows =
         tensors.gathered_joint_k.has_value() ? rows(tensors.gathered_joint_k) : rows(tensors.joint_k);
     const uint32_t v_head_dim = tensors.v_head_dim(args.latent_v_head_dim);
+    // Shard-frame causal (chunked prefill masks in the sequence frame instead; the factory's kernel_is_causal).
+    const bool ring_causal = args.is_causal && !(tensors.is_chunked(args.kv_stripe_split) && !args.is_cross);
     const auto& q_shape = tensors.input_q.padded_shape();
     const auto key = ttsl::hash::hash_objects_with_default_seed(
         tensors.input_q.device()->id(),
@@ -509,6 +511,8 @@ void resolve_ring_joint_blocking(RingJointSDPAParams& args, const RingJointSDPAI
         joint_q_rows,
         joint_k_rows,
         v_head_dim,
+        tensors.v_shares_k_buffer(),
+        ring_causal,
         tensors.input_q.dtype(),
         tensors.gathered_k.dtype());
     const auto resolution = recipes::memoized_recipe_resolution(key, [&] {
@@ -524,6 +528,9 @@ void resolve_ring_joint_blocking(RingJointSDPAParams& args, const RingJointSDPAI
             joint_k_rows,
             static_cast<uint32_t>(args.ring_size),
             v_head_dim,
+            tensors.v_shares_k_buffer(),
+            ring_causal,
+            args.is_balanced,
             args.is_balanced ? q_rows / 2 : 0,
             config);
         return r;

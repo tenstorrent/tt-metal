@@ -97,8 +97,13 @@ struct RecipeBlockingProblem {
     uint32_t joint_k_rows = 0;
     uint32_t ring_size = 1;
     uint32_t d_tiles = 4;
-    uint32_t vd_tiles = 0;               // dense MLA: V / output head dim in tiles (0: d_tiles)
+    uint32_t vd_tiles = 0;               // MLA (dense, ring): V / output head dim in tiles (0: d_tiles)
     std::optional<KVStorage> v_storage;  // dense/joint: V's storage when it differs from K's (nullopt: K's)
+    // Ring MLA: V is K's first vd_tiles columns (ring_mla), read from the K chunk already in L1, never moved.
+    bool latent_v = false;
+    // Ring: shard-frame causal attention (ring_joint_sdpa.cpp ring_mask 1), and its balanced (zigzag) Q order.
+    bool ring_causal = false;
+    bool ring_balanced = false;
     // Dense/joint: the grid the op may use. Ring: the SDPA worker grid. Exp ring: the program
     // config grid including the fabric MUX column (the chooser may narrow its width).
     tt::tt_metal::CoreCoord grid{1, 1};
@@ -187,6 +192,9 @@ SDPAProgramConfig resolve_ring_recipe_blocking(
     uint32_t joint_k_rows,
     uint32_t ring_size,
     uint32_t v_head_dim,
+    bool latent_v,
+    bool ring_causal,
+    bool ring_balanced,
     uint32_t q_chunk_divides,
     const SDPAProgramConfig& program_config);
 
