@@ -89,33 +89,76 @@ needs_device_compiler = pytest.mark.skipif(
 )
 
 
-def _compile(compiler, *args):
-    return subprocess.run(
-        [str(compiler), *_FLAGS, *_INCLUDES, *args, str(_SOURCE)],
-        capture_output=True,
-        text=True,
-    )
-
-
-@needs_host_compiler
-@pytest.mark.parametrize("opt", ["-O0", "-O2"])
-def test_views_on_host(tmp_path, opt):
-    binary = tmp_path / "tensor_views_test"
-    built = _compile(_HOST_COMPILER, *_HOST_FLAGS, opt, "-o", str(binary))
-    assert built.returncode == 0, built.stderr
-    assert subprocess.run([str(binary)]).returncode == 0
-
-
-@needs_device_compiler
-@pytest.mark.parametrize("opt", ["-O0", "-O3"])
-def test_views_on_device_compiler(tmp_path, opt):
-    built = _compile(
-        _DEVICE_COMPILER,
+# Every command this file runs, built once from the constants above. A test picks one by its parameter and passes it
+# to subprocess.run as it is; outputs get a fixed name and land in the test's tmp_path through cwd.
+_HOST_BUILD = {
+    opt: [
+        str(_HOST_COMPILER),
+        *_FLAGS,
+        *_INCLUDES,
+        *_HOST_FLAGS,
+        opt,
+        "-o",
+        "tensor_views_test",
+        str(_SOURCE),
+    ]
+    for opt in ("-O0", "-O2")
+}
+_DEVICE_BUILD = {
+    opt: [
+        str(_DEVICE_COMPILER),
+        *_FLAGS,
+        *_INCLUDES,
         *_DEVICE_FLAGS,
         opt,
         "-c",
         "-o",
-        str(tmp_path / "tensor_views_test.o"),
+        "tensor_views_test.o",
+        str(_SOURCE),
+    ]
+    for opt in ("-O0", "-O3")
+}
+_HOST_REFUSE = {
+    case: [
+        str(_HOST_COMPILER),
+        *_FLAGS,
+        *_INCLUDES,
+        *_HOST_FLAGS,
+        "-fsyntax-only",
+        f"-DEXPECT_FAIL={case}",
+        str(_SOURCE),
+    ]
+    for case in _MUST_NOT_COMPILE
+}
+_DEVICE_REFUSE = {
+    case: [
+        str(_DEVICE_COMPILER),
+        *_FLAGS,
+        *_INCLUDES,
+        *_DEVICE_FLAGS,
+        "-fsyntax-only",
+        f"-DEXPECT_FAIL={case}",
+        str(_SOURCE),
+    ]
+    for case in _MUST_NOT_COMPILE
+}
+
+
+@needs_host_compiler
+@pytest.mark.parametrize("opt", sorted(_HOST_BUILD))
+def test_views_on_host(tmp_path, opt):
+    built = subprocess.run(
+        _HOST_BUILD[opt], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert built.returncode == 0, built.stderr
+    assert subprocess.run(["./tensor_views_test"], cwd=tmp_path).returncode == 0
+
+
+@needs_device_compiler
+@pytest.mark.parametrize("opt", sorted(_DEVICE_BUILD))
+def test_views_on_device_compiler(tmp_path, opt):
+    built = subprocess.run(
+        _DEVICE_BUILD[opt], cwd=tmp_path, capture_output=True, text=True
     )
     assert built.returncode == 0, built.stderr
 
@@ -128,16 +171,12 @@ def _assert_refused(built, case):
 @needs_host_compiler
 @pytest.mark.parametrize("case", sorted(_MUST_NOT_COMPILE))
 def test_views_refuse_on_host(case):
-    built = _compile(
-        _HOST_COMPILER, *_HOST_FLAGS, "-fsyntax-only", f"-DEXPECT_FAIL={case}"
-    )
+    built = subprocess.run(_HOST_REFUSE[case], capture_output=True, text=True)
     _assert_refused(built, case)
 
 
 @needs_device_compiler
 @pytest.mark.parametrize("case", sorted(_MUST_NOT_COMPILE))
 def test_views_refuse_on_device_compiler(case):
-    built = _compile(
-        _DEVICE_COMPILER, *_DEVICE_FLAGS, "-fsyntax-only", f"-DEXPECT_FAIL={case}"
-    )
+    built = subprocess.run(_DEVICE_REFUSE[case], capture_output=True, text=True)
     _assert_refused(built, case)
