@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Length classes: the best SDPA chunk pair and ff1 blocking differ between the ends of the envelope, so
-each class freezes one program set; a class reaches the op as a config, never as a shape."""
+"""Length classes: the best ff1 blocking differs between the ends of the envelope, so each class freezes one
+program set; a class reaches the op as a config, never as a shape."""
 
 from __future__ import annotations
 

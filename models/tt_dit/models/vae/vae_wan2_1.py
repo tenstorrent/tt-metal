@@ -125,17 +125,9 @@ class WanAttentionBlock(Module):
             dtype=dtype,
         )
 
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-        )
+        # The op chooses the chunk sizes on this grid.
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=32,
-            k_chunk_size=256,
-            exp_approx_mode=False,  # NOTE: False is more correct
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size()
         )
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -241,7 +233,6 @@ class WanAttentionBlock(Module):
             ttnn.typecast(v_THNC, ttnn.bfloat16) if v_THNC.dtype != ttnn.bfloat16 else v_THNC,
             is_causal=False,
             program_config=self.sdpa_program_config,
-            compute_kernel_config=self.sdpa_compute_kernel_config,
             precision=ttnn.SDPAPrecision.ACCURATE,
         )
         out_THNC = ttnn.typecast(out_THNC, q_THNC.dtype) if out_THNC.dtype != q_THNC.dtype else out_THNC

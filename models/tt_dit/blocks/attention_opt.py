@@ -7,7 +7,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -43,33 +42,6 @@ _FLUX2_MATMUL_CORE_GRIDS: dict[tuple[int, int, int], tuple[int, int]] = {
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
 class Attention(Module):
-    # SDPA chunk sizes keyed by (is_blackhole, sp_factor, tp_factor). Resolution priority for
-    # non-ring: caller overrides > class map > constructor args > class default.
-    sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {}
-    default_sdpa_chunk_size: tuple[int, int] = (128, 512)
-
-    ring_sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {
-        # -1 is the default resolution.
-        (False, 2, 4): {-1: (256, 256)},
-        (False, 8, 4): {-1: (256, 256)},
-        (True, 2, 2): {-1: (128, 512)},
-        (True, 4, 8): {
-            -1: (256, 512),  # default
-            4096: (128, 256),  # 1024×1024  — 18.0% util (ring_sdpa_sweep.md)
-            4608: (128, 256),  # 1024×1024  — 18.0% util (ring_sdpa_sweep.md)
-            4096 * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
-            (4096 + 128) * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
-            4096 * 4: (256, 512),  # 2048×2048  — 55.4% util (ring_sdpa_sweep_2048.md)
-            4096 * 16: (192, 512),  # 4096×4096  — 67.4% util (ring_sdpa_sweep_4096.md)
-        },
-        (True, 8, 4): {
-            -1: (256, 512),  # default
-            16384: (320, 384),  # 2048×2048  — 43.3% util (ring_sdpa_sweep_8x4_2048.md)
-            65536: (256, 512),  # 4096×4096  — 65.7% util (ring_sdpa_sweep_8x4_4096.md)
-        },
-    }
-    default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
-
     def __init__(
         self,
         *,
@@ -88,9 +60,6 @@ class Attention(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        k_chunk_size: int | None = None,
-        q_chunk_size: int | None = None,
-        sdpa_chunk_size_overrides: dict | None = None,
         per_head_norm: bool = False,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
@@ -125,34 +94,11 @@ class Attention(Module):
         # Reserve last row for CCL.
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
 
-        chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
-        resolved_q_chunk, resolved_k_chunk = chunk_lookup.get(
-            (
-                is_blackhole(),
-                parallel_config.sequence_parallel.factor,
-                parallel_config.tensor_parallel.factor,
-            ),
-            (
-                q_chunk_size if q_chunk_size is not None else self.default_sdpa_chunk_size[0],
-                k_chunk_size if k_chunk_size is not None else self.default_sdpa_chunk_size[1],
-            ),
-        )
-
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=resolved_q_chunk,
-            k_chunk_size=resolved_k_chunk,
-            exp_approx_mode=False,  # NOTE: False is more correct
-            min_blocked_pack_tiles=2,
-        )
-
+        # The op chooses the chunk sizes on these grids.
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self.sdpa_worker_grid)
         self.ring_sdpa_program_config = {}
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        # Was HiFi2 without FP32 accumulation.
+        self.sdpa_precision = ttnn.SDPAPrecision.STANDARD
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -260,26 +206,8 @@ class Attention(Module):
 
     def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
         if per_device_seq_len not in self.ring_sdpa_program_config:
-            device_parallel_key = (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            )
-            ring_chunk_size = self.ring_sdpa_chunk_size_map.get(device_parallel_key, self.default_ring_sdpa_chunk_size)
-            if per_device_seq_len in ring_chunk_size:
-                ring_chunk_size = ring_chunk_size[per_device_seq_len]
-            else:
-                logger.warning(
-                    f"No ring SDPA chunk size found for resolution {per_device_seq_len}, using default {ring_chunk_size[-1]}"
-                )
-                ring_chunk_size = ring_chunk_size[-1]
-
             self.ring_sdpa_program_config[per_device_seq_len] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len),
-                q_chunk_size=ring_chunk_size[0],
-                k_chunk_size=ring_chunk_size[1],
-                exp_approx_mode=False,  # NOTE: False is more correct
-                min_blocked_pack_tiles=2,
+                compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len)
             )
         return self.ring_sdpa_program_config[per_device_seq_len]
 
@@ -628,7 +556,7 @@ class Attention(Module):
                 logical_n=sequence_1_length,
                 logical_l=sequence_2_length,
                 program_config=self.get_ring_sdpa_program_config(sequence_1_length),
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                     self.parallel_config.sequence_parallel.mesh_axis
@@ -656,7 +584,7 @@ class Attention(Module):
                 add_v,
                 joint_strategy="rear",
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
             )
 
         spatial = ttnn.transformer.concatenate_heads(spatial)
@@ -685,16 +613,14 @@ class Attention(Module):
         return spatial, sequence_2
 
     @classmethod
-    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int, k_chunk_size: int = 512) -> int:
+    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int, multiple: int = 512) -> int:
         if sp_factor == 1:
             return 0
 
-        divisor = k_chunk_size * sp_factor
+        divisor = multiple * sp_factor
         return -length % divisor
 
     @classmethod
-    def pad_spatial_sequence(cls, x: torch.Tensor, /, *, sp_factor: int, k_chunk_size: int = 512) -> torch.Tensor:
-        padding_len = cls.spatial_sequence_padding_length(
-            length=x.shape[-2], sp_factor=sp_factor, k_chunk_size=k_chunk_size
-        )
+    def pad_spatial_sequence(cls, x: torch.Tensor, /, *, sp_factor: int, multiple: int = 512) -> torch.Tensor:
+        padding_len = cls.spatial_sequence_padding_length(length=x.shape[-2], sp_factor=sp_factor, multiple=multiple)
         return torch.nn.functional.pad(x, (0, 0, 0, padding_len))

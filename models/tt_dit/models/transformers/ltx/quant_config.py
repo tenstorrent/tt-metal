@@ -5,7 +5,7 @@
 """Quantization and compute-precision policy for the LTX DiT linears.
 
 A single :class:`LtxQuantProfile` holds the whole policy — weight dtypes, the ``to_out`` carve-out,
-activation/SDPA casts, and matmul/SDPA fidelities — and exposes it as construction kwargs. The
+activation/SDPA casts, the matmul fidelity and the SDPA recipe — and exposes it as construction kwargs. The
 transformer modules stay precision-agnostic: they spread ``profile.linear_kwargs(role)`` onto each
 linear and read ``profile.mm_compute_config`` / ``profile.sdpa_self_config`` for the op configs, with
 no dtype or fidelity literals of their own.
@@ -25,7 +25,7 @@ import ttnn
 
 # When set, activations are narrowed to bf8 wherever they cross the fabric — both the linear activation
 # casts and the ring-SDPA Q/K/V inputs — so this is the one knob that changes what the collectives move
-# (the linear payloads and the SP-gathered K/V; SDPA itself stays HiFi2, only its inputs narrow). More
+# (the linear payloads and the SP-gathered K/V; the SDPA recipe stays, only its inputs narrow). More
 # aggressive than the weight quant it rides on: weights are a fixed, well-conditioned distribution,
 # activations are not. On by default because the shipped 1080p tier is measured and VBench-gated with it
 # on; set to 0 to A/B against the weight-only preset. Keeping the SDPA input cast on this same knob means
@@ -50,8 +50,7 @@ class LtxQuantProfile:
     mm_fidelity: ttnn.MathFidelity
     mm_fp32_dest_acc: bool
     sdpa_input_dtype: ttnn.DataType  # self-attn ring-SDPA input cast (gated by LTX_QUANT_ACTIVATIONS)
-    sdpa_fidelity: ttnn.MathFidelity
-    sdpa_fp32_dest_acc: bool
+    sdpa_precision: ttnn.SDPAPrecision  # self-attn SDPA recipe
 
     def linear_kwargs(self, role: str) -> dict:
         """Construction kwargs for a DiT linear of ``role`` ("out" carves out to bf16, else quantized).
@@ -93,22 +92,16 @@ class LtxQuantProfile:
             packer_l1_acc=True,
         )
 
-    def sdpa_self_config(self, arch) -> tuple:
-        """``(compute_config, input_dtype)`` for the self-attn ring SDPA; input cast rides the gate.
+    def sdpa_self_config(self) -> tuple:
+        """``(precision, input_dtype)`` for the self-attn ring SDPA; input cast rides the gate.
 
-        Cross-attention keeps its default bf16/HiFi2 SDPA, so callers apply this to self-attn only.
+        Cross-attention keeps its default bf16 STANDARD SDPA, so callers apply this to self-attn only.
         """
-        compute_config = ttnn.init_device_compute_kernel_config(
-            arch,
-            math_fidelity=self.sdpa_fidelity,
-            math_approx_mode=False,
-            fp32_dest_acc_en=self.sdpa_fp32_dest_acc,
-        )
-        return compute_config, (self.sdpa_input_dtype if LTX_QUANT_ACTIVATIONS else None)
+        return self.sdpa_precision, (self.sdpa_input_dtype if LTX_QUANT_ACTIVATIONS else None)
 
     @staticmethod
     def all_bf8_lofi() -> LtxQuantProfile:
-        """Weights bf8, LoFi compute, bf8 activations. SDPA math stays HiFi2 with bf8 inputs.
+        """Weights bf8, LoFi compute, bf8 activations. SDPA stays STANDARD with bf8 inputs.
 
         SDPA stays fully unquantized in math (FastVideo kept attention higher precision); only its
         inputs narrow to bf8 under ``LTX_QUANT_ACTIVATIONS``. ``ff2`` uses the RowParallel RS-fused
@@ -121,8 +114,7 @@ class LtxQuantProfile:
             mm_fidelity=ttnn.MathFidelity.LoFi,
             mm_fp32_dest_acc=False,
             sdpa_input_dtype=ttnn.bfloat8_b,
-            sdpa_fidelity=ttnn.MathFidelity.HiFi2,
-            sdpa_fp32_dest_acc=False,
+            sdpa_precision=ttnn.SDPAPrecision.STANDARD,
         )
 
     @staticmethod
@@ -138,6 +130,5 @@ class LtxQuantProfile:
             mm_fidelity=ttnn.MathFidelity.LoFi,
             mm_fp32_dest_acc=False,
             sdpa_input_dtype=ttnn.bfloat8_b,
-            sdpa_fidelity=ttnn.MathFidelity.HiFi2,
-            sdpa_fp32_dest_acc=False,
+            sdpa_precision=ttnn.SDPAPrecision.STANDARD,
         )

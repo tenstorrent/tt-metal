@@ -47,7 +47,6 @@ class WanTransformerBlock(Module):
         ccl_manager: CCLManager | None = None,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
-        sdpa_chunk_size_overrides: dict | None = None,
         lora_enabled: bool = False,
     ) -> None:
         super().__init__()
@@ -83,7 +82,6 @@ class WanTransformerBlock(Module):
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             is_self=True,
-            sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             lora_enabled=lora_enabled,
         )
 
@@ -96,7 +94,6 @@ class WanTransformerBlock(Module):
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             is_self=False,
-            sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             lora_enabled=lora_enabled,
         )
 

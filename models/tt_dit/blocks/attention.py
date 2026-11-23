@@ -42,10 +42,7 @@ class Attention(Module):
         ccl_manager: CCLManager | None,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
-        k_chunk_size: int = 512,
-        q_chunk_size: int = 128,
         is_fsdp: bool = False,
-        exp_approx_mode: bool = False,
     ) -> None:
         super().__init__()
 
@@ -73,21 +70,10 @@ class Attention(Module):
             self.mesh_device.compute_with_storage_grid_size().y - 1,
         )
 
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=q_chunk_size,
-            k_chunk_size=k_chunk_size,
-            # Only the joint SDPA kernel (sequence_parallel.factor == 1) honours this flag; the streaming
-            # ring-joint kernel used when factor > 1 always runs the approximate exponential. False is more
-            # accurate, but on Wormhole the bf16-dest accurate exponential costs ~10x per QK tile (#57180).
-            exp_approx_mode=exp_approx_mode,
-            min_blocked_pack_tiles=2,
-        )
-        self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        # The op chooses the chunk sizes on this grid.
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self.sdpa_worker_grid)
+        # Was HiFi2 without FP32 accumulation.
+        self.sdpa_precision = ttnn.SDPAPrecision.STANDARD
 
         self.to_qkv = ColParallelLinear(query_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args)
 
@@ -308,7 +294,7 @@ class Attention(Module):
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                     self.parallel_config.sequence_parallel.mesh_axis
@@ -330,7 +316,7 @@ class Attention(Module):
                 add_v,
                 joint_strategy="rear",
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
             )
 
         spatial = ttnn.transformer.concatenate_heads(spatial)
@@ -352,18 +338,16 @@ class Attention(Module):
         return spatial, prompt
 
     @classmethod
-    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int, k_chunk_size: int = 512) -> int:
+    def spatial_sequence_padding_length(cls, *, length: int, sp_factor: int, multiple: int = 512) -> int:
         if sp_factor == 1:
             return 0
 
-        divisor = k_chunk_size * sp_factor
+        divisor = multiple * sp_factor
         return -length % divisor
 
     @classmethod
-    def pad_spatial_sequence(cls, x: torch.Tensor, /, *, sp_factor: int, k_chunk_size: int = 512) -> torch.Tensor:
-        padding_len = cls.spatial_sequence_padding_length(
-            length=x.shape[-2], sp_factor=sp_factor, k_chunk_size=k_chunk_size
-        )
+    def pad_spatial_sequence(cls, x: torch.Tensor, /, *, sp_factor: int, multiple: int = 512) -> torch.Tensor:
+        padding_len = cls.spatial_sequence_padding_length(length=x.shape[-2], sp_factor=sp_factor, multiple=multiple)
         return torch.nn.functional.pad(x, (0, 0, 0, padding_len))
 
 

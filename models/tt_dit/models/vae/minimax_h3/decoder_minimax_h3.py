@@ -103,26 +103,12 @@ class MiniMaxH3ViTAttention(Module):
         self.to_qkv = Linear(dim, 3 * inner, bias=True, mesh_device=mesh_device, dtype=dtype)
         self.to_out = Linear(inner, dim, bias=True, mesh_device=mesh_device, dtype=dtype)
 
-        # Both `attention_wan.py:120` and `attention_ltx.py:158` configure their SDPA; this
-        # follows them -- HiFi2 with fp32 accumulation off is the standard SDPA setting
-        # there, and it roughly doubles matmul throughput against the HiFi4 default.
-        # Swept at the decoder's exact SDPA shape ([1, 32, 1824, 64] bf16) with a single-op
-        # Chosen by a min-of-20 op benchmark; whole-decoder wall clock jitters too much to
-        # resolve it. q=k=192 with HiFi2 is ~2.95x the default blocking, 128 is slightly worse,
-        # and 256 and above hang the sweep. SDPA is ~40 % of layer device time.
+        # SDPA as in the Wan / LTX attention: STANDARD (it ran HiFi2 without FP32 accumulation), chunk sizes chosen
+        # by the op on this grid.
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=192,
-            k_chunk_size=192,
-            exp_approx_mode=False,  # False is more correct, matching wan/ltx
-            min_blocked_pack_tiles=2,
+            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size()
         )
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-        )
+        self.sdpa_precision = ttnn.SDPAPrecision.STANDARD
 
         self._ones_gate = bf16_tensor(torch.ones(1, 1, dim), device=mesh_device)
 
@@ -226,7 +212,7 @@ class MiniMaxH3ViTAttention(Module):
             attn_mask=None,
             is_causal=False,
             program_config=self.sdpa_program_config,
-            compute_kernel_config=self.sdpa_compute_kernel_config,
+            precision=self.sdpa_precision,
             output_concat_heads=True,
         )
         dim = self.num_heads * self.head_dim

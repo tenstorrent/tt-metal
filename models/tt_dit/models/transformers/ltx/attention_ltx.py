@@ -30,42 +30,6 @@ LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "t
 
 
 class LTXAttention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
-    sdpa_chunk_size_map = {
-        (False, 2, 4): (256, 256),
-        (False, 8, 4): (256, 256),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (128, 512),
-    }
-
-    # V2A cross ring-SDPA q_chunk = the per-device audio Q (audio_N / sp_factor), keyed by
-    # (is_blackhole, sp, tp); assumes audio_N=256. A q_chunk wider than the Q shard pads the
-    # query rows and burns ~2x SDPA compute, so it must track sp, not be fixed per model.
-    # k_chunk reuses the self-attn ring value; misses fall back to the self-attn ring q_chunk.
-    # TODO: audio_N depends on video duration (ceil(round((num_frames/fps)*25), 32*sp)); derive
-    # q_chunk from the actual Q shard (q_BHNE.shape[2]) instead of hardcoding per mesh.
-    cross_ring_sdpa_q_chunk_map = {
-        (True, 4, 2): 64,  # BH 2x4
-        (True, 8, 4): 32,  # BH 4x8
-    }
-    default_sdpa_chunk_size = (256, 256)
-
-    # Per-stage ring-SDPA chunk, keyed by (is_blackhole, sp, tp, N); N is the SP-padded
-    # sequence length passed to the op. Misses fall back to sdpa_chunk_size_map.
-    ring_sdpa_chunk_by_n = {
-        (True, 8, 4, 9728): (96, 256),
-        (True, 8, 4, 38912): (192, 512),
-    }
-
-    # Per-shape cross-attn SDPA chunk, keyed by (is_blackhole, q_seq, kv_seq); seqs are
-    # the per-device Q shard and full K. Misses fall back to sdpa_program_config.
-    sdpa_chunk_by_shape = {
-        (True, 1216, 32): (128, 128),  # video text cross-attn, stage 1
-        (True, 4864, 32): (192, 128),  # video text cross-attn, stage 2
-        (True, 1216, 256): (128, 128),  # audio->video cross-attn, stage 1
-        (True, 4864, 256): (192, 256),  # audio->video cross-attn, stage 2
-    }
-
     def __init__(
         self,
         *,
@@ -207,70 +171,14 @@ class LTXAttention(Module):
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
+        # The op chooses the chunk sizes on these grids.
         full_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=full_grid,
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,
-            min_blocked_pack_tiles=2,
-        )
-
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=full_grid)
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
-        mesh_key = (
-            is_blackhole(),
-            self.parallel_config.sequence_parallel.factor,
-            self.parallel_config.tensor_parallel.factor,
-        )
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(mesh_key, self.default_sdpa_chunk_size)
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,
-            min_blocked_pack_tiles=2,
-        )
-        self._ring_pc_by_n = {
-            n: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.sdpa_worker_grid,
-                q_chunk_size=chunk[0],
-                k_chunk_size=chunk[1],
-                exp_approx_mode=False,
-                min_blocked_pack_tiles=2,
-            )
-            for (b, sp, tp, n), chunk in self.ring_sdpa_chunk_by_n.items()
-            if (b, sp, tp) == mesh_key
-        }
-        self._sdpa_pc_by_shape = {
-            (q, kv): ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=full_grid,
-                q_chunk_size=chunk[0],
-                k_chunk_size=chunk[1],
-                exp_approx_mode=False,
-                min_blocked_pack_tiles=2,
-            )
-            for (b, q, kv), chunk in self.sdpa_chunk_by_shape.items()
-            if b == mesh_key[0]
-        }
+        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self.sdpa_worker_grid)
 
-        # V2A cross ring SDPA: q_chunk matched to the per-device audio Q; k_chunk reuses the
-        # self-attn ring value.
-        cross_ring_q_chunk = self.cross_ring_sdpa_q_chunk_map.get(mesh_key, ring_sdpa_chunk_size[0])
-        self.cross_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=cross_ring_q_chunk,
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,
-            min_blocked_pack_tiles=2,
-        )
-
-        # All SDPA (ring + cross) runs HiFi2, matching the Wan attention config.
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-        )
+        # Was HiFi2 without FP32 accumulation, ring and cross alike.
+        self.sdpa_precision = ttnn.SDPAPrecision.STANDARD
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -293,14 +201,14 @@ class LTXAttention(Module):
         )
 
         # Under a quant preset, override the attention compute configs to the profile's fidelity.
-        # Self-attn additionally swaps in the ring-SDPA compute and narrows its SDPA inputs; cross-attn
+        # Self-attn additionally takes the profile's SDPA recipe and narrows its SDPA inputs; cross-attn
         # leaves SDPA and _sdpa_input_dtype unset, so forward's getattr(self, "_sdpa_input_dtype", None)
         # keeps cross SDPA at bf16.
         if quant_config is not None:
             arch = self.mesh_device.arch()
             self.mm_compute_kernel_config = quant_config.mm_compute_config(arch)
             if self.is_self:
-                self.sdpa_compute_kernel_config, self._sdpa_input_dtype = quant_config.sdpa_self_config(arch)
+                self.sdpa_precision, self._sdpa_input_dtype = quant_config.sdpa_self_config()
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")
@@ -758,8 +666,8 @@ class LTXAttention(Module):
                     ),
                     joint_strategy="rear",
                     logical_n=N,
-                    program_config=self._ring_pc_by_n.get(N, self.ring_sdpa_program_config),
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self.ring_sdpa_program_config,
+                    precision=self.sdpa_precision,
                     dim=2,
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                         self.parallel_config.sequence_parallel.mesh_axis
@@ -784,7 +692,7 @@ class LTXAttention(Module):
                     attn_mask=attn_mask,
                     is_causal=False,
                     program_config=self.sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    precision=self.sdpa_precision,
                 )
             else:
                 spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
@@ -794,7 +702,7 @@ class LTXAttention(Module):
                     attn_mask=attn_mask,
                     is_causal=False,
                     program_config=self.sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    precision=self.sdpa_precision,
                 )
         elif use_ring_cross:
             # Short audio Q attends non-causally to the SP-sharded video K/V; is_cross fuses the
@@ -816,8 +724,8 @@ class LTXAttention(Module):
                 joint_strategy="rear",
                 logical_n=kv_logical_n,
                 is_cross=True,
-                program_config=self.cross_ring_sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                program_config=self.ring_sdpa_program_config,
+                precision=self.sdpa_precision,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(sp_mesh_axis),
                 num_links=self.ccl_manager.num_links,
@@ -836,8 +744,8 @@ class LTXAttention(Module):
                 v_BHNE,
                 attn_mask=attn_mask,
                 is_causal=False,
-                program_config=self._sdpa_pc_by_shape.get((q_BHNE.shape[2], k_BHNE.shape[2]), self.sdpa_program_config),
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                program_config=self.sdpa_program_config,
+                precision=self.sdpa_precision,
             )
 
         # Apply per-head gate in BHNE space.

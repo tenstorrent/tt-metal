@@ -242,26 +242,15 @@ class Ideogram4TransformerBlock(Module):
             ccl_manager=ccl_manager,
         )
 
-        # SDPA config (fidelity recipe §4 — HiFi2, fp32 acc off; flip on if attn PCC suffers).
-        # head_dim=256 (2x the usual 128) doubles SDPA's per-core K/V/score CBs;
-        # k_chunk_size=512 overflows Blackhole L1 (1.59MB > 1.5MB max). Halve to 256
-        # so the buffers fit. Flash attention is exact regardless of chunk size.
-        self.sdpa_q_chunk_size = 128
-        self.sdpa_k_chunk_size = 256
+        # SDPA: the op chooses the chunk sizes on these grids (head_dim 256 included).
         device_grid = mesh_device.compute_with_storage_grid_size()
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(device_grid.x, device_grid.y),
-            q_chunk_size=self.sdpa_q_chunk_size,
-            k_chunk_size=self.sdpa_k_chunk_size,
-            exp_approx_mode=False,
-            min_blocked_pack_tiles=2,
-        )
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=device_grid)
         # Ring SDPA (sequence parallel) reserves the last worker row for the CCL all-gather.
         self.sdpa_worker_grid = (device_grid.x, device_grid.y - 1)
-        self._ring_sdpa_pc_cache = {}
+        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self.sdpa_worker_grid)
         # ------------------------------------------------------------------
         # MIXED math fidelity (mirrors Wan2.2): HiFi2 for the heavy per-token
-        # compute (the four big block matmuls + SDPA), HiFi4 for the
+        # compute (the four big block matmuls; SDPA runs STANDARD), HiFi4 for the
         # precision-sensitive ops (RMSNorm/QK-norm run HiFi4 internally, AdaLN
         # modulation matmul, and the once-per-forward model-level projections).
         #
@@ -279,17 +268,9 @@ class Ideogram4TransformerBlock(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # HiFi2 for SDPA. head_dim=256 is precision-heavy, but the fp32_dest_acc
-        # sweep showed fp32_dest_acc={True,False} give the SAME block PCC
-        # (img1024 99.976% / img4096 99.980% either way) and the SAME device
-        # time at 2048px, so we land fp32_dest_acc=False to match Wan. Flip to
-        # True if a future config regresses SDPA correctness.
-        self.sdpa_hifi2_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY_HIFI2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-        )
+        # SDPA: STANDARD. It ran HiFi2 without FP32 accumulation (a sweep gave the same block PCC
+        # with and without it).
+        self.sdpa_precision = ttnn.SDPAPrecision.STANDARD
         # HiFi4 + fp32 accumulate for the precision-sensitive matmul-class ops
         # (currently the AdaLN modulation projection). RMSNorm / QK-RMSNorm run
         # HiFi4 internally (see layers/normalization.py). RoPE is pure
@@ -303,9 +284,8 @@ class Ideogram4TransformerBlock(Module):
             packer_l1_acc=True,
         )
 
-        # Wiring: the four big matmuls + SDPA -> HiFi2; AdaLN -> HiFi4.
+        # Wiring: the four big matmuls -> HiFi2; AdaLN -> HiFi4.
         self.matmul_compute_kernel_config = self.mm_hifi2_config
-        self.sdpa_compute_kernel_config = self.sdpa_hifi2_config
         self.adaln_compute_kernel_config = self.hifi4_config
 
         # RoPE (interleaved): the 32x32 transformation matrix that rotates adjacent channel
@@ -314,28 +294,6 @@ class Ideogram4TransformerBlock(Module):
         # Cached 0-element "joint" for ring SDPA (self-attention has no joint tokens). Allocated
         # once here (not per-forward) so trace capture never hits ttnn.zeros' host-write path.
         self.dummy_joint = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
-
-    def _get_ring_sdpa_program_config(self, local_seq_len):
-        """Ring-SDPA program config (fixed q_chunk=128).
-
-        NOTE: a standalone *plain*-SDPA micro-sweep suggested q_chunk=256 was ~1.3x
-        faster at long local seq (4352 @ 2048px). That does NOT hold for the production
-        ring_joint SDPA: its extra joint/CCL circular buffers push q_chunk=256 past L1
-        ("CBs grow to 1712656 B > 1572864 B max L1") and it fails at true 2048px. So we
-        keep the proven q_chunk=128 at every resolution (k_chunk=256, head_dim cap).
-        """
-        qc = self.sdpa_q_chunk_size
-        pc = self._ring_sdpa_pc_cache.get(qc)
-        if pc is None:
-            pc = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.sdpa_worker_grid,
-                q_chunk_size=qc,
-                k_chunk_size=self.sdpa_k_chunk_size,
-                exp_approx_mode=False,
-                min_blocked_pack_tiles=2,
-            )
-            self._ring_sdpa_pc_cache[qc] = pc
-        return pc
 
     def _merge_qkv_for_tp(self, qkv_weight: torch.Tensor) -> torch.Tensor:
         """Rearrange the fused reference QKV weight so column-fracturing shards heads.
@@ -586,8 +544,8 @@ class Ideogram4TransformerBlock(Module):
                 persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, self.sp_axis),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
-                program_config=self._get_ring_sdpa_program_config(q.shape[2]),
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                program_config=self.ring_sdpa_program_config,
+                precision=self.sdpa_precision,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_axis),
                 num_links=self.ccl_manager.num_links,
@@ -617,7 +575,7 @@ class Ideogram4TransformerBlock(Module):
                 attn_mask=attn_mask,
                 is_causal=False,
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
             )  # [B, n_local_heads, L/sp, head_dim]
 
         out = ttnn.transformer.concatenate_heads(out)  # [B, L/sp, n_local_heads * head_dim] (fractured on heads)

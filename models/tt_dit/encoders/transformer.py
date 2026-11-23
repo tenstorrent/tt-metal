@@ -1076,8 +1076,9 @@ class Attention(Module):
             v,
             attn_mask=attn_bias,
             is_causal=attn_bias is None,
-            program_config=self._sdpa_program_config(padded_q_seq_len, padded_kv_seq_len),
-            compute_kernel_config=self._hifi_compute_kernel_config,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self._device.compute_with_storage_grid_size()
+            ),  # the op chooses the chunk sizes
             precision=ttnn.SDPAPrecision.ACCURATE,
         )
         del q, k, v
@@ -1183,22 +1184,6 @@ class Attention(Module):
             x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
 
         return x
-
-    def _sdpa_program_config(self, q_len: int, kv_len: int) -> ttnn.SDPAProgramConfig:
-        grid_size = self._device.compute_with_storage_grid_size()
-
-        q_len = -(-q_len // 32) * 32
-        q_chunk_size = min(q_len, MAX_CHUNK_SIZE)
-
-        kv_len = -(-kv_len // 32) * 32
-        kv_chunk_size = min(kv_len, MAX_CHUNK_SIZE)
-
-        return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            q_chunk_size=q_chunk_size,
-            k_chunk_size=kv_chunk_size,
-            exp_approx_mode=False,
-        )
 
     def _sdpa_decode_program_config(self, kv_len: int) -> ttnn.SDPAProgramConfig:
         # The decode kernel requires a power-of-two k-chunk that divides the cache length.

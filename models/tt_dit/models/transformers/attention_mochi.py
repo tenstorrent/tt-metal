@@ -5,7 +5,6 @@
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 from ...layers.linear import ColParallelLinear
 from ...layers.module import Module
@@ -16,15 +15,6 @@ from ...utils.substate import pop_substate, rename_substate
 
 
 class MochiAttention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
-    sdpa_chunk_size_map = {
-        (False, 2, 4): (128, 512),
-        (False, 8, 4): (128, 512),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (128, 512),
-    }
-    default_sdpa_chunk_size = (256, 256)
-
     def __init__(
         self,
         *,
@@ -123,36 +113,11 @@ class MochiAttention(Module):
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=full_grid,
-            q_chunk_size=256,
-            k_chunk_size=512,
-            exp_approx_mode=False,  # NOTE: False is more correct
-            min_blocked_pack_tiles=2,
-        )
-
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
-        )
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-            min_blocked_pack_tiles=2,
-        )
-
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        # The op chooses the chunk sizes on these grids.
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=full_grid)
+        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self.sdpa_worker_grid)
+        # Was HiFi2 without FP32 accumulation.
+        self.sdpa_precision = ttnn.SDPAPrecision.STANDARD
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -287,7 +252,7 @@ class MochiAttention(Module):
                 joint_strategy="rear",
                 logical_n=N,
                 program_config=self.ring_sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                     self.parallel_config.sequence_parallel.mesh_axis
@@ -309,7 +274,7 @@ class MochiAttention(Module):
                 add_v_BHLE,
                 joint_strategy="rear",
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
             )
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)

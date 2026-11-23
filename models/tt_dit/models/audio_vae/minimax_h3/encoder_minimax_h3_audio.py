@@ -316,7 +316,9 @@ class MiniMaxH3AudioCausalAttention(Module):
         query, key, value = (
             ttnn.typecast(t, ttnn.bfloat16) if t.get_dtype() != ttnn.bfloat16 else t for t in (query, key, value)
         )
-        attended = ttnn.transformer.scaled_dot_product_attention(query, key, value, is_causal=True)
+        attended = ttnn.transformer.scaled_dot_product_attention(
+            query, key, value, is_causal=True, precision=ttnn.SDPAPrecision.STANDARD
+        )
         if attended.get_dtype() != self.dtype:
             attended = ttnn.typecast(attended, self.dtype)
 

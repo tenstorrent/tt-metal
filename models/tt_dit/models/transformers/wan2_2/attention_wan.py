@@ -20,16 +20,6 @@ from ....utils.tensor import bf16_tensor
 
 
 class WanAttention(Module):
-    # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
-    sdpa_chunk_size_map = {
-        (False, 2, 4): (256, 256),
-        (False, 8, 4): (256, 256),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (288, 512),
-        (True, 32, 4): (224, 512),
-    }
-    default_sdpa_chunk_size = (256, 256)
-
     def __init__(
         self,
         *,
@@ -42,7 +32,6 @@ class WanAttention(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         is_self: bool = True,
-        sdpa_chunk_size_overrides: dict | None = None,
         lora_enabled: bool = False,
     ) -> None:
         super().__init__()
@@ -116,53 +105,18 @@ class WanAttention(Module):
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
+        # The op chooses the chunk sizes on these grids (exp ring may also narrow its grid).
         full_grid = self.mesh_device.compute_with_storage_grid_size()
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=full_grid,
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,  # NOTE: False is more correct
-            min_blocked_pack_tiles=2,
-        )
-
+        self.sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=full_grid)
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # Reserve last column for CCL
-        chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
-        ring_sdpa_chunk_size = chunk_lookup.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
-        )
-
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=ring_sdpa_chunk_size[0],
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-            min_blocked_pack_tiles=2,
-        )
+        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self.sdpa_worker_grid)
 
         self.use_exp_ring_sdpa = (
             self.parallel_config.tensor_parallel.factor == 4 and self.parallel_config.sequence_parallel.factor == 32
         )
 
-        if self.use_exp_ring_sdpa:
-            self.exp_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=full_grid,
-                q_chunk_size=ring_sdpa_chunk_size[0],
-                k_chunk_size=ring_sdpa_chunk_size[1],
-                exp_approx_mode=False,
-                min_blocked_pack_tiles=2,
-            )
-
-        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
-        )
+        # Was HiFi2 without FP32 accumulation. The all_lofi quant preset sets FAST (quant_config.py).
+        self.sdpa_precision = ttnn.SDPAPrecision.STANDARD
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -439,8 +393,8 @@ class WanAttention(Module):
                         ),
                         joint_strategy="rear",
                         logical_n=N,
-                        program_config=self.exp_ring_sdpa_program_config,
-                        compute_kernel_config=self.sdpa_compute_kernel_config,
+                        program_config=self.sdpa_program_config,
+                        precision=self.sdpa_precision,
                         dim=2,
                         multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(
                             self.parallel_config.sequence_parallel.mesh_axis
@@ -470,7 +424,7 @@ class WanAttention(Module):
                         joint_strategy="rear",
                         logical_n=N,
                         program_config=self.ring_sdpa_program_config,
-                        compute_kernel_config=self.sdpa_compute_kernel_config,
+                        precision=self.sdpa_precision,
                         dim=2,
                         multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                             self.parallel_config.sequence_parallel.mesh_axis
@@ -490,7 +444,7 @@ class WanAttention(Module):
                     v_BHNE,
                     is_causal=False,
                     program_config=self.sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    precision=self.sdpa_precision,
                 )
         else:
             # Cross attention
@@ -501,7 +455,7 @@ class WanAttention(Module):
                 is_causal=False,
                 attn_mask=cross_attn_mask,
                 program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
+                precision=self.sdpa_precision,
             )
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
