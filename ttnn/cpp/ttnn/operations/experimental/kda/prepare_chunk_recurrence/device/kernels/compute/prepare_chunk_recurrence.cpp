@@ -8,7 +8,8 @@
 //   qd=q*exp(G), kl=k*exp(G), kr=k*exp(-G)
 //   Akk=strictly_lower((beta*kl)@kr^T), Aqk=tril(qd@kr^T)
 //   kd=beta*kl, k_dec_t=(kr*exp(G_last))^T, dl=expm1(G_last)=exp(G_last)-1 (complement-form decay).
-// G-a = centered_mask@g with a = G_last/2, formed and exponentiated in FP32 DST.
+// G-a = centered_mask@g and the anchor a = G_last/2 = half_mask@g are formed in FP32 DST and exponentiated there;
+// dl = expm1(2a) is formed from the same anchor in DST, so no exponent passes through a source register.
 // dl is logically [K,1]: only its column 0 is defined, and consumers broadcast that column.
 // dl is computed in FP32, truncated to TF32 by the row-to-column transpose (source A), and stored in the output
 // format the caller selects; the model stores it in BF16. BF16 rounding is relative to |dl|, so for exp(G_last) < 0.5
@@ -230,40 +231,6 @@ KDA_ITEMS_HELPER void binary_items(
 template <ElementwiseBinaryOp Op, typename DFB0, typename DFB1, typename DFB2>
 inline void elementwise_binary(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
     binary_items(Op, a, 0, false, b, 0, false, o, n, max_dst_tiles);
-}
-
-// expm1(2x) = exp(2x) - 1 in FP32 (the doubling is exact). Mode and Iterations restrict it to the first rows, as for
-// the anchor's exponential (gate_exponentials).
-template <VectorMode Mode = VectorMode::RC, int Iterations = 8, typename DFB0, typename DFB1>
-KDA_PREP_HELPER void doubled_expm1_tiles(DFB0& in, DFB1& o, uint32_t n) {
-    constexpr uint32_t fp32_two_bits = __builtin_bit_cast(uint32_t, 2.0F);
-    const uint32_t in_id = in.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(n);
-    reconfig_tracked_srca(in_id);
-    copy_init(in_id);
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
-        in.wait_front(block_start + block_tiles);
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            copy_tile(in_id, block_start + tile, tile);
-        }
-        binop_with_scalar_tile_init();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            mul_unary_tile(tile, fp32_two_bits, Mode);
-        }
-        expm1_tile_init();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            expm1_tile<false, DST_ACCUM_MODE, Iterations>(tile, Mode);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tiles(0, o_id, block_start, block_tiles);
-        tile_regs_release();
-        o.push_back(block_tiles);
-    }
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
@@ -603,61 +570,72 @@ KDA_PREP_HELPER void prepare_v_beta(DFB0& v, DFB1& beta, DFB2& v_beta, uint32_t 
     v.pop_front(items * Ct * Vt);
 }
 
-// x = centered_mask @ g (the exponent G-a, one tile per item and key tile) formed in DST; exp(x) into exponential
-// and its precise reciprocal exp(-x) into inverse, both from x in DST, so x never passes through a source register.
-// The anchor's row exponential goes into anchor_exponential: the anchor is row-replicated and the broadcasts read only
-// row 0, so only the face rows holding it are computed: VectorMode::R visits faces 0 and 1, and two of a face's eight
-// SFPU iterations span its first rows, row 0 included (one leaves part of row 0 unwritten, and kd, q_decay and k_dec_t
-// come out wrong); the rest of each anchor_exponential tile is unspecified. The anchor's exponent is copied from L1
-// through SrcA, so it is rounded to TF32 (one TF32 ulp of |G_last|/2).
-// One tile of each per destination acquire: the anchor's unpack and pack then overlap the exponential and reciprocal
-// of the neighbouring acquires instead of running as a separate stage.
-template <typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4, typename DFB5>
+// x = centered_mask @ g (the exponent G-a) and the anchor a = half_mask @ g (G_last/2, row-replicated), one tile each
+// per item and key tile, both formed in DST; exp(x) into exponential and its precise reciprocal exp(-x) into inverse,
+// exp(a) into anchor_exponential and expm1(2a) = expm1(G_last) into final_decay_rows (the doubling is exact), all from
+// the products in DST, so no exponent passes through a source register. The anchor's rows are replicated and their
+// consumers read only row 0, so only the face rows holding it are computed: VectorMode::R visits faces 0 and 1, and two
+// of a face's eight SFPU iterations span its first rows, row 0 included (one leaves part of row 0 unwritten, and kd,
+// q_decay, k_dec_t and dl come out wrong); the rest of each anchor_exponential and final_decay_rows tile is
+// unspecified. One tile of each per destination acquire: the packs overlap the SFPU work of the neighbouring acquires.
+template <typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4, typename DFB5, typename DFB6>
 KDA_PREP_HELPER void gate_exponentials(
     DFB0& centered_mask,
-    DFB1& g,
-    DFB2& anchor,
+    DFB1& half_mask,
+    DFB2& g,
     DFB3& exponential,
     DFB4& inverse,
     DFB5& anchor_exponential,
+    DFB6& final_decay_rows,
     uint32_t n) {
+    static_assert(max_dst_tiles >= 4, "gate_exponentials holds four destination tiles");
+    constexpr uint32_t fp32_two_bits = __builtin_bit_cast(uint32_t, 2.0F);
+    constexpr auto dst_format = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
     const uint32_t mask_id = centered_mask.get_id();
+    const uint32_t half_mask_id = half_mask.get_id();
     const uint32_t g_id = g.get_id();
-    const uint32_t anchor_id = anchor.get_id();
     const uint32_t exp_id = exponential.get_id();
     const uint32_t inv_id = inverse.get_id();
     const uint32_t anchor_exp_id = anchor_exponential.get_id();
+    const uint32_t rows_id = final_decay_rows.get_id();
     constexpr auto recip_dest = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16;
     exponential.reserve_back(n);
     inverse.reserve_back(n);
     anchor_exponential.reserve_back(n);
+    final_decay_rows.reserve_back(n);
     for (uint32_t tile = 0; tile < n; ++tile) {
         g.wait_front(tile + 1);
-        anchor.wait_front(tile + 1);
         tile_regs_acquire();
         // Matmul maps in0=mask->srcB and in1=g->srcA; with Ct == 1 each output tile is one mask-by-g tile product.
+        // Both masks are FP32 one-tile constants, so one init serves both products.
         reconfig_tracked(g_id, mask_id);
         matmul_tiles_block_init(mask_id, g_id, false, 1, 1, 1);
         matmul_tiles_block(mask_id, g_id, 0, tile, 0, false, 1, 1, 1);
-        reconfig_tracked_srca(anchor_id);
-        copy_init(anchor_id);
-        copy_tile(anchor_id, tile, 2);
+        matmul_tiles_block(half_mask_id, g_id, 0, tile, 2, false, 1, 1, 1);
+        copy_dest_values_init();
+        copy_dest_values<dst_format, 2>(2, 3, VectorMode::R);
         exp_tile_init();
         exp_tile<false, false, InputClamping::ClampToNegative>(0, VectorMode::RC);
         exp_tile<false, false, InputClamping::ClampToNegative, 2>(2, VectorMode::R);
         copy_dest_values_init();
-        copy_dest_values<DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b>(0, 1);
+        copy_dest_values<dst_format>(0, 1);
         recip_tile_init<recip_dest, ReciprocalApproxMode::Precise>();
         recip_tile<recip_dest, ReciprocalApproxMode::Precise>(1);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(3, fp32_two_bits, VectorMode::R);
+        expm1_tile_init();
+        expm1_tile<false, DST_ACCUM_MODE, 2>(3, VectorMode::R);
         tile_regs_commit();
         tile_regs_wait();
         pack_tiles(0, exp_id, tile, 1);
         pack_tiles(1, inv_id, tile, 1);
         pack_tiles(2, anchor_exp_id, tile, 1);
+        pack_tiles(3, rows_id, tile, 1);
         tile_regs_release();
         exponential.push_back(1);
         inverse.push_back(1);
         anchor_exponential.push_back(1);
+        final_decay_rows.push_back(1);
     }
 }
 
@@ -674,46 +652,33 @@ template <
 KDA_PREP_HELPER void prepare_gate_factors(
     DFB0& g,
     DFB1& centered_mask,
-    DFB2& sum_broadcast_matrix,
+    DFB2& half_mask,
     DFB3& centered_decay,
     DFB4& centered_inverse_decay,
     DFB5& anchor_decay,
-    uint32_t items,
-
-    // intermediate
-    DFB6& anchor_g) {
+    DFB6& final_decay_rows,
+    uint32_t items) {
     const uint32_t key_tiles = items * Ct * Kt;
 
     // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
     // exp(G-anchor) nor exp(anchor-G) spans the full chunk range. Their products are
     // unchanged, while realistic KDA gates no longer overflow exp(-G).
     static_assert(Ct == 1, "the gate factors take one tile row per chunk");
-    // The sum-broadcast matrix carries half the gate scale, so this is the anchor G_last/2, replicated.
-    matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, /*a_shared=*/true, g, anchor_g, items);
-
-    // exp(G-anchor), exp(anchor-G) and exp(G_last/2); see gate_exponentials. The anchor stays for prepare_final_decay.
-    gate_exponentials(centered_mask, g, anchor_g, centered_decay, centered_inverse_decay, anchor_decay, key_tiles);
+    // half_mask carries half the gate scale in every entry, so half_mask @ g is the anchor G_last/2, replicated.
+    // exp(G-anchor), exp(anchor-G), exp(G_last/2) and expm1(G_last) rows; see gate_exponentials.
+    gate_exponentials(
+        centered_mask, half_mask, g, centered_decay, centered_inverse_decay, anchor_decay, final_decay_rows, key_tiles);
     g.pop_front(key_tiles);
 }
 
 // dl [K,1] = expm1(G_last) = exp(G_last) - 1 as a column (complement-form decay): for long-memory channels exp(G_last)
 // lies so close to 1 that BF16 keeps almost none of the forgotten fraction 1 - exp(G_last) (none within 2^-9), while
-// the complement keeps its relative precision; recurrent_chunk_scan applies S + (dl * S + update). It is expm1 of the
-// doubled anchor G_last/2 in FP32, which it releases, then the transpose of row 0. The anchor still reaches DST through
-// a TF32 source register (copy_tile), so dl carries up to one TF32 ulp of |G_last| in its argument. Only the face rows
-// holding row 0 are computed (the anchor is row-replicated); the rest of each rows tile, and so every column of dl but
-// column 0, is unspecified. Leaves the packer in the rows' format.
-template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
-KDA_PREP_HELPER void prepare_final_decay(
-    DFB0& anchor_g,
-    DFB1& final_decay,
-    uint32_t items,
-
-    // intermediate
-    DFB2& final_decay_rows) {
+// the complement keeps its relative precision; recurrent_chunk_scan applies S + (dl * S + update). It is the transpose
+// of row 0 of the expm1(G_last) rows gate_exponentials formed in DST, which it releases; every column of dl but
+// column 0 is unspecified. Leaves the packer in the rows' format.
+template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1>
+KDA_PREP_HELPER void prepare_final_decay(DFB0& final_decay_rows, DFB1& final_decay, uint32_t items) {
     const uint32_t key_tiles = items * Ct * Kt;
-    doubled_expm1_tiles<VectorMode::R, 2>(anchor_g, final_decay_rows, key_tiles);
-    anchor_g.pop_front(key_tiles);
     pack_reconfig_data_format(final_decay_rows.get_id(), final_decay.get_id());
     transpose_tile_row_to_column(final_decay_rows, final_decay, items * Kt);
     final_decay_rows.pop_front(key_tiles);
@@ -942,14 +907,14 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         prepare_gate_factors<Ct, Kt>(
             g,
             gate_centered,
-            gate_ones,
+            /*half_mask=*/gate_ones,
             centered_decay,
             centered_inverse_decay,
             anchor_decay,
-            items,
-            /*anchor_g=*/workspace_2);
+            /*final_decay_rows=*/workspace_1,
+            items);
 
-        prepare_final_decay<Ct, Kt>(/*anchor_g=*/workspace_2, final_decay, items, /*final_decay_rows=*/workspace_1);
+        prepare_final_decay<Ct, Kt>(/*final_decay_rows=*/workspace_1, final_decay, items);
 
         beta_logits.wait_front(items * Ct);
         activate_beta<Ct>(beta_logits, beta_row, beta, items);
