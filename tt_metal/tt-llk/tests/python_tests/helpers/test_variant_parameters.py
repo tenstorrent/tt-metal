@@ -2634,14 +2634,14 @@ class SPARSE_K_CONFIG(TemplateParameter):
 @dataclass
 class CLAMPED_SILU_PARAMS(TemplateParameter):
     clamped_silu_op: str = "GATE"
-    scalar0: float = 1.0
-    scalar1: float = 1.0
+    clamped_silu_scalar0: float = 1.0
+    clamped_silu_scalar1: float = 1.0
 
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.clamped_silu_scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.clamped_silu_scalar1)}u;"
         )
 
 
