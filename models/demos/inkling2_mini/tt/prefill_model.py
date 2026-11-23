@@ -58,7 +58,7 @@ from models.demos.inkling2_mini.tt.attention import (
     log_scale,
 )
 from models.demos.inkling2_mini.tt.attention_fast import KV_WIDTH, V_WIDTH
-from models.demos.inkling2_mini.tt.fused.common import dense_matrix, rms_norm_bf16, rms_norm_f32
+from models.demos.inkling2_mini.tt.fused.common import dense_matrix, probe_rms_bf16, rms_norm_bf16, rms_norm_f32
 from models.demos.inkling2_mini.tt.fused.pf_attnres import PfAttnRes
 from models.demos.inkling2_mini.tt.fused.pf_combine import PfCombine
 from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
@@ -459,6 +459,7 @@ class Inkling2Prefill:
         self._pfrel = PfRel(dev) if skew else None
         self.ckc = model.rows.ckc  # HiFi4, fp32 acc
         self.hifi4 = model.hifi4
+        probe_rms_bf16(dev, self.hifi4)  # bf16 norm results in the op only where they round as typecast
         self.mm_cfg = model.mm_cfg
         self.layers = [_LayerPF(self, lay, root) for lay in model.layers]
         # unified experts at HiFi2 when the build takes it, else at LoFi (fp32 DEST: more accurate than the sparse

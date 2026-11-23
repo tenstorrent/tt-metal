@@ -420,17 +420,30 @@ def _launch(device, progs):
     return ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 
 
+_RMS_BF16 = None  # does this build's rms_norm(dtype=bfloat16) round as ttnn.typecast? (probe_rms_bf16)
+
+
+def probe_rms_bf16(device, ckc):
+    """Set whether rms_norm(fp32 x, dtype=bfloat16) equals typecast(rms_norm(x)) on this build: builds with the dtype
+    keyword but without the rounding in DEST pack 0.04% of values otherwise (not exact). Host reads: call it at
+    construction, before any trace capture."""
+    global _RMS_BF16
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 2304, generator=torch.Generator().manual_seed(0)) * 3,
+                        dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)  # fmt: skip
+    try:
+        a = ttnn.rms_norm(x, epsilon=1e-6, compute_kernel_config=ckc, dtype=ttnn.bfloat16)
+    except TypeError:
+        _RMS_BF16 = False
+        return False
+    b = ttnn.typecast(ttnn.rms_norm(x, epsilon=1e-6, compute_kernel_config=ckc), ttnn.bfloat16)
+    _RMS_BF16 = a.dtype == ttnn.bfloat16 and torch.equal(ttnn.to_torch(a), ttnn.to_torch(b))
+    return _RMS_BF16
+
+
 def rms_norm_bf16(x, **kw):
-    """ttnn.rms_norm of an fp32 input to a bf16 result: in the op when the build's rms_norm takes `dtype` (with fp32
-    DEST it rounds to nearest even in DEST, bit-equal to ttnn.typecast of the fp32 result), else through a typecast.
-    """
-    global _RMS_DTYPE
-    if x.dtype == ttnn.float32 and _RMS_DTYPE is not False:
-        try:
-            y = ttnn.rms_norm(x, dtype=ttnn.bfloat16, **kw)
-            _RMS_DTYPE = True
-            return y
-        except TypeError:
-            _RMS_DTYPE = False
+    """ttnn.rms_norm of an fp32 input to a bf16 result: in the op when probe_rms_bf16 found it bit-equal to
+    ttnn.typecast of the fp32 result (rounding in DEST), else through a typecast (also when never probed)."""
+    if x.dtype == ttnn.float32 and _RMS_BF16:
+        return ttnn.rms_norm(x, dtype=ttnn.bfloat16, **kw)
     y = ttnn.rms_norm(x, **kw)
     return y if y.dtype == ttnn.bfloat16 else ttnn.typecast(y, ttnn.bfloat16)

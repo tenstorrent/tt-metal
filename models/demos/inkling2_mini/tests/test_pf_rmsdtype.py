@@ -43,9 +43,10 @@ def test_pf_rms_bf16(device, t, l1_acc):
     w = ttnn.from_torch(  # the model's norm weights: bf16 [72, 32] row-major
         torch.randn(72, 32, generator=g), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
+    assert F.probe_rms_bf16(device, ckc), "this build's rms_norm(dtype=bfloat16) does not round as typecast"
     for extra in ({}, {"weight": w}):
         kw = dict(epsilon=EPS, compute_kernel_config=ckc, **extra)
         new = F.rms_norm_bf16(x, **kw)
-        assert F._RMS_DTYPE and new.dtype == ttnn.bfloat16
+        assert F._RMS_BF16 and new.dtype == ttnn.bfloat16
         ref = ttnn.to_torch(ttnn.typecast(ttnn.rms_norm(x, **kw), ttnn.bfloat16))
         assert torch.equal(ref, ttnn.to_torch(new)), extra.keys()
