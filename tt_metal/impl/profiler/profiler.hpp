@@ -298,7 +298,7 @@ public:
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
 
     // Optional rt-profiler clock anchor (host_anchor TSC, device_anchor cycle, frequency GHz) set by
-    // RealtimeProfilerManager, kept in lockstep with the rt Tracy calibration so worker zones render against the same
+    // the rt profiler receiver, kept in lockstep with the rt Tracy calibration so worker zones render against the same
     // anchor. Valid because all cores share one device wall clock.
     struct RealtimeSyncLine {
         double host_anchor = 0.0;

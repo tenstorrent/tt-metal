@@ -18,6 +18,7 @@
 // nullified, IOMMU-off on BH, etc.) the test skips gracefully via
 // IsProgramRealtimeProfilerActive().
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -291,6 +292,41 @@ TEST(RealtimeProfilerSanity, ThrowingCallbackIsIsolated) {
     EXPECT_GT(throwing_invocations, 0u) << "throwing callback should have been invoked";
     EXPECT_EQ(observed_runtime_ids.size(), kNumPrograms)
         << "sibling callback must receive every record despite the other callback throwing";
+}
+
+TEST(RealtimeProfilerSanity, CallbackCanUnregisterItself) {
+    constexpr int kDeviceId = 0;
+
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    std::atomic<ProgramRealtimeProfilerCallbackHandle> handle{0};
+    std::atomic<uint32_t> invocations{0};
+    handle.store(RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch&) {
+        invocations.fetch_add(1);
+        UnregisterProgramRealtimeProfilerCallback(handle.load());
+    }));
+
+    CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
+    CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
+    enqueue_sanity_program(mesh_device, 1, all_cores);
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    ASSERT_EQ(invocations.load(), 1u) << "the callback should have run once, for the first program";
+
+    for (uint32_t i = 0; i < kNumPrograms; ++i) {
+        enqueue_sanity_program(mesh_device, i + 2, all_cores);
+    }
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    EXPECT_EQ(invocations.load(), 1u) << "a callback ran again after unregistering itself";
 }
 
 TEST(RealtimeProfilerSanity, LastProgramRecordDeliveredOnFinish) {

@@ -4,80 +4,108 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 #include <tracy/TracyTTDevice.hpp>
-#include "tt_metal/impl/dispatch/data_collection.hpp"
+#include <tt-metalium/experimental/realtime_profiler.hpp>
+
+#if defined(TRACY_ENABLE)
+#include <common/TracyTTDeviceData.hpp>
+#endif
 
 namespace tt::tt_metal {
 
-// Manages Tracy contexts for real-time profiler.
-// Registers itself as a ProgramRealtimeProfilerCallback and routes records to the correct
-// Tracy context based on chip_id. Thread-safe for AddDevice/RemoveDevice.
-class RealtimeProfilerTracyHandler {
+// Sends real-time profiler records to Tracy while a Tracy client is connected. The process-wide service registers one
+// of these as a consumer, and unregisters it once Tracy's connect window has passed with no client. Every Tracy call is
+// made on that consumer's thread, so each device's context and its zones go through one lock-free queue. Zones are
+// placed in host time with the device's current clock mapping, so a context is never calibrated after it is created.
+class RealtimeProfilerTracyConsumer {
 public:
-    RealtimeProfilerTracyHandler();
-    ~RealtimeProfilerTracyHandler();
+    RealtimeProfilerTracyConsumer() = default;
 
-    RealtimeProfilerTracyHandler(const RealtimeProfilerTracyHandler&) = delete;
-    RealtimeProfilerTracyHandler& operator=(const RealtimeProfilerTracyHandler&) = delete;
+    RealtimeProfilerTracyConsumer(const RealtimeProfilerTracyConsumer&) = delete;
+    RealtimeProfilerTracyConsumer& operator=(const RealtimeProfilerTracyConsumer&) = delete;
 
-    // Create and calibrate a Tracy context for the given device.
-    void AddDevice(uint32_t chip_id, int64_t host_start, double first_timestamp, double frequency);
+    // Consumer thread: a batch of records. False once Tracy will take no more, which is when its connect window
+    // has passed with no client.
+    bool on_records(const experimental::ProgramRealtimeRecordBatch& batch);
 
-    // Remove and destroy the Tracy context for the given device.
-    void RemoveDevice(uint32_t chip_id);
-
-    // Callback handler invoked by the real-time profiler system for each program record.
-    void HandleRecord(const tt::ProgramRealtimeRecord& record);
-
-    // Push a sync-check marker on the device GPU timeline at the given device timestamp.
-    // Used to verify host-device clock sync accuracy in the Tracy GUI.
-    void PushSyncCheckMarker(uint32_t chip_id, uint64_t device_timestamp, double frequency);
-
-    // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
-    void CalibrateDevice(uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency);
-
-    // Show a dispatch stall (dispatch_s waited stall_cycles for a free RT-profiler record slot, until
-    // stall_end_timestamp): a zone on the device's "Dispatch stall" lane plus an error-level Tracy message
-    // (rate-limited per device; the zones are not).
-    void PushDispatchStallMarker(
-        uint32_t chip_id, uint64_t stall_end_timestamp, uint32_t stall_cycles, double frequency);
+    // Device events. Callable from any thread; each one is applied on the consumer thread before its next batch.
+    void add_device(uint32_t chip_id, int64_t anchor_host, uint64_t anchor_device, double frequency);
+    void remove_device(uint32_t chip_id);
+    // Replaces the device's clock mapping; later zones are placed with it.
+    void calibrate_device(uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency);
+    // A zone on the device's "Dispatch stall" lane, plus a rate-limited error message.
+    void push_dispatch_stall_marker(uint32_t chip_id, uint64_t stall_end_timestamp, uint32_t stall_cycles);
 
 private:
-    TracyTTCtx GetContext(uint32_t chip_id);
-
-    void RecordSkippedZoneWithEndBeforeStart(const tt::ProgramRealtimeRecord& record, int64_t delta);
-    // Emit the stalls rate-limiting held back for this device, if any. Caller holds mutex_.
-    void FlushDispatchStallMessageLocked(uint32_t chip_id);
-    void MaybeEmitSkippedZoneSummaryLocked();
-
-    struct SkippedEndBeforeStartStats {
-        uint64_t total_skipped = 0;
-        uint64_t suppressed_since_last_summary = 0;
-        bool logged_first_detail = false;
-        std::unordered_map<uint32_t, uint64_t> count_by_runtime_id;
-        std::unordered_map<uint32_t, uint64_t> count_by_chip_id;
-        std::chrono::steady_clock::time_point last_summary_time;
-        static constexpr std::chrono::seconds kSummaryInterval{30};
-    };
-
-    struct DispatchStallMessageState {
-        std::chrono::steady_clock::time_point last_message_time;
-        uint64_t suppressed = 0;
-        uint64_t suppressed_cycles = 0;
+    struct Event {
+        enum class Kind : uint8_t { Add, Remove, Calibrate, Stall };
+        Kind kind;
+        uint32_t chip_id = 0;
+        int64_t host_time = 0;
+        uint64_t device_timestamp = 0;
+        uint32_t stall_cycles = 0;
         double frequency = 0.0;
-        static constexpr std::chrono::milliseconds kMinInterval{100};
     };
-
-    std::mutex mutex_;
-    std::unordered_map<uint32_t, TracyTTCtx> tracy_contexts_;
-    std::unordered_map<uint32_t, DispatchStallMessageState> dispatch_stall_messages_;
-    SkippedEndBeforeStartStats skipped_end_before_start_stats_;
+    struct Chip {
+        TracyTTCtx ctx = nullptr;
+        uint32_t programs_lane = 0;
+        uint32_t stall_lane = 0;
+        // The context counts ns from context_host. Device time anchor_device is host time anchor_host, and the device
+        // clock runs at `frequency` cycles per ns.
+        int64_t context_host = 0;
+        int64_t anchor_host = 0;
+        uint64_t anchor_device = 0;
+        double frequency = 0.0;
+        // Where the last zone on each lane ended, in ns on the context. A new mapping never moves a zone before it.
+        uint64_t programs_end = 0;
+        uint64_t stall_end = 0;
+        // Dispatch-stall messages are limited to one per kStallMessageInterval; the rest are counted here.
+        std::chrono::steady_clock::time_point last_stall_message;
+        uint64_t suppressed_stalls = 0;
+        uint64_t suppressed_stall_cycles = 0;
+    };
+    void enqueue(const Event& event);
+    void apply_events();
+    void apply_add(const Event& event);
+    void apply_remove(const Event& event);
+    void apply_stall(Chip& chip, const Event& event);
+    void flush_stall_message(uint32_t chip_id, Chip& chip);
+    void handle_record(const experimental::ProgramRealtimeRecord& record);
 #if defined(TRACY_ENABLE)
-    tt::ProgramRealtimeProfilerCallbackHandle callback_handle_;
+    // The source location that names a program's zones: its kernel names, with the kernel paths as the file.
+    const tracy::SourceLocationData* program_srcloc(const experimental::ProgramRealtimeRecord& record);
+#endif
+    // The device timestamp in ns on the chip's context; 0 if it is before the context's start.
+    uint64_t context_ns(const Chip& chip, uint64_t device_timestamp) const;
+
+    // Written by any thread, drained by the consumer thread. events_pending_ keeps the consumer thread off the lock
+    // while nothing is queued.
+    std::mutex events_mutex_;
+    std::vector<Event> events_;
+    std::atomic<bool> events_pending_{false};
+
+    // Everything below is touched only by the consumer thread.
+    std::vector<Chip> chips_;  // indexed by chip id
+    double ns_per_host_tick_ = 0.0;
+#if defined(TRACY_ENABLE)
+    struct Program {
+        std::string name;
+        tracy::SourceLocationData srcloc;
+    };
+    // Tracy keeps a zone's source location by address, so one is kept per program for good. Keyed by the kernel
+    // sources text; the map's nodes do not move.
+    std::unordered_map<std::string, Program> programs_;
+    // Shortcut from a record's kernel_sources storage to its source location. Cleared when a device is removed, so it
+    // holds no more than the programs of one device session.
+    std::unordered_map<const std::string_view*, const tracy::SourceLocationData*> srcloc_of_sources_;
 #endif
 };
 
