@@ -1,13 +1,16 @@
-# sfpi release 8.3.0
+# sfpi trial 0b10-ivan-rebuild
 
-sfpi_repo='https://github.com/tenstorrent/sfpi'
-sfpi_version='8.3.0'
+		#######################################
+		###   NOT A RELEASE, DO NOT DEPLOY  ###
+		#######################################
+
+# Unofficial experiment build: Ivan's init/config-folding sfpi-gcc merged onto
+# 7.93; see https://github.com/ncvetkovicTT/sfpi/releases/tag/0b10-ivan-rebuild
+
+sfpi_repo='https://github.com/ncvetkovicTT/sfpi'
+sfpi_version='0b10-ivan-rebuild'
 sfpi_base=''
-sfpi_build='1126'
+sfpi_build=''
 sfpi_hashtype='sha256'
-sfpi_aarch64_debian_txz_hash='e415c48f0465ec5284cf6f09c6bced38a5fe967a51cdc5053dc881b6b714928d'
-sfpi_aarch64_debian_deb_hash='2cbbbffc7c7e52ab1a756464040f6a13eaa6d20761d93eb62d46a36fc5bf520c'
-sfpi_x86_64_debian_txz_hash='9f2d269db406ba2ea089a21fa3c5a8f1d999676208c4a28e00ab166a763567e5'
-sfpi_x86_64_debian_deb_hash='74f3011505eae31dcc42c4b0f680af1e1c3a51e1afe5b5fb03253f7e92e9a816'
-sfpi_x86_64_fedora_txz_hash='869e9d8e7e0d76ed38a8ab9252fc665558a360c9f46e0457805f7c01c5fb1714'
-sfpi_x86_64_fedora_rpm_hash='c8e52e1e742cc65223e678b2d5e3e076520a8ad118592ff4ba07ca7984f6a391'
+sfpi_x86_64_debian_txz_hash='d6b43fc4fb242b8cf49142503d0cd513398227ce2369d8eb5a7bae37fd9398b0'
+sfpi_x86_64_debian_deb_hash='38ae232c927f4cc77d34ecc8cfed95c06236dc08fcb5fb3d72c6c781ee00543f'
