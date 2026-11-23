@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -45,6 +46,7 @@ private:
 // records.
 struct ProgramMetadata {
     std::vector<std::string_view> kernel_sources;
+    auto operator<=>(const ProgramMetadata&) const = default;
 };
 
 // Class to manage & dump dispatch data for each program
@@ -110,11 +112,12 @@ private:
     std::map<uint64_t, int> program_id_to_call_count;
     // Lives for the whole process, so the spans handed to RT-profiler callbacks carry no lifetime caveat.
     struct ProgramMetadataStore {
-        // Taken only to record a program. Profiler threads read lock-free through runtime_id_to_metadata_.
+        // Taken only the first time a program is recorded. Profiler threads read lock-free through
+        // runtime_id_to_metadata_.
         std::mutex mutex;
         std::unordered_set<std::string> kernel_source_paths;
-        // ProgramImpl::program_counter is process-wide and only ever increments, so keys never repeat.
-        std::unordered_map<uint64_t, ProgramMetadata> program_id_to_metadata;
+        // One entry per distinct list of kernel sources; programs with the same kernels share it.
+        std::set<ProgramMetadata> metadata;
     };
     static ProgramMetadataStore& program_metadata_store();
     std::array<std::atomic<const ProgramMetadata*>, kRuntimeIdSlots> runtime_id_to_metadata_{};

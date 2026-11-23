@@ -98,14 +98,13 @@ private:
 #if defined(TRACY_ENABLE)
     struct Program {
         std::string name;
+        std::string sources;
         tracy::SourceLocationData srcloc;
     };
-    // Tracy keeps a zone's source location by address, so one is kept per program for good. Keyed by the kernel
-    // sources text; the map's nodes do not move.
-    std::unordered_map<std::string, Program> programs_;
-    // Shortcut from a record's kernel_sources storage to its source location. Cleared when a device is removed, so it
-    // holds no more than the programs of one device session.
-    std::unordered_map<const std::string_view*, const tracy::SourceLocationData*> srcloc_of_sources_;
+    // Tracy keeps a zone's source location by address, so one is kept for good per distinct list of kernel sources.
+    // Keyed by a record's kernel_sources storage, which the data collector keeps one of per list; the map's nodes do
+    // not move.
+    std::unordered_map<const std::string_view*, Program> programs_;
 #endif
 };
 
