@@ -266,10 +266,12 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
 
 
 _DECAY_OUT_BLOCK_TILES = 32
+# A matmul's fused SIGMOID mode (its second parameter): accurate to BF16, for an output that keeps only BF16.
+_SIGMOID_ACCURATE_TO_BF16 = 2.0
 
 
 def decay_projection_program_config(
-    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int, fused_activation: ttnn.UnaryWithParam | None = None
+    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int, fused_sigmoid: bool = False
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
 
@@ -284,17 +286,23 @@ def decay_projection_program_config(
     out_block_h = max(
         h for h in range(1, per_core_M + 1) if per_core_M % h == 0 and h * out_block_w <= _DECAY_OUT_BLOCK_TILES
     )
+    # The FP32 bias and the sigmoid are applied on the packer, a subblock at a time in DST acquires of up to two tiles.
+    # With the sigmoid, one-tile subblocks are the fastest (Kimi-K3 Galaxy: 2 us faster than 1 x 3, though 1 x 3 is
+    # 1 us faster without it). Otherwise the widest subblock an FP32 DST holds, four tiles.
+    out_subblock_w = 1 if fused_sigmoid else max(w for w in range(1, 5) if out_block_w % w == 0)
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=key_dim // tile,
         out_subblock_h=1,
-        # FP32 accumulation holds four tiles in DST.
-        out_subblock_w=max(w for w in range(1, 5) if out_block_w % w == 0),
+        out_subblock_w=out_subblock_w,
         out_block_h=out_block_h,
         out_block_w=out_block_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=fused_activation,
+        # The gate leaves in BF16, so its sigmoid is evaluated only to BF16 accuracy.
+        fused_activation=(
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 0.0, _SIGMOID_ACCURATE_TO_BF16) if fused_sigmoid else None
+        ),
         fuse_batch=True,
     )
