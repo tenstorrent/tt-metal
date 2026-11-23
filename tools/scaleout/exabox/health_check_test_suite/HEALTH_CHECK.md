@@ -157,11 +157,15 @@ from the counters as the reset left them.
   does not stop the next ones.
 - `links` (`diag/links.py`): a 2-chip all-gather on every linked chip pair UMD
   finds (10 s per pair, in rounds: `links_pair`). The probes of a round run
-  side by side, each within its 10 s plus 300 s of setup from its start. After a
-  fault here or in `busbar`, it runs `tt-smi -glx_reset`, asks UMD for the links
-  again (the reset can bring back a tray that dropped under the load) and runs
-  the pair test on them at 300 s per pair (`links_sweep`; skipped under
-  `--skip-reset`). Then one whole-box fabric open and close (`links_fabric`).
+  side by side, a round within its 10 s plus a 30 s op timeout and 60 s of
+  compile. After a pair failure or hang here, or a hang or CCL failure in
+  `busbar` (not a numeric fault or a tray trip alone), it runs
+  `tt-smi -glx_reset`, asks UMD for the links again (the reset can bring back a
+  tray that dropped under the load) and runs the pair test on them again at
+  10 s per pair within a 300 s total cap (`links_sweep`); pairs the cap does not
+  reach are SKIP, never PASS. Under `--skip-reset` the sweep runs with no reset
+  first, on the unit as it is. Then one whole-box fabric open and close
+  (`links_fabric`).
 
 Each program runs in a process group of its own, so that a hung one is stopped
 with everything it started. The suite stops those groups on its way out too:
@@ -177,9 +181,9 @@ Each tier runs the load at its own length, `load_mode` in `tiers.py`:
 | `full` | `full` | about 56 min | last chunk 25 min, longer G3b/N1/N2/register-file checks, full L1 march, heavy 750 s, code readback 60 s |
 
 Mesh open, compile and the links test come on top, at every length: about
-10 min more by estimate, not yet measured. The links test keeps its 10 s and
-300 s per pair whatever the length, so a sweep after a fault adds the same on
-every tier. `run_health_check.py` gives each of these tiers its own whole-run
+10 min more by estimate, not yet measured. The links test keeps its 10 s per
+pair and the sweep its 300 s cap whatever the length, so a sweep after a fault
+adds the same on every tier. `run_health_check.py` gives each of these tiers its own whole-run
 timeout for that: 90 min for `daily`, 120 for `weekly`, 180 for `full` (60 for
 the other tiers).
 
@@ -708,7 +712,8 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--heavy-s N`, `--heavy-ops OPS`, `--heavy-x-s N`, `--heavy-x-ops OPS` | the tier's plan | [Galaxy load](#the-galaxy-load) (`daily`, `weekly`, `full`): the heavy step's seconds, DIDT ops, seconds of extra ops at its end, and extra ops (op names: letters, digits and `_`). |
 | `--heavy-n N`, `--burst-gap-ms N`, `--trays LIST`, `--mm-throttle 1-5` | the tier's plan | Galaxy load: heavy ops per launch (mix, heavy), pause after each burst, load only these trays (mix, heavy), matmul di/dt throttle (`TT_MM_THROTTLE_PERF`). |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
-| `--skip-reset` | off | Skip the reset loop phase entirely |
+| `--skip-reset` | off | Skip every reset: the reset loop phase, the post-test reset and the `glx_reset` before the links sweep. The sweep itself still runs on a link fault. |
+| `--tests LIST` | the tier's tests | Run only these tests of the tier, comma-separated: a test name (`links`, `busbar`, a gtest) or one bus-bar step (`busbar_qb`, `busbar_mix`, `busbar_step`, `busbar_heavy`, `busbar_code`). A name the tier does not run is an error. E.g. `daily --tests busbar_heavy --heavy-s 60`, `daily --tests links --skip-reset`. `run_health_check.py --tests` passes it on. |
 | `--skip-tests` | off | Skip the tests phase entirely: the gtests, the pytests and the galaxy load |
 | `--skip-triage` | off | Skip the post-test reset and the triage phase entirely. `--skip-reset` also suppresses the post-test reset. |
 | `--triage-dir PATH` | `$HC_TRIAGE_DIR`, else `<repo>/tools/scaleout/kmd_triage` | Directory holding the triage scripts. Override only to run a working copy against a deployed checkout. |
@@ -770,7 +775,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 |---|---|---|
 | `busbar_<step>` (`qb`, `mix`, `step`, `heavy`, `code`) | The step's program exits 0, prints no `<NAME> FAIL` line, and exits within its planned length plus 300 s | **FAIL** with the first FAIL line, or the exit code or hang and the last line of the log. **SKIP** on a dry run. |
 | `links_pair` | Every linked chip pair passes a 2-chip all-gather, data checked bit for bit | **FAIL** naming the pairs and channels; each link end, by tray, ASIC, port and BDF, in `link_ends` |
-| `links_sweep` | After a bus-bar or pair fault: a `tt-smi -glx_reset`, then the pair test again at 300 s per pair, on the links UMD finds after the reset | **FAIL** as `links_pair`, or when UMD discovery after the reset fails. **SKIP** when the reset failed or under `--skip-reset`. |
+| `links_sweep` | After a pair failure or hang, or a bus-bar hang or CCL failure: a `tt-smi -glx_reset` (none under `--skip-reset`), then the pair test again at 10 s per pair within a 300 s total cap, on the links UMD finds after the reset | **FAIL** as `links_pair`, or when UMD discovery after the reset fails. **SKIP** when the reset failed, or when the cap left pairs not reached (listed in `not_reached`). |
 | `links_fabric` | One whole-box fabric open and close | **FAIL** on a non-zero exit, a FAIL line or a hang |
 
 ### GDDR

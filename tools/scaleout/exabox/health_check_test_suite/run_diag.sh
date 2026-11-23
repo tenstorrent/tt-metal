@@ -95,6 +95,12 @@ Forwarded options (see diag_runner.py --help for details):
   --heavy-n N, --burst-gap-ms N, --trays LIST, --mm-throttle 1-5
                          Galaxy load: heavy ops per launch, pause after each burst, load only these trays,
                          matmul di/dt throttle. Not given: the tier's plan
+  --tests LIST           Run only these tests of the tier, comma-separated: a test name
+                         (links, busbar, a gtest) or one bus-bar step (busbar_qb, busbar_mix,
+                         busbar_step, busbar_heavy, busbar_code), e.g. --tests busbar_heavy
+                         --heavy-s 60 or --tests links --skip-reset
+  --skip-reset           Skip every reset; the links sweep still runs on a link fault, with
+                         no glx_reset first
   --skip-triage          Skip the post-test reset and the triage phase
   --triage-gating        Let triage FAILs gate the run (default: held at WARN)
   --skip-eth-status      Skip the ETH status read

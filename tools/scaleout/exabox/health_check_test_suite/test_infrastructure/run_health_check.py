@@ -121,6 +121,13 @@ def parse_args() -> argparse.Namespace:
         help="Diagnostic tier passed to the diag suite (light, medium, deploy and pre_reboot are deprecated)",
     )
     p.add_argument(
+        "--tests",
+        default=None,
+        metavar="LIST",
+        help="Run only these tests of the tier, comma-separated (e.g. links or busbar_heavy); "
+        "passed to the diag suite as its --tests",
+    )
+    p.add_argument(
         "--results-dir",
         default="",
         help=(
@@ -406,6 +413,7 @@ def main() -> int:
         launch_mode=launch_mode,
         diag_runner=Path(args.diag_runner) if args.diag_runner else None,
         tt_metal_path=Path(args.tt_metal_path) if args.tt_metal_path else None,
+        extra_args=["--tests", args.tests] if args.tests else None,
     )
 
     full_output = version_header + prom_output + "\n" + test_output
