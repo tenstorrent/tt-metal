@@ -1407,7 +1407,7 @@ def test_dsa_teacher_feed_from_the_deep_chain_scores_every_row(tmp_path: Path, e
     src, src_1m = tmp_path / "dsa_in", tmp_path / "dsa_in_1m"
     m = dsa_teacher_feed.build_dsa_input_from_chain(chain=deep, checkpoint=ckpt, count=10, out=src, segment=4)
     dsa_teacher_feed.build_dsa_input_from_chain(chain=chain, checkpoint=ckpt, count=10, out=src_1m, segment=4)
-    assert m["chain"] == str(deep) and m["layer"] == 3
+    assert m["chain"] == str(deep) and m["layer"] == 3 and m["input"].startswith("fp64_deep_chain dsa_input_3")
     assert torch.equal(load_input(src, 0, 10), load_input(src_1m, 0, 10))
     p = fp64_chain.load_products(chain, ["latent", "kpe", "index_key", "topk_indices_3"])
     _write_trace(tmp_path / "trace", {"dsa_topk_indices_layer_3": p["topk_indices_3"]}, chunk_rows=4)

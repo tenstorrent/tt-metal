@@ -166,9 +166,9 @@ class TokenErrorAccumulator:
     def expected_norms(self) -> torch.Tensor:
         return self._sums()[1].sqrt()
 
-    def error_norms(self) -> torch.Tensor:
-        """Each token's ``||actual - expected||``."""
-        return self._sums()[0].sqrt()
+    def squared_norms(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Each token's ``||actual - expected||^2`` and ``||expected||^2``."""
+        return self._sums()
 
     @staticmethod
     def _ratio(error: torch.Tensor, expected: torch.Tensor) -> torch.Tensor:

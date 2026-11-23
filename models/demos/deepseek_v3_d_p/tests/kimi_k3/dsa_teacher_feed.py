@@ -206,6 +206,7 @@ def build_dsa_input_from_chain(*, chain: Path, checkpoint: Path, count: int, out
     from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import DSA_LAYER
 
     read_chain, _, _ = chain_layer3(chain)
+    producer = json.loads((Path(chain) / MANIFEST).read_text())["producer"]
     w = layer_weights(checkpoint, DSA_LAYER)
     norm = w["input_layernorm.weight"].double()
 
@@ -223,7 +224,7 @@ def build_dsa_input_from_chain(*, chain: Path, checkpoint: Path, count: int, out
     expected = {
         "layer": DSA_LAYER,
         **chain_identity(chain),
-        "input": "fp64_chain dsa_input_3 (AttnRes read, FP64, stored fp32)",
+        "input": f"{producer} dsa_input_3 (AttnRes read, FP64, stored fp32)",
         "norm": "input_layernorm in FP64, one bf16 rounding",
     }
     bars = {"kv_latent_pcc": INPUT_CHECK_PCC, "index_key_pcc": INPUT_CHECK_PCC}
@@ -292,13 +293,13 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
     floor = golden_floor(attn.expected_norms())
     row_nrmse, attn_rows = attn.token_nrmse(floor), torch.cat(attn_rows)
-    row_err, row_ref = attn.error_norms(), attn.expected_norms()
+    err_sq, ref_sq = attn.squared_norms()
 
     def attn_abs_error(inside: torch.Tensor) -> dict:
         """``error_norms`` of the attention output's scored rows ``inside``, keyed ``attn_<measure>``."""
         if not inside.any():
             return dict.fromkeys(("attn_row_err_median", "attn_row_ref_median", "attn_rms_err", "attn_rms_ref"), nan)
-        e = error_norms(row_err[inside].square(), row_ref[inside].square())
+        e = error_norms(err_sq[inside], ref_sq[inside])
         return {f"attn_{k}": v for k, v in e.items()}
 
     recall = torch.cat(recall)
@@ -390,7 +391,9 @@ def main() -> None:
     build = sub.add_parser("input", help="rebuild the teacher-fed input from the trace, or take it from a chain")
     build.add_argument("--trace", type=Path, help="rebuild from this trace")
     build.add_argument(
-        "--chain", type=Path, help="take layer 3's input from this fp64_chain run (and score against it)"
+        "--chain",
+        type=Path,
+        help="take layer 3's input from this FP64 chain run (fp64_chain or fp64_deep_chain) and score against it",
     )
     build.add_argument("--layer", type=int, default=LAYER, help="DSA layer (0-based) to rebuild from the trace")
     build.add_argument("--checkpoint", type=Path, default=Path(os.environ.get("KIMI_K31_HF_MODEL", "")))
