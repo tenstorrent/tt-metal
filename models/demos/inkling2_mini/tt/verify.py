@@ -116,12 +116,17 @@ def attn_rows(attn, xs, state, positions, rows, p0, hists):
     for t in range(R):
         part = ttnn.matmul(sh[t], hists[t + 1], dtype=ttnn.bfloat16, compute_kernel_config=attn.hifi4)
         act = part if act is None else ttnn.add(act, part, dtype=ttnn.bfloat16)
-    bank = attn.w_all.bank
+    # decode staging (mk/overlap.py) swaps w_all.bank for a proxy that reads the next app's weights from L1 where
+    # host programs filled them; no verify program hosts fills, so the verify pass uses the raw bank linear
+    proxy = attn.w_all.bank
+    bank = proxy.st.bl if hasattr(proxy, "st") else proxy
     bank.x_rows = WIN_ROWS * R if WIN_ROWS * R <= 16 else 0  # x_rows.hpp reads <= 16 rows; 0 = whole tiles (same bytes)
+    attn.w_all.bank = bank
     try:
         proj_all = attn.w_all(act, ttnn.bfloat16, attn.mm_cfg)
     finally:
         bank.x_rows = WIN_ROWS
+        attn.w_all.bank = proxy
 
     def project(t):
         """Token t's projection with its rows at 0 (prep and AttnOut read some columns from row 0 only)."""

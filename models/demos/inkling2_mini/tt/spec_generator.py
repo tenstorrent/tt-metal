@@ -113,6 +113,16 @@ class SpecGenerator(Generator):
         assert self._shared(p_shared, R) and not self._shared(p_split, R)
         m.set_inputs(0, 0)
         m.step()
+        if self.use_overlap and self.overlap is None:
+            # decode staging first (as Generator.capture), so every verify program is compiled in its final form
+            # before any capture; Generator.capture below then only settles and captures
+            from models.demos.inkling2_mini.tt.mk import router_stage
+            from models.demos.inkling2_mini.tt.mk.overlap import install
+
+            self.overlap = m.overlap = install(m)
+            self.router_stage = router_stage.install(m)
+            m.step()
+            m.step()
         d.set_draft_pos(1)
         d.draft(d.anchor)
         for p in (p_shared, p_split):
@@ -124,6 +134,10 @@ class SpecGenerator(Generator):
             V.commit(n)
             ttnn.synchronize_device(self.device)
             say("S6 eager commit", n, flush=True)
+        if self.overlap is not None:  # settle the staging attach pattern again after the verify passes
+            m.set_inputs(0, 0)
+            m.step()
+            m.step()
         super().capture()
         say("S6 plain captured", flush=True)
         d.capture(compile=False)
