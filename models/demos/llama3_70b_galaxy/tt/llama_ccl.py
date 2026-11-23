@@ -1653,6 +1653,9 @@ class TT_CCL:
             config=matmul_config,
             compute_kernel_config=compute_kernel_config,
             multi_device_global_semaphore=semaphores,
+            # Without a barrier (or a persistent output buffer) a fast rank's gather writes can land in a slow
+            # rank's DRAM while its previous op still uses it.
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             num_links=num_links,
             topology=topology,
             cluster_axis=cluster_axis,
