@@ -658,3 +658,35 @@ def test_single_routed_expert_over_capacity_count(device, model_name: str, count
         active_tokens=_OVER_CAPACITY_TOKENS - 40,
         x_row_major=True,
     )
+
+
+# The chunked Blackhole path (M_tiles > 64) narrows x and the output into tile-sized chunks, and ttnn.narrow
+# bounds-checks against the logical shape. So routed_expert_ffn requires a tile-aligned logical M there and
+# rejects anything else up front. The weights are tiny because the check fires before they are read.
+_CHUNKED_PADDED_M = 2080  # 65 tiles, past the 64-tile single-chunk limit
+_CHUNKED_UNALIGNED_M = 2056  # pads to _CHUNKED_PADDED_M
+_CHUNKED_DIM = 64
+
+
+def _chunked_ffn_tensor(device, rows, cols):
+    return ttnn.from_torch(
+        torch.zeros(rows, cols, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="the chunked routed expert path is Blackhole-only")
+@pytest.mark.parametrize("unaligned", ["x", "output"])
+def test_routed_expert_chunked_rejects_unaligned_logical_m(device, unaligned, expect_error):
+    x_rows = _CHUNKED_UNALIGNED_M if unaligned == "x" else _CHUNKED_PADDED_M
+    x = _chunked_ffn_tensor(device, x_rows, _CHUNKED_DIM)
+    gate = _chunked_ffn_tensor(device, _CHUNKED_DIM, _CHUNKED_DIM)
+    up = _chunked_ffn_tensor(device, _CHUNKED_DIM, _CHUNKED_DIM)
+    down = _chunked_ffn_tensor(device, _CHUNKED_DIM, _CHUNKED_DIM)
+    # An output whose padded M matches x but whose logical M is unaligned only trips the output check.
+    output = _chunked_ffn_tensor(device, _CHUNKED_UNALIGNED_M, _CHUNKED_DIM) if unaligned == "output" else None
+    with expect_error(RuntimeError, "logical M"):
+        ttnn.experimental.deepseek_prefill.routed_expert_ffn(x, gate, up, down, output=output)

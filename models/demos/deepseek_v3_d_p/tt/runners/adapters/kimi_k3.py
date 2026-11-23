@@ -94,6 +94,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # exactly like a broken model.
     kv_pe_interleave = False
     l1_small_size = KimiK3Config.L1_SMALL_SIZE
+    # Kimi-K3's (and K3.1's) MoE layers run on the MoE block (moe_impl.py).
+    moe_impl = "block"
+    # The MoE block's persistent words' slab a core: its busiest cores are the head's ports at chunk 5120 (4x4 SP-axis-1
+    # stage and 8x4): the mailbox, the x gather's and routing exchange's words, the padded-forward metadata (64 B
+    # aligned), the combine barrier, the dispatch semaphores and the router iteration words - 1696 B, plus 16. It sits in
+    # L1_SMALL at the top of L1, above ring_mla's static CBs: every byte here is a byte less for them.
+    moe_block_words_slab = 1712
     # `weight_cache_path` appends `{name}_{arch}_{N}dev/{sp}x{tp}`, so this is the root only. The
     # cache generator writes `<root>/kimi_k3_bh_32dev/<checkpoint-id>/mesh8x4.tpaxis1`, keyed by
     # checkpoint so a different one cannot silently load another's tensors; `8x4` is a symlink onto
@@ -121,7 +128,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # loading all 1.5 TB -- before the supports_pretrained skip in the fixture body runs.
     shared_path = None
 
-    # Device vs upstream KimiSparseMoeBlock. Held at test_kimi_k3_moe's final_output_pcc: the two
+    # Device vs upstream KimiSparseMoeBlock. Held at the TtMoe test_kimi_k3_moe's final_output_pcc (removed): the two
     # compare the same device tensor against references that agree to 2e-5, so they measure the same
     # thing and cannot carry different bars. The 8x4 value is 0.9696 (reference 0.969567,
     # final_output 0.969585) -- 8x4 spreads 896 experts over 32 chips instead of 8, so the top-16
