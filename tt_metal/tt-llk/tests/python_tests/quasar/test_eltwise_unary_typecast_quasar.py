@@ -142,7 +142,8 @@ def test_eltwise_unary_typecast_int32_quasar(formats, dest_sync, input_dimension
         input_dimensions_B=input_dimensions,
     )
     src_A = _prepare_int32_typecast_input(src_A, src_B, formats)
-    # Integer-valued stimuli, so the torch cast is the exact conversion (RNE narrows to bf16).
+    # Integer-valued stimuli apart from the -0.3 seed, which truncation and RNE both take to 0, so the
+    # torch cast is the exact conversion (RNE narrows to bf16).
     golden_tensor = src_A.to(torch.float32).to(format_dict[formats.output_format])
 
     num_faces = MAX_NUM_FACES
