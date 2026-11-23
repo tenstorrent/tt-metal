@@ -601,40 +601,6 @@ static uint32_t dfb_dm_side_counter_share(const DataflowBufferImpl& dfb, bool is
     return dfb_dm_side_credits_split(dfb, is_producer) ? 0u : 1u;
 }
 
-// A block must fit one NoC packet, or the ISR would fire on the first fragment.
-static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& dfb) {
-    const auto& hal = MetalContext::instance(dfb.get_context_id()).hal();
-    if (!hal.has_tile_counter_registers()) {
-        return;
-    }
-    const DataflowBufferConfig& config = dfb.config;
-    if (!config.enable_producer_implicit_sync && !config.enable_consumer_implicit_sync) {
-        return;
-    }
-    const uint32_t noc_max_burst_bytes = hal.get_noc_max_burst_size_bytes();
-    const auto check_side = [&](bool is_producer) {
-        const bool implicit_sync =
-            is_producer ? config.enable_producer_implicit_sync : config.enable_consumer_implicit_sync;
-        const bool has_dm = has_dm_risc(is_producer ? config.producer_risc_mask : config.consumer_risc_mask);
-        const uint32_t burst = dfb_effective_block_entries(dfb, is_producer);
-        if (!(implicit_sync && has_dm && burst > 1)) {
-            return;
-        }
-        TT_FATAL(
-            burst * config.entry_size <= noc_max_burst_bytes,
-            "DFB {}: implicit-sync BLOCKED {} requires block_size * entry_size <= {} bytes (one NoC "
-            "packet); got {} B ({} x {}). Use explicit sync for larger blocks.",
-            dfb.id,
-            is_producer ? "producer" : "consumer",
-            noc_max_burst_bytes,
-            burst * config.entry_size,
-            burst,
-            config.entry_size);
-    };
-    check_side(/*is_producer=*/true);
-    check_side(/*is_producer=*/false);
-}
-
 size_t serialize_dfb_config_for_core(
     const CoreCoord& core,
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
@@ -1937,7 +1903,6 @@ void DataflowBufferImpl::update_size(std::optional<uint32_t> new_entry_size, std
 
     std::tie(capacity, stride_in_entries) = compute_capacity_and_stride(*this);
     validate_ring_extent(*this);
-    validate_implicit_burst_fits_one_packet(*this);
 
     if (configs_finalized && MetalContext::instance(context_id_).hal().has_tile_counter_registers()) {
         const bool producer_is_tensix_only =
@@ -2612,8 +2577,6 @@ void ProgramImpl::finalize_single_dfb_config(
             dfb->id,
             std::max(config.producer_block_size, config.consumer_block_size));
     }
-
-    validate_implicit_burst_fits_one_packet(*dfb);
 
     // TRISC pack/unpack store ring extent in uint32_t L1-aligned units; host rejects rings > L1 / uint32.
     validate_ring_extent(*dfb);
