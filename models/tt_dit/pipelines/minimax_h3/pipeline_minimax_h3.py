@@ -418,6 +418,30 @@ class _BucketState:
     warm: bool = False
 
 
+@dataclass(frozen=True)
+class MiniMaxH3Residency:
+    """What a mesh preset keeps loaded between requests.
+
+    The tasks in `coresident_tasks` keep every stage loaded across requests; every other task evicts each stage
+    before the next one loads. `vae_residency_mode` says what a coresident task does with the video VAE before each
+    denoise: "keep" leaves it loaded, and "deallocate" frees its loaded modules (the decoder, and for fl2va the
+    keyframe encoder), which reload from the host when they are next needed. "shard_decoder" frees the other modules
+    the same way but shards the decoder over the SP axis, so the decode gathers it back over the fabric instead.
+    """
+
+    coresident_tasks: tuple[str, ...] = ("t2va", "ref2va")
+    vae_residency_mode: str = "keep"
+
+    def __post_init__(self) -> None:
+        _check_vae_residency_mode(self.vae_residency_mode)
+
+
+def _check_vae_residency_mode(mode: str) -> None:
+    if mode not in ("keep", "deallocate", "shard_decoder"):
+        msg = f"vae_residency_mode must be 'keep', 'deallocate' or 'shard_decoder', got {mode!r}"
+        raise ValueError(msg)
+
+
 # Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. An unlisted
 # shape raises rather than defaulting, so it cannot silently ring-collective over a line fabric.
 #
@@ -431,7 +455,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "sp_axis": 1,
         "num_links": 2,
         "topology": ttnn.Topology.Ring,
-        "coresident": True,
         # Dynamic length by default; the ladder and `bucket_denoise` stay as the backup path (any bucketed
         # kwarg or MINIMAX_H3_DYNAMIC_LENGTH=0 selects it) and the top rung is the default admission cap.
         "dynamic_length": True,
@@ -455,7 +478,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         # Every stage stays resident: evicting the transformer drops the per-request buffers it caches
         # (the padded-sequence zero rows), and rebuilding those inside a trace capture is a fatal write.
-        "coresident": True,
+        "residency": MiniMaxH3Residency(),
         "trace_denoise": True,
         # Follows `dynamic_length`, which is opt-in here.
         "encoder_dynamic_length": True,
@@ -475,23 +498,20 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 # Wormhole Galaxy. Same axes as Blackhole -- the shape arguments for TP=4 are architectural, not
 # per-chip -- but these differ:
 #
-#   * `coresident: False`. A Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB, so each stage is
-#     evicted before the next loads. The cost is a text-encoder reload per request, which is the trade
-#     the Residency note above describes.
+#   * `residency`: a Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB. t2va keeps its stages loaded across
+#     requests except the video VAE, whose decoder each device keeps 1/SP of through the denoise; ref2va's
+#     61440-token prompt encode fits beside no other stage, so it evicts each stage before the next loads.
 #   * `dit_fsdp: True`: the DiT weights are sharded across the SP axis too and gathered layer by layer.
 #   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
 #
 # There is no (4, 32) entry: the quad is a Blackhole configuration.
-# TODO: Try to figure out how we can keep components of the the model coresident throughout generation
-# to improve perf. Easy target would be to keep the text encoder resident if possible, might save a
-# few seconds. This will matter when video gen is ~1 minute or so.
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (4, 8): {
         "tp_axis": 0,
         "sp_axis": 1,
         "num_links": 4,
         "topology": ttnn.Topology.Ring,
-        "coresident": False,
+        "residency": MiniMaxH3Residency(coresident_tasks=("t2va",), vae_residency_mode="shard_decoder"),
         "dit_fsdp": True,
         # Dynamic length by default, as on the Blackhole 4x8; the bucket ladder stays as the backup path and the
         # admission cap.
@@ -659,6 +679,7 @@ class MiniMaxH3Pipeline:
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
         use_persistent_ccl_buffers: bool | None = None,
+        vae_residency_mode: str | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         vae_output_type: str = "yuv420",
@@ -678,7 +699,11 @@ class MiniMaxH3Pipeline:
         denoise instead of once a step; `trace_denoise` configs always project once a step.
 
         `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` where
-        the mesh preset enables it (the Blackhole 4x8 and 4x32), for t2va/fl2va only."""
+        the mesh preset enables it (the Blackhole 4x8 and 4x32), for t2va/fl2va only.
+
+        `coresident` and `vae_residency_mode` override the mesh preset's `residency` (`MiniMaxH3Residency`) for this
+        pipeline's task. A task that is not coresident ignores `vae_residency_mode`: loading the transformer already
+        evicts the video VAE."""
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
@@ -690,9 +715,10 @@ class MiniMaxH3Pipeline:
         num_links = preset["num_links"] if num_links is None else num_links
         if topology is None:
             # A ring collective on a 1D line fabric aborts, so the open fabric wins over the preset.
-            fabric_is_line = ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D
+            fabric_is_line = ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_1D
             topology = ttnn.Topology.Linear if fabric_is_line else preset["topology"]
-        coresident = preset.get("coresident", True) if coresident is None else coresident
+        residency = preset.get("residency", MiniMaxH3Residency())
+        coresident = task in residency.coresident_tasks if coresident is None else coresident
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")
         self.audio_t_shard = (
             env_audio_t_shard == "1" if env_audio_t_shard is not None else preset.get("audio_t_shard", False)
@@ -717,6 +743,9 @@ class MiniMaxH3Pipeline:
         source = f" (from {_DYNAMIC_LENGTH_ENV})" if path.dynamic_from_env else ""
         fsdp = "on" if self.dit_fsdp else "off"
         self._host_log(f"denoise path: {path.name}{source}; dit_fsdp: {fsdp} ({fsdp_source})")
+        vae_mode = residency.vae_residency_mode if vae_residency_mode is None else vae_residency_mode
+        _check_vae_residency_mode(vae_mode)
+        self.vae_residency_mode = vae_mode if coresident else "keep"
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -970,6 +999,7 @@ class MiniMaxH3Pipeline:
         trace_denoise: bool | None = None,
         bucket_denoise: bool | None = None,
         use_persistent_ccl_buffers: bool | None = None,
+        vae_residency_mode: str | None = None,
         bucket_ladder: tuple[int, ...] | None = None,
         arena_caps: MiniMaxH3ArenaCaps | None = None,
         vae_output_type: str = "yuv420",
@@ -988,7 +1018,8 @@ class MiniMaxH3Pipeline:
         The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH` / `_PRESETS_WH`; pass any of
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
 
-        `trace_denoise`, `bucket_denoise`, `use_persistent_ccl_buffers` and `bucket_ladder` default to the mesh preset;
+        `trace_denoise`, `bucket_denoise`, `use_persistent_ccl_buffers`, `vae_residency_mode` and `bucket_ladder`
+        default to the mesh preset;
         `arena_caps` and `adaln_slot_roles` default to the task's envelope. `dynamic_length` (the 4x8
         presets' default; kwarg > MINIMAX_H3_DYNAMIC_LENGTH=0|1 > preset) replaces the bucket ladder by the live
         padded length up to `max_sequence_length`; passing any bucketed kwarg instead keeps that path. `dit_fsdp`
@@ -1022,6 +1053,7 @@ class MiniMaxH3Pipeline:
             trace_denoise=trace_denoise,
             bucket_denoise=bucket_denoise,
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
+            vae_residency_mode=vae_residency_mode,
             bucket_ladder=bucket_ladder,
             arena_caps=arena_caps,
             vae_output_type=vae_output_type,
@@ -1814,6 +1846,11 @@ class MiniMaxH3Pipeline:
             dtype="fp32",  # the whole VAE checkpoint is fp32 and the port keeps it there
             get_torch_state_dict=lambda: state,
         )
+        if self.vae_residency_mode == "shard_decoder" and module is self._vae.decoder:
+            # Shard and gather once at each host load, so the shard and gather programs compile with the load (the
+            # warmup) rather than at the first request's decode.
+            module.shard(self.sp_axis)
+            module.gather(self.vae_ccl_manager)
 
     @property
     def vae(self) -> MiniMaxH3Vae:
@@ -2394,6 +2431,14 @@ class MiniMaxH3Pipeline:
         transformer = self._prepare_transformer()
         if self.dynamic_length and self.resident_kv_gather_pair:
             self._bind_kv_gather_pair(transformer)
+        if self.vae_residency_mode != "keep":
+            for module in self._vae.modules:
+                if not module.is_loaded():
+                    continue
+                if self.vae_residency_mode == "shard_decoder" and module is self._vae.decoder:
+                    module.shard(self.sp_axis)
+                else:
+                    module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
             video_rows, audio_rows = self._denoise(

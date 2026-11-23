@@ -12,10 +12,6 @@
 
 #include <stdint.h>
 
-#ifdef ARCH_QUASAR
-#error "PrefetcherPipe weight delivery into the matmul has not been brought up on Quasar"
-#endif
-
 #include "api/dataflow/noc.h"
 #include "api/dataflow/prefetcher_pipe.h"
 

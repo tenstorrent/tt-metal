@@ -22,6 +22,7 @@ struct SparseKvPushParams {
     SparseKvPushPart part = SparseKvPushPart::kAll;
     uint32_t num_links = 2;
     CoreRangeSet core_grid;
+    uint32_t sp_axis = 0;
     tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
 
     // Not hashed: runtime args, patched and validated on every dispatch.

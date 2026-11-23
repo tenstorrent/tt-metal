@@ -7,11 +7,11 @@ add, move or drop a step in one.
 
 The phases always run in the same order, fixed in diag_runner.run_diag():
 
-    snapshot -> resets -> tests -> post_test_resets -> triage -> qsfp_tests -> sys_triage
+    snapshot -> resets -> tests -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage
 
-The order is load-bearing (the triage probes, the QSFP collector and sys-triage
-all open every chip, so they must not overlap the tests, and must come after a
-discrete reset; see the comments on each field below), so a tier does not
+The order is load-bearing (the triage probes, the ETH status read, the QSFP
+collector and sys-triage all open every chip, so they must not overlap the tests,
+and must come after a discrete reset; see the comments on each field below), so a tier does not
 reorder phases. It only picks what each one does. A phase a tier leaves empty is
 still in the report, as a SKIP that names the tier — except post_test_resets,
 whose phase is left out of the report when there is nothing to run.
@@ -62,6 +62,18 @@ class Tier:
     # First-step triage tools: names from TRIAGE_TOOLS.
     triage: tuple[str, ...] = ()
 
+    # Read every on-host ETH link twice with tt-triage's check_eth_status and
+    # judge the two reads (diag/eth_status.py). It opens every chip, so it sits
+    # after the post-test reset like the triage tools; it never resets, and
+    # stops before opening a chip if one has dropped off PCIe.
+    eth_status: bool = False
+
+    # Print the ETH link summary at the end of the run (diag/eth_summary.py), for
+    # the person at the console rather than the dashboard: a verdict, what is
+    # broken and where, and the cabling found. Kept as logs/eth_status_summary.txt
+    # too. Needs eth_status.
+    eth_summary: bool = False
+
     # Collect a tt-bh-glx-cluster-debug ETH dump and check it. A minutes-long
     # ETH sweep; it sits in the same slot as triage, after the post-test reset.
     qsfp_tests: bool = False
@@ -81,9 +93,15 @@ _WEEKLY = Tier(
 )
 
 TIERS: dict[str, Tier] = {
-    # Quick machine status check, based on Veljko Cankovic's script. Off until
-    # its tests are in diag/device_tests.py.
-    # "flash": Tier(...),
+    # Quick ETH link health, based on Veljko Cankovic's script: the unit read as
+    # found, the snapshot and two ETH status reads 30 s apart. No resets and no
+    # tests, so nothing changes the state being read, and a fault is still
+    # there for whoever picks it up. The one tier anyone may run by hand, so it
+    # ends with the ETH link summary.
+    "flash": Tier(
+        eth_status=True,
+        eth_summary=True,
+    ),
     # The scheduled run.
     "daily": Tier(
         resets=("-r", "-glx_reset"),
@@ -135,6 +153,8 @@ def _validate() -> None:
         ]
         problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
+        if tier.eth_summary and not tier.eth_status:
+            problems.append(f"{name}: eth_summary needs eth_status")
     problems += [
         f"{old}: alias for unknown tier {new!r}" for old, new in DEPRECATED_TIER_ALIASES.items() if new not in TIERS
     ]

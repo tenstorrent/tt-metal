@@ -11,7 +11,7 @@
 # this script sets up. Unnarrowed, the system mesh is 8x4 and those rows skip. The half -> device map is per-galaxy, so it comes from
 # gen_pipeline_binding.py --layout 4x4 (generated once per host, galaxy must be idle).
 #
-# Usage, from TT_METAL_HOME:
+# Usage, from TT_METAL_HOME (the repo root):
 #   models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh [--half top|bottom] [-- <extra pytest args>]
 #   models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh -- path/to/test_x.py -k "4x4 and foo"
 #
@@ -49,6 +49,9 @@ export TT_MESH_GRAPH_DESC_PATH="$TOPO/single_4x4_sp1_mgd.textproto"
 echo "4x4 stage, $HALF half: TT_VISIBLE_DEVICES=$TT_VISIBLE_DEVICES"
 
 T=models/demos/deepseek_v3_d_p/tests
+# The [RING, RING] carve's rows (ROWS_SELECTOR of run_subtorus_4x4_tests.sh) request a TorusXY fabric, which this
+# [LINE, RING] tray half cannot bring up, so the default suite leaves them out.
+RING_RING_ROWS="torus-xy-4x4 or 4x4-torus-xy or SP4xTP4-torus-xy or torusxy-mesh-4x4 or -xy4 or xy4- or _xy4 or ring_ring_4x4"
 # Test paths given after -- replace the default suite; bare options (-rA, -x, ...) add to it. pytest keeps
 # only the last -k, so a user's -k is pulled out and put back last: as given with test paths, and merged
 # with the 4x4 filter for the default suite.
@@ -75,8 +78,7 @@ else
     "$T/pcc/test_shared_expert.py::test_shared_expert_pcc" \
     "$T/pcc/test_ffn.py::test_ffn_pcc" \
     "$T/pcc/test_moe_gate_prefill2d.py::test_forward_pass" \
-    "$T/pcc/test_ttnn_moe.py::test_kimi_k3_moe" \
-    -k "4x4${user_k:+ and ($user_k)}"
+    -k "4x4 and not ($RING_RING_ROWS)${user_k:+ and ($user_k)}"
 fi
 
 # python3 -m puts the cwd (TT_METAL_HOME) on sys.path; bare pytest under --import-mode=importlib does not, and the

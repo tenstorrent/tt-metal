@@ -763,6 +763,149 @@ def test_tilize_fp32_lossless_via_to_layout(device):
     assert torch.equal(input_tensor, output_tensor)
 
 
+def _make_int32_precision_tensor(shape):
+    """Full-range int32 values, with the extremes and values wider than 24 bits in the first row."""
+    torch.manual_seed(35303)
+    t = torch.randint(-(2**31), 2**31 - 1, shape, dtype=torch.int32)
+    precision_values = torch.tensor(
+        [
+            2**31 - 1,
+            -(2**31),
+            -(2**31) + 1,
+            2**24 + 1,  # not representable in a 24-bit mantissa
+            -(2**24 + 1),
+            0x12345678,
+            -0x12345678,
+            1,
+            -1,
+            0,
+        ],
+        dtype=torch.int32,
+    )
+    n = min(precision_values.numel(), t.shape[-1])
+    t.view(-1, t.shape[-1])[0, :n] = precision_values[:n]
+    return t
+
+
+@pytest.mark.parametrize("shape", [(32, 32), (64, 128), (64, 1280)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_int32_lossless(device, shape, use_multicore):
+    """Tilize must preserve int32 values exactly."""
+    input_tensor = _make_int32_precision_tensor(shape)
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize(tt_input, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor)
+
+
+# (48, 1264) pads to 40 tiles per row, which takes the block-interleaved factory when multicore.
+@pytest.mark.parametrize("shape", [(48, 80), (33, 65), (48, 1264)])
+@pytest.mark.parametrize("use_multicore", [False, True])
+def test_tilize_with_val_padding_int32_lossless(device, shape, use_multicore):
+    """tilize_with_val_padding must preserve the int32 data region exactly."""
+    input_tensor = _make_int32_precision_tensor(shape)
+    H, W = shape
+    padded_H = math.ceil(H / 32) * 32
+    padded_W = math.ceil(W / 32) * 32
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.tilize_with_val_padding(tt_input, [padded_H, padded_W], 7, use_multicore=use_multicore)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor[:H, :W])
+
+
+def test_tilize_int32_lossless_via_to_layout(device):
+    """to_layout (host→device tilize path) must be bit-exact for int32."""
+    input_tensor = _make_int32_precision_tensor((64, 128))
+
+    tt_input = ttnn.from_torch(input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "memory_layout, tensor_shape, grid_shape",
+    [
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [1, 1, 128, 64], (4, 1)),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, [1, 1, 32, 128], (1, 4)),
+        (ttnn.TensorMemoryLayout.BLOCK_SHARDED, [1, 1, 128, 128], (2, 2)),
+    ],
+)
+def test_tilize_sharded_int32_lossless(device, memory_layout, tensor_shape, grid_shape):
+    """Sharded tilize must preserve int32 values exactly."""
+    n_y, n_x = grid_shape
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
+    H, W = tensor_shape[-2], tensor_shape[-1]
+    shard_shape = [H // n_y, W // n_x]
+    shard_spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_cfg = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+    input_tensor = _make_int32_precision_tensor(tensor_shape)
+
+    tt_input = ttnn.from_torch(
+        input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    tt_output = ttnn.tilize(tt_input, memory_config=mem_cfg)
+
+    assert torch.equal(input_tensor, ttnn.to_torch(tt_output))
+
+
+def test_tilize_with_val_padding_width_sharded_int32_lossless(device):
+    """WIDTH_SHARDED tilize_with_val_padding (the sharded factory) must preserve the int32 data region exactly."""
+    num_cores = 2
+    height_in, height_out, width = 50, 64, 128
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    input_shard_spec = ttnn.ShardSpec(shard_grid, (height_in, width // num_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    output_shard_spec = ttnn.ShardSpec(shard_grid, (height_out, width // num_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    input_tensor = _make_int32_precision_tensor((1, height_in, width))
+
+    tt_input = ttnn.from_torch(
+        input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_mem_cfg
+    )
+    tt_output = ttnn.tilize_with_val_padding(tt_input, [1, height_out, width], 7, memory_config=output_mem_cfg)
+    output_tensor = ttnn.to_torch(tt_output)
+
+    assert torch.equal(input_tensor, output_tensor[:, :height_in, :])
+
+
+@pytest.mark.parametrize("input_tile, output_tile", [(None, [16, 32]), ([16, 32], [32, 32]), ([32, 32], [16, 32])])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.int32])
+def test_tilize_32bit_tiny_tile_rejected_on_quasar(device, dtype, input_tile, output_tile, expect_error):
+    """Quasar tilizes FLOAT32 and INT32 through DEST, which handles 32x32 tiles only (input_tile = retile)."""
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar-only validation")
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.int32
+    layout = ttnn.ROW_MAJOR_LAYOUT if input_tile is None else ttnn.TILE_LAYOUT
+    tile = None if input_tile is None else ttnn.Tile(input_tile)
+    tt_input = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch_dtype), dtype=dtype, layout=layout, tile=tile, device=device
+    )
+    with expect_error(RuntimeError, "is not supported on Quasar"):
+        ttnn.tilize(tt_input, tile=ttnn.Tile(output_tile))
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("op", ["tilize", "tilize_with_val_padding"])
+def test_tilize_int32_to_float_rejected_on_quasar(device, op, output_dtype, expect_error):
+    """Quasar's packer cannot convert Int32 in DEST to a float format."""
+    if device.arch() != ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar-only validation")
+    tt_input = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "is not supported on Quasar"):
+        if op == "tilize":
+            ttnn.tilize(tt_input, dtype=output_dtype)
+        else:
+            ttnn.tilize_with_val_padding(tt_input, [32, 64], 0, dtype=output_dtype)
+
+
 @pytest.mark.parametrize(
     "memory_layout, tensor_shape, grid_shape",
     [
@@ -1331,20 +1474,42 @@ def _docstring_tile_heights():
     return [int(height) for height in re.findall(r"\d+", line.split("height of", 1)[1].split(".", 1)[0])]
 
 
+def _architecture_xfail(dtype, buffer_type, tile_height):
+    """None for an input the ttnn.tilize docstring supports on this architecture, else (reason, run) for an xfail.
+
+    The docstring's architecture rules: on Blackhole, BFLOAT16, UINT16 and UINT8 inputs need a tile height of 2 or
+    more, and a UINT8 input must be in DRAM; on Quasar, a FLOAT32 input needs a tile height of 32. An input outside a
+    rule runs and is expected to fail, except a UINT8 input in L1 on Blackhole and a FLOAT32 input on Quasar, which
+    don't run.
+    """
+    if is_blackhole():
+        if dtype == ttnn.uint8 and buffer_type != ttnn.BufferType.DRAM:
+            return "the docstring asks for UINT8 inputs in DRAM on Blackhole", False
+        if dtype in (ttnn.bfloat16, ttnn.uint16, ttnn.uint8) and tile_height < 2:
+            return f"the docstring asks for a tile height of 2 or more for {dtype} inputs on Blackhole", True
+    if is_quasar() and dtype == ttnn.float32 and tile_height != 32:
+        return "the docstring asks for a tile height of 32 for FLOAT32 inputs on Quasar", False
+    return None
+
+
+@pytest.mark.parametrize("tile_height", _docstring_tile_heights())
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.tilize))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.tilize))
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96), (1, 1, 64, 2048)], ids=["default", "wide"])
-def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, device):
+def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, tile_height, device, request):
     """Runs every dtype, layout and interleaved buffer type the ttnn.tilize docstring lists, with each tile height its
     ``tile`` line lists.
 
-    BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value. A dtype with an architecture
-    rule in the docstring (e.g. UINT8 on Blackhole) runs only where and with the tile heights that rule allows.
+    BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value. An input that the docstring's
+    architecture rules leave out is an xfail on that architecture (see ``_architecture_xfail``).
     """
     check_readable(dtype, layout, buffer_type)
-    dram_only, tile_height_allowed = _docstring_arch_rule(dtype)
-    if dram_only and buffer_type != ttnn.BufferType.DRAM:
-        pytest.skip(f"the docstring asks for {dtype} inputs in DRAM on this architecture")
+    xfail = _architecture_xfail(dtype, buffer_type, tile_height)
+    if xfail:
+        reason, run = xfail
+        if not run:
+            pytest.xfail(reason)
+        request.applymarker(pytest.mark.xfail(reason=reason, strict=False))
     memory_config = interleaved_memory_config(buffer_type)
     input_tensor = ttnn.from_torch(
         full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16),
@@ -1353,13 +1518,10 @@ def test_tilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, de
         device=device,
         memory_config=memory_config,
     )
-    tile_heights = [height for height in _docstring_tile_heights() if tile_height_allowed(height)]
-    assert 32 in tile_heights
-    for tile_height in tile_heights:
-        output = ttnn.tilize(input_tensor, tile=ttnn.Tile((tile_height, 32)))
+    output = ttnn.tilize(input_tensor, tile=ttnn.Tile((tile_height, 32)))
 
-        assert output.layout == ttnn.TILE_LAYOUT
-        assert output.dtype == dtype
-        assert list(output.tile.tile_shape) == [tile_height, 32]
-        assert output.memory_config() == memory_config
-        assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.dtype == dtype
+    assert list(output.tile.tile_shape) == [tile_height, 32]
+    assert output.memory_config() == memory_config
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)

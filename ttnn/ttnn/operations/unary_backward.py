@@ -242,13 +242,12 @@ ttnn.attach_golden_function(
 def _golden_function_rpow_bw(grad_tensor, input_tensor, exponent, *args, **kwargs):
     import torch
 
-    # The device computes grad * exponent * input_tensor ** (exponent - 1), i.e. the gradient of
-    # input_tensor ** exponent, not of the forward rpow's exponent ** input_tensor.
+    # ttnn.rpow(input, exponent) computes exponent ** input -- the float parameter is the base, as in
+    # _golden_function_rpow in ttnn/ttnn/operations/unary.py, which returns torch.pow(dim, input_tensor).
+    # The gradient with respect to input is therefore ln(exponent) * exponent ** input.
+    # For a base of 0, autograd already gives 0 at and above zero and -inf below it, as the device does.
     input_tensor = _prepare_input_for_backward(input_tensor)
-    (input_grad,) = golden_compute_gradients(torch.pow(input_tensor, exponent), (input_tensor,), grad_tensor)
-    if exponent != 0:
-        # The device writes NaN for negative inputs unless exponent is 0, where it returns zeros everywhere.
-        input_grad = torch.where(input_tensor.detach() < 0, float("nan"), input_grad)
+    (input_grad,) = golden_compute_gradients(torch.pow(exponent, input_tensor), (input_tensor,), grad_tensor)
     return [input_grad]
 
 

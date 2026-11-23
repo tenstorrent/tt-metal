@@ -115,7 +115,7 @@ def test_attn_res_block_stats_gathered(mesh_device, device_params, num_sites, pe
         gathered=gathered,
         cluster_axis=TP_AXIS,
         semaphore=semaphore,
-        topology=per_axis_topology()[TP_AXIS],
+        topology=per_axis_topology(mesh_device=mesh_device)[TP_AXIS],
         num_links=num_links,
     )
 

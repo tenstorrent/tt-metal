@@ -16,6 +16,7 @@ from .llk_params import (
     FPU_BINARY_OPERATIONS,
     REDUCE_OPERATIONS,
     SFPU_BINARY_OPERATIONS,
+    SFPU_TERNARY_OPERATIONS,
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
@@ -233,6 +234,10 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
         constants.append(
             f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};"
         )
+    elif mathop in SFPU_TERNARY_OPERATIONS:
+        constants.append(
+            f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
+        )
     elif mathop in FPU_BINARY_OPERATIONS:
         constants.append(
             f"constexpr auto ELTWISE_BINARY_OP = ckernel::EltwiseBinaryType::{mathop.cpp_enum_value};"
@@ -258,10 +263,12 @@ class MATH_OP(TemplateParameter):
                 temp_header.append(
                     f"constexpr auto REDUCE_DIM = ckernel::ReduceDim::{self.mathop.cpp_enum_value};"
                 )
-                if self.pool_type:
-                    temp_header.append(
-                        f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
-                    )
+
+        # The pool applies to reduce ops, but kernels that take no mathop (multidim reduce) read it too.
+        if self.pool_type:
+            temp_header.append(
+                f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.pool_type.value};"
+            )
 
         # Optional extra unary operation (used when both a binary and unary op
         # need to be present in the same kernel, e.g. binary-eltwise followed by
@@ -278,21 +285,6 @@ class MATH_OP(TemplateParameter):
             )
 
         return "\n".join(temp_header)
-
-
-@dataclass
-class SFPU_TERNARY_OP(TemplateParameter):
-    """Select the ternary SFPU op at compile time.
-
-    Emits ``constexpr auto SFPU_TERNARY_OPERATION = SfpuType::<op>;`` consumed by
-    ``sfpu_operations.h``. ``ternary_mathop.cpp_enum_value`` must match the
-    ``SfpuType`` enumerator name (e.g. ``addcmul``/``addcdiv``).
-    """
-
-    ternary_mathop: MathOperation = None
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};"
 
 
 @dataclass
@@ -1139,14 +1131,6 @@ class PERF_RUN_TYPE(TemplateParameter):
 
 
 @dataclass
-class REDUCE_POOL_TYPE(TemplateParameter):
-    reduce_pool_type: ReducePool
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.reduce_pool_type.value};"
-
-
-@dataclass
 class REDUCE_ORDER(TemplateParameter):
     """Order of the chained SFPU reduce passes in sfpu_reduce_multidim_test.cpp, all under one
     shared init_reduce (see ReduceOrder; the kernel names the values REDUCE_ORDER_*).
@@ -1446,14 +1430,6 @@ class TOPK_XL(TemplateParameter):
 class TOP32_RM(TemplateParameter):
     """Compile-time knobs for ``top32_rm_test.cpp`` (the DeepSeek top32_rm family).
 
-    ``row_elements``  length of the row being reduced to its top 32. The driver walks it in
-                      64-element chunks, so a value that is 32 (mod 64) is what reaches the
-                      ``num_faces=2`` tail path -- the same shape the Metal dev test covers
-                      with row=160.
-    ``datum_bytes``   L1 datum size of both operands, which is the only thing the driver
-                      needs to turn a chunk index into an address: one chunk is
-                      ``64 * datum_bytes`` bytes, and unpacker addresses count 16-byte words.
-                      Must match the format the stimuli are written in.
     ``top_min``       ``_bitonic_top32_merge_``'s template polarity. False (the consumer's
                       value) keeps the max half of each compare-exchange, i.e. a top-32.
     ``top32_mode``    0 walks the row in 64-element chunks through this family's own unpack
@@ -1471,13 +1447,10 @@ class TOP32_RM(TemplateParameter):
                       layer, and the only thing in the tree that calls those 7 entry points at
                       all. In the plain mode the unpack goes through
                       ``experimental/llk_unpack_A_top32_rm_api.h`` too, which picks its own
-                      branch (Float32 takes SrcA there, not unpack-to-dest, so those cells differ
-                      from their primitives-path namesakes) and the per-chunk L1 offset, so
-                      ``datum_bytes`` is then only the primitives' fallback for mode 1.
+                      branch (Float32 takes SrcA there, not unpack-to-dest) and applies the
+                      per-chunk L1 offsets used by the consumer.
     """
 
-    row_elements: int = 64
-    datum_bytes: int = 2
     top_min: bool = False
     via_wrappers: bool = False
     # Named for the constant it emits rather than bare `mode`: field names have to be unique
@@ -1486,25 +1459,15 @@ class TOP32_RM(TemplateParameter):
     top32_mode: int = 0
 
     def convert_to_cpp(self) -> str:
-        if self.row_elements % 32 != 0:
-            raise ValueError(
-                f"row_elements must be a multiple of 32, got {self.row_elements}"
-            )
         if self.top32_mode not in (0, 1):
             raise ValueError(
                 f"top32_mode must be 0 (plain) or 1 (pre-sorted), got {self.top32_mode}"
             )
-        if self.top32_mode == 1 and self.row_elements < 1024:
-            raise ValueError(
-                "the pre-sorted mode needs at least one whole 1024-element chunk, got "
-                f"{self.row_elements}"
-            )
         return "\n".join(
             [
-                f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
-                f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
                 f"constexpr bool TOP32_TOP_MIN = {str(self.top_min).lower()};",
                 f"constexpr std::uint32_t TOP32_MODE = {self.top32_mode}u;",
+                f"#define TOP32_PRE_SORTED_MODE {int(self.top32_mode == 1)}",
                 f"#define TOP32_VIA_WRAPPERS {int(self.via_wrappers)}",
             ]
         )
@@ -1741,6 +1704,45 @@ class LOOP_FACTOR(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t LOOP_FACTOR;", "I"
+
+
+@dataclass
+class TOP32_GEOMETRY(RuntimeParameter):
+    """Top32 row geometry: runtime in normal builds, generated constants in SoL."""
+
+    row_elements: int
+    datum_bytes: int
+    top32_result_stride: int = 0
+
+    def __post_init__(self):
+        if self.row_elements % 32 != 0:
+            raise ValueError(
+                f"row_elements must be a multiple of 32, got {self.row_elements}"
+            )
+        if self.datum_bytes not in (2, 4):
+            raise ValueError(f"datum_bytes must be 2 or 4, got {self.datum_bytes}")
+        if self.top32_result_stride not in (0, 2):
+            raise ValueError(
+                "top32_result_stride must be 0 (reuse outputs) or 2 "
+                f"(retain every repeat), got {self.top32_result_stride}"
+            )
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
+                f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
+                f"constexpr std::uint32_t TOP32_RESULT_STRIDE = {self.top32_result_stride}u;",
+            ]
+        )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return (
+            "std::uint32_t TOP32_ROW_ELEMENTS;\n"
+            "std::uint32_t TOP32_DATUM_BYTES;\n"
+            "std::uint32_t TOP32_RESULT_STRIDE;",
+            "III",
+        )
 
 
 @dataclass
