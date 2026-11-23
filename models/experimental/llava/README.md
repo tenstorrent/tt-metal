@@ -235,7 +235,7 @@ The following are local-only and must remain untracked:
 
 - `MoE_models/`: downloaded Hugging Face model cache.
 - `models/sample_data/test_img_mas.png`: local sample image.
-- `models/tt_transformers/model_params/Qwen1-1.8B-moe/*/tensor_cache_*`: generated tensor caches.
+- `models/experimental/llava/model_params/Qwen1-1.8B-moe/*/tensor_cache_*`: generated tensor caches.
 
 Historical implementation logs and superseded plans are preserved under
 `history_docs/`. They are reference material, not current status.

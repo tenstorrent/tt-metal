@@ -356,7 +356,7 @@ def create_qwen_moe_llm(
         moe_llava_state_dict: State dict from LanguageBind/MoE-LLaVA-Qwen-1.8B-4e
         dtype: ttnn data type for weights
         max_seq_len: Maximum sequence length
-        model_config: Config directory name in model_params/
+        model_config: Config directory name in models/experimental/llava/model_params/
         n_layers: Optional layer-count override for truncated PCC tests
             (moe_layer_ids are truncated to layers < n_layers)
 
@@ -370,9 +370,8 @@ def create_qwen_moe_llm(
     from models.tt_transformers.tt.model_config import ModelArgs
 
     # Set HF_MODEL to the Qwen1-MoE config directory
-    llava_config_dir = (
-        Path(__file__).resolve().parents[4] / "models" / "tt_transformers" / "model_params" / model_config
-    )
+    # The Qwen1-MoE config is LLaVA-specific, so it lives under models/experimental/llava/model_params/.
+    llava_config_dir = Path(__file__).resolve().parents[1] / "model_params" / model_config
     os.environ["HF_MODEL"] = str(llava_config_dir)
 
     logger.info(f"Creating MoE-LLaVA Qwen LLM on {mesh_device.get_num_devices()} chip(s) (config: {model_config})")

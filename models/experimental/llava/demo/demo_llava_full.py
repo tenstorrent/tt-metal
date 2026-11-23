@@ -88,10 +88,6 @@ if "TT_METAL_HOME" not in os.environ:
 import torch
 from loguru import logger
 
-# Compatibility shim for ttnn builds lacking ttnn.tools.trace_allocation_tracker
-# (see models/experimental/llava/ttnn_tools_shim.py; a no-op unless trace-alloc
-# tracking is explicitly enabled).
-import models.experimental.llava.ttnn_tools_shim  # noqa: F401
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.llava.demo.demo_utils import download_sample_image, preprocess_image

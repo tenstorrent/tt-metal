@@ -41,16 +41,12 @@ import pytest
 import torch
 from loguru import logger
 
-# Compatibility shim for ttnn builds lacking ttnn.tools.trace_allocation_tracker
-import models.experimental.llava.ttnn_tools_shim  # noqa: F401
 from models.experimental.llava.tt.llava_model import build_moe_llava_prompt
 from models.experimental.llava.tt.llm_wrapper import extract_qwen_moe_state_dict_from_llava
 from models.experimental.llava.tt.model_config import VisionModelArgs
 from models.experimental.llava.tt.qwen1_moe_checkpoint import convert_qwen_moe_to_meta, qwen_mlp_to_meta
 
-QWEN1_MOE_CONFIG_DIR = str(
-    Path(__file__).resolve().parents[4] / "models" / "tt_transformers" / "model_params" / "Qwen1-1.8B-moe"
-)
+QWEN1_MOE_CONFIG_DIR = str(Path(__file__).resolve().parents[1] / "model_params" / "Qwen1-1.8B-moe")
 LLAMA31_CONFIG_DIR = str(
     Path(__file__).resolve().parents[4] / "models" / "tt_transformers" / "model_params" / "Llama-3.1-8B-Instruct"
 )
