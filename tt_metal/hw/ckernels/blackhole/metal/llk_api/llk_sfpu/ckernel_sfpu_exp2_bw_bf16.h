@@ -28,11 +28,10 @@ inline void calculate_exp2_bw_bf16() {
         g0 = g0 * g0_f + 8.261728368097465e-08f;
         g0 = g0 * g0_f + 1.0f;
         g0 = sfpi::setexp(g0, sfpi::exexp(g0_y, ExponentMode::Biased));
-        v_if(g0_c >= 255.0f) { g0 = std::numeric_limits<float>::infinity(); }
-        v_endif;
         vFloat product0 = grad * g0;
         v_if(sfpi::exexp(g0_z) < 0) { product0 = 0.0f; }
         v_elseif(setsgn(grad, 0) == 0.0f && sfpi::as<vInt>(x) < 0x44800000) { product0 = 0.0f; }
+        v_elseif(g0_c >= 255.0f && setsgn(grad, 0) != 0.0f) { product0 = sfpi::copysgn(g0, grad); }
         v_endif;
         vFloat scaled0 = convert<vFloat16b>(product0, RoundMode::Nearest);
         vFloat result = scaled0;
