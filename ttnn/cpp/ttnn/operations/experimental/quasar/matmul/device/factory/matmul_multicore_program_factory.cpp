@@ -219,6 +219,20 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
 
     ComputeHardwareConfig compute_hw_config =
         ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config.value());
+    const auto fp32_dest_acc_en = operation_attributes.compute_kernel_config->fp32_dest_acc_en;
+    if (fp32_dest_acc_en) {
+        auto is_32bit = [](tt::DataFormat format) {
+            return format == tt::DataFormat::Float32 || format == tt::DataFormat::Int32 ||
+                   format == tt::DataFormat::UInt32;
+        };
+        ComputeHardwareConfig::ComputeUnpackModes& modes = compute_hw_config.unpack_modes;
+        if (is_32bit(in0_data_format)) {
+            modes.emplace(IN0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+        if (is_32bit(in1_data_format)) {
+            modes.emplace(IN1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+    }
 
     // bmm compute kernel: B, Mt, Nt are just 3 for loops that act as 1 large loop,
     // so only set Nt for simplicity
