@@ -330,7 +330,6 @@ def _scan_sp_chunks(
     sequence_parallel_axis: int,
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
-    compute_config: _RecurrenceComputeConfig,
     affine_relay: RelayChunkScan,
     output_norm: OutputNorm,
 ) -> RecurrenceResult:
@@ -347,7 +346,8 @@ def _scan_sp_chunks(
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        compute_kernel_config=compute_config.preparation,
+        # The summary only feeds the relay, so it runs at the relay's fidelity (affine_prefix_math_fidelity).
+        compute_kernel_config=affine_relay.compute_config,
         emit_outputs=True,
         emit_memory_config=affine_relay.terms_memory_config,
     )
@@ -662,7 +662,6 @@ class KDARecurrence:
             prepared,
             state,
             self._geometry,
-            compute_config=self._compute_config,
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
