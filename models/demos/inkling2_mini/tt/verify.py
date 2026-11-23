@@ -8,10 +8,8 @@ per row:
 - residual path (attn-res, seal, row norms, loop messages, short convs): F.per_row (fused/common.py), one copy of
   the 1-row program per row on its own cores, launched as one program;
 - message gates and router: their R-row forms (fused/gate.py num_tokens / num_rows, fused/router.py rows);
-- attention: the pending-row path of Inkling2AttentionFast (decode_rows' pieces: rings not written during the pass,
-  sdpa_decode pending_kv / rows_per_token), here also in the triple input mode (global layers, loop passes 2-3),
-  with the R conv windows built in one program (fused/kernels/verify_windows.cpp) into per-token buffers, so the
-  window state is only replaced by the commit, and stacked for one projection;
+- attention: Inkling2AttentionFast.decode_rows / commit_rows (one window + projection, prep, near and combine per
+  pass; sdpa_decode pending rows; far shared by the R tokens when their bounds share a K chunk, else per token);
 - experts: the multi-row bank expert step (union of the rows' experts read once, per-row chains);
 - head: the fused logits tail's R-row form (FusedLogitsTail.rows: one unembed, one softcap / argmax program),
   each row's logits and token bit-equal to the plain step's.
@@ -24,53 +22,18 @@ Off by default: only `SpecGenerator.generate_rows` (tt/spec_generator.py) uses i
 
 from __future__ import annotations
 
-import math
-import os
-
 import torch
 
 import ttnn
 from models.demos.inkling2_mini.convert import cache as wcache
-from models.demos.inkling2_mini.tt.attention import ROWS, WINDOW
-from models.demos.inkling2_mini.tt.attention_fast import (
-    FAR_CHUNK,
-    FAR_GRP,
-    GROUPS,
-    V_WIDTH,
-    DecodePositionsFast,
-    _NoFar,
-)
+from models.demos.inkling2_mini.tt.attention_fast import DecodePositionsFast
 from models.demos.inkling2_mini.tt.fused import common as F
-from models.demos.inkling2_mini.tt.fused.attn import _cb, _crs, _kernel, _stage
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
 from models.demos.inkling2_mini.tt.fused.conv import commit as conv_commit
 from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVGate
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, cache_index
 
 R_MAX = 3
-WIN_ROWS = 9  # rows of a conv window the projection reads (attention_fast: w_all.bank.x_rows)
-_SHIFT = {}
-# One far call shared by all R tokens (rows_per_token) is not exact at long context: the flash-MLA output depends on
-# its core split, which changes with the row count. Default: one far call per token (bit-equal to the 1-row step).
-SHARED_FAR = os.environ.get("INKLING_VERIFY_SHARED_FAR") == "1"
-
-
-def _shifts(device, back=False):
-    """[1, 1, 32, 32] bf16 0/1 matrices: shift t moves rows 0..8 to 9t..9t+8 (back: 9t.. to 0..)."""
-    key = (id(device), back)
-    if key not in _SHIFT:
-        mats = []
-        for t in range(R_MAX):
-            m = torch.zeros(32, 32)
-            for i in range(WIN_ROWS):
-                if back:
-                    m[i, WIN_ROWS * t + i] = 1.0
-                else:
-                    m[WIN_ROWS * t + i, i] = 1.0
-            mats.append(ttnn.from_torch(m.view(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-                                        device=device))  # fmt: skip
-        _SHIFT[key] = (device, mats)
-    return _SHIFT[key][1]
 
 
 def _gate_weights(root, L):
@@ -81,133 +44,6 @@ def _gate_weights(root, L):
         if e["layer"] == L and e["name"].startswith("msg_gate."):
             out[e["name"]] = ttnn.load_tensor(root / e["file"])
     return out
-
-
-def windows_to(win, hists, xs):
-    """All R tokens' conv windows in one program (fused/kernels/verify_windows.cpp): token t's window from token
-    t-1's (hists[0] = the state), written to hists[t + 1] and to rows 9t.. of the projection input (win.act, L1)."""
-    R = len(xs)
-    for t in [*hists, *(x for xt in xs for x in xt)]:
-        F.check_row_input(t)
-        assert t.dtype == ttnn.bfloat16, t.dtype
-    n = win.ntiles
-    per_tok = []
-    for t in range(R):
-        xq, xk, xv = xs[t] if len(xs[t]) == 3 else xs[t] * 3
-        per_tok += [xq.buffer_address(), xk.buffer_address(), xv.buffer_address(), hists[t + 1].buffer_address()]
-    rt = [[hists[0].buffer_address(), win.act.buffer_address(), i * n] + per_tok for i in range(len(win.cores))]
-    crs = _crs(win.cores)
-    named = dict(ntiles=n, ngroups=1 if len(xs[0]) == 1 else 2, rows=R)
-    kernels = [_kernel("verify_windows.cpp", win.cores, named, rt, ttnn.ReaderConfigDescriptor())]
-    cbs = [_cb(0, ttnn.bfloat16, n, crs), _cb(1, ttnn.bfloat16, n, crs), _stage(24, crs, n * 384 + 128)]
-    io = [*hists, *(x for xt in xs for x in xt), win.act]
-    ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
-    return win.act
-
-
-def copy_tensors(device, pairs, n_cores=24):
-    """dst <- src for every (src, dst) pair of same-shape bf16 TILE DRAM tensors, in one program
-    (fused/kernels/verify_copy.cpp)."""
-    src0 = pairs[0][0]
-    page = ttnn.Tile([32, 32]).get_tile_size(src0.dtype)
-    vol = lambda t: math.prod(tuple(t.padded_shape))  # noqa: E731
-    pages = vol(src0) // (32 * 32)
-    cores, crs = F.core_list(device, min(n_cores, len(pairs)))
-    rt = {c: [0] for c in cores}
-    for i, (a, b) in enumerate(pairs):
-        assert a.dtype == b.dtype == src0.dtype and vol(a) == vol(src0)
-        r = rt[cores[i % len(cores)]]
-        r[0] += 1
-        r += [a.buffer_address(), b.buffer_address()]
-    named = F.fixed_rt(dict(pages=pages, page_bytes=page), rt)
-    k = F.kernel("verify_copy.cpp", ttnn.ReaderConfigDescriptor(), named, rt, crs)
-    F.run([t for p in pairs for t in p], [k], [F.cb(0, src0.dtype, 8, page, cores=crs)])
-
-
-def attn_rows(attn, xs, state, positions, rows, p0, hists):
-    """Inkling2AttentionFast.decode_rows for both input modes: xs[t] = [x] (single) or [xq, xk, xv] (triple);
-    token t's window reads hists[t] (hists[0] = state.x_hist) and writes hists[t + 1]. Returns the o-projection
-    input (rows 0 .. R-1 = tokens)."""
-    assert attn.FUSED and attn.window is not None and len(xs) == rows.R
-    R = rows.R
-
-    # One w_all for all tokens: token t's window (rows 0..8 used, = the projection input the plain step projects)
-    # goes to rows 9t.. of one input (windows_to, one program for all tokens), w_all reads 9R rows
-    # (rows ride in the tile: each output row is the 1-row projection's); token t's rows are shifted back to row 0
-    # (exact 0/1 matmul, DRAM) for its prep and output gate.
-    act = windows_to(attn.window, hists, xs)
-    # decode staging (mk/overlap.py) swaps w_all.bank for a proxy that reads the next app's weights from L1 where
-    # host programs filled them; no verify program hosts fills, so the verify pass uses the raw bank linear
-    proxy = attn.w_all.bank
-    bank = proxy.st.bl if hasattr(proxy, "st") else proxy
-    bank.x_rows = WIN_ROWS * R if WIN_ROWS * R <= 16 else 0  # x_rows.hpp reads <= 16 rows; 0 = whole tiles (same bytes)
-    attn.w_all.bank = bank
-    try:
-        proj_all = attn.w_all(act, ttnn.bfloat16, attn.mm_cfg)
-    finally:
-        bank.x_rows = WIN_ROWS
-        attn.w_all.bank = proxy
-
-    def project(t):
-        """Token t's projection with its rows at 0 (prep and AttnOut read some columns from row 0 only)."""
-        r = ROWS["single" if len(xs[t]) == 1 else "triple"]
-        return keep(proj_all, t), {"q": 0, "k": r["k"], "v": r["v"]}
-
-    def keep(proj, t):
-        """Token t's projection rows at row 0 (DRAM) for AttnOut, which reads the gate from projection row 0."""
-        if t == 0:
-            return proj  # rows 0.. already; proj_all is not rewritten before this app's AttnOut calls
-        return ttnn.matmul(_shifts(attn.device, back=True)[t], proj, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                           compute_kernel_config=attn.hifi4)  # fmt: skip
-
-    if attn.is_global:
-        assert FAR_GRP
-        shared = (
-            SHARED_FAR
-            and attn.far_rows_cfg is not None
-            and R > 1
-            and p0 >= WINDOW
-            and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
-        )
-        projs = []
-        for t, pos in enumerate(positions):
-            proj, sel = project(t)
-            _, mask, sink_t = attn.prep(proj, pos, sel, state, rows=(t, rows) if shared else (t, _NoFar(rows)))
-            outs = (rows.o_near[t], rows.r[t], rows.sink_far if shared else attn.near.sink, t if shared else 0)
-            attn.near(attn.prep.q_grp, mask, sink_t, state.k_ring, state.v_ring, pend=(rows, positions[0].pos, t + 1),
-                      outs=outs)  # fmt: skip
-            if shared:
-                projs.append(proj)
-                continue
-            far_pos, valid = pos.far_grp
-            far = ttnn.transformer.flash_multi_latent_attention_decode(
-                attn.prep.q_far, state.kv_grp, head_dim_v=V_WIDTH, is_causal=True, cur_pos_tensor=far_pos,
-                attention_sink=attn.near.sink, scale=1.0, program_config=attn.far_grp_cfg,
-                compute_kernel_config=attn.hifi4,
-            )  # fmt: skip
-            attn.out(far, proj, (rows.o_near[t], rows.r[t], valid), row=t)
-        if shared:
-            far = ttnn.transformer.flash_multi_latent_attention_decode(
-                rows.q_far, state.kv_grp, head_dim_v=V_WIDTH, is_causal=True,
-                cur_pos_tensor=positions[R - 1].far_grp[0], attention_sink=rows.sink_far, scale=1.0,
-                program_config=attn.far_rows_cfg, compute_kernel_config=attn.hifi4,
-            )  # fmt: skip
-            for t, proj in enumerate(projs):
-                attn.out(far, proj, (rows.o_near[t], rows.r[t], positions[t].far_grp[1]), row=t, far_row=GROUPS * t)
-        return attn.out.act
-    projs = []
-    for t, pos in enumerate(positions):
-        proj, sel = project(t)
-        attn.prep(proj, pos, sel, state, rows=(t, rows))
-        projs.append(proj)
-    a = ttnn.transformer.scaled_dot_product_attention_decode(
-        rows.q, state.k_grp, state.v_grp, is_causal=False, attn_mask=rows.mask, attention_sink=rows.sink, scale=1.0,
-        program_config=attn.rows_cfg, compute_kernel_config=attn.hifi4, pending_kv=rows.pending,
-        pending_pos=positions[0].pos,
-    )  # fmt: skip
-    for t, proj in enumerate(projs):
-        attn.out(a, proj, row=t)
-    return attn.out.act
 
 
 class VerifyStep:
@@ -226,12 +62,9 @@ class VerifyStep:
             for _ in range(R)
         ]
         self.rows = {}  # app state -> RowsOut
-        self.hists = {}  # app state -> [state.x_hist, window after token 0, .., after token R-1]
         for L, p in APPS:
             c = cache_index(L, p)
-            st = m.states[c][0]
-            self.rows[c] = m.layers[L].attn.rows_out(R, st)
-            self.hists[c] = [st.x_hist] + [ttnn.clone(st.x_hist) for _ in range(R)]
+            self.rows[c] = m.layers[L].attn.rows_out(R, m.states[c][0])
         self.gates = {}  # loop layer -> (R-token QKV gate, R-row mlp gate)
         for L in range(LOOP_START, LOOP_END):
             w = _gate_weights(root, L)
@@ -293,8 +126,15 @@ class VerifyStep:
             normed = F.per_row(dev, R, lambda r: lay.norm(xs_in[r]))
         else:
             normed = F.per_row(dev, R, lambda r: lay.norm(xs_in[r], num_rows=nq, first_row=nq * r))
-        xs = [list(n) if triple else [n[0]] for n in normed]
-        act = attn_rows(lay.attn, xs, attn_st, self.positions, self.rows[c], self.p0, self.hists[c])
+        xs = [list(n) if triple else n[0] for n in normed]
+        # decode staging (mk/overlap.py) swaps w_all.bank for a proxy that reads the app's weights from L1 where host
+        # programs filled them; no verify program hosts those fills, so the pass projects through the raw bank
+        proxy = lay.attn.w_all.bank
+        lay.attn.w_all.bank = proxy.st.bl if hasattr(proxy, "st") else proxy
+        try:
+            act = lay.attn.decode_rows(xs, attn_st, self.positions, self.rows[c], p0=self.p0)
+        finally:
+            lay.attn.w_all.bank = proxy
         y = lay.attn.w_o(act, ttnn.bfloat16, lay.attn.mm_cfg)  # one o-projection, row t = token t
         pend_a = [lay.conv_attn.pending_slot(conv_a, r) for r in range(R)]
         resid = F.per_row(dev, R, lambda r: lay.conv_attn.conv_add(
@@ -372,17 +212,15 @@ class VerifyStep:
         as n plain steps would have left it."""
         m, R = self.m, self.R
         assert 1 <= n <= R
-        pairs, wins = [], []
+        pairs = []
         for L, p in APPS:
             c = cache_index(L, p)
             lay = m.layers[L]
             attn_st, conv_a, conv_m = m.states[c]
-            lay.attn.commit_rows(attn_st, self.rows[c], self.positions[0], n)
-            wins.append((self.hists[c][n], attn_st.x_hist))
+            lay.attn.commit_rows(attn_st, self.rows[c], self.positions[0], n)  # rings + window state
             for conv, ring in ((lay.conv_attn, conv_a), (lay.conv_mlp, conv_m)):
                 pairs += [
                     (conv.pending_slot(ring, r), ring[(self.phase + r) % FusedShortConv.PHASES]) for r in range(n)
                 ]
         conv_commit(self.device, pairs, F.pages(HIDDEN))
-        copy_tensors(self.device, wins)  # window states of the accepted token, all apps in one program
         ttnn.copy(ttnn.slice(self.d.f_rnn_rows, [0, 0, n - 1, 0], [1, 1, n, HIDDEN]), self.d.f_rnn)

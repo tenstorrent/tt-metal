@@ -99,9 +99,8 @@ class SpecGenerator(Generator):
     def _shared(p0, R):
         from models.demos.inkling2_mini.tt.attention import WINDOW
         from models.demos.inkling2_mini.tt.attention_fast import FAR_CHUNK
-        from models.demos.inkling2_mini.tt.verify import SHARED_FAR
 
-        return SHARED_FAR and p0 >= WINDOW and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
+        return p0 >= WINDOW and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
 
     def _feed(self):
         """Device-side verify inputs: token 0 = the anchor, tokens 1..k = the drafts (no host round trip)."""
@@ -123,7 +122,7 @@ class SpecGenerator(Generator):
         m, d, V = self.model, self.drafter, self.verify
         R = V.R
         say = print if os.environ.get("S6_STAGES") else (lambda *a, **k: None)
-        assert not self._shared(p_split, R)
+        assert self._shared(p_shared, R) and not self._shared(p_split, R)
         # verify tokens of the last pass (host reads them; the commit trace copies the next anchor from them):
         # allocated before any capture so no trace's scratch can overlap it
         self.vtok = ttnn.from_torch(torch.zeros(1, 1, 1, R, dtype=torch.int32), dtype=ttnn.uint32,
