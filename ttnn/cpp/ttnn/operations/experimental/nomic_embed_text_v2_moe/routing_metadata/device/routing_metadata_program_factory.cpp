@@ -104,9 +104,10 @@ tt::tt_metal::ProgramDescriptor RoutingMetadataDeviceOperation::create_descripto
 
     const auto layout = compute_layout(attributes, tensor_args);
     auto& [gather_index, combine_index, combine_weights, expert_counts] = outputs;
-    auto* indices_buffer = tensor_args.indices.buffer();
-    auto* values_buffer = tensor_args.values.buffer();
-    const auto& device = *tensor_args.indices.device();
+    // Selecting from scores, both kernels read them: one for the ids, the other for the weights.
+    auto* indices_buffer = (layout.select ? tensor_args.scores : tensor_args.indices)->buffer();
+    auto* values_buffer = (layout.select ? tensor_args.scores : tensor_args.values)->buffer();
+    const auto& device = *(layout.select ? tensor_args.scores : tensor_args.indices)->device();
 
     // Core c of the rectangle (row-major) takes tile rows [first, first + count) of the window, the
     // first tile_rows % num_cores cores one more than the rest.
@@ -128,17 +129,19 @@ tt::tt_metal::ProgramDescriptor RoutingMetadataDeviceOperation::create_descripto
     const uint32_t table_bytes = (num_cores * table_row_words + totals_row_words) * kWordBytes + l1_alignment;
     const uint32_t tokens_per_core = max_rows_per_core * tt::constants::TILE_HEIGHT;
     const uint32_t weight_slots = std::min(max_rows_per_core, kMaxWeightSlots);
+    // A tile row's face pairs: one of the selection, or one per 16-column group of the experts' scores.
+    const uint32_t face_pairs_per_row = layout.select ? layout.score_groups : 1;
 
     tt::tt_metal::ProgramDescriptor descriptor;
-    descriptor.cbs.push_back(
-        scratch_buffer(cores, kIndexFaces, tt::DataFormat::UInt32, kFacePairBytes, max_rows_per_core));
+    descriptor.cbs.push_back(scratch_buffer(
+        cores, kIndexFaces, tt::DataFormat::UInt32, kFacePairBytes, face_pairs_per_row * max_rows_per_core));
     descriptor.cbs.push_back(
         scratch_buffer(cores, kGatherScratch, tt::DataFormat::UInt32, layout.gathered_rows * kWordBytes, 1));
     descriptor.cbs.push_back(
         scratch_buffer(cores, kCombineScratch, tt::DataFormat::UInt32, tokens_per_core * kWordBytes, layout.top_k));
     descriptor.cbs.push_back(scratch_buffer(cores, kCountsTable, tt::DataFormat::UInt32, table_bytes, 1));
-    descriptor.cbs.push_back(
-        scratch_buffer(cores, kValueFaces, tt::DataFormat::Float32, kFacePairBytes, max_rows_per_core));
+    descriptor.cbs.push_back(scratch_buffer(
+        cores, kValueFaces, tt::DataFormat::Float32, kFacePairBytes, face_pairs_per_row * max_rows_per_core));
     descriptor.cbs.push_back(
         scratch_buffer(cores, kWeightTiles, tt::DataFormat::Float32, kFloat32TileBytes, weight_slots * layout.top_k));
 
@@ -151,10 +154,10 @@ tt::tt_metal::ProgramDescriptor RoutingMetadataDeviceOperation::create_descripto
         });
     }
 
-    // RISCV_0 on NOC0: indices -> gather_index, combine_index, expert_counts. The three outputs are
-    // row-major pages whose size grows with num_tokens. Their page size goes in as a runtime argument
-    // rather than through the buffer's accessor arguments, which would bake it into the kernel binary
-    // and force a new compile for every 32 tokens.
+    // RISCV_0 on NOC0: indices, or the scores' selected ids -> gather_index, combine_index,
+    // expert_counts. The three outputs are row-major pages whose size grows with num_tokens. Their
+    // page size goes in as a runtime argument rather than through the buffer's accessor arguments,
+    // which would bake it into the kernel binary and force a new compile for every 32 tokens.
     KernelDescriptor indices_kernel;
     indices_kernel.kernel_source = kKernelDirectory + "routing_metadata_indices.cpp";
     indices_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -169,6 +172,8 @@ tt::tt_metal::ProgramDescriptor RoutingMetadataDeviceOperation::create_descripto
         {"rows_ready_semaphore", kRowsReady},
         {"num_experts", attributes.num_experts},
         {"top_k", layout.top_k},
+        {"select", layout.select ? 1u : 0u},
+        {"score_tiles_per_row", layout.score_tiles_per_row},
         {"table_row_words", table_row_words},
         {"totals_row_words", totals_row_words},
     };
@@ -181,7 +186,8 @@ tt::tt_metal::ProgramDescriptor RoutingMetadataDeviceOperation::create_descripto
         .noc = NOC::RISCV_0_default,
     };
 
-    // RISCV_1 on NOC1, otherwise idle: values -> combine_weights. Both are 4 KiB tile pages.
+    // RISCV_1 on NOC1, otherwise idle: values, or the scores' selected values -> combine_weights. Both
+    // are 4 KiB tile pages.
     KernelDescriptor weights_kernel;
     weights_kernel.kernel_source = kKernelDirectory + "routing_metadata_weights.cpp";
     weights_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -189,7 +195,10 @@ tt::tt_metal::ProgramDescriptor RoutingMetadataDeviceOperation::create_descripto
     weights_kernel.named_compile_time_args = {
         {"value_faces_cb", kValueFaces},
         {"weight_tiles_cb", kWeightTiles},
+        {"num_experts", attributes.num_experts},
         {"top_k", layout.top_k},
+        {"select", layout.select ? 1u : 0u},
+        {"score_tiles_per_row", layout.score_tiles_per_row},
     };
     TensorAccessorArgs(*values_buffer).append_to(weights_kernel.compile_time_args);
     TensorAccessorArgs(*combine_weights.buffer()).append_to(weights_kernel.compile_time_args);

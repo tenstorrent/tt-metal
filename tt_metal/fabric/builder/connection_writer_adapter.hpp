@@ -53,11 +53,13 @@ struct SenderWorkerAdapterSpec {
  */
 class ChannelConnectionWriterAdapter {
 public:
-    // Adds downstream noc x/y
+    // Adds downstream noc x/y. `sender_channel_idx` is the downstream sender channel's flat index on its router;
+    // `sender_channel_vc_relative_idx` is the same channel counted within its VC.
     virtual void add_downstream_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
         uint32_t sender_channel_idx,
+        uint32_t sender_channel_vc_relative_idx,
         eth_chan_directions downstream_direction,
         tt::tt_metal::CoreCoord downstream_noc_xy,
         bool is_2D_routing) = 0;
@@ -77,6 +79,13 @@ public:
 
     // Pack destination routers' absolute sender channel IDs by compact 2D downstream slot.
     virtual uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const = 0;
+
+    // Pack, by downstream entry (the compact 2D downstream slot; entry 0 in 1D), the fabric position of the sender
+    // channel this router's traffic takes on that downstream router: `vc_fabric_position_start` (the VC's base in the
+    // fabric-wide sender table) plus the channel's index within its VC. Four bits per entry. The router kernel reads
+    // its downstream free-slots registers through these (DOWNSTREAM_VC<n>_SENDER_POSITIONS).
+    virtual uint32_t get_packed_downstream_sender_fabric_positions(
+        uint32_t vc_idx, uint32_t vc_fabric_position_start) const = 0;
 
     // Every downstream connection of a VC represented as downstream router's (direction, NoC x/y), in the
     // order they were added.
@@ -112,6 +121,7 @@ public:
         const SenderWorkerAdapterSpec& adapter_spec,
         uint32_t inbound_vc_idx,
         uint32_t sender_channel_idx,
+        uint32_t sender_channel_vc_relative_idx,
         eth_chan_directions downstream_direction,
         tt::tt_metal::CoreCoord downstream_noc_xy,
         bool is_2D_routing) override;
@@ -137,6 +147,8 @@ public:
     }
 
     uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const override;
+    uint32_t get_packed_downstream_sender_fabric_positions(
+        uint32_t vc_idx, uint32_t vc_fabric_position_start) const override;
 
     const std::vector<std::pair<eth_chan_directions, tt::tt_metal::CoreCoord>>& get_downstream_connections(
         uint32_t vc_idx) const override {
@@ -187,6 +199,12 @@ private:
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
         builder_config::num_max_receiver_channels>
         downstream_sender_channel_ids = {};
+
+    // The same channels counted within their VC, for each downstream entry (entry 0 in 1D).
+    std::array<
+        std::array<std::optional<size_t>, builder_config::max_downstream_edms>,
+        builder_config::num_max_receiver_channels>
+        downstream_sender_vc_relative_channel_ids = {};
 
     std::array<
         std::array<std::optional<size_t>, builder_config::max_downstream_edms>,

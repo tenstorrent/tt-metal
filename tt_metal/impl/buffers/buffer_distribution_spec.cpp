@@ -149,7 +149,7 @@ BufferDistributionSpec::BufferDistributionSpec(
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
-    if (tensor_shape_in_pages_.volume() != 0) {
+    if (tensor_shape_in_pages.volume() != 0) {
         TT_FATAL(!cores_.empty(), "Can't distribute non zero volume tensor over an empty set of cores");
     }
 
