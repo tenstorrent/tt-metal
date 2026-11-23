@@ -12,6 +12,7 @@ committed, so the measured acceptance is real; the per-pass cost is not (see E9-
 
 from __future__ import annotations
 
+import os
 import time
 
 import torch
@@ -108,6 +109,7 @@ class SpecGenerator(Generator):
         compiled eagerly first (a program first compiled after a capture corrupts that trace's scratch)."""
         m, d, V = self.model, self.drafter, self.verify
         R = V.R
+        say = print if os.environ.get("S6_STAGES") else (lambda *a, **k: None)
         assert self._shared(p_shared, R) and not self._shared(p_split, R)
         m.set_inputs(0, 0)
         m.step()
@@ -116,11 +118,16 @@ class SpecGenerator(Generator):
         for p in (p_shared, p_split):
             V.set_inputs([0] * R, p)
             V.step()
+            ttnn.synchronize_device(self.device)
+            say("S6 eager verify", p, flush=True)
         for n in range(1, R + 1):
             V.commit(n)
-        ttnn.synchronize_device(self.device)
+            ttnn.synchronize_device(self.device)
+            say("S6 eager commit", n, flush=True)
         super().capture()
+        say("S6 plain captured", flush=True)
         d.capture(compile=False)
+        say("S6 draft captured", flush=True)
         for ph in range(4):
             for shared in (True, False):
                 # a position of conv phase ph in this far-chunk case (a chunk-crossing pass exists only at some
@@ -134,6 +141,7 @@ class SpecGenerator(Generator):
                 out = V.step()
                 ttnn.end_trace_capture(self.device, tid, cq_id=0)
                 self.vtrace[(ph, shared)] = (tid, out)
+                say("S6 verify captured", ph, shared, flush=True)
             for n in range(1, R + 1):
                 V.set_inputs([0] * R, p_shared - p_shared % 4 + ph)
                 tid = ttnn.begin_trace_capture(self.device, cq_id=0)
@@ -170,7 +178,7 @@ class SpecGenerator(Generator):
             ph = pos % 4
             tid, vout = self.vtrace[(ph, self._shared(pos, R))]
             ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
-            tgt = [int(ttnn.to_torch(t).reshape(-1)[0]) for t in vout["token"]]
+            tgt = [int(x) for x in ttnn.to_torch(vout["token"][0]).reshape(-1)[:R].tolist()]  # one read
             a = 0
             while a < k and drafts[a] == tgt[a]:
                 a += 1

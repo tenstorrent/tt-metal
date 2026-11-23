@@ -211,13 +211,9 @@ class VerifyStep:
             w = _gate_weights(root, L)
             self.gates[L] = (FusedQKVGate(m.rows, w, num_tokens=R), FusedMessageGate(m.rows, w, "mlp", num_rows=R))
         self.d = m.drafter
-        self.commit_ids = [
-            ttnn.from_torch(
-                torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
-            )  # fmt: skip
-            for _ in range(R)
-        ]
-        self.f_rnn = [ttnn.clone(self.d.f_rnn) for _ in range(R)]
+        self.ids = ttnn.from_torch(
+            torch.zeros(1, R, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
+        )  # fmt: skip  positions p0 .. p0+R-1 (drafter commit RoPE rows)
         self.phase = 0
         self.p0 = None
         self.out = None
@@ -233,9 +229,8 @@ class VerifyStep:
                 ttnn.from_torch(torch.tensor([[tok]], dtype=torch.int32), dtype=ttnn.uint32), self.tokens[t]
             )
             pos.update(p0 + t)
-            ids = torch.tensor([[p0 + t]], dtype=torch.int32)
-            ttnn.copy_host_to_device_tensor(ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-                                            self.commit_ids[t])  # fmt: skip
+        ids = torch.arange(p0, p0 + self.R, dtype=torch.int32).view(1, -1)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), self.ids)
         self.phase = p0 % FusedShortConv.PHASES
         self.p0 = p0
 
@@ -288,8 +283,8 @@ class VerifyStep:
         return list(out), n_sealed
 
     def step(self):
-        """One verify pass on (tokens, positions). Returns {"token": [R device uint32 [1,1,1,1]], "logits": raw
-        [1, 1, R, V] fp32}."""
+        """One verify pass on (tokens, positions). Returns {"token": [device uint32 [1, 1, R, 1]] (row t = token t's
+        argmax), "logits": raw + vocab mask [1, 1, R, V] fp32}."""
         m, R, dev = self.m, self.R, self.device
         for pos in self.positions:
             pos.prepare()
@@ -324,16 +319,12 @@ class VerifyStep:
         logits = m.unembed(x_all)  # [1, 1, R, V] fp32 (bank linear, every row)
         logits = ttnn.add(logits, m.vocab_mask)
         rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
-        tokens = [ttnn.argmax(ttnn.slice(rm, [0, 0, t, 0], [1, 1, t + 1, rm.shape[-1]]), dim=-1, keepdim=True)
-                  for t in range(R)]  # fmt: skip
-        # drafter context for every row (rejected rows land at positions the next draft overwrites first)
-        d = self.d
-        for t in range(R):
-            feats = ttnn.pad(ttnn.concat(taps[t] + [fin[t]], dim=2), [(0, 0), (0, 0), (0, 28), (0, 0)], 0.0)
-            d.commit_ids, keep = self.commit_ids[t], d.commit_ids
-            d.commit(feats, self.positions[t].pos)
-            d.commit_ids = keep
-            ttnn.copy(d.f_rnn, self.f_rnn[t])
+        am = ttnn.argmax(rm, dim=-1, keepdim=True)  # [1, 1, R, 1]: every row in one op
+        tokens = [am]
+        # drafter context for every row in one pass (rejected rows land at positions the next draft overwrites first)
+        feats = [ttnn.pad(ttnn.concat(taps[t] + [fin[t]], dim=2), [(0, 0), (0, 0), (0, 28), (0, 0)], 0.0)
+                 for t in range(R)]  # fmt: skip
+        self.d.commit_rows(feats, self.positions[0].pos, self.ids)
         self.out = {"token": tokens, "logits": logits}
         return self.out
 
@@ -354,4 +345,4 @@ class VerifyStep:
                     (conv.pending_slot(ring, r), ring[(self.phase + r) % FusedShortConv.PHASES]) for r in range(n)
                 ]
         conv_commit(self.device, pairs, F.pages(HIDDEN))
-        ttnn.copy(self.f_rnn[n - 1], self.d.f_rnn)
+        ttnn.copy(ttnn.slice(self.d.f_rnn_rows, [0, 0, n - 1, 0], [1, 1, n, HIDDEN]), self.d.f_rnn)

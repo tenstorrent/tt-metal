@@ -234,16 +234,17 @@ class DSparkDrafter:
         r = ttnn.matmul(x32, self.rot, dtype=ttnn.float32, compute_kernel_config=self.ckc)
         return ttnn.typecast(ttnn.add(ttnn.multiply(x32, cos), ttnn.multiply(r, sin)), ttnn.bfloat16)
 
-    def _write_block(self, i, k, v):
-        """Rows 0..7 of k / v [1, 8, 32, 128] (bf16 TILE, DRAM) -> rows p..p+7 of layer i's caches."""
+    def _write_block(self, i, k, v, pos=None, n=BLOCK):
+        """Rows 0..n-1 of k / v [1, 8, 32, 128] (bf16 TILE, DRAM) -> rows pos..pos+n-1 of layer i's caches (pos: int32
+        [1] device tensor, default the draft block's p)."""
+        pos = self.blk_pos if pos is None else pos
         dram = ttnn.DRAM_MEMORY_CONFIG
         k, v = ttnn.to_memory_config(k, dram), ttnn.to_memory_config(v, dram)
         kc, vc = self.k_cache[i], self.v_cache[i]
         rt = []
         for j, _ in enumerate(self.kv_cores):
             src, dst = (k, kc) if j < NKV else (v, vc)
-            rt.append([src.buffer_address(), dst.buffer_address(), self.S // 32, self.blk_pos.buffer_address(),
-                       j % NKV, BLOCK])  # fmt: skip
+            rt.append([src.buffer_address(), dst.buffer_address(), self.S // 32, pos.buffer_address(), j % NKV, n])
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.kv_cores])
         kern = ttnn.KernelDescriptor(
             kernel_source=f"{F.KDIR}/mtp_kv_rows.cpp",
@@ -253,7 +254,7 @@ class DSparkDrafter:
         )
         fmt = ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=4096 + 128)
         cb = ttnn.CBDescriptor(total_size=4096 + 128, core_ranges=crs, format_descriptors=[fmt])
-        ttnn.generic_op([k, v, self.blk_pos, kc, vc], ttnn.ProgramDescriptor(kernels=[kern], cbs=[cb], semaphores=[]))
+        ttnn.generic_op([k, v, pos, kc, vc], ttnn.ProgramDescriptor(kernels=[kern], cbs=[cb], semaphores=[]))
 
     # ------------------------------------------------------------ host inputs
     def set_commit_pos(self, pos):
@@ -291,6 +292,36 @@ class DSparkDrafter:
                 )
         fr = self._rms(ttnn.slice(mix, [0, 0, N_LAYERS, 0], [1, 1, N_LAYERS + 1, HIDDEN]), "rnn_norm")
         ttnn.copy(fr, self.f_rnn)
+
+    def commit_rows(self, feats, pos0, ids):
+        """commit() for R consecutive positions in one pass (speculative verify): feats = R tensors [1,1,32,C] (rows
+        0..3 = the taps of position p0 + r), pos0 int32 [1] = p0, ids uint32 [1, R] ROW_MAJOR = p0 .. p0+R-1. The
+        context K / V rows go to p0 .. p0+R-1 in one write per layer; f_rnn of row r goes to self.f_rnn_rows row r
+        (the caller copies the accepted row into f_rnn). Same math per row as commit()."""
+        R = len(feats)
+        mixes = [ttnn.matmul(self.w["alpha"], ttnn.typecast(f, ttnn.float32) if f.dtype != ttnn.float32 else f,
+                             dtype=ttnn.float32, compute_kernel_config=self.ckc) for f in feats]  # fmt: skip
+
+        def rows_of(j):  # mix row j of every position -> [1, 1, R, C]
+            return ttnn.concat([ttnn.slice(m, [0, 0, j, 0], [1, 1, j + 1, HIDDEN]) for m in mixes], dim=2)
+
+        cos, sin = self._rope_rows(ids, R)
+        for i in range(N_LAYERS):
+            c = self._rms(rows_of(i), f"l{i}.ctx_norm")
+            kv = self._lin(c, f"l{i}.wkv_ctx")  # [1, 1, R, 2048]
+
+            def heads(c0):
+                t = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, c0], [1, 1, R, c0 + NKV * D]), [1, R, NKV, D])
+                return ttnn.permute(t, (0, 2, 1, 3))  # [1, 8, R, 128]
+
+            k = self._rope(self._rms(heads(0), f"l{i}.k_norm_ctx", ttnn.float32), cos, sin)
+            v = ttnn.typecast(heads(NKV * D), ttnn.bfloat16)
+            self._write_block(i, k, v, pos=pos0, n=R)
+        fr = self._rms(rows_of(N_LAYERS), "rnn_norm")  # [1, 1, R, C] bf16
+        if getattr(self, "f_rnn_rows", None) is None or self.f_rnn_rows.shape[-2] != R:
+            self.f_rnn_rows = ttnn.clone(fr)
+        else:
+            ttnn.copy(fr, self.f_rnn_rows)
 
     def _layer(self, i, res):
         h = self._rms(res, f"l{i}.in_norm")
