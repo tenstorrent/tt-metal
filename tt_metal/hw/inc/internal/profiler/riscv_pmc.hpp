@@ -2,19 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RISC-V performance monitor capture for the Tensix baby cores, the Blackhole ethernet cores and the Quasar
-// data-movement cores. The hardware
-// description (CSRs, select formats, event tables) is in tt-llk perf_counters/riscv_pmc_*.h; this header adds the
-// profiler marker format and emission.
-//
-// Enable with TT_METAL_PROFILE_RISCV_PMC=<mhpmevent3>[,<mhpmevent4>] (Quasar DMs:
-// TT_METAL_PROFILE_RISCV_PMC_DM=<mhpmevent3>[,<mhpmevent4>[,<mhpmevent5>[,<mhpmevent6>]]]).
-// The selects are compile-time constants and part of the build key.
+// RISC-V performance monitor capture per kernel launch. Counter and select definitions are in tt-llk
+// perf_counters/riscv_pmc_*.h; this header adds the marker format and emission. The selects come from
+// TT_METAL_PROFILE_RISCV_PMC and TT_METAL_PROFILE_RISCV_PMC_DM and are compile-time constants.
 
 #pragma once
 
-// 9090 and 9091 belong to the Tensix MMIO perf counters. Each value goes in the plain TS_DATA field so
-// every row reaches profile_log_device.csv; a TS_DATA_16B trailer would not.
+// Plain TS_DATA so every row reaches profile_log_device.csv; 9090 and 9091 are the Tensix MMIO counters.
 constexpr uint16_t RISCV_PMC_COUNTS_PROFILER_ID = 9092;  // (pmc4 << 32) | pmc3
 constexpr uint16_t RISCV_PMC_CYCLES_PROFILER_ID = 9093;  // (minstret << 32) | mcycle
 constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) | mhpmevent3
@@ -22,8 +16,7 @@ constexpr uint16_t RISCV_PMC_EVENTS_PROFILER_ID = 9094;  // (mhpmevent4 << 32) |
 constexpr uint16_t RISCV_PMC_COUNTS_UPPER_PROFILER_ID = 9095;  // (pmc6 << 32) | pmc5
 constexpr uint16_t RISCV_PMC_EVENTS_UPPER_PROFILER_ID = 9096;  // (mhpmevent6 << 32) | mhpmevent5
 
-// Cores that carry the counters, and the build that holds the hook. The Blackhole Tensix cores run it in the kernel
-// entry (brisck, ncrisck, trisck): their firmware regions are fixed and everything after them in L1 would shift.
+// Blackhole Tensix cores run the hook in the kernel entry because their firmware regions are fixed.
 #if defined(ARCH_BLACKHOLE) && !defined(FW_BUILD) && !defined(DISPATCH_KERNEL) && \
     (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC))
 #define RISCV_PMC_CORE 1
@@ -33,9 +26,7 @@ constexpr uint16_t RISCV_PMC_EVENTS_UPPER_PROFILER_ID = 9096;  // (mhpmevent6 <<
 #define RISCV_PMC_CORE 1
 #endif
 
-// Included directly by the firmware and kernel entry TUs: the kernel_profiler.hpp includes sit inside its
-// PROFILE_KERNEL block, so the empty macros below would be missing on a profiler-off build.
-// The streaming profiler has no TS_DATA path.
+// Included directly by the entry TUs so the empty macros below exist on a profiler-off build.
 #if defined(PROFILE_RISCV_PMC) && defined(PROFILE_KERNEL) && !defined(PROFILE_STREAMING) && defined(RISCV_PMC_CORE)
 
 #include "api/debug/kernel_profiler.hpp"
@@ -78,9 +69,7 @@ constexpr uint16_t RISCV_PMC_EVENTS_UPPER_PROFILER_ID = 9096;  // (mhpmevent6 <<
 namespace kernel_profiler {
 namespace riscv_pmc {
 
-// mcycle and minstret are never written, so they are read as deltas; the programmable counters are zeroed at
-// begin. One launch is in flight per core, so a plain global is enough (per thread on Quasar, where cores share
-// the image).
+// mcycle and minstret are read as deltas; one launch is in flight per core (per thread on Quasar).
 #if defined(ARCH_QUASAR)
 static thread_local uint32_t cycle_begin, instret_begin;
 #else
@@ -95,8 +84,7 @@ constexpr uint32_t marker_count = 3;
 constexpr uint32_t marker_words = PROFILER_L1_MARKER_UINT32_SIZE + 2;
 constexpr uint32_t reserved_words = marker_count * marker_words + DISPATCH_HEADROOM_SIZE;
 
-// The markers are written after the kernel, so their room (and the room check's headroom) is held back from the
-// kernel's own zones; a kernel that fills the buffer would otherwise drop them.
+// Holds back room for the markers so a kernel that fills the buffer does not drop them.
 inline __attribute__((always_inline)) void begin() {
     stackSize += reserved_words;
     llk::perf::riscv::select(RISCV_PMC_SEL3, RISCV_PMC_SEL4);
@@ -109,9 +97,7 @@ inline __attribute__((always_inline)) void begin() {
     instret_begin = llk::perf::riscv::read_minstret();
 }
 
-// The markers share one buffer-room check and one timestamp, which keeps the hook small. Re-emitting the selects every
-// launch keeps each capture self-describing. No flush_to_dram_if_full(): a full buffer drops the markers, and the flush
-// would pull noc_index into images that do not define it.
+// The selects are re-emitted so each capture is self-describing. No flush here: it needs noc_index.
 inline __attribute__((always_inline)) void end() {
     const uint32_t pmc3 = llk::perf::riscv::read_counter3();
     const uint32_t pmc4 = llk::perf::riscv::read_counter4();

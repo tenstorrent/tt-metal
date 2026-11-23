@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Decoder of the metal profiler's RISC-V performance monitor markers (ids 9092 to 9096).
-Names come from tools/include/perf_counters/riscv_pmc_*.h through headers.py; the formulas are in metrics.py.
+Names come from tools/include/perf_counters/riscv_pmc_*.h through headers.py; the formulas are in riscv_metrics.py.
 """
 
 from functools import lru_cache

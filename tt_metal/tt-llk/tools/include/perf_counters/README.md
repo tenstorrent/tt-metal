@@ -14,7 +14,6 @@ RISC-V performance monitor (the counters inside the cores, not the Tensix banks 
 - `riscv_pmc_types.h`: `CoreKind` (select encoding of a core family), `PmcEvent` (event names), `Entry`.
 - `riscv_pmc_blackhole.h`, `riscv_pmc_wormhole.h`, `riscv_pmc_quasar.h`: per-core-kind `{event, select}` tables
   (`baby_events`, `trisc_events`, `dm_events`); Wormhole's is empty because those cores have no counters.
-- `riscv_pmc_inventory.h`: picks the arch table from `ARCH_*` and exposes `events_for(CoreKind)`.
 - `riscv_pmc_hw.h`: the CSR addresses and `select`, `zero_counters`, `read_mcycle`, `read_minstret`,
   `read_counter3`, `read_counter4` and the counter 5 and 6 variants used by the Quasar data-movement cores.
 

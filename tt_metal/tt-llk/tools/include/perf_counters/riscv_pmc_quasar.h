@@ -11,7 +11,6 @@
 #include "perf_counters/riscv_pmc_types.h"
 
 // Quasar select tables: TRISC (the Blackhole baby-core events plus IF 7 and 8) and data-movement cores.
-// Include through perf_counters/riscv_pmc_inventory.h.
 
 // Same placement rule as quasar.h: LLK_PERF_TABLES_IN_TEXT keeps the tables out of the DM firmware data region.
 #ifndef LLK_PERF_TABLE_SECTION

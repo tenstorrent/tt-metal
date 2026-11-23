@@ -256,8 +256,9 @@ def _tracy_analysis():
     return module
 
 
-def _marker(run, risc, marker_id, time, data, core=(1, 2)):
+def _marker(run, risc, marker_id, time, data, core=(1, 2), device=0):
     return {
+        "device_id": device,
         "run_host_id": run,
         "core_x": core[0],
         "core_y": core[1],
@@ -286,6 +287,21 @@ def test_tracy_decoder_pairs_streams_and_names_events():
     assert set(df["event4"]) == {"MEM_INS_BUF_WRITE"}
     assert list(df["riscv_ipc_ratio"]) == [0.5, 0.4]
     assert list(df["mcycle"]) == [1000, 100]
+
+
+def test_tracy_decoder_keeps_chips_apart():
+    analysis = _tracy_analysis()
+    rows = []
+    for device, (cyc, ins) in enumerate([(1000, 500), (2000, 600)]):
+        rows += [
+            _marker(7, "TRISC_1", 9092, 100, 0, device=device),
+            _marker(7, "TRISC_1", 9093, 101, (ins << 32) | cyc, device=device),
+            _marker(7, "TRISC_1", 9094, 102, 0, device=device),
+        ]
+    df = analysis.decode_riscv_pmc_markers(rows, "blackhole")
+    assert list(df["device_id"]) == [0, 1]
+    assert list(df["mcycle"]) == [1000, 2000]
+    assert list(df["minstret"]) == [500, 600]
 
 
 def test_tracy_decoder_skips_cores_without_the_monitor():

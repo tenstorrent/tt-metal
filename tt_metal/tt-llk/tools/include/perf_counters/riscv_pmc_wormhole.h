@@ -11,7 +11,6 @@
 #include "perf_counters/riscv_pmc_types.h"
 
 // Wormhole: the RISC-V cores implement no performance counter CSRs, so there are no events to select.
-// Include through perf_counters/riscv_pmc_inventory.h.
 
 namespace llk::perf::riscv
 {

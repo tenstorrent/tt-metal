@@ -20,8 +20,8 @@ checked against the kernel wall-clock zone on silicon (section 12).
 
 Quasar TRISCs use the same core design as the Blackhole baby cores, with the same CSR addresses. The
 Quasar data-movement cores are 64-bit cores with the standard RISC-V counter CSRs. The Quasar firmware
-runs both in machine mode. The Quasar capture builds and links for every core above but has not been run
-on Quasar silicon or a simulator.
+runs both in machine mode. The Quasar capture was run on the Quasar emulator (a known-count test: two zones that differ by exactly 10000
+instructions on the four TRISCs); it has not been run on Quasar silicon.
 
 Wormhole RISC-V cores have no `mcycle`, `minstret` or `mhpm*` CSRs, so there is nothing to capture, and
 the option fails the JIT build on Wormhole instead of producing empty data.
@@ -42,7 +42,6 @@ The hardware description is in tt-llk, next to the Tensix counter headers (`tool
 |---|---|
 | `riscv_pmc_types.h` | `CoreKind` (`BABY`, `TRISC`, `DM`: how the select is encoded), `PmcEvent` (event names, append only), `Entry` = `{event, select}` |
 | `riscv_pmc_blackhole.h`, `riscv_pmc_quasar.h`, `riscv_pmc_wormhole.h` | The per-core-kind select tables: `baby_events` (Blackhole), `trisc_events` and `dm_events` (Quasar), an empty `baby_events` on Wormhole, which has no counters. The Quasar tables carry `LLK_PERF_TABLE_SECTION` like `quasar.h` |
-| `riscv_pmc_inventory.h` | Picks the arch header from `ARCH_*` and exposes `events_for(CoreKind)` |
 | `riscv_pmc_hw.h` | The CSR addresses and the primitives `select(event3, event4)`, `zero_counters()`, `read_mcycle()`, `read_minstret()`, `read_counter3()`, `read_counter4()`, plus `select_upper(event5, event6)`, `zero_counters_upper()`, `read_counter5()`, `read_counter6()` for the Quasar data-movement cores. Not available on Wormhole (`#error`) |
 
 The metal consumer is `tt_metal/hw/inc/internal/profiler/riscv_pmc.hpp`: marker ids, payload layout and emission only. The host side is `tools/python/tt_llk_perf/`: `headers.py` parses the tables (`riscv_event_tables(arch)`, `riscv_select_events(arch, kind, select)`, `riscv_event_select`), `riscv_pmc.py` decodes the marker payloads and `riscv_metrics.py` derives IPC, stall and per-instruction metrics. `tools/tracy/perf_counter_analysis.py` has `decode_riscv_pmc_markers`.
@@ -391,7 +390,7 @@ kind = riscv_pmc.core_kind("blackhole", "TRISC_1")        # "baby"
 riscv_pmc.decode_launch("blackhole", kind, launch)         # event names, mcycle, minstret, derived metrics
 ```
 
-`unpack_launch` takes the two upper payloads as optional fourth and fifth arguments and `decode_launch` then also names `event5` and `event6` on data-movement cores. `riscv_metrics.compute_riscv_metrics(cycles, instret, counts)` gives `riscv_ipc_ratio`, `riscv_stall_pct`, `riscv_mem_stall_per_tti_push_ratio` (needs `MEM_STALL_ANY` and `MEM_INS_BUF_WRITE` armed in the same run) and, per armed event, `riscv_<event>_pct` (per cycle) and `riscv_<event>_per_instr_ratio`. Absent inputs read `None`. The metrics live apart from `metrics.py` because that module's keys are the warehouse metric catalog. `perf_counter_analysis.decode_riscv_pmc_markers(rows, arch)` pairs the three streams of every core and returns a dataframe; it takes marker rows from a device log and is not part of the ops report, which only carries the Tensix counter markers (id 9090).
+`unpack_launch` takes the two upper payloads as optional fourth and fifth arguments and `decode_launch` then also names `event5` and `event6` on data-movement cores. `riscv_metrics.compute_riscv_metrics(cycles, instret, counts)` gives `riscv_ipc_ratio`, `riscv_stall_pct`, `riscv_mem_stall_per_tti_push_ratio` (needs `MEM_STALL_ANY` and `MEM_INS_BUF_WRITE` armed in the same run) and, per armed event, `riscv_<event>_pct` (per cycle) and `riscv_<event>_per_instr_ratio`. Absent inputs read `None`. The metrics live apart from `metrics.py` because that module's keys are the warehouse metric catalog. `perf_counter_analysis.decode_riscv_pmc_markers(rows, arch)` pairs the marker streams of every core on every device (three, or five on a Quasar data-movement core with counter 5 or 6 armed) and returns a dataframe; it takes marker rows from a device log with the `PCIe slot` column as `device_id` and is not part of the ops report, which only carries the Tensix counter markers (id 9090).
 
 ## 12. Measured on Blackhole
 
@@ -403,6 +402,6 @@ riscv_pmc.decode_launch("blackhole", kind, launch)         # event names, mcycle
 
 ## 13. Open questions
 
-- Quasar TRISC and DM capture on silicon or an emulator, including counters 5 and 6.
+- Quasar TRISC and DM capture on silicon; only the emulator has run it.
 - Idle ethernet and ERISC1 capture need the host profiler to read those cores first.
 - The meaning of individual per-stage events comes from the hardware description; only the union counter, `mcycle`, `EX_INST_RET` and the TRISC-only `MEM_INS_BUF_WRITE` were validated on silicon.

@@ -746,10 +746,7 @@ public:
             compile_hash_str += "_att:";
             compile_hash_str += noc_att_map_;
         }
-        // The RISC-V PMC event selects are compile-time constants baked into the baby-core
-        // firmware, so two runs that differ only in the selects must not share a firmware build.
-        // Appended only when the feature is on, so the hash stays byte-identical (and every
-        // existing JIT cache and pre-compiled bundle stays valid) for everyone not using it.
+        // The selects are compile-time constants, so runs with different selects need separate builds.
         if (profiler_riscv_pmc_enabled) {
             compile_hash_str += fmt::format("_pmc{:x}_{:x}", profiler_riscv_pmc_event3, profiler_riscv_pmc_event4);
             if (profiler_riscv_pmc_dm_event3 != 0 || profiler_riscv_pmc_dm_event4 != 0) {
