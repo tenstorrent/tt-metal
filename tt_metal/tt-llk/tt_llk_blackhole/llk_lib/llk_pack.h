@@ -795,7 +795,7 @@ inline void _llk_pack_block_closed_run_(const std::uint32_t num_tiles, const std
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
-        TT_MOP(1, 0, num_faces << 10);
+        ckernel::ckernel_template::run_outer(TT_OP_MOP(1, 0, num_faces << 10));
         TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
     }
 
