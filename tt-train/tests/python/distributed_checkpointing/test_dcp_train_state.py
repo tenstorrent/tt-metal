@@ -303,6 +303,17 @@ def test_rng_state_is_checked_whole_before_any_generator_is_set(expect_error):
     check_train_state({"rng": block}, rng=False)  # not asked for: nothing to check
 
 
+def test_each_rank_checks_its_own_stored_rng_entry(expect_error):
+    """Every rank checks its own world rank's RNG entry before anything is placed: a damaged entry of rank 1 stops
+    rank 1, while rank 0, whose entry is intact, goes ahead."""
+    block = capture_rng(world_rank=0)
+    block["ranks"]["1"] = json.loads(json.dumps(block["ranks"]["0"]))
+    block["ranks"]["1"]["numpy"]["state"] = "not hex"
+    check_train_state({"rng": block}, rng=True, world_rank=0)
+    with expect_error(CheckpointError, "the stored RNG state is malformed"):
+        check_train_state({"rng": block}, rng=True, world_rank=1)
+
+
 @pytest.mark.parametrize("damage", list(WRONG_LENGTH_RNG.values()), ids=list(WRONG_LENGTH_RNG))
 def test_rng_state_of_the_wrong_length_changes_no_generator(damage, expect_error):
     # Valid JSON and hex of the wrong length for its generator: refused while decoding, before any generator is set.
