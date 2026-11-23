@@ -22,8 +22,8 @@ class Buffer;
 namespace experimental {
 
 // A kernel config buffer is allocated per device and per core: each device runs its own program's kernel groups, and
-// each core gets a shard sized for its kernel group's block on that device, at its own address. On one device, the
-// cores whose blocks are the same size share one per-core-allocated Buffer.
+// each core gets a shard sized for its kernel group's binaries on that device, at its own address. On one device, the
+// cores whose shards are the same size share one per-core-allocated Buffer.
 class KernelConfigBufferImpl {
 public:
     // One per-core-allocated Buffer: a `size`-byte shard on each of `cores` of one device.

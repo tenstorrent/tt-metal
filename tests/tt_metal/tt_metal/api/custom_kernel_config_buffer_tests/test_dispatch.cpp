@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <map>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -33,14 +34,16 @@ namespace tt::tt_metal {
 
 using CustomKernelConfigBufferTest = HybridAllocatorTest;
 
-// The allocator manages all of L1 above KERNEL_CONFIG, so the kernel-config window is empty (at
-// most alignment padding): every Tensix program must run from a kernel config buffer.
-class ZeroKernelConfigWindowTest : public HybridAllocatorTest {
+// The allocator manages all of L1 above KERNEL_CONFIG but a 4 KB kernel-config window, as blaze sets
+// it: room for a small program's runtime args and CB configs, but not its kernel binaries.
+class SmallKernelConfigWindowTest : public HybridAllocatorTest {
 protected:
+    static constexpr uint32_t kWindowSize = 4 * 1024;
+
     void SetUp() override {
         // Reading the HAL creates the runtime options, which cache the allocator mode: set HYBRID first.
         setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", "1", /*overwrite=*/1);
-        worker_l1_size_ = hal::get_max_worker_l1_unreserved_size();
+        worker_l1_size_ = hal::get_max_worker_l1_unreserved_size() - kWindowSize;
         HybridAllocatorTest::SetUp();
     }
 };
@@ -54,6 +57,7 @@ const distributed::MeshCoordinate kDevice(0, 0);
 
 constexpr uint32_t kPageSize = 1024;
 constexpr uint32_t kCommonValue = 0xC0FFEE;
+constexpr uint32_t kSemaphoreValue = 0x5E4A;
 
 const char* kWriteConfigKernel =
     "tests/tt_metal/tt_metal/api/custom_kernel_config_buffer_tests/kernels/write_config.cpp";
@@ -62,9 +66,9 @@ const char* kComputeWriteConfigKernel =
 
 // The kernels and where each writes in its core's result page (see the kernels).
 enum Kernel : uint32_t { kBrisc, kNcrisc, kCompute };
-constexpr uint32_t kBriscSlot = 0;    // runtime arg, common runtime arg, CB 0 write pointer
-constexpr uint32_t kNcriscSlot = 3;   // same
-constexpr uint32_t kComputeSlot = 6;  // UNPACK, MATH, PACK runtime arg (+0, +1, +2), common runtime arg
+constexpr uint32_t kBriscSlot = 0;    // runtime arg, common runtime arg, CB 0 write pointer, semaphore 0
+constexpr uint32_t kNcriscSlot = 4;   // same
+constexpr uint32_t kComputeSlot = 8;  // UNPACK, MATH, PACK runtime arg (+0, +1, +2), common runtime arg
 
 // The runtime arg value `kernel` gets on the core at `core_index`.
 uint32_t arg_value(Kernel kernel, uint32_t core_index) { return 0xA000 + (kernel * 0x100) + core_index; }
@@ -88,15 +92,18 @@ std::shared_ptr<distributed::MeshBuffer> allocate(
 }
 
 // write_config.cpp on BRISC and NCRISC and compute_write_config.cpp on the TRISCs, on `cores`,
-// writing to `result` and reading CB 0 from `cb_backing`. Each kernel on each core gets its own
-// runtime arg value; BRISC's is padded with `extra_args` runtime args to grow the block.
+// writing to `result`, reading CB 0 from `cb_backing` and semaphore 0. Each kernel on each core gets its
+// own runtime arg value; BRISC's is padded with `extra_args` runtime args, and its code with about 8 KB
+// when `pad_code`.
 distributed::MeshWorkload make_workload(
     distributed::MeshDevice& device,
     const CoreRange& cores,
     const distributed::MeshBuffer& result,
     const distributed::MeshBuffer& cb_backing,
-    uint32_t extra_args = 0) {
+    uint32_t extra_args = 0,
+    bool pad_code = false) {
     Program program = CreateProgram();
+    CreateSemaphore(program, cores, kSemaphoreValue);
     CreateCircularBuffer(
         program,
         cores,
@@ -108,7 +115,11 @@ distributed::MeshWorkload make_workload(
         kWriteConfigKernel,
         cores,
         DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {kBriscSlot}});
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {kBriscSlot},
+            .defines = pad_code ? std::map<std::string, std::string>{{"PAD_CODE", "1"}}
+                                : std::map<std::string, std::string>{}});
     const KernelHandle ncrisc = CreateKernel(
         program,
         kWriteConfigKernel,
@@ -145,9 +156,10 @@ void expect_throw_containing(F&& launch, const std::string& text) {
 
 }  // namespace
 
-// Each core runs from its own shard, at its own address: every RISC (BRISC, NCRISC, and the three
-// TRISCs) runs its kernel from there and reads its runtime args, and the data-movement RISCs their CB
-// config, from there. The shard holds the runtime args.
+// Each core runs its binaries from its own shard, at its own address: every RISC (BRISC, NCRISC, and the
+// three TRISCs) runs its kernel from there. The rest of the kernel config stays in the window: each kernel
+// reads its runtime args, and the data-movement RISCs their CB config and the program semaphore, from
+// there, and none of the runtime args is in the shard.
 TEST_F(CustomKernelConfigBufferTest, RunsFromBufferAtPerCoreAddresses) {
     auto& device = *this->devices_[0];
     // Larger than the block, so kFreeCore's shard takes the slot this leaves free there.
@@ -175,6 +187,7 @@ TEST_F(CustomKernelConfigBufferTest, RunsFromBufferAtPerCoreAddresses) {
             EXPECT_EQ(page[slot], arg_value(kernel, core_index)) << name << " runtime arg on " << core.str();
             EXPECT_EQ(page[slot + 1], kCommonValue) << name << " common runtime arg on " << core.str();
             EXPECT_EQ(page[slot + 2], cb_backing->address()) << name << " CB write pointer on " << core.str();
+            EXPECT_EQ(page[slot + 3], kSemaphoreValue) << name << " semaphore on " << core.str();
         }
         const uint32_t compute_value = arg_value(kCompute, core_index);
         EXPECT_EQ(page[kComputeSlot], compute_value) << "UNPACK runtime arg on " << core.str();
@@ -186,8 +199,8 @@ TEST_F(CustomKernelConfigBufferTest, RunsFromBufferAtPerCoreAddresses) {
         detail::ReadFromDeviceL1(
             chip, core, static_cast<uint32_t>(buffer.address(kDevice, core)), buffer.size(kDevice, core), shard);
         for (const Kernel kernel : {kBrisc, kNcrisc, kCompute}) {
-            EXPECT_NE(std::find(shard.begin(), shard.end(), arg_value(kernel, core_index)), shard.end())
-                << "kernel " << kernel << "'s runtime arg not in the shard on " << core.str();
+            EXPECT_EQ(std::find(shard.begin(), shard.end(), arg_value(kernel, core_index)), shard.end())
+                << "kernel " << kernel << "'s runtime arg is in the shard on " << core.str();
         }
         core_index++;
     }
@@ -204,16 +217,17 @@ TEST_F(CustomKernelConfigBufferTest, RejectsBufferThatDoesNotFit) {
     auto both_cores = make_workload(device, kBothCores, *result, *cb_backing);
     EXPECT_ANY_THROW(experimental::EnqueueMeshWorkload(device.mesh_command_queue(), both_cores, one_core_buffer, true));
 
-    // Sized for a smaller block on the same cores: 1 KB more runtime args do not fit.
+    // Sized for smaller binaries on the same cores: 8 KB more code does not fit.
     auto small = make_workload(device, kBothCores, *result, *cb_backing);
     auto small_buffer = experimental::CreateKernelConfigBuffer(device, small);
-    auto large = make_workload(device, kBothCores, *result, *cb_backing, /*extra_args=*/256);
+    auto large = make_workload(device, kBothCores, *result, *cb_backing, /*extra_args=*/0, /*pad_code=*/true);
     EXPECT_ANY_THROW(experimental::EnqueueMeshWorkload(device.mesh_command_queue(), large, small_buffer, true));
 }
 
-// A blaze-like device: no kernel-config window, and L1 full on every core but one. A program on
-// that core cannot launch the usual way, but runs from a kernel config buffer placed in its free L1.
-TEST_F(ZeroKernelConfigWindowTest, RunsWithNoWindowFromTheOnlyFreeCore) {
+// A blaze-like device: a small kernel-config window, and L1 full on every core but one. A program whose
+// binaries outgrow the window on that core cannot launch the usual way, but runs them from a kernel
+// config buffer placed in its free L1. Its runtime args must still fit the window.
+TEST_F(SmallKernelConfigWindowTest, RunsBinariesFromTheOnlyFreeCore) {
     auto& device = *this->devices_[0];
     const CoreCoord grid = device.compute_with_storage_grid_size();
     const CoreRangeSet free_core{CoreRange(kFreeCore)};
@@ -230,17 +244,30 @@ TEST_F(ZeroKernelConfigWindowTest, RunsWithNoWindowFromTheOnlyFreeCore) {
         static_cast<uint32_t>(device.allocator()->get_statistics(BufferType::L1).largest_free_block_bytes);
     auto filler = allocate(device, full_cores, free_bytes, /*per_core=*/true);
 
-    // Without a window, the usual launch has nowhere to put the block.
-    auto usual = make_workload(device, CoreRange(kFreeCore), *result, *cb_backing);
+    // With 8 KB more code, the binaries do not fit the window: the usual launch fails.
+    auto usual = make_workload(device, CoreRange(kFreeCore), *result, *cb_backing, /*extra_args=*/0, /*pad_code=*/true);
     expect_throw_containing(
         [&] { distributed::EnqueueMeshWorkload(device.mesh_command_queue(), usual, /*blocking=*/true); },
         "too large for kernel config buffer");
 
     // A full core has no room for a buffer either.
-    auto on_full_core = make_workload(device, CoreRange(kBlockedCore), *result, *cb_backing);
+    auto on_full_core =
+        make_workload(device, CoreRange(kBlockedCore), *result, *cb_backing, /*extra_args=*/0, /*pad_code=*/true);
     expect_throw_containing([&] { experimental::CreateKernelConfigBuffer(device, on_full_core); }, "Out of Memory");
 
-    auto workload = make_workload(device, CoreRange(kFreeCore), *result, *cb_backing);
+    // 8 KB of runtime args do not fit the window, even with the binaries in a buffer.
+    auto large_args = make_workload(device, CoreRange(kFreeCore), *result, *cb_backing, /*extra_args=*/2048);
+    auto large_args_buffer = experimental::CreateKernelConfigBuffer(device, large_args);
+    expect_throw_containing(
+        [&] {
+            experimental::EnqueueMeshWorkload(
+                device.mesh_command_queue(), large_args, large_args_buffer, /*blocking=*/true);
+        },
+        "too large for kernel config buffer");
+    large_args_buffer.deallocate();
+
+    auto workload =
+        make_workload(device, CoreRange(kFreeCore), *result, *cb_backing, /*extra_args=*/0, /*pad_code=*/true);
     auto buffer = experimental::CreateKernelConfigBuffer(device, workload);
     experimental::EnqueueMeshWorkload(device.mesh_command_queue(), workload, buffer, /*blocking=*/true);
 
@@ -253,6 +280,7 @@ TEST_F(ZeroKernelConfigWindowTest, RunsWithNoWindowFromTheOnlyFreeCore) {
         EXPECT_EQ(page[slot], arg_value(kernel, 0)) << "kernel " << kernel;
         EXPECT_EQ(page[slot + 1], kCommonValue) << "kernel " << kernel;
         EXPECT_EQ(page[slot + 2], cb_backing->address()) << "kernel " << kernel;
+        EXPECT_EQ(page[slot + 3], kSemaphoreValue) << "kernel " << kernel;
     }
     EXPECT_EQ(page[kComputeSlot], arg_value(kCompute, 0));
     EXPECT_EQ(page[kComputeSlot + 1], arg_value(kCompute, 0) + 1);

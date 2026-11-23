@@ -117,8 +117,8 @@ void KernelConfigBufferImpl::deallocate() {
 
 namespace {
 
-// Gets the required size for the kernel config buffer on each core in a specific program on its device,
-// aligned to the device's L1 alignment.
+// Gets the required size for the kernel config buffer on each core in a specific program on its device: the core's
+// kernel binaries, aligned to the device's L1 alignment.
 std::unordered_map<CoreCoord, uint32_t> get_required_buffer_sizes(IDevice& device, Program& program) {
     const uint32_t alignment = device.allocator_impl()->get_alignment(BufferType::L1);
     const uint32_t tensix_index = MetalContext::instance(program.impl().get_context_id())
@@ -127,16 +127,16 @@ std::unordered_map<CoreCoord, uint32_t> get_required_buffer_sizes(IDevice& devic
     const ProgramConfig& program_config = program.impl().get_program_config(tensix_index);
     std::unordered_map<CoreCoord, uint32_t> buffer_sizes;
     for (const auto& kernel_group : program.impl().get_kernel_groups(tensix_index)) {
-        const uint32_t block = tt::align(kernel_config_footprint(*kernel_group, program_config), alignment);
+        const uint32_t binaries = tt::align(kernel_text_footprint(*kernel_group, program_config), alignment);
         for (const CoreCoord& core : corerange_to_cores(kernel_group->core_ranges)) {
-            buffer_sizes.emplace(core, block);
+            buffer_sizes.emplace(core, binaries);
         }
     }
     return buffer_sizes;
 }
 
-// Allocates the shards for `program` on `device`: one per-core-allocated Buffer per block size, each core in the one of
-// its block.
+// Allocates the shards for `program` on `device`: one per-core-allocated Buffer per shard size, each core in the one of
+// its size.
 std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Program& program) {
     std::map<uint32_t, std::vector<CoreRange>> cores_by_size;
     for (const auto& [core, buffer_size] : get_required_buffer_sizes(device, program)) {
@@ -167,12 +167,8 @@ std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Pro
 KernelConfigBuffer CreateKernelConfigBuffer(distributed::MeshDevice& device, distributed::MeshWorkload& workload) {
     TT_FATAL(
         !MetalContext::instance(device.impl().get_context_id()).rtoptions().get_fast_dispatch(),
-        "A kernel config buffer can only be allocated in slow dispatch mode: fast dispatch places kernel-config blocks "
-        "in its own ring "
-        "buffer");
-    for (auto& [_, program] : workload.get_programs()) {
-        program.impl().check_no_tensix_semaphores();
-    }
+        "A kernel config buffer can only be allocated in slow dispatch mode: fast dispatch places kernel binaries in "
+        "its own ring buffer");
     // Laid out as launch lays it out, so launch reuses this. Nothing to do if the caller already compiled it.
     program_preparation::compile(device, workload);
 
@@ -187,7 +183,7 @@ KernelConfigBuffer CreateKernelConfigBuffer(distributed::MeshDevice& device, dis
             std::move(device_shards.begin(), device_shards.end(), std::back_inserter(shards));
         }
     }
-    TT_FATAL(!shards.empty(), "The workload has no Tensix kernels on this host's devices, so no kernel config block");
+    TT_FATAL(!shards.empty(), "The workload has no Tensix kernels on this host's devices, so no kernel binaries");
     return KernelConfigBuffer(std::make_shared<KernelConfigBufferImpl>(std::move(shards), &device));
 }
 
@@ -199,9 +195,8 @@ void EnqueueMeshWorkload(
     distributed::MeshDevice& device = *mesh_cq.device();
     TT_FATAL(
         !MetalContext::instance(device.impl().get_context_id()).rtoptions().get_fast_dispatch(),
-        "A kernel config buffer can only be allocated in slow dispatch mode: fast dispatch places kernel-config blocks "
-        "in its own ring "
-        "buffer");
+        "A kernel config buffer can only be allocated in slow dispatch mode: fast dispatch places kernel binaries in "
+        "its own ring buffer");
     TT_FATAL(buffer.impl().is_allocated(), "Kernel config buffer was deallocated");
     const distributed::MeshDevice* buffer_device = buffer.impl().mesh_device();
     TT_FATAL(

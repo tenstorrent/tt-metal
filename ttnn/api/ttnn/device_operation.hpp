@@ -817,7 +817,8 @@ void prepare(
  * Validates the operation as `launch` does, builds its mesh workload with its program factory, and compiles and lays
  * it out as its launch will (tt::tt_metal::experimental::program_preparation::compile). In slow dispatch the
  * kernel-configuration blocks are not checked against the KERNEL_CONFIG window here: `run` checks them against the
- * window, or the kernel config buffer it runs from. Throws for an operation that skips launch with these arguments.
+ * window, and the kernel binaries against the kernel config buffer when it runs from one. Throws for an operation that
+ * skips launch with these arguments.
  */
 template <DeviceOperationConcept device_operation_t>
 CompiledProgram compile(
@@ -860,7 +861,7 @@ CompiledProgram compile(
  * Launch `compiled_program` with these operation attributes and tensors, as `launch` launches an operation whose
  * program is cached: their runtime arguments are applied to the compiled workload, which is then enqueued with the same
  * bookkeeping (runtime ID, inspector, graph capture, profiler). `kernel_config_buffer`, when given, holds the Tensix
- * kernel-configuration blocks in place of the KERNEL_CONFIG window (create_kernel_config_buffer). Without one, a
+ * kernel binaries in place of the KERNEL_CONFIG window (create_kernel_config_buffer). Without one, a
  * CommandListBuilder recording on this thread records the workload as it records `launch`; with one, `run` throws
  * while recording, since a command list cannot hold a workload that runs from a kernel config buffer.
  *

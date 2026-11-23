@@ -65,9 +65,9 @@ private:
     ttnn::MeshDevice* mesh_device_;
 };
 
-// A kernel config buffer for `compiled` (experimental::CreateKernelConfigBuffer), for device_operation::run to launch
-// it from instead of the KERNEL_CONFIG window. Needs slow dispatch and the device opened with
-// TT_METAL_ALLOCATOR_MODE_HYBRID=1; rejects Tensix program semaphores.
+// A kernel config buffer for `compiled` (experimental::CreateKernelConfigBuffer), for device_operation::run to run its
+// Tensix kernel binaries from instead of the KERNEL_CONFIG window. Needs slow dispatch and the device opened with
+// TT_METAL_ALLOCATOR_MODE_HYBRID=1.
 inline tt::tt_metal::experimental::KernelConfigBuffer create_kernel_config_buffer(CompiledProgram& compiled) {
     return tt::tt_metal::experimental::CreateKernelConfigBuffer(compiled.mesh_device(), compiled.workload());
 }
