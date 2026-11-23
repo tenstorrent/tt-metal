@@ -187,7 +187,8 @@ class SFTTrainer(Trainer):
 
     def trainer_state(self, metadata: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """What ``trainer_state.json`` records: the format, the run's full config, the tt-metal version
-        (``tt_metal_version()``) and the model the run trains, then ``metadata``, whose keys win. For example::
+        (``tt_metal_version()``) and the model the run trains, then the keys of ``metadata``, which may not replace
+        those. For example::
 
             {
                 "format": {"type": "hf"},
@@ -199,13 +200,16 @@ class SFTTrainer(Trainer):
                 "metrics": {"train/loss": 1.23, "val/loss": 1.31}
             }
         """
-        return {
+        state = {
             "format": self.config.checkpoint.format.model_dump(),
             "config": self.config.model_dump(mode="json"),
             "tt_metal_version": tt_metal_version(),
             "base_model": {"name_or_path": self.config.model.name},
-            **(metadata or {}),
         }
+        clashes = sorted(state.keys() & (metadata or {}).keys())
+        if clashes:
+            raise ValueError(f"metadata may not replace the trainer's {clashes}")
+        return {**state, **(metadata or {})}
 
     def _check_base_model(self, directory: str) -> None:
         """Raise ``UnsupportedTrainingConfig`` if the checkpoint at ``directory`` was saved by a run of another model.

@@ -198,11 +198,17 @@ def test_save_checkpoint_has_the_provider_export_the_weights_into_a_staged_direc
     assert _entries(tmp_path) == ["checkpoint"]
 
 
-def test_metadata_wins_over_the_run_fields(monkeypatch):
+def test_metadata_adds_to_the_run_fields(monkeypatch):
     monkeypatch.setattr(sft, "tt_metal_version", lambda: None)
-    trainer = _trainer()
-    assert trainer.trainer_state({"tt_metal_version": "host"})["tt_metal_version"] == "host"
-    assert trainer.trainer_state()["tt_metal_version"] is None
+    state = _trainer().trainer_state({"image": "host"})
+    assert state["image"] == "host"
+    assert state["tt_metal_version"] is None
+
+
+@pytest.mark.parametrize("key", ["format", "config", "tt_metal_version", "base_model"])
+def test_metadata_may_not_replace_the_run_fields(expect_error, key):
+    with expect_error(ValueError, key):
+        _trainer().trainer_state({key: "host"})
 
 
 @pytest.mark.parametrize(
