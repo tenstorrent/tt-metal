@@ -4,7 +4,7 @@
 >
 > 1. Build with `build_metal.sh`
 > 2. Run `tt-train/run_profiler.sh` with the appropriate binary
-> 3. Open `tt-train/notebooks/profiler_results.ipynb` notebook and run using the generated `ops_perf_results_<timestamp>.csv`
+> 3. Open `tt-train/tools/profiling/profiling_analysis_single_exp.ipynb` notebook and run using the generated `ops_perf_results_<timestamp>.csv`
 
 ---
 
