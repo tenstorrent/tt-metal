@@ -22,6 +22,7 @@ import pytest
 
 import ttml
 import ttml.experimental
+import ttml.experimental.trainer.implementations.sft as sft
 from ttml.experimental.datasets.provider.sft import SST2Provider
 from ttml.experimental.models.provider import LlamaProvider
 from ttml.experimental.models.utils.checkpoint import ADAPTER_CONFIG, ADAPTER_WEIGHTS, read_adapter
@@ -30,10 +31,12 @@ from ttml.experimental.trainer.__main__ import main
 from ttml.experimental.trainer.configs import load_config
 from ttml.experimental.trainer.managers.checkpoint import HISTORY_FILE
 from ttml.experimental.trainer.managers.logging import TrainingLogger
-from ttml.experimental.trainer.utils import TRAINER_STATE, tt_metal_version
+from ttml.experimental.trainer.utils import TRAINER_STATE
 
 RECIPE = Path(ttml.experimental.__file__).parent / "training_configs" / "llama_3_2_1b_instruct_sst2_lora.yaml"
 MODEL_SOURCE = "unsloth/Llama-3.2-1B-Instruct"  # not gated
+# The version the runs record: the real one depends on how ttnn is installed, and is None without a package.
+TT_METAL_VERSION = "0.0.0-test"
 STEPS = 2
 # The examples read of each split: enough train batches that every run stays in epoch 0.
 SPLIT_SIZES = {"train": 256, "validation": 64}
@@ -69,6 +72,7 @@ def run_recipe(overrides: list[str]) -> SimpleNamespace:
             patch.setattr(TrainingLogger, "info", record_message)
             patch.setattr(SST2Provider, "_load_raw_dataset", load_head)
             patch.setattr(LlamaProvider, "model_source", lambda self: MODEL_SOURCE)
+            patch.setattr(sft, "tt_metal_version", lambda: TT_METAL_VERSION)
             main(["--config", str(RECIPE), *(arg for override in overrides for arg in ("--set", override))])
     finally:
         gc.collect()
@@ -137,7 +141,7 @@ def test_a_checkpoint_carries_the_metrics_of_its_step(recipe):
     assert state["format"] == {"type": "hf"}
     assert state["base_model"] == {"name_or_path": recipe.config.model.name}
     assert state["config"] == recipe.config.model_dump(mode="json")
-    assert state["tt_metal_version"] == tt_metal_version()
+    assert state["tt_metal_version"] == TT_METAL_VERSION
     (entry,) = json.loads((recipe.checkpoints / HISTORY_FILE).read_text())["checkpoints"]
     assert (entry["name"], entry["path"], entry["step"], entry["metrics"]) == (last.name, str(last), STEPS, metrics)
 

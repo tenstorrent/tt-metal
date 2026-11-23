@@ -161,15 +161,19 @@ class _Provider(ModelProvider):
         (directory / "weights").write_text("new")
 
 
-def _trainer(init=None):
-    """A trainer of ``acme/acme-7b`` with ``_Provider``, starting from the checkpoint at ``init``, if given."""
+def _trainer(init=None, format_type="hf", lora=None):
+    """A trainer of ``acme/acme-7b`` with ``_Provider``, saving checkpoints in ``format_type``, training the ``lora``
+    adapters if given, and starting from the checkpoint at ``init``, if given."""
+    checkpoint = {"format": {"type": format_type}}
+    if init:
+        checkpoint["init_strategy"] = {"path": str(init)}
     config = SFTTrainerConfig(
-        model={"name": "acme/acme-7b"},
+        model={"name": "acme/acme-7b", "lora": lora},
         dataset={"id": "alpaca"},
         optimizer={"lr": 1e-3},
         batch_size=1,
         max_length=32,
-        checkpoint={"init_strategy": {"path": str(init)}} if init else {},
+        checkpoint=checkpoint,
     )
     trainer = SFTTrainer()
     trainer.config, trainer.provider = config, _Provider(config)
@@ -177,9 +181,13 @@ def _trainer(init=None):
     return trainer
 
 
-def test_save_checkpoint_has_the_provider_export_the_weights_into_a_staged_directory(tmp_path, monkeypatch):
+@pytest.mark.parametrize("lora", [{"r": 8, "alpha": 16, "target_modules": ["q_proj"]}, None], ids=["lora", "full"])
+@pytest.mark.parametrize("format_type", ["hf", "tt"])
+def test_save_checkpoint_has_the_provider_export_the_weights_into_a_staged_directory(
+    tmp_path, monkeypatch, format_type, lora
+):
     monkeypatch.setattr(sft, "tt_metal_version", lambda: "0.64.0")
-    trainer = _trainer()
+    trainer = _trainer(format_type=format_type, lora=lora)
     trainer.model = object()
     final = tmp_path / "checkpoint"
     _write_checkpoint(final, "old")
@@ -187,7 +195,7 @@ def test_save_checkpoint_has_the_provider_export_the_weights_into_a_staged_direc
 
     assert (final / "weights").read_text() == "new"
     assert read_trainer_state(final) == {
-        "format": {"type": "hf"},
+        "format": {"type": format_type},
         "config": trainer.config.model_dump(mode="json"),
         "tt_metal_version": "0.64.0",
         "base_model": {"name_or_path": "acme/acme-7b"},
