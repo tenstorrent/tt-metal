@@ -414,6 +414,51 @@ def test_remainder_negative_zero(testing_dtype, device):
     "testing_dtype",
     ["bfloat16", "float32"],
 )
+def test_remainder_opposite_sign_exact_multiple(testing_dtype, device):
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    # An exact multiple whose quotient comes out a hair past the integer makes floor() one too low,
+    # leaving a raw result of b. The magnitude correction that pulls it back to 0 used to run only
+    # when a and b had the same sign. Which pairs hit it depends on the architecture's reciprocal:
+    # the first two rows fail on Blackhole, the last four on Wormhole.
+    torch_input_a = torch.tensor([-245.0, -1.1640625, -300.0, -660.0, 948.0, 450.0], dtype=torch_dtype)
+    torch_input_b = torch.tensor([3.828125, 0.58203125, 1.875, 1.875, -1.8515625, -1.875], dtype=torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+
+    tt_in_a = ttnn.from_torch(torch_input_a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_in_b = ttnn.from_torch(torch_input_b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.remainder(tt_in_a, tt_in_b))
+
+    assert_equal(golden, output_tensor)
+
+    # The same check over a sweep: every result lies in [0, b) for b > 0 and (b, 0] for b < 0, unless
+    # the correctly rounded result is itself b.
+    torch.manual_seed(0)
+    a = (torch.rand(256, 256) * 2000 - 1000).to(torch_dtype)
+    b = (torch.rand(256, 256) * 3.5 + 0.5).to(torch_dtype)
+    b = torch.where(torch.rand(256, 256) < 0.5, -b, b)
+
+    tt_a = ttnn.from_torch(a, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_b = ttnn.from_torch(b, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    result = ttnn.to_torch(ttnn.remainder(tt_a, tt_b)).float()
+
+    a, b = a.float(), b.float()
+    expected = torch.remainder(a.double(), b.double()).to(torch_dtype).float()
+    in_range = (result == 0) | ((torch.sign(result) == torch.sign(b)) & (result.abs() < b.abs()))
+    bad = ~(in_range | (result == expected))
+    assert not bad.any(), (
+        f"{int(bad.sum())} results outside the divisor's range, first: remainder({a[bad][0].item()}, "
+        f"{b[bad][0].item()}) = {result[bad][0].item()}, expected {expected[bad][0].item()}"
+    )
+
+
+@pytest.mark.parametrize(
+    "testing_dtype",
+    ["bfloat16", "float32"],
+)
 def test_fmod_nan(testing_dtype, device):
     torch_dtype = getattr(torch, testing_dtype)
     ttnn_dtype = getattr(ttnn, testing_dtype)
