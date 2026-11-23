@@ -24,7 +24,7 @@ RUN_NAME="${MODEL}${VARIANT}"
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
   kimi_k3|kimi_k3_1)   MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
-  glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4 sc1_4x4 sc4_rr" ;;
+  glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4 sc1_4x4 sc4_rr sc1_rr" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -169,7 +169,7 @@ case "${MODEL}" in
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
     fi
     case "${CONFIG}" in
-      *_4x4|sc4_rr)
+      *_4x4|*_rr)
         # 4x4 stages, two per galaxy, bound by tt-run discovery as for Kimi-K3 below: 8 stages for sc4, two
         # (all 78 layers) for sc1. glm53_4x4.json holds the layout: SP=4 on mesh axis 1, 2560-token chunks
         # (640 tokens per chip, GLM's 8x4 per-chip load), TP-deduped KV and the slots it fits. Its 1064960
@@ -193,7 +193,17 @@ case "${MODEL}" in
         PP_4X4_HOSTS=1
         [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
         PP_RANKS=$((2 * PP_4X4_HOSTS))
-        if [ "${CONFIG}" = sc4_rr ]; then
+        if [ "${CONFIG}" = sc1_rr ]; then
+          # One [RING,RING] stage on the in-Galaxy torus, one rank. The first 38 layers: 38 is a `full`-indexer layer
+          # start (the next stage would begin there), about half of the 78 that two 4x4 stages hold. Runner and
+          # producer both read PREFILL_NUM_LAYERS, so the stage runs and PCCs layers 0-37, its last one KV-only.
+          PP_RR=1
+          PP_RANKS=1
+          SC1_NUM_LAYERS=38
+          RUNNER_ENV+=" export PREFILL_FABRIC_MODE=2d_torus_xy;"
+          # The same unfused norm and L1_SMALL as the SC4 [RING,RING] stages.
+          RUNNER_ENV+=" export PREFILL_FUSED_RMSNORM=0; export PREFILL_L1_SMALL_SIZE=2048;"
+        elif [ "${CONFIG}" = sc4_rr ]; then
           # [RING,RING]: 8 stages, the odd (seam) ones on two hosts each, so 12 ranks; the 4x4 tray-half cache
           # serves it (same mesh coordinates, only the fabric differs).
           PP_RR=1
@@ -490,7 +500,9 @@ if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   [ "${#HOST_LIST[@]}" -eq "${PP_4X4_HOSTS}" ] || {
     echo "${MODEL}/${CONFIG} requires exactly ${PP_4X4_HOSTS} cabled Galaxy hosts in ${TTRUN_DIR}/hostfile; got '${RESOLVED_HOSTS}'" >&2; exit 2;
   }
-  if [ "${PP_RR}" = 1 ]; then
+  if [ "${CONFIG}" = sc1_rr ]; then
+    MGD="${MGD_DIR}/sc1_4x4_rr_mgd.textproto"
+  elif [ "${PP_RR}" = 1 ]; then
     MGD="${MGD_DIR}/sc4_4x4_rr_mgd.textproto"
   elif [ "${PP_4X4_HOSTS}" -eq 1 ]; then
     MGD="${MGD_DIR%/ci}/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto"

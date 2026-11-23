@@ -2334,6 +2334,42 @@
   sp_config: sc4
 
 
+# The production [RING,RING] 4x4 stage on one Galaxy: the in-Galaxy torus (ASICs {3,4,7,8} of every tray, sc1_4x4_rr_mgd), one
+# rank, running GLM-5.3's first 38 layers (38 is a `full`-indexer layer start, about half of the 78 two stages hold; the
+# stage's last layer is KV-only, as on any last stage). [1/2] runs one 2,560-token chunk per forward, [2/2] two per forward
+# (packed, traced, D2H layer acks); both PCC the stage's KV and index caches (layers 0-37) against the 1M golden tail.
+# Perf is reported, not gated: no [RING,RING] baseline yet. The job took 21.4 min with the reset (steps 807 s cold and
+# 444 s warm); with both steps cold it would take about 28.
+- name: "(GLM-5.3-744B) disaggregated prefill 1x[4,4] [RING,RING] 38 layers KV accuracy 1M tail@2.5k, unpacked + packed, SC1"
+  cmd: |
+    set -uo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
+    echo "===== [1/2] (GLM-5.3-744B) 1x[4,4] [RING,RING] 38 layers KV accuracy 1M tail@2.5k, one chunk per forward, SC1 ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_rr; rc1=$?
+    echo "===== [1/2] rc=${rc1} ====="
+    echo "===== [2/2] (GLM-5.3-744B) 1x[4,4] [RING,RING] 38 layers packed KV accuracy 1M tail@2.5k, two chunks per forward, SC1 ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_rr --variant packed; rc2=$?
+    echo "===== [2/2] rc=${rc2} ====="
+    exit $(( rc1 != 0 || rc2 != 0 ))
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1_high_power:
+      timeout: 35
+      tier: 1
+      release_ready: false
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc1
+
+
 # Kimi-K3 with RadixArk's DSpark drafter, through the same launcher and the same 8 stages of [4,4]. Traced at 1M
 # with 24 slots: the drafter's K/V on the last stage leaves room for 26 (it fails at 27 in the per-stage
 # capacity probe, PR #61481), and 24 keeps two of margin as the trunk leg does. Slot 0 is PCC'd on 55k, where
