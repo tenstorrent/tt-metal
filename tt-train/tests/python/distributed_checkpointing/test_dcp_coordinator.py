@@ -535,7 +535,7 @@ def test_phases_gather_and_broadcast_over_three_ranks():
     "failures",
     [
         {0: ValueError("disk full")},
-        {1: ValueError("disk full")},
+        {1: IncompleteCheckpointError("no index")},
         {2: ValueError("disk full")},
         {0: MissingKeyError("no entry"), 2: IncompleteCheckpointError("no index")},
         {1: IncompleteCheckpointError("no index"), 2: MissingKeyError("no entry")},
@@ -544,7 +544,8 @@ def test_phases_gather_and_broadcast_over_three_ranks():
 )
 def test_a_failing_rank_stops_every_rank_and_names_itself(failures):
     """Whichever ranks fail, the coordinator among them, every rank raises the class the first failing rank reported
-    (CheckpointError for an error from outside the package) and names every failing rank with its message."""
+    (its own CheckpointError subclass, or CheckpointError for an error from outside the package) and names every
+    failing rank with its message."""
 
     def body(group, fake):
         def work():
@@ -748,21 +749,6 @@ def test_disagreeing_ranks_are_refused():
         f"disagree on the checkpoint directory: rank {r} has {r} (all ranks: [0, 1])" in str(e)
         for r, e in errors.items()
     )
-
-
-def test_every_rank_raises_the_class_the_failing_rank_raised():
-    def body(group, fake):
-        def work():
-            if group.rank == 1:
-                raise IncompleteCheckpointError("no index.json")
-
-        group.phase("reading the index", work)
-
-    _, errors = _run_ranks(3, body)
-    assert set(errors) == {0, 1, 2}
-    assert all(type(e) is IncompleteCheckpointError and "rank(s) [1]" in str(e) for e in errors.values())
-    # Every rank sees the failing rank's own message, not only its class.
-    assert all("rank 1: IncompleteCheckpointError: no index.json" in str(e) for e in errors.values())
 
 
 def test_interrupt_is_exchanged_before_it_propagates():
