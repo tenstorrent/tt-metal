@@ -3,8 +3,9 @@
 
 """Tier-1 GLM-5.4 weights on device: the reduced stack (tests/glm54_weights.py) builds as a TtPrefillTransformer
 and every layer's output matches the CPU reference on the same weights: the prelude and loop pass 1 (layers 0-2, run
-once) against the GLM-5.4 reference stack, and the coda layer 3, which on device follows pass 1 directly (no gates or
-pass 2), teacher-forced: the CPU GLM-5.3 decoder layer runs on the device's own layer-2 output.
+once) against the GLM-5.4 reference stack, and the coda layer 3 teacher-forced: the CPU GLM-5.3 decoder layer runs on
+the device's own gate-2 output (the loop and gates run on device since q171.2.4; their checks are
+test_glm54_loop_device.py).
 
 A load check, not the loop's acceptance: the loop, gates and pass 2 on device are q171.2.4 / q171.2.5. The bar
 only has to catch weights that did not load as the reference reads them (wrong layer, role or order; see LOAD_PCC).
@@ -55,6 +56,8 @@ COMPARED = {0: "pass1.in", 2: "pass1.out"}
 # Layer 3 (coda) is compared teacher-forced, on its own contribution (output - input): by layer 3 the residual stream
 # dominates, so on whole outputs even skipping the layer scores 0.868 and a wrong router 0.935 (rows < 512, CPU).
 # Measured on rows < 512: correct device load 0.992; CPU faults: layer 1's norms + router 0.747, layer 1's MLA 0.321.
+# (Those were measured when layer 3 followed pass 1 on device; on the gate-2 output, test_glm54_loop_device measured
+# 0.9925.)
 CODA_DELTA_PCC = 0.95
 SP = 8  # the 8x4 mesh's SP factor (axis 0)
 CHUNK = PREFILL_CHUNK_TOKENS_PER_CHIP * SP
@@ -159,7 +162,7 @@ def test_glm54_tier1_loads_on_device(mesh_device, device_params, num_links):
         mesh_device=mesh_device,
         config=config,
         model_cfg=GLM54ReducedConfig,
-        state_dict=weights.state_dict,
+        state_dict={**weights.state_dict, "loop_gates": weights.gates},
         num_layers=n,
         seq_len=chunk,
         dispatch_buffer_capacity_factor=8,
@@ -257,11 +260,14 @@ def test_glm54_tier1_loads_on_device(mesh_device, device_params, num_links):
             failures.append(f"layer {i} PCC rows < {LOAD_ROWS} {p:.5f} < {LOAD_PCC}")
 
     # Coda, teacher-forced on rows < LOAD_ROWS (causal, and below index_topk every key is selected, so these rows
-    # depend on nothing after them): CPU layer 3 on the device's layer-2 output.
+    # depend on nothing after them): CPU layer 3 on the device's gate-2 output.
     coda = weights.state_dict["layers"][3]
     assert config.indexer_types[3] == "full"  # owns its indexer: no top-k to inject
     assert LOAD_ROWS <= config.index_topk
-    x2 = device[2][:LOAD_ROWS]
+    gate2 = out["gate2"].to(torch.float32)[0]
+    x2 = torch.empty_like(gate2)
+    x2[order] = gate2
+    x2 = x2[:LOAD_ROWS]
     cpu3, _ = glm_decoder_layer_reference(
         config,
         None,
@@ -273,7 +279,7 @@ def test_glm54_tier1_loads_on_device(mesh_device, device_params, num_links):
         mla_ref=SparseMLAReference(config, coda["mla_weights"], seq_len=LOAD_ROWS),
     )
     p = _pcc(device[3][:LOAD_ROWS] - x2, cpu3[0].float() - x2)
-    logger.info(f"tier-1 layer 3 device vs CPU layer 3 on device layer 2, contribution PCC rows < {LOAD_ROWS}: {p:.5f}")
+    logger.info(f"tier-1 layer 3 device vs CPU layer 3 on device gate 2, contribution PCC rows < {LOAD_ROWS}: {p:.5f}")
     if p < CODA_DELTA_PCC:
         failures.append(f"layer 3 contribution PCC rows < {LOAD_ROWS} {p:.5f} < {CODA_DELTA_PCC}")
     assert not failures, failures
