@@ -69,7 +69,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     write_manifest,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as dsa
-from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as dsa_golden
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_vllm_emulation import kda_flashkda_emulation
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, checkpoint_tensors, missed_keys, topk_recall
 
@@ -259,7 +258,7 @@ class ChainModel:
                 kda=l in KDA_LAYERS,
                 dense=l == 0,
                 moe=l in MOE_LAYERS,
-                dsa=l == DSA_LAYER,
+                dsa_attn=l == DSA_LAYER,
                 threads=threads,
                 log=log,
             )
@@ -286,13 +285,13 @@ def load_layer(
     kda: bool,
     dense: bool,
     moe: bool,
-    dsa: bool,
+    dsa_attn: bool,
     threads: int,
     log: Callable[[str], None] = print,
 ) -> tuple[dict, dict[str, str]]:
     """Layer ``l``'s weights as ``ChainModel.layers[l]`` holds them, and their digests: the norms and AttnRes queries;
-    ``kda`` (KDA attention), ``dsa`` (DSA attention), ``dense`` (dense FFN) or ``moe`` (the full MoE); a DSA layer
-    without ``moe`` gets only its router (``gate`` / ``gate_bias``, to route sampled rows for a cross-check)."""
+    ``kda`` (KDA attention), ``dsa_attn`` (DSA attention), ``dense`` (dense FFN) or ``moe`` (the full MoE); a DSA
+    layer without ``moe`` gets only its router (``gate`` / ``gate_bias``, to route sampled rows for a cross-check)."""
     config = json.loads((checkpoint / "config.json").read_text())
     kda_config = KDAConfig.from_model_config(config)
     eps = float(config.get("text_config", config)["rms_norm_eps"])
@@ -303,12 +302,12 @@ def load_layer(
         names += [f"self_attn.{n}" for n in required_kda_weight_names(kda_config)]
     if dense:
         names += [f"mlp.{n}" for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")]
-    if moe or dsa:
+    if moe or dsa_attn:
         names += [f"block_sparse_moe.gate.{n}" for n in ("weight", "e_score_correction_bias")]
     if moe:
         names += [f"block_sparse_moe.{n}" for n in MoE_NON_ROUTED if not n.startswith("gate.")]
-    if dsa:
-        names += [f"self_attn.{n}" for n in dsa_golden.WEIGHTS]
+    if dsa_attn:
+        names += [f"self_attn.{n}" for n in dsa.WEIGHTS]
     t = checkpoint_tensors(checkpoint, l, names)
     digests = {f"layers.{l}": tensor_digest(t)}
     layer = {
@@ -327,8 +326,8 @@ def load_layer(
         experts, digests[f"layers.{l}.experts"] = load_experts(checkpoint, l, num_experts, threads, log)
         w = {n: t[f"block_sparse_moe.{n}"] for n in MoE_NON_ROUTED}
         layer["moe"] = MoE64(w, experts, C.NUM_EXPERTS_PER_TOKEN, eps)
-    if dsa:
-        layer["dsa"] = {n: t[f"self_attn.{n}"].to(F64) for n in dsa_golden.WEIGHTS}
+    if dsa_attn:
+        layer["dsa"] = {n: t[f"self_attn.{n}"].to(F64) for n in dsa.WEIGHTS}
         if not moe:
             layer["gate"] = t["block_sparse_moe.gate.weight"].to(F64)
             layer["gate_bias"] = t["block_sparse_moe.gate.e_score_correction_bias"].to(F64)

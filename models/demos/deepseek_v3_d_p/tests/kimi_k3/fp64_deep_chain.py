@@ -553,7 +553,7 @@ def main() -> None:
             kda=kind == "kda",
             dense=kind == "dense",
             moe=kind == "moe",
-            dsa=kind == "dsa",
+            dsa_attn=kind == "dsa",
             threads=args.threads,
             log=log,
         )
