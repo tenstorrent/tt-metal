@@ -65,11 +65,13 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn, release_blocks
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import to_mesh_order
+from models.demos.deepseek_v3_d_p.tt.moe_impl import BLOCK, moe_block_fabric_payload_size
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -78,7 +80,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTran
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
-from models.demos.minimax_m3.tt.packed_rows import packed_real_row_mask, packed_routed_pad_rows
+from models.demos.minimax_m3.tt.packed_rows import packed_routed_pad_rows
 from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 NUM_LAYERS = 4
@@ -141,18 +143,22 @@ GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 # traced and eager, pipeline ranks). At the runner's 1,536 B, the packed test's second build (forward_chunks=1) ran
 # out of L1_SMALL on galaxy 8x4 after the 2026-11-06 main merge, though the first model was freed.
 TEST_L1_SMALL_SIZE = GLM53Adapter.l1_small_size + 512
+# GLM-5.3's MoE is the MoE block (tt/moe_impl.py). The test's config class (_TestGLM53Config) is not one the block
+# knows by name, so the models here ask for it, and the meshes open with its fabric payload (one combine row).
+MOE_IMPL = BLOCK
+GLM_FABRIC_PAYLOAD = moe_block_fabric_payload_size(GLM53Config, moe_fabric_payload(GLM53Config), MOE_IMPL)
 
 MESH_PARAMS = [
     pytest.param(
         (2, 4),
-        fabric2d_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=TEST_L1_SMALL_SIZE),
+        fabric2d_device_params(fabric_payload_size=GLM_FABRIC_PAYLOAD, l1_small_size=TEST_L1_SMALL_SIZE),
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
         id="fabric2d-2x4",
     ),
     pytest.param(
         (8, 4),
-        torus_xy_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=TEST_L1_SMALL_SIZE),
+        torus_xy_device_params(fabric_payload_size=GLM_FABRIC_PAYLOAD, l1_small_size=TEST_L1_SMALL_SIZE),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
@@ -162,7 +168,7 @@ MESH_PARAMS = [
     # descriptor); unnarrowed, requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
-        torus_x_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=TEST_L1_SMALL_SIZE),
+        torus_x_device_params(fabric_payload_size=GLM_FABRIC_PAYLOAD, l1_small_size=TEST_L1_SMALL_SIZE),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="torus-x-4x4-sp1",
@@ -170,19 +176,28 @@ MESH_PARAMS = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _release_moe_blocks(request):
+    """Free the MoE blocks a test built (their L1_SMALL words, arena and DRAM) before its mesh closes."""
+    mesh = request.getfixturevalue("mesh_device") if "mesh_device" in request.fixturenames else None
+    yield
+    if mesh is not None:
+        release_blocks(mesh)
+
+
 def _sp_axis(mesh_device):
     """The mesh's SP axis: 1 on a 4x4 stage (SP on the tray half's ring), else 0."""
     return 1 if tuple(mesh_device.shape) == (4, 4) else 0
 
 
-def _traced_mesh_params(l1_small_extra: int = 0, *, four_by_four: bool = True) -> list:
+def _traced_mesh_params(l1_small_extra: int = 0) -> list:
     """MESH_PARAMS with a trace region; ``l1_small_extra`` grows L1_SMALL as the runner does for MTP."""
     l1_small = TEST_L1_SMALL_SIZE + l1_small_extra
     params = [
         pytest.param(
             (2, 4),
             fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=GLM_FABRIC_PAYLOAD,
                 l1_small_size=l1_small,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -193,7 +208,7 @@ def _traced_mesh_params(l1_small_extra: int = 0, *, four_by_four: bool = True) -
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=GLM_FABRIC_PAYLOAD,
                 l1_small_size=l1_small,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -202,20 +217,19 @@ def _traced_mesh_params(l1_small_extra: int = 0, *, four_by_four: bool = True) -
             id="torus-xy-8x4",
         ),
     ]
-    if four_by_four:
-        params.append(
-            pytest.param(
-                (4, 4),
-                torus_x_device_params(
-                    fabric_payload_size=moe_fabric_payload(GLM53Config),
-                    l1_small_size=l1_small,
-                    trace_region_size=GLM_TRACE_REGION_SIZE,
-                ),
-                2,
-                marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-                id="torus-x-4x4-sp1",
-            )
+    params.append(
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(
+                fabric_payload_size=GLM_FABRIC_PAYLOAD,
+                l1_small_size=l1_small,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         )
+    )
     return params
 
 
@@ -225,9 +239,9 @@ TRACED_MESH_PARAMS = _traced_mesh_params()
 # its own global semaphores in L1_SMALL, so the two models need more: 3,072 B in all ran out on galaxy 8x4, 4,096 B
 # fits.
 MTP_L1_SMALL_EXTRA = 2048
-# Packed MTP runs on galaxy 8x4 (and LoudBox); its 4x4-stage rows follow with a 4x4 packed MTP runner config.
-MTP_MESH_PARAMS = [p for p in MESH_PARAMS if p.id != "torus-x-4x4-sp1"]
-TRACED_MTP_MESH_PARAMS = _traced_mesh_params(MTP_L1_SMALL_EXTRA, four_by_four=False)
+# Packed MTP runs on galaxy 8x4, a 4x4 stage and LoudBox (CI selects the 8x4 rows).
+MTP_MESH_PARAMS = MESH_PARAMS
+TRACED_MTP_MESH_PARAMS = _traced_mesh_params(MTP_L1_SMALL_EXTRA)
 
 
 def _build(mesh_device, config, device_params, num_links, chunk, num_slots, forward_chunks=1, indexer_types=None):
@@ -261,6 +275,7 @@ def _build(mesh_device, config, device_params, num_links, chunk, num_slots, forw
         tp_shard_kv=True,
         sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
         forward_chunks=forward_chunks,
+        moe_impl=MOE_IMPL,
     )
     del state_dict
 
@@ -573,6 +588,7 @@ def test_glm_packed_forward_matches_one_chunk_forwards(variant, config_only, mes
         transformer.release_sub_device_managers()
     del transformer, kvpe_cache, index_kv_cache
     gc.collect()  # free the packed model's device buffers before the second model allocates
+    release_blocks(mesh_device)  # (and its MoE block's L1_SMALL words / arena: the one-chunk model builds its own)
 
     # The packed model's one-chunk forwards vs a model built for one chunk per forward (same weights).
     _, single, single_kvpe, single_index = _build(
@@ -608,25 +624,30 @@ def test_glm_packed_forward_matches_one_chunk_forwards(variant, config_only, mes
         single.release_sub_device_managers()
 
 
-def _capture_packed_routing(monkeypatch, mesh_device):
-    """Patch TtMoe's routing-dump hook to read every eager packed MoE layer's top-k ids back: a list, one entry per MoE
-    call, of (sentinel, per-SP-chip [rows, k] tensors); TP replicas are checked equal."""
-    sp_axis = _sp_axis(mesh_device)
-    cols = tuple(mesh_device.shape)[1]
+def _capture_packed_counts(monkeypatch):
+    """Wrap the MoE block's FFN to read, after every eager packed MoE call, how many (row, expert) picks its routing
+    planner counted: each chip's slice of the head's per-expert counts (its own experts), summed over the mesh. A list,
+    one total per MoE call. The planner counts only the rows the forward's chunk bounds call real, and dispatch, the
+    routed experts and the combine run its plan, so a routed pad row (or a dropped real row) changes the total."""
     calls = []
+    call = TtK3MoEBlockFfn.__call__
 
-    def capture(self, indices, scores, actual_start, cache_user_id, traced, packed=False):
-        assert packed and not traced, "this hook reads eager packed forwards only"
-        per_chip = {}
-        for i, t in enumerate(ttnn.get_device_tensors(indices)):
-            chip = i // cols if sp_axis == 0 else i % cols
-            ids = ttnn.to_torch(t).to(torch.int64).reshape(-1, indices.shape[-1])
-            if chip in per_chip:
-                assert torch.equal(per_chip[chip], ids), f"TP replicas of chip {chip} routed differently"
-            per_chip[chip] = ids
-        calls.append((self.gate.config.n_routed_experts, [per_chip[c] for c in range(len(per_chip))]))
+    def capture(self, x, *args, chunks=None, forward_chunks=None, **kwargs):
+        assert chunks is not None, "this hook reads eager packed forwards only"
+        y = call(self, x, *args, chunks=chunks, forward_chunks=forward_chunks, **kwargs)
+        R = tuple(self.mesh.shape)[self.options.sp_axis]
+        block = self._block(int(x.shape[-2]) * R, forward_chunks if forward_chunks is not None else len(chunks))
+        epc = self.dims.num_experts // self.mesh.get_num_devices()
+        # (device i holds the block's chip chips[i]: the identity with SP on axis 0, transposed on a 4x4 sp1 stage)
+        chips = to_mesh_order(list(range(self.mesh.get_num_devices())), self.mesh.shape, self.options.sp_axis)
+        total = 0
+        for i, d in enumerate(ttnn.get_device_tensors(block.last_head.counts)):
+            n = chips[i]
+            total += int(ttnn.to_torch(d).reshape(-1)[n * epc : (n + 1) * epc].to(torch.int64).sum())
+        calls.append(total)
+        return y
 
-    monkeypatch.setattr(TtMoe, "_dump_routing", capture)
+    monkeypatch.setattr(TtK3MoEBlockFfn, "__call__", capture)
     return calls
 
 
@@ -637,15 +658,14 @@ def _capture_packed_routing(monkeypatch, mesh_device):
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_packed_pad_rows_skip_the_moe(variant, config_only, mesh_device, device_params, num_links, monkeypatch):
-    """Partial chunks ahead of non-empty ones in a packed forward: their pad rows fall inside the MoE padding config's
-    one leading real-row count per chip, so only the per-row mask (PackedPadding.real_rows) keeps them out of the
-    experts.
+    """Partial chunks ahead of non-empty ones in a packed forward: their pad rows sit between two chunks' real rows on
+    every chip, so only the forward's chunk bounds (MoEBlockPacking) keep them out of the MoE block's experts.
 
     Forward 0 puts user A's first turn (896 tokens) ahead of B's and C's full chunks; forward 1 puts A's second turn,
-    which starts mid-slab at 896 (a rotated chunk), and B's partial chunk ahead of C's full one. Every MoE layer must
-    give each pad row the sentinel on all its picks and each real row real experts (packed_real_row_mask). Then the
-    same forwards run in fresh slots with random tokens in the pad rows: the dense layers' KV and indexer-K must be
-    bit-exact and the rest within PAD_TOKENS_PCC."""
+    which starts mid-slab at 896 (a rotated chunk), and B's partial chunk ahead of C's full one. Every MoE layer's
+    routing planner must count exactly the real rows' picks (real rows x NUM_EXPERTS_PER_TOKEN): a routed pad row or a
+    dropped real row changes the total. Then the same forwards run in fresh slots with random tokens in the pad rows:
+    the dense layers' KV and indexer-K must be bit-exact and the rest within PAD_TOKENS_PCC."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
     sp = mesh_device.shape[_sp_axis(mesh_device)]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
@@ -667,7 +687,7 @@ def test_glm_packed_pad_rows_skip_the_moe(variant, config_only, mesh_device, dev
     config, transformer, kvpe_cache, index_kv_cache = _build(
         mesh_device, config_only, device_params, num_links, chunk, num_slots, forward_chunks=FORWARD_CHUNKS
     )
-    calls = _capture_packed_routing(monkeypatch, mesh_device)
+    calls = _capture_packed_counts(monkeypatch)
     try:
         for chunks in forwards:
             validate_chunks(
@@ -693,24 +713,16 @@ def test_glm_packed_pad_rows_skip_the_moe(variant, config_only, mesh_device, dev
                     if not c.is_empty
                 }
             )
-            mask = packed_real_row_mask(chunks, sp, chunk_local)
+            real = sum(c.actual_end - c.actual_start for c in chunks)
+            topk = _TestGLM53Config.NUM_EXPERTS_PER_TOKEN
             assert calls, "no MoE layer ran"
-            for layer, (sentinel, per_chip) in enumerate(calls):
-                for c in range(sp):
-                    real = torch.tensor(mask[c], dtype=torch.bool)
-                    got = per_chip[c]
-                    assert got.shape[0] == real.numel(), (got.shape, real.numel())
-                    pad_routed = int((got[~real] != sentinel).any(dim=-1).sum())
-                    real_dropped = int((got[real] >= sentinel).any(dim=-1).sum())
-                    logger.info(
-                        f"[pad rows] forward {f} MoE call {layer} chip {c}: {int((~real).sum())} pad rows, "
-                        f"{pad_routed} routed; {int(real.sum())} real rows, {real_dropped} unrouted"
-                    )
-                    if pad_routed or real_dropped:
-                        failures.append(
-                            f"forward {f} MoE call {layer} chip {c}: {pad_routed} pad rows routed, "
-                            f"{real_dropped} real rows given the sentinel"
-                        )
+            for layer, total in enumerate(calls):
+                logger.info(
+                    f"[pad rows] forward {f} MoE call {layer}: planner counted {total} picks, "
+                    f"{real} real rows x {topk} = {real * topk}"
+                )
+                if total != real * topk:
+                    failures.append(f"forward {f} MoE call {layer}: {total} picks counted, want {real * topk}")
         assert not failures, f"[pad rows] {len(failures)} routing error(s):\n" + "\n".join(failures)
         monkeypatch.undo()
 
@@ -897,7 +909,8 @@ def _build_mtp(mesh_device, config, device_params, num_links, chunk, num_slots, 
     from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
     from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
 
-    sp_axis, tp_axis = 0, 1
+    sp_axis = _sp_axis(mesh_device)
+    tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
     seq_cache = N_CHUNKS * chunk
     config = _test_config(config)
@@ -919,6 +932,7 @@ def _build_mtp(mesh_device, config, device_params, num_links, chunk, num_slots, 
         tp_shard_kv=True,
         sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
         forward_chunks=forward_chunks,
+        moe_impl=MOE_IMPL,
     )
     predictor = TtMTPPredictor(
         mesh_device,
@@ -1004,7 +1018,8 @@ def _mtp_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, i
     _mtp_chunk_inputs. Returns the chunks' provided levels."""
     from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPUnionEmbedding
 
-    sp = mesh_device.shape[0]
+    sp_axis = _sp_axis(mesh_device)
+    sp = mesh_device.shape[sp_axis]
 
     def upload(rows):  # [sp, n] int64 -> [sp, 1, n] uint32, one row per SP chip
         return ttnn.from_torch(
@@ -1013,7 +1028,9 @@ def _mtp_forward(transformer, kvpe_cache, index_kv_cache, mesh_device, chunks, i
             dtype=ttnn.uint32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=mesh_shard_dims(0, sp_axis)
+            ),
         )
 
     unions, provided_levels = [], []
@@ -1057,7 +1074,7 @@ def test_glm_packed_mtp_matches_one_chunk_forwards(
     own forward (slots 4..7), with prompt-ending chunks mid-forward, real and all-pad lookahead, and empty tails.
     Bars as test_glm_packed_forward_matches_one_chunk_forwards (the MoE sees different rows per call, #63555)."""
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[_sp_axis(mesh_device)]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
     lengths, forwards = _packed_schedule(chunk)
     num_users = len(lengths)
@@ -1167,6 +1184,7 @@ def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, devi
         capacity_factor=8,
         gate_fallback_mode=GATE_MODE,
         model_cfg=_TestGLM53Config,
+        moe_impl=MOE_IMPL,
         routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
         sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
         use_trace=True,
@@ -1312,7 +1330,8 @@ def test_glm_packed_mtp_traced_matches_eager(variant, config_only, mesh_device, 
     from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer_slot
 
     assert_gate_mode_matches_adapter(variant, GATE_MODE)
-    sp = mesh_device.shape[0]
+    sp_axis = _sp_axis(mesh_device)
+    sp = mesh_device.shape[sp_axis]
     chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
     lengths, forwards = _mtp_traced_schedule(chunk)
     num_users = len(lengths)
@@ -1327,6 +1346,8 @@ def test_glm_packed_mtp_traced_matches_eager(variant, config_only, mesh_device, 
         num_layers=NUM_LAYERS,
         max_seq_len=seq_cache,
         mesh_shape=tuple(mesh_device.shape),
+        sp_axis=sp_axis,
+        tp_axis=1 - sp_axis,
         chunk_size=chunk,
         forward_tokens_budget=FORWARD_CHUNKS * chunk,
         num_users=2 * num_users,
@@ -1335,6 +1356,7 @@ def test_glm_packed_mtp_traced_matches_eager(variant, config_only, mesh_device, 
         capacity_factor=8,
         gate_fallback_mode=GATE_MODE,
         model_cfg=_TestGLM53Config,
+        moe_impl=MOE_IMPL,
         routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
         sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
         use_trace=True,
@@ -1356,8 +1378,8 @@ def test_glm_packed_mtp_traced_matches_eager(variant, config_only, mesh_device, 
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=kv_layers,
             num_users=cache_slots,
         ),
@@ -1366,8 +1388,8 @@ def test_glm_packed_mtp_traced_matches_eager(variant, config_only, mesh_device, 
             mesh_device=mesh_device,
             seq_len=seq_cache,
             mesh_shape=mesh_shape,
-            sp_axis=0,
-            tp_axis=1,
+            sp_axis=sp_axis,
+            tp_axis=1 - sp_axis,
             num_kvpe_cache_layers=full_indexer_rank(config, kv_layers),
             num_users=cache_slots,
             dtype=ttnn.bfloat8_b,
@@ -1493,7 +1515,7 @@ def _read_d2h_records(service, count):
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=GLM_FABRIC_PAYLOAD,
                 l1_small_size=TEST_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
@@ -1547,6 +1569,7 @@ def test_glm_packed_pipeline_matches_one_rank(variant, config_only, mesh_device,
             capacity_factor=8,
             gate_fallback_mode=GATE_MODE,
             model_cfg=_TestGLM53Config,
+            moe_impl=MOE_IMPL,
             routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
             use_trace=use_trace,

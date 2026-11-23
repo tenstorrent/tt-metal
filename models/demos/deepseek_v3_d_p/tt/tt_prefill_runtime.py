@@ -539,6 +539,7 @@ class TtPrefillRuntime:
             layer_num=self.config.num_layers + k,
             # A packed forward runs the MTP block packed too: attention per chunk, one MoE over every chunk's rows.
             forward_chunks=self.config.forward_chunks,
+            moe_impl=self.config.moe_impl,  # (the trunk's MoE: a packed forward's padding is one kind for both)
         )
 
     def _build_dflash_drafter(self) -> None:
