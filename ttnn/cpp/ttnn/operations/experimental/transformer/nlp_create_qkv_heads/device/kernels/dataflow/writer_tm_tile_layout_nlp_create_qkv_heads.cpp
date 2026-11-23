@@ -38,7 +38,7 @@ void kernel_main() {
 #ifdef TRANSPOSE_K_HEADS
     DataflowBuffer dfb_k(dfb::k);  // dfb for K heads (filled by compute)
 #else
-    DataflowBuffer& dfb_k = dfb_qv;  // K heads share the Q, V dfb (directly from reader)
+    auto& dfb_k = dfb_qv;  // K heads share the Q, V dfb (directly from reader)
 #endif
 
     const uint32_t tile_bytes_qv = dfb_qv.get_tile_size();

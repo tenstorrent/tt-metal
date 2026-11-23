@@ -14,14 +14,12 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include <optional>
 #include <vector>
 
 #include "erisc_datamover_builder.hpp"
-#include "impl/program/program_impl.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
 #include "fabric_builder_context.hpp"
@@ -151,16 +149,22 @@ void append_fabric_vc2_connection_rt_args(
         fabric_context.get_cluster().get_virtual_eth_core_from_channel(src_chip_id, fabric_router_channel);
 
     const auto& edm_config = fabric_context.get_builder_context().get_fabric_router_config();
-    auto* channel_allocator = edm_config.channel_allocator.get();
-    auto* const static_channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be FabricStaticSizedChannelsAllocator");
 
-    // VC2 sender is at the last flat index: after all VC0 and VC1 senders.
+    // The router is on this host, so its layout is the one it published, senders included; another host's router
+    // comes through the exchange with receivers only.
+    const auto& router_layout =
+        fabric_context.get_builder_context().get_router_channel_layout(src_fabric_node_id, fabric_router_channel);
+    TT_FATAL(
+        !router_layout.senders[2].empty(),
+        "The layout of router {} channel {} has no VC2 sender: it is not a router this host built",
+        src_fabric_node_id,
+        fabric_router_channel);
+
+    // VC2 sender is at the last flat index: after the router's own VC0 and VC1 senders.
     // Used for flat edm_config arrays (indexed across all VCs).
-    const auto num_vc0_senders = static_channel_allocator->get_num_sender_channels(0);
-    const auto num_vc1_senders = static_channel_allocator->get_num_sender_channels(1);
-    const auto num_vc2_senders = static_channel_allocator->get_num_sender_channels(2);
+    const auto num_vc0_senders = router_layout.senders[0].size();
+    const auto num_vc1_senders = router_layout.senders[1].size();
+    const auto num_vc2_senders = router_layout.senders[2].size();
     const auto vc2_sender_channel_flat = num_vc0_senders + num_vc1_senders;
     const auto total_sender_channels = num_vc0_senders + num_vc1_senders + num_vc2_senders;
 
@@ -213,17 +217,16 @@ void append_fabric_vc2_connection_rt_args(
             (i == vc2_sender_channel_flat) ? " <-- VC2" : "");
     }
 
-    // VC2 has exactly one sender channel at VC-relative index 0.
-    // The allocator's 2D API requires (vc_id=2, channel_id=0).
+    // VC2 has exactly one sender channel. Its buffer sits after the router's own VC0 and VC1 senders, so it comes
+    // from the router's published layout.
     static constexpr size_t vc2_id = 2;
-    static constexpr size_t vc2_channel_idx = 0;
+    const RouterChannelLayout::Channel vc2_channel = router_layout.senders[vc2_id].at(0);
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = fabric_router_virtual_core.x,
         .edm_noc_y = fabric_router_virtual_core.y,
-        .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(vc2_id, vc2_channel_idx),
-        .num_buffers_per_channel =
-            static_channel_allocator->get_sender_channel_number_of_slots(vc2_id, vc2_channel_idx),
+        .edm_buffer_base_addr = vc2_channel.base_address,
+        .num_buffers_per_channel = vc2_channel.num_slots,
         .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[vc2_sender_channel_flat],
         .edm_connection_handshake_addr =
             edm_config.sender_channels_connection_semaphore_address[vc2_sender_channel_flat],

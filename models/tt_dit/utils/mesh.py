@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from typing import TYPE_CHECKING
 
 import ttnn
+from models.tt_dit.parallel.config import ParallelFactor
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -35,3 +36,21 @@ def reshape_device(device: ttnn.MeshDevice, shape: ttnn.MeshShape | Sequence[int
         yield
     finally:
         device.reshape(original_shape)
+
+
+def reshape_for_factor(device: ttnn.MeshDevice, factor: ParallelFactor) -> AbstractContextManager[None]:
+    """Temporarily reshapes a mesh device to fit a parallel factor.
+
+    Args:
+        device: The mesh device to reshape.
+        factor: The factor whose mesh axis gets exactly ``factor.factor`` devices. The other axis
+            takes the remaining devices.
+
+    Returns:
+        A context manager that applies the shape on entry and restores the original one on exit.
+    """
+    shape = list(device.shape)
+    shape[factor.mesh_axis] = factor.factor
+    shape[1 - factor.mesh_axis] = device.shape.mesh_size() // factor.factor
+
+    return reshape_device(device, ttnn.MeshShape(*shape))

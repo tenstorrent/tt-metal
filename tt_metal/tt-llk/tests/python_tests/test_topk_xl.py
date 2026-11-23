@@ -26,9 +26,15 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import DEST_SYNC, TOPK_XL
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    LOOP_FACTOR,
+    TILE_COUNT,
+    TOPK_XL,
+)
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
@@ -206,7 +212,7 @@ def _build_input(K, num_chunks, tail_elements, num_rows, mode, as_float32):
     return (src if as_float32 else src.to(torch.bfloat16)), rows
 
 
-def _variant(
+def _variant_kwargs(
     K,
     num_chunks=1,
     tail_elements=None,
@@ -228,9 +234,10 @@ def _variant(
     blaze_compat=False,
     dest_sync=DestSync.Full,
     formats=FORMATS,
+    extra_templates=(),
 ):
     """
-    Build the stimulus and the TestConfig for one variant. Returns (config, rows).
+    Build the stimulus and TestConfig kwargs for one variant. Returns (kwargs, rows).
 
     `tail_elements` defaults to K, i.e. full chunks with no -inf padding.
     RemoveMsb packs one region in place, every other index op packs two.
@@ -238,17 +245,20 @@ def _variant(
     """
     tail_elements = K if tail_elements is None else tail_elements
     tiles_per_seq = _tiles_per_sequence(K)
-    result_tiles = (1 if index_op == TopKXLIndexOp.RemoveMsb else 2) * tiles_per_seq
+    fused_region_only = (
+        index_op == TopKXLIndexOp.RemoveMsb or sort_mode == TopKXLSortMode.Columns
+    )
+    result_tiles = (1 if fused_region_only else 2) * tiles_per_seq
     # 32-bit input does unpack_to_dest (is_32bit_input), while bf16 goes
     # through SrcA then the MATH A2D datacopy.
-    is_32bit = formats.input_format in (DataFormat.Float32, DataFormat.Int32)
+    is_32bit = formats.input_format.is_32_bit()
     # Unused dummy tile, but it is declared with the input format, so its dtype has
     # to follow it or the stimuli packer is handed a mislabeled tensor.
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[formats.input_format])
 
     src_A, rows = _build_input(K, num_chunks, tail_elements, num_rows, mode, is_32bit)
 
-    config = TestConfig(
+    config_kwargs = dict(
         test_name="sources/topk_xl_test.cpp",
         formats=formats,
         templates=[
@@ -273,6 +283,11 @@ def _variant(
                 reinit_after_copy=reinit_after_copy,
                 blaze_compat=blaze_compat,
             ),
+            *extra_templates,
+        ],
+        runtimes=[
+            LOOP_FACTOR(1),
+            TILE_COUNT(tile_cnt=num_rows * num_chunks * tiles_per_seq),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -287,21 +302,63 @@ def _variant(
         dest_acc=DestAccumulation.Yes,  # 32-bit fused value|index words in Dest.
         unpack_to_dest=is_32bit,
     )
-    return config, rows
+    return config_kwargs, rows
 
 
-def _run(K, **kwargs):
+def _variant(*args, **kwargs):
+    """Build the stimulus and TestConfig for one variant. Returns (config, rows)."""
+    config_kwargs, rows = _variant_kwargs(*args, **kwargs)
+    return TestConfig(**with_functional_defaults(config_kwargs)), rows
+
+
+def _run(
+    K,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    **kwargs,
+):
     """Build and run one variant. Returns (result, rows)."""
-    config, rows = _variant(K, **kwargs)
-    return config.run().result, rows
+    config_kwargs, rows = _variant_kwargs(K, **kwargs)
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=config_kwargs,
+    )
+    if is_perf:
+        return None, rows
+    return outcome.result, rows
 
 
-def _run_test_topk(K, compare_index_set=True, index_offset=0, **kwargs):
+def _run_test_topk(
+    K,
+    compare_index_set=True,
+    index_offset=0,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    **kwargs,
+):
     """
     The whole flow for the variants that report a flat index: build the stimulus,
     run it, and check the result against the golden. `kwargs` go to `_variant`.
     """
-    result, rows = _run(K, **kwargs)
+    result, rows = _run(
+        K,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        **kwargs,
+    )
+    if is_perf:
+        return
     _check(
         result,
         K,
@@ -932,6 +989,57 @@ def test_topk_xl_local_sort_early_exit(K, sort_direction):
         )
 
 
+# The topk_large_indices column body (k <= 64): each column keeps the top 64 of its members over all chunks.
+@parametrize(
+    num_chunks=[2, 4],
+    sort_direction=list(TopKSortDirection),
+    blaze_compat=[False, True],
+)
+def test_topk_xl_rebuild_columns(num_chunks, sort_direction, blaze_compat):
+    K = 1024
+    result, rows = _run(
+        K,
+        num_chunks=num_chunks,
+        sort_mode=TopKXLSortMode.Columns,
+        sort_direction=sort_direction,
+        blaze_compat=blaze_compat,
+    )
+    words = torch.tensor(result, dtype=format_dict[FORMATS.output_format])
+    assert (
+        words.numel() == ELEMENTS_PER_TILE
+    ), f"expected one fused tile, got {words.numel()} words"
+    row = rows[0]
+    hi16 = lambda w: (int(w) >> 16) & 0xFFFF
+    row_hi16 = [(int(v) >> 16) & 0xFFFF for v in row.view(torch.int32).tolist()]
+
+    columns = {}
+    for offset in range(K):
+        position = _sort_position(offset, K)
+        columns.setdefault(position // 64, []).append((position, offset))
+
+    ascending = sort_direction == TopKSortDirection.Ascending
+    for column, members in sorted(columns.items()):
+        sequence = [int(words[offset]) for _, offset in sorted(members)]
+        values = [hi16(w) for w in sequence]
+        assert values == sorted(
+            values, reverse=not ascending
+        ), f"column {column} is not sorted {'ascending' if ascending else 'descending'}"
+        candidates = [
+            row_hi16[c * K + offset] for _, offset in members for c in range(num_chunks)
+        ]
+        assert (
+            sorted(values, reverse=True) == sorted(candidates, reverse=True)[:64]
+        ), f"column {column} does not hold the top 64 of its members"
+        for w in sequence:
+            offset = _index_to_chunk_offset(w & 0xFFFF, K)
+            assert (
+                _sort_position(offset, K) // 64 == column
+            ), f"column {column} holds offset {offset} from another column"
+            assert hi16(w) in {
+                row_hi16[c * K + offset] for c in range(num_chunks)
+            }, f"column {column}: index of offset {offset} is not paired with its value"
+
+
 # row_major=true stamps each element's chunk offset instead of the tile coordinate the
 # default numbering needs decoding from. The offset fits in bits [10:0] for every K, so
 # core_id keeps bits [15:11] either way.
@@ -1017,3 +1125,12 @@ def test_topk_xl_blaze_compat_pack_remove_msb(K, core_id):
         blaze_compat=True,
     )
     _check_remove_msb(result, K, rows, core_id=core_id)
+
+
+def test_topk_xl_pack_state_repeats():
+    _run_test_topk(
+        512,
+        num_chunks=2,
+        num_rows=1,
+        loop_factor=2,
+    )

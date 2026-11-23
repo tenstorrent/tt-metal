@@ -9,8 +9,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
 
 #include <bit>
@@ -20,7 +20,7 @@
 
 namespace ttnn::prim {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 ttnn::device_operation::ProgramArtifacts
 SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_artifacts(
@@ -102,9 +102,15 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     // MAX and PREV_MAX stay with the bulk group. They are subtracted from the bulk buffers for
     // numeric stability, and fp32 there against 16-bit operands widened the per-row spread at
     // w <= 4096 (worst row 0.9916 -> 0.9648) for no gain in the mean.
-    const tt::DataFormat im_cb_data_format = (fp32_dest_acc_en && in0_cb_data_format == tt::DataFormat::Float32)
-                                                 ? tt::DataFormat::Float32
-                                                 : tt::DataFormat::Float16_b;
+    //
+    // All of the above is for the defaulted compute config. A caller that passes fp32_dest_acc_en
+    // explicitly keeps Float32 bulk buffers, as before fp32 accumulation became the default: an
+    // explicit accurate config (e.g. HiFi4, approx off, fp32 acc) relies on exp(x - max) staying
+    // fp32 until the final multiply, and its program, including the use_large_kernel switch below,
+    // must not change underneath it.
+    const bool bulk_fp32 = fp32_dest_acc_en && (in0_cb_data_format == tt::DataFormat::Float32 ||
+                                                attributes.has_explicit_compute_kernel_config);
+    const tt::DataFormat im_cb_data_format = bulk_fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const std::uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
 
     const tt::DataFormat acc_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -175,7 +181,22 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     // Program specific checks
     if ((device->l1_size_per_core() * 0.9) < cb_size_sum_bytes) {
         use_large_kernel = true;
-        std::uint32_t large_kernel_cb_size = (80 / block_size) * block_size;
+        const std::uint32_t streamed_entry_bytes =
+            in0_tile_size + (2 * im_tile_size) + (has_mask ? im_tile_size + mask_tile_size : 0);
+        const std::uint32_t single_entry_bytes = (out0_t * out0_tile_size) + (3 * acc_tile_size) +
+                                                 (2 * im_tile_size) + max_scaler_tile_size + sum_scaler_tile_size +
+                                                 mask_padded_tile_size + fused_attention_scale_tile_size;
+        const std::uint32_t l1_free = device->allocator()->get_bank_size(BufferType::L1);
+        const std::uint32_t entries_that_fit =
+            l1_free > single_entry_bytes ? (l1_free - single_entry_bytes) / streamed_entry_bytes : 0;
+        constexpr std::uint32_t max_large_kernel_cb_entries = 80;
+        const std::uint32_t large_kernel_cb_size =
+            (std::min(max_large_kernel_cb_entries, entries_that_fit) / block_size) * block_size;
+        TT_FATAL(
+            large_kernel_cb_size >= block_size,
+            "Softmax buffers of {} bytes per streamed entry do not fit L1 ({} bytes free)",
+            streamed_entry_bytes,
+            l1_free);
         dfb_length = large_kernel_cb_size;
         in0_t = large_kernel_cb_size;
         im4_t = large_kernel_cb_size;
@@ -636,6 +657,28 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     }
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+// Out of place, the output is not bound: the softmax ops take no output keyword, so DST stays at its recorded
+// address. In place, DST is the input tensor, so it follows input_tensor.
+ttnn::command_list::CmdListBindings
+SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::map_cmd_list_parameters(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    const ProgramSpec& spec,
+    const ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/TensorParamName{"src"});
+    if (attributes.inplace) {
+        binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/TensorParamName{"dst"});
+    }
+    // pre_scale exists only on the fused scale-mask path. Without a mask, a scale CmdListParam goes unclaimed.
+    if (tensor_args.mask.has_value()) {
+        binder.tensor(/*invoke_name=*/"mask", /*program_spec_param_name=*/TensorParamName{"mask"});
+        binder.param(/*invoke_name=*/"scale", /*encode=*/ttnn::command_list::encode_float32_bits)
+            .runtime(/*kernel_name=*/KernelSpecName{"reader"}, /*arg_name=*/"pre_scale");
+    }
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

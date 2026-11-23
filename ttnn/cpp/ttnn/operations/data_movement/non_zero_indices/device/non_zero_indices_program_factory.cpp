@@ -27,20 +27,17 @@ uint32_t compute_geometry(
     const bool is_tile = (input.layout() == Layout::TILE);
     const auto& lshape = input.logical_shape();
     const auto& pshape = input.padded_shape();
-    aligned_output_bytes = out_indices.buffer()->aligned_page_size();
+    aligned_output_bytes = out_indices.mesh_buffer().aligned_page_size();
 
     if (!is_tile) {
         // Use the buffer's physical page size so TensorAccessor gets the correct page size for
         // all layouts (interleaved, HEIGHT/WIDTH/BLOCK sharded). For HEIGHT_SHARDED this equals
         // last_dim * elem_size; for WIDTH/BLOCK_SHARDED it equals shard_width * elem_size.
-        const uint32_t phys_page_bytes = input.buffer()->page_size();
+        const uint32_t phys_page_bytes = input.mesh_buffer().page_size();
         const uint32_t elements_per_page = phys_page_bytes / input.element_size();
-        // Use num_dev_pages() directly: avoids recomputing from volume/page_size and correctly
-        // handles any rounding the allocator may apply.
-        const uint32_t num_pages = input.buffer()->num_dev_pages();
         // Use the buffer's allocator-aligned page size for the NOC transfer and interleaved
         // TensorAccessor stride, matching the buffer's actual per-page footprint in DRAM/L1.
-        const uint32_t aligned_page_size = input.buffer()->aligned_page_size();
+        const uint32_t aligned_page_size = input.mesh_buffer().aligned_page_size();
 
         // For WIDTH/BLOCK_SHARDED each logical row is split across shards_per_row column shards,
         // so a row spans that many consecutive logical page ids. This is a page-count, not a core
@@ -50,10 +47,12 @@ uint32_t compute_geometry(
         const uint32_t logical_last_dim = lshape[3];
         const uint32_t shards_per_row =
             (elements_per_page < logical_last_dim) ? (logical_last_dim / elements_per_page) : 1;
+        // Logical rows only: num_dev_pages() also counts shard padding pages, which must not be scanned.
+        const uint32_t num_rows = lshape[0] * lshape[1] * lshape[2];
 
         geom_args = {
             aligned_output_bytes,
-            num_pages,
+            num_rows,
             elements_per_page,
             aligned_page_size,
             shards_per_row,
@@ -61,7 +60,7 @@ uint32_t compute_geometry(
             lshape[2]};  // logical_H: H-dimension for (b,n,h,c) index decomposition
         return aligned_page_size;
     }
-    const uint32_t tile_page_size = input.buffer()->aligned_page_size();
+    const uint32_t tile_page_size = input.mesh_buffer().aligned_page_size();
 
     const uint32_t B = lshape[0];
     const uint32_t N = lshape[1];

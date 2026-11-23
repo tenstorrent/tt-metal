@@ -15,19 +15,28 @@ import numpy as np
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
-from helpers.llk_params import DestAccumulation, MathFidelity
+from helpers.llk_params import (
+    CustomMmDestLayout,
+    DestAccumulation,
+    DestSync,
+    MathFidelity,
+)
 from helpers.logger import logger
 from helpers.pack import pack_bfp2_b, pack_bfp4_b, pack_bfp8_b, pack_bfp16
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    COMPRESSED_META,
     CRK_TILE_DIMM,
     CUSTOM_MM_CALLS,
+    CUSTOM_MM_LAYOUT,
+    DEST_SYNC,
     IN_FACE_DIMS,
     NUM_FACES,
+    TILE_COUNT,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
-from helpers.tilize_untilize import tilize, untilize
+from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import matmul_acc_atol, passed_test
 from ttexalens.tt_exalens_lib import write_to_device
@@ -327,9 +336,11 @@ def encode_tile_meta(assignment, ct):
 
 def pack_bfp_tile(tile, code, tile_dim, face_dim=FACE_C_DIM):
     num_faces = (tile_dim // face_dim) ** 2
-    faces = tilize(
-        tile.reshape(-1), tile_dimensions=[tile_dim, tile_dim]
-    )  # row-major -> face-major
+    faces = tilize_block(
+        tile,
+        dimensions=[tile_dim, tile_dim],
+        tile_dimensions=[tile_dim, tile_dim],
+    ).flatten()
     if code == FMT_CODE["bfp8"]:
         return bytes(pack_bfp8_b(faces, num_faces=num_faces))
     if code == FMT_CODE["bfp4"]:
@@ -353,8 +364,10 @@ def unpack_bfp_tile(tile, code, tile_dim, face_dim=FACE_C_DIM):
         faces = unpack_bfp2_b(tile, num_faces=num_faces)
     else:
         raise ValueError(f"Unsupported format {code}")
-    return untilize(faces, tile_dimensions=[tile_dim, tile_dim]).reshape(
-        tile_dim, tile_dim
+    return untilize_block(
+        faces,
+        dimensions=[tile_dim, tile_dim],
+        tile_dimensions=[tile_dim, tile_dim],
     )  # face-major -> row-major
 
 
@@ -372,6 +385,15 @@ def run_compressed(
     make_meta,
     pcc_threshold=None,
     calls=CUSTOM_MM_CALLS(),
+    dest_layout=CustomMmDestLayout.Dense,
+    dest_sync=DestSync.Half,
+    compression_case=None,
+    golden_multiplier=1,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     # Shared driver for both compressed-matmul tests. Kernel-specific parts are passed
     # flat: kernel (C++ source), granularity (assignment unit — 32 tile / 16 face),
@@ -382,7 +404,8 @@ def run_compressed(
     # ku/cu are the assignment row/col counts (K//granularity, N//granularity), which
     # differ from the 32-tile grid kt/ct (K//32, N//32) on the face kernel.
     # calls (CUSTOM_MM_CALLS) splits K over back-to-back calls; pack_b / make_meta then lay B and its meta
-    # out per call.
+    # out per call. dest_layout (CUSTOM_MM_LAYOUT) is where the output tiles sit in DEST and dest_sync (DEST_SYNC) how
+    # much of DEST one block may use; kernels that do not read them ignore them.
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM  # 32-tile kernel grid
     ku, cu = (
         K // granularity,
@@ -390,7 +413,11 @@ def run_compressed(
     )  # assignment rows/cols (= kt/ct on tile, 2x on face)
     assert M in supported_M, f"M must be in {supported_M}"
     assert kt >= 2 and kt % 2 == 0, "kt_dim must be an even number >= 2"
-    assert 1 <= ct <= 16, "ct_dim must be in [1, 16]"
+    # DEST capacity bounds ct_dim: a 16-bit DEST has 1024 rows, SyncHalf gives a block half of them.
+    dest_rows = 1024 if dest_sync == DestSync.Full else 512
+    assert (
+        1 <= ct and ct * dest_layout.tile_rows <= dest_rows
+    ), f"ct_dim {ct} does not fit {dest_layout.name} tiles in a {dest_sync.name}-sync DEST"
     assert (
         K % DEFAULT_TILE_R_DIM == 0 and N % DEFAULT_TILE_C_DIM == 0
     ), "K and N must be multiples of the 32x32 kernel tile"
@@ -428,7 +455,7 @@ def run_compressed(
     torch.manual_seed(0)
     torch_a = torch.randn((M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, N), dtype=torch.bfloat16)
-    b_dequant = torch.zeros((K, N), dtype=torch.bfloat16)
+    b_dequant = None if is_perf else torch.zeros((K, N), dtype=torch.bfloat16)
     tiles = []  # (code, packed_bytes) per assignment unit, in row-major order
     for i, code in enumerate(assignment):
         r, c = divmod(i, cu)
@@ -437,10 +464,11 @@ def run_compressed(
             c * granularity : (c + 1) * granularity,
         ]
         full = pack_bfp_tile(blk, code, tile_dim=granularity)
-        b_dequant[
-            r * granularity : (r + 1) * granularity,
-            c * granularity : (c + 1) * granularity,
-        ] = unpack_bfp_tile(full, code, tile_dim=granularity)
+        if not is_perf:
+            b_dequant[
+                r * granularity : (r + 1) * granularity,
+                c * granularity : (c + 1) * granularity,
+            ] = unpack_bfp_tile(full, code, tile_dim=granularity)
         tiles.append((code, full))
 
     packed_a = b""
@@ -449,44 +477,55 @@ def run_compressed(
     packed_b, aux = pack_b(tiles)
     meta = make_meta(assignment, cu, ku, aux)
 
-    # Golden via the standard MatmulGolden path (LoFi). Feed the already-bfp-quantized
-    # b_dequant as Float16_b so MatmulGolden does NOT re-quantize it, and keep
-    # tilize=False — tile layout is handled device-side (pack_bfp_tile / the result
-    # reorder below), so the golden stays row-major. Instantiate MatmulGolden directly
-    # rather than via get_golden_generator: the harness swaps in a DummyGoldenGenerator
-    # (zeros(1024)) during compile-producer, which would break the reshape for narrow-M.
-    golden = MatmulGolden()(
-        torch_a,
-        b_dequant,
-        DataFormat.Float16_b,
-        MathFidelity.LoFi,
-        input_A_dimensions=[M, K],
-        input_B_dimensions=[K, N],
-        tilize=False,
-        input_A_format=DataFormat.Float16_b,
-        input_B_format=DataFormat.Float16_b,
-    ).reshape(M, N)
+    golden = None
+    if not is_perf:
+        # Keep the golden row-major; packing and result reordering are device-side.
+        golden = (
+            MatmulGolden()(
+                torch_a,
+                b_dequant,
+                DataFormat.Float16_b,
+                MathFidelity.LoFi,
+                input_A_dimensions=[M, K],
+                input_B_dimensions=[K, N],
+                tilize=False,
+                input_A_format=DataFormat.Float16_b,
+                input_B_format=DataFormat.Float16_b,
+            ).reshape(M, N)
+            * golden_multiplier
+        )
 
-    configuration = TestConfig(
-        kernel,
-        InputOutputFormat(
-            input_format=DataFormat.Float16_b,
-            output_format=DataFormat.Float16_b,
-            input_format_B=DataFormat.Bfp8_b,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name=kernel,
+            formats=InputOutputFormat(
+                input_format=DataFormat.Float16_b,
+                output_format=DataFormat.Float16_b,
+                input_format_B=DataFormat.Bfp8_b,
+            ),
+            templates=[
+                CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+                calls,
+                CUSTOM_MM_LAYOUT(dest_layout),
+                DEST_SYNC(dest_sync),
+            ]
+            + ([COMPRESSED_META(compression_case, meta)] if is_perf else []),
+            runtimes=[
+                NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
+                IN_FACE_DIMS(in0_face_r_dim=M),
+                TILE_COUNT(ct),
+            ],
+            variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
+            dest_acc=DestAccumulation.No,
         ),
-        templates=[
-            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            calls,
-        ],
-        runtimes=[
-            NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
-            IN_FACE_DIMS(in0_face_r_dim=M),
-        ],
-        variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
-        dest_acc=DestAccumulation.No,
     )
-
-    res = configuration.run().result
+    if is_perf:
+        return
+    res = outcome.result
     # Device packs the result as ct = N//32 tiles; within a tile the two 16-col faces
     # (M x FACE_C_DIM, row-major) sit contiguously, then padding out to a full 32-row tile.
     # Drop the per-tile padding (span = len // ct) and reorder to row-major (M, N).

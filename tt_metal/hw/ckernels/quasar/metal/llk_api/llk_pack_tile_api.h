@@ -20,24 +20,17 @@
  * This function initializes packer0 to pack a single tile from the destination register to the output
  * DataFlow Buffer.
  *
- * Allocates a BFD id from the pack partition and programs its table entry from the output DFB's
+ * Programs the Pack0 BFD table entry from the output DFB's
  * info (shape, L1 base, formats); the DFB id never doubles as the BFD id.
  */
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint8_t output_id = static_cast<std::uint8_t>(get_output_id(pack_output));
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
-    const std::uint8_t bfd_id = llk_pack_program_bfd(output_id);
-    _llk_pack_init_(bfd_id, tensor_shape);
-
-    // 32-bit unpack-to-dest path: PACR addresses dest via SEC{TRISC_ID}_Offset (pack thread).
-    // Initialize the section base to bank 0 for SyncHalf so the first PACR reads bank 0.
-    if constexpr (UnpackToDestEn) {
-        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            _reset_dest_register_offset_();
-            _set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());
-        }
-    }
+    llk_pack_program_bfd(output_id);
+    _llk_pack_init_(ckernel::trisc::BFD_ID_PACK0, tensor_shape);
+    // DEST bank tracking is deliberately not touched here: this per-op init may run inside a tile loop (pack_init,
+    // binary_op_init_common etc). The once-per-program bank-0 reset lives in llk_pack_dest_init.
 }
 
 /**
@@ -58,7 +51,7 @@ template <bool out_of_order_output, bool untilize>
 inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t output_tile_index) {
     std::uint32_t l1_tile_index;
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
-    const std::uint32_t wr_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx;
+    const std::uint32_t wr_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx;
     const std::uint32_t stride_size_tiles = local_dfb_interface.stride_size_tiles;
 
     if constexpr (out_of_order_output) {
@@ -95,7 +88,9 @@ inline void llk_pack(
     const std::uint32_t tile_index, const std::uint32_t pack_output, const std::uint32_t output_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        pack_bfd_resource, pack_output, "pack_tile pack_output DFB differs from the one llk_pack_init programmed");
+        ckernel::trisc::BFD_ID_PACK0,
+        pack_output,
+        "pack_tile pack_output DFB differs from the one llk_pack_init programmed");
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output, false>(output_id, output_tile_index);
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
@@ -118,7 +113,7 @@ inline void llk_pack(
  * Suppressing the store does not suppress the descriptor fetch: PACR_STRIDE still reads the bd_table entry
  * it names and validates its tile size. The entry must therefore be programmed, so this primitive requires
  * pack init (llk_pack_init, which compute_kernel_hw_startup calls) to have run on this thread; it reads the
- * allocator's current pack-partition id rather than allocating one, and does not touch the DFB.
+ * Pack0's fixed BFD id rather than programming one, and does not touch the DFB.
  *
  * @param pack_output  The output dataflow buffer whose WAIT/PUSH this orders; not used to address L1.
  */
@@ -131,7 +126,7 @@ inline void llk_pack_dummy(const std::uint32_t pack_output) {
     // a 5-bit index into the 32-entry bd_table. NO_WRITE suppresses the store but NOT the descriptor
     // fetch: the entry is still read and its tile size validated, so it must be programmed. Use this
     // thread's own pack-partition entry (llk_pack_init, via compute_kernel_hw_startup).
-    TT_PACR_STRIDE(0, 0, 0, 0, 0, ckernel::trisc::bfd_current<pack_bfd_resource>(), 0 /*Packer0*/, 0 /*ClrDatValid*/);
+    TT_PACR_STRIDE(0, 0, 0, 0, 0, ckernel::trisc::BFD_ID_PACK0, 0 /*Packer0*/, 0 /*ClrDatValid*/);
 
     // Restore pass-through so a later real pack-untilize (PACR_STRIDE) is unaffected.
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 0);
@@ -154,7 +149,9 @@ inline void llk_pack_dummy(const std::uint32_t pack_output) {
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_output, std::uint32_t ntiles) {
     LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        pack_bfd_resource, pack_output, "pack_block pack_output DFB differs from the one llk_pack_init programmed");
+        ckernel::trisc::BFD_ID_PACK0,
+        pack_output,
+        "pack_block pack_output DFB differs from the one llk_pack_init programmed");
     std::uint8_t output_id = get_output_id(pack_output);
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 

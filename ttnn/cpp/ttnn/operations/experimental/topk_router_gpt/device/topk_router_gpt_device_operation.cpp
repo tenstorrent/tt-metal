@@ -5,6 +5,7 @@
 #include "topk_router_gpt_device_operation.hpp"
 
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::experimental::topk_router_gpt {
 
@@ -31,7 +32,7 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
         input.storage_type() == StorageType::DEVICE,
         "Input tensor must be on device, got storage_type {}",
         input.storage_type());
-    TT_FATAL(input.buffer() != nullptr, "Input tensor must have allocated buffer");
+    TT_FATAL(input.is_allocated(), "Input tensor must have allocated buffer");
     TT_FATAL(input.layout() == Layout::TILE, "Input tensor must have TILE layout, got {}", input.layout());
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Input tensor must have BFLOAT16 dtype, got {}", input.dtype());
 
@@ -40,7 +41,7 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
         weight.storage_type() == StorageType::DEVICE,
         "Weight tensor must be on device, got storage_type {}",
         weight.storage_type());
-    TT_FATAL(weight.buffer() != nullptr, "Weight tensor must have allocated buffer");
+    TT_FATAL(weight.is_allocated(), "Weight tensor must have allocated buffer");
     TT_FATAL(weight.layout() == Layout::TILE, "Weight tensor must have TILE layout, got {}", weight.layout());
     TT_FATAL(weight.dtype() == DataType::BFLOAT16, "Weight tensor must have BFLOAT16 dtype, got {}", weight.dtype());
 
@@ -49,7 +50,7 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
         bias.storage_type() == StorageType::DEVICE,
         "Bias tensor must be on device, got storage_type {}",
         bias.storage_type());
-    TT_FATAL(bias.buffer() != nullptr, "Bias tensor must have allocated buffer");
+    TT_FATAL(bias.is_allocated(), "Bias tensor must have allocated buffer");
     TT_FATAL(bias.layout() == Layout::TILE, "Bias tensor must have TILE layout, got {}", bias.layout());
     TT_FATAL(bias.dtype() == DataType::BFLOAT16, "Bias tensor must have BFLOAT16 dtype, got {}", bias.dtype());
 
@@ -114,11 +115,11 @@ spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
     const auto padded_shape = ttnn::Shape({32, attrs.k});
 
     // Preserve the caller's logical B while allocating all 32 rows in the RM backing buffer.
-    const auto idx_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+    const auto idx_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
         DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm, logical_shape, padded_shape);
     auto idx_spec = tt::tt_metal::TensorSpec(logical_shape, idx_layout);
 
-    const auto wgt_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+    const auto wgt_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
         DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm, logical_shape, padded_shape);
     auto wgt_spec = tt::tt_metal::TensorSpec(logical_shape, wgt_layout);
 

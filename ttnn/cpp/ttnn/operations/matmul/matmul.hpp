@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <string>
 #include <variant>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -79,7 +80,8 @@ Tensor linear(
     std::optional<Tensor> optional_output_tensor = std::nullopt,
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
-    const PrefetcherPipeList& prefetcher_pipes = {});
+    const PrefetcherPipeList& prefetcher_pipes = {},
+    std::optional<uint32_t> in0_column_offset = std::nullopt);
 
 void addmm_validate(
     const Tensor& input_tensor, const Tensor& mat1_tensor, const Tensor& mat2_tensor, float alpha, float beta);
@@ -115,7 +117,13 @@ Tensor sparse_matmul(
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
     const std::optional<Tensor>& indices = std::nullopt,
-    const std::optional<Tensor>& bias = std::nullopt);
+    const std::optional<Tensor>& bias = std::nullopt,
+    const PrefetcherPipeList& prefetcher_pipes = {});
+
+// Testing/benchmark only: what the opt-in matmul config model (ttnn.CONFIG.matmul_model_config) did on this thread's
+// last matmul without a program config: "model: <program config>", or "default: <why>" when the default selection
+// ran. Empty if the flag has been off.
+std::string matmul_model_last_pick();
 
 }  // namespace operations::matmul
 

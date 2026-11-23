@@ -11,8 +11,6 @@
 #include <optional>
 #include <vector>
 
-#include <api/tt-metalium/device.hpp>
-
 #include "trace/trace_node.hpp"
 
 namespace tt::tt_metal {

@@ -11,8 +11,82 @@
 namespace ckernel::math
 {
 
+/**
+ * @brief Return the FPU phase count of a fidelity.
+ * @param fidelity: Approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ */
+constexpr std::uint32_t math_fidelity_phase_count(const MathFidelity fidelity)
+{
+    return fidelity == MathFidelity::LoFi ? 1 : to_underlying(fidelity);
+}
+
+/**
+ * @brief Fidelity phases an op issues for its source formats.
+ *
+ * phase_count is the number of FPU passes. phase_increment is the fidelity counter step between them:
+ * 0 for LoFi, 1 for consecutive phases, 2 when a narrow SrcA skips phase 1.
+ */
+struct MathFidelitySchedule
+{
+    std::uint8_t phase_count;
+    std::uint8_t phase_increment;
+};
+
+/**
+ * @brief Resolve the issued phase count and counter increment for the source formats.
+ *
+ * Phase 1 needs low SrcA mantissa bits, phase 2 low SrcB bits, phase 3 both. Phases the formats cannot use are dropped.
+ *
+ * @tparam fidelity: Requested approximation, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ * @param src_a_format: Effective SrcA register format.
+ * @param src_b_format: Effective SrcB register format.
+ * @note Only Float16, Tf32 and Float32 carry low mantissa bits. Pass register formats, not L1 MX formats; unpacked MX normally uses Float16_b.
+ */
+template <MathFidelity fidelity>
+constexpr MathFidelitySchedule math_fidelity_schedule(const DataFormat src_a_format, const DataFormat src_b_format)
+{
+    static_assert(
+        fidelity == MathFidelity::LoFi || fidelity == MathFidelity::HiFi2 || fidelity == MathFidelity::HiFi3 || fidelity == MathFidelity::HiFi4,
+        "Invalid math fidelity");
+    constexpr std::uint32_t requested_phases = math_fidelity_phase_count(fidelity);
+
+    const auto has_low_mantissa = [](const DataFormat format)
+    { return format == DataFormat::Float16 || format == DataFormat::Tf32 || format == DataFormat::Float32; };
+
+    const bool wide_a = has_low_mantissa(src_a_format);
+    const bool wide_b = has_low_mantissa(src_b_format);
+
+    std::uint8_t phases = 1;
+    if (wide_a && requested_phases > 1)
+    {
+        phases++;
+    }
+    if (wide_b && requested_phases > 2)
+    {
+        phases++;
+    }
+    if (wide_a && wide_b && requested_phases > 3)
+    {
+        phases++;
+    }
+    // A narrow SrcA has no phase 1, so its second phase is phase 2.
+    const std::uint8_t increment = phases == 1 ? 0 : (wide_a ? 1 : 2);
+    return {phases, increment};
+}
+
+/**
+ * @brief Return the source register format of an operand that is copied from dest instead of unpacked from L1.
+ * @tparam EN_32BIT_DEST: dest is in 32-bit mode.
+ * @param dest_format: dest format in 16-bit mode.
+ */
+template <bool EN_32BIT_DEST>
+constexpr DataFormat dest_src_format(const DataFormat dest_format)
+{
+    return EN_32BIT_DEST && dest_format == DataFormat::Float16_b ? DataFormat::Tf32 : dest_format;
+}
+
 // Rows one FPU instruction covers: 8 on the base Quasar part, 4 on the narrow one.
-constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;
+constexpr std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS;
 static_assert(ELTWISE_MATH_ROWS == 4 || ELTWISE_MATH_ROWS == 8, "the math LLKs support a 4-row or 8-row FPU");
 
 template <std::uint32_t NUM_ROWS>
@@ -30,24 +104,24 @@ constexpr auto fpu_row_offsets()
     return rows;
 }
 
-constexpr static std::uint32_t FPU_MOV_ROWS = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
+constexpr std::uint32_t FPU_MOV_ROWS = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2a::MOV_8_ROWS : p_movd2a::MOV_4_ROWS));
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movd2b::MOV_8_ROWS : p_movd2b::MOV_4_ROWS));
 static_assert(FPU_MOV_ROWS == (ELTWISE_MATH_ROWS == 8 ? p_movb2a::MOV_8_ROWS : p_movb2a::MOV_4_ROWS));
 
-constexpr static bool FPU_SPLITS_DEST_ROW_GROUP = ELTWISE_MATH_ROWS < MAX_FPU_ROWS; // a dest row group takes several FPU issues
+constexpr bool FPU_SPLITS_DEST_ROW_GROUP = ELTWISE_MATH_ROWS < MAX_FPU_ROWS; // a dest row group takes several FPU issues
 
-constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
-constexpr static unsigned int SFP_ROWS           = 2;
+constexpr std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
+constexpr unsigned int SFP_ROWS           = 2;
 
 // SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
-constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
-constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
+constexpr unsigned int SFPU_DEST_BASE_ADDR = 0x0;
+constexpr unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
 
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;
 
-typedef struct
+struct alu_config_t
 {
     // word 0
     std::uint32_t ALU_FORMAT_SPEC_REG_SrcA_val        : 8;
@@ -72,22 +146,59 @@ typedef struct
     std::uint32_t ALU_ACC_CTRL_SFPU_Fp32_enabled : 1;
     std::uint32_t ALU_ACC_CTRL_INT8_math_enabled : 1;
     std::uint32_t UNUSED1                        : 21;
-} alu_config_t;
+};
 
 static_assert(sizeof(alu_config_t) == NUM_WORDS_ALU_FORMAT * sizeof(std::uint32_t));
 
-typedef union
+union alu_config_u
 {
     std::uint32_t val[NUM_WORDS_ALU_FORMAT];
     alu_config_t f;
-} alu_config_u;
+};
 
-// List of possible data format config states
-enum class DataFormatConfigSet : std::uint8_t
+// Which ALU format config type is programmed. With the SrcA/SrcB formats, the whole input to
+// _build_alu_words_.
+enum class AluCfgType : std::uint8_t
 {
-    UNCONFIGURED         = 0,
-    DEFAULT              = 1,
-    MOV_OPS_EXPLICIT_FMT = 2
+    // Nothing known about the ALU registers: never requested, so no request matches it; cached words unusable.
+    // Must stay 0, it is the zero-init value.
+    UNCONFIGURED            = 0,
+    DEFAULT                 = 1,
+    MOV_OPS_EXPLICIT_FORMAT = 2
+};
+
+/**
+ * @brief One ALU format configuration, the whole input to @ref _build_alu_words_.
+ *
+ * The same type describes what a caller requests and what is currently programmed.
+ *
+ * @note EN_32BIT_DEST is deliberately absent: callers pass it explicitly as a compile-time parameter.
+ */
+struct AluCfgState
+{
+    AluCfgType type;
+    DataFormat srca_format;
+    DataFormat srcb_format;
+};
+
+inline constexpr bool operator==(const AluCfgState& lhs, const AluCfgState& rhs)
+{
+    return (lhs.type == rhs.type) && (lhs.srca_format == rhs.srca_format) && (lhs.srcb_format == rhs.srcb_format);
+}
+
+/**
+ * @brief ALU_FORMAT_SPEC words 0..2 as this TRISC last programmed them.
+ *
+ * `programmed` is the configuration that was asked for, `words` the values stored for it. Hardware is
+ * never read back, so both hold only what this TRISC wrote: ALU_FORMAT_SPEC is shared, and a second
+ * thread programming it would leave this copy stale.
+ *
+ * @note `programmed.type == UNCONFIGURED` invalidates both.
+ */
+struct AluCfgTracker
+{
+    AluCfgState programmed;
+    alu_config_u words;
 };
 
 // /**

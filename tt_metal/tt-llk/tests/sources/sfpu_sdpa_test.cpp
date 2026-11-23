@@ -29,8 +29,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
+#include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -63,6 +66,7 @@ constexpr std::uint32_t SDPA_DST_INDEX = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
@@ -71,21 +75,57 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */,
-        0 /* within_face_16x16_transpose */,
-        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES),
-        formats.unpack_A_src,
-        formats.unpack_A_dst);
-
-    for (std::uint32_t tile = 0; tile < NUM_DST_TILES; ++tile)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_A         = params.buffer_A;
+#endif
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, NUM_DST_TILES, TILE_NUM_FACES);
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+
+        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            0 /* transpose_of_faces */,
+            0 /* within_face_16x16_transpose */,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, TILE_NUM_FACES),
+            formats.unpack_A_src,
+            formats.unpack_A_dst);
+        PROFILER_SYNC();
     }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && unpack_to_dest)
+        {
+            // Stand in for direct unpack: service math's mailbox/semaphore handshake without moving data.
+            for (std::uint32_t tile = 0; tile < LOOP_FACTOR * NUM_DST_TILES; ++tile)
+            {
+                (void)mailbox_read(ThreadId::MathThreadId);
+                wait_for_dest_available();
+                t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            _perf_unpack_stream_set_valid<true /* set_a */, true /* set_b */, PERF_RUN_TYPE>(src_handshake_iters);
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t tile = 0; tile < NUM_DST_TILES; ++tile)
+                {
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+    _llk_unpack_A_uninit_<BroadcastType::NONE>();
 }
 
 #endif
@@ -94,6 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "ckernel_sfpu.h"
 #include "llk_lib_math_wrappers.h"
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 
@@ -165,24 +206,69 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-
-    sdpa_op_init();
-
-    _llk_math_wait_for_dest_available_<dest_sync>();
-
-    for (std::uint32_t tile = 0; tile < NUM_DST_TILES; ++tile)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, NUM_DST_TILES, TILE_NUM_FACES);
     {
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            tile, formats.math, formats.math);
+        START_PERF_MEASURE("INIT")
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false /* is_int_fpu_en */,
+            PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+        sdpa_op_init();
+        PROFILER_SYNC();
     }
-
-    sdpa_op(SDPA_DST_INDEX);
-
-    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && unpack_to_dest)
+        {
+            // Stand in for math's side of direct unpack without running the measured SFPU body.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t tile = 0; tile < NUM_DST_TILES; ++tile)
+                {
+                    math::math_unpack_to_dest_math_ready();
+                    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(tile);
+                    math::math_unpack_to_dest_tile_ready();
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(src_handshake_iters);
+        }
+        else
+        {
+            constexpr bool sync_with_pack = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (sync_with_pack)
+                {
+                    _llk_math_wait_for_dest_available_<dest_sync>();
+                }
+                // MATH_ISOLATE's unpack stand-in supplies the required input handshake.
+                for (std::uint32_t tile = 0; tile < NUM_DST_TILES; ++tile)
+                {
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        tile, formats.math, formats.math);
+                }
+                sdpa_op(SDPA_DST_INDEX);
+                if constexpr (sync_with_pack)
+                {
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -197,19 +283,44 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-
-    _llk_packer_wait_for_math_done_();
-
-    // Pack every tile to check both the correction outputs and the untouched values in either layout.
-    for (std::uint32_t tile = 0; tile < NUM_DST_TILES; ++tile)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_Res       = params.buffer_Res;
+#endif
     {
-        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
     }
-
-    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+        }
+        else
+        {
+            constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (sync_with_math)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
+                for (std::uint32_t tile = 0; tile < NUM_DST_TILES; ++tile)
+                {
+                    _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
+                }
+                // Wormhole PACK_ISOLATE also releases every section to drain the packers.
+                if constexpr (sync_with_math || PERF_PACK_SECTION_RELEASE)
+                {
+                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif

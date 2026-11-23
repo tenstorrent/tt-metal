@@ -83,7 +83,7 @@ Under `--output-dir` (default `generated/ttrun`):
 | `rankfile` | Always. OpenMPI-style lines: `rank N=hostname slot=S`. |
 | `phase2_mock_mapping.yaml` | Only if mock cluster descriptor paths were collected from ranks (see [Environment](#environment)). |
 
-`rank_bindings.yaml` includes `mesh_graph_desc_path` and a `rank_bindings` list: each entry has `rank`, `mesh_id`, `mesh_host_rank`, and optional `env_overrides` (e.g. `TT_VISIBLE_DEVICES`).
+`rank_bindings.yaml` includes `mesh_graph_desc_path` and a `rank_bindings` list: each entry has `rank`, `mesh_id`, `mesh_host_rank`, and optional `env_overrides`. Phase 1 writes `TT_METAL_CLUSTER_ID` there from the physical system descriptor hostname, and phase 2 exports that value. `TT_VISIBLE_DEVICES` is the other usual override.
 
 ### Example `rank_bindings.yaml`
 
@@ -95,6 +95,7 @@ rank_bindings:
     mesh_id: 0
     mesh_host_rank: 0
     env_overrides:
+      TT_METAL_CLUSTER_ID: "bh-glx-110-c01u02"
       TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
   - rank: 1
     mesh_id: 1

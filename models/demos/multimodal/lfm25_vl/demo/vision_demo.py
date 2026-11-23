@@ -22,15 +22,15 @@ import ttnn
 from models.common.llama_models import sample_top_p
 from models.common.sampling import SamplingParams
 from models.demos.multimodal.lfm25_vl.tt.e2e_model import Lfm25VlMultimodalGenerator
-from models.tt_transformers.tt.common import ImageMedia, InterleavedTextMedia, Role, hf_multimodal_encode
-from models.tt_transformers.tt.generator import create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.ttt_compat.tt.common import ImageMedia, InterleavedTextMedia, Role, hf_multimodal_encode
+from models.ttt_compat.tt.generator import create_submeshes
+from models.ttt_compat.tt.model_config import DecodersPrecision
 
 HF_MODEL = "LiquidAI/LFM2.5-VL-1.6B"
 os.environ.setdefault("HF_MODEL", HF_MODEL)
 
 SAMPLE_PROMPTS_PATH = Path(__file__).resolve().parent / "sample_prompts" / "demo.json"
-IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
+IMG_PATH = Path("models/ttt_compat/demo/sample_prompts/llama_models").resolve()
 
 
 def _lfm25_vl_device_params():

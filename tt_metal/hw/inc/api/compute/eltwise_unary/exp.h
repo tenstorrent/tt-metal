@@ -29,6 +29,9 @@ enum class InputClamping : uint8_t {
  * Template scale parameter is used when approx is true and exp_tile is called with scale_en set to
  * true.
  *
+ * Also programs the SFPU state that exp_tile's body reads: the shared programmable constants
+ * (vConstFloatPrgm0..2, LREG12..14) and, in approx mode, the load macros. Which of them each path
+ * reads is in the note on exp_tile.
  */
 template <
     bool approx = false,
@@ -47,6 +50,16 @@ ALWI void exp_tile_init() {
  * in the DST register. The DST register buffer must be in an
  * acquired state via an *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
+ *
+ * The body reads SFPU state that exp_tile_init programs and that other SFPU ops' inits
+ * (recip_tile_init among them) overwrite. What it reads depends on the mode, the DEST format and
+ * the architecture:
+ * - approx: LREG12..14 (vConstFloatPrgm0..2) and, unless DISABLE_SFPLOADMACRO, the load macros, on
+ *   Wormhole and Blackhole;
+ * - accurate on a bf16 DEST: LREG12..13 (vConstFloatPrgm0..1), on Wormhole and Blackhole;
+ * - accurate on an fp32 DEST: LREG12..14 (vConstFloatPrgm0..2), on Wormhole and Blackhole.
+ * So call exp_tile_init again after any other SFPU init before the next exp_tile. Interleaving ops
+ * without their inits silently returns wrong values; there is no assert.
  *
  * Return value: None
  *
@@ -85,6 +98,7 @@ ALWI void exp_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC, uint1
 /**
  * Pack-thread variant of exp_tile_init. Runs the init on the pack thread
  * to enable FPU/SFPU overlap with math-thread matmul operations.
+ * The programmable registers it loads are shared with the math thread's SFPU ops; see exp_tile_init.
  */
 template <
     bool approx = false,

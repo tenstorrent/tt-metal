@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Local invariants of WorkUnitSpec::kernels (program_spec.hpp): for each DFB its kernels bind, exactly one
-// producer and one consumer instance, and at most one of its kernels binds a given scratchpad.
+// producer and one consumer instance, and, at most one of its kernels binds a given scratchpad.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -13,8 +13,8 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -25,6 +25,7 @@ namespace {
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
@@ -57,7 +58,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleProducersInSameWorkUnitFails) {
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 producer instance(s)")));
 }
 
@@ -86,7 +87,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleConsumersInSameWorkUnitFails) {
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer1", "consumer2"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 consumer instance(s)")));
 }
 
@@ -116,7 +117,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleConsumersInDifferentWorkUnitsSu
         MakeMinimalWorkUnit("wu_g2", node1, {"producer", "consumer2"}),
     };
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleProducersInDifferentWorkUnitsSucceeds) {
@@ -144,7 +145,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleProducersInDifferentWorkUnitsSu
         MakeMinimalWorkUnit("wu_g2", node1, {"producer2", "consumer"}),
     };
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBProducerConsumerCoverageMismatchFails) {
@@ -173,7 +174,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBProducerConsumerCoverageMismatchFails) {
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is malformed at node")));
 }
 
@@ -202,7 +203,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_LocalDFBConsumerOnNodeWithoutProducerFails) {
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("This node has a consumer but no producer")));
 }
 
@@ -235,7 +236,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_LocalDFBAllGridConsumerWithPerGroupProducersSu
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::move(work_units);
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleProducersOnSameNodeFailsWithoutFlag) {
@@ -263,7 +264,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleProducersOnSameNodeFailsWithoutFlag) 
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 producer instance(s)")));
 }
 
@@ -294,7 +295,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleProducersOnSameNodeSucceedsWithFlag) 
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleConsumersOnSameNodeSucceedsWithFlag) {
@@ -323,13 +324,13 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleConsumersOnSameNodeSucceedsWithFlag) 
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer1", "consumer2"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsSameNodeFails) {
     // One ScratchpadSpec bound by two kernels that share a node. A scratchpad is private node-local
-    // L1; binding it from two kernels on the SAME node would be true sharing, which is not yet
-    // supported (the disjoint-node case IS allowed — see the next test). MakeMinimalValidProgramSpec
+    // L1; binding it from two kernels on the SAME node requires explicit opt-in
+    // (the disjoint-node case IS allowed — see the next test). MakeMinimalValidProgramSpec
     // places both kernels on node {0,0}, so this is the same-node collision case.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
@@ -341,8 +342,30 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsSameNodeFails) {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_compute"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("kernel instances on node")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_ScratchpadMultiBindingOptInIsPerResource) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.scratchpads = {
+        ScratchpadSpec{
+            .unique_id = ScratchpadSpecName{"shared"},
+            .size_per_node = 1024,
+            .advanced_options = {.allow_instance_multi_binding = true}},
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"private"}, .size_per_node = 1024},
+    };
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {
+            {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "shared"},
+            {.scratchpad_spec_name = ScratchpadSpecName{"private"}, .accessor_name = "local"},
+        };
+    }
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("ScratchpadSpec 'private' is bound by")));
+    spec.scratchpads[1].advanced_options.allow_instance_multi_binding = true;
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsDisjointNodesSucceeds) {
@@ -371,7 +394,38 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsDisjointNodesSuccee
         MakeMinimalWorkUnit("wu_b", node1, {"kernel_b"}),
     };
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverridePrivacyAppliesOnlyOnReservedNodes) {
+    // Multiple bindings on an excluded node do not require sharing permission.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
+    spec.kernels.push_back(MakeMinimalGen2DMKernel("selected"));
+    // The DM and compute kernels share a binding only on the excluded node {0,0}.
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
+    }
+    spec.work_units.push_back(MakeMinimalWorkUnit("selected", NodeCoord{1, 0}, {"selected"}));
+    spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverridePrivacyRejectsSharedReservedNode) {
+    // Multiple bindings on a reserved node require sharing permission.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 64,
+        .advanced_options = {.override_placement = CoreRangeSet(CoreRange({0, 0}))}}};
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
+    }
+    EXPECT_THAT(
+        [&] { Program(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("kernel instances on node")));
 }
 
 }  // namespace

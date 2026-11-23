@@ -37,18 +37,28 @@ class ChipArchitecture(Enum):
 QUASAR_ARCH_ROOT = Path(__file__).resolve().parents[3] / "tt_llk_quasar" / "arch"
 
 
-def quasar_arch_variant():
-    variant = os.getenv("QUASAR_ARCH_VARIANT", "").strip()
+# Other spellings tt-metal accepts for TT_METAL_QUASAR_VARIANT. Empty means the base Quasar part.
+QUASAR_VARIANT_ALIASES = {
+    "quasar": "",
+    "2.0.0": "",
+    "2.0.1": "horizon",
+    "2.0.2": "trinity",
+}
+
+
+def quasar_variant():
+    raw = os.getenv("TT_METAL_QUASAR_VARIANT", "").strip().lower()
+    variant = QUASAR_VARIANT_ALIASES.get(raw, raw)
     if variant and not (QUASAR_ARCH_ROOT / variant).is_dir():
         known = sorted(p.name for p in QUASAR_ARCH_ROOT.iterdir() if p.is_dir())
         raise ValueError(
-            f"QUASAR_ARCH_VARIANT={variant!r} is not a directory under {QUASAR_ARCH_ROOT}; known variants: {known}"
+            f"TT_METAL_QUASAR_VARIANT={raw!r} has no directory under {QUASAR_ARCH_ROOT}; known variants: {known}"
         )
     return variant
 
 
 def is_4row_arch():
-    return quasar_arch_variant() == "quasar_4row"
+    return quasar_variant() == "trinity"
 
 
 # Cache for chip architecture

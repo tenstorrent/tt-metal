@@ -9,7 +9,7 @@ different reasons:
 
   * ``golden_generators.UnarySFPUGolden`` reproduces the value so its result matches what
     the kernel computes.
-  * ``sfpu_domains._OP_EDGE_POINTS`` probes *exactly at* the value, because that is where
+  * ``sfpu_domains._OP_EDGES`` probes *exactly at* the value, because that is where
     the op's behaviour switches — the knee, the threshold, the comparison tie.
 
 Held separately because two independent copies of one number is a silent-drift bug rather
@@ -20,6 +20,8 @@ nothing. Neither consumer owns the number, so neither imports it from the other.
 This module is the leaf of that dependency: it must not import from golden_generators or
 sfpu_domains.
 """
+
+import struct
 
 # exp_with_base(x) = exp(EXP_WITH_BASE_SCALE * x), base e^0.5: EXP_WITH_BASE_SCALE_BF16
 # (and its fp32 form for exp_init) in sfpu_operations.h.
@@ -82,3 +84,15 @@ SITU_GLU_BETA_UP = 25.0
 # rand's default interval [RAND_FROM, RAND_FROM + RAND_SCALE] (RAND_FROM_BITS / RAND_SCALE_BITS).
 RAND_FROM = 1.0
 RAND_SCALE = 2.0
+
+# EMA weights, mirrored by kEmaAlphaBits / kEmaBetaBits in sfpu_operations_quasar.h. 0.6 is
+# non-dyadic, so the carry product rounds.
+EMA_ALPHA_BITS = 0x3F19999A  # 0.6f
+EMA_BETA_BITS = 0x3ECCCCCD  # 0.4f
+EMA_ALPHA = struct.unpack("<f", struct.pack("<I", EMA_ALPHA_BITS))[0]
+EMA_BETA = struct.unpack("<f", struct.pack("<I", EMA_BETA_BITS))[0]
+
+# Dropout harness defaults (kDropoutScaleBits / kDropoutSeed); probability is p * INT_MAX.
+DROPOUT_SCALE = 2.0
+DROPOUT_PROBABILITY_MAX = 0x7FFFFFFF
+DROPOUT_SEED = 0xDEADBEEF

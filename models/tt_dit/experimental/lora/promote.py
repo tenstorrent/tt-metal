@@ -29,14 +29,22 @@ _PROMOTABLE = (Linear, ColParallelLinear, RowParallelLinear)
 # layout is identical to the original, so the swap is allowed. The pre-defined
 # LoRA*Linear classes are mixin-first (so their forward override wins in runtime
 # mode) and can't be used here; fuse mode never needs that override, and every
-# bind method is LoRAMixin-exclusive, so ordering is otherwise irrelevant.
+# bind method is LoRAMixin-exclusive. ``deallocate_weights`` is the exception, so
+# ``_promoted_class`` overrides it.
 _PROMOTED_CACHE: dict[type, type] = {}
 
 
 def _promoted_class(base_cls: type) -> type:
     cls = _PROMOTED_CACHE.get(base_cls)
     if cls is None:
-        cls = type(f"LoRA{base_cls.__name__}", (base_cls, LoRAMixin), {})
+        # Base-first MRO resolves ``deallocate_weights`` to ``Module``'s and skips the mixin's, so a
+        # promoted layer would keep ``_delta_applied`` through an eviction and ``reapply_after_load``
+        # would never merge the delta into the reloaded base weights.
+        def deallocate_weights(self) -> None:
+            self._forget_device_lora_state()
+            base_cls.deallocate_weights(self)
+
+        cls = type(f"LoRA{base_cls.__name__}", (base_cls, LoRAMixin), {"deallocate_weights": deallocate_weights})
         _PROMOTED_CACHE[base_cls] = cls
     return cls
 
@@ -45,6 +53,11 @@ def _iter_modules(root):
     yield root
     for _, child in root.named_children():
         yield from _iter_modules(child)
+
+
+def lora_modules(root):
+    """Every LoRA-aware module under ``root``, root included."""
+    return (module for module in _iter_modules(root) if isinstance(module, LoRAMixin))
 
 
 def promote_to_lora(root, *, mode: str = "fuse") -> int:

@@ -16,10 +16,13 @@
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
 #endif
+#ifdef FUSE_BIAS_SFPU
+#include "api/compute/experimental/sfpu_binary_bcast_pack.h"
+#endif
 
 #include "api/compute/eltwise_binary.h"
 #include "experimental/kernel_args.h"
-#ifdef SFPU_ACTIVATION
+#if defined(SFPU_ACTIVATION) || defined(FUSE_BIAS_SFPU)
 #include "bmm_fused_activation.hpp"
 #endif
 
@@ -48,13 +51,13 @@
  *
  * @tparam in0_block_num_tiles The number of tiles in the block to be transposed.
  * @tparam block_size The number of tiles in each block to be transposed.
- * @param in0_transpose_dfb_id Dataflow buffer to read the original tiles from.
- * @param in0_dfb_id Dataflow buffer to which the transposed tiles are written.
+ * @param in0_transpose_dfb Dataflow buffer to read the original tiles from.
+ * @param in0_dfb Dataflow buffer to which the transposed tiles are written.
  */
-template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
-FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t in0_dfb_id) {
-    DataflowBuffer in0_transpose_dfb(in0_transpose_dfb_id);
-    DataflowBuffer in0_dfb(in0_dfb_id);
+template <uint32_t in0_block_num_tiles, uint32_t block_size = 4, typename In0TransposeDFB, typename In0DFB>
+FORCE_INLINE void transpose_tile_block(In0TransposeDFB& in0_transpose_dfb, In0DFB& in0_dfb) {
+    const uint32_t in0_transpose_dfb_id = in0_transpose_dfb.get_id();
+    const uint32_t in0_dfb_id = in0_dfb.get_id();
     constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
     constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
     // Lets do 2 passes: One loop until last and one last for the left overs
@@ -95,58 +98,60 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
     }
 }
 
+template <typename MmPartialsDFB, typename MmPartialsReloadDFB>
 FORCE_INLINE void reload_from_dfb_to_dst(
+    MmPartialsDFB& mm_partials_dfb,
+    MmPartialsReloadDFB& mm_partials_reload_dfb,
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
-    uint32_t mm_partials_dfb_id,
-    uint32_t mm_partials_reload_dfb_id,
     bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
+    const uint32_t mm_partials_dfb_id = mm_partials_dfb.get_id();
+    const uint32_t mm_partials_reload_dfb_id = mm_partials_reload_dfb.get_id();
     // mm_partials_reload_dfb_id is the buffer view the reload copies through. It equals
-    // mm_partials_dfb_id unless the partials buffer is also read as an FPU operand elsewhere (the
-    // fused bias add reads it via SrcA), in which case UnpackToDestFp32 cannot be set on it
-    // directly; instead a second buffer aliases the same SRAM with UnpackToDestFp32 set, and the
-    // reload copies through that alias while the FPU consumer keeps the original view. The alias
-    // has its own read pointer, so align it with the partials buffer's current read position
-    // before copying.
+    // mm_partials_dfb_id unless the reload is marked UnpackToDestFp32 and the partials buffer is also
+    // read as an FPU operand elsewhere (the fused bias add reads it via SrcA). In that case
+    // UnpackToDestFp32 cannot be set on the partials buffer directly; instead a second buffer aliases
+    // the same SRAM with UnpackToDestFp32 set, and the reload copies through that alias while the FPU
+    // consumer keeps the original view. The alias has its own read pointer, so align it with the
+    // partials buffer's current read position before copying.
     // Reconfigure input
     reconfig_data_format_srca(in1_dfb_id, mm_partials_reload_dfb_id);
     copy_init(mm_partials_reload_dfb_id);
-    mm_partials_dfb.wait_front(out_subblock_num_tiles);
+    mm_partials_dfb.wait_front(static_cast<uint16_t>(out_subblock_num_tiles));
 
 #ifdef MM_PARTIALS_RELOAD_ALIAS
     if (mm_partials_reload_dfb_id != mm_partials_dfb_id) {
-        DataflowBuffer mm_partials_reload_dfb(mm_partials_reload_dfb_id);
         // Only the unpacker owns the FIFO read pointer; keep this off the MATH/PACK threads.
         UNPACK((mm_partials_reload_dfb.evil_set_read_ptr(mm_partials_dfb.get_read_ptr())));
     }
 #endif
 
-    uint32_t start_dst_index = 0;
-    uint32_t start_tile_index = 0;
+    const uint32_t start_dst_index = 0;
+    const uint32_t start_tile_index = 0;
     copy_block(mm_partials_reload_dfb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
-    mm_partials_dfb.pop_front(out_subblock_num_tiles);
+    mm_partials_dfb.pop_front(static_cast<uint16_t>(out_subblock_num_tiles));
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
-    matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init(
+        in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename IntermDFB, typename OutDFB>
 inline void reblock_and_untilize(
+    IntermDFB& interm_dfb,
+    OutDFB& out_dfb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_h,
-    uint32_t interm_dfb_id,
-    uint32_t out_dfb_id) {
-    DataflowBuffer interm_dfb(interm_dfb_id);
-    DataflowBuffer out_dfb(out_dfb_id);
-    uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
-    interm_dfb.wait_front(num_tiles_in_row_of_subblocks);
+    uint32_t out_subblock_h) {
+    const uint32_t interm_dfb_id = interm_dfb.get_id();
+    const uint32_t out_dfb_id = out_dfb.get_id();
+    const uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
+    interm_dfb.wait_front(static_cast<uint16_t>(num_tiles_in_row_of_subblocks));
 
     uint32_t within_block_index = 0;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
@@ -156,7 +161,7 @@ inline void reblock_and_untilize(
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < out_subblock_w; w++) {
-                uint32_t tile_index = block_offset + within_block_index + w;
+                const uint32_t tile_index = block_offset + within_block_index + w;
                 copy_tile(interm_dfb_id, tile_index, w);
             }
             tile_regs_commit();
@@ -169,7 +174,7 @@ inline void reblock_and_untilize(
 
         within_block_index += out_subblock_w;
     }
-    interm_dfb.pop_front(num_tiles_in_row_of_subblocks);
+    interm_dfb.pop_front(static_cast<uint16_t>(num_tiles_in_row_of_subblocks));
 }
 
 void kernel_main() {
@@ -200,9 +205,9 @@ void kernel_main() {
     constexpr auto out_subblock_num_tiles = get_arg(args::out_subblock_num_tiles);  // out_subblock_h * out_subblock_w;
     constexpr auto batch = get_arg(args::batch);                                    // batch dim
     constexpr auto out_block_num_tiles = get_arg(args::out_block_num_tiles);        // number of tiles in out_block
-    constexpr bool untilize_out = get_arg(args::untilize_out);                      // untilize output
+    constexpr bool untilize_out = get_arg(args::untilize_out) != 0;                 // untilize output
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_arg(args::get_batch_from_reader);
+    constexpr bool get_batch_from_reader = static_cast<bool>(get_arg(args::get_batch_from_reader));
     // Whether in0 arrives needing a tile transpose. This arrives as a define rather than an
     // argument because dfb::in0_transposed is only bound when the transpose is actually wanted:
     // selecting the buffer with a ternary would name-look-up both operands regardless of the
@@ -225,8 +230,8 @@ void kernel_main() {
     constexpr uint32_t out_dfb_id = dfb::out;
     constexpr uint32_t mm_partials_dfb_id = dfb::intermed0;
     // Buffer view the cross-block reload copies through: the UnpackToDestFp32-marked alias of the
-    // partials buffer when it is also read as an FPU operand (fused bias), otherwise the partials
-    // buffer itself.
+    // partials buffer when the factory defines MM_PARTIALS_RELOAD_ALIAS, otherwise the partials buffer
+    // itself.
 #ifdef MM_PARTIALS_RELOAD_ALIAS
     // The partials buffer is also read as an FPU operand (fused bias) and so cannot carry
     // UnpackToDestFp32; the reload instead copies through this alias view of the same SRAM, which
@@ -242,12 +247,33 @@ void kernel_main() {
     constexpr uint32_t in0_transpose_dfb_id = dfb::in0;
 
     DataflowBuffer in0_dfb(in0_dfb_id);
+#ifdef IN0_TRANSPOSE_TILE
+    DataflowBuffer in0_transpose_dfb(in0_transpose_dfb_id);
+#else
+    // Same id as in0_dfb here; named only so the if constexpr transpose branch below still compiles.
+    auto& in0_transpose_dfb = in0_dfb;
+#endif
     // From the binding token, not the bare id: under PrefetcherPipe delivery the host makes in1 a
     // relay, and only the token constructor re-aligns it to the pipe's durable read cursor (firmware
     // resets the buffer's pointers at every launch). Identical to the id form on every other path.
     DataflowBuffer in1_dfb(dfb::in1);
     DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
-    DataflowBuffer untilize_mode_out_dfb(untilize_mode_out_dfb_id);
+#ifdef MM_PARTIALS_RELOAD_ALIAS
+    DataflowBuffer mm_partials_reload_dfb(mm_partials_reload_dfb_id);
+#else
+    auto& mm_partials_reload_dfb = mm_partials_dfb;
+#endif
+    DataflowBuffer out_dfb(out_dfb_id);
+    auto& untilize_mode_out_dfb = untilize_out ? mm_partials_dfb : out_dfb;
+
+    // Quasar only: with get_batch_from_reader, the in0 kernel on this node sends one entry per batch
+    // through dfb::batch_valid, nonzero when the batch is valid; WH/BH use the BRISC mailbox. The buffer
+    // is bound only in that mode, so a define gates the token, for the same reason as IN0_TRANSPOSE_TILE
+    // above.
+#ifdef BATCH_VALID_DFB
+    static_assert(get_batch_from_reader, "BATCH_VALID_DFB requires get_batch_from_reader");
+    DataflowBuffer batch_valid_dfb(dfb::batch_valid);
+#endif
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_dfb_id = dfb::bias;
@@ -259,12 +285,13 @@ void kernel_main() {
 #endif
     constexpr uint32_t mm_out_dfb_id = mm_partials_dfb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
-    constexpr bool row_broadcast_bias = (bool)get_arg(args::row_broadcast_bias);
+    constexpr bool row_broadcast_bias = static_cast<bool>(get_arg(args::row_broadcast_bias));
     DataflowBuffer bias_dfb(bias_dfb_id);
+    auto& mm_out_dfb = mm_partials_dfb;
 #else
     constexpr uint32_t mm_out_dfb_id = untilize_mode_out_dfb_id;
+    auto& mm_out_dfb = untilize_mode_out_dfb;
 #endif
-    DataflowBuffer mm_out_dfb(mm_out_dfb_id);
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
     // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
@@ -295,9 +322,9 @@ void kernel_main() {
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
-    constexpr uint32_t in1_transpose_tile = true;
+    constexpr uint32_t in1_transpose_tile = 1;
 #else
-    constexpr uint32_t in1_transpose_tile = false;
+    constexpr uint32_t in1_transpose_tile = 0;
 #endif
 
     constexpr bool spill = num_blocks_inner_dim > 1;
@@ -309,21 +336,28 @@ void kernel_main() {
             // Check whether this batch is valid
 #ifdef ARCH_QUASAR
             // Quasar has no BRISC->compute mailbox (ckernel::ThreadId::BriscThreadId does not exist), so the
-            // reader-driven batch-skip (is_batch_valid) handoff is not wired here. Batch sparsity is therefore
-            // unsupported on Quasar until that DM->TRISC handoff exists: reject it at compile time so a Quasar
-            // build with get_batch_from_reader=true fails loudly instead of deadlocking compute on input tiles
-            // the reader never pushes (its own !ARCH_QUASAR guard skips them) or consuming stale DFB contents.
-            // Mirrors the experimental Quasar bmm kernel.
+            // reader-driven batch-skip (is_batch_valid) handoff goes through dfb::batch_valid instead.
+#ifdef BATCH_VALID_DFB
+            batch_valid_dfb.wait_front(1);
+            const bool is_batch_valid = batch_valid_dfb.read_tile_value<uint16_t>(0, 0) != 0;
+            // TEN-4746 (#48552): read_tile_value is a plain SRAM load, not an UNPACR, so this
+            // wait_front->pop_front pair is bare. dummy_unpack issues an UNPACR_NOP that reads nothing and
+            // orders the POP after the WAIT.
+            dummy_unpack(batch_valid_dfb.get_id());
+            batch_valid_dfb.pop_front(1);
+#else
+            // Without dfb::batch_valid, compute cannot learn which batches the in0 kernels skip.
             static_assert(
                 !get_batch_from_reader,
-                "get_batch_from_reader (batch sparsity) is unsupported on Quasar until the DM->TRISC "
-                "is_batch_valid mailbox handoff is implemented; do not enable it on Quasar.");
+                "get_batch_from_reader (batch sparsity) on Quasar requires the batch_valid dataflow buffer "
+                "(BATCH_VALID_DFB), which this factory does not bind.");
             const bool is_batch_valid = true;  // unreachable when the static_assert holds (flag is false)
+#endif
 #else
             bool is_batch_valid = false;
-            UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            UNPACK(is_batch_valid = static_cast<bool>(mailbox_read(ckernel::ThreadId::BriscThreadId));)
+            MATH(is_batch_valid = static_cast<bool>(mailbox_read(ckernel::ThreadId::BriscThreadId));)
+            PACK(is_batch_valid = static_cast<bool>(mailbox_read(ckernel::ThreadId::BriscThreadId));)
 #endif
             if (!is_batch_valid) {
                 continue;
@@ -348,14 +382,14 @@ void kernel_main() {
                     // block-group's tail (last-block pack to mm_out, or the bias / untilize pack to out) left
                     // the pack BFD on a non-partials DFB; re-init pack for the partials DFB so this group's
                     // accumulation packs reference the correct BFD. Unconditional (covers non-bias, bias, and
-                    // untilize tails); a redundant re-init is tolerated by the BFD bump-and-wrap contract.
+                    // untilize tails); a redundant re-init is harmless (it re-programs the fixed Pack0 BFD).
                     // (reconfig_data_format.h ARCH_QUASAR note: call pack_init on pack-output switch.)
                     pack_init(mm_partials_dfb_id);
 #endif
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
-                    bool last_out = block == (num_blocks_inner_dim - 1);
+                    const bool last_out = block == (num_blocks_inner_dim - 1);
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_dfb_id, in0_transpose_dfb_id);
@@ -368,7 +402,7 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-                        transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
+                        transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb, in0_dfb);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
                         matmul_block_init(
                             in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -403,9 +437,9 @@ void kernel_main() {
                     in0_dfb.wait_front(in0_block_num_tiles);
                     in1_dfb.wait_front(in1_block_num_tiles);
 
-                    int in0_index_subblock_offset = 0;
+                    uint32_t in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                        int in1_index_subblock_offset = 0;
+                        uint32_t in1_index_subblock_offset = 0;
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                             // When last_subblock_padded is true the last in1 subblock has
                             // (out_subblock_w - last_subblock_w_valid) padded lanes whose in1 tiles were
@@ -420,11 +454,11 @@ void kernel_main() {
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_dfb_to_dst(
+                                    mm_partials_dfb,
+                                    mm_partials_reload_dfb,
                                     in0_dfb_id,
                                     in1_dfb_id,
-                                    mm_partials_dfb_id,
-                                    mm_partials_reload_dfb_id,
-                                    in1_transpose_tile,
+                                    in1_transpose_tile != 0,
                                     out_subblock_num_tiles,
                                     out_subblock_w,
                                     out_subblock_h,
@@ -433,7 +467,7 @@ void kernel_main() {
 
 #ifndef SKIP_COMPUTE
                             // Compute output sub-block
-                            uint32_t dst_index =
+                            const uint32_t dst_index =
                                 0;  // start at 0, each call to matmul_block internally increments dst_index
                             uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
@@ -489,7 +523,7 @@ void kernel_main() {
                                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 #endif
-                                uint32_t start_dst_index = 0;
+                                const uint32_t start_dst_index = 0;
                                 pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
@@ -512,7 +546,7 @@ void kernel_main() {
                                 }
 #endif
 
-                                uint32_t start_dst_index = 0;
+                                const uint32_t start_dst_index = 0;
                                 pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
@@ -586,17 +620,86 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-                reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
-                if constexpr (row_broadcast_bias) {
-                    add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
-                } else {
-                    add_init(mm_partials_dfb_id, bias_dfb_id);
-                }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the buffer for reuse across bh/batch iterations.
                 // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
                 if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_dfb.wait_front(bias_ntiles);
+                }
+#ifdef FUSE_BIAS_SFPU
+                // FP32 bias on FP32 partials: an FPU add reads both through SrcA/SrcB as TF32, which drops the
+                // bias's low 13 mantissa bits, a per-column error that does not average out. Both buffers
+                // unpack to DEST unchanged instead, and the SFPU adds the bias's row 0 to every row in FP32.
+                // Each output tile takes two DEST tiles (its partials and its bias tile), so an acquire uses four:
+                // all of FP32 DEST in half sync, half of it in full sync.
+                static_assert(row_broadcast_bias, "FUSE_BIAS_SFPU takes a row-broadcast bias");
+                constexpr uint32_t sfpu_bias_tiles_per_acquire = 2;
+                reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
+                // One copy init serves both buffers: the factory gives the bias the partials' format (FP32) and
+                // tile shape (32x32), and nothing below changes the unpack or math state.
+                copy_init(mm_partials_dfb_id);
+                for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+                    uint32_t in1_index_subblock_offset = 0;
+                    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                        const bool is_last_in1_subblock_padded =
+                            last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
+                        // Unlike the FPU path, the output is reserved before the partials are popped: the chunks
+                        // below unpack and pack one at a time. The two buffers keep separate counters, so neither
+                        // wait depends on the other; when they share L1, chunk i packs over partials that chunk i
+                        // has already unpacked to DEST.
+                        mm_partials_dfb.wait_front(out_subblock_num_tiles);
+                        untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
+                        for (uint32_t first = 0; first < out_subblock_num_tiles; first += sfpu_bias_tiles_per_acquire) {
+                            const uint32_t count =
+                                std::min<uint32_t>(sfpu_bias_tiles_per_acquire, out_subblock_num_tiles - first);
+                            tile_regs_acquire();
+                            for (uint32_t t = 0; t < count; t++) {
+                                copy_tile(mm_partials_dfb_id, first + t, t);
+                            }
+                            for (uint32_t t = 0; t < count; t++) {
+                                const uint32_t k = (first + t) % out_subblock_w;
+                                // Padded output columns of the last in1 subblock read bias tile 0; the
+                                // writer drops them.
+                                const uint32_t bias_tile_idx =
+                                    (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
+                                        ? 0u
+                                        : in1_index_subblock_offset + k;
+                                copy_tile(bias_dfb_id, bias_tile_idx, sfpu_bias_tiles_per_acquire + t);
+                            }
+                            tile_regs_commit();
+                            pack_sfpu_begin();
+                            sfpu_add_bcast_row_init_pack();
+                            for (uint32_t t = 0; t < count; t++) {
+                                sfpu_add_bcast_row_pack(t, sfpu_bias_tiles_per_acquire + t);
+                            }
+#ifdef SFPU_ACTIVATION
+                            ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
+                            for (uint32_t t = 0; t < count; t++) {
+                                ActivationApplyHelper<
+                                    activation_type,
+                                    activation_param0,
+                                    activation_param1,
+                                    activation_param2>::apply(t);
+                            }
+#endif
+                            pack_sfpu_end();
+                            for (uint32_t t = 0; t < count; t++) {
+                                pack_tile<true>(t, untilize_mode_out_dfb_id, first + t);
+                            }
+                            tile_regs_release();
+                        }
+                        mm_partials_dfb.pop_front(out_subblock_num_tiles);
+                        untilize_mode_out_dfb.push_back(out_subblock_num_tiles);
+
+                        in1_index_subblock_offset += out_subblock_w;
+                    }
+                }
+#else
+                reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
+                if constexpr (row_broadcast_bias) {
+                    add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
+                } else {
+                    add_init(mm_partials_dfb_id, bias_dfb_id);
                 }
 #ifdef ARCH_QUASAR
                 // Quasar (§7): the accumulation above left the pack BFD on mm_partials_dfb_id; the bias pack
@@ -607,7 +710,7 @@ void kernel_main() {
                 }
 #endif
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                    int in1_index_subblock_offset = 0;
+                    uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                         // See matmul stage: the last in1 subblock has padded lanes whose bias tile was
                         // never pushed by the reader. Redirect those out-of-range bias_tile_idx reads to
@@ -652,24 +755,11 @@ void kernel_main() {
                         untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #ifdef SFPU_ACTIVATION
-                        PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                            semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO));
-
-                        // Flip destination register offset for PACKER access
-                        PACK(TT_SETC16(
-                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            ActivationApplyHelper<
-                                activation_type,
-                                activation_param0,
-                                activation_param1,
-                                activation_param2>::apply(i);
-                        }
-
-                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                        apply_activation_from_pack<
+                            activation_type,
+                            activation_param0,
+                            activation_param1,
+                            activation_param2>(out_subblock_num_tiles);
 #else
                         tile_regs_wait();
 #endif
@@ -682,6 +772,7 @@ void kernel_main() {
                         in1_index_subblock_offset += out_subblock_w;
                     }
                 }
+#endif  // FUSE_BIAS_SFPU
                 if constexpr (bias_per_group || num_blocks_w_dim > 1) {
                     bias_dfb.pop_front(bias_ntiles);
                 }
@@ -703,7 +794,7 @@ void kernel_main() {
                     copy_init(mm_partials_dfb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
-                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_dfb_id, out_dfb_id);
+                            mm_partials_dfb, out_dfb, in1_num_subblocks, out_subblock_num_tiles, out_subblock_h);
                     }
                     pack_untilize_uninit(mm_partials_dfb_id);
                 }

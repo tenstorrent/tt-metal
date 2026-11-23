@@ -7,9 +7,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <map>
@@ -22,23 +22,23 @@
 
 using namespace tt;
 
+using tt::tt_metal::AddRuntimeArgsForNode;
+using tt::tt_metal::DataflowBufferSpec;
+using tt::tt_metal::DFBBinding;
+using tt::tt_metal::DFBEndpointType;
+using tt::tt_metal::DFBSpecName;
+using tt::tt_metal::Group;
 using tt::tt_metal::KernelBuildOptLevel;
+using tt::tt_metal::KernelRunArgs;
+using tt::tt_metal::KernelSpec;
+using tt::tt_metal::KernelSpecName;
+using tt::tt_metal::ProgramRunArgs;
+using tt::tt_metal::ProgramSpec;
+using tt::tt_metal::TensorBinding;
+using tt::tt_metal::TensorParameter;
+using tt::tt_metal::TensorParamName;
 using tt::tt_metal::UnpackMode;
-using tt::tt_metal::experimental::AddRuntimeArgsForNode;
-using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DFBBinding;
-using tt::tt_metal::experimental::DFBEndpointType;
-using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::Group;
-using tt::tt_metal::experimental::KernelRunArgs;
-using tt::tt_metal::experimental::KernelSpec;
-using tt::tt_metal::experimental::KernelSpecName;
-using tt::tt_metal::experimental::ProgramRunArgs;
-using tt::tt_metal::experimental::ProgramSpec;
-using tt::tt_metal::experimental::TensorBinding;
-using tt::tt_metal::experimental::TensorParameter;
-using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::WorkUnitSpec;
+using tt::tt_metal::WorkUnitSpec;
 
 namespace ttnn::prim {
 
@@ -94,7 +94,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 
-    uint32_t B = get_batch_size(ashape);
+    // Broadcast batch dims are read in place, so the work is split over the output's batches.
+    const auto batch_broadcast = operations::matmul::utilities::get_batch_broadcast(ashape, bshape);
+    uint32_t B = operations::matmul::utilities::get_output_batch_size(ashape, bshape);
     uint32_t Mt = operations::matmul::utilities::get_M_dim(ashape, in0_tile, false);
     uint32_t Kt = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
     uint32_t Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
@@ -119,7 +121,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     uint32_t batch_scale_factor = per_core_M > M ? per_core_M / M : 1;
     uint32_t per_core_M_per_batch = per_core_M > M ? M : per_core_M;
     uint32_t num_blocks = (K / in0_block_w);
-    bool packer_l1_acc_en = packer_l1_acc && (num_blocks > 2);
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -457,6 +461,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
+    // A core's consecutive output blocks walk the M blocks of a batch, then move to the next batch
+    // (per_core_N == N, so a batch has no N blocks to walk).
+    const uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
+    const uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
+    const uint32_t out_m_block_stride = per_core_M_per_batch * N;
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Build KernelSpecs
     ////////////////////////////////////////////////////////////////////////////
@@ -495,10 +505,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"num_blocks", num_blocks},
                 {"bcast_B", static_cast<uint32_t>(bcast_batch)},
                 {"MtKt", M * K},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"in0_m_block_stride", in0_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch"},
+                .runtime_arg_names = {"in0_tensor_start_tile_id", "batch", "start_m_block"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -555,10 +567,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
                 {"out_num_subblocks_w", out_num_subblocks_w},
                 {"out_num_subblocks_h", out_num_subblocks_h},
                 {"MtNt", M * N},
+                {"m_blocks_per_batch", m_blocks_per_batch},
+                {"out_m_block_stride", out_m_block_stride},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id"},
+                .runtime_arg_names = {"in1_tensor_start_tile_id", "batch", "out_tensor_start_tile_id", "start_m_block"},
             },
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -573,6 +587,13 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             .accessor_name = "bias",
         });
         reader_writer.runtime_arg_schema.runtime_arg_names.push_back("in3_tensor_start_tile_id");
+    }
+    if (batch_broadcast.has_value()) {
+        // The readers place each core's start batch themselves, so they take its index.
+        operations::matmul::utilities::add_batch_broadcast_args(reader, *batch_broadcast, M * K, std::nullopt);
+        reader.runtime_arg_schema.runtime_arg_names.push_back("start_batch");
+        operations::matmul::utilities::add_batch_broadcast_args(reader_writer, *batch_broadcast, std::nullopt, K * N);
+        reader_writer.runtime_arg_schema.runtime_arg_names.push_back("start_batch");
     }
 
     // Compute kernel. Two specs of one source, one per work-split core group, differing only in the
@@ -712,12 +733,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     }
     const auto cores = corerange_to_cores(all_cores, num_cores, row_major);
 
-    uint32_t m_blocks_per_batch = M / per_core_M_per_batch;
     uint32_t n_blocks_per_batch = N / per_core_N;
     uint32_t blocks_per_batch = m_blocks_per_batch * n_blocks_per_batch;
     uint32_t in0_batch_stride = M * K;
     uint32_t in1_batch_stride = K * N;
-    uint32_t in0_m_block_stride = per_core_M_per_batch * (transpose_a ? 1 : K);
     uint32_t in1_n_block_stride = per_core_N * (transpose_b ? K : 1);
 
     KernelRunArgs reader_run_args{.kernel = READER};
@@ -733,14 +752,22 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         uint32_t start_m_block = block_within_batch / n_blocks_per_batch;
         uint32_t start_n_block = block_within_batch % n_blocks_per_batch;
 
-        uint32_t in0_start_tile_id = (start_batch * in0_batch_stride) + (start_m_block * in0_m_block_stride);
+        uint32_t in0_start_tile_id =
+            (batch_broadcast.has_value() ? 0 : (start_batch * in0_batch_stride)) + (start_m_block * in0_m_block_stride);
         uint32_t in1_start_tile_id =
-            (bcast_batch ? 0 : (start_batch * in1_batch_stride)) + (start_n_block * in1_n_block_stride);
+            (bcast_batch || batch_broadcast.has_value() ? 0 : (start_batch * in1_batch_stride)) +
+            (start_n_block * in1_n_block_stride);
+        if (batch_broadcast.has_value()) {
+            AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"start_batch", start_batch}});
+            AddRuntimeArgsForNode(reader_writer_run_args.runtime_arg_values, core, {{"start_batch", start_batch}});
+        }
 
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
-            {{"in0_tensor_start_tile_id", in0_start_tile_id}, {"batch", num_output_blocks_per_core}});
+            {{"in0_tensor_start_tile_id", in0_start_tile_id},
+             {"batch", num_output_blocks_per_core},
+             {"start_m_block", start_m_block}});
 
         uint32_t out_start_tile_id =
             (start_batch * M * N) + (start_m_block * per_core_M_per_batch * N) + (start_n_block * per_core_N);
@@ -749,7 +776,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             core,
             {{"in1_tensor_start_tile_id", in1_start_tile_id},
              {"batch", num_output_blocks_per_core},
-             {"out_tensor_start_tile_id", out_start_tile_id}});
+             {"out_tensor_start_tile_id", out_start_tile_id},
+             {"start_m_block", start_m_block}});
         if (bias.has_value()) {
             // Broadcast over batch, single block per element (start_m_block == start_n_block == 0
             // under the bias FATAL): the whole [M, N] bias starts at tile 0.

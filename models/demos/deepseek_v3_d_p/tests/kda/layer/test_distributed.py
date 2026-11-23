@@ -6,13 +6,21 @@ from __future__ import annotations
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    make_actual_start,
+    nrmse,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
+    kda_device_params,
     random_weights,
     reconstruct_convolution_at_sp_rank,
     reconstruct_sp_tp_tensor,
@@ -21,17 +29,39 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
-pytestmark = [
-    run_for_blackhole(),
-    pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
-]
+# How much more NRMSE against the fp32 reference the SP-segmented output may have than the one-shot output.
+_CHUNKED_ERROR_MARGIN = 1e-4
+# The mesh whose SP axis has four ranks, where the segmented output departs further from the one-shot output.
+_SP4_MESH_SHAPE = (4, 4)
+
+pytestmark = run_for_blackhole()
+
+_ON_4X4_STAGE = pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4")
+# LoudBox with TP on either axis, and one 4x4 prefill stage (a Galaxy tray half) with its deployed layout:
+# TP=4 on the axis-0 line, SP=4 on the axis-1 ring.
+_ON_DISTRIBUTED_MESHES = pytest.mark.parametrize(
+    "mesh_device,device_params,tensor_parallel_axis",
+    [
+        pytest.param((2, 4), kda_device_params((2, 4)), 0, id="2x4-tp0"),
+        pytest.param((2, 4), kda_device_params((2, 4)), 1, id="2x4-tp1"),
+        pytest.param(
+            (4, 4),
+            kda_device_params((4, 4)),
+            0,
+            marks=_ON_4X4_STAGE,
+            id="4x4-torus-x-tp0",
+        ),
+        pytest.param(
+            (4, 4),
+            kda_device_params((4, 4), wrap_both_axes=True),
+            0,
+            marks=_ON_4X4_STAGE,
+            id="4x4-torus-xy-tp0",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
 
 
 def _to_sp_input(
@@ -51,7 +81,7 @@ def _to_sp_input(
     )
 
 
-@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+@_ON_DISTRIBUTED_MESHES
 def test_sp_explicit_grouping_matches_reference(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
@@ -106,8 +136,6 @@ def test_sp_explicit_grouping_matches_reference(
     expected_convolution = torch.cat(
         (expected_state.q_convolution, expected_state.k_convolution, expected_state.v_convolution), dim=-1
     ).to(torch.bfloat16)
-    local_heads = config.num_heads // tuple(mesh_device.shape)[tensor_parallel_axis]
-    local_width = local_heads * config.head_k_dim
     sp_size = tuple(mesh_device.shape)[sp_axis]
 
     assert_accurate(
@@ -115,6 +143,7 @@ def test_sp_explicit_grouping_matches_reference(
         actual_output,
         name=f"tp_axis={tensor_parallel_axis} output",
         pcc_threshold=0.999,
+        nrmse_threshold=0.02,
     )
     for sp_rank in range(sp_size):
         actual_recurrent = reconstruct_state_at_sp_rank(
@@ -126,28 +155,50 @@ def test_sp_explicit_grouping_matches_reference(
             sp_axis,
             tensor_parallel_axis,
             sp_rank,
-            local_width,
+            config,
+            layer.convolution_page_channels,
         )
         assert_accurate(
             expected_state.recurrent,
             actual_recurrent,
             name=f"tp_axis={tensor_parallel_axis} sp_rank={sp_rank} recurrent",
             pcc_threshold=0.999,
+            nrmse_threshold=0.03,
         )
         assert_accurate(
             expected_convolution,
             actual_convolution,
             name=f"tp_axis={tensor_parallel_axis} sp_rank={sp_rank} convolution",
             pcc_threshold=0.999,
+            nrmse_threshold=0.004,
         )
 
 
 @pytest.mark.parametrize(
-    "tensor_parallel_axis,summary_group_chunks,splits",
+    "mesh_device,device_params,tensor_parallel_axis,summary_group_chunks,splits",
     [
-        pytest.param(1, 8, (2048, 3072), id="tp-axis-1-uneven-split"),
-        pytest.param(0, 10, (2560, 2560), id="tp-axis-0-even-split"),
+        pytest.param((2, 4), kda_device_params((2, 4)), 1, 8, (2048, 3072), id="2x4-tp1-uneven-split"),
+        pytest.param((2, 4), kda_device_params((2, 4)), 0, 10, (2560, 2560), id="2x4-tp0-even-split"),
+        pytest.param(
+            (4, 4),
+            kda_device_params((4, 4)),
+            0,
+            10,
+            (2560, 2560),
+            marks=_ON_4X4_STAGE,
+            id="4x4-torus-x-tp0-even-split",
+        ),
+        pytest.param(
+            (4, 4),
+            kda_device_params((4, 4), wrap_both_axes=True),
+            0,
+            10,
+            (2560, 2560),
+            marks=_ON_4X4_STAGE,
+            id="4x4-torus-xy-tp0-even-split",
+        ),
     ],
+    indirect=["mesh_device", "device_params"],
 )
 def test_sp_segmented_prefill_matches_one_shot(
     mesh_device: ttnn.MeshDevice,
@@ -168,6 +219,7 @@ def test_sp_segmented_prefill_matches_one_shot(
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(421)).to(
         torch.bfloat16
     )
+    reference, reference_state = kda_forward_reference(hidden, weights, config)
     sp_axis = 1 - tensor_parallel_axis
     layer = ttKDA(
         mesh_device,
@@ -198,14 +250,14 @@ def test_sp_segmented_prefill_matches_one_shot(
     one_shot_recurrent = reconstruct_state_at_sp_rank(
         one_shot_state.recurrent, mesh_device, sp_axis, tensor_parallel_axis, sp_rank=0
     )
-    local_heads = config.num_heads // tuple(mesh_device.shape)[tensor_parallel_axis]
     one_shot_convolution = reconstruct_convolution_at_sp_rank(
         one_shot_state.convolution,
         mesh_device,
         sp_axis,
         tensor_parallel_axis,
         sp_rank=0,
-        local_width=local_heads * config.head_k_dim,
+        config=config,
+        page_channels=layer.convolution_page_channels,
     )
 
     chunked_state = layer.allocate_state(batch_size=1)
@@ -253,25 +305,60 @@ def test_sp_segmented_prefill_matches_one_shot(
         sp_axis,
         tensor_parallel_axis,
         sp_rank=0,
-        local_width=local_heads * config.head_k_dim,
+        config=config,
+        page_channels=chunk_layer.convolution_page_channels,
     )
     label = f"tp_axis={tensor_parallel_axis} group={summary_group_chunks}"
-    assert_accurate(one_shot, chunked, name=f"{label} chunked output", pcc_threshold=0.9999)
-    assert_accurate(
-        one_shot_recurrent,
-        chunked_recurrent,
-        name=f"{label} chunked recurrent",
-        pcc_threshold=0.9999,
-    )
-    assert_accurate(
-        one_shot_convolution,
-        chunked_convolution,
-        name=f"{label} chunked convolution",
-        pcc_threshold=0.9999,
-    )
+    if tuple(mesh_device.shape) != _SP4_MESH_SHAPE:
+        # The two runs reach a group's entry state through different compositions: the distributed prefix transports
+        # each rank's composed transform as BF16, while the local scan applies the same groups in FP32. With few SP
+        # ranks the outputs agree to one BF16 rounding of those entry states (output NRMSE on 2x4 1D: 5.7e-5 with an
+        # [A | B] transport, 8.9e-6 with the complement form [E | B]); the carried states stay bit-identical.
+        assert_accurate(one_shot, chunked, name=f"{label} chunked output", pcc_threshold=0.9999, nrmse_threshold=1e-4)
+        assert_bit_identical(one_shot_recurrent, chunked_recurrent, name=f"{label} chunked recurrent")
+    else:
+        # With four SP ranks that difference grows (output NRMSE between the two runs: 2.0e-4 on 4x4), so it is not a
+        # fixed bound. What the segmented path must not do is be less accurate than the one-shot path: both are scored
+        # against the FP32 host reference of the whole sequence, and the chunked error may exceed the one-shot error
+        # only by the 1e-4 that bounded their difference on 2x4.
+        for name, output in (("one-shot", one_shot), ("chunked", chunked)):
+            assert_accurate(
+                reference.to(output.dtype),
+                output,
+                name=f"{label} {name} output vs fp32 reference",
+                pcc_threshold=0.999,
+                nrmse_threshold=0.02,
+            )
+        one_shot_error = float(nrmse(reference, one_shot))
+        chunked_error = float(nrmse(reference, chunked))
+        logger.info(f"{label}: NRMSE vs fp32 reference, one-shot {one_shot_error:.3e}, chunked {chunked_error:.3e}")
+        assert chunked_error <= one_shot_error + _CHUNKED_ERROR_MARGIN, (
+            f"{label} chunked output NRMSE {chunked_error:.3e} vs the fp32 reference exceeds the one-shot "
+            f"{one_shot_error:.3e} by more than {_CHUNKED_ERROR_MARGIN:.0e}"
+        )
+        # The carried recurrent state takes the same BF16 entry-state roundings, so it is held to the same bound.
+        for name, state in (("one-shot", one_shot_recurrent), ("chunked", chunked_recurrent)):
+            assert_accurate(
+                reference_state.recurrent,
+                state,
+                name=f"{label} {name} recurrent vs fp32 reference",
+                pcc_threshold=0.999,
+                nrmse_threshold=0.03,
+            )
+        one_shot_state_error = float(nrmse(reference_state.recurrent, one_shot_recurrent))
+        chunked_state_error = float(nrmse(reference_state.recurrent, chunked_recurrent))
+        logger.info(
+            f"{label}: recurrent NRMSE vs fp32 reference, one-shot {one_shot_state_error:.3e}, "
+            f"chunked {chunked_state_error:.3e}"
+        )
+        assert chunked_state_error <= one_shot_state_error + _CHUNKED_ERROR_MARGIN, (
+            f"{label} chunked recurrent NRMSE {chunked_state_error:.3e} vs the fp32 reference exceeds the one-shot "
+            f"{one_shot_state_error:.3e} by more than {_CHUNKED_ERROR_MARGIN:.0e}"
+        )
+    assert_bit_identical(one_shot_convolution, chunked_convolution, name=f"{label} chunked convolution")
 
 
-@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+@_ON_DISTRIBUTED_MESHES
 def test_sp_minimal_group_matches_reference_and_is_deterministic(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
@@ -306,8 +393,6 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
         active_seq_len=sequence,
     )
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
-    tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
-    local_width = config.num_heads // tp_size * config.head_k_dim
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         state = layer.allocate_state(batch_size=1)
@@ -317,7 +402,13 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
 
     (output_tt, recurrent_tt, convolution_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
     actual_output = reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tensor_parallel_axis, tp_dim=2, sp_dim=1)
-    assert_accurate(expected_output.to(actual_output.dtype), actual_output, name="SP layer output", pcc_threshold=0.999)
+    assert_accurate(
+        expected_output.to(actual_output.dtype),
+        actual_output,
+        name="SP layer output",
+        pcc_threshold=0.999,
+        nrmse_threshold=0.015,
+    )
     for sp_rank in range(sp_size):
         actual_recurrent = reconstruct_state_at_sp_rank(
             recurrent_tt, mesh_device, sp_axis, tensor_parallel_axis, sp_rank
@@ -328,18 +419,21 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
             sp_axis,
             tensor_parallel_axis,
             sp_rank,
-            local_width,
+            config,
+            layer.convolution_page_channels,
         )
         assert_accurate(
             expected_state.recurrent.to(actual_recurrent.dtype),
             actual_recurrent,
             name=f"SP layer recurrent sp_rank={sp_rank}",
             pcc_threshold=0.999,
+            nrmse_threshold=0.03,
         )
         assert_accurate(
             expected_convolution.to(actual_convolution.dtype),
             actual_convolution,
             name=f"SP layer convolution sp_rank={sp_rank}",
             pcc_threshold=0.999,
+            nrmse_threshold=0.004,
         )
     assert all(marker.item() == 0 for marker in mismatch_markers), "SP layer is not bit-identical across runs"

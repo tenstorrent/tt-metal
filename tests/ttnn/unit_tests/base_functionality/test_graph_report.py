@@ -11,12 +11,19 @@ This tests the decoupled workflow:
 """
 
 import contextlib
+import errno
+import fcntl
 import gc
 import hashlib
 import json
+import os
+import re
+import socket
 import sqlite3
+import stat
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -33,7 +40,7 @@ import ttnn
 
 from loguru import logger as loguru_logger
 
-from models.common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0, skip_for_slow_dispatch
 
 
 @pytest.fixture
@@ -60,6 +67,45 @@ def _make_report(
     if python_io is not None:
         report["python_io"] = python_io
     return report
+
+
+def _minimal_single_op_graph(op_name="ttnn.relu"):
+    """Graph with one top-level operation and nothing else."""
+    return [
+        {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
+        {
+            "counter": 1,
+            "node_type": "function_start",
+            "params": {"name": op_name},
+            "connections": [],
+            "input_tensors": [],
+        },
+        {
+            "counter": 2,
+            "node_type": "function_end",
+            "params": {"name": op_name},
+            "connections": [],
+            "duration_ns": 100,
+        },
+        {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+    ]
+
+
+def _write_reports(report_dir, reports):
+    """Write (filename, report dict) pairs as JSON files into report_dir, creating it."""
+    report_dir.mkdir(parents=True, exist_ok=True)
+    for filename, report_dict in reports:
+        with open(report_dir / filename, "w") as f:
+            json.dump(report_dict, f)
+
+
+def _query_db(db_path, sql):
+    """Run one query against an imported DB and return all rows."""
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute(sql).fetchall()
+    finally:
+        conn.close()
 
 
 def _import_to_db(report_dict, tmp_path):
@@ -428,42 +474,18 @@ class TestSubDeviceExecutionImport:
 class TestImportReportMultiFileOperationIds:
     """import_report over multiple JSON files: UNIQUE(operation_id, rank) and per-rank file stride."""
 
-    @staticmethod
-    def _minimal_single_op_graph(op_name="ttnn.relu"):
-        return [
-            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 3]},
-            {
-                "counter": 1,
-                "node_type": "function_start",
-                "params": {"name": op_name},
-                "connections": [],
-                "input_tensors": [],
-            },
-            {
-                "counter": 2,
-                "node_type": "function_end",
-                "params": {"name": op_name},
-                "connections": [],
-                "duration_ns": 100,
-            },
-            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
-        ]
-
     def _import_report_dir(self, reports, tmp_path):
         """Write JSON reports into a directory and run import_report on that directory."""
         report_dir = tmp_path / "reports_in"
-        report_dir.mkdir()
-        for filename, report_dict in reports:
-            with open(report_dir / filename, "w") as f:
-                json.dump(report_dict, f)
+        _write_reports(report_dir, reports)
         db_path = graph_report.import_report(report_dir, tmp_path / "output")
         conn = sqlite3.connect(db_path)
         return conn, conn.cursor()
 
     def test_same_numeric_operation_id_for_different_ranks(self, tmp_path):
         """Two captures with different ranks may both assign operation_id 1 (disambiguated by rank)."""
-        r0 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 0})
-        r1 = _make_report(self._minimal_single_op_graph(), metadata={"rank": 1})
+        r0 = _make_report(_minimal_single_op_graph(), metadata={"rank": 0})
+        r1 = _make_report(_minimal_single_op_graph(), metadata={"rank": 1})
         conn, cursor = self._import_report_dir([("first.json", r0), ("second.json", r1)], tmp_path)
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
         assert cursor.fetchall() == [(1, 0), (1, 1)]
@@ -471,8 +493,8 @@ class TestImportReportMultiFileOperationIds:
 
     def test_second_json_same_rank_shifts_operation_ids(self, tmp_path):
         """Two JSON files for the same rank: second file uses base_operation_id = stride (10000)."""
-        r_a = _make_report(self._minimal_single_op_graph("ttnn.op_a"), metadata={"rank": 0})
-        r_b = _make_report(self._minimal_single_op_graph("ttnn.op_b"), metadata={"rank": 0})
+        r_a = _make_report(_minimal_single_op_graph("ttnn.op_a"), metadata={"rank": 0})
+        r_b = _make_report(_minimal_single_op_graph("ttnn.op_b"), metadata={"rank": 0})
         conn, cursor = self._import_report_dir([("a.json", r_a), ("b.json", r_b)], tmp_path)
         stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY operation_id")
@@ -482,13 +504,1321 @@ class TestImportReportMultiFileOperationIds:
 
     def test_mixed_multiple_files_per_rank_and_separate_ranks(self, tmp_path):
         """Rank 0: two files (ids 1 and 10001); rank 1: one file (id 1 again)."""
-        r0a = _make_report(self._minimal_single_op_graph("ttnn.r0a"), metadata={"rank": 0})
-        r0b = _make_report(self._minimal_single_op_graph("ttnn.r0b"), metadata={"rank": 0})
-        r1 = _make_report(self._minimal_single_op_graph("ttnn.r1"), metadata={"rank": 1})
+        r0a = _make_report(_minimal_single_op_graph("ttnn.r0a"), metadata={"rank": 0})
+        r0b = _make_report(_minimal_single_op_graph("ttnn.r0b"), metadata={"rank": 0})
+        r1 = _make_report(_minimal_single_op_graph("ttnn.r1"), metadata={"rank": 1})
         conn, cursor = self._import_report_dir([("a.json", r0a), ("b.json", r0b), ("c.json", r1)], tmp_path)
         stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
         assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
+
+
+def _rank_capture(rank, world_size, filename=None):
+    """(filename, report) for 0-based ``rank`` of ``world_size``, named as the pytest fixture names it by default."""
+    report = _make_report(_minimal_single_op_graph(), metadata={"rank": rank, "world_size": world_size})
+    return filename or graph_report._rank_capture_name(rank, world_size), report
+
+
+def _write_rank_0_copy_as_rank_1(report_dir, op_name="ttnn.relu"):
+    """Overwrite graph_capture_2_of_2.json with a capture whose metadata says rank 0. import_report rejects it partway
+    through, after rank 0's capture has been imported."""
+    copied = _make_report(_minimal_single_op_graph(op_name), metadata={"rank": 0, "world_size": 2})
+    _write_reports(report_dir, [("graph_capture_2_of_2.json", copied)])
+
+
+_NO_SCHEMA_VERSION_ROW = "<no schema_version row>"
+
+# What an earlier import, or another writer, may have left at db.sqlite. None leaves an imported DB as it is.
+_parametrize_stored_schema = pytest.mark.parametrize(
+    "stored_schema",
+    [None, "1.0", "99.0", _NO_SCHEMA_VERSION_ROW, b"junk"],
+    ids=["current_schema", "older_schema", "newer_schema", "no_schema_version", "not_sqlite"],
+)
+
+
+def _set_stored_schema(db_path, stored_schema):
+    """Rewrite an imported DB's schema_version (or its whole file, for bytes) as ``_parametrize_stored_schema`` says."""
+    if stored_schema is None:
+        return
+    if isinstance(stored_schema, bytes):
+        db_path.write_bytes(stored_schema)
+        return
+    conn = sqlite3.connect(db_path)
+    try:
+        if stored_schema == _NO_SCHEMA_VERSION_ROW:
+            conn.execute("DELETE FROM report_metadata WHERE key = 'schema_version'")
+        else:
+            conn.execute("UPDATE report_metadata SET value = ? WHERE key = 'schema_version'", (stored_schema,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class TestImportReportRankCompleteness:
+    """import_report over graph_capture_<r>_of_<N>.json: every rank of one run, each exactly once.
+
+    Ranks here are 0-based distributed ranks, as in the capture metadata; file names number them from 1.
+    """
+
+    def test_all_ranks_present_imports_every_rank(self, tmp_path):
+        """With the python_io sidecars real runs write beside each capture, which must not count as captures."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(
+            report_dir,
+            [
+                _rank_capture(0, 2),
+                _rank_capture(1, 2),
+                ("graph_capture_1_of_2.python_io.json", []),
+                ("graph_capture_2_of_2.python_io.json", []),
+            ],
+        )
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM operations ORDER BY rank") == [(0,), (1,)]
+
+    def test_missing_rank_raises_and_names_missing_file(self, tmp_path, expect_error):
+        """Ranks 1 and 3 aren't visible, as when their report directory is local to another host."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 4), _rank_capture(2, 4)])
+        with expect_error(ValueError, r"2 of 4 ranks are missing") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert "graph_capture_2_of_4.json, graph_capture_4_of_4.json" in str(excinfo.value)
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    def test_missing_rank_leaves_an_existing_db_untouched(self, tmp_path, expect_error):
+        """A failed import must not pass off an earlier run's DB as its own, nor change it."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        before = db_path.read_bytes()
+        (report_dir / "graph_capture_2_of_2.json").unlink()
+        with expect_error(ValueError, r"1 of 2 ranks are missing") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert f"{db_path} was not updated" in str(excinfo.value)
+        assert db_path.read_bytes() == before
+
+    @pytest.mark.parametrize("unlisted", [0, 1, 2])
+    def test_missing_ranks_listed_are_capped(self, tmp_path, expect_error, unlisted):
+        """Missing names are listed up to the cap and counted past it, so a bogus world size in a file name can't
+        build a huge message."""
+        listed = graph_report._MAX_MISSING_CAPTURES_LISTED
+        world_size = 1 + listed + unlisted
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, world_size)])
+        with expect_error(ValueError, rf"{listed + unlisted} of {world_size} ranks are missing") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        message = str(excinfo.value)
+        assert message.count(f"_of_{world_size}.json") == listed
+        assert (f"and {unlisted} more" in message) == (unlisted > 0)
+
+    def test_mixed_world_sizes_raises(self, tmp_path, expect_error):
+        """A stale capture from an earlier run with a different world size is left in the directory."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2), _rank_capture(0, 4)])
+        with expect_error(ValueError, r"different world sizes \[2, 4\]"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+
+    @pytest.mark.parametrize("stray_name", ["graph_capture_3_of_2.json", "graph_capture_0_of_2.json"])
+    def test_rank_outside_the_run_raises(self, tmp_path, expect_error, stray_name):
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2), _rank_capture(1, 2, stray_name)])
+        with expect_error(ValueError, rf"ranks outside 1\.\.2: {stray_name}"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+
+    def test_rank_named_twice_raises(self, tmp_path, expect_error):
+        """graph_capture_01_of_2 and graph_capture_1_of_2 both name rank 0, which would otherwise import it twice."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(
+            report_dir,
+            [_rank_capture(0, 2), _rank_capture(0, 2, "graph_capture_01_of_2.json"), _rank_capture(1, 2)],
+        )
+        with expect_error(
+            ValueError, r"same rank more than once: graph_capture_01_of_2\.json and graph_capture_1_of_2\.json"
+        ):
+            graph_report.import_report(report_dir, tmp_path / "output")
+
+    @pytest.mark.parametrize(
+        "metadata_rank, metadata_world_size",
+        [(0, 2), (1, 4)],
+        ids=["rank_disagrees", "world_size_disagrees"],
+    )
+    def test_metadata_disagreeing_with_file_name_raises(
+        self, tmp_path, expect_error, metadata_rank, metadata_world_size
+    ):
+        """A capture copied or renamed into another rank's file name would otherwise be merged as that rank."""
+        report_dir = tmp_path / "reports_in"
+        copied = _make_report(
+            _minimal_single_op_graph(), metadata={"rank": metadata_rank, "world_size": metadata_world_size}
+        )
+        _write_reports(report_dir, [_rank_capture(0, 2), ("graph_capture_2_of_2.json", copied)])
+        expected_name = f"graph_capture_{metadata_rank + 1}_of_{metadata_world_size}\\.json"
+        with expect_error(
+            ValueError,
+            rf"graph_capture_2_of_2\.json holds the capture of {expected_name} according to its metadata "
+            rf"\(rank {metadata_rank} of world size {metadata_world_size}\)",
+        ):
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    @_parametrize_stored_schema
+    def test_failure_during_the_import_leaves_an_existing_db_unchanged(self, tmp_path, expect_error, stored_schema):
+        """The mismatch is found after the first capture has been imported; none of it reaches the existing DB, which is
+        left as it was, and the error says so.
+
+        Whatever the existing file holds, an older-schema DB or a file that isn't SQLite at all included, a failed
+        import leaves it in place (tenstorrent/ttnn-visualizer#2148).
+        """
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        _set_stored_schema(db_path, stored_schema)
+        before = db_path.read_bytes()
+        _write_rank_0_copy_as_rank_1(report_dir, "ttnn.other")
+        with expect_error(ValueError, "according to its metadata") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert f"{db_path} was not updated" in str(excinfo.value)
+        assert db_path.read_bytes() == before
+
+    def test_unsupported_version_of_a_rank_capture_raises(self, tmp_path, expect_error):
+        """Skipping it, as a loose capture is skipped, would leave that rank out of a merge that passed the check."""
+        report_dir = tmp_path / "reports_in"
+        name, report = _rank_capture(1, 2)
+        report["version"] = 99
+        _write_reports(report_dir, [_rank_capture(0, 2), (name, report)])
+        with expect_error(ValueError, r"graph_capture_2_of_2\.json has version 99"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    def test_rank_captures_are_imported_in_numeric_order(self, tmp_path, monkeypatch):
+        """graph_capture_10_of_10 is imported last, not between _1_ and _2_ as a plain string sort would put it.
+
+        The DB keys every row by rank rather than by import order, so the order is only visible from inside the
+        import loop, here through the per-file _report_rank call.
+        """
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(rank, 10) for rank in range(10)])
+        imported_names = []
+        report_rank = graph_report._report_rank
+
+        def _recording_report_rank(report, path):
+            imported_names.append(path.name)
+            return report_rank(report, path)
+
+        monkeypatch.setattr(graph_report, "_report_rank", _recording_report_rank)
+        graph_report.import_report(report_dir, tmp_path / "output")
+        assert imported_names == [f"graph_capture_{n}_of_10.json" for n in range(1, 11)]
+
+    def test_single_rank_capture_file_imports_alone(self, tmp_path):
+        """Pointing import_report at one rank's file imports just that rank: only a directory is checked for
+        completeness."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 4)])
+        db_path = graph_report.import_report(report_dir / "graph_capture_1_of_4.json", tmp_path / "output")
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM operations") == [(0,)]
+
+    def test_files_without_rank_suffix_are_not_checked(self, tmp_path):
+        """Loose *.json captures carry no world size, so there is nothing to check them against."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(
+            report_dir, [("graph_capture.json", _make_report(_minimal_single_op_graph(), metadata={"rank": 3}))]
+        )
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM operations") == [(3,)]
+
+
+def _importing_file_name(target, pid, token="0123abcd", host=None):
+    """Name of the importing file that process ``pid`` on ``host`` (this one by default) creates for ``target``."""
+    return graph_report._importing_name(Path(target), host or socket.gethostname(), pid, token).name
+
+
+# What ttnn.graph.flush_comparison_records_to_db finds accumulated: one local comparison record and its golden tensor.
+_COMPARISON_RECORDS = {
+    "version": 1,
+    "local_tensor_comparison_records": [
+        {"tensor_id": 1, "golden_tensor_id": 1001, "matches": True, "desired_pcc": 0.9999, "actual_pcc": 1.0}
+    ],
+    "global_tensor_comparison_records": [],
+    "tensors": [{"tensor_id": 1001, "shape": "torch.Size([1, 32])", "storage_type": "HOST"}],
+}
+
+
+class TestImportReportFreshDatabase:
+    """Each import writes a new database: nothing is left over from an earlier import into the same directory, and a
+    failed import leaves the earlier database as it was, whatever its schema (tenstorrent/ttnn-visualizer#2148)."""
+
+    @staticmethod
+    def _row_counts(db_path):
+        tables = _query_db(db_path, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        return {table: _query_db(db_path, f"SELECT COUNT(*) FROM {table}")[0][0] for (table,) in tables}
+
+    @staticmethod
+    def _importing_files(directory):
+        return sorted(p.name for p in directory.iterdir() if graph_report._IMPORTING_INFIX in p.name)
+
+    @staticmethod
+    def _write_run_with_yamls(report_dir, text, world_size=1, ranks_with_yamls=(0,)):
+        """Write the captures of a run of ``world_size`` ranks; the ranks in ``ranks_with_yamls`` carry a cluster
+        descriptor and a mesh mapping holding ``text``."""
+        captures = []
+        for rank in range(world_size):
+            name, report = _rank_capture(rank, world_size)
+            if rank in ranks_with_yamls:
+                report["cluster_descriptor"] = f"cluster: {text}"
+                report["mesh_coordinate_mapping"] = f"mesh: {text}"
+            captures.append((name, report))
+        _write_reports(report_dir, captures)
+
+    def test_importing_again_into_the_same_directory_does_not_duplicate_rows(self, tmp_path):
+        """Rerunning a test within the same minute imports into the same report directory again."""
+        report_path = tmp_path / "report.json"
+        report = _make_report(TestResNet50Patterns.MOCK_RESNET_GRAPH, devices=TestResNet50Patterns.MOCK_DEVICE_INFO)
+        report_path.write_text(json.dumps(report))
+        db_path = graph_report.import_report(report_path, tmp_path / "output")
+        once = self._row_counts(db_path)
+        assert once["input_tensors"] and once["output_tensors"] and once["buffers"]
+        graph_report.import_report(report_path, tmp_path / "output")
+        assert self._row_counts(db_path) == once
+
+    def test_a_directory_imported_into_itself_twice(self, tmp_path, single_relu_mock_graph, single_relu_python_io):
+        """The graph report fixture imports the report directory into itself, and a rerun within the same minute does it
+        again. The tensor lifetime file the first import wrote there is not a capture."""
+        report_dir = tmp_path / "report"
+        report = _make_report(single_relu_mock_graph, python_io=single_relu_python_io)
+        _write_reports(report_dir, [("graph_capture.json", report)])
+        db_path = graph_report.import_report(report_dir, report_dir)
+        assert (report_dir / f"graph_capture{graph_report.TENSOR_LIFETIME_SIDECAR_SUFFIX}").is_file()
+        once = self._row_counts(db_path)
+        assert once["tensor_lifetime"]
+        # As the fixture does after importing, before the rerun writes its own capture.
+        (report_dir / "graph_capture.json").unlink()
+        _write_reports(report_dir, [("graph_capture.json", report)])
+        graph_report.import_report(report_dir, report_dir)
+        assert self._row_counts(db_path) == once
+
+    @staticmethod
+    def _tensor_graph(op_name, input_shape, with_output):
+        """One operation reading tensor 42 with ``input_shape``, optionally producing tensor 101."""
+        nodes = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, 5]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "42", "shape": input_shape},
+                "connections": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": op_name, "inputs": "1"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {
+                "counter": 3,
+                "node_type": "tensor",
+                "params": {"tensor_id": "101", "shape": "[1,1,32,32]"},
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": op_name},
+                "connections": [3] if with_output else [],
+                "duration_ns": 1000,
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        if not with_output:
+            del nodes[3]
+        return nodes
+
+    def test_importing_a_different_capture_keeps_only_its_rows(self, tmp_path):
+        """A rerun of an edited test reuses operation and tensor ids with a different payload: neither the rows the
+        earlier import replaced or ignored on a conflict nor the ones only it had may survive."""
+        report_dir = tmp_path / "reports_in"
+        first = _make_report(self._tensor_graph("ttnn.first", "[1,1,32,32]", with_output=True))
+        _write_reports(report_dir, [("graph_capture.json", first)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT COUNT(*) FROM output_tensors") == [(1,)]
+        second = _make_report(self._tensor_graph("ttnn.second", "[1,1,64,64]", with_output=False))
+        _write_reports(report_dir, [("graph_capture.json", second)])
+        graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT name FROM operations") == [("ttnn.second",)]
+        assert _query_db(db_path, "SELECT tensor_id, shape FROM tensors") == [(42, "[1,1,64,64]")]
+        assert _query_db(db_path, "SELECT tensor_id FROM input_tensors") == [(42,)]
+        assert _query_db(db_path, "SELECT COUNT(*) FROM output_tensors") == [(0,)]
+
+    @pytest.mark.parametrize(
+        "loose_files, cause",
+        [
+            (
+                [("graph_capture.json", {**_make_report(_minimal_single_op_graph()), "version": 99})],
+                r"all 1 capture file\(s\) were skipped because this importer only reads version 1: "
+                r"graph_capture\.json \(version 99\)\. Capture them again",
+            ),
+            (
+                [
+                    (
+                        "graph_capture.json",
+                        {k: v for k, v in _make_report(_minimal_single_op_graph()).items() if k != "version"},
+                    )
+                ],
+                r"graph_capture\.json \(no version\)",
+            ),
+            ([("config.json", {})], "it holds no capture file"),
+        ],
+        ids=["unsupported_version", "no_version", "only_config"],
+    )
+    def test_importing_no_capture_leaves_the_existing_db_unchanged(self, tmp_path, expect_error, loose_files, cause):
+        """A database of no captures would otherwise replace the earlier import's. The error says why nothing was
+        imported."""
+        output_dir = tmp_path / "output"
+        _write_reports(tmp_path / "first", [("graph_capture.json", _make_report(_minimal_single_op_graph()))])
+        db_path = graph_report.import_report(tmp_path / "first", output_dir)
+        before = db_path.read_bytes()
+        _write_reports(tmp_path / "second", loose_files)
+        with expect_error(ValueError, "No graph captures were imported from") as excinfo:
+            graph_report.import_report(tmp_path / "second", output_dir)
+        assert re.search(cause, str(excinfo.value))
+        assert str(excinfo.value).endswith(f"{db_path} was not updated")
+        assert db_path.read_bytes() == before
+
+    def test_importing_no_capture_creates_no_db(self, tmp_path, expect_error):
+        _write_reports(tmp_path / "reports_in", [("config.json", {})])
+        with expect_error(ValueError, "No graph captures were imported from") as excinfo:
+            graph_report.import_report(tmp_path / "reports_in", tmp_path / "output")
+        assert "was not updated" not in str(excinfo.value)
+        assert list((tmp_path / "output").iterdir()) == []
+
+    def test_every_value_error_says_the_db_was_not_updated(self, tmp_path, expect_error):
+        """Also one raised while a capture is read, after the import has started."""
+        output_dir = tmp_path / "output"
+        _write_reports(tmp_path / "first", [_rank_capture(0, 1)])
+        db_path = graph_report.import_report(tmp_path / "first", output_dir)
+        before = db_path.read_bytes()
+        _write_reports(tmp_path / "second", [("graph_capture.json", [])])
+        with expect_error(ValueError, "Graph report must be a JSON object") as excinfo:
+            graph_report.import_report(tmp_path / "second", output_dir)
+        assert str(excinfo.value).endswith(f"{db_path} was not updated")
+        assert db_path.read_bytes() == before
+        assert self._importing_files(output_dir) == []
+
+    def test_yamls_are_published_with_the_database(self, tmp_path, expect_error):
+        """The cluster descriptor and mesh mapping YAMLs come from the import that wrote the database beside them:
+        a later import replaces them, and a failed one leaves them as they were."""
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+        suffix = graph_report._rank_file_suffix(0, 2)
+        yamls = [
+            output_dir / f"cluster_descriptor{suffix}.yaml",
+            output_dir / f"physical_chip_mesh_coordinate_mapping{suffix}.yaml",
+        ]
+        self._write_run_with_yamls(report_dir, "first", world_size=2)
+        graph_report.import_report(report_dir, output_dir)
+        self._write_run_with_yamls(report_dir, "second", world_size=2)
+        graph_report.import_report(report_dir, output_dir)
+        assert [p.read_text() for p in yamls] == ["cluster: second", "mesh: second"]
+        self._write_run_with_yamls(report_dir, "third", world_size=2)
+        _write_rank_0_copy_as_rank_1(report_dir)
+        with expect_error(ValueError, "according to its metadata"):
+            graph_report.import_report(report_dir, output_dir)
+        assert [p.read_text() for p in yamls] == ["cluster: second", "mesh: second"]
+        assert self._importing_files(output_dir) == []
+
+    def test_the_first_capture_carrying_a_yaml_wins(self, tmp_path):
+        """Two loose captures of one rank both carry a cluster descriptor: the first one imported writes the YAML."""
+        captures = []
+        for name in ("a.json", "b.json"):
+            report = _make_report(_minimal_single_op_graph())
+            report["cluster_descriptor"] = f"cluster: {name}"
+            captures.append((name, report))
+        _write_reports(tmp_path / "reports_in", captures)
+        graph_report.import_report(tmp_path / "reports_in", tmp_path / "output")
+        assert (tmp_path / "output" / "cluster_descriptor.yaml").read_text() == "cluster: a.json"
+
+    @_parametrize_stored_schema
+    def test_import_replaces_whatever_db_was_there(self, tmp_path, stored_schema):
+        """Whatever file is at the database's path, current or newer schema included, the import replaces it rather
+        than adding to it (tenstorrent/ttnn-visualizer#2148). A row only the earlier DB had, and the row counts of a
+        single import, show that."""
+        report_path = tmp_path / "report.json"
+        report = _make_report(TestResNet50Patterns.MOCK_RESNET_GRAPH, devices=TestResNet50Patterns.MOCK_DEVICE_INFO)
+        report_path.write_text(json.dumps(report))
+        db_path = graph_report.import_report(report_path, tmp_path / "output")
+        once = self._row_counts(db_path)
+        if not isinstance(stored_schema, bytes):
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute("INSERT INTO report_metadata (key, value) VALUES ('left_from_earlier_import', 'yes')")
+                conn.commit()
+            finally:
+                conn.close()
+        _set_stored_schema(db_path, stored_schema)
+        graph_report.import_report(report_path, tmp_path / "output")
+        assert _query_db(db_path, "SELECT value FROM report_metadata WHERE key = 'schema_version'") == [
+            (graph_report.DATABASE_SCHEMA_VERSION,)
+        ]
+        assert _query_db(db_path, "SELECT COUNT(*) FROM report_metadata WHERE key = 'left_from_earlier_import'") == [
+            (0,)
+        ]
+        assert self._row_counts(db_path) == once
+
+    def test_late_runtime_error_leaves_the_existing_db_unchanged(self, tmp_path, monkeypatch, expect_error):
+        """Any exception from anywhere in the import, not only the ValueErrors raised as a capture is read: here after
+        a capture's rows have gone into the temporary DB."""
+        report_path = tmp_path / "report.json"
+        report = _make_report(TestResNet50Patterns.MOCK_RESNET_GRAPH, devices=TestResNet50Patterns.MOCK_DEVICE_INFO)
+        report_path.write_text(json.dumps(report))
+        output_dir = tmp_path / "output"
+        db_path = graph_report.import_report(report_path, output_dir)
+        before = db_path.read_bytes()
+
+        def failing_import_metadata(cursor, metadata):
+            assert cursor.execute("SELECT COUNT(*) FROM buffers").fetchone()[0] > 0
+            raise RuntimeError("late failure")
+
+        monkeypatch.setattr(graph_report, "import_metadata", failing_import_metadata)
+        hooks_before = (sys.gettrace(), sys.getprofile())
+        with expect_error(RuntimeError, "late failure"):
+            graph_report.import_report(report_path, output_dir)
+        assert (sys.gettrace(), sys.getprofile()) == hooks_before
+        assert db_path.read_bytes() == before
+        assert self._importing_files(output_dir) == []
+
+    @pytest.mark.parametrize("db_name", ["db.sqlite", "report.db"])
+    @pytest.mark.parametrize("succeeds", [True, False], ids=["success", "failure"])
+    def test_no_temporary_file_is_left_behind(self, tmp_path, expect_error, succeeds, db_name):
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        graph_report.import_report(report_dir, output_dir, db_name=db_name)
+        if succeeds:
+            graph_report.import_report(report_dir, output_dir, db_name=db_name)
+        else:
+            _write_rank_0_copy_as_rank_1(report_dir)
+            with expect_error(ValueError, "according to its metadata"):
+                graph_report.import_report(report_dir, output_dir, db_name=db_name)
+        assert (output_dir / db_name).is_file()
+        assert self._importing_files(output_dir) == []
+
+    def test_db_name_in_a_subdirectory(self, tmp_path):
+        """The CLI passes --db-name straight through, and a name with a directory part works if the directory
+        exists."""
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+        _write_reports(report_dir, [_rank_capture(0, 1)])
+        (output_dir / "sub").mkdir(parents=True)
+        for _ in range(2):
+            db_path = graph_report.import_report(report_dir, output_dir, db_name="sub/db.sqlite")
+        assert db_path == output_dir / "sub" / "db.sqlite"
+        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
+        assert self._importing_files(output_dir / "sub") == []
+
+    def test_db_name_in_a_missing_subdirectory_raises(self, tmp_path, expect_error):
+        """Before anything is created, and before the trace and profile hooks are touched."""
+        _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+        output_dir = tmp_path / "output"
+        hooks_before = (sys.gettrace(), sys.getprofile())
+        with expect_error(FileNotFoundError, "missing"):
+            graph_report.import_report(tmp_path / "reports_in", output_dir, db_name="missing/db.sqlite")
+        assert (sys.gettrace(), sys.getprofile()) == hooks_before
+        assert list(output_dir.iterdir()) == []
+
+    _DEAD_PID = 999999
+
+    @pytest.fixture
+    def only_this_process_is_alive(self, monkeypatch):
+        monkeypatch.setattr(graph_report, "_pid_is_alive", lambda pid: pid == os.getpid())
+
+    @pytest.mark.parametrize("in_subdirectory", [False, True], ids=["output_dir", "db_subdirectory"])
+    def test_files_orphaned_by_a_killed_import_are_removed(self, tmp_path, only_this_process_is_alive, in_subdirectory):
+        """A killed process never runs its clean-up. Only files of a dead process on this host are removed: a live
+        process may still be importing, and a pid from another host sharing the directory says nothing here."""
+        output_dir = tmp_path / "output"
+        directory = output_dir / "sub" if in_subdirectory else output_dir
+        directory.mkdir(parents=True)
+        dead_db = _importing_file_name("db.sqlite", self._DEAD_PID)
+        dead_db_without_its_database = _importing_file_name("db.sqlite", self._DEAD_PID, token="4567abcd")
+        orphaned = [
+            dead_db,
+            f"{dead_db}-journal",
+            f"{dead_db_without_its_database}-wal",
+            f"{dead_db_without_its_database}-shm",
+            _importing_file_name("cluster_descriptor.yaml", self._DEAD_PID, token="89ef0123"),
+            # A pid os.kill can't take is no live process's.
+            _importing_file_name("db.sqlite", 99999999999999999999),
+        ]
+        kept = [
+            _importing_file_name("db.sqlite", os.getpid()),
+            _importing_file_name("db.sqlite", self._DEAD_PID, host="other"),
+            # Names the pattern rejects: not what an import creates.
+            f".db.sqlite.importing-{socket.gethostname()}-{self._DEAD_PID}-notahexpart",
+            f"{dead_db}-backup",
+        ]
+        for name in orphaned + kept:
+            (directory / name).write_bytes(b"partial")
+        _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+        db_name = "sub/db.sqlite" if in_subdirectory else "db.sqlite"
+        graph_report.import_report(tmp_path / "reports_in", output_dir, db_name=db_name)
+        assert self._importing_files(directory) == sorted(kept)
+
+    def test_a_locked_file_is_kept_although_its_pid_is_not_alive(self, tmp_path, only_this_process_is_alive):
+        """A process in another PID namespace on the same host (a container sharing the host's network and this
+        directory) is alive although its pid isn't here; the lock it holds on its file, and so on that file's journal,
+        says so."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        live = _importing_file_name("db.sqlite", self._DEAD_PID)
+        kept = [live, f"{live}-journal"]
+        for name in kept:
+            (output_dir / name).write_bytes(b"partial")
+        fd = os.open(output_dir / live, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+            graph_report.import_report(tmp_path / "reports_in", output_dir)
+        finally:
+            os.close(fd)
+        assert self._importing_files(output_dir) == sorted(kept)
+
+    def test_orphan_clean_up_skips_a_link(self, tmp_path, only_this_process_is_alive):
+        """A link at an importing file's name is not this importer's file: neither it, its target nor a journal beside
+        it is touched."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        target = tmp_path / "elsewhere.txt"
+        target.write_text("not yours")
+        link = output_dir / _importing_file_name("db.sqlite", self._DEAD_PID)
+        link.symlink_to(target)
+        journal = link.with_name(f"{link.name}-journal")
+        journal.write_bytes(b"partial")
+        _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+        graph_report.import_report(tmp_path / "reports_in", output_dir)
+        assert link.is_symlink() and target.read_text() == "not yours"
+        assert journal.read_bytes() == b"partial"
+
+    @staticmethod
+    def _make_flock_raise(monkeypatch, error_number):
+        def flock(fd, operation):
+            raise OSError(error_number, os.strerror(error_number))
+
+        monkeypatch.setattr(graph_report.fcntl, "flock", flock)
+
+    @pytest.mark.parametrize(
+        "error_number", sorted(graph_report._FLOCK_UNSUPPORTED_ERRNOS), ids=lambda n: errno.errorcode[n]
+    )
+    def test_import_works_where_the_filesystem_cannot_flock(
+        self, tmp_path, monkeypatch, only_this_process_is_alive, error_number
+    ):
+        """A report directory shared by the hosts of a multi-host run is often on NFS or Lustre, where flock can be
+        unsupported. The import goes ahead without the lock, and orphans of a dead process on this host are still
+        removed by their pid."""
+        self._make_flock_raise(monkeypatch, error_number)
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        orphaned = _importing_file_name("db.sqlite", self._DEAD_PID)
+        (output_dir / orphaned).write_bytes(b"partial")
+        self._write_run_with_yamls(tmp_path / "reports_in", "first")
+        for _ in range(2):
+            db_path = graph_report.import_report(tmp_path / "reports_in", output_dir)
+        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
+        assert (output_dir / "cluster_descriptor.yaml").read_text() == "cluster: first"
+        assert self._importing_files(output_dir) == []
+
+    def test_an_unexpected_flock_error_fails_the_import_and_leaves_no_importing_file(
+        self, tmp_path, monkeypatch, expect_error
+    ):
+        """An error other than an unsupported filesystem's is raised, and the file it was taken on is removed rather
+        than left hidden beside the database."""
+        _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+        db_path = graph_report.import_report(tmp_path / "reports_in", tmp_path / "output")
+        before = db_path.read_bytes()
+        self._make_flock_raise(monkeypatch, errno.EIO)
+        with expect_error(OSError, os.strerror(errno.EIO)):
+            graph_report.import_report(tmp_path / "reports_in", tmp_path / "output")
+        assert db_path.read_bytes() == before
+        assert self._importing_files(tmp_path / "output") == []
+
+    def test_orphan_clean_up_skips_a_file_it_cannot_lock(self, tmp_path, monkeypatch, only_this_process_is_alive):
+        """The clean-up is best effort: an unexpected error locking an orphan leaves that file, not the import."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        orphaned = _importing_file_name("db.sqlite", self._DEAD_PID)
+        (output_dir / orphaned).write_bytes(b"partial")
+        real_flock = fcntl.flock
+
+        def flock(fd, operation):
+            if operation & fcntl.LOCK_NB:
+                raise OSError(errno.EIO, os.strerror(errno.EIO))
+            real_flock(fd, operation)
+
+        monkeypatch.setattr(graph_report.fcntl, "flock", flock)
+        _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+        db_path = graph_report.import_report(tmp_path / "reports_in", output_dir)
+        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
+        assert self._importing_files(output_dir) == [orphaned]
+
+    def test_pid_is_alive(self, monkeypatch):
+        assert graph_report._pid_is_alive(os.getpid())
+        assert not graph_report._pid_is_alive(2**70)
+
+        def kill_owned_by_another_user(pid, sig):
+            raise PermissionError
+
+        monkeypatch.setattr(os, "kill", kill_owned_by_another_user)
+        assert graph_report._pid_is_alive(1) is True
+
+    def test_importing_file_never_follows_a_planted_link(self, tmp_path, monkeypatch):
+        """A name already taken, by a link here, is skipped for a new one; the link and its target are untouched."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        target = tmp_path / "elsewhere.txt"
+        target.write_text("not yours")
+        hex_parts = iter(["0123abcd", "0123abcd", "4567abcd"])
+        monkeypatch.setattr(graph_report.secrets, "token_hex", lambda n: next(hex_parts))
+        link = output_dir / _importing_file_name("db.sqlite", os.getpid(), token="0123abcd")
+        link.symlink_to(target)
+        staged = graph_report._create_importing_file(output_dir / "db.sqlite")
+        os.close(staged.fd)
+        assert staged.path == output_dir / _importing_file_name("db.sqlite", os.getpid(), token="4567abcd")
+        assert link.is_symlink() and target.read_text() == "not yours"
+
+    def test_an_importing_file_removed_before_it_is_locked_is_replaced(self, tmp_path, monkeypatch):
+        """Another import can take a just-created file for an orphan and remove it before it is locked; a new one is
+        created in its place."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        hex_parts = iter(["0123abcd", "4567abcd"])
+        monkeypatch.setattr(graph_report.secrets, "token_hex", lambda n: next(hex_parts))
+        first = output_dir / _importing_file_name("db.sqlite", os.getpid(), token="0123abcd")
+        real_flock = graph_report._flock
+
+        def flock_after_another_import_removed_it(fd, operation):
+            first.unlink(missing_ok=True)
+            return real_flock(fd, operation)
+
+        monkeypatch.setattr(graph_report, "_flock", flock_after_another_import_removed_it)
+        staged = graph_report._create_importing_file(output_dir / "db.sqlite")
+        os.close(staged.fd)
+        assert staged.path == output_dir / _importing_file_name("db.sqlite", os.getpid(), token="4567abcd")
+        assert self._importing_files(output_dir) == [staged.path.name]
+
+    def test_permissions_are_kept(self, tmp_path, monkeypatch):
+        """A replaced database and YAML keep their permission bits, and the database's temporary copy has them for the
+        whole import, so a locked-down database is never readable through it."""
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+        self._write_run_with_yamls(report_dir, "first")
+        db_path = graph_report.import_report(report_dir, output_dir)
+        yaml_path = output_dir / "cluster_descriptor.yaml"
+        for path in (db_path, yaml_path):
+            path.chmod(0o640)
+        groups_before = [p.stat().st_gid for p in (db_path, yaml_path)]
+        importing_modes = []
+        real_import_metadata = graph_report.import_metadata
+
+        def recording_import_metadata(cursor, metadata):
+            importing_modes.extend(
+                stat.S_IMODE(p.stat().st_mode) for p in output_dir.glob(f".db.sqlite{graph_report._IMPORTING_INFIX}*")
+            )
+            real_import_metadata(cursor, metadata)
+
+        monkeypatch.setattr(graph_report, "import_metadata", recording_import_metadata)
+        graph_report.import_report(report_dir, output_dir)
+        # The database's, and any journal SQLite opened beside it, which takes the database's bits.
+        assert importing_modes and set(importing_modes) == {0o640}
+        assert [stat.S_IMODE(p.stat().st_mode) for p in (db_path, yaml_path)] == [0o640, 0o640]
+        assert [p.stat().st_gid for p in (db_path, yaml_path)] == groups_before
+
+    def test_the_importing_file_is_never_more_readable_than_the_db(self, tmp_path, monkeypatch):
+        """Permission is checked when a file is opened, so a reader who opened the temporary copy while it was more
+        readable could keep reading it. It is created readable by its owner only."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 1)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        db_path.chmod(0o600)
+        modes_at_creation = []
+        real_flock = graph_report._flock
+
+        def recording_flock(fd, operation):
+            modes_at_creation.append(stat.S_IMODE(os.fstat(fd).st_mode))
+            return real_flock(fd, operation)
+
+        monkeypatch.setattr(graph_report, "_flock", recording_flock)
+        graph_report.import_report(report_dir, tmp_path / "output")
+        assert modes_at_creation == [0o600]
+        assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
+
+    @pytest.mark.parametrize("may_take_the_group", [True, False], ids=["group_taken", "not_in_the_group"])
+    def test_a_replacement_takes_the_group_or_closes_group_access(self, tmp_path, monkeypatch, may_take_the_group):
+        """The replaced file's permission bits under this user's group could let a different set of users read it. Its
+        group is taken too or, where this user isn't in that group, group and other access is cleared."""
+        path = tmp_path / "importing"
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
+        fields = list(os.fstat(fd))
+        fields[stat.ST_MODE] = stat.S_IFREG | 0o644
+        fields[stat.ST_GID] += 1
+        target = os.stat_result(fields)
+        chowns = []
+
+        def fchown(fd, uid, gid):
+            if not may_take_the_group:
+                raise PermissionError(errno.EPERM, os.strerror(errno.EPERM))
+            chowns.append((uid, gid))
+
+        monkeypatch.setattr(graph_report.os, "fchown", fchown)
+        try:
+            graph_report._take_group_and_mode(fd, target)
+            mode = stat.S_IMODE(os.fstat(fd).st_mode)
+        finally:
+            os.close(fd)
+        if may_take_the_group:
+            assert (chowns, mode) == ([(-1, target.st_gid)], 0o644)
+        else:
+            assert mode == 0o600
+
+    @pytest.mark.parametrize("suffix", graph_report._SQLITE_SIDECAR_SUFFIXES)
+    def test_a_stale_journal_beside_the_db_is_removed(self, tmp_path, suffix):
+        """A journal a crashed reader or writer left beside the old file would be taken for the new one's."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 1)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        journal = db_path.with_name(db_path.name + suffix)
+        journal.write_bytes(b"junk")
+        graph_report.import_report(report_dir, tmp_path / "output")
+        assert not journal.exists()
+        assert _query_db(db_path, "SELECT COUNT(*) FROM operations") == [(1,)]
+
+    def test_yamls_an_earlier_import_left_are_removed(self, tmp_path):
+        """Captures without YAMLs, or from a run of a different size (another rank suffix), must not be paired with an
+        earlier run's cluster description. Other YAMLs in the directory are not the import's."""
+        output_dir = tmp_path / "output"
+        self._write_run_with_yamls(tmp_path / "two_ranks", "two ranks", world_size=2)
+        graph_report.import_report(tmp_path / "two_ranks", output_dir)
+        (output_dir / "cluster_descriptor_backup.yaml").write_text("mine")
+        name, report = _rank_capture(0, 1)
+        report["cluster_descriptor"] = "cluster: one rank"
+        _write_reports(tmp_path / "one_rank", [(name, report)])
+        db_path = graph_report.import_report(tmp_path / "one_rank", output_dir)
+        assert sorted(p.name for p in output_dir.glob("*.yaml")) == [
+            "cluster_descriptor.yaml",
+            "cluster_descriptor_backup.yaml",
+        ]
+        assert _query_db(db_path, "SELECT value FROM report_metadata WHERE key = 'yaml_files'") == [
+            ('["cluster_descriptor.yaml"]',)
+        ]
+        _write_reports(tmp_path / "no_yamls", [_rank_capture(0, 1)])
+        graph_report.import_report(tmp_path / "no_yamls", output_dir)
+        assert sorted(p.name for p in output_dir.glob("*.yaml")) == ["cluster_descriptor_backup.yaml"]
+
+    def test_yamls_no_import_recorded_are_left_alone(self, tmp_path):
+        """A hand-written or tool-generated cluster descriptor survives an import that writes none, into a new
+        directory or beside an earlier import's database."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        hand_written = output_dir / "cluster_descriptor.yaml"
+        hand_written.write_text("mine")
+        _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+        for _ in range(2):
+            db_path = graph_report.import_report(tmp_path / "reports_in", output_dir)
+            assert hand_written.read_text() == "mine"
+        assert _query_db(db_path, "SELECT value FROM report_metadata WHERE key = 'yaml_files'") == [("[]",)]
+
+    def test_only_names_an_import_could_write_are_removed(self, tmp_path):
+        """The names come from a file anyone who can write the directory can change: one that isn't a YAML an import
+        writes, in output_dir itself, is never removed."""
+        output_dir = tmp_path / "output"
+        _write_reports(tmp_path / "reports_in", [_rank_capture(0, 1)])
+        db_path = graph_report.import_report(tmp_path / "reports_in", output_dir)
+        (output_dir / "sub").mkdir()
+        named = ["config.json", "../outside.yaml", "sub/cluster_descriptor.yaml", "cluster_descriptor.yaml"]
+        for name in named:
+            (output_dir / name).write_text("named")
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("UPDATE report_metadata SET value = ? WHERE key = 'yaml_files'", (json.dumps(named),))
+            conn.commit()
+        finally:
+            conn.close()
+        graph_report.import_report(tmp_path / "reports_in", output_dir)
+        assert [(output_dir / name).exists() for name in named] == [True, True, True, False]
+
+    def test_failure_while_publishing(self, tmp_path, monkeypatch, expect_error):
+        """Each move is atomic but the set isn't: if the second move fails, the YAML already moved stays beside the
+        earlier database, and nothing staged is left behind."""
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+        self._write_run_with_yamls(report_dir, "first")
+        db_path = graph_report.import_report(report_dir, output_dir)
+        before = db_path.read_bytes()
+        self._write_run_with_yamls(report_dir, "second")
+        real_publish = graph_report._publish_staged_file
+        calls = []
+
+        def publish_failing_second_time(staged, path):
+            calls.append(path)
+            if len(calls) == 2:
+                raise OSError("disk went away")
+            real_publish(staged, path)
+
+        monkeypatch.setattr(graph_report, "_publish_staged_file", publish_failing_second_time)
+        with expect_error(OSError, "disk went away"):
+            graph_report.import_report(report_dir, output_dir)
+        assert (output_dir / "cluster_descriptor.yaml").read_text() == "cluster: second"
+        assert (output_dir / "physical_chip_mesh_coordinate_mapping.yaml").read_text() == "mesh: first"
+        assert db_path.read_bytes() == before
+        assert self._importing_files(output_dir) == []
+
+    def test_a_failed_publish_keeps_the_earlier_import_s_yamls(self, tmp_path, monkeypatch, expect_error):
+        """Stale YAMLs are removed only once the database has been replaced: a 2-rank database whose 1-rank re-import
+        fails to publish keeps its _1_of_2 / _2_of_2 YAMLs."""
+        output_dir = tmp_path / "output"
+        self._write_run_with_yamls(tmp_path / "two_ranks", "two ranks", world_size=2, ranks_with_yamls=(0, 1))
+        db_path = graph_report.import_report(tmp_path / "two_ranks", output_dir)
+        before = db_path.read_bytes()
+        yamls_before = sorted(p.name for p in output_dir.glob("*.yaml"))
+        assert len(yamls_before) == 4
+        self._write_run_with_yamls(tmp_path / "one_rank", "one rank")
+
+        def failing_publish(staged, path):
+            raise OSError("disk went away")
+
+        monkeypatch.setattr(graph_report, "_publish_staged_file", failing_publish)
+        with expect_error(OSError, "disk went away"):
+            graph_report.import_report(tmp_path / "one_rank", output_dir)
+        assert db_path.read_bytes() == before
+        assert sorted(p.name for p in output_dir.glob("*.yaml")) == yamls_before
+        assert self._importing_files(output_dir) == []
+
+    def test_nothing_is_published_if_a_staged_file_was_removed(self, tmp_path, monkeypatch, expect_error):
+        """Where flock is unsupported, an import in another PID namespace on this host can take a live import's file
+        for an orphan and remove it. That import then publishes nothing, rather than its YAMLs beside the earlier
+        database."""
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+        self._write_run_with_yamls(report_dir, "first")
+        db_path = graph_report.import_report(report_dir, output_dir)
+        before = db_path.read_bytes()
+        self._write_run_with_yamls(report_dir, "second")
+        real_import_metadata = graph_report.import_metadata
+
+        def import_metadata_after_the_db_was_removed(cursor, metadata):
+            for path in output_dir.glob(f".db.sqlite{graph_report._IMPORTING_INFIX}*"):
+                if not path.name.endswith(graph_report._SQLITE_SIDECAR_SUFFIXES):
+                    path.unlink()
+            real_import_metadata(cursor, metadata)
+
+        monkeypatch.setattr(graph_report, "import_metadata", import_metadata_after_the_db_was_removed)
+        with expect_error(RuntimeError, "was removed or replaced during the import"):
+            graph_report.import_report(report_dir, output_dir)
+        assert db_path.read_bytes() == before
+        assert (output_dir / "cluster_descriptor.yaml").read_text() == "cluster: first"
+        assert self._importing_files(output_dir) == []
+
+    def test_a_yaml_that_cannot_be_written_leaves_no_staged_file(self, tmp_path, monkeypatch, expect_error):
+        report_dir = tmp_path / "reports_in"
+        output_dir = tmp_path / "output"
+        self._write_run_with_yamls(report_dir, "first")
+        db_path = graph_report.import_report(report_dir, output_dir)
+        before = db_path.read_bytes()
+
+        def disk_full(fd, text):
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+        monkeypatch.setattr(graph_report, "_write_through", disk_full)
+        with expect_error(OSError, os.strerror(errno.ENOSPC)):
+            graph_report.import_report(report_dir, output_dir)
+        assert db_path.read_bytes() == before
+        assert (output_dir / "cluster_descriptor.yaml").read_text() == "cluster: first"
+        assert self._importing_files(output_dir) == []
+
+    def test_imports_into_one_directory_publish_one_at_a_time(self, tmp_path, monkeypatch):
+        """Every move happens under a lock on the directory, so two imports can't interleave their YAMLs and
+        databases."""
+        output_dir = tmp_path / "output"
+        self._write_run_with_yamls(tmp_path / "reports_in", "first")
+        real_publish = graph_report._publish_staged_file
+        locked = []
+
+        def publish_checking_the_lock(staged, path):
+            fd = os.open(output_dir, os.O_RDONLY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked.append(False)
+            except BlockingIOError:
+                locked.append(True)
+            finally:
+                os.close(fd)
+            real_publish(staged, path)
+
+        monkeypatch.setattr(graph_report, "_publish_staged_file", publish_checking_the_lock)
+        graph_report.import_report(tmp_path / "reports_in", output_dir)
+        assert locked == [True, True, True]
+
+    def test_flushed_comparison_records_come_back_once_from_their_sidecar(self, tmp_path, monkeypatch):
+        """flush_comparison_records_to_db writes records into db.sqlite and into comparison_records.json beside it. A
+        later import into the same directory replaces db.sqlite and reads the records back from the JSON, once."""
+        report_dir = tmp_path / "report"
+        report_dir.mkdir()
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", json.loads(json.dumps(_COMPARISON_RECORDS)))
+        ttnn.graph.flush_comparison_records_to_db(report_dir)
+        assert _query_db(report_dir / "db.sqlite", "SELECT COUNT(*) FROM local_tensor_comparison_records") == [(1,)]
+        # The graph report fixture imports a report directory into itself.
+        _write_reports(report_dir, [("graph_capture.json", _make_report(_minimal_single_op_graph()))])
+        db_path = graph_report.import_report(report_dir, report_dir)
+        assert _query_db(db_path, "SELECT tensor_id, golden_tensor_id FROM local_tensor_comparison_records") == [
+            (1, 1001)
+        ]
+
+    def test_the_directory_comparison_records_are_read_once(self, tmp_path):
+        """comparison_records.json belongs to the directory, not to a capture: a multi-rank import whose captures have
+        no comparison records of their own imports it once, for the first rank."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(
+            report_dir,
+            [
+                _rank_capture(0, 2),
+                _rank_capture(1, 2),
+                (graph_report.COMPARISON_RECORDS_FALLBACK_NAME, _COMPARISON_RECORDS),
+            ],
+        )
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        assert _query_db(db_path, "SELECT tensor_id, golden_tensor_id, rank FROM local_tensor_comparison_records") == [
+            (1, 1001, 0)
+        ]
+
+
+class TestGraphReportFixtureMultiRankTeardown:
+    """Teardown of the graph report pytest fixture on a two-rank run, with ttnn's capture and distributed calls
+    replaced by recorders. Every rank must reach both barriers, even when rank 0's import raises."""
+
+    @staticmethod
+    def _stub_ttnn(monkeypatch, tmp_path, rank, world_size, distributed=True):
+        calls = []
+        capture_active = [False]
+
+        def begin_graph_capture(run_mode):
+            capture_active[0] = True
+
+        def end_graph_capture_to_file(path):
+            capture_active[0] = False
+            calls.append(("end", Path(path).name))
+            Path(path).write_text("{}")
+
+        config = SimpleNamespace(
+            enable_graph_report=True,
+            enable_comparison_mode=False,
+            enable_detailed_buffer_report=True,
+            report_path=str(tmp_path / "report"),
+        )
+        monkeypatch.setattr(ttnn, "CONFIG", config)
+        monkeypatch.setattr(ttnn.graph, "is_graph_capture_active", lambda: capture_active[0])
+        monkeypatch.setattr(ttnn.graph, "begin_graph_capture", begin_graph_capture)
+        monkeypatch.setattr(ttnn.graph, "end_graph_capture_to_file", end_graph_capture_to_file)
+        monkeypatch.setattr(ttnn.graph, "enable_detailed_buffer_tracing", lambda: calls.append("enable_tracing"))
+        monkeypatch.setattr(ttnn.graph, "disable_detailed_buffer_tracing", lambda: calls.append("disable_tracing"))
+        monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: distributed)
+        monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: rank)
+        monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: world_size)
+        monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: calls.append("barrier"))
+        monkeypatch.setattr(ttnn, "save_config_to_json_file", lambda path: calls.append(("config", Path(path).name)))
+        return calls
+
+    @staticmethod
+    def _run_fixture():
+        """Run the fixture's setup, then its teardown, with no test body in between."""
+        request = SimpleNamespace(fixturenames=[], getfixturevalue=lambda name: None)
+        fixture = graph_report._run_pytest_graph_report_fixture(request)
+        next(fixture)
+        next(fixture, None)
+
+    def test_rank_0_import_error_still_releases_the_other_ranks(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2)
+
+        def failing_import_report(report_path, output_dir):
+            calls.append("import")
+            raise ValueError("Graph capture files for 1 of 2 ranks are missing")
+
+        monkeypatch.setattr(graph_report, "import_report", failing_import_report)
+        with expect_error(ValueError, "1 of 2 ranks are missing"):
+            self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture_1_of_2.json"),
+            "barrier",
+            "import",
+            "barrier",
+            "disable_tracing",
+            ("config", "config_1_of_2.json"),
+        ]
+        # Left for diagnosing the failed import.
+        assert (tmp_path / "report" / "graph_capture_1_of_2.json").exists()
+
+    def test_rank_0_imports_then_removes_the_captures(self, monkeypatch, tmp_path):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2)
+        (tmp_path / "report").mkdir()
+        (tmp_path / "report" / "graph_capture_2_of_2.json").write_text("{}")
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture_1_of_2.json"),
+            "barrier",
+            "import",
+            "barrier",
+            "disable_tracing",
+            ("config", "config_1_of_2.json"),
+        ]
+        assert not list((tmp_path / "report").glob("graph_capture_*_of_*.json"))
+
+    def test_single_process_needs_no_barriers(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=1, distributed=False)
+
+        def failing_import_report(report_path, output_dir):
+            calls.append("import")
+            raise ValueError("import failed")
+
+        monkeypatch.setattr(graph_report, "import_report", failing_import_report)
+        with expect_error(ValueError, "import failed"):
+            self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture.json"),
+            "import",
+            "disable_tracing",
+            ("config", "config.json"),
+        ]
+
+    def test_other_ranks_skip_the_import_and_reach_both_barriers(self, monkeypatch, tmp_path):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=1, world_size=2)
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture_2_of_2.json"),
+            "barrier",
+            "barrier",
+            "disable_tracing",
+            ("config", "config_2_of_2.json"),
+        ]
+
+
+class TestDeallocateTensorLookup:
+    """A top-level buffer_deallocate becomes a ttnn::deallocate operation whose input is the tensor living at the freed
+    address when it is freed; one inside an operation lifts that tensor into the operation's inputs."""
+
+    L1 = 1
+    DRAM = 0
+
+    @staticmethod
+    def _graph(events):
+        """Graph of these events, in order (a buffer_type or device_id of None is left out of the node, as older
+        captures did):
+        - ("tensor", tensor_id, address, buffer_type[, device_id])
+        - ("dealloc", address, buffer_type[, device_id])
+        - ("alloc", address, buffer_type, device_id): a buffer_allocate
+        - ("dealloc_of_last_alloc",): a buffer_deallocate with no params, connected to the latest buffer_allocate
+        - ("start", name) / ("end", name): a function_start / function_end with no input tensors
+        """
+        nodes = []
+        last_alloc = None
+        for i, event in enumerate(events, start=1):
+            kind, *fields = event
+            node = {"counter": i, "params": {}, "connections": []}
+            if kind in ("start", "end"):
+                node["node_type"] = "function_start" if kind == "start" else "function_end"
+                node["params"] = {"name": fields[0]}
+                if kind == "start":
+                    node["input_tensors"] = []
+            elif kind == "dealloc_of_last_alloc":
+                node["node_type"] = "buffer_deallocate"
+                node["connections"] = [last_alloc]
+            else:
+                if kind == "tensor":
+                    tensor_id, address, buffer_type, *device = fields
+                    node["params"] = {"tensor_id": str(tensor_id), "address": str(address), "storage_type": "DEVICE"}
+                else:
+                    address, buffer_type, *device = fields
+                    node["params"] = {"address": str(address)}
+                    if kind == "alloc":
+                        node["params"].update({"size": "2048", "page_size": "2048"})
+                        last_alloc = i
+                node["node_type"] = {
+                    "tensor": "tensor",
+                    "dealloc": "buffer_deallocate",
+                    "alloc": "buffer_allocate",
+                }[kind]
+                if buffer_type is not None:
+                    node["params"]["buffer_type"] = str(buffer_type)
+                if device and device[0] is not None:
+                    node["params"]["device_id"] = str(device[0])
+            nodes.append(node)
+        end = len(events) + 1
+        return [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1, end]},
+            *nodes,
+            {"counter": end, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+    @classmethod
+    def _operation_inputs(cls, events, tmp_path):
+        """(name, input tensor) for each operation, in operation order; None for one with no input."""
+        conn, cursor = _import_to_db(_make_report(cls._graph(events)), tmp_path)
+        try:
+            cursor.execute(
+                """SELECT o.name, it.tensor_id FROM operations o
+                   LEFT JOIN input_tensors it ON it.operation_id = o.operation_id AND it.rank = o.rank
+                   ORDER BY o.operation_id"""
+            )
+            return cursor.fetchall()
+        finally:
+            conn.close()
+
+    @classmethod
+    def _deallocated_tensor_ids(cls, events, tmp_path):
+        """The input tensor of each ttnn::deallocate operation, in operation order (None for one with no input)."""
+        return [tensor_id for name, tensor_id in cls._operation_inputs(events, tmp_path) if name == "ttnn::deallocate"]
+
+    def test_reused_address_is_credited_to_the_tensor_living_there(self, tmp_path):
+        """Tensor 2 reuses tensor 1's freed address; freeing it again must not be credited to tensor 1."""
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_dram_and_l1_tensors_at_the_same_address_are_told_apart(self, tmp_path):
+        events = [
+            ("tensor", 1, 8192, self.L1),
+            ("tensor", 2, 8192, self.DRAM),
+            ("dealloc", 8192, self.L1),
+            ("dealloc", 8192, self.DRAM),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_deallocate_without_buffer_type_takes_the_latest_tensor_at_the_address(self, tmp_path):
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("dealloc", 4096, None),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, 2]
+
+    def test_tensor_without_buffer_type_still_matches_a_typed_deallocate(self, tmp_path):
+        """Captures that predate the tensor's buffer_type still credit the deallocation."""
+        events = [("tensor", 1, 4096, None), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1]
+
+    def test_freed_tensor_is_not_credited_with_a_later_free_at_its_address(self, tmp_path):
+        """A scratch buffer that reuses tensor 1's freed address is freed in turn: tensor 1 is already gone."""
+        events = [("tensor", 1, 4096, self.L1), ("dealloc", 4096, self.L1), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, None]
+
+    def test_same_address_on_two_devices_is_credited_per_device(self, tmp_path):
+        events = [
+            ("tensor", 1, 4096, self.L1, 0),
+            ("tensor", 2, 4096, self.L1, 1),
+            ("dealloc", 4096, self.L1, 1),
+            ("dealloc", 4096, self.L1, 0),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [2, 1]
+
+    def test_address_with_no_tensor_has_no_input(self, tmp_path):
+        """A scratch buffer that no tensor node ever named: the operation is kept, with no input tensor."""
+        events = [("tensor", 1, 4096, self.L1), ("dealloc", 12288, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [None]
+
+    def test_tensor_seen_at_a_live_slot_takes_over_the_deallocation(self, tmp_path):
+        """Tensor 2 shows up at tensor 1's address before any free there (a view, or a free the capture missed): the
+        free goes to tensor 2, the one living there now."""
+        events = [("tensor", 1, 4096, self.L1), ("tensor", 2, 4096, self.L1), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [2]
+
+    def test_typed_deallocate_does_not_credit_a_tensor_of_another_type(self, tmp_path):
+        events = [("tensor", 1, 4096, self.DRAM), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [None]
+
+    def test_deallocate_on_an_unknown_device_credits_no_tensor(self, tmp_path):
+        """Tensor and free nodes both carry device_id in captures that carry address; a free without one names no
+        device, so it is not matched to a tensor recorded on one."""
+        events = [("tensor", 1, 4096, self.L1, 0), ("dealloc", 4096, self.L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [None]
+
+    def test_deallocate_without_address_uses_its_allocation(self, tmp_path):
+        """A free with no params of its own takes address, buffer type and device from the buffer_allocate it is
+        connected to."""
+        events = [
+            ("tensor", 1, 8192, self.L1, 0),
+            ("tensor", 2, 8192, self.DRAM, 0),
+            ("alloc", 8192, self.DRAM, 0),
+            ("dealloc_of_last_alloc",),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [2]
+
+    def test_free_inside_an_operation_is_lifted_into_its_inputs(self, tmp_path):
+        """A free inside a function_start/function_end pair (Python-level ttnn.deallocate) takes the tensor living at
+        the address, as a top-level free does, and the operation gets it as its input; a later top-level free at the
+        same address finds nothing left there."""
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("start", "ttnn.deallocate"),
+            ("dealloc", 4096, self.L1),
+            ("end", "ttnn.deallocate"),
+            ("dealloc", 4096, self.L1),
+        ]
+        assert self._operation_inputs(events, tmp_path) == [
+            ("ttnn::deallocate", 1),
+            ("ttnn.deallocate", 2),
+            ("ttnn::deallocate", None),
+        ]
+
+    def test_reused_address_gives_each_tensor_its_own_deallocate_operation(self):
+        """What the visualizer shows: each tensor's lifetime ends at the free of its own buffer."""
+        events = [
+            ("tensor", 1, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+            ("tensor", 2, 4096, self.L1),
+            ("dealloc", 4096, self.L1),
+        ]
+        conn = sqlite3.connect(":memory:")
+        try:
+            cursor = conn.cursor()
+            graph_report.create_database_schema(cursor)
+            graph_report.import_graph(cursor, self._graph(events), record_tensor_lifetime=True)
+            lifetimes = cursor.execute(
+                "SELECT tensor_id, deallocate_operation_id FROM tensor_lifetime ORDER BY tensor_id"
+            ).fetchall()
+            deallocations = [
+                operation_id
+                for (operation_id,) in cursor.execute(
+                    "SELECT operation_id FROM operations WHERE name = 'ttnn::deallocate' ORDER BY operation_id"
+                )
+            ]
+        finally:
+            conn.close()
+        assert lifetimes == [(1, deallocations[0]), (2, deallocations[1])]
+
+    def test_free_keeps_live_buffers_of_another_type_or_device_in_the_snapshot(self, tmp_path):
+        """The per-operation buffer snapshot drops only the freed buffer, not every buffer at its address."""
+        events = [
+            ("alloc", 4096, self.L1, 0),
+            ("alloc", 4096, self.DRAM, 0),
+            ("alloc", 4096, self.L1, 1),
+            ("dealloc", 4096, self.L1, 0),
+        ]
+        conn, cursor = _import_to_db(_make_report(self._graph(events)), tmp_path)
+        try:
+            live = cursor.execute(
+                "SELECT device_id, buffer_type FROM buffers WHERE operation_id = "
+                "(SELECT MAX(operation_id) FROM operations) ORDER BY device_id, buffer_type"
+            ).fetchall()
+        finally:
+            conn.close()
+        assert live == [(0, self.DRAM), (1, self.L1)]
 
 
 @pytest.fixture
@@ -3264,6 +4594,58 @@ class TestGraphCaptureToFile:
         assert "version" in report
         assert report["graph"] == captured_graph
 
+    def test_capture_ends_when_report_file_cannot_be_written(self, device, tmp_report_dir, expect_error):
+        blocker = tmp_report_dir / "not_a_directory"
+        blocker.write_text("")
+        report_path = blocker / "report.json"
+
+        tt_input = ttnn.from_torch(
+            torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+        tt_output = None
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            tt_output = ttnn.relu(tt_input)
+            with expect_error(RuntimeError, "cannot create directories"):
+                ttnn.graph.end_graph_capture_to_file(report_path)
+            assert not ttnn.graph.is_graph_capture_active()
+            assert not ttnn.graph.is_python_io_recording_enabled()
+        finally:
+            if ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+            # The caught exception's traceback keeps this frame alive past device close;
+            # free the device buffers now so collecting it later touches no device.
+            ttnn.deallocate(tt_input)
+            if tt_output is not None:
+                ttnn.deallocate(tt_output)
+
+    def test_full_graph_capture_failed_write_keeps_outer_capture(self, device, tmp_report_dir, expect_error):
+        blocker = tmp_report_dir / "not_a_directory"
+        blocker.write_text("")
+
+        tt_input = ttnn.from_torch(
+            torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+        tt_output = None
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            with expect_error(RuntimeError, "cannot create directories"):
+                with ttnn.graph.full_graph_capture(blocker / "report.json"):
+                    tt_output = ttnn.relu(tt_input)
+            assert ttnn.graph.is_graph_capture_active()
+            ttnn.graph.end_graph_capture()
+            assert not ttnn.graph.is_graph_capture_active()
+        finally:
+            while ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+            # The caught exception's traceback keeps this frame alive past device close;
+            # free the device buffers now so collecting it later touches no device.
+            ttnn.deallocate(tt_input)
+            if tt_output is not None:
+                ttnn.deallocate(tt_output)
+
     @skip_for_slow_dispatch()
     def test_default_manager_execution_metadata_round_trip(self, device, tmp_report_dir):
         report_path = tmp_report_dir / "default_manager_report.json"
@@ -4552,8 +5934,6 @@ def test_resnet50_e2e_graph_capture(
     mesh_device, batch_size, input_loc, imagenet_label_dict, model_location_generator, tmp_path
 ):
     """Run ResNet50 inference, capture graph, import to DB, and validate structural properties."""
-    import shutil
-
     from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
 
     report_path = tmp_path / "resnet50_report.json"
@@ -4572,8 +5952,6 @@ def test_resnet50_e2e_graph_capture(
     output_dir = tmp_path / "output"
     db_path = graph_report.import_report(report_path, output_dir)
     assert db_path.exists(), "Imported DB should be created"
-
-    shutil.copy2(db_path, "/tmp/db.sqlite")
 
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
@@ -6857,3 +8235,249 @@ class TestReportModesDuringTraceCapture:
                 ttnn.end_trace_capture(device, trace_id, cq_id=0)
                 ttnn.release_trace(device, trace_id)
         ttnn.synchronize_device(device)
+
+
+def _comparison_records():
+    record = {"tensor_id": 1, "golden_tensor_id": 2, "matches": True, "desired_pcc": 0.99, "actual_pcc": 0.995}
+    return {"local_tensor_comparison_records": [record], "global_tensor_comparison_records": [], "tensors": []}
+
+
+class TestGraphCaptureEndsWhenItsReportFails:
+    """Ending a capture ends it, and resets the Python side once no capture is left, even when the report can't be
+    written. Passing a directory as the report path makes the write fail."""
+
+    WRITE_FAILS = "Failed to move graph report into place"
+
+    @pytest.fixture(autouse=True)
+    def own_the_capture_stack(self):
+        """Skips under a session-wide report capture, and ends whatever a failed test leaves active so later tests
+        don't inherit it."""
+        if ttnn.graph.is_graph_capture_active():
+            pytest.skip("graph reporting is already on for this run; these tests end every capture they leave behind")
+        stack_traces_were_on = ttnn.graph.is_python_stack_trace_enabled()
+        yield
+        try:
+            while ttnn.graph.is_graph_capture_active():
+                ttnn.graph.end_graph_capture()
+        finally:
+            if stack_traces_were_on:
+                ttnn.graph.enable_python_stack_traces()
+            else:
+                ttnn.graph.disable_python_stack_traces()
+
+    @staticmethod
+    def _partial_reports(report_path):
+        """The temporary files a report is written to before it is moved into place."""
+        return list(Path(report_path).parent.glob(f"{Path(report_path).name}.partial*"))
+
+    def test_failed_write_ends_the_capture_and_leaves_no_partial_report(self, tmp_path, expect_error):
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        with expect_error(RuntimeError, self.WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+        assert not self._partial_reports(tmp_path)
+
+    def test_failed_open_ends_the_capture(self, tmp_path, expect_error):
+        """The temporary file can't be opened (a directory is in the way)."""
+        report_path = tmp_path / "report.json"
+        Path(f"{report_path}.partial.{os.getpid()}").mkdir()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        with expect_error(RuntimeError, "Failed to open graph report file for writing"):
+            ttnn.graph.end_graph_capture_to_file(report_path)
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+        assert not report_path.exists()
+
+    def test_report_under_a_regular_file_ends_the_capture(self, tmp_path, expect_error):
+        """The report's directory can't be created, because a file has its name."""
+        (tmp_path / "f").write_text("")
+        report_path = tmp_path / "f" / "report.json"
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        with expect_error(RuntimeError, "create_directories|Not a directory|File exists"):
+            ttnn.graph.end_graph_capture_to_file(report_path)
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+
+    @pytest.mark.parametrize(
+        "end",
+        [lambda report_path: ttnn.graph.end_graph_capture(), ttnn.graph.end_graph_capture_to_file],
+        ids=["end_graph_capture", "end_graph_capture_to_file"],
+    )
+    def test_ending_with_no_active_capture_raises(self, tmp_path, expect_error, end):
+        report_path = tmp_path / "report.json"
+        with expect_error(RuntimeError, "no graph capture is active"):
+            end(report_path)
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+        assert not report_path.exists()
+
+    def test_failed_write_turns_off_stack_traces_the_capture_turned_on(self, tmp_path, expect_error):
+        with ttnn.manage_config("enable_graph_python_stack_traces", True):
+            ttnn.graph.disable_python_stack_traces()
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            assert ttnn.graph.is_python_stack_trace_enabled()
+            with expect_error(RuntimeError, self.WRITE_FAILS):
+                ttnn.graph.end_graph_capture_to_file(tmp_path)
+        assert not ttnn.graph.is_python_stack_trace_enabled()
+
+    def test_failed_write_keeps_stack_traces_turned_on_before_the_capture(self, tmp_path, expect_error):
+        ttnn.graph.enable_python_stack_traces()
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        with expect_error(RuntimeError, self.WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+        assert ttnn.graph.is_python_stack_trace_enabled()
+
+    def test_failed_outermost_write_drops_comparison_and_io_records(self, tmp_path, expect_error, monkeypatch):
+        """Records for a report that was never written would otherwise wait for the next capture, and comparison
+        records be flushed with another session's."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", _comparison_records())
+        monkeypatch.setattr(ttnn.graph, "_python_io_data", [{"name": "ttnn.relu"}])
+        with expect_error(RuntimeError, self.WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+        assert not ttnn.graph.has_comparison_records()
+        assert ttnn.graph._python_io_data == []
+
+    def test_failed_nested_write_leaves_the_records_to_the_outer_capture(self, tmp_path, expect_error, monkeypatch):
+        """The nested capture ends; the outer one keeps recording and writes both kinds of records in its own report."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", _comparison_records())
+        monkeypatch.setattr(ttnn.graph, "_python_io_data", [{"name": "ttnn.relu"}])
+        with expect_error(RuntimeError, self.WRITE_FAILS):
+            ttnn.graph.end_graph_capture_to_file(tmp_path)
+        assert ttnn.graph.is_graph_capture_active()
+        assert ttnn.graph.is_python_io_recording_enabled()
+
+        outer_report = tmp_path / "outer.json"
+        ttnn.graph.end_graph_capture_to_file(outer_report)
+        assert not ttnn.graph.is_graph_capture_active()
+        comparison = json.loads(outer_report.with_suffix(".comparison_records.json").read_text())
+        assert [r["tensor_id"] for r in comparison["local_tensor_comparison_records"]] == [1]
+        python_io = json.loads(outer_report.with_suffix(".python_io.json").read_text())
+        assert [r["name"] for r in python_io] == ["ttnn.relu"]
+
+    @pytest.mark.parametrize("failing_sidecar", ["_write_python_io_sidecar", "_write_comparison_records_sidecar"])
+    def test_failed_sidecar_write_still_ends_the_capture(self, tmp_path, expect_error, monkeypatch, failing_sidecar):
+        """The C++ report is written, then a sidecar fails: the capture is over and its records are reset."""
+
+        def failing_sidecar_write(report_path):
+            raise OSError("sidecar write failed")
+
+        report_path = tmp_path / "report.json"
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        monkeypatch.setattr(ttnn.graph, "_python_io_data", [{"name": "ttnn.relu"}])
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", _comparison_records())
+        monkeypatch.setattr(ttnn.graph, failing_sidecar, failing_sidecar_write)
+        with expect_error(OSError, "sidecar write failed"):
+            ttnn.graph.end_graph_capture_to_file(report_path)
+        assert report_path.exists()
+        assert not ttnn.graph.is_graph_capture_active()
+        assert not ttnn.graph.is_python_io_recording_enabled()
+        assert ttnn.graph._python_io_data == []
+        assert not ttnn.graph.has_comparison_records()
+
+    @pytest.mark.parametrize("write_fails", [False, True], ids=["write_succeeds", "write_fails"])
+    def test_nested_full_graph_capture_leaves_the_enclosing_capture_active(self, tmp_path, expect_error, write_fails):
+        """full_graph_capture ends its own capture, not one it is nested in, such as the graph report fixture's."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        if write_fails:
+            with expect_error(RuntimeError, self.WRITE_FAILS):
+                with ttnn.graph.full_graph_capture(tmp_path, slow_dispatch=False):
+                    pass
+        else:
+            with ttnn.graph.full_graph_capture(tmp_path / "inner.json", slow_dispatch=False):
+                pass
+        assert ttnn.graph.is_graph_capture_active()
+
+    def test_report_fixture_raises_and_ends_its_capture_when_the_write_fails(self, tmp_path, expect_error):
+        """The graph report fixture's teardown: the error reaches the test run, and no capture is left behind."""
+        with ttnn.manage_config("enable_graph_report", True), ttnn.manage_config(
+            "root_report_path", str(tmp_path)
+        ), ttnn.manage_config("report_name", "failed_write"):
+            report_path = Path(ttnn.CONFIG.report_path)
+            fixture = graph_report._run_pytest_graph_report_fixture(
+                SimpleNamespace(fixturenames=[], getfixturevalue=lambda name: None)
+            )
+            next(fixture)
+            (report_path / "graph_capture.json").mkdir(parents=True)
+            with expect_error(RuntimeError, self.WRITE_FAILS):
+                next(fixture, None)
+        assert not ttnn.graph.is_graph_capture_active()
+
+
+# mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
+@pytest.mark.usefixtures("silicon_arch_name")
+def test_multihost_graph_report(request):
+    """
+    Smoke test for graph reports in a multi-process (multi-host) run: every rank captures its own graph and rank 0
+    merges all of them into one db.sqlite, with each rank's rows tagged by rank. The report is left under
+    generated/ttnn/reports, so this test also serves as a quick way to produce a small multi-rank report.
+
+    Skipped unless launched with tt-run on at least two ranks, e.g. on a T3K:
+        tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml \\
+            pytest tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_multihost_graph_report
+    """
+    if not ttnn.using_distributed_env():
+        pytest.skip("needs a multi-process run launched with tt-run")
+    if ttnn.graph.is_graph_capture_active():
+        pytest.skip("graph reporting is already on for this run, so the nested fixture would join that capture")
+    # Requested here rather than as an argument so a single-process run skips without opening the mesh.
+    mesh_device = request.getfixturevalue("mesh_device")
+    rank = int(ttnn.distributed_context_get_rank())
+    world_size = int(ttnn.distributed_context_get_size())
+
+    with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
+        "enable_logging", True
+    ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config("report_name", None):
+        # The report directory is stamped with the current minute, so start every rank together.
+        ttnn.distributed_context_barrier()
+        with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
+            report_path = Path(ttnn.CONFIG.report_path)
+            # Build on host and then move to device: from_torch(device=...) would touch the other ranks' chips.
+            x = ttnn.from_torch(
+                torch.rand((32, 32), dtype=torch.bfloat16),
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            # A few cheap ops, so each rank's part of the report has more than one operation.
+            x = ttnn.to_device(x, mesh_device)
+            y = ttnn.relu(x)
+            y = ttnn.add(y, x)
+            ttnn.multiply(y, x)
+            ttnn.synchronize_device(mesh_device)
+
+    config_path = report_path / f"config_{rank + 1}_of_{world_size}.json"
+    assert config_path.exists(), f"rank {rank} wrote no {config_path.name} under {report_path}"
+    if rank != 0:
+        return
+
+    db_path = report_path / "db.sqlite"
+    assert db_path.exists(), f"no db.sqlite written under {report_path}"
+    op_names = ("ttnn.relu", "ttnn.add", "ttnn.multiply")
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        op_counts = {}
+        for op_name in op_names:
+            cursor.execute("SELECT rank, COUNT(*) FROM operations WHERE name = ? GROUP BY rank", (op_name,))
+            op_counts[op_name] = dict(cursor.fetchall())
+        cursor.execute("SELECT rank, COUNT(*) FROM devices GROUP BY rank")
+        device_counts = dict(cursor.fetchall())
+    finally:
+        conn.close()
+    # Exact counts rather than presence, so an op recorded more than once or a rank missing devices is caught.
+    for op_name in op_names:
+        expected = {r: 1 for r in range(world_size)}
+        assert op_counts[op_name] == expected, f"{op_name} count per rank {op_counts[op_name]}, expected {expected}"
+    # Each rank records only its own local devices: get_num_devices() counts the whole mesh across all ranks, while
+    # get_device_ids() lists this rank's local ones. Assumes every rank owns the same number of devices, as each half
+    # of the T3K two-rank binding does.
+    # TODO(tenstorrent/ttnn-visualizer#2225): the count matches only because the MeshDevice's id 0 collides with chip 0
+    # in the report's devices list. Fixing that adds the mesh as its own entry, and this expectation has to change.
+    expected = {r: len(mesh_device.get_device_ids()) for r in range(world_size)}
+    assert device_counts == expected, (
+        f"device count per rank {device_counts}, expected {expected} "
+        "(if the MeshDevice id collision is fixed, see tenstorrent/ttnn-visualizer#2225)"
+    )

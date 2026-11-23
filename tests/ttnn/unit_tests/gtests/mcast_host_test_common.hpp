@@ -9,9 +9,9 @@
 #include "ttnn/kernel_lib/mcast/host/mcast_impl.hpp"
 #include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/program/program_impl.hpp"
@@ -23,10 +23,14 @@ using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::NOC;
 namespace wire = dataflow_kernel_lib::mcast_wire;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using dataflow_kernel_lib::SenderMcastMode;
 using dataflow_kernel_lib::TransferMode;
-class McastHostFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastHostFixture> {};
+class McastHostFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastHostFixture> {
+public:
+    // The suite's device, for the free helpers below that need a MeshDevice to build a Program on.
+    static tt::tt_metal::distributed::MeshDevice& mesh_device() { return *device_; }
+};
 
 inline CoreRangeSet grid(CoreCoord start, CoreCoord end) { return CoreRangeSet(CoreRange(start, end)); }
 inline CoreRangeSet cores(const std::vector<CoreCoord>& values) {
@@ -52,7 +56,7 @@ struct GroupInput {
 };
 
 inline McastImpl make_mcast(
-    tt::tt_metal::IDevice* device, const std::vector<GroupInput>& inputs, const McastConfig& cfg = {}) {
+    tt::tt_metal::distributed::MeshDevice* device, const std::vector<GroupInput>& inputs, const McastConfig& cfg = {}) {
     McastImpl mcast(*device, cfg);
     for (const auto& input : inputs) {
         mcast.add_group(input.receivers, input.senders, input.ack);
@@ -63,7 +67,7 @@ inline McastImpl make_mcast(
 // Golden wire tests use the regular Program path. Existing resources may be seeded
 // to verify that automatic allocation skips occupied IDs.
 template <typename McastType>
-void bind_for_inspection(McastType& mcast, tt::tt_metal::Program& program, const std::vector<uint32_t>& existing) {
+void seed_semaphores(McastType& mcast, tt::tt_metal::Program& program, const std::vector<uint32_t>& existing) {
     if constexpr (requires { mcast.participating_cores(); }) {
         for (auto id : existing) {
             program.impl().add_semaphore(mcast.participating_cores(), id, 0, tt::CoreType::WORKER);
@@ -71,25 +75,52 @@ void bind_for_inspection(McastType& mcast, tt::tt_metal::Program& program, const
     } else {
         TT_FATAL(existing.empty(), "Argument allocation fixtures must provide explicit placement");
     }
-    mcast.append_semaphores(program);
+}
+
+// The NoC recorded in an emitted multicast control word.
+inline NOC emitted_noc(const std::vector<uint32_t>& compile_args) {
+    return (compile_args.at(0) & wire::NOC1) ? NOC::NOC_1 : NOC::NOC_0;
+}
+
+// A direct Program reaches a multicast only through attach(). An unplaced kernel binds the channel and exposes
+// its compile-time arguments.
+template <typename McastType>
+std::vector<uint32_t> attach_unplaced(
+    McastType& mcast, tt::tt_metal::Program& program, std::vector<uint32_t> operation_args = {}) {
+    tt::tt_metal::DataMovementConfig config{.compile_args = std::move(operation_args)};
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> unplaced;
+    mcast.attach(program, CoreRangeSet{}, config, "inspect", unplaced);
+    return config.compile_args;
+}
+
+// Places a one-core kernel on the multicast NoC and returns its runtime arguments after `operation_args`.
+template <typename McastType>
+std::vector<uint32_t> attach_on_core(
+    McastType& mcast, tt::tt_metal::Program& program, CoreCoord core, std::vector<uint32_t> operation_args = {}) {
+    tt::tt_metal::DataMovementConfig config{.noc = emitted_noc(attach_unplaced(mcast, program))};
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> args{{core, std::move(operation_args)}};
+    mcast.attach(program, CoreRangeSet(CoreRange(core, core)), config, "inspect_core", args);
+    return args.at(0).second;
+}
+
+template <typename McastType>
+void bind_for_inspection(McastType& mcast, tt::tt_metal::Program& program, const std::vector<uint32_t>& existing) {
+    seed_semaphores(mcast, program, existing);
+    attach_unplaced(mcast, program);
 }
 
 template <typename McastType>
 std::vector<uint32_t> compile_args(McastType mcast, const std::vector<uint32_t>& existing = {}) {
-    tt::tt_metal::Program program;
-    bind_for_inspection(mcast, program, existing);
-    std::vector<uint32_t> args;
-    mcast.append_compile_time_args_to(args);
-    return args;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(McastHostFixture::mesh_device());
+    seed_semaphores(mcast, program, existing);
+    return attach_unplaced(mcast, program);
 }
 
 template <typename McastType>
 std::vector<uint32_t> runtime_args(McastType mcast, CoreCoord core, const std::vector<uint32_t>& existing = {}) {
-    tt::tt_metal::Program program;
-    bind_for_inspection(mcast, program, existing);
-    std::vector<uint32_t> args;
-    mcast.append_runtime_args_to(args, core);
-    return args;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(McastHostFixture::mesh_device());
+    seed_semaphores(mcast, program, existing);
+    return attach_on_core(mcast, program, core);
 }
 
 struct DecodedCompileTime {
@@ -158,7 +189,7 @@ inline uint32_t emitted_semaphore(const std::vector<uint32_t>& ct, wire::Semapho
 template <typename McastType>
 std::vector<tt::tt_metal::SemaphoreDescriptor> allocated_semaphores(
     McastType mcast, const std::vector<uint32_t>& existing = {}) {
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(McastHostFixture::mesh_device());
     bind_for_inspection(mcast, program, existing);
     std::vector<tt::tt_metal::SemaphoreDescriptor> result;
     const auto& semaphores = program.impl().semaphores();

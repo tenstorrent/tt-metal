@@ -22,9 +22,12 @@
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
-#include "tt-metalium/circular_buffer_constants.h"
+#include "api/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
-#include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
+#include "ckernel_buf_desc.h"  // ckernel::trisc::BD_TABLE_NUM_ENTRIES
+#if defined(UCK_CHLKC_MATH)
+#include "cmath_common.h"    // ckernel::math::AluCfgTracker (definition of alu_cfg below)
+#endif
 
 // clang-format on
 
@@ -65,13 +68,9 @@ std::uint8_t my_relative_x_ __attribute__((used));
 std::uint8_t my_relative_y_ __attribute__((used));
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-#if defined(UCK_CHLKC_PACK)
-thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK] __attribute__((used));
+thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_TRISC] __attribute__((used));
 thread_local std::uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
-thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_PACK_TC_SLOTS] __attribute__((used));
-#else
-thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
-#endif
+thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS] __attribute__((used));
 #endif
 // Defined for all TRISC types (including math) so kernels that include dataflow_buffer headers link cleanly.
 // For math TRISC, setup_local_dfb_interfaces is not called, so this stays 0; dfb_ensure_ready
@@ -88,8 +87,7 @@ thread_local std::uint32_t tdma_guard_armed_mask __attribute__((used)) = 0;
 namespace llk_reinit_guard {
 // #44071 re-init guard (Quasar). thread_local per TRISC (tt-llk#1678); declared extern in
 // llk_reinit_guard.h.
-thread_local std::uint8_t reinit_guard_slots[static_cast<std::uint8_t>(ckernel::trisc::BfdResource::Count)]
-    __attribute__((used)) = {};
+thread_local std::uint8_t reinit_guard_slots[ckernel::trisc::BD_TABLE_NUM_ENTRIES] __attribute__((used)) = {};
 }  // namespace llk_reinit_guard
 #endif
 
@@ -112,17 +110,91 @@ thread_local std::uint32_t op_info_offset __attribute__((used)) = 0;
 namespace trisc {
 // Flip between 0 and 1 to keep dest pointer between kernel calls
 thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
-// BFD id allocator state (Quasar). Defined for all TRISC images alongside dest_register_offset;
-// thread_local so the host-threaded emulation gives each TRISC its own allocator (tt-llk#1678).
-// do_thread_crt1 clears this per-thread state before first use; bfd_alloc then sets next to the
-// partition base and current[] to BFD_ID_INVALID on the first allocation.
-thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
 }  // namespace trisc
+namespace pack {
+// Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
+// Declared extern thread_local in cpack_common.h.
+thread_local std::uint32_t clear_dest_bank_id __attribute__((used)) = 0;
+}  // namespace pack
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 }  // namespace ckernel
 
 using namespace ckernel;
+
+// Per-Neo ALU-format config state; declared extern thread_local in llk_math_common.h.
+#if defined(UCK_CHLKC_MATH)
+thread_local ckernel::math::AluCfgTracker alu_cfg __attribute__((used)) = {};
+// Unpack-to-dest: set once math has seen the unpacker's first UNPACK_MATH post of the program.
+thread_local bool unpack_math_seeded __attribute__((used)) = false;
+#endif
+
+// Called from trisc_irq_entry, which saves no vector registers, so built without the vector extension.
+extern "C" __attribute__((noinline, used, hot, target("arch=rv32im_zmmul_zaamo_zba_zbc_xtttensixqsr_xttzbkb"))) void
+handle_interrupt() {
+    uint32_t trisc_id = internal_::get_trisc_id();
+    uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
+    if (error_code == trisc_id || (35 - error_code) == trisc_id ||
+        (error_code > 3 && error_code < 32 && trisc_id == 0)) {
+        ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
+        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt after handling the error
+        (void)hirv;
+    } else {
+        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt
+        (void)hirv;
+        return;
+    }
+#if !defined(WATCHER_ENABLED)  // hang anyway
+    while (1) {
+        ;
+    }
+#endif
+}
+
+// HW error interrupt entry: saves the caller-saved registers around handle_interrupt.
+// A TRISC skips an mret when a branch predictor entry for another PC matches it, and runs on at mret + 4. The
+// jump there retries the mret, which returns because the first attempt cleared that prediction (with branch
+// history off, CSR_CFG's reset value).
+extern "C" __attribute__((naked)) void trisc_irq_entry() {
+    asm volatile(
+        "addi sp, sp, -(16 * 4)\n"
+        "sw ra, 0 * 4(sp)\n"
+        "sw t0, 1 * 4(sp)\n"
+        "sw t1, 2 * 4(sp)\n"
+        "sw t2, 3 * 4(sp)\n"
+        "sw t3, 4 * 4(sp)\n"
+        "sw t4, 5 * 4(sp)\n"
+        "sw t5, 6 * 4(sp)\n"
+        "sw t6, 7 * 4(sp)\n"
+        "sw a0, 8 * 4(sp)\n"
+        "sw a1, 9 * 4(sp)\n"
+        "sw a2, 10 * 4(sp)\n"
+        "sw a3, 11 * 4(sp)\n"
+        "sw a4, 12 * 4(sp)\n"
+        "sw a5, 13 * 4(sp)\n"
+        "sw a6, 14 * 4(sp)\n"
+        "sw a7, 15 * 4(sp)\n"
+        "call handle_interrupt\n"
+        "lw ra, 0 * 4(sp)\n"
+        "lw t0, 1 * 4(sp)\n"
+        "lw t1, 2 * 4(sp)\n"
+        "lw t2, 3 * 4(sp)\n"
+        "lw t3, 4 * 4(sp)\n"
+        "lw t4, 5 * 4(sp)\n"
+        "lw t5, 6 * 4(sp)\n"
+        "lw t6, 7 * 4(sp)\n"
+        "lw a0, 8 * 4(sp)\n"
+        "lw a1, 9 * 4(sp)\n"
+        "lw a2, 10 * 4(sp)\n"
+        "lw a3, 11 * 4(sp)\n"
+        "lw a4, 12 * 4(sp)\n"
+        "lw a5, 13 * 4(sp)\n"
+        "lw a6, 14 * 4(sp)\n"
+        "lw a7, 15 * 4(sp)\n"
+        "addi sp, sp, 16 * 4\n"
+        "mret_loop: mret\n"
+        "j mret_loop\n");
+}
 
 void init_sync_registers() {
     // TODO: check if this is needed with transition to DFBs
@@ -162,6 +234,7 @@ FORCE_INLINE void dfb_clear_packer_remapper_window(
     constexpr std::uint32_t dfb_trisc_mask = (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Unpack) * 8)) |
                                              (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Sfpu) * 8));
     while ((*neo_sync & dfb_trisc_mask) != 0u) {
+        invalidate_l1_cache();
     }
     for (uint32_t i = lo; i < hi; i++) {
         WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(i), 0u);
@@ -198,6 +271,7 @@ extern "C" std::uint32_t _start1() {
 
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
            SHARED_GLOBALS_READY_GO) {
+        invalidate_l1_cache();
     }
     // Initialize GPRs to all 0s
 #pragma GCC unroll 0
@@ -214,6 +288,7 @@ extern "C" std::uint32_t _start1() {
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
+            invalidate_l1_cache();
             if constexpr (COMPILE_FOR_TRISC == 0) {
                 if (*trisc_run == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
                     init_sync_registers();

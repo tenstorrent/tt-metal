@@ -26,15 +26,14 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // Per-core reader/writer arg vectors (geometry unchanged from the shared RM factory). Reader vector:
 //   [0]=src abs addr (aligned-down)+width_offset, [1]=padded_stick, [2]=unpadded_stick, [3]=stick_offset,
@@ -81,10 +80,10 @@ get_padded_slice_runtime_args_rm_sharded_output(
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
-    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
 
@@ -94,7 +93,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
     const int slice_row_size_bytes = static_cast<int>(actual_output_shape[-1] * input_tensor.element_size());
 
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
-    uint32_t start_addr = input_tensor.buffer()->address();
+    uint32_t start_addr = input_tensor.mesh_buffer().address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,
         input_page_size,
@@ -186,6 +185,7 @@ const TensorParamName PS_SRC{"padded_slice_src"};
 const TensorParamName PS_OUT{"padded_slice_out"};
 const DFBSpecName PS_OUT_DFB{"padded_slice_out_dfb"};
 const ScratchpadSpecName PS_SCRATCH{"padded_slice_scratch"};
+const ScratchpadSpecName PS_ZERO{"padded_slice_zero"};
 const KernelSpecName PS_READER{"padded_slice_reader"};
 const KernelSpecName PS_WRITER{"padded_slice_writer"};
 constexpr uint32_t kNumTrids = 2;
@@ -218,13 +218,13 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     uint32_t slice_row_size_bytes = (actual_output_shape[-1] * a.element_size()) / num_cores_channels;
 
     TT_FATAL(
-        output.buffer()->buffer_type() == tt::tt_metal::BufferType::L1,
+        output.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
         "padded_slice output buffer must be L1 (sharded).");
 
-    auto src_buffer_alignment = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = a.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     TT_FATAL(
@@ -235,9 +235,10 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     const bool is_non_aligned = (output_row_size_bytes % alignment) != 0;
 
-    // Pad-row writer is not yet ported.
+    // The shard row is wider than the slice row (channels padded to the shard alignment): the reader
+    // zero-fills each row's tail from a zeroed scratchpad, which the shared factory's pad-row writer did.
     const bool pad_output_row = output_row_size_bytes > slice_row_size_bytes;
-    TT_FATAL(!pad_output_row, "Quasar padded_slice: pad-row path (output_row > slice_row) not yet ported.");
+    const uint32_t l1_alignment = ::hal::get_l1_alignment();
 
     const uint32_t output_cb_page_size =
         is_non_aligned ? tt::round_up(output_row_size_bytes, dst_buffer_alignment) : output_row_size_bytes;
@@ -271,6 +272,15 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             tt::align((a.logical_shape()[-1] * a.element_size()) + src_buffer_alignment, src_buffer_alignment);
         spec.scratchpads.push_back(ScratchpadSpec{.unique_id = PS_SCRATCH, .size_per_node = scratch_page * kNumTrids});
     }
+    // Zero source for the pad-row tails: one row of zeros plus room to match the destination's L1
+    // misalignment. The kernel reads [unpadded % l1_alignment, + stick_size_offset - unpadded), which ends at or
+    // before stick_size_offset == output_row_size_bytes (the sharded-L1 row is l1-aligned, asserted above), so
+    // this size leaves at least l1_alignment to spare. Declared unconditionally for the same name-check reason
+    // as above; tiny when unused.
+    spec.scratchpads.push_back(ScratchpadSpec{
+        .unique_id = PS_ZERO,
+        .size_per_node =
+            pad_output_row ? tt::align(output_row_size_bytes + l1_alignment, l1_alignment) : l1_alignment});
 
     // Reader: interleaved src -> OUTPUT DFB.
     KernelSpec reader{
@@ -282,11 +292,15 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     reader.dfb_bindings = {ProducerOf(PS_OUT_DFB, "in0")};
     // Always bound (see the ScratchpadSpec note above): the kernel's `scratch::pad` reference must resolve
     // even when is_non_aligned is false (non-template if-constexpr still name-checks the discarded branch).
-    reader.scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = PS_SCRATCH, .accessor_name = "pad"}};
+    reader.scratchpad_bindings = {
+        ScratchpadBinding{.scratchpad_spec_name = PS_SCRATCH, .accessor_name = "pad"},
+        ScratchpadBinding{.scratchpad_spec_name = PS_ZERO, .accessor_name = "zero"}};
     reader.compile_time_args = {
         {"is_non_aligned", is_non_aligned ? 1u : 0u},
         {"src_buffer_alignment", static_cast<uint32_t>(src_buffer_alignment)},
-        {"num_trids", kNumTrids}};
+        {"num_trids", kNumTrids},
+        {"pad_output_row", pad_output_row ? 1u : 0u},
+        {"l1_alignment", l1_alignment}};
     reader.runtime_arg_schema = {
         .runtime_arg_names = {
             "src_byte_offset",
@@ -319,7 +333,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     auto per_core = get_padded_slice_runtime_args_rm_sharded_output(
         a, output, output_tensor_start, actual_output_shape, iter_cores);
 
-    const uint32_t start_addr = a.buffer()->address();
+    const uint32_t start_addr = a.mesh_buffer().address();
     const uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
     const uint32_t misalignment = begins_bytes % src_buffer_alignment;
 

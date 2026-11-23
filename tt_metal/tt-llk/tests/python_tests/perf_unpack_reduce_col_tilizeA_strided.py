@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+from helpers.llk_params import DestSync
+from helpers.param_config import parametrize
+from helpers.perf.core import ALL_PERF_RUN_TYPES
+from helpers.tile_constants import MAX_FACE_R_DIM
+from test_unpack_reduce_col_tilizeA_strided import (
+    UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
+    UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES,
+    UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_DIMENSIONS,
+)
+from test_unpack_reduce_col_tilizeA_strided import (
+    test_unpack_reduce_col_tilizeA_strided as run_unpack_reduce_col_tilizeA_strided,
+)
+from test_unpack_reduce_col_tilizeA_strided import (
+    unpack_reduce_col_tilizeA_strided_dest_acc,
+    unpack_reduce_col_tilizeA_strided_tile_cnt,
+)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
+    dest_acc=unpack_reduce_col_tilizeA_strided_dest_acc,
+    tile_cnt=unpack_reduce_col_tilizeA_strided_tile_cnt,
+    # Perf runs full-face tiles only; the functional sweep also covers the 8x32 and 4x32 partial
+    # face heights.
+    tile_dimensions=[
+        dims
+        for dims in UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_DIMENSIONS
+        if dims[0] >= MAX_FACE_R_DIM
+    ],
+    pool_type=UNPACK_REDUCE_COL_TILIZEA_STRIDED_POOL_TYPES,
+    dest_sync=[DestSync.Half],
+    run_types=[ALL_PERF_RUN_TYPES],
+    loop_factor=[32],
+)
+def test_perf_unpack_reduce_col_tilizeA_strided(
+    perf_report,
+    formats,
+    dest_acc,
+    tile_cnt,
+    tile_dimensions,
+    pool_type,
+    dest_sync,
+    run_types,
+    loop_factor,
+):
+    run_unpack_reduce_col_tilizeA_strided(
+        formats,
+        dest_acc,
+        tile_cnt,
+        tile_dimensions,
+        pool_type,
+        dest_sync,
+        is_perf=True,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )

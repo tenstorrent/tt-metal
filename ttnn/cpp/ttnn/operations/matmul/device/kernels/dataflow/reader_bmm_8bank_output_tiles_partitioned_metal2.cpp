@@ -15,18 +15,21 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#ifdef BATCH_BROADCAST
+#include "ttnn/operations/matmul/device/kernels/dataflow/batch_broadcast_offset.hpp"
+#endif
 
 void kernel_main() {
-    uint32_t Mt = get_arg(args::Mt);
-    uint32_t Kt = get_arg(args::Kt);
-    uint32_t Nt = get_arg(args::Nt);
-    uint32_t MtKt = get_arg(args::MtKt);  // if 0
-    uint32_t KtNt = get_arg(args::KtNt);
-    uint32_t batch = get_arg(args::batch);
-    uint32_t bcast_B = get_arg(args::bcast_B);  // if 1 we broadcast B to batch
-    uint32_t output_tile_start_id = get_arg(args::output_tile_start_id);
-    uint32_t num_output_tiles = get_arg(args::num_output_tiles);
-    uint32_t MtNt = get_arg(args::MtNt);
+    const uint32_t Mt = get_arg(args::Mt);
+    const uint32_t Kt = get_arg(args::Kt);
+    const uint32_t Nt = get_arg(args::Nt);
+    const uint32_t MtKt = get_arg(args::MtKt);  // if 0
+    const uint32_t KtNt = get_arg(args::KtNt);
+    const uint32_t batch = get_arg(args::batch);
+    const uint32_t bcast_B = get_arg(args::bcast_B);  // if 1 we broadcast B to batch
+    const uint32_t output_tile_start_id = get_arg(args::output_tile_start_id);
+    const uint32_t num_output_tiles = get_arg(args::num_output_tiles);
+    const uint32_t MtNt = get_arg(args::MtNt);
 
     constexpr uint32_t in0_last_ktile_w = get_arg(args::in0_last_ktile_w);
     constexpr uint32_t in0_last_ktile_h = get_arg(args::in0_last_ktile_h);
@@ -54,9 +57,34 @@ void kernel_main() {
     const auto s0 = TensorAccessor(tensor::in0);
     const auto s1 = TensorAccessor(tensor::in1);
 
-    Noc noc;
+    const Noc noc;
 
+#ifdef BATCH_BROADCAST
+    // Each output tile (out_batch, mt, nt) reads row mt of A's and column nt of B's broadcast batch.
+    constexpr auto batch_dims = get_arg(args::batch_dims);
+    constexpr auto in0_batch_strides = get_arg(args::in0_batch_strides);
+    constexpr auto in1_batch_strides = get_arg(args::in1_batch_strides);
+    uint32_t out_batch = output_tile_start_id / MtNt;
+    uint32_t mt = output_tile_start_id % MtNt / Nt;
+    uint32_t nt = output_tile_start_id % Nt;
+    // The batch offsets change only with out_batch, so they are recomputed at batch boundaries.
+    uint32_t in0_batch_offset = batch_broadcast_offset(out_batch, batch_dims, in0_batch_strides);
+    uint32_t in1_batch_offset = batch_broadcast_offset(out_batch, batch_dims, in1_batch_strides);
+#endif
     for (uint32_t n = 0; n < num_output_tiles; n++) {
+#ifdef BATCH_BROADCAST
+        itileA = in0_batch_offset + mt * Kt;
+        itileB = in1_batch_offset + nt;
+        if (++nt == Nt) {
+            nt = 0;
+            if (++mt == Mt) {
+                mt = 0;
+                ++out_batch;
+                in0_batch_offset = batch_broadcast_offset(out_batch, batch_dims, in0_batch_strides);
+                in1_batch_offset = batch_broadcast_offset(out_batch, batch_dims, in1_batch_strides);
+            }
+        }
+#endif
         for (uint32_t kt = 0; kt < Kt; kt++) {
             {  // Read A's tile at (mt, kt)
                 dfb_in0.reserve_back(onetile);

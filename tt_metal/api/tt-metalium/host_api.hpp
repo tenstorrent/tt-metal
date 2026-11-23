@@ -15,20 +15,16 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <hostdevcommon/common_values.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
-#include <tt-metalium/hal_types.hpp>
 
 /** @file */
 
@@ -80,10 +76,13 @@ void SetRootDir(const std::string& root_dir);
 size_t GetNumAvailableDevices();
 
 /**
- * Returns whether Tenstorrent devices are in a Galaxy cluster
+ * Returns whether Tenstorrent devices are in a Galaxy cluster.
+ *
+ * @deprecated This API always returns false and will be removed.
  *
  * Return value: bool
  */
+[[deprecated("This API always returns false and will be removed after 2026-11-13.")]]
 bool IsGalaxyCluster();
 
 /**
@@ -95,56 +94,6 @@ size_t GetNumPCIeDevices();
 
 ChipId GetPCIeDeviceID(ChipId device_id);
 
-// clang-format off
-/**
- * Instantiates a device object.
- *
- * Return value: IDevice*
- *
- * | Argument   | Description                | Type            | Valid Range                       | Required |
- * |------------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
- * */
-// clang-format on
-[[deprecated("Use distributed::MeshDevice::create_unit_mesh instead. This API will be removed after 2026-09-27.")]]
-IDevice* CreateDevice(
-    ChipId device_id,
-    uint8_t num_hw_cqs = 1,
-    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-    const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-    const std::vector<uint32_t>& l1_bank_remap = {},
-    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
-
-// clang-format off
-/**
- * Instantiates a device with minimal setup, used to attach to a device in a bad state.
- *
- * Return value: IDevice*
- *
- * | Argument   | Description                | Type            | Valid Range                       | Required |
- * |------------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
- * */
-// clang-format on
-[[deprecated("Use distributed::MeshDevice::create_unit_mesh instead. This API will be removed after 2026-09-27.")]]
-IDevice* CreateDeviceMinimal(
-    ChipId device_id, uint8_t num_hw_cqs = 1, const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
-
-// clang-format off
-/**
- * Resets device and closes device
- *
- * Return value: bool
- *
- * | Argument | Description                | Type     | Valid Range | Required |
- * |----------|----------------------------|----------|-------------|----------|
- * | device   | Pointer to a device object | IDevice* |             | True     |
- */
-// clang-format on
-[[deprecated("Use MeshDevice RAII or MeshDevice::close instead. This API will be removed after 2026-09-27.")]]
-bool CloseDevice(IDevice* device);
-
 // ==================================================
 //                  HOST API: program & kernels
 // ==================================================
@@ -153,10 +102,33 @@ bool CloseDevice(IDevice* device);
 /**
  * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
  *
+ * Deprecated: the Program is bound to the default MetalContext, so it cannot be used with a MeshDevice that belongs to a
+ * different MetalEnv. Use CreateProgram(distributed::MeshDevice&) instead.
+ *
  * Return value: Program
  */
 // clang-format on
+[[deprecated(
+    "Use CreateProgram(distributed::MeshDevice&) instead, which binds the Program to the MetalEnv of the mesh "
+    "device. This API will be removed after 2026-12-31.")]]
 Program CreateProgram();
+
+// clang-format off
+/**
+ * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
+ *
+ * The Program is bound to the MetalEnv that owns `mesh_device`. All later operations on the Program (CreateKernel,
+ * CreateCircularBuffer, ...) resolve their hardware description, runtime options, and build environment from that env.
+ * The Program can only be compiled and enqueued on devices from the same MetalEnv.
+ *
+ * Return value: Program
+ *
+ * | Argument    | Description                                                | Type                       | Valid Range | Required |
+ * |-------------|------------------------------------------------------------|----------------------------|-------------|----------|
+ * | mesh_device | The mesh device whose MetalEnv the Program will be bound to | distributed::MeshDevice &  |             | Yes      |
+ */
+// clang-format on
+Program CreateProgram(distributed::MeshDevice& mesh_device);
 
 // clang-format off
 /**
@@ -348,108 +320,6 @@ GlobalSemaphore CreateGlobalSemaphore(
 
 // clang-format off
 /**
-*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | BufferConfig              |             | Yes      |
-*/
-// clang-format on
-[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config);
-
-// clang-format off
-/**
-*  Creates a pre-allocated interleaved DRAM or L1 buffer with the global allocator on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | BufferConfig              |             | Yes      |
-*  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
-*/
-// clang-format on
-[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, DeviceAddr address);
-
-// clang-format off
-/**
-*  Creates a pre-allocated interleaved DRAM or L1 buffer on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | BufferConfig              |             | Yes      |
-*  | sub_device_id   | The sub-device id to allocate on                                  | SubDeviceId               |             | No       |
-*/
-// clang-format on
-[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, SubDeviceId sub_device_id);
-
-// clang-format off
-/**
-*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
-*/
-// clang-format on
-[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config);
-
-// clang-format off
-/**
-*  Creates a pre-allocated sharded DRAM or L1 buffer with the global allocator on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
-*  | address         | Device address of the buffer                                      | DeviceAddr                |             | No       |
-*/
-// clang-format on
-[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address);
-
-// clang-format off
-/**
-*  Creates a pre-allocated sharded DRAM or L1 buffer on device
-*
-*  Return value: std::shared_ptr<Buffer>
-*
-*  | Argument        | Description                                                       | Type                      | Valid Range | Required |
-*  |-----------------|------------------------------------------------------------------ |---------------------------|-------------|----------|
-*  | config          | Config for the buffer                                             | ShardedBufferConfig       |             | Yes      |
-*  | sub_device_id   | The sub-device id to allocate on                                  |                           |             | No       |
-*/
-// clang-format on
-[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id);
-
-// clang-format off
-/**
-*  Deallocates buffer from device by marking its memory as free.
-*
-*  Return value: void
-*
-*  | Argument | Description                          | Type     | Valid Range | Required |
-*  |----------|--------------------------------------|----------|-------------|----------|
-*  | buffer   | The buffer to deallocate from device | Buffer & |             | Yes      |
-*/
-// clang-format on
-[[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-void DeallocateBuffer(Buffer& buffer);
-
-// clang-format off
-/**
 *  Gives the specified program ownership of the buffer: the buffer will remain on device at least until the program is enqueued. This is required for asynchronous Command Queues.
 *
 *  Return value: void
@@ -637,6 +507,11 @@ void ReadMeshDeviceProfilerResults(
  * | cq_id        | The command queue id to push.                                                     | uint8_t                       |                                    | Yes      |
  */
 // clang-format on
+[[deprecated(
+    "Metal is moving away from implicit (thread-local) command queue selection. Pass the command queue id explicitly "
+    "(for example mesh_command_queue(cq_id)); TTNN users should use ttnn::with_command_queue_id or "
+    "ttnn.command_queue, which now keep their own state and no longer set this one. This API will be removed after "
+    "2026-12-10.")]]
 void PushCurrentCommandQueueIdForThread(uint8_t cq_id);
 
 // clang-format off
@@ -645,6 +520,10 @@ void PushCurrentCommandQueueIdForThread(uint8_t cq_id);
  * Return value: uint8_t
  */
 // clang-format on
+[[deprecated(
+    "Metal is moving away from implicit (thread-local) command queue selection. Pass the command queue id explicitly "
+    "(for example mesh_command_queue(cq_id)); TTNN users should use ttnn::with_command_queue_id or "
+    "ttnn.command_queue. This API will be removed after 2026-12-10.")]]
 uint8_t PopCurrentCommandQueueIdForThread();
 
 // clang-format off
@@ -653,6 +532,10 @@ uint8_t PopCurrentCommandQueueIdForThread();
  * Return value: uint8_t
  */
 // clang-format on
+[[deprecated(
+    "Metal is moving away from implicit (thread-local) command queue selection. Pass the command queue id explicitly "
+    "(for example mesh_command_queue(cq_id)); TTNN users should use ttnn::get_current_command_queue_id_for_thread. "
+    "This API will be removed after 2026-12-10.")]]
 uint8_t GetCurrentCommandQueueIdForThread();
 
 }  // namespace tt::tt_metal

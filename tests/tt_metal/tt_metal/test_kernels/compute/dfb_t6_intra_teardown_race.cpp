@@ -15,6 +15,7 @@
 #include "ckernel_trisc_common.h"
 #include "dev_mem_map.h"
 #include "experimental/kernel_args.h"
+#include "risc_common.h"
 
 namespace {
 volatile std::uint32_t* scratch_word(std::uint32_t l1_address) {
@@ -43,6 +44,7 @@ void kernel_main() {
 
 #ifdef UCK_CHLKC_UNPACK
     while (*scratch_word(scratch_l1_address) != posts_landed) {
+        invalidate_l1_cache();
     }
     // Pack has returned by the time this spin finishes, so its firmware teardown has run.
     for (std::uint32_t i = 0; i < unpack_spin; i++) {

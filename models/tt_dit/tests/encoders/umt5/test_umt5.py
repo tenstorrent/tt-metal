@@ -8,7 +8,7 @@ import time
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoTokenizer
+from transformers import T5Tokenizer
 from transformers.models.umt5.configuration_umt5 import UMT5Config as HF_UMT5Config
 from transformers.models.umt5.modeling_umt5 import UMT5EncoderModel
 
@@ -23,6 +23,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache
 from ....utils.check import assert_quality
+from ....utils.hf_local_mirror import ensure_cached
 
 # Shared device configuration for UMT5 tests to reduce code duplication and ensure we are using consistent device configurations.
 
@@ -95,7 +96,7 @@ def test_umt5_embeddings(
     if dit_unit_test:
         hf_model = get_random_weights_model()
     else:
-        model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+        model_name_checkpoint = ensure_cached("Wan-AI/Wan2.2-T2V-A14B-Diffusers")
         hf_model = UMT5EncoderModel.from_pretrained(
             model_name_checkpoint, subfolder="text_encoder", local_files_only=False
         )
@@ -200,7 +201,7 @@ def test_umt5_encoder(
 
     parallel_config, ccl_manager = parallel_config_and_ccl_manager
 
-    model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+    model_name_checkpoint = ensure_cached("Wan-AI/Wan2.2-T2V-A14B-Diffusers")
 
     if dit_unit_test:
         hf_model = get_random_weights_model()
@@ -219,7 +220,7 @@ def test_umt5_encoder(
     total_prompts = len(prompt)
     num_devices = mesh_device.shape[1 - parallel_config.tensor_parallel.mesh_axis]
     prompt += [" "] * ((num_devices - (total_prompts % num_devices)) % num_devices)
-    tokenizer = AutoTokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer", trust_remote_code=True)
+    tokenizer = T5Tokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer")
     text_inputs = tokenizer(
         prompt,
         padding="max_length",

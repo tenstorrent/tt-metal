@@ -1,0 +1,76 @@
+{
+  "architectures": [
+    "MiniMaxM3TinyForCausalLM"
+  ],
+  "model_type": "minimax_m3",
+  "_comment": "MiniMax-M3.1 TEXT backbone, flattened from the checkpoint's HF text_config. Differs from MiniMax-M3 in rope_theta (1e7), the attention schedule (every layer MSA: sparse_attention_freq all 1, index value branch disabled), extra sparse_* switches (all off) and no MTP fields. The checkpoint is quantized: MXFP8 linears (block [1,32]) and compressed-tensors NVFP4 routed experts (group 16), dequantized to bf16 at load (utils/checkpoint.py); quantization_config holds the format fields the loader checks (ignored_layers omitted). Multimodal vision_config omitted (out of scope). Layer schedule: layers 0-2 dense MLP, 3-59 MoE; MSA attention on all 60.",
+  "attention_dropout": 0.0,
+  "head_dim": 128,
+  "hidden_size": 6144,
+  "num_attention_heads": 64,
+  "num_key_value_heads": 4,
+  "num_hidden_layers": 60,
+  "vocab_size": 200064,
+  "max_position_embeddings": 1048576,
+  "rms_norm_eps": 1e-06,
+  "rope_theta": 10000000,
+  "rotary_dim": 64,
+  "partial_rotary_factor": 0.5,
+  "use_qk_norm": true,
+  "qk_norm_type": "per_head",
+  "use_gemma_norm": true,
+  "attention_output_gate": false,
+  "hidden_act": "swigluoai",
+  "swiglu_alpha": 1.702,
+  "swiglu_limit": 7.0,
+  "intermediate_size": 3072,
+  "dense_intermediate_size": 12288,
+  "shared_intermediate_size": 3072,
+  "num_local_experts": 128,
+  "num_experts_per_tok": 4,
+  "n_shared_experts": 1,
+  "scoring_func": "sigmoid",
+  "use_routing_bias": true,
+  "routed_scaling_factor": 2.0,
+  "moe_layer_freq": [
+    0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+  ],
+  "sparse_attention_config": {
+    "use_sparse_attention": true,
+    "sparse_block_size": 128,
+    "sparse_topk_blocks": 16,
+    "sparse_num_index_heads": 4,
+    "sparse_index_dim": 128,
+    "sparse_score_type": "max",
+    "sparse_init_block": 0,
+    "sparse_local_block": 1,
+    "sparse_attention_freq": [
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+    ],
+    "sparse_enable_kv_share": false,
+    "sparse_enable_vo_rope": false,
+    "sparse_enable_estimate_lse": false,
+    "sparse_kvshare_value_drop_rope_dim": false,
+    "sparse_disable_index_value": [
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+      1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+    ]
+  },
+  "tie_word_embeddings": false,
+  "use_cache": true,
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.52.4",
+  "quantization_config": {
+    "quant_method": "mxfp8",
+    "activation_scheme": "dynamic",
+    "weight_block_size": [1, 32],
+    "group_size": 16,
+    "moe_quant_algo": "NVFP4",
+    "moe_quant_format": "nvfp4-pack-quantized"
+  }
+}

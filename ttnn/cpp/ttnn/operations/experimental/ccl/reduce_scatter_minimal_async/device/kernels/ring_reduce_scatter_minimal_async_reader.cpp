@@ -7,7 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_common/kernels/common.hpp"

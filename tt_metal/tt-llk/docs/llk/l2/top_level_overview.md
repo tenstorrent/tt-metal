@@ -174,7 +174,6 @@ Table 1 contains all unpack operations currently implemented for Tensix:
 | `llk_unpack_AB_matmul.h` | Optimizes matrix multiplication by unpacking tiles into Source A and B with register reuse. |
 | `llk_unpack_reduce.h` | Unpacks a single tile into Source A and a scalar value into Source B for reduction operations. |
 | `llk_unpack_tilize.h` | Converts row-major input data into tile format during unpacking. |
-| `llk_unpack_untilize.h` | Converts tiled data back to row-major format during unpacking. **Deprecated** in favor of `llk_pack_untilize.h`; see tt-metal#22904. |
 ---
 
 ### LLK Math Operations (Table 2)
@@ -186,8 +185,8 @@ Table 2 contains all math operations currently implemented for Tensix:
 | `llk_math_eltwise_unary_datacopy.h` | Transfers a tile from Source A/B to Destination register using FPU. |
 | `llk_math_eltwise_unary_sfpu.h` | Executes unary operations on a tile data in the Destination register using SFPU. |
 | `llk_math_eltwise_binary.h` | Performs element-wise operations (add/sub/mul) on Source A and B tiles using FPU, storing results in Destination register. |
-| `llk_math_eltwise_reduce.h` | Computes global maximum or average from Source A using scalar values from Source B via FPU. |
-| `llk_math_eltwise_matmul.h` | Performs matrix multiplication between Source A and Source B tiles using FPU. |
+| `llk_math_reduce.h` | Computes global maximum or average from Source A using scalar values from Source B via FPU. |
+| `llk_math_matmul.h` | Performs matrix multiplication between Source A and Source B tiles using FPU. |
 ---
 
 ### LLK Pack Operations (Table 3)

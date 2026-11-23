@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <string>
 
@@ -133,6 +134,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         S = page_table_tensor.value().padded_shape()[-1] * block_size;
         has_block_padding = original_block_size < TILE_HEIGHT;
     }
+    TT_FATAL(B > 0, "SDPA decode batch size must be > 0");
 
     // ========== Q Sharding & MLA Parallelization ==========
     // Q is "locally available" when sharded for MLA with data replicated across all worker cores.
@@ -199,8 +201,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     TT_FATAL(num_cores_available >= B, "Cores available ({}) must be >= batch size ({})", num_cores_available, B);
 
     // ========== Core Allocation ==========
-    const uint32_t max_cores_per_head =
-        program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
+    const uint32_t max_cores_per_head = program_config.has_value()
+                                            ? program_config->max_cores_per_head_batch
+                                            : std::min<uint32_t>(num_cores_available, 1u << MAX_TREE_REDUCTION_ROUNDS);
     TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
@@ -261,14 +264,52 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // A core group can be laid out in either row-major or column-major order on the core grid.
     // By default core groups are laid out in row-major order. But when Q heads is parallelized,
     // column-major group indexing is used to keep batch groups spatially close for efficient K multicast along columns.
-    const bool use_col_major_group_indexing =
-        (q_heads_parallel_factor > 1) && (grid_size.y >= num_cores_per_head) && !on_subcoregrid && q_locally_available;
+    // Without replicated Q the reader fetches Q from the group's output core, so Q shards must already sit there.
+    auto col_major_layout_possible = [&]() -> bool {
+        if (q_heads_parallel_factor <= 1 || grid_size.y < num_cores_per_head || on_subcoregrid) {
+            return false;
+        }
+        if (q_locally_available) {
+            return true;
+        }
+        if (!is_q_sharded || num_heads_per_core != 1 || grid_size.x % num_cores_per_head != 0 ||
+            num_active_cores % num_cores_per_head != 0) {
+            return false;
+        }
+        const uint32_t groups = num_active_cores / num_cores_per_head;
+        const uint32_t groups_per_row = grid_size.x / num_cores_per_head;
+        if (groups != B || groups % groups_per_row != 0) {
+            return false;
+        }
+        const uint32_t rows = groups / groups_per_row;
+        if (rows % q_heads_parallel_factor != 0) {
+            return false;
+        }
+        const auto& shard_spec = input_tensor_q.memory_config().shard_spec().value();
+        const auto shard_cores =
+            corerange_to_cores(shard_spec.grid, B, shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        if (shard_cores.size() != B) {
+            return false;
+        }
+        for (uint32_t cb = 0; cb < B; ++cb) {
+            if (shard_cores[cb] != CoreCoord{(cb / rows) * num_cores_per_head, cb % rows}) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const bool use_col_major_group_indexing = col_major_layout_possible();
     uint32_t num_group_rows = 0;
     uint32_t num_group_cols = 0;
     uint32_t num_groups_total = 0;
     if (use_col_major_group_indexing) {
         num_groups_total = num_active_cores / num_cores_per_head;
         num_group_rows = grid_size.x / num_cores_per_head;
+        TT_FATAL(
+            num_group_rows > 0,
+            "grid_size.x ({}) must be at least num_cores_per_head ({}) for column major core groups",
+            grid_size.x,
+            num_cores_per_head);
         num_group_cols = num_groups_total / num_group_rows;
         TT_FATAL(
             num_group_cols % q_heads_parallel_factor == 0,
@@ -335,7 +376,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     auto get_col_major_group_idx = [&](uint32_t row_major_idx) -> uint32_t {
         uint32_t group_row = row_major_idx / num_group_rows;
         uint32_t group_col = row_major_idx % num_group_rows;
-        return (group_col * num_group_rows) + group_row;
+        return (group_col * num_group_cols) + group_row;
     };
 
     // Reducer cores (one per KV head group)
@@ -429,19 +470,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // Matmul block/subblock configuration for output (QK * V)
     uint32_t out_in0_block_w = Sk_chunk_t > 0 ? Sk_chunk_t : 0;
-    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    // The subblock width must divide vDHt for the same reason: vDHt / subblock_w truncates otherwise.
+    const uint32_t out_out_subblock_w = largest_divisor_at_most(vDHt, dst_size);
     // Same divisibility requirement as the QK subblock height above.
     const uint32_t out_out_subblock_h =
         (out_out_subblock_w == vDHt) ? largest_divisor_at_most(PNHt, dst_size / out_out_subblock_w) : 1;
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
-    // DHt granularity for compute loops (must be power of 2)
-    uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = static_cast<uint32_t>(std::log2(dht_granularity));
-    if (dht_granularity != (1u << log2_dht_granularity)) {
-        dht_granularity = 1;
-    }
+    // DHT_GRANULARITY chunks the vDHt-wide normalisation loops, so it must divide vDHt (and DHt).
+    const uint32_t dht_granularity = largest_divisor_at_most(std::gcd(DHt, vDHt), dst_size);
 
     // ========== Tile Counts for Circular Buffers ==========
     const uint32_t q_tiles = PNHt * DHt;

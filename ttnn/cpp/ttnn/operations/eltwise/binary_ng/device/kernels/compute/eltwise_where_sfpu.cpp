@@ -27,11 +27,11 @@ ALWI void process_tile(
     DataflowBuffer dfb_out(cb_out_id);
 
 #if BCAST_INPUT  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
-    DataflowBuffer& dfb_bcast = dfb_in1;
-    DataflowBuffer& dfb_other = dfb_in0;
+    auto& dfb_bcast = dfb_in1;
+    auto& dfb_other = dfb_in0;
 #else  // BCAST_INPUT == 0 : input A (condition tensor)  is broadcasted
-    DataflowBuffer& dfb_bcast = dfb_in0;
-    DataflowBuffer& dfb_other = dfb_in1;
+    auto& dfb_bcast = dfb_in0;
+    auto& dfb_other = dfb_in1;
 #endif
 
     dfb_bcast.wait_front(num_tiles_per_cycle);

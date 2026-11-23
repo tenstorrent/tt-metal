@@ -71,8 +71,8 @@ def test_off_restores_legacy(tmp_path, monkeypatch):
     assert checkpoint_cache_key(ckpt) is None
 
 
-def test_invalid_mode_rejected(tmp_path):
-    with pytest.raises(ValueError):
+def test_invalid_mode_rejected(tmp_path, expect_error):
+    with expect_error(ValueError, "expected one of"):
         checkpoint_cache_key(_make_ckpt(tmp_path / "ckpt"), mode="sometimes")
 
 
