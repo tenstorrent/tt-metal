@@ -997,7 +997,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         .compile_time_args = {{"block_size", block_size}},
         // writer_start is a tile-row index for the row-major writer and a flat tile offset for
         // the tile writer, so the schema carries the host's own name for it.
-        .runtime_arg_schema = {.runtime_arg_names = {"Wt", "num_tile_rows", "writer_start"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"Wt", "num_tile_rows", "writer_start", "row_skip"}},
         .hw_config = create_writer_datamovement_config(),
     };
     if (input_is_row_major) {
@@ -1316,11 +1316,19 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
         // For the RM output writer start_tile_row is the starting tile-row index for this core,
         // not the flat tile offset, because the RM writer computes row addresses directly.
-        const uint32_t writer_start = input_is_row_major ? curr_row : tile_offset;
+        // The tile writer may target a column window of a wider preallocated output (output_tensor):
+        // it starts at the window's first tile of its first row and skips the rest of each row.
+        const uint32_t out_Wt = output.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+        const uint32_t row_skip = input_is_row_major ? 0 : out_Wt - Wt;
+        const uint32_t writer_start =
+            input_is_row_major ? curr_row : curr_row * out_Wt + operation_attributes.output_col_tiles;
         m2::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
-            {{"Wt", Wt}, {"num_tile_rows", num_tile_rows_per_core}, {"writer_start", writer_start}});
+            {{"Wt", Wt},
+             {"num_tile_rows", num_tile_rows_per_core},
+             {"writer_start", writer_start},
+             {"row_skip", row_skip}});
         if (input_is_row_major) {
             m2::AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"H_logical", H_logical}});
         }

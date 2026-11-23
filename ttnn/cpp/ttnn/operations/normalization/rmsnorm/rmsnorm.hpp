@@ -22,6 +22,10 @@ Tensor rms_norm(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const prim::LayerNormProgramConfig>& program_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<DataType>& dtype = std::nullopt);
+    const std::optional<DataType>& dtype = std::nullopt,
+    // Preallocated interleaved TILE output: the result goes into its tile columns
+    // [output_col_tiles, output_col_tiles + input width in tiles); its dtype is the output dtype.
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    uint32_t output_col_tiles = 0);
 
 }  // namespace ttnn

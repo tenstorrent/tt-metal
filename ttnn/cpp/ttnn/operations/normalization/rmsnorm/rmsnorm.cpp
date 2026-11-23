@@ -28,7 +28,11 @@ Tensor rms_norm(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<DataType>& dtype) {
+    const std::optional<DataType>& dtype_arg,
+    const std::optional<Tensor>& output_tensor,
+    uint32_t output_col_tiles) {
+    const std::optional<DataType> dtype =
+        output_tensor.has_value() ? std::optional<DataType>(output_tensor.value().dtype()) : dtype_arg;
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
 
@@ -94,7 +98,9 @@ Tensor rms_norm(
         prim::DistributedLayerNormStage::NOT_DISTRIBUTED,
         std::nullopt,  // stats
         std::nullopt,  // recip_tensor
-        round_bf16);
+        round_bf16,
+        output_tensor,
+        output_col_tiles);
 }
 
 }  // namespace ttnn

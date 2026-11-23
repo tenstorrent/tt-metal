@@ -52,6 +52,8 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): Defaults to `None`.
             dtype (ttnn.DataType, optional): output data type. Defaults to `None` (the input's).
+            output_tensor (ttnn.Tensor, optional): preallocated interleaved TILE tensor with the input's rows, at least as wide. The result is written into its tile columns starting at :attr:`output_col_tiles`; other columns are not touched. Its dtype is the output dtype. Defaults to `None`.
+            output_col_tiles (int, optional): first tile column of the result in :attr:`output_tensor`. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -118,7 +120,9 @@ void bind_normalization_rms_norm(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("dtype") = nb::none());
+        nb::arg("dtype") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("output_col_tiles") = 0);
 }
 
 }  // namespace ttnn::operations::normalization::detail

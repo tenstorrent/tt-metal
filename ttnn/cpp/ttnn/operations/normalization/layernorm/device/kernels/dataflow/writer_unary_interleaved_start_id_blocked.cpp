@@ -14,6 +14,7 @@ void kernel_main() {
     const uint32_t Wt = get_arg(args::Wt);
     const uint32_t num_tile_rows = get_arg(args::num_tile_rows);
     const uint32_t tile_offset = get_arg(args::writer_start);
+    const uint32_t row_skip = get_arg(args::row_skip);  // output tiles past this op's column window, per row
 
     constexpr auto blk = get_arg(args::block_size);  // needed for correctness of softmax/LN kernels
     constexpr uint32_t onetile = 1;
@@ -38,5 +39,6 @@ void kernel_main() {
             noc.async_write_barrier();
             dfb_out0.pop_front(static_cast<uint16_t>(block.full_block_size()));
         }
+        tile_id += row_skip;
     }
 }

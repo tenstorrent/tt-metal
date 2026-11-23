@@ -23,6 +23,8 @@ struct LayerNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     std::optional<operations::unary::UnaryWithParam> fused_activation;
+    // With LayerNormInputs::output_tensor: first tile column of the output's column window.
+    uint32_t output_col_tiles = 0;
 };
 
 struct LayerNormInputs {
@@ -32,6 +34,9 @@ struct LayerNormInputs {
     std::optional<Tensor> bias;                   // beta
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
     std::optional<Tensor> recip_tensor;           // reciprocal LUT for welford algorithm
+    // Preallocated interleaved TILE output (same rows as the input, at least as wide): the result is written
+    // into its tile columns [output_col_tiles, output_col_tiles + Wt); the other columns are left as they are.
+    std::optional<Tensor> output_tensor;
 };
 
 }  // namespace ttnn::prim
