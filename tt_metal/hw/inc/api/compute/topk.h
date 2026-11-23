@@ -242,7 +242,8 @@ ALWI void topk_tile_init() {
  * DEST required) and u16 index tiles at idst+2..idst+3. The index low bits are complemented iff
  * (value_sign == 0) XNOR largest, which makes the sign-magnitude SFPSWAP order torch-stable in the
  * requested GLOBAL direction; run once per freshly loaded slab, never per network call. The index
- * tiles are consumed (dead afterwards). DST must be in acquired state.
+ * tiles are consumed (dead afterwards). DST must be in acquired state. On Quasar, where a 16-bit
+ * integer cannot sit in a 32-bit DST, the index tiles hold each index as an Int32 word.
  *
  * Return value: None
  *
@@ -269,7 +270,8 @@ ALWI void topk_fuse_tile(uint32_t idst) {
  * value words ([bf16|0x0000], in place — the following Float32->bf16 pack is then exact) and u16
  * index tiles at idst+2 onward, un-complementing the index with the same largest polarity the fuse
  * used. The index store uses SFPSTORE mode 9 (low->high) so the packer reads UInt16 out of the
- * high half of 32-bit DEST. Run once on the final output tiles; DST must be in acquired state.
+ * high half of 32-bit DEST. On Quasar (no UInt16) the index stays an Int32 word, packed as Int32.
+ * Run once on the final output tiles; DST must be in acquired state.
  *
  * Return value: None
  *
@@ -405,7 +407,7 @@ ALWI void topk_strip_rank_tags(std::uint32_t idst) {
  * Moves a uint16 index tile that lives in 32-bit DEST as a plain integer into the packer-visible
  * high half (SFPSTORE mode 9), before it is packed. Requires 32-bit DEST (is_fp32_dest_acc_en,
  * checked at compile time). Must run on MATH while DEST is still acquired (before tile_regs_commit
- * / pack_tile).
+ * / pack_tile). Not supported on Quasar, which has no UInt16 (compile error).
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void topk_finalize_uint16_indices(std::uint32_t idst) {
@@ -429,7 +431,8 @@ ALWI void topk_uint16_prepare_value_tile_for_pack(uint32_t idst) {
  * lands them) into the packer-visible high half, stripping the stale garbage above them. Used by
  * the fused-key TopK final extraction; unconditional (not gated on TOPK_UINT16_FP32_DEST). Requires
  * 32-bit DEST (is_fp32_dest_acc_en, checked at compile time). Must run on MATH while DEST is still
- * acquired (before tile_regs_commit / pack_tile).
+ * acquired (before tile_regs_commit / pack_tile). Not supported on Quasar, which has no UInt16
+ * (compile error).
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void topk_uint16_move_dest_tile_to_pack_half(uint32_t idst) {
