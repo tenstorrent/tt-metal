@@ -52,14 +52,15 @@ def rope_tables(pos0, rows):
 KV_PAD = 128  # cache rows past max_ctx: the block rows of a draft at p <= max_ctx - 1 (and the flash-decode chunk)
 
 
-def bank(device, w, cfg, out_dtype):
-    """BankLinear for one drafter matmul: w torch [K, N]; one reference chunk, 3 readers per bank."""
+def bank(device, w, cfg, out_dtype, cores_per_bank=6):
+    """BankLinear for one drafter matmul: w torch [K, N]; one reference chunk, up to 6 readers per bank."""
     nb = device.dram_grid_size().x
     K, N = w.shape
     chunk = 14336 if N > 65536 else math.ceil(N / (nb * 32)) * nb * 32
     kt = K // 32
+    c = min(cores_per_bank, chunk // 32 // nb)
     return BankLinear(device, w, ttnn.bfloat8_b, chunk, kb=next(b for b in range(8, 0, -1) if kt % b == 0),
-                      cores_per_bank=3, compute_kernel_config=cfg, out_cols=N, out_dtype=out_dtype)  # fmt: skip
+                      cores_per_bank=c, compute_kernel_config=cfg, out_cols=N, out_dtype=out_dtype)  # fmt: skip
 
 
 class DSparkDrafter:
@@ -102,7 +103,14 @@ class DSparkDrafter:
                 # so its CBs stay below the decode staging buffer (tt/mk/overlap.py, ~890 KB up)
                 parts = 2 if t.shape[0] > 4608 else 1
                 kp = t.shape[0] // parts
-                self.lin[name] = [bank(dev, t[j * kp : (j + 1) * kp], self.mmc, dt) for j in range(parts)]
+                if name.endswith("w_gate_up"):  # gate and up as two linears: no column slices of the output
+                    half = t.shape[1] // 2
+                    for j, n in enumerate(("w_gate", "w_up")):
+                        self.lin[name.replace("w_gate_up", n)] = [
+                            bank(dev, t[:, j * half : (j + 1) * half], self.mmc, dt)
+                        ]
+                else:
+                    self.lin[name] = [bank(dev, t[j * kp : (j + 1) * kp], self.mmc, dt) for j in range(parts)]
                 del t
         self.w = {k_: ttnn.to_device(v, dev, memory_config=dram) for k_, v in host.items()
                   if k_ not in self.lin and k_ not in ("fold_w", "fold_b")}  # fmt: skip
@@ -140,6 +148,13 @@ class DSparkDrafter:
         # p + 7, once per kv group (the flash-decode batch)
         self.cur_pos = ttnn.from_torch(torch.zeros(NKV, dtype=torch.int32), dtype=ttnn.int32, device=dev)
         self.f_rnn = put(torch.zeros(1, 1, 1, HIDDEN), ttnn.bfloat16)
+        # row selectors: onehot[i] [1,1,1,32] picks block row i of a [1,1,32,C] tensor by matmul (a row slice of a
+        # tile tensor is untilize + slice + a single-core tilize, ~70 us)
+        self.onehot = []
+        for i in range(BLOCK):
+            e = torch.zeros(1, 1, 1, 32)
+            e[..., i] = 1.0
+            self.onehot.append(put(e))
         self.S = self.max_ctx + KV_PAD
         zeros = torch.zeros(1, NKV, self.S, D)
         self.k_cache = [put(zeros, ttnn.bfloat16) for _ in range(N_LAYERS)]
@@ -290,11 +305,14 @@ class DSparkDrafter:
         o = ttnn.experimental.nlp_concat_heads(ttnn.pad(o, [(0, 0), (0, 0), (0, 32 - BLOCK), (0, 0)], 0.0))
         res = ttnn.add(res, self._lin(o, f"l{i}.wo", ttnn.float32), dtype=ttnn.float32)
         h = self._rms(res, f"l{i}.post_norm")
-        gu = self._lin(h, f"l{i}.w_gate_up", ttnn.float32)
-        inter = gu.shape[-1] // 2
-        g = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, 32, inter])
-        u = ttnn.slice(gu, [0, 0, 0, inter], [1, 1, 32, 2 * inter])
-        a = ttnn.typecast(ttnn.multiply(ttnn.silu(g), u), ttnn.bfloat16)
+        if f"l{i}.w_gate" in self.lin:
+            g, u = self._lin(h, f"l{i}.w_gate", ttnn.float32), self._lin(h, f"l{i}.w_up", ttnn.float32)
+        else:
+            gu = self._lin(h, f"l{i}.w_gate_up", ttnn.float32)
+            inter = gu.shape[-1] // 2
+            g = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, 32, inter])
+            u = ttnn.slice(gu, [0, 0, 0, inter], [1, 1, 32, 2 * inter])
+        a = ttnn.multiply(g, u, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], dtype=ttnn.bfloat16)
         return ttnn.add(res, self._lin(a, f"l{i}.w_down", ttnn.float32), dtype=ttnn.float32)
 
     def draft(self, anchor):
@@ -318,13 +336,15 @@ class DSparkDrafter:
             pe = ttnn.reshape(ttnn.embedding(prev, self.w["markov_w1"], layout=ttnn.TILE_LAYOUT), [1, 1, 1, RANK])
             st = ttnn.zeros_like(pe) if state is None else ttnn.typecast(state, ttnn.bfloat16)
             raw = self._lin(ttnn.concat([st, pe], dim=-1), "rnn_w_sp", ttnn.float32)
-            raw = ttnn.add(raw, ttnn.slice(ctx, [0, 0, i + 1, 0], [1, 1, i + 2, 3 * RANK]))
+            raw = ttnn.add(
+                raw, ttnn.matmul(self.onehot[i + 1], ctx, dtype=ttnn.float32, compute_kernel_config=self.ckc)
+            )
             gate = ttnn.sigmoid(ttnn.slice(raw, [0, 0, 0, 0], [1, 1, 1, RANK]))
             cand = ttnn.tanh(ttnn.slice(raw, [0, 0, 0, RANK], [1, 1, 1, 2 * RANK]))
             lat = ttnn.tanh(ttnn.slice(raw, [0, 0, 0, 2 * RANK], [1, 1, 1, 3 * RANK]))
             upd = ttnn.multiply(ttnn.rsub(gate, 1.0), cand)
             state = upd if state is None else ttnn.add(ttnn.multiply(gate, state), upd)
-            x = ttnn.add(ttnn.slice(hb, [0, 0, i + 1, 0], [1, 1, i + 2, HIDDEN]),
+            x = ttnn.add(ttnn.matmul(self.onehot[i + 1], hb, dtype=ttnn.float32, compute_kernel_config=self.ckc),
                          self._lin(ttnn.typecast(lat, ttnn.bfloat16), "ho_w", ttnn.float32))  # fmt: skip
             _, am = self.head(ttnn.typecast(x, ttnn.bfloat16))  # softcap 30 + vocab mask + argmax, [1,1,1,1]
             am = ttnn.clone(am)  # the head's token buffer is rewritten by the next step
