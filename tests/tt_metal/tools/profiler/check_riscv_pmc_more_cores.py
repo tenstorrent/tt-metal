@@ -29,6 +29,10 @@ EV3, EV4 = 0x10110111, 0xA0000000
 IDS = {9092: "counts", 9093: "cycles", 9094: "events"}
 
 
+class NoIdleEthernetCores(RuntimeError):
+    pass
+
+
 def run(env_extra):
     if os.path.exists(LOG):
         os.remove(LOG)
@@ -38,6 +42,8 @@ def run(env_extra):
     result = subprocess.run([BINARY], cwd=REPO, env=env, capture_output=True, text=True)
     sys.stdout.write(result.stdout[-2000:])
     if result.returncode != 0:
+        if "no idle ethernet cores" in result.stdout + result.stderr:
+            raise NoIdleEthernetCores("the card has no idle ethernet cores")
         sys.stderr.write(result.stderr[-4000:])
         raise RuntimeError(f"{BINARY} failed with {result.returncode}: {result.stderr[-2000:]}")
     with open(LOG, newline="") as f:

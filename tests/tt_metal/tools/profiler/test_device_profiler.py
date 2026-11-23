@@ -1244,10 +1244,8 @@ def test_riscv_pmc_more_cores():
         rows, _ = checker.run({})
         checks = checker.check_off(rows)
         rows, launched = checker.run({"TT_METAL_PROFILE_RISCV_PMC": f"{checker.EV3:#x},{checker.EV4:#x}"})
-    except RuntimeError as e:
-        if "no idle ethernet cores" in str(e):
-            pytest.skip("No idle ethernet cores on this card")
-        raise
+    except checker.NoIdleEthernetCores:
+        pytest.skip("No idle ethernet cores on this card")
     checks += checker.check_on(rows, launched)
 
     failed = [what for cond, what in checks if not cond]
