@@ -274,6 +274,22 @@ def test_quasar_reshape_tile_padding(device, dtype, pad_value, in_shape, out_sha
     assert torch.all(_padding_of(out, out_shape) == (pad_value or 0))
 
 
+# The pad value is baked into the kernel, so it is part of the program-cache key: the same reshape with
+# another pad value must not reuse the program built for the first one, and a repeat must.
+def test_quasar_reshape_tile_padding_program_cache(device):
+    _quasar(device)
+    in_shape, out_shape = (1, 1, 40, 50), (1, 1, 50, 40)
+    for pad_value, new_program in [(3.0, True), (5.0, True), (None, True), (3.0, False), (None, False)]:
+        x = torch.randn(in_shape, dtype=torch.bfloat16)
+        tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=TILE, device=device)
+        entries = device.num_program_cache_entries()
+        kwargs = {} if pad_value is None else {"pad_value": pad_value}
+        out = ttnn.experimental.quasar.reshape(tx, out_shape, **kwargs)
+        assert (device.num_program_cache_entries() > entries) == new_program
+        assert torch.equal(ttnn.to_torch(out).float(), x.reshape(out_shape).float())
+        assert torch.all(_padding_of(out, out_shape) == (pad_value or 0.0))
+
+
 @pytest.mark.parametrize("num_threads", [1, 6])
 def test_quasar_reshape_tile_padding_threads(device, monkeypatch, num_threads):
     _quasar(device)

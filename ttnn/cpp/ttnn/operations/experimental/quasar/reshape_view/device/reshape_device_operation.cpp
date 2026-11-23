@@ -124,6 +124,7 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
         operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
                                                        : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         operation_attributes.num_threads,
+        operation_attributes.pad_word,  // a compile-time arg of the TILE kernel
         tensor_args,
         program_factory.index());
 }
