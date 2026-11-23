@@ -135,28 +135,46 @@
 // Fused BF16 backward kernels (<op>_bw_tile), dispatched as BinaryOp::<OP>_BW. To add one, include
 // its header here and list it in SFPU_BW_BF16_OPS.
 #include "llk_sfpu/ckernel_sfpu_abs_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_elu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_exp2_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_expm1_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_hardshrink_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_hardsigmoid_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_hardswish_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_hardtanh_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_leaky_relu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_log_sigmoid_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_relu6_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_relu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_selu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_sigmoid_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_silu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_softplus_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_softshrink_bw_bf16.h"
 #include "llk_sfpu/ckernel_sfpu_square_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_tanh_bw_bf16.h"
 
 // X(BinaryOp enumerator, kernel name): calculate_<name>_bw_bf16.
 #define SFPU_BW_BF16_OPS(X)        \
     X(ABS_BW, abs)                 \
+    X(ELU_BW, elu)                 \
+    X(EXP2_BW, exp2)               \
+    X(EXPM1_BW, expm1)             \
     X(HARDSHRINK_BW, hardshrink)   \
     X(HARDSIGMOID_BW, hardsigmoid) \
     X(HARDSWISH_BW, hardswish)     \
     X(HARDTANH_BW, hardtanh)       \
     X(LEAKY_RELU_BW, leaky_relu)   \
+    X(LOG_SIGMOID_BW, log_sigmoid) \
     X(RELU_BW, relu)               \
     X(RELU6_BW, relu6)             \
+    X(SELU_BW, selu)               \
+    X(SIGMOID_BW, sigmoid)         \
+    X(SILU_BW, silu)               \
+    X(SOFTPLUS_BW, softplus)       \
     X(SOFTSHRINK_BW, softshrink)   \
-    X(SQUARE_BW, square)
+    X(SQUARE_BW, square)           \
+    X(TANH_BW, tanh)
 
 // Ternary SFPU op headers (consumed by the ternary dispatchers below).
 // To add a new Quasar ternary SFPU op:
