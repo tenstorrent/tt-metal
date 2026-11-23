@@ -100,6 +100,9 @@ _INT32_TYPECAST_PAIRS = [
 # and -(2**31 - 1) read as sign-magnitude. An Int32 source also gets INT32_MIN, which sign-magnitude cannot hold.
 _INT32_SIGN_SEEDS = (-1, 1, -2, 0)
 _INT32_MIN = -(2**31)
+# A float source that rounds to zero from below must store 0, not the sign-magnitude -0 (INT32_MIN once
+# converted to two's complement).
+_FLOAT_NEG_ZERO_SEEDS = (-0.0, -0.3)
 
 
 def _prepare_int32_typecast_input(src_A, src_B, formats: InputOutputFormat):
@@ -112,6 +115,8 @@ def _prepare_int32_typecast_input(src_A, src_B, formats: InputOutputFormat):
     seeds = _INT32_SIGN_SEEDS
     if formats.input_format == DataFormat.Int32:
         seeds += (_INT32_MIN,)
+    else:
+        seeds += _FLOAT_NEG_ZERO_SEEDS
     flat = values.flatten()
     flat[-len(seeds) :] = torch.tensor(seeds, dtype=flat.dtype)
     return flat.reshape(values.shape)
