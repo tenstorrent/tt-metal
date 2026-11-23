@@ -53,7 +53,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         START_PERF_MEASURE("INIT")
-        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, ckernel::DEFAULT_TENSOR_SHAPE, ckernel::DEFAULT_TENSOR_SHAPE);
         _llk_unpack_A_init_<BROADCAST_TYPE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), UNPACK_FMT, UNPACK_FMT);
         PROFILER_SYNC();
@@ -83,7 +84,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-
 }
 
 #endif

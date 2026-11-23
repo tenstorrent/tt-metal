@@ -91,12 +91,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         // compute_kernel_hw_startup
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src,
-            formats.unpack_B_src,
-            formats.unpack_A_dst,
-            formats.unpack_B_dst,
-            DEFAULT_TENSOR_SHAPE,
-            DEFAULT_TENSOR_SHAPE);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, DEFAULT_TENSOR_SHAPE, DEFAULT_TENSOR_SHAPE);
 
         // Poison op (see the file header).
         const std::uint32_t poison_tile_bytes = SCALE_DATUM_SIZE(formats.unpack_A_src, DEFAULT_TENSOR_SHAPE.total_tensor_size());
