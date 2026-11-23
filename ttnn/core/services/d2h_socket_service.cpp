@@ -9,7 +9,9 @@
 #include <bit>
 #include <optional>
 #include <cerrno>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <thread>
@@ -1308,10 +1310,18 @@ void D2HStreamService::read_metadata_from_sockets(ttsl::Span<std::byte> metadata
         !sockets_.empty(), "D2HStreamService::read_metadata_from_sockets: expected at least one socket for metadata");
     sockets_.front()->read(metadata_scratch_.data(), /*num_pages=*/1);
     std::memcpy(metadata.data(), metadata_scratch_.data(), metadata.size());
+    // TT_METAL_D2H_METADATA_COMPARE_BYTES: compare only that prefix across sockets, for a diagnostic record
+    // whose tail is per chip (PREFILL_ACK_DEVICE_TS stamps each chip's own clock there); the first socket's
+    // tail is returned.
+    static const size_t compare_limit = [] {
+        const char* v = std::getenv("TT_METAL_D2H_METADATA_COMPARE_BYTES");
+        return v != nullptr && *v != '\0' ? static_cast<size_t>(std::strtoul(v, nullptr, 10)) : SIZE_MAX;
+    }();
+    const size_t compare_bytes = std::min(metadata.size(), compare_limit);
     for (size_t s = 1; s < sockets_.size(); ++s) {
         sockets_[s]->read(metadata_scratch_.data(), /*num_pages=*/1);
         TT_FATAL(
-            std::memcmp(metadata.data(), metadata_scratch_.data(), metadata.size()) == 0,
+            std::memcmp(metadata.data(), metadata_scratch_.data(), compare_bytes) == 0,
             "D2HStreamService::read_metadata_from_sockets: metadata mismatch across sockets (socket index {})",
             s);
     }
