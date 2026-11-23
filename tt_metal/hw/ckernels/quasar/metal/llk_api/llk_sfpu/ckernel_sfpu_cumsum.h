@@ -47,7 +47,7 @@ constexpr std::uint32_t CUMSUM_CARRY_REG = CUMSUM_QUAD_ROWS - 1;
 constexpr std::uint32_t CUMSUM_ADDR_MOD = ADDR_MOD_6;
 
 // Quads alternate banks, so the shortest sequence that repeats byte-for-byte is two quads, one per
-// bank. Recorded once by cumsum_init and run over the 4 bank pairs, that leaves a tile costing a
+// bank. Recorded once by cumsum_init (cumprod_init) and run over the 4 bank pairs, that leaves a tile costing a
 // handful of instruction issues instead of the 112 the SFPU executes.
 constexpr std::uint32_t CUMSUM_QUAD_INSTRS = 14;  // 4 SFPLOAD + SFPTRANSP + 4 SFPADD + SFPTRANSP + 4 SFPSTORE
 constexpr std::uint32_t CUMSUM_QUADS_PER_RECORDING = 2;
@@ -56,26 +56,28 @@ constexpr std::uint32_t CUMSUM_REPLAY_LEN = CUMSUM_QUADS_PER_RECORDING * CUMSUM_
 constexpr std::uint32_t CUMSUM_REPLAYS_PER_FACE_PAIR = CUMSUM_QUADS_PER_FACE_PAIR / CUMSUM_QUADS_PER_RECORDING;
 static_assert(CUMSUM_ROW_QUADS % CUMSUM_QUADS_PER_RECORDING == 0, "the recorded body must tile the Dest tile exactly");
 
-// Replay bank 1, so bank-0 FPU ops can run between cumsum tiles; EMA records over it.
+// Replay bank 1, so bank-0 FPU ops can run between cumsum tiles; cumprod (which shares this walk) and EMA record
+// over it.
 static_assert(
     CUMSUM_REPLAY_SLOT + CUMSUM_REPLAY_LEN <= SFPU_REPLAY_BANK_DEPTH, "the recorded body must fit one replay bank");
 
 /**
- * @brief Accumulate one tile row quad on top of the previous quad's running totals.
+ * @brief Accumulate one tile row quad on top of the previous quad's running totals (sums or products).
  *
  * Four SFPLOADs bring in the quad's 128 datums, one register per (face, column parity). SFPTRANSP
- * then redistributes this bank so each register holds one whole tile row, which four SFPADDs chain:
- * carry -> row 0 -> row 1 -> row 2 -> row 3. The quad's own totals stay in the bank's last register
- * for the next quad to pick up as its carry.
+ * then redistributes this bank so each register holds one whole tile row, which four SFPADDs (or
+ * SFPMULs) chain: carry -> row 0 -> row 1 -> row 2 -> row 3. The quad's own totals stay in the bank's
+ * last register for the next quad to pick up as its carry.
  *
  * @tparam LREG_BASE: First LREG of this quad's bank, values = <CUMSUM_LREG_BANK_A/CUMSUM_LREG_BANK_B>
+ * @tparam PRODUCT: Chain products (cumprod) instead of sums (cumsum)
  * @note Alternate LREG_BASE between quads. The carry only survives because it sits in the bank this
  *       quad's SFPLOADs do not overwrite, so SFPTRANSP's involution restores it untouched.
  * @note The last SFPSTORE rides CUMSUM_ADDR_MOD to step Dest to the next quad, so this only runs
- *       correctly once @ref cumsum_init has programmed that mod.
+ *       correctly once @ref _scan_init_ has programmed that mod.
  */
-template <std::uint32_t LREG_BASE>
-inline void _calculate_cumsum_row_quad_() {
+template <std::uint32_t LREG_BASE, bool PRODUCT>
+inline void _calculate_scan_row_quad_() {
     // The previous quad ran on the other bank and left its totals in that bank's last register.
     constexpr std::uint32_t OTHER_BANK = (LREG_BASE == CUMSUM_LREG_BANK_A) ? CUMSUM_LREG_BANK_B : CUMSUM_LREG_BANK_A;
     constexpr std::uint32_t CARRY = OTHER_BANK + CUMSUM_CARRY_REG;
@@ -94,13 +96,20 @@ inline void _calculate_cumsum_row_quad_() {
     // Both banks transpose; this bank's registers now hold one whole tile row each
     TTI_SFPTRANSP;
 
-    // Serial column-wise prefix sum down the quad's four rows. SFPADD is dest = a*b + c, so a = 1.0
-    // makes it dest = prev + cur. No SFPNOP between them - the hardware interlocks a dependent
-    // consumer of a 2-cycle MAD.
-    TTI_SFPADD(p_sfpu::LCONST_1, CARRY, LREG_BASE + 0, LREG_BASE + 0, 0 /* instr_mod1: no negation */);
-    TTI_SFPADD(p_sfpu::LCONST_1, LREG_BASE + 0, LREG_BASE + 1, LREG_BASE + 1, 0 /* instr_mod1: no negation */);
-    TTI_SFPADD(p_sfpu::LCONST_1, LREG_BASE + 1, LREG_BASE + 2, LREG_BASE + 2, 0 /* instr_mod1: no negation */);
-    TTI_SFPADD(p_sfpu::LCONST_1, LREG_BASE + 2, LREG_BASE + 3, LREG_BASE + 3, 0 /* instr_mod1: no negation */);
+    // Serial column-wise prefix sum (product) down the quad's four rows. SFPADD and SFPMUL are both
+    // dest = a*b + c: a = 1.0 makes SFPADD dest = prev + cur, c = 0.0 makes SFPMUL dest = prev * cur.
+    // No SFPNOP between them - the hardware interlocks a dependent consumer of a 2-cycle MAD.
+    if constexpr (PRODUCT) {
+        TTI_SFPMUL(CARRY, LREG_BASE + 0, p_sfpu::LCONST_0, LREG_BASE + 0, 0 /* instr_mod1: no negation */);
+        TTI_SFPMUL(LREG_BASE + 0, LREG_BASE + 1, p_sfpu::LCONST_0, LREG_BASE + 1, 0 /* instr_mod1: no negation */);
+        TTI_SFPMUL(LREG_BASE + 1, LREG_BASE + 2, p_sfpu::LCONST_0, LREG_BASE + 2, 0 /* instr_mod1: no negation */);
+        TTI_SFPMUL(LREG_BASE + 2, LREG_BASE + 3, p_sfpu::LCONST_0, LREG_BASE + 3, 0 /* instr_mod1: no negation */);
+    } else {
+        TTI_SFPADD(p_sfpu::LCONST_1, CARRY, LREG_BASE + 0, LREG_BASE + 0, 0 /* instr_mod1: no negation */);
+        TTI_SFPADD(p_sfpu::LCONST_1, LREG_BASE + 0, LREG_BASE + 1, LREG_BASE + 1, 0 /* instr_mod1: no negation */);
+        TTI_SFPADD(p_sfpu::LCONST_1, LREG_BASE + 1, LREG_BASE + 2, LREG_BASE + 2, 0 /* instr_mod1: no negation */);
+        TTI_SFPADD(p_sfpu::LCONST_1, LREG_BASE + 2, LREG_BASE + 3, LREG_BASE + 3, 0 /* instr_mod1: no negation */);
+    }
 
     // Involution: this bank returns to store order, the other bank to its pre-transpose contents -
     // that is what keeps the previous quad's carry intact.
@@ -114,18 +123,17 @@ inline void _calculate_cumsum_row_quad_() {
 }
 
 /**
- * @brief Configure the SFPU state the cumsum tile walk depends on.
+ * @brief Configure the SFPU state the scan tile walk (cumsum / cumprod) depends on.
  *
  * Resets the RWC counters so the quad-relative Dest immediates start from 0, programs ADDR_MOD_6
  * with the per-quad Dest advance the replayed body rides on, and records that body into replay
  * bank 1. Every instruction the recording captures is an immediate, so it needs no runtime state and
  * recording it here rather than per call leaves each tile costing only its replays.
  *
- * @note Call this before @ref calculate_cumsum, and again before resuming cumsum after any op that
- *       reprograms ADDR_MOD_6 or records into replay bank 1 (EMA does).
+ * @tparam PRODUCT: Record the product body (cumprod) instead of the sum body (cumsum)
  */
-template <bool APPROXIMATION_MODE /*unused*/>
-inline void cumsum_init() {
+template <bool PRODUCT>
+inline void _scan_init_() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
 
     addr_mod_t{
@@ -137,41 +145,33 @@ inline void cumsum_init() {
 
     // Record only, without executing.
     _sfpu_record_replay_bank1_<CUMSUM_REPLAY_SLOT, CUMSUM_REPLAY_LEN>([] {
-        _calculate_cumsum_row_quad_<CUMSUM_LREG_BANK_A>();
-        _calculate_cumsum_row_quad_<CUMSUM_LREG_BANK_B>();
+        _calculate_scan_row_quad_<CUMSUM_LREG_BANK_A, PRODUCT>();
+        _calculate_scan_row_quad_<CUMSUM_LREG_BANK_B, PRODUCT>();
     });
 }
 
 /**
- * @brief Column-wise (top-to-bottom) cumulative sum of one whole 32x32 Dest tile, in place.
+ * @brief Configure the SFPU state the cumsum tile walk depends on.
  *
- * Walks the tile as CUMSUM_ROW_QUADS quads on alternating LREG banks, issued as replays of the
- * two-quad body @ref cumsum_init recorded, one face pair at a time.
+ * @note Call this before @ref calculate_cumsum, and again before resuming cumsum after any op that
+ *       reprograms ADDR_MOD_6 or records into replay bank 1 (cumprod and EMA do).
+ */
+template <bool APPROXIMATION_MODE /*unused*/>
+inline void cumsum_init() {
+    _scan_init_<false /*PRODUCT*/>();
+}
+
+/**
+ * @brief Walk one whole 32x32 Dest tile with the scan body @ref _scan_init_ recorded.
  *
- * @param first: Whether this is the first tile of a top-to-bottom chain; zeroes the carry bank.
- * @note Run this once per tile under VectorMode::RC_custom, not once per face - the chain spans the
- *       whole tile. It leaves the Dest RWC counter advanced part way into the tile, which
- *       @ref _llk_math_eltwise_sfpu_done_ resets.
- * @note On return CUMSUM_LREG_BANK_B (LREG4-7) collectively holds this tile's 32 column totals in
- *       store order. The next call's first transpose reconstructs the carry in LREG7. Feed tiles
- *       top-to-bottom and write nothing to LREG4-7 in between.
+ * Issues the recorded two-quad body as replays, one face pair at a time; the carry bank
+ * (CUMSUM_LREG_BANK_B) must already hold the chain's carry.
+ *
  * @note Replays from bank 1 of the math thread's replay buffer, and overwrites bank 0's last slot with
  *       the SFPNOP that switches banks (see SFPU_REPLAY_BANK_SWITCH_SLOT_FREE). Both replay bank IDs
  *       are back at 0 on return.
- * @note Call @ref cumsum_init before this - it programs the address mode and records the body this
- *       replays.
  */
-template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8 /*unused*/>
-inline void calculate_cumsum(const bool first) {
-    if (first) {
-        // Zero the whole carry bank, not just its last register: SFPTRANSP swizzles lanes across the
-        // entire bank, so a non-zero register anywhere in it would surface in the carry's lanes.
-        TTI_SFPMOV(p_sfpu::LCONST_0, CUMSUM_LREG_BANK_B + 0, 0 /* instr_mod1: plain copy */);
-        TTI_SFPMOV(p_sfpu::LCONST_0, CUMSUM_LREG_BANK_B + 1, 0 /* instr_mod1: plain copy */);
-        TTI_SFPMOV(p_sfpu::LCONST_0, CUMSUM_LREG_BANK_B + 2, 0 /* instr_mod1: plain copy */);
-        TTI_SFPMOV(p_sfpu::LCONST_0, CUMSUM_LREG_BANK_B + 3, 0 /* instr_mod1: plain copy */);
-    }
-
+inline void _scan_tile_walk_() {
     _sfpu_enter_replay_bank1_();
 
     for (std::uint32_t face_pair = 0; face_pair < CUMSUM_FACE_PAIRS; face_pair++) {
@@ -205,6 +205,39 @@ inline void calculate_cumsum(const bool first) {
             }
         }
     }
+}
+
+/**
+ * @brief Column-wise (top-to-bottom) cumulative sum of one whole 32x32 Dest tile, in place.
+ *
+ * Walks the tile as CUMSUM_ROW_QUADS quads on alternating LREG banks, issued as replays of the
+ * two-quad body @ref cumsum_init recorded, one face pair at a time.
+ *
+ * @param first: Whether this is the first tile of a top-to-bottom chain; zeroes the carry bank.
+ * @note Run this once per tile under VectorMode::RC_custom, not once per face - the chain spans the
+ *       whole tile. It leaves the Dest RWC counter advanced part way into the tile, which
+ *       @ref _llk_math_eltwise_sfpu_done_ resets.
+ * @note On return CUMSUM_LREG_BANK_B (LREG4-7) collectively holds this tile's 32 column totals in
+ *       store order. The next call's first transpose reconstructs the carry in LREG7. Feed tiles
+ *       top-to-bottom and write nothing to LREG4-7 in between.
+ * @note Replays from bank 1 of the math thread's replay buffer, and overwrites bank 0's last slot with
+ *       the SFPNOP that switches banks (see SFPU_REPLAY_BANK_SWITCH_SLOT_FREE). Both replay bank IDs
+ *       are back at 0 on return.
+ * @note Call @ref cumsum_init before this - it programs the address mode and records the body this
+ *       replays.
+ */
+template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8 /*unused*/>
+inline void calculate_cumsum(const bool first) {
+    if (first) {
+        // Zero the whole carry bank, not just its last register: SFPTRANSP swizzles lanes across the
+        // entire bank, so a non-zero register anywhere in it would surface in the carry's lanes.
+        TTI_SFPMOV(p_sfpu::LCONST_0, CUMSUM_LREG_BANK_B + 0, 0 /* instr_mod1: plain copy */);
+        TTI_SFPMOV(p_sfpu::LCONST_0, CUMSUM_LREG_BANK_B + 1, 0 /* instr_mod1: plain copy */);
+        TTI_SFPMOV(p_sfpu::LCONST_0, CUMSUM_LREG_BANK_B + 2, 0 /* instr_mod1: plain copy */);
+        TTI_SFPMOV(p_sfpu::LCONST_0, CUMSUM_LREG_BANK_B + 3, 0 /* instr_mod1: plain copy */);
+    }
+
+    _scan_tile_walk_();
 }
 
 // The compensated scan is not ported to Quasar. cumsum.h still compiles there; a kernel that uses
