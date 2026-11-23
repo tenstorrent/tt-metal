@@ -650,7 +650,7 @@ def test_rtdetr_decoder(device):
     logger.info(f"Intermediate reference points: {reference_points_pcc}")
 
 
-def run_rtdetr_model_test(device, model_name, model_class):
+def run_rtdetr_model_test(device, model_name, model_class, tt_model_class=TtRTDetrModel):
     num_layers = num_layers_from_env()
     torch_rtdetr = load_reference_model(model_class, model_name, num_layers)
     torch_module = torch_rtdetr.model
@@ -675,7 +675,7 @@ def run_rtdetr_model_test(device, model_name, model_class):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
-    tt_module = TtRTDetrModel(
+    tt_module = tt_model_class(
         config=torch_rtdetr.config,
         parameters=parameters,
         device=device,
