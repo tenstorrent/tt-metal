@@ -42,6 +42,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.inkling2_mini.convert import cache as wcache
@@ -471,6 +472,21 @@ class Inkling2Prefill:
                 if kw is not None:
                     self.expert_fidelity = fid
                     break
+            op = "ttnn.experimental.deepseek_prefill.unified_routed_expert_moe"
+            if kw is None and experts == "unified":
+                raise RuntimeError(f"Inkling2Prefill(experts='unified'): this build's {op} is missing or rejects stacked "
+                                   "expert weights")  # fmt: skip
+            if kw is None:  # auto
+                logger.warning(
+                    f"Inkling2Prefill: this build's {op} is missing or rejects stacked expert weights; falling back to "
+                    "the sparse expert path, which FAILS the prefill gate (forced code1500 logits PCC 0.999900 < "
+                    "0.9999) and is slower. Use a build with the unified expert op (fork integrate 710cc79df56+)."
+                )
+            elif expert_fidelity is None and self.expert_fidelity != ttnn.MathFidelity.HiFi2:
+                logger.warning(
+                    f"Inkling2Prefill: this build's {op} takes no math_fidelity; running it at LoFi (fp32 DEST), not "
+                    "the HiFi2 default: outputs differ from a HiFi2 build (fork integrate 710cc79df56+)."
+                )
             if experts == "auto":
                 experts = "unified" if kw is not None else "sparse"
             self.unified_kw = kw or {}
