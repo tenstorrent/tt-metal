@@ -74,18 +74,19 @@ pytest models/experimental/tafsut_forecast/tests/golden/test_dataflow.py
 
 ## Results
 
-Blackhole p150a, device time of one traced forecast, accuracy precision unless noted. Round 0 is the first working
-port; round 1 is where optimization stopped (see `optimizations.md`).
+Blackhole p150a, device time of one traced forecast. Round 0 is the first working port; round 1 is where optimization
+stopped (see `optimizations.md`); both ran on tt-metal `fae9a1ea287`. The last two columns are this code on
+`c83644ccafa` (bench job 2094), within 0.2 % of round 1 everywhere.
 
-| shape | input -> horizon | round 0 (ms) | round 1 (ms) | round 1, performance (ms) | CPU reference (s) |
-|---|---|---|---|---|---|
-| paper | 1024 x 2048 -> 64 | 1699.2 | 399.8 | 358.6 | 66.8 |
-| long_context | 32 x 32768 -> 64 | 604.6 | 573.2 | 560.3 | 20.9 |
-| long_horizon | 512 x 2048 -> 2048 (2 forwards) | 2351.2 | 697.2 | 629.3 | 67.2 |
-| gift_ragged | 32 ragged series (GIFT-Eval batch) -> 48 | 604.4 | 573.2 | 560.3 | 46.7 |
-| gift_ragged_odd | 16 ragged series, bucket 8192 -> 48 | 75.0 | 48.5 | 46.3 | 3.5 |
+| shape | input -> horizon | round 0, accuracy (ms) | round 1, accuracy (ms) | accuracy (ms) | performance (ms) | CPU reference (s) |
+|---|---|---|---|---|---|---|
+| paper | 1024 x 2048 -> 64 | 1699.2 | 399.8 | 399.2 | 358.2 | 66.8 |
+| long_context | 32 x 32768 -> 64 | 604.6 | 573.2 | 573.8 | 561.0 | 20.9 |
+| long_horizon | 512 x 2048 -> 2048 (2 forwards) | 2351.2 | 697.2 | 696.5 | 628.4 | 67.2 |
+| gift_ragged | 32 ragged series (GIFT-Eval batch) -> 48 | 604.4 | 573.2 | 573.7 | 561.1 | 46.7 |
+| gift_ragged_odd | 16 ragged series, bucket 8192 -> 48 | 75.0 | 48.5 | 48.4 | 46.3 | 3.5 |
 
-Accuracy at round 1 (paper): `pcc_normalized` 0.999996 and `pcc_final` 0.999998 at accuracy; 0.999940 and 0.999960
+Accuracy (paper, job 2094): `pcc_normalized` 0.999996 and `pcc_final` 0.999998 at accuracy; 0.999940 and 0.999960
 at performance. The bench also gates band, row-bias and spread-ratio metrics per case (`tests/perf/floors.json`) and
 checks that a collapsed forecast fails them.
 
