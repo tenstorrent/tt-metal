@@ -49,6 +49,17 @@ PAY_MARGIN = float(os.environ.get("RESIDENT_ADAPTIVE_PAY_MARGIN", "1.05"))
 PAY_MIN = int(os.environ.get("RESIDENT_ADAPTIVE_PAY_MIN", "16"))
 PAY_HOLD = int(os.environ.get("RESIDENT_ADAPTIVE_PAY_HOLD", "512"))
 PLAIN_MS_DEFAULT = lambda n: 16.5 + 0.5 * (n - 1)  # noqa: E731  (the batch card's 128 / 128 TPOT, c1 .. c8)
+# promotion gate: a move into the spec build refills the drafter window (a target pass over up to its 2,048 tokens)
+# while every live user waits, so promote only when the expected saving pays for it: the candidates' expected remaining
+# tokens x (plain step - spec step / PROMOTE_ACC) ms per token > refill ms x live users. Remaining tokens: an EMA of
+# finished requests' output lengths (PROMOTE_OUT until one finishes) minus what each has generated (at least a quarter
+# of it); refill ms per token measured (a default until then); spec step times measured per live count (a default
+# model until then); acceptance for a request not yet speculating: PROMOTE_ACC tokens per verify
+PROMOTE_GATE = os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_GATE", "1") == "1"
+PROMOTE_ACC = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_ACC", "2.7"))
+PROMOTE_OUT = float(os.environ.get("RESIDENT_ADAPTIVE_PROMOTE_OUT", "256"))
+REFILL_MS_FIXED, REFILL_MS_PER_TOKEN = 20.0, 0.13  # (defaults: tests/refill_batch.py, 2026-11-23)
+SPEC_MS_DEFAULT = lambda n: 28.0 + 3.5 * (n - 1)  # noqa: E731  (served verify steps, 2026-11-23: 1 / 4 / 8 users)
 # (log the per-step host / call times every 64 steps)
 TIMING = os.environ.get("RESIDENT_ADAPTIVE_TIMING", "0") == "1"
 # (0: synchronous serving, the first served version)
@@ -127,7 +138,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # prefill / layout change, any speculative step)
         self._calls = [0, 0]
         # (the acceptance-aware policy's measurements: EMAs of tokens per spec user-step and of step times per kind)
-        self._pay = dict(acc=None, spec_ms={}, plain_ms={}, verifies=0, last_t=None, kind=None, n=0, hold=0, excl=0.0)
+        self._pay = self._new_pay()
+        self.prompt_len = {}  # slot -> its prompt's length (generated tokens = history - prompt)
         # the plain build's hub-fed inputs do not hold every live row's next token (a move into it, a step served by
         # the spec build): its next ordinary call rebuilds them from the history instead of a steady replay
         self._plain_stale = False
@@ -189,6 +201,45 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self._plain_stale = True
         self.spec_of.clear()
 
+    @staticmethod
+    def _new_pay():
+        # (out: EMA of finished requests' output tokens; refill_tpt: EMA of refill ms per refilled token; gate: the
+        # promotion gate's last verdict, for its log line)
+        return dict(
+            acc=None,
+            spec_ms={},
+            plain_ms={},
+            verifies=0,
+            last_t=None,
+            kind=None,
+            n=0,
+            hold=0,
+            excl=0.0,
+            out=None,
+            refill_tpt=None,
+            gate=True,
+        )
+
+    def _promotion_pays(self, cands):
+        """the promotion gate (PROMOTE_GATE): (verdict, its log line)"""
+        pay, n = self._pay, max(1, len(self.live))
+        plain = pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n))
+        spec = pay["spec_ms"].get(n, SPEC_MS_DEFAULT(n))
+        save = plain - spec / PROMOTE_ACC  # (ms a token, per user)
+        out = pay["out"] or PROMOTE_OUT
+        left = [
+            max(out - (len(self.history[r]) - self.prompt_len.get(r, len(self.history[r]))), out / 4) for r in cands
+        ]
+        window = getattr(getattr(self.ae, "spec", None), "window", 2048)
+        toks = sum(min(len(self.history[r]) - 1, window) for r in cands)
+        refill = REFILL_MS_FIXED + (pay["refill_tpt"] or REFILL_MS_PER_TOKEN) * toks
+        gain, cost = sum(left) * save, refill * n
+        line = (
+            f"{len(cands)} of {n} users: ~{sum(left) / len(cands):.0f} tokens left each x {save:.1f} ms saved a token "
+            f"= {gain:.0f} user-ms vs a {refill:.0f} ms refill ({toks} tokens) x {n} users = {cost:.0f}"
+        )
+        return gain > cost, line
+
     def _measure(self, spec_accepts):
         """update the policy's EMAs with the step just committed (its kind and live count from its decode call, its time
         since the previous propose); whether speculation pays: its tokens per user-ms >= a plain step's x PAY_MARGIN
@@ -225,16 +276,33 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         import time
 
         t0 = time.perf_counter()
-        free, items = self._free_spec(), []
-        for r in sorted(self.live):
-            if r in self.spec_of or r not in self.greedy_ok or r in self.sampled or not free:
-                continue
+        free = self._free_spec()
+        cands = [
+            r for r in sorted(self.live) if r not in self.spec_of and r in self.greedy_ok and r not in self.sampled
+        ]
+        cands = cands[: len(free)]
+        if not cands:
+            return
+        if PROMOTE_GATE:
+            ok, line = self._promotion_pays(cands)
+            if ok != self._pay["gate"]:
+                logger.info(f"adaptive: promotion {'pays' if ok else 'would not pay'} ({line})")
+                self._pay["gate"] = ok
+            if not ok:
+                return
+        items = []
+        for r in cands:
             u = free.pop(0)
             items.append((r, u, self.tables[r], self.history[r]))
             self.spec_of[r], self.last_acc[r] = u, 1
-        if items:  # (one batched refill for every user promoted now)
-            self.ae.move_to_spec_many(items)
-        self._pay["excl"] = self._pay.get("excl", 0.0) + time.perf_counter() - t0
+        window = getattr(getattr(self.ae, "spec", None), "window", 2048)
+        toks = sum(min(len(h) - 1, window) for _, _, _, h in items)
+        self.ae.move_to_spec_many(items)  # (one batched refill for every user promoted now)
+        dt = time.perf_counter() - t0
+        self._pay["excl"] += dt
+        tpt = max(0.0, dt * 1000 - REFILL_MS_FIXED) / max(1, toks)
+        old = self._pay["refill_tpt"]
+        self._pay["refill_tpt"] = tpt if old is None else old + 0.3 * (tpt - old)
 
     @staticmethod
     def _non_speculable(sp, i):
@@ -280,6 +348,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             if finals is None or bool(finals[j]):  # (a prompt handed off: its tokens, for the drafter refill)
                 r = self.slots.res_of[int(empty_slots[j])]
                 self.history[r] = [int(t) for t in tokens[j, : int(prompt_lens[j])]]
+                self.prompt_len[r] = int(prompt_lens[j])
         if len(self.live) > SPEC_USERS and self.mode == "SPEC":
             logger.info(f"adaptive: {len(self.live)} live users -> PLAIN")
             self.mode, self.low_calls = "PLAIN", 0
@@ -517,7 +586,10 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             if r in self.spec_of:
                 u = self.spec_of.pop(r)
                 self.ae._set_spec_table(u, [0])
-            self.history.pop(r, None)
+            h, plen = self.history.pop(r, None), self.prompt_len.pop(r, None)
+            if h is not None and plen is not None and len(h) > plen:  # (its output length, for the promotion gate)
+                old = self._pay["out"]
+                self._pay["out"] = (len(h) - plen) if old is None else old + 0.2 * ((len(h) - plen) - old)
             self.last_acc.pop(r, None)
             self.sampled.discard(r)
             self.greedy_ok.discard(r)

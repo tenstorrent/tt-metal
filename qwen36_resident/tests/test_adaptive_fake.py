@@ -109,8 +109,9 @@ class FakeAE:
         self.moves.append(("to_spec", j, u))
 
 
-def make(monkeypatch):
+def make(monkeypatch, gate=False):
     monkeypatch.setattr(F, "ROWS", B)
+    monkeypatch.setattr(A, "PROMOTE_GATE", gate)  # (fake steps take microseconds: the gate has its own tests)
     pf = F.FakeModel(B, sample=True)
     pf.launch_rows = B
     pf.row_order = lambda: list(range(B))
@@ -124,7 +125,7 @@ def make(monkeypatch):
     m.ae.plain_tables = m.tables
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
     m.sampled, m._t, m._plain_stale, m.greedy_ok, m._calls = set(), {}, False, set(), [0, 0]
-    m._pay = dict(acc=None, spec_ms={}, plain_ms={}, verifies=0, last_t=None, kind=None, n=0, hold=0, excl=0.0)
+    m._pay, m.prompt_len = m._new_pay(), {}
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
 
@@ -390,6 +391,51 @@ def test_pay_policy_excludes_prefills(monkeypatch):
         m._pay["kind"], m._pay["n"] = "verify", 8
         pays = m._measure([3.2] * 8)
     assert pays is True and abs(m._pay["spec_ms"][8] - 40.0) < 1e-6, (m._pay, pays)
+
+
+def _gate_case(monkeypatch, n_live, ctx, generated, out=None):
+    """a class with n_live greedy plain users of ctx-token histories, `generated` of them output"""
+    m, pf = make(monkeypatch, gate=True)
+    for r in range(n_live):
+        m.history[r], m.prompt_len[r] = [1] * ctx, ctx - generated
+    m.greedy_ok.update(range(n_live))
+    m.live.clear()
+    m.live.update(range(n_live))
+    m._pay["out"] = out
+    return m
+
+
+@pytest.mark.parametrize(
+    "n_live,ctx,generated,out,expect",
+    [
+        (1, 8192, 1, None, True),  # one user, 8K: ~255 tokens x ~6 ms saved >> a ~290 ms refill
+        (1, 300, 1, None, True),  # short prompt: refill ~60 ms
+        (8, 2048, 1, None, False),  # 8 users arriving with 2K prompts: ~2.1 s refill x 8 users vs ~1 ms saved a token
+        (8, 2048, 1, 128, False),
+        (4, 256, 1, None, True),  # 4 short chats
+        (8, 128, 1, None, False),  # 8 short chats: a 150 ms refill x 8 waiting users vs ~0.6 ms saved a token
+        (1, 12000, 1, 16, False),  # short answers learned (out 16 tokens) on a long context: the refill does not pay
+        (1, 12000, 240, 256, True),  # (at least a quarter of the expected output left: 64 tokens)
+    ],
+)
+def test_promotion_gate(monkeypatch, n_live, ctx, generated, out, expect):
+    """promote only when the candidates' expected remaining tokens x the saving per token pay for the refill every
+    live user waits for (defaults: no measurement yet)"""
+    m = _gate_case(monkeypatch, n_live, ctx, generated, out)
+    ok, line = m._promotion_pays(sorted(m.live))
+    assert ok is expect, line
+
+
+def test_promotion_gate_blocks_moves(monkeypatch):
+    """a gate that says no: nobody moves, the mode stays SPEC (steps run plain); a measured spec step that saves
+    nothing keeps it closed for a single short prompt too"""
+    m = _gate_case(monkeypatch, 8, 2048, 1)
+    m._promote()
+    assert not m.spec_of and not m.ae.moves and m.mode == "SPEC"
+    m = _gate_case(monkeypatch, 1, 300, 1)
+    m._pay["spec_ms"][1] = 2.7 * 17.0  # (no faster than the 16.5 ms plain step at 2.7 tokens a verify)
+    m._promote()
+    assert not m.spec_of and not m.ae.moves
 
 
 def test_no_promotion_with_a_step_in_flight(monkeypatch):
