@@ -416,6 +416,9 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         TT_FATAL(
             fabric_context_.is_2D_routing_enabled(),
             "TT_METAL_ENABLE_FABRIC_HOST_RDMA is supported on 2D fabrics only");
+        TT_FATAL(
+            !fabric_context_.get_rtoptions().get_fabric_graph_builder(),
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is not supported with TT_METAL_FABRIC_GRAPH_BUILDER");
         const auto tensix_config = fabric_context_.get_fabric_tensix_config();
         TT_FATAL(
             tensix_config == FabricTensixConfig::DISABLED,
