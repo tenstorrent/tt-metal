@@ -74,8 +74,8 @@ def generate_unpack_tilize_combinations(
 
     Args: List of input-output format pairs
 
-    Returns: List of (format, dest_acc, dest_sync, unpacker_sel, input_dimensions,
-             tile_dimensions, block_ct_dim) tuples; block_ct_dim is None for a run per row,
+    Returns: List of (unpacker_sel, tile_dimensions, format, dest_acc, dest_sync,
+             input_dimensions, block_ct_dim) tuples; block_ct_dim is None for a run per row,
              otherwise the SrcA/SrcB run length, a divisor of the row
     """
     combinations = []
@@ -135,12 +135,12 @@ def generate_unpack_tilize_combinations(
                         for dimensions in dimensions_list:
                             combinations.append(
                                 (
+                                    unpacker_sel,
+                                    tile_dims,
                                     fmt,
                                     dest_acc,
                                     dest_sync,
-                                    unpacker_sel,
                                     dimensions,
-                                    tile_dims,
                                     None,
                                 )
                             )
@@ -162,15 +162,15 @@ def generate_unpack_tilize_combinations(
                                 if cols in MULTI_RUN_BLOCK_CT_DIM:
                                     combinations.append(
                                         (
+                                            unpacker_sel,
+                                            tile_dims,
                                             fmt,
                                             dest_acc,
                                             dest_sync,
-                                            unpacker_sel,
                                             [
                                                 rows * tile_shape.total_row_dim(),
                                                 cols * tile_shape.total_col_dim(),
                                             ],
-                                            tile_dims,
                                             MULTI_RUN_BLOCK_CT_DIM[cols],
                                         )
                                     )
@@ -194,13 +194,15 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
     same=True,  # Input format and output format are the same
 )
 # Column names of the tuples ``generate_unpack_tilize_combinations`` returns.
+# unpacker_sel and tile_dimensions lead so a test-id prefix can select an
+# engine + tile size (tests/pipeline_reorg/ttsim-skip-list.yaml relies on it).
 UNPACK_TILIZE_FLAT_NAMES = (
+    "unpacker_sel",
+    "tile_dimensions",
     "formats",
     "dest_acc",
     "dest_sync",
-    "unpacker_sel",
     "input_dimensions",
-    "tile_dimensions",
     "block_ct_dim",
 )
 ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
