@@ -123,11 +123,9 @@ public:
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_ring_fabric_node_ids() const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_line_fabric_node_ids() const;
 
-    // Returns true if the view is fully local, i.e. all devices in the view are local.
+    // Returns true if the device at `coord` is local to this process (i.e. attached to this host). In multi-host
+    // meshes, use this to skip remote coordinates before doing per-device work.
     // Throws if the coordinate is out of bounds of this view.
-    [[deprecated(
-        "Deprecated, is_local should be avoided as it is likely to cause issues in distributed contexts. This will be "
-        "removed after 28-02-2026.")]]
     bool is_local(const MeshCoordinate& coord) const;
 
     // Returns the coordinate range of all local devices in this view.
