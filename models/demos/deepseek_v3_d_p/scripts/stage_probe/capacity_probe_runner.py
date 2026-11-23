@@ -1,10 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.4 G2 capacity stand-in: the stock prefill runner on GLM-5.3 layers 26-53, reshaped to G2's memory.
+"""Capacity-probe launcher: the stock GLM-5.3 prefill runner, patched before it starts (tt_metal_tracker-q171.3.5).
 
-GLM-5.4's loop pass 2 (G2) does not exist yet (q171.2.5 / q171.2.6 / q171.2.7). For the capacity bisection
-(tt_metal_tracker-q171.3.5) this launcher patches the GLM-5.3 runner before it starts, then runs it unchanged:
+Always: logs DRAM per chip (``STAGE_DRAM``: allocated and largest free block per bank) after the weights are built
+and after the KV caches are allocated, so probes can be compared footprint for footprint.
+
+``CAP_STUB_WEIGHTS=1``: capacity-sweep weights (user ruling 2026-11-07, knowledge note "Capacity sweeps allocate
+weight-shaped tensors instead of loading real weights"; K3.1's eac952cbf43). While the adapter builds the runtime,
+every cached weight is allocated on device with the spec and mesh topology of its cache file (the file is mapped
+and only its header read) and left uninitialized: a cache load straight to device is intercepted at
+``load_tensor_flatbuffer``, and the routed experts, which load to host and place with ``ttnn.to_device``, are
+stubbed only inside their loader. Weight bytes are unchanged; values are garbage, so use it for memory only.
+
+``CAP_G2_STANDIN=1``: GLM-5.4 G2 stand-in on GLM-5.3 layers 26-53, reshaped to G2's memory. GLM-5.4's loop pass 2
+does not exist yet (q171.2.5 / q171.2.6 / q171.2.7):
 
 * every layer of the probe's range is ``shared`` (pass 2 runs no indexer, A5): no indexer weights load, no index-K
   cache and no indexer score buffer are allocated, and the offset first rank feeds the layers placeholder top-k
@@ -13,14 +23,15 @@ GLM-5.4's loop pass 2 (G2) does not exist yet (q171.2.5 / q171.2.6 / q171.2.7). 
 * next to the KVPE cache (G2's bank A: the pass-1 copy, same shape as G1's), it allocates what G2 adds that the
   runner does not: the pass-2 window, 128 rows x 704 B per loop layer per user, replicated on every chip (an upper
   bound), and one chunk's receive buffers for the 7 top-k sets and the 28 layers' pass-1 KVPE rows.
+  Not represented: the two-bank attention's own working buffers and the damp gate (scalar, negligible). Needs
+  ``PREFILL_PP_LAYER_OFFSET=26 PREFILL_NUM_LAYERS=28``.
 
-Not represented: the two-bank attention's own working buffers and the damp gate (scalar, negligible). Use with
-``STAGE_PROBE_RUNNER_MODULE=models.demos.deepseek_v3_d_p.scripts.stage_probe.capacity_probe_runner`` and
-``PREFILL_PP_LAYER_OFFSET=26 PREFILL_NUM_LAYERS=28``.
+Use with ``STAGE_PROBE_RUNNER_MODULE=models.demos.deepseek_v3_d_p.scripts.stage_probe.capacity_probe_runner``.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import runpy
 
@@ -105,11 +116,89 @@ def _patch_placeholder_indices() -> None:
     TtPrefillRuntime.prefill_chunk = prefill_chunk_with_indices
 
 
+def _allocate_like(host, device, memory_config=None):
+    """An uninitialized device tensor with the host tensor's per-chip spec and mesh topology."""
+    import ttnn
+
+    spec = host.spec
+    if memory_config is None:
+        tensor = ttnn.allocate_tensor_on_device(spec, device)
+    else:  # placed with another memory config, as the routed experts are
+        tensor = ttnn.allocate_tensor_on_device(spec.shape, spec.dtype, spec.layout, device, memory_config)
+    tensor.update_tensor_topology(host.tensor_topology())
+    return tensor
+
+
+@contextlib.contextmanager
+def _header_only():
+    import ttnn
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+
+    tensor_module = ttnn._ttnn.tensor
+    load = tensor_module.load_tensor_flatbuffer
+    load_experts = TtRoutedExpert.__dict__["_convert_and_cache_expert_weights"]
+
+    def load_header(file_name, device=None):
+        host = load(file_name, None)
+        return host if device is None else _allocate_like(host, device)
+
+    def load_experts_header(*args, **kwargs):
+        to_device = ttnn.to_device
+        ttnn.to_device = lambda host, device, memory_config=None, **_: _allocate_like(host, device, memory_config)
+        try:
+            return load_experts.__func__(*args, **kwargs)
+        finally:
+            ttnn.to_device = to_device
+
+    tensor_module.load_tensor_flatbuffer = load_header
+    TtRoutedExpert._convert_and_cache_expert_weights = staticmethod(load_experts_header)
+    try:
+        yield
+    finally:
+        tensor_module.load_tensor_flatbuffer = load
+        TtRoutedExpert._convert_and_cache_expert_weights = load_experts
+
+
+def _log_dram(mesh_device, phase: str) -> None:
+    import ttnn
+
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    allocated = view.total_bytes_allocated_per_bank * view.num_banks
+    largest = view.largest_contiguous_bytes_free_per_bank
+    logger.info(
+        f"STAGE_DRAM {phase}: {allocated} B allocated per chip, largest free block {largest} B per bank "
+        f"({largest / 2**20:.1f} MiB)"
+    )
+
+
+def _patch_build_and_logging(stub: bool) -> None:
+    from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+
+    build_runtime = GLM53Adapter.build_runtime
+    allocate_kv_cache = GLM53Adapter.allocate_kv_cache
+
+    def build(self, *, mesh_device, **kwargs):
+        with _header_only() if stub else contextlib.nullcontext():
+            runtime = build_runtime(self, mesh_device=mesh_device, **kwargs)
+        _log_dram(mesh_device, f"weights ({'stub' if stub else 'real'})")
+        return runtime
+
+    def allocate(self, *, mesh_device, params, **kwargs):
+        caches = allocate_kv_cache(self, mesh_device=mesh_device, params=params, **kwargs)
+        _log_dram(mesh_device, f"kv_caches ({params.num_users} users)")
+        return caches
+
+    GLM53Adapter.build_runtime = build
+    GLM53Adapter.allocate_kv_cache = allocate
+
+
 def main() -> None:
     assert os.environ.get("PREFILL_MODEL", "glm_5_3") == "glm_5_3"
-    _all_shared_loop()
-    _patch_allocate_kv_cache()
-    _patch_placeholder_indices()
+    if os.environ.get("CAP_G2_STANDIN") == "1":
+        _all_shared_loop()
+        _patch_allocate_kv_cache()
+        _patch_placeholder_indices()
+    _patch_build_and_logging(stub=os.environ.get("CAP_STUB_WEIGHTS") == "1")
     runpy.run_module("models.demos.common.prefill.runners.prefill_runner", run_name="__main__")
 
 
