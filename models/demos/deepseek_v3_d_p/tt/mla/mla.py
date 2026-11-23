@@ -23,6 +23,8 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_AGMM_CONFIG, MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.rope import identity_rope_tensors_indexed
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import (
+    KVD_LANES_PER_LINK,
+    KVD_PLANNERS,
     SAME_CHUNK_NEXT_LAYER,
     PushStep,
     SparseKvPushPart,
@@ -42,6 +44,14 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
+
+
+# EXPERIMENT (SPARSE_MLA_KV_DISPATCH=1, with KVD_DESIGN=3 PLAN_ABL=DISPATCH_ONLY): the chunk start from which a full
+# layer's KV goes through sparse_kv_dispatch instead of the prefix gather beside top-k (whole slabs;
+# SPARSE_MLA_KV_DISPATCH_FROM and SPARSE_MLA_KV_DISPATCH_FROM_LAYERS="layer:tokens,..." override). K3.1 L24 8x4 on a real
+# 1M prompt broke even at ~150-205k against the gather.
+_K31_KV_DISPATCH_FROM: dict[int, int] = {}
+_KV_DISPATCH_FROM_DEFAULT = 204_800
 
 
 class ttMLA:
@@ -806,6 +816,7 @@ class ttMLA:
         # (sparse_kv_push.py), on meshes the push can route and caches whose blocks it fits; elsewhere they gather the
         # whole prefix.
         self._push = None
+        self._kv_dispatch_from = 0
         # One chip's rows of a chunk: the cache's block-cyclic block.
         push_stripe_chunk = self.active_seq_len_local // self.tp_factor
         if self._sparse_kv_gather_buffer is not None and sparse_kv_push_supported(
@@ -828,6 +839,28 @@ class ttMLA:
             # Which buffer a layer reads depends only on the config, so pick it once for this layer and the next (whose
             # prefix this layer pushes).
             self._push_buffer_parity = {layer: self._push_parity(layer) for layer in (layer_idx, layer_idx + 1)}
+            # EXPERIMENT (SPARSE_MLA_KV_DISPATCH=1): this full layer's dispatch cutoff, in whole slabs and at least one
+            # (the gather beside top-k fills the first chunk): below it the gather, from it the dispatch. A cutoff at
+            # or past the buffer never dispatches.
+            slab = self.active_seq_len_local * self.sp_factor
+            kvd_from = _K31_KV_DISPATCH_FROM.get(layer_idx, _KV_DISPATCH_FROM_DEFAULT)
+            if os.environ.get("SPARSE_MLA_KV_DISPATCH_FROM") is not None:
+                kvd_from = int(os.environ["SPARSE_MLA_KV_DISPATCH_FROM"])
+            for item in filter(None, os.environ.get("SPARSE_MLA_KV_DISPATCH_FROM_LAYERS", "").split(",")):
+                layer, tokens = (int(v) for v in item.split(":"))
+                if layer == layer_idx:
+                    kvd_from = tokens
+            self._kv_dispatch_from = max(1, -(-kvd_from // slab)) * slab
+            # Never at or past the buffer, nor when an owner's plan slot does not fit one fabric packet (the planner
+            # then falls back to gathered tables, which the dispatch cannot read).
+            slot_bytes = ttnn._ttnn.operations.experimental.sparse_kv_push_inbox_slot_bytes(
+                dense.shape[2], push_stripe_chunk, mesh_device.get_num_devices()
+            )
+            pages_per_packet, _ = ttnn._ttnn.operations.experimental._sparse_kv_push_packet_shape(
+                mesh_device, self._push_page_bytes
+            )
+            if self._kv_dispatch_from >= dense.shape[2] or slot_bytes > pages_per_packet * self._push_page_bytes:
+                self._kv_dispatch_from = 0
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
         # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2) every layer is
@@ -2335,7 +2368,11 @@ class ttMLA:
             injected=indexer_indices is not None,
             next_step=next_step,
         )
-        if selection_state is not None:
+        if selection_state is not None and metadata is not None and self._kv_dispatch_enabled():
+            attn_out, indices = self._sparse_full_dispatch_overlapped(
+                selection_state=selection_state, **attention_kwargs
+            )
+        elif selection_state is not None:
             attn_out, indices = self._sparse_chunked_attn_overlapped(
                 selection_state=selection_state,
                 **attention_kwargs,
@@ -2831,6 +2868,142 @@ class ttMLA:
         ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_INDEX_REDISTRIBUTION`")
         indices = self._indexer.finalize_distribution(local_indices, selection_state)
         return indices, kvpe_dev
+
+    def _kv_dispatch_enabled(self):
+        # sp_axis 0 only: sparse_kv_dispatch writes the owners' rows in row-major chip order, which is the gather's
+        # SP-major order only when SP runs along mesh rows. A layer whose cutoff is past its buffer never dispatches.
+        return (
+            os.environ.get("SPARSE_MLA_KV_DISPATCH", "0") == "1"
+            and self._push is not None
+            and self._sparse_kv_gather_buffer is not None
+            and self.sp_axis == 0
+            and self._kv_dispatch_from > 0
+        )
+
+    def _sparse_full_dispatch_overlapped(
+        self,
+        *,
+        selection_state,
+        tt_q,
+        tt_kvpe,
+        kvpe_cache,
+        cache_layer_idx,
+        cache_user_id,
+        seq_len_local,
+        kv_actual_isl,
+        actual_end=None,
+        metadata=None,
+        **_,
+    ):
+        """EXPERIMENT (SPARSE_MLA_KV_DISPATCH=1): a full layer with sparse_kv_dispatch behind a cutoff (metadata path).
+        Top-k runs beside a prefix gather into the gather buffer that is active only for chunks starting below the
+        cutoff; then the dispatch-only plan and sparse_kv_dispatch, active only from the cutoff (it reads the chunk
+        start from the plan table), write only the rows some chip needs into the same buffer at the same pages; sparse
+        SDPA reads it with the natural indices either way. One trace serves both modes."""
+        cache_batch_idx, _ = self._prepare_sparse_kv_prefix(
+            tt_kvpe=tt_kvpe,
+            kvpe_cache=kvpe_cache,
+            cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
+            kv_actual_isl=kv_actual_isl,
+            seq_len_local=seq_len_local,
+            actual_end=actual_end,
+            metadata=metadata,
+        )
+        storage = kvpe_cache.storage
+        gather = self._sparse_kv_gather_buffer
+        cutoff = self._kv_dispatch_from
+        resources = self._sparse_mla_overlap
+        loaded = False
+        failed = False
+        try:
+            with self._sub_device_manager(resources.manager_id):
+                loaded = True
+                ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_START`")
+                local_indices = self._indexer.select_local(
+                    selection_state,
+                    subdevice_id=resources.topk_subdevice_id,
+                    sub_core_grids=resources.topk_core_grid,
+                    dram_read_noc=ttnn.NOC.NOC_0,
+                )
+                ttnn.experimental.high_bw_all_gather(
+                    storage,
+                    dim=2,
+                    output_tensor=gather,
+                    cluster_axis=None,
+                    num_links=self.ccl_num_links,
+                    # SP-major stripes, as _gather_kvpe_prefix (and the pages sparse_kv_dispatch writes)
+                    full_mesh_outer_axis=self.sp_axis,
+                    **self._kvpe_gather_slot_kwargs(storage, cache_batch_idx, metadata),
+                    gathered_prefix_tensor=metadata[1],
+                    gathered_slab_global=seq_len_local * self.sp_factor,
+                    gathered_active_below=cutoff,
+                    # the full layout (not threshold-sized slots): the pages the natural indices address
+                    gathered_active_full_layout=True,
+                    subdevice_id=resources.gather_subdevice_id,
+                    sub_core_grids=resources.gather_core_grid,
+                    ready_semaphore=resources.ready_semaphore,
+                    data_valid_semaphore=resources.data_valid_semaphore,
+                )
+        except Exception:
+            failed = True
+            raise
+        finally:
+            if loaded:
+                ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_END`")
+            if failed:
+                self.tt_ccl.reset_sparse_mla_overlap_semaphores()
+        indices = self._indexer.finalize_distribution(local_indices, selection_state)
+        max_rows = gather.shape[2]
+        plan = self._push.plan(
+            indices,
+            stripe_chunk=self._push_stripe_chunk,
+            page_bytes=self._push_page_bytes,
+            max_rows=max_rows,
+            chunk_start=kv_actual_isl or 0,
+            chunk_start_tensor=metadata[1],
+            dense_below=0,
+            owner_major=True,
+        )
+        assert plan.inbox is not None, "sparse_kv_dispatch needs the owner-major plan table (inbox mode)"
+        sems, scratch = self._push.dispatch_resources(max_rows, self._push_stripe_chunk)
+        ttnn.experimental.sparse_kv_dispatch(
+            storage,
+            output_tensor=gather,
+            table=plan.table,
+            inbox=plan.inbox,
+            scratch=scratch,
+            stripe_chunk=self._push_stripe_chunk,
+            max_rows=max_rows,
+            fence_semaphore=sems[0],
+            arrived_semaphore=sems[1],
+            credit_semaphore=sems[2],
+            inbox_semaphore=sems[3],
+            num_links=self.ccl_num_links,
+            planners=KVD_PLANNERS,
+            lanes_per_link=KVD_LANES_PER_LINK,
+            **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
+            active_from=cutoff,
+        )
+        output_attn = self._finish_sparse_chunked_attn(
+            tt_q=tt_q,
+            kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=gather, geometry=kvpe_cache.geometry),
+            indices=indices,
+            kvpe_cache=kvpe_cache,
+            seq_len_local=seq_len_local,
+        )
+        return output_attn, indices
+
+    def _kvpe_gather_slot_kwargs(self, storage, cache_batch_idx, metadata):
+        """Cache slot of a KVPE gather: on the metadata path recomposed on device from the user id tensor (see
+        _gather_kvpe_prefix), otherwise the host slot."""
+        if metadata is not None and storage.shape[0] > 1:
+            return {
+                "input_batch_index_tensor": metadata[0],
+                "batch_slot_num_layers": self.layer_num,
+                "batch_slot_layer_idx": cache_batch_idx % self.layer_num,
+            }
+        return {"input_batch_index": cache_batch_idx if storage.shape[0] > 1 else 0}
 
     def _sparse_chunked_attn_overlapped(
         self,

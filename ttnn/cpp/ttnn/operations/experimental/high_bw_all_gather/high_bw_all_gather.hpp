@@ -32,12 +32,14 @@ Tensor high_bw_all_gather(
     // gathered dim; the reader derives the extent from it. Mutually exclusive with gathered_dim_size.
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
     uint32_t gathered_slab_global = 0,
+    uint32_t gathered_active_below = 0,
     const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
     const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt,
     // Full-mesh mode (cluster_axis == nullopt) only: the mesh axis that is OUTERMOST in the gathered
     // order. 0 = row-major (rank r*cols + c), 1 = column-major (rank c*rows + r). A caller whose shards
     // are laid out SP-major passes its sp_axis.
-    uint32_t full_mesh_outer_axis = 0);
+    uint32_t full_mesh_outer_axis = 0,
+    bool gathered_active_full_layout = false);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 

@@ -13,10 +13,39 @@ enum Reader {
     metadata_address = 1,
     search_length = 2,
     input_row_bytes = 3,
-    valid_end_address = 4
+    valid_end_address = 4,
+    // Two-level programs only. A row runs two-level when its search length is at least the cutover; 0 forces
+    // two-level, 0xFFFFFFFF forces single-level for a nonempty search (an empty one runs two-level). block_max_address
+    // is the maxima tensor stage 2 reads (the caller's, or the program's own that phase 1 writes); block_max_row_bytes
+    // its row pitch. two_level_num_input_rows is the number of input rows, two_level_num_cores the number of cores the
+    // rows run on. The coordinator (core index 0) hands out the phase-1 units.
+    two_level_cutover = 5,
+    block_max_address = 6,
+    block_max_row_bytes = 7,
+    two_level_num_input_rows = 8,
+    two_level_num_cores = 9,
+    reader_coordinator_noc_x = 10,
+    reader_coordinator_noc_y = 11,
+    // The rows halved across core pairs (see topk_two_level::row_owner); 0 without pairs.
+    two_level_split_rows = 12
 };
-enum Compute { compute_search_length = 0 };
-enum Writer { output_address = 0 };
+enum Compute { compute_search_length = 0, compute_two_level_num_input_rows = 1 };
+// Two-level programs only: writer_block_max_address is the maxima tensor phase 1 writes, writer_block_max_row_bytes
+// its row pitch, mode_output_address a test output for the mode the program ran in (0 = none).
+// writer_two_level_num_input_rows and writer_two_level_num_cores are the reader's two_level_num_input_rows and
+// two_level_num_cores. writer_two_level_core_coords starts the cores' virtual NoC x | y << 8, two cores per word (core
+// c in the half c % 2 of word c / 2, in core index order; a row's owner: topk_two_level::row_owner). Core index 0 is
+// the coordinator.
+enum Writer {
+    output_address = 0,
+    writer_block_max_address = 1,
+    mode_output_address = 2,
+    writer_block_max_row_bytes = 3,
+    writer_two_level_num_input_rows = 4,
+    writer_two_level_num_cores = 5,
+    writer_two_level_split_rows = 6,
+    writer_two_level_core_coords = 7
+};
 }  // namespace topk_common_args
 
 // Per-core args. A core reduces num_rows rows: whole rows from start_row and, with has_split, last one half of
@@ -32,6 +61,9 @@ enum Reader {
     reader_split_row = 2,
     reader_has_split = 3,
     reader_second_half = 4,
+    // Two-level programs only (the split slots above are always present then): this core's index, which names its
+    // rows.
+    reader_two_level_core_index = 5,
 };
 enum Compute {
     compute_num_rows = 0,

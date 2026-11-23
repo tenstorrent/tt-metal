@@ -38,6 +38,10 @@ constexpr uint32_t kWordSplitBlock = 4;    // the block holding the chunk start;
 constexpr uint32_t kWordPagesPerPacket = 5;
 constexpr uint32_t kWordBanks = 6;
 constexpr uint32_t kWordHasSplit = 7;  // built with a chunk start; without one, every row is in the prefix
+constexpr uint32_t kWordDense = 8;     // the chunk start is below dense_below: no rows to push (owner counts are 0)
+constexpr uint32_t kWordDense2 = 9;    // the chunk start is below dense_below_2 (a push with second_dense skips)
+constexpr uint32_t kWordHasSummary = 10;  // owner-major slot: kSummaryMagic when words kSummaryOff.. hold its summary
+constexpr uint32_t kSummaryMagic = 0x53554D31u;  // "SUM1": not a stray value from an older table
 
 // Word offsets of the sections.
 constexpr uint32_t kOwnerOff = 32;
@@ -45,6 +49,11 @@ constexpr uint32_t kOwnerPrefixOff = kOwnerOff + kMaxDevices;
 constexpr uint32_t kBitmapOff = 128;
 constexpr uint32_t kHeaderWords = kOwnerPrefixOff + kMaxDevices;  // what the push reads before the bitmap
 static_assert(kHeaderWords <= kBitmapOff);
+// Owner-major slot summary (sparse_kv_dispatch): bit u of the slot's bitmap word u is set when that word is nonzero,
+// for slots of at most kSummaryWords * 32 words (else kWordHasSummary is 0). Past the header the push reads.
+constexpr uint32_t kSummaryOff = 96;
+constexpr uint32_t kSummaryWords = 32;
+static_assert(kHeaderWords <= kSummaryOff && kSummaryOff + kSummaryWords <= kBitmapOff);
 }  // namespace plan_table
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -99,6 +108,12 @@ struct PacketMeta {
     uint32_t rows;
 };
 constexpr uint32_t kMetaEntryBytes = 16;  // a PacketMeta, padded to the 16 B L1 alignment
+// Inbox mode, PacketMeta::rows of the reader's non-row packets: a table slice for owner `requester` (first_page holds
+// its bytes), and the end of this sender's slices.
+constexpr uint32_t kSliceRows = 0x80000001u;
+constexpr uint32_t kSlicesDoneRows = 0x80000002u;
+// A packet to skip: pads phase 0 to whole kBatch, so both kernels' batches stay aligned to the kData/kMeta ring.
+constexpr uint32_t kSkipRows = 0x80000003u;
 static_assert(sizeof(PacketMeta) <= kMetaEntryBytes);
 
 constexpr uint32_t kBatch = 4;                 // packets per reader barrier, and in flight per writer flush
@@ -111,6 +126,9 @@ constexpr uint32_t kWindowBytes = 2 * kDramReadAlign;
 constexpr uint32_t kMaxStripeChunk = (kWindowBytes - kDramReadAlign) * 8;  // rows whose bitmap is at most 64 B
 constexpr uint32_t kBlocksPerBatch = 16;  // blocks whose bitmaps are fetched behind one read barrier
 constexpr uint32_t kTableCbBytes = plan_table::kBitmapOff * sizeof(uint32_t) + kBlocksPerBatch * kWindowBytes;
+// Inbox mode: a table slice gathers an owner's block bitmaps from this chip's table this many windows per barrier.
+constexpr uint32_t kSliceBlocksPerBatch = 64;
+constexpr uint32_t kSliceTableCbBytes = plan_table::kBitmapOff * sizeof(uint32_t) + kSliceBlocksPerBatch * kWindowBytes;
 
 }  // namespace sparse_push
 
@@ -119,7 +137,15 @@ constexpr uint32_t kTableCbBytes = plan_table::kBitmapOff * sizeof(uint32_t) + k
 // ---------------------------------------------------------------------------------------------------------------------
 namespace sparse_push_plan {
 
-constexpr uint32_t kWorkers = 2;  // BRISC and NCRISC of a core
+// The plan's workers on a core: BRISC and NCRISC, plus the three TRISCs with PLAN_WORKERS=5 (the L1 loops of the
+// dispatch-only plan; NoC work stays on BRISC and NCRISC).
+#ifdef PLAN_WORKERS
+constexpr uint32_t kWorkers = PLAN_WORKERS;
+#else
+constexpr uint32_t kWorkers = 2;
+#endif
+constexpr uint32_t kMaxWorkers = 5;
+static_assert(kWorkers == 2 || kWorkers == kMaxWorkers);
 
 // Where the plan gets the chunk start (the prefix ends at the block holding it) from.
 enum SplitSource : uint32_t {
@@ -148,6 +174,7 @@ enum Cb : uint32_t {
     kMisc = 6,         // single words shared by the workers (kMisc* below)
     kBuckets = 7,      // step 1's buckets, then step 2's copy lists
     kWordRanks = 8,    // [word]: the owner's needed rows before the word, within its range
+    kIdx2 = 9,         // with dense_below_2: this core's indices in the second dense layout
 };
 
 // kDirtyMaps: three arrays of dirty_array_words(cores) words.
@@ -172,8 +199,16 @@ constexpr uint32_t kMiscBucketed = 128;    // [from * kWorkers + to]: rows worke
 constexpr uint32_t kMiscCopies = 160;      // [my_chunk]: how many cores pushed a copy of this core's chunk
 static_assert(kMiscBase - kMiscTotals >= sparse_push::plan_table::kMaxDevices);
 static_assert(kMiscBucketed - kMiscBase >= sparse_push::plan_table::kMaxDevices);
-static_assert(kMiscCopies - kMiscBucketed >= kWorkers * kWorkers);
-constexpr uint32_t misc_words(uint32_t max_chunks) { return kMiscCopies + pad_words(max_chunks); }
+static_assert(kMiscCopies - kMiscBucketed >= kMaxWorkers * kMaxWorkers);
+// With PLAN_WORKERS=5 the workers sync through these words instead of semaphores (the TRISCs have no semaphore
+// API): [0] the step BRISC started, [1] the bitmap is zero, [2 + worker] the worker's progress.
+constexpr uint32_t kMiscSync = kMiscCopies + kMaxChunksPerCore;
+constexpr uint32_t kMiscSyncWords = 2 + kMaxWorkers;
+constexpr uint32_t misc_words(uint32_t max_chunks, uint32_t workers) {
+    return workers <= 2 || kMiscCopies + pad_words(max_chunks) > kMiscSync + pad_words(kMiscSyncWords)
+               ? kMiscCopies + pad_words(max_chunks)
+               : kMiscSync + pad_words(kMiscSyncWords);
+}
 
 // Semaphores.
 constexpr uint32_t kSemArrive = 0;                    // core 0: arrivals at the cross-core exchange

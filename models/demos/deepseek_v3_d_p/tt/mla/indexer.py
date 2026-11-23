@@ -21,6 +21,12 @@ from types import SimpleNamespace
 import torch
 from loguru import logger
 
+# EXPERIMENT default for SPARSE_MLA_INDEXER_BLOCK_MAX.
+# Default: on with the K3.1 dispatch path (SPARSE_MLA_KV_DISPATCH=1), whose top-k runs exposed before the dispatch and
+# needs the two-level selection (K3.1 L24 8x4, real 1M prompt: dispatch with it -4.5% against main, without it +3.0%);
+# off otherwise (alone it measured +1-2 ms a chunk against main's single-level top-k).
+_BLOCK_MAX_DEFAULT = "1" if os.environ.get("SPARSE_MLA_KV_DISPATCH", "0") == "1" else "0"
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
@@ -55,6 +61,7 @@ class IndexerSelectionState:
     valid_length_tensor: ttnn.Tensor | None = None
     valid_length_offset: int = 0
     valid_end_tensor: ttnn.Tensor | None = None
+    block_max: ttnn.Tensor | None = None
 
 
 def _fused_ring_host_timing_enabled() -> bool:
@@ -1028,6 +1035,24 @@ class TtIndexerBase:
         # the host scalars a captured program would freeze at their capture-time values.
         traced = metadata is not None
         host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
+        # EXPERIMENT (SPARSE_MLA_INDEXER_BLOCK_MAX, default below): the indexer also writes each row's 32-key block
+        # maxima, which top-k then takes as block_max_tensor (two-level selection without its own maxima pass).
+        width = k_full.shape[2]
+        block_max = None
+        if (
+            os.environ.get("SPARSE_MLA_INDEXER_BLOCK_MAX", _BLOCK_MAX_DEFAULT) == "1"
+            and self.index_topk_capacity == 2048
+            and 65536 <= width <= 2097152
+            and width % 32 == 0
+            and (traced or valid_pos % 32 == 0)
+        ):
+            block_max = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, q_dev.shape[2], width // 32]),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+                q_dev.device(),
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
         logits = ttnn.experimental.ring_indexer_score_dsa(
             q_dev,
             k_full,
@@ -1062,6 +1087,9 @@ class TtIndexerBase:
             block_cyclic_sp_axis=None,
             # The per-device slab is this chip's Q rows.
             block_cyclic_chunk_local=q_dev.shape[2],
+            block_max_output=block_max,
+            # topk_large_indices' default two-level cutover: below it top-k runs single-level and never reads them.
+            block_max_from_length=98_304,
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
             # Q rows and the index cache are SP-major (sp_coord*tp + tp_coord): row-major on the mesh at
@@ -1100,6 +1128,7 @@ class TtIndexerBase:
             valid_end_tensor=metadata[2] if metadata is not None else None,
             valid_length_offset=glob if metadata is not None else 0,
             requires_tp_redistribution=tpsp and not self.output_tp_sequence_sharded,
+            block_max=block_max,
         )
 
     def select_local(
@@ -1121,6 +1150,8 @@ class TtIndexerBase:
                 valid_length_offset=state.valid_length_offset,
                 valid_end_tensor=state.valid_end_tensor,
             )
+        if state.block_max is not None:
+            metadata_kwargs.update(block_select=32, block_max_tensor=state.block_max)
         return ttnn.experimental.topk_large_indices(
             state.logits,
             k=self.index_topk_capacity,

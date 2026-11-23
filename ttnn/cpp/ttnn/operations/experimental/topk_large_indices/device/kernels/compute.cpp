@@ -8,7 +8,8 @@
 //
 // Outlining shared code enlarges this kernel rather than shrinking it: the topk_xl MOP and replay-buffer
 // programming folds constants hard at each call site, so one generic copy is bigger than several specialised
-// ones. Delete a path with a compile-time argument instead.
+// ones. Delete a path with a compile-time argument instead. The exception is arm_untilize_pack, out of line in
+// two-level programs: every call site passes the same constants, so one copy folds them as well.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -19,6 +20,11 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_dest.h"
+#ifdef TOPK_TWO_LEVEL
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "api/compute/reduce.h"
+#include "topk_large_indices_two_level.hpp"
+#endif
 #include "api/dataflow/circular_buffer.h"
 #include "topk_large_indices_compute_body_mode.hpp"
 #include "topk_large_indices_metadata.hpp"
@@ -328,20 +334,21 @@ FORCE_INLINE void reduce_segmented_row(
         const uint32_t chunk_slot = base + tiles_per_sequence<K>;
         const bool mirror_final_survivor = segment != 0 || (last_segment && final_ascending);
 
-        const uint32_t first_elements = segment_first + 1 == end_chunk_total ? tail_elements : K;
-        if (segment == 0) {
-            sort_fused_chunk<K, true>(input, base, first_elements, false, segment_first & fused_chunk_id_mask);
-        } else {
-            sort_fused_chunk<K, false>(input, base, first_elements, false, segment_first & fused_chunk_id_mask);
-        }
-
-        if (segment_first == last_chunk) {
-            topk_xl_rebuild<K, true>(base, mirror_final_survivor);
-        } else {
-            for (uint32_t chunk = segment_first + 1; chunk <= last_chunk; ++chunk) {
-                const uint32_t active_elements = chunk + 1 == end_chunk_total ? tail_elements : K;
-                sort_fused_chunk<K, false>(input, chunk_slot, active_elements, true, chunk & fused_chunk_id_mask);
+        // The segment's first chunk sorts descending into the base, every later one ascending into the chunk slot and
+        // merges in. One loop, so each sort_fused_chunk form has a single call site.
+        for (uint32_t chunk = segment_first; chunk <= last_chunk; ++chunk) {
+            const bool head = chunk == segment_first;
+            const uint32_t active_elements = chunk + 1 == end_chunk_total ? tail_elements : K;
+            if (head && segment == 0) {
+                sort_fused_chunk<K, true>(input, base, active_elements, false, chunk & fused_chunk_id_mask);
+            } else {
+                sort_fused_chunk<K, false>(
+                    input, head ? base : chunk_slot, active_elements, !head, chunk & fused_chunk_id_mask);
+            }
+            if (!head) {
                 topk_xl_merge<K, true>(base);
+            }
+            if (!head || segment_first == last_chunk) {
                 topk_xl_rebuild<K, true>(base, mirror_final_survivor && chunk == last_chunk);
             }
         }
@@ -538,6 +545,21 @@ FORCE_INLINE void reduce_split_segmented_row(
     }
 }
 
+// Arms the untilize pack of a row's indices. Out of line in two-level programs: every call site passes the same
+// constant CB, so the one copy loses no folding. Each passes its own line on to the compute-kernel sentinel's
+// diagnostics.
+#ifdef TOPK_TWO_LEVEL
+template <uint32_t K>
+__attribute__((noinline)) void arm_untilize_pack(uint32_t indices_cb, uint32_t call_line = __builtin_LINE()) {
+    pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb, call_line);
+}
+#else
+template <uint32_t K>
+FORCE_INLINE void arm_untilize_pack(uint32_t indices_cb, uint32_t call_line = __builtin_LINE()) {
+    pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb, call_line);
+}
+#endif
+
 // A raw pack and unpack round trip can leave unpacker state a later program's init does not reset; one discarded
 // copy resets it. The copy deliberately reads whatever the input CB's read pointer happens to address -- the value
 // is thrown away, and the address is always inside the CB's own L1 allocation.
@@ -550,6 +572,93 @@ FORCE_INLINE void settle_next_program(uint32_t input_cb) {
     tile_regs_wait();
     tile_regs_release();
 }
+
+#ifdef TOPK_TWO_LEVEL
+#ifdef TRISC_MATH
+// The block maxima of one tile unpacked for a max row reduce (data transposed within each face, one face per
+// handoff), pooled into DEST rows `row` (rows 0-15 of the tile, faces 0 and 1) and `row + 4` (rows 16-31, faces 2 and
+// 3) of the current tile. GMPOOL max-accumulates into the top row of an aligned 4-row block and zeroes the other three;
+// DEST rows start undefined, which it reads as -inf. Unlike reduce_tile, the result row stays a row: no transpose
+// back into a column.
+inline void two_level_pool_tile(uint32_t row) {
+    TT_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, row);
+    TT_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, row);
+    TT_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, row + 4);
+    TT_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, row + 4);
+}
+#endif
+
+// Phase 1 of a two-level program (see topk_large_indices_two_level.hpp): one unit's 32 tiles, tilized one tile wide so
+// tile t holds the unit's keys from 1024 t and its row r is block 32 t + r. Every row is reduced to its maximum, eight
+// tiles per output tile: tile i of a group leaves its 32 maxima in DEST rows 8 i and 8 i + 4, 16 each, so the output
+// tile's rows 4 j hold blocks 16 j .. 16 j + 15 of the group, in block order. The writer sends them to the maxima
+// tensor.
+FORCE_INLINE void two_level_unit() {
+    constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
+    constexpr uint32_t cb_tiled = get_named_compile_time_arg_val("tl_cb_tiled");
+    constexpr uint32_t cb_scaler = get_named_compile_time_arg_val("tl_cb_scaler");
+    constexpr uint32_t cb_red = get_named_compile_time_arg_val("tl_cb_red");
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    constexpr uint32_t group_tiles = 8;
+    static_assert(stage1_batch % group_tiles == 0);
+    CircularBuffer tiled(cb_tiled);
+    CircularBuffer reduced(cb_red);
+    CircularBuffer(cb_scaler).wait_front(1);
+    compute_kernel_lib::tilize<1, cb_stage1, cb_tiled>(stage1_batch);
+    reconfig_data_format(cb_tiled, cb_scaler);
+    pack_reconfig_data_format(cb_red);
+    // reduce_init without its pack edge mask, which would keep only column 0.
+    state_configure(cb_tiled, cb_scaler, cb_red, __builtin_LINE());
+    UNPACK((llk_unpack_AB_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler)));
+    MATH((llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, MATH_FIDELITY>(
+        cb_tiled, cb_scaler)));
+    tiled.wait_front(stage1_batch);
+    for (uint32_t group = 0; group < stage1_batch; group += group_tiles) {
+        reduced.reserve_back(1);
+        tile_regs_acquire();
+        MATH((math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0)));
+        for (uint32_t i = 0; i < group_tiles; ++i) {
+            UNPACK((llk_unpack_AB_reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_tiled, cb_scaler, group + i, 0)));
+            MATH((two_level_pool_tile(8 * i)));
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_red);
+        tile_regs_release();
+        reduced.push_back(1);
+    }
+    tiled.pop_front(stage1_batch);
+    reduce_uninit();
+}
+
+// Runs the phase-1 units the reader sends until it announces anything else, which it returns: one of this core's rows
+// (header_row, or header_split for a split row's stage 2), its half of a split row (header_half), or the end
+// (header_end). Phase 1 runs on the ordinary schedule, so a split in progress is ended first.
+FORCE_INLINE uint32_t two_level_next_row(uint32_t total_units, bool& split_on) {
+    constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    CircularBuffer stage1(cb_stage1);
+    while (true) {
+        stage1.wait_front(1);
+        // The two header slots are reused: drop any cached copy of this one before reading it.
+        UNPACK(invalidate_l1_cache());
+        const uint32_t code = read_tile_value(cb_stage1, 0, 0);
+        stage1.pop_front(1);
+        if (code >= total_units) {
+            stage1.wait_front(stage1_batch);
+            stage1.pop_front(stage1_batch);
+            return code;
+        }
+        // No settle after the split: two-level items never round-trip an accumulator through L1 (stage 2 and stage 3
+        // are at most 32 chunks, one segment), and the unit's tilize and reduce inits configure what they use.
+        if (split_on) {
+            topk_xl_split_end();
+            split_on = false;
+        }
+        two_level_unit();
+    }
+}
+#endif
 
 }  // namespace
 
@@ -585,7 +694,7 @@ void kernel_main() {
     constexpr uint32_t final_survivor = 0;
 
     compute_kernel_hw_startup(input_cb, indices_cb);
-    pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb);
+    arm_untilize_pack<K>(indices_cb);
 
     uint32_t num_chunks;
     uint32_t tail_elements;
@@ -593,6 +702,13 @@ void kernel_main() {
     uint32_t split_tail_elements;
     // Clipped like the reader's: an empty half would otherwise stamp chunk ids past the end of the row.
     uint32_t split_first_chunk;
+#ifdef TOPK_TWO_LEVEL
+    // A two-level program (see topk_large_indices_two_level.hpp) learns its mode and search length from the mailbox.
+    bool two_level_mode = false;
+    uint32_t two_level_search_length = 0;
+    static_assert(valid_length_from_metadata, "a two-level program reads its bounds from the mailbox");
+    static_assert(split_whole_rows, "a two-level program runs its stages on the whole-row split body");
+#endif
     if constexpr (valid_length_from_metadata) {
         // The reader already clipped the rows and the split half against the metadata length.
         CircularBuffer meta_cb_obj(meta_cb);
@@ -610,6 +726,10 @@ void kernel_main() {
         // A split core's mailbox whole-row count is the row's own, so half_bounds places the cut exactly as
         // the reader did. Deriving it with the same helper is what keeps the two from drifting apart.
         split_first_chunk = half_bounds({num_chunks, tail_elements}, K, second_half).first_chunk;
+#ifdef TOPK_TWO_LEVEL
+        two_level_mode = mailbox_word(meta_cb, topk_two_level::mailbox_mode_word) != 0;
+        two_level_search_length = mailbox_word(meta_cb, topk_two_level::mailbox_search_length_word);
+#endif
         meta_cb_obj.pop_front(1);
     } else if constexpr (!row_split) {
         const auto bounds = calculate_topk_bounds(search_len, K);
@@ -641,29 +761,161 @@ void kernel_main() {
     constexpr bool segmented_split = split_segments && long_rows;
     // Shorter rows run on one thread: the set-up costs more than the overlap saves.
     constexpr uint32_t min_split_chunks = K == 2048 ? 2 : 3;
+#ifdef TOPK_TWO_LEVEL
+    // A split row's halves of stage 3 run as soon as they can, not after the end (see the reader).
+    constexpr bool early_halves = get_named_compile_time_arg_val("tl_early_halves") != 0;
+    static_assert(!early_halves || segmented_split, "early halves run on the segmented split body");
+#endif
 
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     uint32_t first_row = 0;
+    // A split-row half runs on the split body like a whole row, when it starts on a 32-chunk block or (two-level) its
+    // stamps are offset to the row's; the body keeps one call site. As the loop's last item its survivor stays in DEST
+    // for the split-row path; a two-level early half (tl_early_halves) runs mid-loop and packs its survivor out.
+    bool half_done = false;
+    // A two-level split row's halves run on the split body as 16-chunk rows from chunk 0, stamped with the row's chunk
+    // ids (the split body decodes stamps per 32-chunk block and needs a row to start on one).
+    bool shifted_half = false;
     if constexpr (split_whole_rows) {
-        if (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
-            (num_chunks <= max_fused_chunks || segmented_split)) {
+        const bool half_in_split = segmented_split && has_split && split_num_chunks >= min_split_chunks &&
+                                   (split_first_chunk & fused_chunk_id_mask) == 0;
+#ifdef TOPK_TWO_LEVEL
+        // A two-level row is two items on this loop's split body, both read from input_cb: its block maxima (stage
+        // 2), then its gathered candidates (stage 3). One call site keeps a single copy of the body in the binary.
+        const uint32_t whole_row_chunks = num_chunks;
+        const uint32_t whole_row_tail = tail_elements;
+        // A two-level core runs its items until the reader's end header: two per row, between phase-1 units.
+        const uint32_t items = two_level_mode ? 0xFFFFFFFFu : num_whole_rows + (half_in_split ? 1 : 0);
+        const uint32_t maxima_chunks = topk_two_level::stage2_chunks(two_level_search_length);
+        const uint32_t total_units =
+            topk_two_level::Units::of(
+                two_level_search_length,
+                get_named_compile_time_arg_val("tl_stage1_batch"),
+                get_common_arg_val<uint32_t>(topk_common_args::compute_two_level_num_input_rows))
+                .total;
+        bool split_on = false;
+        if (two_level_mode || half_in_split ||
+            (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
+             (num_chunks <= max_fused_chunks || segmented_split))) {
+            if (!two_level_mode) {
+                begin_thread_split();
+                split_on = true;
+            }
+            const bool prefetch = !two_level_mode && !segmented_split && num_chunks <= max_fused_chunks &&
+                                  topk_xl_split_can_prefetch<K>(num_chunks);
+            // A split row's stage 2 runs here. Its stage 3 runs in halves here too with the segmented split body;
+            // only non-segmented programs take the split-row path below for it.
+            bool stage2_only = false;
+            for (uint32_t row = 0; row < items; ++row) {
+                const bool maxima_item = two_level_mode && (row & 1) == 0;
+                bool half_item = !two_level_mode && row == num_whole_rows;
+                if (maxima_item) {
+                    const uint32_t next = two_level_next_row(total_units, split_on);
+                    if (early_halves && next == topk_two_level::header_end) {
+                        break;
+                    }
+                    if (next == (early_halves ? topk_two_level::header_half : topk_two_level::header_end)) {
+                        if constexpr (!segmented_split) {
+                            break;
+                        }
+                        // Each core of the pair sorts its half of the split row's 32 candidate chunks here, as a
+                        // 16-chunk row whose chunk stamps start at the half's first chunk: the stamps are the
+                        // row's, so the halves join fused (ties ordered as on one core) and decode to the row's
+                        // positions.
+                        static_assert(topk_two_level::candidate_keys / K / 2 >= min_split_chunks);
+                        static_assert(topk_two_level::candidate_keys / K <= max_fused_chunks);
+                        if (!has_split) {
+                            break;
+                        }
+                        shifted_half = true;
+                        num_chunks = topk_two_level::candidate_keys / K;
+                        tail_elements = K;
+                        const auto half = half_bounds({num_chunks, tail_elements}, K, second_half);
+                        split_num_chunks = half.num_chunks;
+                        split_tail_elements = half.tail_elements;
+                        split_first_chunk = half.first_chunk;
+                        half_item = true;
+                    }
+                    stage2_only = next == topk_two_level::header_split;
+                    if (!split_on) {
+                        begin_thread_split();
+                        split_on = true;
+                    }
+                } else if (two_level_mode && stage2_only) {
+                    continue;
+                }
+                // Shadow the row bounds with this item's: the call below is the single-level loop's.
+                const bool fused_join = num_chunks <= max_fused_chunks;
+                const uint32_t num_chunks =
+                    half_item ? split_num_chunks
+                              : (!two_level_mode ? whole_row_chunks
+                                                 : (maxima_item ? maxima_chunks : topk_two_level::candidate_keys / K));
+                const uint32_t tail_elements = half_item ? split_tail_elements : (two_level_mode ? K : whole_row_tail);
+                const bool prefetch_next = prefetch && row + 1 < num_whole_rows;
+#else
+        if (half_in_split || (num_whole_rows > 0 && num_chunks >= min_split_chunks &&
+                              (num_chunks <= max_fused_chunks || segmented_split))) {
             begin_thread_split();
             const bool prefetch =
                 !segmented_split && num_chunks <= max_fused_chunks && topk_xl_split_can_prefetch<K>(num_chunks);
-            for (uint32_t row = 0; row < num_whole_rows; ++row) {
+            const bool fused_join = num_chunks <= max_fused_chunks;
+            const uint32_t whole_row_chunks = num_chunks;
+            const uint32_t whole_row_tail = tail_elements;
+            for (uint32_t row = 0; row < num_whole_rows + (half_in_split ? 1 : 0); ++row) {
+                const bool half_item = row == num_whole_rows;
+                const uint32_t num_chunks = half_item ? split_num_chunks : whole_row_chunks;
+                const uint32_t tail_elements = half_item ? split_tail_elements : whole_row_tail;
                 const bool prefetch_next = prefetch && row + 1 < num_whole_rows;
+#endif
                 tile_regs_acquire();
                 if constexpr (segmented_split) {
+#ifdef TOPK_TWO_LEVEL
+                    if (shifted_half) {
+                        topk_xl_split_set_stamp_offset(split_first_chunk);
+                    }
+#endif
+                    // A half ends ascending when its survivor leaves this core, and stays fused for a fused join.
                     reduce_split_segmented_row<K>(
                         input,
                         acc_cb,
                         indices_cb,
-                        0 /*row_first_chunk*/,
+                        half_item && !shifted_half ? split_first_chunk : 0,
                         num_chunks,
                         tail_elements,
-                        false /*final_ascending*/,
-                        true /*emit_indices*/,
-                        false /*keep_fused*/);
+                        half_item && sends_survivor,
+                        !half_item,
+                        half_item && fused_join);
+#ifdef TOPK_TWO_LEVEL
+                    if (shifted_half) {
+                        topk_xl_split_set_stamp_offset(0);
+                    }
+                    if (half_item && early_halves && two_level_mode) {
+                        // The half's survivor leaves DEST raw: to the partner from the second core, into this core's
+                        // own send CB until the end's join on the first.
+                        topk_xl_split_end();
+                        split_on = false;
+                        arm_untilize_pack<K>(indices_cb);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        send.reserve_back(survivor_tiles);
+                        pack_untilize_uninit(send_cb);
+                        pack_reconfig_data_format(send_cb);
+                        for (uint32_t tile = 0; tile < survivor_tiles; ++tile) {
+                            pack_tile(final_survivor + tile, send_cb);
+                        }
+                        send.push_back(survivor_tiles);
+                        tile_regs_release();
+                        arm_untilize_pack<K>(indices_cb);
+                        shifted_half = false;
+                        // The half took a maxima item's slot: the next item is a header again.
+                        ++row;
+                        continue;
+                    }
+#endif
+                    if (half_item) {
+                        half_done = true;
+                        break;
+                    }
                 } else {
                     reduce_split_row<K>(
                         input, indices_cb, num_chunks, tail_elements, prefetch && row > 0, prefetch_next);
@@ -673,7 +925,7 @@ void kernel_main() {
 
                 // The pack thread's SFPU work has reprogrammed its ADDR_MODs and MOP, so the untilize pack
                 // below must re-init rather than inherit them.
-                pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb);
+                arm_untilize_pack<K>(indices_cb);
                 indices.reserve_back(1);
                 pack_untilize_dest<tiles_per_sequence<K>, tiles_per_sequence<K>>(
                     indices_cb, 1, 0, final_survivor + tiles_per_sequence<K>);
@@ -687,10 +939,70 @@ void kernel_main() {
             }
             // Pairs with the begin_thread_split() above, on both ways out of this block. Leaving the two
             // semaphores at max 15 is invisible to this op and breaks the next one.
+#ifdef TOPK_TWO_LEVEL
+            // A two-level core may end on a phase-1 unit, with no split open.
+            if (split_on) {
+                topk_xl_split_end();
+            }
+#else
             topk_xl_split_end();
-            if constexpr (segmented_split) {
+#endif
+            if (half_done) {
+                // The split body leaves the packer in its last segment's mode; both output forms of the split-row
+                // path start from the untilize one. No settle: DEST holds the half's survivor.
+                arm_untilize_pack<K>(indices_cb);
+#ifdef TOPK_TWO_LEVEL
+            } else if (segmented_split || two_level_mode) {
+#else
+            } else if constexpr (segmented_split) {
+#endif
                 settle_next_program(input_cb);
             }
+#ifdef TOPK_TWO_LEVEL
+            if (two_level_mode && early_halves) {
+                if (has_split && !second_half) {
+                    // The split row's join: this core's parked half, then the partner's landed one merged into it.
+                    arm_untilize_pack<K>(indices_cb);
+                    tile_regs_acquire();
+                    send.wait_front(survivor_tiles);
+                    reconfig_data_format_srca(input_cb, send_cb);
+                    copy_init(send_cb);
+                    for (uint32_t tile = 0; tile < tiles_per_sequence<K>; ++tile) {
+                        copy_tile(send_cb, tile, final_survivor + tile);
+                    }
+                    send.pop_front(survivor_tiles);
+                    merge_landed_fused_survivor<K>(landing, input_cb);
+                    mark_neginf_indices<K>(final_survivor);
+                    materialize_index_rank_order<K>(final_survivor, indices_cb);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    indices.reserve_back(1);
+                    pack_untilize_dest<tiles_per_sequence<K>, tiles_per_sequence<K>>(
+                        indices_cb, 1, 0, final_survivor + tiles_per_sequence<K>);
+                    indices.push_back(1);
+                    tile_regs_release();
+                    settle_next_program(input_cb);
+                }
+                return;
+            }
+            if (two_level_mode) {
+                if (!has_split) {
+                    return;
+                }
+                // This core's half of the split row's 32 candidate chunks, on the split-row path. With the segmented
+                // split body both cores sort their half above.
+                if constexpr (!segmented_split) {
+                    if (!half_done) {
+                        num_chunks = topk_two_level::candidate_keys / K;
+                        tail_elements = K;
+                        const auto half = half_bounds({num_chunks, tail_elements}, K, second_half);
+                        split_num_chunks = half.num_chunks;
+                        split_tail_elements = half.tail_elements;
+                        split_first_chunk = half.first_chunk;
+                    }
+                }
+            }
+#endif
             if (!has_split) {
                 return;
             }
@@ -710,26 +1022,14 @@ void kernel_main() {
         // chunks; both partners derive this from the same whole-row chunk count, so they agree on the format.
         const bool fused_join = split_row && num_chunks <= max_fused_chunks;
 
-        tile_regs_acquire();
-
-        // A half long enough, and starting on a 32-chunk block so the split body's segment-local stamps
-        // decode, runs across MATH and PACK like the whole rows do. The output below is shared with every
-        // other row.
-        bool half_on_both_threads = false;
-        if constexpr (segmented_split) {
-            if (split_row && row_chunks >= min_split_chunks && (first_chunk & fused_chunk_id_mask) == 0) {
-                begin_thread_split();
-                reduce_split_segmented_row<K>(
-                    input, acc_cb, indices_cb, first_chunk, row_chunks, row_tail, row_sends, false, fused_join);
-                topk_xl_split_end();
-                // The split body leaves the packer in its last segment's mode; both output forms below start
-                // from the untilize one.
-                pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb);
-                half_on_both_threads = true;
-            }
+        // A half that ran as the split-body loop's last item (see half_done) left its survivor in tile 0 with DEST
+        // held, across MATH and PACK.
+        const bool half_on_both_threads = split_row && half_done;
+        if (!half_on_both_threads) {
+            tile_regs_acquire();
         }
         if (half_on_both_threads) {
-            // The split body already left the survivor in tile 0; nothing more to reduce.
+            // Nothing more to reduce.
         } else if constexpr (body_mode == ComputeBodyMode::FusedSegmented) {
             reduce_segmented_row<K>(input, first_chunk, row_chunks, row_tail, row_sends, fused_join);
         } else if constexpr (body_mode == ComputeBodyMode::FusedEndToEnd) {
@@ -777,7 +1077,7 @@ void kernel_main() {
 
         if (row_sends) {
             // Re-arm the untilize pack the row output path expects.
-            pack_untilize_dest_init<tiles_per_sequence<K>, tiles_per_sequence<K>>(indices_cb);
+            arm_untilize_pack<K>(indices_cb);
         }
     }
     if (receives_survivor || sends_survivor) {

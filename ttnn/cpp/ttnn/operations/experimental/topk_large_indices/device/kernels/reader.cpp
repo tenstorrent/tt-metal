@@ -11,6 +11,943 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "topk_large_indices_metadata.hpp"
 #include "topk_large_indices_runtime_args.hpp"
+#ifdef TOPK_TWO_LEVEL
+#include "api/dataflow/noc_semaphore.h"
+#include "topk_large_indices_two_level.hpp"
+
+namespace {
+
+constexpr uint16_t neginf_bf16 = 0xFF80;
+// The mode and search length words follow the whole-row and split bounds in the compute's mailbox.
+static_assert(topk_two_level::mailbox_mode_word == 2 * topk_metadata_split_word_offset);
+
+// Stores -inf into num_elements (at least 1) keys from l1_addr: a leading odd key alone, then whole words. Returns the
+// address of the last key stored; the caller waits for the stores (topk_two_level::wait_l1_store) before the CB push
+// that hands them on.
+__attribute__((noinline)) uint32_t fill_neginf(uint32_t l1_addr, uint32_t num_elements) {
+    const uint32_t end = l1_addr + num_elements * sizeof(uint16_t);
+    uint32_t addr = l1_addr;
+    if (addr & 2) {
+        *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr) = neginf_bf16;
+        addr += sizeof(uint16_t);
+    }
+#pragma GCC unroll 4
+    for (; addr + sizeof(uint32_t) <= end; addr += sizeof(uint32_t)) {
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr) = (uint32_t{neginf_bf16} << 16) | neginf_bf16;
+    }
+    if (addr < end) {
+        *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr) = neginf_bf16;
+    }
+    return end - sizeof(uint16_t);
+}
+
+// What the reader hands the compute and the writer next (see topk_two_level::header_row): a header page then 32
+// tile pages in the stage-1 CB (the tiles carry a unit's keys and are unused otherwise), and a mailbox page.
+FORCE_INLINE uint32_t two_level_announce(uint32_t code, uint32_t row) {
+    using namespace topk_two_level;
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    CircularBuffer writer_mailbox(get_named_compile_time_arg_val("tl_cb_writer_mailbox"));
+    writer_mailbox.reserve_back(1);
+    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_mailbox.get_write_ptr());
+    words[writer_header_code_word] = code;
+    words[writer_header_row_word] = row;
+    wait_l1_store(reinterpret_cast<uint32_t>(&words[writer_header_row_word]));
+    writer_mailbox.push_back(1);
+    CircularBuffer stage1_cb(get_named_compile_time_arg_val("tl_cb_stage1"));
+    stage1_cb.reserve_back(1 + stage1_batch);
+    const uint32_t base = stage1_cb.get_write_ptr();
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base) = code;
+    return base;
+}
+
+// last_store: the address of the reader's last L1 store into the pushed pages (the header, or a -inf fill after it).
+FORCE_INLINE void two_level_push_stage1(uint32_t last_store) {
+    topk_two_level::wait_l1_store(last_store);
+    CircularBuffer(get_named_compile_time_arg_val("tl_cb_stage1"))
+        .push_back(1 + get_named_compile_time_arg_val("tl_stage1_batch"));
+}
+
+// One phase-1 unit: its 32 tiles of 1024 keys. The last live block's keys past the search length are -inf; the blocks
+// past it keep stale keys, whose maxima the writer does not send.
+template <typename InputAccessor>
+FORCE_INLINE void two_level_unit(
+    const Noc& noc,
+    const InputAccessor& input,
+    uint32_t search_len,
+    const topk_two_level::Units& units,
+    uint32_t unit) {
+    using namespace topk_two_level;
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    static_assert(tile_bytes == tile_keys * sizeof(uint16_t));
+    CircularBuffer stage1_cb(get_named_compile_time_arg_val("tl_cb_stage1"));
+    const uint32_t base = two_level_announce(unit, 0);
+    // The unit's tiles are contiguous in the row and in the CB: its live keys, in whole 64 B granules (the row is a
+    // multiple of 32 keys long, so this never leaves it), read one piece at a time. Phase 1 saturates the DRAM from
+    // the other cores too; keeping little in flight per core keeps the queues short for the rows' small reads.
+    constexpr uint32_t piece_bytes = 4096;
+    const uint32_t first_key = units.part(unit) * stage1_batch * tile_keys;
+    constexpr uint32_t unit_keys = stage1_batch * tile_keys;
+    const uint32_t live = search_len - first_key < unit_keys ? search_len - first_key : unit_keys;
+    const uint32_t live_bytes = div_up(live, block_keys) * block_bytes;
+    for (uint32_t offset = 0; offset < live_bytes; offset += piece_bytes) {
+        noc.async_read(
+            input,
+            stage1_cb,
+            live_bytes - offset < piece_bytes ? live_bytes - offset : piece_bytes,
+            {.page_id = units.row(unit), .offset_bytes = first_key * static_cast<uint32_t>(sizeof(uint16_t)) + offset},
+            {.offset_bytes = tile_bytes + offset});
+        noc.async_read_barrier();
+    }
+    // Only the last live block's keys past the search length need -inf: the writer sends the maxima of the live
+    // blocks only, and each block's maximum comes from its own tile row, so the stale keys of later blocks reach
+    // nothing.
+    const uint32_t live_keys = live_bytes / sizeof(uint16_t);
+    two_level_push_stage1(
+        live < live_keys ? fill_neginf(base + tile_bytes + live * sizeof(uint16_t), live_keys - live) : base);
+}
+
+// One read of the gather from the source set by noc_async_read_set_state (the row's DRAM bank, or this core's L1 for
+// the staged copies). Out of line: each inlined NoC read is a few hundred bytes of a tight kernel config buffer.
+__attribute__((noinline)) void gather_read(uint32_t src, uint32_t dst, uint32_t bytes, uint8_t noc_id) {
+    noc_async_read_with_state(src, dst, bytes, noc_id);
+}
+
+// A non-posted atomic add to `target` on command buffer `cmd_buf`, returning the old value to `return_word` (see
+// two_level_run on what that value is worth), and, with `wait`, the wait for its acknowledgement. Out of line, like
+// gather_read.
+__attribute__((noinline)) void atomic_add(
+    uint8_t noc_id, uint32_t cmd_buf, uint64_t target, uint32_t increment, uint32_t return_word, bool wait = true) {
+    noc_fast_atomic_increment<noc_mode, true>(
+        noc_id,
+        cmd_buf,
+        target,
+        NOC_UNICAST_WRITE_VC,
+        increment,
+        31 /*wrap*/,
+        false /*linked*/,
+        false /*posted*/,
+        return_word);
+    if (wait) {
+        noc_async_atomic_barrier(noc_id);
+    }
+}
+
+// An atomic add on the register-write buffer, returning the old value (see the claims in two_level_run). Out of line:
+// the schedule calls it at several sites.
+__attribute__((noinline)) uint32_t aux_atomic_add(uint8_t noc_id, uint64_t target, uint32_t increment) {
+    const uint32_t rows_word = get_semaphore(get_named_compile_time_arg_val("tl_rows_return_sem"));
+    atomic_add(noc_id, write_reg_cmd_buf, target, increment, rows_word);
+    invalidate_l1_cache();
+    return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows_word);
+}
+
+// A word of another core's L1, read over the NoC through this core's scratch semaphore (a 16 B slot). A NoC read
+// keeps its source's offset within 16 B, so the read is of the word's aligned 16 B.
+__attribute__((noinline)) uint32_t read_word(uint8_t noc_id, uint64_t addr) {
+    auto* scratch =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("tl_scratch_sem")));
+    noc_async_read(addr & ~uint64_t{15}, reinterpret_cast<uint32_t>(scratch), 16, noc_id);
+    noc_async_read_barrier(noc_id);
+    invalidate_l1_cache();
+    return scratch[(addr >> 2) & 3];
+}
+
+// Stage 3's gather: the selected blocks table[0 .. 64 * num_chunks) of `row` into num_chunks 2048-key candidate
+// chunks. A row is one page in one bank, so its NoC address is resolved once and each block read is an offset from
+// it. Sentinel slots and keys past the search length are -inf.
+//
+// The gather is bound by the number of DRAM reads more than their size, so reads are coalesced: a run of consecutive
+// blocks is one read into its slots, and other selected blocks sharing an aligned 1-2 KB span are one read of their
+// range into a staging area, then copied to their slots by local L1 reads.
+// The staging area is the stage-1 CB, idle while a row gathers: reserving all of it waits until the compute has
+// consumed every page there, and nothing is pushed.
+//
+// Out of line: several call sites, and the kernel config buffer is tight. Each chunk waits for its page of the table:
+// from this core's writer through the table CB, or (from_partner) from the split pair's first core, counted by
+// half_sem.
+template <typename InputAccessor>
+__attribute__((noinline)) void two_level_gather(
+    const Noc& noc,
+    const InputAccessor& input,
+    uint32_t search_len,
+    uint32_t row,
+    const volatile tt_l1_ptr uint32_t* table,
+    uint32_t num_chunks,
+    bool from_partner) {
+    using namespace topk_two_level;
+    constexpr uint32_t cb_in = get_compile_time_arg_val(0);
+    constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(3);
+    constexpr uint32_t blocks_per_chunk = chunk_bytes / block_bytes;
+    static_assert(blocks_per_chunk == table_page_entries);
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    constexpr uint32_t span_blocks = 32;  // the largest span, 2 KB
+    CircularBuffer input_cb(cb_in);
+    CircularBuffer stage1_cb(get_named_compile_time_arg_val("tl_cb_stage1"));
+    // A staged range holds at least two of the chunk's 64 slots, so a chunk stages at most 32 spans: 64 KB, within the
+    // CB's contiguous half from its write pointer.
+    static_assert(blocks_per_chunk / 2 * span_blocks * block_bytes <= (1 + stage1_batch) * get_compile_time_arg_val(2));
+    stage1_cb.reserve_back(2 * (1 + stage1_batch));
+    const uint32_t staging = stage1_cb.get_write_ptr();
+    const uint32_t num_blocks = div_up(search_len, block_keys);
+    const uint32_t last_block = num_blocks - 1;
+    const uint32_t last_block_live = search_len - last_block * block_keys;
+    // 2 KB spans for rows of at most 8 blocks per selected slot (up to about 512K keys), 1 KB for longer rows, where
+    // the wider range reads measured slower than the reads they save.
+    const uint32_t span_shift = num_blocks > 8 * selected_blocks ? 4 : 5;
+    const uint8_t noc_id = noc.get_noc_id();
+    const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc_id);
+    // The row is one page in one DRAM bank: its reads differ only in the low address word.
+    const uint32_t row_addr = static_cast<uint32_t>(row_noc_addr);
+    ASSERT(num_blocks == 0 || row_addr + num_blocks * block_bytes - 1 >= row_addr);
+    // A slot's staged source address, with bit 31 set; 0 for a slot read in place. Zeroed by a loop, not an
+    // initialiser, which would pull in memset.
+    uint32_t copy_from[blocks_per_chunk];
+    for (uint32_t slot = 0; slot < blocks_per_chunk; ++slot) {
+        copy_from[slot] = 0;
+    }
+    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        if (from_partner) {
+            Semaphore<>(get_named_compile_time_arg_val("tl_half_sem")).wait_min(chunk + 1);
+        } else {
+            CircularBuffer(get_named_compile_time_arg_val("tl_cb_table")).wait_front(chunk + 1);
+        }
+        invalidate_l1_cache();
+        asm volatile("" ::: "memory");
+        input_cb.reserve_back(tiles_per_chunk);
+        const uint32_t chunk_base = input_cb.get_write_ptr();
+        ASSERT((chunk_base & (block_bytes - 1)) == 0);
+        // The chunk's blocks, read from L1 once.
+        uint32_t chunk_table[blocks_per_chunk];
+        const auto* page = const_cast<const uint32_t*>(table) + chunk * blocks_per_chunk;
+#pragma GCC unroll 8
+        for (uint32_t i = 0; i < blocks_per_chunk; ++i) {
+            chunk_table[i] = page[i];
+        }
+        noc_async_read_set_state(row_noc_addr, noc_id);
+        uint32_t partial_slot = blocks_per_chunk;
+        // The last -inf stored into the chunk, if any.
+        uint32_t last_fill = 0;
+        uint32_t staged = staging;
+        bool copies = false;
+        uint32_t slot = 0;
+        while (slot < blocks_per_chunk) {
+            const uint32_t block = chunk_table[slot];
+            if (block == sentinel) {
+                last_fill = fill_neginf(chunk_base + slot * block_bytes, block_keys);
+                ++slot;
+                continue;
+            }
+            uint32_t run = 1;
+            while (slot + run < blocks_per_chunk && chunk_table[slot + run] == block + run) {
+                ++run;
+            }
+            // A lone block: the other selected blocks of its span, if any, join it in one staged read.
+            uint32_t group = 1;
+            if (run == 1) {
+                while (slot + group < blocks_per_chunk && chunk_table[slot + group] != sentinel &&
+                       chunk_table[slot + group] >> span_shift == block >> span_shift) {
+                    ++group;
+                }
+            }
+            if (group == 1) {
+                if (block <= last_block && last_block < block + run) {
+                    partial_slot = slot + (last_block - block);
+                }
+                gather_read(row_addr + block * block_bytes, chunk_base + slot * block_bytes, run * block_bytes, noc_id);
+                slot += run;
+                continue;
+            }
+            const uint32_t span_bytes = (chunk_table[slot + group - 1] - block + 1) * block_bytes;
+            gather_read(row_addr + block * block_bytes, staged, span_bytes, noc_id);
+            for (uint32_t i = 0; i < group; ++i) {
+                const uint32_t member = chunk_table[slot + i];
+                if (member == last_block) {
+                    partial_slot = slot + i;
+                }
+                copy_from[slot + i] = (staged + (member - block) * block_bytes) | (1u << 31);
+            }
+            copies = true;
+            staged += span_bytes;
+            slot += group;
+        }
+        noc.async_read_barrier();
+        if (copies) {
+            // This core's own L1.
+            noc_async_read_set_state(get_noc_addr(0, noc_id), noc_id);
+            for (slot = 0; slot < blocks_per_chunk;) {
+                const uint32_t from = copy_from[slot];
+                if (!(from >> 31)) {
+                    ++slot;
+                    continue;
+                }
+                // Slots whose staged sources are contiguous (consecutive members, or adjacent groups) move in one copy.
+                uint32_t count = 1;
+                while (slot + count < blocks_per_chunk && copy_from[slot + count] == from + count * block_bytes) {
+                    copy_from[slot + count] = 0;
+                    ++count;
+                }
+                copy_from[slot] = 0;
+                gather_read(from & 0x7FFFFFFFu, chunk_base + slot * block_bytes, count * block_bytes, noc_id);
+                slot += count;
+            }
+            noc.async_read_barrier();
+        }
+        if (partial_slot < blocks_per_chunk && last_block_live < block_keys) {
+            // The last block is read whole; its keys past the search length are stale.
+            last_fill = fill_neginf(
+                chunk_base + partial_slot * block_bytes + last_block_live * sizeof(uint16_t),
+                block_keys - last_block_live);
+        }
+        if (last_fill != 0) {
+            wait_l1_store(last_fill);
+        }
+        clobber_all_memory();
+        input_cb.push_back(tiles_per_chunk);
+    }
+}
+
+// Wall-clock ticks (about 150 us) a core waits for one of its rows' units once every unit is claimed, or in a streamed
+// stage 2 from a look at the claimed count that found it claimed, before it does the unit itself. A claimed unit is
+// usually done well within it (its core may first finish a row's last chunks); a repair that comes too early only does
+// a unit twice. Past it, a core with nothing else to do leaves the first time a pass finds no unit for it, even with
+// claim marks left to scan.
+constexpr uint32_t repair_after = 200000;
+// Wall-clock ticks (about 10 us) between looks at the claimed count while a streamed stage 2 waits for a unit not yet
+// claimed (see two_level_stage2).
+constexpr uint32_t claim_poll = 13500;
+// Claims (about 200 us of them on 108 cores, longer on fewer) after which a unit of a core's rows still not done counts
+// as lost while units remain (see two_level_run).
+constexpr uint32_t lost_lag = 1024;
+
+// From this search length, on at least 3 * wave_rows cores, a row of the last phase-1 wave can stream its stage 2
+// while units are still unclaimed (see two_level_run). Below it the other cores may all be sorting rows meanwhile, and
+// the streaming row would wait for one of them to claim its units. On 108 and 99 cores and 160 rows it is faster from
+// 512K.
+constexpr uint32_t stream_early_from = 393216;
+
+// The block maxima of phase-1 unit `part` of `row`, computed here instead of by the compute, into `dst` (slot b for
+// the unit's block b): its keys through the stage-1 CB, idle meanwhile (as for the gather), each block's largest live
+// key, with -0 and subnormals read as +0 as the compute's unpack does.
+template <typename InputAccessor>
+__attribute__((noinline)) void two_level_unit_maxima(
+    const Noc& noc, const InputAccessor& input, uint32_t search_len, uint32_t row, uint32_t part, uint32_t dst) {
+    using namespace topk_two_level;
+    constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
+    constexpr uint32_t unit_keys = stage1_batch * tile_keys;
+    CircularBuffer stage1_cb(get_named_compile_time_arg_val("tl_cb_stage1"));
+    // The CB holds two items of 1 + stage1_batch pages and every push is one, so the write pointer is at one of them:
+    // an item is room enough for a unit's keys.
+    stage1_cb.reserve_back(2 * (1 + stage1_batch));
+    const uint32_t first_key = part * unit_keys;
+    const uint32_t live = search_len - first_key < unit_keys ? search_len - first_key : unit_keys;
+    const uint32_t blocks = div_up(live, block_keys);
+    const uint8_t noc_id = noc.get_noc_id();
+    const uint64_t row_noc_addr = input.get_noc_addr(row, 0, noc_id);
+    noc_async_read_set_state(row_noc_addr, noc_id);
+    gather_read(
+        static_cast<uint32_t>(row_noc_addr) + first_key * sizeof(uint16_t),
+        stage1_cb.get_write_ptr(),
+        blocks * block_bytes,
+        noc_id);
+    noc_async_read_barrier(noc_id);
+    invalidate_l1_cache();
+    asm volatile("" ::: "memory");
+    // Keys as integers in value order: a negative one with every bit flipped, a non-negative one with its sign set.
+    // The maximum of the keys is the maximum of these; -0 and subnormals read as +0 after it, which is the maximum of
+    // the flushed keys exactly when one of them is the maximum.
+    const auto ordered = [](uint32_t bits) { return bits ^ ((0u - (bits >> 15)) & 0x7FFFu) ^ 0x8000u; };
+    const auto* pairs = reinterpret_cast<const uint32_t*>(stage1_cb.get_write_ptr());
+    auto* maxima = reinterpret_cast<uint16_t*>(dst);
+    for (uint32_t block = 0; block < blocks; ++block) {
+        uint32_t best0 = 0;
+        uint32_t best1 = 0;
+        for (uint32_t word = block * block_keys / 2; word < (block + 1) * block_keys / 2; ++word) {
+            const uint32_t pair = pairs[word];
+            // Keys past live, in the last block, are stale: 0 orders below every key.
+            const uint32_t lo = 2 * word < live ? ordered(pair & 0xFFFFu) : 0;
+            const uint32_t hi = 2 * word + 1 < live ? ordered(pair >> 16) : 0;
+            best0 = lo > best0 ? lo : best0;
+            best1 = hi > best1 ? hi : best1;
+        }
+        const uint32_t best = best0 > best1 ? best0 : best1;
+        // Back from the order: a set sign bit was a non-negative key.
+        const uint32_t bits = best & 0x8000u ? best & 0x7FFFu : ~best & 0xFFFFu;
+        maxima[block] = (bits & 0x7F80u) == 0 ? 0 : bits;
+    }
+    wait_l1_store(reinterpret_cast<uint32_t>(&maxima[blocks - 1]));
+}
+
+// Stage 2 of one row: its block maxima from the maxima tensor through the input CB, one chunk per reserve so a chunk
+// never wraps. Past the row's blocks a chunk is -inf. With done_words (the row's done words, per_row of them), the row
+// runs before its maxima are complete: each chunk waits for the units it covers, and a unit still missing repair_after
+// after a look at the claimed count (read by claimed_count) found it claimed is computed here (see two_level_run's
+// claims; a slow one is only done twice). The count is read when an awaited unit is missing and not known claimed,
+// then every claim_poll until it is, so the units of the row that the same look found claimed share one wait.
+template <typename InputAccessor, typename MaxAccessor, typename ClaimedCount>
+FORCE_INLINE void two_level_stage2(
+    const Noc& noc,
+    const InputAccessor& input,
+    const MaxAccessor& block_max,
+    uint32_t search_len,
+    uint32_t row,
+    const volatile tt_l1_ptr uint32_t* done_words,
+    const topk_two_level::Units& units,
+    uint32_t first_unit,
+    uint32_t unit_stride,
+    const ClaimedCount& claimed_count) {
+    using namespace topk_two_level;
+    constexpr uint32_t cb_in = get_compile_time_arg_val(0);
+    constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(3);
+    CircularBuffer input_cb(cb_in);
+    const uint32_t max_chunks = stage2_chunks(search_len);
+    const uint32_t max_bytes = div_up(search_len, block_keys) * sizeof(uint16_t);
+    constexpr uint32_t unit_maxima = get_named_compile_time_arg_val("tl_stage1_batch") * (tile_keys / block_keys);
+    constexpr uint32_t chunk_maxima = chunk_bytes / sizeof(uint16_t);
+    static_assert(chunk_maxima % unit_maxima == 0);
+    uint32_t parts_seen = 0;
+    // The claimed count at the last look, and the time of that look; the first look is at once.
+    uint32_t claims = 0;
+    uint32_t since = get_timestamp_32b() - claim_poll - 1;
+    for (uint32_t chunk = 0; chunk < max_chunks; ++chunk) {
+        // The chunk's units to compute here, a bit per unit from its first.
+        uint32_t repairs = 0;
+        if (done_words != nullptr) {
+            uint32_t needed = (chunk + 1) * (chunk_maxima / unit_maxima);
+            needed = needed < units.per_row ? needed : units.per_row;
+            while (parts_seen < needed) {
+                invalidate_l1_cache();
+                if (done_words[parts_seen] == 0) {
+                    const uint32_t now = get_timestamp_32b();
+                    if (first_unit + parts_seen * unit_stride >= claims) {
+                        if (now - since > claim_poll) {
+                            claims = claimed_count();
+                            since = get_timestamp_32b();
+                        }
+                        continue;
+                    }
+                    if (now - since <= repair_after) {
+                        continue;
+                    }
+                    // Before the counter ran out other cores claim; once it has, their scan does a lost unit sooner
+                    // than here, so the wait starts again.
+                    if (claims < units.total) {
+                        const uint32_t count = claimed_count();
+                        if (count >= units.total) {
+                            claims = count;
+                            since = get_timestamp_32b();
+                            continue;
+                        }
+                    }
+                    repairs |= 1u << (parts_seen - chunk * (chunk_maxima / unit_maxima));
+                }
+                ++parts_seen;
+            }
+        }
+        input_cb.reserve_back(tiles_per_chunk);
+        const uint32_t dst = input_cb.get_write_ptr();
+        const uint32_t first = chunk * chunk_bytes;
+        const uint32_t bytes =
+            max_bytes > first ? (max_bytes - first < chunk_bytes ? max_bytes - first : chunk_bytes) : 0;
+        for (uint32_t offset = 0; offset < bytes; offset += tile_bytes) {
+            const uint32_t piece = bytes - offset < tile_bytes ? bytes - offset : tile_bytes;
+            noc.async_read(
+                block_max, input_cb, piece, {.page_id = row, .offset_bytes = first + offset}, {.offset_bytes = offset});
+        }
+        if (bytes < chunk_bytes) {
+            wait_l1_store(fill_neginf(dst + bytes, (chunk_bytes - bytes) / sizeof(uint16_t)));
+        }
+        noc.async_read_barrier();
+        // A repaired unit's maxima also go to the maxima tensor, as the unit's writer would have sent them.
+        for (uint32_t unit = 0; repairs >> unit != 0; ++unit) {
+            if (repairs >> unit & 1) {
+                const uint32_t part = chunk * (chunk_maxima / unit_maxima) + unit;
+                const uint32_t unit_dst = dst + unit * unit_maxima * sizeof(uint16_t);
+                const uint32_t unit_first = part * unit_maxima * sizeof(uint16_t);
+                two_level_unit_maxima(noc, input, search_len, row, part, unit_dst);
+                const uint32_t unit_bytes = max_bytes - unit_first < unit_maxima * sizeof(uint16_t)
+                                                ? max_bytes - unit_first
+                                                : unit_maxima * sizeof(uint16_t);
+                noc_async_write(
+                    unit_dst, block_max.get_noc_addr(row, unit_first, noc.get_noc_id()), unit_bytes, noc.get_noc_id());
+                noc_async_write_barrier(noc.get_noc_id());
+            }
+        }
+        clobber_all_memory();
+        input_cb.push_back(tiles_per_chunk);
+    }
+}
+
+// A two-level program's schedule on this core. Its rows (see topk_two_level::row_owner) run as soon as their maxima are
+// complete; until then the core claims phase-1 units, so the cores without a ready row keep the DRAM streaming. With
+// the caller's maxima there is no phase 1 and every row is ready at once. A core of a split pair gathers its half of
+// the pair's split row, a chunk as soon as its page of the table is there: the first core's from its own writer, the
+// second core's from the first core's writer; with tl_early_halves as soon as the halves can run, else after the end
+// header.
+template <typename InputAccessor, typename MaxAccessor>
+FORCE_INLINE void two_level_run(
+    const Noc& noc,
+    const InputAccessor& input,
+    const MaxAccessor& block_max,
+    uint32_t search_len,
+    const topk_two_level::Units& units,
+    uint32_t core_index,
+    uint32_t num_cores,
+    bool has_split,
+    bool second_half,
+    uint32_t split_row) {
+    using namespace topk_two_level;
+    constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
+    // A chunk is a table page (see two_level_gather), so half the table is half the chunks.
+    constexpr uint32_t half_chunks = table_pages / 2;
+    constexpr bool has_block_max = get_named_compile_time_arg_val("tl_block_max_input") != 0;
+    const uint32_t split_rows = units.split_rows;
+    const uint32_t whole_rows = units.num_rows - split_rows;
+    const uint32_t local_whole_rows = core_index < whole_rows ? div_up(whole_rows - core_index, num_cores) : 0;
+    // The first core of a split pair also owns the split row's stage 2, as its last local row.
+    const bool split_owner = has_split && !second_half;
+    const uint32_t local_rows = local_whole_rows + (split_owner ? 1 : 0);
+    auto* done_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        CircularBuffer(get_named_compile_time_arg_val("tl_cb_done_words")).get_write_ptr());
+    // An L1 address on the coordinator.
+    const uint32_t coordinator_x = get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x);
+    const uint32_t coordinator_y = get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y);
+    const auto on_coordinator = [&](uint32_t addr) {
+        return get_noc_addr(coordinator_x, coordinator_y, addr, noc.get_noc_id());
+    };
+    const uint64_t counter = on_coordinator(get_semaphore(get_named_compile_time_arg_val("tl_unit_sem")));
+    const uint32_t claim_word = get_semaphore(get_named_compile_time_arg_val("tl_claim_sem"));
+    const auto* claimed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(claim_word);
+    // With tl_early_halves a split row's halves of stage 3 run as soon as they can, rather than after the end: the
+    // first core's right after the row's stage 2, the second core's once the first table page has arrived from its
+    // partner.
+    constexpr bool early_halves = get_named_compile_time_arg_val("tl_early_halves") != 0;
+    // The cores in row mode while units remain, counted on the coordinator: with split_rows_first about a cap of them
+    // take rows (the count each core gets back is an estimate, see below), so the rest keep claiming units and phase 1
+    // does not stall behind the rows.
+    const uint64_t rows_counter = on_coordinator(get_semaphore(get_named_compile_time_arg_val("tl_rows_sem")));
+    const uint32_t row_cap = split_rows_first(early_halves, search_len) ? num_cores * row_cap_fifths / 5 : num_cores;
+    // A non-posted atomic add returns the counter's old value to the return address of its command buffer. That value
+    // is not reliable: the atomic barrier can complete before it lands, it goes to whatever return address the buffer
+    // holds when it does, and under load a core can get another claim's value. The increments themselves and NoC reads
+    // are reliable, so correctness rests on those:
+    // - A claim waits for claim_word to change from the core's last value (the word starts at 0xFFFFFFFF, which no
+    //   claim returns), for at most claim_timeout. A wrong or missing value is a unit done twice, which its done word
+    //   absorbs, or a unit nobody does, which its row's owner repairs (see below). A value that lands after the
+    //   counter ran out is still taken.
+    // - The other atomics (the cleared count, the row counter and the claim marks) use the register-write buffer,
+    //   unused by this kernel otherwise, returning to rows_word or mark_return, so their values never land in
+    //   claim_word. The row counter's value is only the cap's estimate.
+    static_assert(noc_mode == DM_DEDICATED_NOC);
+    constexpr uint32_t claim_timeout = 200000;  // wall-clock ticks, about 150 us
+    uint32_t last_claimed = 0xFFFFFFFFu;
+    const auto claim = [&]() {
+        atomic_add(noc.get_noc_id(), write_at_cmd_buf, counter, 1, claim_word);
+        const uint32_t start = get_timestamp_32b();
+        do {
+            invalidate_l1_cache();
+            const uint32_t value = *claimed;
+            if (value != last_claimed) {
+                last_claimed = value;
+                return true;
+            }
+        } while (get_timestamp_32b() - start < claim_timeout);
+        return false;
+    };
+    const uint32_t local_coordinate =
+        static_cast<uint32_t>(NOC_XY_ADDR(my_x[noc.get_noc_id()], my_y[noc.get_noc_id()], 0) >> NOC_ADDR_COORD_SHIFT) &
+        NOC_COORDINATE_MASK;
+    const auto aux_add = [&](uint64_t target, uint32_t increment) {
+        return aux_atomic_add(noc.get_noc_id(), target, increment);
+    };
+    const auto rows_add = [&](uint32_t increment) { return aux_add(rows_counter, increment); };
+    const uint64_t cleared_count = on_coordinator(get_semaphore(get_named_compile_time_arg_val("tl_cleared_sem")));
+    // The claim marks: the core that takes a unit's claim sets its bit on the coordinator, once the coordinator has
+    // cleared them (counted in the cleared count). The atomic's value returns to mark_return, never read. A value
+    // delivered to two cores clears its bit and every set bit above it up to the next clear one, which it sets (within
+    // the 32-bit word; a carry past bit 31 is dropped): the cleared units are done twice, and the unit whose bit the
+    // carry sets, if lost, is left to its owner's repair. A late value of a mark can land in rows_word, which only
+    // throws off the row cap's estimate.
+    const uint64_t marks = on_coordinator(reinterpret_cast<uint32_t>(done_words) + marks_offset);
+    bool marks_cleared = false;
+    const auto mark = [&](uint32_t unit) {
+        if (unit >= units.total) {
+            return;
+        }
+        while (!marks_cleared) {
+            marks_cleared = read_word(noc.get_noc_id(), cleared_count) >= num_cores;
+        }
+        atomic_add(
+            noc.get_noc_id(),
+            write_reg_cmd_buf,
+            marks + unit / 32 * sizeof(uint32_t),
+            1u << (unit % 32),
+            reinterpret_cast<uint32_t>(done_words) + mark_return_offset,
+            false);
+    };
+    const bool capped = !has_block_max && row_cap < num_cores;
+    if constexpr (!has_block_max) {
+        // The atomic sets the return address's low word; the rest points it at this core.
+        NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_RET_ADDR_MID, 0);
+        NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_RET_ADDR_COORDINATE, local_coordinate);
+        // Clear this run's done words (the coordinator, core 0, also the claim marks), then count this core on the
+        // coordinator; no writer sends a done word before every core is counted.
+        const uint32_t clear_words =
+            core_index == 0 ? marks_offset / sizeof(uint32_t) + div_up(units.total, 32) : done_words_bytes / 4;
+        for (uint32_t word = 0; word < clear_words; ++word) {
+            done_words[word] = 0;
+        }
+        wait_l1_store(reinterpret_cast<uint32_t>(&done_words[clear_words - 1]));
+        aux_add(cleared_count, 1);
+    }
+    // A local row is ready when its first per_row done words are nonzero; complete_parts[r] counts those seen so far.
+    uint8_t complete_parts[max_local_rows] = {};
+    const auto row_ready = [&](uint32_t local_row) {
+        uint32_t part = complete_parts[local_row];
+        while (part < units.per_row && done_words[local_row * max_row_units + part] != 0) {
+            ++part;
+        }
+        complete_parts[local_row] = part;
+        return part == units.per_row;
+    };
+    const auto row_of = [&](uint32_t local_row) {
+        return split_owner && local_row == local_whole_rows
+                   ? split_row
+                   : whole_row_of(
+                         core_index, local_row, whole_rows, split_rows, num_cores, extra_rows_first(search_len));
+    };
+    // This core's rows, by local row: at most max_local_rows with a phase 1, any number with the caller's maxima. With
+    // a phase 1, a row's units are row_unit[r] + part * unit_stride[r].
+    uint32_t row_index[max_local_rows];
+    uint32_t row_unit[max_local_rows];
+    uint32_t unit_stride[max_local_rows];
+    if constexpr (!has_block_max) {
+        for (uint32_t local_row = 0; local_row < local_rows; ++local_row) {
+            row_index[local_row] = row_of(local_row);
+            row_unit[local_row] = units.unit_of(row_index[local_row], 0);
+            unit_stride[local_row] = units.unit_of(row_index[local_row], 1) - row_unit[local_row];
+        }
+    }
+    const auto local_row_index = [&](uint32_t local_row) {
+        if constexpr (has_block_max) {
+            return row_of(local_row);
+        }
+        return row_index[local_row];
+    };
+    // The coordinator's counter, read over the NoC: the number of units claimed so far, or more.
+    const auto read_counter = [&]() { return read_word(noc.get_noc_id(), counter); };
+    // The idle time since this core last had work, for the repair.
+    bool idle = false;
+    uint32_t idle_since = 0;
+    bool repairing = false;
+    uint32_t repair_next = 0;
+    // The scan for lost units (see the claim marks): from claim_poll after a core sees the counter run out, it reads
+    // the marks of two slices of slice_words words, its own and the one of the core half the grid away, so another core
+    // scans the slices of a core still busy with its rows. A unit there without its mark was claimed with its value
+    // lost (or still landing), and is done here. Words past the last unit's are skipped, and bits past it read as units
+    // past it, also skipped. A core with nothing else to do stays for its scan; once repair_after has passed it leaves
+    // as soon as a pass finds no unit.
+    uint32_t exhausted_at = 0;
+    const uint32_t slice_words = div_up(div_up(units.total, 32), num_cores);
+    const uint32_t scan_words = 2 * slice_words;
+    uint32_t scan_next = 0;
+    uint32_t scan_word = 0;
+    uint32_t scan_bits = 0;
+    // Without tl_early_halves nothing may come between the split row's stage 2 and the end header (the compute's split
+    // ends on a unit): from then on this core takes no unit.
+    bool closed = false;
+    // Per local row, the last part this core did as lost while units remained.
+    static_assert(max_local_rows == 4);
+    uint8_t early_part[max_local_rows] = {0xFF, 0xFF, 0xFF, 0xFF};
+    CircularBuffer table_cb(get_named_compile_time_arg_val("tl_cb_table"));
+    const auto* half_pages =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("tl_half_sem")));
+    const uint32_t remote_table = CircularBuffer(get_named_compile_time_arg_val("tl_cb_remote_table")).get_write_ptr();
+    bool half_pending = early_halves && has_split;
+    bool units_left = !has_block_max;
+    // This core's local rows run in the order their maxima complete; done_rows has a bit per finished one (with the
+    // caller's maxima the rows run in order and only rows_done counts them).
+    uint32_t done_rows = 0;
+    uint32_t rows_done = 0;
+    while (true) {
+        if (half_pending && !split_owner) {
+            invalidate_l1_cache();
+            bool counted = false;
+            bool allowed = *half_pages >= 1;
+            if (allowed && units_left && capped) {
+                counted = true;
+                if (rows_add(1) >= row_cap) {
+                    rows_add(0xFFFFFFFFu);
+                    counted = false;
+                    allowed = false;
+                }
+            }
+            if (allowed) {
+                two_level_push_stage1(two_level_announce(header_half, split_row));
+                two_level_gather(
+                    noc,
+                    input,
+                    search_len,
+                    split_row,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_table),
+                    half_chunks,
+                    true);
+                if (counted) {
+                    rows_add(0xFFFFFFFFu);
+                }
+                half_pending = false;
+                idle = false;
+                continue;
+            }
+        }
+        // The first of this core's rows whose maxima are complete. Without tl_early_halves the split row is the last:
+        // its table stays in the table CB until its half gathers after the end, so it waits for the claims to run out
+        // and for the whole rows.
+        uint32_t local_row = local_rows;
+        if constexpr (has_block_max) {
+            // Every row is ready: they run in order, any number of them.
+            local_row = rows_done;
+        } else if (rows_done < local_rows) {
+            invalidate_l1_cache();
+            for (uint32_t candidate = 0; candidate < local_rows; ++candidate) {
+                const bool split = split_owner && candidate == local_whole_rows;
+                if ((done_rows >> candidate & 1) ||
+                    (split && !early_halves && (units_left || rows_done < local_whole_rows))) {
+                    continue;
+                }
+                if (row_ready(candidate)) {
+                    local_row = candidate;
+                    break;
+                }
+            }
+        }
+        // No row is ready: the stage 2 of the row with the most units done from its first (complete_parts) starts
+        // now, each chunk as soon as its units are done, once every unit is claimed or, from stream_early_from and for
+        // a row of the last wave, once its first chunk's units are done. The last wave's owners then leave phase 1
+        // early, whose end is paced by the DRAM, not by the cores.
+        bool streaming = false;
+        if constexpr (!has_block_max) {
+            if (local_row == local_rows && rows_done < local_rows) {
+                constexpr uint32_t chunk_units =
+                    chunk_bytes / sizeof(uint16_t) /
+                    (get_named_compile_time_arg_val("tl_stage1_batch") * (tile_keys / block_keys));
+                // At most wave_rows owners leave the claims early; the guard leaves other cores to claim, not a
+                // guarantee that they are free to (a unit left unclaimed waits for its repair).
+                const bool stream_early = search_len >= stream_early_from && num_cores >= 3 * wave_rows;
+                // Read only with stream_early, whose search length leaves units.per_row nonzero.
+                const uint32_t last_wave = stream_early ? (units.total - 1) / (wave_rows * units.per_row) : 0;
+                uint32_t best_parts = 0;
+                for (uint32_t candidate = 0; candidate < local_rows; ++candidate) {
+                    const bool split = split_owner && candidate == local_whole_rows;
+                    if ((done_rows >> candidate & 1) || (split && !early_halves)) {
+                        continue;
+                    }
+                    if (units_left && (!stream_early || complete_parts[candidate] < chunk_units ||
+                                       row_unit[candidate] / (wave_rows * units.per_row) != last_wave)) {
+                        continue;
+                    }
+                    if (local_row == local_rows || complete_parts[candidate] > best_parts) {
+                        local_row = candidate;
+                        best_parts = complete_parts[candidate];
+                    }
+                }
+                streaming = local_row < local_rows;
+            }
+        }
+        // Over the cap, the core claims a unit instead.
+        bool counted = false;
+        if (local_row < local_rows && units_left && capped) {
+            counted = true;
+            if (rows_add(1) >= row_cap) {
+                rows_add(0xFFFFFFFFu);
+                counted = false;
+                local_row = local_rows;
+            }
+        }
+        const bool is_split_row = split_owner && local_row == local_whole_rows;
+        if (local_row < local_rows) {
+            const uint32_t row = local_row_index(local_row);
+            two_level_push_stage1(two_level_announce(is_split_row ? header_split : header_row, row));
+            two_level_stage2(
+                noc,
+                input,
+                block_max,
+                search_len,
+                row,
+                streaming ? done_words + local_row * max_row_units : nullptr,
+                units,
+                streaming ? row_unit[local_row] : 0,
+                streaming ? unit_stride[local_row] : 0,
+                read_counter);
+            if (is_split_row && early_halves) {
+                two_level_push_stage1(two_level_announce(header_half, row));
+                two_level_gather(
+                    noc,
+                    input,
+                    search_len,
+                    row,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_read_ptr()),
+                    half_chunks,
+                    false);
+                table_cb.wait_front(table_pages);
+                table_cb.pop_front(table_pages);
+                half_pending = false;
+            }
+            if (!is_split_row) {
+                two_level_gather(
+                    noc,
+                    input,
+                    search_len,
+                    row,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_read_ptr()),
+                    2 * half_chunks,
+                    false);
+                table_cb.pop_front(table_pages);
+            }
+            if (counted) {
+                rows_add(0xFFFFFFFFu);
+            }
+            if constexpr (!has_block_max) {
+                done_rows |= 1u << local_row;
+                closed = is_split_row && !early_halves;
+            }
+            ++rows_done;
+            idle = false;
+            continue;
+        }
+        // The next phase-1 unit: a claimed one, or with `repairing` one of this core's rows' missing ones.
+        uint32_t unit = units.total;
+        // Whether `unit` is a claim's value, which this core marks.
+        bool claimed_unit = false;
+        if (units_left) {
+            // The first missing unit of one of this core's rows per pass: one lost_lag claims behind the last is done
+            // here (a slow one is only done twice), once, so its row is not held to the end of phase 1.
+            for (uint32_t r = 0; r < local_rows && last_claimed < units.total && unit >= units.total; ++r) {
+                if (!(done_rows >> r & 1) && !row_ready(r) && complete_parts[r] != early_part[r] &&
+                    row_unit[r] + complete_parts[r] * unit_stride[r] + lost_lag < last_claimed) {
+                    early_part[r] = complete_parts[r];
+                    unit = row_unit[r] + complete_parts[r] * unit_stride[r];
+                }
+            }
+            if (unit >= units.total) {
+                if (claim() && last_claimed < units.total) {
+                    unit = last_claimed;
+                    claimed_unit = true;
+                } else {
+                    // Past the last unit, or no value came (its unit is then missing): the counter itself says
+                    // whether units remain.
+                    units_left = read_counter() < units.total;
+                    exhausted_at = get_timestamp_32b();
+                    continue;
+                }
+            }
+        } else if constexpr (!has_block_max) {
+            if (closed) {
+                break;
+            }
+            // A claim's value that came after its timeout.
+            invalidate_l1_cache();
+            const uint32_t value = *claimed;
+            if (value != last_claimed) {
+                last_claimed = value;
+                unit = value;
+                claimed_unit = value < units.total;
+            }
+            const uint32_t waited = get_timestamp_32b() - exhausted_at;
+            if (unit >= units.total && waited > claim_poll) {
+                while (scan_bits == 0 && scan_next < scan_words) {
+                    const uint32_t slice =
+                        scan_next < slice_words ? core_index : (core_index + num_cores / 2) % num_cores;
+                    scan_word = slice * slice_words + scan_next % slice_words;
+                    ++scan_next;
+                    if (scan_word * 32 < units.total) {
+                        scan_bits = ~read_word(noc.get_noc_id(), marks + scan_word * sizeof(uint32_t));
+                    }
+                }
+                if (scan_bits != 0) {
+                    unit = scan_word * 32 + __builtin_ctz(scan_bits);
+                    scan_bits &= scan_bits - 1;
+                }
+            }
+        }
+        if (unit >= units.total && repairing) {
+            unit = units.total;
+            // The repair walks this core's done words once, from repair_next: each missing unit is done once.
+            for (; repair_next < local_rows * max_row_units && unit == units.total; ++repair_next) {
+                const uint32_t local_row = repair_next / max_row_units;
+                const uint32_t part = repair_next % max_row_units;
+                if (part < units.per_row && !(done_rows >> local_row & 1) && done_words[repair_next] == 0) {
+                    unit = row_unit[local_row] + part * unit_stride[local_row];
+                }
+            }
+            repairing = unit < units.total;
+        }
+        if constexpr (!has_block_max) {
+            if (claimed_unit) {
+                mark(unit);
+            }
+        }
+        if (unit < units.total) {
+            two_level_unit(noc, input, search_len, units, unit);
+            idle = false;
+            continue;
+        }
+        if (rows_done == local_rows && !half_pending) {
+            if constexpr (!has_block_max) {
+                // Not before this core's scan, unless its time is over.
+                if ((scan_next < scan_words || scan_bits != 0) && get_timestamp_32b() - exhausted_at < repair_after) {
+                    continue;
+                }
+            }
+            break;
+        }
+        // Nothing to do: every unit is claimed, and this core waits for its rows' units or its partner's table. After
+        // repair_after the core does any of its rows' units still missing (see the claims above) itself; usually
+        // there are none.
+        if constexpr (!has_block_max) {
+            const uint32_t now = get_timestamp_32b();
+            if (!idle) {
+                idle = true;
+                idle_since = now;
+            } else if (now - idle_since > repair_after) {
+                repairing = true;
+                repair_next = 0;
+                idle = false;
+            }
+        }
+    }
+    if constexpr (!has_block_max) {
+        // Point the atomic buffer's returns back at the default word, and the register-write buffer's target back at
+        // this core, as the kernels that run after expect.
+        atomic_add(noc.get_noc_id(), write_at_cmd_buf, counter, 0, MEM_NOC_ATOMIC_RET_VAL_ADDR);
+        NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_TARG_ADDR_MID, 0);
+        NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_TARG_ADDR_COORDINATE, local_coordinate);
+    }
+    two_level_push_stage1(two_level_announce(header_end, 0));
+    if (has_split && !early_halves) {
+        // This core's half of the split row's candidates: the first core's by its own writer's table, the second
+        // core's by the table half the first core's writer sends into its remote-table CB.
+        const uint32_t table_addr = split_owner ? table_cb.get_read_ptr() : remote_table;
+        two_level_gather(
+            noc,
+            input,
+            search_len,
+            split_row,
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_addr),
+            half_chunks,
+            !split_owner);
+        if (split_owner) {
+            table_cb.wait_front(table_pages);
+            table_cb.pop_front(table_pages);
+        }
+    }
+}
+
+}  // namespace
+#endif
 
 void kernel_main() {
     const uint32_t src_addr = get_common_arg_val<uint32_t>(topk_common_args::input_address);
@@ -41,6 +978,9 @@ void kernel_main() {
     constexpr uint32_t vend_args_base = meta_args.next_compile_time_args_offset();
     constexpr auto vend_args = TensorAccessorArgs<vend_args_base>();
     constexpr uint32_t neginf_bf16_pair = 0xFF80FF80u;
+#ifdef TOPK_TWO_LEVEL
+    const uint32_t two_level_cutover = get_common_arg_val<uint32_t>(topk_common_args::two_level_cutover);
+#endif
 
     const auto input = TensorAccessor(input_args, src_addr, input_page_bytes);
     const uint32_t input_width = input_page_bytes / element_bytes;
@@ -90,7 +1030,15 @@ void kernel_main() {
             split_mailbox->num_chunks = split.num_chunks;
             split_mailbox->tail_elements = split.tail_elements;
         }
+#ifdef TOPK_TWO_LEVEL
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+        words[topk_two_level::mailbox_mode_word] =
+            topk_two_level::two_level_mode_for(search_len, two_level_cutover) ? 1u : 0u;
+        words[topk_two_level::mailbox_search_length_word] = search_len;
+        topk_two_level::wait_l1_store(reinterpret_cast<uint32_t>(&words[topk_two_level::mailbox_search_length_word]));
+#else
         clobber_all_memory();
+#endif
         meta_cb_obj.push_back(1);
     } else {
         bounds = calculate_topk_bounds(search_len, llk_k);
@@ -98,7 +1046,73 @@ void kernel_main() {
         if constexpr (row_split) {
             split = half_bounds(bounds, llk_k, second_half);
         }
+#ifdef TOPK_TWO_LEVEL
+        // A two-level program's compute always reads its bounds and mode from the mailbox.
+        CircularBuffer meta_cb_obj(meta_cb);
+        meta_cb_obj.reserve_back(1);
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_cb_obj.get_write_ptr());
+        words[topk_metadata_num_chunks_word] = whole.num_chunks;
+        words[topk_metadata_tail_elements_word] = whole.tail_elements;
+        if constexpr (row_split) {
+            words[topk_metadata_split_word_offset + topk_metadata_num_chunks_word] = split.num_chunks;
+            words[topk_metadata_split_word_offset + topk_metadata_tail_elements_word] = split.tail_elements;
+        }
+        words[topk_two_level::mailbox_mode_word] =
+            topk_two_level::two_level_mode_for(search_len, two_level_cutover) ? 1u : 0u;
+        words[topk_two_level::mailbox_search_length_word] = search_len;
+        topk_two_level::wait_l1_store(reinterpret_cast<uint32_t>(&words[topk_two_level::mailbox_search_length_word]));
+        meta_cb_obj.push_back(1);
+#endif
     }
+
+#ifdef TOPK_TWO_LEVEL
+    const bool two_level_mode = topk_two_level::two_level_mode_for(search_len, two_level_cutover);
+    // The writer learns the mode and the search length here; it has no bound of its own.
+    CircularBuffer writer_mailbox(get_named_compile_time_arg_val("tl_cb_writer_mailbox"));
+    writer_mailbox.reserve_back(1);
+    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_mailbox.get_write_ptr());
+    words[topk_two_level::writer_mailbox_mode_word] = two_level_mode ? 1u : 0u;
+    words[topk_two_level::writer_mailbox_search_length_word] = search_len;
+    topk_two_level::wait_l1_store(
+        reinterpret_cast<uint32_t>(&words[topk_two_level::writer_mailbox_search_length_word]));
+    writer_mailbox.push_back(1);
+    if (two_level_mode) {
+        constexpr bool has_block_max = get_named_compile_time_arg_val("tl_block_max_input") != 0;
+        if constexpr (!has_block_max) {
+            // The max reduce multiplies by this scaler tile: 1.0 everywhere keeps every value exact.
+            CircularBuffer scaler_cb(get_named_compile_time_arg_val("tl_cb_scaler"));
+            scaler_cb.reserve_back(1);
+            auto* scaler = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scaler_cb.get_write_ptr());
+            for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                scaler[word] = 0x3F803F80u;
+            }
+            topk_two_level::wait_l1_store(reinterpret_cast<uint32_t>(&scaler[tile_bytes / sizeof(uint32_t) - 1]));
+            scaler_cb.push_back(1);
+        }
+        constexpr auto block_max_args = TensorAccessorArgs<vend_args.next_compile_time_args_offset()>();
+        const auto block_max = TensorAccessor(
+            block_max_args,
+            get_common_arg_val<uint32_t>(topk_common_args::block_max_address),
+            get_common_arg_val<uint32_t>(topk_common_args::block_max_row_bytes));
+        two_level_run(
+            noc,
+            input,
+            block_max,
+            search_len,
+            topk_two_level::Units::of(
+                search_len,
+                get_named_compile_time_arg_val("tl_stage1_batch"),
+                get_common_arg_val<uint32_t>(topk_common_args::two_level_num_input_rows),
+                get_common_arg_val<uint32_t>(topk_common_args::two_level_split_rows),
+                topk_two_level::split_rows_first(get_named_compile_time_arg_val("tl_early_halves") != 0, search_len)),
+            get_arg_val<uint32_t>(topk_core_args::reader_two_level_core_index),
+            get_common_arg_val<uint32_t>(topk_common_args::two_level_num_cores),
+            has_split,
+            second_half,
+            split_row);
+        return;
+    }
+#endif
 
     // One loop for both: without a split row, has_split is false and every row takes the whole-row bounds.
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
@@ -115,7 +1129,12 @@ void kernel_main() {
                 chunk_words[word] = neginf_bf16_pair;
             }
             // Order the fill ahead of the push, as the metadata mailbox above does.
+#ifdef TOPK_TWO_LEVEL
+            topk_two_level::wait_l1_store(
+                reinterpret_cast<uint32_t>(&chunk_words[tiles_per_chunk * tile_bytes / sizeof(uint32_t) - 1]));
+#else
             clobber_all_memory();
+#endif
             input_cb.push_back(tiles_per_chunk);
             continue;
         }

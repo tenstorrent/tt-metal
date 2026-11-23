@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cstdint>
 
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
+#endif
 #include "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
 
 // The L1 loops of the plan's steps (see the overview in sparse_push_plan.cpp); BRISC and NCRISC each run half.
@@ -36,14 +38,21 @@ enum Progress : uint32_t {
 
 inline void fence() { asm volatile("fence" ::: "memory"); }
 
-// The core's two workers hand each other L1 data through local semaphores.
+// The core's workers hand each other L1 data through local L1 words (semaphores, or kMiscSync words): plain loads
+// and stores (the L1 data cache is off), so the TRISCs share them.
 inline void wait_at_least(uint32_t sem_addr, uint32_t v) {
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v);
+#else
+    while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr) < v) {
+    }
+#endif
+    fence();  // (acquire: the data the word announces is read after it)
 }
 
 inline void post(uint32_t sem_addr, uint32_t v) {
-    fence();  // the worker's L1 writes land before the semaphore says they did
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr), v);
+    fence();  // the worker's L1 writes land before the word says they did
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr) = v;
 }
 
 // Barrier of the core's two workers: report `progress`, then wait until every worker has reported it.
@@ -66,11 +75,11 @@ inline uint32_t word_owner(uint32_t word) { return (word % kWordResidues) * kWor
 // cache. Bucket (worker, to) holds the rows `worker` hands to word owner `to`, at buckets + (worker * kWorkers + to) *
 // bucket_cap; bucketed[worker * kWorkers + to] gets its length.
 inline void bucket(
-    const uint32_t* idx,
+    const uint32_t* __restrict__ idx,
     uint32_t max_rows,
     uint32_t begin,
     uint32_t end,
-    uint32_t* buckets,
+    uint32_t* __restrict__ buckets,
     uint32_t bucket_cap,
     uint32_t* bucketed,
     uint32_t worker) {
@@ -79,7 +88,23 @@ inline void bucket(
     for (uint32_t to = 0; to < kWorkers; ++to) {
         bucket_end[to] = first + to * bucket_cap;
     }
-    for (uint32_t i = begin; i < end; ++i) {
+    // Loads kLoadBatch rows before storing any, so their L1 latencies overlap.
+    constexpr uint32_t kLoadBatch = 8;
+    uint32_t i = begin;
+    for (; i + kLoadBatch <= end; i += kLoadBatch) {
+        uint32_t rows[kLoadBatch];
+#pragma GCC unroll 8
+        for (uint32_t k = 0; k < kLoadBatch; ++k) {
+            rows[k] = idx[i + k];
+        }
+#pragma GCC unroll 8
+        for (uint32_t k = 0; k < kLoadBatch; ++k) {
+            if (rows[k] < max_rows) {
+                *bucket_end[word_owner(rows[k] / kRowsPerWord)]++ = rows[k];
+            }
+        }
+    }
+    for (; i < end; ++i) {
         const uint32_t row = idx[i];
         if (row < max_rows) {
             *bucket_end[word_owner(row / kRowsPerWord)]++ = row;
@@ -107,8 +132,17 @@ inline uint32_t scatter(
     for (uint32_t from = 0; from < kWorkers; ++from) {
         const uint32_t* rows = buckets + (from * kWorkers + worker) * bucket_cap;
         const uint32_t count = bucketed[from * kWorkers + worker];
+        // Rows loaded kLoadBatch at a time ahead of the bit updates, so their L1 latencies overlap.
+        constexpr uint32_t kLoadBatch = 8;
+        uint32_t batch[kLoadBatch];
         for (uint32_t i = 0; i < count; ++i) {
-            const uint32_t row = rows[i];
+            if (i % kLoadBatch == 0) {
+#pragma GCC unroll 8
+                for (uint32_t k = 0; k < kLoadBatch; ++k) {
+                    batch[k] = rows[i + k];  // may read past count, inside the bucket's padded capacity
+                }
+            }
+            const uint32_t row = batch[i % kLoadBatch];
             const uint32_t row_word = row / kRowsPerWord;
             if (row_word != word) {
                 if (word != kSentinel) {
@@ -191,8 +225,8 @@ inline void list_copies(
 }
 
 // As a reducer: ORs the received copies of each of this core's chunks into its bitmap. Split by word rather than by
-// chunk, so a chunk every core touched is not left to one worker. Unrolled for 16-word chunks over two workers (worker
-// w takes words w, w + 2, ..., w + 14): it reads each copy's list entry once, where a per-word loop re-walks the list.
+// chunk, so a chunk every core touched is not left to one worker (worker w takes words w, w + kWorkers, ... of the
+// 16): it reads each copy's list entry once, where a per-word loop re-walks the list.
 template <uint32_t cores>
 inline void or_copies(
     const uint32_t* scratch,
@@ -202,23 +236,55 @@ inline void or_copies(
     uint32_t core_idx,
     uint32_t* bitmap,
     uint32_t worker) {
-    static_assert(kChunkWords == 16 && kWorkers == 2, "worker w takes words w, w + 2, ..., w + 14");
+    constexpr uint32_t kMine = (kChunkWords + kWorkers - 1) / kWorkers;  // words a worker takes, at most
+    const uint32_t mine = (kChunkWords - worker + kWorkers - 1) / kWorkers;
     for (uint32_t my_chunk = 0; my_chunk < my_chunks; ++my_chunk) {
         const uint32_t count = copies[my_chunk];
         const uint16_t* list = lists + my_chunk * cores;
         const uint32_t* first_word = scratch + my_chunk * cores * kChunkWords + worker;
-        uint32_t acc[kChunkWords / kWorkers] = {};
+        uint32_t acc[kMine] = {};
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t* copy = first_word + list[i] * kChunkWords;
+            if (mine == kMine) {
 #pragma GCC unroll 8
-            for (uint32_t k = 0; k < kChunkWords / kWorkers; ++k) {
-                acc[k] |= copy[k * kWorkers];
+                for (uint32_t k = 0; k < kMine; ++k) {
+                    acc[k] |= copy[k * kWorkers];
+                }
+            } else {
+#pragma GCC unroll 8
+                for (uint32_t k = 0; k < kMine - 1; ++k) {
+                    acc[k] |= copy[k * kWorkers];
+                }
             }
         }
         uint32_t* dst = bitmap + (core_idx + my_chunk * cores) * kChunkWords + worker;
-#pragma GCC unroll 8
-        for (uint32_t k = 0; k < kChunkWords / kWorkers; ++k) {
+        for (uint32_t k = 0; k < mine; ++k) {
             dst[k * kWorkers] = acc[k];
+        }
+    }
+}
+
+// Dispatch-only plan: this worker's share of owner `owner`'s owner-major slot (words u = 32 s .. 32 s + 31 of summary
+// words s = worker, worker + kWorkers, ...): the words from the chip bitmap, and their summary word when the slot has
+// one. The header words are BRISC's.
+template <uint32_t num_devices, uint32_t words_per_block>
+inline void slot_share(
+    const uint32_t* bitmap, uint32_t* slot, uint32_t owner, uint32_t active_blocks, uint32_t worker) {
+    using namespace sparse_push::plan_table;
+    const uint32_t owner_blocks = active_blocks > owner ? (active_blocks - owner + num_devices - 1) / num_devices : 0;
+    const uint32_t owner_words = owner_blocks * words_per_block;
+    const bool summary = owner_words <= kSummaryWords * 32;
+    for (uint32_t s = worker; s * 32 < owner_words; s += kWorkers) {
+        const uint32_t u_end = std::min(s * 32 + 32, owner_words);
+        uint32_t sum = 0;
+        for (uint32_t u = s * 32; u < u_end; ++u) {
+            const uint32_t block = u / words_per_block;
+            const uint32_t v = bitmap[(owner + block * num_devices) * words_per_block + (u - block * words_per_block)];
+            slot[kBitmapOff + u] = v;
+            sum |= (v != 0 ? 1u : 0u) << (u % 32);
+        }
+        if (summary) {
+            slot[kSummaryOff + s] = sum;
         }
     }
 }
@@ -286,14 +352,16 @@ inline void owner_bases(const uint32_t* totals, uint32_t* run_bases, uint32_t wo
 
 // Rewrites idx [begin, end) in place from cache rows to compact-buffer pages: a row's rank within its owner is its
 // range's offset + its word's rank + the needed rows below it in the word. A row past the cache (malformed top-k) was
-// never planned and becomes the sentinel, so the plan stays inside its buffers.
+// never planned and becomes the sentinel, so the plan stays inside its buffers. In dense mode the buffer holds the
+// dense gather instead, every owner's rows from slot owner * dense_slot_rows on, in its cache's order.
 template <
     uint32_t num_devices,
     uint32_t max_rows,
     uint32_t stripe_chunk,
     uint32_t range_blocks,
     uint32_t pages_per_packet,
-    uint32_t banks>
+    uint32_t banks,
+    uint32_t dense_slot_rows>
 inline void rewrite(
     uint32_t* __restrict__ idx,
     uint32_t begin,
@@ -301,7 +369,40 @@ inline void rewrite(
     const uint32_t* __restrict__ bitmap,
     const uint16_t* __restrict__ word_ranks,
     const uint32_t* __restrict__ range_offsets,
-    const uint32_t* __restrict__ run_bases) {
+    const uint32_t* __restrict__ run_bases,
+    bool dense) {
+    constexpr uint32_t kLoadBatch = 4;
+    if (!dense) {
+        // kLoadBatch indices at a time: their rows, then their bitmap words and word ranks, then the arithmetic.
+        uint32_t i = begin;
+        for (; i + kLoadBatch <= end; i += kLoadBatch) {
+            uint32_t rows[kLoadBatch], bits[kLoadBatch], ranks[kLoadBatch];
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < kLoadBatch; ++k) {
+                rows[k] = idx[i + k];
+            }
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < kLoadBatch; ++k) {
+                const uint32_t word = rows[k] < max_rows ? rows[k] / kRowsPerWord : 0;
+                bits[k] = bitmap[word];
+                ranks[k] = word_ranks[word];
+            }
+#pragma GCC unroll 4
+            for (uint32_t k = 0; k < kLoadBatch; ++k) {
+                const uint32_t row = rows[k];
+                if (row >= max_rows) {
+                    idx[i + k] = kSentinel;
+                    continue;
+                }
+                const uint32_t block = row / stripe_chunk;
+                const uint32_t owner = block % num_devices;
+                const uint32_t rank = range_offsets[(block / range_blocks) * owner_stride(num_devices) + owner] +
+                                      ranks[k] + __builtin_popcount(bits[k] & ((1u << (row % kRowsPerWord)) - 1u));
+                idx[i + k] = sparse_push::compact_page<pages_per_packet, banks>(run_bases[owner], rank);
+            }
+        }
+        begin = i;
+    }
 #pragma GCC unroll 2  // tuning knob
     for (uint32_t i = begin; i < end; ++i) {
         const uint32_t row = idx[i];
@@ -310,12 +411,23 @@ inline void rewrite(
             continue;
         }
         const uint32_t block = row / stripe_chunk;
-        const uint32_t word = row / kRowsPerWord;
         const uint32_t owner = block % num_devices;
+        if (dense) {
+            idx[i] = owner * dense_slot_rows + (block / num_devices) * stripe_chunk + row % stripe_chunk;
+            continue;
+        }
+        const uint32_t word = row / kRowsPerWord;
         const uint32_t rank = range_offsets[(block / range_blocks) * owner_stride(num_devices) + owner] +
                               word_ranks[word] + __builtin_popcount(bitmap[word] & ((1u << (row % kRowsPerWord)) - 1u));
         idx[i] = sparse_push::compact_page<pages_per_packet, banks>(run_bases[owner], rank);
     }
+}
+
+// Dense mode: the chunk start (read in step 0) is below dense_below, so the shared layers gather densely and the plan
+// only rewrites the indices to dense-buffer rows. dense_below 0: never.
+template <uint32_t dense_below>
+inline bool is_dense(const uint32_t* misc) {
+    return dense_below != 0 && misc[kMiscSplit] < dense_below;
 }
 
 // Steps 4 and 5 for one worker: owner prefixes and totals, then run bases, then the rewrite of its share of idx.
@@ -326,6 +438,8 @@ template <
     uint32_t range_blocks,
     uint32_t pages_per_packet,
     uint32_t banks,
+    uint32_t dense_below,
+    uint32_t dense_slot_rows,
     typename DoneSem>
 inline void bases_and_rewrite(
     uint32_t* idx,
@@ -340,14 +454,15 @@ inline void bases_and_rewrite(
     sync_workers(done_sem, worker, kTotalled);
     owner_bases<num_devices, pages_per_packet, banks>(misc + kMiscTotals, misc + kMiscBase, worker);
     sync_workers(done_sem, worker, kBased);
-    rewrite<num_devices, max_rows, stripe_chunk, range_blocks, pages_per_packet, banks>(
+    rewrite<num_devices, max_rows, stripe_chunk, range_blocks, pages_per_packet, banks, dense_slot_rows>(
         idx,
         share_begin(index_count, worker),
         share_begin(index_count, worker + 1),
         bitmap,
         word_ranks,
         partials,
-        misc + kMiscBase);
+        misc + kMiscBase,
+        is_dense<dense_below>(misc));
     post(done_sem(worker), kRewritten);  // report only: the write-back waits for it
 }
 

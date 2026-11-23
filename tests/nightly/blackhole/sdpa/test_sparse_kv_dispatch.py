@@ -1,0 +1,957 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""sparse_kv_dispatch: the KV rows every chip's top-k needs, sent over store-and-forward trees into the full-size
+gather buffer at their owner-major pages (KV_DISPATCH_2D_PLAN.md).
+
+Exactness: on every chip, every page a needed row maps to equals the cache's row (the owner-major layout is the chips'
+cache shards concatenated in row-major chip order, which is what high_bw_all_gather writes)."""
+
+import os
+
+import numpy as np
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import run_for_blackhole
+
+TOPK, STRIPE = 2048, 160
+
+_ROUTER = ttnn.FabricRouterConfig()
+_ROUTER.max_packet_payload_size_bytes = int(
+    os.environ.get("KVD_PAYLOAD", 12352)
+)  # GLM-5.3 mesh (moe_fabric_payload_size)
+_TORUS_XY = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    "l1_small_size": 2048,
+    "trace_region_size": 64 * 1024 * 1024,
+    "fabric_router_config": _ROUTER,
+}
+
+
+def _grid(mesh_device):
+    g = mesh_device.compute_with_storage_grid_size()
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))])
+
+
+class Dispatch:
+    """Owns the dispatch's buffers and semaphores for one mesh, cache size and row format."""
+
+    def __init__(self, mesh_device, max_rows, width, dtype, planners=None, links=2, lanes_per_link=None):
+        # defaults: the op's (48 planners, 2 lanes a link), overridable by KVD_PLANNERS / KVD_LANES
+        self.mesh_device, self.max_rows, self.links = mesh_device, max_rows, links
+        self.planners = planners or int(os.environ.get("KVD_PLANNERS", "48"))
+        self.lanes = lanes_per_link or int(os.environ.get("KVD_LANES", "2"))
+        n = mesh_device.get_num_devices()
+        common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+        zeros = ttnn.from_torch(
+            torch.zeros(1, 1, max_rows, width, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            mesh_mapper=replicate,
+            **common,
+        )
+        self.output = zeros if dtype == ttnn.bfloat16 else ttnn.typecast(zeros, dtype)
+        slot_bytes = ttnn._ttnn.operations.experimental.sparse_kv_push_inbox_slot_bytes(max_rows, STRIPE, n)
+        # the inbox (every chip's plan slice for this owner) in L1, interleaved (KVD_INBOX_L1=0: DRAM): the
+        # planners read ~32 x 64 B lines a word from it
+        inbox_mc = ttnn.DRAM_MEMORY_CONFIG if os.environ.get("KVD_INBOX_L1", "1") == "0" else ttnn.L1_MEMORY_CONFIG
+        self.inbox = ttnn.from_torch(
+            torch.zeros(1, 1, n, slot_bytes // 4, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            mesh_mapper=replicate,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=inbox_mc,
+        )
+        spec = ttnn.experimental.sparse_kv_dispatch_scratch_spec(
+            mesh_device, max_rows, STRIPE, self.planners, links, self.lanes
+        )
+        self.scratch = ttnn.allocate_tensor_on_device(spec, mesh_device)
+        grid = _grid(mesh_device)
+        self.sems = [ttnn.create_global_semaphore(mesh_device, grid, 0, ttnn.BufferType.L1_SMALL) for _ in range(4)]
+        ttnn.synchronize_device(mesh_device)
+
+    def plan(self, indices, chunk_start):
+        table, _ = ttnn.experimental.sparse_push_plan(
+            indices,
+            stripe_chunk=STRIPE,
+            max_rows=self.max_rows,
+            page_bytes=self.output.buffer_aligned_page_size(),
+            chunk_start=chunk_start,
+            owner_major=True,
+        )
+        return table
+
+    def __call__(self, cache, table, slot=0, **kw):
+        return ttnn.experimental.sparse_kv_dispatch(
+            cache,
+            output_tensor=self.output,
+            table=table,
+            inbox=self.inbox,
+            scratch=self.scratch,
+            stripe_chunk=STRIPE,
+            max_rows=self.max_rows,
+            fence_semaphore=self.sems[0],
+            arrived_semaphore=self.sems[1],
+            credit_semaphore=self.sems[2],
+            inbox_semaphore=self.sems[3],
+            num_links=self.links,
+            planners=self.planners,
+            lanes_per_link=self.lanes,
+            batch_index=slot,
+            # (manual timing knob, KVD_DESIGN=3 and LANES=1: below the cutoff the op copies nothing, so exactness
+            # checks of those chunks fail by design)
+            **({"active_from": int(os.environ["KVD_ACTIVE_FROM"])} if os.environ.get("KVD_ACTIVE_FROM") else {}),
+            **kw,
+        )
+
+
+def _cache(mesh_device, slots, rows, kv_fmt, seed):
+    gen = torch.Generator().manual_seed(seed)
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    if kv_fmt == "bf16":
+        host = torch.randn(slots, 1, rows, 576, generator=gen).to(torch.bfloat16)
+        return ttnn.from_torch(host, dtype=ttnn.bfloat16, mesh_mapper=shard, **common), 576, ttnn.bfloat16
+    latent = torch.randn(slots, 1, rows, 512, generator=gen).to(torch.bfloat16)
+    rope = torch.randn(slots, 1, rows, 64, generator=gen).to(torch.bfloat16)
+    fp8, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        ttnn.from_torch(latent, dtype=ttnn.bfloat16, mesh_mapper=shard, **common), round_scale_to_power_of_two=True
+    )
+    cache = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(
+        fp8, scales, ttnn.from_torch(rope, dtype=ttnn.bfloat16, mesh_mapper=shard, **common)
+    )
+    return cache, 656, ttnn.fp8_e4m3
+
+
+def _routing():
+    """The dispatch's routing (push_experiment/tools/kvd2d_routing.py, the rule the kernels implement)."""
+    import importlib.util
+
+    path = os.path.join(
+        os.path.dirname(__file__),
+        "../../../../models/demos/deepseek_v3_d_p/tests/sparse_mla/push_experiment/tools/kvd2d_routing.py",
+    )
+    spec = importlib.util.spec_from_file_location("kvd2d_routing", os.path.abspath(path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _touched(mesh_shape, natural, max_rows, wrap_x=True, wrap_y=True):
+    """Per chip, the pages the dispatch may write: rows it needs, and rows its trees relay through it."""
+    R, C = mesh_shape
+    n = R * C
+    rt = _routing().Routing(R, C, wrap_x and C >= 3, wrap_y and R >= 3)
+    masks = {}
+    for i in range(n):
+        u = np.unique(natural[i].ravel())
+        for g in u[(u >= 0) & (u < max_rows)].tolist():
+            masks[g] = masks.get(g, 0) | (1 << i)
+    touched = [set() for _ in range(n)]
+    for g, mk in masks.items():
+        o = (g // STRIPE) % n
+        page = o * (max_rows // n) + (g // STRIPE // n) * STRIPE + g % STRIPE
+        for i in range(n):
+            if mk >> i & 1:
+                touched[i].add(page)
+        m = mk & ~(1 << o)
+        if m:
+            edges, _ = rt.tree(o, m, rt.order_of(o, m, g), g)
+            for _, (r, c) in edges:
+                touched[r * C + c].add(page)
+    return touched
+
+
+def _as_bits(t):
+    """Raw bits of a host tensor read back from device (exact compare, NaN payloads included)."""
+    t = t.contiguous()
+    return t.view(torch.int16) if t.dtype in (torch.bfloat16, torch.float16) else t.view(torch.int32)
+
+
+def _check(mesh_device, d, cache, slot, natural):
+    n = mesh_device.get_num_devices()
+    # fp8 has no single-device to_torch: compare both sides after the same on-device typecast to bf16
+    as_bf16 = lambda t: t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16)
+    cache_all = ttnn.to_torch(as_bf16(cache), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))[slot, 0]
+    outs = ttnn.get_device_tensors(as_bf16(d.output))
+    bad = 0
+    for i in range(n):
+        need = np.unique(natural[i].ravel())
+        need = need[(need >= 0) & (need < d.max_rows)]
+        pages = (need // STRIPE % n) * (d.max_rows // n) + (need // STRIPE // n) * STRIPE + need % STRIPE
+        got = ttnn.to_torch(outs[i])[0, 0]
+        p = torch.from_numpy(pages.astype(np.int64))
+        g, e = _as_bits(got[p].to(torch.float32)), _as_bits(cache_all[p].to(torch.float32))
+        miss = (g != e).any(dim=1)
+        bad += int(miss.sum())
+        if miss.any():
+            zero = (got[p][miss].abs().sum(dim=1) == 0).sum()
+            if os.environ.get("KVD_DEBUG") and i < 2:
+                ca = _as_bits(cache_all.to(torch.float32))
+                for r in need[miss.numpy()][:4]:
+                    pg = (r // STRIPE % n) * (d.max_rows // n) + (r // STRIPE // n) * STRIPE + r % STRIPE
+                    row_bits = _as_bits(got[pg : pg + 1].to(torch.float32))
+                    hit = (ca == row_bits).all(dim=1).nonzero().flatten().tolist()
+                    logger.error(f"  chip {i} row {r} page {pg}: content equals cache pages {hit[:4]}")
+            own = int((need // STRIPE % n == i).sum())
+            logger.error(
+                f"chip {i}: {int(miss.sum())} of {len(pages)} needed rows wrong ({int(zero)} still zero; {own} own), "
+                f"e.g. rows {need[miss.numpy()][:5]}"
+            )
+    return bad
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [_TORUS_XY], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("kv_fmt", ["fp8", "bf16"])
+@pytest.mark.parametrize("slabs, picks", [(4, 300), (8, 2048)], ids=["small", "dense_picks"])
+@pytest.mark.parametrize("lanes", [1, 2], ids=["lanes1", "lanes2"])
+def test_dispatch_exact(mesh_device, kv_fmt, slabs, picks, lanes):
+    """Random top-k over three calls (program cache hits, persistent words back at zero): uniform, per-chip extents, empty."""
+    n = mesh_device.get_num_devices()
+    max_rows = slabs * n * STRIPE
+    cache, width, dtype = _cache(mesh_device, 2, max_rows, kv_fmt, seed=1)
+    d = Dispatch(mesh_device, max_rows, width, dtype, lanes_per_link=lanes)
+    shard = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    rng = np.random.default_rng(3)
+    # call 0: every chip picks over the whole cache; call 1: chip i's picks stop at a different point (its plan covers
+    # fewer blocks, after a longer call left words in the inbox); call 2: nothing needed
+    poison_host = torch.full((1, 1, max_rows, width), 3.0, dtype=torch.bfloat16)
+    poison = ttnn.from_torch(
+        poison_host,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        **common,
+    )
+    poison = poison if dtype == ttnn.bfloat16 else ttnn.typecast(poison, dtype)
+    poison_bits = _as_bits(
+        ttnn.to_torch(
+            ttnn.get_device_tensors(poison if dtype == ttnn.bfloat16 else ttnn.typecast(poison, ttnn.bfloat16))[0]
+        )[0, 0].to(torch.float32)
+    )
+    for call, slot in ((0, 0), (1, 1), (2, 0)):
+        ttnn.copy(poison, d.output)
+        natural = np.stack([rng.integers(0, max_rows, size=(STRIPE, TOPK)) for _ in range(n)])
+        if call == 1:
+            for i in range(n):
+                natural[i] %= max(STRIPE, max_rows * (i + 1) // n)
+        natural[:, :, picks:] = max_rows  # sentinel past the cache: ignored
+        if call == 2:
+            natural[:] = max_rows
+        idx = ttnn.from_torch(
+            torch.from_numpy(natural.reshape(1, 1, n * STRIPE, TOPK).astype(np.int32)),
+            dtype=ttnn.uint32,
+            mesh_mapper=shard,
+            **common,
+        )
+        table = d.plan(idx, chunk_start=max_rows - n * STRIPE)
+        d(cache, table, slot=slot)
+        ttnn.synchronize_device(mesh_device)
+        bad = _check(mesh_device, d, cache, slot, natural)
+        assert bad == 0, f"call {call}: {bad} needed rows wrong"
+        # nothing else changed: every page outside the chip's needed and relayed rows still holds the poison
+        touched = _touched(tuple(mesh_device.shape), natural, max_rows)
+        outs = ttnn.get_device_tensors(d.output if dtype == ttnn.bfloat16 else ttnn.typecast(d.output, ttnn.bfloat16))
+        for i in sorted({0, n // 2, n - 1}):
+            got = _as_bits(ttnn.to_torch(outs[i])[0, 0].to(torch.float32))
+            keep = torch.ones(max_rows, dtype=torch.bool)
+            keep[list(touched[i])] = False
+            stray = int((got[keep] != poison_bits[keep]).any(dim=1).sum())
+            assert stray == 0, f"call {call} chip {i}: {stray} pages written that no tree puts there"
+        logger.info(f"call {call}: every needed row landed, nothing else written")
+
+
+_GLM_TRACE = "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120/dsa"
+_GLM_START = 1039360  # the trace's chunk start (a whole number of slabs)
+# per-layer tree roofline (tools/roofline_real_topk_8x4.jsonl), us
+_GLM_TREE_US = {6: 103, 14: 59, 30: 55, 46: 256, 62: 274, 74: 191}
+
+
+def _traced_us(mesh_device, fn, n=10):
+    import time
+
+    fn()
+    ttnn.synchronize_device(mesh_device)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for _ in range(n):
+        fn()
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    t0 = time.perf_counter()
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    us = (time.perf_counter() - t0) / n * 1e6
+    ttnn.release_trace(mesh_device, tid)
+    return us
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("device_params", [_TORUS_XY], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("layer", [int(x) for x in os.environ.get("KVD_LAYERS", "14,62").split(",")])
+def test_dispatch_real_topk(mesh_device, layer):
+    """Staged GLM-5.3 1M top-k: exact on two chips, and the traced time per call against the layer's tree roofline."""
+    from safetensors.numpy import load_file
+
+    f = f"{_GLM_TRACE}/dsa_topk_indices_layer_{layer}/rows_00000000_00005120.safetensors"
+    if not os.path.exists(f):
+        pytest.skip(f"not staged: {f}")
+    n = mesh_device.get_num_devices()
+    max_rows = _GLM_START + n * STRIPE
+    natural = next(iter(load_file(f).values())).astype(np.int64).reshape(n, STRIPE, TOPK)
+    cache, width, dtype = _cache(mesh_device, 1, max_rows, "fp8", seed=5)
+    kw = {}
+    if os.environ.get("KVD_B"):
+        kw["rows_per_packet"] = int(os.environ["KVD_B"])
+    if os.environ.get("KVD_SLOTS"):
+        kw["landing_slots"] = int(os.environ["KVD_SLOTS"])
+    d = Dispatch(mesh_device, max_rows, width, dtype)
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    idx = ttnn.from_torch(
+        torch.from_numpy(natural.reshape(1, 1, n * STRIPE, TOPK).astype(np.int32)),
+        dtype=ttnn.uint32,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        **common,
+    )
+    table = d.plan(idx, chunk_start=_GLM_START)
+    d(cache, table, **kw)
+    ttnn.synchronize_device(mesh_device)
+    if not os.environ.get("KVD_SKIP_CHECK"):
+        # exactness on two chips (a full 1M readback per chip is ~1.4 GB)
+        as_bf16 = lambda t: t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16)
+        cache_all = ttnn.to_torch(as_bf16(cache), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))[0, 0]
+        outs = ttnn.get_device_tensors(as_bf16(d.output))
+        for i in (0, 17):
+            need = np.unique(natural[i].ravel())
+            need = need[(need >= 0) & (need < max_rows)]
+            pages = torch.from_numpy(
+                ((need // STRIPE % n) * (max_rows // n) + (need // STRIPE // n) * STRIPE + need % STRIPE).astype(
+                    np.int64
+                )
+            )
+            got = ttnn.to_torch(outs[i])[0, 0]
+            bad = int(
+                (
+                    (_as_bits(got[pages].to(torch.float32)) != _as_bits(cache_all[pages].to(torch.float32))).any(dim=1)
+                ).sum()
+            )
+            assert bad == 0, f"layer {layer} chip {i}: {bad} of {len(pages)} needed rows wrong"
+        logger.info(f"layer {layer}: chips 0 and 17 exact")
+    if os.environ.get("KVD_PROFILE"):
+        for _ in range(3):
+            d(cache, table, **kw)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.ReadDeviceProfiler(mesh_device)
+        return
+    us = _traced_us(mesh_device, lambda: d(cache, table, **kw))
+    roof = _GLM_TREE_US.get(layer)
+    vs = f"tree roofline {roof} us, x{us / roof:.2f}" if roof else "no roofline staged"
+    logger.warning(f"KVD layer {layer} 1M: {us:.0f} us per call ({vs}); HBAG measured ~4250 us")
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_dispatch_ablate(mesh_device):
+    """Ablations on staged GLM 1M top-k in one bring-up. KVD_ABLATE is a JSON list of configs, each
+    {"name": ..., "env": {...}, "planners": 48, "lanes": 2, "kw": {...}, "check": false}; KVD_LAYERS picks layers.
+    Every config clears the program cache (env-driven defines and kernel edits recompile) and is timed traced."""
+    import json
+
+    from safetensors.numpy import load_file
+
+    configs = json.loads(os.environ.get("KVD_ABLATE", '[{"name": "default"}]'))
+    layers = [int(x) for x in os.environ.get("KVD_LAYERS", "14,62").split(",")]
+    n = mesh_device.get_num_devices()
+    max_rows = _GLM_START + n * STRIPE
+    cache, width, dtype = _cache(mesh_device, 1, max_rows, "fp8", seed=5)
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    data = {}
+    for layer in layers:
+        f = f"{_GLM_TRACE}/dsa_topk_indices_layer_{layer}/rows_00000000_00005120.safetensors"
+        if not os.path.exists(f):
+            pytest.skip(f"not staged: {f}")
+        natural = next(iter(load_file(f).values())).astype(np.int64).reshape(n, STRIPE, TOPK)
+        data[layer] = (
+            natural,
+            ttnn.from_torch(
+                torch.from_numpy(natural.reshape(1, 1, n * STRIPE, TOPK).astype(np.int32)),
+                dtype=ttnn.uint32,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+                **common,
+            ),
+        )
+    as_bf16 = lambda t: t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16)
+    cache_all = None
+    dispatchers = {}
+    rows = []
+    for cfg in configs:
+        saved = {k: os.environ.get(k) for k in cfg.get("env", {})}
+        os.environ.update({k: str(v) for k, v in cfg.get("env", {}).items()})
+        try:
+            mesh_device.disable_and_clear_program_cache()
+            mesh_device.enable_program_cache()
+            key = (cfg.get("planners", 48), cfg.get("lanes", 2))
+            if key not in dispatchers:
+                dispatchers[key] = Dispatch(mesh_device, max_rows, width, dtype, planners=key[0], lanes_per_link=key[1])
+            d = dispatchers[key]
+            kw = cfg.get("kw", {})
+            for layer in layers:
+                natural, idx = data[layer]
+                table = d.plan(idx, chunk_start=_GLM_START)
+                if cfg.get("check"):  # poison first: an earlier config's rows must not pass for this one's
+                    zeros = ttnn.zeros(d.output.shape, dtype=ttnn.bfloat16, **common)
+                    poison = zeros if d.output.dtype == ttnn.bfloat16 else ttnn.typecast(zeros, d.output.dtype)
+                    ttnn.copy(poison, d.output)
+                    ttnn.deallocate(poison)
+                d(cache, table, **kw)
+                ttnn.synchronize_device(mesh_device)
+                exact = None
+                if cfg.get("check"):
+                    if cache_all is None:
+                        cache_all = ttnn.to_torch(
+                            as_bf16(cache), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2)
+                        )[0, 0]
+                    outs = ttnn.get_device_tensors(as_bf16(d.output))
+                    bad = 0
+                    for i in (0, 17):
+                        need = np.unique(natural[i].ravel())
+                        need = need[(need >= 0) & (need < max_rows)]
+                        pages = torch.from_numpy(
+                            (need // STRIPE % n) * (max_rows // n) + (need // STRIPE // n) * STRIPE + need % STRIPE
+                        )
+                        got = ttnn.to_torch(outs[i])[0, 0]
+                        bad += int(
+                            (_as_bits(got[pages].to(torch.float32)) != _as_bits(cache_all[pages].to(torch.float32)))
+                            .any(dim=1)
+                            .sum()
+                        )
+                    exact = bad == 0
+                    assert exact, f"{cfg.get('name')} L{layer}: {bad} needed rows wrong on chips 0 and 17"
+                us = _traced_us(mesh_device, lambda: d(cache, table, **kw))
+                plan_us = (
+                    _traced_us(mesh_device, lambda: d.plan(idx, chunk_start=_GLM_START)) if cfg.get("plan") else None
+                )
+                rows.append((cfg.get("name"), layer, us, plan_us, exact))
+                logger.warning(
+                    f"KVDA {cfg.get('name')} L{layer}: {us:.0f} us"
+                    + (f" plan {plan_us:.0f} us" if plan_us else "")
+                    + (f" exact={exact}" if exact is not None else "")
+                )
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+    for name, layer, us, plan_us, exact in rows:
+        roof = _GLM_TREE_US.get(layer)
+        logger.warning(
+            f"KVDA | {name:24s} | L{layer} | {us:7.0f} us | x{us / roof:5.2f} roofline"
+            + (f" | plan {plan_us:.0f} us" if plan_us else "")
+            + (f" | exact={exact}" if exact is not None else "")
+        )
+
+
+# K3.1's DSA (full-attention) layers (KimiK3Config.mla_layer_ids): the dumps' occurrence i is model layer [i]
+_K31_DSA_LAYERS = list(range(3, 92, 4)) + [92]
+# K3.1 tree roofline on the real prompt (KV_DISPATCH_FUSED_PLAN.md section 11), us: (KV slabs, layer) -> us
+_K31_TREE_US = {(0, 0): 273, (0, 1): 331, (0, 2): 503, (0, 3): 175, (0, 4): 441}
+_K31_TREE_US.update({(61, 0): 81, (61, 1): 154, (61, 2): 275, (61, 3): 149, (61, 4): 237})
+
+
+def _bench_setup(mesh_device, cases):
+    """The bench's state: cache, Dispatch and, per case (KV slabs, layer), its plan table, the pages chips 0 and 17
+    need, the tree roofline and a label. K3.1 (KVD_K31_DIR) layers are DSA occurrences (_K31_DSA_LAYERS). The
+    Dispatch (planners, lanes) is built here, once: configs vary kernel knobs (KVD3, KVD_ABL), not KVD_PLANNERS."""
+    from safetensors.numpy import load_file
+
+    k31 = os.environ.get("KVD_K31_DIR")
+    n = mesh_device.get_num_devices()
+    slab = n * STRIPE
+    max_rows = _GLM_START + slab
+    cache, width, dtype = _cache(mesh_device, 1, max_rows, "fp8", seed=5)
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    as_bf16 = lambda t: t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16)
+    cache_all = ttnn.to_torch(as_bf16(cache), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))[0, 0]
+    d = Dispatch(mesh_device, max_rows, width, dtype)
+    data = {}
+    for k, layer in cases:
+        kv = max_rows if k == 0 else k * slab
+        start = kv - slab
+        if k31:
+            f = f"{k31}/topk_start{start}_occ{layer}.pt"
+            if not os.path.exists(f):
+                pytest.skip(f"not staged: {f}")
+            natural = torch.load(f).numpy().astype(np.int64).reshape(n, STRIPE, TOPK)
+            roof = _K31_TREE_US.get((k, layer))
+        else:
+            f = f"{_GLM_TRACE}/dsa_topk_indices_layer_{layer}/rows_00000000_00005120.safetensors"
+            if not os.path.exists(f):
+                pytest.skip(f"not staged: {f}")
+            natural = next(iter(load_file(f).values())).astype(np.int64).reshape(n, STRIPE, TOPK)
+            if k:
+                natural = _rescale_topk(natural, max_rows, kv)
+            roof = _GLM_TREE_US.get(layer) if k == 0 else None
+        idx = ttnn.from_torch(
+            torch.from_numpy(natural.reshape(1, 1, n * STRIPE, TOPK).astype(np.int32)),
+            dtype=ttnn.uint32,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+            **common,
+        )
+        pages = []
+        for i in (0, 17):
+            need = np.unique(natural[i].ravel())
+            need = need[(need >= 0) & (need < max_rows)]
+            pages.append(
+                torch.from_numpy(
+                    (need // STRIPE % n) * (max_rows // n) + (need // STRIPE // n) * STRIPE + need % STRIPE
+                )
+            )
+        name = f"DSA{layer}=L{_K31_DSA_LAYERS[layer]}" if k31 else f"L{layer}"
+        data[(k, layer)] = (d.plan(idx, chunk_start=start), pages, roof, f"{kv // 1000}k {name}")
+    ttnn.synchronize_device(mesh_device)
+    return dict(mesh=mesh_device, cache=cache, cache_all=cache_all, d=d, data=data, common=common, as_bf16=as_bf16)
+
+
+def _replay_once(mesh_device, fn, before_last):
+    """fn captured in a trace, replayed twice; before_last() runs just before the second replay (stats marks)."""
+    fn()
+    ttnn.synchronize_device(mesh_device)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    fn()
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    before_last()
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    ttnn.release_trace(mesh_device, tid)
+
+
+def _bench_run(st, configs, cases, timed=True, after=None, traced_once=False, mark=None):
+    """Every config (name, env, check): program cache cleared, exactness, then (timed) the dispatch traced, best of
+    2 x 20 calls. check: "all" (chips 0 and 17, every case), true (the default: chip 0, the first case: reading a 1M
+    output back costs ~4 s a chip), false. after(name, case): called after the checked call (e.g. to collect stats). Returns
+    ({(name, case): us}, summary lines)."""
+    mesh_device, cache, d, data, common = st["mesh"], st["cache"], st["d"], st["data"], st["common"]
+    res = {}
+    for cfg in configs:
+        name = cfg.get("name", "?")
+        saved = {key: os.environ.get(key) for key in cfg.get("env", {})}
+        os.environ.update({key: str(v) for key, v in cfg.get("env", {}).items()})
+        try:
+            mesh_device.disable_and_clear_program_cache()
+            mesh_device.enable_program_cache()
+            for ci, case in enumerate(cases):
+                table, pages, roof, label = data[case]
+                check = cfg.get("check", True)
+                chips = ((0, 17) if check == "all" else (0,)) if check and (check == "all" or ci == 0) else ()
+                if chips or not timed:
+                    zeros = ttnn.zeros(d.output.shape, dtype=ttnn.bfloat16, **common)
+                    poison = zeros if d.output.dtype == ttnn.bfloat16 else ttnn.typecast(zeros, d.output.dtype)
+                    ttnn.copy(poison, d.output)
+                    ttnn.deallocate(poison)
+                    if traced_once:  # (stats as the timed runs see them: the last of two traced replays)
+
+                        def before_last():
+                            # poison again: the check sees only the last replay's rows
+                            p = ttnn.zeros(d.output.shape, dtype=ttnn.bfloat16, **common)
+                            q = p if d.output.dtype == ttnn.bfloat16 else ttnn.typecast(p, d.output.dtype)
+                            ttnn.copy(q, d.output)
+                            ttnn.synchronize_device(mesh_device)
+                            if mark:
+                                mark()
+
+                        _replay_once(mesh_device, lambda: d(cache, table), before_last)
+                    else:
+                        d(cache, table)
+                    ttnn.synchronize_device(mesh_device)
+                    if after:
+                        after(name, case)
+                if chips:
+                    outs = ttnn.get_device_tensors(st["as_bf16"](d.output))
+                    bad = 0
+                    for i, pg in zip(chips, pages):
+                        got = ttnn.to_torch(outs[i])[0, 0]
+                        bad += int(
+                            (_as_bits(got[pg].to(torch.float32)) != _as_bits(st["cache_all"][pg].to(torch.float32)))
+                            .any(dim=1)
+                            .sum()
+                        )
+                    assert bad == 0, f"{name} {label}: {bad} needed rows wrong on chips {chips}"
+                if timed:
+                    us = min(_traced_us(mesh_device, lambda: d(cache, table), n=20) for _ in range(2))
+                    res[(name, case)] = us
+                    logger.warning(f"KVDB {name} {label}: {us:.0f} us")
+        finally:
+            for key, v in saved.items():
+                if v is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = v
+    lines = []
+    if timed:
+        base = configs[0].get("name", "?")
+        for cfg in configs:
+            name = cfg.get("name", "?")
+            cells = []
+            for case in cases:
+                us, roof, label = res[(name, case)], data[case][2], data[case][3]
+                cells.append(
+                    f"{label} {us:6.0f}"
+                    + (f" x{us / roof:4.2f}" if roof else "")
+                    + (f" {100 * (us / res[(base, case)] - 1):+5.1f}%" if name != base else "")
+                )
+            lines.append(f"KVDB | {name:20s} | " + " | ".join(cells))
+    return res, lines
+
+
+def _bench_cases(spec=None):
+    k31 = os.environ.get("KVD_K31_DIR")
+    spec = spec or os.environ.get("KVD_BENCH", "0:2,0:3,61:0" if k31 else "0:62,0:14")
+    return [tuple(int(x) for x in c.split(":")) for c in spec.split(",")]
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_dispatch_bench(mesh_device):
+    """A few representative cases, every config in one bring-up (one payload: run once per KVD_PAYLOAD).
+    KVD_BENCH: cases "slabs:layer,..." (slabs 0 = 1M; K3.1 layer = DSA occurrence); default K3.1 (KVD_K31_DIR)
+    0:2,0:3,61:0, GLM 0:62,0:14. KVD_ABLATE: JSON list of configs {"name", "env", "check" (default true)}."""
+    import json
+
+    cases = _bench_cases()
+    configs = json.loads(os.environ.get("KVD_ABLATE", '[{"name": "base"}]'))
+    st = _bench_setup(mesh_device, cases)
+    _, lines = _bench_run(st, configs, cases)
+    for line in lines:
+        logger.warning(line)
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_dispatch_server(mesh_device):
+    """Experiment server: one bring-up, then requests from KVD_SERVER_DIR until a stop request.
+    req_<id>.json: {"configs": [...] (as KVD_ABLATE), "cases": "0:2,..." (a subset of the started set), "stats": bool,
+    "stop": bool}. Result res_<id>.txt: the KVDB summary lines, or the error; with stats, the dispatch runs once per
+    case with KVD_STATS (untraced, or "traced": the last of two replays) and the DPRINT lines it printed (TT_METAL_DPRINT_FILE) go to res_<id>.dprint.
+    Kernel sources are recompiled when they change: KVD_ABL gets SALT=<hash of the kernel sources>."""
+    import glob
+    import json
+    import time
+    import traceback
+
+    q = os.environ.get("KVD_SERVER_DIR")
+    if not q:
+        pytest.skip("experiment server: set KVD_SERVER_DIR (scratch tooling, runs until a stop request)")
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+    kdirs = [
+        f"{root}/ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/dispatch/device/kernels",
+        f"{root}/ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/common/kernels",
+        f"{root}/ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/plan/device/kernels",
+    ]
+    dfile = os.environ.get("TT_METAL_DPRINT_FILE")
+    all_cases = _bench_cases()
+    st = _bench_setup(mesh_device, all_cases)
+    with open(f"{q}/ready", "w") as f:
+        f.write(" ".join(st["data"][c][3] for c in all_cases) + "\n")
+    logger.warning(f"KVD server ready: {q}")
+    while True:
+        reqs = sorted(glob.glob(f"{q}/req_*.json"), key=os.path.getmtime)
+        if not reqs:
+            time.sleep(0.2)
+            continue
+        path = reqs[0]
+        rid = os.path.basename(path)[4:-5]
+        try:
+            req = json.load(open(path))
+        except json.JSONDecodeError:  # still being written, or bad: set aside after 5 s (it would block the queue)
+            if time.time() - os.path.getmtime(path) > 5:
+                os.rename(path, f"{q}/bad_{rid}.json")
+                open(f"{q}/res_{rid}.txt", "w").write("ERROR: request is not valid JSON\n")
+            time.sleep(0.2)
+            continue
+        os.rename(path, f"{q}/run_{rid}.json")
+        if req.get("stop"):
+            open(f"{q}/res_{rid}.txt", "w").write("stopped\n")
+            break
+        t0 = time.time()
+        out = []
+        try:
+            import hashlib
+
+            h = hashlib.sha1()
+            for p in sorted(p for k in kdirs for p in glob.glob(f"{k}/*")):
+                h.update(open(p, "rb").read())
+            salt = int(h.hexdigest()[:7], 16)  # (kernel sources' contents: an edit recompiles)
+            configs = req.get("configs", [{"name": "base"}])
+            for cfg in configs:
+                env = cfg.setdefault("env", {})
+                abl = ",".join(x for x in (env.get("KVD_ABL", os.environ.get("KVD_ABL", "")), f"SALT={salt}") if x)
+                env["KVD_ABL"] = abl
+            cases = _bench_cases(req["cases"]) if req.get("cases") else all_cases
+            if req.get("stats"):
+                for cfg in configs:
+                    cfg["env"]["KVD_STATS"] = "1"
+                marks = []
+                size = lambda: os.path.getsize(dfile) if dfile and os.path.exists(dfile) else 0
+
+                def after(name, case):
+                    time.sleep(2.0)  # (the DPRINT server drains asynchronously)
+                    marks.append((name, st["data"][case][3], size()))
+
+                start = [size()]
+
+                def mark():  # traced: only the last replay's prints (the warm-up call and replay print too)
+                    time.sleep(2.0)
+                    start[0] = size()
+
+                _bench_run(st, configs, cases, timed=False, after=after, traced_once=bool(req.get("traced")), mark=mark)
+                with open(dfile, "rb") as f:
+                    f.seek(start[0])
+                    blob = f.read().decode(errors="replace")
+                with open(f"{q}/res_{rid}.dprint", "w") as f:
+                    f.write(blob)
+                out.append(f"stats: {len(blob.splitlines())} DPRINT lines ({[(m[0], m[1]) for m in marks]})")
+            else:
+                _, lines = _bench_run(st, configs, cases)
+                out += lines
+        except Exception:
+            out.append("ERROR\n" + traceback.format_exc())
+        out.append(f"({time.time() - t0:.1f} s)")
+        with open(f"{q}/res_{rid}.tmp", "w") as f:
+            f.write("\n".join(out) + "\n")
+        os.rename(f"{q}/res_{rid}.tmp", f"{q}/res_{rid}.txt")
+
+
+def _rescale_topk(natural, src_rows, kv):
+    """Synthetic top-k at KV length kv from real top-k over src_rows: every index scaled to [0, kv), then pushed
+    apart so each query keeps its picks distinct (sorted, no index above kv - 1). Pads (< 0) stay pads."""
+    flat = natural.reshape(-1, natural.shape[-1])
+    valid = (flat >= 0) & (flat < src_rows)  # (pads: negative or past the cache)
+    cnt = valid.sum(axis=1, keepdims=True)
+    assert int(cnt.max()) <= kv, f"{int(cnt.max())} picks do not fit in {kv} rows"
+    big = np.iinfo(np.int64).max // 4
+    v = np.sort(np.where(valid, flat * kv // src_rows, big), axis=1)
+    j = np.arange(flat.shape[1])[None, :]
+    v = np.maximum.accumulate(v - j, axis=1) + j  # strictly increasing
+    v = np.minimum(v, kv - cnt + j)  # room for the rest below kv
+    v = np.where(j < cnt, v, -1)
+    return v.reshape(natural.shape)
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_dispatch_kv_sweep(mesh_device):
+    """Plan + dispatch against high_bw_all_gather at a range of KV lengths (KVD_KV, in slabs of n x STRIPE rows;
+    0 = the real 1M chunk). Below 1M the top-k is the real 1M top-k rescaled to the KV length (synthetic). Buffers
+    are sized for 1M as in the model; HBAG gathers the populated prefix (gathered_dim_size), as mla.py does."""
+    from safetensors.numpy import load_file
+
+    k31 = os.environ.get("KVD_K31_DIR")
+    layers = [int(x) for x in os.environ.get("KVD_LAYERS", "0,1,2,3,4" if k31 else "14,62").split(",")]
+    n = mesh_device.get_num_devices()
+    slab = n * STRIPE
+    max_rows = _GLM_START + slab
+    # (K3.1: slabs 61 and 101 are the real 312k and 512k dumps)
+    kvs = [int(x) for x in os.environ.get("KVD_KV", "1,10,25,61,101,0" if k31 else "1,10,25,51,102,0").split(",")]
+    cache, width, dtype = _cache(mesh_device, 1, max_rows, "fp8", seed=5)
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    d = Dispatch(mesh_device, max_rows, width, dtype)
+    hb_out = ttnn.allocate_tensor_on_device(d.output.spec, mesh_device)
+    # the existing push (v2: owner-major plan table, table exchange in its own inbox, all rows), as mla.py runs it
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart, SparseKvPushPlanner
+
+    push_planner = SparseKvPushPlanner(mesh_device, 2)
+    push_rows = ttnn.experimental.sparse_kv_push_output_spec(
+        mesh_device, distinct_rows=STRIPE * TOPK, max_rows=max_rows, stripe_chunk=STRIPE, row_width=width, dtype=dtype
+    ).shape[2]
+    push_out = ttnn.allocate_tensor_on_device(
+        ttnn.TensorSpec([1, 1, push_rows, width], dtype, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG), mesh_device
+    )
+    push_inbox = ttnn.from_torch(
+        torch.zeros(1, 1, n, d.inbox.shape[3], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        **common,
+    )
+    push = lambda table: ttnn.experimental.sparse_kv_push(
+        cache,
+        output_tensor=push_out,
+        table=table,
+        inbox=push_inbox,
+        part=SparseKvPushPart.ALL,
+        stripe_chunk=STRIPE,
+        max_rows=max_rows,
+        num_links=2,
+        ready_semaphore=push_planner.ready_semaphore,
+        done_semaphore=push_planner.done_semaphore,
+        batch_index=0,
+    )
+    as_bf16 = lambda t: t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16)
+    cache_all = ttnn.to_torch(as_bf16(cache), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))[0, 0]
+    # KVD_K31_DIR: K3.1 top-k dumps (topk_start{start}_occ{layer}.pt, real at 312k and 1M; KVD_LAYERS = DSA layers)
+    real, real_at = {}, {}  # real[layer]: 1M top-k; real_at[(kv, layer)]: other real KV points
+    for layer in layers:
+        if k31:
+            if not os.path.exists(f"{k31}/topk_start{_GLM_START}_occ{layer}.pt"):
+                pytest.skip(f"not staged: {k31}/topk_start{_GLM_START}_occ{layer}.pt")
+            load = lambda start: (
+                torch.load(f"{k31}/topk_start{start}_occ{layer}.pt").numpy().astype(np.int64).reshape(n, STRIPE, TOPK)
+            )
+            real[layer] = load(_GLM_START)
+            for k in kvs:  # every other KV point with a real dump (its chunk start = kv - slab)
+                if k and os.path.exists(f"{k31}/topk_start{k * slab - slab}_occ{layer}.pt"):
+                    real_at[(k * slab, layer)] = load(k * slab - slab)
+            continue
+        f = f"{_GLM_TRACE}/dsa_topk_indices_layer_{layer}/rows_00000000_00005120.safetensors"
+        if not os.path.exists(f):
+            pytest.skip(f"not staged: {f}")
+        real[layer] = next(iter(load_file(f).values())).astype(np.int64).reshape(n, STRIPE, TOPK)
+    rows = []
+    for k in kvs:
+        kv = max_rows if k == 0 else k * slab
+        start = kv - slab
+        hb = lambda: ttnn.experimental.high_bw_all_gather(
+            cache, dim=2, output_tensor=hb_out, cluster_axis=None, num_links=2, gathered_dim_size=kv
+        )
+        hb_us = _traced_us(mesh_device, hb)
+        for layer in layers:
+            natural = (
+                real[layer]
+                if k == 0
+                else real_at.get((kv, layer), None)
+                if (kv, layer) in real_at
+                else _rescale_topk(real[layer], max_rows, kv)
+            )
+            is_real = k == 0 or (kv, layer) in real_at
+            idx = ttnn.from_torch(
+                torch.from_numpy(natural.reshape(1, 1, n * STRIPE, TOPK).astype(np.int32)),
+                dtype=ttnn.uint32,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+                **common,
+            )
+            zeros = ttnn.zeros(d.output.shape, dtype=ttnn.bfloat16, **common)
+            poison = zeros if d.output.dtype == ttnn.bfloat16 else ttnn.typecast(zeros, d.output.dtype)
+            ttnn.copy(poison, d.output)
+            ttnn.deallocate(poison)
+            table = d.plan(idx, chunk_start=start)
+            d(cache, table)
+            ttnn.synchronize_device(mesh_device)
+            outs = ttnn.get_device_tensors(as_bf16(d.output))
+            bad, need_max = 0, 0
+            for i in (0, 17):
+                need = np.unique(natural[i].ravel())
+                need = need[(need >= 0) & (need < max_rows)]
+                need_max = max(need_max, len(need))
+                pages = torch.from_numpy(
+                    (need // STRIPE % n) * (max_rows // n) + (need // STRIPE // n) * STRIPE + need % STRIPE
+                )
+                got = ttnn.to_torch(outs[i])[0, 0]
+                bad += int(
+                    (_as_bits(got[pages].to(torch.float32)) != _as_bits(cache_all[pages].to(torch.float32)))
+                    .any(dim=1)
+                    .sum()
+                )
+            assert bad == 0, f"KV {kv} L{layer}: {bad} needed rows wrong on chips 0 and 17"
+            us = _traced_us(mesh_device, lambda: d(cache, table))
+            plan_us = _traced_us(mesh_device, lambda: d.plan(idx, chunk_start=start))
+            # both back to back in one trace (what the model replays); vs plan_us + us: the effect of tracing the two
+            # programs together (both still write and read the table)
+            pd_us = _traced_us(mesh_device, lambda: d(cache, d.plan(idx, chunk_start=start)))
+            fused_us = float("nan")
+            if os.environ.get("KVD_FUSED"):  # one op: the plan fused into the dispatch (kvd4), exact first
+                zeros = ttnn.zeros(d.output.shape, dtype=ttnn.bfloat16, **common)
+                poison = zeros if d.output.dtype == ttnn.bfloat16 else ttnn.typecast(zeros, d.output.dtype)
+                ttnn.copy(poison, d.output)
+                ttnn.deallocate(poison)
+                # its own zeroed table (a plan that wrote nothing would fail the check) and a copy of the indices
+                # at another address (later calls hit the program cache with new addresses); the FUSED_NOPLAN probe
+                # skips the plan, so it dispatches from the prebuilt table
+                noplan = any(k.split("=")[0] == "FUSED_NOPLAN" for k in os.environ.get("KVD_ABL", "").split(","))
+                zero_table = lambda: ttnn.from_torch(
+                    torch.zeros(tuple(table.shape), dtype=torch.int32),
+                    dtype=ttnn.uint32,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    **common,
+                )
+                ftable = table if noplan else zero_table()
+                fidx = ttnn.clone(idx)
+                fused = lambda: d(cache, ftable, plan_indices=fidx, plan_chunk_start=start)
+                fused()
+                ttnn.synchronize_device(mesh_device)
+                outs = ttnn.get_device_tensors(as_bf16(d.output))
+                fbad = 0
+                for i in (0, 17):
+                    need = np.unique(natural[i].ravel())
+                    need = need[(need >= 0) & (need < max_rows)]
+                    pages = torch.from_numpy(
+                        (need // STRIPE % n) * (max_rows // n) + (need // STRIPE // n) * STRIPE + need % STRIPE
+                    )
+                    got = ttnn.to_torch(outs[i])[0, 0]
+                    fbad += int(
+                        (_as_bits(got[pages].to(torch.float32)) != _as_bits(cache_all[pages].to(torch.float32)))
+                        .any(dim=1)
+                        .sum()
+                    )
+                assert fbad == 0, f"fused KV {kv} L{layer}: {fbad} needed rows wrong on chips 0 and 17"
+                fused_us = _traced_us(mesh_device, fused)
+                # the cached program again, with a second table and indices allocated while the first pair lives
+                # (other addresses: the override must patch them), checked the same way
+                ftable2 = table if noplan else zero_table()
+                fidx2 = ttnn.clone(idx)
+                assert fidx2.buffer_address() != fidx.buffer_address()
+                zeros = ttnn.zeros(d.output.shape, dtype=ttnn.bfloat16, **common)
+                poison = zeros if d.output.dtype == ttnn.bfloat16 else ttnn.typecast(zeros, d.output.dtype)
+                ttnn.copy(poison, d.output)
+                ttnn.deallocate(poison)
+                d(cache, ftable2, plan_indices=fidx2, plan_chunk_start=start)
+                ttnn.synchronize_device(mesh_device)
+                outs = ttnn.get_device_tensors(as_bf16(d.output))
+                for i in (0, 17):
+                    need = np.unique(natural[i].ravel())
+                    need = need[(need >= 0) & (need < max_rows)]
+                    pages = torch.from_numpy(
+                        (need // STRIPE % n) * (max_rows // n) + (need // STRIPE // n) * STRIPE + need % STRIPE
+                    )
+                    got = ttnn.to_torch(outs[i])[0, 0]
+                    bad2 = int(
+                        (_as_bits(got[pages].to(torch.float32)) != _as_bits(cache_all[pages].to(torch.float32)))
+                        .any(dim=1)
+                        .sum()
+                    )
+                    assert bad2 == 0, f"fused (new addresses) KV {kv} L{layer} chip {i}: {bad2} needed rows wrong"
+                for x in (fidx, fidx2) if noplan else (fidx, ftable, fidx2, ftable2):
+                    ttnn.deallocate(x)
+            push_us = float("nan")
+            # (no push with PLAN_ABL=DISPATCH_ONLY: the table has no per-owner counts for it)
+            if os.environ.get("KVD_SWEEP_PUSH", "0") != "0" and "DISPATCH_ONLY" not in os.environ.get("PLAN_ABL", ""):
+                push(table)
+                ttnn.synchronize_device(mesh_device)
+                push_us = _traced_us(mesh_device, lambda: push(table))
+            ttnn.deallocate(idx)
+            rows.append((kv, layer, need_max, plan_us, us, push_us, hb_us, is_real, pd_us, fused_us))
+            logger.warning(
+                f"KVDS KV {kv} L{layer}: plan {plan_us:.0f} dispatch {us:.0f} push {push_us:.0f} hbag {hb_us:.0f} us"
+            )
+    push_planner.release()
+    for kv, layer, need_max, plan_us, us, push_us, hb_us, is_real, pd_us, fused_us in rows:
+        logger.warning(
+            f"KVDS | KV {kv:8d} | L{layer} | needed rows {need_max:7d} | plan {plan_us:5.0f} | dispatch {us:5.0f} | "
+            f"plan+dispatch {plan_us + us:5.0f} (one trace {pd_us:5.0f}) | fused {fused_us:5.0f} | push {push_us:5.0f} | plan+push {plan_us + push_us:5.0f} | "
+            f"hbag {hb_us:5.0f} us | {'real' if is_real else 'synthetic'}"
+        )

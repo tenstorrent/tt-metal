@@ -5,6 +5,7 @@
 #pragma once
 
 #include "kernels/topk_large_indices_compute_body_mode.hpp"
+#include "kernels/topk_large_indices_two_level.hpp"
 #include "topk_large_indices_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -47,6 +48,10 @@ struct TopkLargeIndicesSharedVariables {
     bool row_split = false;
     uint32_t num_rows = 0;
     uint32_t num_chunks = 0;
+    bool two_level = false;
+    // A two-level program's own maxima tensor, written by phase 1 and read by phase 2 (unless the caller supplies
+    // the maxima or a maxima output).
+    std::optional<Tensor> two_level_maxima;
 };
 
 struct TopkLargeIndicesProgramFactory {
@@ -89,5 +94,16 @@ bool long_rows(uint32_t k, uint32_t input_last_dim);
 // Whether a core can hold a whole row of several chunks, which the compute kernel splits across MATH and PACK.
 // A program whose rows all go to core pairs has no whole rows, so it builds no split code.
 bool split_whole_rows(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores);
+
+// Two-level selection (see kernels/topk_large_indices_two_level.hpp). A program carries the two-level path only when
+// the caller asks for it and the physical width is in the supported range; the mode is chosen at run time.
+constexpr uint32_t two_level_block_keys = topk_two_level::block_keys;
+constexpr uint32_t two_level_min_width = 65'536;
+constexpr uint32_t two_level_max_width = 2'097'152;
+// A core tracks the readiness of up to this many rows (see topk_two_level::row_owner).
+constexpr uint32_t two_level_max_rows_per_core = topk_two_level::max_local_rows;
+bool two_level_enabled(const operation_attributes_t& attrs, uint32_t input_last_dim);
+// The search length from which a two-level program runs two-level by default.
+constexpr uint32_t two_level_default_cutover = 98'304;
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program
