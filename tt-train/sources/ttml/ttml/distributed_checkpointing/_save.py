@@ -264,6 +264,29 @@ def _write_plan(
     return crcs
 
 
+def require_shared_staging(ckpt_dir: str, staging: str, rank: int) -> None:
+    """What a rank other than 0 checks before it joins the staging directory rank 0 created: that it sees it. One that
+    does not is on a filesystem rank 0 does not share (a path on each host's own disk), and must not make a copy of its
+    own, into which it would write every shard before rank 0 found its files missing, and which nothing would remove.
+
+    It first makes the parent: on NFS a lookup of the parent made before rank 0 created it (a ``find_latest`` that saw
+    no checkpoint yet) can be cached as "does not exist" for up to a minute, and a mkdir, which the server answers,
+    drops that entry. A parent this rank did make is on its own disk, and is removed again."""
+    parent = os.path.dirname(ckpt_dir)
+    try:
+        os.mkdir(parent)
+        made_parent = True
+    except OSError:  # it exists, as it should; or its own parent is missing, which the check below reports
+        made_parent = False
+    if not os.path.isdir(staging):
+        if made_parent:
+            os.rmdir(parent)
+        raise CheckpointError(
+            f"{staging}, which rank 0 created, does not exist on rank {rank}: the checkpoint directory must be on a "
+            f"filesystem every rank shares"
+        )
+
+
 def save(
     ckpt_dir: str,
     *,
@@ -376,14 +399,9 @@ def save(
         created_staging = True
 
     def join_staging() -> None:
-        # The other ranks join the directory the coordinator made. One that does not see it is on a filesystem the
-        # coordinator does not share (a path on each host's own disk): it must not make a copy of its own, into which
-        # it would write every shard before the coordinator found its files missing, and which nothing would remove.
-        if not group.is_coordinator and not os.path.isdir(staging):
-            raise CheckpointError(
-                f"{staging}, which rank 0 created, does not exist on rank {rank}: the checkpoint directory must be on "
-                f"a filesystem every rank shares"
-            )
+        # The other ranks join the directory the coordinator made.
+        if not group.is_coordinator:
+            require_shared_staging(ckpt_dir, staging, rank)
         begin_staging(ckpt_dir, nonce)  # its data directory
 
     try:

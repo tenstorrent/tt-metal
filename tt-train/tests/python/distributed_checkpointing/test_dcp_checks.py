@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The guards save and load run before touching a device or a file: JSON state, host shard sizes, optimizer param
-groups, the fused-name lint and the module walk. Device-free."""
+groups, the fused-name lint and the module walk; and what a rank other than 0 checks before it joins rank 0's staging
+directory. Device-free."""
 
 import os
 import warnings
@@ -16,7 +17,8 @@ from ttml.distributed_checkpointing._errors import CheckpointError, LayoutError,
 from ttml.distributed_checkpointing._index import Entry
 from ttml.distributed_checkpointing._layouts import Identity, fused_segments
 from ttml.distributed_checkpointing._planner import TensorInfo
-from ttml.distributed_checkpointing._save import _logical_bytes
+from ttml.distributed_checkpointing import _save
+from ttml.distributed_checkpointing._save import _logical_bytes, require_shared_staging
 from ttml.distributed_checkpointing._state_dict import (
     LiveTensor,
     _cpp_bound_params,
@@ -291,3 +293,38 @@ def test_argument_errors_come_first(tmp_path, expect_error):
             call()
         assert type(raised.value) is dcp.CheckpointError and type(raised.value.__cause__) is cause, message
     assert os.listdir(tmp_path) == []
+
+
+def test_a_rank_other_than_0_makes_the_parent_before_it_looks_for_the_staging_directory(tmp_path, monkeypatch):
+    """On NFS a lookup of the checkpoint's parent made before rank 0 created it (a find_latest that saw no checkpoint
+    yet) can be cached as "does not exist" for up to a minute; a mkdir of the parent, which the server answers, drops
+    that entry. The stale lookup is simulated: nothing under the parent is seen until a mkdir of it was tried."""
+    parent = tmp_path / "ckpts"
+    staging = parent / "step_0000001.staging-7"
+    staging.mkdir(parents=True)
+    tried = []
+    real_mkdir, real_isdir = os.mkdir, os.path.isdir
+
+    def mkdir(path, *args, **kwargs):
+        tried.append(str(path))
+        return real_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(_save.os, "mkdir", mkdir)
+    monkeypatch.setattr(_save.os.path, "isdir", lambda path: bool(tried) and real_isdir(path))
+    require_shared_staging(str(parent / "step_0000001"), str(staging), 1)
+    assert tried == [str(parent)]
+
+
+def test_a_rank_that_does_not_share_the_directory_leaves_its_own_disk_as_it_was(tmp_path, expect_error):
+    """A path on each host's own disk: the parent this rank makes, finding no staging directory under it, is removed
+    again before it refuses."""
+    own_disk = tmp_path / "own_disk"
+    own_disk.mkdir()
+    parent = own_disk / "ckpts"
+    with expect_error(
+        CheckpointError,
+        r"step_0000001\.staging-7, which rank 0 created, does not exist on rank 1: the checkpoint directory must be "
+        r"on a filesystem every rank shares",
+    ):
+        require_shared_staging(str(parent / "step_0000001"), str(parent / "step_0000001.staging-7"), 1)
+    assert os.listdir(own_disk) == [], "the parent this rank made is removed again"
