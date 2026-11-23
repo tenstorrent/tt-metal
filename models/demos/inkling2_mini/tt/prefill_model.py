@@ -66,6 +66,7 @@ from models.demos.inkling2_mini.tt.fused.pf_gateout import PfGateOut
 from models.demos.inkling2_mini.tt.fused.pf_heads import PfHeads, half_proj, half_scale_rows, scale_rows
 from models.demos.inkling2_mini.tt.fused.pf_rel import PfRel, skew_proj
 from models.demos.inkling2_mini.tt.fused.pf_route import PfRoute
+from models.demos.inkling2_mini.tt.fused.pf_sink import PfSink
 from models.demos.inkling2_mini.tt.fused.pf_swiglu import PfSwiglu
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, SOFTCAP, VOCAB_REAL
 from models.demos.inkling2_mini.tt.moe import INTER, NUM_EXPERTS, RMS_EPS, ROUTE_SCALE, TOP_K, softcapped_swiglu
@@ -442,6 +443,7 @@ class Inkling2Prefill:
         self._pfswiglu = PfSwiglu(dev) if fused_glue else None  # sparse experts: slices + softcapped SwiGLU in one
         self._pfheads = PfHeads(dev) if fused_heads else None
         self._pfgate = PfGateOut(dev) if fused_heads else None
+        self._pfsink = PfSink(dev, N_HEADS) if fused_heads else None
         # skewed rel bias (PfRel + scaled_dot_product_attention(rel_skewed=True)): needs a build with rel_skewed
         skew = fused_heads and "rel_skewed" in (ttnn.transformer.scaled_dot_product_attention.__doc__ or "")
         self._pfrel = PfRel(dev) if skew else None
@@ -707,7 +709,10 @@ class Inkling2Prefill:
             rel = self._pfheads(qgrs, N_HEADS, 6144, "l2", REL_CLIP, scale=lp.rel_scale_half, tau=tau_g, hd=D_REL)
         else:
             rel = self._scaled_clip(_heads(_cols(qgrs, 6144, 6528), N_HEADS, D_REL), lp.rel_scale, REL_CLIP, tau_g)
-        sink = ttnn.permute(_cols(qgrs, 6528, 6552), (0, 3, 2, 1))  # [1,24,T,1]
+        if self._pfsink is not None:  # [1,24,T,1], one program
+            sink = self._pfsink(qgrs, 6528)
+        else:
+            sink = ttnn.permute(_cols(qgrs, 6528, 6552), (0, 3, 2, 1))  # [1,24,T,1]
 
         self._tick("a.q_rel_prep")
         self._record_inputs(lp, conv, xq, xk, xv, n, t)
