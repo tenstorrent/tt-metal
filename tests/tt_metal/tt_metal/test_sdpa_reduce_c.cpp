@@ -340,6 +340,9 @@ static bool test_sdpa_reduce_c(
 
 // NIGHTLY_ prefix ensures this test only runs in nightly CI pipelines
 TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a ComputeKernel, which Quasar rejects";
+    }
     bool pass = true;
 
     /**

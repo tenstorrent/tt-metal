@@ -35,7 +35,15 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-using NamedArgsTest = MeshDevice1x1Fixture;
+class NamedArgsTest : public MeshDevice1x1Fixture {
+protected:
+    void SetUp() override {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+        }
+        MeshDevice1x1Fixture::SetUp();
+    }
+};
 
 TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     auto mesh_device = get_mesh_device();

@@ -502,31 +502,49 @@ TEST_F(UnitMeshCQSingleCardSharedFixture, WriteInterleavedSticksAndReadBack) {
 }
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedStickReaderSingleBankTilizedWriter) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     ASSERT_TRUE(interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
         devices_[0], devices_[0]->mesh_command_queue()));
 }
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedTilizedReaderInterleavedStickWriter) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     ASSERT_TRUE(interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
         devices_[0], devices_[0]->mesh_command_queue()));
 }
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedL1DatacopyL1ToL1) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     ASSERT_TRUE(
         (test_interleaved_l1_datacopy<true, true>(devices_[0], devices_[0]->mesh_command_queue())));
 }
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedL1DatacopyDramToL1) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     ASSERT_TRUE(
         (test_interleaved_l1_datacopy<false, true>(devices_[0], devices_[0]->mesh_command_queue())));
 }
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedL1DatacopyL1ToDram) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     ASSERT_TRUE(
         (test_interleaved_l1_datacopy<true, false>(devices_[0], devices_[0]->mesh_command_queue())));
 }
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedL1DatacopyDramToDram) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     ASSERT_TRUE(
         (test_interleaved_l1_datacopy<false, false>(devices_[0], devices_[0]->mesh_command_queue())));
 }

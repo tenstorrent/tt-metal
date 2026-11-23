@@ -158,13 +158,22 @@ void run_eltwise_binary_test(
 }  // namespace
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinaryAdd) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::ADD));
 }
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinarySub) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::SUB));
 }
 
 TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinaryMul) {
+    if (arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+    }
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::MUL));
 }
