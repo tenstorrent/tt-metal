@@ -64,7 +64,7 @@ quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16]
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float32]
   # ttsim: tensix_unpacr_dest_stride (UNPACR_DEST_STRIDE) is unimplemented; tiny-tile tilize to DEST uses it.
-  # Issue: https://github.com/tenstorrent/ttsim/issues/37
+  # Issue: https://github.com/tenstorrent/ttsim-private/issues/1317
   # exit: ttsim implements UNPACR_DEST_STRIDE. 32x32 tilize to DEST does not use it and stays on.
   - "tt_metal/tt-llk/tests/python_tests/quasar/test_unpack_tilize_quasar.py::test_unpack_tilize_quasar[unpacker_sel:UnpDest-tile_dimensions:(1, 32)"
   - "tt_metal/tt-llk/tests/python_tests/quasar/test_unpack_tilize_quasar.py::test_unpack_tilize_quasar[unpacker_sel:UnpDest-tile_dimensions:(2, 32)"
