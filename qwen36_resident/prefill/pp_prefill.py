@@ -60,6 +60,13 @@ KDIR = f"{PKG_DIR}/prefill/kernels/"
 KV_TILE_BYTES = (TILE_BYTES[ttnn.bfloat8_b], TILE_BYTES[V_DT])
 
 
+# (S0 bfp4 V) 1: rtn_bfp4 before the typecast (accuracy: NLL +0.05% at 8K vs +0.47% truncated) — but served with the
+# 32-row decode build it HANGS at the PP's chunk 512 (2K prompts; results/20261123-s0-bisect: rtn off fine, on stuck;
+# fine natively with an 8-row build and at chunk 256 / 1024): off by default until the cause is found or a custom kernel
+# replaces the ttnn ops (PLAN S0-6)
+V_RTN = os.environ.get("RESIDENT_KV_V_RTN", "0") == "1"
+
+
 def rtn_bfp4(v):
     """v [..., C, HD] bf16 (tile layout) rounded to nearest on the bfp4 grid it will be packed to: one exponent per 16
     consecutive elements of a row (the block max's), 3 magnitude bits, the block max's exponent kept (no carry past 7).
@@ -944,7 +951,7 @@ class PPPrefill:
         q = self._qkrope(q, w["wq"])
         k = self._qkrope(k, w["wk"])
         ttnn.experimental.paged_fill_cache(self.K[j], ttnn.typecast(k, ttnn.bfloat8_b), self.fill_pt, batch_idx=0)
-        if V_DT == ttnn.bfloat4_b:  # (S0: rounded to nearest first, the packer truncates)
+        if V_DT == ttnn.bfloat4_b and V_RTN:  # (S0: rounded to nearest first, the packer truncates)
             v = rtn_bfp4(v)
         ttnn.experimental.paged_fill_cache(self.V[j], ttnn.typecast(v, V_DT), self.fill_pt, batch_idx=0)
         o = ttnn.transformer.chunked_scaled_dot_product_attention(
