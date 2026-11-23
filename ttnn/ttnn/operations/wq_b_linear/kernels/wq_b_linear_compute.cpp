@@ -1,0 +1,38 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// wq_b_linear worker compute: one matmul_block over num_k_blocks K-steps, packer L1
+// accumulation into cb_interm_acc, last K-step packed TileRowMajor into cb_out_block.
+
+#include <cstdint>
+#include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
+
+void kernel_main() {
+    constexpr uint32_t cb_x_resident = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_w_block = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_interm_acc = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_out_block = get_compile_time_arg_val(3);
+    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(5);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(6);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(7);
+    constexpr uint32_t block_k_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(9);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_resident, cb_w_block, cb_out_block);
+
+    CircularBuffer x_buf(cb_x_resident), w_buf(cb_w_block), out_buf(cb_out_block), interm_buf(cb_interm_acc);
+    compute_kernel_lib::matmul_block<
+        false /*transpose*/,
+        true /*packer_l1_acc*/,
+        compute_kernel_lib::LastBlockTarget::Out,
+        compute_kernel_lib::OutputCBLayout::TileRowMajor>(
+        x_buf,
+        w_buf,
+        out_buf,
+        interm_buf,
+        compute_kernel_lib::MatmulBlockShape::of(
+            in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_k_tiles, num_k_blocks));
+}
