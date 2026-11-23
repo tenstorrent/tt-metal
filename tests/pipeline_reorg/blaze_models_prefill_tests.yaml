@@ -413,7 +413,7 @@
       timeout: 54
       tier: 2
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -448,7 +448,7 @@
       timeout: 12
       tier: 2
       release_ready: false
-  owner_id: U07N3CUUN05  # Iva Potkonjak
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -461,7 +461,8 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py -k "kimi_k3-8x4-5120 and not weka and not eager" -vvv --tb=short
+      # (the block perf gate, test_moe_block_perf, runs in the MoE perf leg below, on the 14 kW pool its baselines are cut on)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py -k "kimi_k3-8x4-5120 and not weka and not eager and not test_moe_block_perf" -vvv --tb=short
     '
   test_type: kimi_k3_moe
   test_tags: [kimi_k3, moe]
@@ -471,7 +472,46 @@
       timeout: 52
       tier: 2
       release_ready: false
-  owner_id: U08RL15T4N8 # Danilo Djekic
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(Kimi-K3-2.8T, Kimi-K3.1) MoE block perf 8x4 5k, 4x4 2.5k"
+  # Host time (test_kimi_moe_perf) and per-op device time (test_moe_block_perf) of one MoE block layer: K3 on 8x4 at
+  # 5,120 tokens, K3.1's 4x4 stage (top tray half) at 2,560. Stops at the first failure; a run that passes no test
+  # (skipped) fails too.
+  # Tagged k3_mla_perf: the dispatch is at GitHub's 25-input limit, so that checkbox selects every K3 perf leg.
+  fabric_profile: torus_xy
+  cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=INFO
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      T=models/demos/deepseek_v3_d_p/tests
+      gated() {
+        "$@" 2>&1 | tee /tmp/k3_moe_perf.out
+        local status=${PIPESTATUS[0]}
+        [ "$status" -eq 0 ] || exit "$status"
+        grep -qE "[0-9]+ passed" /tmp/k3_moe_perf.out || { echo "::error::k3_moe_perf: no test passed (skipped?): $*"; exit 1; }
+      }
+      gated python3 -m pytest $T/perf/test_kimi_moe_perf.py -k "kimi_k3-8x4-5120" -vvv --tb=short
+      gated python3 -m pytest $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3-8x4-5120 and not weka and not real" -vvv --tb=short
+      gated $T/run_4x4_stage_tests.sh --half top -- $T/perf/test_kimi_moe_perf.py -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
+      gated $T/run_4x4_stage_tests.sh --half top -- $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short
+    '
+  test_type: k3_moe_perf
+  test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      # The job takes ~13 min (four ~1 min pytest runs plus fabric bring-up and the 4x4 binding); 20 leaves 1.5x.
+      timeout: 20
+      tier: 2
+      release_ready: false
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -616,7 +656,7 @@
       timeout: 255
       tier: 2
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -683,7 +723,7 @@
       timeout: 47
       tier: 2
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -738,7 +778,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -763,7 +803,7 @@
       timeout: 10
       tier: 2
       release_ready: false
-  owner_id: U08NCAT9V9N
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1
@@ -2320,7 +2360,7 @@
       timeout: 25
       tier: 1
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: shield
   budget_type: demo
   sp_config: sc4
@@ -2493,7 +2533,7 @@
       timeout: 90
       tier: 1
       release_ready: false
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: shield
   budget_type: demo
   sp_config: sc4
@@ -2525,7 +2565,7 @@
     bh_sc1_high_power:
       # 30 killed the leg at 38 min on run 34831600450, mid-bringup.
       timeout: 60
-  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: shield
   budget_type: demo
   sp_config: sc1
@@ -2553,7 +2593,7 @@
       # K3's 60: its L24 leg was still in bringup at 38 min on CI (run 34831600450), where weight load
       # is NFS-bound. Locally the whole launcher took about 6 min at 96 slots (four ~265 ms chunks).
       timeout: 60
-  owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: shield
   budget_type: demo
   sp_config: sc1

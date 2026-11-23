@@ -386,7 +386,9 @@ Plan plan_chunk_geometry(uint32_t n_m_req, uint32_t n_n_req, const PlanInputs& i
     }
     const uint32_t r = kblk.resident ? 1 : 0;
     pl.depth_hold = geo.hold_depths[r];
-    pl.half_split = kblk.resident ? mirror_split : HalfSplit::K;
+    // The halves sum partials in opposite ring orders, so they round differently. K splits by M position; when
+    // scattering on N, split on N so a row's result doesn't depend on where it sits (packed forwards).
+    pl.half_split = kblk.resident || mirror_split == HalfSplit::N ? mirror_split : HalfSplit::K;
     pl.sched = sched_of[r];
     pl.waves = geo.waves_of[r];
     pl.P = pl.waves.P;

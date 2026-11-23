@@ -8,8 +8,8 @@ To build and execute, you may use the following commands:
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/matmul_multi_core_reuse
-    ./build/programming_examples/matmul_multi_core_reuse_mcast
+    ./build/programming_examples/metal_example_matmul_multicore_reuse
+    ./build/programming_examples/metal_example_matmul_multicore_reuse_mcast
 ```
 
 - [Matmul Multi_core Reuse (Optimized)](./data_reuse.md)
