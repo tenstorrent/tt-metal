@@ -11,6 +11,7 @@ over 32 candidate lists against the serial reference. The 2x4 plan is regression
 from __future__ import annotations
 
 import contextlib
+import os
 import random
 import re
 import sys
@@ -255,6 +256,26 @@ def test_decode_probe_round_marks():
     p[SP.PROBE_IX0, :6] = torch.tensor(ix[:6])
     out = SP.decode_probe(p, line=4)
     assert "rounds" not in out and list(out["ix0"].values()) == [us(v) for v in ix[:6]]
+    # the RS1 split's link-0 lane (rs1a, row 240) and the latent core's NCRISC (row 131: start, cache written, QL in,
+    # q sent); a tensor without row 240 decodes without rs1a
+    assert SP.PROBE_LANE_ROW[SP.RS1S_NAME] == 240 and len(set(SP.PROBE_LANE_ROW.values())) == 5
+    assert "lat1" not in out and SP.RS1S_NAME not in out["lanes"]
+    p = torch.cat([p, torch.zeros(SP.PROBE_LANE_ROW[SP.RS1S_NAME] + 1 - p.shape[0], 16, dtype=torch.int64)])
+    lane = [2000 + 270 * k for k in range(5)]
+    p[SP.PROBE_LANE_ROW[SP.RS1S_NAME], :5] = torch.tensor(lane)
+    p[SP.PROBE_LANE_ROW["ag1"], :5] = torch.tensor([200 + 270 * k for k in range(5)])
+    lat = [50, 400, 410, 700]
+    p[SP.PROBE_LAT1, :4] = torch.tensor(lat)
+    out = SP.decode_probe(p, line=4)
+    assert list(out["lanes"][SP.RS1S_NAME].values()) == [us(v) for v in lane]
+    assert out["lat1"] == {k: us(v) for k, v in zip(SP.LAT1_MARKS, lat)}
+    sp = out["span"]
+    assert sp["lat_q_copy"] == round(out["lat1"]["q_sent"] - out["lat1"]["ql_in"], 2)
+    assert sp["lat_q_sent_to_ag1_open"] == round(us(200 + 270) - out["lat1"]["q_sent"], 2)
+    assert sp["rs1a_send"] == round(us(lane[2]) - us(lane[1]), 2)
+    with open(os.path.join(os.path.dirname(SP.KDIR), "mk_mla.py")) as fh:  # (mk_mla imports ttnn: read its text)
+        rows = int(re.search(r"^PROBE_ROWS = (\d+)", fh.read(), re.M).group(1))
+    assert SP.PROBE_LANE_ROW[SP.RS1S_NAME] < rows <= 256  # inside the MkMla probe tensor and its layer block
 
 
 def test_8x4_byte_formats_round_trip():
@@ -1290,6 +1311,38 @@ def test_block_chunks_keep_pages(t):
                             for b in range(0, nbytes, 256):
                                 y_ = page(t, p, tok) + b // SP.TB
                                 assert y_n[(q, y_)] == y_b[(q, y_)] == int(xv[page(t, q, tok) + b // SP.TB])
+        if name == "rs1":  # GLM53_DSA_SHARD_RS1_TSPLIT: rs1 / rs1a = the two spans of every block's staged pages
+            ts, sp_ = SP.rs1_tsplit_args(t), SP.rs1_tsplit_spans(t)
+            assert sp_[1][0] == 0 and sp_[1][1] + sp_[0][1] == SP.rs_sent_pages(t, data) == sp_[0][0] + sp_[0][1]
+            assert abs(sp_[1][1] - sp_[0][1]) <= 2 and all(v % 2 == 0 for v in sp_[0] + sp_[1])
+            got = {}
+            for link, a_ in ts.items():
+                st_ = SP.fs_stage(a_["rows"], a_["width"], a_["extra"])
+                assert (
+                    st_["spc"] == sp_[link][1] and st_["spc"] % st_["nb"] == 0 and st_["cb_bytes"] <= st_b["cb_bytes"]
+                )
+            for p in range(n):
+                for first in (None, SP.rs1_early_first(p, 8)):
+                    *_, dsts = SP.fs_scatter_block(p, n, 1, first)
+                    pk_n = SP.fs_scatter_packets(a_n["rows"], a_n["width"], a_n["extra"], p, dsts)
+                    halves = {link: SP.fs_scatter_packets(a_["rows"], a_["width"], a_["extra"], p, dsts)
+                              for link, a_ in ts.items()}  # fmt: skip
+                    pages = {
+                        link: [(q, xs[j], ys[j]) for q, xs, ys, _ in pk for j in (0, 1)] for link, pk in halves.items()
+                    }
+                    want = [(q, xs[j], ys[j]) for q, xs, ys, _ in pk_n for j in (0, 1)]
+                    # every RSNP page exactly once over the two halves, each half in the RSNP order
+                    assert sorted(pages[1] + pages[0]) == sorted(want) and len(set(pages[1]) & set(pages[0])) == 0
+                    for link, pg in pages.items():
+                        assert pg == [e for e in want if e in set(pg)], (t, p, link)
+                    for link, pk in halves.items():  # one chunk-end signal per destination: the half's last pair
+                        lastq = {q: i for i, (q, _, _, _) in enumerate(pk)}
+                        assert [sig for *_, sig in pk] == [i == lastq[q] for i, (q, _, _, _) in enumerate(pk)]
+                        assert sorted(lastq) == sorted(q for q, _, _, _ in dsts)  # every destination on both lanes
+                        got.setdefault(link, {}).setdefault(p, sorted(lastq))
+            for link in (0, 1):  # each receiver's waiter on each lane: one half-chunk from every other source
+                for q in range(n):
+                    assert sorted(p for p in range(n) if q in got[link][p]) == [p for p in range(n) if p != q]
         c_n = SP.rs_stream_counts(t, rsb=True, rsnp=True)[name]
         assert (c_n["signals"], c_n["wait_per_source"]) == (on["signals"], on["wait_per_source"]) == (n - 1, 1)
         assert c_n["packets"] * 2 == c_n["bytes"] // SP.TB == (n - 1) * SP.rs_sent_pages(t, data)
@@ -1335,6 +1388,7 @@ def test_block_audits(t):
         for early in (False, True):
             SP.audit_rs_blocks(geo, t, rsb=rsb, rs1_early=early)
             SP.audit_rs_blocks(geo, t, rsb=rsb, rs1_early=early, rs1s=True)  # rev 76: rs1 / rs1a halves
+            SP.audit_rs_blocks(geo, t, rsb=rsb, rs1_early=early, rs1s=True, rs1t=True)  # RS1_TSPLIT: every destination
         a, st = SP.rs_stream_args(t, rsb=rsb), geo.streams(t, rsb=rsb)
         for name, ppc in (("rs1", SP.RS2_PPC), ("rs2", SP.RS2B_PPC)):
             assert (st[name]["chunks"], st[name]["width"]) == (a[name]["rows"] // 32, a[name]["width"])
@@ -1446,7 +1500,8 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     bit-identical to knob-off over 3 runs; 32 K x 4 ids identical), the fused prefill mHC mix and COMB (2026-11-18:
     not bitwise -- ids move at near-ties -- gated on tau / coherence and the served 1 M / AgentX rows); an
     explicit environment value wins (an explicit AGK=0 drops the AGB default with it, an explicit RSB=0 the RSNP
-    default, an explicit MFAST=0 (or R8 / AGK / PREFILTER = 0) the MSPLIT default, an explicit GLM53_MLA_ATT_OBF16=1 the
+    default, an explicit RS1_SPLIT=0 / RSB=0 / RSNP=0 the RS1_TSPLIT default, an explicit MFAST=0 (or R8 / AGK / PREFILTER
+    = 0) the MSPLIT default, an explicit GLM53_MLA_ATT_OBF16=1 the
     COMB default); the speculative verify's step cuts and its kda_rec
     value split (GLM53_REC_SPLIT_VERIFY: no default is a GLM53_SPEC_* name, so apply_spec's speculative defaults still
     follow apply); the 1 M prefill window ladder; other meshes get nothing"""
@@ -1508,6 +1563,9 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert got["GLM53_DSA_SHARD_PREFILTER"] == "1" and SP.shard_prefilter(8)
     assert got["GLM53_DSA_SHARD_RS1_SPLIT"] == "1" and SP.shard_rs1_split(8)
     assert not SP.shard_prefilter(2) and not SP.shard_rs1_split(2)  # (the pair / the 2x4 never take them)
+    # GLM53_DSA_SHARD_RS1_TSPLIT: a galaxy default on RS1_SPLIT + RSNP
+    assert GD.KNOBS["GLM53_DSA_SHARD_RS1_TSPLIT"] == got["GLM53_DSA_SHARD_RS1_TSPLIT"] == "1"
+    assert SP.shard_rs1_tsplit(8, SP.shard_rs1_split(8), SP.shard_rsnp(8)) and not SP.shard_rs1_tsplit(2, False, False)
     # rev 77 GLM53_DSA_SHARD_MFAST: a galaxy default; needs R8 + AGK + PREFILTER; the define names the kernels and
     # mk_mla.py carry (a renamed define would silently build knob-off)
     assert GD.KNOBS["GLM53_DSA_SHARD_MFAST"] == got["GLM53_DSA_SHARD_MFAST"] == "1" and SP.shard_mfast(8)
@@ -1622,7 +1680,15 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     got = GD.apply((8, 4), 4096, 4096)
     assert "GLM53_DSA_SHARD_RSB" not in got and not SP.shard_rsb(8)
     assert "GLM53_DSA_SHARD_RSNP" not in got and not SP.shard_rsnp(8)  # no RSNP-needs-RSB error
-    assert got["GLM53_DSA_SHARD_AGB"] == got["GLM53_DSA_SHARD_R8"] == "1"
+    assert "GLM53_DSA_SHARD_RS1_TSPLIT" not in got  # (and TSPLIT with it: no TSPLIT-needs-RSNP error)
+    assert not SP.shard_rs1_tsplit(8, SP.shard_rs1_split(8), SP.shard_rsnp(8))
+    assert got["GLM53_DSA_SHARD_AGB"] == got["GLM53_DSA_SHARD_R8"] == "1"  # (the RSB=0 apply)
+    for need in ("GLM53_DSA_SHARD_RS1_SPLIT", "GLM53_DSA_SHARD_RSNP"):  # TSPLIT rides on RS1_SPLIT + RSNP
+        _protect_env(monkeypatch, keys)
+        monkeypatch.setenv(need, "0")
+        got = GD.apply((8, 4), 4096, 4096)
+        assert need not in got and "GLM53_DSA_SHARD_RS1_TSPLIT" not in got, need
+        assert not SP.shard_rs1_tsplit(8, SP.shard_rs1_split(8), SP.shard_rsnp(8)), need
     _protect_env(monkeypatch, keys)
     monkeypatch.setenv("GLM53_MLA_ATT_OBF16", "1")  # bf16 O partials: COMB would raise at the MLA build
     got = GD.apply((8, 4), 4096, 4096)
@@ -1658,6 +1724,18 @@ def test_rs1_split_build_refusals(monkeypatch):
         SP.rs1_split_window_check(True)  # (the knob: tt/prefill_tp.py dsa_dense_window's)
     monkeypatch.delenv("GLM53_DSA_DENSE_WINDOW")
     SP.rs1_split_window_check(True)
+    # GLM53_DSA_SHARD_RS1_TSPLIT: 0 without the galaxy default, needs the split RS1 and RSNP, the kernels' / builder's
+    # span text
+    monkeypatch.delenv("GLM53_DSA_SHARD_RS1_TSPLIT", raising=False)
+    assert not SP.shard_rs1_tsplit(8)
+    monkeypatch.setenv("GLM53_DSA_SHARD_RS1_TSPLIT", "1")
+    assert SP.shard_rs1_tsplit(8, True, True) and not SP.shard_rs1_tsplit(2, False, False)
+    for need in (dict(rs1s=False), dict(rsnp=False)):
+        with expect_error(ValueError, "GLM53_DSA_SHARD_RS1_TSPLIT=1 needs"):
+            SP.shard_rs1_tsplit(8, **need)
+    monkeypatch.delenv("GLM53_DSA_SHARD_RS1_TSPLIT")
+    SP.rs1_tsplit_header_check()
+    assert SP.rs1_tsplit_spans(16) == {1: (0, 72), 0: (72, 72)} and SP.rs1_tsplit_spans(1) == {1: (0, 4), 0: (4, 6)}
     env = {}
     # want = GLM53_MLA_DSA_LANES (8) as a power of two <= chunks / helpers; p also <= the free cores
     assert SP.dsa_lane_count(20, 4, 32, env) == (8, 8) and SP.dsa_lane_count(7, 4, 32, env) == (4, 8)

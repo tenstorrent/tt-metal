@@ -173,7 +173,9 @@ class _FabricStream:
     sub=(stride, data) (GLM53_DSA_SHARD_RSNP, the scatter only): a chunk = H / 32 / stride sub-chunks of `stride` pages
     whose first `data` pages hold data -- the lane stages and sends only those (an odd count per chunk keeps the last
     sub-chunk's first pad page), each to its knob-off page (fs_read.cpp / fs_send.cpp FS_SUBPC / FS_SUBD); nb then
-    divides the staged pages per chunk."""
+    divides the staged pages per chunk. sub=(stride, data, span0, spann) (GLM53_DSA_SHARD_RS1_TSPLIT): only the staged
+    pages [span0, span0 + spann) of every chunk (both even: whole pairs; fs_read.cpp / fs_send.cpp FS_SPAN0 / FS_SPANN)
+    -- the split RS1's two lanes each take one half of every destination block; nb then divides spann."""
 
     scatter = False  # FabricStreamScatter: per-destination unicast (fs_send.cpp / fs_read.cpp FS_SCATTER)
     # rev 76 (tt/tp_dsa_shard.py GLM53_DSA_SHARD_RS1_SPLIT): the name of the stream whose consumers' signal releases this
@@ -217,11 +219,15 @@ class _FabricStream:
         self.nb, self.slots = nb, slots
         self.sub = None
         if sub is not None:  # GLM53_DSA_SHARD_RSNP: (stride, data pages, staged pages per chunk)
-            stride, data = (int(v) for v in sub)
+            stride, data = (int(v) for v in sub[:2])
             spc = -(-(self.ppc // stride * data) // 2) * 2
             assert self.scatter and keypack is None and self.ppc % stride == 0 and 0 < data < stride, (sub, self.ppc)
+            span = tuple(int(v) for v in sub[2:]) if len(sub) > 2 else ()  # RS1_TSPLIT: (span0, spann) of the spc
+            assert not span or (len(span) == 2 and span[0] % 2 == 0 and span[1] % 2 == 0 and span[1] > 0
+                                and span[0] + span[1] <= spc), (sub, spc)  # fmt: skip
+            spc = span[1] if span else spc  # (the pages this stream stages / sends per chunk)
             assert spc % nb == 0 and nb % 2 == 0, (spc, nb)
-            self.sub = (stride, data, spc)
+            self.sub = (stride, data, spc) + span
         else:
             assert self.ppc % nb == 0 and nb % 2 == 0, (self.ppc, nb)
         self.keypack = None
@@ -341,6 +347,8 @@ class _FabricStream:
                 sdefs.append(("FS_KP_XPER", str(xper)))
         if self.sub:  # GLM53_DSA_SHARD_RSNP: both lane kernels stage / send the sub-chunks' data pages only
             sd = [("FS_SUBPC", str(self.sub[0])), ("FS_SUBD", str(self.sub[1]))]
+            if len(self.sub) > 3:  # GLM53_DSA_SHARD_RS1_TSPLIT: this stream's span of every chunk's staged pages
+                sd += [("FS_SPAN0", str(self.sub[3])), ("FS_SPANN", str(self.sub[4]))]
             sdefs += sd
             rdefs += sd
         if self.n > 2 and not row_barrier_defines():  # THE PER-HOP DRAIN: a multi-hop line -> the waiter's row barrier

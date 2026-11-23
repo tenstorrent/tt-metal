@@ -9,7 +9,9 @@
 // bases (block q of x for destination q): the lane streams its share of each destination's block in turn, in the order
 // fs_send.cpp sends them. FS_KEYPACK (rev 68, below): each staged chunk's candidate records -> one key page.
 // FS_SUBPC / FS_SUBD (GLM53_DSA_SHARD_RSNP, the scatter only; fs_send.cpp): a chunk's sub-chunks of FS_SUBPC pages
-// stage only their first FS_SUBD (data) pages, in order -- the pad pages are never read nor sent.
+// stage only their first FS_SUBD (data) pages, in order -- the pad pages are never read nor sent. FS_SPAN0 /
+// FS_SPANN (GLM53_DSA_SHARD_RS1_TSPLIT, on FS_SUBD; fs_send.cpp): only the staged pages [FS_SPAN0, FS_SPAN0 + FS_SPANN)
+// of every chunk -- the split RS1's half of each destination block.
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -25,13 +27,22 @@ constexpr uint32_t TB = 2048;
 constexpr uint32_t SUB_N = PPC / FS_SUBPC;
 constexpr uint32_t DPC = (SUB_N * FS_SUBD + 1) / 2 * 2;
 static_assert(PPC % FS_SUBPC == 0 && FS_SUBD > 0 && FS_SUBD < FS_SUBPC, "sub-chunks: data pages, then pad");
+#if defined(FS_SPANN)  // the split RS1's half: staged pages [FS_SPAN0, FS_SPAN0 + FS_SPANN) of the chunk's DPC
+constexpr uint32_t SPN = FS_SPANN;
+static_assert(FS_SPAN0 % 2 == 0 && SPN % 2 == 0 && SPN > 0 && FS_SPAN0 + SPN <= DPC, "a span of whole pairs");
+static_assert(SPN % NB == 0, "a batch never straddles a span");
+#else
 static_assert(DPC % NB == 0, "a batch never straddles a chunk");
+#endif
 inline uint32_t sub_col(uint32_t s) {
     const uint32_t k = s / FS_SUBD;
     return k < SUB_N ? k * FS_SUBPC + (s - k * FS_SUBD) : PPC - FS_SUBPC + FS_SUBD;
 }
 #else
 static_assert(PPC % NB == 0, "a batch never straddles a chunk");
+#endif
+#if defined(FS_SPANN) && !defined(FS_SUBD)
+#error "FS_SPANN: on FS_SUBD (the RSNP chunks)"
 #endif
 #if defined(FS_KEYPACK)
 // rev 68, the KEY PACK (tt/fabric_stream.py keypack=; the 8x4 DSA shard's AG round 1, kernels/mla/dsa_shard.hpp AGK):
@@ -71,7 +82,9 @@ void kernel_main() {
     noc_semaphore_wait_min(wsem, wait_count);
 #endif
 #endif
-#if defined(FS_SUBD)
+#if defined(FS_SPANN)
+    const uint32_t nbat = c_n * SPN / NB;
+#elif defined(FS_SUBD)
     const uint32_t nbat = c_n * DPC / NB;
 #else
     const uint32_t nbat = c_n * PPC / NB;
@@ -108,7 +121,12 @@ void kernel_main() {
         for (uint32_t b = 0; b < nbat; b++) {
             cb_reserve_back(CB_STAGE, NB);
             const uint32_t wp = get_write_ptr(CB_STAGE);
-#if defined(FS_SUBD)  // staged page idx of the lane: chunk idx / DPC, its page sub_col(idx % DPC)
+#if defined(FS_SPANN)  // span page idx of the lane: chunk idx / SPN, its page sub_col(FS_SPAN0 + idx % SPN)
+            for (uint32_t i = 0; i < NB; i++) {
+                const uint32_t idx = b * NB + i;
+                noc_async_read_page((base + c_lo + idx / SPN) * PPC + sub_col(FS_SPAN0 + idx % SPN), x, wp + i * TB);
+            }
+#elif defined(FS_SUBD)  // staged page idx of the lane: chunk idx / DPC, its page sub_col(idx % DPC)
             for (uint32_t i = 0; i < NB; i++) {
                 const uint32_t idx = b * NB + i;
                 noc_async_read_page((base + c_lo + idx / DPC) * PPC + sub_col(idx % DPC), x, wp + i * TB);

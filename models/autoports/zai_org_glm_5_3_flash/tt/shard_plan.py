@@ -244,13 +244,14 @@ class Geometry:
         return out
 
     def block(self, name: str, t: int, r: int, c: int, rs1_early: bool = False, agk: bool = False,
-              agb: bool = False, rsb: bool = False, rs1s: bool = False) -> dict:  # fmt: skip
+              agb: bool = False, rsb: bool = False, rs1s: bool = False, rs1t: bool = False) -> dict:  # fmt: skip
         """chip (r, c)'s block of stream `name`: src chunk base in x, dst chunk base in y (on the receivers: the same
         address on every chip), local copy, up / down multicast ranges (the scatter: the chips above / below), and the
         scatter's destinations [(position q, src chunk base, direction 0 up / 1 down, hops)]; rev 65 rs1_early (the
         8x4 column scatter): the other half's destinations first (rs1_early_first), then the own half's; rsb (the 8x4
         scatters in block chunks): the chunk bases count destination blocks (1 chunk each); rev 76 rs1s (the column
-        scatter split over both links): rs1 / rs1a keep the destinations of their link (rs1_split_dsts), in that order
+        scatter split over both links): rs1 / rs1a keep the destinations of their link (rs1_split_dsts), in that order;
+        rs1t (GLM53_DSA_SHARD_RS1_TSPLIT, on rs1s): both keep every destination (each sends its half of every block)
         """
         assert not rs1_early or self.P > 2, "RS1 early: the 8x4 column scatter"
         sp = self.streams(t, agk=agk, agb=agb, rsb=rsb, rs1s=rs1s)[name]
@@ -269,7 +270,7 @@ class Geometry:
             if rs1_early and name in ("rs1", RS1S_NAME):
                 first = set(rs1_early_first(p, self.P))
                 dsts = [d for d in dsts if d[0] in first] + [d for d in dsts if d[0] not in first]
-            if rs1s and name in ("rs1", RS1S_NAME):  # rev 76: this link's half, in the order above
+            if rs1s and not rs1t and name in ("rs1", RS1S_NAME):  # rev 76: this link's half, in the order above
                 keep = set(rs1_split_dsts(p, n, sp["link"]))
                 dsts = [d for d in dsts if d[0] in keep]
             return dict(p=p, src=None, dst=p * ch, local=False, up=up, dn=dn, dsts=dsts)
@@ -1354,6 +1355,64 @@ def rs1_split_srcs(p: int, n: int, link: int) -> tuple:
     return first, n - first, 2
 
 
+def shard_rs1_tsplit(pair: int, rs1s: bool = True, rsnp: bool = True) -> bool:
+    """GLM53_DSA_SHARD_RS1_TSPLIT (a galaxy default, tt/galaxy_defaults.py; 0 elsewhere; on RS1_SPLIT + RSNP, the 8x4): the split column scatter's two lanes take
+    the two HALVES of every destination block (rs1_tsplit_spans: the first / second half of each block chunk's staged
+    pages) instead of one parity of destinations each. The parity split puts four of a source's seven blocks on link 0
+    and three on link 1 (two / one per RS1-early phase): at 32 K x 16 the link-0 lane lands 28 us after the link-1 lane
+    and gates the roots' round-1 landing. With the halves each lane carries 3.5 blocks; every receiver's waiter on each
+    lane counts every source (one half-chunk each: no strided sources); same x / y pages and bytes, the roots unchanged:
+    bit-exact. Needs RS1_SPLIT and RSNP (the span lives in RSNP's staged pages); the pair / the 2x4 never take it"""
+    on = pair > 2 and _flag("GLM53_DSA_SHARD_RS1_TSPLIT")
+    if on and not (rs1s and rsnp):
+        raise ValueError("GLM53_DSA_SHARD_RS1_TSPLIT=1 needs GLM53_DSA_SHARD_RS1_SPLIT=1 and GLM53_DSA_SHARD_RSNP=1")
+    return on
+
+
+def rs1_tsplit_spans(t: int, data: int | None = None) -> dict:
+    """{link: (span0, spann)} of the split RS1 under GLM53_DSA_SHARD_RS1_TSPLIT: the rs_sent_pages(t, data) staged pages of
+    a destination's block chunk in two spans of whole pairs -- link 1 (rs1) the first floor(pairs / 2) pairs, link 0
+    (rs1a) the rest (t 16: 72 + 72 of 144; t 1: 4 + 6 of 10)"""
+    spc = rs_sent_pages(t, RS1_DATA_PAGES if data is None else data)
+    h = spc // 4 * 2
+    assert 0 < h < spc and h % 2 == 0 and spc % 2 == 0, (t, spc, h)
+    return {1: (0, h), 0: (h, spc - h)}
+
+
+def rs1_tsplit_args(t: int) -> dict:
+    """{link: dict(rows, width, extra)} -- the RSNP RS1 stream arguments (rs_stream_args(t, rsb, rsnp)) of each half under
+    GLM53_DSA_SHARD_RS1_TSPLIT: sub=(stride, data, span0, spann), nb the largest even divisor <= RSNP_NB_CAP of the span,
+    slots within RSB's staging bytes"""
+    a = rs_stream_args(t, rsb=True, rsnp=True)["rs1"]
+    b = rs_stream_args(t, rsb=True)["rs1"]["extra"]  # RSB's batch / slots (the knob-off staging bytes)
+    out = {}
+    for link, (s0, sn) in rs1_tsplit_spans(t).items():
+        nb = max(k for k in range(2, RSNP_NB_CAP["rs1"] + 1, 2) if sn % k == 0)
+        slots = min(b["slots"], b["slots"] * b["nb"] // nb)
+        out[link] = dict(
+            rows=a["rows"], width=a["width"], extra=dict(nb=nb, slots=slots, sub=a["extra"]["sub"] + (s0, sn))
+        )
+    return out
+
+
+def rs1_tsplit_header_check() -> None:
+    """GLM53_DSA_SHARD_RS1_TSPLIT's host plan vs the kernels' / builder's text: fs_read.cpp and fs_send.cpp stage / send
+    the span's pages through sub_col(FS_SPAN0 + ..), the chunk end on the span's last pair; fabric_stream.py passes the
+    span as FS_SPAN0 / FS_SPANN"""
+    for k, lines in (("fs_send.cpp", ("const uint32_t nbat = c_n * SPN / NB;",
+                                      "const uint32_t g0 = (row_base + chunk) * PPC + sub_col(FS_SPAN0 + col);",
+                                      "const uint32_t g1 = (row_base + chunk) * PPC + sub_col(FS_SPAN0 + col + 1);",
+                                      "const bool last = col + 2 == SPN;")),
+                     ("fs_read.cpp", ("const uint32_t nbat = c_n * SPN / NB;",
+                                      "noc_async_read_page((base + c_lo + idx / SPN) * PPC + sub_col(FS_SPAN0 + idx % SPN), x, wp + i * TB);"))):  # fmt: skip
+        with open(os.path.join(KDIR, "fabric_stream", k)) as f:
+            src = f.read()
+        for line_ in lines:
+            assert line_ in src, (k, line_)
+    with open(os.path.join(os.path.dirname(KDIR), "fabric_stream.py")) as f:
+        assert 'sd += [("FS_SPAN0", str(self.sub[3])), ("FS_SPANN", str(self.sub[4]))]' in f.read()
+
+
 def rs1_split_window_check(rs1_split: bool, dense_window: bool | None = None) -> None:
     """rev 76 x GLM53_DSA_DENSE_WINDOW: refused at build (tt/tp_dsa_shard.py, tt/mk_mla.py). In an ALL-DENSE launch
     (every row's context inside the dense window) the roots skip the split-K exchange and only signal the RS lanes
@@ -1607,6 +1666,8 @@ def emulate_lane_merge(keys_global, C: int, chunks: int, lanes: int, k: int = 51
 
 # ------------------------------------------------------------------ the shard phase probe (rev 59)
 PROBE_LANE_ROW = {"ag1": 236, "ag2": 237, "rs1": 238, "rs2": 239}  # fs_send.cpp rows (mk_mla.py SHARD_PROBE_LANE0)
+# the RS1 split's link-0 lane (rev 76 RS1S_NAME, probe builds only): row 240, past the four streams' (mk_mla.py PROBE_ROWS)
+PROBE_LANE_ROW[RS1S_NAME] = 240
 PROBE_ROOT_NC, PROBE_ROOT_BR, PROBE_IX0, PROBE_IX1, PROBE_LAT1 = 132, 0, 220, 221, 131  # the root = owner k = 0
 ATT_NC_MARKS = ("att_start", "local_select", "merge", "pass0", "rs1_landed", "pass1", "rs2_landed", "finalize", "end")
 ATT_BR_MARKS = ("att_start", "presweep", "pass0_pushed", "end")
@@ -1615,6 +1676,8 @@ ROUND_MARKS_N = (
     10  # rev 72 (GLM53_DSA_SHARD_ROUND_MARKS): 4 R8 rounds + the tie, 2 marks each, between y_in and local_coord
 )
 LANE_MARKS = ("start", "opened", "sent", "closed", "landed")
+# the latent core's NCRISC (kernels/mla/lat_dm1.cpp, row PROBE_LAT1): start, cache written + LAT_SEM, QL in, q sent
+LAT1_MARKS = ("start", "cache_done", "ql_in", "q_sent")
 
 
 def _marks(row) -> list:
@@ -1627,8 +1690,9 @@ def decode_probe(p, *, line: int, mhz: float = 1350.0, ar=None) -> dict:
     group 0) and the derived spans:
       root NCRISC (row 132; its LAST 9 marks: the attention phase after mhc_pre's) ATT_NC_MARKS, root BRISC (row 0, last
       4) ATT_BR_MARKS, the index core ix_dm0 (row 220) IX0_MARKS, ix_dm1 (row 221; TP8: the q assembly = its last 2),
-      the stream lanes (rows 236..239) LANE_MARKS; ar = FabricPhase.lane_marks() of this chip (optional: [[brisc x 8],
-      [ncrisc x 5]] per lane: launch start, inputs ready, round 1 sent, round 2 sent, result done, launch end)."""
+      the stream lanes (rows 236..239, + 240: the RS1 split's rs1a) LANE_MARKS, the latent core's NCRISC (row 131, its
+      last 4) LAT1_MARKS; ar = FabricPhase.lane_marks() of this chip (optional: [[brisc x 8], [ncrisc x 5]] per lane:
+      launch start, inputs ready, round 1 sent, round 2 sent, result done, launch end)."""
     rows = [[int(v) & 0xFFFFFFFF for v in r] for r in p.tolist()]
     nc, br = _marks(rows[PROBE_ROOT_NC]), _marks(rows[PROBE_ROOT_BR])
     if len(nc) < len(ATT_NC_MARKS):
@@ -1656,10 +1720,13 @@ def decode_probe(p, *, line: int, mhz: float = 1350.0, ar=None) -> dict:
         out["qasm"] = dict(ag_landed=us(ix1[-2]), assembled=us(ix1[-1]))
     lanes = {}
     for name, r in PROBE_LANE_ROW.items():
-        m = _marks(rows[r])
+        m = _marks(rows[r]) if r < len(rows) else []  # (a probe tensor without row 240: no rs1a marks)
         if len(m) >= len(LANE_MARKS):
             lanes[name] = {k: us(v) for k, v in zip(LANE_MARKS, m[-len(LANE_MARKS) :])}
     out["lanes"] = lanes
+    lat = _marks(rows[PROBE_LAT1]) if len(rows) > PROBE_LAT1 else []
+    if len(lat) >= len(LAT1_MARKS):
+        out["lat1"] = {k: us(v) for k, v in zip(LAT1_MARKS, lat[-len(LAT1_MARKS) :])}
     if ar is not None:
         out["ar"] = [dict(start=us(b[0]), inputs=us(b[1]), result=us(b[4]), end=us(b[5])) for b, _ in ar]
     n = out["root_nc"]
@@ -1684,6 +1751,10 @@ def decode_probe(p, *, line: int, mhz: float = 1350.0, ar=None) -> dict:
         span[f"{name}_send"] = l_["sent"] - l_["opened"]
     if "qasm" in out:
         span["q_asm"] = out["qasm"]["assembled"] - out["qasm"]["ag_landed"]
+    if "lat1" in out:  # the latent core's q copy (QL in -> q sent) and, with AG1's lane, its open after the copy
+        span["lat_q_copy"] = out["lat1"]["q_sent"] - out["lat1"]["ql_in"]
+        if "ag1" in lanes:
+            span["lat_q_sent_to_ag1_open"] = lanes["ag1"]["opened"] - out["lat1"]["q_sent"]
     if ar is not None and out["ar"]:
         span["ar_inputs_to_result"] = out["ar"][0]["result"] - out["ar"][0]["inputs"]
     out["span"] = {k: round(v, 2) for k, v in span.items()}
@@ -2440,12 +2511,16 @@ def fs_stage(rows: int, width: int, extra: dict) -> dict:
     nb = min(int(extra.get("nb", FS_NB)), ppc)
     slots = int(extra.get("slots", FS_SLOTS))
     sub = tuple(int(v) for v in extra["sub"]) if extra.get("sub") is not None else None
-    spc = ppc
+    spc, span0 = ppc, 0
     if sub is not None:
         assert ppc % sub[0] == 0 and 0 < sub[1] < sub[0], (ppc, sub)
         spc = rs_sent_pages(ppc // sub[0], sub[1])
+        if len(sub) > 2:  # GLM53_DSA_SHARD_RS1_TSPLIT: the stream's span (span0, spann) of the staged pages
+            assert sub[2] % 2 == 0 and sub[3] % 2 == 0 and 0 < sub[3] and sub[2] + sub[3] <= spc, (sub, spc)
+            span0, spc = sub[2], sub[3]
+            sub = sub[:2]
     assert width % 32 == 0 and spc % nb == 0 and nb % 2 == 0, (width, nb, sub)
-    return dict(chunks=rows // 32, ppc=ppc, nb=nb, slots=slots, cb_bytes=slots * nb * TB, spc=spc, sub=sub)
+    return dict(chunks=rows // 32, ppc=ppc, nb=nb, slots=slots, cb_bytes=slots * nb * TB, spc=spc, sub=sub, span0=span0)
 
 
 def fs_scatter_block(p: int, n: int, chunks: int, first: list | None = None, keep: list | None = None) -> tuple:
@@ -2497,7 +2572,7 @@ def fs_scatter_packets(rows: int, width: int, extra: dict, p: int, dsts: list) -
     packet (q, (x page of each staged page), (y page each lands on), signal = the chunk-end packet: `col + 2 == PPC` /
     DPC). Knob off / RSB: the pairs of fs_scatter_sends (y pages g0, g0 + 1)"""
     st = fs_stage(rows, width, extra)
-    chunks, ppc, nb, spc, sub = st["chunks"], st["ppc"], st["nb"], st["spc"], st["sub"]
+    chunks, ppc, nb, spc, sub, s0 = st["chunks"], st["ppc"], st["nb"], st["spc"], st["sub"], st["span0"]
     row_base, c_lo, c_n = p * chunks, 0, chunks
     nbat = c_n * spc // nb
     out = []
@@ -2508,8 +2583,8 @@ def fs_scatter_packets(rows: int, width: int, extra: dict, p: int, dsts: list) -
                 idx = b * nb + i
                 if sub is None:
                     staged.append((base + c_lo) * ppc + b * nb + i)
-                else:
-                    staged.append((base + c_lo + idx // spc) * ppc + fs_sub_col(idx % spc, ppc, sub))
+                else:  # (RS1_TSPLIT: the span's page s0 + idx % spc)
+                    staged.append((base + c_lo + idx // spc) * ppc + fs_sub_col(s0 + idx % spc, ppc, sub))
         for b in range(nbat):  # fs_send.cpp: the same batches, a pair per packet
             for i in range(0, nb, 2):
                 idx = b * nb + i
@@ -2518,8 +2593,8 @@ def fs_scatter_packets(rows: int, width: int, extra: dict, p: int, dsts: list) -
                     g0 = (row_base + chunk) * ppc + col
                     g1 = g0 + 1
                 else:
-                    g0 = (row_base + chunk) * ppc + fs_sub_col(col, ppc, sub)
-                    g1 = (row_base + chunk) * ppc + fs_sub_col(col + 1, ppc, sub)
+                    g0 = (row_base + chunk) * ppc + fs_sub_col(s0 + col, ppc, sub)
+                    g1 = (row_base + chunk) * ppc + fs_sub_col(s0 + col + 1, ppc, sub)
                 out.append((q, (staged[idx], staged[idx + 1]), (g0, g1), col + 2 == spc))
     return out
 
@@ -2542,7 +2617,7 @@ def rs_stream_counts(t: int, rsb: bool = False, P: int = 8, L: int = 4, rsnp: bo
 
 
 def audit_rs_blocks(geo, t: int, rsb: bool = False, rs1_early: bool = False, plan_knobs: dict | None = None,
-                    rs1s: bool = False) -> None:  # fmt: skip
+                    rs1s: bool = False, rs1t: bool = False) -> None:  # fmt: skip
     """tt/tp_dsa_shard.py TPMlaShard._audits' block check for the 8x4 scatters, host-only: every chip's RS1 / RS2 block
     as FabricStreamScatter computes it from rs_stream_args (fs_scatter_block) == the plan's Geometry.block; raises the
     audit's ValueError. plan_knobs: the (rsb, rs1_early) the plan is asked with (default: the streams'), to reproduce a
@@ -2553,6 +2628,7 @@ def audit_rs_blocks(geo, t: int, rsb: bool = False, rs1_early: bool = False, pla
     pk = dict(rsb=rsb, rs1_early=rs1_early) if plan_knobs is None else plan_knobs
     if rs1s and plan_knobs is None:
         pk["rs1s"] = True
+        pk["rs1t"] = rs1t
     links = {"rs1": 1, RS1S_NAME: 0}
     names = (("rs1", geo.pair_axis), ("rs2", geo.line_axis)) + (((RS1S_NAME, geo.pair_axis),) if rs1s else ())
     for r in range(geo.R):
@@ -2560,7 +2636,7 @@ def audit_rs_blocks(geo, t: int, rsb: bool = False, rs1_early: bool = False, pla
             for name, axis in names:
                 p_, _ = geo.axis_pos(r, c, axis)
                 first = rs1_early_first(p_, geo.P) if (rs1_early and name in links) else None
-                keep = rs1_split_dsts(p_, geo.P, links[name]) if (rs1s and name in links) else None
+                keep = rs1_split_dsts(p_, geo.P, links[name]) if (rs1s and not rs1t and name in links) else None
                 dst, local, up, dn, dsts = fs_scatter_block(p_, geo.axis_len(axis), a[name]["rows"] // 32, first, keep)
                 got = dict(p=p_, src=None, dst=dst, local=bool(local), up=up, dn=dn, dsts=dsts)
                 want = geo.block(name, t, r, c, **pk)
