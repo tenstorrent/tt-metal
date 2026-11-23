@@ -200,7 +200,8 @@ protected:
         const tt::Cluster& cluster = metal_context.get_cluster();
         const metal_SocDescriptor& soc_descriptor = cluster.get_soc_desc(*cluster.mmio_chip_ids().begin());
         uint64_t dram_bank_size = soc_descriptor.dram_view_size;
-        if (const std::optional<std::string_view> att_map = metal_context.rtoptions().get_noc_att_map()) {
+        if (const std::optional<std::string_view> att_map = metal_context.rtoptions().get_noc_att_map();
+            this->arch_ == tt::ARCH::QUASAR && att_map.has_value()) {
             if (const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map)) {
                 dram_bank_size = std::min(dram_bank_size, quasar_att::dram_window_local_address_limit(*map_info));
             }
