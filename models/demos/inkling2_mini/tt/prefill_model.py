@@ -7,7 +7,7 @@ continues at pos = len(prompt):
 - attention (per HF cache index c): 1024-slot ring (slot = pos % 1024), global full cache, k/v conv inputs at lag 0-2;
 - post-attn / post-mlp ShortConv state rows 0-3 = inputs at lag 0-3 (fp32).
 
-A chunk is T tokens (default 8192, 12288 with the unified experts: each chunk has a large fixed cost; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128). Pad
+A chunk is T tokens (default 8192, 10240 with the unified experts: each chunk has a large fixed cost; T divides 1024 or is a multiple of it; the last chunk is rounded up to 128). Pad
 rows (positions >= len(prompt)) keep the old ring slots, but kv_full gets all T rows: decode writes position P before
 any read of it, so those rows are never read. Per application, everything is a [1,1,T,C] sequence tensor:
 - block / message attn-res: per-token softmax over depth (no cross-token mixing);
@@ -200,9 +200,10 @@ def _has_r2(dev):
     return bool(ttnn.to_torch(out).float().flatten()[0] == 32.0)
 
 
-def _has_unified(dev, w_gate_up, w_down):
+def _has_unified(dev, w_gate_up, w_down, fidelity):
     """Does this build's deepseek_prefill.unified_routed_expert_moe take stacked expert weights (the same
-    [1, E, K, 2I] tensor in every gate / up slot) ? A no-expert call: older builds reject the shapes."""
+    [1, E, K, 2I] tensor in every gate / up slot) at this math fidelity (precise mode)? A no-expert call: older
+    builds reject the shapes or any fidelity but LoFi."""
     op = getattr(getattr(ttnn.experimental, "deepseek_prefill", None), "unified_routed_expert_moe", None)
     if op is None:
         return False
@@ -212,7 +213,7 @@ def _has_unified(dev, w_gate_up, w_down):
     )  # noqa: E731
     x = ttnn.from_torch(torch.zeros(32, HIDDEN), dtype=ttnn.bfloat16, layout=rm, device=dev)
     ckc = ttnn.init_device_compute_kernel_config(
-        dev.arch(), math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False
+        dev.arch(), math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=True
     )
     e = [w_gate_up] * NUM_EXPERTS
     try:
@@ -396,7 +397,8 @@ class Inkling2Prefill:
         weighted_reduce=False,
         fused_glue=True,
         trace=True,
-        experts="sparse",
+        experts="auto",
+        expert_fidelity=None,
         fused_heads=True,
         profile=False,
         debug=False,
@@ -413,16 +415,13 @@ class Inkling2Prefill:
         chunks (see "traced chunks" below; the outputs are bit-equal to the eager run).
         fused_heads: q / k / v head split + scale + L2 clip / RMS in one program each (tt/fused/pf_heads.py; same
         rounding points as the op chain, sums in another order: not bit-equal).
-        experts: "sparse" (default: grouped sparse_matmul, HiFi2), "unified" (all experts in one
-        deepseek_prefill.unified_routed_expert_moe program; that op only runs LoFi, so it is opt-in: lower precision
-        is never the default; needs a build that takes stacked expert weights), "auto": unified when the build has it.
+        experts: "unified" (all experts in one deepseek_prefill.unified_routed_expert_moe program, precise mode:
+        fp32 DEST; needs a build with stacked expert weights and, for fidelities above LoFi, the op's
+        math_fidelity attribute), "sparse" (grouped sparse_matmul), "auto" (default): unified when the build runs it
+        at expert_fidelity, else sparse. expert_fidelity: default HiFi2 (the sparse path's); LoFi is opt-in only.
         profile: synchronized per-section times in self.times. debug: print each application."""
-        if chunk is None:  # one chunk up to 12K tokens; the sparse expert path's slot buffers only fit 8192 at 32K
-            chunk = 12288 if experts == "unified" else 8192
-        assert self._chunk_ok(chunk), chunk
         self.m = model
         self.device = dev = model.device
-        self.chunk = chunk
         self.gm = slot_rows
         if r2 is None:
             r2 = _has_r2(dev)
@@ -442,9 +441,16 @@ class Inkling2Prefill:
         self.hifi4 = model.hifi4
         self.mm_cfg = model.mm_cfg
         self.layers = [_LayerPF(self, lay, root) for lay in model.layers]
+        # the expert fidelity of the exact path (HiFi2, as the sparse matmuls); LoFi only when asked for
+        self.expert_fidelity = expert_fidelity or ttnn.MathFidelity.HiFi2
         if experts == "auto":
-            experts = "unified" if _has_unified(dev, self.layers[0].w_gate_up, self.layers[0].w_down) else "sparse"
+            ok = _has_unified(dev, self.layers[0].w_gate_up, self.layers[0].w_down, self.expert_fidelity)
+            experts = "unified" if ok else "sparse"
         self.unified = experts == "unified"
+        if chunk is None:  # one chunk up to 10K tokens (11264+ runs out of DRAM in a multi-prompt process at 32K)
+            chunk = 10240 if self.unified else 8192
+        assert self._chunk_ok(chunk), chunk
+        self.chunk = chunk
         # routing buffers built on the device (tt/fused/pf_route.py), no host round trip; the sparse path needs
         # one slot-expert buffer per chunk (R2 sparse_matmul takes all slots in one call)
         self._pfroute = PfRoute(dev) if (self.unified or self.r2) else None
@@ -453,7 +459,7 @@ class Inkling2Prefill:
         self.dev_route = self._pfroute is not None
         # fp32 DEST: the op's precise mode (fp32 partials, bf16 activations; bf8 activations miss the gate)
         self.unified_ckc = ttnn.init_device_compute_kernel_config(
-            dev.arch(), math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=True
+            dev.arch(), math_fidelity=self.expert_fidelity, math_approx_mode=False, fp32_dest_acc_en=True
         )
         g = _load(root, None, {"final_res_q", "msg_q"})
         self.final_res = (PfAttnRes if self.fused_glue else _AttnRes)(dev, g["final_res_q"], 1, self.ckc)
