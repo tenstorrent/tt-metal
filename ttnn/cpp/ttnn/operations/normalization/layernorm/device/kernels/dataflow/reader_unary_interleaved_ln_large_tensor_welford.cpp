@@ -229,15 +229,25 @@ void kernel_main() {
 #else
 #ifdef FUSE_GAMMA
             {
+#ifdef AFFINE_ROW_MAJOR
+                layernorm_dataflow_utils::read_row_major_affine_block_to_dfb(
+                    noc, dfb_gamma, addrg, gamma_tile_bytes, block.start(), block);
+#else
                 layernorm_dataflow_utils::read_block_to_dfb(
                     noc, dfb_gamma, addrg, gamma_tile_bytes, block.start(), block);
+#endif
             }
 #endif
 
 #ifdef FUSE_BETA
             {
+#ifdef AFFINE_ROW_MAJOR
+                layernorm_dataflow_utils::read_row_major_affine_block_to_dfb(
+                    noc, dfb_beta, addrb, beta_tile_bytes, block.start(), block);
+#else
                 layernorm_dataflow_utils::read_block_to_dfb(
                     noc, dfb_beta, addrb, beta_tile_bytes, block.start(), block);
+#endif
             }
 #endif
 #endif
