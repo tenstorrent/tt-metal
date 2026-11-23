@@ -214,9 +214,15 @@ def test_metadata_adds_to_the_run_fields(monkeypatch):
 
 
 @pytest.mark.parametrize("key", ["format", "config", "tt_metal_version", "base_model"])
-def test_metadata_may_not_replace_the_run_fields(expect_error, key):
+def test_metadata_may_not_replace_the_run_fields(tmp_path, expect_error, key):
+    trainer = _trainer()
+    trainer.model = object()
+    exported = []
+    trainer.provider.export_weights = lambda model, directory: exported.append(directory)
     with expect_error(ValueError, key):
-        _trainer().trainer_state({key: "host"})
+        trainer.save_checkpoint(str(tmp_path / "checkpoint"), {key: "host"})
+    assert exported == []
+    assert _entries(tmp_path) == []
 
 
 @pytest.mark.parametrize(

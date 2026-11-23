@@ -181,9 +181,10 @@ class SFTTrainer(Trainer):
         provider writes (see ``ModelProvider.export_weights``), and ``trainer_state.json`` with
         ``trainer_state(metadata)``.
         """
+        state = self.trainer_state(metadata)
         with staged_directory(path) as directory:
             self.provider.export_weights(self.model, directory)
-            write_trainer_state(directory, self.trainer_state(metadata))
+            write_trainer_state(directory, state)
 
     def trainer_state(self, metadata: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """What ``trainer_state.json`` records: the format, the run's full config, the tt-metal version
