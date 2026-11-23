@@ -245,10 +245,8 @@ def test_perf_pack_ctx(perf_report, case, arm, run_types, loop_factor, is_perf):
 _EQ_REF = {}
 
 
-@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
-@skip_for_wormhole
-@parametrize(case=_cases(), arm=ARMS)
-def test_pack_ctx_equiv(case, arm):
+def _equiv_raw(case, arm):
+    """The L1 bytes the arm packs, from a 0xA5-filled result region; None when the run only compiles."""
     kwargs, (pa, pb, n, state) = _kwargs(case, arm, 1)
     cfg = create_test_or_perf_config(
         is_perf=False, run_types=[PerfRunType.L1_TO_L1], test_config_kwargs=kwargs
@@ -268,18 +266,31 @@ def test_pack_ctx_equiv(case, arm):
             write_to_device(TestConfig.TENSIX_LOCATION, a, [0xA5] * sz)
     cfg.run()
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        return
-    raw = b"".join(
+        return None
+    return b"".join(
         bytes(read_from_device(TestConfig.TENSIX_LOCATION, a, num_bytes=sz))
         for a, sz in regions
     )
-    key = (case, state)
-    if arm[1] == 0:
-        _EQ_REF[key] = raw
+
+
+@pytest.mark.nightly  # exhaustive sweep, too long for the smoke run
+@skip_for_wormhole
+@parametrize(case=_cases(), arm=ARMS)
+def test_pack_ctx_equiv(case, arm):
+    raw = _equiv_raw(case, arm)
+    if raw is None:
         return
-    ref = _EQ_REF.get(key) if arm != (0, 3) else _EQ_REF.get((case, 0))
-    if ref is None:
-        pytest.skip("per-tile arm of this state did not run first")
+    state = arm[0]
+    if arm[1] == 0:
+        _EQ_REF[(case, state)] = raw
+        return
+    ref_arm = (0, 0) if arm == (0, 3) else (state, 0)
+    if ref_arm not in ARMS:
+        pytest.skip("no per-tile arm for this state")
+    if (case, ref_arm[0]) not in _EQ_REF:
+        # the per-tile arm ran on another xdist worker, or not yet
+        _EQ_REF[(case, ref_arm[0])] = _equiv_raw(case, ref_arm)
+    ref = _EQ_REF[(case, ref_arm[0])]
     diff = [i for i in range(len(ref)) if ref[i] != raw[i]]
     assert (
         not diff

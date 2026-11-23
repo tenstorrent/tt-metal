@@ -320,8 +320,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
+        // a reconfigure needs the reduce edge masks cleared (reconfig_packer_data_format's assert): the reduce contexts clear them
+        // ahead of it and set them again behind it, as reduce_uninit and reduce_init around a format switch
+        constexpr bool mask_around_reconfig = ctx_reduce && (pack_sweep_state == 2 || pack_sweep_state == 3);
         pack_api_sweep::run<pack_api_tiles, is_fp32_dest_acc_en, pack_api_kt, pack_sweep_state, pack_api_arm, pack_sweep_arm_b, out_a, out_b>(
-            LOOP_FACTOR, NUM_BLOCKS, dst, [&] { ctx_pack_init(out_a, face_r, num_faces); }, [] {});
+            LOOP_FACTOR,
+            NUM_BLOCKS,
+            dst,
+            [&] { ctx_pack_init(out_a, face_r, num_faces); },
+            [&]
+            {
+                if constexpr (mask_around_reconfig)
+                {
+                    _llk_pack_reduce_mask_config_<REDUCE_DIM>(ckernel::make_tensor_shape_from_legacy(face_r, num_faces));
+                }
+            },
+            []
+            {
+                if constexpr (mask_around_reconfig)
+                {
+                    _llk_pack_reduce_mask_clear_();
+                }
+            });
         PROFILER_SYNC();
     }
     if constexpr (ctx_reduce)
