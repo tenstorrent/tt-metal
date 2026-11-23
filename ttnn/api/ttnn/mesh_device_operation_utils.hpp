@@ -103,6 +103,14 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(
     return ttnn::device_operation::detail::extract_tensor_coordinates_impl(collect_tensors(tensor_args), mesh_device);
 }
 
+// The mesh ranges a launch creates programs on (see detail::launch_ranges_impl). Unlike extract_tensor_coordinates,
+// which is global, this keeps only the chips this process owns when several hosts share the mesh.
+template <typename TensorArgs>
+ttnn::MeshCoordinateRangeSet launch_ranges(const TensorArgs& tensor_args, ttnn::MeshDevice* mesh_device) {
+    return ttnn::device_operation::detail::launch_ranges_impl(
+        collect_tensors(tensor_args), mesh_device, all_tensors_have_uniform_storage(tensor_args));
+}
+
 // Tracks all programs in `workload` and returns true if any program was hooked.
 inline bool track_workload(tt::tt_metal::distributed::MeshWorkload& workload, ttnn::MeshDevice* mesh_device) {
     bool hook_program = false;

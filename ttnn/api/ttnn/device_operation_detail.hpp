@@ -78,6 +78,16 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
     tt::tt_metal::distributed::MeshDevice* mesh_device);
 
 /**
+ * The mesh ranges a launch creates programs on: the whole mesh when every tensor has uniform storage, else the
+ * coordinates of the tensors. On a mesh that several hosts share, only the coordinates this process owns.
+ * Output placement keeps using the global coordinates of extract_tensor_coordinates_impl.
+ */
+tt::tt_metal::distributed::MeshCoordinateRangeSet launch_ranges_impl(
+    const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    bool uniform_storage);
+
+/**
  * Which of `tensors` are backed by the same MeshTensor: for each tensor, the position of the first
  * tensor holding the same MeshTensor (its own position if none precedes it). Returns an empty
  * vector when no two tensors share a MeshTensor, so the common case allocates nothing.
