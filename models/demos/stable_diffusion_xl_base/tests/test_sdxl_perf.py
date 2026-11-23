@@ -141,7 +141,8 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_encode_1024x1024": {
-        "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
+        # mean of 4 scheduled wh_n150 runs 2026-11-06..11-23 on 4 VMs (319.67M..324.74M)
+        "wormhole": 323_245_000,
         # mean of 8 scheduled bh_p150 runs 2026-11-06..11-23 on 4 VMs (135.57M..135.95M)
         "blackhole": 135_768_000,
     },
