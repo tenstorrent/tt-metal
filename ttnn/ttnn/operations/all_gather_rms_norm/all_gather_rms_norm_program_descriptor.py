@@ -116,6 +116,14 @@ SPLIT_RUNS = 0  # bulk packets: 1 = split a run that does not fit the open packe
 OWN_SRC_DST = 1  # port reader own entry: 1 = read back the own final pages (one read per bank run, measured faster),
 #                 0 = pull page by page from the workers' L1 blocks
 
+# OVERLAP (Refinement 3): own-ready granularity. The row-groups are cut into OWN_BANDS bands (consecutive groups); each
+# worker announces its own block on its band's counter and the port's own entry waits only for the bands a packet's
+# rows fall in, so the first packets go out before the slowest worker finished. 1 = one counter for all workers.
+OWN_BANDS = 1
+# port reader: push each packet as soon as its own reads landed (non-blocking check after every issue), not only once
+# READ_DEPTH packets are in flight — the first packet of an entry no longer waits for 3 more to be issued
+EAGER_PUSH = 1
+OWN_BANDS_MAX = 16  # persistent band counters (global semaphores) per port core
 NOC_READER = ttnn.NOC.RISCV_0_default  # NoC0 (fabric_all_gather's convention)
 NOC_WRITER = ttnn.NOC.RISCV_1_default  # NoC1
 
@@ -467,10 +475,11 @@ def global_semaphores(mesh_device, plan):
     key = ("sems", id(mesh_device), tuple(sorted(port_cores)))
     if key not in _RES_CACHE:
         cores = _single_cores(port_cores)
-        sems = tuple(ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3))
+        sems = tuple(ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3 + OWN_BANDS_MAX))
         ttnn.synchronize_device(mesh_device)  # every chip's counters are 0 before any chip's first call
         _RES_CACHE[key] = (mesh_device, sems)
-    return [int(ttnn.get_global_semaphore_address(s)) for s in _RES_CACHE[key][1]]  # ready, bulk, stats
+    # ready, bulk, stats, then OWN_BANDS_MAX own-ready band counters
+    return [int(ttnn.get_global_semaphore_address(s)) for s in _RES_CACHE[key][1]]
 
 
 def staging_buffer(mesh_device, geo: Geometry, dtype):
@@ -660,7 +669,23 @@ def create_mesh_program_descriptor(
                 pages.add((q, (g_ - q * geo.W_local) // TILE))
             src_max = max(src_max, len(pages))
 
-    ready_addr, bulk_addr, stats_addr = global_semaphores(mesh_device, plan)
+    ready_addr, bulk_addr, stats_addr, *band_addrs = global_semaphores(mesh_device, plan)
+    # own-ready bands (OVERLAP): band of row-group g = g * own_bands // n_groups (same formula on the workers); the
+    # staged (R_U) slot is flat and the WIDTH pre-combine has one group: one counter (the program semaphore) there
+    own_bands = (
+        1 if (is_ru or pre_combine) else max(1, min(_knob("OWN_BANDS", OWN_BANDS), split.n_groups, OWN_BANDS_MAX))
+    )
+    band_need = [0] * own_bands  # announcements per band: k per row-group
+    band_row_end = [0] * own_bands  # first tile-row after the band
+    row = 0
+    for g in range(split.n_groups):
+        b = g * own_bands // split.n_groups
+        row += split.rows_hi if g < split.big else split.rows_hi - 1
+        if g == split.n_groups - 1:
+            row = geo.R
+        band_need[b] += k
+        band_row_end[b] = row
+    band_addrs = band_addrs[:own_bands]
 
     # ---- worker compile-time args (agrn_worker_args.hpp) ----
     worker_ct = [
@@ -698,6 +723,7 @@ def create_mesh_program_descriptor(
         int(pre_combine),
         row_chunk,
         rpo,
+        own_bands,
     ]
     # Sharded: the local shard is consumed in place, never through an accessor -> empty accessor args.
     acc_ct = list(
@@ -743,6 +769,8 @@ def create_mesh_program_descriptor(
         own_from_dst,
         CB_PORT_DESC,
         split_runs,
+        own_bands,
+        _knob("EAGER_PUSH", EAGER_PUSH),
     ] + list(ttnn.TensorAccessorArgs(dst_tensor).get_compile_time_args())
 
     # ---- compute config ----
@@ -929,6 +957,7 @@ def create_mesh_program_descriptor(
         common += [pack(virt((c.x, c.y))) for c in port_list]
         common += inv_n
         common += [inv_wl]
+        common += band_addrs  # own-ready band counters (own_bands > 1)
         if pre_combine:
             common += active_noc  # member NoC coords: row owners and the final-stats fan-out
         if x_sharded:
@@ -1002,6 +1031,7 @@ def create_mesh_program_descriptor(
                     n_owners if pre_combine else split.n_active,
                     len(recv_slots),
                 ] + list(recv_slots)
+                r_args += band_need + band_row_end + band_addrs  # own_bands > 1: band gating of the own entry
                 reader_rt[core.x][core.y] = r_args
 
                 is_hub = l == 0

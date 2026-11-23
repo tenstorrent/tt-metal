@@ -53,9 +53,16 @@ constexpr uint32_t cb_desc = get_compile_time_arg_val(23);
 // 1: a run that does not fit the open packet is split (its head fills the packet, the rest opens the next), so packets
 // carry run_pages pages unless the scatter_runs limit closes them; 0: a run that does not fit closes the packet
 constexpr bool split_runs = get_compile_time_arg_val(24) != 0;
-constexpr uint32_t PORT_CT_ARGS = 25;                        // TensorAccessorArgs(dst) follow
-constexpr uint32_t run_stride = shard_w ? 1 : nb;            // page-id step between the pages of one run
-constexpr uint32_t shard_w_div = shard_w ? shard_w : 1;      // (the interleaved walk never divides by it)
+// own-ready bands (OVERLAP): > 1 — the own entry waits, per packet, only for the bands (consecutive row-groups) its
+// runs' tile-rows fall in; 1 — once for every active worker (sem_own_ready)
+constexpr uint32_t own_bands = get_compile_time_arg_val(25);
+// 1: after issuing a packet's reads, push every in-flight packet whose reads already landed (non-blocking trid
+// check); 0: push only when read_depth packets are in flight (or before a blocking wait)
+constexpr bool eager_push = get_compile_time_arg_val(26) != 0;
+constexpr uint32_t PORT_CT_ARGS = 27;  // TensorAccessorArgs(dst) follow
+static_assert(own_bands >= 1 && own_bands <= 32, "band mask");
+constexpr uint32_t run_stride = shard_w ? 1 : nb;        // page-id step between the pages of one run
+constexpr uint32_t shard_w_div = shard_w ? shard_w : 1;  // (the interleaved walk never divides by it)
 constexpr uint32_t chunk_bytes = run_pages * page_bytes;
 
 static_assert(scatter_runs >= 1 && scatter_runs <= 4, "NOC_SCATTER_WRITE_MAX_CHUNKS = 4");

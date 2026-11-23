@@ -62,10 +62,10 @@ constexpr uint32_t cb_final_mean = 30;     // reader -> compute: LN mean in colu
 constexpr uint32_t cb_stat_consts_x = 31;  // LN: n_q of the cross-chip partitions (one per chip)
 
 // ---- program-local semaphores ----
-constexpr uint32_t sem_records_local = 0;  // hubs: one inc per active worker (records written into my table)
-constexpr uint32_t sem_stats_ready = 1;    // workers: one inc per hub (all slots of the stats table landed)
-constexpr uint32_t sem_own_ready = 2;      // ports: one inc per active worker (own block written + resident)
-constexpr uint32_t sem_landed = 3;         // workers (R_U): one inc per port (its arrivals landed)
+constexpr uint32_t sem_records_local = 0;    // hubs: one inc per active worker (records written into my table)
+constexpr uint32_t sem_stats_ready = 1;      // workers: one inc per hub (all slots of the stats table landed)
+constexpr uint32_t sem_own_ready = 2;        // ports: one inc per active worker (own block written + resident)
+constexpr uint32_t sem_landed = 3;           // workers (R_U): one inc per port (its arrivals landed)
 constexpr uint32_t sem_stats_ready_bwd = 4;  // workers: set to 1 by the bwd hub's multicast (fwd hub: sem_stats_ready)
 constexpr uint32_t sem_stats_done = 5;       // hubs: the sender tells its own reader the table is complete
 constexpr uint32_t sem_pre = 6;    // row owner: one inc per member (its records of my rows are in my pre table)

@@ -53,6 +53,11 @@ void kernel_main() {
     const uint32_t n_recv = get_arg_val<uint32_t>(a++);  // slots landing in my table, in arrival order
     const uint32_t recv_idx = a;
     a += n_recv;
+    // own_bands > 1: per band the announcements it needs (k per row-group), its end tile-row, its counter address
+    const uint32_t band_need_idx = a;
+    const uint32_t band_end_idx = a + own_bands;
+    const uint32_t band_addr_idx = a + 2 * own_bands;
+    a += 3 * own_bands;
 
     const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
     // NoC address of every destination bank's first page and the bank page pitch: a run's read address is then
@@ -144,6 +149,24 @@ void kernel_main() {
     const uint32_t chunks_base = get_write_ptr(cb_chunks);  // nothing pushed yet: the CB's first slot
     const uint32_t desc_base = get_write_ptr(cb_desc);
     uint32_t pushed = 0, inflight = 0, issued = 0;
+    // own-ready bands: a band, once seen complete, is never polled again; after the first few packets all are
+    constexpr uint32_t all_bands = own_bands >= 32 ? 0xFFFFFFFFu : (1u << own_bands) - 1u;
+    uint32_t bands_ready = 0;
+    auto wait_bands = [&](const Packet& pk) {
+        for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+            const uint32_t r = flat_slot ? 0u : pk.rr[ri];
+            uint32_t b = 0;
+            while (b + 1 < own_bands && get_arg_val<uint32_t>(band_end_idx + b) <= r) {
+                ++b;
+            }
+            if (!((bands_ready >> b) & 1u)) {
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(band_addr_idx + b)),
+                    get_arg_val<uint32_t>(band_need_idx + b));
+                bands_ready |= 1u << b;
+            }
+        }
+    };
     auto retire_oldest = [&]() {
         noc_async_read_barrier_with_trid(1 + (issued - inflight) % read_depth);
         cb_push_back(cb_chunks, run_pages);
@@ -155,7 +178,7 @@ void kernel_main() {
         const uint32_t A = get_arg_val<uint32_t>(entries_idx + 3 * k + 1);
         const uint32_t B = get_arg_val<uint32_t>(entries_idx + 3 * k + 2);
         const uint32_t q = e & 0xFFFF, part = e >> 16;
-        if (k == 0) {
+        if (k == 0 && own_bands == 1) {
             AGRN_ZONE("pr_wait_own");
             noc_semaphore_wait_min(own_ready, n_active);
         }
@@ -164,6 +187,11 @@ void kernel_main() {
         }
         uint32_t c = 0;
         for_each_packet(q, part, first_bank, bank_stride, [&](const Packet& pk) {
+            if constexpr (own_bands > 1) {
+                if (k == 0 && bands_ready != all_bands) {
+                    wait_bands(pk);
+                }
+            }
             if (inflight == read_depth) {
                 retire_oldest();
             }
@@ -223,6 +251,14 @@ void kernel_main() {
             ++issued;
             ++inflight;
             ++c;
+            if constexpr (eager_push) {
+                // hand over every packet whose reads already landed (non-blocking check), so the sender starts on
+                // the first packet of an entry without waiting for read_depth packets to be issued
+                while (inflight > 0 &&
+                       ncrisc_noc_read_with_transaction_id_flushed(noc_index, 1 + (issued - inflight) % read_depth)) {
+                    retire_oldest();
+                }
+            }
         });
     }
     while (inflight > 0) {
@@ -244,6 +280,16 @@ void kernel_main() {
     }
     if (expect_in > 0) {
         noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect_in);
+    }
+    if constexpr (own_bands > 1) {
+        // re-arm every band counter (persistent, trace-safe) once all its workers announced — also on a port whose
+        // walk never touched the band, so a late announcement cannot leak into the next call
+        for (uint32_t b = 0; b < own_bands; ++b) {
+            const uint32_t addr = get_arg_val<uint32_t>(band_addr_idx + b);
+            const uint32_t need = get_arg_val<uint32_t>(band_need_idx + b);
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr), need);
+            noc_semaphore_inc(get_noc_addr(addr), 0u - need);
+        }
     }
     noc_async_atomic_barrier();
 }

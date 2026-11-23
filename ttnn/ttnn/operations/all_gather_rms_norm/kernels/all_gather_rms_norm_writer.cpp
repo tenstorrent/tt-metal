@@ -217,7 +217,9 @@ void kernel_main() {
             }
         }
         noc_async_write_barrier();
-        const uint32_t sem = get_semaphore(sem_own_ready);
+        // own_bands > 1: my band's counter (a global semaphore, same address on every port core)
+        const uint32_t sem = own_bands > 1 ? get_common_arg_val<uint32_t>(CRT_BANDS + w.g * own_bands / n_groups)
+                                           : get_semaphore(sem_own_ready);
         for (uint32_t i = 0; i < n_ports; ++i) {
             const uint32_t c = get_common_arg_val<uint32_t>(CRT_PORT_NOC + i);
             noc_semaphore_inc(get_noc_addr(c & 0xFFFF, c >> 16, sem), 1);

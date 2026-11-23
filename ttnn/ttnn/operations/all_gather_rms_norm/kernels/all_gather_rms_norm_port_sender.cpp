@@ -256,6 +256,9 @@ void kernel_main() {
             }
             for (uint32_t pi = 0; pi < entry_total; ++pi) {
                 cb_wait_front(cb_chunks, run_pages * (unflushed + 1));
+                if (k == 0 && pi == 0) {
+                    AGRN_ZONE("ps_own_pkt0");  // marker: first own packet handed over
+                }
                 invalidate_l1_cache();  // the slot's descriptor was written by the reader (NCRISC)
                 Packet pk;
                 {

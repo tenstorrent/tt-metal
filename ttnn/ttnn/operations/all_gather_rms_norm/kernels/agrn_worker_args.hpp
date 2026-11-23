@@ -53,7 +53,10 @@ constexpr bool out_in_place = get_compile_time_arg_val(30) != 0;
 constexpr bool pre_combine = get_compile_time_arg_val(31) != 0;
 constexpr uint32_t row_chunk = get_compile_time_arg_val(32);       // tile-rows per pass of the per-row CBs
 constexpr uint32_t rows_per_owner = get_compile_time_arg_val(33);  // pre_combine only
-constexpr uint32_t WORKER_CT_ARGS = 34;                            // TensorAccessorArgs follow (reader / writer)
+// own-ready bands (OVERLAP): > 1 — the writer announces its own block on band g * own_bands / n_groups (a global
+// semaphore per band on every port core) instead of the single program semaphore sem_own_ready
+constexpr uint32_t own_bands = get_compile_time_arg_val(34);
+constexpr uint32_t WORKER_CT_ARGS = 35;  // TensorAccessorArgs follow (reader / writer)
 
 constexpr uint32_t KT = pre_combine ? 1 : K;  // members per (slot, row) in the stats table
 constexpr uint32_t P = G * KT;                // stats partitions per row of the cross-chip combine
@@ -74,13 +77,14 @@ constexpr uint32_t CRT_INV_W_BITS = 6;
 constexpr uint32_t CRT_P = 7;
 constexpr uint32_t CRT_HUB_MASK =
     8;  // bit q set: slot q lands in the bwd hub (host check; the table is multicast to every core)
-constexpr uint32_t CRT_FWD_HUB = 9;   // NoC x | y << 16
+constexpr uint32_t CRT_FWD_HUB = 9;  // NoC x | y << 16
 constexpr uint32_t CRT_BWD_HUB = 10;
-constexpr uint32_t CRT_PORTS = 11;                      // n_ports linear logical indices
-constexpr uint32_t CRT_PORT_NOC = CRT_PORTS + n_ports;  // n_ports NoC coords (x | y << 16)
-constexpr uint32_t CRT_INV_N = CRT_PORT_NOC + n_ports;  // K x fp32 bits of 1 / (valid columns of member m)
-constexpr uint32_t CRT_INV_WL = CRT_INV_N + K;          // fp32 bits of 1 / W_local (pre-combined slice mean)
-constexpr uint32_t CRT_MEMBER_NOC = CRT_INV_WL + 1;     // pre_combine: K member NoC coords (x | y << 16)
+constexpr uint32_t CRT_PORTS = 11;                          // n_ports linear logical indices
+constexpr uint32_t CRT_PORT_NOC = CRT_PORTS + n_ports;      // n_ports NoC coords (x | y << 16)
+constexpr uint32_t CRT_INV_N = CRT_PORT_NOC + n_ports;      // K x fp32 bits of 1 / (valid columns of member m)
+constexpr uint32_t CRT_INV_WL = CRT_INV_N + K;              // fp32 bits of 1 / W_local (pre-combined slice mean)
+constexpr uint32_t CRT_BANDS = CRT_INV_WL + 1;              // own_bands band-counter L1 addresses (port cores)
+constexpr uint32_t CRT_MEMBER_NOC = CRT_BANDS + own_bands;  // pre_combine: K member NoC coords (x | y << 16)
 constexpr uint32_t CRT_WORKER_MAP = CRT_MEMBER_NOC + (pre_combine ? K : 0);  // sharded: byte [lin] = worker index
                                                                              // (0xFF: none), 4 per word
 
