@@ -25,7 +25,7 @@ namespace ttnn::operations::experimental::ccl {
 void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
     ttnn::bind_function<"minimal_matmul_strided_reduce_scatter_async", "ttnn.experimental.">(
         mod,
-        R"doc(minimal_matmul_strided_reduce_scatter_async(input_tensor: ttnn.Tensor, weight_tensor: ttnn.Tensor, dim: int, ...) -> (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor)
+        R"doc(minimal_matmul_strided_reduce_scatter_async(input_tensor: ttnn.Tensor, weight_tensor: ttnn.Tensor, dim: int, ...) -> (ttnn.Tensor, ttnn.Tensor)
 
         Performs a fused matmul followed by strided reduce-scatter operation.
         The matmul output is fed directly into the reduce-scatter, with the matmul
@@ -96,6 +96,7 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
               (2 * num_links * num_workers_per_link). REQUIRED whenever :attr:`mm_window_blocks` is set
               (the op rejects the call otherwise), for the same reason as mm_progress_counters. Share one
               across every MMRS call (see CCLManager.get_mm_credit_counters_buffer).
+            * :attr:`dtype` (Optional[ttnn.DataType]): dtype of the matmul output. Defaults to `None` (the input dtype).
 
         )doc",
         &ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,
