@@ -5832,7 +5832,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     // here reads the partials as an FPU SrcA operand, and on Quasar UnpackToDest is kernel-wide (UnpackToDestEn
     // sends every copy_tile through Dest, see #62102). The cost is that the reload between K blocks rounds
     // through SrcA (TF32) and loses fp32 precision at every block boundary. The non-Quasar mcast factories
-    // avoid that loss by reloading through an UnpackToDest alias of interm0 (#50250).
+    // avoid that loss by marking interm0 UnpackToDest (or, with a fused bias, an alias of it) (#50250).
     const bool interm0_is_32bit = interm0_data_format == tt::DataFormat::Float32 ||
                                   interm0_data_format == tt::DataFormat::Int32 ||
                                   interm0_data_format == tt::DataFormat::UInt32;
@@ -6877,7 +6877,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // here reads the partials as an FPU SrcA operand, and on Quasar UnpackToDest is kernel-wide (UnpackToDestEn
     // sends every copy_tile through Dest, see #62102). The cost is that the reload between K blocks rounds
     // through SrcA (TF32) and loses fp32 precision at every block boundary. The non-Quasar mcast factories
-    // avoid that loss by reloading through an UnpackToDest alias of interm0 (#50250).
+    // avoid that loss by marking interm0 UnpackToDest (or, with a fused bias, an alias of it) (#50250).
     const bool interm0_is_32bit = interm0_data_format == tt::DataFormat::Float32 ||
                                   interm0_data_format == tt::DataFormat::Int32 ||
                                   interm0_data_format == tt::DataFormat::UInt32;
