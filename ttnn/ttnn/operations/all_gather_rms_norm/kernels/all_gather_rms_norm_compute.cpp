@@ -79,6 +79,94 @@ struct FinalizeInvRms {
     }
 };
 
+// ---- LN fused combine (Refinement 4): one chain per tile-row of column-form gather tiles (gt == 1) ----
+// With c = K_own (this core's centering shift, exact, in every column) the combine is ONE pass over the partitions:
+//   u_j = m_j - c, a_j = m_j - K_j, A_j = n_j u_j, B_j = T_j - n_j a_j^2 + n_j u_j^2
+//   d = sum A / W (= mean - K_own), M2 = sum B - W d^2, rstd = rsqrt(M2 / W + eps)
+// (sum B - W d^2 = sum_j [T_j - n_j a_j^2] + sum_j n_j (m_j - mean)^2 exactly; c is one of the partition shifts, so
+// W d^2 <= P x the between-partition term: the subtraction costs at most ~P fp32 ulps of M2.) Every value is an
+// exact fp32 DEST value (SFPU), the row sums are the SFPU in-tile collapse. Padding columns (j >= P) carry n = m = T =
+// K = 0 and contribute 0. P <= 16: every partition column sits in faces 0 / 2, so the elementwise passes visit only
+// those (VectorMode::C).
+// Raw SFPU (documented helper bypass): no kernel_lib element expresses a multi-slot fused SFPU body or the in-tile
+// row collapse as a chain element; these are column-local bodies in the base op's FinalizeInvRms style.
+constexpr VectorMode ln_comb_vmode = (P <= 16) ? VectorMode::C : VectorMode::RC;
+#ifdef TRISC_MATH
+constexpr uint32_t SFPI_TILE = 32;  // dst_reg rows per DEST tile
+// D0 = m, D1 = K, D2 = c  ->  D0 = u = m - c, D1 = a = m - K
+sfpi_inline void ln_comb_center_body() {
+#pragma GCC unroll 0
+    for (int i = 0; i < 8; i++) {
+        const sfpi::vFloat m = sfpi::dst_reg[0];
+        const sfpi::vFloat k = sfpi::dst_reg[SFPI_TILE];
+        const sfpi::vFloat c = sfpi::dst_reg[2 * SFPI_TILE];
+        sfpi::dst_reg[SFPI_TILE] = m - k;
+        sfpi::dst_reg[0] = m - c;
+        sfpi::dst_reg++;
+    }
+}
+// D0 = u, D1 = a, D2 = T, D3 = n  ->  D0 = A = n u, D1 = B = T - n a^2 + n u^2
+sfpi_inline void ln_comb_terms_body() {
+#pragma GCC unroll 0
+    for (int i = 0; i < 8; i++) {
+        const sfpi::vFloat u = sfpi::dst_reg[0];
+        const sfpi::vFloat a = sfpi::dst_reg[SFPI_TILE];
+        const sfpi::vFloat t = sfpi::dst_reg[2 * SFPI_TILE];
+        const sfpi::vFloat n = sfpi::dst_reg[3 * SFPI_TILE];
+        const sfpi::vFloat nu = n * u;
+        sfpi::dst_reg[0] = nu;
+        sfpi::dst_reg[SFPI_TILE] = (t - n * a * a) + nu * u;
+        sfpi::dst_reg++;
+    }
+}
+// column 0 of D0 = sum A, D1 = sum B  ->  D0 = d = sum A / W, D1 = rstd = rsqrt(max(sum B / W - d^2, 0) + eps)
+sfpi_inline void ln_comb_finalize_body(const uint32_t inv_w_bits, const uint32_t eps_bits) {
+#pragma GCC unroll 0
+    for (int rg = 0; rg < 4; rg++) {
+        const sfpi::vFloat inv_w = ckernel::sfpu::Converter::as_float(inv_w_bits);
+        const sfpi::vFloat eps = ckernel::sfpu::Converter::as_float(eps_bits);
+        const sfpi::vFloat d = sfpi::dst_reg[0] * inv_w;
+        sfpi::vFloat v = sfpi::dst_reg[SFPI_TILE] * inv_w - d * d;
+        v_if(v < 0.0f) { v = 0.0f; }
+        v_endif;
+        sfpi::dst_reg[0] = d;
+        sfpi::dst_reg[SFPI_TILE] = ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false>(v + eps);
+        sfpi::dst_reg += 2;
+    }
+}
+#endif
+
+struct LnCombCenter : TernaryOp<LnCombCenter, Dst::D0, Dst::D1, Dst::D2, Dst::D0> {
+    static ALWI void init() { square_tile_init(); }
+    static ALWI void exec_impl(uint32_t off) {
+        MATH((_llk_math_eltwise_unary_sfpu_params_(ln_comb_center_body, to_u32(Dst::D0) + off, ln_comb_vmode)));
+    }
+};
+struct LnCombTerms : TernaryOp<LnCombTerms, Dst::D0, Dst::D1, Dst::D3, Dst::D0> {
+    static ALWI void init() { square_tile_init(); }
+    static ALWI void exec_impl(uint32_t off) {
+        MATH((_llk_math_eltwise_unary_sfpu_params_(ln_comb_terms_body, to_u32(Dst::D0) + off, ln_comb_vmode)));
+    }
+};
+// In-tile row collapse (column 0 = sum over the 32 columns), exact fp32 SFPU — the reduce helper's
+// AccumulateViaAdd finalize as a chain element.
+template <Dst Slot>
+struct SfpuRowSum : UnaryOp<SfpuRowSum<Slot>, Slot> {
+    static ALWI void init() { sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>(); }
+    static ALWI void exec_impl(uint32_t off) {
+        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(to_u32(Slot) + off);
+    }
+};
+struct LnCombFinalize : compute_kernel_lib::BinaryOp<LnCombFinalize, Dst::D0, Dst::D1, Dst::D0> {
+    uint32_t inv_w_bits;
+    uint32_t eps_bits;
+    static ALWI void init() { rsqrt_tile_init(); }
+    ALWI void exec(uint32_t /*i*/, uint32_t off) const {
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            ln_comb_finalize_body, to_u32(Dst::D0) + off, VectorMode::C, inv_w_bits, eps_bits)));
+    }
+};
+
 struct MulScalarPost {
     uint32_t bits;
     ALWI void operator()(uint32_t dst) const {
@@ -454,6 +542,9 @@ ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool ta
             ln_exact_mode,
             ReduceAlgorithm::ReduceTile>(
             ReduceInputBlockShape::of(crt, cw), x_layout(cw), NoAccumulation{}, MulScalarPost{inv_n_bits});
+        {
+            AGRN_ZONE("x_s1a");
+        }
         reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
@@ -467,8 +558,14 @@ ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool ta
             ReduceInputBlockShape::of(crt, cw), x_layout(cw), NoAccumulation{}, MulScalarPost{inv_n_bits});
     }
     // K = tf32(m) in every column
+    {
+        AGRN_ZONE("x_s1b");
+    }
     unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_ln_shift)>(IterationShape::tiles(crt));
     cb_wait_front(cb_ln_shift, crt);
+    {
+        AGRN_ZONE("x_kb");
+    }
     // T = sum (x - K)^2 (padding columns masked in the reduce; sharded tail: by the mask block in the chain)
     constexpr auto xs_blk = x_input<cbx>;
     constexpr auto shift_col = input(cb_ln_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
@@ -493,6 +590,9 @@ ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool ta
             SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
             Square<Dst::D0>{},
             PackTile<output(cb_ln_sq)>{});
+        {
+            AGRN_ZONE("x_tchain");
+        }
         reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
@@ -508,6 +608,9 @@ ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool ta
             NoAccumulation{},
             NoOp{},
             tail ? ReducePartialScaler::only_partial() : ReducePartialScaler::none());
+    }
+    {
+        AGRN_ZONE("x_tred");
     }
     // K (stat 2): tf32-exact, so the copy is exact
     eltwise_chain(
@@ -540,6 +643,9 @@ ALWI void ln_combine_mean(uint32_t n, uint32_t inv_bits) {
         CopyTile<g_n<cb_n>, Dst::D1>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
         PackTile<output(cb_ln_tmp)>{});
+    {
+        AGRN_ZONE("x_mean_chain");
+    }
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
@@ -567,6 +673,9 @@ ALWI void ln_mean_minus_shift(uint32_t n) {
         CopyTile<shift_in, Dst::D1>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
         PackTile<output(cb_ln_m)>{});
+    {
+        AGRN_ZONE("x_d_chain");
+    }
     unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_mean_b)>(IterationShape::tiles(n));
     cb_wait_front(cb_mean_b, n);
 }
@@ -608,6 +717,9 @@ ALWI void ln_combine_m2(uint32_t n, Post post) {
         MulBinary<Dst::D0, Dst::D2, Dst::D0>{},  // n (m - mean)^2
         AddBinary<Dst::D1, Dst::D0, Dst::D1>{},
         PackTile<output(cb_ln_tmp), Dst::D1>{});
+    {
+        AGRN_ZONE("x_m2_chain");
+    }
     cb_pop_front(cb_gathered, n * nstats * gt);
     reduce<
         PoolType::SUM,
@@ -691,6 +803,33 @@ ALWI void pop_affine(uint32_t cw) {
     }
 }
 
+// Fused LN combine (gt == 1, fp32 DEST): per tile-row of the transposed gather tiles -> d (col 0) in cb_ln_m and
+// rstd (col 0) in cb_inv, then their column broadcasts cb_mean_b / cb_rstd_b (n tiles each, waited). Pops the
+// gathered tiles. Replaces ln_combine_mean + ln_mean_minus_shift + ln_combine_m2 (three chains, two reduces).
+constexpr bool ln_fused_comb = DST_ACCUM_MODE && gather_tiles == 1;
+template <bool Enabled = ln_fused_comb>
+ALWI void ln_combine_fused(uint32_t n, uint32_t inv_w_bits, uint32_t eps_bits) {
+    eltwise_chain(
+        IterationShape::grid(n, 1),
+        CopyTile<g_m<1>, Dst::D0>{StridedTileRange{0, nstats}},  // m
+        CopyTile<g_m<1>, Dst::D1>{StridedTileRange{2, nstats}},  // K
+        CopyTile<shift_in, Dst::D2>{},                           // c = K_own
+        LnCombCenter{},
+        CopyTile<g_m<1>, Dst::D2>{StridedTileRange{1, nstats}},  // T
+        CopyTile<g_n<cb_stat_consts>, Dst::D3>{},                // n
+        LnCombTerms{},
+        SfpuRowSum<Dst::D0>{},
+        SfpuRowSum<Dst::D1>{},
+        LnCombFinalize{{}, inv_w_bits, eps_bits},
+        PackTile<output(cb_ln_m), Dst::D0>{},
+        PackTile<output(cb_inv), Dst::D1>{});
+    cb_pop_front(cb_gathered, n * nstats);
+    unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_mean_b)>(IterationShape::tiles(n));
+    unary_bcast<BroadcastDim::Col, input(cb_inv), output(cb_rstd_b)>(IterationShape::tiles(n));
+    cb_wait_front(cb_mean_b, n);
+    cb_wait_front(cb_rstd_b, n);
+}
+
 ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bits, uint32_t inv_w_bits, bool tail) {
     const uint32_t crt = w.crt, cw = w.cw;
     cb_wait_front(cb_x, crt * cw);
@@ -722,22 +861,26 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
     }
     cb_wait_front(cb_gathered, crt * nstats * gather_tiles);
     cb_wait_front(cb_stat_consts, 1);
-    ln_combine_mean<gather_tiles, cb_stat_consts>(crt, inv_w_bits);
-    {
-        AGRN_ZONE("c_mean_done");
+    if constexpr (ln_fused_comb) {
+        ln_combine_fused(crt, inv_w_bits, finalize.eps_bits);
+    } else {
+        ln_combine_mean<gather_tiles, cb_stat_consts>(crt, inv_w_bits);
+        {
+            AGRN_ZONE("c_mean_done");
+        }
+        cb_wait_front(cb_mean_col, crt);
+        ln_mean_minus_shift<cb_mean_col>(crt);
+        cb_pop_front(cb_mean_col, crt);
+        {
+            AGRN_ZONE("c_meanb_in");
+        }
+        ln_combine_m2<gather_tiles, cb_stat_consts, cb_inv>(crt, finalize);
+        {
+            AGRN_ZONE("c_m2_done");
+        }
+        unary_bcast<BroadcastDim::Col, input(cb_inv), output(cb_rstd_b)>(IterationShape::tiles(crt));
+        cb_wait_front(cb_rstd_b, crt);
     }
-    cb_wait_front(cb_mean_col, crt);
-    ln_mean_minus_shift<cb_mean_col>(crt);
-    cb_pop_front(cb_mean_col, crt);
-    {
-        AGRN_ZONE("c_meanb_in");
-    }
-    ln_combine_m2<gather_tiles, cb_stat_consts, cb_inv>(crt, finalize);
-    {
-        AGRN_ZONE("c_m2_done");
-    }
-    unary_bcast<BroadcastDim::Col, input(cb_inv), output(cb_rstd_b)>(IterationShape::tiles(crt));
-    cb_wait_front(cb_rstd_b, crt);
 
     {
         AGRN_ZONE("c_rstd_done");
