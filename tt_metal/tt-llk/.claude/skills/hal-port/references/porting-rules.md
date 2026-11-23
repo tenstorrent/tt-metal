@@ -23,6 +23,11 @@ Allowed improvements, and only these, during porting:
 2. runtime → compile time: where production computes at runtime a value that is really a template/constexpr value,
    use the compile-time HAL form (immediate instruction) instead of the instruction-buffer form.
 
+SFPU is out of scope: the HAL will not implement `SFP*` instructions. Leave every `TT_SFP*`/`TTI_SFP*` line,
+`sfpi::` call and `ckernel_sfpu_*` helper exactly as production has it (no `HAL-GAP` tag needed). Port only the
+non-SFPU instructions around them (STALLWAIT, SETRWC, address modes, config writes, MOP/replay), keeping their order
+relative to the SFPU code. Report such headers as "ported except SFPU".
+
 Keep RISC code at least as lean as production on per-tile paths (see the edge-case reference).
 If the HAL has no API for an instruction or access, keep the production line with `// HAL-GAP: <what is missing>`.
 Do not edit HAL headers, production headers or tests to make a port work; report the need instead.

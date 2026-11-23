@@ -24,7 +24,8 @@ Read before you start:
    `perf_*.py` that name those sources. Untested headers: say so in your report.
 2. **Port** each header in place in `tests/hal_llk/` following the rules. Production helpers that emit instructions
    are ported into the same header under `namespace hal_port` with their production names; public `_llk_*`
-   functions keep their exact signatures. Headers already ported by others (e.g. `llk_unpack_common.h`) may only be
+   functions keep their exact signatures. `SFP*` instructions and `sfpi::` code stay as production has them (the HAL
+   will not implement SFPU); port only the instructions around them. Headers already ported by others (e.g. `llk_unpack_common.h`) may only be
    extended, never changed in behaviour; coordinate through the plan owner if you must.
 3. **Check codegen** against production for at least one representative variant per thread:
    `bash .claude/skills/hal-port/scripts/compare_codegen.sh <test_x.py> <unpack|math|pack> [--perf]`
