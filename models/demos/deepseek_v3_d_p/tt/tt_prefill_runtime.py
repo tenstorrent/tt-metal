@@ -25,6 +25,7 @@ from models.demos.common.prefill.runners.runner_utils import d2d_activation_widt
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
+from models.demos.deepseek_v3_d_p.tt.loop_handoff import LoopHandoff, LoopHandoffSender, write_kvpe_copy
 from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata, _llama4_scale_geometry, write_chunk_metadata
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, PackedPadding, real_row_mask_host
@@ -126,6 +127,11 @@ class TtPrefillRuntimeConfig:
     first_layer_idx: int = 0
     is_first_rank: bool = True
     is_last_rank: bool = True
+    # GLM-5.4 stage placement: the loop passes this rank runs its loop layers in (None: every pass it holds), and
+    # the damp gates' host weights, one dict per loop pass (reference.glm_5_4.synthetic_gates form). Both None for a
+    # model without a loop.
+    loop_passes: Optional[tuple] = None
+    loop_gates: Optional[list] = None
     sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM
     # Trace-safe metadata prefill: capture the per-chunk forward ONCE as a (segmented) ttnn trace during
     # compile(), then replay it every chunk — advancing the per-chunk scalars (slot_id, actual_start,
@@ -267,6 +273,12 @@ class TtPrefillRuntime:
         self._send_warmup_activation = None
         self._trace_indices_in = None
         self._trace_indices_out = None
+        # GLM-5.4 loop handoff (tt/loop_handoff.py), built at compile(): the stage's handoff shape and cache layers,
+        # the sending stage's persistent buffers (traced), the receiving stage's persistent inbound buffers.
+        self._loop_handoff = None
+        self._loop_kv_layers = None
+        self._loop_sender = None
+        self._loop_handoff_in = None
         self._trace_captured = False
         self._kv_cache = None
         #   _llama4_scale_by_offset — Mistral only: one pre-built query-scale buffer per chunk offset,
@@ -369,11 +381,18 @@ class TtPrefillRuntime:
                 self._build_mtp_predictor()
 
         self._build_start = time.perf_counter()
+        loop_kwargs = {}
+        if self.config.loop_gates is not None or self.config.loop_passes is not None:
+            # The gates are host bf16 weights, never in the TTNN cache; they join the (cache-only) state dict here,
+            # after the cache check, so they cannot pass for the weights an incomplete cache would be rebuilt from.
+            state_dict = {**state_dict, "loop_gates": self.config.loop_gates}
+            loop_kwargs["loop_passes"] = self.config.loop_passes
         self.model = self.MODEL_CLS(
             mesh_device=self.mesh_device,
             config=self.hf_config,
             model_cfg=model_cfg,
             state_dict=state_dict,
+            **loop_kwargs,
             num_layers=self.config.num_layers,
             seq_len=self.config.chunk_size,  # per-chunk size -> MoE/FFN dispatch buffers
             max_seq_len=self.config.max_seq_len,  # KV ring buffer = full per-user cache
@@ -829,6 +848,67 @@ class TtPrefillRuntime:
     def indexer_indices_shape(self) -> tuple:
         return self.model.indexer_indices_shape()
 
+    @property
+    def receives_loop_handoff(self) -> bool:
+        """GLM-5.4 loop pass >= 2 stage (G2): pass 1's KVPE rows and top-k sets arrive after the activation."""
+        return getattr(self.model, "receives_loop_handoff", False)
+
+    @property
+    def sends_loop_handoff(self) -> bool:
+        """GLM-5.4 stage ending on a loop pass before the last (G1): it sends the loop handoff downstream."""
+        return getattr(self.model, "sends_loop_handoff", False)
+
+    def loop_handoff_segments(self) -> list:
+        """``(global spec, mapper config)`` of the loop handoff's D2D segments, in wire order (KVPE rows, then the
+        top-k sets): the boundary tail this stage sends or receives. Available after compile()."""
+        assert self._loop_handoff is not None, "loop_handoff_segments(): no loop handoff on this stage, or not compiled"
+        return self._loop_handoff.segments()
+
+    def _build_loop_handoff(self, kv_caches: MlaKvCaches) -> None:
+        """Shape the G1 -> G2 handoff from this stage's cache and model, and allocate its persistent buffers."""
+        if not (self.sends_loop_handoff or self.receives_loop_handoff) or self._loop_handoff is not None:
+            return
+        hf = self.hf_config
+        storage = kv_caches.kvpe.storage
+        self._loop_handoff = LoopHandoff(
+            mesh_shape=tuple(self.config.mesh_shape),
+            chunk_size_global=self.config.chunk_size,
+            kv_layers=hf.loop_last_layer - hf.loop_first_layer + 1,
+            kv_width=int(storage.shape[-1]),
+            kv_dtype=storage.dtype,
+            index_shape=tuple(self.model.indexer_indices_shape()),
+            num_index_sets=len(self.model.loop_index_sets),
+        )
+        # The loop layers' slots in this stage's cache: the stage starts at or before the loop (G1, G2: slot 0).
+        self._loop_kv_layers = {
+            "first_kv_layer": hf.loop_first_layer - self.config.first_layer_idx,
+            "num_kv_layers": self.model.num_kvpe_cache_layers,
+        }
+        # The top-k sets are the model's: G1 sends what its pass 1 filled, G2 receives straight into what its pass 2
+        # reads.
+        if self.sends_loop_handoff:
+            self._loop_sender = self._new_loop_sender(self.model.loop_index_sets)
+        if self.receives_loop_handoff:
+            # The traced forward's inbound buffers. Zeroed once (allocation does not clear): a stage-alone probe of G2
+            # (first rank past layer 0) has no upstream and reads them as its placeholder handoff, an empty bank A and
+            # top-k sets of position 0. [1:] are the model's own sets, so this zeroes those too.
+            self._loop_handoff_in = self._new_loop_sender(self.model.loop_index_sets).segments()
+            for t in self._loop_handoff_in:
+                zeros = ttnn.zeros_like(t)
+                ttnn.copy(zeros, t)
+                ttnn.deallocate(zeros)
+
+    def _new_loop_sender(self, index_sets: list) -> LoopHandoffSender:
+        return LoopHandoffSender(self.mesh_device, self._loop_handoff, index_sets=index_sets, **self._loop_kv_layers)
+
+    def _loop_metadata_dev(self, slot_id: int, actual_start: int, actual_end: int) -> tuple:
+        """Eager loop handoff: the chunk's (slot, start, end) as the device scalars collect / write_kvpe_copy read."""
+        return tuple(self._meta1_dev(v) for v in (slot_id, actual_start, actual_end))
+
+    def _write_loop_kvpe(self, kv_caches: MlaKvCaches, kvpe_rows: ttnn.Tensor, metadata) -> None:
+        """G2: write pass 1's KVPE rows of this chunk into the stage's copy (bank A), before pass 2 reads it."""
+        write_kvpe_copy(kv_caches.kvpe.storage, kvpe_rows, metadata, self._loop_handoff, **self._loop_kv_layers)
+
     def make_placeholder_indices(self) -> ttnn.Tensor:
         return ttnn.from_torch(
             torch.zeros(self.indexer_indices_shape(), dtype=torch.int64),
@@ -873,6 +953,8 @@ class TtPrefillRuntime:
             buffers += [self._trace_mtp_chunk_ids, self._trace_mtp_tokens]
         if self.receives_indexer_indices:
             buffers.append(self._trace_indices_in)
+        if self.receives_loop_handoff:
+            buffers += self._loop_handoff_in
         if (
             self.config.is_first_rank
             or len(buffers) != len(backings)
@@ -963,6 +1045,7 @@ class TtPrefillRuntime:
         assert self.model_built
         chunk = self.config.chunk_size
         t0 = time.perf_counter()
+        self._build_loop_handoff(kv_caches)
         if self.config.forward_chunks > 1 and self.config.use_trace:
             logger.info("TtPrefillRuntime.compile() — warming the traced packed forward; capture deferred")
             self._kv_cache = kv_caches
@@ -1005,6 +1088,11 @@ class TtPrefillRuntime:
                     mtp_tokens=tt_mtp_tokens,
                     indexer_indices=self.make_placeholder_indices() if self.receives_indexer_indices else None,
                     mtp_id_segments=mtp_id_segments,
+                    loop_handoff=(
+                        [ttnn.zeros_like(t) for t in self._loop_handoff_in]
+                        if self._loop_handoff_in and not self._first_rank_past_layer_0()
+                        else None
+                    ),
                 )
                 ttnn.synchronize_device(self.mesh_device)
             finally:
@@ -1253,9 +1341,8 @@ class TtPrefillRuntime:
         activation, then under MTP the persistent id buffers. None where :attr:`trace_output` is None."""
         if self._trace_output is None:
             return None
-        if self.config.mtp_levels:
-            return [self._trace_output, *self._mtp_id_buffers()]
-        return [self._trace_output]
+        segments = [self._trace_output, *(self._mtp_id_buffers() if self.config.mtp_levels else ())]
+        return segments + (self._loop_sender.segments() if self._loop_sender is not None else [])
 
     @property
     def trace_metadata_msg(self) -> Optional[ttnn.Tensor]:
@@ -1274,9 +1361,12 @@ class TtPrefillRuntime:
         if activation is None:
             return None
         md = self._meta_words_dev(tuple(w & 0xFFFFFFFF for w in words))
-        if not self.config.mtp_levels:
+        extras = list(self._mtp_id_buffers()) if self.config.mtp_levels else []
+        if self._loop_sender is not None:
+            extras += self._loop_sender.segments()
+        if not extras:
             return activation, md
-        return [activation, *(ttnn.zeros_like(b) for b in self._mtp_id_buffers())], md
+        return [activation, *(ttnn.zeros_like(b) for b in extras)], md
 
     def _forward_traced_packed(self, kv_caches: MlaKvCaches):
         """The captured/warmed packed forward: every chunk position reads its (slot, start, end) from its own
@@ -1613,6 +1703,10 @@ class TtPrefillRuntime:
             )
             if self.config.is_first_rank:
                 model_input = union.trunk
+        if self.receives_loop_handoff:
+            # Bank A at the received record's (slot, start, end): _trace_metadata is filled from the D2D record.
+            # The sets arrived in the model's own (_loop_handoff_in[1:] are model.loop_index_sets).
+            self._write_loop_kvpe(kv_caches, self._loop_handoff_in[0], self._trace_metadata)
         out = self.model.forward(
             model_input,
             kv_caches.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
@@ -1636,6 +1730,8 @@ class TtPrefillRuntime:
             mtp_geometry=self._trace_mtp_geometry,
             input_is_embedded=union is not None and self.config.is_first_rank,
         )
+        if self._loop_sender is not None:
+            self._loop_sender.collect(kv_caches.kvpe.storage, self._trace_metadata)
         if mtp:
             if union is not None:
                 union.deallocate()
@@ -1942,6 +2038,7 @@ class TtPrefillRuntime:
         provided_levels: int = 0,
         indexer_indices: Optional[ttnn.Tensor] = None,
         mtp_id_segments: tuple = (),
+        loop_handoff: Optional[list] = None,
     ) -> Union[None, ttnn.Tensor, list]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
@@ -1998,11 +2095,16 @@ class TtPrefillRuntime:
                 When forwards_indexer_indices, read outbound_indexer_indices after this call.
             mtp_id_segments: a non-first rank's ``(chunk ids, lookahead ids)``, received as D2D segments
                 with the activation. Deallocated here. Non-first ranks only, when MTP is on.
+            loop_handoff: GLM-5.4, exactly when receives_loop_handoff (G2): the received loop handoff segments,
+                ``[KVPE rows, top-k set 0, ...]`` (loop_handoff_segments order). The rows are written into this
+                stage's copy of pass 1's KVPE at the chunk's (slot, start, end) before the forward reads it.
+                Deallocated here unless they are the claimed persistent buffers.
 
         Returns:
             None on the last rank. Otherwise the activation to send downstream, or with MTP on the list
-            ``[activation, chunk ids, lookahead ids]`` matching the D2D segments. Eager: the caller owns
-            them. Traced: persistent buffers the next replay overwrites.
+            ``[activation, chunk ids, lookahead ids]`` matching the D2D segments; a stage sending the GLM-5.4
+            loop handoff (G1) appends its segments. Eager: the caller owns them. Traced: persistent buffers the
+            next replay overwrites.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -2033,6 +2135,14 @@ class TtPrefillRuntime:
             f"indexer_indices must be passed exactly when this rank starts on a shared indexer layer "
             f"(receives_indexer_indices={self.receives_indexer_indices})"
         )
+        assert (loop_handoff is not None) == (self.receives_loop_handoff and not self._first_rank_past_layer_0()), (
+            f"loop_handoff must be passed exactly when this stage runs the loop only in passes >= 2 and has an "
+            f"upstream stage (receives_loop_handoff={self.receives_loop_handoff})"
+        )
+        if loop_handoff is None and self.receives_loop_handoff:
+            # A stage-alone probe (the runner's PREFILL_PP_LAYER_OFFSET): no pass-1 stage sends the handoff, so the
+            # stage reads its zero placeholder (an all-zero bank A and top-k), like the DFlash partial placeholder.
+            loop_handoff = self._loop_handoff_in
         if self.config.use_trace:
             # Traced path: update the persistent input + per-element metadata IN PLACE, then replay the
             # captured segmented forward. The metadata (slot_id, actual_start, actual_end) drives every
@@ -2119,13 +2229,22 @@ class TtPrefillRuntime:
                 else:
                     ttnn.copy(indexer_indices, self._trace_indices_in)
                     ttnn.deallocate(indexer_indices)
+            if loop_handoff is not None and loop_handoff is not self._loop_handoff_in:
+                if self._extras_are_caller_filled:
+                    assert all(
+                        s is b for s, b in zip(loop_handoff, self._loop_handoff_in)
+                    ), "claimed loop handoff segments must be the persistent buffers the drain writes"
+                else:
+                    for src, dst in zip(loop_handoff, self._loop_handoff_in):
+                        ttnn.copy(src, dst)
+                        ttnn.deallocate(src)
             self._controller.replay(variant=mtp_variant)
 
             # Non-last rank: return the persistent output activation (replay just refreshed it) for the
             # driver to forward downstream over D2D. Last/single rank: the populated KV cache is the output.
             if self.config.is_last_rank:
                 return None
-            if self.config.mtp_levels:
+            if self.config.mtp_levels or self._loop_sender is not None:
                 return self.trace_send_segments
             return self._trace_output
 
@@ -2145,6 +2264,19 @@ class TtPrefillRuntime:
         elif self.config.mtp_levels:
             mtp_union, model_input, mtp_ids_fwd = self._mtp_prepare_input(input_tensor, mtp_tokens, mtp_id_segments)
             mtp_owns_input = self.config.is_first_rank
+
+        loop_md, loop_sender = None, None
+        # Eager G1 builds a fresh handoff per chunk for its caller to send; a last rank (a stage-alone probe) has no
+        # downstream, so it builds none (the traced path still collects into its persistent sender: production cost).
+        eager_sends = self.sends_loop_handoff and not self.config.is_last_rank
+        if loop_handoff is not None or eager_sends:
+            loop_md = self._loop_metadata_dev(slot_id, actual_start, actual_end)
+        if loop_handoff is not None:
+            assert len(loop_handoff) == len(self._loop_handoff.segments()), "loop handoff segments missing"
+            self._write_loop_kvpe(kv_caches, loop_handoff[0], loop_md)
+            if loop_handoff is not self._loop_handoff_in:  # else they already are the model's sets
+                for src, dst in zip(loop_handoff[1:], self.model.loop_index_sets):
+                    ttnn.copy(src, dst)
 
         out = self.model.forward(
             model_input,
@@ -2168,6 +2300,17 @@ class TtPrefillRuntime:
             ttnn.deallocate(model_input)
         if indexer_indices is not None and indexer_indices is not getattr(self.model, "last_indexer_indices", None):
             ttnn.deallocate(indexer_indices)
+        if eager_sends:
+            # Fresh buffers per eager chunk (copies of the model's sets): the caller owns (and frees) what this call
+            # returns.
+            loop_sender = self._new_loop_sender([ttnn.clone(t) for t in self.model.loop_index_sets])
+            loop_sender.collect(kv_caches.kvpe.storage, loop_md)
+        if loop_handoff is not None and loop_handoff is not self._loop_handoff_in:
+            for t in loop_handoff:
+                ttnn.deallocate(t)
+        if loop_md is not None:
+            for t in loop_md:
+                ttnn.deallocate(t)
 
         if self.config.dflash_enabled:
             if self.config.is_last_rank:
@@ -2196,11 +2339,13 @@ class TtPrefillRuntime:
                 mtp_union.deallocate()
             if self.config.is_last_rank:
                 return None
-            return [out, *mtp_ids_fwd]
+            return [out, *mtp_ids_fwd] + (loop_sender.segments() if loop_sender is not None else [])
 
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
         # Last/single rank: forward returns None (no intermediates requested); the KV cache is the output.
-        return out if not self.config.is_last_rank else None
+        if self.config.is_last_rank:
+            return None
+        return [out, *loop_sender.segments()] if loop_sender is not None else out
 
     @property
     def activation_planes(self) -> int:
@@ -2260,7 +2405,9 @@ class TtPrefillRuntime:
         if not self.config.use_trace or self._trace_d2h_service is None:
             return 0
         # A packed capture acks a warm forward's every chunk position (_capture_trace_packed).
-        return self.config.forward_chunks * self.layer_ack_layers(0, self.config.num_layers)[1]
+        # A looped model acks once per layer PASS (a whole-loop rank: 106 for GLM-5.4's 78 layers).
+        passes = getattr(self.model, "num_layer_passes", self.config.num_layers)
+        return self.config.forward_chunks * self.layer_ack_layers(0, passes)[1]
 
     def set_d2h_ack_service(self, d2h_service) -> None:
         """Register the D2H layer-ack service for a TRACED run, baking it into the capture.

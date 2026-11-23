@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.4 execution order (torch-free): the CPU reference stack and the device transformer both run it."""
+"""GLM-5.4 execution order (torch-free): the CPU reference stack and the device transformer both run it, and the
+runner places its passes on pipeline stages (``pass_schedule``)."""
 
 from dataclasses import dataclass
 
@@ -28,3 +29,40 @@ def loop_schedule(num_layers: int, loop_first_layer: int, loop_last_layer: int, 
         steps.append(LoopStep("gate", k))
     steps += [LoopStep("layer", 0, i) for i in range(loop_last_layer + 1, num_layers)]
     return steps
+
+
+# --- Stage placement (pipeline ranks over the 106-pass schedule) ---
+
+
+def pass_schedule(config):
+    """The pipeline positions of ``config``: one per layer pass (``PassSchedule``), the loop's passes in order."""
+    from models.demos.common.prefill.runners.pass_schedule import PassSchedule
+
+    steps = loop_schedule(config.num_hidden_layers, config.loop_first_layer, config.loop_last_layer, config.loop_count)
+    return PassSchedule(
+        passes=tuple((s.layer, s.loop_pass) for s in steps if s.kind == "layer"), num_layers=config.num_hidden_layers
+    )
+
+
+def runs_later_loop_pass(loop_passes) -> bool:
+    """A stage running some loop pass >= 2 (the whole loop on one stage, or GLM-5.4 G2): it holds pass-2 state, a
+    window ring past each cache slot's pass-1 positions (tt.mla.two_bank). ``loop_passes`` is the stage's loop passes
+    (``PassSchedule.rank_slice``); None means every pass. The model and the cache allocator both decide by this."""
+    return loop_passes is None or any(p >= 2 for p in loop_passes)
+
+
+def runs_only_later_loop_passes(loop_passes) -> bool:
+    """A stage running the loop only in passes >= 2 (GLM-5.4 G2): it runs no indexer (every pass-2 layer reuses its
+    pass-1 layer's top-k, A5) and receives pass 1's KV and top-k from the pass-1 stage (the loop handoff). None means
+    every pass."""
+    return loop_passes is not None and bool(loop_passes) and 1 not in loop_passes
+
+
+def stage_indexer_types(config, loop_passes: tuple) -> list:
+    """The full/shared map a stage builds its blocks with: the model's, except that a stage running the loop only
+    in passes >= 2 marks every loop layer ``shared`` (no indexer weights, no index-cache slot)."""
+    types = list(config.indexer_types)
+    if runs_only_later_loop_passes(loop_passes):
+        for layer in range(config.loop_first_layer, config.loop_last_layer + 1):
+            types[layer] = "shared"
+    return types

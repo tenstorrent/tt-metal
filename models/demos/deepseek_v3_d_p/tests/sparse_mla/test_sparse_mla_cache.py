@@ -223,6 +223,7 @@ def test_glm53_persistent_indexer_indices_are_replaced_without_deallocation(monk
     transformer.kv_only_last_layer = False
     transformer.is_last_rank = False
     transformer.num_layers = len(modes)
+    transformer._loop_passes = None
     transformer.steps, transformer.loop_gates = transformer._build_schedule(glm_5_3_hf_config(), {}, 1, None, 1)
 
     monkeypatch.setattr(transformer_module, "signpost", lambda *args, **kwargs: None)

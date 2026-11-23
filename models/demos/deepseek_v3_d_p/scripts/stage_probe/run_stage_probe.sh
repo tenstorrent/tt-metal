@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
-# Time one GLM-5.3 pipeline stage alone on this galaxy as a single 8x4 rank.
+# Time one GLM-5.3 pipeline stage alone on this galaxy as a single 8x4 rank (STAGE_PROBE_MODEL=glm54: one GLM-5.4
+# stage, whose <first_layer> <num_layers> count layer PASSES of the 106-pass schedule, e.g. G2 = 54 28).
 #
 #   run_stage_probe.sh <name> <first_layer> <num_layers> [request_tokens]
 #
@@ -22,6 +23,12 @@ NAME="${1:?usage: run_stage_probe.sh <name> <first_layer> <num_layers> [request_
 FIRST_LAYER="${2:?first layer (0-indexed)}"
 NUM_LAYERS="${3:?layer count}"
 REQUEST_TOKENS="${4:-1044480}"
+PROBE_MODEL="${STAGE_PROBE_MODEL:-glm53}"
+case "${PROBE_MODEL}" in
+  glm53) PREFILL_MODEL_NAME=glm_5_3 ;;
+  glm54) PREFILL_MODEL_NAME=glm_5_4 ;;
+  *) echo "STAGE_PROBE_MODEL must be glm53 or glm54, got ${PROBE_MODEL}" >&2; exit 2 ;;
+esac
 CHUNK_SIZE=5120
 WARMUP_CHUNKS="${STAGE_PROBE_WARMUP_CHUNKS:-10}"
 # Extra runner exports, e.g. "export PREFILL_USE_TRACE=0;" for a debug run. tt-run does not forward PREFILL_*,
@@ -50,7 +57,7 @@ SERVICE_ID="stage_probe_${NAME}_${STAMP}"
 
 stage() { echo "[$(date -u +%FT%TZ)] $*" | tee -a "${STAGE_LOG}"; }
 
-stage "probe ${NAME}: layers [${FIRST_LAYER}, $((FIRST_LAYER + NUM_LAYERS))) request=${REQUEST_TOKENS} tok " \
+stage "probe ${NAME} (${PROBE_MODEL}): layers [${FIRST_LAYER}, $((FIRST_LAYER + NUM_LAYERS))) request=${REQUEST_TOKENS} tok " \
   "warmup=${WARMUP_CHUNKS} chunks, ${TT_METAL_HOME} @ ${SHA} dirty=$(git -C "${TT_METAL_HOME}" status --porcelain --untracked-files=no | wc -l)"
 cat > "${RUN_DIR}/command.txt" <<EOF
 $0 $*
@@ -141,7 +148,7 @@ stage "launching runner (tt-run, 1 rank, ${BINDING##*/})"
     bash -lc "cd '${TT_METAL_HOME}'; source python_env/bin/activate; export TT_METAL_HOME='${TT_METAL_HOME}'; \
       export PYTHONPATH='${TT_METAL_HOME}'; \
       export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; export PYTHONUNBUFFERED=1; \
-      export PREFILL_MANIFEST='${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/glm53.json'; \
+      export PREFILL_MANIFEST='${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/${PROBE_MODEL}.json'; \
       export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; export PREFILL_NUM_USERS=1; \
       export PREFILL_NUM_LAYERS=${NUM_LAYERS}; export PREFILL_PP_LAYER_OFFSET=${FIRST_LAYER}; \
       export PREFILL_ENABLE_MIGRATION=0; \
@@ -169,8 +176,8 @@ done
 stage "runner ready after ~${waited}s; starting producer"
 
 (
-  export PREFILL_PRODUCER_MANIFEST="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/glm53.json"
-  export PREFILL_MODEL=glm_5_3 PREFILL_CHUNK_SIZE=${CHUNK_SIZE} PREFILL_MAX_SEQ_LEN=1064960
+  export PREFILL_PRODUCER_MANIFEST="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/${PROBE_MODEL}.json"
+  export PREFILL_MODEL=${PREFILL_MODEL_NAME} PREFILL_CHUNK_SIZE=${CHUNK_SIZE} PREFILL_MAX_SEQ_LEN=1064960
   export PREFILL_NUM_USERS=1 PREFILL_NUM_LAYERS=${NUM_LAYERS}
   export PREFILL_PRODUCER_CHUNKS=$((REQUEST_TOKENS / CHUNK_SIZE)) PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}
   export PREFILL_PRODUCER_MAX_REQUESTS=1 PREFILL_PRODUCER_MULTI_TURN_PROB=0 PREFILL_PRODUCER_CHECK_PCC=0
@@ -205,6 +212,12 @@ if [ "${RUNNER_CRASHED}" = 1 ]; then
   exit 1
 fi
 stage "producer rc=${PROD_RC}; $(grep -c 'CHUNK_RETIRE.*warmup=0' "${PRODUCER_LOG}" || true) measured chunks"
+if [ "${PROD_RC}" != 0 ]; then
+  # A failed producer sends no SHUTDOWN sentinel: stop the runner now (the exit trap kills its process group)
+  # rather than holding the device for the drain timeout.
+  RUNNER_RC=stopped
+  exit 1
+fi
 
 # The SHUTDOWN sentinel makes the runner drain, release its trace and close the mesh.
 if timeout 600 tail --pid="${RUNNER_PID}" -f /dev/null; then

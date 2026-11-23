@@ -136,35 +136,46 @@ class GLM53Adapter(MLAPrefillAdapter):
         if params.mtp_levels:
             enable_mtp_indexer_slot(hf_config)
 
+        seq_len, bank_aligned = self.kv_cache_slot_rows(hf_config, params)
         kvpe_cache = init_mla_kv_cache(
             cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             hf_config=hf_config,
             mesh_device=mesh_device,
-            seq_len=params.max_seq_len,
+            seq_len=seq_len,
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers + mtp_levels,
             num_users=self.kv_cache_slots(params),
             tp_axis=kv_tp_axis,
-            bank_aligned=True,
+            bank_aligned=bank_aligned,
         )
         first_full = full_indexer_rank(hf_config, params.first_layer_idx)
         num_index_layers = (
             full_indexer_rank(hf_config, params.first_layer_idx + params.num_layers + mtp_levels) - first_full
         )
-        index_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=hf_config.index_head_dim,
-            mesh_device=mesh_device,
-            seq_len=params.max_seq_len,
-            mesh_shape=list(params.mesh_shape),
-            sp_axis=params.sp_axis,
-            num_kvpe_cache_layers=num_index_layers,
-            num_users=self.kv_cache_slots(params),
-            dtype=ttnn.bfloat8_b,
-            tp_axis=kv_tp_axis,
-            bank_aligned=True,
+        # A stage of only shared layers (GLM-5.4's loop pass-2 stage) runs no indexer and owns no index cache.
+        index_cache = (
+            None
+            if num_index_layers == 0
+            else init_kvpe_cache(
+                kvpe_cache_head_dim=hf_config.index_head_dim,
+                mesh_device=mesh_device,
+                seq_len=seq_len,
+                mesh_shape=list(params.mesh_shape),
+                sp_axis=params.sp_axis,
+                num_kvpe_cache_layers=num_index_layers,
+                num_users=self.kv_cache_slots(params),
+                dtype=ttnn.bfloat8_b,
+                tp_axis=kv_tp_axis,
+                bank_aligned=bank_aligned,
+            )
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
+
+    def kv_cache_slot_rows(self, hf_config, params) -> tuple[int, bool]:
+        """(positions per cache slot, whether each slot must start on DRAM bank 0): ``max_seq_len`` slots, aligned
+        for the paged KV migration that reads them."""
+        return params.max_seq_len, True
 
     @property
     def default_sparse_kv_cache_format(self):

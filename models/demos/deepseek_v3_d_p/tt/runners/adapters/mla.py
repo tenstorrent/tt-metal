@@ -61,6 +61,9 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     # Missing TTNN cache pieces are converted from the HF checkpoint (PREFILL_HF_MODEL) at start-up, which needs the
     # DeepSeek-V3 HF key layout (see tt/runners/weight_categories.py). A model whose checkpoint differs sets False.
     builds_missing_weight_cache = True
+    # Model name the TTNN weight-cache directory is named after; None = ``name``. A variant that reads another
+    # model's cache unchanged (GLM-5.4 reads GLM-5.3's) names that model, so no directory of its own is created.
+    weight_cache_model: Optional[str] = None
 
     def fabric_payload_size(self) -> int:
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
@@ -92,7 +95,8 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             return None
         arch = "bh" if is_blackhole() else "wh"
         num_devices = ttnn.get_num_devices()
-        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / mesh_cache_key(mesh_shape, sp_axis)
+        model = self.weight_cache_model or self.name
+        path = Path(env_cache) / f"{model}_{arch}_{num_devices}dev" / mesh_cache_key(mesh_shape, sp_axis)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -140,6 +144,10 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             not params.tp_shard_kv or self.supports_tp_shard_kv
         ), f"tp_shard_kv requested but model {self.name!r} does not support it (supports_tp_shard_kv=False)"
         return params.tp_shard_kv
+
+    def loop_gate_weights(self, hf_config) -> Optional[list]:
+        """Host weights of a looped model's damp gates, one dict per loop pass; None for a model without a loop."""
+        return None
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the MLA model and return the runtime. The runtime (TtPrefillRuntime)
@@ -191,6 +199,8 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             hf_model_path=os.environ.get("PREFILL_HF_MODEL")
             or os.environ.get(self.env_var, "")
             or self.hf_model_default,
+            loop_passes=params.loop_passes,
+            loop_gates=self.loop_gate_weights(hf_config),
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

@@ -5,8 +5,10 @@
 
 A config without loop fields (GLM-5.3 and every other model) and a GLM-5.4 stage slice that holds no loop layer run
 each block once, in order, as before the loop existed. A slice holding the whole loop runs the reference
-``loop_schedule``. A slice holding part of the loop (a stage split, q171.2.8) and a loop without one gate weight per
-pass are rejected. The device schedule of the reduced stack is also checked on device (test_glm54_loop_device).
+``loop_schedule``, restricted to its ``loop_passes`` when it is a pipeline stage holding one pass (G1, G2). A slice
+holding part of the loop's layers, passes that cannot follow its prelude/coda layers, and a loop without one gate
+weight per pass are rejected. The device schedule of the reduced stack is also checked on device
+(test_glm54_loop_device, test_glm54_stage_device).
 """
 
 import pytest
@@ -17,12 +19,13 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import glm_5_4_hf_con
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 
 
-def _schedule(config, first_layer_idx, num_layers, state_dict=None, kv_only_last_layer=False):
+def _schedule(config, first_layer_idx, num_layers, state_dict=None, kv_only_last_layer=False, loop_passes=None):
     t = TtPrefillTransformer.__new__(TtPrefillTransformer)
     t.first_layer_idx, t.num_layers, t.kv_only_last_layer = first_layer_idx, num_layers, kv_only_last_layer
+    t._loop_passes = loop_passes
     t.mesh_device = None  # gates are never built on these paths
     steps, gates = t._build_schedule(config, state_dict or {}, 1, None, 1)
-    assert gates == []
+    assert gates == {}
     return steps
 
 
@@ -56,10 +59,17 @@ def test_glm54_kv_only_last_layer_cannot_be_a_loop_layer(expect_error):
         _schedule(glm_5_4_hf_config(), 0, 54, kv_only_last_layer=True)
 
 
-@pytest.mark.parametrize("ack", ["d2h_service", "on_layer_complete"])
-def test_glm54_loop_model_takes_no_layer_acks(ack, expect_error):
-    """While pass 2 runs the GLM-5.3 attention stand-in it would ack each loop layer id twice (q171.2.5 / .8)."""
-    t = TtPrefillTransformer.__new__(TtPrefillTransformer)
-    t.loop_gates = [object()]
-    with expect_error(AssertionError, "takes no layer acks"):
-        t.forward(object(), object(), 0, **{ack: object()})
+@pytest.mark.parametrize(
+    "first, n, passes, match",
+    [
+        (0, 54, (2,), "prelude layers 0..25 must precede loop pass 1"),
+        (26, 52, (1,), "coda layers 54..77 must follow loop pass 2"),
+        (26, 28, (2, 1), "not a contiguous run"),
+        (26, 28, (3,), "not a contiguous run"),
+        (0, 26, (1,), "hold no loop layer"),
+    ],
+    ids=["prelude-before-pass2", "coda-after-pass1", "unordered", "past-loop-count", "no-loop-layers"],
+)
+def test_glm54_stage_passes_are_checked(first, n, passes, match, expect_error):
+    with expect_error(ValueError, match):
+        _schedule(glm_5_4_hf_config(), first, n, loop_passes=passes)

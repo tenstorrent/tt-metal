@@ -13,7 +13,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
+from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SAME_CHUNK_NEXT_LAYER, PushStep, packed_push_targets
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -703,8 +703,8 @@ class TtPrefillBlock(LightweightModule):
             padding_side: "right" or "left"; threaded to the MoE FFN for padding-aware routing.
             loop_pass2: run GLM-5.4 loop pass 2 (block built with loop_pass2=True): two-bank attention over this
                 layer's pass-1 KVPE at `indexer_indices` (its pass-1 group's top-k, required) plus the window of its
-                own pass-2 KV, kept in the slot's window ring. No pad-zero and no layer ack (pass 2 writes no
-                pass-1 rows; its ack ids are the stage placement's).
+                own pass-2 KV, kept in the slot's window ring. No pad-zero (pass 2 writes no pass-1 rows); its layer
+                ack goes out under ``ack_layer_idx``, the pass's own id (pass_schedule.loop_ack_id).
             force_kv_only: run this one call KV-only on top of the construction-time flag -- MLA
                 fills the cache and returns, no FFN/MoE, no block output. For MTP's last level.
 
@@ -1023,7 +1023,19 @@ class TtPrefillBlock(LightweightModule):
         # blocks are not `TtPrefillBlock` can hand off to migration without duplicating them. Kimi-K3 is
         # that model: only 24 of its 93 layers write a KV slab, so its block is its own class. Behaviour
         # here is unchanged; every argument is what this function used to read inline.
-        if loop_pass2:  # pass 2 wrote only its slot's window ring: nothing to zero, and it acks no layer
+        if loop_pass2:
+            # Pass 2 wrote only its slot's window ring, no pass-1 rows: nothing to zero. It acks under its own pass
+            # id (ack_layer_idx, pass_schedule.loop_ack_id), never the pass-1 layer's.
+            if d2h_service is not None or on_layer_complete is not None:  # as zero_pad_and_ack: no transport, no ack
+                assert ack_layer_idx is not None, "a loop pass-2 layer acks under its pass's own id (ack_layer_idx)"
+                send_layer_ack(
+                    mesh_device=self.mesh_device,
+                    global_layer_idx=ack_layer_idx,
+                    d2h_service=d2h_service,
+                    metadata_msg=metadata_msg,
+                    on_layer_complete=on_layer_complete,
+                    trace_controller=getattr(self, "_trace_controller", None),
+                )
             x = ttnn.add(x, mla_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(mla_out)
             return x, mla_indices, kv_intermediates
