@@ -57,12 +57,23 @@ SWAP_GB = float(os.environ.get("RESIDENT_SWAP_GB", "0"))
 
 
 def _host_bytes(snap):
-    """bytes of a snapshot_to_host result's tensors (every chip's)"""
-    return sum(
-        int(v.volume() * v.element_size()) if hasattr(v, "volume") else 1  # (a fake's entries count 1)
-        for k, v in snap.items()
-        if k != "n_tokens"
-    )
+    """bytes of a snapshot_to_host result's tensors, every chip's shard: a mesh tensor's volume() is one shard's (the
+    host tier's budget counted a quarter of its bytes on the 4-chip mesh until 2026-11-23)"""
+    total = 0
+    for k, v in snap.items():
+        if k == "n_tokens":
+            continue
+        if not hasattr(v, "volume"):  # (a fake's entries count 1)
+            total += 1
+            continue
+        try:
+            import ttnn
+
+            shards = ttnn.get_device_tensors(v)
+        except Exception:
+            shards = [v]
+        total += sum(int(t.volume() * t.element_size()) for t in shards)
+    return total
 
 
 BLOCK = 64  # KV block (positions): the engine's page
