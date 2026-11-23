@@ -59,6 +59,7 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::optional<ttnn::Tensor>& x_row_index = std::nullopt,
     uint32_t zero_output_row = std::numeric_limits<uint32_t>::max(),
     uint32_t core_grid_x = 0,
-    uint32_t core_row_groups = 1);
+    uint32_t core_row_groups = 1,
+    uint32_t core_grid_y = 0);
 
 }  // namespace ttnn::prim

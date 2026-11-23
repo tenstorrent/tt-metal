@@ -211,7 +211,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // exceeding this max; the CBs below are sized to the max so a smaller pick
     // simply uses fewer of the reserved tiles.
     uint32_t GRID_X = op.grid_x;  // <= kCoreGridX (validated)
-    uint32_t GRID_Y = kCoreGridY;
+    uint32_t GRID_Y = op.grid_y;  // 8 or 10 (validated)
     // Row groups (op.row_groups): the rows split into independent grids of RY rows, each running its own experts
     // (adaptive_chunk::RowGroupSchedule). All M math is per group.
     const uint32_t ROW_GROUPS = op.row_groups;
@@ -242,10 +242,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
+        grid_size.x >= GRID_X && grid_size.y >= GRID_Y,
         "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
-        kCoreGridX,
-        kCoreGridY,
+        GRID_X,
+        GRID_Y,
         grid_size.x,
         grid_size.y);
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard

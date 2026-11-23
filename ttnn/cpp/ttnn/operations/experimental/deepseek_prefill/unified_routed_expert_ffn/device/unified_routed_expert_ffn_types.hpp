@@ -143,6 +143,9 @@ struct UnifiedRoutedExpertFfnParams {
     // key.
     uint32_t row_groups = 1;
 
+    // Worker rows (8 or 10; default kCoreGridY), split into row_groups groups. Part of the key.
+    uint32_t grid_y = kCoreGridY;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -159,7 +162,8 @@ struct UnifiedRoutedExpertFfnParams {
         "precise",
         "math_fidelity",
         "grid_x",
-        "row_groups");
+        "row_groups",
+        "grid_y");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -177,7 +181,8 @@ struct UnifiedRoutedExpertFfnParams {
             precise,
             math_fidelity,
             grid_x,
-            row_groups);
+            row_groups,
+            grid_y);
     }
 };
 
