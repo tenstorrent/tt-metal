@@ -251,6 +251,133 @@ class BankMoeExperts:
             math_approx_mode=False,
         )
 
+    def _call_rows(self, x, weights, indices, R):
+        """R verify rows (x [1,1,R,H], weights / indices [1,1,R,8]): the union of the rows' experts is read once; row
+        r's output is bit-equal to the 1-row call on row r alone (module moe_bank_mr_reader.cpp). Bank layout only."""
+        assert not self.pf and 1 < R <= 4, (self.pf, R)
+        assert x.dtype == ttnn.bfloat16 and weights.dtype == ttnn.bfloat16 and indices.dtype == ttnn.uint16
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, R, HIDDEN]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, ttnn.L1_MEMORY_CONFIG
+        )
+        acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
+        CB_GA, CB_PLAN, CB_TOK, CB_DONE = 12, 13, 14, 15
+        common = {"topk": TOP_K, "hid_tiles": HID_TILES, "rows": R, "cb_plan": CB_PLAN}
+        r_named = {
+            "cb_x": CB_X, "cb_w": CB_W, "cb_wd": CB_WD, "cb_ws16": CB_WS16, "cb_scr": CB_SCR, "cb_tok": CB_TOK,
+            "cb_done": CB_DONE, "kt_gu": KT_GU, "kt_dn": KT_DN, "x_tiles": KT_GU, "n_banks": self.nb, "base": self.base,
+            "x_lo": X_LO, "dn_slots": self.dn_slots, **common,
+        }  # fmt: skip
+        w_named = {
+            "cb_ga": CB_GA, "cb_g32": CB_G32, "cb_u16": CB_U16, "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O,
+            "cb_z": CB_Z, "cb_scr": CB_SCR, "sem_u": SEM_U, "sem_g": SEM_G, "sem_r": SEM_R, "n_banks": self.nb,
+            "x_lo": X_LO, "dense_pages": F.pages(HIDDEN), **common,
+        }  # fmt: skip
+        c_named = {
+            "cb_x": CB_X, "cb_w": CB_W, "cb_wd": CB_WD, "cb_ga": CB_GA, "cb_g32": CB_G32, "cb_u16": CB_U16,
+            "cb_ws16": CB_WS16, "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O, "cb_tok": CB_TOK, "cb_done": CB_DONE,
+            "sbk": self.sbk, "kt_gu": KT_GU, "kt_dn": KT_DN, **common,
+        }  # fmt: skip
+        dense = None
+        if self.dense_out:  # one twin per row count, made on the first (eager) call
+            self.dense_rows = getattr(self, "dense_rows", {})
+            if R not in self.dense_rows:
+                self.dense_rows[R] = F.dense_tensor(self.device, torch.zeros(R, HIDDEN), ttnn.bfloat16)
+            dense = self.dense_rows[R]
+        cx, cy = self.noc[self.collector]
+        r_args, w_args, c_args = [], [], []
+        for c, f, b, k, j, off, dslot, n, gate in self.workers_info:
+            core = ttnn.CoreCoord(*c)
+            px, py = self.noc[gate]
+            r_args.append((core, [x.buffer_address(), weights.buffer_address(), indices.buffer_address(),
+                                  self.w_gate_up.buffer_address(), self.w_down.buffer_address(), f, b, k, off, dslot]))  # fmt: skip
+            w_args.append((core, [f, j, px, py, cx, cy, out.buffer_address(), n, indices.buffer_address(), b]
+                           + ([dense.buffer_address()] if dense is not None else [])))  # fmt: skip
+            c_args.append((core, [f]))
+        (x0, y0), (x1, y1) = self.mcast_rect
+        dm = ttnn.DataMovementConfigDescriptor
+        flip = {(w[0][0], w[0][1]) for w in self.workers_info if w[2] in self.noc1_banks}
+        kernels = []
+        for sel, rnoc, wnoc in ((False, ttnn.NOC.NOC_0, ttnn.NOC.NOC_1), (True, ttnn.NOC.NOC_1, ttnn.NOC.NOC_0)):
+            cores = [c for c, *_ in self.workers_info if ((c[0], c[1]) in flip) == sel]
+            if not cores:
+                continue
+            pick = lambda args: [(k, v) for k, v in args if ((k.x, k.y) in flip) == sel]  # noqa: E731
+            kernels += [
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/moe_bank_mr_reader.cpp", core_ranges=_range_set(cores),
+                    compile_time_args=acc(x) + acc(weights) + acc(indices) + acc(self.w_gate_up) + acc(self.w_down),
+                    named_compile_time_args=list(r_named.items()), runtime_args=pick(r_args),
+                    config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=rnoc),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/moe_bank_mr_writer.cpp", core_ranges=_range_set(cores),
+                    compile_time_args=acc(out) + acc(indices) + (acc(dense) if dense is not None else []),
+                    named_compile_time_args=list(w_named.items()), defines=[("DENSE_OUT", "1")] * (dense is not None),
+                    runtime_args=pick(w_args), config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=wnoc),
+                ),
+            ]  # fmt: skip
+        kernels += [
+            ttnn.KernelDescriptor(
+                kernel_source=f"{KDIR}/moe_bank_mr_compute.cpp", core_ranges=self.workers,
+                named_compile_time_args=list(c_named.items()),
+                defines=[("STD_MM_GU", "1")] * self.std_gu + [("STD_MM_DN", "1")] * self.std_dn,
+                runtime_args=c_args, config=self.compute_config,
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=f"{KDIR}/moe_expert_collector.cpp", core_ranges=_range_set([self.collector]),
+                named_compile_time_args=[
+                    ("cb_hid", CB_HID), ("sem_g", SEM_G), ("sem_r", SEM_R), ("n_senders", R * HID_TILES),
+                    ("hid_bytes", R * HID_TILES * 64), ("cb_x", CB_X), ("x_tiles", KT_GU), ("sem_x", SEM_X),
+                    ("topk", TOP_K), ("n_guess", 0), ("n_groups", 0), ("sem_pf", SEM_PF), ("n_ring", 0),
+                ],
+                runtime_args=[(ttnn.CoreCoord(*self.collector), [x0, y0, x1, y1, self.mcast_dests, 0, 0, 0, 0, 0])],
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+        ]  # fmt: skip
+        sems = [
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=self.all_cores, initial_value=0) for i in (SEM_U, SEM_G, SEM_R)
+        ]
+        prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=self._cbs_rows(R))
+        io = [x, weights, indices, self.w_gate_up, self.w_down] + ([dense] if dense is not None else []) + [out]
+        y = ttnn.generic_op(io, prog)
+        if dense is not None:  # register the twin for this output; drop the previous output's entry (no leak)
+            last = getattr(self, "_last_rows", None)
+            if last is not None:
+                F._TWIN.pop(id(last), None)
+            F.set_twin(y, dense, R)
+            self._last_rows = y
+        return y
+
+    def _cbs_rows(self, R):
+        tiny = ttnn.TileDescriptor(ttnn.Tile([1, 32]))
+        bf = ttnn.bfloat16
+        t32 = ttnn.TileDescriptor(ttnn.Tile([32, 32]))
+        gtile = ttnn.Tile([32, 32]).get_tile_size(self.w_gate_up.dtype)
+        dtile = ttnn.Tile([32, 32]).get_tile_size(self.w_down.dtype)
+
+        def cb(cores, total, *fmts):
+            return ttnn.CBDescriptor(total_size=total, core_ranges=cores, format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=i, data_format=d, page_size=ps, tile=t) for i, d, ps, t in fmts])  # fmt: skip
+
+        w = self.workers
+        return [
+            cb(w, R * KT_GU * 64, (CB_X, bf, 64, tiny)),
+            cb(w, 2 * KT_GU * gtile, (CB_W, self.w_gate_up.dtype, gtile, t32)),  # two whole columns
+            cb(w, HID_TILES * dtile, (CB_WD, self.w_down.dtype, dtile, t32)),  # 8 down slots
+            cb(w, R * TOP_K * 64, (12, bf, 64, tiny)),  # A out, 8 R tiles
+            cb(w, R * 2048, (CB_G32, bf, 2048, t32)),
+            cb(w, R * 2048, (CB_U16, bf, 2048, t32)),
+            cb(w, R * 2048, (CB_WS16, bf, 2048, t32)),
+            cb(w, 2 * 2048, (CB_H16, bf, 2048, t32)),
+            cb(self.all_cores, R * HID_TILES * 64, (CB_HID, bf, 64, tiny)),
+            cb(w, 2 * 64, (CB_O, bf, 64, tiny)),
+            cb(w, 2048, (CB_Z, bf, 2048, t32)),
+            cb(w, 256, (CB_SCR, ttnn.uint16, 64, tiny)),
+            cb(w, 2048, (13, bf, 2048, t32)),  # plan
+            cb(w, R * 32, (14, ttnn.uint16, 32, ttnn.TileDescriptor(ttnn.Tile([1, 16])))),  # tokens
+            cb(w, R * 32, (15, ttnn.uint16, 32, ttnn.TileDescriptor(ttnn.Tile([1, 16])))),  # done
+        ]
+
     def _assign(self):
         self.workers_info = []  # (core, flags, bank, kslot, j, col_off, dslot, n, partner gate core)
         for b in range(self.nb):
@@ -318,6 +445,9 @@ class BankMoeExperts:
         experts it marks are read from the ring, and every ring worker pops the slabs. guess_out (PF layout): a mask of the
         same shape the collector writes with this step's n_guess highest-weight experts (for a later step's guess).
         signal: tensor prefetcher op signal address the collector raises at its end (ExpertPipe.request waits on it)."""
+        if x.shape[-2] > 1:  # speculative verify: R rows (moe_bank_mr_*.cpp); the 1-row path below is unchanged
+            assert guess is None and guess_out is None and signal is None, "multi-row: no expert prefetch"
+            return self._call_rows(x, weights, indices, x.shape[-2])
         ring = guess is not None
         assert not ring or self.ring is not None
         for t in (x, weights, indices):
