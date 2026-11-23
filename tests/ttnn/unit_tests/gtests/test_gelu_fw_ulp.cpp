@@ -185,16 +185,14 @@ inline double gelu_exact(double x) {
 /**
  * Compute the expected BF16 GELU value with DAZ+FTZ applied.
  *
- * Uses float32 erff (matching torch.gelu's arithmetic model) rather than fp64
- * erfc. This ensures the reference saturates at the same points as the kernel
- * and produces the same float32 staircase values in the deep-tail region,
- * keeping ULP ≤ 2 vs the kernel everywhere.
+ * Uses the fp64 erfc reference gelu_exact(), rounded to BF16 (RNE). This is the
+ * true value: float32 1 + erff(x/sqrt(2)) cancels below x = -3.1 and is exactly 0
+ * from x = -5.54, while GELU(x) stays a normal BF16 value down to x = -13.125
+ * (e.g. GELU(-6) = -5.92e-9).
  */
 inline float gelu_expected_bf16_daz(float x) {
     float x_daz = bf16_daz_normalize(x);
-    constexpr float SQRT2F = std::numbers::sqrt2_v<float>;
-    float cdf = 0.5f * (1.0f + std::erff(x_daz / SQRT2F));
-    float result = x_daz * cdf;
+    float result = static_cast<float>(gelu_exact(x_daz));
     return bf16_daz_normalize(result);
 }
 
@@ -302,8 +300,8 @@ TEST_F(GeluFwUlpTest, NearZeroRegion) {
 
 // Precision guard: sweeps ALL ~65K BF16 values, enforces per-region ULP caps.
 // Regions match the kernel's piecewise implementation:
-//   x <= -5.54259443: saturation to 0 (first x where fp32 erff(x/sqrt(2)) == -1)
-//   (-5.54259443, -3.125): Moroz exp_21f + H-form correction + grid rounding
+//   x <= -13.1875: saturation to 0 (the true GELU(x) is below the smallest normal BF16)
+//   (-13.1875, -3.125): exp-based tail
 //   [-3.125, 2.78125): core CDF polynomial (degree-15)
 //   x >= 2.78125: identity (return x)
 //   2.78125 (BF16 0x4032) is the exact boundary where GELU rounds to x with RNE
@@ -369,8 +367,8 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
     };
 
     std::vector<RegionStats> regions = {
-        {"Saturation to 0 (x <= -5.54259443)"},
-        {"Exp-based (-5.54259443, -3.125)"},
+        {"Saturation to 0 (x <= -13.1875)"},
+        {"Exp-based (-13.1875, -3.125)"},
         {"Core CDF poly [-3.125, 2.78125)"},
         {"Identity (x >= 2.78125)"},
     };
@@ -391,7 +389,7 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
 
         // Categorize by kernel region (3 active regions + zero default)
         int region_idx;
-        if (x <= -5.54259443f) {
+        if (x <= -13.1875f) {
             region_idx = 0;  // Zero saturation
         } else if (x < -3.125f) {
             region_idx = 1;  // Exp-based
@@ -948,10 +946,11 @@ TEST_F(GeluFwUlpTest, SpecialValues) {
         uint16_t expected_bits;
     };
 
-    // GELU(+inf)=+inf, GELU(-inf)=0, GELU(0)=0
+    // GELU(+inf)=+inf, GELU(-inf)=NaN (-inf * 0, as torch gives), GELU(0)=0.
+    // A BF16 output stores NaN as +inf (tenstorrent/tt-metal#60224).
     std::vector<SpecialCase> cases = {
         {"positive zero", 0.0f, 0x0000},
-        {"-inf → 0", -std::numeric_limits<float>::infinity(), 0x0000},
+        {"-inf → NaN (stored as +inf)", -std::numeric_limits<float>::infinity(), bf16_ulp_fw::BF16_POS_INF},
         {"+inf → +inf", std::numeric_limits<float>::infinity(), bf16_ulp_fw::BF16_POS_INF},
     };
 
