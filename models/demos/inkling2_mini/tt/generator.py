@@ -14,18 +14,26 @@ import ttnn
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv as ShortConv
 
 
+def _pf_cache(model):
+    """True when every MoE layer's experts were loaded in the PF layout (the expert prefetch needs it)."""
+    return all(getattr(getattr(getattr(L, "moe", None), "fused", None), "pf", False) for L in model.layers)
+
+
 # Weight staging (tt/mk/overlap.py) from capture() to release(); Generator(model, overlap=False) turns it off.
 # Decode only: its staging tensor holds ~535 KB of L1 on every core, which prefill programs need, so a session that
 # runs Inkling2Prefill between capture() and release() builds Generator(model, overlap=False).
 # shortcut: such sessions decode without the staging (~0.47 ms/token); upgrade: free and re-capture around prefill.
-# experts=True (default: INKLING_EXPERT_PREFETCH=1) also streams each MoE step's guessed experts into L1 ahead of it
-# (tt/mk/expert_overlap.py; needs a PF-layout cache, ~0.47 ms/token at 4K). Once per process: its 300 KB L1 ring is
-# not given back by release().
+# experts=True also streams each MoE step's guessed experts into L1 ahead of it (tt/mk/expert_overlap.py; needs a
+# PF-layout cache, ~0.3 ms/token at 4K). Default: on when the cache has the PF expert layout (with overlap on);
+# INKLING_EXPERT_PREFETCH=0 / 1 forces it. Once per process: its L1 ring is not given back by release().
 class Generator:
     def __init__(self, model, overlap=True, experts=None):
         self.model = model
         self.use_overlap = overlap
-        self.use_experts = os.environ.get("INKLING_EXPERT_PREFETCH") == "1" if experts is None else experts
+        if experts is None:
+            env = os.environ.get("INKLING_EXPERT_PREFETCH")
+            experts = env == "1" if env is not None else _pf_cache(model)
+        self.use_experts = experts
         self.experts = None  # tt/mk/expert_overlap.ExpertOverlap while installed
         self.device = model.device
         self.trace = None  # [phase] -> trace id
