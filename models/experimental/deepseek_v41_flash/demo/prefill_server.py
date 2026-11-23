@@ -17,8 +17,10 @@ that already holds a prompt's first ``have`` tokens' entries gets only the later
 
 Run (from the repo root, ttnn venv)::
 
-    BRINGUP_SPEC=models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml BRINGUP_HF=... \\
-      python models/experimental/deepseek_v41_flash/demo/prefill_server.py --port 9041
+    python models/experimental/deepseek_v41_flash/demo/prefill_server.py --port 9041
+
+The checkpoint is the default Hugging Face cache
+(``~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash-1017``).
 
 and try it with ``demo/prefill_client.py --server HOST:9041`` (``--prefix-check`` for the cache).
 """
@@ -31,6 +33,7 @@ import socket
 import sys
 import threading
 import time
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -40,6 +43,19 @@ from models.experimental.deepseek_v41_flash.tt.prefill.d_p_wire import VERSION, 
 
 # Decode commits whole 128-token units (its ALIGNMENT); the prompt's remainder is replayed by decode.
 ALIGN = 128
+# The full Galaxy this server runs. bringup/spec.yaml is the partial 2x2 bring-up.
+_GALAXY_SPEC = (
+    Path(__file__).resolve().parents[4]
+    / "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml"
+)
+
+
+def _checkpoint() -> str:
+    """The default Hugging Face snapshot. Raises FileNotFoundError when it has not been downloaded."""
+    from models.experimental.deepseek_v4_flash.tt.weight_loader import resolve_snapshot_dir
+    from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR
+
+    return str(resolve_snapshot_dir(DEFAULT_MODEL_DIR))
 
 
 class PrefixCache:
@@ -324,23 +340,29 @@ def main(argv: list[str] | None = None) -> int:
         "forwards it to the ranks)",
     )
     args = p.parse_args(argv)
-    if not os.environ.get("BRINGUP_SPEC"):
-        print("set BRINGUP_SPEC (metal_2's galaxy_8x4-full spec) and BRINGUP_HF", file=sys.stderr)
+    try:
+        checkpoint = _checkpoint()
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
         return 1
     # metal_2's settings give a process that has imported pytest (its model build does) ENGRAM_TABLE=mmap: random reads
     # of the ~190 GB checkpoint tables, which leave a 1M-token prompt host-bound for many minutes. Serve from RAM.
     os.environ.setdefault("DS41_ENGRAM_TABLE", "resident")
 
+    from models.demos.common.bringup.core.spec import Spec
     from models.demos.common.bringup.testing.harness import close_mesh, open_mesh
     from models.experimental.deepseek_v41_flash.tt.prefill.d_p_bridge import DPPrefill
 
-    mesh, fab = open_mesh()
+    spec = Spec.load(_GALAXY_SPEC)
+    mesh, fab = open_mesh(spec)
     try:
         d_p = DPPrefill(
             mesh,
             max_seq=args.max_seq,
             slots=args.cache_slots,
             dram_reserve=int(args.cache_reserve_gb * 2**30),
+            checkpoint=checkpoint,
+            spec=spec,
         )
         service = PrefillService(d_p, sync_chunks=args.profile_chunks)
         warm = min(args.warm_len if args.warm_len is not None else d_p.max_seq, d_p.max_seq)

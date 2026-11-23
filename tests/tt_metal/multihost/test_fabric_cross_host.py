@@ -2,15 +2,25 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Cross-host fabric smoke test: Galaxy on host 40 <-> Galaxy on host 41.
+"""Cross-host fabric smoke test: two 8x4 Blackhole Galaxies, one per host, cabled to each other.
 
-Run under tt-run with dual_8x4_hosts_40_41_rank_bindings.yaml (one MPI rank per
-host). The two Galaxies form ONE logical 16x4 mesh -- 8 rows per host -- which is
+Run under tt-run with one MPI rank per host: the rank bindings
+tests/tt_metal/distributed/config/dual_8x4_hosts_40_41_rank_bindings.yaml (no host names; the
+40_41 is the pair it was first written for) and a rankfile pinning rank 0 and rank 1 to the two
+hosts. The two Galaxies form ONE logical 16x4 mesh -- 8 rows per host -- which is
 the same shape the repo's own DUAL_BH CCL tests use. Each rank shards a tensor
 along the host-spanning axis, runs ttnn.all_reduce over the QSFP-DD fabric, and
 verifies every local device shard against a torch reference.
 
-A pass means: fabric came up across the 40<->41 cable bundle AND carried real
+    tt-run --rank-binding tests/tt_metal/distributed/config/dual_8x4_hosts_40_41_rank_bindings.yaml \\
+      --mpi-args "--host HOST_A,HOST_B --map-by rankfile:file=RANKFILE \\
+        --mca btl self,tcp --mca btl_tcp_if_include IFACE --bind-to none --tag-output" \\
+      bash -c 'cd $TT_METAL_HOME && exec python tests/tt_metal/multihost/test_fabric_cross_host.py'
+
+where RANKFILE holds ``rank 0=HOST_A slot=0`` and ``rank 1=HOST_B slot=0``, and IFACE is the
+network interface MPI runs over on both hosts.
+
+A pass means: fabric came up across the cable bundle between the hosts AND carried real
 traffic correctly. Exit code 0 == pass.
 
 Mirrors tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/
@@ -20,6 +30,7 @@ to the torch reference with PCC.
 """
 
 import os
+import socket
 import sys
 
 import torch
@@ -97,7 +108,7 @@ def main() -> int:
 
     world_size = int(ttnn.distributed_context_get_size())
     rank = int(ttnn.distributed_context_get_rank())
-    print(f"[rank {rank}/{world_size}] starting cross-host fabric check on hosts 40<->41", flush=True)
+    print(f"[rank {rank}/{world_size}] starting cross-host fabric check on {socket.gethostname()}", flush=True)
 
     if world_size != 2:
         print(f"ERROR: expected 2 ranks (one Galaxy per host), got {world_size}")
@@ -158,7 +169,7 @@ def main() -> int:
             print(f"[rank {rank}] PASS ({label})")
 
         ttnn.distributed_context_barrier()
-        print(f"[rank {rank}] ALL CHECKS PASSED -- fabric 40<->41 is healthy")
+        print(f"[rank {rank}] ALL CHECKS PASSED -- the cross-host fabric is healthy")
         return 0
 
     finally:

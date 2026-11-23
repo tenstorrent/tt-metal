@@ -513,7 +513,7 @@ A complete, verified 2-host setup lives in this repo:
 | `tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x4_hosts_40_41_mesh_graph_descriptor.textproto` | One 16×4 mesh, `host_topology [2,1]` |
 | `tests/tt_metal/distributed/config/dual_8x4_hosts_40_41_rank_bindings.yaml` | 2 ranks, both `mesh_id 0`, host ranks 0/1 |
 | `tests/tt_metal/distributed/config/dual_8x4_hosts_40_41.rankfile` | Rank → host pinning |
-| `tests/tt_metal/multihost/test_fabric_40_41.py` | `all_reduce` across the boundary, DRAM + L1, verified per shard |
+| `tests/tt_metal/multihost/test_fabric_cross_host.py` | `all_reduce` across the boundary, DRAM + L1, verified per shard |
 
 Measured on that configuration: 32 cross-host channels on ch8/ch9, 8 exit chips
 per host (trays 1–2), `all_reduce` passing across 64 devices.

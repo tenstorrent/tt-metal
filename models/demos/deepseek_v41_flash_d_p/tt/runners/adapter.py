@@ -132,7 +132,15 @@ def table_seq(max_seq: int, chunk: int) -> int:
 
 
 def load_model(
-    mesh_device, layers, *, max_seq: int, chunk: int, lm_head: bool = False, weight_cache=None, checkpoint=None
+    mesh_device,
+    layers,
+    *,
+    max_seq: int,
+    chunk: int,
+    lm_head: bool = False,
+    weight_cache=None,
+    checkpoint=None,
+    spec=None,
 ):
     """The model's one load path (module docstring "Model load"): TtDS41Model of ``layers`` with RoPE tables for
     ``max_seq`` positions; in a bring-up batch the batch's model (loaded once for the longest sequence its tests need,
@@ -157,7 +165,7 @@ def load_model(
         lm_head=bool(lm_head),
         load=load,
         config={"chunk": int(chunk), "weight_cache": str(weight_cache), "checkpoint": ck},
-        spec=bringup_spec(),
+        spec=bringup_spec() if spec is None else spec,
     )
 
 
@@ -172,7 +180,7 @@ class DS41PrefillRuntime:
     """Runtime contract of ADDING_A_PREFILL_MODEL.md section 2 and bringup/serving_contract.md (stateless w.r.t. the
     KV cache: each slot's state is bound to its slabs of the engine's caches)."""
 
-    def __init__(self, *, mesh_device, hf_config, params: PrefillRunParams):
+    def __init__(self, *, mesh_device, hf_config, params: PrefillRunParams, checkpoint=None, spec=None):
         import ttnn
         from models.demos.deepseek_v41_flash_d_p.tt.attention import WindowGeometry
 
@@ -184,7 +192,14 @@ class DS41PrefillRuntime:
         self.layer_ids = served_layer_ids(params.first_layer_idx, params.num_layers)
         # FIX.29: through the one load path (in a bring-up batch: the batch's model, loaded once)
         self.model = load_model(
-            mesh_device, self.layer_ids, max_seq=m, chunk=c, lm_head=False, weight_cache=params.weight_cache_path
+            mesh_device,
+            self.layer_ids,
+            max_seq=m,
+            chunk=c,
+            lm_head=False,
+            weight_cache=params.weight_cache_path,
+            checkpoint=checkpoint,
+            spec=spec,
         )
         # FIX.17: DEEP_LAYERS=tail skips layers 21-39 until the prompt's end; the engine reads every layer's window KV
         assert not self.model.deep, "DEEP_LAYERS=tail is not served: the engine needs every layer's whole history"
@@ -572,30 +587,30 @@ class DS41PrefillAdapter(PrefillModelAdapter):
     l1_small_size = 24576  # the spec's device_params
     hf_repo_id = DS41Config.HF_ID
 
-    def load_hf_config(self):
+    def load_hf_config(self, checkpoint=None):
         """The checkpoint's text config as attributes (the runner sets max_seq_len on it)."""
-        raw = json.loads((Path(model_path()) / "config.json").read_text())
+        raw = json.loads((Path(checkpoint or model_path()) / "config.json").read_text())
         return types.SimpleNamespace(**raw.get("text_config", raw))
 
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0, spec=None) -> Optional[Path]:
         """The routed experts' laid-out weight cache (tt/experts.py:expert_cache_dir, EXPERTS_WEIGHT_CACHE); every
         other weight loads from the checkpoint."""
         from models.demos.deepseek_v41_flash_d_p.tt.experts import expert_cache_dir
 
-        return expert_cache_dir(bringup_spec())
+        return expert_cache_dir(bringup_spec() if spec is None else spec)
 
     def num_kv_cache_layers(self, num_layers: int) -> int:
         """Acks per chunk: one per served layer (every layer owns 0_window_kv)."""
         return int(num_layers)
 
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams, checkpoint=None) -> KvCaches:
         from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import Config
         from models.demos.deepseek_v41_flash_d_p.tt.runners.kv_contract import DS41ContractKV
 
         layer_ids = served_layer_ids(params.first_layer_idx, params.num_layers)
         contract = DS41ContractKV(
             mesh_device,
-            Config.from_dir(model_path()),
+            Config.from_dir(checkpoint or model_path()),
             layer_ids,
             max_seq=params.max_seq_len,
             chunk=params.chunk_size,
@@ -603,8 +618,10 @@ class DS41PrefillAdapter(PrefillModelAdapter):
         )
         return DS41KvCaches(contract=contract, layer_ids=layer_ids, by_config=dict(contract.by_config))
 
-    def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
-        return DS41PrefillRuntime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams, checkpoint=None, spec=None):
+        return DS41PrefillRuntime(
+            mesh_device=mesh_device, hf_config=hf_config, params=params, checkpoint=checkpoint, spec=spec
+        )
 
     def read_slot_kv_and_check_pcc(self, table, device_map, slot_id, real_len, trace_dir, num_layers):
         """The producer's read-back (K-73): every served cache through the table vs the bring-up golden,

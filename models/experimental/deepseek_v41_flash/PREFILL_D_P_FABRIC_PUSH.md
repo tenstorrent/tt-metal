@@ -1,6 +1,6 @@
 # Disaggregated prefill -> decode over TT-Fabric: plan
 
-Status (2026-11-22): phases 0-3 done; the servers run end-to-end with `--prefill-push` (section 6, phase 3). This document is the
+Status (2026-11-22): phases 0-3 done; the servers run end-to-end with `--kv-transfer-mode fabric` (section 6, phase 3). This document is the
 work plan for moving the prefill server's KV hand-off from "read back to host + TCP blobs" to "prefill writes decode's
 DRAM directly over TT-Fabric, TCP carries only control".
 
@@ -206,12 +206,12 @@ Each phase ends with a two-rank run on hosts 40 and 41.
 3. Failure handling: prefill error reply, prefill crash (ends the job: document), decode request cancelled mid-push
    (blocks stay reserved until the reply).
 
-Written: `PrefillClient.prefill_push`, `PrefillService.prefill(targets=...)`, `server.py --prefill-push` (and
+Written: `PrefillClient.prefill_push`, `PrefillService.prefill(targets=...)`, `server.py --kv-transfer-mode fabric` (and
 `--prefill-wait`, so rank 1 waits for rank 0's prefill server), `DeepseekV4Model.abort_remote_commit`;
 `reset_session` / `close_session` refuse a session with a commit in flight. A prefill error reply aborts the commit
 (the turn fails, the user is reset); a cancellation during the push is held until the reply, then aborts. A prefill
 crash ends the `tt-run` job (both servers). Mocked in `tests/test_remote_prefill.py`. Launch:
-`demo/run_d_p_servers.sh --hf <snapshot> -- ... --prefill-push`.
+`demo/run_d_p_servers.sh -- ... --kv-transfer-mode fabric`.
 
 End-to-end (DSpark, 5 instances, 8.6k-token prompt, 64 greedy tokens): PASS, identical replies in push and TCP modes
 for the first turn, a repeat (decode prefix-cache hit) and a follow-up turn (push continued from `have` 8832).

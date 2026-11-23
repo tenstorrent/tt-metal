@@ -80,6 +80,8 @@ class DPPrefill:
         progress: Optional[Callable] = None,
         slots: int = 1,
         dram_reserve: Optional[int] = None,
+        checkpoint: Optional[str] = None,
+        spec=None,
     ):
         _apply_env()
         from models.demos.common.prefill.adapter import PrefillRunParams
@@ -89,11 +91,12 @@ class DPPrefill:
         note = progress or (lambda message: logger.info(f"[d_p] {message}"))
         self.mesh_device, self.chunk = mesh_device, int(chunk)
         self.max_seq = -(-int(max_seq) // self.chunk) * self.chunk
-        self.cfg = Config.from_dir(model_path())
+        ck = checkpoint or model_path()
+        self.cfg = Config.from_dir(ck)
         self.layers = kv_only_layers(self.cfg)
         sp, tp = tuple(mesh_device.shape)
         adapter = DS41PrefillAdapter()
-        hf = adapter.load_hf_config()
+        hf = adapter.load_hf_config(ck)
         hf.max_seq_len = self.max_seq
         params = PrefillRunParams(
             mesh_shape=(sp, tp),
@@ -108,11 +111,13 @@ class DPPrefill:
             num_links=2,
             gate_mode_name=adapter.default_gate_mode,
             kv_only_last_layer=True,
-            weight_cache_path=adapter.weight_cache_path((sp, tp)),
+            weight_cache_path=adapter.weight_cache_path((sp, tp), spec=spec),
         )
         t0 = time.perf_counter()
         note(f"loading layers {self.layers[0]}-{self.layers[-1]} on the {sp} x {tp} mesh (SP {sp}, TP {tp})")
-        self.runtime = adapter.build_runtime(mesh_device=mesh_device, hf_config=hf, params=params)
+        self.runtime = adapter.build_runtime(
+            mesh_device=mesh_device, hf_config=hf, params=params, checkpoint=ck, spec=spec
+        )
         assert self.runtime.layer_ids == self.layers, (self.runtime.layer_ids, self.layers)
         assert self.runtime.model.skip_mode == "decode", self.runtime.model.skip_mode
         self.slots: list = []
@@ -121,7 +126,7 @@ class DPPrefill:
             free = self._dram_free()
             if dram_reserve is not None and self.slots and free - slot_bytes < dram_reserve:
                 break
-            kv = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf, params=params)
+            kv = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf, params=params, checkpoint=ck)
             self.runtime.state(kv, 0)  # (the slot's window rings and stores, allocated now)
             # (the first slot's figure also counts the history buffers every slot shares: an overestimate)
             slot_bytes = free - self._dram_free()

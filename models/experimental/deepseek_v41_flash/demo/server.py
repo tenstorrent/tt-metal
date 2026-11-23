@@ -2519,7 +2519,7 @@ class V41GenerationServer(GenerationServer):
                 engine,
                 engine.prefill_url,
                 max_len=getattr(engine, "prefill_max_len", None),
-                push=getattr(engine, "prefill_push", False),
+                push=getattr(engine, "kv_transfer_mode", "tcp") == "fabric",
                 connect_wait=getattr(engine, "prefill_wait", 0.0),
             )
         if (
@@ -3105,7 +3105,7 @@ def _serve_instances(args) -> int:
                         engine,
                         args.prefill_url,
                         max_len=args.prefill_max_len,
-                        push=args.prefill_push,
+                        push=args.kv_transfer_mode == "fabric",
                         connect_wait=args.prefill_wait,
                     )
                     stack.callback(prefiller.close)
@@ -3252,7 +3252,7 @@ class V41ChatEngine(ChatEngine):
         self.dspark = bool(getattr(args, "dspark", False))
         self.prefill_url = getattr(args, "prefill_url", None)
         self.prefill_max_len = getattr(args, "prefill_max_len", None)
-        self.prefill_push = bool(getattr(args, "prefill_push", False))
+        self.kv_transfer_mode = getattr(args, "kv_transfer_mode", "tcp")
         self.prefill_wait = float(getattr(args, "prefill_wait", 0.0))
         self.instance = instance
         self.instances = 1 if moe_server is None else len(moe_server.request_meshes)
@@ -4193,12 +4193,12 @@ def parse_args(argv: list[str] | None = None):
         "instead of running a local prefill model (default: DEEPSEEK_V41_PREFILL_URL, else unset)",
     )
     p.add_argument(
-        "--prefill-push",
-        action=argparse.BooleanOptionalAction,
-        default=os.environ.get("DEEPSEEK_V41_PREFILL_PUSH") == "1",
-        help="with --prefill-url: the prefill server writes the KV cache straight into this server's device memory "
-        "over TT-Fabric (both servers ranks of one tt-run job, demo/run_d_p_servers.sh) instead of sending it over "
-        "TCP (default: DEEPSEEK_V41_PREFILL_PUSH=1, else off)",
+        "--kv-transfer-mode",
+        choices=("fabric", "tcp"),
+        default=os.environ.get("DEEPSEEK_V41_KV_TRANSFER_MODE") or "tcp",
+        help="with --prefill-url: fabric writes the KV cache into this server's device memory over TT-Fabric "
+        "(both servers ranks of one tt-run job, demo/run_d_p_servers.sh); tcp sends the KV cache over TCP "
+        "(default: DEEPSEEK_V41_KV_TRANSFER_MODE, else tcp)",
     )
     p.add_argument(
         "--prefill-wait",

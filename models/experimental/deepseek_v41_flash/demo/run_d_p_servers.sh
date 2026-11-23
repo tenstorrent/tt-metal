@@ -10,27 +10,30 @@
 # Both ranks open the same router settings: 2D torus fabric, STRICT_INIT, and the prefill's 6208 B packet payload
 # (MOE_BLOCK_SPLIT_ROWS=on; decode takes it through DEEPSEEK_V4_FABRIC_PAYLOAD).
 #
-# Run on host 40 from the repo root, venv active; host 41 has the same checkout, built, at the same path:
+# Run on the prefill host from the repo root, venv active; the decode host has the same checkout, built, at the same
+# path. PREFILL_HOST / DECODE_HOST / MPI_IFACE (environment) name other hosts than the default 40 / 41 pair.
+# The prefill server reads the default Hugging Face cache
+# (~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4.1-Flash-1017).
 #
-#   models/experimental/deepseek_v41_flash/demo/run_d_p_servers.sh --hf /path/to/DeepSeek-V4.1-Flash \
-#     [--prefill-port 9041] [-- decode server args...]
+#   [PREFILL_HOST=... DECODE_HOST=... MPI_IFACE=...] \
+#   models/experimental/deepseek_v41_flash/demo/run_d_p_servers.sh [--prefill-port 9041] [-- decode server args...]
 #
 # Prefill logs are tagged [1,0]<stdout>, decode's [1,1]<stdout>. The decode server listens on host 41 (default
-# port 8000); the prefill server on host 40 at --prefill-port. Decode args for the disaggregated prefill with the KV
-# pushed over the fabric: -- --prefill-url 10.82.97.40:9041 --prefill-push (--no-prefill-push: the KV over TCP).
+# port 8000); the prefill server on host 40 at --prefill-port. Decode args for the KV cache over the fabric:
+# -- --prefill-url 10.82.97.40:9041 --kv-transfer-mode fabric (--kv-transfer-mode tcp: the KV over TCP).
 # The prefill server logs a per-stage profile of every request; DEEPSEEK_V41_PREFILL_PROFILE_CHUNKS=1 makes its
 # prefill split exact (it waits for the device after every chunk).
 set -euo pipefail
 
 SCRIPT=models/experimental/deepseek_v41_flash/demo/run_d_p_servers.sh
-PREFILL_HOST=DC16-2-BG-0202-u20-40
-DECODE_HOST=DC16-2-BG-0202-u13-41
-MPI_IFACE=ens5f0np0.1
+# The two hosts (as ssh and MPI reach them) and the network interface MPI runs over; the defaults are the 40/41 pair.
+PREFILL_HOST=${PREFILL_HOST:-DC16-2-BG-0202-u20-40}
+DECODE_HOST=${DECODE_HOST:-DC16-2-BG-0202-u13-41}
+MPI_IFACE=${MPI_IFACE:-ens5f0np0.1}
 
-hf="" prefill_port=9041
+prefill_port=9041
 while [ $# -gt 0 ]; do
   case "$1" in
-    --hf) hf="$2"; shift 2 ;;
     --prefill-port) prefill_port="$2"; shift 2 ;;
     # (--decode-args: the ranks' own separator, as tt-run drops a "--" from the command it runs)
     --|--decode-args) shift; break ;;
@@ -40,15 +43,17 @@ done
 decode_args=("$@")
 
 if [ -z "${OMPI_COMM_WORLD_RANK:-}" ]; then
-  [ -n "$hf" ] || { echo "--hf (the DeepSeek-V4.1-Flash checkpoint, for the prefill server) is required" >&2; exit 2; }
   [ -f "$SCRIPT" ] || { echo "run from the repo root" >&2; exit 2; }
   export TT_METAL_HOME=$PWD
   export DEEPSEEK_V4_FABRIC_PAYLOAD=6208
+  # Rank 0 (prefill, mesh 0) on PREFILL_HOST, rank 1 (decode, mesh 1) on DECODE_HOST.
+  rankfile=$(mktemp /tmp/d_p_servers.XXXXXX.rankfile)
+  printf 'rank 0=%s slot=0\nrank 1=%s slot=0\n' "$PREFILL_HOST" "$DECODE_HOST" > "$rankfile"
   exec tt-run --rank-binding tests/tt_metal/distributed/config/dual_bh_galaxy_8x4_hosts_40_41_two_mesh_rank_bindings.yaml \
     --mpi-args "--host $PREFILL_HOST,$DECODE_HOST \
-      --map-by rankfile:file=$PWD/tests/tt_metal/distributed/config/dual_8x4_hosts_40_41.rankfile \
+      --map-by rankfile:file=$rankfile \
       --mca btl self,tcp --mca btl_tcp_if_include $MPI_IFACE --bind-to none --tag-output" \
-    bash "$PWD/$SCRIPT" --hf "$hf" --prefill-port "$prefill_port" --decode-args "${decode_args[@]}"
+    bash "$PWD/$SCRIPT" --prefill-port "$prefill_port" --decode-args "${decode_args[@]}"
 fi
 
 cd "$TT_METAL_HOME"
@@ -57,7 +62,6 @@ python=$TT_METAL_HOME/python_env/bin/python
 
 case "$OMPI_COMM_WORLD_RANK" in
   0)
-    export BRINGUP_SPEC=models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml BRINGUP_HF=$hf
     exec "$python" models/experimental/deepseek_v41_flash/demo/prefill_server.py --port "$prefill_port"
     ;;
   1)
