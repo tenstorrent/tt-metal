@@ -90,7 +90,10 @@ void py_module_types(nb::module_& mod) {
             "read_from_tensor",
             [](tt::tt_metal::D2HStreamService& self, ttnn::Tensor& host_tensor) {
                 std::vector<std::byte> metadata(self.metadata_size_bytes());
-                self.read_from_tensor(host_tensor, ttsl::Span<std::byte>(metadata.data(), metadata.size()));
+                {
+                    nb::gil_scoped_release release;  // the read blocks until the device sends the transfer
+                    self.read_from_tensor(host_tensor, ttsl::Span<std::byte>(metadata.data(), metadata.size()));
+                }
                 return nb::bytes(reinterpret_cast<const char*>(metadata.data()), metadata.size());
             },
             "Drain one transfer into host_tensor (per-shard spec); returns trailing metadata bytes. Not in "

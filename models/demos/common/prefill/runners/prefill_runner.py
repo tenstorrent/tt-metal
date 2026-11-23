@@ -31,6 +31,12 @@ from models.demos.common.prefill.prefill_chunk import (
     validate_chunks,
 )
 from models.demos.common.prefill.runners.hang_detector import arm_hang_detector
+from models.demos.common.prefill.runners.host_hop import (
+    HOST_HOP_RANKS_ENV,
+    HostHopReceiver,
+    HostHopSender,
+    host_hop_sender_ranks,
+)
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
@@ -461,6 +467,22 @@ def build_d2d_pipeline_endpoints(
     # one AttnRes snapshot per completed block) sends more planes than it received. This rank's
     # outbound_planes must equal the next rank's inbound_planes or the rendezvous rejects the pair.
     workers = d2d_worker_cores(mesh_device)
+    host_hops = host_hop_sender_ranks(num_ranks)
+
+    def _host_hop(end_cls, sender_rank, peer_rank, planes, tail):
+        if extra_specs or tail:
+            raise NotImplementedError(
+                f"the boundary out of rank {sender_rank} crosses the host, which carries the activation only"
+            )
+        return end_cls(
+            mesh_device,
+            global_spec=activation_global_spec(d2d_rows, d2d_width, planes),
+            mapper_config=D2D_MAPPER_CONFIG,
+            worker_cores=workers,
+            metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
+            peer_rank=peer_rank,
+            sender_rank=sender_rank,
+        )
 
     def _common(planes, tail):
         extras = [(spec, H2D_MAPPER_CONFIG) for spec in extra_specs] + list(tail)
@@ -477,19 +499,29 @@ def build_d2d_pipeline_endpoints(
         )
 
     inbound = None
-    if rank > 0:
+    if rank > 0 and rank - 1 in host_hops:
+        logger.info(f"[pp rank {rank}] [host hop] creating inbound receiver from rank {rank - 1}")
+        inbound = _host_hop(
+            HostHopReceiver, sender_rank=rank - 1, peer_rank=rank - 1, planes=inbound_planes, tail=inbound_tail
+        )
+    elif rank > 0:
         logger.info(f"[pp rank {rank}] [d2d] creating inbound receiver from rank {rank - 1}")
         inbound = ttnn.D2DStreamService.create_receiver(
             receiver_mesh=mesh_device,
             sender_rank=rank - 1,
             receiver_rank=rank,
             fabric_link_group=D2D_INBOUND_LINK_GROUP,
-            # A middle stage builds its outbound sender on this mesh next; the last stage builds none.
-            reserve_links_for_later_service=rank < num_ranks - 1,
+            # A middle stage builds its outbound fabric sender on this mesh next; the last stage builds none.
+            reserve_links_for_later_service=rank < num_ranks - 1 and rank not in host_hops,
             **_common(inbound_planes, inbound_tail),
         )
     outbound = None
-    if rank < num_ranks - 1:
+    if rank < num_ranks - 1 and rank in host_hops:
+        logger.info(f"[pp rank {rank}] [host hop] creating outbound sender to rank {rank + 1}")
+        outbound = _host_hop(
+            HostHopSender, sender_rank=rank, peer_rank=rank + 1, planes=outbound_planes, tail=outbound_tail
+        )
+    elif rank < num_ranks - 1:
         logger.info(f"[pp rank {rank}] [d2d] creating outbound sender to rank {rank + 1}")
         outbound = ttnn.D2DStreamService.create_sender(
             sender_mesh=mesh_device,
@@ -516,6 +548,8 @@ def _send_payload(segments: list):
 
 
 def _d2d_drain_op(inbound, sockets):
+    if isinstance(inbound, HostHopReceiver):
+        return inbound.sync(metadata_out=sockets.persistent_metadata(), tokens_out=sockets.tokens)
     return ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound,
         metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
@@ -531,6 +565,8 @@ def _d2d_recv(inbound, sockets, stage_metadata=None) -> tuple:
     ``stage_metadata`` is handed the drained metadata before the blocking host read of it, once the
     drain is traced (the runtime's capture exists by then)."""
     t0 = time.perf_counter()
+    if isinstance(inbound, HostHopReceiver):
+        inbound.receive()
     if sockets.drain_trace is not None:
         sockets.drain_trace.replay()
         act, extras = sockets.tokens, list(sockets.extras or [])
@@ -582,6 +618,12 @@ def _fill_send_record(record: ttnn.Tensor, meta: dict) -> None:
     _fill_record(record, _metadata_record_words(meta))
 
 
+def _outbound_sync(outbound, payload, metadata):
+    if isinstance(outbound, HostHopSender):
+        return outbound.sync(payload, metadata)
+    return ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, payload, metadata=metadata)
+
+
 def _d2d_send(
     outbound,
     segments,
@@ -600,9 +642,9 @@ def _d2d_send(
         trace.replay()
     else:
         md_tensor = metadata_msg if metadata_msg is not None else _send_metadata_record(outbound, meta)
-        ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
-            outbound, _send_payload(segments), metadata=md_tensor
-        )
+        _outbound_sync(outbound, _send_payload(segments), md_tensor)
+    if isinstance(outbound, HostHopSender):
+        outbound.forward()
     if deallocate:
         for t in segments:
             ttnn.deallocate(t)
@@ -651,9 +693,9 @@ def _forward_send_warmup(runtime, outbound: D2DBoundary, rank: int, send_indices
     idx_src = runtime.outbound_indexer_indices if send_indices else None
     idx_staged = _stage_for(idx_src, d2d_out.get_backing_tensors()[-1]) if send_indices else None
     send_segments = segments + ([idx_staged] if send_indices else [])
-    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
-        d2d_out, _send_payload(send_segments), metadata=md_tensor
-    )
+    _outbound_sync(d2d_out, _send_payload(send_segments), md_tensor)
+    if isinstance(d2d_out, HostHopSender):
+        d2d_out.forward()
     d2d_out.release_fabric_links()
     d2d_out.wait_for_fabric_links()
     for t in segments:
@@ -758,11 +800,7 @@ def _capture_socket_ops(
     if send_skip is None:
         payload = _send_payload(segments + ([indices] if send_indices else []))
         call = CapturedCall(mesh_device)
-        call.capture(
-            lambda: ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
-                d2d_out, payload, metadata=forward_md
-            )
-        )
+        call.capture(lambda: _outbound_sync(d2d_out, payload, forward_md))
         sockets.send_trace = call
 
     def _how(trace, skip):
@@ -1154,6 +1192,7 @@ def _print_config() -> None:
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_HYBRID_PAGE_POOL_V2", str(int(HYBRID_PAGE_POOL_V2))),
+        (HOST_HOP_RANKS_ENV, os.environ.get(HOST_HOP_RANKS_ENV, "")),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         (
@@ -1211,6 +1250,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
         "PREFILL_HYBRID_PAGE_POOL_V2": HYBRID_PAGE_POOL_V2,
         "PREFILL_MASTER_RANK": int(os.environ.get("PREFILL_MASTER_RANK", "0")),
+        HOST_HOP_RANKS_ENV: sorted(host_hop_sender_ranks(num_ranks)),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -1412,6 +1452,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     ack_shm_name = scheduler_shm_name(service_id)
     master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
     if HYBRID_PAGE_POOL_V2:
+        if isinstance(inbound.activation, HostHopReceiver):
+            raise NotImplementedError(
+                "PREFILL_HYBRID_PAGE_POOL_V2 describes D2D receivers; this rank's inbound is a host hop"
+            )
         # Published even on a single rank, so the engine always finds the file.
         boundaries = [inbound.channels()] if inbound.channels() else []
         socket_receivers_file = export_d2d_pipeline_descriptor(boundaries, rank, service_id, master_rank)
@@ -1583,18 +1627,24 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
-    hang_detector = arm_hang_detector(
-        mesh_device,
-        rank,
-        h2d=h2d_service,
-        d2d_in=inbound.activation,
-        d2d_out=outbound.activation,
-        d2h=d2h_service,
-        acks_per_chunk=layout.rank_record_count,
-        # What _capture_trace will do before the first real chunk.
-        sends_warmup=traced and hasattr(runtime, "send_warmup_inputs"),
-        warmup_acks=getattr(runtime, "warmup_ack_count", lambda: 0)(),
-        layers=f"{first_layer_idx}-{first_layer_idx + num_my_layers - 1}",
+    host_hop_in = isinstance(inbound.activation, HostHopReceiver)
+    # The watcher reads stream counters, which a host hop does not have: a rank fed by one is not watched.
+    hang_detector = (
+        None
+        if host_hop_in
+        else arm_hang_detector(
+            mesh_device,
+            rank,
+            h2d=h2d_service,
+            d2d_in=inbound.activation,
+            d2d_out=None if isinstance(outbound.activation, HostHopSender) else outbound.activation,
+            d2h=d2h_service,
+            acks_per_chunk=layout.rank_record_count,
+            # What _capture_trace will do before the first real chunk.
+            sends_warmup=traced and hasattr(runtime, "send_warmup_inputs"),
+            warmup_acks=getattr(runtime, "warmup_ack_count", lambda: 0)(),
+            layers=f"{first_layer_idx}-{first_layer_idx + num_my_layers - 1}",
+        )
     )
     try:
         run_request_loop(
