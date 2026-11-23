@@ -131,6 +131,12 @@ def _check_crc(plan: KeyPlan, chunk_index: int, crc: int, path: str) -> None:
 WHOLE_READ_SHARE = 0.5
 
 
+def _reads_whole(needed: int, nbytes: int) -> bool:
+    """Whether a rank needing ``needed`` bytes of a chunk of ``nbytes`` reads it whole (``WHOLE_READ_SHARE``): the one
+    rule ``chunk_reads`` reports by and ``_read_chunk`` reads by."""
+    return needed >= WHOLE_READ_SHARE * nbytes
+
+
 def _needed_bytes(plan: KeyPlan) -> dict[int, int]:
     """Per chunk of the entry, the bytes this rank's destination shards need of it."""
     needed: dict[int, int] = {}
@@ -148,7 +154,7 @@ def chunk_reads(plan: LoadPlan) -> tuple[list[list], list[list]]:
     for kplan in plan.keys.values():
         for chunk, needed in sorted(_needed_bytes(kplan).items()):
             nbytes = kplan.entry.chunks[chunk].nbytes
-            if needed < WHOLE_READ_SHARE * nbytes:
+            if not _reads_whole(needed, nbytes):
                 in_part.append([kplan.entry.key, chunk])
             elif needed < nbytes:
                 whole_of_part.append([kplan.entry.key, chunk])
@@ -204,7 +210,7 @@ def _read_chunk(
         _check_crc(plan, items[0].chunk, zlib.crc32(dest), path)
         return record.nbytes
     needed = sum(it.src.volume for it in items) * itemsize
-    if whole or needed >= WHOLE_READ_SHARE * record.nbytes:
+    if whole or _reads_whole(needed, record.nbytes):
         raw = pread_all(fd, record.nbytes, data_start + record.data_offset)
         _check_crc(plan, items[0].chunk, zlib.crc32(raw), path)
         chunk = np.frombuffer(raw, dtype=carrier).reshape(record.box.sizes)

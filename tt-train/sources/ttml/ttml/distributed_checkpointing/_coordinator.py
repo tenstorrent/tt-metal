@@ -30,12 +30,11 @@ rank. Data files go through the shared filesystem and are only ever opened by ex
 Save. Every rank describes its tensors and the mesh coordinates it holds (its plan part); rank 0 merges the parts,
 checking that the ranks describe every key they share alike and together hold every box, and elects one owner per box,
 so a box held by several ranks (a replica across hosts, or the same key on several meshes) is written by exactly one of
-them, chosen to even out the bytes each rank and device writes; rank 0 broadcasts the election; every rank writes the boxes
-it owns into its own files; the result parts (files, chunk records, checksums, this rank's generators) are gathered;
-rank 0 merges them into ``index.json`` and ``header.json``, checking that the ranks report one chunk per elected box,
-and finalizes the directory. Its phases: collecting the
-live tensors, checking the target directory, merging the plan parts, writing the shards, merging the index and
-finalizing.
+them, chosen to even out the bytes each rank and device writes; rank 0 broadcasts the election; every rank writes the
+boxes it owns into its own files; the result parts (files, chunk records, checksums, this rank's generators) are
+gathered; rank 0 merges them into ``index.json`` and ``header.json``, checking that the ranks report one chunk per
+elected box, and finalizes the directory. Its phases: collecting the live tensors, checking the target directory,
+creating the staging directory, merging the plan parts, writing the shards, merging the index and finalizing.
 
 Load. Every rank reads the index and restores the shards of the coordinates it holds. ``strict`` is judged over the
 union of the ranks' live tensors, since on a multi-mesh world no single rank holds every key. Its phases: checking the
@@ -49,7 +48,6 @@ import dataclasses
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
-from math import prod
 from typing import Any, Callable, Protocol
 
 import ttnn
@@ -534,8 +532,9 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     A key held by several ranks must be described identically by all of them (label, per-device shape, dtype,
     transform), and the ranks' scheduler states must agree, since the checkpoint stores one copy that every rank
     restores. Their dataloader states are stored once when they agree, and per rank when they differ (data-parallel
-    loaders that keep a seed or a shard of their own). A key's label splits it into boxes (its replica groups); each box is held by one or more
-    (rank, mesh coordinate) pairs, at least one of which must exist. The box's owner is the one pair that writes it.
+    loaders that keep a seed or a shard of their own). A key's label splits it into boxes (its replica groups); each box
+    is held by one or more (rank, mesh coordinate) pairs, at least one of which must exist. The box's owner is the one
+    pair that writes it.
 
     The owners even out the bytes written, since the slowest rank ends the write: a box with one holder is that
     holder's, and the others, largest first, go to the holder whose rank has the fewest bytes so far and, among the
@@ -591,7 +590,7 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     boxes: list[tuple[int, str, tuple[int, ...], list[Owner]]] = []  # (bytes, key, group, holders)
     for key, info in infos.items():
         groups, _ = _groups_of(info)
-        nbytes = prod(info.local_shape) * info.itemsize
+        nbytes = info.local_nbytes
         for group_key in groups:
             holders = sorted(members[key].get(group_key, []))
             if not holders:
