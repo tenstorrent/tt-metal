@@ -2945,3 +2945,10 @@ a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_repo
 - Fix: core/gate.cpu_task_env: a task with `device: false` gets BRINGUP_HOST_MEM_RESERVE_GB=0 in its gate (agent
   checks and the orchestrator's gate alike, run_gate); the FIX.30 floor check stays. Unmarked perf tasks still count as
   device tasks. Selftest: selftest/test_cpu_task_hostmem.py.
+
+## F302 (2026-11-23, DeepSeek-V4.1 PS.1): a CPU-only perf-step task is gated, not A/B-measured on the device
+- Seen: PS.1 (step perf, role perf, device: false: a design doc + CPU roofline test) passed its agent check, then the
+  orchestrator treated it as a perf pick and ran an on / off device profile (test_profile.py), refused by the host-memory
+  reserve; the run stopped WAITING FOR A PERSON on an A/B whose 'on' gate showed MISSING metrics.
+- Fix: Orchestrator.perf_pick is false for `device: false` tasks; they take the normal gate. Unmarked perf picks keep
+  their A/B. Selftest: selftest/test_cpu_perf_task.py.

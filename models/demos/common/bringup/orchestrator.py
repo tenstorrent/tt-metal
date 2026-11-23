@@ -1633,7 +1633,9 @@ class Orchestrator:
 
     # ---- perf picks (F57): the agent makes the change; the orchestrator measures it on vs off; the owner decides
     def perf_pick(self, task: dict) -> bool:
-        return task.get("step") == "perf" and bool(task.get("role"))
+        # F302: a perf-step task marked `device: false` (a CPU-only design / analysis task) changes nothing to measure
+        # on the device: it is gated like any task, never an on / off device A/B (DeepSeek-V4.1 PS.1, 2026-11-23)
+        return task.get("step") == "perf" and bool(task.get("role")) and task.get("device") is not False
 
     def ab_key(self, task: dict) -> str:
         """What a report and a decision are about: the pick's brief and switch. An edit of the gate (the owner dropping
