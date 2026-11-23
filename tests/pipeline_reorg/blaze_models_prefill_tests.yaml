@@ -2299,33 +2299,50 @@
 
 # GLM-5.3 on the production prefill shape: the SC4 pod carved into eight [RING,RING] 4x4 tori (sc4_4x4_rr_mgd), 12
 # ranks by tt-run discovery. Four stages sit inside one Galaxy; the four seam stages span two neighbouring hosts
-# (PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2), with row-block D2D services on each 1-host <-> 2-host boundary. [1/2] runs
-# one 2,560-token chunk per forward, [2/2] two per forward (packed, traced, D2H layer acks from each stage
-# leader's chips); both PCC every rank's KV and index caches against the 1M golden tail. Each step takes ~5-6 min
-# and the whole job ~32 min including the reset (run 45154375989). Perf is reported, not gated: no [RING,RING]
-# baseline yet.
-- name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] [RING,RING] KV accuracy 1M tail@2.5k, unpacked + packed, SC4"
+# (PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2), with row-block D2D services on each 1-host <-> 2-host boundary. One
+# 2,560-token chunk per forward; every rank's KV and index caches are PCC'd against the 1M golden tail. Perf is
+# reported, not gated: no [RING,RING] baseline yet.
+- name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] [RING,RING] KV accuracy 1M tail@2.5k, SC4"
   cmd: |
-    set -uo pipefail
+    set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
     if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
     export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
-    echo "===== [1/2] (GLM-5.3-744B) 8x[4,4] [RING,RING] KV accuracy 1M tail@2.5k, one chunk per forward, SC4 ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr; rc1=$?
-    echo "===== [1/2] rc=${rc1} ====="
-    echo "===== [2/2] (GLM-5.3-744B) 8x[4,4] [RING,RING] packed KV accuracy 1M tail@2.5k, two chunks per forward, SC4 ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr --variant packed; rc2=$?
-    echo "===== [2/2] rc=${rc2} ====="
-    exit $(( rc1 != 0 || rc2 != 0 ))
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 40
+      tier: 1
+      release_ready: false
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+# The packed twin of the SC4 [RING,RING] leg above: the same 8 [RING,RING] 4x4 stages and golden tail, two 2,560-token
+# chunks per forward, traced, with D2H acks from each stage leader's chips. PCC-gated only (PREFILL_PERF_GATE=0).
+- name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] [RING,RING] packed KV accuracy 1M tail@2.5k, two chunks per forward, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr --variant packed
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      timeout: 60
+      timeout: 40
       tier: 1
       release_ready: false
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
