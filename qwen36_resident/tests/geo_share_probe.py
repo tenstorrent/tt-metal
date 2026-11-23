@@ -148,7 +148,7 @@ def main():
                 lg = plain.logits()
                 for r in order:
                     if p >= P - 1:
-                        toks[r].append(int(lg[r, :, : d.vocab_chip].reshape(-1)[: d.vocab].argmax()))
+                        toks[r].append(int(lg[r, :, : d.vocab_chip].reshape(-1)[: cfg["vocab_size"]].argmax()))
             out["plain_digest"] = digest([toks[r] for r in order])
             feed = {r: (emb[0], P + a.new) for r in range(32)}
             out["plain_step_ms"] = round(timed(lambda: plain.step(plain.token_state_rows(feed)), sync, a.steps), 2)

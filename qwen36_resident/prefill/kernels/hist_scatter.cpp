@@ -17,6 +17,10 @@
 // Gather (compile-time arg 7, one target row only): the reverse — the target row of the history goes into the compact
 // pages (a slot's snapshot, Strata S1 / S3). The tile's rows are read whole (64 B aligned DRAM reads) into a scratch
 // past the K compact chunks, then the target row's two face rows are copied out.
+// Remap (compile-time arg 8, one target row only; DB3 phase 2's moves between the verify-rows ring and the compact
+// snapshot): runtime args after the target row: history slot of loop slot 0, compact slot stride, compact slot of loop
+// slot 0 — loop slot s touches history slot hslot0 + s and compact page ((g * cstride + cslot0 + s) * K + k) (default:
+// 0, written, 0).
 
 #include <cstdint>
 
@@ -30,11 +34,16 @@ void kernel_main() {
     constexpr uint32_t written = get_compile_time_arg_val(5);
     constexpr bool one_row = get_compile_time_arg_val(6) != 0;
     constexpr bool gather = get_compile_time_arg_val(7) != 0;
+    constexpr bool remap = get_compile_time_arg_val(8) != 0;
     static_assert(!gather || one_row, "gather: one target row");
+    static_assert(!remap || one_row, "remap: one target row");
     constexpr uint32_t chunk = one_row ? 64 : 64 * rows, row_bytes = slots * slot_elems * 2, cb_buf = 0;
     const uint32_t target = one_row ? get_arg_val<uint32_t>(4 + 2 * K) : 0;
     const uint32_t compact = get_arg_val<uint32_t>(0), hist = get_arg_val<uint32_t>(1);
     const uint32_t first = get_arg_val<uint32_t>(2), count = get_arg_val<uint32_t>(3);
+    const uint32_t hslot0 = remap ? get_arg_val<uint32_t>(5 + 2 * K) : 0;
+    const uint32_t cstride = remap ? get_arg_val<uint32_t>(6 + 2 * K) : written;
+    const uint32_t cslot0 = remap ? get_arg_val<uint32_t>(7 + 2 * K) : 0;
     const InterleavedAddrGen<true> src{.bank_base_address = compact, .page_size = chunk};
     const InterleavedAddrGen<true> dst{.bank_base_address = hist, .page_size = row_bytes};
     const uint32_t buf = get_write_ptr(cb_buf);
@@ -44,7 +53,7 @@ void kernel_main() {
             const uint32_t scratch = buf + K * chunk;
             for (uint32_t k = 0; k < K; k++) {
                 const uint32_t row = get_arg_val<uint32_t>(4 + 2 * k), tile = get_arg_val<uint32_t>(5 + 2 * k);
-                const uint32_t off = (slot * slot_elems + tile * 32 * rows) * 2;
+                const uint32_t off = ((hslot0 + slot) * slot_elems + tile * 32 * rows) * 2;
                 noc_async_read(get_noc_addr(row * copies + g, dst, off), scratch, 64 * rows);
                 noc_async_read_barrier();
                 volatile tt_l1_ptr uint32_t* from = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
@@ -56,7 +65,7 @@ void kernel_main() {
                 }
             }
             for (uint32_t k = 0; k < K; k++) {
-                noc_async_write(buf + k * chunk, get_noc_addr((g * written + slot) * K + k, src), chunk);
+                noc_async_write(buf + k * chunk, get_noc_addr((g * cstride + cslot0 + slot) * K + k, src), chunk);
             }
             noc_async_write_barrier();
         }
@@ -64,12 +73,12 @@ void kernel_main() {
     for (uint32_t g = first; !gather && g < first + count; g++) {
         for (uint32_t slot = 0; slot < written; slot++) {
             for (uint32_t k = 0; k < K; k++) {
-                noc_async_read(get_noc_addr((g * written + slot) * K + k, src), buf + k * chunk, chunk);
+                noc_async_read(get_noc_addr((g * cstride + cslot0 + slot) * K + k, src), buf + k * chunk, chunk);
             }
             noc_async_read_barrier();
             for (uint32_t k = 0; k < K; k++) {
                 const uint32_t row = get_arg_val<uint32_t>(4 + 2 * k), tile = get_arg_val<uint32_t>(5 + 2 * k);
-                const uint32_t off = (slot * slot_elems + tile * 32 * rows) * 2;
+                const uint32_t off = ((hslot0 + slot) * slot_elems + tile * 32 * rows) * 2;
                 if constexpr (one_row) {
                     for (uint32_t f = 0; f < 2; f++) {
                         noc_async_write(

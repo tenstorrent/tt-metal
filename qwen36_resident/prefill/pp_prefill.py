@@ -1782,7 +1782,7 @@ class PPPrefill:
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=all_cores,
                         # (rows per tile = the batch; 16 / R blocks per row; slot 0 (block 0) written; one target row)
-                        compile_time_args=[K, copies, b, 16 // R, model._blk * TILE * b, 1, 1, 0],
+                        compile_time_args=[K, copies, b, 16 // R, model._blk * TILE * b, 1, 1, 0, 0],
                         runtime_args=rt,
                         config=ttnn.DataMovementConfigDescriptor(
                             processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
@@ -2040,7 +2040,7 @@ class PPPrefill:
                     source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                     core_ranges=all_cores,
                     compile_time_args=[K, copies, rows_per_tile, slots, model._blk * TILE * model.batch, written]
-                    + [int(rows_mode), 0],  # (one target row; no gather)
+                    + [int(rows_mode), 0, 0],  # (one target row; no gather; no remap)
                     runtime_args=rt,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default

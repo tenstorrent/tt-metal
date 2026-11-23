@@ -2122,7 +2122,7 @@ class ResidentModel:
             kernel_source=pdir + "hist_scatter.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=one_core,
-            compile_time_args=[K, G, B, CONV_K - 1, self._blk * TILE * B, CONV_K - 1, 1, 0],
+            compile_time_args=[K, G, B, CONV_K - 1, self._blk * TILE * B, CONV_K - 1, 1, 0, 0],
             runtime_args=rt,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
@@ -2218,7 +2218,7 @@ class ResidentModel:
             kernel_source=f"{PKG_DIR}/prefill/kernels/hist_scatter.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=one_core,
-            compile_time_args=[K, G, B, CONV_K - 1, self._blk * TILE * B, CONV_K - 1, 1, int(gather)],
+            compile_time_args=[K, G, B, CONV_K - 1, self._blk * TILE * B, CONV_K - 1, 1, int(gather), 0],
             runtime_args=rt,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
@@ -2309,6 +2309,94 @@ class ResidentModel:
             n_tiles = -(-snap["n_tokens"] // TILE)
             tbl = self.block_tables[s] if table is None else table
             self._page_copy(self._kv_copies(tbl, n_tiles, snap["kv"], save=False))
+
+    def _hist_one(self, gr, row, hslot, compact, cslot, cstride, gather):
+        """one conv-history slot of one row of every (streamer, copy) row <-> compact slot cslot of a snapshot
+        (hist_scatter.cpp, one target row, remap): group gr's tile row `row`, history slot hslot (verify rows: a block
+        of the ring), compact pages ((g * cstride + cslot) * K + k)"""
+        sub, n, b = self.subs[0], self.d.n, self.batch
+        rows, cols, _ = self.hist_index()
+        K, G = len(rows), self._gdn_copies
+        slots = 16 // self.R if self.vrows else CONV_K - 1
+        core = ttnn.CoreCoord(0, 0)
+        one_core = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+        tiles = (cols[::TILE] // TILE).tolist()
+        rt = ttnn.RuntimeArgs()
+        pairs = [v for i in range(K) for v in (int(rows[i]) + gr * self._S, tiles[i])]
+        rt[core.x][core.y] = (
+            [compact.buffer_address(), sub["hist"].buffer_address(), 0, G]
+            + pairs
+            + [
+                row,
+                hslot,
+                cstride,
+                cslot,
+            ]
+        )
+        kern = ttnn.KernelDescriptor(
+            kernel_source=f"{PKG_DIR}/prefill/kernels/hist_scatter.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=one_core,
+            compile_time_args=[K, G, b, slots, self._blk * TILE * b, 1, 1, int(gather), 1],
+            runtime_args=rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+        cbd = ttnn.CBDescriptor(
+            total_size=K * 64 + 64 * b,
+            core_ranges=one_core,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=64)],
+        )
+        pd = ttnn.MeshProgramDescriptor()
+        pd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, n - 1))] = ttnn.ProgramDescriptor(
+            kernels=[kern], semaphores=[], cbs=[cbd]
+        )
+        ttnn.generic_op([compact, sub["hist"]], pd)
+        ttnn.synchronize_device(self.mesh)
+
+    def vrows_snapshot(self, u, ring, slot):
+        """verify rows (DB3 phase 2): user u's committed recurrent state in snapshot_slot's format (a plain rows build's
+        restore_slot takes it): its GDN states of slot `slot` (row u R + slot) and its conv history's 3 newest inputs,
+        age j (0 = oldest) from ring slot (ring + j) % 16 (block // R, tile row u R % batch + slot % R). ring / slot:
+        the user's next step's (after its last commit)"""
+        assert self.vrows
+        d, mesh, G, R = self.d, self.mesh, self._gdn_copies, self.R
+        gr, base = divmod(u * R, self.batch)
+        K = len(self.hist_index()[0])
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        state = ttnn.empty([G * d.nv * 16 * TILE, TILE], ttnn.float32, ttnn.TILE_LAYOUT, mesh, dram)
+        hist = ttnn.empty([G * (CONV_K - 1) * K, TILE], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, dram)
+        LR, sub, r = self.launch_rows, self.subs[0], u * R + slot % R
+        self._page_copy(
+            [
+                (sub["state"], ((c * d.nv + h) * LR + r) * 16, state, (c * d.nv + h) * 16, 16)
+                for c in range(G)
+                for h in range(d.nv)
+            ]
+        )
+        for j in range(CONV_K - 1):
+            s = (ring + j) % 16
+            self._hist_one(gr, base + s % R, s // R, hist, j, CONV_K - 1, gather=True)
+        return dict(state=state, hist=hist, n_tokens=0)
+
+    def vrows_restore(self, u, snap):
+        """verify rows (DB3 phase 2): a snapshot_slot / vrows_snapshot result into user u at ring 0, slot 0 (its next
+        step: token_state_vrows with ring 0, slot 0, prev None): GDN states into row u R, history age j into ring slot
+        j (block j // R, tile row u R % batch + j % R)"""
+        assert self.vrows
+        d, G, R = self.d, self._gdn_copies, self.R
+        gr, base = divmod(u * R, self.batch)
+        LR, sub, r = self.launch_rows, self.subs[0], u * R
+        self._page_copy(
+            [
+                (snap["state"], (c * d.nv + h) * 16, sub["state"], ((c * d.nv + h) * LR + r) * 16, 16)
+                for c in range(G)
+                for h in range(d.nv)
+            ]
+        )
+        for j in range(CONV_K - 1):
+            self._hist_one(gr, base + j % R, j // R, snap["hist"], j, CONV_K - 1, gather=False)
 
     SNAP_TENSORS = ("state", "hist", "kv")
 
