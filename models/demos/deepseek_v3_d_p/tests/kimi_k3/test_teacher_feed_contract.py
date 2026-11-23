@@ -1430,6 +1430,32 @@ def test_kda_chain_feed_rebuilds_the_chain_and_scores_a_device_run(tmp_path: Pat
     assert r["states"][0]["row"] == 8 and r["states"][0]["recurrent_rel"] < 1e-6
     assert json.loads((out / "metrics.json").read_text())["layer"] == 1
 
+    # device_chain.score reads every stream reference from the chain and the rebuild (no model): a run that taps the
+    # references (in fp32) but doubles row 6 of live_0 scores fp32 rounding everywhere else and |live_0[6]| / sqrt(10)
+    # RMS error on live_0.
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import device_chain
+
+    dc = tmp_path / "dc"
+    refs = [device_chain.stream_references(chain, rebuilt, i) for i in range(3)]
+    rows = [4, 4, 2]
+    taps = {k: torch.cat([r[k][:n].float() for r, n in zip(refs, rows)]) for k in device_chain.STREAM_KEYS}
+    assert torch.equal(taps["kda_input_1"], want_in.float())
+    taps["live_0"][6] *= 2
+    dc_run = {"count": 10, "chunk": 4}
+    for tap in ("stream", "kda-l0"):
+        start_run(dc / tap, dc_run)
+    for c, lo in enumerate(range(0, 10, 4)):
+        payload = {"start": lo, "end": min(lo + 4, 10), **{k: v[lo : lo + 4] for k, v in taps.items()}}
+        torch.save(payload, chunk_path(dc / "stream", c))
+    finish_run(dc / "stream", dc_run, 1.0)
+    carry0 = torch.load(fp64_chain.state_path(chain, 1), weights_only=True)["kda"][0]
+    torch.save(carry0, dc / "kda-l0" / "state_00000008.pt")
+    finish_run(dc / "kda-l0", {**dc_run, "states": [{"row": 8, "file": "state_00000008.pt"}]}, 1.0)
+    o = device_chain.score(run=dc, rebuilt=rebuilt, window=4)["overall"]
+    assert all(o[f"{k}_nrmse"] < 1e-6 for k in device_chain.STREAM_KEYS if k != "live_0")
+    assert o["live_0_rms_err"] == pytest.approx(float(taps["live_0"][6].double().norm() / 2) / 10**0.5, rel=1e-6)
+    assert o["live_0_rms_err"] / o["live_0_rms_ref"] == pytest.approx(o["live_0_nrmse"])
+
     state = torch.load(fp64_chain.state_path(chain, 0), weights_only=True)
     state["kda"][1]["recurrent"] = 2 * state["kda"][1]["recurrent"]
     torch.save(state, fp64_chain.state_path(chain, 0))

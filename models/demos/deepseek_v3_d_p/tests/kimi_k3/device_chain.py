@@ -15,8 +15,8 @@ error compounds with context is read off the same per-window curves the teacher-
 
 The FP64 references of the stream: the MoE inputs and the DSA layer's AttnRes read are the chain's products; the
 live residual after layers 0 and 1 is the KDA rebuild's ``live_1`` / ``live_2`` (fp32), after layer 2
-``live_2 + kda_output_2 + moe_output_2``; the KDA inputs of layers 1-2 are recomputed in FP64 from the rebuild's
-live residual and the embedding, as the chain computes them.
+``live_2 + kda_output_2 + moe_output_2``; the KDA inputs of layers 1-2 are the rebuild's (its FP64 KDA input rounded
+once to bf16, which moves an NRMSE of 0.02-0.06 by under 1e-4). Every reference is a stored product.
 
     python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain score --run /mnt/.../k31-1m-device-chain
 """
@@ -43,14 +43,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     token_ids_sha256,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import CUT_GAP_RANKS, key_sums, pcc_nrmse
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import (
-    F64,
-    ChainModel,
-    attn_res64,
-    rms64,
-    state_path,
-    tensor_digest,
-)
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import F64, attn_res64, rms64, state_path, tensor_digest
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_chain_feed import rebuilt_manifest, rebuilt_path, rel
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed import routing_window
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
@@ -121,23 +114,19 @@ def load_token_ids(trace: Path, count: int) -> torch.Tensor:
     return torch.tensor(Trace(trace).metadata["token_ids"][:count], dtype=torch.int64)
 
 
-def stream_references(model: ChainModel, chain: Path, rebuilt: Path, index: int, emb: torch.Tensor) -> dict:
+def stream_references(chain: Path, rebuilt: Path, index: int) -> dict:
     """The FP64 value of every ``STREAM_KEYS`` tap over chain segment ``index`` (module docstring)."""
     seg = torch.load(segment_path(chain, index), weights_only=True, mmap=True)
     rb = torch.load(rebuilt_path(rebuilt, index), weights_only=True, mmap=True)
-    sealed = emb.unsqueeze(1)
     want = {f"moe_input_{l}": seg[f"moe_input_{l}"] for l in (1, 2)}
     want["dsa_input_3"] = seg["dsa_input_3"]
-    for l in (1, 2):
-        L = model.layers[l]
-        read = attn_res64(rb[f"live_{l}"].to(F64), sealed, L["attn_res"], model.eps)
-        want[f"kda_input_{l}"] = rms64(read, L["input_layernorm"], model.eps)
+    want.update({f"kda_input_{l}": rb[f"kda_input_{l}"] for l in (1, 2)})
     want["live_0"], want["live_1"] = rb["live_1"], rb["live_2"]
     want["live_2"] = rb["live_2"].double() + rb["kda_output_2"].double() + seg["moe_output_2"].double()
     return want
 
 
-def score(*, run: Path, rebuilt: Path, trace: Path, model: ChainModel, window: int, log=print) -> dict:
+def score(*, run: Path, rebuilt: Path, window: int, log=print) -> dict:
     """Score the stream and the layer-0 carry of a device-chain run in ``run``; writes ``stream/metrics.json``."""
     stream = complete_run(run / "stream")
     count, chunk = stream["count"], stream["chunk"]
@@ -145,7 +134,6 @@ def score(*, run: Path, rebuilt: Path, trace: Path, model: ChainModel, window: i
     chain = Path(rb["chain"]["chain"])
     seg_rows = rb["segment_rows"]
     segment = seg_rows[0][1] - seg_rows[0][0]
-    token_ids = load_token_ids(trace, count)
     sums = {k: [] for k in STREAM_KEYS}
     row_nrmse = {k: [] for k in STREAM_KEYS}
     for index in range(-(-count // segment)):
@@ -156,8 +144,7 @@ def score(*, run: Path, rebuilt: Path, trace: Path, model: ChainModel, window: i
             a, b = max(lo, payload["start"]) - payload["start"], min(hi, payload["end"]) - payload["start"]
             for k in STREAM_KEYS:
                 got[k].append(payload[k][a:b])
-        emb = model.embedding[token_ids[lo:hi]].to(F64)
-        want = stream_references(model, chain, rebuilt, index, emb)
+        want = stream_references(chain, rebuilt, index)
         for k in STREAM_KEYS:
             g, w = torch.cat(got[k]).double(), want[k][: hi - lo].double()
             sums[k].append(key_sums(g, w))
@@ -693,11 +680,7 @@ def main() -> None:
         print(json.dumps({tap: r["overall"] for tap, r in results.items()}, indent=1))
         return
 
-    chain = Path(json.loads((args.rebuilt / MANIFEST).read_text())["chain"]["chain"])
-    checkpoint = Path(json.loads((chain / MANIFEST).read_text())["identity"]["checkpoint"])
-    log(f"loading weights (no routed experts) from {checkpoint}")
-    model = ChainModel.from_checkpoint(checkpoint, args.threads, log, routed_experts=False)
-    result = score(run=args.run, rebuilt=args.rebuilt, trace=args.trace, model=model, window=args.window, log=log)
+    result = score(run=args.run, rebuilt=args.rebuilt, window=args.window, log=log)
     print(json.dumps({"overall": result["overall"], "kda_l0_states": result["kda_l0_states"][-3:]}, indent=1))
 
 
