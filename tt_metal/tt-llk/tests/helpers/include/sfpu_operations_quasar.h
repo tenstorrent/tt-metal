@@ -1791,6 +1791,11 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         // Forwards APPROXIMATION_MODE to _init_reciprocal_ (LUT-only vs Newton).
         sfpu_binary_init<APPROXIMATION_MODE, BinaryOp::DIV>();
     }
+    else if constexpr (OP == BinaryOp::XLOGY)
+    {
+        // Programs the log constants in vConstFloatPrgm0-2.
+        sfpu_binary_init<APPROXIMATION_MODE, BinaryOp::XLOGY>();
+    }
     else if constexpr (quasar_binary_op_is_max_min(OP))
     {
         _init_binary_max_min_();
@@ -1957,7 +1962,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         // logsigmoid_tile_init: loads the polynomial tail d6..d8 into vConstFloatPrgm0..2.
         logsigmoid_init<APPROXIMATION_MODE>();
     }
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS / MUL_SM_SHIFT23 are stateless — no init.
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS / MUL_SM_SHIFT23 / NEXTAFTER / NEXTAFTER_BF16 are stateless — no init.
 }
 
 /**
@@ -2181,6 +2186,18 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             src1_tile,
             dst_tile,
             vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::XLOGY || OP == BinaryOp::NEXTAFTER || OP == BinaryOp::NEXTAFTER_BF16)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_sfpu_binary,
+            (APPROXIMATION_MODE, OP, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
     }
     else if constexpr (OP == BinaryOp::ATAN2)
     {

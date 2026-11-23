@@ -84,11 +84,7 @@ ALWI void sfpu_mul_bcast_col_init() { sfpu_bcast_col_init(); }
  * `vector_mode` selects the rows: `VectorMode::RC` (the default) is the whole
  * tile, `VectorMode::R` is rows 0..15 only (faces 0 and 1), after which rows
  * 16..31 of the data tile are untouched and rows 16..31 of the column tile are
- * never read. Other modes are rejected (LLK_ASSERT). `VectorMode::R` is not
- * supported on Quasar: a kernel that uses it fails to build. On Quasar
- * `vector_mode` must also be a compile-time constant: the unsupported R path
- * is dropped only when the compiler can fold the mode check, so a run-time
- * value fails to build there even when it is `VectorMode::RC`.
+ * never read. Other modes are rejected (LLK_ASSERT).
  *
  * Return value: None
  *
@@ -203,7 +199,6 @@ ALWI void sfpu_mul_bcast_col(uint32_t dst_data_idx, uint32_t dst_col_vec_idx, Ve
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call.
  * Requires a prior call to `sfpu_bcast_col_init` (or the op-specific init).
- * Not supported on Quasar: a kernel that calls it fails to build.
  *
  * Return value: None
  *
@@ -276,8 +271,6 @@ ALWI void sfpu_mul_bcast_col_band(
  * output are FP32. DST must be acquired, and `sfpu_bcast_col_init()` must have
  * been called since any scalar-broadcast normalisation.
  *
- * Not supported on Quasar: a kernel that calls it fails to build.
- *
  * Return value: None
  *
  * | Argument            | Description                                              | Type     | Valid Range                                           | Required |
@@ -307,8 +300,6 @@ ALWI void sfpu_normalize_bcast_col(uint32_t dst_data_idx, uint32_t dst_mean_col_
  * Apply `(data - mean) * inv_std` to two in-place data tiles while reusing
  * each column-vector statistics broadcast. All operands and outputs are FP32.
  * DST must be acquired, and `sfpu_bcast_col_init()` must have been called.
- *
- * Not supported on Quasar: a kernel that calls it fails to build.
  *
  * Return value: None
  *
@@ -346,8 +337,6 @@ ALWI void sfpu_normalize_bcast_col_two_tiles(
  * output are FP32. DST must be acquired, and `sfpu_bcast_col_init()` must have
  * been called since any scalar-broadcast normalisation.
  *
- * Not supported on Quasar: a kernel that calls it fails to build.
- *
  * Return value: None
  *
  * | Argument            | Description                                              | Type     | Valid Range                                           | Required |
@@ -381,8 +370,8 @@ ALWI void sfpu_residual_normalize_bcast_col(
  * `sfpu_normalize_bcast_scalar()` and again if an intervening operation changes
  * the shared SFPU configuration or zero-stride address modifier.
  *
- * On Quasar `sfpu_normalize_bcast_scalar()` is not supported, so this init
- * has nothing to set up.
+ * On Quasar this init has nothing to set up: the normalisation builds its
+ * broadcasts itself.
  *
  * Return value: None
  */
@@ -403,8 +392,6 @@ ALWI void sfpu_normalize_bcast_scalar_init() {
  * This operation invalidates the persistent column-broadcast mask and clobbers
  * programmable constant register 2. A later column-broadcast or SFPU operation
  * that consumes that constant must run its corresponding init first.
- *
- * Not supported on Quasar: a kernel that calls it fails to build.
  *
  * Return value: None
  *
@@ -444,8 +431,6 @@ ALWI void sfpu_normalize_bcast_scalar(
  * Neither the column-broadcast mask nor its replay program is touched, so the
  * two families coexist.
  *
- * Not supported on Quasar: a kernel that calls it fails to build.
- *
  * Return value: None
  */
 // clang-format on
@@ -466,8 +451,6 @@ ALWI void sfpu_bcast_scalar_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, s
  * lane mask: a column-broadcast op that follows a load runs its init first,
  * which leaves the parked value alone. The scalar tile and DEST must be FP32
  * and DEST acquired.
- *
- * Not supported on Quasar: a kernel that calls it fails to build.
  *
  * Return value: None
  *
@@ -502,8 +485,6 @@ ALWI void sfpu_bcast_scalar_load(uint32_t dst_scalar_idx) {
  * else is untouched. The multiply is the column broadcast's own instruction,
  * so the result is bit-identical to `sfpu_mul_bcast_col` with a column tile
  * that holds the scalar in every row. FP32 DEST only; DEST must be acquired.
- *
- * Not supported on Quasar: a kernel that calls it fails to build.
  *
  * Return value: None
  *
