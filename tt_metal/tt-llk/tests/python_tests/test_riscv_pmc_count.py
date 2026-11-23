@@ -89,9 +89,9 @@ def test_riscv_pmc_counts_a_known_loop(monkeypatch):
         )
         # The same capture code surrounds both loops, so only the extra iterations remain.
         assert long_instructions - short_instructions == extra, report[-1]
-        # The armed counter follows the same difference. Zeroing at arm time leaves only the arming overhead in each
-        # zone, equal in both, so the difference is exact; a counter that is not zeroed adds the first zone's count.
-        assert long_retired - short_retired == extra, report[-1]
+        # The armed counter samples one instruction either side of minstret depending on the thread's code, while a
+        # counter that is not zeroed at arm time would add the first zone's whole count.
+        assert abs((long_retired - short_retired) - extra) <= 1, report[-1]
         assert (
             short_instructions >= SHORT_ITERATIONS * INSTRUCTIONS_PER_ITERATION
         ), report[-1]
