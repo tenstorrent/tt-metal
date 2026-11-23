@@ -26,8 +26,9 @@ void kernel_main() {
                     noc_async_write(l + m * ROW, oa.get_noc_addr(h * T + 32 * qt + r), ROW);
                 }
             }
-            noc_async_write_barrier();
+            noc_async_writes_flushed();  // the block's L1 can be reused once the writes left; acks at the end
             cb_pop_front(cb_out, NB);
         }
     }
+    noc_async_write_barrier();
 }
