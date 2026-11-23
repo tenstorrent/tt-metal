@@ -44,7 +44,10 @@ constexpr uint32_t gamma_src_page_bytes = get_compile_time_arg_val(27);  // gamm
 // map (common args), and the W tail of the caller's shard is masked in compute (never zeroed in place)
 constexpr bool x_sharded = get_compile_time_arg_val(28) != 0;
 constexpr uint32_t last_crt = get_compile_time_arg_val(29);  // tile-rows of the last row-group
-constexpr uint32_t WORKER_CT_ARGS = 30;                      // TensorAccessorArgs follow (reader / writer)
+// cb_out_block is backed on the own slice of this core's output shard (HEIGHT, one tile-row per shard): normalize
+// packs the pages into their final place, there is no own write
+constexpr bool out_in_place = get_compile_time_arg_val(30) != 0;
+constexpr uint32_t WORKER_CT_ARGS = 31;  // TensorAccessorArgs follow (reader / writer)
 
 constexpr uint32_t P = G * K;  // stats partitions per row
 constexpr uint32_t TILE = 32;

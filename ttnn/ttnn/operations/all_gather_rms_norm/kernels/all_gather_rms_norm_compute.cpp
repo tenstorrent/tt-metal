@@ -297,7 +297,7 @@ ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize, bool tail) {
 
 // The x block the LN paths read: fp32 DEST -> a Float32 block (UnpackToDestFp32: exact in DEST); 16-bit DEST -> cb_x
 // itself (nothing is UnpackToDestFp32-tagged, every DEST value is 16-bit anyway).
-constexpr bool ln_x_copy = !x_is_f32 && DST_ACCUM_MODE;
+constexpr bool ln_x_copy = !x_is_f32 && DST_ACCUM_MODE && !x_sharded;  // sharded: bf16 / bf8b x is exact in DEST
 constexpr uint32_t cb_xs = ln_x_copy ? cb_x32 : cb_x;
 // Exact (SFPU) fp32 sums need fp32 DEST; under 16-bit DEST the FPU path sums (the caller chose 16-bit accumulation).
 constexpr ReduceFp32Mode ln_exact_mode = DST_ACCUM_MODE ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;

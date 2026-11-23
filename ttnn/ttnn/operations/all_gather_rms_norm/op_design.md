@@ -469,5 +469,21 @@ the advisory layer (CB set, helper choices, mechanism details); see `l1_ledger.m
 | num_links None | min(usable links per hop, 2) | SUPPORTED num_links is {1, 2} |
 
 Not landed in Phase 0: HEIGHT / WIDTH sharded input, `fp32_dest_acc_en=False` (see `changelog.md`).
+
+## Implementation notes (Refinement 1: sharded input, 16-bit DEST)
+
+| Design item | As built | Why |
+|---|---|---|
+| Worker identity (common RT args only) | sharded input: a packed byte map `lin -> worker index` (shard order) in the common args (`CRT_WORKER_MAP`); interleaved keeps "grid − ports, row-major" | shard grids may be multi-range / column-major; still no per-core RT args (dispatch) |
+| Split from the shard spec | HEIGHT: k = 1, one group per shard, ragged last shard → `last_crt` CT arg; WIDTH: one group, k = #shards, only the stats-table cap binds (P_CAP / the LN one-gather-tile rule stay the interleaved split's cost choices). Ragged WIDTH shards only at R = 1 | the shard is the block (zero-copy `cb_x`) |
+| Placement | ports chosen from the grid minus the input shard cores (`build_plan(..., excluded)`, cached per exclusion set) | port cores run no worker kernels |
+| W tail on a sharded input | the caller's shard is never zeroed. On the tail member every sum over x (RMS x², LN S1 and T) multiplies its block by a **mask block** (`cb_mask`: cw row-0 masks, ones but the tail tile's valid columns, built with `prepare_reduce_mask`) via the row-broadcast DestReuse multiply already used for gamma, then a plain ReduceTile | the helper's AccumulateViaAdd `only_partial` fold of a lone tail tile (cw = 1) accumulates onto an unseeded DEST when crt > 1 (measured: rel RMS 0.14 → 0.016 → pass); and it cannot read an UnpackToDestFp32-tagged x block |
+| LN x block on a sharded input | `cb_xs = cb_x` (no `cb_x32` copy, untagged); `cb_ln_sq` bf16 for a 16-bit-mantissa x | bf16 / bf8b x lands in fp32 DEST exactly through srcA; frees `cwt` Float32 tiles next to the caller's resident in/out shards (HEIGHT LN at W_local 1792–2048 did not fit) |
+| LN combine with several gather tiles (WIDTH k > 32 / G) | chains over `grid(crt, gather_tiles)` with Strided Block addressing, `n_j` in `gather_tiles` tiles, and the exact ReduceTile (Accurate) collapse the RMS combine uses; one gather tile keeps the Phase 0 AccumulateViaAdd collapse | AccumulateViaAdd's cross-tile `add_tiles` reads the UnpackToDestFp32-tagged `cb_ln_tmp` through srcA (garbage) |
+| Sharded output landing | port walk mode `shard_w > 0`: lanes are tile-rows (link l owns rows l, l + L, …), a run is a slot row's columns inside one shard core (split at `shard_w` columns), relay reads the run from the local shard. HEIGHT in + HEIGHT out with one tile-row per shard on the same cores: `cb_out_block` IS the own slice of the output shard (`cb_descriptor_from_sharded_tensor(..., address_offset = p·Wlt·page)`), no own write | runs are long (Wlt pages) so 1–2 runs per packet; in-place output frees `cwt` pages (fp32 HEIGHT 640×1536 needed it) |
+| 16-bit DEST | `T_acc` for `cb_sumsq`, `cb_inv`, `cb_rstd_b`, `cb_ln_sq`, `cb_mask`; no UnpackToDestFp32 tags; LN reads `cb_x` directly and every reduce runs Fast; records stay Float32 pages (wire contract); the hub-side fp32 combine stays `deferred` | `helpers.TOLERANCES[(bf16, False)]` holds on the whole gate tier (188/188 interleaved cells) |
+
+Not landed (Refinement 1b): WIDTH_SHARDED at large R × k — the stats table (G·R·k·nstats records) exceeds
+`STATS_TABLE_CAP`, or the per-member gather / LN per-row CBs (`crt = R` rows × P partitions) exceed L1.
 Measured: forcing an aligned slice through the slot-contiguous staging regime (long fabric runs + tile assembly)
 gave 40.3 µs vs 35.5 µs for final-address landing on the focus case: the R_A choice holds on this box.

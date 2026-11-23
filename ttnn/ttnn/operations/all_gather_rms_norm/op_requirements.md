@@ -45,7 +45,7 @@
 - **Compute config**: `default_compute_kernel_config()` = HiFi4, fp32_dest_acc_en=True, exact SFPU; fidelity / approx are not gated.
 - **Golden baseline**: gate tier — see `verification_report.md` (verifier CLI: 0 supported_fail, 0 xpass_drift, 0 xfail_wrong_mode).
 
-### [ ] Refinement 1 — Port the base op's remaining input surface: HEIGHT_SHARDED + WIDTH_SHARDED input, and fp32_dest_acc_en=False
+### [~] Refinement 1 — Port the base op's remaining input surface: HEIGHT_SHARDED + WIDTH_SHARDED input, and fp32_dest_acc_en=False
 
 **Goal**: add `ttnn.TensorMemoryLayout.HEIGHT_SHARDED` and `ttnn.TensorMemoryLayout.WIDTH_SHARDED` to `SUPPORTED["memory_layout"]` and `False` to `SUPPORTED["fp32_dest_acc_en"]` — the from-base features Phase 0 did not land, ported from the base op's mechanisms (`ttnn/ttnn/operations/base_ops/rms_norm/changelog.md`):
 
@@ -59,6 +59,28 @@
 **Verifier notes**: put first (from-base port, a knob-turn on every axis: HEIGHT is the k = 1 case of the existing split, WIDTH is k = #shards on the existing stats table, fp32_dest False is a CB-format / tag-list change) — ahead of the cross-device perf refinements. The perf-flagged configs (bf16, fp32_dest_acc_en=True, INTERLEAVED) are already supported, so nothing here gates Refinement 2. `/numeric-formats-metal` covers the fp32_dest_acc_en=False half only; sharding placement has no skill — follow the base op's zero-copy `cb_descriptor_from_sharded_tensor` pattern. The harness builds sharded inputs with `eval.sharding.auto_shard_config`; in the first gate run, three sharded cells failed *inside the harness's own from_torch* (tilize work split, "No solution found for single_block_size") while the op's persisted L1 leak was eating L1 — after the verifier's fix they xfail normally, but watch for INFEASIBLE_L1 skips on the 1×1×32×4096 / 1×1×64×1000 shards. 16-bit DEST: the precision gate is `helpers.TOLERANCES[(bf16, False)] = (0.999, 0.015)`.
 
 **Done when**: every gate-tier cell with `memory_layout ∈ {HEIGHT_SHARDED, WIDTH_SHARDED}` or `fp32_dest_acc_en=False` (except the `{float32, False}` and `{bfloat8_b, w_non_aligned}` EXCLUSIONS) moves from `xfail_expected` to `supported_pass`; no sharded path reads its local shard through a `TensorAccessor`; all prior cells stay green.
+
+**Outcome**: landed `fp32_dest_acc_en=False` (gate: 188/188 interleaved cells pass, rest are the permanent
+EXCLUSIONS), HEIGHT_SHARDED (71/72 runnable gate cells; 128×8192 bf8b LN cannot fit its 1.1 MB output shard) and
+WIDTH_SHARDED where R × k is small (≈ 57/86). Remaining blocker: WIDTH at large R × k → Refinement 1b.
+
+### [ ] Refinement 1b — WIDTH_SHARDED at large R × k: on-chip pre-combine of the k shard members + row-chunked stats CBs
+
+**Goal**: the WIDTH_SHARDED gate cells that still fail with `RuntimeError: WIDTH_SHARDED k = … exceeds the
+stats-partition cap` or an L1 CB overflow (≈ 29 cells: 2048×384, 2048×1280, 640×{896,1536,1792}, 1×640×1792,
+4×1×512×512, 2×4×128×512, 128×4096 LN, 128×8192, and LN at R = 16–20: 640×{32,192,256,384,512}, 4×128×47). Measured
+cause (Refinement 1): WIDTH fixes k = #shards (12–86) and one row-group (crt = R), so (a) the stats table is
+G·R·k·nstats·128 B (393 KB at 2048×384 RMS, > `STATS_TABLE_CAP` 256 KB, and it is a CB on every core), and (b) every
+member gathers and combines all R rows × P = G·k partitions: `cb_gather_rows` + `cb_gathered` = 2·R·nstats·⌈P/32⌉
+Float32 tiles plus ~7 per-row LN CBs (R = 20 LN ≈ 1.3 MB). Lever: a **row-owner pre-combine** on the chip (the base
+op's WIDTH owner-combine topology, Refinement 2 of base_ops/rms_norm): member m owns rows ⌈R/k⌉·m…, sums the k members'
+partials of its rows (RMS: add; LN: the same exact (n, m, T, K) combine the cross-chip step uses) into ONE record per
+row before the fabric round (P = G, table = G·R·nstats·128 B), then after the round combines its rows and returns
+final per-row stats (inv / mean, rstd) to all k members; plus row-chunked (sub-block) per-row CBs so crt = R never
+sizes a Float32 CB. A scheme-change (dependent-axis cross-core combine), not a knob-turn.
+
+**Done when**: those WIDTH_SHARDED gate cells pass (or skip INFEASIBLE_L1 in the harness's own from_torch); no prior
+cell regresses.
 
 ### [ ] Refinement 2 — TRANSPORT: bulk packet efficiency on interleaved final pages (focus case)
 

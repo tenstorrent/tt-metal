@@ -225,14 +225,15 @@ def select_sharded_split(geo: Geometry, input_tensor, G, k_cap_fn):
         if unit_h < geo.R:
             raise RuntimeError(f"all_gather_rms_norm: WIDTH shard height {sh} does not cover the {geo.R} tile-rows")
         k = -(-geo.Wlt // unit_w)
-        if geo.Wlt % unit_w:
-            raise RuntimeError(f"all_gather_rms_norm: ragged WIDTH shards ({geo.Wlt} tiles / {unit_w}) are not built")
+        if geo.Wlt % unit_w and geo.R > 1:
+            # a ragged last shard keeps the nominal row pitch, the block helpers assume pitch = width (R = 1: no pitch)
+            raise RuntimeError(f"all_gather_rms_norm: ragged WIDTH shards ({geo.Wlt} tiles / {unit_w}) over R > 1")
         if len(order) < k:
             raise RuntimeError(f"all_gather_rms_norm: {k} W shards but only {len(order)} shard-grid cores")
         if k > k_cap_fn():
             raise RuntimeError(
                 f"all_gather_rms_norm: WIDTH_SHARDED k = {k} shards exceeds the stats-partition cap {k_cap_fn()} "
-                f"(P_CAP / G, LN one gather tile, STATS_TABLE_CAP); a pre-combine of the k members is not built"
+                f"(STATS_TABLE_CAP at R = {geo.R}); the on-chip pre-combine of the k members is not built (Refinement 1b)"
             )
         return Split(k, 1, geo.R, 1, unit_w, geo.R), order[:k]
     raise RuntimeError(f"all_gather_rms_norm: memory layout {mc.memory_layout} is not built")
@@ -576,6 +577,21 @@ def create_mesh_program_descriptor(
     payload_bytes = run_pages * out_page
     stats_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
     out_sharded = output_tensor.memory_config().is_sharded()
+    # HEIGHT in -> HEIGHT out, one tile-row per shard on the same cores: the own slice of a worker's output shard is
+    # Wlt contiguous pages, so cb_out_block IS that slice (normalize packs into its final place — no block, no own
+    # write; the ports pull it from there)
+    out_in_place = False
+    if (
+        x_sharded
+        and out_sharded
+        and not is_ru
+        and input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        and output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        and split.rows_hi == 1
+    ):
+        o_ss = output_tensor.memory_config().shard_spec
+        o_order = _ordered_shard_cores(o_ss.grid, o_ss.orientation == ttnn.ShardOrientation.ROW_MAJOR)
+        out_in_place = int(o_ss.shape[0]) == TILE and o_order[: len(shard_order)] == list(shard_order)
     if is_ru:
         walk = Walk(nb, 1, geo.R * geo.Wlt, geo.R * geo.Wlt, geo.R * geo.Wlt, run_pages, scatter_runs)
     elif out_sharded:
@@ -634,6 +650,7 @@ def create_mesh_program_descriptor(
         gamma_src_page,
         int(x_sharded),  # worker identity from the shard map (common args), zero-copy cb_x, masked W tail
         split.last_rows,
+        int(out_in_place),
     ]
     # Sharded: the local shard is consumed in place, never through an accessor -> empty accessor args.
     acc_ct = list(
@@ -689,9 +706,9 @@ def create_mesh_program_descriptor(
         tagged = [CB_GATHER_ROWS]  # exact fp32 copy into DEST for the transpose
         if is_ln:
             tagged += [CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_COL]
-            if not mask_tail:
-                # exact x in DEST; the masked S1 of a sharded W tail folds x through srcA (AccumulateViaAdd), which a
-                # tagged CB cannot feed — bf16 / bf8b x is exact in tf32 there, fp32 x is truncated to tf32
+            if not mask_tail and (x_is_f32 or not x_sharded):
+                # exact x in DEST (the Float32 x block); a sharded W tail's masked sums read x through srcA (DestReuse
+                # mask multiply), which a tagged CB cannot feed — fp32 x is truncated to tf32 there
                 tagged.append(CB_X if x_is_f32 else CB_X32)
         else:
             # RMS: the local collapse and the cross-chip combine sum the partials in fp32 (Accurate SFPU reduce
@@ -778,7 +795,13 @@ def create_mesh_program_descriptor(
             _cb(CB_RECORD_LANDING, G * k * nstats, RECORD_BYTES, ttnn.float32, full),
             _cb(CB_GATHERED, crt_max * nstats * gather_tiles, T32, ttnn.float32, full),
             _cb(CB_INV, crt_max, T_acc, acc_dtype, full),
-            _cb(CB_OUT_BLOCK, crt_max * cw_max, out_page, out_dtype, full),
+            (
+                ttnn.cb_descriptor_from_sharded_tensor(
+                    CB_OUT_BLOCK, output_tensor, p * geo.Wlt * out_page, geo.Wlt * out_page, full
+                )
+                if out_in_place
+                else _cb(CB_OUT_BLOCK, crt_max * cw_max, out_page, out_dtype, full)
+            ),
             _cb(CB_PORT_CHUNKS, 2 * batch_chunks * run_pages, out_page, out_dtype, full),
             # program-scoped: same address on every core of every chip, no persistent L1 (see agrn_common.hpp)
             _cb(CB_STATS_TABLE, table_bytes // RECORD_BYTES, RECORD_BYTES, ttnn.float32, full),
@@ -789,11 +812,13 @@ def create_mesh_program_descriptor(
         if has_beta:
             cbs.append(_cb(CB_BETA, cw_max, gamma_page, g_dtype, full))
         if is_ln or mask_tail:
-            # T_acc like cb_ln_sq (and the masked S1's x block): the reduce helper's masked fold unpacks the mask as
-            # srcB without a format reconfig
+            # T_acc like cb_ln_sq: the reduce helper's masked fold (interleaved LN T) unpacks the mask as srcB without a
+            # format reconfig. Sharded LN on a 16-bit-mantissa x: cb_ln_sq ((x - K)^2 scratch, one block of tiles
+            # beside the caller's resident in/out shards) is bf16 — the sharded paths never fold it with the mask.
+            sq_dtype = ttnn.bfloat16 if (is_ln and x_sharded and not x_is_f32) else acc_dtype
             cbs += [
                 _cb(CB_MASK, cw_max if mask_tail else 1, T_acc, acc_dtype, full),  # sharded tail: the mask block
-                _cb(CB_LN_SQ, crt_max * cw_max, T_acc, acc_dtype, full),
+                _cb(CB_LN_SQ, crt_max * cw_max, ttnn.tile_size(sq_dtype), sq_dtype, full),
             ]
         if is_ln:
             cbs += [
@@ -805,7 +830,8 @@ def create_mesh_program_descriptor(
                 _cb(CB_RSTD_B, crt_max, T_acc, acc_dtype, full),
                 _cb(CB_LN_TMP, crt_max * gather_tiles, T32, ttnn.float32, full),
             ]
-            if not x_is_f32 and fp32_dest:  # 16-bit DEST: the S1 reduce reads cb_x itself (no exact copy)
+            # 16-bit DEST / sharded input: the LN paths read cb_x itself (bf16 / bf8b lands in DEST exactly anyway)
+            if not x_is_f32 and fp32_dest and not x_sharded:
                 cbs.append(_cb(CB_X32, crt_max * cw_max, T32, ttnn.float32, full))
         else:
             cbs.append(_cb(CB_SUMSQ, crt_max, T_acc, acc_dtype, full))

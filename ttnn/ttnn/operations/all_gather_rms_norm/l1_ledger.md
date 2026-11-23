@@ -123,3 +123,19 @@ Total per chip: DRAM ≈ 6S (x 1, own write 1, landed 3, relay read 1) against t
 Data-movement budget: unchanged from the table above (x 1, own write 1, landed 3, relay read 1 per chip; the ports
 pull the own slice from worker L1). Measured probe: re-reading the own slice from the own DRAM output instead is only
 0.7 µs faster on the focus case (34.85 vs 35.54 µs), i.e. the pull is not the transport bottleneck.
+
+## Refinement 1 (sharded input, 16-bit DEST) — ledger deltas
+
+| CB | Change | Shares with / why not |
+|----|--------|-----------------------|
+| `cb_x` | sharded input: `cb_descriptor_from_sharded_tensor` on the input (zero-copy, 0 CB bytes), declared on the full range (the shard address is valid on every core; nothing else lives there) | is the caller's shard: never written (W tail masked in compute) |
+| `cb_out_block` | HEIGHT in + HEIGHT out, one tile-row per shard on the same cores: backed on the own slice of the output shard (`address_offset = p·Wlt·T_out`, `Wlt` pages, 0 CB bytes) | is the final output: the own write disappears, the ports pull from it as before |
+| `cb_mask` | sharded W tail: `cwt` row-0 masks (the mask block), T_acc; else 1 page (LN T fold) | none: read by every masked chain of the block |
+| `cb_ln_sq` | also allocated for RMS on a sharded W tail (masked x² block); bf16 for sharded LN on a non-fp32 x; T_acc otherwise | reused by S1 (twice) and T in sequence on the masked path — each chain's output is consumed (BulkWaitBulkPop) before the next fills it |
+| `cb_x32` | not allocated on a sharded input or under 16-bit DEST (LN reads `cb_x`) | — |
+| `cb_inv`, `cb_rstd_b` | T_acc (was Float32 under 16-bit DEST too) | — |
+| `cb_stat_consts`, `cb_ln_tmp` | `gather_tiles` / `crt · gather_tiles` pages (LN with P > 32, WIDTH only) | — |
+
+Data-movement budget, sharded input: x never crosses DRAM (consumed in place); a sharded output is written once in
+L1 (own slice in place for HEIGHT one-row shards, local / NoC writes otherwise) and the remote slices land at their
+final shard addresses over the fabric. Interleaved budget unchanged.

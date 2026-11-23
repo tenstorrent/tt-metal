@@ -117,7 +117,11 @@ void kernel_main() {
         }
         AGRN_ZONE("wr_own");
         const auto dst = TensorAccessor(dst_args, get_common_arg_val<uint32_t>(CRT_DST_ADDR), out_page_bytes);
-        for (uint32_t r = 0; r < w.crt; ++r) {
+        if constexpr (out_in_place) {
+            // cb_out_block is the own slice of this core's output shard: the pages are already in place
+            cb_wait_front(cb_out_block, w.crt * w.cw);
+        }
+        for (uint32_t r = 0; r < (out_in_place ? 0u : w.crt); ++r) {
             const uint32_t tr = w.row_start + r;
             const uint32_t first = is_ru ? (p * R + tr) * Wlt + w.w_start : tr * Wt + p * Wlt + w.w_start;
             for (uint32_t j = 0; j < w.cw; ++j) {

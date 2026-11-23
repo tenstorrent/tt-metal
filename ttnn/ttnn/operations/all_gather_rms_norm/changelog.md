@@ -81,3 +81,38 @@ pages / 4 DRAM writes), relay ~4 µs, landing tail ~3 µs. LN 640×32: local sta
    readiness would start the first packets earlier.
 3. local (LN) — the LN combine / normalize chain (~7 µs per tile-row on the critical path: many small chains and
    reduces with per-call init / reconfig).
+
+## Refinement 1 — Port the base op's remaining input surface: HEIGHT_SHARDED + WIDTH_SHARDED input, and fp32_dest_acc_en=False
+- Date: 2026-11-23
+- What was done:
+  - **fp32_dest_acc_en=False** (base op Refinement 1 mechanism): intermediate CB formats follow the DEST width (`T_acc`
+    for `cb_sumsq`, `cb_inv`, `cb_rstd_b`, `cb_ln_sq`, `cb_mask`); the UnpackToDestFp32 tag list is empty under 16-bit
+    DEST; LN reads `cb_x` directly (no Float32 copy) and every LN reduce runs Fast. Records stay Float32 pages (wire
+    contract); the combine runs in the caller's 16-bit DEST (the hub-side fp32 combine stays `deferred`: not needed).
+    The design's FPU-centering row 12' was not needed: the existing SFPU chains run in 16-bit DEST within tolerance.
+  - **HEIGHT_SHARDED** (base op Refinement 4): k = 1, one row-group per shard (ragged last → `last_crt`), zero-copy
+    `cb_x` (`cb_descriptor_from_sharded_tensor`, empty x accessor args), worker identity from a packed shard map in the
+    common args (still no per-core RT args), ports placed off the input shard grid. HEIGHT output with one tile-row
+    per shard on the same cores: `cb_out_block` is backed on the own slice of the output shard (no block, no own write).
+  - **WIDTH_SHARDED** (base op Refinement 2): one group, k = #shards; the members meet in the stats table; LN combine
+    generalized to several gather tiles (P > 32); ragged last shard at R = 1.
+  - **Sharded output**: port walk mode `shard_w` (lanes = tile-rows, runs = a slot row inside one shard core, split at
+    shard columns); host `Walk` replica in step; R_U keeps the DRAM staging and assembles into the sharded output.
+  - **W tail on a sharded input**: masked in compute, never zeroed in the caller's shard — a mask block (row-0 masks,
+    `prepare_reduce_mask`) applied with the gamma row-broadcast DestReuse multiply before plain reduces.
+  - Reused: SF-GN schedule, stats round, relay / arrival counters, gather, compute chains, DestReuseRowBcast.
+    Added: shard split + map, walk mode, mask block, multi-gather-tile LN combine, in-place output CB.
+- Accuracy achieved: all gate cells within `helpers.TOLERANCES` (16-bit DEST bf16 (0.999, 0.015), bf8b (0.995, 0.05));
+  new unit file 13/13 on shapes [640×384 HEIGHT/WIDTH RMS+LN, 640×1536 fp32 HEIGHT, 32×50 HEIGHT LN, 32×384 WIDTH LN
+  (P = 48), 2×1×128×100 WIDTH (tail, crt = 8), 32×8192 WIDTH (ragged, P = 344), 16-bit DEST interleaved + sharded].
+- Golden test progress (gate tier, targeted slices): fp32_dest=False interleaved 188 passed / 98 xfailed (EXCLUSIONS);
+  sharded 128 passed / 30 failed / 11 skipped / 6 xfailed of 175 (HEIGHT 71/72 runnable; WIDTH ≈ 57/86); interleaved
+  fp32-DEST regression sample 91/91 + test_regression 32/32 + loose perf cases 2/2; unit dir green.
+- Perf (eval harness, 5 experiments, fastest / slowest chip): focus 35.56 / 35.95 µs, LN 29.56 / 29.83 µs — unchanged.
+- Issues encountered: (1) an UnpackToDestFp32-tagged CB cannot be read through srcA — hit twice (masked S1 on
+  `cb_x32`, AccumulateViaAdd over several LN gather tiles); (2) AccumulateViaAdd's `only_partial` fold of a lone tail
+  tile with several tile-rows accumulates onto an unseeded DEST (rel RMS 0.14), replaced by the mask-block multiply;
+  (3) L1: HEIGHT output shards of the gathered shape are G× the input shard — fixed by the in-place output CB and by
+  dropping the LN Float32 x copy on sharded input. Remaining (Refinement 1b): WIDTH at large R × k (stats table cap /
+  per-row CBs, ≈ 29 cells, RuntimeError); 128×8192 bf8b HEIGHT LN (output shard alone exceeds L1).
+- Tests added: `tests/ttnn/unit_tests/operations/all_gather_rms_norm/test_all_gather_rms_norm_sharded_numeric.py`
