@@ -294,8 +294,43 @@ def _new_job(a):
         "t_submit": time.time(),
         "stage": "pending",
     }
+    cached = _cached_tt(job) if not getattr(a, "no_cache", False) else None
+    if cached:
+        job.update(
+            {
+                k: cached.get(k)
+                for k in ("verdict", "counts", "run_log", "compile_log", "chip")
+            },
+            stage="done",
+            cached_from=cached["id"],
+            t_done=time.time(),
+        )
+        _write(ROOT / "done" / f"{jid}.json", job)
+        return jid
     _write(ROOT / "pending" / f"{jid}.json", job)
     return jid
+
+
+def _cached_tt(job):
+    """A passed functional run of the same production (tt) test. Work-package branches never change production
+    headers, so a tt result is the same whichever worktree it ran from; reuse it instead of using a chip again.
+    """
+    if job["impl"] != "tt" or job["perf"]:
+        return None
+    key = ("test", "k", "test_id")  # maxfail only matters when something fails
+    for p in sorted((ROOT / "done").glob("*.json"), reverse=True):
+        try:
+            d = _read(p)
+        except Exception:
+            continue
+        if (
+            d.get("impl") == "tt"
+            and not d.get("perf")
+            and d.get("verdict") == "PASS"
+            and all(d.get(k) == job[k] for k in key)
+        ):
+            return d
+    return None
 
 
 def _line(j):
@@ -348,6 +383,11 @@ def main():
         s.add_argument("--timeout", type=int, default=1800)
         s.add_argument("--tag")
         s.add_argument("--priority", type=int, default=0)
+        s.add_argument(
+            "--no-cache",
+            action="store_true",
+            help="run a tt job even if an identical one already passed",
+        )
         s.add_argument("--owner", default=os.environ.get("USER", "?"))
         s.add_argument("--note", default="")
         s.add_argument("--wait-timeout", type=int, default=0)
