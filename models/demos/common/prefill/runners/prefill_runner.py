@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import signal
+import threading
 import time
 from dataclasses import dataclass, fields
 from typing import Optional
@@ -1710,6 +1711,42 @@ def _serve_request(
             sink = LayerCompletionRingWriter(producer, is_shutdown=lambda: _shutdown)
             runtime.set_layer_completion_sink(sink)
             source_desc = "host on_layer_complete callback"
+    elif use_d2h:
+        # A stage's other hosts run the same model code, so only the leader reports the stage's layers. With D2H acks
+        # they still build the same D2H service and ack records, so both hosts of the shared mesh allocate the same
+        # lockstep buffers and capture the same ops (an asymmetric allocation shifts every later address on one host
+        # and deadlocks the cross-host collectives). Their records go to a private local ring that a thread empties.
+        mirror_name = f"{ring_shm_name}_mirror_r{rank}"
+        _unlink_stale_shm(mirror_name)
+        mirror_queue = LayerCompletionQueue.create(mirror_name, completions_per_chunk=ack_layout.completions_per_chunk)
+        fifo_size_bytes = _layer_ack_fifo_bytes(ack_layout.rank_record_count, runtime.config.use_trace)
+        d2h_service = ttnn.D2HStreamService(
+            mesh_device,
+            global_spec=None,
+            fifo_size_bytes=fifo_size_bytes,
+            worker_cores=SYNC_WORKER_CORES,
+            metadata_size_bytes=_layer_ack_record_bytes(stage),
+            metadata_ring=True,
+        )
+        layer_ack_service = ttnn.LayerAckService(
+            d2h_service,
+            mirror_name,
+            first_record=ack_layout.rank_first_record,
+            record_count=ack_layout.rank_record_count,
+            layer_ids=ack_layout.rank_layer_ids,
+        )
+        if runtime.config.use_trace:
+            runtime.set_d2h_ack_service(d2h_service)
+        else:
+            layer_ack_service.start()
+
+        def _discard_mirror_records():
+            while not _shutdown:
+                if mirror_queue.try_pop() is None:
+                    time.sleep(0.001)
+
+        threading.Thread(target=_discard_mirror_records, name="d2h-ack-mirror-drain", daemon=True).start()
+        source_desc = "D2H records mirrored and discarded (non-leader host of a multi-host stage)"
     else:
         # A stage's other hosts run the same model code, so only the leader reports the stage's layers.
         if getattr(runtime, "set_layer_completion_sink", None) is not None:
