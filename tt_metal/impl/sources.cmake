@@ -157,7 +157,11 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_transfer_stats.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/realtime_profiler_tracy_handler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_receiver.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_service.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_tracy_consumer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/ringbuffer_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fd_kernel.cpp

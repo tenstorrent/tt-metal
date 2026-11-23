@@ -36,7 +36,7 @@
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 
 #include "tt_metal/common/env_lib.hpp"
-#include "tt_metal/distributed/realtime_profiler_manager.hpp"
+#include "tt_metal/impl/realtime_profiler/realtime_profiler_receiver.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {

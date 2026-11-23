@@ -51,7 +51,7 @@
 #include <experimental/fabric/topology_mapper.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
-#include "distributed/realtime_profiler_manager.hpp"
+#include "tt_metal/impl/realtime_profiler/realtime_profiler_receiver.hpp"
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 #include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"

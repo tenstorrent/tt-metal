@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "realtime_profiler_tracy_handler.hpp"
+#include "realtime_profiler_tracy_consumer.hpp"
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>

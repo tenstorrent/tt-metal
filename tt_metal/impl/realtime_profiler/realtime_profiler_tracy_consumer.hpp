@@ -9,7 +9,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <tracy/TracyTTDevice.hpp>
-#include "data_collection.hpp"
+#include "tt_metal/impl/dispatch/data_collection.hpp"
 
 namespace tt::tt_metal {
 

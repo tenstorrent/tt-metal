@@ -118,19 +118,3 @@ void NotifyProgramRealtimeProfilerDeactivated(ContextId context_id, uint32_t chi
 }
 
 }  // namespace tt
-
-// Public experimental API — delegates to the internal tt:: functions.
-namespace tt::tt_metal::experimental {
-
-ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
-    ProgramRealtimeProfilerCallback callback) {
-    return tt::RegisterProgramRealtimeProfilerCallback(std::move(callback));
-}
-
-void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
-    tt::UnregisterProgramRealtimeProfilerCallback(handle);
-}
-
-bool IsProgramRealtimeProfilerActive() { return tt::IsProgramRealtimeProfilerActive(); }
-
-}  // namespace tt::tt_metal::experimental
