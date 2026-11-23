@@ -19,8 +19,9 @@ class Callback:
 
     A loss a hook gets (``loss``, ``window_loss``, ``val_loss``) may be a device tensor, which must not outlive
     the device that ``trainer.cleanup`` closes. Read it with ``trainer.loss_to_float`` in the hook and keep the
-    float, not the loss. A callback that sums losses across hooks drops the sum by the end of the run and in
-    ``on_train_error``.
+    float, not the loss. A callback that sums losses across hooks keeps the sum in ``trainer.callback_handler.state``,
+    never on itself: ``cleanup`` frees that state, while the callback's own ``on_train_error`` doesn't run if an
+    earlier callback's raises.
     """
 
     def on_train_start(self, trainer: Any) -> None:
@@ -79,14 +80,23 @@ class Callback:
         """``val_loss`` is the mean loss of the validation batches, a loss to read and not keep (see above)."""
 
     def on_setup_error(self, trainer: Any, exception: BaseException) -> None:
-        """``setup`` failed and will re-raise ``exception``; ``trainer.logger`` is ``None`` if it failed first."""
+        """``setup`` failed and will re-raise ``exception``; ``trainer.logger`` is ``None`` if it failed first.
+
+        If it raises, the callbacks after it don't get ``on_setup_error``, and ``setup`` raises its exception, with
+        ``exception`` as its ``__context__``.
+        """
 
     def on_train_error(self, trainer: Any, exception: BaseException) -> None:
-        """``train`` failed or a hook stopped it, and ``train`` will re-raise ``exception``."""
+        """``train`` failed or a hook stopped it, and ``train`` will re-raise ``exception``.
+
+        If it raises, the callbacks after it don't get ``on_train_error``, and ``train`` raises its exception, with
+        ``exception`` as its ``__context__``.
+        """
 
 
 class CallbackHandler:
-    """Calls a hook on every callback that has it, in order."""
+    """Calls a hook on every callback that has it, in order. A hook that raises, an error hook too, stops the
+    dispatch: the exception propagates and the callbacks after it don't get the hook."""
 
     def __init__(self, trainer: Any, callbacks: Union[Any, Iterable[Any], None] = None) -> None:
         self.trainer = trainer
@@ -95,6 +105,9 @@ class CallbackHandler:
         elif isinstance(callbacks, Callback):
             callbacks = [callbacks]
         self.callbacks = list(callbacks)
+        # What callbacks keep across hooks during a run, device tensors included, each under keys of its own.
+        # `Trainer.cleanup` clears it before closing the device, whichever error hooks ran.
+        self.state: dict[str, Any] = {}
 
     def __call__(self, hook: str, *args: Any, **kwargs: Any) -> None:
         for callback in self.callbacks:

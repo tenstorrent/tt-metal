@@ -351,8 +351,8 @@ class Trainer(ABC):
         """Release everything the run created, so the next ``setup`` starts clean.
 
         Safe to call more than once, and after a failure anywhere in ``setup`` or ``train``. Drops all run
-        state (what the trainer held before its first run is kept), frees it while the device is still
-        open, and closes the device last.
+        state, ``callback_handler.state`` too (what the trainer held before its first run is kept), frees it
+        while the device is still open, and closes the device last.
         """
         device_manager = self.__dict__.get("device_manager")
         host_attributes = self._host_attributes()
@@ -368,6 +368,7 @@ class Trainer(ABC):
             for attr in list(self.__dict__):
                 if attr not in host_attributes:
                     delattr(self, attr)
+            self.callback_handler.state.clear()
             self._reset_run_state()
             gc.collect()
             if device_manager is not None:

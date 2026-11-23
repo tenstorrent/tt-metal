@@ -9,6 +9,11 @@ from typing import Any
 
 from .callback import Callback
 
+# Keys in `trainer.callback_handler.state`: the sum of the step losses since the last log, and their number,
+# `frequency` or fewer for the run's last log, on its last step.
+_RUNNING_LOSS = "metrics/running_loss"
+_RUNNING_STEPS = "metrics/running_steps"
+
 
 class MetricsCallback(Callback):
     """Logs the model size, and the metrics ``config.metrics`` asks for, through ``trainer.logger``.
@@ -25,17 +30,13 @@ class MetricsCallback(Callback):
 
     def __init__(self) -> None:
         self.values: dict[str, Any] = {}
-        # Sum of the step losses since the last log, and their number: `frequency`, or fewer for the run's last
-        # log, on its last step.
-        self._running_loss: Any = None
-        self._running_steps = 0
         self._total_steps = 0
 
     def on_train_start(self, trainer: Any) -> None:
         # A callback outlives the run; drop what a failed run left behind.
         self.values = {}
-        self._running_loss = None
-        self._running_steps = 0
+        trainer.callback_handler.state.pop(_RUNNING_LOSS, None)
+        trainer.callback_handler.state.pop(_RUNNING_STEPS, None)
         self._total_steps = trainer.total_steps()
         total, trainable = trainer.parameter_counts()
         trainer.logger.log_model_info(
@@ -49,22 +50,23 @@ class MetricsCallback(Callback):
         )
 
     def on_optimizer_step_end(self, trainer: Any, window_loss: Any) -> None:
-        self._running_loss = window_loss if self._running_loss is None else self._running_loss + window_loss
-        self._running_steps += 1
+        state = trainer.callback_handler.state
+        running = state.get(_RUNNING_LOSS)
+        state[_RUNNING_LOSS] = window_loss if running is None else running + window_loss
+        state[_RUNNING_STEPS] = state.get(_RUNNING_STEPS, 0) + 1
 
     def on_step_end(self, trainer: Any, global_step: int) -> None:
         config = trainer.config.metrics.train
         if global_step % config.frequency == 0 or global_step == self._total_steps:
+            state = trainer.callback_handler.state
             available = {
-                "loss": trainer.loss_to_float(self._running_loss) / self._running_steps,
+                "loss": trainer.loss_to_float(state.pop(_RUNNING_LOSS)) / state.pop(_RUNNING_STEPS),
                 "learning_rate": trainer.current_learning_rate(),
             }
             metrics = _select(available, config.metric_names, "train")
             self.values.update(metrics)
             # The trainer's 0-based epoch, as checkpoints record it.
             trainer.logger.log_metrics({**metrics, "train/epoch": trainer.epoch}, step=global_step, commit=False)
-            self._running_loss = None
-            self._running_steps = 0
         # Commit once per step, so validation metrics logged during the step land on it too.
         trainer.logger.log_metrics({}, step=global_step, commit=True)
 
@@ -90,8 +92,6 @@ class MetricsCallback(Callback):
             trainer.logger.error(f"Setup failed: {exception}", traceback.format_exc())
 
     def on_train_error(self, trainer: Any, exception: BaseException) -> None:
-        # The loss may be a device tensor, which must not outlive the run's device.
-        self._running_loss = None
         if trainer.logger is not None:
             trainer.logger.error(f"Training failed: {exception}", traceback.format_exc())
 

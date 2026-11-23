@@ -381,6 +381,8 @@ finally:
   `Callback`.
 - **Failures.** An exception in `setup` goes to every callback's `on_setup_error`, and one in `train` to
   `on_train_error`; then the method re-raises it. So a host reports both through its callbacks, with nothing to catch.
+  An error hook that raises fails too: the callbacks after it don't get theirs, and the method raises the hook's
+  exception, with the run's exception as its `__context__`.
 - **Stopping.** An exception from a callback ends the run: `on_train_error` sees it, then `train` raises it. To
   cancel a job, raise an exception of your own and catch it around `train`.
 - **Reading the run.** `trainer.loss_to_float(loss)`, `trainer.current_learning_rate()` (a list, one LR per
@@ -390,7 +392,10 @@ finally:
   `val_loss` in `on_validation_end`, may be a device tensor. Convert it with `trainer.loss_to_float` inside the hook
   and keep the float, never the tensor: once `cleanup` has closed the device, reading the tensor fails, and freeing
   it can crash the process
-  ([tt-metal#57798](https://github.com/tenstorrent/tt-metal/issues/57798)).
+  ([tt-metal#57798](https://github.com/tenstorrent/tt-metal/issues/57798)). A callback that sums losses across
+  steps, to read them once per log, keeps the sum in `trainer.callback_handler.state` under keys of its own, never on
+  itself: `cleanup` clears that state before it closes the device, also when an earlier callback's
+  `on_train_error` raised and the callback's own never ran.
 - **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint as the run saves
   them.
 - **The trained model.** With `CheckpointCallback`, it is the last entry of
