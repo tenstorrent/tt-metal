@@ -73,7 +73,8 @@ def main():
     fig.text(
         0.01,
         0.01,
-        "chunk_time = a chunk's first layer ack -> its last layer ack. First point is chunk 0; "
+        "chunk_time = a chunk's first layer ack -> its last layer ack, less its queueing between stages. "
+        "First point is chunk 0; "
         f"the rest are the median of the {2 * _HALF_WINDOW + 1} chunks around that ISL.",
         color=_MUTED,
         fontsize=9,

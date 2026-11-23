@@ -5,6 +5,7 @@
 
 import argparse
 import json
+import itertools
 import math
 import os
 import random
@@ -647,9 +648,9 @@ class _ChunkRetireClock:
         self._layer_acks = {}
         self.warmup = False
 
-    def on_push(self, key: tuple) -> None:
+    def on_push(self, key: tuple, forward: int = -1) -> None:
         with self._lock:
-            self._pushed.setdefault(key, deque()).append(self.warmup)
+            self._pushed.setdefault(key, deque()).append((self.warmup, forward))
 
     def on_ack(self, c) -> None:
         key = chunk_key(c)
@@ -662,7 +663,7 @@ class _ChunkRetireClock:
     def on_retire(self, key: tuple, retire_ts: float) -> None:
         with self._lock:
             queued = self._pushed.get(key)
-            warmup = queued.popleft() if queued else None
+            warmup, forward = queued.popleft() if queued else (None, -1)
             if queued is not None and not queued:
                 del self._pushed[key]
             first_ts = self._first_ack.pop(key, None)
@@ -674,7 +675,7 @@ class _ChunkRetireClock:
         slot_id, pos_start, pos_end = key
         logger.info(
             f"[producer] CHUNK_RETIRE slot={slot_id} start={pos_start} end={pos_end} first={first_ts:.6f} "
-            f"retire={retire_ts:.6f} warmup={int(warmup)} acks={acks} "
+            f"retire={retire_ts:.6f} warmup={int(warmup)} acks={acks} fwd={forward} "
             f"layers={','.join(f'{a}-{b}@{(t - first_ts) * 1000.0:.1f}' for a, b, t in layer_acks)}"
         )
 
@@ -1899,14 +1900,16 @@ def main() -> None:
     cfg.slot_lengths = slot_lengths
 
     retire_clock = _ChunkRetireClock()
+    forwards_pushed = itertools.count()
 
     def push_forward(pushes: list) -> float:
         for p in pushes:
             logger.info(
                 f"[producer] push slot={p.slot_id} cidx={p.chunk_idx} start={p.actual_start} end={p.actual_end}"
             )
+        forward = next(forwards_pushed)
         for p in pushes:
-            retire_clock.on_push((p.slot_id, p.actual_start, p.actual_end))
+            retire_clock.on_push((p.slot_id, p.actual_start, p.actual_end), forward)
         push_start = time.perf_counter()
         _push(service, payload_bytes, *_forward_payload(pushes, lambda slot_id: pools_by_trace[slot_traces[slot_id]]))
         return (time.perf_counter() - push_start) * 1000.0
