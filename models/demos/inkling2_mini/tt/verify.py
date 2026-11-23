@@ -30,6 +30,7 @@ from models.demos.inkling2_mini.tt.attention import WINDOW
 from models.demos.inkling2_mini.tt.attention_fast import DecodePositionsFast
 from models.demos.inkling2_mini.tt.fused import common as F
 from models.demos.inkling2_mini.tt.fused.attn import HEAD_DIM, N_KV
+from models.demos.inkling2_mini.tt.fused.attn_wo_rows import AttnWoRows
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
 from models.demos.inkling2_mini.tt.fused.conv import commit as conv_commit
 from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVGate
@@ -96,6 +97,9 @@ class VerifyStep:
         for L, p in APPS:
             c = cache_index(L, p)
             self.rows[c] = m.layers[L].attn.rows_out(R, m.states[c][0])
+        # R-row o-projection + conv (fused/attn_wo_rows.py) where the plain step fuses them (AttnWo), on the raw bank
+        self.wo_rows = {L: AttnWoRows(lay.attn.wo.bank, HIDDEN) for L, lay in enumerate(m.layers)
+                        if getattr(lay.attn, "wo", None) is not None}  # fmt: skip
         self.gates = {}  # loop layer -> (R-token QKV gate, R-row mlp gate)
         for L in range(LOOP_START, LOOP_END):
             w = _gate_weights(root, L)
@@ -166,11 +170,17 @@ class VerifyStep:
             act = lay.attn.decode_rows(xs, attn_st, self.positions, self.rows[c], p0=self.p0)
         finally:
             lay.attn.w_all.bank = proxy
-        y = lay.attn.w_o(act, ttnn.bfloat16, lay.attn.mm_cfg)  # one o-projection, row t = token t
-        pend_a = [lay.conv_attn.pending_slot(conv_a, r) for r in range(R)]
-        resid = F.per_row(dev, R, lambda r: lay.conv_attn.conv_add(
-            y, conv_a, (self.phase + r) % FusedShortConv.PHASES, None if lay.boundary else hs[r], ttnn.float32,
-            row_out=False, x_row=r, slot=pend_a[r]))  # fmt: skip
+        res_in = None if lay.boundary else hs
+        wo = self.wo_rows.get(L)
+        if wo is not None and (res_in is None or all(F.twin(h) is not None and F.twin(h)[1] == 1 for h in hs)):
+            # o-projection + post-attention conv of all rows in one program (as the plain step's AttnWo)
+            resid = wo(act, (lay.conv_attn, conv_a, self.phase), res_in, R)
+        else:
+            y = lay.attn.w_o(act, ttnn.bfloat16, lay.attn.mm_cfg)  # one o-projection, row t = token t
+            pend_a = [lay.conv_attn.pending_slot(conv_a, r) for r in range(R)]
+            resid = F.per_row(dev, R, lambda r: lay.conv_attn.conv_add(
+                y, conv_a, (self.phase + r) % FusedShortConv.PHASES, None if res_in is None else hs[r],
+                ttnn.float32, row_out=False, x_row=r, slot=pend_a[r]))  # fmt: skip
         if lay.boundary:
             F.per_row(dev, R, lambda r: m.frows.seal(None, hs[r], n_sealed))
             n_sealed += 1
