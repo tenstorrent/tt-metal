@@ -11,6 +11,17 @@ import ttnn
 from ..utils.tensor import local_device_to_torch
 
 
+def _deallocate_entry(entry):
+    # A flat [ping, pong] pair, or [[intermediate, output], ...] pairs where either half may be None.
+    if entry is None:
+        return
+    if isinstance(entry, (list, tuple)):
+        for item in entry:
+            _deallocate_entry(item)
+    else:
+        ttnn.deallocate(entry)
+
+
 class CCLManager:
     """
     Manages parallelization of DiT model.
@@ -303,24 +314,20 @@ class CCLManager:
         a buffer a live capture references corrupts its replays.
         """
 
-        # The cache is shared by several getters whose entries differ in nesting: a flat
-        # [ping, pong] pair, or [[intermediate, output], ...] pairs where either half may be None.
-        def deallocate_entry(entry):
-            if entry is None:
-                return
-            if isinstance(entry, (list, tuple)):
-                for item in entry:
-                    deallocate_entry(item)
-            else:
-                ttnn.deallocate(entry)
-
         before = set(self._ping_pong_buffer_cache)
         try:
             yield
         finally:
-            for key in [k for k in self._ping_pong_buffer_cache if k not in before]:
-                deallocate_entry(self._ping_pong_buffer_cache.pop(key))
-                self._ping_pong_buffer_indices.pop(key, None)
+            self.free_ping_pong_buffers([k for k in self._ping_pong_buffer_cache if k not in before])
+
+    def ping_pong_keys(self):
+        return set(self._ping_pong_buffer_cache)
+
+    def free_ping_pong_buffers(self, keys):
+        """Free the ping-pong pairs of `keys`; the next getter call for one allocates it again. Untraced only."""
+        for key in keys:
+            _deallocate_entry(self._ping_pong_buffer_cache.pop(key))
+            self._ping_pong_buffer_indices.pop(key, None)
 
     def get_rs_ping_pong_semaphore(self, mesh_axis):
         """

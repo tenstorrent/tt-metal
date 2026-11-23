@@ -220,13 +220,14 @@ class Flux3KleinPipeline:
         encoder_parallel = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis)
         )
+        encoder_ccl = CCLManager(
+            mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
+        )
         encoder = build_flux3_klein_text_encoder(
             shared,
             mesh_device=mesh_device,
             parallel_config=encoder_parallel,
-            ccl_manager=CCLManager(
-                mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
-            ),
+            ccl_manager=encoder_ccl,
             # the TP shard is ~1.8 GB per chip: keep it resident instead of all-gathering every weight per prompt
             is_fsdp=False,
         )
@@ -260,12 +261,13 @@ class Flux3KleinPipeline:
             )
             self._transformers[model] = transformer
 
+        vae_ccl = CCLManager(
+            mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
+        )
         self._vae = Flux3KleinVae(
             shared,
             device=mesh_device,
-            ccl_manager=CCLManager(
-                mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
-            ),
+            ccl_manager=vae_ccl,
             dit_ccl_manager=self._ccl,
             dit_sp_axis=sp_axis,
             sizes=SIZES,
@@ -277,6 +279,9 @@ class Flux3KleinPipeline:
             null_rows = ttnn.core.roundup(self._prompt_encoder.tokenize("")[2], mesh_shape[sp_axis] * TILE)
             self._null_text = self._prompt_encoder.encode("", null_rows)
         self._plan_cache: OrderedDict[tuple, Flux3KleinPlan] = OrderedDict()
+        self._ccl_managers = (encoder_ccl, self._ccl, vae_ccl)
+        self._pair_layouts: dict[tuple, tuple | None] = {}
+        self._last_layout = None
         self._mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
 
@@ -356,7 +361,9 @@ class Flux3KleinPipeline:
         latent_job = self._prestep_pool().submit(self._prepare_latent_host, seed, h, w, sp)
 
         t0 = time.time()
-        text = self._prompt_encoder.encode(prompt, text_rows or self._text_rows(prompt, size, ref_bucket))
+        text_rows = text_rows or self._text_rows(prompt, size, ref_bucket)
+        self._claim_pairs((request.model, size, ref_bucket, text_rows), free_others=size == max(SIZES))
+        text = self._prompt_encoder.encode(prompt, text_rows)
         timings["encode"] = time.time() - t0
 
         t0 = time.time()
@@ -411,6 +418,22 @@ class Flux3KleinPipeline:
             lengths = dict(key[3])
             if (lengths["image"], lengths["image_cond"]) != (image_rows, cond_rows):
                 self._plan_cache.pop(key).deallocate()
+
+    def _claim_pairs(self, layout: tuple, free_others: bool) -> None:
+        """Assigns the CCL ping-pong pairs (keyed by shape, never evicted) the previous request created to its layout,
+        and at the largest size frees the pairs of every other layout: warming every 4096 layout kept one set per
+        sequence length (DP4: 1.1 to 1.9 GB per chip each, job 229540 ran out of DRAM on them). The request's own layout
+        keeps its pairs, so a repeated request still reuses them."""
+        for index, ccl in enumerate(self._ccl_managers):
+            for key in ccl.ping_pong_keys():
+                self._pair_layouts.setdefault((index, key), self._last_layout)
+        self._last_layout = layout
+        stale = [pair for pair, owner in self._pair_layouts.items() if owner != layout] if free_others else []
+        if stale:
+            ttnn.synchronize_device(self._device)
+        for index, key in stale:
+            self._ccl_managers[index].free_ping_pong_buffers([key])
+            del self._pair_layouts[(index, key)]
 
     def _prestep_pool(self) -> ThreadPoolExecutor:
         if getattr(self, "_prestep_executor", None) is None:
