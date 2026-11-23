@@ -57,3 +57,24 @@ def test_cross_padded_ring8(nhq_total, head_dim, q_global, kv_global, logical_n)
         pcc_threshold=CROSS_PCC_THRESHOLD,
         rmse_threshold=CROSS_RMSE_THRESHOLD,
     )
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("nhq_total, head_dim, q_global, kv_global, logical_n", PADDED_CONFIGS[:2])
+def test_cross_padded_ring8_op_chosen_chunks(nhq_total, head_dim, q_global, kv_global, logical_n):
+    """is_cross ring SDPA with both chunk sizes left to the op (as the LTX audio-to-video cross attention calls it)."""
+    run_ring_joint_sdpa_cross(
+        MESH_CONFIG,
+        nhq_total,
+        head_dim,
+        q_global,
+        kv_global,
+        logical_n,
+        q_chunk_sizes=[0],
+        k_chunk_size=0,
+        tp_size=4,
+        sp_size=8,
+        topology=Topology.Ring,
+        pcc_threshold=CROSS_PCC_THRESHOLD,
+        rmse_threshold=CROSS_RMSE_THRESHOLD,
+    )

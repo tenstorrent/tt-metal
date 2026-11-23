@@ -29,10 +29,13 @@ from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa import (
 ITERS = 50
 BURST, BURSTS = 16, 20
 
-# name, heads per TP rank, local sequence, head dim, causal, q chunk, k chunk
+# name, heads per TP rank, local sequence, head dim, causal, q chunk, k chunk (0: chosen by the op)
 CASES = [
     ("ring_joint_wan_like_s2368_nh10", 10, 2368, 128, False, 288, 512),
     ("ring_joint_causal_s1024_nh4", 4, 1024, 128, True, 128, 256),
+    ("ring_joint_wan_like_s2368_nh10_op_chosen", 10, 2368, 128, False, 0, 0),
+    # The blocking the op chooses for the case above, given explicitly (separates the resolve from the program).
+    ("ring_joint_wan_like_s2368_nh10_q224", 10, 2368, 128, False, 224, 512),
 ]
 
 

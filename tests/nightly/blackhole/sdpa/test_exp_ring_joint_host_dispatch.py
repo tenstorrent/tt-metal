@@ -58,9 +58,11 @@ def exp_ring_mesh():
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
-# name, heads, local sequence, head dim, q chunk, k chunk, grid (SDPA columns + 1 MUX column, rows)
+# name, heads, local sequence, head dim, q chunk, k chunk (0: chosen by the op), grid (SDPA columns + 1 MUX column,
+# rows)
 CASES = [
     ("exp_ring_wan_like_s2368_nh10", 10, 2368, 128, 224, 512, (12, 10)),
+    ("exp_ring_wan_like_s2368_nh10_op_chosen", 10, 2368, 128, 0, 0, (12, 10)),
 ]
 
 

@@ -402,9 +402,8 @@ def generate_ring_joint_perf_model_configs(
     # through the joint entry point with zero-length joint inputs, which is what the harness already
     # does (it passes None for joint q/k/v), so these measure the path the model actually runs.
     #
-    # These configs back `MiniMaxH3Attention.measured_sdpa_chunk_sizes`. They were previously cited
-    # by that table's docstring but never committed, so the numbers in it were not reproducible from
-    # the tree; that is what this restores.
+    # These configs backed the H3 attention's former per-length chunk table (the model now leaves the
+    # chunks to the op); they stay as a sweep of the H3 shapes.
     #
     # The chunk-size lists deliberately bracket the currently-shipped pick so a sweep produces the
     # baseline and the candidates in one table. The optimum tracks SDPA core-slot efficiency, and
@@ -863,6 +862,7 @@ def call_sdpa(
     kv_cache_layer_idx=None,
     circular_kv_cache=False,
     kv_valid_end_tensor=None,
+    precision=None,
 ):
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
@@ -900,6 +900,7 @@ def call_sdpa(
         kv_cache_layer_idx=kv_cache_layer_idx,
         circular_kv_cache=circular_kv_cache,
         kv_valid_end_tensor=kv_valid_end_tensor,
+        precision=precision,
     )
     return tt_out
 
@@ -1233,6 +1234,7 @@ def run_ring_joint_sdpa_model_configs(
     runtime: RingJointSDPARuntime = None,
     fp32_dest_acc_en: bool = False,
     use_attention_sink: bool = False,
+    precision=None,
 ):
     """Run all q/k configs for one model while reusing shared inputs, mesh setup, and reference data."""
     qk_configs = list(qk_configs)
@@ -1438,6 +1440,7 @@ def run_ring_joint_sdpa_model_configs(
                     worker_sub_device_id=worker_sub_device_id,
                     ccl_column=ccl_column,
                     attention_sink=tt_attention_sink,
+                    precision=precision,
                 )
 
                 if use_device_determinism_compare:
@@ -5726,6 +5729,38 @@ def test_ring_mla_accuracy(
     )
 
 
+# Chunk sizes of 0 are chosen by the op on the caller's grid; an explicit one is kept (mixed calls).
+OP_CHOSEN_QK_CONFIGS = {"op_chosen": (0, 0), "q_chosen": (0, 256), "k_chosen": (128, 0)}
+OP_CHOSEN_MODELS = [m for m in ("wan2_2_1xGLX", "minimax3_gqa_smoke", "videogen_model1_480p") if m in MODEL_CONFIGS]
+
+
+@pytest.mark.parametrize("chunks", OP_CHOSEN_QK_CONFIGS)
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["standard", "accurate"])
+@pytest.mark.parametrize("model_name", OP_CHOSEN_MODELS)
+def test_ring_joint_attention_op_chosen_chunks_accuracy(model_name, fp32_dest_acc_en, chunks):
+    run_ring_joint_sdpa_model_configs(
+        MESH_CONFIG,
+        MODEL_CONFIGS[model_name],
+        [OP_CHOSEN_QK_CONFIGS[chunks]],
+        pcc_threshold=DEFAULT_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else DEFAULT_PCC_THRESHOLD,
+        rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        precision=ttnn.SDPAPrecision.ACCURATE if fp32_dest_acc_en else ttnn.SDPAPrecision.STANDARD,
+    )
+
+
+@pytest.mark.parametrize(
+    "b,sq,nhq,nhk,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_balanced,q_dtype,kv_dtype",
+    RING_MLA_TEST_CONFIGS,
+    ids=RING_MLA_TEST_CONFIG_IDS,
+)
+def test_ring_mla_op_chosen_chunks_accuracy(
+    b, sq, nhq, nhk, d_q, d_k, d_v, q_chunk_size, k_chunk_size, is_balanced, q_dtype, kv_dtype
+):
+    """ring_mla with both chunk sizes left to the op."""
+    run_ring_mla_sdpa(MESH_CONFIG, b, nhq, nhk, sq, d_q, d_k, d_v, 0, 0, q_dtype, kv_dtype, is_balanced=is_balanced)
+
+
 # === TEST 3: DETERMINISM VERIFICATION ===
 @pytest.mark.parametrize(
     "model_names",
@@ -9195,8 +9230,9 @@ def test_ring_joint_attention_gemma4_global_segmented_accuracy():
 # runtime word the hash ignores, so one program per length class serves 74..470 tile rows per chip.
 H3_DYNAMIC_HEADS_PER_CHIP = 14
 H3_DYNAMIC_HEAD_DIM = 128
-# The model's chunk pair per length class (DYNAMIC_RING_SDPA_CHUNKS).
-H3_DYNAMIC_QK_CHUNKS = {"short": (320, 384), "long": (256, 512)}
+# Explicit chunk pairs per length class (the model's former pins; it now passes 0 and the op chooses them from the
+# gather buffer's capacity, "op_chosen" below).
+H3_DYNAMIC_QK_CHUNKS = {"short": (320, 384), "long": (256, 512), "op_chosen": (0, 0)}
 H3_DYNAMIC_CAPACITY_TILES = 470  # 120320 rows / SP 8 / 32
 H3_DYNAMIC_PCC_THRESHOLD = 0.99
 
@@ -9429,6 +9465,8 @@ H3_DYNAMIC_VARIANTS = {
     "short": [(148, 0, 0), (74, 1000, 1), (148, 2368, 0)],
     "long": [(287, 33, 0), (427, 5000, 1), (470, 777, 0), (287, 0, 1)],
 }
+# Op-chosen chunks come from the capacity, so one program serves both classes' lengths.
+H3_DYNAMIC_VARIANTS["op_chosen"] = H3_DYNAMIC_VARIANTS["short"] + H3_DYNAMIC_VARIANTS["long"]
 
 
 @pytest.mark.timeout(3600)
