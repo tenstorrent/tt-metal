@@ -6,7 +6,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <host_api.hpp>
-#include <profiler.hpp>
+#include "impl/profiler/profiler.hpp"
 #include <mesh_workload.hpp>
 #include <mesh_command_queue.hpp>
 #include <tt_metal.hpp>

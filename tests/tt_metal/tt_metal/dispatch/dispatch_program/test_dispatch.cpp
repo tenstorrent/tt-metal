@@ -237,7 +237,7 @@ TEST_F(MeshDispatchFixture, TensixTestHostTransferStatsCountProgramLoads) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const CoreCoord core = {0, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     const KernelHandle kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
