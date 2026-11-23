@@ -7,7 +7,7 @@
 Values map token names (e.g. ``program_config_size.total.TENSIX``) to
 ``{"unit", "count", "total", "min", "max"}``. Token names may change; treat a missing one as unknown.
 
-    with ttnn.jit_telemetry.capture() as cap:
+    with ttnn.experimental.jit_telemetry.capture() as cap:
         run_some_programs()
     largest = cap.stats.get("program_config_size.total.TENSIX", {}).get("max")
 """

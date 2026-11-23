@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "jit_telemetry.hpp"
+#include "ttnn-nanobind/jit_telemetry.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -37,7 +37,7 @@ nb::dict to_dict(const std::vector<jt::TokenStats>& stats) {
 
 void py_module(nb::module_& mod) {
     mod.def("begin_capture", &jt::begin_capture, R"doc(
-        Start a JIT telemetry capture and return its id. Prefer ttnn.jit_telemetry.capture().
+        Start a JIT telemetry capture and return its id. Prefer ttnn.experimental.jit_telemetry.capture().
     )doc");
     mod.def(
         "end_capture",

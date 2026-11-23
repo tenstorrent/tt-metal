@@ -52,7 +52,7 @@ def test_capture_closes_when_the_body_raises(expect_error, monkeypatch):
     monkeypatch.setattr(ttnn._ttnn.jit_telemetry, "begin_capture", record_begin)
 
     with expect_error(ValueError, "boom"):
-        with ttnn.jit_telemetry.capture():
+        with ttnn.experimental.jit_telemetry.capture():
             raise ValueError("boom")
     with expect_error(RuntimeError, "is not open"):
         ttnn._ttnn.jit_telemetry.end_capture(opened[0])
@@ -72,7 +72,7 @@ def test_capture_records_a_program_that_fails_the_size_check(device, expect_erro
         ),
     ]
     program = _oversized_program()
-    with ttnn.jit_telemetry.capture() as cap:
+    with ttnn.experimental.jit_telemetry.capture() as cap:
         with expect_error(RuntimeError, "too large for kernel config buffer"):
             ttnn.generic_op(io_tensors, program)
 
