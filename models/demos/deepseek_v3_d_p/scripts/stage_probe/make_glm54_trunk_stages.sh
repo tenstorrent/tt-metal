@@ -10,7 +10,8 @@
 # the GLM-5.3 reference cut its 78-layer run: G0 passes 0-25, G1 26-53 (loop pass 1), G2 54-81 (loop pass 2), G3
 # 82-105. at_glm54_ranges has the shape of glm53_stage_ref.json's glm53_at_glm54_ranges; the repeat run, if given,
 # goes under repeat/. glm54_trunk_result.py then adds the per-run checks, determinism, repeat spread and the per-probe
-# met/unmet verdict against the reference. Extra text fields: STAGE_REF_NOTES (newline-separated key=text lines).
+# met/unmet verdict against the reference. Extra text fields: STAGE_REF_NOTES (newline-separated key=text lines);
+# TRUNK_PROVISIONAL (newline-separated <probe>=<why> lines) marks those probes' verdicts provisional.
 set -euo pipefail
 OUT="${1:?usage: make_glm54_trunk_stages.sh <out.json> <glm53_stage_ref.json> <trunk_run_dir> [<repeat_run_dir>]}"
 REF="${2:?glm53 stage reference json}"

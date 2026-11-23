@@ -9,10 +9,12 @@ Adds to <trunk.json>, in place:
   determinism       whether every run logged the same digest per chunk label (bit-identical KV across runs)
   repeat_spread     per stage and probe, the largest minus smallest period_ms over the runs' splits
   verdict           per probe: GLM-5.4 slowest stage period_ms (first run) vs the GLM-5.3 reference's slowest stage
-                    period_ms x threshold_factor (1.54, epic APPROVED ACCEPTANCE), met / unmet
+                    period_ms x threshold_factor (1.54, epic APPROVED ACCEPTANCE), met / unmet; a probe named in
+                    TRUNK_PROVISIONAL (newline-separated <probe>=<why> lines) gets provisional: true and that reason
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -46,6 +48,9 @@ def run_checks(run_dir: Path) -> dict:
 
 def main() -> None:
     out_path, ref_path, *run_dirs = sys.argv[1:]
+    provisional = dict(
+        line.split("=", 1) for line in os.environ.get("TRUNK_PROVISIONAL", "").splitlines() if line.strip()
+    )
     result = json.loads(Path(out_path).read_text())
     ref = json.loads(Path(ref_path).read_text())["reference"]
     runs = [Path(d) for d in run_dirs]
@@ -97,6 +102,8 @@ def main() -> None:
             "ratio_to_glm53": round(ms / ref_ms, 3),
             "status": "met" if ms <= target else "unmet",
         }
+        if probe in provisional:
+            verdict[probe].update(provisional=True, provisional_reason=provisional[probe])
     result["verdict"] = {
         "rule": f"GLM-5.4 slowest stage period_ms <= {THRESHOLD} x GLM-5.3 reference slowest stage period_ms "
         "(glm53_default_split, glm53_stage_ref.json reference), per probe",
