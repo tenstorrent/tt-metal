@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/work_split.hpp>
+#include <limits>
 #include <vector>
 #include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -605,7 +606,12 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    uint32_t logical_volume = input_shape.volume();
+    uint64_t logical_volume_64 = input_shape.volume();
+    TT_FATAL(
+        logical_volume_64 <= std::numeric_limits<uint32_t>::max(),
+        "permute: logical volume of {} elements exceeds the uint32_t limit",
+        logical_volume_64);
+    uint32_t logical_volume = static_cast<uint32_t>(logical_volume_64);
     uint32_t num_rows = logical_volume / input_shape[rank - 1];
     uint32_t y_dim_index_in_input = dims[rank - 2];
 
@@ -642,7 +648,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
 
     uint32_t num_faces_w = tile_shape[1] / face_shape[1];
 
-    uint32_t padded_xw_volume = X_p * W_p;
+    uint64_t padded_xw_volume = static_cast<uint64_t>(X_p) * W_p;
     for (uint32_t i = 0; i < rank - 1; i++) {
         if (i == x_dim_index_in_input) {
             continue;
@@ -650,7 +656,12 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
         padded_xw_volume *= input_shape[i];
     }
 
-    uint32_t xw_blocks = padded_xw_volume / (tile_shape[0] * tile_shape[1]);
+    uint64_t xw_blocks_64 = padded_xw_volume / (tile_shape[0] * tile_shape[1]);
+    TT_FATAL(
+        xw_blocks_64 <= std::numeric_limits<uint32_t>::max(),
+        "permute: tile-padded volume of {} tiles exceeds the uint32_t work-split limit",
+        xw_blocks_64);
+    uint32_t xw_blocks = static_cast<uint32_t>(xw_blocks_64);
 
     bool needs_x_padding = (x % tile_shape[1] != 0);
     bool needs_y_padding =
