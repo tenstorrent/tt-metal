@@ -30,6 +30,7 @@ says which mesh axis H runs along (1 for the 4x4-stage layout).
 """
 
 import functools
+import math
 from typing import NamedTuple
 
 import pytest
@@ -59,6 +60,7 @@ FWD_VC_PAGES = DeepSeekV3Config.MOE_FWD_VC_PAGES
 _MESH_IDS = (
     "fabric2d-torus-xy-8x4-2link",
     "fabric2d-torus-x-4x4-2link",
+    "fabric2d-torus-xy-4x4-2link",
     "fabric2d-torus-y-8x1-2link",
     "fabric2d-torus-x-1x8-2link",
 )
@@ -347,7 +349,7 @@ class _Fixture:
         assert dtype in self._delivered, f"no {dtype} payload was uploaded, or combine does not take it"
         return self._delivered[dtype]
 
-    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16):
+    def run(self, cluster_axis, num_links, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, forwarding_buffer=None):
         return ttnn.experimental.deepseek_prefill.combine_fabric2d(
             self.tt_payload(layout, dtype),
             self.tt_meta,
@@ -362,6 +364,7 @@ class _Fixture:
             fwd_vc_pages=FWD_VC_PAGES,
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            forwarding_buffer=forwarding_buffer,
         )
 
     def picks_by_distance(self):
@@ -685,6 +688,160 @@ def test_combine_fabric2d_back_to_back(mesh_device, device_params, num_links, in
     for i, (fx, output) in enumerate(zip(order, results)):
         fx.check(output, f"launch {i} of four with no host sync between them")
     logger.info("back-to-back: 4 unsynchronised launches byte-exact")
+
+
+def _dram_bytes_allocated(mesh_device):
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    return view.total_bytes_allocated_per_bank * view.num_banks
+
+
+def _forwarding_buffer(fx, cluster_axis, num_links, emb_dim=None):
+    """A forwarding_buffer for the fixture's calls, or for another link count or token width."""
+    return ttnn.experimental.deepseek_prefill.combine_fabric2d_forwarding_buffer(
+        fx.mesh_device,
+        emb_dim=fx.emb_dim if emb_dim is None else emb_dim,
+        fwd_vc_pages=FWD_VC_PAGES,
+        cluster_axis=cluster_axis,
+        num_links=num_links,
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _PRODUCTION_MESH,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(900)
+def test_combine_fabric2d_external_forwarding_buffer(mesh_device, device_params, num_links):
+    """A forwarding buffer the caller allocates once serves every launch, and the op then allocates only its output.
+
+    Two draws alternate with no host sync, in both input layouts, so a launch reading another's relayed pages would
+    show up as the other draw's tokens. Every launch after each layout's first must hit the program cache.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    a = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=41)
+    b = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=42)
+    buffer = _forwarding_buffer(a, cfg.sp_axis, num_links)
+    # Per device, as the memory view reports, and exactly what the op would allocate for itself at this shape.
+    # UINT32 pages, so four bytes an element.
+    forwarding_bytes = math.prod(buffer.shape) * 4
+    for layout in (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT):
+        # Uploaded first, so neither the upload nor its tilize program is counted below.
+        for fx in (a, b):
+            fx.tt_payload(layout)
+        ttnn.synchronize_device(mesh_device)
+        before = _dram_bytes_allocated(mesh_device)
+        output = a.run(cfg.sp_axis, num_links, layout=layout, forwarding_buffer=buffer)
+        ttnn.synchronize_device(mesh_device)
+        # The output is several times the forwarding buffer here, so it is taken off first; what is left is the
+        # banks' rounding, a fraction of a forwarding buffer of the op's own. BFLOAT16, so two bytes an element.
+        output_bytes = math.prod(output.shape) * 2
+        grown = _dram_bytes_allocated(mesh_device) - before - output_bytes
+        assert grown < forwarding_bytes, (
+            f"{layout}: the first launch allocated {grown} B of DRAM beyond its {output_bytes} B output, which only a "
+            f"{forwarding_bytes} B forwarding buffer of the op's own explains, instead of using the one passed in"
+        )
+        a.check(output, f"{layout}, first launch with an external forwarding buffer")
+        ttnn.deallocate(output)
+
+        order = [a, b, a, b]
+        programs = mesh_device.num_program_cache_entries()
+        results = [fx.run(cfg.sp_axis, num_links, layout=layout, forwarding_buffer=buffer) for fx in order]
+        added = mesh_device.num_program_cache_entries() - programs
+        for i, (fx, output) in enumerate(zip(order, results)):
+            fx.check(output, f"{layout}, launch {i} of four sharing one forwarding buffer")
+            ttnn.deallocate(output)
+        assert added == 0, f"{layout}: four launches sharing one buffer added {added} programs, expected 0"
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _PRODUCTION_MESH,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(900)
+def test_combine_fabric2d_external_forwarding_buffer_rebind(mesh_device, device_params, num_links):
+    """A cached program relaunched with a new forwarding buffer relays through the new one.
+
+    The program is built against a first buffer, which is then freed and its memory refilled with a marker. The
+    relaunch is a program-cache hit; if it kept the first buffer's address it would still combine correctly,
+    through the marker memory, so the marker is what shows a stale binding.
+    """
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=43)
+    first = _forwarding_buffer(fx, cfg.sp_axis, num_links)
+    # Kept until the end, so the first buffer's memory is the only hole the marker can land in.
+    first_output = fx.run(cfg.sp_axis, num_links, forwarding_buffer=first)
+    ttnn.synchronize_device(mesh_device)
+
+    shape = list(first.shape)
+    old_address = first.buffer_address()
+    # Allocated while the first buffer is live, so it cannot land on the first buffer's memory.
+    second = _forwarding_buffer(fx, cfg.sp_axis, num_links)
+    ttnn.deallocate(first)
+    marker = 0x5A5A5A5A
+    marked = ttnn.full(
+        shape,
+        fill_value=marker,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    assert marked.buffer_address() == old_address, "the marker did not land on the first forwarding buffer's memory"
+
+    programs = mesh_device.num_program_cache_entries()
+    output = fx.run(cfg.sp_axis, num_links, forwarding_buffer=second)
+    ttnn.synchronize_device(mesh_device)
+    assert mesh_device.num_program_cache_entries() == programs, "the relaunch built a program instead of hitting"
+    fx.check(output, "relaunch with a second forwarding buffer")
+
+    # Every stream's region starts at stream * pages_per_stream and its channels fill from their first page, so
+    # the head of each is where a stale binding writes first.
+    streams = 2 * num_links
+    pages_per_stream = shape[0] // streams
+    for stream in range(streams):
+        start = stream * pages_per_stream
+        probe = ttnn.slice(marked, [start, 0], [start + FWD_VC_PAGES, shape[1]])
+        got = ttnn.to_torch(probe, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(torch.int64)
+        ttnn.deallocate(probe)
+        assert torch.all(got == marker), f"stream {stream}: the relaunch wrote into the freed first buffer"
+    for t in (first_output, output, marked, second):
+        ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    _PRODUCTION_MESH,
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "case, message",
+    [
+        ("undersized", "forwarding_buffer has"),
+        ("page_size", "forwarding_buffer pages at"),
+        ("aliased", "forwarding_buffer shares its buffer"),
+    ],
+    ids=["undersized", "page_size", "aliased"],
+)
+@pytest.mark.timeout(300)
+def test_combine_fabric2d_external_forwarding_buffer_refused(
+    mesh_device, device_params, num_links, case, message, expect_error
+):
+    """A forwarding buffer the op cannot use is refused before anything runs: too few pages, pages for another
+    token width, or an input passed again as the buffer."""
+    cfg = extract_mesh_config(mesh_device)
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, seed=44)
+    if case == "undersized":
+        # Half the streams' regions.
+        assert num_links > 1, "an undersized buffer is drawn for fewer links"
+        buffer = _forwarding_buffer(fx, cfg.sp_axis, num_links // 2)
+    elif case == "page_size":
+        buffer = _forwarding_buffer(fx, cfg.sp_axis, num_links, emb_dim=fx.emb_dim // 2)
+    else:
+        buffer = fx.tt_offs
+    with expect_error(RuntimeError, message):
+        fx.run(cfg.sp_axis, num_links, forwarding_buffer=buffer)
 
 
 # Exactly representable in bfloat16 and far outside the random payload, so equality is a safe test.

@@ -49,7 +49,7 @@
 #include "buffer_types.hpp"
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"

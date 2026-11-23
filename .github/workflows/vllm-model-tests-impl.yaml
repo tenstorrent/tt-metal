@@ -192,7 +192,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -218,7 +218,7 @@ jobs:
 
       - name: ⬇️ Checkout vLLM TT plugin
         if: ${{ inputs.vllm-source != 'fork' }}
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
         timeout-minutes: 20
         with:
           repository: tenstorrent/vllm-tt-plugin
@@ -228,7 +228,7 @@ jobs:
 
       - name: ⬇️ Checkout vLLM fork
         if: ${{ inputs.vllm-source == 'fork' }}
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
         timeout-minutes: 20
         with:
           repository: tenstorrent/vllm
@@ -836,12 +836,20 @@ jobs:
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
         with:
+          # ignored_line_patterns replaces the tool's bundled list, so its ^SKIPPED/^XFAIL entries are restated.
+          # vLLM's API server stops EngineCore with SIGTERM on every shutdown, clean or not, and EngineCore logs the
+          # signal name; a crash still surfaces through the exit code, failed tests and the server log's errors.
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["output"],
-              "output_dir": "ai_summaries"
+              "output_dir": "ai_summaries",
+              "ignored_line_patterns": [
+                "^SKIPPED\\b",
+                "^XFAIL\\b",
+                "\\[shutdown\\] EngineCore: trigger received signal=SIGTERM\\b"
+              ]
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}

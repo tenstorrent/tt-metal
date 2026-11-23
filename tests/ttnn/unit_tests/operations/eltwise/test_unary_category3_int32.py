@@ -63,7 +63,7 @@ Accuracy criteria
 | tril, triu    | diagonal 0, ±1, 5, -100, 300   | exact                       |
 | unary_chain   | int32-capable ops              | exact                       |
 | bitcast       | to uint32                      | bit-exact                   |
-|               | to float32                     | strict xfail                |
+|               | to float32                     | bit-exact                   |
 """
 
 
@@ -329,18 +329,13 @@ def test_bitcast_to_uint32(device):
     assert_equal(input_tensor, result.view(torch.int32))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#61975: bitcast int32 -> float32 does not keep the bits: float32 subnormal patterns become 0, NaN "
-    "patterns become inf and normal patterns keep only the top 10 mantissa bits",
-)
 def test_bitcast_to_float32(device):
     """bitcast(x, float32) must keep all 32 bits.
 
     | Input range | Check     | Reason                                         |
     |-------------|-----------|------------------------------------------------|
     | all         | bit-exact | a bitcast changes the type, not the bits;      |
-    |             |           | e.g. 0x12345678 comes back as 0x12344000       |
+    |             |           | e.g. 0x12345678 stays 0x12345678               |
     """
     input_tensor = generate_int32_values()
 
