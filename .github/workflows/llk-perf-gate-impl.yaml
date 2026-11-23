@@ -511,6 +511,7 @@ jobs:
           path: stage2
 
       - name: Add stage 2 to the report
+        id: stage2
         if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
         env:
           ARCH: ${{ inputs.arch }}
@@ -521,11 +522,19 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
             --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .name" | wc -l) || LEGS=0
           GATE_BASE=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
-          # Report-only: stage 2 adds to the report and does not change the verdict.
+          # Stage 2 decides a stage-1 regression: it exits non-zero when a candidate is a confirmed
+          # regression, needs review, or was not re-measured. A clean stage 1 has nothing to re-measure.
+          STAGE2_EXIT=0
           python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
             --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
             --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
-            --arch "$ARCH" --report stage2.md || true
+            --arch "$ARCH" --report stage2.md || STAGE2_EXIT=$?
+          EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
+          if [ "$EXIT_CODE" = "1" ]; then
+            echo "Stage 2 re-measured the candidates, so it decides the verdict (stage 2 exit ${STAGE2_EXIT})."
+            EXIT_CODE=$STAGE2_EXIT
+          fi
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
           printf '\n' >> perf_gate_report.md
           cat stage2.md >> perf_gate_report.md
 
@@ -585,6 +594,7 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
+          STAGE2_EXIT_CODE: ${{ steps.stage2.outputs.exit_code }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
           MEASURE_RESULT: ${{ steps.measured.outputs.result }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
@@ -610,6 +620,8 @@ jobs:
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Where stage 2 ran on a stage-1 regression, its exit code is the verdict.
+          GATE_EXIT_CODE="${STAGE2_EXIT_CODE:-$GATE_EXIT_CODE}"
           if [[ "$PR_NUMBER" == "?" && "$GITHUB_REF" =~ gh-readonly-queue/[^/]+/pr-([0-9]+)- ]]; then
             PR_NUMBER="${BASH_REMATCH[1]}"
             PR_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}"
@@ -732,7 +744,9 @@ jobs:
           fi
 
           HAVE_BASELINE=$(cat have_baseline.txt 2>/dev/null || echo false)
-          EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
+          # Where stage 2 ran on a stage-1 regression, its exit code is the verdict.
+          EXIT_CODE="${{ steps.stage2.outputs.exit_code }}"
+          [ -n "$EXIT_CODE" ] || EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
           if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
             KIND=incomplete

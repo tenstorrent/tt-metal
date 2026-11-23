@@ -209,6 +209,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       arches: ${{ steps.plan.outputs.arches }}
+      shifts: ${{ steps.shifts.outputs.shifts }}
       run: ${{ steps.source.outputs.run }}
       head: ${{ steps.source.outputs.head }}
       base: ${{ steps.source.outputs.base }}
@@ -248,6 +249,37 @@ jobs:
             echo "pr=${PR_NUMBER}"
             echo "cap=${CAP}"
           } >> "$GITHUB_OUTPUT"
+      # Both sides must measure at the same code positions, or nothing pairs up. When the branch
+      # point's copy of the placement script cannot take a list from the gate, both sides use its list.
+      - name: Pick the code positions both sides can measure at
+        id: shifts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCRIPT: tt_metal/tt-llk/tests/run_llk_perf_placement.sh
+          HEAD_SHA: ${{ steps.source.outputs.head }}
+          BASE_SHA: ${{ steps.source.outputs.base }}
+        run: |
+          read_script() {
+            gh api "repos/${GITHUB_REPOSITORY}/contents/${SCRIPT}?ref=$1" --jq .content 2>/dev/null \
+              | base64 -d 2>/dev/null || true
+          }
+          list_of() { sed -n 's/.*LLK_CODE_SHIFTS[:=-]*"\{0,1\}\([0-9][0-9 ]*\).*/\1/p' <<< "$1" | head -1; }
+
+          HEAD_SCRIPT=$(read_script "$HEAD_SHA")
+          BASE_SCRIPT=$(read_script "$BASE_SHA")
+          SHIFTS=$(list_of "$HEAD_SCRIPT")
+
+          if ! grep -q 'LLK_CODE_SHIFTS:-' <<< "$BASE_SCRIPT"; then
+            BASE_SHIFTS=$(sed -n 's/^for SHIFT in \([0-9][0-9 ]*\);.*/\1/p' <<< "$BASE_SCRIPT" | head -1)
+            [ -n "$BASE_SHIFTS" ] || BASE_SHIFTS=$(list_of "$BASE_SCRIPT")
+            if [ -n "$BASE_SHIFTS" ] && [ "$BASE_SHIFTS" != "$SHIFTS" ]; then
+              echo "::notice::The branch point measures at ${BASE_SHIFTS} and cannot take the list from the gate, so both sides use those positions. Rebase to get ${SHIFTS}."
+              SHIFTS="$BASE_SHIFTS"
+            fi
+          fi
+          echo "Stage 2 measures at: ${SHIFTS:-the list in the script}"
+          echo "shifts=$SHIFTS" >> "$GITHUB_OUTPUT"
+
       # One arch can have a report while the other has none, so a missing one is not a failure.
       - name: Download the stage-1 Blackhole report
         continue-on-error: true
@@ -344,6 +376,7 @@ jobs:
       perf-run-types: L1_TO_L1
       tests-yaml: ./tests/pipeline_reorg/llk_perf_placement_tests.yaml
       node-list-artifact: placement-nodes-${{ matrix.arch }}
+      code-shifts: ${{ needs.placement-plan.outputs.shifts }}
       compile-quasar: false
       upload-to-warehouse: false
       pipeline: pr
@@ -366,6 +399,7 @@ jobs:
       perf-run-types: L1_TO_L1
       tests-yaml: ./tests/pipeline_reorg/llk_perf_placement_tests.yaml
       node-list-artifact: placement-nodes-${{ matrix.arch }}
+      code-shifts: ${{ needs.placement-plan.outputs.shifts }}
       compile-quasar: false
       upload-to-warehouse: false
       pipeline: pr
@@ -420,6 +454,7 @@ jobs:
           HEAD_RESULT: ${{ needs.placement-measure-head.result }}
           BASE_RESULT: ${{ needs.placement-measure-base.result }}
           SOURCE_RUN: ${{ needs.placement-plan.outputs.run }}
+          POSITIONS: ${{ needs.placement-plan.outputs.shifts }}
         run: |
           mkdir -p current baseline
           LIMIT_NOTE="The limit of ${PLACEMENT_CAP} tests per arch keeps this job short. To re-measure all of them, run the **LLK perf gate** workflow by hand with \`placement_run_id\` = \`${SOURCE_RUN}\`; it reuses this stage 1 and updates this comment."
@@ -429,7 +464,7 @@ jobs:
             --threshold "$THRESHOLD" --min-cycles "$MIN_CYCLES" \
             --module-threshold "$MODULE_THRESHOLDS" \
             --over-cap nodes/nodes.over --limit-note "$LIMIT_NOTE" \
-            --arch "$ARCH" --report stage2.md || true
+            --positions "$POSITIONS" --arch "$ARCH" --report stage2.md || true
           if [ "$HEAD_RESULT" != success ] || [ "$BASE_RESULT" != success ]; then
             NOTE="> ⚠️ A stage-2 measuring job did not succeed (PR head: ${HEAD_RESULT}, branch point: ${BASE_RESULT}). What it did not measure is listed as not re-measured."
             printf '%s\n\n%s\n' "$(head -1 stage2.md)" "$NOTE" > stage2.tmp
