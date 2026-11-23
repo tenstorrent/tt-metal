@@ -147,7 +147,7 @@ fewer port per-packet cycles. Neither fits this refinement's chain scope.
 
 **Verifier notes**: after Refinement 2. If R2 changes the landing topology (lever a), per-entry notification and the R_U `announce_landed` granularity (lamp: per-slot assembly) belong here.
 
-### [ ] Refinement 4 — LN critical-path compute chain (indexer-k case)
+### [x] Refinement 4 — LN critical-path compute chain (indexer-k case)
 
 **Type**: perf
 
@@ -159,5 +159,19 @@ fewer port per-packet cycles. Neither fits this refinement's chain scope.
 Fuse the combine's SFPU chains, drop the duplicate S1 reduce (an exact copy needs a path that does not truncate through srcA), and consider splitting the 20 tile-rows over more workers. Grid occupancy needs a row split below one tile-row, which is impossible, so the remaining lever is the per-row chain length. Levers come from master.md: `compute_fusion`, `sfpu_tile_scope`, `reduce_block`. No SUPPORTED change.
 
 **Done when**: the LN perf case's fastest chip improves beyond noise (slowest not higher), its PCC / RMS gates still hold (`test_layer_norm_distribution[big_offset]` included), the focus case does not regress, and the golden suite plus the config-spanning guard set are green.
+
+**Outcome**: LN 640×32 + γ + β **26.32 → 21.42 µs** fastest / 26.71 → 21.82 µs slowest (`eval.ccl_perf compare`: win,
+noise 0.05); focus 29.22 → 29.21 µs (null, untouched path). Measured first: each chain element costs ~0.1–0.15 µs
+on a one-tile row, so the ~7.4 µs after the gather was element count (transpose pass, three combine chains with 17 +
+3 + 3 elements, two reduces, three broadcasts, a 10-element normalize). Landed (fp32 DEST, path-gated): a one-pass
+combine against c = K_own (d = ΣA/W, M2 = ΣB − W d²) in ONE chain that reads the row-form gather tiles and
+transposes them in DEST (−3.06 + −0.67 µs); d / rstd broadcast inside the normalize chain plus a fused
+((x − K) − d)·rstd SFPU pass; S1 computed once and packed twice, T row sum in-chain for one-tile-column members
+(−1.18 µs, records out 0.9 µs sooner). After the gather now: combine 2.2 µs → normalize 1.1 → own write 1.1, then
+the own entry / relays (~7 µs, port-CPU bound, Refinement 2). What binds next is the exchange itself: the stats
+round (~7 µs from records to stats-ready, fabric + fence) and the bulk. In this chain, what is left is ~10 copy /
+transpose / SFPU elements at ~0.15 µs each. Two-slot precomputes (n·c, 1/n) would remove two copies (~0.3 µs) but
+need a 5th DEST slot or a new record format, so not done here. Over-split rows cannot help: R = 20 tile-rows is
+already one per worker.
 
 **Verifier notes**: a local-compute refinement, so it is filed after the cross-device ones. On the LN case the transport bulk (~11 µs for a 20-page slot) is still the larger term, and R2 / R3 attack it first.

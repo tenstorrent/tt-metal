@@ -236,3 +236,39 @@ pages / 4 DRAM writes), relay ~4 µs, landing tail ~3 µs. LN 640×32: local sta
   chain before it is ≈ 10 µs, of which the own DRAM write burst + read-back is the largest piece left. A cheaper L1
   source for the own entry would make both bands and x·γ pay.
 - Tests added: none (existing unit files cover the paths; `ps_own_pkt0` marker for zone timelines).
+
+## Refinement 4 — LN critical-path compute chain (indexer-k case)
+- Date: 2026-11-23
+- What was done:
+  - **Measured first** (zones, LN 640×32 + γ + β, one tile per row, k = 1, 20 workers): after the gather, transpose
+    0.8 µs, mean chain + reduce 1.2, d chain + broadcast 0.85, M2 chain (17 elements) 2.4 + reduce / finalize 0.7,
+    rstd broadcast 0.2, normalize 1.2. Local stats 2.8 µs before the records. Each chain element costs ~0.1–0.15 µs
+    on one tile: the cost is element count.
+  - **One-pass fused combine** (`ln_combine_fused`, `gather_tiles == 1`, fp32 DEST): shift c = K_own,
+    A = n(m − c), B = T − n(m − K)² + n(m − c)², d = ΣA/W, M2 = ΣB − W d², rstd in a column-0 finalize. One chain:
+    the row-form gather tiles are copied from `cb_gather_rows` and transposed in DEST (no `transpose_gathered` pass),
+    two fused SFPU passes (faces 0/2 only when P ≤ 16), two SFPU in-tile row sums, two packs (d → `cb_ln_m`,
+    rstd → `cb_inv`).
+  - **Normalize**: d / rstd broadcast inside the chain (`UnaryBcast`, same FPU column broadcast as the old
+    `unary_bcast`), and ((x − K) − d)·rstd as one SFPU pass (`LnCenterScale`, every LN path).
+  - **Local stats, cw == 1** (fp32 DEST): S1 is one exact row sum packed into both `cb_partial` and `cb_ln_m`, which
+    drops the duplicate reduce without an srcA copy. T is (x − K)² + row sum in the same chain when the member has
+    no W tail.
+  - Gates: 16-bit DEST, `gather_tiles > 1`, pre_combine, `cw > 1` and W-tail members keep the previous chains.
+  - Reused: the record format, reader placement, `cb_ln_m` / `cb_inv` / `cb_ln_shift`, the γ / β dest-reuse elements,
+    the FinalizeInvRms SFPU style, the transpose_dest mechanism. Added: chain elements `LnCombCenter`, `LnCombTerms`,
+    `LnCombFinalize`, `LnCenterScale`, `SfpuRowSum`, `TransposeDestElem`, `MulScalarElem`; no CB, kernel or host
+    change.
+- Perf (eval harness, 5 experiments, compared step by step with `eval.ccl_perf compare`): LN **26.324 → 23.269**
+  (fused combine) **→ 22.090** (local stats + in-chain broadcast + fused normalize) **→ 21.417 µs** (in-DEST
+  transpose) fastest; slowest 26.714 → 21.820. Focus 29.217 → 29.207 µs (null). Not dispatch-bound.
+- Accuracy achieved: LN 640×32 bf16 PCC 0.999998 / rel RMS 0.0020; LN fp32 offset 50 (128×384 Linear) PCC 1.000000 /
+  0.0015; LN 640×32 fp32 offset 50 PCC 1.000000 / 0.0015 (limits: bf16 0.999 / 0.01, fp32 0.9999 / 0.005).
+- Golden test progress: targeted LN slices — 1x1x640x32, 32x17, 17x64, 1x1x32x50, 1x1x17x1280: 179 passed, 45
+  xfailed (EXCLUSIONS); 128x8192, 1x640x1792, 640x384: 185 passed, 2 skipped, 27 xfailed; test_regression 32/32
+  (`test_layer_norm_distribution[big_offset]` included); unit dir 57/57.
+- Issues encountered: none blocking. The DEST limit (4 fp32 slots, half sync) splits the combine into two SFPU passes.
+- Remaining headroom (finding): after the gather, combine 2.2 µs → normalize 1.1 → own write 1.1, then the bulk
+  (~7 µs, port-CPU bound). The stats round (~7 µs records → stats-ready) is now the largest serial term in the LN call.
+- Tests added: `test_perf_probe_ln` in `test_all_gather_rms_norm_perf_probe.py` (no-check LN profiling helper for zone
+  timelines).

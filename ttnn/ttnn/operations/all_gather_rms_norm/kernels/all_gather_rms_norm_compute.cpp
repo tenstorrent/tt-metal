@@ -17,7 +17,13 @@
 //                        K column -> cb_partial (stat 2)
 //   combine_stats_block  mean = sum_j n_j m_j / W                     -> cb_mean_col (reader broadcasts it exactly)
 //                        M2   = sum_j [T_j - n_j (m_j - K_j)^2 + n_j (m_j - mean)^2] -> rstd -> cb_inv -> cb_rstd_b
-//   normalize_block      (x - mean) * rstd [* gamma] [+ beta], x / mean exact fp32 in DEST (SFPU) -> cb_out_block
+//   normalize_block      ((x - K) - d) * rstd (one fused SFPU pass) [* gamma] [+ beta] -> cb_out_block
+// LN fast paths (Refinement 4, fp32 DEST):
+//   local, cw == 1       S1 once: CopyTile + SfpuRowSum + 1/n, packed to cb_partial AND cb_ln_m; T in one chain
+//                        ((x - K)^2 + SfpuRowSum, no W tail) -> cb_partial
+//   combine, gt == 1     ONE chain per tile-row (ln_combine_fused): row-form gather tiles transposed in DEST, the
+//                        one-pass combine against c = K_own -> d (cb_ln_m) and rstd (cb_inv), column 0; the normalize
+//                        broadcasts both inside its chain (UnaryBcast) — no cb_gathered / cb_mean_b / cb_rstd_b
 //
 // Raw API / raw LLK (documented exceptions, ported from the base op rms_norm_compute.cpp):
 //  * sum_squares_block: eltwise_chain's DestAccumulation::PerRow packs one tile-row per acquire; the base op's raw
@@ -25,6 +31,10 @@
 //  * MulGammaRowBcast / AddBetaRowBcast: DestReuseBinary has no BroadcastDim; the LLK supports a ROW-broadcast CB
 //    operand on the dest-reuse op, which lets cb_gamma / cb_beta keep only row 0 of faces 0/1.
 //  * FinalizeInvRms: column-0-scoped SFPU body (x * 1/W + eps -> rsqrt) as the reduce() post_reduce_op.
+//  * LN fused chain elements (LnCombCenter / LnCombTerms / LnCombFinalize / LnCenterScale, SfpuRowSum,
+//    TransposeDestElem): no kernel_lib element is a multi-slot fused SFPU body, the in-tile SFPU row collapse, or an
+//    in-DEST transpose; they wrap the same LLK calls (sfpu params, sfpu_reduce, transpose_dest) as chain elements so
+//    one chain keeps the whole per-row combine in DEST (Refinement 4: each extra element costs ~0.1-0.15 us per tile).
 
 #include <cstdint>
 
@@ -588,9 +598,6 @@ ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool ta
             ln_exact_mode,
             ReduceAlgorithm::ReduceTile>(
             ReduceInputBlockShape::of(crt, cw), x_layout(cw), NoAccumulation{}, MulScalarPost{inv_n_bits});
-        {
-            AGRN_ZONE("x_s1a");
-        }
         reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
@@ -604,14 +611,8 @@ ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool ta
             ReduceInputBlockShape::of(crt, cw), x_layout(cw), NoAccumulation{}, MulScalarPost{inv_n_bits});
     }
     // K = tf32(m) in every column
-    {
-        AGRN_ZONE("x_s1b");
-    }
     unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_ln_shift)>(IterationShape::tiles(crt));
     cb_wait_front(cb_ln_shift, crt);
-    {
-        AGRN_ZONE("x_kb");
-    }
     // T = sum (x - K)^2 (padding columns masked in the reduce; sharded tail: by the mask block in the chain)
     constexpr auto xs_blk = x_input<cbx>;
     constexpr auto shift_col = input(cb_ln_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
@@ -646,9 +647,6 @@ ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool ta
             SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
             Square<Dst::D0>{},
             PackTile<output(cb_ln_sq)>{});
-        {
-            AGRN_ZONE("x_tchain");
-        }
         reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
@@ -664,9 +662,6 @@ ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool ta
             NoAccumulation{},
             NoOp{},
             tail ? ReducePartialScaler::only_partial() : ReducePartialScaler::none());
-    }
-    {
-        AGRN_ZONE("x_tred");
     }
     // K (stat 2): tf32-exact, so the copy is exact
     eltwise_chain(
@@ -699,9 +694,6 @@ ALWI void ln_combine_mean(uint32_t n, uint32_t inv_bits) {
         CopyTile<g_n<cb_n>, Dst::D1>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
         PackTile<output(cb_ln_tmp)>{});
-    {
-        AGRN_ZONE("x_mean_chain");
-    }
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
@@ -729,9 +721,6 @@ ALWI void ln_mean_minus_shift(uint32_t n) {
         CopyTile<shift_in, Dst::D1>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
         PackTile<output(cb_ln_m)>{});
-    {
-        AGRN_ZONE("x_d_chain");
-    }
     unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_mean_b)>(IterationShape::tiles(n));
     cb_wait_front(cb_mean_b, n);
 }
@@ -773,9 +762,6 @@ ALWI void ln_combine_m2(uint32_t n, Post post) {
         MulBinary<Dst::D0, Dst::D2, Dst::D0>{},  // n (m - mean)^2
         AddBinary<Dst::D1, Dst::D0, Dst::D1>{},
         PackTile<output(cb_ln_tmp), Dst::D1>{});
-    {
-        AGRN_ZONE("x_m2_chain");
-    }
     cb_pop_front(cb_gathered, n * nstats * gt);
     reduce<
         PoolType::SUM,

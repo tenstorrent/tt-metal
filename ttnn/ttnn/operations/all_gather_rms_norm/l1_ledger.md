@@ -188,3 +188,14 @@ is CPU-bound per page, not DRAM-bound. `OWN_SRC_DST = 0` restores the L1 pull (6
 
 Data-movement budget: unchanged in DRAM. The cross-core NoC drops from ~80 · G · 2 hub reads per call (the
 gather hot spot) to G slot multicasts (≈ 40 KiB per hub on the focus case).
+
+## As built — Refinement 4 (LN critical-path compute chain, fp32 DEST)
+
+No CB added, resized or removed. On the LN fast paths some existing CBs go idle (still allocated, unchanged size):
+- `cb_gathered` (transpose target) — idle when `gather_tiles == 1` and fp32 DEST: the fused combine reads the row-form
+  `cb_gather_rows` and transposes in DEST. Still used by the RMS combine, pre_combine and `gather_tiles > 1`.
+- `cb_mean_col`, `cb_ln_tmp`, `cb_mean_b`, `cb_rstd_b` — idle on the same path: d and rstd are packed as column-0
+  tiles into `cb_ln_m` / `cb_inv` (both already sized ≥ crt) and broadcast inside the normalize chain.
+- `cb_ln_sq` — idle in local stats when `cw == 1` and the member has no W tail.
+Shares with / why not: the idle CBs could be dropped from the allocation on these paths (an L1 saving, no perf
+effect); not done to keep one CB layout per program variant. Data-movement budget unchanged (compute-only change).

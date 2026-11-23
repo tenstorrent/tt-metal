@@ -556,3 +556,24 @@ sender +1.6 µs (the reader pushed only once `READ_DEPTH` packets were issued).
 
 What binds now (focus, chip with the earliest stats): stats ready 6.4 → gather 0.25 → combine 0.9 → normalize 1.0 →
 own write ≈ 1.1–2.3 (DRAM burst) → own entry ≈ 10 µs (port-CPU bound, Refinement 2) → relays ≈ 4 µs → tail.
+
+## Refinement 4 — LN critical-path compute chain as built (fp32 DEST)
+
+Measured first (zones, LN 640×32 case, one tile per row, k = 1): after the gather landed, transpose 0.8 µs → mean chain
++ reduce 1.2 → d chain + broadcast 0.85 → M2 chain (17 elements) 2.4 + reduce/finalize 0.7 → rstd broadcast 0.2 →
+normalize 1.2 µs; local stats 2.8 µs before the records. Every chain element costs ~0.1–0.15 µs on one tile, so the
+cost is element count, not arithmetic.
+
+- **One-pass combine against c = K_own** (`ln_combine_fused`, `gather_tiles == 1`): `A_j = n_j(m_j − c)`,
+  `B_j = T_j − n_j(m_j − K_j)² + n_j(m_j − c)²`; `d = ΣA/W` (= mean − K_own, the normalize's d directly),
+  `M2 = ΣB − W d²`. Exact algebra; since c is one partition's shift, `W d² ≤ P ×` the between-partition term, so the
+  subtraction costs ≤ ~P fp32 ulps of M2 (big_offset fp32 green). One chain: row-form gather tiles copied and
+  transposed in DEST (no `transpose_gathered` pass), two fused SFPU passes (faces 0/2 only when P ≤ 16), two in-tile
+  SFPU row sums, a column-0 finalize, two packs (d → `cb_ln_m`, rstd → `cb_inv`).
+- **Normalize**: d / rstd broadcast inside the chain (`UnaryBcast`, the same FPU column broadcast as before — same
+  numerics), and `((x − K) − d) · rstd` as one SFPU pass (also on the old paths).
+- **Local stats, cw == 1**: S1 is one exact row sum packed twice (`cb_partial` + `cb_ln_m`) — the duplicate reduce
+  is gone without an exact copy through srcA; T is `(x − K)²` + row sum in the same chain when the member has no W
+  tail.
+- Path gates: fp32 DEST only (the exact SFPU sums need it; 16-bit DEST keeps the old chain), `gather_tiles > 1` and
+  pre_combine keep the old combine, `cw > 1` / W-tail members keep the old local stats.
