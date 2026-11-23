@@ -856,11 +856,8 @@ std::vector<Tensor> square_bw(
 std::vector<Tensor> hardshrink_bw(
     const Tensor& grad, const Tensor& input_tensor, float lambd, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    // Same construction as softshrink_bw: |x| > lambd expressed as
-    // (x < -lambd) || (x > lambd). Doing it this way keeps the predicate
-    // identical to the sibling op that already passes CI, and avoids the
-    // extra abs() kernel. A NaN input compares false on both sides, so the
-    // gradient is zeroed, which is what the domain test expects.
+    // grad where |x| > lambd, written as (x < -lambd) || (x > lambd) like softshrink_bw.
+    // NaN compares false on both sides, so its gradient is 0.
     Tensor result = ttnn::where(
         ttnn::logical_or(
             ttnn::lt(input_tensor, -lambd, std::nullopt, output_mem_config),
