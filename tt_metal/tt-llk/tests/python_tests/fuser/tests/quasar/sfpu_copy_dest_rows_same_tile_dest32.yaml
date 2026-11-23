@@ -1,0 +1,35 @@
+# copy_dest_rows / copy_dest_row as in sfpu_copy_dest_rows_dest32.yaml, but source and target are the same tile
+# (Dest tile 1), as the Compute API allows. Float32 unpacked straight to Dest.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 64]
+    format: [Float32]
+    stimuli:
+      include:
+        - [-1.0e+30, -1000.0]
+        - [-1000.0, -0.001]
+        - [0.001, 1000.0]
+        - [1000.0, 1.0e+30]
+        - -1.0e-30
+        - 0.0
+        - 1.0e-30
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+    atol: 0.0  # raw copies: every datum, copied or kept, must survive bit for bit
+    rtol: 0.0
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 64]}
+      - type: "BinarySfpu"
+        operation: [SfpuCopyDestRows, SfpuCopyDestRow]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 1, src1: 1, dest: 1}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 1, out: 0}}

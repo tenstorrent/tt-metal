@@ -26,6 +26,7 @@
 #include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_cumprod.h"
 #include "llk_sfpu/ckernel_sfpu_cumsum.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_dropout.h"
@@ -113,6 +114,7 @@
 #include "llk_sfpu/ckernel_sfpu_binary_pow.h"       // calculate_sfpu_binary_pow / sfpu_binary_pow_init
 #include "llk_sfpu/ckernel_sfpu_binary_remainder.h" // calculate_sfpu_binary_remainder / calculate_remainder_int32
 #include "llk_sfpu/ckernel_sfpu_clamped_silu_glu.h" // calculate_clamped_silu_glu (silu(min(gate, 10)) * clamp(up, -10, 10))
+#include "llk_sfpu/ckernel_sfpu_copy_dest_rows.h"   // copy_dest_band / copy_dest_row (row-granular Dest copies)
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h" // copy_dest_value / copy_dest_value_init (Dest-to-Dest copy)
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"        // calculate_div_int32 / div_init (int32 / int32 -> fp32)
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"  // calculate_div_int32_trunc / calculate_div_int32_floor
@@ -406,6 +408,10 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
         cumsum_init<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::cumprod)
+    {
+        cumprod_init<APPROX>();
     }
     else if constexpr (OPERATION == SfpuType::softplus)
     {
@@ -822,6 +828,14 @@ void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_form
     }
 }
 
+// Fixed row ranges for fill_rows / fill_rows_ct, since the fuser cannot pass them. Between them they cut a band at
+// each of its first and last rows (lo = 3 and 1, hi = 1 and 3), fill whole bands and cross the face-pair boundary.
+// Keep in sync with FILL_ROWS_FUSER_RANGE / FILL_ROWS_CT_FUSER_RANGE in helpers/golden_generators.py.
+inline constexpr std::uint32_t FILL_ROWS_FUSER_BEGIN    = 3;
+inline constexpr std::uint32_t FILL_ROWS_FUSER_END      = 21;
+inline constexpr std::uint32_t FILL_ROWS_CT_FUSER_BEGIN = 9;
+inline constexpr std::uint32_t FILL_ROWS_CT_FUSER_END   = 31;
+
 /**
  * @brief Apply a Quasar unary SFPU op in-place on one Dest tile.
  *
@@ -835,9 +849,9 @@ void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_form
  * @tparam TILE_SHAPE Dest footprint used to locate the tile.
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format used by format-dependent ops such as comp, signbit and fill.
- * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
- *        and ema read it. Defaults to true so each tile is independent.
- * @param fill_const_value Constant written by fill; other operations ignore it.
+ * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum,
+ *        cumprod and ema read it. Defaults to true so each tile is independent.
+ * @param fill_const_value Constant written by fill, fill_rows and fill_rows_ct; other operations ignore it.
  * @param idx_addr reshuffle_rows only: L1 address of the row mask minus its 16-byte header.
  * @tparam vector_mode Which faces of the tile to process. Reductions over the whole tile walk it their own way.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
@@ -861,8 +875,9 @@ void call_unary_sfpu_operation_quasar(
 {
     static_assert(
         TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 ||
-            (OPERATION != SfpuType::cumsum && OPERATION != SfpuType::ema && OPERATION != SfpuType::reshuffle_rows && OPERATION != SfpuType::sum_int_col &&
-             OPERATION != SfpuType::sum_int_row && OPERATION != SfpuType::tiled_prod),
+            (OPERATION != SfpuType::cumsum && OPERATION != SfpuType::cumprod && OPERATION != SfpuType::fill_rows && OPERATION != SfpuType::fill_rows_ct &&
+             OPERATION != SfpuType::ema && OPERATION != SfpuType::reshuffle_rows && OPERATION != SfpuType::sum_int_col && OPERATION != SfpuType::sum_int_row &&
+             OPERATION != SfpuType::tiled_prod),
         "This Quasar unary SFPU operation requires 32x32 tiles");
     constexpr std::uint32_t kReluThresholdBits = 0x40A00000u; // 5.0f
     if constexpr (OPERATION == SfpuType::abs)
@@ -1241,6 +1256,36 @@ void call_unary_sfpu_operation_quasar(
         // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
         // boundary, so it runs once per tile (RC_custom), not once per face.
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
+    }
+    else if constexpr (OPERATION == SfpuType::cumprod)
+    {
+        // The cumsum walk with a product step: once per tile (RC_custom), carry seeded 1.0 when first.
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cumprod, (APPROX), dst_index, VectorMode::RC_custom, first);
+    }
+    else if constexpr (OPERATION == SfpuType::fill_rows)
+    {
+        // Once per tile (VectorMode::None), rows FILL_ROWS_FUSER_BEGIN .. FILL_ROWS_FUSER_END - 1.
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            _calculate_fill_rows_,
+            (APPROX),
+            dst_index,
+            VectorMode::None,
+            FILL_ROWS_FUSER_BEGIN,
+            FILL_ROWS_FUSER_END,
+            fill_const_value);
+    }
+    else if constexpr (OPERATION == SfpuType::fill_rows_ct)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            _calculate_fill_rows_ct_,
+            (APPROX, FILL_ROWS_CT_FUSER_BEGIN, FILL_ROWS_CT_FUSER_END),
+            dst_index,
+            VectorMode::None,
+            fill_const_value);
     }
     else if constexpr (OPERATION == SfpuType::ema)
     {
@@ -1800,6 +1845,17 @@ alignas(4) inline constexpr std::uint8_t RESHUFFLE_ROWS_FUSER_MASK[ckernel::sfpu
     1,  2,  31, 31, 100, 8,  9, 15, 16, 255, 20, 21, 22, 64,  7,  0,
 };
 
+// Fixed band / row pairs for BinaryOp::COPY_DEST_ROWS / COPY_DEST_ROW, since the fuser cannot pass them.
+// COPY_DEST_ROWS copies band 1 to band 6 (across the face-pair boundary). COPY_DEST_ROW makes two copies in order:
+// row 5 to row 18 (another lane group and face pair), then row 9 to row 1 (the same lane group).
+// Keep in sync with COPY_DEST_ROWS_FUSER_BANDS / COPY_DEST_ROW_FUSER_ROWS in helpers/golden_generators.py.
+inline constexpr std::uint32_t COPY_DEST_ROWS_FUSER_IN_BAND   = 1;
+inline constexpr std::uint32_t COPY_DEST_ROWS_FUSER_OUT_BAND  = 6;
+inline constexpr std::uint32_t COPY_DEST_ROW_FUSER_FROM_ROW_0 = 5;
+inline constexpr std::uint32_t COPY_DEST_ROW_FUSER_TO_ROW_0   = 18;
+inline constexpr std::uint32_t COPY_DEST_ROW_FUSER_FROM_ROW_1 = 9;
+inline constexpr std::uint32_t COPY_DEST_ROW_FUSER_TO_ROW_1   = 1;
+
 constexpr bool quasar_binary_op_is_max_min(ckernel::BinaryOp op)
 {
     return op == ckernel::BinaryOp::MAX || op == ckernel::BinaryOp::MIN;
@@ -2052,7 +2108,8 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         // logsigmoid_tile_init: loads the polynomial tail d6..d8 into vConstFloatPrgm0..2.
         logsigmoid_init<APPROXIMATION_MODE>();
     }
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS / MUL_SM_SHIFT23 / NEXTAFTER / NEXTAFTER_BF16 are stateless — no init.
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS / MUL_SM_SHIFT23 / NEXTAFTER / NEXTAFTER_BF16 /
+    // COPY_DEST_ROWS / COPY_DEST_ROW are stateless — no init.
 }
 
 /**
@@ -2699,6 +2756,47 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             src1_tile,
             dst_tile,
             VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::COPY_DEST_ROWS)
+    {
+        // Kernel ABI (in, out, unused, in_band, out_band), as copy_dest_rows passes it; src1_tile is ignored.
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            copy_dest_band,
+            (APPROXIMATION_MODE, is_fp32_dest_acc_en),
+            src0_tile,
+            dst_tile,
+            dst_tile,
+            VectorMode::None,
+            COPY_DEST_ROWS_FUSER_IN_BAND,
+            COPY_DEST_ROWS_FUSER_OUT_BAND);
+    }
+    else if constexpr (OP == BinaryOp::COPY_DEST_ROW)
+    {
+        // Kernel ABI (in, out, unused, from_row, to_row), as copy_dest_row passes it; src1_tile is ignored.
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            copy_dest_row,
+            (APPROXIMATION_MODE, is_fp32_dest_acc_en),
+            src0_tile,
+            dst_tile,
+            dst_tile,
+            VectorMode::None,
+            COPY_DEST_ROW_FUSER_FROM_ROW_0,
+            COPY_DEST_ROW_FUSER_TO_ROW_0);
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            copy_dest_row,
+            (APPROXIMATION_MODE, is_fp32_dest_acc_en),
+            src0_tile,
+            dst_tile,
+            dst_tile,
+            VectorMode::None,
+            COPY_DEST_ROW_FUSER_FROM_ROW_1,
+            COPY_DEST_ROW_FUSER_TO_ROW_1);
     }
     else if constexpr (OP == BinaryOp::RESHUFFLE_ROWS)
     {

@@ -652,6 +652,23 @@ def prepare_cumsum_inputs(
     return (-1.0 + 2.0 * u).to(format_dict[input_format])
 
 
+def prepare_cumprod_inputs(
+    src_A: torch.Tensor,
+    input_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Map the uniform [0, 1] stimulus onto +-[0.8, 1.2] for the column-wise cumulative product.
+
+    A column product chains up to 32 multiplies, so |x| in [0.8, 1.2] keeps every partial
+    product within [0.8**32, 1.2**32] ~ [8e-4, 3e2] - finite in Float16 and clear of the
+    subnormal magnitudes the SFPU MAD datapath flushes to zero. The lower half of the
+    stimulus is negated so the chain sees sign flips as well as growth and decay.
+    """
+    u = src_A.to(torch.float32)  # uniform [0, 1] from the uniform stimuli spec
+    magnitude = 0.8 + 0.8 * (u % 0.5)
+    return torch.where(u < 0.5, -magnitude, magnitude).to(format_dict[input_format])
+
+
 def prepare_ema_inputs(
     src_A: torch.Tensor,
     input_format: DataFormat,
@@ -664,7 +681,7 @@ def prepare_ema_inputs(
 # Ops whose result depends on where in the tile a datum sits, so L1 has to hold a real tilized tile.
 # Every other op in this suite is element-wise and cannot tell a tilized buffer from a row-major one,
 # which is why the suite has always written the latter.
-LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum, MathOperation.Ema)
+LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum, MathOperation.Cumprod, MathOperation.Ema)
 
 _INT32_SMAG_MAX = 2**31 - 1
 # Must exceed every |scalar| so negative inputs straddle a negative scalar.
@@ -708,6 +725,8 @@ def prepare_unary_inputs(
         return prepare_square_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Cumsum:
         return prepare_cumsum_inputs(src_A, input_format)
+    if mathop == MathOperation.Cumprod:
+        return prepare_cumprod_inputs(src_A, input_format)
     if mathop == MathOperation.Ema:
         return prepare_ema_inputs(src_A, input_format)
     if mathop in TRIGONOMETRY_OPS:
@@ -1592,6 +1611,7 @@ _APPROX_MATHOPS = (
 _QSR_EXTRA_MATHOPS = (
     MathOperation.Relu,
     MathOperation.Cumsum,
+    MathOperation.Cumprod,
     MathOperation.Ema,
     MathOperation.Dropout,
     MathOperation.Log10,
@@ -1671,6 +1691,8 @@ OP_CONFIGS = [
     # cross-tile carry (first=false) needs the shared C++ source to thread
     # `first = (i == 0)` through its tile loop, so it is a follow-on.
     OpConfig(MathOperation.Cumsum, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # The cumsum walk with a product step: carry seeded 1.0 per tile (first=true).
+    OpConfig(MathOperation.Cumprod, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Whole-tile like cumsum: in place, carry zeroed per tile.
     OpConfig(MathOperation.Ema, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,

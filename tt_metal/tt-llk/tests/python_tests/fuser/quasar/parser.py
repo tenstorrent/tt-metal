@@ -475,6 +475,9 @@ UNARY_SFPU_OPS = {
     MathOperation.Rdiv,
     MathOperation.TiledProd,
     MathOperation.Ema,
+    MathOperation.Cumprod,
+    MathOperation.FillRows,
+    MathOperation.FillRowsCt,
     MathOperation.Identity,
     MathOperation.CastFp32ToFp16a,
     MathOperation.AltComplexRotate90,
@@ -576,6 +579,8 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuSqrtBw,
     MathOperation.SfpuSquareBw,
     MathOperation.SfpuTanhBw,
+    MathOperation.SfpuCopyDestRows,
+    MathOperation.SfpuCopyDestRow,
 }
 
 

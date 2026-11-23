@@ -163,6 +163,8 @@ enum class BinaryOp : std::uint8_t
     SQRT_BW,
     SQUARE_BW,
     TANH_BW,
+    COPY_DEST_ROWS,
+    COPY_DEST_ROW,
 };
 
 enum class DataLayout

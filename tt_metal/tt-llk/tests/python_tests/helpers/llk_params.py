@@ -82,6 +82,9 @@ class MathOperation(Enum):
     # Whole-tile column-wise cumulative sum; not element-wise, so its golden works on the
     # tilized tensor rather than per datum.
     Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
+    # Whole-tile column-wise cumulative product (the cumsum walk with a multiply); its golden
+    # works on the tilized tensor.
+    Cumprod = OpSpec("cumprod", MathOpType.SFPU_UNARY)
     Dropout = OpSpec("dropout", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
     # Whole-tile column-wise EMA; its golden works on the tilized tensor.
@@ -92,6 +95,10 @@ class MathOperation(Enum):
     # scale of 0.5 so the op computes exp(0.5*x).
     ExpWithBase = OpSpec("exp_with_base", MathOpType.SFPU_UNARY)
     Fill = OpSpec("fill", MathOpType.SFPU_UNARY)
+    # fill_rows_tile over a fixed row range (FILL_ROWS_FUSER_RANGE / FILL_ROWS_CT_FUSER_RANGE in
+    # golden_generators.py); the run-time and the compile-time form.
+    FillRows = OpSpec("fill_rows", MathOpType.SFPU_UNARY)
+    FillRowsCt = OpSpec("fill_rows_ct", MathOpType.SFPU_UNARY)
     Gelu = OpSpec("gelu", MathOpType.SFPU_UNARY)
     # LUT approximation of gelu (the APPROXIMATION_MODE branch of calculate_gelu).
     GeluAppx = OpSpec("gelu_appx", MathOpType.SFPU_UNARY)
@@ -322,6 +329,10 @@ class MathOperation(Enum):
     SfpuIntMask = OpSpec("INT_MASK", MathOpType.SFPU_BINARY)
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
+    # copy_dest_rows / copy_dest_row with fixed band / row pairs (COPY_DEST_ROWS_FUSER_BANDS /
+    # COPY_DEST_ROW_FUSER_ROWS in golden_generators.py), src0 -> dest.
+    SfpuCopyDestRows = OpSpec("COPY_DEST_ROWS", MathOpType.SFPU_BINARY)
+    SfpuCopyDestRow = OpSpec("COPY_DEST_ROW", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
     SfpuIscloseEqualNan = OpSpec("ISCLOSE_EQNAN", MathOpType.SFPU_BINARY)
