@@ -95,14 +95,22 @@ recipes::PrecisionPolicy sparse_policy(const SparseSDPAParams& attrs, const OpDi
 // recipe_subblock_width) pays the step's fixed cost for less work: on BH, Qwen 3.8 QSA decode (32 heads, 1 row,
 // top-2048 of 4096, D 512) took 194 / 112 / 100 / 101 us at 1 / 2 / 4 / 8-tile steps. Compute tilizes `group` chunks
 // into one step (the reader still gathers chunk by chunk); a token's last group may hold fewer chunks (masked tail).
+constexpr uint32_t kWidestQkSubblockTiles = 4;
 uint32_t sparse_step_group(const OpDims& d) {
-    constexpr uint32_t kWidestQkSubblockTiles = 4;
     if (d.Skt >= kWidestQkSubblockTiles) {
         return 1;
     }
     const uint32_t n_chunks = d.topk / d.k_chunk;
     return std::min((kWidestQkSubblockTiles + d.Skt - 1) / d.Skt, n_chunks);
 }
+
+// The FP32-state recipes (BALANCED, ACCURATE) rescale every O row of the step's Q (the FP32 numerator, vd tiles per Q
+// tile row) whenever a row maximum changes, once per step whatever its width: two of the widest QK subblocks per step
+// halve those corrections per key. Taken only where it costs nothing else (sparse_resolve_plan): GLM-5.3 scaled FP8
+// H64 S40 (split-K) 244 -> 231 us, Kimi K3.1 FP8 H64 S160 801 -> 747 us; it lost the step's K staging for Kimi K3.1
+// scaled H96 S120 (607 -> 626 us) and split-K for H96 S160 (865 -> 1177 us), and added masked padding to Qwen 3.8 QSA
+// (65 chunks of one tile; S32 225 -> 236 us).
+constexpr uint32_t kFp32StepTiles = 2 * kWidestQkSubblockTiles;
 
 // The layout of one plan: the recipe compute CBs (recipe_compute_program) resized for the sparse kernel, the sparse
 // dataflow CBs (sparse_sdpa_common.hpp recipe_cb), and the recipe compute kernel (named arguments, defines, config).
@@ -284,6 +292,11 @@ uint64_t sparse_layout_l1_bytes(const SparseLayout& layout, uint64_t cb_align) {
 constexpr std::array<uint32_t, 10> ROW_SPEED_PCT = {85, 84, 88, 97, 102, 107, 110, 112, 114, 115};
 constexpr uint32_t FIRST_ROW_Y = 2;
 
+// The equal split's boundary i of m over `units`, rounded up: a token cut in two leaves its larger part to the earlier
+// core, whose TAIL segment merges the later core's HEAD state after its own steps (the HEAD's state then arrives
+// while the TAIL still computes, and the TAIL's merge follows its own last step).
+uint64_t split_k_even_bound(uint64_t units, uint64_t i, uint64_t m) { return (units * i + m - 1) / m; }
+
 // Split-K unit boundaries: core i owns units [bounds[i], bounds[i + 1]) of the token-major (token, chunk) order.
 // Equal split, or (row_weighted) in proportion to ROW_SPEED_PCT so the slow top rows do not finish last. The
 // weighted split falls back to the equal one when any core would get less than one token (the S > cores pairwise
@@ -306,7 +319,8 @@ std::vector<uint64_t> split_k_unit_bounds(
     }
     std::vector<uint64_t> bounds(num_used + 1);
     for (uint32_t i = 0; i <= num_used; ++i) {
-        bounds[i] = total_units * cum_w[i] / cum_w[num_used];
+        bounds[i] =
+            row_weighted ? total_units * cum_w[i] / cum_w[num_used] : split_k_even_bound(total_units, i, num_used);
     }
     if (row_weighted) {
         for (uint32_t i = 0; i < num_used; ++i) {
@@ -318,8 +332,9 @@ std::vector<uint64_t> split_k_unit_bounds(
     return bounds;
 }
 
-SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan(
-    const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
+// The plan for steps of `group` gathered chunks (then one, when they do not fit).
+SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan_for(
+    const SparseSDPAParams& attrs, const SparseSDPAInputs& t, uint32_t group) {
     using Plan = SparseSDPAOperation::SparseSDPAProgramFactory::Plan;
     auto* device = t.q.device();
     const OpDims d = op_dims(attrs, t);
@@ -338,7 +353,6 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan(
     // only adds masked keys to a step). Unscaled KV gathers 32 key rows at a time below a chunk (two, then one).
     Plan plan{.split_k = false, .num_used = attrs.worker_core_grid.num_cores()};
     bool found = false;
-    const uint32_t group = sparse_step_group(d);
     // K row staging: one step's rows when the default holds less (compute tilizes a step's rows before its step, so the
     // reader then gathers the next step's while compute runs this one), the default (one chunk; scaled KV two slabs),
     // then (unscaled KV) 64 or 32 rows. With less than a step staged the gather serialized with the step (Qwen 3.8 QSA
@@ -360,8 +374,15 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan(
         }
         return options;
     };
-    // Q through the K row CB: unscaled KV in Q's row format (a K row stage holds at least one tile row of Q).
+    // Q row staging: two tile rows (the reader one ahead of compute's tilize) or one; through the K row CB (unscaled
+    // KV in Q's row format: a K row stage holds at least one tile row of Q) at the L1 floor. With at most one token per
+    // core its Q read is on the critical path, so every tile row of a pass is staged at once (one read barrier, issued
+    // with the index row's): H128 S4 sink 32.8 -> 30.5 us. With several tokens per core the reader reads ahead anyway
+    // and the L1 went to K staging (H128 S640 sink 2.66 ms, 2.79 with all of Q staged).
     std::vector<uint32_t> q_rm_options{2, 1};
+    if (d.Sqt > 2 && d.S <= attrs.worker_core_grid.num_cores()) {
+        q_rm_options.insert(q_rm_options.begin(), d.Sqt);
+    }
     if (!d.scaled_kv && d.q_df == d.kv_df) {
         q_rm_options.push_back(0);
     }
@@ -369,7 +390,12 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan(
         for (const uint32_t g : {group, 1u}) {
             for (const bool fused : {true, false}) {
                 for (const uint32_t q_rm_rows : q_rm_options) {
-                    for (const uint32_t k_rm_rows : k_rm_options(g)) {
+                    const auto k_options = k_rm_options(g);
+                    for (const uint32_t k_rm_rows : k_options) {
+                        // Every Q tile row staged at once only beside the deepest K staging.
+                        if (q_rm_rows > 2 && k_rm_rows != k_options.front()) {
+                            continue;
+                        }
                         const Plan p{
                             .split_k = false,
                             .num_used = plan.num_used,
@@ -411,7 +437,7 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan(
         const uint64_t units = static_cast<uint64_t>(S) * n_chunks;
         const auto valid = [&](uint32_t m) {
             for (uint32_t i = 0; i < m; ++i) {
-                const uint64_t b0 = units * i / m, b1 = units * (i + 1) / m;
+                const uint64_t b0 = split_k_even_bound(units, i, m), b1 = split_k_even_bound(units, i + 1, m);
                 if (b1 == b0 || (b0 % n_chunks != 0 && b1 < (b0 / n_chunks + 1) * n_chunks)) {
                     return false;
                 }
@@ -430,9 +456,17 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan(
     // Split-K takes the deepest K staging that fits beside its merge CBs (a whole-token split instead costs far more
     // than shallower staging: Kimi K3.1 H96 S160 989 vs 1225 us).
     if (split.split_k) {
+        // Small S leaves most cores idle, so a core's own gather rate (not the DRAM) bounds it: unscaled KV first tries
+        // two steps of staging, so the reader gathers the next step while compute tilizes this one (BF16 H32 S8,
+        // 2 cores per token: 115.7 -> 102.1 us). With every core gathering it only added contention (Kimi K3.1 FP8
+        // H64 S160, whole-token split: 802 -> 835 us), so whole-token plans keep one step.
+        std::vector<uint32_t> split_k_rm = k_rm_options(plan.group);
+        if (S < num_cores && !d.scaled_kv) {
+            split_k_rm.insert(split_k_rm.begin(), 2 * plan.group * d.k_chunk);
+        }
         bool shallower = false;
-        for (const uint32_t k_rm_rows : k_rm_options(plan.group)) {
-            shallower = shallower || k_rm_rows == plan.k_rm_rows;
+        for (const uint32_t k_rm_rows : split_k_rm) {
+            shallower = shallower || k_rm_rows == plan.k_rm_rows || k_rm_rows == 2 * plan.group * d.k_chunk;
             split.k_rm_rows = k_rm_rows;
             if (shallower && fits(true, split)) {
                 return split;
@@ -440,6 +474,23 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan(
         }
     }
     return plan;
+}
+
+SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan(
+    const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
+    const OpDims d = op_dims(attrs, t);
+    const auto plan = sparse_resolve_plan_for(attrs, t, sparse_step_group(d));
+    // FP32-state recipes: steps of kFp32StepTiles when the token's chunks pair up evenly (no masked padding) and the
+    // plan keeps everything else: its passes, fused chunks, split and a step of K staging.
+    const uint32_t wide = (kFp32StepTiles + d.Skt - 1) / d.Skt;
+    const uint32_t n_chunks = d.topk / d.k_chunk;
+    if (!sparse_policy(attrs, d).fp32_destination || wide <= plan.group || n_chunks % wide != 0) {
+        return plan;
+    }
+    const auto w = sparse_resolve_plan_for(attrs, t, wide);
+    const bool keeps = w.group == wide && w.passes == plan.passes && w.fused == plan.fused &&
+                       w.split_k == plan.split_k && w.num_used == plan.num_used && w.k_rm_rows >= wide * d.k_chunk;
+    return keeps ? w : plan;
 }
 
 }  // namespace
@@ -531,6 +582,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         block_cyclic_ct = {1, bc.chunk_local, bc.sp, seq_len_local - bc.chunk_local, bc.chunk_local * (bc.sp - 1)};
     }
 
+    // Unscaled KV staged a step at a time gathers the step's chunks in one request (one drain of the gather rings per
+    // step, not per chunk).
+    const uint32_t k_step_rows = !d.scaled_kv && plan.k_rm_rows >= plan.group * k_chunk && plan.group > 1
+                                     ? plan.group * k_chunk
+                                 : plan.k_rm_rows == 0 || plan.k_rm_rows >= k_chunk ? k_chunk
+                                                                                    : 32u;
     std::vector<uint32_t> reader_ct = {H, S, topk, k_chunk, k_dim, q_elem_bytes, kv_elem_bytes, idx_elem_bytes};
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     reader_ct.insert(reader_ct.end(), {scaled_kv, v_dim, packed_page_bytes, split_k, fused_dequant});
@@ -538,8 +595,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         reader_ct.end(),
         {q_tiles,
          plan.passes,
-         plan.k_rm_rows == 0 || plan.k_rm_rows >= k_chunk ? k_chunk : 32u,
-         plan.q_rm_rows == 0 ? 1u : 0u});
+         k_step_rows,
+         plan.q_rm_rows == 0 ? 1u : 0u,
+         // Q batches of a size dividing the pass's tile rows, so every reservation starts at the Q row CB's base.
+         plan.q_rm_rows != 0 && q_tiles % plan.q_rm_rows == 0 ? plan.q_rm_rows : 1u});
     TT_FATAL(
         reader_ct.size() == ::sparse_sdpa::reader_ct_arg::END,
         "sparse_sdpa reader compile-time argument layout is out of sync");
@@ -609,6 +668,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     compute_args.emplace_back("packed_row_bytes", packed_page_bytes);
     compute_args.emplace_back("split_k", split_k);
     compute_args.emplace_back("q_via_k_rm", plan.q_rm_rows == 0 ? 1u : 0u);
+    compute_args.emplace_back("k_step_staged", k_step_rows > k_chunk ? 1u : 0u);
     auto compute_desc = make_kernel("compute/sparse_sdpa_compute.cpp", {}, layout.compute.config);
     compute_desc.named_compile_time_args = std::move(compute_args);
     compute_desc.defines = layout.compute.defines;
