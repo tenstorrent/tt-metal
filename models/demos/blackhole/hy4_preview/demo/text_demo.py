@@ -7,7 +7,7 @@ Boot ONCE (engine build + warm, ~15-18 min), then run any number of scenarios on
     python -m models.demos.blackhole.hy4_preview.demo.text_demo --scenarios multirow,masked,cap0,pfx_hit_cold --check
     python -m models.demos.blackhole.hy4_preview.demo.text_demo --scenarios multirow --record # (re)write the greedy goldens for this config
     python -m models.demos.blackhole.hy4_preview.demo.text_demo --perf                        # prefill ms/token (1 and 4 rows), decode ms/round, tokens/round
-Scenarios: see demo/scenarios.py (multirow, masked, cap0, pfx_hit_cold, xrow, stash, chunked_pf, tailpark, long, perf). A scenario whose engine feature is not built or not enabled by env reports SKIP.
+Scenarios: see demo/scenarios.py (multirow, masked, cap0, pfx_hit_cold, xrow, stash, chunked_pf, tailpark, long, perf) and demo/scenario_sched.py (sched_xrow5, sched_cached, sched_victim). A scenario whose engine feature is not built or not enabled by env reports SKIP.
 Environment: the PRODUCT flags (program/product17/FINAL_FLAGS.txt, models/demos/blackhole/hy4_preview/FINAL_FLAGS.txt) must be exported exactly as for the server, plus HY4_PFX=1 (prefix scenarios), HY4_XROW=1,
 HY4_STASH=1 HY4_BLOCKS=1 (stash), HY4_PFX_LOSS_LOG=1 (optional). Run inside the product container with the b46 libs mounted (product17/final_launch.sh shows the mounts); weights from HY4_CKPT.
 Env of the demo: K (spec draft length, default 3; the demo needs K >= 1), MAXLEN (default 262144; use 1048576 for the production-size final check), HY4_SERVE_LAYERS (e.g. 4 for a plumbing check), TRACE_BYTES,

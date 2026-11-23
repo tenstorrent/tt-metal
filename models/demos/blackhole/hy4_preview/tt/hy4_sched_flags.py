@@ -39,7 +39,7 @@ FEATURES = {
     "pos_buckets": (
         "HY4_POS_BUCKETS",
         "pos_buckets",
-        "decode position buckets (reserved: only wired when ITL vs context shows a gap)",
+        "log only: windowed spec-round ms by deepest decode position (32k buckets) and live rows (`HY4 round_by_depth`): the ITL-vs-context measurement that decides row 15 (position buckets)",
     ),
 }
 

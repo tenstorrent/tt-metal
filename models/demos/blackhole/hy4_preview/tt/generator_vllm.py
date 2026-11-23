@@ -22,6 +22,7 @@ spec round (temperature only: generation_config default top_p 1, top_k -1); samp
 import json
 import os
 import sys
+import time
 
 import torch
 from loguru import logger
@@ -392,7 +393,9 @@ class HYV4ForCausalLM:
                     if (int(ks[i]) > 1 or float(ps[i]) < 1.0) and not self._warned_topk:
                         self._warned_topk = True
                         logger.warning("Hy4 sampled spec round: top_k / top_p are ignored (temperature only)")
+        _t_rd = time.perf_counter()
         st = eng.round(caps, want, temps, seeds, plugin_block=block)
+        self._depth_note(rows, sp0, len(rows), (time.perf_counter() - _t_rd) * 1e3)
         out = torch.zeros(W, n, dtype=torch.int32)
         for i, ph in rows:
             out[i] = torch.tensor(st[ph]["a"], dtype=torch.int32)
@@ -403,6 +406,30 @@ class HYV4ForCausalLM:
                 f"HY4 spec round {self.steps}: rows={len(rows)} m={[st[ph]['m'] for _, ph in rows]} round_ms_avg={ms:.1f} sampled={want}"
             )
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out)
+
+    def _depth_note(self, rows, sp0, nrows, ms):
+        """flag pos_buckets (HY4_POS_BUCKETS / live file, default off): round ms by the deepest decode position of the round (32k buckets) and live-row count; one ``HY4 round_by_depth`` line per 500 rounds.
+        Purpose: the measurement that decides whether decode position buckets (HY4_PORT_PLAN row 15) have any gain: ITL vs context from a normal AgentX run, no probe boot.
+        """
+        from models.demos.blackhole.hy4_preview.tt import hy4_sched_flags as SF
+
+        if not SF.enabled("pos_buckets"):
+            return
+        d = getattr(self, "_depth", None)
+        if d is None:
+            d = self._depth = {}
+        try:
+            deep = max(int(sp0[i]) for i, _ in rows)
+        except ValueError:
+            return
+        e = d.setdefault((deep // 32768 * 32, nrows), [0.0, 0])
+        e[0] += ms
+        e[1] += 1
+        if sum(v[1] for v in d.values()) % 500 == 0:
+            logger.info(
+                "HY4 round_by_depth {(depth_k, rows): (ms_avg, rounds)} "
+                + str({k: (round(v[0] / v[1], 1), v[1]) for k, v in sorted(d.items())})
+            )
 
     def _decode_narrow(self, tokens, start_pos, sp):
         """ordinary [B, 1] decode in a speculating launch (no row carries a draft): a forced single-token round (cap 0): the verify rows beyond row 0 are computed and rejected, the MTP state advances as in

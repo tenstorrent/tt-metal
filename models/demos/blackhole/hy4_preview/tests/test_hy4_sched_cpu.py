@@ -379,3 +379,17 @@ def test_sched_cached_pass():
     e.pfx_redo = True
     ctx = run("sched_cached", e, n=2048, extra=512)
     assert all(v == "PASS" for v in gates(ctx).values()), ctx.gates
+
+
+def test_depth_note_flag_and_buckets(monkeypatch, capsys):
+    from models.demos.blackhole.hy4_preview.tt import generator_vllm as G
+
+    dummy = NS()
+    note = lambda *a: G.HYV4ForCausalLM._depth_note(dummy, *a)
+    note([(0, 0)], [70000], 1, 50.0)
+    assert not hasattr(dummy, "_depth")  # flag off: nothing recorded
+    monkeypatch.setenv("HY4_POS_BUCKETS", "1")
+    SF.reset_cache()
+    note([(0, 0), (1, 1)], [70000, 5000], 2, 60.0)
+    note([(0, 0), (1, 1)], [70100, 5000], 2, 40.0)
+    assert dummy._depth == {(64, 2): [100.0, 2]}
