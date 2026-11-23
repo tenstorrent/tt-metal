@@ -173,6 +173,7 @@ def score(*, run: Path, rebuilt: Path, trace: Path, model: ChainModel, window: i
             pcc, nrmse = pcc_nrmse(sums[k][lo:hi])
             result[f"{k}_pcc"], result[f"{k}_nrmse"] = pcc, nrmse
             result[f"{k}_row_nrmse_p99"] = quantile(row_nrmse[k][lo:hi], 0.99)
+            result.update({f"{k}_{n}": v for n, v in row_error_norms(sums[k][lo:hi]).items()})
         return result
 
     states = []
@@ -363,6 +364,40 @@ def rows_of(directory: Path, names: list[str], start: int, end: int) -> dict:
     return segment_rows(lambda i: rebuilt_path(directory, i), segment, names, start, end)
 
 
+def row_error_norms(sums: torch.Tensor) -> dict:
+    """Absolute error of the rows whose ``key_sums`` are given: the median per-row ``||x - y||`` and ``||y||``, and
+    their RMS over rows. ``rms_err / rms_ref`` is ``pcc_nrmse``'s NRMSE; RMS values of windows combine exactly."""
+    see, syy = sums[:, 5], sums[:, 3]
+    return {
+        "row_err_median": quantile(see.sqrt(), 0.5),
+        "row_ref_median": quantile(syy.sqrt(), 0.5),
+        "rms_err": float(see.mean().sqrt()),
+        "rms_ref": float(syy.mean().sqrt()),
+    }
+
+
+def input_pair_keys(spec: Taps) -> tuple[str, ...]:
+    """The half of each layer's input the device does not tap, derived on both sides so every layer has both: the KDA
+    layers' pre-norm AttnRes read (``kda_read_l``) and the DSA layers' input after ``input_layernorm``
+    (``dsa_normed_l``)."""
+    return (*(f"kda_read_{l}" for l in spec.kda if l), *(f"dsa_normed_{l}" for l in spec.dsa))
+
+
+def input_pairs(got: dict, weights: dict, eps: float, emb: torch.Tensor, spec: Taps) -> dict:
+    """``input_pair_keys`` from one side's taps (the device's or the reference's): the KDA read in FP64 from the live
+    sum before the layer, the DSA normed input in FP64 from its tapped read (as ``rebuild_deep`` / the chains compute
+    them)."""
+    out = {}
+    for l in spec.kda:
+        if l:
+            out[f"kda_read_{l}"] = attn_res64(
+                got[f"live_{l - 1}"].double(), emb.unsqueeze(1), weights[l]["attn_res"], eps
+            )
+    for l in spec.dsa:
+        out[f"dsa_normed_{l}"] = rms64(got[f"dsa_input_{l}"].double(), weights[l]["input_layernorm"], eps)
+    return out
+
+
 def deep_references(
     *, chain: Path, rebuilt_1m: Path, rebuilt: Path, weights: dict, eps: float, emb: torch.Tensor, lo: int, hi: int
 ) -> dict:
@@ -408,13 +443,16 @@ def score_deep(
     embedding: torch.Tensor,
     eps: float,
     window: int,
+    metrics_dir: Path,
     log=print,
 ) -> dict:
     """Score a layers 0-7 device-chain run in ``run`` against the deep chain per ``window`` rows; writes each tap's
-    ``metrics.json`` and returns ``{tap: metrics}``.
+    ``<metrics_dir>/<tap>/metrics.json`` and returns ``{tap: metrics}``.
 
     The per-row definitions are the teacher-feed scorers': the stream and the KDA outputs by pooled PCC / NRMSE
-    (``key_sums``) and per-row NRMSE; the MoE output by per-row NRMSE floored at 1% of the median reference row norm
+    (``key_sums``) and per-row NRMSE, the stream also by absolute error (``row_error_norms``: NRMSE falls when a layer
+    adds a large accurate contribution to the live sum, while the error in it still grows) and with both halves of
+    every layer input (``input_pairs``); the MoE output by per-row NRMSE floored at 1% of the median reference row norm
     and its routing by ``routing_window`` against the FP64 ids, best first (so a miss's rank is its FP64 rank); the
     DSA attention output (every row: the deep chain attends every row) as the MoE output, its top-k by recall on rows
     >= k with each miss's FP64 rank (``missed_keys``) and the FP64 cut gap (``chain_vs_trace.CUT_GAP_RANKS``), its
@@ -428,7 +466,8 @@ def score_deep(
     chain_1m = Path(rebuilt_manifest(rebuilt_1m, count)["chain"]["chain"])
     token_ids = load_token_ids(trace.path, count)
     kda_fed = tuple(l for l in spec.kda if l)
-    pooled = [*spec.stream_keys, *(f"kda_{l}" for l in kda_fed)]  # scored by key_sums and per-row NRMSE
+    stream_keys = (*spec.stream_keys, *input_pair_keys(spec))
+    pooled = [*stream_keys, *(f"kda_{l}" for l in kda_fed)]  # scored by key_sums and per-row NRMSE
     sums, rows = {k: [] for k in pooled}, {k: [] for k in pooled}
     moe_err = {l: TokenErrorAccumulator() for l in spec.moe}
     dsa_err = {l: TokenErrorAccumulator() for l in spec.dsa}
@@ -449,6 +488,8 @@ def score_deep(
             chain=chain, rebuilt_1m=rebuilt_1m, rebuilt=rebuilt, weights=weights, eps=eps, emb=emb, lo=lo, hi=hi
         )
         got = {k: s[k] for k in spec.stream_keys}
+        got.update(input_pairs(got, weights, eps, emb, spec))
+        want.update(input_pairs(want, weights, eps, emb, spec))
         for l in kda_fed:
             got[f"kda_{l}"] = torch.load(chunk_path(run / f"kda-l{l}", c), weights_only=True)["attn_out"]
             want[f"kda_{l}"] = want[f"kda_output_{l}"]
@@ -506,9 +547,10 @@ def score_deep(
     def window_measures(tap: str, lo: int, hi: int) -> dict:
         w = {"start": lo, "end": hi}
         if tap == "stream":
-            for k in spec.stream_keys:
+            for k in stream_keys:
                 w[f"{k}_pcc"], w[f"{k}_nrmse"] = pcc_nrmse(sums[k][lo:hi])
                 w[f"{k}_row_nrmse_p99"] = quantile(rows[k][lo:hi], 0.99)
+                w.update({f"{k}_{n}": v for n, v in row_error_norms(sums[k][lo:hi]).items()})
             return w
         l = int(tap.split("-l")[1])
         if tap.startswith("kda"):
@@ -578,7 +620,8 @@ def score_deep(
         }
         if tap.startswith("kda"):
             result["states"] = states(tap)
-        (run / tap / "metrics.json").write_text(json.dumps(result, indent=1))
+        (metrics_dir / tap).mkdir(parents=True, exist_ok=True)
+        (metrics_dir / tap / "metrics.json").write_text(json.dumps(result, indent=1))
         results[tap] = result
     return results
 
@@ -593,6 +636,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=DEEP_REBUILT, help="rebuild-deep: the rebuild's directory")
     parser.add_argument("--deep-rebuilt", type=Path, default=DEEP_REBUILT, help="score-deep: rebuild_deep's directory")
     parser.add_argument("--window", type=int, default=65536)
+    parser.add_argument("--metrics", type=Path, help="score-deep: where each tap's metrics.json goes (default: --run)")
     parser.add_argument("--threads", type=int, default=8)
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
@@ -642,6 +686,7 @@ def main() -> None:
             embedding=embedding,
             eps=float(config.get("text_config", config)["rms_norm_eps"]),
             window=args.window,
+            metrics_dir=args.metrics or args.run,
             log=log,
         )
         print(json.dumps({tap: r["overall"] for tap, r in results.items()}, indent=1))

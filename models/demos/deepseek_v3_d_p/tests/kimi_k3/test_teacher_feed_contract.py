@@ -1113,6 +1113,23 @@ def test_key_sums_give_pcc_and_nrmse_by_hand():
     assert n == pytest.approx(float((x - y).norm() / y.norm()), rel=1e-12)
 
 
+def test_row_error_norms_by_hand():
+    """x = [[3, 4], [1, 2]], y = [[6, 8], [1, 1]]: per-row |x - y| 5 and 1, |y| 10 and sqrt(2); medians 3 and
+    (10 + sqrt 2) / 2, RMS sqrt(13) and sqrt(51), whose ratio is the pooled NRMSE; a two-row window's RMS values are
+    the RMS of its rows' (they combine exactly)."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import key_sums, pcc_nrmse
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import row_error_norms
+
+    sums = key_sums(torch.tensor([[3.0, 4.0], [1.0, 2.0]]), torch.tensor([[6.0, 8.0], [1.0, 1.0]]))
+    r = row_error_norms(sums)
+    assert r["row_err_median"] == pytest.approx(3.0)
+    assert r["row_ref_median"] == pytest.approx((10 + 2**0.5) / 2)
+    assert (r["rms_err"], r["rms_ref"]) == (pytest.approx(13**0.5), pytest.approx(51**0.5))
+    assert r["rms_err"] / r["rms_ref"] == pytest.approx(pcc_nrmse(sums)[1])
+    halves = [row_error_norms(sums[i : i + 1]) for i in range(2)]
+    assert r["rms_err"] == pytest.approx(((halves[0]["rms_err"] ** 2 + halves[1]["rms_err"] ** 2) / 2) ** 0.5)
+
+
 def test_chain_model_reads_each_checkpoint_tensor_into_its_slot(tmp_path: Path):
     """`ChainModel.from_checkpoint` on a tiny checkpoint whose every tensor is distinct puts each one where its
     checkpoint name says: per layer the pre-attention (`self_attention_res_*`) and pre-FFN (`mlp_res_*`) queries, the
