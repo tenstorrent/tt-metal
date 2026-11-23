@@ -506,3 +506,34 @@ as a CT path `pre_combine` (WIDTH_SHARDED input only; HEIGHT / interleaved uncha
 | Ring contiguity | `row_chunk` = a divisor of R (largest that fits `ROW_CHUNK_L1_BUDGET`); owner rows a multiple of it; the LN final set padded to nstats | a block-indexed helper cannot read a block that wraps around its CB ring; every per-row CB now sees one block size |
 
 Hub side: the only change is the record-writer count the hub waits for (`n_owners` instead of `n_active`).
+
+## Refinement 2 — TRANSPORT as built: the bulk is port-CPU bound, not packet / DRAM bound
+
+The queue's premise ("interleaved final pages give 1–2-page bank runs, so the packets are inefficient") was measured
+and refuted before any change (focus case, zone profiles of a steady call):
+- landing every bulk packet as ONE contiguous write into the peer port's L1 (no scatter, no DRAM) left the own entry at
+  ~15 µs; `fabric_all_gather` itself moves this slice (640×384 per chip, 1×4 ring, 2 links) in 22.2 µs with gather
+  dim 2 (1–2-page runs) and 22.6 µs with dim 0 (7-page runs): the destination layout does not set the rate;
+- skipping the port reader's own-entry reads: −2 µs; an own entry of the same 24 packets at full 7-page size with
+  minimal per-packet code: 2.5× faster. Per-packet instrumentation (BRISC wall clock): ~1200 ticks per packet, of
+  which the router slot wait ~40 and the flush ~15 — the rest is the walk, the header builders' address re-encoding
+  (`get_noc_address_components` + `safe_get_noc_addr` per chunk), accessor lookups, and waiting for the reader
+  (one NoC read per page from worker L1, one barrier + push per 4-packet batch).
+
+What changed (all TRANSPORT, one scheme; knobs in `all_gather_rms_norm_program_descriptor.py`):
+
+| Change | Mechanism | Measured (focus, fastest chip) |
+|---|---|---|
+| sender header fast path | per-bank router-side base addresses computed once (`bank_base`, `bank_pitch`); non-increment headers written directly, scatter fields as ten 32-bit stores (layout pinned by static_asserts) | 35.51 → 34.96 µs |
+| pipelined port reader | one NoC transaction id per packet, `READ_DEPTH` (4, ≤ `BATCH_CHUNKS`) packets in flight, each pushed when its own reads land; before blocking on a relay arrival the reader hands every read packet to the sender (deadlock otherwise) | with the next row: 32.46 µs |
+| own entry read back from the own pages | `OWN_SRC_DST = 1`: one read per bank run (the workers' own writes are barriered before `own_ready`) instead of one NoC read per page from worker L1; `0` keeps the pull | 35.26 (pull) vs 32.46 µs |
+| reader → sender packet descriptors | `cb_port_desc` (CB 32): the reader writes each slot's runs, the sender no longer walks | 31.20 µs |
+| word-store scatter headers + reader bank table | — | 30.72 → 30.52 µs |
+
+Measured and not kept (or parked): `SPLIT_RUNS = 1` (split a run across packets to fill them: 8 % fewer packets but
+more scatter chunks / reads, +1.2 µs; knob, default 0); a non-blocking header-only increment + larger header ring
+(+0.4 µs, reverted); an own-entry run table walked during the local work and pre-built routed headers (the 2D route
+setter costs ~0.5 µs per header, and loading precomputed runs from L1 is slower than re-walking: +3 µs, removed); the
+reader writing the command fields into routed per-slot headers (the sender then only sends: 30.75 µs, no gain over
+30.52 — the per-packet work is ~1000–1100 ticks in total and is already split about evenly between the two RISCs,
+removed).

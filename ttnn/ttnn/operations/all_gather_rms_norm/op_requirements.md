@@ -88,7 +88,7 @@ slice: 85 passed / 2 xfailed (EXCLUSIONS) of 87 (was ≈ 57). No regression: uni
 golden sample 454 pass (the one failure is the known 128×8192 bf8b HEIGHT LN L1 overflow), test_regression 32/32;
 perf cases unchanged (focus 35.52 / 35.89 µs, LN 29.59 / 29.84 µs).
 
-### [ ] Refinement 2 — TRANSPORT: bulk packet efficiency on interleaved final pages (focus case)
+### [x] Refinement 2 — TRANSPORT: bulk packet efficiency on interleaved final pages (focus case)
 
 **Type**: perf
 
@@ -100,6 +100,21 @@ perf cases unchanged (focus 35.52 / 35.89 µs, LN 29.59 / 29.84 µs).
 No SUPPORTED change. Cite `ttnn/ttnn/operations/examples/fabric_all_gather/` (README rate table) for the transport ceiling instead of re-measuring it.
 
 **Done when**: the focus case's fastest chip improves beyond noise (`eval.ccl_perf compare`, slowest chip not worse) toward the 10.1 µs target; the LN perf case does not regress; the golden suite stays green; and there is no regression across the config-spanning guard set (one representative per distinct kernel path × layout × placement: R_A interleaved RMS, R_A interleaved LN, R_U unaligned, Linear topology, 1 link, cluster_axis 0, plus the sharded paths once Refinement 1 lands).
+
+**Outcome**: focus 35.51 → **30.45 µs** fastest / 35.89 → 31.35 µs slowest; LN 29.59 → **27.73** / 29.84 → 27.94 µs
+(`eval.ccl_perf compare`: win on both, noise 0.05). The stated cause was refuted first: landing the packets in peer L1
+without scatter did not move the own entry, and `fabric_all_gather` moves this slice at the same rate with 7-page or
+1–2-page runs — the bulk is bound by per-packet work on the two port RISCs (walk, header address re-encoding, a
+page-at-a-time own pull, batch-granular handoff), ~1200 ticks per ~10 KiB packet, against a link floor ~2.5× faster
+(minimal-CPU ablation). Landed: header fast path (precomputed router-side bank addresses, word stores), pipelined
+reader (trid per packet, per-packet push), own entry read back from the own pages (`OWN_SRC_DST`), reader → sender
+run descriptors (`cb_port_desc`). Lever (a) (receiver-L1 landing) was not built: its premise (packet / DRAM-write
+efficiency) is what the ablation refuted, and (b) `fabric_mcast` was not tried (it removes the relay read, not
+per-packet work). Remaining: own entry ≈ 11 µs for 24 packets (~450 ns per packet vs ~345 ns link floor for a full
+packet), now about evenly bound by both port RISCs (~550–600 ticks each); what is left needs less total per-packet
+work (e.g. fewer packets per byte — `SPLIT_RUNS` measured +1.2 µs because more scatter chunks cost more than fewer
+packets save), and the larger share of the call is now the serial chain before the bulk (stats → normalize → own
+entry starts at ~11 µs), which is Refinement 3 (OVERLAP).
 
 ### [ ] Refinement 3 — OVERLAP: start the bulk before the slowest worker finishes, and shorten the stats → normalize → own-entry chain
 

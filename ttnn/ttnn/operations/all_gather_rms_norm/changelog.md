@@ -150,3 +150,46 @@ pages / 4 DRAM writes), relay ~4 µs, landing tail ~3 µs. LN 640×32: local sta
 - Issues encountered: CB ring wrap of mixed block sizes (fixed by uniform chunks); multi-row AccumulateViaAdd LN
   combine on tagged input (switched to ReduceTile); a name clash of the chunk variable with the port loop's `rc`.
 - Tests added: `tests/ttnn/unit_tests/operations/all_gather_rms_norm/test_all_gather_rms_norm_width_precombine.py`
+
+## Refinement 2 — TRANSPORT: bulk packet efficiency on interleaved final pages (focus case)
+- Date: 2026-11-23
+- What was done:
+  - **Measured the premise first; it was wrong.** Ablations on the focus case (zone profile of a steady call): bulk
+    packets landed as one contiguous write in the peer port's L1 (no scatter, no DRAM) → own entry unchanged (~15 µs);
+    `fabric_all_gather` moves this slice (640×384, 1×4 ring, 2 links) in 22.2 µs with 1–2-page runs (dim 2) and
+    22.6 µs with 7-page runs (dim 0). The own entry was instead bound by per-packet work on both port RISCs:
+    ~1200 BRISC ticks per ~10 KiB packet (router slot wait ~40, flush ~15; the rest walk, header-builder address
+    re-encoding per chunk, accessor lookups, waiting for a reader doing one NoC read per page and one barrier per
+    4-packet batch). A minimal-CPU own entry of the same 24 packets at full size ran 2.5× faster.
+  - **Sender**: router-side bank addresses computed once (`bank_base` / `bank_pitch`); non-increment packet headers
+    written directly (scatter command fields as ten 32-bit stores, layout pinned by static_asserts); no packet walk
+    (runs from the reader).
+  - **Reader**: pipelined reads (one NoC transaction id per packet, `READ_DEPTH` = 4 ≤ `BATCH_CHUNKS`, each packet
+    pushed as its own reads land; every read packet is handed over before blocking on a relay arrival — without that
+    the ring deadlocks); own entry read back from the own output pages one read per bank run (`OWN_SRC_DST` = 1,
+    0 = the old L1 pull); bank-table read addresses; writes each slot's runs to `cb_port_desc` (CB 32, 2·batch × 64 B).
+  - Knobs: `READ_DEPTH`, `OWN_SRC_DST`, `SPLIT_RUNS` (0: measured +1.2 µs at 1 — fewer, fuller packets with more
+    scatter chunks are slower here; host walk replica and device walk both implement it).
+  - Measured and dropped: non-blocking header-only increments + a larger header ring (+0.4 µs); an own-entry run table
+    walked during the local work with pre-built routed headers (2D route setter ~0.5 µs per header; loading
+    precomputed runs is slower than re-walking: +3 µs); the reader writing the command fields into per-slot routed
+    headers so the sender only sends (30.75 vs 30.52 µs — the work is already split about evenly over the two RISCs).
+  - Reused: the walk, CB layout, arrival-counter protocol, header builders (increment packets); Added: `cb_port_desc`,
+    the bank tables, the pipelined reader loop.
+- Perf (eval harness, 5 experiments, `eval.ccl_perf compare` vs the pre-refinement build measured in this session):
+  focus 640×384 RMS **35.514 → 30.452 µs** fastest (−5.06), slowest 35.889 → 31.354; LN 640×32 + γ + β
+  **29.592 → 27.726 µs** fastest (−1.87), slowest 29.841 → 27.935; both "win" (noise 0.05). Not dispatch-bound.
+- Accuracy achieved: unchanged (transport only moves bytes; same pages, same values) — unit dir 56/56 within
+  `helpers.TOLERANCES` on all its shapes (focus 640×384 RMS/LN, 32×1792, fp32 2×1×128×256, R_U 17×50 / 32×50, sharded
+  HEIGHT/WIDTH numerics, WIDTH pre-combine).
+- Golden test progress: targeted slice of 254 cells (every 6th bf16 / fp32-DEST / RM-gamma cell over all shapes,
+  layouts, topologies, links, cluster axes and alignments, plus bf8b, fp32, fp32_dest=False samples and both loose perf
+  cases): 228 passed, 25 xfailed (EXCLUSIONS), 1 failed — 128×8192 bf8b HEIGHT_SHARDED LN, the known L1 overflow
+  from Refinement 1 (CB region ends at 1.39 MB; the same failure on the pre-refinement build).
+- Issues encountered: a ring deadlock with the pipelined reader (fixed: retire in-flight packets before an arrival
+  wait); read depth above the batch size deadlocks (the sender pops whole groups: clamped and static_asserted).
+- Remaining headroom (finding, not a queue item): own entry ≈ 11 µs for 24 packets per port (~450 ns per packet vs
+  ~345 ns link floor for a full packet), bound about evenly by both port RISCs; the bigger share of the call is now the
+  serial chain before the bulk starts (~11 µs: stats → normalize → own-ready) — Refinement 3.
+- Tests added: `tests/ttnn/unit_tests/operations/all_gather_rms_norm/test_all_gather_rms_norm_perf_probe.py`
+  (no-check profiling helper for zone timelines).

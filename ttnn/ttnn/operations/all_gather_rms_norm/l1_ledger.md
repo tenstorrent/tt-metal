@@ -163,3 +163,16 @@ block (`crt_max`) and nothing changes.
 Data-movement budget: unchanged (x never crosses DRAM). New on-chip NoC traffic: each member writes `R · nstats`
 records to the owners, each owner writes `rpo · nfinal` records to each of the k members (`k · R · nfinal · 128 B`
 per chip); the hub table and the fabric stats slots shrink by k×.
+
+## As built — Refinement 2 (TRANSPORT: port-core per-packet work)
+
+| CB | Index | Pages | Shares with / why not |
+|----|-------|-------|-----------------------|
+| `cb_port_desc` (ports; full range, identical-address rule) | 32 | `2 · batch_chunks` × 64 B (one per `cb_port_chunks` chunk slot, 512 B at batch 4) | port reader → port sender: the slot's runs (`PacketDesc`), written with the slot's reads and read once the slot is pushed, so only the reader walks the packets. Cannot live in `cb_port_chunks` (a payload slot is filled to `run_pages` pages and is the packet source); cannot alias anything else (live the whole bulk). |
+
+Data-movement budget (changed): the ports now read the own normalized slice back from the own output pages (knob
+`OWN_SRC_DST = 1`, one DRAM read per bank run) instead of pulling it page by page from worker L1. Per chip DRAM ≈ 8S
+(x 1, own write 1, own read-back 2 — the fwd and the bwd ports each read the whole own slice, split over the links —,
+landed 3, relay read 1) against 6S before; the NoC pull of 2S from worker L1 is gone. Measured: the read-back
+is 2.8 µs faster on the focus case with the pipelined reader (35.26 vs 32.46 µs at read depth 4): the port reader
+is CPU-bound per page, not DRAM-bound. `OWN_SRC_DST = 0` restores the L1 pull (6S).
