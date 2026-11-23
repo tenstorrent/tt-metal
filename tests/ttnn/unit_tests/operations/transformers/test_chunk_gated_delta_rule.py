@@ -271,7 +271,7 @@ def test_gated_delta_attn_seq_vs_golden(device, num_chunks, with_initial_state):
 @pytest.mark.parametrize("num_chunks", [1, 4], ids=lambda n: f"NC{n}")
 def test_gated_delta_attn_seq_honors_math_fidelity(device, num_chunks):
     """compute_kernel_config.math_fidelity reaches the kernel: HiFi4 must be measurably closer to the
-    float64 golden than HiFi2. PCC cannot see this (the HiFi2 error is mostly a uniform shrink of the
+    fp32 golden than HiFi2. PCC cannot see this (the HiFi2 error is mostly a uniform shrink of the
     state), so compare relative L2 error instead."""
     golden = ttnn.get_golden_function(ttnn.transformer.gated_delta_attn_seq)
     inputs, initial_state = _gated_delta_attn_seq_inputs(1, num_chunks, True, seed=7)
