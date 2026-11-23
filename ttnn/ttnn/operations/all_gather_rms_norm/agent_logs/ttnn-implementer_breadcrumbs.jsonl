@@ -1,0 +1,1 @@
+{"event":"fix_applied","what":"cb_mask Float32: reduce helper AccumulateViaAdd masked fold unpacks the mask as srcB with the input CB format (no reconfig); a bf16 mask read as fp32 corrupted the LN W-tail mask","result":"LN w_non_aligned debug matrix 8/8, acceptance 15/15","ts":"2026-11-23T14:29:55+00:00"}

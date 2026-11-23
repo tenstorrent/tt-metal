@@ -620,7 +620,8 @@ def create_mesh_program_descriptor(
             cbs.append(_cb(CB_BETA, cw_max, gamma_page, g_dtype, full))
         if is_ln:
             cbs += [
-                _cb(CB_MASK, 1, ttnn.tile_size(ttnn.bfloat16), ttnn.bfloat16, full),
+                # Float32 like cb_ln_sq: the reduce helper's masked fold unpacks the mask as srcB without a format reconfig
+                _cb(CB_MASK, 1, T32, ttnn.float32, full),
                 _cb(CB_LN_M, crt_max, T32, ttnn.float32, full),
                 _cb(CB_LN_SHIFT, crt_max, T32, ttnn.float32, full),
                 _cb(CB_LN_SQ, crt_max * cw_max, T32, ttnn.float32, full),
