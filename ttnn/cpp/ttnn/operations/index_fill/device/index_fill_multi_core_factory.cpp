@@ -162,7 +162,7 @@ ttnn::device_operation::ProgramArtifacts IndexFillOperation::IndexFillProgramFac
     const KernelSpecName WRITER{"writer"};
     const DFBSpecName SRC{"src"};
     const DFBSpecName INDEX{"index"};
-    const DFBSpecName FILL{"fill"};
+    const ScratchpadSpecName FILL{"fill"};
     const TensorParamName INPUT{"input"};
     const TensorParamName INDEX_TENSOR{"index"};
     const TensorParamName OUTPUT{"output"};
@@ -194,7 +194,6 @@ ttnn::device_operation::ProgramArtifacts IndexFillOperation::IndexFillProgramFac
 
     // Create dataflow buffers
     auto input_dataformat = datatype_to_dataformat_converter(input.dtype());
-    auto index_dataformat = datatype_to_dataformat_converter(index.dtype());
 
     uint32_t input_page_size = input.mesh_buffer().aligned_page_size();
     uint32_t index_total_size = index.mesh_buffer().aligned_size();
@@ -209,20 +208,18 @@ ttnn::device_operation::ProgramArtifacts IndexFillOperation::IndexFillProgramFac
             .num_entries = input_dfb_depth,
             .data_format_metadata = input_dataformat,
         },
-        // The entire index tensor
+        // The entire index tensor. No data format: only the DM kernels read it, and Quasar has no UInt32 format.
         DataflowBufferSpec{
             .unique_id = INDEX,
             .entry_size = index_total_size,
             .num_entries = 1,
-            .data_format_metadata = index_dataformat,
         },
-        // An input page filled with fill_value
-        DataflowBufferSpec{
-            .unique_id = FILL,
-            .entry_size = input_page_size,
-            .num_entries = 1,
-            .data_format_metadata = input_dataformat,
-        },
+    };
+
+    // An input page filled with fill_value. Only the writer touches it, so it is a scratchpad rather than a DFB.
+    ScratchpadSpec fill_scratchpad{
+        .unique_id = FILL,
+        .size_per_node = input_page_size,
     };
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/index_fill/device/kernels/";
@@ -320,17 +317,12 @@ ttnn::device_operation::ProgramArtifacts IndexFillOperation::IndexFillProgramFac
                     .accessor_name = "index",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
-                // The writer is the only kernel that touches the fill page: it fills it once and then uses it
-                // as the NoC source for every filled row, so it is bound as both producer and consumer.
-                DFBBinding{
-                    .dfb_spec_name = FILL,
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{
+                    .scratchpad_spec_name = FILL,
                     .accessor_name = "fill",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = FILL,
-                    .accessor_name = "fill",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
                 },
             },
         .tensor_bindings =
@@ -400,6 +392,7 @@ ttnn::device_operation::ProgramArtifacts IndexFillOperation::IndexFillProgramFac
         .name = "index_fill",
         .kernels = {std::move(reader_spec), std::move(writer_spec)},
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = {std::move(fill_scratchpad)},
         .tensor_parameters =
             {
                 TensorParameter{

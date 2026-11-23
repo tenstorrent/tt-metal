@@ -5,6 +5,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
+#include "internal/local_mem/address_access.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #if !defined(ARCH_QUASAR)
@@ -60,17 +62,14 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_src(dfb::src);
     DataflowBuffer dfb_index(dfb::index);
-    DataflowBuffer dfb_fill(dfb::fill);
+    Scratchpad<volatile IntType> fill_page(scratch::fill);
 
     const auto s = TensorAccessor(tensor::output);
 
     // Pre-fill a page in L1 with fill_value to avoid re-filling on every row.
-    dfb_fill.reserve_back(onepage);
-    uint32_t fill_addr = dfb_fill.get_write_ptr();
-    auto* fill_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(fill_addr);
     if constexpr (!is_last_dim) {
         for (uint32_t i = 0; i < row_size; ++i) {
-            fill_ptr[i] = fill_value;
+            fill_page[i] = fill_value;
         }
         // The fill is baby-RISCV stores and the page is the NoC's source for every filled row below.
         // A store can retire before its write-request lands in L1, and the RISCV core and the NoC are
@@ -78,14 +77,15 @@ void kernel_main() {
         // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). Read back the last filled element so
         // the fill is processed before the first NoC write is issued. Same construction as #50374.
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        // Quasar DM: the write pointer may be the cached address, so the fill can sit in L1D/L2 while the NoC
-        // reads TL1. Flush the fill page (fences on both sides). Matches fill_rm_interleaved.cpp.
-        flush_l2_cache_range(static_cast<uintptr_t>(fill_addr), static_cast<size_t>(row_size * sizeof(IntType)));
+        // Quasar DM: the fill stores can sit in L1D/L2 while the NoC reads TL1. Flush the fill page (fences on
+        // both sides). Matches fill_rm_interleaved.cpp.
+        flush_l2_cache_range(
+            static_cast<uintptr_t>(local_mem::detail::AddressAccess::address(fill_page.local_mem())),
+            static_cast<size_t>(row_size * sizeof(IntType)));
 #else
-        (void)ckernel::load_blocking(fill_ptr + row_size - 1);
+        (void)ckernel::load_blocking(&fill_page[row_size - 1]);
 #endif
     }
-    dfb_fill.push_back(onepage);
 
     // Wait for index tensor to be available
     dfb_index.wait_front(onepage);
@@ -105,7 +105,7 @@ void kernel_main() {
         if (use_filled_page) {
             for (uint32_t kout = 0; kout < out_num_col_shards; ++kout) {
                 noc.async_write(
-                    dfb_fill,
+                    fill_page,
                     s,
                     out_write_size,
                     {.offset_bytes = kout * out_write_size},
@@ -159,4 +159,7 @@ void kernel_main() {
             dfb_src.pop_front(onepage);
         }
     }
+
+    // Quasar's kernel-exit drain waits until every pushed entry has been popped.
+    dfb_index.pop_front(onepage);
 }
