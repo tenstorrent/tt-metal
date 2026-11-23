@@ -35,9 +35,14 @@ def test_halves_are_the_two_4x4_column_pairs():
     )
 
 
+def test_quarters_are_the_four_2x4_blocks():
+    assert dp.QUARTER_PCIE_IDS == tuple(tuple(range(first, first + 8)) for first in (0, 8, 16, 24))
+
+
 @pytest.mark.parametrize(
     ("pcie_ids", "group_shape", "shape"),
     [
+        (dp.QUARTER_PCIE_IDS[3][::-1], (2, 2), (2, 4)),
         (dp.GROUP_PCIE_IDS[0][::-1], (4, 2), (4, 2)),
         (dp.HALF_PCIE_IDS[1][::-1], (4, 2), (4, 4)),
         (dp.HALF_PCIE_IDS[1], (4, 4), (4, 4)),
@@ -68,7 +73,9 @@ def test_a_process_needs_8_or_16_distinct_chips(pcie_ids, group_shape, expect_er
         dp.group_env(pcie_ids, group_shape)
 
 
-@pytest.mark.parametrize(("shape", "types"), [((4, 2), "RING, LINE"), ((4, 4), "RING, LINE"), ((2, 8), "LINE, RING")])
+@pytest.mark.parametrize(
+    ("shape", "types"), [((4, 2), "RING, LINE"), ((4, 4), "RING, LINE"), ((2, 8), "LINE, RING"), ((2, 4), "LINE, LINE")]
+)
 def test_mesh_graph_descriptor_is_one_ring_line_mesh(shape, types):
     text = dp.MESH_GRAPH_DESCRIPTORS[shape].read_text()
     assert re.search(rf"dims: \[ {shape[0]}, {shape[1]} \] dim_types: \[ {types} \]", text)
@@ -78,18 +85,24 @@ def test_mesh_graph_descriptor_is_one_ring_line_mesh(shape, types):
 
 def test_a_group_runs_the_sequence_on_its_ring_axis():
     for shape, (sp_axis, tp_axis) in dp.GROUP_AXES.items():
+        if shape == dp.LINE_GROUP_SHAPE:  # no ring: its 2 x 4 block is all lines (descriptor test)
+            continue
         types = re.search(r"dim_types: \[ (\w+), (\w+) \]", dp.MESH_GRAPH_DESCRIPTORS[shape].read_text()).groups()
         assert (types[sp_axis], types[tp_axis]) == ("RING", "LINE")
 
 
 def test_line_axes_are_the_descriptor_lines_longer_than_2_chips():
     for shape, line_axes in dp.GROUP_LINE_AXES.items():
+        if shape == dp.LINE_GROUP_SHAPE:  # every CCL is a line through the pipeline's topology (serve test)
+            assert line_axes == ()
+            continue
         types = re.search(r"dim_types: \[ (\w+), (\w+) \]", dp.MESH_GRAPH_DESCRIPTORS[shape].read_text()).groups()
         assert line_axes == tuple(axis for axis, kind in enumerate(types) if kind == "LINE" and shape[axis] > 2)
 
 
 @pytest.mark.parametrize(
-    ("shape", "fabric"), [((4, 2), "FABRIC_1D_RING"), ((2, 8), "FABRIC_1D_RING"), ((4, 4), "FABRIC_2D_TORUS_Y")]
+    ("shape", "fabric"),
+    [((4, 2), "FABRIC_1D_RING"), ((2, 8), "FABRIC_1D_RING"), ((4, 4), "FABRIC_2D_TORUS_Y"), ((2, 4), "FABRIC_1D")],
 )
 def test_process_mesh_is_opened_as_in_one_process(monkeypatch, shape, fabric):
     import ttnn
@@ -105,8 +118,11 @@ def test_process_mesh_is_opened_as_in_one_process(monkeypatch, shape, fabric):
 
 
 class FakeMesh:
+    def __init__(self, group_shape=dp.GROUP_SHAPE):
+        self.group_shape = group_shape
+
     def create_submeshes(self, shape):
-        assert tuple(shape) == dp.GROUP_SHAPE
+        assert tuple(shape) == self.group_shape
         return ["sub0", "sub1"]
 
 
@@ -118,6 +134,7 @@ class FakeMesh:
         (2, (4, 2), (1024,), ((1024,),)),
         (1, (2, 8), (1024,), ((1024,),)),
         (1, (4, 4), (1024,), ((1024,),)),
+        (2, (2, 2), (1024,), ((1024,),)),
     ],
 )
 def test_serve_warms_every_group_before_ready_and_closes_the_mesh(monkeypatch, groups, group_shape, warmup, sizes):
@@ -138,7 +155,7 @@ def test_serve_warms_every_group_before_ready_and_closes_the_mesh(monkeypatch, g
         def close(self):
             calls.append(("close", self.mesh))
 
-    mesh = FakeMesh() if groups == 2 else "mesh"
+    mesh = FakeMesh(group_shape) if groups == 2 else "mesh"
     shape = (group_shape[0], group_shape[1] * groups)
     monkeypatch.setattr(dp, "open_group_mesh", lambda s: mesh if s == shape else None)
     monkeypatch.setattr(
@@ -157,6 +174,8 @@ def test_serve_warms_every_group_before_ready_and_closes_the_mesh(monkeypatch, g
     sp_axis, tp_axis = (1, 0) if group_shape == (2, 8) else (0, 1)
     axis_topologies = {1: ttnn.Topology.Linear} if group_shape == (4, 4) else {}
     kw = {"sp_axis": sp_axis, "tp_axis": tp_axis, "axis_topologies": axis_topologies, "upsample": False}
+    if group_shape == dp.LINE_GROUP_SHAPE:
+        kw["topology"] = ttnn.Topology.Linear
     assert calls == [c for m in meshes for c in (("create", m, kw), ("warmup", m, sizes))]
     for (parent, _), m in zip(pipes, meshes):
         parent.send("r")
@@ -212,7 +231,10 @@ class ThreadProcess:
         self._thread = threading.Thread(target=target, args=args, daemon=daemon)
 
     def start(self):
-        self.env = {key: os.environ.get(key) for key in ("TT_VISIBLE_DEVICES", "TT_MESH_GRAPH_DESC_PATH")}
+        self.env = {
+            key: os.environ.get(key)
+            for key in ("TT_VISIBLE_DEVICES", "TT_MESH_GRAPH_DESC_PATH", "TT_METAL_EXECUTOR_THREADS")
+        }
         self._thread.start()
 
     def join(self, timeout=None):
@@ -316,6 +338,25 @@ def test_two_processes_of_two_groups(halves):
     results = halves.generate([f"r{i}" for i in range(12)])
     assert [r for r, _ in results] == [f"r{i}" for i in range(12)]
     assert len({group for _, group in results}) == 4
+
+
+def test_four_processes_of_two_dp8_groups_split_the_executor_threads(thread_groups, monkeypatch):
+    monkeypatch.delenv("TT_METAL_EXECUTOR_THREADS", raising=False)
+    monkeypatch.setattr(dp.os, "cpu_count", lambda: 96)
+    with dp.Flux3KleinProcessGroups(dp.QUARTER_PCIE_IDS, group_shape=(2, 2), warmup=(1024,)) as dp8:
+        assert [p.env["TT_VISIBLE_DEVICES"] for p in dp8._processes] == [
+            ",".join(map(str, q)) for q in dp.QUARTER_PCIE_IDS
+        ]
+        assert {p.env["TT_MESH_GRAPH_DESC_PATH"] for p in dp8._processes} == {str(dp.MESH_GRAPH_DESCRIPTORS[(2, 4)])}
+        assert {p.env["TT_METAL_EXECUTOR_THREADS"] for p in dp8._processes} == {"24"}
+        assert dp8.alive_groups == 8
+    assert "TT_METAL_EXECUTOR_THREADS" not in os.environ
+
+
+def test_a_set_executor_thread_count_wins(thread_groups, monkeypatch):
+    monkeypatch.setenv("TT_METAL_EXECUTOR_THREADS", "5")
+    with dp.Flux3KleinProcessGroups(warmup=(1024,)) as groups:
+        assert {p.env["TT_METAL_EXECUTOR_THREADS"] for p in groups._processes} == {"5"}
 
 
 @pytest.mark.parametrize("group_shape", [(2, 8), (4, 4)])

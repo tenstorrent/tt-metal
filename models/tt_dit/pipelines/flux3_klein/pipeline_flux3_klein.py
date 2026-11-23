@@ -77,8 +77,9 @@ MULTI_REFERENCE_TOKEN_BUCKETS = tuple(
 WARMUP_PROMPT = "warmup"
 # Plans (RoPE tables, modulation / row-gather indices) kept on device: ~200 MB host-built each at 4096.
 PLAN_CACHE_SIZE = 8
-# Meshes whose pipelines free other layouts' CCL pairs at the largest size (_claim_pairs): DP4's (4, 2) groups.
-PAIR_FREEING_MESH_SHAPES = ((4, 2),)
+# Meshes whose pipelines free other layouts' CCL pairs (_claim_pairs), from this size on: DP4's (4, 2) groups at 4096,
+# DP8's (2, 2) groups from 2048 (its 2048 warm-up ran out of DRAM on them).
+PAIR_FREEING_FROM_SIZE = {(4, 2): 4096, (2, 2): 2048}
 
 
 @dataclass(frozen=True)
@@ -284,7 +285,7 @@ class Flux3KleinPipeline:
         self._ccl_managers = (encoder_ccl, self._ccl, vae_ccl)
         self._pair_users: dict[tuple, set] = {}
         self._last_layout = None
-        self._free_pairs = tuple(mesh_device.shape) in PAIR_FREEING_MESH_SHAPES
+        self._pair_freeing_size = PAIR_FREEING_FROM_SIZE.get(tuple(mesh_device.shape))
         self._mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
 
@@ -366,8 +367,8 @@ class Flux3KleinPipeline:
 
         t0 = time.time()
         text_rows = text_rows or self._text_rows(prompt, size, ref_bucket)
-        if self._free_pairs:
-            self._claim_pairs((request.model, size, ref_bucket, text_rows), free_others=size == max(SIZES))
+        if self._pair_freeing_size:
+            self._claim_pairs((request.model, size, ref_bucket, text_rows), free_others=size >= self._pair_freeing_size)
         text = self._prompt_encoder.encode(prompt, text_rows)
         timings["encode"] = time.time() - t0
 
@@ -418,10 +419,10 @@ class Flux3KleinPipeline:
 
     def _claim_pairs(self, layout: tuple, free_others: bool) -> None:
         """Credits the CCL ping-pong pairs (keyed by shape, never evicted) the previous request used to its layout and,
-        at the largest size, frees the allocated pairs only other largest-size layouts have used, as _free_other_plans
-        does for plans: a DP4 group warmed on every 4096 layout otherwise runs out of DRAM on them. Pairs of a shape
-        the layouts share stay once each has used them; pairs a smaller size used stay too (small, and freed they would
-        be re-created mid-render on its next request)."""
+        with `free_others`, frees the allocated pairs only other layouts of its size have used, as _free_other_plans does
+        for plans: a DP4 group warmed on every 4096 layout otherwise runs out of DRAM on them. Pairs of a shape the
+        layouts share stay once each has used them; pairs another size used stay too (freed, they would be re-created
+        mid-render on its next request)."""
         for index, ccl in enumerate(self._ccl_managers):
             for key in ccl.take_used_ping_pong_keys():
                 self._pair_users.setdefault((index, key), set()).add(self._last_layout)

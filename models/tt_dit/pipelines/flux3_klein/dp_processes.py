@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """FLUX 3 Klein data parallel across processes: one Flux3KleinPipeline per group of a Blackhole Galaxy, (4, 2) by
-default (DP4) or a 16-chip (2, 8) / (4, 4) group (DP2). Each process sees only its chips (TT_VISIBLE_DEVICES), opens
+default (DP4), a 16-chip (2, 8) / (4, 4) group (DP2) or a (2, 2) group (DP8). Each process sees only its chips (TT_VISIBLE_DEVICES), opens
 them as one mesh (TT_MESH_GRAPH_DESC_PATH) and serves one group (GROUP_PCIE_IDS, the default) or two (4, 2) groups in
 two threads (HALF_PCIE_IDS), so the groups' host dispatch does not share one Python GIL."""
 
@@ -23,14 +23,17 @@ from loguru import logger
 GROUP_SHAPE = (4, 2)
 # Each group shape's (sp_axis, tp_axis): the sequence runs on the group's ring axis. (2, 8) keeps the Galaxy's 8-chip
 # ring (SP8 x TP2); (4, 4) is a 4x4 half (SP4 x TP4, the TP axis a line).
-GROUP_AXES = {(4, 2): (0, 1), (2, 8): (1, 0), (4, 4): (0, 1)}
+GROUP_AXES = {(4, 2): (0, 1), (2, 8): (1, 0), (4, 4): (0, 1), (2, 2): (0, 1)}
 # Each group shape's longer axes that close no ring (the LINE dims of its mesh graph descriptor): their CCLs run as
 # lines.
-GROUP_LINE_AXES = {(4, 2): (), (2, 8): (), (4, 4): (1,)}
+GROUP_LINE_AXES = {(4, 2): (), (2, 8): (), (4, 4): (1,), (2, 2): ()}
+# DP8: (2, 2) groups, two per process on a 2 x 4 block (QUARTER_PCIE_IDS). No axis closes a ring: the block opens on
+# FABRIC_1D and its pipelines run every CCL as a line (topology Linear).
+LINE_GROUP_SHAPE = (2, 2)
 # By process mesh shape: one (4, 2) group, two of them or one (4, 4) group, one (2, 8) group.
 MESH_GRAPH_DESCRIPTORS = {
     shape: Path(__file__).with_name(f"dp_group_{shape[0]}x{shape[1]}_mesh_graph_descriptor.textproto")
-    for shape in ((4, 2), (4, 4), (2, 8))
+    for shape in ((4, 2), (4, 4), (2, 8), (2, 4))
 }
 
 # The PCIe devices (/dev/tenstorrent/N) of the processes. One group each: FABRIC_1D_RING needs the 4-chip axis to
@@ -39,6 +42,8 @@ GROUP_PCIE_IDS = tuple(tuple(range(first, 32, 4)) for first in (0, 2, 3))
 # Two groups each: the two 4x4 halves. The (0, 1, 4, 5, ...) half closes no torus on its second axis, so these meshes
 # run on FABRIC_2D_TORUS_Y, which every op of the pipeline must support.
 HALF_PCIE_IDS = tuple(tuple(i for i in range(32) if i % 4 in columns) for columns in ((0, 1), (2, 3)))
+# Two (2, 2) groups each: the four 2 x 4 blocks of the (4, 8) mesh (its submeshes' chips).
+QUARTER_PCIE_IDS = tuple(tuple(range(first, first + 8)) for first in range(0, 32, 8))
 
 
 def process_shape(groups: int, group_shape: tuple[int, int] = GROUP_SHAPE) -> tuple[int, int]:
@@ -68,7 +73,10 @@ def open_group_mesh(shape: tuple[int, int] = GROUP_SHAPE):
 
     router = ttnn.FabricRouterConfig()
     router.max_packet_payload_size_bytes = 8192
-    fabric = ttnn.FabricConfig.FABRIC_1D_RING if 2 in shape else ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+    if shape == process_shape(2, LINE_GROUP_SHAPE):
+        fabric = ttnn.FabricConfig.FABRIC_1D
+    else:
+        fabric = ttnn.FabricConfig.FABRIC_1D_RING if 2 in shape else ttnn.FabricConfig.FABRIC_2D_TORUS_Y
     ttnn.set_fabric_config(fabric, router_config=router)
     return ttnn.open_mesh_device(ttnn.MeshShape(*shape), l1_small_size=65536)
 
@@ -122,6 +130,7 @@ def serve(
                     sp_axis=sp_axis,
                     tp_axis=tp_axis,
                     axis_topologies={axis: ttnn.Topology.Linear for axis in GROUP_LINE_AXES[group_shape]},
+                    **({"topology": ttnn.Topology.Linear} if group_shape == LINE_GROUP_SHAPE else {}),
                     **pipeline_kwargs,
                 )
             )
@@ -169,8 +178,12 @@ class Flux3KleinProcessGroups:
         self._processes, self._conns, self._names = [], [], {}
         self._lock = threading.Lock()
         try:
+            # the JIT compiles on the executor's threads (one per host CPU by default): split them over the processes
+            threads = os.environ.get("TT_METAL_EXECUTOR_THREADS") or str(
+                max(1, (os.cpu_count() or 1) // len(processes))
+            )
             for pcie_ids in processes:
-                env = group_env(pcie_ids, group_shape)
+                env = {**group_env(pcie_ids, group_shape), "TT_METAL_EXECUTOR_THREADS": threads}
                 pipes = [context.Pipe() for _ in range(process_groups(pcie_ids, group_shape))]
                 children = [child for _, child in pipes]
                 process = context.Process(
