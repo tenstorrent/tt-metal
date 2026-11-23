@@ -516,7 +516,6 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
         }
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
         ckernel::ckernel_template::run();
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
         if constexpr (unpack_to_dest)
         {
             if (is_32bit_input(unpack_src_format, unpack_dst_format))
@@ -524,6 +523,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
                 unpack_to_dest_tile_done(context);
             }
         }
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
         switch_config_context_from(context);
         return;
     }
@@ -591,9 +591,6 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
         }
     }
 
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
     if (unpack_to_dest)
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
@@ -608,6 +605,10 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
             }
         }
     }
+
+    // T6::SEMGET for context release, after unpack_to_dest_tile_done's config writes so that
+    // configure_unpack_AB's wait_for_idle also waits for them
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
@@ -668,8 +669,8 @@ inline void _llk_unpack_A_block_(
         {
             ckernel::ckernel_template::run();
         }
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
         unpack_to_dest_tile_done(unp_cfg_context);
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
         switch_config_context(unp_cfg_context);
         return;
     }
@@ -814,7 +815,7 @@ inline void _llk_unpack_A_operands_to_dest_(
         }
     }
 
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
     unpack_to_dest_tile_done(unp_cfg_context);
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
     switch_config_context(unp_cfg_context);
 }

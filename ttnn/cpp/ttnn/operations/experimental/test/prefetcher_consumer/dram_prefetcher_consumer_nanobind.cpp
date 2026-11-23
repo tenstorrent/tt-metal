@@ -138,6 +138,9 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
                 rotation (List[int]): per-receiver streaming rotation indexed by global ring
                     position (must match the rotation queued to the prefetcher). Empty == identity
                     (lead_block = ring_pos), the natural topology order. Defaults to empty.
+                groups (List[int]): for a grouped weight (dim -3 counts its groups, at most 32), the
+                    groups the prefetcher delivers, ascending, as its group selector picks them.
+                    Empty == every group. Defaults to empty.
         )doc",
         &test_tensor_prefetcher_pipe_validator,
         nb::arg("mesh_device"),
@@ -148,7 +151,8 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
         nb::arg("prefetcher_pipes"),
         nb::arg("bank_to_receivers"),
         nb::arg("streaming") = false,
-        nb::arg("rotation") = std::vector<uint32_t>{});
+        nb::arg("rotation") = std::vector<uint32_t>{},
+        nb::arg("groups") = std::vector<uint32_t>{});
 }
 
 }  // namespace ttnn::operations::experimental::test

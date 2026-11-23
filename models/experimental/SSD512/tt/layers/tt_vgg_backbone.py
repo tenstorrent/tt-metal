@@ -472,7 +472,7 @@ def apply_vgg_backbone(
                             reshard_if_not_optimal=False,
                         )
                         slice_strategy = None
-                        enable_act_double_buffer = False
+                        enable_act_double_buffer = True
                         deallocate_activation = True
                     elif input_height <= 32:
                         act_block_h = 32
@@ -498,12 +498,12 @@ def apply_vgg_backbone(
                         else:
                             sharding_strategy = AutoShardedStrategyConfiguration()
                             slice_strategy = None
-                            enable_act_double_buffer = False
+                            enable_act_double_buffer = True
                             deallocate_activation = False
                 else:
                     sharding_strategy = AutoShardedStrategyConfiguration()
                     slice_strategy = None
-                    enable_act_double_buffer = False
+                    enable_act_double_buffer = True
                     deallocate_activation = False
 
                 if used_cache_fallback:
@@ -540,7 +540,7 @@ def apply_vgg_backbone(
                         fp32_dest_acc_en=True,
                         packer_l1_acc=False,
                         enable_act_double_buffer=enable_act_double_buffer,
-                        enable_weights_double_buffer=False,
+                        enable_weights_double_buffer=True,
                         deallocate_activation=deallocate_activation,
                         reallocate_halo_output=True,
                         config_tensors_in_dram=not use_l1_for_this_layer,
@@ -571,7 +571,7 @@ def apply_vgg_backbone(
                         fp32_dest_acc_en=True,
                         packer_l1_acc=False,
                         enable_act_double_buffer=enable_act_double_buffer,
-                        enable_weights_double_buffer=False,
+                        enable_weights_double_buffer=True,
                         deallocate_activation=deallocate_activation,
                         reallocate_halo_output=True,
                         config_tensors_in_dram=not use_l1_for_this_layer,

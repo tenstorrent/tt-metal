@@ -101,6 +101,8 @@ UNTILIZE_CASES = [
 
 
 def _run_tilize(mesh, shape, dt, in_mem, out_mem):
+    if dt == "uint16":
+        U.xfail_on_quasar("Quasar has no UInt16 DFB data format (tilize 'output_page' DFB is rejected)")
     x = _rand(shape, dt)
     tt_x = U.to_tt_mem(x, mesh, in_mem, dtype=_DT[dt], layout=ttnn.ROW_MAJOR_LAYOUT)
     out = U.op("to_layout")(tt_x, ttnn.TILE_LAYOUT, memory_config=U.resolve_memcfg(out_mem, mesh))

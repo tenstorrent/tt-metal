@@ -538,12 +538,12 @@ void append_to_descriptor(
     const Tensor& start_tensor = direct_write ? *tensor_arguments.expert_region_offsets : tensor_arguments.counts;
     const uint32_t dram_alignment = hal::get_dram_alignment();
     const uint32_t idx_page =
-        std::max<uint32_t>(tensor_arguments.global_expert_idx_table.buffer()->aligned_page_size(), dram_alignment);
-    const uint32_t start_page = std::max<uint32_t>(start_tensor.buffer()->aligned_page_size(), dram_alignment);
+        std::max<uint32_t>(tensor_arguments.global_expert_idx_table.mesh_buffer().aligned_page_size(), dram_alignment);
+    const uint32_t start_page = std::max<uint32_t>(start_tensor.mesh_buffer().aligned_page_size(), dram_alignment);
     // aligned_page_size() is a 64-bit DeviceAddr, and a narrowing conversion inside a braced-init
     // list is ill-formed, so the cast is what lets the three bounds share one std::max.
     const uint32_t counts_page = std::max<uint32_t>(
-        {static_cast<uint32_t>(tensor_arguments.counts.buffer()->aligned_page_size()), dram_alignment, start_page});
+        {static_cast<uint32_t>(tensor_arguments.counts.mesh_buffer().aligned_page_size()), dram_alignment, start_page});
     const bool phase_alias = blocking.phase_cb_alias(output_tile);
     const uint64_t l1_need = blocking.l1_bytes(activations_are_row_major, output_tile, true);
     TT_FATAL(
@@ -630,9 +630,9 @@ void append_to_descriptor(
         activations_are_row_major,
         phase_alias,
         direct_write,
-        tensor_arguments.activations.buffer()->page_size(),
+        tensor_arguments.activations.mesh_buffer().page_size(),
         activation_slice,
-        std::max<uint32_t>(tensor_arguments.counts.buffer()->aligned_page_size(), dram_alignment),
+        std::max<uint32_t>(tensor_arguments.counts.mesh_buffer().aligned_page_size(), dram_alignment),
         idx_page,
         static_cast<uint32_t>(tensor_arguments.counts.logical_shape()[-1]),
         start_page,
@@ -1204,13 +1204,13 @@ void validate(const OperationArguments& operation_arguments, const TensorArgumen
         }
         for (const auto& [name, tensor] : alias_candidates) {
             TT_FATAL(
-                output.buffer()->address() != tensor->buffer()->address(),
+                output.mesh_buffer().address() != tensor->mesh_buffer().address(),
                 "moe_fused_swiglu: output must not alias {}; device readers can overlap output writeback",
                 name);
         }
         if (tensor_arguments.expert_region_offsets.has_value()) {
             TT_FATAL(
-                output.buffer()->address() != tensor_arguments.expert_region_offsets->buffer()->address(),
+                output.mesh_buffer().address() != tensor_arguments.expert_region_offsets->mesh_buffer().address(),
                 "moe_fused_swiglu: output must not alias expert_region_offsets");
         }
     }
@@ -1724,9 +1724,9 @@ void append_to_descriptor(
     // kernels build a per-expert accessor from that descriptor + the per-expert
     // base address (passed as a runtime-arg).
     auto* x_buffer = t.x.buffer();
-    auto* gate_buffer = t.gate_projs[0].buffer();
-    auto* up_buffer = t.up_projs[0].buffer();
-    auto* down_buffer = t.down_projs[0].buffer();
+    const auto* gate_buffer = &t.gate_projs[0].mesh_buffer();
+    const auto* up_buffer = &t.up_projs[0].mesh_buffer();
+    const auto* down_buffer = &t.down_projs[0].mesh_buffer();
     auto* counts_buffer = t.counts.buffer();
     auto* idx_buffer = t.global_expert_idx_table.buffer();
     auto* out_buffer = tensor_return_value.buffer();

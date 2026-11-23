@@ -604,3 +604,17 @@ def test_moreh_sum_large_integer_magnitude(input_shape, dim, device):
     logger.debug(f"{torch.equal(torch_output, tt_output_cpu)}")
 
     assert torch.equal(torch_output, tt_output_cpu)
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16], ids=["bf16_output"])
+def test_moreh_sum_int32_rejects_other_output_dtype(device, output_dtype, expect_error):
+    # The int32 factories size every buffer from the output dtype, so a bf16 output reads int32 tiles as bf16.
+    x = ttnn.from_torch(
+        torch.randint(-50, 50, (1, 1, 64, 96), dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    out = ttnn.from_torch(torch.zeros(1, 1, 64, 1), dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must match the input dtype"):
+        ttnn.moreh_sum(x, dim=3, keepdim=True, output=out)

@@ -17,13 +17,13 @@
 #include <string>
 #include <utility>
 #include <tt_stl/overloaded.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::kernel_lib::host {
 namespace {
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 namespace wire = dataflow_kernel_lib::mcast_wire;
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;

@@ -5,7 +5,6 @@
 #include <tt_stl/fmt.hpp>
 #include "mesh_command_queue_base.hpp"
 
-#include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <api/tt-metalium/experimental/pinned_memory.hpp>
 #include <algorithm>

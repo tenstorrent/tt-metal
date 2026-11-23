@@ -16,7 +16,7 @@
 #include "quasar/qa_hal.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
@@ -325,6 +325,8 @@ public:
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
         } else if (variant == IpVariant::TRINITY) {
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
+        } else if (variant == IpVariant::SATURN) {
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.3/meta");
         }
         // Saturn has no register headers yet, so it gets no include path here. Once they are added, add a
         // Saturn branch for their version.
@@ -364,6 +366,13 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        // Emit a per-variant define so kernel headers can gate on the specific Quasar IP.
+        // The variant is set by Cluster::get_quasar_ip_variant(), which reads ip_variant
+        // from the SoC descriptor (shipped beside the simulator binary).
+        // Add a new branch for each new IP variant.
+        if (hal_.quasar_arch_variant_ == IpVariant::HORIZON) {
+            defines.push_back("IP_VARIANT_HORIZON");
+        }
         // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
         // emulation by the same .so test.
         if (params.rtoptions.get_simulator_path().extension() == ".so") {
@@ -645,6 +654,7 @@ void Hal::initialize_qa(
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
+    this->noc_addr_local_bits_ = NOC_ADDR_LOCAL_BITS;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
     this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = NOC_NODE_ID;                                   // TODO: add correct value

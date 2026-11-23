@@ -30,7 +30,7 @@ KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
 # With the entry correction, the summary's emitted output terms also live in L1 next to the chunk terms, which then
 # fit Kimi-K3's per-chip workload on 11x10 and 12x10 grids.
-KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE = 280 * 1024
+KDA_RELAY_PREPARATION_L1_BYTES_PER_CORE = 280 * 1024
 # The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
 # each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024
@@ -49,9 +49,6 @@ KDA_NORM_OUTPUT_L1_BYTES_PER_CORE = 48 * 1024
 # The output projection's partial sums stay in interleaved L1 until the TP reduce-scatter reads them when each core's
 # share fits this budget (75 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
 KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
-# The bounded gate's FP32 logits stay in interleaved L1 between the decay projection and the offset add when each core's
-# share fits this budget (64 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
-KDA_DECAY_LOGITS_L1_BYTES_PER_CORE = 64 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
@@ -110,14 +107,16 @@ class KDARecurrenceProgramConfig:
     # Exact number of chunks per group. Construction validates divisibility and
     # worker capacity; execution never silently changes an explicit configuration.
     summary_group_chunks: int = 20
-    affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
+    # None keeps each path's own: HiFi3 for the SP relay (its gated norm needs it; it rejects less), HiFi2 for the
+    # single-rank affine scan.
+    affine_prefix_math_fidelity: ttnn.MathFidelity | None = None
     scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
-    # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayAffinePrefix):
+    # With sequence parallelism and one group per head, the SP prefix is a relay along the SP axis (RelayChunkScan):
     # each rank applies its own summary to the entry state it receives and forwards the result. The summary also emits
-    # each chunk's output terms, and an EntryCorrection program forms the chunk outputs and the final state from the
-    # entry states, all chunks in parallel. Cores the entry correction may use: its products count toward the Blackhole
-    # di/dt bound.
-    entry_correction_max_cores: int = 110
+    # each chunk's output terms, from which the relay's program forms the chunk outputs once the entry state lands, all
+    # chunks in parallel (the entry correction). Cores the relay may use (its heads' cores, so the cores per head): its
+    # products count toward the Blackhole di/dt bound.
+    relay_max_cores: int = 110
 
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):
@@ -142,8 +141,15 @@ class KDAProgramConfig:
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
+    # Fused output projection + reduce-scatter: its CCL port cores in the last grid column instead of the first row.
+    output_projection_column_major_ccl: bool = False
     # Channels per page of the convolution tail (``KdaState.convolution``); None keeps it token-paged.
     convolution_page_channels: int | None = None
+    # Blackhole di/dt: the input and decay projections run on at most this many cores (matmul_grid).
+    max_matmul_cores: int = 110
+    # With a tuned input projection and a TP-sharded input on a 2D fabric, gather the input inside the input projection
+    # (ttnn.experimental.all_gather_minimal_matmul_async), its fabric muxes on the worker column beside matmul_grid.
+    fuse_tp_gather: bool = True
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -159,19 +165,26 @@ class KDAProgramConfig:
 _TUNED_PROJECTION_ROWS = 640
 
 
+def matmul_grid(grid: ttnn.CoreCoord, max_cores: int) -> ttnn.CoreCoord:
+    """The widest block of full-height worker columns of ``grid`` with at most ``max_cores`` cores."""
+    return ttnn.CoreCoord(max(1, min(grid.x, max_cores // grid.y)), grid.y)
+
+
 def tuned_projection_matmul_configs(
     grid: ttnn.CoreCoord,
     rows: int,
     input_n: int,
     output_k: int,
     output_n: int,
+    weight_dtype: ttnn.DataType = ttnn.bfloat16,
 ) -> tuple[
     ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None
 ]:
     """Return the tuned input and output projection schedules laid out on ``grid``.
 
-    Tuned on the 12x10 Blackhole worker grid at 640 rows per device with the production numerics
-    (bf16, FP32 destination accumulation); subblocks stay within the 4-tile FP32 destination limit.
+    Tuned on the 11x10 Blackhole matmul grid at 640 rows per device with the production numerics
+    (bf16, FP32 destination accumulation) at HiFi2; not re-tuned at other fidelities. Subblocks stay within
+    the 4-tile FP32 destination limit.
     Returns (None, None) when the blocking does not fit, keeping the auto-selected ttnn.linear configs.
     """
     row_tiles = rows // ttnn.TILE_SIZE
@@ -181,13 +194,13 @@ def tuned_projection_matmul_configs(
     if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8 or (output_n // ttnn.TILE_SIZE) % 4 or input_per_core_n % 3:
         return None, None
     # One output block per core: each core keeps its whole [per_core_m, input_per_core_n] block resident and
-    # streams K in 4-tile blocks (K3 at 640 rows: 2 x 33 tiles per core, 56 K blocks), the widest that fits in
-    # L1 next to the L1 output with bf16 weights. At HiFi2 the bf16 weight stream from DRAM bounds it.
+    # streams K in 4-tile blocks with bf16 weights, 8 with block-float ones (K3 at 640 rows: 2 x 36 tiles per core),
+    # the widest that fits in L1 next to the L1 output.
     input_projection = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
-        in0_block_w=4,
+        in0_block_w=4 if weight_dtype == ttnn.bfloat16 else 8,
         out_subblock_h=1,
-        out_subblock_w=3,
+        out_subblock_w=4 if input_per_core_n % 4 == 0 else 3,
         out_block_h=per_core_m,
         out_block_w=input_per_core_n,
         per_core_M=per_core_m,
@@ -231,15 +244,22 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         recurrence=KDARecurrenceProgramConfig(
             local_scan_strategy="grouped",
             summary_group_chunks=group_chunks[active_seq_len_local],
+            # HiFi3, not HiFi2: HiFi2 keeps only SrcB's 6 explicit mantissa bits, which biases the FP32 state products
+            # low over long sequences. With SP these are the relay's hop and entry correction (affine prefix).
+            scan_math_fidelity=ttnn.MathFidelity.HiFi3,
+            affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi3,
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # HiFi3 for the same SrcB truncation.
+        output_projection_math_fidelity=ttnn.MathFidelity.HiFi3,
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+        # Tuned on Galaxy (12x10 grid, TP4).
+        output_projection_column_major_ccl=True,
         # The state migration contract's segment, so a slab copy of the convolution tail is a page copy.
         convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
     )
@@ -249,13 +269,13 @@ _DECAY_OUT_BLOCK_TILES = 32
 
 
 def decay_projection_program_config(
-    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int
+    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int, fused_activation: ttnn.UnaryWithParam | None = None
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
 
     Each core's output is computed in blocks of at most _DECAY_OUT_BLOCK_TILES tiles, which bounds the output and
     FP32 intermediate circular buffers on geometries with many rows or heads per core (one Kimi-K3 Galaxy SP8xTP4
-    core holds a single 2 x 8 block).
+    core holds a single 2 x 9 block on the 11 x 10 matmul grid).
     """
     tile = ttnn.TILE_SIZE
     per_core_M = math.ceil(rows // tile / grid.y)
@@ -275,6 +295,6 @@ def decay_projection_program_config(
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=None,
+        fused_activation=fused_activation,
         fuse_batch=True,
     )

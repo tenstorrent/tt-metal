@@ -9,8 +9,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
 
 #include <bit>
@@ -20,7 +20,7 @@
 
 namespace ttnn::prim {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 ttnn::device_operation::ProgramArtifacts
 SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_artifacts(
@@ -657,6 +657,28 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     }
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+// Out of place, the output is not bound: the softmax ops take no output keyword, so DST stays at its recorded
+// address. In place, DST is the input tensor, so it follows input_tensor.
+ttnn::command_list::CmdListBindings
+SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::map_cmd_list_parameters(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    const ProgramSpec& spec,
+    const ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/TensorParamName{"src"});
+    if (attributes.inplace) {
+        binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/TensorParamName{"dst"});
+    }
+    // pre_scale exists only on the fused scale-mask path. Without a mask, a scale CmdListParam goes unclaimed.
+    if (tensor_args.mask.has_value()) {
+        binder.tensor(/*invoke_name=*/"mask", /*program_spec_param_name=*/TensorParamName{"mask"});
+        binder.param(/*invoke_name=*/"scale", /*encode=*/ttnn::command_list::encode_float32_bits)
+            .runtime(/*kernel_name=*/KernelSpecName{"reader"}, /*arg_name=*/"pre_scale");
+    }
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

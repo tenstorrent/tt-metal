@@ -47,8 +47,12 @@ def zero_pad_and_ack(
     trace_controller,
     tp_axis: Optional[int] = None,
     alias_layer_ids: tuple = (),
+    zero_only: bool = False,
 ) -> None:
     """Zero this chunk's pad window in the KV cache and tell migration the layer is done.
+
+    ``zero_only``: zero the pad window and send no ack, for a caller that acks the chunk itself later on
+    the same CQ (a packed forward's D2H acks go out chunk by chunk once the forward is done).
 
     A no-op unless one of the two ack transports is wired, which is what makes it safe to call
     unconditionally from a block that may or may not be running under a migration engine.
@@ -72,11 +76,11 @@ def zero_pad_and_ack(
     #       without the flush could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
     #       across pipeline ranks).
     # cache_layer_idx is the LOCAL per-rank cache slot in both.
-    if d2h_service is not None or on_layer_complete is not None:
-        # PREFILL_ACK_TIMING splits this window into its zero and its ack. The whole body is skipped
-        # during warmup (neither transport is wired at runtime.compile() time), so both programs are
-        # first compiled here, on the first REAL chunk -- which is where the pipeline's one-time
-        # chunk-0 cost lives. Host wall time only; deliberately no added synchronize, since a sync
+    if zero_only or d2h_service is not None or on_layer_complete is not None:
+        # PREFILL_ACK_TIMING splits this window into its zero and its ack. A one-chunk-per-forward warmup
+        # wires neither transport, so its programs are first compiled here, on the first REAL chunk --
+        # which is where the pipeline's one-time chunk-0 cost lives (a packed warmup compiles them through
+        # zero_only and a NullLayerCompletionSink). Host wall time only; deliberately no added synchronize, since a sync
         # here would change what the pipeline does as well as what it reports.
         _t0 = time.perf_counter() if _ACK_TIMING else 0.0
         assert actual_end is not None or metadata is not None, "actual_end or metadata required for zero_pad"
@@ -111,6 +115,8 @@ def zero_pad_and_ack(
                     tp_axis=tp_axis,
                 )
         _t_zero = time.perf_counter() if _ACK_TIMING else 0.0
+        if zero_only:
+            return
         send_layer_ack(
             mesh_device=mesh_device,
             global_layer_idx=global_layer_idx,

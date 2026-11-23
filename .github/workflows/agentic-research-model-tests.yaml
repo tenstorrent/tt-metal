@@ -114,7 +114,9 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       build-inplace-wheel: true
-      platform: Ubuntu 22.04
+      # vLLM 0.32 and later require Python 3.11 or newer. Only the Ubuntu 24.04
+      # image has it (3.12); the 22.04 image has 3.10.
+      platform: Ubuntu 24.04
 
   model-tests:
     needs: [build-artifact, select-tests]

@@ -1280,7 +1280,7 @@ void RMSAllGatherProgramFactory::override_runtime_arguments(
     }
     uint32_t gamma_address = 0;
     if (tensor_args.weight.has_value()) {
-        Buffer* const gamma_buffer = tensor_args.weight.value().buffer();
+        const auto* const gamma_buffer = &tensor_args.weight.value().mesh_buffer();
         TT_FATAL(gamma_buffer != nullptr, "rms_allgather weight (gamma) tensor buffer is null");
         gamma_address = static_cast<uint32_t>(gamma_buffer->address());
     }

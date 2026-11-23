@@ -111,18 +111,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef ARCH_BLACKHOLE
     // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
 #ifdef MATMUL_STREAM_NARROW
-    constexpr bool stream_narrow = !is_fp32_dest_acc_en;
+    [[maybe_unused]] constexpr bool stream_narrow = !is_fp32_dest_acc_en;
 #else
-    constexpr bool stream_narrow = false;
+    [[maybe_unused]] constexpr bool stream_narrow = false;
 #endif
 #ifdef MATMUL_STREAM_Z
-    constexpr std::uint32_t stream_z = 4;
+    [[maybe_unused]] constexpr std::uint32_t stream_z = 4;
 #else
-    constexpr std::uint32_t stream_z = 0;
+    [[maybe_unused]] constexpr std::uint32_t stream_z = 0;
 #endif
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow, stream_z, matmul_reuse_dir_k
 #define MATMUL_UNPACK_TEMPLATE_ARGS \
     0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows, matmul_max_row_tiles, stream_z, matmul_reuse_dir_k
+#if defined(MATMUL_MAIN_ROW_MOP) && MATMUL_MAIN_ROW_MOP
+// main's row MOP consumes main's unpack sequence, as in the opt-in kernels: no keyed unpack form
+#undef MATMUL_UNPACK_INIT_TEMPLATE_ARGS
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
+#undef MATMUL_UNPACK_TEMPLATE_ARGS
+#define MATMUL_UNPACK_TEMPLATE_ARGS
+#undef MATMUL_K_LOOP
+#endif
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
@@ -244,6 +252,12 @@ constexpr bool matmul_row_end_fold_k = false;
 
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
+#ifndef MATMUL_MAIN_ROW_MOP
+#define MATMUL_MAIN_ROW_MOP 0
+#endif
+#if MATMUL_MAIN_ROW_MOP
+#include "llk_math_matmul_main_rm_lib.h"
+#endif
 #ifdef MATMUL_SFPU_AFTER
 // an SFPU op after the matmul block in one kernel (init once at the start, as Metal's full inits do): relu on every tile of the block
 #include "ckernel_sfpu.h"
@@ -315,7 +329,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef MATMUL_SFPU_AFTER
         _llk_math_eltwise_unary_sfpu_init_once_();
 #endif
+#if MATMUL_MAIN_ROW_MOP
+        mm_main_rm::_llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL, true>(
+#else
         _llk_math_matmul_init_<MATMUL_MATH_INIT_ARGS>(
+#endif
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
@@ -334,10 +352,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
+#if MATMUL_MAIN_ROW_MOP
+                    // main's row MOP (#65115): the block's KT_DIM K steps in one call
+                    mm_main_rm::_llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, true>(DST_INDEX, CT_DIM, RT_DIM, KT_DIM);
+#else
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
                         _llk_math_matmul_<MATMUL_MATH_ARGS>(DST_INDEX, CT_DIM, RT_DIM);
                     }
+#endif
                 }
             }
         }
@@ -351,10 +374,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (NUM_TILES_IN_BLOCK <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Matmul block exceeds destination capacity");
+#if MATMUL_MAIN_ROW_MOP
+                    // main's row MOP (#65115): the block's KT_DIM K steps in one call
+                    mm_main_rm::_llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, true>(DST_INDEX, CT_DIM, RT_DIM, KT_DIM);
+#else
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
                         _llk_math_matmul_<MATMUL_MATH_ARGS>(DST_INDEX, CT_DIM, RT_DIM);
                     }
+#endif
 #ifdef MATMUL_SFPU_AFTER
                     for (std::uint32_t sfpu_tile = 0; sfpu_tile < NUM_TILES_IN_BLOCK; sfpu_tile++)
                     {
@@ -381,7 +409,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
                     [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en && !matmul_main_math_form;
 #endif
+#if MATMUL_MAIN_ROW_MOP
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+#else
                     _llk_math_dest_section_done_<MATMUL_DEST_DONE_ARGS>();
+#endif
                 }
             }
         }
@@ -650,7 +682,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         matmul_pack_tile_rt<is_fp32_dest_acc_en>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[block * result_block_stride + tile]), formats.pack_dst);
                     }
 #endif
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+                    // Wormhole: PACK_ISOLATE releases the dest section too, as production's tile_regs_release does
+                    if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE || PERF_PACK_SECTION_RELEASE)
                     {
                         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }

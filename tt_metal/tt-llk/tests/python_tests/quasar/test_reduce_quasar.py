@@ -152,7 +152,7 @@ def reduce_math_fidelities(formats, pool_type):
     pool_type=reduce_pool_types,
     math_fidelity=reduce_math_fidelities,
     is_reduce_to_one=reduce_is_reduce_to_one_modes,
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -164,7 +164,7 @@ def test_reduce_quasar(
     pool_type,
     math_fidelity,
     is_reduce_to_one,
-    dest_sync_mode,
+    dest_sync,
     run_types,
     loop_factor,
     *,
@@ -251,7 +251,7 @@ def test_reduce_quasar(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             generate_input_dim(
@@ -318,7 +318,7 @@ REDUCE_TO_ONE_TILE_COUNTS = [8, 16]
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=POOL_TYPES,
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     tile_count=runtime(REDUCE_TO_ONE_TILE_COUNTS),
 )
 def test_reduce_quasar_multi_tile_to_one(
@@ -326,7 +326,7 @@ def test_reduce_quasar_multi_tile_to_one(
     dest_acc,
     reduce_dim,
     pool_type,
-    dest_sync_mode,
+    dest_sync,
     tile_count,
 ):
     """Reduce N > 1 tiles into one DEST tile for every pool type and reduce dimension."""
@@ -338,7 +338,7 @@ def test_reduce_quasar_multi_tile_to_one(
         pool_type,
         MathFidelity.LoFi,
         True,
-        dest_sync_mode,
+        dest_sync,
         [PerfRunType.L1_TO_L1],
         1,
         input_dimensions=[32 * tile_count, 32],
@@ -351,7 +351,7 @@ def test_reduce_quasar_multi_tile_to_one(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column],
     pool_type=[ReducePool.Max, ReducePool.Sum],
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     blocks=runtime(list(DEST_DEPTH_BLOCK_COUNTS)),
 )
 def test_reduce_quasar_dest_depth(
@@ -359,7 +359,7 @@ def test_reduce_quasar_dest_depth(
     dest_acc,
     reduce_dim,
     pool_type,
-    dest_sync_mode,
+    dest_sync,
     blocks,
 ):
     """Per-tile reduce over 4 and 8 Dest sections of SyncHalf size.
@@ -375,7 +375,7 @@ def test_reduce_quasar_dest_depth(
         pool_type,
         MathFidelity.LoFi,
         False,
-        dest_sync_mode,
+        dest_sync,
         [PerfRunType.L1_TO_L1],
         1,
         input_dimensions=[32 * blocks * max_dest_tiles(dest_acc, DestSync.Half), 32],
@@ -418,7 +418,7 @@ _ARCH = get_chip_architecture()
     reduce_dim=[ReduceDimension.Column, ReduceDimension.Row],
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=lambda formats: get_valid_math_fidelities(formats),
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -429,7 +429,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     reduce_dim,
     pool_type,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     run_types,
     loop_factor,
     *,
@@ -477,7 +477,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             UNPACKER_ENGINE_SEL(),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),

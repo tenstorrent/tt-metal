@@ -30,6 +30,7 @@ constexpr uint32_t NO_SEMAPHORE = 0xFFFFFFFFu;
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "../../combine_fabric2d_placement.hpp"
 #include "../../combine_fabric2d_types.hpp"
@@ -74,7 +75,7 @@ inline uint32_t tiles_per_token_row(const CombineFabric2dInputs& tensor_args) {
 // shared exponents on top of the mantissas and so is not tile_hw times any element size.
 inline uint32_t tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
     if (dispatched_is_tiled(tensor_args)) {
-        return static_cast<uint32_t>(tensor_args.dispatched_buffer.buffer()->aligned_page_size());
+        return static_cast<uint32_t>(tensor_args.dispatched_buffer.mesh_buffer().aligned_page_size());
     }
     return static_cast<uint32_t>(tensor_args.dispatched_buffer.tensor_spec().tile().get_tile_hw()) *
            tensor_args.dispatched_buffer.element_size();

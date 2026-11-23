@@ -1163,7 +1163,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     matmul_pack_tile_rt<is_fp32_dest_acc_en>(tile_index, addr, formats.pack_dst);
                 }
 #endif
-                if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+                // Wormhole: PACK_ISOLATE releases the dest section too, as production's tile_regs_release does
+                if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE || PERF_PACK_SECTION_RELEASE)
                 {
                     _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }

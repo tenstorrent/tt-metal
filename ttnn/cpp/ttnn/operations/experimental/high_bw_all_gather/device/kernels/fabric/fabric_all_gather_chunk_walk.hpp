@@ -56,7 +56,9 @@
 //   fabric link worker  One core per (ring, direction, link). Its reader reads this chip's own shard from the input,
 //                     then forwards shards from this chip's output once they have arrived; its sender sends every chunk
 //                     one fabric hop into the same pages of the next chip's output.
-//   local copy core   Writes this chip's own shard into its own output, without the fabric: one per link.
+//   local copy core   Interleaved input: writes this chip's own shard into its own output, without the fabric: one per
+//                     link. With any other input the link workers of one direction write it instead (from the chunks
+//                     they read for sending), so there are no local copy cores.
 //
 // Protocol
 //   outgoing shards   The shards a link worker sends, in order: make_outgoing_shard(rank, chunk_half). Outgoing shard 0
@@ -69,24 +71,8 @@
 //   downstream-started counter  Fence between calls: before sending, a sender waits until its downstream has
 //                     signalled that it started this call, so a reused output is never overwritten early.
 //
-// ND-sharded (any non-interleaved) input: its fabric chunks are not physically contiguous, so the local copy cores
-// (two per link) first convert the own shard into this chip's interleaved output, and the link workers read it from
-// there.
-//   contiguous input run  Up to pages_per_fabric_chunk logically consecutive pages that are also physically
-//                     consecutive in the input: one DRAM read (for_each_contiguous_input_run).
-//   input run entry   What a local copy core's reader tells its copy writer about each run it read into the chunk CB,
-//                     on input_run_cb (one 16 B page per run, two words used):
-//                       [0] flat_page: the run's first page in the own shard, numbered over the valid pages only
-//                           (outer_slice * valid_pages_per_outer_slice + page_in_slice);
-//                       [1] num_pages in bits 0..30 (at most pages_per_fabric_chunk), and in bit 31 whether this
-//                           is the last run of its conversion block.
-//                     The chunk CB carries only page bytes, and only the reader knows where runs start and end (it
-//                     probes physical contiguity through the input accessor), so the writer takes both from here: the
-//                     position to place the run's pages in the output, and the block end, where it waits for its
-//                     writes to land and then signals the blocks-converted semaphores.
-//   conversion block  The unit a local copy core converts and reports: copy core c converts blocks c, c + n, ...
-//   blocks-converted semaphore  Per local copy core: how many of its conversion blocks are in the output. A link worker
-//                     waits for the blocks a chunk of its own shard touches.
+// ND-sharded (any non-interleaved) input: the pages of a fabric chunk (one lane run of the interleaved output) are not
+// physically consecutive in the input, so the reader reads the own shard's chunks page by page.
 
 #include <cstdint>
 
