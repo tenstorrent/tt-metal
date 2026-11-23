@@ -276,8 +276,11 @@ MESHES = {  # id -> (mesh shape, device params maker, requires_mesh_topology's t
     # TT_MESH_GRAPH_DESC_PATH = experimental_descriptors/single_bh_galaxy_tray_half_sp1_graph_descriptor.textproto and
     # TT_VISIBLE_DEVICES = the half's 16 chips, gen_pipeline_binding.py --layout 4x4) - the block on the transposed mesh
     "4x4-sp1": ((4, 4), torus_x_device_params, "mesh-4x4"),
+    # The [RING, RING] 4x4 prefill stage: the sub-torus carve of one Galaxy (single_bh_galaxy_subtorus_xy4 descriptor, run
+    # by run_subtorus_4x4_tests.sh), both axes rings, SP on the axis-1 ring and TP on the axis-0 ring
+    "xy4-sp1": ((4, 4), torus_xy_device_params, "mesh-4x4"),
     # MiniMax-M3 on a 4x2 stage (SP 4 x TP 2, one tray's 8 chips, plain Fabric2D: run with TT_MESH_GRAPH_DESC_PATH =
     # experimental_descriptors/single_bh_galaxy_sub_4x2_graph_descriptor.textproto and TT_VISIBLE_DEVICES = 0-7)
     "4x2": ((4, 2), fabric2d_device_params, "mesh-4x2"),
 }
-MESH_SP_AXIS = {"4x4-sp1": 1}  # (the mesh axis SP runs on; 0 elsewhere)
+MESH_SP_AXIS = {"4x4-sp1": 1, "xy4-sp1": 1}  # (the mesh axis SP runs on; 0 elsewhere)
