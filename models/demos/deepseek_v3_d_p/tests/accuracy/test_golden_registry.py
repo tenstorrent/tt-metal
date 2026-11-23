@@ -3,12 +3,16 @@
 """The golden registry contract on tiny goldens in a temporary root. CPU only, no device."""
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
 import torch
 
 from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import (
+    GOLDEN_DIR_MODE,
+    GOLDEN_FILE_MODE,
     MANIFEST,
     ROOT_ENV,
     TOKEN_IDS,
@@ -16,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import (
     GoldenMismatch,
     GoldenNotFound,
     golden_root,
+    make_golden_dir,
     open_golden,
     product_schema,
     write_manifest,
@@ -52,6 +57,28 @@ def test_open_golden_serves_a_complete_golden(tmp_path: Path) -> None:
     assert golden.manifest["products"]["output"] == {"kind": "row", "dtype": "float64", "shape": [3]}
     assert golden.token_ids().tolist() == TOKENS
     golden.require(producer="tests.tiny", producer_version=1, identity={"model": "tiny"}, products=["output"])
+
+
+def test_writers_make_a_golden_readable_by_other_users_whatever_the_umask(tmp_path: Path) -> None:
+    """CI reads goldens as users other than their producer, so a producer under umask 077 must still publish
+    world-readable files and a traversable root and golden directory."""
+    previous = os.umask(0o077)
+    try:
+        golden = tmp_path / "root" / "tiny"
+        make_golden_dir(golden)
+        write_token_ids(golden, TOKENS)
+        write_manifest(golden, {"golden_id": "tiny"})
+        write_manifest(golden, {"golden_id": "tiny", "rewritten": True})  # replacing keeps the mode
+    finally:
+        os.umask(previous)
+    modes = {path.name: stat.S_IMODE(path.stat().st_mode) for path in (golden.parent, golden, *golden.iterdir())}
+    assert modes == {
+        "root": GOLDEN_DIR_MODE,
+        "tiny": GOLDEN_DIR_MODE,
+        MANIFEST: GOLDEN_FILE_MODE,
+        TOKEN_IDS: GOLDEN_FILE_MODE,
+    }  # no temporary file is left behind either
+    assert (GOLDEN_FILE_MODE, GOLDEN_DIR_MODE) == (0o664, 0o2775)
 
 
 def test_registry_root_follows_the_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

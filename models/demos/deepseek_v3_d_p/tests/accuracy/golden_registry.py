@@ -21,6 +21,10 @@ products stays with each producer, whose file layouts differ.
 * ``products``: ``{name: {kind, dtype, shape}}``, ``kind`` one of ``PRODUCT_KINDS`` (``row``: one value per prompt
   row; ``segment_end``: one value after each segment, such as a carried state; ``sampled_row``: rows the producer
   lists), ``shape`` without the row axis.
+
+Goldens are shared: CI users other than the producer read them. Every file in a golden is mode ``GOLDEN_FILE_MODE``
+(0664) and every directory from the root down is ``GOLDEN_DIR_MODE`` (2775), whatever the producer's umask;
+``make_golden_dir`` and ``publish`` set them, and producers write through them.
 """
 
 from __future__ import annotations
@@ -28,7 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +43,8 @@ DEFAULT_ROOT = Path("/mnt/weka/model-cache/scratch/accuracy-goldens")
 MANIFEST = "manifest.json"
 TOKEN_IDS = "token_ids.pt"
 PRODUCT_KINDS = ("row", "segment_end", "sampled_row")
+GOLDEN_FILE_MODE = 0o664
+GOLDEN_DIR_MODE = 0o2775
 
 
 class GoldenError(Exception):
@@ -66,23 +72,37 @@ def token_ids_sha256(token_ids: Sequence[int] | torch.Tensor) -> str:
     return hashlib.sha256(torch.as_tensor(token_ids, dtype=torch.int64).numpy().tobytes()).hexdigest()
 
 
+def make_golden_dir(directory: Path) -> None:
+    """Create the golden directory (and the registry root above it if missing) with ``GOLDEN_DIR_MODE``."""
+    directory = Path(directory)
+    for path in (directory.parent, directory):
+        if not path.is_dir():
+            path.mkdir(parents=True, exist_ok=True)
+            path.chmod(GOLDEN_DIR_MODE)
+
+
+def publish(write: Callable[[Path], None], path: Path) -> None:
+    """Write ``path`` atomically with ``GOLDEN_FILE_MODE``: ``write`` fills a temporary file, which then replaces
+    ``path`` (a reader sees the old or the new file, never a partial or unreadable one)."""
+    path = Path(path)
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        write(temporary)
+        temporary.chmod(GOLDEN_FILE_MODE)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def write_manifest(directory: Path, manifest: dict) -> None:
-    """Write ``manifest.json`` atomically (a reader sees the old or the new manifest, never a partial one)."""
-    temporary = Path(directory) / f"{MANIFEST}.{os.getpid()}.tmp"
-    temporary.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
-    temporary.replace(Path(directory) / MANIFEST)
+    """Write ``manifest.json`` atomically and readable by every registry user."""
+    publish(lambda path: path.write_text(json.dumps(manifest, indent=1), encoding="utf-8"), Path(directory) / MANIFEST)
 
 
 def write_token_ids(directory: Path, token_ids: Sequence[int] | torch.Tensor) -> str:
     """Store the prompt's token ids in the golden atomically and return their digest."""
     ids = torch.as_tensor(token_ids, dtype=torch.int64).clone()
-    path = Path(directory) / TOKEN_IDS
-    temporary = path.with_suffix(f".{os.getpid()}.tmp")
-    try:
-        torch.save(ids, temporary)
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    publish(lambda path: torch.save(ids, path), Path(directory) / TOKEN_IDS)
     return token_ids_sha256(ids)
 
 

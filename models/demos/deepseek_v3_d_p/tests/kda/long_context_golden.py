@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import platform
 import subprocess
 import time
@@ -38,9 +37,11 @@ from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, 
 from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import (
     MANIFEST,
     Golden,
+    make_golden_dir,
     manifest_problems,
     open_golden,
     product_schema,
+    publish,
     token_ids_sha256,
     write_manifest,
     write_token_ids,
@@ -55,15 +56,6 @@ K3_LAYER0_GOLDEN = "k3-l0-kda-fp64-1m"
 
 def _segment_path(run_dir: Path, index: int) -> Path:
     return run_dir / f"segment_{index:06d}.pt"
-
-
-def _atomic_save(payload: object, path: Path) -> None:
-    temporary = path.with_suffix(f".{os.getpid()}.tmp")
-    try:
-        torch.save(payload, temporary)
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _provenance() -> dict:
@@ -101,7 +93,7 @@ def run_golden(
     uninterrupted one. Each run session's provenance is recorded with the segment it started from.
     """
     run_dir = Path(run_dir)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    make_golden_dir(run_dir)
     expected = {
         "golden_id": run_dir.name,
         "producer": PRODUCER,
@@ -138,9 +130,8 @@ def run_golden(
         start, end = index * segment, min((index + 1) * segment, len(token_ids))
         began = time.perf_counter()
         output, state = kda_forward_reference(layer_input(token_ids[start:end]), weights, config, state, dtype=dtype)
-        _atomic_save(
-            {"start": start, "end": end, "output": output[0], "state": vars(state)}, _segment_path(run_dir, index)
-        )
+        payload = {"start": start, "end": end, "output": output[0], "state": vars(state)}
+        publish(lambda path: torch.save(payload, path), _segment_path(run_dir, index))
         if "products" not in manifest:
             manifest["products"] = {
                 "output": product_schema("row", output[0]),
