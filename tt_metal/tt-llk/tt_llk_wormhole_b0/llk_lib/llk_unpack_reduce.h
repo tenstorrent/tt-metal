@@ -29,8 +29,7 @@ using namespace ckernel::unpacker;
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param tensor_shape: Tile geometry of the operand (rows/cols per face and the face grid).
- * @note The MOP length uses @p tensor_shape total face count, so the legacy 2-face tile is the
- *       16x32 (1x2) grid, never 32x16.
+ * @note Asserted unsupported (in init): faces shorter than 16 rows and the 32x16 (2x1) face grid.
  */
 template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_mop_config_(const ckernel::TensorShape tensor_shape)
@@ -81,6 +80,9 @@ inline void _llk_unpack_reduce_init_(
         "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
 
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    // The MOP unpacks full 16-row faces in row order, so short faces and a 2x1 face grid give wrong output.
+    LLK_ASSERT(tensor_shape.face_r_dim == MAX_FACE_R_DIM, "Unpack reduce requires 16-row faces");
+    LLK_ASSERT(!is_tensor_shape_2x1_face_grid(tensor_shape), "Unpack reduce does not support 32x16 tiles");
 
     // Configure SrcB format registers
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xf>(unpB_src_format);
