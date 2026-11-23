@@ -3,8 +3,10 @@
 
 // The router view: one router's facts and activity, then its channels VC by VC. Each sender and receiver card shows
 // its ring buffer's slots and what capture read about them: free slots or packets held, packets not credited back
-// yet, the credit counters the channel's credits come through, and the connection. The capture gives counts, not
-// which slots hold a packet, so every slot is drawn the same and the counts are shown beside them.
+// yet, the credit counters the channel's credits come through, and the connection. On a router built with the channel
+// progress log (TT_METAL_FABRIC_ENABLE_CHANNEL_PROGRESS_LOG), decode says which slots hold a packet (analysis.slots),
+// and each slot is shaded by its state. Without it the capture gives counts only, so every slot is drawn the same and
+// the counts are shown beside them.
 
 import { DIRECTION_NAMES } from "./capture_model.js";
 import { element, formatCount, formatDuration, formatHex } from "./format.js";
@@ -17,6 +19,23 @@ const CHANNEL_STATUS_NOTES = {
     vc_not_serviced: "This router doesn't service the VC, so the channel has no slots.",
     mux: "The router's tensix mux carries this channel, so it has no slots in the router.",
     trimmed: "The channel trimming profile turned this channel off, so it has no slots.",
+};
+// What each slot state means, by channel kind: [label, the CSS class it's shaded with]. A slot decode counts as both
+// pending and held (the ring's overlap) gets both classes, and is striped.
+const SLOT_STATES = {
+    free: ["free", "free"],
+    written_not_sent: ["written, not sent", "pending"],
+    sent_awaiting_credit: ["sent, awaiting credit", "held"],
+    arrived_not_sent_on: ["arrived, not sent on", "pending"],
+    sent_on_awaiting_credit: ["sent on, awaiting credit", "held"],
+};
+const SLOTS_UNKNOWN_NOTES = {
+    status_unread: "capture has no read of the ERISC's edm_status, so the log can't be trusted to be from this run",
+    not_started: "the ERISC hasn't reported STARTED, so the log holds nothing from this run yet",
+    log_unread: "capture has no read of the channel progress log",
+    register_unread: "capture has no read of the channel's count register",
+    count_out_of_range: "the channel's count register reads above its slots",
+    next_slot_outside_ring: "the log's next slot isn't one of this channel's slots",
 };
 const TAKEN_AT_NOTES = {
     retire: "The receiver takes a packet once it has issued the packet's forward or local write.",
@@ -94,6 +113,12 @@ function renderFacts(model, router, onSelectRouter) {
         ["Link", linkNotes.filter(Boolean).join(", ") || "none"],
         ["Capture", `${(capture.status ?? "unknown").replace("_", " ")}${regions ? ` (${regions} regions)` : ""}`],
     ];
+    const progressLog = firstField(router.data.fields, "channel_progress_log_enabled");
+    if (progressLog) {
+        facts.push(["Progress log", progressLog.value
+            ? "on: each channel's slots are shaded by state"
+            : "off: slots show counts only (TT_METAL_FABRIC_ENABLE_CHANNEL_PROGRESS_LOG)"]);
+    }
     if (router.chip.data.local_sync?.master === router.path) facts.push(["Local sync", "master for its chip"]);
     return element("dl", { className: "facts" }, facts.map(([label, value]) => element("div", {}, element("dt", {}, label), element("dd", {}, value))));
 }
@@ -257,6 +282,17 @@ function renderSender(model, router, vc, name, channel, callbacks) {
             rows.push([label, value, Object.keys(channel.credits).length > 1 ? `${erisc}: ${note}` : note]);
         }
     }
+    const slots = channel.analysis?.slots;
+    if (slots && slots.sent !== null && slots.sent !== undefined) {
+        rows.push(["Logged progress", keyValueList([
+            ["sent", slots.sent],
+            [slots.credited_at === "first_level_ack" ? "first_level_acked" : "completed",
+                element("b", {}, String(slots.credited_at === "first_level_ack" ? slots.first_level_acked : slots.completed))],
+            [slots.credited_at === "first_level_ack" ? "completed" : "first_level_acked",
+                slots.credited_at === "first_level_ack" ? slots.completed : slots.first_level_acked],
+            ["next_slot_addr", formatHex(slots.next_slot_addr)],
+        ]), `the channel progress log: packets sent over Ethernet, and the credits that free them, which come at ${slots.credited_at === "first_level_ack" ? "first-level ack" : "completion"} here. sent less the bold count is the slots sent and still held.`]);
+    }
     if (connection || connectionInfo) {
         const producerName = channel.producer === "worker" ? "worker" : channel.producer?.split("/").at(-1) ?? "producer";
         rows.push([`Producer connection`, keyValueList([
@@ -270,7 +306,7 @@ function renderSender(model, router, vc, name, channel, callbacks) {
             "buffer_index_sem: where the worker keeps its write cursor across connections. It doesn't say which slots hold packets."]);
     }
     return channelCard("Sender", name, channel, rows,
-        [renderSlotStrip(model, router, { kind: "sender", vc, name }, channel.ring_buffer, callbacks), renderChannelFields(channel.fields)]);
+        [renderSlotStrip(model, router, { kind: "sender", vc, name, slots }, channel.ring_buffer, callbacks), renderChannelFields(channel.fields)]);
 }
 
 // Keys and values on their own lines, under the decoded file's key names. Null values are left out.
@@ -326,12 +362,20 @@ function renderReceiver(model, router, vc, name, channel, callbacks) {
     } else if (packetsSent) {
         rows.push(["Packets sent", String(packetsSent.count ?? packetsSent.raw)]);
     }
+    const slots = channel.analysis?.slots;
+    if (slots && slots.next_index !== null && slots.next_index !== undefined) {
+        rows.push(["Logged progress", keyValueList([
+            ["next_index", slots.next_index],
+            ["uncredited", element("b", {}, String(slots.uncredited))],
+            ["packets_ready", slots.packets_ready],
+        ]), `the channel progress log: the oldest packet not sent on yet, the slots sent on but not credited back to the peer, and${slots.taken_at === "first_level_ack" ? " the slots acked but not sent on" : " the router's copy of pkts_sent"}.`]);
+    }
     if (groupSize !== undefined) rows.push(["Completion group", `${groupSize} slot${groupSize === 1 ? "" : "s"}`, "credits go back to the peer a group at a time"]);
     rows.push(["Credits sent to peer", renderCreditsToPeer(model, router, vc),
         "per sender channel of the peer: the running total of its packets this receiver has finished with (completed) or acked, beside the peer's copy of the same total. Hover a line for the counters."]);
     return channelCard("Receiver", name, channel, rows,
         [renderDownstreamEdges(model, router, vc, onSelectRouter),
-            renderSlotStrip(model, router, { kind: "receiver", vc, name }, channel.ring_buffer, callbacks), renderChannelFields(channel.fields)]);
+            renderSlotStrip(model, router, { kind: "receiver", vc, name, slots }, channel.ring_buffer, callbacks), renderChannelFields(channel.fields)]);
 }
 
 // The credits this router has sent back for each of the peer's sender channels on the VC, beside what the peer has
@@ -384,9 +428,12 @@ function renderDownstreamEdges(model, router, vc, onSelectRouter) {
         })));
 }
 
-// One box per slot. Capture has counts, not which slots hold a packet, so every slot with a header is drawn alike; a
-// slot never written (its header all zeros) is hollow. Hovering a slot shows its address and the header last written
-// to it, which may be from a packet long gone; clicking it opens that header and its path below the slots.
+// One box per slot. With the channel progress log, the slots are laid out as a ring (renderSlotRing): shaded by the
+// states decode gives them (analysis.slots.ring), striped when a slot has two, with the pointers and each run's state
+// and count under them. Without it, capture has counts, not which slots hold a packet, so the slots are drawn in
+// order, alike, and a slot never written (its header all zeros) is hollow. Hovering a slot shows its address, its state
+// and the header last written to it, which may be from a packet long gone; clicking it opens that header and its path
+// below the slots.
 function renderSlotStrip(model, router, slotChannel, ringBuffer, { onSelectRouter, onShowPath }) {
     if (!ringBuffer) return null;
     const slotCount = ringBuffer.num_elements ?? 0;
@@ -401,6 +448,8 @@ function renderSlotStrip(model, router, slotChannel, ringBuffer, { onSelectRoute
     let openIndex = null;
     const addressOf = (index) => ringBuffer.address + index * slotBytes;
     const channelLabel = `${router.path} ${slotChannel.kind} ${slotChannel.vc} ${slotChannel.name}`;
+    const ring = slotChannel.slots?.ring ?? null;
+    const statesOf = (index) => ring?.states?.[index] ?? [];
 
     // Opens slot `index`, or closes it when it's already open.
     function openSlot(index) {
@@ -419,25 +468,122 @@ function renderSlotStrip(model, router, slotChannel, ringBuffer, { onSelectRoute
 
     for (let index = 0; index < slotCount; index++) {
         const header = headers[index] ?? null;
-        const slot = element("button", { type: "button", className: header ? "slot" : "slot never-written", ariaLabel: `Slot ${index}` });
+        const states = statesOf(index);
+        const classes = ["slot", ...slotStateClasses(states)];
+        if (!header && !ring) classes.push("never-written");
+        const slot = element("button", { type: "button", className: classes.join(" "), ariaLabel: `Slot ${index}` });
         slot.setAttribute("aria-pressed", "false");
         const describe = () => {
-            readout.textContent = `Slot ${index} of ${slotCount} · ${formatHex(addressOf(index))} · ${describeHeader(header)}`;
+            const stateText = ring ? ` · ${describeSlotStates(states)}` : "";
+            readout.textContent = `Slot ${index} of ${slotCount} · ${formatHex(addressOf(index))}${stateText} · ${describeHeader(header)}`;
         };
         slot.addEventListener("pointerenter", describe);
         slot.addEventListener("focus", describe);
         slot.addEventListener("click", () => openSlot(index));
         slotButtons.push(slot);
-        strip.append(slot);
     }
+    const slotsView = ring ? renderSlotRing(slotChannel.kind, ring, slotButtons) : strip;
+    if (!ring) strip.append(...slotButtons);
     return element("div", { className: "slot-block" },
-        element("p", { className: "column-title" }, "Slots"), strip,
+        element("p", { className: "column-title" }, "Slots"),
+        renderSlotsUnknown(slotChannel.slots),
+        slotsView,
         element("p", { className: "slots-caption" },
             `${slotCount} slots × ${slotBytes.toLocaleString("en-US")} B = ${(slotCount * slotBytes).toLocaleString("en-US")} B at ${formatHex(ringBuffer.address)}`,
-            neverWritten ? ` · ${neverWritten} never written (hollow)` : ""),
+            !ring && neverWritten ? ` · ${neverWritten} never written (hollow)` : ""),
         readout,
         detail,
         renderHeaderSummary(model, headers, onSelectRouter));
+}
+
+// The CSS classes a slot is shaded with: state-pending, state-held, both (striped), or state-free.
+function slotStateClasses(states) {
+    const kinds = new Set(states.map((state) => SLOT_STATES[state]?.[1]).filter(Boolean));
+    if (kinds.has("pending") && kinds.has("held")) return ["state-overlap"];
+    return [...kinds].map((kind) => `state-${kind}`);
+}
+
+function describeSlotStates(states) {
+    if (!states.length) return "state not known";
+    const text = states.map((state) => SLOT_STATES[state]?.[0] ?? state.replaceAll("_", " ")).join(" and ");
+    return states.length > 1 ? `${text}: counted as both` : text;
+}
+
+// Why decode couldn't tell the slots' states, on a router with the log on. Nothing otherwise.
+function renderSlotsUnknown(slots) {
+    if (!slots?.unknown) return null;
+    return element("p", { className: "slots-caption slot-states-unknown" },
+        `Slot states not known: ${SLOTS_UNKNOWN_NOTES[slots.unknown] ?? slots.unknown.replaceAll("_", " ")}`);
+}
+
+// The pointers drawn under a ring, by channel kind: each one's name, where it is, and what it means. `ring` is
+// analysis.slots.ring: held slots end just before next_slot, pending ones start at it.
+function findSlotPointers(kind, ring) {
+    const depth = ring.states.length;
+    const at = (offset) => ((ring.next_slot + offset) % depth + depth) % depth;
+    if (kind === "sender") {
+        return [
+            { name: "credit", slot: at(-ring.held), note: "the oldest slot still held: freed when the peer credits it" },
+            { name: "send", slot: ring.next_slot, note: "the next slot the router sends over Ethernet" },
+            { name: "write", slot: at(ring.pending), note: "where the producer writes its next packet" },
+        ];
+    }
+    return [
+        { name: "credit", slot: at(-ring.held), note: "the oldest slot not credited back to the peer yet" },
+        { name: "head", slot: ring.next_slot, note: "the oldest packet not sent on: the one the receiver works on next" },
+        { name: "arrive", slot: at(ring.pending), note: "where the peer's next packet lands" },
+    ];
+}
+
+// What a run of slots with the same states is called, as the run's label says it.
+function describeSlotRun(states) {
+    const text = describeSlotStates(states);
+    return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// The slots in ring order from the oldest held slot: slot numbers above, each slot shaded by its states, the
+// pointers under the slot each points at, and under each run of slots in the same states, what they are and how many.
+// `slotButtons` holds each slot's button, by slot index.
+function renderSlotRing(kind, ring, slotButtons) {
+    const depth = ring.states.length;
+    const start = ((ring.next_slot - ring.held) % depth + depth) % depth;
+    const order = Array.from({ length: depth }, (_, position) => (start + position) % depth);
+    const grid = element("div", { className: "slot-ring", role: "group", ariaLabel: "Slots, oldest held first" });
+    grid.style.setProperty("--slot-count", String(depth));
+    const place = (node, column, row, span = 1) => {
+        node.style.gridColumn = `${column} / span ${span}`;
+        node.style.gridRow = String(row);
+        return node;
+    };
+    const pointersBySlot = new Map();
+    for (const pointer of findSlotPointers(kind, ring)) {
+        pointersBySlot.set(pointer.slot, [...(pointersBySlot.get(pointer.slot) ?? []), pointer]);
+    }
+    order.forEach((slot, position) => {
+        const column = position + 1;
+        grid.append(place(element("span", { className: "slot-number" }, `slot ${slot}`), column, 1));
+        grid.append(place(slotButtons[slot], column, 2));
+        const pointers = pointersBySlot.get(slot) ?? [];
+        if (pointers.length) {
+            grid.append(place(element("span", { className: "slot-pointers" }, pointers.map((pointer) =>
+                element("span", { className: "slot-pointer", title: pointer.note }, "▲ ", pointer.name))), column, 3));
+        }
+    });
+    // Runs of slots in the same states, in ring order.
+    let runStart = 0;
+    for (let position = 1; position <= depth; position++) {
+        const key = (index) => ring.states[order[index]].join("+");
+        if (position < depth && key(position) === key(runStart)) continue;
+        const states = ring.states[order[runStart]];
+        const count = position - runStart;
+        grid.append(place(element("span", { className: `slot-run ${slotStateClasses(states).join(" ")}` },
+            element("span", {}, describeSlotRun(states)),
+            element("span", { className: "faint" }, `${count} slot${count === 1 ? "" : "s"}`)), runStart + 1, 4, count));
+        runStart = position;
+    }
+    return element("div", { className: "slot-ring-holder" }, grid,
+        ring.overlap ? element("p", { className: "slots-caption slot-states-unknown" },
+            `${ring.overlap} slot${ring.overlap === 1 ? " is" : "s are"} counted as both: the log and the count register disagree`) : null);
 }
 
 function describeHeader(header) {

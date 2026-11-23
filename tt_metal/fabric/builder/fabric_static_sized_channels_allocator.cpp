@@ -66,7 +66,8 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
     size_t channel_buffer_size_bytes,
     size_t available_channel_buffering_space,
-    const std::vector<MemoryRegion>& memory_regions) :
+    const std::vector<MemoryRegion>& memory_regions,
+    size_t worker_slots_to_give_up) :
     FabricChannelAllocator(topology, options, memory_regions),
     num_used_sender_channels_per_vc(num_used_sender_channels_per_vc),
     num_used_receiver_channels_per_vc(num_used_receiver_channels_per_vc),
@@ -91,6 +92,19 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     configure_buffer_slots_helper(topology, options, num_sender_buffer_slots_per_vc, num_receiver_buffer_slots_per_vc);
+
+    // Slots VC0's worker channel gives up, so the L1 after the channel buffers grows by that many slots (the channel
+    // progress log takes one when it doesn't fit otherwise).
+    if (worker_slots_to_give_up > 0) {
+        const uint32_t worker_channel = get_worker_connected_sender_channel();
+        size_t& worker_slots = num_sender_buffer_slots_per_vc[0][worker_channel];
+        TT_FATAL(
+            worker_slots > worker_slots_to_give_up,
+            "VC0's worker channel has {} slots, too few to give up {} and keep one",
+            worker_slots,
+            worker_slots_to_give_up);
+        worker_slots -= worker_slots_to_give_up;
+    }
 
     // Calculate total slots across all VCs
     size_t total_slot_count = 0;

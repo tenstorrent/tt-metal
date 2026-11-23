@@ -178,7 +178,18 @@ and a bar only shows how many slots are in use.
   forwards into, with that channel's free slots.
 - **Slots:** one row of boxes across each card, below its facts and above its fields. A hollow slot was never written:
   its header is all zeros. Hover one for its address and the header last written to it, which may be from a packet
-  that's gone, and click it to open that header (see Packet headers and paths below). Under the slots, a table counts
+  that's gone, and click it to open that header (see Packet headers and paths below).
+- **Slot states:** on a router run with `TT_METAL_FABRIC_ENABLE_CHANNEL_PROGRESS_LOG=1`, decode says which slots hold
+  a packet (each channel's `analysis.slots`). Each slot is then shaded:
+  - teal: pending, written but not sent (sender) or arrived but not sent on (receiver);
+  - blue: held, sent and awaiting credit;
+  - grey: free.
+
+  The next slot is underlined. A striped slot with an amber border is counted as both pending and held: the log and
+  the count register disagree. On a running router they were read apart; on a stopped one, the router's own counts
+  disagree. A line under the slots counts each state, or says why decode couldn't tell. The card also lists the
+  logged progress: `sent`, `completed` and `first_level_acked` for a sender, and `next_index`, `uncredited` and
+  `packets_ready` for a receiver. The router's facts say whether the log was on. Under the slots, a table counts
   where the channel's headers go: the router that reads each packet next, what it does there, and where it goes after.
 - **Credit counters:** the router's four credit counter arrays. The columns a channel uses are bright.
 - **Fields:** every field, per ERISC, grouped by category, in each card and for the router. Fields the builder didn't

@@ -283,6 +283,32 @@ json Interpreter<ChannelTrimmingOverrides>::make_json(
     return out;
 }
 
+json Interpreter<RouterChannelProgressLog>::make_json(
+    const RouterChannelProgressLog& value, const InterpretContext& /*context*/) {
+    json out;
+    json& senders = out["sender_channels"] = json::array();
+    for (const SenderChannelProgressRecord& sender : value.sender_channels) {
+        senders.push_back({
+            {"next_slot_addr", sender.next_slot_addr},
+            {"sent", sender.sent},
+            {"completed", sender.completed},
+            {"first_level_acked", sender.first_level_acked},
+        });
+    }
+    json& receivers = out["receiver_channels"] = json::array();
+    for (const ReceiverChannelProgressRecord& receiver : value.receiver_channels) {
+        receivers.push_back({
+            {"next_index", receiver.next_index},
+            {"uncredited", receiver.uncredited},
+            {"packets_ready", receiver.packets_ready},
+        });
+    }
+    out["sender_pov_receiver_free_slots_per_vc"] = value.sender_pov_receiver_free_slots_per_vc;
+    out["receiver_pov_sender_next_slot_addr_by_vc"] = value.receiver_pov_sender_next_slot_addr_by_vc;
+    out["relay_next_slot_addr"] = value.relay_next_slot_addr;
+    return out;
+}
+
 // Element i of the region is timer bit i. Whether that timer is enabled is its bit in the ERISC's
 // code_profiling_timers field, written only when the context names the ERISC.
 json Interpreter<CodeProfilingTimerResult>::make_json(

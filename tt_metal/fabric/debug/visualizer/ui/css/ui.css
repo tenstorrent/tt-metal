@@ -401,9 +401,43 @@ select:hover { background-color: var(--surface-hover); }
   overflow-x: auto; padding: 3px 2px;
 }
 .slot {
+  --slot-fill: var(--line);
   height: 30px; min-width: 12px; border-radius: 3px; border: 1px solid var(--line-strong); outline: none;
-  background: linear-gradient(var(--accent-line) 0 22%, var(--line) 22% 100%);
+  background: linear-gradient(var(--accent-line) 0 22%, var(--slot-fill) 22% 100%);
 }
+/* Slot states, from the channel progress log: held (sent, awaiting credit) in blue, pending (written or arrived, not
+   sent on yet) in amber, free hollow, and a slot counted as both striped. Laid out as a ring from the oldest held
+   slot, with slot numbers above, pointers below, and each run's state and count under it. */
+.slot, .slot-run {
+  --slot-pending: color-mix(in srgb, var(--warning) 70%, var(--surface));
+  --slot-held: color-mix(in srgb, var(--verdict-looping) 70%, var(--surface));
+}
+.slot.state-pending, .slot.state-held, .slot.state-free, .slot.state-overlap { height: 40px; }
+.slot.state-pending { background: var(--slot-pending); }
+.slot.state-held { background: var(--slot-held); }
+.slot.state-free { background: none; border-style: dashed; }
+.slot.state-overlap {
+  background: repeating-linear-gradient(135deg, var(--slot-pending) 0 6px, var(--slot-held) 6px 12px);
+  border-color: var(--error);
+}
+.slot-ring-holder { overflow-x: auto; padding: 3px 2px; }
+.slot-ring {
+  display: grid; grid-template-columns: repeat(var(--slot-count), minmax(44px, 1fr)); gap: 6px 4px;
+  min-width: calc(var(--slot-count) * 48px);
+}
+.slot-number { text-align: center; font: 12px var(--font-data); color: var(--fg-muted); }
+.slot-pointers { display: flex; flex-direction: column; gap: 2px; }
+.slot-pointer { font: 600 12px var(--font-ui); color: var(--fg); white-space: nowrap; cursor: help; }
+.slot-run {
+  display: flex; flex-direction: column; gap: 2px; padding: 4px 2px 6px;
+  border-top: 1px solid var(--line); border-bottom: 2px solid var(--line-strong);
+  font-size: 13px; color: var(--fg);
+}
+.slot-run.state-pending { border-bottom-color: var(--slot-pending); }
+.slot-run.state-held { border-bottom-color: var(--slot-held); }
+.slot-run.state-overlap { border-bottom-color: var(--error); }
+.slot-run .faint { font-size: 12px; }
+.slot-states-unknown { color: var(--warning); }
 .slot:hover, .slot:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .slots-caption, .slot-readout { margin: 0; font: 12px var(--font-data); color: var(--fg-faint); }
 .slot-readout { min-height: 18px; color: var(--fg-muted); }
@@ -435,7 +469,8 @@ details.nested ol { margin: 4px 0 0; padding-left: 28px; }
 
 /* ---------- Packet headers and paths ---------- */
 .slot { padding: 0; cursor: pointer; }
-.slot.never-written { background: none; border-style: dashed; }
+.slot.never-written { border-style: dashed; }
+.slot.never-written { background: none; }
 .slot[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 .slot-detail {
   display: flex; flex-direction: column; gap: 10px; padding: 12px 14px;

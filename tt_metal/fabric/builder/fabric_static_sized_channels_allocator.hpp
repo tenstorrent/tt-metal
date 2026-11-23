@@ -37,7 +37,8 @@ public:
         const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
         size_t channel_buffer_size_bytes,
         size_t available_channel_buffering_space,
-        const std::vector<MemoryRegion>& memory_regions);
+        const std::vector<MemoryRegion>& memory_regions,
+        size_t worker_slots_to_give_up = 0);
 
     // One router's allocation: the sender channels it has, laid out from the start of the buffer region, with the
     // reference's slot counts and receivers. Slot counts stay the fabric's: an upstream router keeps one downstream

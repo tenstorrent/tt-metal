@@ -331,6 +331,7 @@ manifest::Field make_field(
 struct Emission {
     bool is_2d_fabric = false;
     bool channel_trimming_capture = false;
+    bool channel_progress_log = false;
     bool deadlock_avoidance = false;
 };
 
@@ -338,6 +339,7 @@ Emission read_emission(const RouterArgs& args, uint32_t erisc) {
     return {
         .is_2d_fabric = args.read_erisc_arg(erisc, "IS_2D_FABRIC") != 0,
         .channel_trimming_capture = args.read_erisc_arg(erisc, "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE") != 0,
+        .channel_progress_log = args.read_erisc_arg(erisc, "ENABLE_CHANNEL_PROGRESS_LOG") != 0,
         .deadlock_avoidance = args.read_erisc_arg(erisc, "ENABLE_DEADLOCK_AVOIDANCE") != 0,
     };
 }
@@ -347,6 +349,7 @@ bool is_emitted(manifest::Emitted emitted, const Emission& emission) {
         case manifest::Emitted::ALWAYS: return true;
         case manifest::Emitted::FABRIC_2D: return emission.is_2d_fabric;
         case manifest::Emitted::CHANNEL_TRIMMING_CAPTURE: return emission.channel_trimming_capture;
+        case manifest::Emitted::CHANNEL_PROGRESS_LOG: return emission.channel_progress_log;
         case manifest::Emitted::DEADLOCK_AVOIDANCE: return emission.deadlock_avoidance;
     }
     TT_THROW("Fabric manifest: unknown emission {}", static_cast<int>(emitted));

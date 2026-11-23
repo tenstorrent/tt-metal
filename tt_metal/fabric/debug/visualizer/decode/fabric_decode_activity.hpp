@@ -64,8 +64,9 @@ struct LoopHeartbeat {
 struct TelemetryHeartbeat {
     uint32_t erisc = 0;
     HeartbeatSide side = HeartbeatSide::TX;
-    // Whether the ERISC writes it (writes_telemetry_statistic). False also when a read's FabricTelemetry is another
-    // version than this build's, since its layout is then another.
+    // Whether the ERISC writes it: it runs the side (services a sender channel for TX, a receiver channel for RX) and
+    // its telemetry fields enable the statistic (writes_telemetry_statistic). False also when a read's FabricTelemetry
+    // is another version than this build's, since its layout is then another.
     bool written = false;
     // Every read of it, the full read last. Empty when it isn't written.
     std::vector<HeartbeatRead> reads;

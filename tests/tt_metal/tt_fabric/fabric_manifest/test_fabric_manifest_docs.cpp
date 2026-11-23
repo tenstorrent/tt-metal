@@ -81,6 +81,8 @@ std::string source_text(const manifest::Source& source) {
                     case manifest::Emitted::FABRIC_2D: return fmt::format("`{}` (2D only)", arg.name);
                     case manifest::Emitted::CHANNEL_TRIMMING_CAPTURE:
                         return fmt::format("`{}` (with the channel trimming capture on)", arg.name);
+                    case manifest::Emitted::CHANNEL_PROGRESS_LOG:
+                        return fmt::format("`{}` (with the channel progress log on)", arg.name);
                     case manifest::Emitted::DEADLOCK_AVOIDANCE:
                         return fmt::format("`{}` (with deadlock avoidance on)", arg.name);
                 }
