@@ -43,7 +43,10 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
     generate_input_dim,
 )
-from helpers.tile_constants import is_mx_unsupported_tile_dims
+from helpers.tile_constants import (
+    MX_SUPPORTED_TILE_SIZES,
+    is_mx_unsupported_tile_dims,
+)
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test, result_tensor
 
@@ -52,8 +55,6 @@ UNPACK_TILIZE_TILE_SIZES = [
     (1, 32),
     (2, 32),
 ]
-# The to-DEST small-faces path also takes faces of 4 and 8 rows.
-UNPACK_TILIZE_TO_DEST_TILE_SIZES = UNPACK_TILIZE_TILE_SIZES + [(4, 32), (8, 32)]
 
 # Rows the SrcA/SrcB tilize takes in more than one MOP run: full_ct_dim -> block_ct_dim, a
 # proper divisor (the init asserts block_ct_dim divides full_ct_dim), so each run past the
@@ -74,8 +75,8 @@ def generate_unpack_tilize_combinations(
 
     Args: List of input-output format pairs
 
-    Returns: List of (unpacker_sel, tile_dimensions, format, dest_acc, dest_sync,
-             input_dimensions, block_ct_dim) tuples; block_ct_dim is None for a run per row,
+    Returns: List of (format, dest_acc, dest_sync, unpacker_sel, input_dimensions,
+             tile_dimensions, block_ct_dim) tuples; block_ct_dim is None for a run per row,
              otherwise the SrcA/SrcB run length, a divisor of the row
     """
     combinations = []
@@ -102,12 +103,10 @@ def generate_unpack_tilize_combinations(
             else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
         )
         tile_sizes = (
-            UNPACK_TILIZE_TO_DEST_TILE_SIZES
-            if in_fmt.is_32_bit()
+            select_perf_tile_sizes(UNPACK_TILIZE_TILE_SIZES)
+            if is_perf
             else UNPACK_TILIZE_TILE_SIZES
         )
-        if is_perf:
-            tile_sizes = select_perf_tile_sizes(tile_sizes)
 
         for dest_acc in dest_acc_modes:
             for dest_sync in dest_sync_modes:
@@ -122,6 +121,11 @@ def generate_unpack_tilize_combinations(
                     for tile_dims in tile_sizes:
                         if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                             continue
+                        if (
+                            unpacks_to_dest(in_fmt, dest_acc)
+                            and tile_dims not in MX_SUPPORTED_TILE_SIZES
+                        ):
+                            continue
                         tile_shape = construct_tile_shape(tile_dims)
                         dimensions_list = (
                             generate_perf_input_dimensions(
@@ -135,12 +139,12 @@ def generate_unpack_tilize_combinations(
                         for dimensions in dimensions_list:
                             combinations.append(
                                 (
-                                    unpacker_sel,
-                                    tile_dims,
                                     fmt,
                                     dest_acc,
                                     dest_sync,
+                                    unpacker_sel,
                                     dimensions,
+                                    tile_dims,
                                     None,
                                 )
                             )
@@ -162,15 +166,15 @@ def generate_unpack_tilize_combinations(
                                 if cols in MULTI_RUN_BLOCK_CT_DIM:
                                     combinations.append(
                                         (
-                                            unpacker_sel,
-                                            tile_dims,
                                             fmt,
                                             dest_acc,
                                             dest_sync,
+                                            unpacker_sel,
                                             [
                                                 rows * tile_shape.total_row_dim(),
                                                 cols * tile_shape.total_col_dim(),
                                             ],
+                                            tile_dims,
                                             MULTI_RUN_BLOCK_CT_DIM[cols],
                                         )
                                     )
@@ -194,15 +198,13 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
     same=True,  # Input format and output format are the same
 )
 # Column names of the tuples ``generate_unpack_tilize_combinations`` returns.
-# unpacker_sel and tile_dimensions lead so a test-id prefix can select an
-# engine + tile size (tests/pipeline_reorg/ttsim-skip-list.yaml relies on it).
 UNPACK_TILIZE_FLAT_NAMES = (
-    "unpacker_sel",
-    "tile_dimensions",
     "formats",
     "dest_acc",
     "dest_sync",
+    "unpacker_sel",
     "input_dimensions",
+    "tile_dimensions",
     "block_ct_dim",
 )
 ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
