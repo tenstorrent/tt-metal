@@ -196,7 +196,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         import time
 
         pay, now, ema = self._pay, time.perf_counter(), lambda old, x, a=0.1: x if old is None else old + a * (x - old)
-        # (a promotion's refill is no step's cost: excluded)
+        # (a promotion's refill and a prefill between the steps are no step's cost: excluded)
         dt_ms = None if pay["last_t"] is None else (now - pay["last_t"] - pay.get("excl", 0.0)) * 1000
         pay["last_t"], pay["excl"] = now, 0.0
         n = max(1, pay["n"])
@@ -266,6 +266,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         """every prompt through the rows adapter into its plain row, as the batch profile prefills (the TT chunk core's
         chunks and gangs, batched PP passes, the host prefix cache); a greedy user moves into the spec build at a later
         propose (_promote), once a decode call has shown its sampling parameters"""
+        import time
+
+        t0 = time.perf_counter()
         n = int(len(prompt_lens))
         if self.mode == "PLAIN" and not self.live:  # (an idle server starts speculating again)
             self.mode, self.low_calls = "SPEC", 0
@@ -280,6 +283,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         if len(self.live) > SPEC_USERS and self.mode == "SPEC":
             logger.info(f"adaptive: {len(self.live)} live users -> PLAIN")
             self.mode, self.low_calls = "PLAIN", 0
+        # (a prefill between two decode steps is no step's cost either: excluded from the policy's step times)
+        self._pay["excl"] = self._pay.get("excl", 0.0) + time.perf_counter() - t0
         return res
 
     # ------------------------------------------------------------------ decode

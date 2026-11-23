@@ -368,6 +368,30 @@ def test_pay_policy(monkeypatch, acc, expect):
     assert pays is expect, (m._pay, pays)
 
 
+def test_pay_policy_excludes_prefills(monkeypatch):
+    """a prefill between two decode steps (another user's prompt) is not the step's time: 40 ms verify steps with 3.2
+    tokens each pay at 8 users even when a 300 ms prefill runs between every two of them"""
+    import time as _time
+
+    m, pf = make(monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(_time, "perf_counter", lambda: clock[0])
+
+    def slow_prefill(self, *a, **k):
+        clock[0] += 0.300
+        return None
+
+    monkeypatch.setattr(ResidentRowsAdapter, "prefill_forward", slow_prefill)
+    m._pay["last_t"] = clock[0]
+    pays = None
+    for _ in range(A.PAY_MIN + 4):
+        clock[0] += 0.040
+        m.prefill_forward(None, None, None, [1], empty_slots=[0], prefill_final_mask=[False])
+        m._pay["kind"], m._pay["n"] = "verify", 8
+        pays = m._measure([3.2] * 8)
+    assert pays is True and abs(m._pay["spec_ms"][8] - 40.0) < 1e-6, (m._pay, pays)
+
+
 def test_no_promotion_with_a_step_in_flight(monkeypatch):
     """async scheduling submits ordinary step N + 1 before step N's propose: the plain build is a token ahead of the
     history there, so a promotion (which moves the plain state with the history) waits for a propose with no step in
