@@ -46,6 +46,7 @@ from pathlib import Path
 
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config as C
 from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import GLM54Config as C54
+from models.demos.deepseek_v3_d_p.tt.mla.two_bank import ring_rows
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheGeometry
 
 MAX_SEQ_LEN = 1_064_960  # glm53.json PREFILL_MAX_SEQ_LEN
@@ -333,8 +334,15 @@ def _glm54_stages(stage_alone: bool = False, g3_mtp: bool = True) -> list[Stage]
     x_bytes = (5120 // rows.sp) * (C.EMB_SIZE // rows.tp) * 2  # one [640, 1536] bf16 activation
     topk_sets = full_layers(*loop) * q_rows * C.INDEX_TOPK * 4  # 7 uint32 top-k sets per chunk per chip
     kvpe_rows = n_loop * q_rows * KVPE_PAGE_BYTES  # one chunk's pass-1 KVPE rows of the 28 loop layers per chip
-    # Pass-2 window carry: 128 rows x 704 B per loop layer per user, bounded as if every chip kept all of them.
-    window = n_loop * C54.LOOP_WINDOW_SIZE * KVPE_PAGE_BYTES
+    # Pass-2 window carry (q171.2.6): a ring of ring_rows(chunk) positions past each slot's pass-1 rows in every loop
+    # layer's KVPE cache slot, TP-deduped like the cache: ring_rows / chips rows of 704 B per chip.
+    ring = ring_rows(5120)
+    window = n_loop * (ring // rows.chips) * KVPE_PAGE_BYTES
+    # The KVPE cache length grows by the ring, and so does the replicated dense gather buffer sized from it; pass 2's
+    # push writes [window | top-k] rows of its 160 query rows into its own compact buffer (q171.3.8 may fold it into
+    # the idle dense gather buffer).
+    gather_ring_rows = ring * KVPE_PAGE_BYTES
+    pass2_push = q_rows * (C54.LOOP_WINDOW_SIZE + C.INDEX_TOPK) * KVPE_PAGE_BYTES
     return [
         Stage("G0", (0, loop[0] - 1), embedding=True),
         Stage(
@@ -350,8 +358,14 @@ def _glm54_stages(stage_alone: bool = False, g3_mtp: bool = True) -> list[Stage]
             indexer=False,
             embedding=stage_alone,
             damp_gate=True,
-            user_extra={"window_bound": window},
-            fixed_extra={"x1_keep": x_bytes, "topk_receive": topk_sets, "kvpe_receive": kvpe_rows},
+            user_extra={"window_ring": window},
+            fixed_extra={
+                "x1_keep": x_bytes,
+                "topk_receive": topk_sets,
+                "kvpe_receive": kvpe_rows,
+                "gather_buffer_ring_rows": gather_ring_rows,
+                "pass2_push_buffer": pass2_push,
+            },
         ),
         Stage("G3", (loop[1] + 1, C.NUM_LAYERS - 1), mtp=g3_mtp, embedding=stage_alone),
     ]
@@ -393,8 +407,10 @@ ASSUMPTIONS = [
     "1,064,960 keys x bf16, the failing allocation of #62125's 4x4 stage 0); the calculation does not credit it, "
     "because the two-bank attention's own buffers are not implemented yet (q171.2.5). Crediting it adds about 0.5 "
     "user on G2.",
-    "G2 pass-2 window carry is bounded as 128 rows x 704 B per loop layer per user on every chip (2.52 MB per user); "
-    "the real storage (q171.2.6) is likely SP-local and smaller.",
+    "G2 pass-2 window carry (q171.2.6) is a 4-chunk ring (20,480 positions) past each slot's pass-1 rows in every "
+    "loop layer's KVPE cache slot, TP-deduped: 640 rows x 704 B per loop layer per user per chip (12.6 MB per user). "
+    "G2 also holds the dense gather buffer's ring rows (14.4 MB) and pass 2's own push buffer (160 query rows x 2176 "
+    "keys x 704 B, 245 MB per chip; q171.3.8 may fold it into the idle dense gather buffer).",
     "Damp gates use the scalar width (synthetic weights); a per-channel gate adds at most 75.5 MB per chip on G1 "
     "and G2 (0.1 user).",
     "G3 holds one MTP level as GLM-5.3 (A7): embedding + LM head + one MoE layer + eh_proj, and one more KVPE and "

@@ -23,6 +23,7 @@ schedule bit-identically to eager; ``test_two_bank_index_list`` checks the devic
 """
 
 import copy
+import random
 
 import pytest
 import torch
@@ -138,6 +139,28 @@ def test_ring_canonical_rows_hold_every_window_position(schedule):
             for q in range(max(0, p - W + 1), p + 1):
                 got = held.get(ring_id(q, 0, CHUNK))
                 assert got == q, f"chunk {start}: position {q} reads ring row {ring_id(q, 0, CHUNK)} holding {got}"
+
+
+def test_ring_survives_random_requests_and_slot_reuse():
+    """Random request mixes on one slot (32-aligned partial chunks, ragged ends, a new request reusing the slot over
+    the previous one's ring rows): every window position a chunk reads is at its canonical row and was written for
+    this request, and no write leaves the 4-chunk ring."""
+    index = TwoBankIndex.__new__(TwoBankIndex)  # host math only
+    index.ring_base, index.period, W = 0, 2 * CHUNK, 128
+    rnd = random.Random(1)
+    for _ in range(100):
+        held = {}
+        for request in range(rnd.randint(1, 3)):
+            start, total = 0, 32 * rnd.randint(1, 4 * CHUNK // 32) + rnd.randint(0, 31)
+            while start < total:
+                end = start + min(rnd.choice([32 * rnd.randint(1, CHUNK // 32), CHUNK, CHUNK]), total - start)
+                for v, ve in index.ring_writes(start, end):
+                    assert v < ve <= ring_rows(CHUNK), f"write [{v}, {ve}) of chunk [{start}, {end})"
+                    for k in range(ve - v):
+                        held[v + k] = (request, start + k)
+                for q in range(max(0, start - W + 1), end):
+                    assert held.get(ring_id(q, 0, CHUNK)) == (request, q), f"request {request} chunk {start}: {q}"
+                start = end
 
 
 INDEX_STARTS = [0, 32, 96, 160, 640 + 96, 3 * 640 + 608, 5120, 5120 + 96, 2 * 5120 + 7 * 640 + 32, 99840 + 4064]
@@ -434,11 +457,28 @@ def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a @ b) / (a.norm() * b.norm()))
 
 
+def window_pccs(got: torch.Tensor, exp: torch.Tensor, window: int) -> list[float]:
+    """PCC of the first `window` rows from each SP shard start of a chunk ([1, n, D] rows), offset 0 included: the
+    chunk's own first rows read the window carried from the previous chunk, each later shard's first rows read the
+    previous shard's rows."""
+    n, shard = got.shape[1], CHUNK // 8
+    return [_pearson(got[:, s : min(s + window, n)], exp[:, s : min(s + window, n)]) for s in range(0, n, shard)]
+
+
+def _window_failures(got, exp, window) -> list[str]:
+    return [
+        f"{'the chunk start' if k == 0 else f'SP shard {k}'}: first {window} rows PCC {p:.5f} < {OUTPUT_PCC}"
+        for k, p in enumerate(window_pccs(got, exp, window))
+        if p < OUTPUT_PCC
+    ]
+
+
 def _check_vs_single_shot(config, case, layer, slot, chunks, *, out, ring, bank_a, indices):
     """LoopPass2MLAReference single-shot over the slot's prompt (positions 0 .. end of its last chunk) on the device's
-    bank A and top-k vs the chunked device output, per chunk and over each SP shard's first W rows of a chunk (which
-    read the previous shard's rows), and vs the ring's rows of every position, each read right after its chunk."""
-    window, shard, total = config.loop_window_size, CHUNK // 8, chunks[-1][1]
+    bank A and top-k vs the chunked device output, per chunk and over the first W rows from each SP shard start
+    (``window_pccs``: the carry readers and the halo readers), and vs the ring's rows of every position, each read
+    right after its chunk."""
+    window, total = config.loop_window_size, chunks[-1][1]
     mla_ref = SparseMLAReference(config, glm_random_mla_weights(config, layer, GLM54_SYNTHETIC_SEED), seq_len=CAPACITY)
     ref = LoopPass2MLAReference(mla_ref, window=window, latent_dim=config.kv_lora_rank).forward(
         _prompt(slot, layer, 2, total), kvpe_a=bank_a, indices_a=indices, actual_start=0
@@ -447,20 +487,46 @@ def _check_vs_single_shot(config, case, layer, slot, chunks, *, out, ring, bank_
     logger.info(f"[{case}] L{layer}: ring rows PCC {ring_pcc:.5f} over {total} positions")
     for start, end in chunks:
         got, exp = out[:, start:end], ref.output[:, start:end]
-        n = end - start
-        shard_pccs = [
-            _pearson(got[:, s : min(s + window, n)], exp[:, s : min(s + window, n)]) for s in range(shard, n, shard)
-        ]
-        out_pcc = _pearson(got, exp)
+        out_pcc, windows = _pearson(got, exp), window_pccs(got, exp, window)
         logger.info(
-            f"[{case}] L{layer} chunk {start}-{end}: output PCC {out_pcc:.5f}, shard-start PCC min "
-            f"{min(shard_pccs, default=float('nan')):.5f}"
+            f"[{case}] L{layer} chunk {start}-{end}: output PCC {out_pcc:.5f}, chunk-start window PCC {windows[0]:.5f}, "
+            f"shard-start window PCC min {min(windows):.5f}"
         )
-        # The shard halo first: a row near a shard start reads the previous shard's rows.
-        for k, p in enumerate(shard_pccs, start=1):
-            assert p >= OUTPUT_PCC, f"L{layer} chunk {start}: SP shard {k}'s first {window} rows PCC {p:.5f}"
+        # The windows first: a chunk's first rows read the carry, a shard's first rows the previous shard's rows.
+        failures = _window_failures(got, exp, window)
+        assert not failures, f"L{layer} chunk {start}: {failures}"
         assert out_pcc >= OUTPUT_PCC, f"L{layer} chunk {start}: output PCC {out_pcc:.5f} < {OUTPUT_PCC}"
     assert ring_pcc >= WINDOW_PCC, f"L{layer}: ring rows PCC {ring_pcc:.5f} < {WINDOW_PCC}"
+
+
+def test_window_check_catches_a_wrong_carry():
+    """Control (CPU only): the chunk-start window check that certifies the carry fails when the carry is wrong.
+    The reference runs chunk 2 of a prompt with a zeroed carry, and with the carry of the wrong positions (0..W-2, as a
+    misplaced ring row read would give), against the same reference run single-shot; the correct carry passes."""
+    config = _config("scaled_fp8")
+    W, n = config.loop_window_size, CHUNK + 1024
+    mla_ref = SparseMLAReference(config, glm_random_mla_weights(config, 1, GLM54_SYNTHETIC_SEED), seq_len=CAPACITY)
+    _, bank_a = mla_ref.absorbed_query_and_kvpe(_prompt(0, 1, 1, n))  # pass-1 KVPE of the prompt
+    topk = torch.full((1, 1, n, config.index_topk), SENTINEL, dtype=torch.int64)
+    for p in range(n):  # the latest causal positions: a deterministic stand-in for pass-1 top-k
+        k = min(p + 1, config.index_topk)
+        topk[0, 0, p, :k] = torch.arange(p + 1 - k, p + 1)
+    ref = LoopPass2MLAReference(mla_ref, window=W, latent_dim=config.kv_lora_rank)
+    hidden = _prompt(0, 1, 2, n)
+    single = ref.forward(hidden, kvpe_a=bank_a, indices_a=topk, actual_start=0)
+    first = ref.forward(hidden[:, :CHUNK], kvpe_a=bank_a, indices_a=topk[..., :CHUNK, :], actual_start=0)
+
+    def chunk2(carry):
+        out = ref.forward(
+            hidden[:, CHUNK:], kvpe_a=bank_a, indices_a=topk[..., CHUNK:, :], actual_start=CHUNK, window_carry=carry
+        )
+        return _window_failures(out.output, single.output[:, CHUNK:], W)
+
+    assert not chunk2(first.window_carry), "the correct carry must pass"
+    for name, carry in (("zeroed", torch.zeros_like(first.window_carry)), ("misplaced", first.kvpe[: W - 1])):
+        failures = chunk2(carry)
+        logger.info(f"{name} carry: {failures}")
+        assert failures and failures[0].startswith("the chunk start"), f"{name} carry passes the window check"
 
 
 @pytest.mark.parametrize("window_format", FORMATS)

@@ -12,10 +12,11 @@ Both banks live in the layer's slot of the same KVPE cache, which ``sparse_sdpa`
 
     positions [0, ring_base)                       bank A: pass 1's rows (G2's copy of G1's cache); pass 2 never
                                                    writes them
-    positions [ring_base, ring_base + RING)        the window ring: pass 2's own rows, RING = 5 chunks
+    positions [ring_base, ring_base + RING)        the window ring: pass 2's own rows, RING = 2P = 4 chunks
 
 Pass 2 writes each chunk's KV with the pass-1 cache write (``update_padded_kv_cache``, which places the chunk's rotated
-SP rows), twice: at virtual start ``ring_base + (start mod P)`` and ``P`` further, with period ``P = 2 * chunk``.
+SP rows), twice: at virtual start ``ring_base + (start mod P)`` and ``P`` further, with period ``P = 2 * chunk``; the
+second copy is clipped at the ring end ``ring_base + 2P`` (its rows past that would not be canonical anyway).
 Then position q (of this or any earlier chunk of the slot) is always at the canonical row
 ``ring_id(q) = ring_base + P + (q mod P)``:
 
@@ -24,7 +25,8 @@ Then position q (of this or any earlier chunk of the slot) is always at the cano
 * rows outside that band are scratch nobody reads;
 * a window needs at most ``chunk + W - 1 <= P`` consecutive positions, so no two of them share a canonical row.
 
-``RING = 2P + chunk`` holds the second copy of a chunk starting at ``start mod P = P - 32``. ``ring_base`` and P are
+The clipped second copy still writes at least its first row (it starts below ``ring_base + 2P`` because
+``start mod P < P``), and every canonical row of the chunk lands in one copy or the other. ``ring_base`` and P are
 whole chunks, so the virtual starts rotate the chunk exactly as the pass-1 write of ``start`` does. The carry across
 chunks, per user slot and per layer, is the ring itself: it is part of the slot.
 
@@ -54,7 +56,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 
 WINDOW_FORMATS = {"scaled_fp8": MlaKvCacheFormat.SCALED_FP8, "bf16": MlaKvCacheFormat.BF16_RM}
 RING_PERIOD_CHUNKS = 2  # P = 2 chunks: a window (<= chunk + W - 1 positions) never wraps onto itself
-RING_CHUNKS = 2 * RING_PERIOD_CHUNKS + 1  # the second copy of a chunk at start mod P = P - 32 ends below 2P + chunk
+RING_CHUNKS = 2 * RING_PERIOD_CHUNKS  # 2P: the second copy is clipped at the ring end
 
 
 def window_kv_format(config) -> MlaKvCacheFormat:
@@ -177,9 +179,11 @@ class TwoBankIndex:
         self._source = per_chip(source, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
 
     def ring_writes(self, start: int, end: int) -> list[tuple[int, int]]:
-        """Host form of the ring writes of the chunk [start, end): (virtual start, virtual end) per copy."""
+        """Host form of the ring writes of the chunk [start, end): (virtual start, virtual end) per copy, the second
+        clipped at the ring end."""
         first = self.ring_base + start % self.period
-        return [(v, v + end - start) for v in (first, first + self.period)]
+        ring_end = self.ring_base + 2 * self.period
+        return [(v, min(v + end - start, ring_end)) for v in (first, first + self.period)]
 
     def ring_write_metadata(self, metadata) -> list[list[ttnn.Tensor]]:
         """Device form of ``ring_writes`` from the chunk metadata (slot, start, end): one metadata triple per copy,
@@ -187,10 +191,12 @@ class TwoBankIndex:
         start = _scalar_f32(metadata[1])
         length = ttnn.subtract(_scalar_f32(metadata[2]), start)
         first = ttnn.add(ttnn.subtract(start, _floor_mul(start, self.period, 16.0)), float(self.ring_base))
-        out = []
-        for v in (first, ttnn.add(first, float(self.period))):
-            out.append([metadata[0], _scalar_u32(v), _scalar_u32(ttnn.add(v, length))])
-        return out
+        second = ttnn.add(first, float(self.period))
+        ring_end = float(self.ring_base + 2 * self.period)
+        return [
+            [metadata[0], _scalar_u32(first), _scalar_u32(ttnn.add(first, length))],
+            [metadata[0], _scalar_u32(second), _scalar_u32(ttnn.minimum(ttnn.add(second, length), ring_end))],
+        ]
 
     def index_list(self, topk_indices: ttnn.Tensor, chunk_start: ttnn.Tensor, chunk_end: ttnn.Tensor) -> ttnn.Tensor:
         """This chunk's natural index list ``[1, 1, query_rows, W + top-k]`` uint32: ring ids of each query row's

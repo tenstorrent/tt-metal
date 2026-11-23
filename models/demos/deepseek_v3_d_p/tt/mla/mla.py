@@ -2567,22 +2567,20 @@ class ttMLA:
     ):
         """Loop pass-2 attention (A2-A6, two_bank.py): this chunk's KV goes to the slot's window ring (two writes), then
         one sparse KV push of [window ring ids | injected pass-1 top-k] and one sparse_sdpa over the pushed rows.
-        The slot's pass-1 rows are read, never written. Trace-safe on the metadata path: the ring writes, the index
-        list, the push slot and the plan's chunk start read metadata on device."""
+        The slot's pass-1 rows are read, never written. One path, trace-safe: the ring writes, the index list, the push
+        slot and the plan's chunk start read the chunk's metadata on device (an eager call uploads it)."""
         if not injected:
             raise ValueError("loop pass 2 runs no indexer: inject the pass-1 group's top-k (indexer_indices)")
         expected_shape = self.indexer_indices_shape()
         if tuple(indices.shape) != expected_shape:
             raise ValueError(f"pass-2 attention needs this chip's top-k {expected_shape}, got {tuple(indices.shape)}")
         index = self._two_bank
-        if metadata is not None:
-            writes = [dict(metadata=m) for m in index.ring_write_metadata(metadata)]
-            chunk_start, chunk_end = metadata[1], metadata[2]
-        else:
+        # One path: an eager call builds the chunk's metadata triple and takes the trace-safe branch too.
+        host_metadata = metadata is None
+        if host_metadata:
             start = kv_actual_isl or 0
             end = start + seq_len_local * self.sp_factor if actual_end is None else actual_end
-            writes = [dict(kv_actual_isl=v, actual_end=e) for v, e in index.ring_writes(start, end)]
-            chunk_start, chunk_end = (
+            metadata = [
                 ttnn.from_torch(
                     torch.tensor([[[[value]]]], dtype=torch.int32),
                     device=self.mesh_device,
@@ -2591,27 +2589,25 @@ class ttMLA:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
-                for value in (start, end)
-            )
-        for write in writes:
+                for value in (cache_user_id, start, end)
+            ]
+        for write in index.ring_write_metadata(metadata):
             self._update_kv_cache(
                 kvpe_cache,
                 tt_kvpe,
                 cache_user_id=cache_user_id,
                 cache_layer_idx=cache_layer_idx,
+                kv_actual_isl=None,
+                metadata=write,
                 tp_axis=self.tp_shard_kv_axis,
-                **{"kv_actual_isl": None, "actual_end": None, "metadata": None, **write},
             )
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
             ttnn.deallocate(value)
 
-        joint = index.index_list(indices, chunk_start, chunk_end)
-        if metadata is None:
-            ttnn.deallocate(chunk_start)
-            ttnn.deallocate(chunk_end)
+        joint = index.index_list(indices, metadata[1], metadata[2])
         # The joint list is a new tensor every call, so a cached plan keyed by its address could be another layer's.
         self._push.invalidate()
-        plan = self._sparse_push_plan(joint, kv_actual_isl, metadata)
+        plan = self._sparse_push_plan(joint, None, metadata)
         cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
         storage = kvpe_cache.storage
         self._push.pushes[SparseKvPushPart.ALL.name] += 1
@@ -2639,6 +2635,9 @@ class ttMLA:
             compact=True,
         )
         ttnn.deallocate(joint)
+        if host_metadata:
+            for t in metadata:
+                ttnn.deallocate(t)
         return out
 
     def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata):

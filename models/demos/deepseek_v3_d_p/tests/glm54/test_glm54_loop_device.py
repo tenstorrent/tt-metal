@@ -590,7 +590,9 @@ def test_glm54_loop_chunks_on_device(mesh_device, device_params, num_links):
         return [_raw_host(t) for t in blocks], [_raw_host(t) for t in _cache_tensors(kvpe_cache, index_kv_cache)]
 
     # One metadata pass first, so the reference pass and the traced pass start from a state the same path wrote:
-    # rows of chunks later in the schedule are still the previous pass's when a chunk's caches are compared.
+    # rows of chunks later in the schedule are still the previous pass's when a chunk's caches are compared, and the
+    # host-scalar and metadata forwards differ on a partial chunk from the first MoE layer on (q171.2.6 notes: slot 1's
+    # 96-token chunk, layer 1 output; layer 0 and every KV/index write before it identical).
     for chunk in CHUNKS_SCHEDULE:
         set_chunk(*chunk)
         meta_forward()
