@@ -82,7 +82,6 @@ SHAPE_NAMES = {
     (4, 2, 2): "TENSOR_SHAPE_FR4_NF2x2",
     (8, 2, 2): "TENSOR_SHAPE_FR8_NF2x2",
     (16, 2, 2): "TENSOR_SHAPE_FR16_NF2x2",
-    (16, 4, 1): "TENSOR_SHAPE_FR16_NF4x1",
 }
 
 # DPRINT function-name prefixes that contribute to each TRISC coverage table.

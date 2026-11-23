@@ -216,7 +216,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
             formats.pack_src, formats.pack_dst, test_face_r_dim * FACE_C_DIM * test_num_faces /* tile_size */, test_face_r_dim, TILE_C_DIM, test_num_faces);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, test_face_r_dim, TILE_C_DIM, test_num_faces);
-        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>(test_face_r_dim);
+        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>(
+            ckernel::tensor_shape_from_num_faces(test_face_r_dim, test_num_faces));
         PROFILER_SYNC();
     }
     {
