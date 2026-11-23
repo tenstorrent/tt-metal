@@ -20,7 +20,6 @@ import pytest
         (torch.Size([1, 2, 6, 8]), (2, 4), False),
         (torch.Size([1, 2, 6, 8]), (2, 4), True),
         (torch.Size([2, 1, 32, 64]), 6, False),
-        (torch.Size([2, 1, 32, 64]), 6, False),
     ),
 )
 def test_AdaptiveAvgPool2d_fallback(

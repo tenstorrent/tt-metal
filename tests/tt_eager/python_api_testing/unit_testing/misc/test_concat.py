@@ -184,12 +184,6 @@ def test_concat_with_program_cache(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ),
         (
-            (1, 1, 160, 32),
-            (80, 32),
-            (80, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-        ),
-        (
             (1, 1, 235200, 16),
             (4800, 16),
             (4800, 32),
