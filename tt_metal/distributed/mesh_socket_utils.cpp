@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string_view>
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -35,6 +37,12 @@ void validate_host_socket_allocation(MeshDevice& mesh_device, const MeshCoreCoor
     uint32_t service_core = 0;
     context->all_reduce(
         ttsl::Span<uint32_t>(&local_service_core, 1), ttsl::Span<uint32_t>(&service_core, 1), ReduceOp::MAX);
+    // TT_METAL_SOCKET_COOWNERS_MIRROR=1 (see mesh_socket.cpp): every co-owner builds the same host socket on its own
+    // chips' service cores, so the claim is symmetric across the shared mesh.
+    const char* mirror = std::getenv("TT_METAL_SOCKET_COOWNERS_MIRROR");
+    if (mirror != nullptr && std::string_view(mirror) == "1") {
+        return;
+    }
     TT_FATAL(service_core == 0, "Host sockets on shared meshes do not support claimed service-core endpoints.");
 }
 
