@@ -62,6 +62,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
             kernel_size (tuple[int, int]): size of the convolving kernel.
             stride (tuple[int, int]): stride of the cross-correlation.
             padding (tuple[int, int] or tuple[int, int, int, int]): zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+            output_padding (tuple[int, int], optional): additional size added to one side of each output dimension. Default: (0, 0)
             dilation (tuple[int, int]): spacing between kernel elements.
             groups (int): number of blocked connections from input channels to output channels.
 
@@ -70,6 +71,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
             dtype (DataType, optional): the data type of the output tensor. Default: None (will use the same dtype as input_tensor).
             conv_config (ttnn.Conv2dConfig, optional): configuration for convolution. Default: None
             compute_config (ttnn.DeviceComputeKernelConfig, optional): configuration for compute kernel. Default: None
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the output tensor. Default: None
             mirror_kernel (bool, optional): Determines if the op should mirror the kernel internally. Set to False if the kernel has already been mirrored. Default: True
             dram_slice_config (ttnn.Conv2dSliceConfig, optional): Configuration for DRAM slicing. If provided, the operation will use DRAM slicing, else will fall back to L1 version. Default: None
             return_output_dim (bool, optional): If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False
