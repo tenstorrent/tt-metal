@@ -51,6 +51,7 @@ def run_child(case, out_path):
         "bfloat16": ttnn.bfloat16,
         "float32": ttnn.float32,
         "int32": ttnn.int32,
+        "uint8": ttnn.uint8,
         "uint16": ttnn.uint16,
         "uint32": ttnn.uint32,
     }[case.get("dtype", "bfloat16")]
@@ -70,7 +71,9 @@ def run_child(case, out_path):
     try:
         for shape in case["shapes"]:
             torch_dtype = torch.bfloat16 if case.get("dtype", "bfloat16") == "bfloat16" else torch.float32
-            if case.get("dtype") in ("int32", "uint16", "uint32"):
+            if case.get("dtype") == "uint8":
+                x = torch.randint(0, 100, shape, dtype=torch.uint8)
+            elif case.get("dtype") in ("int32", "uint16", "uint32"):
                 x = torch.randint(0, 100, shape, dtype=torch.int32)
             else:
                 x = torch.randn(shape).to(torch_dtype)
