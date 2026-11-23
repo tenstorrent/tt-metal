@@ -5,11 +5,13 @@
 #include "dit_fused_distributed_rmsnorm_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstdlib>
 #include <map>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -88,13 +90,14 @@ uint32_t derive_worker_cap(
     uint32_t cap = whole_rows > 0u ? whole_rows : budget;
     // DEV worker-count sweep knob: WAN_RMSNORM_WORKER_CAP overrides the grid-derived cap
     // (still validity-clamped below, and it bypasses the arch knee). Used to re-sweep the
-    // per-shape optimum before finalizing the heuristic.
-    const char* worker_cap_env = std::getenv("WAN_RMSNORM_WORKER_CAP");
-    if (worker_cap_env != nullptr) {
-        const int forced = std::atoi(worker_cap_env);
-        if (forced > 0) {
-            cap = static_cast<uint32_t>(forced);
-        }
+    // per-shape optimum before finalizing the heuristic. Read once per process (sizing runs several times on every
+    // launch), so set it before the first launch; a later change is ignored.
+    static const std::optional<int> forced_worker_cap = []() -> std::optional<int> {
+        const char* worker_cap_env = std::getenv("WAN_RMSNORM_WORKER_CAP");
+        return worker_cap_env != nullptr ? std::optional<int>(std::atoi(worker_cap_env)) : std::nullopt;
+    }();
+    if (forced_worker_cap.has_value() && *forced_worker_cap > 0) {
+        cap = static_cast<uint32_t>(*forced_worker_cap);
     }
     // Validity clamp: a forwarder coalesces at most sticks_per_packet 128 B sticks
     // into one fabric packet, so workers_per_forwarder (= ceil(cap/num_forwarders))
@@ -122,7 +125,7 @@ uint32_t derive_worker_cap(
     // WH's grid-derived budget (64) is already its optimum, so no BH-style knee there.
     // Tuned to the DiT (Wan/LTX/FLUX) shape suite; 48 is the conservative fallback.
     // The WAN_RMSNORM_WORKER_CAP override bypasses this knee so it can sweep BH freely.
-    if (arch == tt::ARCH::BLACKHOLE && worker_cap_env == nullptr) {
+    if (arch == tt::ARCH::BLACKHOLE && !forced_worker_cap.has_value()) {
         constexpr uint32_t kBhContentionKnee = 48u;
         constexpr uint32_t kBhRoundBoundCap = 64u;
         constexpr uint32_t kBhRing4RowThreshold = 448u;  // between Wan sp8 (296, want 64) and sp4 (592, want 48)
@@ -1401,8 +1404,20 @@ ProgramDescriptor build_program_descriptor(
     check_kernel_index(writer_kernel_idx, dyn::kWriterKernelIdx, "writer");
 
     // ------------------------------------------------------------------------
-    // Forwarder kernels (AG path): one per forwarder core (per-core CT args).
+    // Forwarder kernels (AG path): one per forwarder core (per-core CT args). What differs between the chips (the
+    // device index and the fabric routes) is in runtime args, so a range's programs merge into one.
     // ------------------------------------------------------------------------
+    std::array<uint32_t, 6> forward_route{};
+    std::array<uint32_t, 6> backward_route{};
+    if (num_forwarders > 0) {
+        // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
+        TT_FATAL(
+            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device)) ||
+                ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
+            "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
+        std::tie(forward_route, backward_route) = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+            mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+    }
     for (uint32_t f = 0; f < num_forwarders; f++) {
         const uint32_t group_begin = f * workers_per_forwarder;
         const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
@@ -1411,9 +1426,6 @@ ProgramDescriptor build_program_descriptor(
             packet_cb_id,
             reserved_packet_header_cb_id,
             args.ring_size,
-            device_index,
-            num_targets_forward,
-            num_targets_backward,
             f,  // forwarder_index
             num_forwarders,
             group_size,
@@ -1424,15 +1436,6 @@ ProgramDescriptor build_program_descriptor(
             go_sem_id,
         };
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
-        // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
-        TT_FATAL(
-            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
-                ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
-            "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
-        const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
-            mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
-        fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
-        fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
         // DIT_NORM_RUNTIME_ROWS: rounds and present counts come from the common row count and
         // these trailing args (the shared kernel keeps its host-counted layout for other callers).
         fwd_ct.push_back(num_workers);
@@ -1609,9 +1612,11 @@ ProgramDescriptor build_program_descriptor(
             const auto& core = forwarder_cores[f];
             const uint32_t group_begin = f * workers_per_forwarder;
             const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
-            // Worker NoC coords, then the fabric connections; appended after the two address
-            // slots (dit_fused_distributed_rmsnorm_dynamic::kForwarder*Arg).
-            std::vector<uint32_t> fwd_rt_tail;
+            // This chip's device index and fabric routes, the worker NoC coords, then the fabric connections;
+            // appended after the two address slots (dit_fused_distributed_rmsnorm_dynamic::kForwarder*Arg).
+            std::vector<uint32_t> fwd_rt_tail = {device_index};
+            fwd_rt_tail.insert(fwd_rt_tail.end(), forward_route.begin(), forward_route.end());
+            fwd_rt_tail.insert(fwd_rt_tail.end(), backward_route.begin(), backward_route.end());
             for (uint32_t w = group_begin; w < group_end; w++) {
                 fwd_rt_tail.push_back(static_cast<uint32_t>(worker_virtual[w].x));
                 fwd_rt_tail.push_back(static_cast<uint32_t>(worker_virtual[w].y));
@@ -1656,7 +1661,7 @@ ProgramDescriptor build_program_descriptor(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-tt::tt_metal::WorkloadDescriptor DitFusedDistributedRmsnormMeshWorkloadFactory::create_workload_descriptor(
+tt::tt_metal::WorkloadDescriptor DitFusedDistributedRmsnormProgramFactory::create_workload_descriptor(
     const DitFusedDistributedRmsnormParams& operation_attributes,
     const DitFusedDistributedRmsnormInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value,
@@ -1683,6 +1688,8 @@ tt::tt_metal::WorkloadDescriptor DitFusedDistributedRmsnormMeshWorkloadFactory::
                      resolved_args, range.start_coord(), tensor_args, tensor_return_value)});
             continue;
         }
+        // One descriptor per chip: the framework merges a range's into one program with per-device runtime args
+        // (merge_per_device_programs), or keeps them per chip where they differ in more than that.
         for (const auto& coord : range) {
             workload_descriptor.programs.push_back(
                 {ttnn::MeshCoordinateRange(coord),
@@ -1693,12 +1700,32 @@ tt::tt_metal::WorkloadDescriptor DitFusedDistributedRmsnormMeshWorkloadFactory::
     return workload_descriptor;
 }
 
+DitFusedDistributedRmsnormMeshWorkloadFactory::cached_mesh_workload_t
+DitFusedDistributedRmsnormMeshWorkloadFactory::create_mesh_workload(
+    const DitFusedDistributedRmsnormParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const DitFusedDistributedRmsnormInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
+    // override_runtime_arguments patches values that are the same on every chip, so it handles merged ranges.
+    return descriptor_adapter_t::create_mesh_workload(
+        operation_attributes, tensor_coords, tensor_args, tensor_return_value, ttnn::MergePerDevicePrograms{});
+}
+
 void DitFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached,
+    const DitFusedDistributedRmsnormParams& operation_attributes,
+    const DitFusedDistributedRmsnormInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
+    for (auto& [range, program] : cached.workload.get_programs()) {
+        patch_program(program, operation_attributes, tensor_args, tensor_return_value);
+    }
+}
+
+void DitFusedDistributedRmsnormMeshWorkloadFactory::patch_program(
     tt::tt_metal::Program& program,
     const DitFusedDistributedRmsnormParams& operation_attributes,
     const DitFusedDistributedRmsnormInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    std::vector<Tensor>& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // The kernel set and core layout come from the cached program, never from a fresh compute_sizing: sizing reads

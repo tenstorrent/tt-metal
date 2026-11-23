@@ -3,8 +3,18 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::softsign {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
+using ::sfpi::SFPEXEXP_MOD1_NODEBIAS;
+using ::sfpi::SFPIADD_MOD1_ARG_IMM;
+using ::sfpi::SFPIADD_MOD1_CC_GTE0;
+using ::sfpi::SFPIADD_MOD1_CC_NONE;
+using ::sfpi::SFPLOAD_MOD0_FMT_UINT16;
+using ::sfpi::SFPLOADI_MOD0_FLOATB;
+using ::sfpi::SFPLOADI_MOD0_USHORT;
+using ::sfpi::SFPSETCC_MOD1_LREG_EQ0;
+using ::sfpi::SFPSETCC_MOD1_LREG_GTE0;
+using ::sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B;
+using ::sfpi::SFPSTOCHRND_RND_EVEN;
 // Instructions abs_denominator_wh_suffix issues.
 template <bool LateRound, bool RawNegativeInfinity = true>
 constexpr uint32_t abs_denominator_wh_suffix_slots() {

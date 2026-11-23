@@ -27,6 +27,7 @@ inline bool bf16_dest_softsign() {
 #endif
 }
 // Each call records replay slots 0-14, below replay_buf_offset = 16.
+// The slots are the compiled call's, the SFPI compiler's own replay records included.
 template <int ITERATIONS = 32>
 __attribute__((noinline)) inline void calculate_softsign_bf16() {
     ckernel::sfpu::bf16::softsign::calculate_abs_denominator<ckernel::sfpu::SoftsignBf16Config, ITERATIONS>();

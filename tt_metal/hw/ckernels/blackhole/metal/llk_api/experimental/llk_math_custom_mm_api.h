@@ -17,7 +17,7 @@
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in the DEST sync region
  *         (custom_mm_tile_rows of the CustomMmDestLayout each)
- * kt_dim: any integer from 1 to 256 (inclusive)
+ * kt_dim: any integer of 1 or more
  * fidelity: LoFi only
  * throttle: not supported
  *

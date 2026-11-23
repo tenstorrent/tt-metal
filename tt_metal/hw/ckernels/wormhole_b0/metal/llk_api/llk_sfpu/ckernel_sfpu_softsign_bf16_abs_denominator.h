@@ -6,7 +6,6 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_softsign_bf16_replay_window.h"
-#include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_softsign_bf16_abs_denominator_replay.h"
 namespace ckernel::sfpu::bf16::softsign {
 template <typename Config>

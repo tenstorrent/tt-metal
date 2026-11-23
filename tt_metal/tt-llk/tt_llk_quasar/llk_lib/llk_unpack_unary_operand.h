@@ -21,7 +21,7 @@ using namespace ckernel;
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B
  * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ * stored in the buffer descriptor table; the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
@@ -77,7 +77,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B
  * @tparam EN_32BIT_DEST: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ * stored in the buffer descriptor table; the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  */
 template <std::uint32_t UNP_SEL, bool EN_32BIT_DEST>
@@ -118,7 +118,7 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
  * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ * stored in the buffer descriptor table; the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note Does NOT support tiny-tiles
@@ -271,7 +271,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @tparam EN_32BIT_DEST: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- *        stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ *        stored in the buffer descriptor table; the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @param num_tiles: Number of tiles to unpack at a time for a single operand.
  * @note On the math thread (T1): for the plain datacopy path pair with @ref _llk_math_eltwise_unary_datacopy_init_; for reuse_dest != NONE this is the

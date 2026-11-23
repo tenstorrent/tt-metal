@@ -3,8 +3,12 @@
 #pragma once
 
 namespace ckernel::sfpu::ttpoly::softsign {
-using namespace ::sfpi;
 using ::sfpi::DataLayout;
+using ::sfpi::SFPLOADI_MOD0_FLOATB;
+using ::sfpi::SFPLOADI_MOD0_LOWER;
+using ::sfpi::SFPLOADI_MOD0_UPPER;
+using ::sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B;
+using ::sfpi::SFPSTOCHRND_RND_EVEN;
 inline void abs_denominator_loadmacro_init() {
     TTI_SFP_STOCH_RND(SFPSTOCHRND_RND_EVEN, 0, 0, ckernel::p_sfpu::LREG0, 13, SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     TTI_SFPLOADI(0, SFPLOADI_MOD0_LOWER, 0x0000);  // mad | simple idle
