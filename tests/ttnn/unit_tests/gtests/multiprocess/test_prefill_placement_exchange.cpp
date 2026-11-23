@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -25,6 +26,7 @@
 #include "ttnn/operations/ccl/common/host/mesh_chip_exchange.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_placement.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/device/dispatch_fabric2d_placement.hpp"
+#include "ttnn/operations/experimental/moe_block/common/port_placement.hpp"
 
 namespace {
 
@@ -37,6 +39,7 @@ using tt::tt_metal::distributed::MeshCoordinateRange;
 using tt::tt_metal::distributed::MeshShape;
 using namespace ttnn::operations::ccl::common;
 namespace dispatch = ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d;
+namespace moe_block = ttnn::operations::experimental::moe_block;
 namespace combine = ttnn::operations::experimental::deepseek_prefill::combine_fabric2d;
 
 class RingRing4x4Fixture : public MeshDeviceFixtureBase {
@@ -240,6 +243,33 @@ TEST_F(RingRing4x4Fixture, CombinePlacementAgreesAcrossRanks) {
                 }
                 expect_same_on_every_rank(words);
             }
+        }
+    }
+}
+
+TEST_F(RingRing4x4Fixture, MoeBlockPortPlacementAgreesAcrossRanks) {
+    for (const uint32_t sp_axis : {0u, 1u}) {
+        for (const uint32_t num_links : {1u, 2u}) {
+            const auto plan = moe_block::mesh_plan(*mesh_device_, num_links, true, true, sp_axis);
+            const auto ports = moe_block::place_ports(*mesh_device_, plan);
+            const auto grid = mesh_device_->compute_with_storage_grid_size();
+            std::vector<uint32_t> words;
+            std::map<moe_block::ChipCoord, std::set<CoreCoord>> cores_of_chip;
+            for (const auto& [key, core] : ports) {
+                EXPECT_LT(core.x, grid.x);
+                EXPECT_LT(core.y, grid.y);
+                EXPECT_TRUE(cores_of_chip[key.chip].insert(core).second)
+                    << "two ports of chip (" << key.chip.r << ", " << key.chip.c << ") share a core";
+                append_core(words, core);
+            }
+            size_t expected_ports = 0;
+            for (const auto& [chip, directions] : plan.chips) {
+                for (const auto& port : directions) {
+                    expected_ports += port ? port->links.size() : 0;
+                }
+            }
+            EXPECT_EQ(ports.size(), expected_ports);
+            expect_same_on_every_rank(words);
         }
     }
 }
