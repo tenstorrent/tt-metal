@@ -87,8 +87,6 @@ on:
         description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
         value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
-# No workflow-level permissions: the tt-train-tests job inherits the caller's, so only callers
-# that grant id-token: write (L2 nightly) get the Hugging Face OIDC exchange.
 jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
@@ -234,8 +232,6 @@ jobs:
           uv pip list
           uv pip install "gitpython==3.1.55" "pydantic==2.9.2" "numpy>=1.24.4,<2" "pyyaml>=5.4"
 
-      # Short-lived HF read token from GitHub OIDC (no stored secret). Directly before the
-      # test step so the 60-minute token lifetime starts late.
       - name: 🤗 Get Hugging Face token (OIDC)
         id: hf-oidc
         if: ${{ inputs.hf-oidc && inputs.package-artifact-name == '' }}
@@ -254,8 +250,6 @@ jobs:
         with:
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
-            # Best effort: tests do not inherit the OIDC request variables. The wrapper shell
-            # (run-with-log) keeps them in its own environment.
             unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
             python3 tools/tt-power-sidecar/tt_power_sidecar.py \
               --backend sysfs \

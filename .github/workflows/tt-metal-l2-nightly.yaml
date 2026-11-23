@@ -380,11 +380,10 @@ jobs:
       (github.event_name == 'schedule' || inputs.run_tt_train_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    # A job-level block zeroes every scope it omits, so restate the reads.
     permissions:
       contents: read
       packages: read
-      id-token: write # Hugging Face OIDC exchange (hf-oidc)
+      id-token: write
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: unit
@@ -401,11 +400,10 @@ jobs:
       (github.event_name == 'schedule' || inputs.run_tt_train_perf_pretraining_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    # A job-level block zeroes every scope it omits, so restate the reads.
     permissions:
       contents: read
       packages: read
-      id-token: write # Hugging Face OIDC exchange (hf-oidc)
+      id-token: write
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: perf
@@ -423,11 +421,10 @@ jobs:
       (github.event_name == 'schedule' || inputs.run_tt_train_perf_finetuning_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    # A job-level block zeroes every scope it omits, so restate the reads.
     permissions:
       contents: read
       packages: read
-      id-token: write # Hugging Face OIDC exchange (hf-oidc)
+      id-token: write
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: perf
