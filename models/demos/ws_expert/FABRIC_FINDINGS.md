@@ -64,6 +64,13 @@ high_bw_all_gather reaches 23.9 of 25 GB/s per link direction at 200G (96%) and 
 benchmark at 400G stops at ~38-39: with 8704 B packets the sending RISC is busy every cycle (~300 cycles a packet
 against ~245 for a bare send loop), with 15232 B packets it waits on router space. Both are above what 200G asks.
 
+At 200G (rerun on the same box): one connection 23.9-24.2 GB/s (96-97%) for packets of 8 KB and up even under the
+15232 B payload; two flows on a chip never collide (2 x 24 GB/s fits a NoC link); the forwarding ring runs at 23.5-24.0
+in every variant, shared core or RISC split, link-bound. Only placement still matters there: with every link busy,
+physical placement holds every flow at 23.6, logical / scattered placement leaves the worst at 14-15 (paths stacking
+4+ streams on one NoC link). So at the Galaxy's speed the fabric and our forwarding are not the problem; where the
+streams cross the NoC is.
+
 ## 5. What this means for weight streaming and the Galaxy
 
 - The mux exists because a router accepts one worker connection per direction and a group's 25 cores all send. A
@@ -90,5 +97,5 @@ against ~245 for a bare send loop), with 15232 B packets it waits on router spac
 - The 8704 B sender loop's extra ~60 cycles a packet (bookkeeping, credit field, queue).
 - 15232 B both ways on one link: 42 GB/s alone, ~39 forwarding; whether the receiving core's own sends slow its
   router's landing writes.
-- Every link busy at 200G on this box, and on the Galaxy.
+- Every link busy on the Galaxy (8 links; at 200G on this box: 23.6 a flow with physical placement).
 - `ws_lane5.eth_x` / `L5Cfg.place`: map channel ids through each chip's ethernet harvest.

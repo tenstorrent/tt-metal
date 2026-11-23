@@ -1938,3 +1938,15 @@ link both ways at once (40 one-hop flows, each its own sender / receiver core), 
 | out / in a middle chip (6 links) | 107-193 / 115-176 | 278-281 / 278-281 |
   So nothing per chip: the NoC paths into and out of the ethernet row. On the Galaxy (8 links at 200G, 25 GB/s a
   stream) up to 3 streams fit a NoC link, but the same placement rule applies, with each chip's real harvest.
+
+### The same benchmarks at 200G (2026-11-23 ~21:40, bh-lb-09 reflashed to galaxy-like eth200: 12 x 10, 64 ports 200G)
+- One flow, GB/s by router payload / packet: 4352 router: 1088 12.5, 2176 22.4, 4352 23.3; 8704 router: 4352 23.3,
+  6528 23.8, 8704 23.9; 15232 router: 1088 4.8, 2176 8.6, 4352 15.9, 6528 21.6, 8704 23.9, 10880-15232 24.1-24.2.
+  The slot cost now only hurts packets under ~8 KB in a 15232 slot (a 7.7 KB combine row would be ~22-23).
+- Two flows from / into one chip, any NoC pairing, disjoint chips: 23.9 each everywhere (two streams = 48 GB/s, below
+  a NoC link's ~81).
+- Every link both ways (40 flows): physical placement 23.6 / 23.6 / 23.7 (min / median / max; middle chips 142 out and
+  in); logical placement 15.3 / 23.6 / 23.9; scattered 14.2 / 20.8 / 23.8. With 6 links the badly placed paths still
+  stack 4+ streams on a NoC link.
+- Ring (test_fr2 RISC split / test_fr_best shared core), one or two links, 8704 / 15232: 23.1-23.6 / 24.0 a link
+  direction; the senders wait on router space most of the time (1.3-2.0 of 2.8 ms): link-bound in every variant.
