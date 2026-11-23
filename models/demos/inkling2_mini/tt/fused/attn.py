@@ -173,7 +173,8 @@ class AttnPrep:
                     h = g * GROUPS + i
                     r += [h * HEAD_DIM // 32, mode_rows["q"], h]
                     if rows is not None and not self.dyn:
-                        w += [rows[1].q.buffer_address(), 0, 0, 0, (rows[0] * N_KV + g) * (HEAD_DIM // 32), i]
+                        k, lt = rows[1].local(rows[0])
+                        w += [rows[1].qc[k].buffer_address(), 0, 0, 0, (lt * N_KV + g) * (HEAD_DIM // 32), i]
                         continue
                     w += [self.q.buffer_address(), 0, 0, 0, 0, h]
                     if self.dyn:
@@ -282,9 +283,12 @@ class AttnPrep:
                     + [ro.sink_blk[t].buffer_address()]
                 )
                 continue
-            if rows is not None and not self.dyn:  # local: mask / sink of token t at batch t * 8 + g
+            if rows is not None and not self.dyn:  # local: mask / sink of token t at batch lt * 8 + g of its chunk
                 t, ro = rows
-                w_rt.append([ro.mask.buffer_address(), i * NJ, proj.buffer_address(), ro.sink.buffer_address(), 0, t])
+                k, lt = ro.local(t)
+                w_rt.append(
+                    [ro.maskc[k].buffer_address(), i * NJ, proj.buffer_address(), ro.sinkc[k].buffer_address(), 0, lt]
+                )
                 continue
             w_rt.append([self.mask.buffer_address(), i * NJ, proj.buffer_address(), self.sink.buffer_address(), blk])
         crs = _crs(cores)
@@ -358,11 +362,12 @@ class AttnPrep:
             return None
         return self.q, self.mask, self.sink_blk if self.dyn else self.sink
 
-    def rows(self, proj, positions, sels, state, rows):
-        """Multi-token verify: the R tokens' preps (__call__ with rows = (t, rows[t])) as one program, token t on its
-        own 32 cores. rows: one RowsOut-like per token (a RowsOut, or _NoFar for a per-token far call). The k / v
-        writers of the tokens run in token order (shared pending / far-cache tiles)."""
+    def rows(self, proj, positions, sels, state, rows, t0=0):
+        """Multi-token verify: the preps of tokens t0 .. t0 + R - 1 (__call__ with rows = (t0 + t, rows[t])) as one
+        program, token t on its own 32 cores (R <= 3). rows: one RowsOut-like per token (a RowsOut, or _NoFar for a
+        per-token far call). The k / v writers of the tokens run in token order (shared pending / far-cache tiles)."""
         R = len(positions)
+        assert R <= 3, R
         cores, _ = F.core_list(self.device, 4 * N_KV * R, first_row=1)
         sets = [cores[4 * N_KV * t : 4 * N_KV * (t + 1)] for t in range(R)]
         grp = lambda t, j: sets[t][j * N_KV : (j + 1) * N_KV]  # noqa: E731  j: 0 q, 1 k, 2 v, 3 bias
@@ -372,18 +377,18 @@ class AttnPrep:
             for j, kind in ((0, "q"), (1, "k"), (2, "v")):
                 chain = (t > 0, grp(t + 1, j) if t + 1 < R else None)
                 k, c = self._head_group(
-                    grp(t, j), proj, kind, sels[t], tau, state, positions[t], (t, rows[t]), chain=chain
+                    grp(t, j), proj, kind, sels[t], tau, state, positions[t], (t0 + t, rows[t]), chain=chain
                 )
                 kernels += k
                 cbs += c
-            k, c = self._bias_group(proj, positions[t], tau, (t, rows[t]), prow=sels[t]["q"], cores=grp(t, 3))
+            k, c = self._bias_group(proj, positions[t], tau, (t0 + t, rows[t]), prow=sels[t]["q"], cores=grp(t, 3))
             kernels += k
             cbs += c
         io = [proj, self.q_taps, self.kv_taps["k"], self.kv_taps["v"], self.scaler, self.rel_scale, self.g]
         io += [self.table, self.mass, self.sink, self.mask, state.k_ring, state.v_ring]
         io += [state.kv_full, self.sink_blk, self.q_grp, self.q_far] if self.dyn else []
         for t, pos in enumerate(positions):
-            io += [pos.tau, pos.near_mask, pos.ring, pos.pos] + rows[t].tensors(t)
+            io += [pos.tau, pos.near_mask, pos.ring, pos.pos] + rows[t].tensors(t0 + t)
         io += [self.q]
         sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=_crs(cores), initial_value=0)]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems))
@@ -401,7 +406,7 @@ class AttnOut:
         self.act = _shared_l1(device, "o_in", N_HEADS * HEAD_DIM, act_mem)
         self.cores = [ttnn.CoreCoord(i, 0) for i in range(N_KV)]  # act_mem grid: CoreGrid(x=8, y=1)
 
-    def __call__(self, attn, proj, merge=None, row=None, far_row=0, proj_row=0):
+    def __call__(self, attn, proj, merge=None, row=None, far_row=0, proj_row=0, batch=None):
         """attn: [1, 1, 24, 128] bf16 TILE DRAM, or with merge = (o_near [1, 8, 3, 128] fp32, r [1, 8, 3, 1] fp32,
         far_valid [1, 1, 1, 1] fp32) the far partial [1, 1, 24, 160] or per kv group [1, 8, 3, 160] bf16. proj as
         AttnPrep. Returns self.act."""
@@ -411,10 +416,10 @@ class AttnOut:
         crs = _crs(self.cores)
         nh = N_HEADS // len(self.cores)
         rt = [[attn.buffer_address(), proj.buffer_address(), i * nh] for i in range(len(self.cores))]
-        if row is not None:  # multi-token verify: token `row` -> act row `row` (local: attn [1, 8R, 3, 128])
-            assert row < 16, row
+        if row is not None:  # multi-token verify: token `row` -> act row `row` (local: attn [1, 8n, 3, 128], the
+            assert row < 16, row  # token at batch group `batch`, default row)
             if merge is None:
-                rt = [a + [row] for a in rt]
+                rt = [a + [row if batch is None else batch] for a in rt]
         io = [attn, proj]
         if merge is not None:
             for t in merge:
@@ -660,11 +665,13 @@ class AttnNear:
         ttnn.generic_op(parts + outs_t, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         return o_t, r_t, s_t
 
-    def rows(self, items, k_ring, v_ring, rows, pos0):
-        """Multi-token verify: near + combine of all R tokens in one program each, token t on its own cores (near:
-        cores 32 t .. 32 t + 31 from row 1, combine: row 1 + t). items[t] = (q_grp, mask_grp, sink_blk, o_near, r,
-        far sink, sink row group) for token t; token t reads pending rows 0 .. t (see __call__)."""
+    def rows(self, items, k_ring, v_ring, rows, pos0, t0=0):
+        """Multi-token verify: near + combine of tokens t0 .. t0 + R - 1 in one program each, token t on its own cores
+        (near: cores 32 t .. 32 t + 31 from row 1, combine: row 1 + t; R <= 3). items[t] = (q_grp, mask_grp,
+        sink_blk, o_near, r, far sink, sink row group) for token t0 + t, which reads pending rows 0 .. t0 + t (see
+        __call__)."""
         R = len(items)
+        assert R <= 3, R
         assert k_ring.dtype == v_ring.dtype and k_ring.dtype in (ttnn.bfloat16, ttnn.bfloat8_b), k_ring.dtype
         kv_page = 1088 if k_ring.dtype == ttnn.bfloat8_b else 2048
         f32, bf = ttnn.float32, ttnn.bfloat16
@@ -686,14 +693,14 @@ class AttnNear:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        while len(self._rows_parts) < R:
+        while len(self._rows_parts) < t0 + R:
             self._rows_parts.append(
                 (put([1, p_n, 32, 32], f32), put([1, p_n, 32, HEAD_DIM], f32), put([1, p_n, 32, 32], f32))
             )
         kernels, io = [], [k_ring, v_ring, self.ones, rows.pending, pos0]
         all_cores = []
         for t, (q_grp, mask_grp, sink_blk, *_rest) in enumerate(items):
-            cores, (zp, op, mp) = self._rows_cores[R][t], self._rows_parts[t]
+            cores, (zp, op, mp) = self._rows_cores[R][t], self._rows_parts[t0 + t]
             all_cores += cores
             ins = [q_grp, mask_grp, sink_blk, k_ring, v_ring]
             io += [q_grp, mask_grp, sink_blk, zp, op, mp]
@@ -703,7 +710,7 @@ class AttnNear:
                 r_rt.append(
                     [x.buffer_address() for x in ins]
                     + [g, self.ones.buffer_address(), i * nj]
-                    + [rows.pending.buffer_address(), pos0.buffer_address(), t + 1]
+                    + [rows.pending.buffer_address(), pos0.buffer_address(), t0 + t + 1]
                 )
                 w_rt.append([zp.buffer_address(), op.buffer_address(), mp.buffer_address(), p])
             kernels.append(
@@ -747,7 +754,7 @@ class AttnNear:
         for t, (*_head, o_t, r_t, s_t, tok) in enumerate(items):
             cc = [ttnn.CoreCoord(i, 1 + t) for i in range(N_KV)]
             all_cc += cc
-            zp, op, mp = self._rows_parts[t]
+            zp, op, mp = self._rows_parts[t0 + t]
             r_rt = [[x.buffer_address() for x in (zp, op, mp)] + [g] for g in range(N_KV)]
             w_rt = [[o_t.buffer_address(), r_t.buffer_address(), s_t.buffer_address(), g, tok] for g in range(N_KV)]
             kernels += [
@@ -779,14 +786,16 @@ class AttnNear:
 
 
 class RowsOut:
-    """Outputs of a multi-token verify pass (local layers, R <= 3 tokens), in the layout of sdpa_decode's pending-row
-    mode: q [1, 8R, 3, 128], mask [8R, 1, 3, 1024], sink [8R x 32, 32] (batch t * 8 + g = token t, kv group g), and
-    pending [2, 8, 32, 128] in the ring dtype (row t of batch g / 8 + g = token t's packed k / v row). slot[t]: the
-    int32 slot index t the kv writer puts token t's rows at."""
+    """Outputs of a multi-token verify pass (R <= 4 tokens), in the layout of sdpa_decode's pending-row mode, per
+    chunk of tokens (one sdpa call each, at most 3 tokens: 8 batches x 4 cores per token; R = 4 runs as 2 + 2):
+    qc[k] [1, 8n, 3, 128], maskc[k] [8n, 1, 3, 1024], sinkc[k] [8n x 32, 32] (batch lt * 8 + g = token t0 + lt, kv
+    group g), and pending [2, 8, 32, 128] in the ring dtype (row t of batch g / 8 + g = token t's packed k / v row).
+    slot[t]: the int32 slot index t the kv writer puts token t's rows at."""
 
     def __init__(self, device, R, ring_dtype, is_global=False):
-        assert 1 <= R <= 3, "pending-row sdpa: at most 3 tokens (8R batches x 4 cores)"
+        assert 1 <= R <= 4, "pending-row sdpa: at most 4 tokens"
         self.R = R
+        self.chunks = [(0, R)] if R <= 3 else [(0, 2), (2, 2)]  # (first token, tokens)
         self.q_far = None  # global layers, shared far call: q_far rows 3 t + i, per-token near outputs, far sink rows
 
         def zeros(shape, dt=ttnn.bfloat16):
@@ -798,9 +807,10 @@ class RowsOut:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        self.q = zeros([1, N_KV * R, GROUPS, HEAD_DIM])
-        self.mask = zeros([N_KV * R, 1, GROUPS, WINDOW])
-        self.sink = zeros([N_KV * R * 32, 32])
+        self.qc = [zeros([1, N_KV * n, GROUPS, HEAD_DIM]) for _, n in self.chunks]
+        self.maskc = [zeros([N_KV * n, 1, GROUPS, WINDOW]) for _, n in self.chunks]
+        self.sinkc = [zeros([N_KV * n * 32, 32]) for _, n in self.chunks]
+        self.q, self.mask, self.sink = self.qc[0], self.maskc[0], self.sinkc[0]
         self.pending = zeros([2, N_KV, 32, HEAD_DIM], ring_dtype)
         self.slot = [
             ttnn.from_torch(torch.tensor([t], dtype=torch.int32), dtype=ttnn.int32, device=device) for t in range(R)
@@ -818,11 +828,19 @@ class RowsOut:
             self.sink_tok = [zeros([N_KV * 32, 32]) for _ in range(R)]
             self.q_far_tok = [zeros([1, N_KV, GROUPS, 288]) for _ in range(R)]
 
+    def local(self, t):
+        """(chunk, index in the chunk) of token t."""
+        for k, (t0, n) in enumerate(self.chunks):
+            if t0 <= t < t0 + n:
+                return k, t - t0
+        raise ValueError(t)
+
     def tensors(self, t):
+        k, _ = self.local(t)
         extra = [self.q_far] if self.q_far is not None else []
         if hasattr(self, "q_grp"):
             extra += [self.q_grp[t], self.mask_g[t], self.sink_blk[t], self.q_far_tok[t]]
-        return [self.q, self.mask, self.sink, self.pending, self.slot[t]] + extra
+        return [self.qc[k], self.maskc[k], self.sinkc[k], self.pending, self.slot[t]] + extra
 
 
 class KvCommit:

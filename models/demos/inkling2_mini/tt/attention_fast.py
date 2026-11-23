@@ -215,6 +215,10 @@ class Inkling2AttentionFast(Inkling2Attention):
         self.local_cores = {(x, y) for x in range(lg.x) for y in range(lg.y)}
         # multi-token verify (decode_rows): sdpa_decode with pending rows, (token, kv group) batches x 4 cores
         self.rows_cfg = sdpa_cfg(LOCAL_CHUNK, LOCAL_CORES_PER_HEAD, exact_exp_half_tile=True)
+        # R = 4: the second sdpa call of the pass starts at token 2 (sdpa pending_tok0)
+        self.rows_cfgs = {0: self.rows_cfg}
+        if hasattr(ttnn.SDPAProgramConfig, "pending_tok0"):
+            self.rows_cfgs[2] = sdpa_cfg(LOCAL_CHUNK, LOCAL_CORES_PER_HEAD, exact_exp_half_tile=True, pending_tok0=2)
         # shared verify far call: the R tokens' rows in one call, each token's own causal bound (rows_per_token)
         self.far_rows_cfg = (
             sdpa_cfg(FAR_CHUNK, **FAR_OPTS, exact_exp_half_tile=True, rows_per_token=GROUPS)
@@ -458,14 +462,14 @@ class Inkling2AttentionFast(Inkling2Attention):
         return {"q": b, "k": b + r["k"], "v": b + r["v"]}
 
     def rows_out(self, R, state):
-        """Scratch of a multi-token verify pass (decode_rows) for R tokens, R <= 3."""
+        """Scratch of a multi-token verify pass (decode_rows) for R tokens, R <= 4."""
         rows = RowsOut(self.device, R, state.k_ring.dtype, is_global=self.is_global)
         rows.win = ttnn.zeros_like(state.x_hist)
         return rows
 
     def decode_rows(self, xs, state, positions, rows, p0=None):
-        """Multi-token verify, local layers: R = len(xs) <= 3 tokens at consecutive positions; xs[t] the token's input
-        row (xq = xk = xv), positions[t] its prepared DecodePositionsFast, rows a rows_out(R). Each token's window /
+        """Multi-token verify: R = len(xs) <= 4 tokens at consecutive positions (R <= 3 in the triple input mode);
+        xs[t] the token's input row (single mode) or [xq, xk, xv] (triple), positions[t] its prepared DecodePositionsFast, rows a rows_out(R). Each token's window /
         projection and the prep run as one program each (its k / v rows go to rows.pending, the ring is not written), then one
         sdpa_decode over the ring with the pending rows, then each token's output gate into o-projection input row t.
         Returns that input (self.out.act, rows 0 .. R-1): row t is bit-equal to row 0 after plain decode of token t.
@@ -487,7 +491,10 @@ class Inkling2AttentionFast(Inkling2Attention):
             )
             proj = self._rows_proj(xs, state, rows)
             sels = [self._rows_sel(rows, t) for t in range(R)]
-            self.prep.rows(proj, positions, sels, state, [rows if shared else _NoFar(rows, t) for t in range(R)])
+            views = [rows if shared else _NoFar(rows, t) for t in range(R)]
+            for t0, n in rows.chunks:  # one prep program per chunk of <= 3 tokens
+                sl = slice(t0, t0 + n)
+                self.prep.rows(proj, positions[sl], sels[sl], state, views[sl], t0=t0)
             # near + combine of all tokens in one program each (token t reads pending rows 0 .. t)
             sinks = [rows.sink_far if shared else rows.sink_tok[t] for t in range(R)]
             items = [
@@ -502,7 +509,8 @@ class Inkling2AttentionFast(Inkling2Attention):
                 )
                 for t in range(R)
             ]
-            self.near.rows(items, state.k_ring, state.v_ring, rows, positions[0].pos)
+            for t0, n in rows.chunks:
+                self.near.rows(items[t0 : t0 + n], state.k_ring, state.v_ring, rows, positions[0].pos, t0=t0)
             if not shared:
                 for t, pos in enumerate(positions):
                     far_pos, valid = pos.far_grp
@@ -541,24 +549,34 @@ class Inkling2AttentionFast(Inkling2Attention):
                     )
             return self.out.act
         proj = self._rows_proj(xs, state, rows)
-        R = rows.R
-        self.prep.rows(proj, positions, [self._rows_sel(rows, t) for t in range(R)], state, [rows] * R)
-        attn = ttnn.transformer.scaled_dot_product_attention_decode(
-            rows.q,
-            state.k_grp,
-            state.v_grp,
-            is_causal=False,
-            attn_mask=rows.mask,
-            attention_sink=rows.sink,
-            scale=1.0,
-            program_config=self.rows_cfg,
-            compute_kernel_config=self.hifi4,
-            pending_kv=rows.pending,
-            pending_pos=positions[0].pos,
-        )
+        sels = [self._rows_sel(rows, t) for t in range(rows.R)]
+        for t0, n in rows.chunks:
+            self.prep.rows(proj, positions[t0 : t0 + n], sels[t0 : t0 + n], state, [rows] * n, t0=t0)
+        outs = []
+        for k, (t0, n) in enumerate(rows.chunks):  # one sdpa call per chunk (pending_tok0: its first token)
+            outs.append(
+                ttnn.transformer.scaled_dot_product_attention_decode(
+                    rows.qc[k],
+                    state.k_grp,
+                    state.v_grp,
+                    is_causal=False,
+                    attn_mask=rows.maskc[k],
+                    attention_sink=rows.sinkc[k],
+                    scale=1.0,
+                    program_config=self._rows_cfg(t0),
+                    compute_kernel_config=self.hifi4,
+                    pending_kv=rows.pending,
+                    pending_pos=positions[0].pos,
+                )
+            )
         for t in range(rows.R):
-            self.out(attn, proj, row=t, proj_row=rows.win_g * t)
+            k, lt = rows.local(t)
+            self.out(outs[k], proj, row=t, proj_row=rows.win_g * t, batch=lt)
         return self.out.act
+
+    def _rows_cfg(self, t0):
+        assert t0 in self.rows_cfgs, "R = 4 needs sdpa_decode pending_tok0 (a newer build)"
+        return self.rows_cfgs[t0]
 
     def commit_rows(self, state, rows, positions0, n):
         """After the accept of a decode_rows pass: tokens 0 .. n - 1's k / v rows into the ring, as plain decode would

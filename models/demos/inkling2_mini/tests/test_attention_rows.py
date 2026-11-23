@@ -58,11 +58,13 @@ def _one(attn, x, state, pos):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("p", [9000, 1023 + 9 * 1024])
-@pytest.mark.parametrize("R", [2, 3])
+@pytest.mark.parametrize("R", [2, 3, 4])
 @pytest.mark.parametrize("is_global", [False, True], ids=["local", "global"])
 @pytest.mark.parametrize("n_acc", ["all", 1], ids=["accept_all", "accept_1"])
 @pytest.mark.parametrize("mode", ["single", "triple"])
 def test_decode_rows(device, p, R, is_global, n_acc, mode):
+    if R == 4 and mode == "triple":
+        pytest.skip("triple mode: R <= 3 (9 window rows per token)")
     n_acc = R if n_acc == "all" else n_acc
     sd = ta.random_state_dict(is_global, seed=11 if is_global else 7)
     attn = Inkling2AttentionFast(device, T.host_weights_from_hf(sd, is_global), is_global)
