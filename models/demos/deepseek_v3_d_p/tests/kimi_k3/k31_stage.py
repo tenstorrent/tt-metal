@@ -20,6 +20,7 @@ from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
 from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload_size
 
 ADAPTER = get_adapter("kimi_k3_1")
 MESH = (8, 4)
@@ -78,7 +79,8 @@ STAGE_LAYOUTS = {
 }
 assert STAGE_LAYOUTS[MESH_4X4].tp_axis == TP_AXIS_4X4
 
-# The runner's mesh for each layout, at the adapter's fabric payload and L1_SMALL and the default trace region:
+# The runner's mesh for each layout, at the adapter's fabric payload (raised to one combine row of the MoE block, K3.1's
+# MoE, as the runner raises it) and L1_SMALL and the default trace region:
 # 8x4 Ring/Ring; 4x4 Linear/Ring (FABRIC_2D_TORUS_X), which the runner opens for an SP-on-axis-1 rank. The 4x4
 # row needs the Galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by
 # tests/run_4x4_stage_tests.sh); unnarrowed, the system mesh is 8x4 and requires_mesh_topology skips it.
@@ -86,7 +88,7 @@ PLACEMENT = [
     pytest.param(
         MESH,
         torus_xy_device_params(
-            fabric_payload_size=ADAPTER.fabric_payload_size(),
+            fabric_payload_size=moe_block_fabric_payload_size(KimiK31Config, ADAPTER.fabric_payload_size()),
             l1_small_size=ADAPTER.l1_small_size,
             trace_region_size=TRACE_REGION_SIZE,
         ),
@@ -96,7 +98,7 @@ PLACEMENT = [
     pytest.param(
         MESH_4X4,
         torus_x_device_params(
-            fabric_payload_size=ADAPTER.fabric_payload_size(),
+            fabric_payload_size=moe_block_fabric_payload_size(KimiK31Config, ADAPTER.fabric_payload_size()),
             l1_small_size=ADAPTER.l1_small_size,
             trace_region_size=TRACE_REGION_SIZE,
         ),

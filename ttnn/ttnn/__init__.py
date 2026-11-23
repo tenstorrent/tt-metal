@@ -50,21 +50,21 @@ def manage_config(name: str, value):
     global CONFIG
     original_value = getattr(CONFIG, name)
     setattr(CONFIG, name, value)
-    logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
+    logger.trace(f"Set ttnn.CONFIG.{name} to {value}")
     try:
         yield
     finally:
         # Restore even when the block raises, or the value leaks into everything that runs afterwards.
         try:
             setattr(CONFIG, name, original_value)
-            logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
+            logger.trace(f"Restored ttnn.CONFIG.{name} to {original_value}")
         except Exception as e:
             # Some config attributes (e.g., path-like) do not accept None; fallback to empty string
             # afuller
             if original_value is None:
                 try:
                     setattr(CONFIG, name, "")
-                    logger.debug(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
+                    logger.trace(f"Restored ttnn.CONFIG.{name} to empty string as a substitute for None")
                 except Exception as e2:
                     logger.error(
                         f"{e2}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to a safe default (original was None)"
