@@ -72,7 +72,9 @@ def test_four_ranks_on_a_galaxy_host_get_disjoint_whole_cores():
 
 def test_excluded_cpus_leave_their_whole_core_out_of_every_share():
     allowed = range(64)
-    shares = [rcb.cpus_for_local_rank(allowed, r, 4, exclude={1, 2}, siblings=_smt(32), node_of=_one_node) for r in range(4)]
+    shares = [
+        rcb.cpus_for_local_rank(allowed, r, 4, exclude={1, 2}, siblings=_smt(32), node_of=_one_node) for r in range(4)
+    ]
     used = set().union(*shares)
     assert not used & {1, 2, 33, 34}
     assert sum(len(s) for s in shares) == len(used)  # disjoint
