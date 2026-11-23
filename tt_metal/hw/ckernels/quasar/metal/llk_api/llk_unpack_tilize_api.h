@@ -107,6 +107,8 @@ inline void llk_unpack_tilize_block(
 
 /**
  * @brief No-op on Quasar — tilize teardown is not required.
+ *
+ * Safe because tilize leaves the face/row counters at zero and every later op programs the state it reads.
  */
 inline void llk_unpack_tilize_uninit([[maybe_unused]] const std::uint32_t operand) {}
 

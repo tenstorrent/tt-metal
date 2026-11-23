@@ -95,6 +95,8 @@ jobs:
         id: hf-oidc
         timeout-minutes: 5
         uses: ./.github/actions/hf-oidc-token
+        with:
+          resource: ${{ vars.HF_OIDC_RESOURCE }}
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
