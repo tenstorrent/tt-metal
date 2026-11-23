@@ -216,6 +216,14 @@ while IFS= read -r FILE; do
     esac
 done <<< "$CHANGED_FILES"
 
+# CHANGED_FILES leaves deletions out, so a PR that only deletes an SFPU accuracy budget table
+# would start no LLK job and skip the SFPU ULP PR check (llk_pr_gate_tests.yaml), which is what
+# fails a table that no longer loads. Route that deletion like any other change to the table.
+if git diff --name-only --diff-filter=D "${MERGE_BASE}..HEAD" -- \
+    'tt_metal/tt-llk/tests/python_tests/helpers/sfpu_accuracy_budget_*.yaml' | grep -q .; then
+    LLK_TESTS_CHANGED=true
+fi
+
 # --- run-clang-tidy inputs: raw snapshot + dedicated re-scans ---------------
 # Snapshot the language-agnostic per-file flags NOW, before the blanket
 # submodule/workflow "treat as everything changed" fallback below mutates
