@@ -7,7 +7,8 @@ open/close.
 
 pair    every chip-to-chip Ethernet link UMD discovers, tested as a 2-chip all-gather of each linked pair (data
         checked bit for bit); pairs run in rounds, no chip in two pairs of a round
-sweep   after a bus-bar or pair fault: glx_reset, then the pair test again with a longer budget per pair
+sweep   after a link/CCL failure or a hang (in the pair test or a bus-bar step; not a numeric fault):
+        glx_reset, then the pair test again, PAIR_S per pair, no new round past SWEEP_S in total
 fabric  one whole-box fabric open and close
 """
 from __future__ import annotations
@@ -24,7 +25,9 @@ from .common import emit_result, emit_running, log, start_group, stop_group
 from .model import FAIL, PASS, SKIP, Check, Phase
 from .naming import chip, link_end
 
-PAIR_S, SWEEP_S, OP_TIMEOUT_S = 10, 300, 30
+# each pair runs PAIR_S s of all-gathers, every op cut at OP_TIMEOUT_S; a round waits at most PAIR_S + OP_TIMEOUT_S + COMPILE_S
+# (a pair past it is hung); SWEEP_S caps the whole sweep, not one round
+PAIR_S, SWEEP_S, OP_TIMEOUT_S, COMPILE_S = 10, 300, 30, 60
 DISCOVER = """import json, tt_umd as u
 cd = u.TopologyDiscovery.create_cluster_descriptor()
 print(json.dumps({"bdfs": {int(k): v for k, v in cd.get_chip_pci_bdfs().items()},
@@ -131,21 +134,41 @@ def _start_pair(d: Path, lab: str, idx: list[int], seconds: int) -> subprocess.P
 
 
 def pair_test(
-    phase: Phase, out: Path, name: str, seconds: int, disc: dict, dry_run: bool = False, sys_root: str = "/sys"
+    phase: Phase,
+    out: Path,
+    name: str,
+    seconds: int,
+    disc: dict,
+    dry_run: bool = False,
+    sys_root: str = "/sys",
+    cap_s: int | None = None,
 ) -> bool:
-    """One 2-chip all-gather per linked pair, a round at a time. Adds one check; True when a pair failed or hung."""
-    rounds, failed, check = pairs(disc["links"]), [], f"links_{name}"
+    """One 2-chip all-gather per linked pair, *seconds* each, a round at a time; with *cap_s*, no round starts after
+    cap_s s and its pairs are reported not reached. Adds one check (FAIL on a failed or hung pair, else SKIP when a pair
+    was not reached, else PASS); True when a pair failed or hung."""
+    rounds, failed, missed, check = pairs(disc["links"]), [], [], f"links_{name}"
     n = sum(len(r) for r in rounds)
     if dry_run:
-        log(f"[dry-run] {name}: {n} pairs in {len(rounds)} rounds, {seconds} s each")
+        cap = f", {cap_s} s in total" if cap_s is not None else ""
+        log(f"[dry-run] {name}: {n} pairs in {len(rounds)} rounds, {seconds} s each{cap}")
         print(f"  {check:30} (dry-run)")
         phase.add(Check(name=check, status=SKIP, details="dry run", ip="eth"))
         return False
     d = out / name
     d.mkdir(parents=True, exist_ok=True)
     emit_running(check)
-    t0 = time.time()
+    t0, start = time.time(), time.monotonic()
     for r in rounds:
+        if cap_s is not None and time.monotonic() - start >= cap_s:
+            missed += [
+                {
+                    "pair": f"{_short(disc['bdfs'][a])}-{_short(disc['bdfs'][b])}",
+                    "channels": ch,
+                    "ends": link_ends(disc, a, b, ch),
+                }
+                for a, b, ch in r
+            ]
+            continue
         jobs = []
         try:
             for a, b, ch in r:
@@ -156,8 +179,11 @@ def pair_test(
                         {"pair": lab, "channels": ch, "why": "a chip has no tt-kmd node: not opened", "ends": ends}
                     )
                     continue
-                jobs.append((lab, ch, ends, _start_pair(d, lab, idx, seconds), time.monotonic() + seconds + SETUP_S))
-            for lab, ch, ends, p, deadline in jobs:
+                jobs.append((lab, ch, ends, _start_pair(d, lab, idx, seconds)))
+            deadline = (
+                time.monotonic() + seconds + OP_TIMEOUT_S + COMPILE_S
+            )  # the round's pairs run together: one limit
+            for lab, ch, ends, p in jobs:
                 try:
                     rc = p.wait(timeout=max(0.0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
@@ -170,20 +196,24 @@ def pair_test(
                 elif rc is None:
                     failed.append({"pair": lab, "channels": ch, "why": "hung", "ends": ends})
         finally:
-            for *_, p, _ in jobs:
+            for *_, p in jobs:
                 stop_group(p)
     what = "; ".join(f"{f['pair']} (channels {','.join(map(str, f['channels']))}): {f['why']}" for f in failed)
-    emit_result(check, FAIL if failed else PASS, suffix=f"({time.time() - t0:.1f}s, {n} pairs)")
+    if missed:
+        what = "; ".join(filter(None, (what, f"{len(missed)} of {n} pairs not reached in the {cap_s} s cap")))
+    status = FAIL if failed else SKIP if missed else PASS
+    emit_result(check, status, suffix=f"({time.time() - t0:.1f}s, {n} pairs)")
     phase.add(
         Check(
             name=check,
-            status=FAIL if failed else PASS,
+            status=status,
             ip="eth",
             details=what[:400] or f"{n} linked pairs, {len(rounds)} rounds",
             data={
                 "pairs": n,
                 "rounds": len(rounds),
                 "failed": failed,
+                "not_reached": missed,
                 "link_ends": [e for f in failed for e in f["ends"]],
                 "dir": str(d),
             },
@@ -220,8 +250,9 @@ def _discover(phase: Phase, check: str, dry_run: bool) -> dict | None:
 
 
 def run_links(phase: Phase, out: Path, fault: bool, reset, dry_run: bool = False) -> None:
-    """Pair test; on a fault here or in the bus-bar test, *reset* (the glx_reset; "" when it ran clean, else why not) and the
-    sweep, which is skipped with that reason; then the fabric open/close. The sweep tests the links discovered after
+    """Pair test; on a failed or hung pair here, or *fault* (a bus-bar hang or CCL failure: busbar.link_fault), *reset* (the
+    glx_reset; "" when it ran clean or was skipped on purpose, else why not) and the sweep (PAIR_S per pair, SWEEP_S in
+    total), which is skipped with that reason; then the fabric open/close. The sweep tests the links discovered after
     the reset, which can bring back a tray that dropped under the load."""
     disc = _discover(phase, "links_pair", dry_run)
     if disc is not None:
@@ -231,5 +262,5 @@ def run_links(phase: Phase, out: Path, fault: bool, reset, dry_run: bool = False
         if why:
             phase.add(Check(name="links_sweep", status=SKIP, details=why, ip="eth"))
         elif (disc := _discover(phase, "links_sweep", dry_run)) is not None:
-            pair_test(phase, out / "links", "sweep", SWEEP_S, disc, dry_run)
+            pair_test(phase, out / "links", "sweep", PAIR_S, disc, dry_run, cap_s=SWEEP_S)
     fabric_open(phase, out / "links", dry_run)

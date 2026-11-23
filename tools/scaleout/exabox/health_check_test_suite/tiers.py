@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from diag.busbar import LOAD_TESTS, MODES
+from diag.busbar import LOAD_TESTS, MODES, STEPS
 from diag.device_tests import PYTESTS, TESTS
 from diag.resets import RESET_FLAGS
 from diag.triage import TRIAGE_TOOLS
@@ -178,6 +178,25 @@ DEPRECATED_TIER_ALIASES: dict[str, str] = {
     "deploy": "weekly",
     "pre_reboot": "pre_bmc_reboot",
 }
+
+
+def select_tests(tier: Tier, only: str) -> tuple[Tier, tuple[str, ...]]:
+    """*tier* cut down to the tests named in *only* (comma-separated; --tests), and the bus-bar steps to run.
+
+    A name is one of the tier's tests or, when the tier runs the bus-bar test, one bus-bar step as its check is named
+    (busbar_<step>, e.g. busbar_heavy); "busbar" is every step. The tier's order and load_mode stay. A name the tier
+    does not run is a ValueError that lists what it does run."""
+    names = [n for n in only.replace(" ", "").split(",") if n]
+    steps = (*(f"busbar_{s}" for s in STEPS),) if "busbar" in tier.tests else ()
+    bad = [n for n in names if n not in tier.tests and n not in steps]
+    if bad or not names:
+        raise ValueError(
+            f"--tests {only!r}: {', '.join(bad) or 'no test named'} not in this tier; "
+            f"it runs: {', '.join((*tier.tests, *steps)) or 'no tests'}"
+        )
+    picked = tuple(s for s in STEPS if "busbar" in names or f"busbar_{s}" in names)
+    tests = tuple(t for t in tier.tests if t in names or (t == "busbar" and picked))
+    return replace(tier, tests=tests), picked
 
 
 def _validate() -> None:

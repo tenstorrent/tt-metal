@@ -41,7 +41,7 @@ if _SUITE_DIR not in sys.path:
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.aer import AerWindow  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
-from diag.busbar import LOAD_TESTS, OVERRIDES, plan as busbar_plan, run_busbar  # noqa: E402
+from diag.busbar import LOAD_TESTS, OVERRIDES, STEPS, link_fault, plan as busbar_plan, run_busbar  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
@@ -59,7 +59,7 @@ from diag.snapshot import (  # noqa: E402
 from diag.snapshot_checks import pcie_enum_check, validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
-from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
+from tiers import DEPRECATED_TIER_ALIASES, TIERS, select_tests  # noqa: E402
 
 
 def build_diag_arg_parser() -> argparse.ArgumentParser:
@@ -68,7 +68,23 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="SYS-4365 diag tool")
     ap.add_argument("--tier", choices=[*TIERS, *DEPRECATED_TIER_ALIASES], required=True)
     ap.add_argument("--dry-run", action="store_true", help="Print intended subprocess calls; skip destructive steps.")
-    ap.add_argument("--skip-reset", action="store_true", help="Skip phase 3 (reset loop) entirely.")
+    ap.add_argument(
+        "--skip-reset",
+        action="store_true",
+        help=(
+            "Skip every reset: the reset loop, the post-test reset and the glx_reset before the links sweep. "
+            "The sweep itself still runs on a link fault, on the unit as it is."
+        ),
+    )
+    ap.add_argument(
+        "--tests",
+        metavar="LIST",
+        help=(
+            "Run only these of the tier's tests, comma-separated, in the tier's order; a bus-bar step by its check "
+            "name (busbar_qb, busbar_mix, busbar_step, busbar_heavy, busbar_code), busbar for all of them. "
+            "The other phases run as usual (their --skip-* flags skip them). Default: all of the tier's tests."
+        ),
+    )
     ap.add_argument(
         "--skip-tests", action="store_true", help="Skip the tests phase entirely: gtests, pytests and the galaxy load."
     )
@@ -209,13 +225,15 @@ def _run_galaxy_load(
     overrides: dict,
     dry_run: bool,
     sweep_reset: Callable[[], str],
+    steps: Sequence[str] = STEPS,
 ) -> None:
-    """The LOAD_TESTS among *tests* into *phase* at *mode*'s length: the bus-bar steps, then the links test, which
-    sweeps after a fault in either. One that raises is its own FAIL and does not stop the other."""
+    """The LOAD_TESTS among *tests* into *phase* at *mode*'s length: the bus-bar *steps*, then the links test, which
+    sweeps after a hang or CCL failure in either (busbar.link_fault; never a numeric fault alone). One that raises is
+    its own FAIL and does not stop the other."""
     held = len(phase.checks)
     if "busbar" in tests:
-        _guarded(phase, "busbar", FAIL, lambda: run_busbar(phase, out, mode, dry_run, **overrides))
-    fault = any(c.status == FAIL for c in phase.checks[held:])
+        _guarded(phase, "busbar", FAIL, lambda: run_busbar(phase, out, mode, dry_run, tuple(steps), **overrides))
+    fault = any(link_fault(c) for c in phase.checks[held:] if c.name != "busbar")
     if "links" in tests:
         _guarded(phase, "links", FAIL, lambda: run_links(phase, out, fault, sweep_reset, dry_run))
 
@@ -311,6 +329,7 @@ def run_diag(
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
     overrides: dict | None = None,
+    tests: str | None = None,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → tests → triage → ETH status → QSFP tests → sys-triage → AER).
 
@@ -324,7 +343,10 @@ def run_diag(
         tier = DEPRECATED_TIER_ALIASES[tier]
     if tier not in TIERS:
         raise ValueError(f"unknown tier {tier!r}; expected one of: {', '.join(TIERS)}")
-    plan = TIERS[tier]
+    plan, steps = TIERS[tier], STEPS
+    if tests is not None:
+        plan, steps = select_tests(plan, tests)
+        log(f"--tests: running {', '.join(plan.tests) or 'no tests'}")
     if tt_metal_path is None:
         tt_metal_path = default_tt_metal_path()
 
@@ -418,9 +440,11 @@ def run_diag(
     test_phase = Phase(name="tests")
 
     def sweep_reset() -> str:
-        """The links sweep's tt-smi -glx_reset: "" when it ran clean, else why the sweep is skipped."""
+        """The links sweep's tt-smi -glx_reset: "" when it ran clean or --skip-reset skips it (the sweep then runs on the
+        unit as it is), else why the sweep is skipped."""
         if skip_reset:
-            return "no reset (--skip-reset)"
+            log("links sweep: no glx_reset first (--skip-reset)")
+            return ""
         ok = aer_reset(lambda: run_post_test_reset(tt_smi_path, ("-glx_reset",), test_phase, dry_run))
         return "" if ok else "reset failed"
 
@@ -438,9 +462,13 @@ def run_diag(
         live = not (input_snapshot or dry_run)
         hsc_before = read_hsc_status() if live else None
         device_tests = [t for t in plan.tests if t not in LOAD_TESTS]
-        _guarded(
-            test_phase, "tests", FAIL, lambda: run_tests(tt_metal_path, device_tests, test_phase, dry_run, logs_dir)
-        )
+        if device_tests:  # none when --tests picks only the galaxy load
+            _guarded(
+                test_phase,
+                "tests",
+                FAIL,
+                lambda: run_tests(tt_metal_path, device_tests, test_phase, dry_run, logs_dir),
+            )
         if plan.galaxy_load:
             _run_galaxy_load(
                 plan.tests,
@@ -450,6 +478,7 @@ def run_diag(
                 overrides or {},
                 dry_run,
                 sweep_reset,
+                steps,
             )
         if live:
             _guarded(test_phase, "hsc_input_status", WARN, lambda: judge_hsc(hsc_before, read_hsc_status(), test_phase))
@@ -624,9 +653,17 @@ def main() -> int:
     args = ap.parse_args()
     overrides = {k: getattr(args, k) for k in OVERRIDES}
     tier = TIERS[DEPRECATED_TIER_ALIASES.get(args.tier, args.tier)]
-    if any(v is not None for v in overrides.values()) and not tier.galaxy_load:
+    if args.tests is not None:
+        try:
+            tier = select_tests(tier, args.tests)[0]
+        except ValueError as e:
+            ap.error(str(e))
+    if any(v is not None for v in overrides.values()) and "busbar" not in tier.tests:
         loaded = ", ".join(n for n, t in TIERS.items() if t.galaxy_load)
-        ap.error(f"the bus-bar overrides set the galaxy load, which tier {args.tier} does not run (tiers: {loaded})")
+        ap.error(
+            f"the bus-bar overrides set the galaxy load's bus-bar steps, which tier {args.tier}"
+            f"{' with --tests ' + args.tests if args.tests is not None else ''} does not run (tiers: {loaded})"
+        )
     if tier.galaxy_load:
         try:
             busbar_plan(tier.load_mode, **overrides)
@@ -656,6 +693,7 @@ def main() -> int:
         output=args.output,
         snapshot_out=args.snapshot_out,
         overrides=overrides,
+        tests=args.tests,
     )
     return rc
 
