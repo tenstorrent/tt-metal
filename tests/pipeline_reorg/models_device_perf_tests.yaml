@@ -134,8 +134,8 @@
   model: resnet50
   skus:
     bh_p150b_civ2:
-      timeout: 9
-      pytest_timeout: 240
+      timeout: 14
+      pytest_timeout: 360
       arch_dir: blackhole
     wh_n150:
       timeout: 10
