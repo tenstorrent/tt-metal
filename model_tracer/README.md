@@ -98,7 +98,7 @@ See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the da
 - **Trace Selection Registry**: `model_tracer/trace_selection_registry.yaml` - Controls which traces are included in test reconstruction
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
-- **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
+- **Config Loader**: `tests/sweep_framework/master_config_loader_v2.py` - Converts JSON configs to sweep test parameters
 
 ---
 
@@ -212,7 +212,7 @@ The sweep framework automatically:
 
 ```python
 # 1. Import and load
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("your_operation_name")
@@ -338,7 +338,7 @@ tt-metal/
 │   └── traced_operations/
 │       └── ttnn_operations_master.json # Master config storage
 └── tests/sweep_framework/
-    ├── master_config_loader.py        # Config loader & utilities
+    ├── master_config_loader_v2.py     # Config loader & utilities
     ├── sweeps_parameter_generator.py  # Generate test vectors
     ├── sweeps_runner.py               # Run individual sweep tests
     └── sweeps/
@@ -368,7 +368,7 @@ See any `*_model_traced.py` file in `tests/sweep_framework/sweeps/model_traced/`
 
 **Simple as:**
 ```python
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 loader = MasterConfigLoader()
 parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 ```
@@ -377,4 +377,4 @@ parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 
 For the full model tracer and database workflow, see [GUIDE.md](GUIDE.md).
 
-For complete documentation on running sweep tests, see [Sweep Framework README](tests/sweep_framework/README.md).
+For complete documentation on running sweep tests, see [Sweep Framework README](../tests/sweep_framework/README.md).
