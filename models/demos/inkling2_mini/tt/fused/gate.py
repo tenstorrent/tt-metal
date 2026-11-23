@@ -12,6 +12,8 @@ FusedMessageGate: drop-in for residual.MessageGate (rows = vectors, each through
 FusedQKVGate: drop-in for model._QKVGate (row i of h / m through gate q, k, v; block-masked like _QKVGate).
 """
 
+import copy
+
 import torch
 
 import ttnn
@@ -61,6 +63,21 @@ class _FusedGate:
         m[..., 0, :] = 1.0
         m[..., 16, :] = 1.0
         self.scaler = ttnn.from_torch(m, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        self.combine_cores, self.fused_req = combine_cores, fused
+        self._layout(rows, group)
+
+    def with_rows(self, rows, group=None):
+        """The same gate (shared device weights) laid out for `rows` rows in tokens of `group` (default: this gate's
+        group): e.g. R verify rows of the model's 1-token gate."""
+        other = copy.copy(self)
+        other._layout(rows, group or self.group)
+        return other
+
+    def _layout(self, rows, group):
+        """Cores, partial-sum packing and output buffers for `rows` rows (tokens of `group` rows)."""
+        device, fused, combine_cores = self.device, self.fused_req, self.combine_cores
+        self.rows = rows
+        assert not self.block or rows % (self.kz // 2) == 0
         self.out = F.OutCache(device)
         n = combine_cores or self.ntc
         assert self.ntc % n == 0

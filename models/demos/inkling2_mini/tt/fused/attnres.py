@@ -62,13 +62,16 @@ class FusedRowOps:
             self._fresh.append({})
         return self._fresh[r]
 
-    def seal(self, stack, h, k):
-        """Stack with rms(h) in row k. Free if the last write of row k was rms(h) (an AttnRes partial)."""
+    def seal(self, stack, h, k, h_row=0):
+        """Stack with rms(h) in row k. Free if the last write of row k was rms(h) (an AttnRes partial).
+        h_row: the row of h to seal (R verify rows: row r of an R-row h)."""
         if self.fresh.get(k) is not h:
-            self.run(h, k)
+            self.run(h, k, p_row=h_row)
         return self.stack
 
-    def run(self, partial, k, q=None, nq=0, out=None, out_rows=None, out_dense=None, norm=None, o_row=0, tw_n=0):
+    def run(
+        self, partial, k, q=None, nq=0, out=None, out_rows=None, out_dense=None, norm=None, o_row=0, tw_n=0, p_row=0
+    ):
         """norm: (dense fp32 weight, bf16 L1 row) -> also the weighted rms of output 0 into that row (MoE input).
         o_row, tw_n: outputs at vector o_row of a shared R-row output, tw_n twin vectors (attnres_writer)."""
         F.check_row_input(partial)
@@ -90,7 +93,7 @@ class FusedRowOps:
             ttnn.ReaderConfigDescriptor(),
             named,
             [
-                *F.input_args(partial),
+                *F.input_args(partial, p_row),
                 q.buffer_address() if q is not None else 0,
                 self.stack.buffer_address(),
                 self.scaler.buffer_address(),
