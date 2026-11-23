@@ -500,9 +500,15 @@ def _spec_sampled(gen, backend, mesh_device, tok, prompts, plains, plain_timing,
 def _spec_ab_multi(gen, backend, mesh_device, tok, prompts, plains, plain_timing, plain_ms, K, stop) -> None:
     """GLM53_SPEC_MULTI: the G prompts through the backend's multi-user step (generate_batch(spec_k=K) places them on
     the group bases) after the plain run on the same build; per user the ids == its plain ids up to its first near-tie
-    (the gate), tau (its committed tokens per step), the plain top-2 gap at a mismatch; MK_SPEC_MULTI lines"""
+    (the gate), tau (its committed tokens per step), the plain top-2 gap at a mismatch; MK_SPEC_MULTI lines.
+    GLM53_MK_SPEC_SLOTS="0,2,4,6": the users' generator slots (generate_batch then runs the first step whose bases hold
+    them: GLM53_SPEC_W8_VERIFY's 4 x 1 step, else the 8 x 1 alternate); GLM53_MK_DUMP_IDS on a spec-only run: its ids as
+    a json (a later run's GLM53_MK_EXPECT_IDS_FILE)"""
     G = len(prompts)
-    souts = gen.generate_batch([list(p) for p in prompts], OSL, stop_on_eos=stop, enable_trace=True, spec_k=K)
+    sl = [int(v) for v in os.environ.get("GLM53_MK_SPEC_SLOTS", "").split(",") if v.strip()] or None
+    assert sl is None or len(sl) == G, f"GLM53_MK_SPEC_SLOTS {sl}: one slot per live user ({G})"
+    souts = gen.generate_batch([list(p) for p in prompts], OSL, stop_on_eos=stop, enable_trace=True, spec_k=K,
+                               slots=sl)  # fmt: skip
     ttnn.synchronize_device(mesh_device)
     st = gen.last_batch_timing
     steps = int(st["spec_steps"])
@@ -533,6 +539,12 @@ def _spec_ab_multi(gen, backend, mesh_device, tok, prompts, plains, plain_timing
     logger.info(f"MK_SPEC backend spec counters: {backend.spec.counters}")
     sha = _ids_sha(souts)
     logger.info(f"MK_SPEC_ALL_IDS: sha256 {sha} ({G} users, {sum(len(o) for o in souts)} ids)")
+    dump = os.environ.get("GLM53_MK_DUMP_IDS", "")
+    if dump and os.environ.get("GLM53_MK_SPEC_ONLY", "0") == "1":  # (a plain + spec run dumps its plain ids)
+        with open(dump, "w") as f:
+            json.dump(dict(users=[list(o) for o in souts], live=G, isl=len(prompts[0]), osl=OSL, step_ms=spec_ms,
+                           spec_step=list(st.get("spec_step") or ()), slots=sl), f)  # fmt: skip
+        logger.info(f"MK_E2E_DUMP_IDS: {dump} ({G} users, the speculative ids)")
     kg = st.get("spec_step") or (K, G)
     row = dict(tau=sum(taus) / max(1, G), steps=steps, spec_ms=spec_ms, eff=eff, ttft_ms=st["prefill_s"] * 1e3, sha=sha,
                step=f"step (K, G) {tuple(kg)[:2]}", step_ms=tim["step_ms"] if tim else spec_ms,

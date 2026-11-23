@@ -2231,6 +2231,7 @@ def test_spec_widths_rules(monkeypatch):
     # single-user rules
     # are not read; the sparse_dsa layers' extra fabric row counts only <= 4 (wider runs on the full width's phases)
     monkeypatch.setenv("GLM53_SPEC_VERIFY_W", "3")
+    monkeypatch.setenv("GLM53_STACK_NATIVE_FAB", "pad")  # (an 8-row step below the 16-row full width: packed phases)
     assert spec_widths(3, 16, ws, groups=4) == dict(w=16, lone=16, wv=16, cu=16, ch=4, mode="multi", ts=(4,))
     assert spec_widths(3, 16, ws, groups=2) == dict(w=8, lone=8, wv=8, cu=8, ch=2, mode="multi", ts=(2,))
     assert spec_widths(1, 16, ws, groups=2) == dict(w=4, lone=4, wv=4, cu=4, ch=4, mode="multi", ts=(4,))
@@ -2275,6 +2276,146 @@ def test_spec_multi_lone_step():
     assert spec_pick_step(steps, [4]) == (1, [4])  # a lone user elsewhere: the primary (partial)
     assert spec_pick_step(steps, [0, 4]) == (1, [0, 4]) and spec_pick_step(steps, [0, 2]) == (2, [0, 2])
     assert spec_pick_step(steps, [0], room=lambda i: i != 0) == (1, [0])  # no room on the lone step: the next one
+
+
+def _spec_switch_gen(steps, cur: int = 0, partial: bool = False):
+    """a Glm53Generator over a backend whose spec is a _MockSpecSwitch of steps [(K, G, bases)] (spec_steps / spec_all_slots
+    / spec_select read only K / groups / slots / partial of each step)"""
+    sw = _MockSpecSwitch([SimpleNamespace(K=k, groups=g, slots=tuple(b), partial=partial) for k, g, b in steps])
+    sw.select(cur)
+    gen = Glm53Generator.__new__(Glm53Generator)
+    gen.backend, gen._bindings, gen.counters = SimpleNamespace(spec=sw), {}, {}
+    return gen
+
+
+def test_spec_multi_sub_steps_and_w8_verify():
+    """GLM53_SPEC_MULTI_SUB (row sparsity) / GLM53_SPEC_W8_VERIFY: SUBSET steps of the built steps (G' < G users on a
+    step's first bases, its K), each listed before its step -- the pair step (2 x 3 on 0 / 4) verifies 8 rows on the
+    native width 8 where the 4 x 3 primary verifies 16, the 4 x 1 step (0 / 2 / 4 / 6) 8 where the 8 x 1 alternate
+    verifies 16; GLM53_SPEC_MULTI_LONE is the 1-user case; a subset equal to a built step is refused. The pick takes the
+    narrowest step that holds every live user; the placement order (spec_all_slots) stays 0, 4, 8, 12, 2, 6, 10, 14 --
+    the 4 x 1 step lists after the primary, so a 3rd / 4th user keeps the 4 x 3 step's bases; the knob adds width 8 on
+    the packed phases (an 8-row step below the 16-row full width refuses any other GLM53_STACK_NATIVE_FAB)"""
+    from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
+        spec_multi_layout,
+        spec_multi_subs,
+        spec_w8_env,
+        spec_w8_verify,
+    )
+
+    on = {"GLM53_SPEC_MULTI": "1", "GLM53_SPEC_MTP_SPARSE": "1", "GLM53_SPEC_MULTI_USERS": "4", "GLM53_SPEC_K": "3"}
+    srv = {**on, "GLM53_SPEC_MULTI_ALT": "8:1", "GLM53_SPEC_MULTI_LONE": "1"}  # (the served B 16 steps)
+    assert spec_multi_subs(on) == () and spec_multi_subs({}) == () and spec_multi_layout({}) == []
+    assert spec_multi_subs({**on, "GLM53_SPEC_MULTI_SUB": "2"}) == ((2, 3),)
+    assert spec_multi_subs({**on, "GLM53_SPEC_MULTI_SUB": "2", "GLM53_SPEC_MULTI_LONE": "1"}) == ((1, 3), (2, 3))
+    assert spec_multi_subs({**on, "GLM53_SPEC_MULTI_SUB": "2,1"}) == ((1, 3), (2, 3))
+    assert spec_multi_subs({**srv, "GLM53_SPEC_MULTI_SUB": "2:3,4:1"}) == ((1, 3), (2, 3), (4, 1))
+    with expect_error(ValueError, "not 1 <= G' < G"):
+        spec_multi_subs({**on, "GLM53_SPEC_MULTI_SUB": "4"})  # (not a subset: the primary itself)
+    with expect_error(ValueError, "not 1 <= G' < G"):
+        spec_multi_subs({**on, "GLM53_SPEC_MULTI_SUB": "4:1"})  # (no step with K 1: no alternate)
+    with expect_error(ValueError, "GLM53_SPEC_MULTI_SUB"):
+        spec_multi_subs({"GLM53_SPEC_MULTI_SUB": "2", "GLM53_SPEC_MULTI": "1"})  # (no sparse MTP: no shared state)
+    with expect_error(ValueError, "comma-separated"):
+        spec_multi_subs({**on, "GLM53_SPEC_MULTI_SUB": "two"})
+    # a subset equal to a built step: refused up front (it would be built twice) -- the 4 x 1 primary under the 8 x 1
+    # alternate, the 2 x 3 primary under a 4 x 3 alternate, by GLM53_SPEC_MULTI_SUB or as the knob's half
+    p41 = {**on, "GLM53_SPEC_K": "1", "GLM53_SPEC_MULTI_ALT": "8:1"}
+    p23 = {**on, "GLM53_SPEC_MULTI_USERS": "2", "GLM53_SPEC_MULTI_ALT": "4:3"}
+    with expect_error(ValueError, "built steps already"):
+        spec_multi_subs({**p41, "GLM53_SPEC_MULTI_SUB": "4:1"})
+    with expect_error(ValueError, "built steps already"):
+        spec_multi_subs({**p23, "GLM53_SPEC_MULTI_SUB": "2"})
+    with expect_error(ValueError, "halves \\[\\(4, 1\\)\\] are built steps already"):
+        spec_multi_subs({**p41, "GLM53_SPEC_W8_VERIFY": "1"})
+    with expect_error(ValueError, "halves \\[\\(2, 3\\)\\] are built steps already"):
+        spec_multi_subs({**p23, "GLM53_SPEC_W8_VERIFY": "1"})
+    assert spec_multi_subs({**p41, "GLM53_SPEC_MULTI_SUB": "2:1"}) == (
+        (2, 1),
+    )  # (a true subset of both: the primary's)
+    assert spec_multi_layout({**p41, "GLM53_SPEC_MULTI_SUB": "2:1"}) == [(2, 1), (4, 1), (8, 1)]
+    # the served layout, unchanged without the knob; with it the two 8-row halves, each before its step
+    assert spec_multi_layout(srv) == [(1, 3), (4, 3), (8, 1)]
+    w8 = {**srv, "GLM53_SPEC_W8_VERIFY": "1"}
+    assert spec_w8_verify(w8) and not spec_w8_verify(srv)
+    assert spec_multi_subs(w8) == ((1, 3), (2, 3), (4, 1))
+    assert spec_multi_layout(w8) == [(1, 3), (2, 3), (4, 3), (4, 1), (8, 1)]
+    with expect_error(ValueError, "GLM53_SPEC_W8_VERIFY"):
+        spec_w8_verify({"GLM53_SPEC_W8_VERIFY": "1", "GLM53_SPEC_MULTI": "1"})
+    with expect_error(ValueError, "no 16-row multi-user step"):
+        spec_multi_subs({**on, "GLM53_SPEC_MULTI_USERS": "2", "GLM53_SPEC_W8_VERIFY": "1"})  # (2 x 3 = 8 rows only)
+    # the width: 8 joins the native widths, the packed phases by default; None (off) without the knob or K; B 16 only
+    env = dict(w8)
+    assert spec_w8_env(env) == {"GLM53_STACK_NATIVE_WIDTHS": "8", "GLM53_STACK_NATIVE_FAB": "pad"}
+    assert env["GLM53_STACK_NATIVE_WIDTHS"] == "8" and spec_w8_env(env) == {}  # (idempotent: on, nothing left to set)
+    assert spec_w8_env({**w8, "GLM53_STACK_NATIVE_WIDTHS": "12"})["GLM53_STACK_NATIVE_WIDTHS"] == "8,12"
+    assert spec_w8_env(dict(srv)) is None and spec_w8_env({**w8, "GLM53_SPEC_K": "0"}) is None
+    with expect_error(ValueError, "the B 16 build"):
+        spec_w8_env(dict(w8), max_batch=32)
+    # the rows: the pair 2 x 4 = 8 on the native width 8 (its chained rows at narrow 4), the 4 x 1 step 4 x 2 = 8 (no
+    # chained launch at K 1); refused without width 8, and below the 16-row full width on anything but the packed
+    # phases -- the same 8-row step through GLM53_SPEC_MULTI_SUB=2 (GLM53_STACK_NATIVE_FAB defaults to "own")
+    pad = {"GLM53_STACK_NATIVE_FAB": "pad"}
+    assert spec_widths(3, 16, (4, 8), groups=2, env=pad) == dict(w=8, lone=8, wv=8, cu=8, ch=4, mode="multi", ts=(4,))
+    assert spec_widths(1, 16, (4, 8), groups=4, env=pad) == dict(w=8, lone=8, wv=8, cu=8, ch=8, mode="multi", ts=())
+    with expect_error(AssertionError, "must be a decode width of the build"):
+        spec_widths(3, 16, (4,), groups=2, env=pad)
+    sub = {**srv, "GLM53_SPEC_MULTI_SUB": "2", "GLM53_STACK_NATIVE_WIDTHS": "8"}
+    for fab in ({}, {"GLM53_STACK_NATIVE_FAB": "own"}):
+        with expect_error(ValueError, "packed phases"):
+            for g, k in spec_multi_subs({**sub, **fab}):
+                spec_widths(k, 16, (4, 8), groups=g, env={**sub, **fab})
+    assert [spec_widths(k, 16, (4, 8), groups=g, env={**sub, **pad})["w"] for g, k in spec_multi_subs(sub)] == [4, 8]
+    assert spec_widths(3, 32, (4, 8), groups=2, env={})["w"] == 8  # (a 32-row full width: its whole-tile phase serves)
+    # the pick over the layout's steps (K, G, bases)
+    steps = [(3, 1, (0,)), (3, 2, (0, 4)), (3, 4, (0, 4, 8, 12)), (1, 4, (0, 2, 4, 6)), (1, 8, tuple(range(0, 16, 2)))]
+    assert spec_pick_step(steps, [0]) == (0, [0])  # 1 user on 0: the lone 4-row step
+    assert spec_pick_step(steps, [0, 4]) == (1, [0, 4])  # 2 users on 0 / 4: the pair's 8 rows
+    assert spec_pick_step(steps, [4]) == (1, [4])  # 1 user on 4 (partial pair): 8 rows
+    assert spec_pick_step(steps, [0, 4, 8]) == (2, [0, 4, 8])  # 3 users on the primary's bases: the 4 x 3 step
+    assert spec_pick_step(steps, [0, 2]) == (3, [0, 2])  # on 0..7 off the primary's bases: the 4 x 1 step's 8 rows
+    assert spec_pick_step(steps, [0, 2, 4, 6]) == (3, [0, 2, 4, 6])
+    assert spec_pick_step(steps, [0, 2, 8]) == (4, [0, 2, 8])  # a user past slot 7: the 8 x 1 step's 16 rows
+    assert spec_pick_step(steps, [0, 4], room=lambda i: i != 1) == (2, [0, 4])  # no room on the pair: the primary
+    gen = _spec_switch_gen(steps, cur=2)  # (the served placement order: Glm53Generator.spec_all_slots itself)
+    assert gen.spec_all_slots() == (0, 4, 8, 12, 2, 6, 10, 14)
+    assert gen.spec_steps() == [(k, g, tuple(b)) for k, g, b in steps]
+
+
+def test_generate_batch_explicit_slots_pick_the_first_step_that_holds_them():
+    """generate_batch(spec_k, slots=...) on a multi-step backend (_MockSpecSwitch of the pair 2 x 3 on 0 / 4 and the 4 x 1
+    step on 0 / 2 / 4 / 6, GLM53_SPEC_PARTIAL) picks the step as the served adapter does (spec_pick_step over spec_steps'
+    preference order), whatever step is current: [0, 4] -> the pair even with the 4 x 1 step current, [0, 2, 4, 6] ->
+    the 4 x 1 step; the outputs equal plain greedy. A bad slots argument is refused before any step is selected."""
+    mb, K0 = 8, 3
+
+    class _B(_MockSpecMultiPartialBackend):
+        def allocate_decode_io(self, kv):
+            io = super().allocate_decode_io(kv)
+            self.spec = _MockSpecSwitch([self.spec, _MockSpecMultiPartial(self, 1, 4, self.good)])
+            return io
+
+    be = _B(mb, K0, 2, lambda step: K0)
+    gen = Glm53Generator(be, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=mb, max_seq_len=SEQ)
+    p4 = [_prompt(200 - 30 * u, 3 + 7 * u) for u in range(4)]  # (past slot 0's first block: its null-block row)
+    p2 = p4[:2]
+    plain2, plain4 = gen.generate_batch(p2, 8, enable_trace=True), gen.generate_batch(p4, 8, enable_trace=True)
+    assert gen.spec_steps() == [(3, 2, (0, 4)), (1, 4, (0, 2, 4, 6))] and gen.spec_partial_groups()
+    gen.spec_select(1)
+    assert gen.generate_batch(p2, 8, enable_trace=True, spec_k=K0, slots=[0, 4]) == plain2
+    assert gen.spec_current() == 0 and gen.last_batch_timing["spec_step"] == (3, 2)
+    assert gen.generate_batch(p4, 8, enable_trace=True, spec_k=K0, slots=[0, 2, 4, 6]) == plain4
+    assert gen.spec_current() == 1 and gen.last_batch_timing["spec_step"] == (1, 4)
+    for bad in ([0, 0], [0, 40], [0]):  # (duplicate, out of range, wrong count): refused, the current step kept
+        with expect_error(ValueError, "distinct slots"):
+            gen.generate_batch(p2, 8, enable_trace=True, spec_k=K0, slots=bad)
+        assert gen.spec_current() == 1
+    # (the selection helper alone, on step tuples: the first holder in preference order, the current step ignored)
+    g2 = _spec_switch_gen([(3, 2, (0, 4)), (1, 4, (0, 2, 4, 6))], cur=1, partial=True)
+    b = SimpleNamespace(max_batch=mb)
+    assert g2._spec_batch_slots(b, 2, [4, 0]) == [4, 0] and g2.spec_current() == 0
+    assert g2._spec_batch_slots(b, 3, [0, 2, 6]) == [0, 2, 6] and g2.spec_current() == 1
+    assert g2._spec_batch_slots(b, 2, None) == [0, 4] and g2.spec_current() == 0
 
 
 def test_spec_admit_keeps_speculation_on_attach_with_mtp_snapshots():

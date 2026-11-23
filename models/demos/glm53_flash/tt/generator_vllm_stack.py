@@ -2347,6 +2347,18 @@ class GLM53StackForCausalLM:
                                 accepted_counts=torch.ones(B, dtype=torch.int32))  # fmt: skip
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids.reshape(B, 1))
 
+    def _note_w8(self, n: int) -> None:
+        """GLM53_SPEC_W8_VERIFY: n device steps of the current step counted under spec_stats "w8_<G>x<K>" when it
+        verifies 8 rows of a wider build (the pair / 4 x 1 steps; the key appears with its first step, so the default
+        stats are unchanged)"""
+        steps = self.gen.spec_steps()
+        if not steps:
+            return
+        K, G, _b = steps[self.gen.spec_current()]
+        if int(G) * (int(K) + 1) == 8 < int(self.max_batch) and int(G) > 1:
+            k = f"w8_{int(G)}x{int(K)}"
+            self.spec_stats[k] = self.spec_stats.get(k, 0) + int(n)
+
     def _fused_sample_out(self, recs: list, r, B: int, W: int):
         """a chain's records -> ``VerifyOutput(fused_sample)`` (fused_sample_block) + the adapter's bookkeeping: the
         committed count its proposal must continue (_spec_n: total - 1), the stats (fused per device step)"""
@@ -2358,6 +2370,7 @@ class GLM53StackForCausalLM:
         st = self.spec_stats
         f0 = st["fused"]
         st["fused"] += len(recs)
+        self._note_w8(len(recs))
         st["calls"] += 1
         st["committed"] += sum(total.values()) if multi else total
         if st["fused"] // 256 > f0 // 256:
@@ -2433,6 +2446,7 @@ class GLM53StackForCausalLM:
                 self._spec_n[g] = int(rec[g]["n"])
                 self.spec_stats["committed"] += int(rec[g]["n"]) + 1
             self.spec_stats["fused"] += 1
+            self._note_w8(1)
             if self.spec_stats["fused"] % 256 == 0:
                 st = self.spec_stats
                 logger.info(f"GLM53 stack spec (multi): {st} (tau per user "

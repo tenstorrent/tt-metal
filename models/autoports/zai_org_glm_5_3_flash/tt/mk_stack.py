@@ -104,6 +104,12 @@ class AllocPool:
         # tensors allocated) before it, so a NEW tensor now -- a program first built after a capture -- would sit in L1
         # / DRAM a captured trace may also use. Not refused (unvalidated on device): logged once, counted
         self.frozen, self.post_capture_allocs = False, 0
+        # wide_prefix (GLM53_SPEC_W8_VERIFY, StackBackend: the build pools, never a child): an alias request with a row
+        # count outside the tile dims ((1, t, 2, 512), (1, 4, t, 1)) is also served as a view of an unhanded tensor of
+        # the same tile rows / columns whose dim -3 reaches as far (_wide_alias). On a full width below 32 rows its
+        # exact shapes are not their padded ones, so the alias keys miss them, and a width-8 / 4 build must not add L1
+        # below the full width's static CBs
+        self.wide_prefix = False
 
     def freeze(self) -> None:
         """a trace was captured: allocations from now on are logged (once per process) and counted (+ the child's)"""
@@ -294,7 +300,7 @@ class AllocPool:
         Returns the view's key (views / prefix_base); None: no candidate or ttnn refuses the view -> the caller allocates.
         """
         if len(pad) < 2 or any(v != 1 for v in pad[:-2]) or pad[-2] != 32:
-            return None
+            return self._wide_alias(want, pad, k) if self.wide_prefix else None
         best = None
         for bk, blst in self.lists.items():
             if bk[1:] != k[1:]:
@@ -313,6 +319,37 @@ class AllocPool:
             try:
                 self.views[vk] = ttnn.reshape(base, ttnn.Shape(list(want)), ttnn.Shape(list(base.padded_shape)))
             except Exception:  # noqa: BLE001 -- ttnn refuses a wider padded last dim: allocate instead
+                return None
+            self.prefix_base[vk] = base
+        return vk
+
+    def _wide_alias(self, want, pad, k):
+        """wide_prefix: a request (unit dims above -3) served as a view of an unhanded pool tensor of the same dtype /
+        layout / memory config, unit dims above -3, the same padded tile rows and columns and at least as many dim -3
+        slices -- TILE pages run over (dim -3, tile row, tile column), so the request's tiles are the base's first ones,
+        in order (the same base padded shape: another width's exact shape, e.g. the full width's (1, 4, 16, 1) for
+        (1, 4, 8, 1)). The smallest such base; None -> the caller allocates (as _prefix_alias)"""
+        if len(pad) < 3 or any(v != 1 for v in pad[:-3]):
+            return None
+        best = None
+        for bk, blst in self.lists.items():
+            if bk[1:] != k[1:]:
+                continue
+            for base in blst:
+                bp = tuple(int(v) for v in base.padded_shape)
+                if (id(base) in self.used or len(bp) != len(pad) or any(v != 1 for v in bp[:-3])
+                        or bp[-2:] != pad[-2:] or bp[-3] < pad[-3]):  # fmt: skip
+                    continue
+                if best is None or bp[-3] < best[1]:
+                    best = (base, bp[-3])
+        if best is None:
+            return None
+        base = best[0]
+        vk = ("prefix", id(base), want)
+        if vk not in self.views:
+            try:
+                self.views[vk] = ttnn.reshape(base, ttnn.Shape(list(want)), ttnn.Shape(list(base.padded_shape)))
+            except Exception:  # noqa: BLE001 -- ttnn refuses the view: allocate instead
                 return None
             self.prefix_base[vk] = base
         return vk
