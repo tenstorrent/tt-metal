@@ -4,8 +4,11 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+
+#include <tt-metalium/vocabulary/device_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -61,5 +64,21 @@ tt::tt_metal::ClusterType GetClusterType();
  * @return std::string Path to the serialized cluster descriptor file
  */
 std::string SerializeClusterDescriptor();
+
+/**
+ * Returns number of Tenstorrent devices that can be targeted
+ *
+ * Return value: size_t
+ */
+size_t GetNumAvailableDevices();
+
+/**
+ * Returns number of Tenstorrent devices that are connected to host via PCIe and can be targeted
+ *
+ * Return value: size_t
+ */
+size_t GetNumPCIeDevices();
+
+ChipId GetPCIeDeviceID(ChipId device_id);
 
 }  // namespace tt::tt_metal

@@ -4,11 +4,9 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
-#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -19,12 +17,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/profiler_types.hpp>
-#include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device_types.hpp>
 
 /** @file */
 
@@ -55,26 +50,6 @@ class MeshTensor;
 //                  HOST API: Device management
 // ==================================================
 
-// clang-format off
-/**
- * Sets the root directory for TT Metal meta data files like kernel sources.
- *
- * Return value: void
- *
- * | Argument  | Description                                 | Type                | Valid range | Required |
- * |-----------|---------------------------------------------|---------------------|-------------|----------|
- * | root_dir  | Path to the root directory                  | const std::string & |             | No       |
- */
-// clang-format on
-void SetRootDir(const std::string& root_dir);
-
-/**
- * Returns number of Tenstorrent devices that can be targeted
- *
- * Return value: size_t
- */
-size_t GetNumAvailableDevices();
-
 /**
  * Returns whether Tenstorrent devices are in a Galaxy cluster.
  *
@@ -84,15 +59,6 @@ size_t GetNumAvailableDevices();
  */
 [[deprecated("This API always returns false and will be removed after 2026-11-13.")]]
 bool IsGalaxyCluster();
-
-/**
- * Returns number of Tenstorrent devices that are connected to host via PCIe and can be targeted
- *
- * Return value: size_t
- */
-size_t GetNumPCIeDevices();
-
-ChipId GetPCIeDeviceID(ChipId device_id);
 
 // ==================================================
 //                  HOST API: program & kernels
@@ -477,26 +443,6 @@ std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program
  */
 // clang-format on
 RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id);
-
-// clang-format off
-/**
- * Read device side profiler data for all devices in the mesh device
- *
- * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
- *
- * Return value: void
- *
- * | Argument      | Description                                           | Type                     | Valid Range               | Required |
- * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
- * | mesh_device   | The mesh device containing the devices to be profiled | MeshDevice&              |                           | Yes      |
- * | state         | The state to use for this profiler read               | ProfilerReadState        |                           | No       |
- * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
- * */
-// clang-format on
-void ReadMeshDeviceProfilerResults(
-    distributed::MeshDevice& mesh_device,
-    ProfilerReadState state = ProfilerReadState::NORMAL,
-    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 // clang-format off
 /**
