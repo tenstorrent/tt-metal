@@ -35,9 +35,9 @@ using ChipRecords = std::vector<std::vector<uint32_t>>;
 // so a failure on one host shows up as an error on all of them rather than a hang on the others. Only failures
 // inside `local_record` are covered: an exception a rank raises before calling this still leaves the others waiting.
 //
-// A non-empty `config_key` caches the result per (mesh, config_key): a later call with the same pair returns the
-// cached records without calling `local_record` or the collective. `config_key` must name every input the records
-// depend on.
+// A non-empty `config_key` caches the result per (mesh, mesh shape and chip layout, record width, config_key): a
+// later call with the same key returns the cached records without calling `local_record` or the collective.
+// `config_key` must name every other input the records depend on.
 ChipRecords exchange_chip_records(
     const ttnn::MeshDevice& mesh,
     const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& context,

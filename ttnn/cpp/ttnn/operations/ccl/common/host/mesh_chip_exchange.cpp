@@ -9,6 +9,7 @@
 #include <exception>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -36,6 +37,21 @@ std::mutex& cache_mutex() {
     return mutex;
 }
 
+// reshape() changes a mesh's coordinate-to-chip mapping without changing its id, so the cache key carries the shape,
+// the fabric node behind every coordinate, and the record width alongside the caller's configuration.
+std::string cache_signature(const ttnn::MeshDevice& mesh, uint32_t words_per_chip, const std::string& config_key) {
+    if (config_key.empty()) {
+        return {};
+    }
+    const auto& shape = mesh.shape();
+    std::ostringstream signature;
+    signature << config_key << "|shape=" << shape << "|words=" << words_per_chip << "|nodes=";
+    for (const auto& coord : ttnn::MeshCoordinateRange(shape)) {
+        signature << mesh.get_fabric_node_id(coord) << ',';
+    }
+    return signature.str();
+}
+
 }  // namespace
 
 std::shared_ptr<DistributedContext> mesh_distributed_context(const ttnn::MeshDevice& mesh) {
@@ -48,7 +64,8 @@ ChipRecords exchange_chip_records(
     uint32_t words_per_chip,
     const std::function<std::vector<uint32_t>(const ttnn::MeshCoordinate&)>& local_record,
     const std::string& config_key) {
-    const auto cache_key = std::make_pair(static_cast<int>(mesh.id()), config_key);
+    const auto cache_key =
+        std::make_pair(static_cast<int>(mesh.id()), cache_signature(mesh, words_per_chip, config_key));
     if (!config_key.empty()) {
         const std::lock_guard lock(cache_mutex());
         const auto hit = cache().find(cache_key);
