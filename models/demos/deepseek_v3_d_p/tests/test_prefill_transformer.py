@@ -39,10 +39,10 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
-from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     moe_fabric_payload,
+    prefill_block_mesh_params,
     torus_x_device_params,
     torus_xy_device_params,
 )
@@ -904,9 +904,9 @@ def _ci_unsupported_param_combos_ds_transformer(**params):
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
-        # FABRIC_2D variants — shared list defined in conftest.py (also used by
+        # FABRIC_2D variants — shared list from fabric_profiles.py (also used by
         # test_prefill_block_loop.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
-        *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
+        *prefill_block_mesh_params(),
     ],
     indirect=["mesh_device", "device_params"],
 )

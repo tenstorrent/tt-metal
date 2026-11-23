@@ -35,13 +35,7 @@ TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
 DSV3 = get_adapter("deepseek_v3_d_p")
 
 from models.demos.deepseek_v3_d_p.tests import _reuse
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    certified_torus_fabric,
-    fabric2d_device_params,
-    torus_x_device_params,
-    torus_xy_device_params,
-    torus_y_device_params,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import certified_torus_fabric
 
 # glm_5_3 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
 # ADAPTER_PATHS (prefill serving is not wired), so register it locally for the `variant` fixture
@@ -55,57 +49,6 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     download_infinitebench_subset,
     extract_moe_layer_weights,
 )
-
-# Shared production-policy params for prefill block + transformer tests. LoudBox executes canonical
-# 2x4 Fabric2D and one 4x2 axis-order diagnostic; Galaxy production executes only 8x4 TorusXY.
-FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
-    pytest.param(
-        (4, 2),
-        fabric2d_device_params(),
-        1,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="fabric2d-mesh-4x2",
-    ),
-    pytest.param(
-        (2, 4),
-        fabric2d_device_params(),
-        1,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-        id="fabric2d-mesh-2x4",
-    ),
-    # FABRIC_2D_TORUS_XY on the full 8x4 galaxy: Ring on BOTH axes (SP dim 0 = Ring-8, TP dim 1 =
-    # Ring-4). SP-axis MoE dispatch/combine ride #48225's ring-aware kernels; TP-axis collectives ring.
-    pytest.param(
-        (8, 4),
-        torus_xy_device_params(),
-        2,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="torus-xy-8x4",
-    ),
-    # Existing 16-chip subtorus diagnostics. These run only with an explicit 4x4 carve descriptor;
-    # they are a distinct workload and are not substitutes for production 8x4 TorusXY coverage.
-    pytest.param(
-        (4, 4),
-        torus_y_device_params(),
-        2,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="torus-y-4x4",
-    ),
-    pytest.param(
-        (4, 4),
-        torus_x_device_params(),
-        2,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="torus-x-4x4",
-    ),
-    pytest.param(
-        (4, 4),
-        torus_xy_device_params(),
-        2,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="torus-xy-4x4",
-    ),
-]
 
 
 def pytest_addoption(parser):
@@ -138,7 +81,8 @@ def pytest_configure(config):
 
 def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
     kept = []
-    is_bh = is_blackhole()
+    # Read the arch only for an item that has a predicate: it opens the devices, which a host-only test must not.
+    is_bh = None
     for item in items:
         # Every uncollect_if mark counts, not just the closest: a function-level one and a per-param one
         # (utils/stage_4x4_params.py) can sit on the same case.
@@ -150,6 +94,8 @@ def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
         # Values the predicate wants that come from fixtures, not parametrization.
         params.setdefault("is_ci_env", is_ci_env)
         params.setdefault("is_ci_v2_env", is_ci_v2_env)
+        if is_bh is None:
+            is_bh = is_blackhole()
         params.setdefault("is_bh", is_bh)
         if not any(marker.kwargs["pred"](**params) for marker in markers):
             kept.append(item)
