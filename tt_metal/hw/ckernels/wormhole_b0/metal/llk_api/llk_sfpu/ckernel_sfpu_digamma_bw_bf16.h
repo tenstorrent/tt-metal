@@ -65,9 +65,8 @@ inline void calculate_digamma_bw_bf16() {
         vFloat x = x6;
         v_if(x < 0.0f) { factor = v1; }
         v_endif;
-        v_if(
-            setsgn(vFloat(dst_reg[32 + d]), 0) == 0.0f && setsgn(x, 0) < 1.0842021724855044e-19f &&
-            setsgn(x, 0) != 0.0f) {
+        vFloat grad = dst_reg[32 + d];
+        v_if(setsgn(grad, 0) == 0.0f && setsgn(x, 0) < 1.0842021724855044e-19f && setsgn(x, 0) != 0.0f) {
             factor = 0.0f;
         }
         v_endif;
@@ -81,7 +80,11 @@ inline void calculate_digamma_bw_bf16() {
             v_endif;
         }
         v_endif;
-        vFloat product = dst_reg[32 + d] * factor;
+        vFloat product = grad * factor;
+        v_if(sfpi::exexp(factor) == 128 && setsgn(grad, 0) != 0.0f) {
+            product = sfpi::copysgn(vFloat(1.0f), grad) * factor;
+        }
+        v_endif;
         v_if(setsgn(factor, 0) < 1.1754943508222875e-38f) { product = 0.0f; }
         v_endif;
         v_if(sfpi::is_nan(product)) { product = std::numeric_limits<float>::quiet_NaN(); }
