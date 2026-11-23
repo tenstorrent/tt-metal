@@ -68,18 +68,13 @@ inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t unpB_num_faces,
     const bool partial_face_a,
     const bool partial_face_b) {
+    // make_tensor_shape_from_legacy maps 2 faces to 1x2 only; the non-partial 2x1 case is built explicitly.
     const auto shape_from_legacy =
         [](const std::uint32_t face_r_dim, const std::uint32_t num_faces, const bool partial_face) {
-            const bool full = num_faces == ckernel::MAX_NUM_FACES;
-            const std::uint8_t num_faces_r_dim =
-                (full || (num_faces == 2 && !partial_face)) ? ckernel::MAX_NUM_FACES_R_DIM : 1;
-            const std::uint8_t num_faces_c_dim =
-                (full || (num_faces == 2 && partial_face)) ? ckernel::MAX_NUM_FACES_C_DIM : 1;
-            return ckernel::make_tensor_shape(
-                static_cast<std::uint8_t>(face_r_dim),
-                static_cast<std::uint8_t>(FACE_C_DIM),
-                num_faces_r_dim,
-                num_faces_c_dim);
+            const std::uint8_t fr = static_cast<std::uint8_t>(face_r_dim);
+            return (num_faces == 2 && !partial_face)
+                       ? ckernel::make_tensor_shape(fr, ckernel::MAX_FACE_C_DIM, ckernel::MAX_NUM_FACES_R_DIM, 1)
+                       : ckernel::make_tensor_shape_from_legacy(fr, static_cast<std::uint8_t>(num_faces));
         };
     const ckernel::TensorShape in0_tensor_shape = shape_from_legacy(unpB_face_r_dim, unpB_num_faces, partial_face_b);
     const ckernel::TensorShape in1_tensor_shape = shape_from_legacy(unpA_face_r_dim, unpA_num_faces, partial_face_a);

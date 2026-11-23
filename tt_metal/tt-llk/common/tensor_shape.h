@@ -231,8 +231,7 @@ constexpr bool matmul_supports_tensor_shapes(const TensorShape& in0_tensor_shape
     const bool in1_full_faces = in1_tensor_shape.face_r_dim == MAX_FACE_R_DIM;
     const bool in1_is_16x16   = (in1_tensor_shape.num_faces_r_dim == 1) && (in1_tensor_shape.num_faces_c_dim == 1);
     const bool in0_faces_ok =
-        in0_tensor_shape.face_r_dim == MAX_FACE_R_DIM ||
-        (in0_tensor_shape.num_faces_r_dim == 1 && in0_tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM);
+        in0_tensor_shape.face_r_dim == MAX_FACE_R_DIM || (in0_tensor_shape.num_faces_r_dim == 1 && in0_tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM);
     return k_dims_match && in1_full_faces && !in1_is_16x16 && in0_faces_ok;
 }
 
@@ -246,6 +245,18 @@ inline TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, 
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be one of the valid values: 1, 2, or 4");
     return tensor_shape_from_num_faces(face_r_dim, num_faces);
+}
+
+/**
+ * @brief @ref tensor_shape_from_tile_dims that asserts the tile dims map to a TensorShape exactly.
+ */
+inline TensorShape make_tensor_shape_from_tile_dims(const std::uint32_t tile_r_dim, const std::uint32_t tile_c_dim)
+{
+    const TensorShape tensor_shape = tensor_shape_from_tile_dims(tile_r_dim, tile_c_dim);
+    LLK_ASSERT(
+        tensor_shape.total_row_dim() == tile_r_dim && tensor_shape.total_col_dim() == tile_c_dim && is_valid_face_r_dim(tensor_shape.face_r_dim),
+        "tile dims have no exact TensorShape");
+    return tensor_shape;
 }
 
 /**
@@ -289,7 +300,6 @@ constexpr bool is_tensor_shape_2x1_face_grid(const TensorShape& tensor_shape)
 {
     return tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.total_num_faces() == MAX_NUM_FACES_R_DIM;
 }
-
 
 /**
  * @brief Whether matmul unpacks this operand one face at a time.
