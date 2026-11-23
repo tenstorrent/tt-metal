@@ -308,11 +308,9 @@ class ttKDA:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
         self._tp_num_links = tt_ccl.get_num_links(self._tp_cluster_axis) if self.tensor_parallel_size > 1 else None
-        # Ordinary matmuls (input and decay projections) keep packer L1 accumulation; the input
-        # projection takes its fidelity from the program config.
-        self.compute_config = ttnn.init_device_compute_kernel_config(
+        self.decay_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=program_config.decay_projection_math_fidelity,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
@@ -384,7 +382,7 @@ class ttKDA:
             self.config.head_k_dim,
             decay_width,
             # The bounded gate's sigmoid runs in the projection after its fused offset add (_compute_decay).
-            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
+            fused_sigmoid=self._bounded_gate,
         )
         # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
         self.decay_memory_config = l1_when_it_fits(
@@ -589,7 +587,7 @@ class ttKDA:
             program_config=self.decay_program_config,
             memory_config=self.decay_memory_config,
             dtype=ttnn.bfloat16,
-            compute_kernel_config=self.compute_config,
+            compute_kernel_config=self.decay_compute_config,
             in0_column_offset=decay_rank_offset,
         )
         if not self._bounded_gate:

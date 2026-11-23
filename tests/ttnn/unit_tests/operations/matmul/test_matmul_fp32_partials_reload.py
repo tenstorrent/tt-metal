@@ -367,3 +367,54 @@ def test_matmul_2d_mcast_fp32_bias_added_in_fp32(device, in0_block_w, packer_l1_
         assert torch.equal(output, unfused)
         # The SFPU sigmoid's own error (2.4e-4 here).
         assert (output - torch.sigmoid(logits)).abs().max() < 5e-4
+
+
+# Sigmoid mode 2 evaluates the fused sigmoid only to BF16 accuracy on an FP32 DEST: each BF16 output stays within the
+# rounding's half ULP plus exp_21f's one ULP of the exact sigmoid. With an FP32 bias the sigmoid follows the SFPU bias
+# add; without one, the matmul's pack.
+@pytest.mark.parametrize("with_bias", [True, False])
+def test_matmul_2d_mcast_fused_sigmoid_accurate_to_bf16(device, with_bias):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("the matmul's sigmoid modes are not built for Quasar")
+    torch.manual_seed(0)
+    m, k, n = 256, 256, 384
+    grid = ttnn.CoreCoord(4, 4)
+    per_core_m, per_core_n = m // 32 // grid.y, n // 32 // grid.x
+    a, b = (_bf16_rand(1, 1, m, k) - 0.5).bfloat16().float(), (_bf16_rand(1, 1, k, n) - 0.5).bfloat16().float()
+    bias = 3.0 * torch.randn(1, 1, 1, n) if with_bias else torch.zeros(1, 1, 1, n)
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    bias_tt = ttnn.from_torch(bias.reshape(1, 1, n), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def fused_sigmoid(mode):
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=per_core_n,
+            out_block_h=per_core_m,
+            out_block_w=per_core_n,
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            transpose_mcast=False,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 0.0, float(mode)),
+            fuse_batch=True,
+        )
+        output = ttnn.linear(
+            a_tt,
+            b_tt,
+            bias=bias_tt if with_bias else None,
+            program_config=program_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=_compute_config(device, packer_l1_acc=False),
+        )
+        return ttnn.to_torch(output).double().reshape(1, 1, m, n)
+
+    accurate, accurate_to_bf16 = fused_sigmoid(0), fused_sigmoid(2)
+    reference = torch.sigmoid(torch.matmul(a.double(), b.double()) + bias.double())
+    # BF16 keeps 8 significant bits: one ULP of each reference value's binade.
+    bf16_ulp = torch.exp2(torch.floor(torch.log2(reference)) - 7)
+    assert ((accurate_to_bf16 - reference).abs() <= 1.5 * bf16_ulp).all()
+    assert ((accurate - reference).abs() <= 0.75 * bf16_ulp).all()
+    # The mode reached the kernel.
+    assert not torch.equal(accurate_to_bf16, accurate)

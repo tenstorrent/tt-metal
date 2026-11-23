@@ -186,6 +186,7 @@ def test_kimi_k3_math_fidelity():
     assert config.recurrence.affine_prefix_math_fidelity == ttnn.MathFidelity.HiFi3
     assert config.output_projection_math_fidelity == ttnn.MathFidelity.HiFi3
     assert config.input_projection_math_fidelity == ttnn.MathFidelity.HiFi2
+    assert config.decay_projection_math_fidelity == ttnn.MathFidelity.HiFi3
 
 
 def test_kimi_k3_rejects_untuned_geometry(expect_error):
