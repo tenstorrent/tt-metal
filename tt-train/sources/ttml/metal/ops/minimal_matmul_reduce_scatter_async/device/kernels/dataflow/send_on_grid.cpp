@@ -35,17 +35,17 @@ template <
     uint32_t M_blocks,
     uint32_t N_blocks,
     uint32_t num_dirs,
-    uint32_t dir,
-    uint32_t tiles_per_packet>
+    uint32_t dir>
 class UnitCursor {
 public:
-    UnitCursor(const tt_l1_ptr ProducerArgs* producers, uint32_t num_producers, uint32_t ring_index, uint32_t N_tiles) :
-        producers_(producers), num_producers_(num_producers), ring_index_(ring_index), N_tiles_(N_tiles) {
+    UnitCursor(const tt_l1_ptr ProducerArgs* producers, uint32_t num_producers, uint32_t ring_index) :
+        producers_(producers), num_producers_(num_producers), ring_index_(ring_index) {
         if (num_producers_ == 0 || kUnitsPerProducer == 0) {
             done_ = true;
             return;
         }
-        if (!load()) {
+        load_block();
+        if (!load_unit()) {
             next_unit();
         }
     }
@@ -62,35 +62,9 @@ public:
     uint32_t ready_target() const {
         return j_ + 1;
     }
-    bool unit_begin() const {
-        return t0_ == 0;
+    const BlockRegion& region() const {
+        return region_;
     }
-    bool unit_end() const {
-        return t0_ + tiles_per_packet >= tiles_;
-    }
-    uint32_t count() const {
-        return std::min(tiles_per_packet, tiles_ - t0_);
-    }
-    uint32_t page() const {
-        return row_page_ + c_;
-    }
-    void next_tile() {
-        if (++c_ == region_.cols) {
-            c_ = 0;
-            row_page_ += N_tiles_;
-        }
-    }
-    void next_packet() {
-        t0_ += tiles_per_packet;
-        if (t0_ >= tiles_) {
-            next_unit();
-        }
-    }
-
-private:
-    static constexpr uint32_t kBlocksPerStep = mmrs::blocks_in_direction(N_blocks, num_dirs, dir) * M_blocks;
-    static constexpr uint32_t kUnitsPerProducer = (ring_size - 1) * kBlocksPerStep;
-
     void next_unit() {
         do {
             if (++p_ == num_producers_) {
@@ -99,36 +73,36 @@ private:
                     done_ = true;
                     return;
                 }
+                load_block();
             }
-        } while (!load());
+        } while (!load_unit());
     }
 
-    bool load() {
-        const uint32_t step = j_ / kBlocksPerStep;
+private:
+    static constexpr uint32_t kBlocksPerStep = mmrs::blocks_in_direction(N_blocks, num_dirs, dir) * M_blocks;
+    static constexpr uint32_t kUnitsPerProducer = (ring_size - 1) * kBlocksPerStep;
+
+    void load_block() {
         const uint32_t within = j_ % kBlocksPerStep;
-        const uint32_t nb = mmrs::nth_block_in_direction(within / M_blocks, num_dirs, dir);
-        const uint32_t mb = within % M_blocks;
-        const uint32_t slice = mmrs::step_slice(step, ring_index_, ring_size, dir);
-        const CoreShare share = producers_[p_].share;
-        region_ = block_region<slice_tiles, m_piece, M_blocks, N_blocks>(slice, mb, nb, share);
-        tiles_ = region_.rows * region_.cols;
-        t0_ = 0;
-        c_ = 0;
-        row_page_ = (region_.row0 * N_tiles_) + region_.col0;
-        return tiles_ > 0;
+        slice_ = mmrs::step_slice(j_ / kBlocksPerStep, ring_index_, ring_size, dir);
+        nb_ = mmrs::nth_block_in_direction(within / M_blocks, num_dirs, dir);
+        mb_ = within % M_blocks;
+    }
+
+    bool load_unit() {
+        region_ = block_region<slice_tiles, m_piece, M_blocks, N_blocks>(slice_, mb_, nb_, producers_[p_].share);
+        return !region_.empty();
     }
 
     const tt_l1_ptr ProducerArgs* producers_;
     uint32_t num_producers_;
     uint32_t ring_index_;
-    uint32_t N_tiles_;
     uint32_t p_ = 0;
     uint32_t j_ = 0;
+    uint32_t slice_ = 0;
+    uint32_t nb_ = 0;
+    uint32_t mb_ = 0;
     BlockRegion region_;
-    uint32_t tiles_ = 0;
-    uint32_t t0_ = 0;
-    uint32_t c_ = 0;
-    uint32_t row_page_ = 0;
     bool done_ = false;
 };
 
@@ -147,8 +121,8 @@ struct SendSlots {
     Header header(uint32_t slot) const {
         return reinterpret_cast<Header>(payload(slot) - sizeof(PACKET_HEADER_TYPE));
     }
-    static uint32_t packet_bytes(uint32_t tiles) {
-        return sizeof(PACKET_HEADER_TYPE) + (tiles * tile_size);
+    uint32_t packet_bytes(uint32_t slot) const {
+        return sizeof(PACKET_HEADER_TYPE) + header(slot)->payload_size_bytes;
     }
 };
 
@@ -173,6 +147,22 @@ void set_scatter(Header header, uint32_t count, uint64_t landed) {
     scatter.chunk_count = static_cast<uint8_t>(count + (landed != 0 ? 1 : 0));
     header->payload_size_bytes = static_cast<uint16_t>(count * tile_size);
 }
+
+template <uint32_t page_bytes>
+struct BankedPages {
+    static constexpr uint32_t kBanks = NUM_DRAM_BANKS;
+    uint64_t bank_start[kBanks] = {};
+
+    template <typename AddressOf>
+    void fill(const AddressOf& address_of) {
+        for (uint32_t b = 0; b < kBanks; b++) {
+            bank_start[b] = address_of(b);
+        }
+    }
+    uint64_t operator()(uint32_t page) const {
+        return bank_start[page % kBanks] + ((page / kBanks) * page_bytes);
+    }
+};
 }  // namespace
 
 void kernel_main() {
@@ -191,12 +181,14 @@ void kernel_main() {
     constexpr uint32_t dir = get_compile_time_arg_val(10);
     constexpr uint32_t ring_size = get_compile_time_arg_val(11);
     constexpr uint32_t go_semaphore_id = get_compile_time_arg_val(12);
+    static_assert(slot_packets >= 2 && slot_packets % 2 == 0 && slot_packets <= 32);
     constexpr uint32_t packets_per_batch = slot_packets / 2;
     constexpr ccl_routing_utils::line_unicast_route_info_t route =
         ccl_routing_utils::get_line_unicast_route_info_from_args<13>();
     constexpr auto buffer_args = TensorAccessorArgs<13 + ccl_routing_utils::num_line_unicast_args>();
     static_assert(tiles_per_packet >= NOC_SCATTER_WRITE_MIN_CHUNKS && tiles_per_packet <= NOC_SCATTER_WRITE_MAX_CHUNKS);
     constexpr bool trailing_incs = tiles_per_packet > kFusedIncMaxTiles;
+    auto next_slot = [](uint32_t slot) { return slot + 1 == slot_packets ? 0 : slot + 1; };
 
     size_t argidx = 0;
     const uint32_t buffer_addr = get_arg_val<uint32_t>(argidx++);
@@ -208,6 +200,16 @@ void kernel_main() {
     const auto* producers = reinterpret_cast<const tt_l1_ptr ProducerArgs*>(get_arg_addr(argidx));
 
     const auto buffer = TensorAccessor(buffer_args, buffer_addr, tile_size);
+    auto local_address = [&](uint32_t page) { return buffer.get_noc_addr(page); };
+    auto neighbour_address = [&](uint32_t page) { return buffer.get_noc_addr(page, 0, edm_to_local_chip_noc); };
+    constexpr bool banked = !buffer_args.is_sharded && buffer_args.is_dram;
+    static_assert(!banked || buffer_args.get_aligned_page_size() == tile_size);
+    BankedPages<tile_size> local_pages;
+    BankedPages<tile_size> neighbour_pages;
+    if constexpr (banked) {
+        local_pages.fill(local_address);
+        neighbour_pages.fill(neighbour_address);
+    }
     const uint32_t ready_base = CircularBuffer(ready_cb).get_write_ptr();
     using Slots = SendSlots<tile_size, tiles_per_packet, slot_header_bytes>;
     constexpr uint32_t kAlign = NOC_DRAM_READ_ALIGNMENT_BYTES;
@@ -234,6 +236,7 @@ void kernel_main() {
         fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::None>(
             slots.header(s), 1, nullptr, 0);
         route_header(slots.header(s));
+        set_scatter<tile_size>(slots.header(s), tiles_per_packet, 0);
     }
     Header inc_header = nullptr;
     if constexpr (trailing_incs) {
@@ -247,7 +250,7 @@ void kernel_main() {
     auto& router = connection.get(0).sender;
     router.setup_stateful_send_cmd_bufs();
     uint32_t free_router_slots = 0;
-    auto send_packet = [&](uint32_t header_addr, uint32_t bytes) {
+    auto send_packet = [&](uint32_t header_addr, uint32_t bytes) __attribute__((always_inline)) {
         while (free_router_slots == 0) {
             free_router_slots = router.get_num_free_write_slots();
         }
@@ -255,47 +258,81 @@ void kernel_main() {
         --free_router_slots;
     };
 
-    using Cursor = UnitCursor<ring_size, slice_tiles, m_piece, M_blocks, N_blocks, num_dirs, dir, tiles_per_packet>;
-    Cursor reader(producers, num_producers, ring_index, N_tiles);
-    std::array<uint32_t, slot_packets> slot_tiles{};
+    using Cursor = UnitCursor<ring_size, slice_tiles, m_piece, M_blocks, N_blocks, num_dirs, dir>;
+    Cursor cursor(producers, num_producers, ring_index);
     std::array<uint64_t, trailing_incs ? slot_packets : 1> slot_trailing_inc{};
+    uint32_t trailing_slots = 0;
+    uint32_t odd_slots = 0;
     uint32_t read_slot = 0;
     uint32_t send_slot = 0;
+    uint32_t tiles_left = 0;
+    uint32_t row_left = 0;
+    uint32_t cols = 0;
+    uint32_t page = 0;
+    uint32_t row_step = 0;
 
-    auto read_batch = [&](uint32_t unsent) -> uint32_t {
+    auto read_batch = [&]() __attribute__((always_inline)) -> uint32_t {
         uint32_t issued = 0;
-        while (!reader.done() && issued < packets_per_batch && unsent + issued < slot_packets) {
-            if (reader.unit_begin()) {
-                invalidate_l1_cache();
-                if (*ready_counter(ready_base, reader.producer()) < reader.ready_target()) {
+        while (issued < packets_per_batch) {
+            if (tiles_left == 0) {
+                if (cursor.done()) {
                     break;
                 }
+                invalidate_l1_cache();
+                if (*ready_counter(ready_base, cursor.producer()) < cursor.ready_target()) {
+                    break;
+                }
+                const BlockRegion& region = cursor.region();
+                cols = region.cols;
+                tiles_left = region.rows * cols;
+                row_left = cols;
+                page = (region.row0 * N_tiles) + region.col0;
+                row_step = N_tiles + 1 - cols;
             }
             const Header header = slots.header(read_slot);
             auto& scatter = header->command_fields.unicast_scatter_write;
-            const uint32_t count = reader.count();
+            const uint32_t count = tiles_left < tiles_per_packet ? tiles_left : tiles_per_packet;
             uint32_t l1 = slots.payload(read_slot);
             for (uint32_t i = 0; i < count; ++i, l1 += tile_size) {
-                const uint32_t page = reader.page();
-                noc_async_read_one_packet(buffer.get_noc_addr(page), l1, tile_size);
-                scatter.noc_address[i] = buffer.get_noc_addr(page, 0, edm_to_local_chip_noc);
-                reader.next_tile();
+                uint64_t source = 0;
+                if constexpr (banked) {
+                    scatter.noc_address[i] = neighbour_pages(page);
+                    source = local_pages(page);
+                } else {
+                    scatter.noc_address[i] = neighbour_address(page);
+                    source = local_address(page);
+                }
+                noc_async_read_one_packet(source, l1, tile_size);
+                if (--row_left == 0) {
+                    row_left = cols;
+                    page += row_step;
+                } else {
+                    ++page;
+                }
             }
+            tiles_left -= count;
+            const uint32_t slot_bit = 1U << read_slot;
             uint64_t landed_inc = 0;
-            if (reader.unit_end()) {
-                const auto& producer = reader.producer_args();
+            if (tiles_left == 0) {
+                const auto& producer = cursor.producer_args();
                 landed_inc = safe_get_noc_addr(producer.noc_x, producer.noc_y, landed_sem_addr, edm_to_local_chip_noc);
+                cursor.next_unit();
             }
             if constexpr (trailing_incs) {
-                slot_trailing_inc[read_slot] = count > kFusedIncMaxTiles ? landed_inc : 0;
-                if (count > kFusedIncMaxTiles) {
+                if (landed_inc != 0 && count > kFusedIncMaxTiles) {
+                    slot_trailing_inc[read_slot] = landed_inc;
+                    trailing_slots |= slot_bit;
                     landed_inc = 0;
                 }
             }
-            set_scatter<tile_size>(header, count, landed_inc);
-            slot_tiles[read_slot] = count;
-            reader.next_packet();
-            read_slot = read_slot + 1 == slot_packets ? 0 : read_slot + 1;
+            if (count != tiles_per_packet || landed_inc != 0) {
+                set_scatter<tile_size>(header, count, landed_inc);
+                odd_slots |= slot_bit;
+            } else if ((odd_slots & slot_bit) != 0) {
+                set_scatter<tile_size>(header, tiles_per_packet, 0);
+                odd_slots &= ~slot_bit;
+            }
+            read_slot = next_slot(read_slot);
             ++issued;
         }
         return issued;
@@ -303,28 +340,26 @@ void kernel_main() {
 
     uint32_t landed = 0;
     while (true) {
+        noc_async_writes_flushed();
         if (landed == 0) {
-            if (reader.done()) {
+            if (cursor.done()) {
                 break;
             }
-            noc_semaphore_wait_min(ready_counter(ready_base, reader.producer()), reader.ready_target());
-            noc_async_writes_flushed();
-            landed = read_batch(0);
-            noc_async_read_barrier();
+            noc_semaphore_wait_min(ready_counter(ready_base, cursor.producer()), cursor.ready_target());
         }
-        noc_async_writes_flushed();
-        const uint32_t in_flight = read_batch(landed);
+        const uint32_t in_flight = read_batch();
         for (uint32_t n = landed; n > 0; --n) {
-            send_packet(
-                reinterpret_cast<uint32_t>(slots.header(send_slot)), Slots::packet_bytes(slot_tiles[send_slot]));
+            send_packet(reinterpret_cast<uint32_t>(slots.header(send_slot)), slots.packet_bytes(send_slot));
             if constexpr (trailing_incs) {
-                if (slot_trailing_inc[send_slot] != 0) {
+                const uint32_t slot_bit = 1U << send_slot;
+                if ((trailing_slots & slot_bit) != 0) {
+                    trailing_slots &= ~slot_bit;
                     noc_async_writes_flushed();
                     inc_header->command_fields.unicast_seminc.noc_address = slot_trailing_inc[send_slot];
                     send_packet(reinterpret_cast<uint32_t>(inc_header), sizeof(PACKET_HEADER_TYPE));
                 }
             }
-            send_slot = send_slot + 1 == slot_packets ? 0 : send_slot + 1;
+            send_slot = next_slot(send_slot);
         }
         noc_async_read_barrier();
         landed = in_flight;
