@@ -58,9 +58,10 @@ class Trainer(ABC):
     def setup(self, config: TrainerConfig) -> None:
         """Validate ``config`` and build what a run needs: data, device, model and optimizer.
 
-        Fails on an untrainable config before the device is opened or any weights are downloaded. Any
-        exception, a ``KeyboardInterrupt`` too, goes to every callback's ``on_setup_error`` and is re-raised;
-        ``cleanup`` still frees what was built.
+        Fails on a config the trainer can't train, as ``_check_config`` and the data checks find it, before the
+        device is opened or any weights are downloaded. Callbacks check what they need of the config in
+        ``on_train_start``. Any exception, a ``KeyboardInterrupt`` too, goes to every callback's ``on_setup_error``
+        and is re-raised; ``cleanup`` still frees what was built.
         """
         try:
             self._host_attributes()

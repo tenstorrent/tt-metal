@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """How SFT dataset providers batch a split: train drops a last partial batch, validation fills it with padding rows
-that don't count in the loss. Device-free."""
+that don't count in the loss; and how a validation split carved out of the train split stays held out. Device-free."""
 
 from types import SimpleNamespace
 
@@ -37,9 +37,20 @@ class _Provider(DatasetProvider):
         return f"q{example['n']}:", "a" * (1 + example["n"] % 3)
 
 
+class _CarvedProvider(_Provider):
+    train_val_split_ratio = 0.8
+
+
 def _provider(split):
     config = SimpleNamespace(batch_size=BATCH_SIZE, max_length=MAX_LENGTH, seed=0)
     return _Provider(config, split, _Tokenizer())
+
+
+def _carved_ns(split, seed, max_length):
+    """The ``n`` of each example of ``split`` of ``_CarvedProvider``."""
+    config = SimpleNamespace(batch_size=BATCH_SIZE, max_length=max_length, seed=seed)
+    examples = _CarvedProvider(config, split, _Tokenizer()).examples
+    return {int("".join(chr(t) for t in example["input_ids"]).split(":")[0][1:]) for example in examples}
 
 
 def _masked_mean(batch, per_token):
@@ -70,6 +81,20 @@ def test_validation_pads_the_last_batch_and_runs_every_example():
     rows = [row for batch in batches for row in batch["input_ids"][:, 0, 0] if row.any()]
     prompts = ["".join(chr(t) for t in row if t != PAD).split(":")[0] for row in rows]
     assert prompts == [f"q{n}" for n in range(NUM_EXAMPLES)]
+
+
+def test_a_carved_validation_split_is_held_out_whatever_the_seed_and_max_length():
+    validation = _carved_ns("validation", seed=0, max_length=MAX_LENGTH)
+    assert len(validation) == NUM_EXAMPLES - int(_CarvedProvider.train_val_split_ratio * NUM_EXAMPLES)
+    assert validation.isdisjoint(_carved_ns("train", seed=0, max_length=MAX_LENGTH))
+
+    assert _carved_ns("validation", seed=1, max_length=MAX_LENGTH) == validation
+    assert _carved_ns("train", seed=1, max_length=MAX_LENGTH).isdisjoint(validation)
+
+    # "q{n}:" and 1 + n % 3 response tokens and EOS: 6 tokens drops the examples with n % 3 == 2.
+    short = 6
+    assert _carved_ns("validation", seed=0, max_length=short) == {n for n in validation if n % 3 != 2}
+    assert _carved_ns("train", seed=0, max_length=short).isdisjoint(validation)
 
 
 def test_padding_rows_leave_the_loss_unchanged():

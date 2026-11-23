@@ -151,7 +151,7 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | Field | Default | Description |
 |---|---|---|
 | `model` | | `name`, the HF hub id of a model with a registered provider, is required. `lora`, when set, is the LoRA adapters to train: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`). Unset, every weight is trained. `gradient_checkpointing` (`false`) builds the model to recompute activations in the backward pass, which saves memory. |
-| `dataset` | | `id`, one of `sst2`, `alpaca` or `custom`, is required. `custom_options` is required when `id` is `custom`: `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
+| `dataset` | | `id`, one of `sst2`, `alpaca` or `custom`, is required. `custom_options` is required when `id` is `custom`, and rejected for any other `id`: `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
 | `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one supported so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
 | `device` | | `mesh` (`[1, 1]`), the size of each dimension of the device mesh the run opens, such as `[rows, columns]`. A single chip, `[1, 1]`, is the only mesh supported so far. |
 | `dtype` | `bfloat16` | Must be `bfloat16`. |
@@ -490,7 +490,8 @@ longer than `max_length`, and batches them. The subclass adds what is the datase
 - `_load_raw_dataset()`: the HF dataset of `self.split`.
 - `_prompt_and_response(example)`: the prompt and the response of one example.
 - `train_val_split_ratio`, for a source with a train split only: the share of it to train on, the rest being held out
-  for validation.
+  for validation. The split is carved out of the raw examples in a fixed order, before tokenizing and dropping long
+  examples, so it holds out the same examples whatever the run's seed, `max_length` and tokenizer.
 - `has_split(config, split)`, for a source that may lack a split: the trainer then runs without it.
 
 Write it in `ttml/experimental/datasets/provider/sft/<dataset>.py`, with its prompt templates in

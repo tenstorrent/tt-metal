@@ -30,12 +30,15 @@ class DatasetConfig(BaseModel):
 
     # An implemented dataset, "sst2" or "alpaca", or "custom" (see ``ttml.experimental.datasets.provider.sft``).
     id: str = Field(min_length=1)
-    # The files of a "custom" dataset and how to read them; "custom" needs them.
+    # The files of a "custom" dataset and how to read them; "custom" needs them and no other id takes them.
     custom_options: Optional[CustomDatasetConfig] = None
 
     @model_validator(mode="after")
     def _check_custom_options(self) -> "DatasetConfig":
         # Ids are matched case-insensitively (see ``ttml.experimental.datasets.provider.sft.get_providers``).
-        if self.id.lower() == "custom" and self.custom_options is None:
+        is_custom = self.id.lower() == "custom"
+        if is_custom and self.custom_options is None:
             raise ValueError("custom_options is required when id is 'custom'")
+        if not is_custom and self.custom_options is not None:
+            raise ValueError(f"custom_options is only read when id is 'custom', not {self.id!r}")
         return self

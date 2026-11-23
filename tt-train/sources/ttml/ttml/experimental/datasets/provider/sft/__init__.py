@@ -34,7 +34,7 @@ def get_providers(
 ) -> dict[str, Optional[DatasetProvider]]:
     """The provider of each of ``splits`` of the dataset ``config.dataset.id`` names; None for a split the dataset
     doesn't have (a custom dataset without validation files). A dataset whose splits are carved out of one source is
-    loaded and tokenized once, for all of them."""
+    loaded once, for all of them."""
     provider = providers().get(config.dataset.id.lower())
     if provider is None:
         raise ValueError(f"dataset.id: {config.dataset.id!r} is not one of {sorted(providers())}")

@@ -4,7 +4,9 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# A name the trainer can't provide is ignored, so a recipe can list metrics a later trainer adds.
+# A name the trainer doesn't compute is an error, but only once training has started: when the run saves
+# checkpoints, at the start of training, and otherwise when its phase first logs.
+# TODO(mmilosevicTT, #66795): check the names in setup, before any weights are downloaded or the device is opened.
 
 
 class TrainMetricsConfig(BaseModel):

@@ -17,6 +17,11 @@ if TYPE_CHECKING:
     from ttml.experimental.trainer.configs import SFTTrainerConfig
 
 
+# Orders the raw examples before `train_val_split_ratio` carves them. Not `config.seed`: a run started from another
+# run's checkpoint must hold out the examples that run held out.
+SPLIT_SEED = 0
+
+
 class DatasetProvider:
     """One split of a dataset for causal-LM fine-tuning: prompt/response examples, tokenized and served as batches.
 
@@ -39,7 +44,8 @@ class DatasetProvider:
 
     Subclasses provide the raw HF dataset (``_load_raw_dataset``) and how one example maps to a prompt and
     a response (``_prompt_and_response``). A source that ships one split carves validation out of it
-    (``train_val_split_ratio``), and one that may lack a split says so (``has_split``).
+    (``train_val_split_ratio``), and one that may lack a split says so (``has_split``). A carved split is taken from
+    the raw examples, before tokenizing, so it holds the same examples whatever the seed, ``max_length`` and tokenizer.
 
     Examples are lists of token ids: the provider needs no device, and the tokenizer is passed in.
     """
@@ -50,16 +56,16 @@ class DatasetProvider:
 
     def __init__(self, config: SFTTrainerConfig, split: str, tokenizer: Any, source: Any = None) -> None:
         """``source`` is the ``source`` of another split's provider, of the same config and tokenizer: with
-        ``train_val_split_ratio``, this split is carved out of it instead of loading and tokenizing the dataset again.
+        ``train_val_split_ratio``, this split is carved out of it instead of loading the dataset again.
         """
         self.config = config
         self.split = split
         self.tokenizer = tokenizer
-        # With `train_val_split_ratio`, the tokenized and shuffled dataset the splits are carved out of; else None.
+        # With `train_val_split_ratio`, the raw dataset the splits are carved out of, shuffled; else None.
         self.source: Any = None
         if self.train_val_split_ratio is not None:
             if source is None:
-                source = self._tokenize_and_filter(self._load_raw_dataset()).shuffle(seed=config.seed)
+                source = self._load_raw_dataset().shuffle(seed=SPLIT_SEED)
             self.source = source
         # A `datasets.Dataset` of the split's tokenized examples.
         self.examples: Any = self._prepare_examples()
@@ -159,7 +165,9 @@ class DatasetProvider:
 
         train_end = int(self.train_val_split_ratio * len(self.source))
         if self.split == "train":
-            return self.source.select(range(0, train_end))
-        if self.split == "validation":
-            return self.source.select(range(train_end, len(self.source)))
-        raise ValueError(f"{type(self).__name__} has the splits 'train' and 'validation', not {self.split!r}")
+            indices = range(0, train_end)
+        elif self.split == "validation":
+            indices = range(train_end, len(self.source))
+        else:
+            raise ValueError(f"{type(self).__name__} has the splits 'train' and 'validation', not {self.split!r}")
+        return self._tokenize_and_filter(self.source.select(indices))
