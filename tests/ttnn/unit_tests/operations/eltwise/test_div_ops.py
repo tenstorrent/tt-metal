@@ -421,9 +421,12 @@ def test_remainder_opposite_sign_exact_multiple(testing_dtype, device):
     # An exact multiple whose quotient comes out a hair past the integer makes floor() one too low,
     # leaving a raw result of b. The magnitude correction that pulls it back to 0 used to run only
     # when a and b had the same sign. Which pairs hit it depends on the architecture's reciprocal:
-    # the first two rows fail on Blackhole, the last four on Wormhole.
-    torch_input_a = torch.tensor([-245.0, -1.1640625, -300.0, -660.0, 948.0, 450.0], dtype=torch_dtype)
-    torch_input_b = torch.tensor([3.828125, 0.58203125, 1.875, 1.875, -1.8515625, -1.875], dtype=torch_dtype)
+    # the first two rows fail on Blackhole, the next four on Wormhole. The last two are not exact
+    # multiples: their floor is right and the remainder 2^26 - 1 rounds to the divisor, which must stay.
+    torch_input_a = torch.tensor([-245.0, -1.1640625, -300.0, -660.0, 948.0, 450.0, -1.0, 1.0], dtype=torch_dtype)
+    torch_input_b = torch.tensor(
+        [3.828125, 0.58203125, 1.875, 1.875, -1.8515625, -1.875, 2.0**26, -(2.0**26)], dtype=torch_dtype
+    )
 
     golden_function = ttnn.get_golden_function(ttnn.remainder)
     golden = golden_function(torch_input_a, torch_input_b, device=device)
