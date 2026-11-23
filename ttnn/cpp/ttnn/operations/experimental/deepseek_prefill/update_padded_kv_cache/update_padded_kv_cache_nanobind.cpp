@@ -165,7 +165,8 @@ void bind_read_padded_kv_cache(nb::module_& mod) {
             layer-major, with ``chunk_local = chunk_size_global / (sp * tp)``. Writing those rows back with
             ``update_padded_kv_cache(cluster_axis=None, input_row_offset=l * chunk_local, input_rows=chunk_local)``
             at the same slot / kv_actual_global / valid_global reproduces the cache bit for bit on a mesh of the same
-            shape. Rows past the cache end are not read and stay unwritten in ``output``. An FP8_E4M3 cache is read
+            shape when the source was written with SP on mesh axis 0 (``cluster_axis=0``): only then is its sp*tp chip
+            order the complete-mesh row-major order. Rows past the cache end are not read and stay unwritten in ``output``. An FP8_E4M3 cache is read
             as UINT8 rows of the same width (its bytes; FP8 has no D2D stream or host-mapper path), which
             ``update_padded_kv_cache`` accepts as the input of a plain copy into an FP8 cache.
 

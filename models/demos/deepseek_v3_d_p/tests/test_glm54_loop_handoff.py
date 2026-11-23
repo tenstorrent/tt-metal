@@ -159,7 +159,9 @@ def _host_index_sets(handoff, end, generator):
 def test_read_padded_kv_cache_round_trip(mesh_device):
     """The read op at the production 8x4 geometry (SP 8 x TP 4, 160 rows per chip per chunk), without D2D: read a
     layer range back after each chunk's TP-deduped write and write it into a second cache in complete-mesh mode;
-    the two caches must match bit for bit over those layers, and the unread layer must stay untouched."""
+    the two caches must match bit for bit over those layers, and the unread layer must stay untouched. Alternate
+    chunks read into a fresh output, and half way the metadata tensors are replaced, so program-cache hits must
+    patch both addresses."""
     if not is_blackhole():
         pytest.skip("FP8_E4M3 needs Blackhole")
     mesh_device.enable_program_cache()
@@ -191,13 +193,16 @@ def test_read_padded_kv_cache_round_trip(mesh_device):
         num_index_sets=0,
     )
     assert handoff.chunk_rows == 160
-    sender = LoopHandoffSender(mesh_device, handoff, first_kv_layer=first, num_kv_layers=num_layers, tp_axis=1)
+    sender = LoopHandoffSender(mesh_device, handoff, first_kv_layer=first, num_kv_layers=num_layers)
     meta = [_scalar(mesh_device, 0) for _ in range(3)]
     generator = torch.Generator().manual_seed(27)
     rows_mapper = ttnn.create_mesh_mapper(
         mesh_device, ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(2), ttnn.PlacementReplicate()])
     )
-    for slot, start, end in SCHEDULE:
+    for n, (slot, start, end) in enumerate(SCHEDULE):
+        if n == len(SCHEDULE) // 2:
+            # Fresh metadata tensors on a program-cache hit: the read must patch their new addresses.
+            meta = [_scalar(mesh_device, 0) for _ in range(3)]
         for dst, value in zip(meta, (slot, start, end)):
             _fill(dst, [value])
         for layer in range(num_layers):
@@ -219,8 +224,25 @@ def test_read_padded_kv_cache_round_trip(mesh_device):
             )
             ttnn.deallocate(bf16)
             ttnn.deallocate(fp8)
-        sender.collect(source, meta, [])
-        write_kvpe_copy(copy, sender.kvpe, meta, handoff, first_kv_layer=first, num_kv_layers=num_layers)
+        if n % 2:
+            # A freshly allocated output (output=None) on a cache hit: its address must be patched too.
+            rows = ttnn.experimental.deepseek_prefill.read_padded_kv_cache(
+                source,
+                meta[0],
+                meta[1],
+                first_layer=first,
+                num_read_layers=count,
+                num_layers=num_layers,
+                chunk_size_global=CHUNK,
+                cluster_axis=0,
+                tp_axis=1,
+            )
+        else:
+            sender.collect(source, meta, [])
+            rows = sender.kvpe
+        write_kvpe_copy(copy, rows, meta, handoff, first_kv_layer=first, num_kv_layers=num_layers)
+        if rows is not sender.kvpe:
+            ttnn.deallocate(rows)
     ttnn.synchronize_device(mesh_device)
     entries = NUM_USERS * num_layers
     for k, (a, b) in enumerate(zip(_shards(source), _shards(copy))):
@@ -269,7 +291,7 @@ def test_glm54_loop_handoff(mesh_device, traced):
         index_shape=(1, 1, CHUNK // (half * cols), TOP_K),
         num_index_sets=INDEX_SETS,
     )
-    sender_handoff = LoopHandoffSender(g1, handoff, first_kv_layer=0, num_kv_layers=KV_LAYERS, tp_axis=1)
+    sender_handoff = LoopHandoffSender(g1, handoff, first_kv_layer=0, num_kv_layers=KV_LAYERS)
 
     act_spec = ttnn.TensorSpec(
         shape=ttnn.Shape([1, 1, CHUNK, HIDDEN]),

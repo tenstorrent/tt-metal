@@ -89,12 +89,11 @@ def _check_mesh(mesh_device, handoff: LoopHandoff) -> None:
 class LoopHandoffSender:
     """G1 side: persistent buffers the handoff is collected into and sent from, at fixed addresses for trace."""
 
-    def __init__(self, mesh_device, handoff: LoopHandoff, *, first_kv_layer: int, num_kv_layers: int, tp_axis: int = 1):
+    def __init__(self, mesh_device, handoff: LoopHandoff, *, first_kv_layer: int, num_kv_layers: int):
         _check_mesh(mesh_device, handoff)
         self.handoff = handoff
         self.first_kv_layer = first_kv_layer
         self.num_kv_layers = num_kv_layers
-        self.tp_axis = tp_axis
         self.kvpe = ttnn.allocate_tensor_on_device(
             ttnn.TensorSpec(
                 shape=ttnn.Shape([1, 1, handoff.kv_layers * handoff.chunk_rows, handoff.kv_width]),
@@ -133,8 +132,9 @@ class LoopHandoffSender:
             num_read_layers=self.handoff.kv_layers,
             num_layers=self.num_kv_layers,
             chunk_size_global=self.handoff.chunk_size_global,
+            # The stage cache is written SP on mesh axis 0, TP-deduped on axis 1 (the mesh contract above).
             cluster_axis=0,
-            tp_axis=self.tp_axis,
+            tp_axis=1,
             output=self.kvpe,
         )
         for src, dst in zip(index_sets, self.index_sets):

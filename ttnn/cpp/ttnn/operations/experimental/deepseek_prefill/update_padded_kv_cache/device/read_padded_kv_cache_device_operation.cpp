@@ -4,6 +4,7 @@
 
 #include "read_padded_kv_cache_device_operation.hpp"
 #include "kv_cache_linearization.hpp"
+#include "kv_cache_metadata.hpp"
 
 #include <cstdint>
 #include <unordered_map>
@@ -71,15 +72,17 @@ void validate_runtime(const Op::operation_attributes_t& args, const Op::tensor_a
             *args.tp_axis,
             *args.cluster_axis);
     }
-    for (const Tensor* meta : {&tensor_args.slot_idx, &tensor_args.kv_actual_global}) {
-        TT_FATAL(meta->storage_type() == StorageType::DEVICE, "slot_idx and kv_actual_global must be on device");
-        TT_FATAL(meta->dtype() == DataType::UINT32, "slot_idx and kv_actual_global must be uint32");
-    }
-    // One accessor serves both metadata reads.
-    TT_FATAL(
-        tensor_args.slot_idx.memory_config() == tensor_args.kv_actual_global.memory_config(),
-        "slot_idx and kv_actual_global must share a memory config");
+    // Layout drives the page math and is not hashed, so it is checked on hits too.
+    TT_FATAL(cache.layout() == Layout::ROW_MAJOR, "read_padded_kv_cache supports ROW_MAJOR caches only");
+    const auto& accessor_memory_config = tensor_args.slot_idx.memory_config();
+    validate_kv_cache_metadata_tensor(tensor_args.slot_idx, cache, accessor_memory_config, "slot_idx");
+    validate_kv_cache_metadata_tensor(tensor_args.kv_actual_global, cache, accessor_memory_config, "kv_actual_global");
     if (tensor_args.output.has_value()) {
+        // The output's address is patched into a program for the cache's mesh; one on another mesh (e.g. a same-shape
+        // submesh in the same process) would be written through the wrong device's address.
+        TT_FATAL(
+            tensor_args.output->storage_type() == StorageType::DEVICE && tensor_args.output->device() == cache.device(),
+            "output must be allocated on the cache's device");
         const auto expected = Op::compute_output_specs(args, tensor_args);
         TT_FATAL(
             tensor_args.output->tensor_spec() == expected,
@@ -98,7 +101,6 @@ Op::program_factory_t Op::select_program_factory(const operation_attributes_t&, 
 void Op::validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& cache = tensor_args.cache;
     TT_FATAL(cache.storage_type() == StorageType::DEVICE, "cache must be on device");
-    TT_FATAL(cache.layout() == Layout::ROW_MAJOR, "read_padded_kv_cache supports ROW_MAJOR caches only");
     const auto& shape = cache.padded_shape();
     TT_FATAL(shape.rank() == 4 && shape[1] == 1, "cache must be [entries, 1, rows, width], got {}", shape);
     TT_FATAL(
@@ -166,6 +168,7 @@ ttsl::hash::hash_t Op::compute_program_hash(const operation_attributes_t& args, 
         args.cluster_axis,
         args.tp_axis,
         cache.dtype(),
+        cache.layout(),
         cache.memory_config(),
         cache.padded_shape(),
         tensor_args.slot_idx.memory_config(),

@@ -11,6 +11,8 @@
 
 #include <tt-metalium/mesh_coord.hpp>
 
+#include "ttnn/distributed/types.hpp"
+
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -21,17 +23,21 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // times tp (tp_axis, KV dedup, or 1); with cluster_axis = nullopt it is the complete mesh in the cache's declared
 // row-major topology order.
 
-inline uint32_t kv_cache_tp_factor(const Tensor& cache, const std::optional<uint32_t>& tp_axis) {
-    if (!tp_axis.has_value()) {
-        return 1;
-    }
-    const auto& view = cache.device()->get_view();
-    return *tp_axis == 0 ? view.num_rows() : view.num_cols();
+// Mesh extent along a shard axis (0 = rows, 1 = cols).
+inline uint32_t mesh_axis_extent(const ttnn::distributed::MeshDeviceView& mesh_view, uint32_t axis) {
+    return (axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+}
+
+// TP dedup factor: the extent of the TP axis, or 1 when the cache is TP-replicated (tp_axis unset).
+inline uint32_t tp_dedup_factor(
+    const ttnn::distributed::MeshDeviceView& mesh_view, const std::optional<uint32_t>& tp_axis) {
+    return tp_axis.has_value() ? mesh_axis_extent(mesh_view, *tp_axis) : 1;
 }
 
 inline uint32_t kv_cache_linear_factor(
     const Tensor& cache, const std::optional<uint32_t>& cluster_axis, const std::optional<uint32_t>& tp_axis) {
-    return ::ttnn::ccl::get_topological_dimension(cache, cluster_axis) * kv_cache_tp_factor(cache, tp_axis);
+    return ::ttnn::ccl::get_topological_dimension(cache, cluster_axis) *
+           tp_dedup_factor(cache.device()->get_view(), tp_axis);
 }
 
 // This chip's position on that axis: sp_coord * tp + tp_coord.
@@ -58,7 +64,7 @@ inline uint32_t kv_cache_linear_coord(
     }
     const uint32_t tp_coord =
         tp_axis.has_value() ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, tp_axis) : 0;
-    return sp_coord * kv_cache_tp_factor(cache, tp_axis) + tp_coord;
+    return sp_coord * tp_dedup_factor(cache.device()->get_view(), tp_axis) + tp_coord;
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache

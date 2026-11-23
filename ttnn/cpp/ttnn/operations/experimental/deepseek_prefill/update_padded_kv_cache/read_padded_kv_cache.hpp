@@ -16,7 +16,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // [first_layer, first_layer + num_read_layers) of user `slot_idx`, into a [1, 1, num_read_layers * chunk_local,
 // width] tensor (layer-major; chunk_local = chunk_size_global / (sp * tp) rows per chip). Writing those rows back with
 // update_padded_kv_cache(cluster_axis=None, input_row_offset=l * chunk_local, input_rows=chunk_local) at the same
-// slot / kv_actual_global / valid_global reproduces the cache bit for bit on a mesh of the same shape, which is how
+// slot / kv_actual_global / valid_global reproduces the cache bit for bit on a mesh of the same shape when the source
+// was written with SP on mesh axis 0 (cluster_axis=0, tp_axis=1 or none): only then is its sp*tp chip order the
+// complete-mesh row-major order (with SP on axis 1 it is col * rows + row instead). That is how
 // a pipeline stage forwards a chunk's stored KV rows to a downstream copy of the cache without the TP-replicated
 // fields the write consumed.
 //
