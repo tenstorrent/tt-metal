@@ -63,6 +63,10 @@ for _key, _kb in list(HOST_KB.items()):
     for _r in (2, 3, 4):
         HOST_KB.setdefault(_key[:-1] + (_key[-1] * _r,), _kb)
 BUDGET = 0.8
+# per-host fill read shape (bytes, reads in flight per RISC) where it differs from StagedBankLinear's (stage.py FILL):
+# the PRE join is fill-bound (own ~22 us, fill ~27): 2 KB x 2 there, 4K 14.63 -> 14.60 ms (x 3, 4 KB x 2 and a global
+# 2 KB x 2 were slower; row norm (3 cores) x 2 too)
+HOST_FILL = {JOIN_KEY: (2048, 2)}
 # KB per staging core one piece may fill inside a local sdpa call (sdpa_decode extra_kernels; 0 = off)
 SDPA_KB = 200  # 150 / 200 / 250 / 300: 16.18 / 16.09 / 16.24 / 16.41 ms at 4K (11 us delay); 0 / no hook: 16.29
 SDPA_DELAY_US = 11.0  # fill start inside the sdpa call: after its K / V reads (~11 us of 31, G3), DRAM idle after
@@ -291,7 +295,7 @@ class Overlap:
                 self.seen.get("not_host" if kb is None else "idle_host", 0) + 1
             )
             return _orig_generic_op(io, prog)
-        pieces = self._pieces(cores, kb)
+        pieces = self._pieces(cores, kb, fill=HOST_FILL.get(host_key(prog, len(cores))))
         if pieces is None:
             self.seen["clash"] += 1
             return _orig_generic_op(io, prog)
@@ -302,7 +306,7 @@ class Overlap:
         )
         return _orig_generic_op(list(io[:-1]) + extra + [io[-1]], prog)
 
-    def _pieces(self, cores, kb, delay=0):
+    def _pieces(self, cores, kb, delay=0, fill=None):
         """Fill kernels (and their tensors) for a host program on `cores`: up to budget x kb KB per staging core,
         oldest queued item first, then the next items on cores disjoint from the ones filled. None if none fit."""
         left, used, kernels, extra, take = kb * self.budget * 1024, set(cores), [], [], []
@@ -328,7 +332,7 @@ class Overlap:
                 hi = min(1.0, lo + left / obj.st.staged)
                 if obj.st.part_bytes(hi) <= obj.st.part_bytes(lo):
                     continue
-                kernels += obj.st.fill_kernels((lo, hi), delay=delay)
+                kernels += obj.st.fill_kernels((lo, hi), delay=delay, fill=fill)
                 extra += obj.st.fill_io
                 left -= (hi - lo) * obj.st.staged
                 t.filled = hi
