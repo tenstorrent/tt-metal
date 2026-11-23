@@ -168,7 +168,29 @@ The same test ran with random weights on ttsim, and with both kinds of weights o
 - All these cases passed their logit check.
 - With random weights, the `mlp` step loses the most PCC in each layer, on both machines. With trained weights, the `self_attn` step of layer 1 loses more than its `mlp` step, on both machines. In all four runs, the `mlp` output of layer 1 has the lowest PCC of all steps.
 - With random weights, the loss on Quasar is large enough to mark the `mlp` step of layer 1 (0.936) and every step after it "DIVERGES"; with trained weights, no step is marked.
-- Quasar is closer to the reference than Wormhole at every step. My guess is that Wormhole loses more because it stores the weights as `bfloat8_b` and `bfloat4_b`, while the Quasar tests turn them into bfloat16; this was not tested.
+- Quasar is closer to the reference than Wormhole at every step. Most of the difference comes from the block float formats: on Wormhole the model stores the weights as `bfloat8_b` and `bfloat4_b` and casts some activations to `bfloat8_b`, while the Quasar tests turn all of these into bfloat16. With a pytest plugin that turns all of them into bfloat16 on Wormhole too (the same wrapping as the `quasar_block_float_to_bf16` fixture), the Wormhole logits reach 0.9649 (random) and 0.9973 (trained), and `layer1.mlp` 0.9172 and 0.9903, against 0.9068, 0.9813, 0.7947 and 0.9021 with the block float formats. Wormhole in bfloat16 is still a little below Quasar (logits 0.9728 and 0.9986). The plugin is `wh_bf16_plugin/wh_bf16.py` and the log `pcclog_wh_bf16_prefill_2layers.log`, both in `/localdev/fplavec/temp/gpt_oss_ops_runs/20261120_pcc_ttsim/`.
+
+### Why random weights lose more PCC
+
+Most of the lower PCC with random weights comes from bfloat16 rounding, not from the device. On 2026-11-23, the Hugging Face model ran on the CPU in float32 and, with the same weights and input, in bfloat16, for random and for trained weights, with 2 layers. The check used its own seeds, so its random weights and its input tokens are not those of `test_model`. The bfloat16 run alone shows the same difference:
+
+| Step, bfloat16 against float32 on the CPU | Random weights | Trained weights |
+|---|---|---|
+| `layer0.mlp` | 0.9922 | 0.9999 |
+| `layer1.self_attn` | 0.9897 | 0.9995 |
+| `layer1.mlp` | 0.9558 | 0.9994 |
+| `lm_head` (logits) | 0.9835 | 0.9999 |
+
+The router picks 4 of the 32 experts for each token. With random weights, the bfloat16 run picks a different set of experts than the float32 run for more tokens:
+
+| Tokens (of 128) with the same 4 experts in bfloat16 and float32 | Random weights | Trained weights |
+|---|---|---|
+| Layer 0 | 120 | 126 |
+| Layer 1 | 96 | 126 |
+
+These tokens cause most of the drop of the `mlp` step. With random weights, the PCC of the `mlp` output over the tokens with the same experts is 0.9994 in layer 0 and 0.9932 in layer 1; over the tokens with a different set of experts it is 0.869 (8 tokens) and 0.844 (32 tokens). The router scores are not closer together with random weights: the median gap between the 4th and the 5th expert's score is 0.126 with random weights, and 0.113 to 0.138 with trained weights. In layer 1, more error reaches the router with random weights: its input has a PCC of 0.993 (the `post_attention_layernorm` of layer 1), against 0.9997 with trained weights. In layer 0, the router input is close to the reference with both kinds of weights (0.9997 with random and 0.9999 with trained weights); why more tokens change experts in layer 0 with random weights was not found.
+
+So the PCC with random weights measures how sensitive a randomly initialized model is to bfloat16 rounding, more than the accuracy of the device. The ttsim value for `layer1.mlp` (0.936) is lower than the CPU bfloat16 value (0.956), but the two runs used different random weights and inputs. The script and its log are `router_check.py` and `router_check.log` in `/localdev/fplavec/temp/gpt_oss_ops_runs/20261120_pcc_ttsim/`.
 
 ### Module tests
 
