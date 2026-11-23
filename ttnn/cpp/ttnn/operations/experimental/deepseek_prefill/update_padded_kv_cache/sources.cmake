@@ -1,7 +1,10 @@
 # Source files for ttnn_op_experimental_deepseek_prefill_update_padded_kv_cache.
 # Module owners should update this file when adding/removing/renaming source files.
 
-set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_UPDATE_PADDED_KV_CACHE_API_HEADERS update_padded_kv_cache.hpp)
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_UPDATE_PADDED_KV_CACHE_API_HEADERS
+    update_padded_kv_cache.hpp
+    read_padded_kv_cache.hpp
+)
 
 # Registered on the shared `ttnn` Python module target from
 # ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/CMakeLists.txt (see the `if(TARGET ttnn)` block there).

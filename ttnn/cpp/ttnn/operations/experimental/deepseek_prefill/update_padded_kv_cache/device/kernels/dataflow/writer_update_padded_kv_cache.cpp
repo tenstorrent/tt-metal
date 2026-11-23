@@ -11,18 +11,6 @@
 
 namespace packed = ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache;
 
-namespace {
-
-// A global prefix maps to a staircase of local offsets in block-cyclic cache storage.
-inline uint32_t local_cache_offset(uint32_t prefix, uint32_t coordinate, uint32_t factor, uint32_t chunk) {
-    const uint32_t slab = prefix / (factor * chunk);
-    const uint32_t boundary = (prefix / chunk) % factor;
-    const uint32_t offset = prefix % chunk;
-    return slab * chunk + (coordinate < boundary ? chunk : (coordinate == boundary ? offset : 0));
-}
-
-}  // namespace
-
 // CB -> cache writer for the per-chip-offset kv-cache update op.
 //
 // The per-request `slot_idx` and `kv_actual_global` reach the kernel one of two ways, selected by the
@@ -122,14 +110,16 @@ static void run_writer() {
     // Cache linearization: users outer, layers inner.
     const uint32_t batch_idx = slot_idx * num_layers + layer_idx;
 
-    const uint32_t update_idxt = local_cache_offset(kv_actual_global_t, my_sp_coord, sp_factor, chunk_local_t);
+    const uint32_t update_idxt =
+        kv_cache_dataflow::local_cache_offset(kv_actual_global_t, my_sp_coord, sp_factor, chunk_local_t);
 
     const uint32_t input_Ht = chunk_local_t;
 
     // Real rows are a prefix on every chip, so their end is the staircase above at valid_global_t.
     uint32_t rows_to_write = input_Ht;
     if constexpr (HasValid) {
-        const uint32_t end_idxt = local_cache_offset(valid_global_t, my_sp_coord, sp_factor, chunk_local_t);
+        const uint32_t end_idxt =
+            kv_cache_dataflow::local_cache_offset(valid_global_t, my_sp_coord, sp_factor, chunk_local_t);
         rows_to_write = (end_idxt > update_idxt) ? (end_idxt - update_idxt) : 0;
         if (rows_to_write > input_Ht) {
             rows_to_write = input_Ht;

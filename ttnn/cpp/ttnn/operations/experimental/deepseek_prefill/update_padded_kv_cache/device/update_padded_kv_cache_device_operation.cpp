@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "update_padded_kv_cache_device_operation.hpp"
+#include "kv_cache_linearization.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache.hpp"
 
 #include <algorithm>
@@ -97,30 +98,7 @@ uint32_t linear_coord_of(
     const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
     const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args,
     const ttnn::MeshCoordinate& coord) {
-    const auto& cache = tensor_args.cache;
-    uint32_t sp_coord;
-    if (args.cluster_axis.has_value()) {
-        sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
-    } else {
-        // Complete-mesh cache ownership follows the tensor's declared canonical row-major topology. An
-        // allocate-on-device tensor's storage coordinate vector may use a different internal order;
-        // using that order would rotate the wrong cache shard after a nonzero kv_actual_global.
-        //
-        // This value is ALREADY the linearized sp*tp position the block-cyclic math wants:
-        // row-major over the full mesh is exactly sp_coord*tp + tp_coord. tp_axis is rejected in this
-        // mode, so tp_factor collapses to 1 and linear_coord reduces to this index unchanged.
-        const auto& topology_coords = cache.tensor_topology().mesh_coords();
-        const auto it = std::find(topology_coords.begin(), topology_coords.end(), coord);
-        TT_FATAL(it != topology_coords.end(), "cache mesh coordinate {} is absent from its tensor topology", coord);
-        sp_coord = static_cast<uint32_t>(std::distance(topology_coords.begin(), it));
-    }
-    // KV dedup: linearize sp and tp into ONE block-cyclic axis of size sp*tp (linear = sp_coord*tp + tp_coord).
-    // tp_axis==nullopt => tp_factor=1 collapses this.
-    const uint32_t tp_factor = tp_dedup_factor(cache.device()->get_view(), args.tp_axis);
-    const uint32_t tp_coord = args.tp_axis.has_value()
-                                  ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis)
-                                  : 0;
-    return sp_coord * tp_factor + tp_coord;
+    return kv_cache_linear_coord(tensor_args.cache, coord, args.cluster_axis, args.tp_axis);
 }
 
 // The whole-mesh chip table, if any; create_descriptor and create_mesh_workload both decide through this.
@@ -264,8 +242,12 @@ void validate_runtime_args(
 
     // The copy path requires matching dtype/layout; the split-input path validates its
     // tiled BF16 inputs or row-major scaled-FP8 fields below. Check these on hits too.
+    // A plain copy into an FP8 cache also takes UINT8 rows: the same bytes, in the form FP8 rows travel in where
+    // FP8 has no path (D2D stream services, host mappers), e.g. read_padded_kv_cache's output.
+    const bool fp8_rows_as_bytes = cache.dtype() == DataType::FP8_E4M3 &&
+                                   tensor_args.input.dtype() == DataType::UINT8 && !tensor_args.rope.has_value();
     TT_FATAL(
-        cache.dtype() == tensor_args.input.dtype(),
+        cache.dtype() == tensor_args.input.dtype() || fp8_rows_as_bytes,
         "cache and input dtype must match (got {} and {})",
         cache.dtype(),
         tensor_args.input.dtype());
