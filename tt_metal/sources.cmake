@@ -69,6 +69,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
+    api/tt-metalium/experimental/kernel_config_buffer.hpp
     api/tt-metalium/experimental/operation_timeout.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp

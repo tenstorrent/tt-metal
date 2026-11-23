@@ -434,6 +434,10 @@ void py_module_types(nb::module_& mod) {
             "address_offset",
             &tt::tt_metal::CBDescriptor::address_offset,
             "Byte offset from buffer base address for CB placement (default 0)")
+        .def_rw(
+            "globally_allocated_bound_later",
+            &tt::tt_metal::CBDescriptor::globally_allocated_bound_later,
+            "Globally allocated CB whose buffer or tensor a later descriptor names (default False)")
         .def(
             "has_buffer",
             [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },

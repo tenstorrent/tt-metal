@@ -84,6 +84,8 @@ struct CBDescriptor {
     const MeshTensor* tensor = nullptr;
     uint32_t address_offset = 0;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
+    // Globally allocated, with `buffer`/`tensor` named by a later descriptor; the program can't launch until then.
+    bool globally_allocated_bound_later = false;
 };
 
 struct SemaphoreDescriptor {

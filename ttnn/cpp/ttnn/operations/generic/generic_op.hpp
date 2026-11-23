@@ -6,6 +6,7 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
+#include "ttnn/compiled_program.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {
@@ -34,6 +35,30 @@ void prepare_generic_op(
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
 void prepare_generic_op(
     const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
+
+// Compiles and lays out the program that generic_op would enqueue, into a CompiledProgram, without enqueueing it or
+// touching the program cache (ttnn::device_operation::compile). In slow dispatch its kernel binaries may outgrow the
+// KERNEL_CONFIG window, to run from a kernel config buffer (ttnn::device_operation::create_kernel_config_buffer).
+ttnn::device_operation::CompiledProgram compile_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
+ttnn::device_operation::CompiledProgram compile_generic_op(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
+
+// generic_op, launching `compiled` (from compile_generic_op) instead of a program from the program cache: the
+// descriptor's runtime arguments, and the buffers of its CBs, are applied to it as a cache hit applies them
+// (ttnn::device_operation::run). The descriptor must have the program cache key of the one `compiled` was compiled
+// from. `kernel_config_buffer`, when given, holds the Tensix kernel binaries instead of the KERNEL_CONFIG window.
+Tensor run_compiled_program(
+    ttnn::device_operation::CompiledProgram& compiled,
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor,
+    const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer = nullptr);
+Tensor run_compiled_program(
+    ttnn::device_operation::CompiledProgram& compiled,
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::ProgramDescriptor& program_descriptor,
+    const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer = nullptr);
 
 }  // namespace experimental
 

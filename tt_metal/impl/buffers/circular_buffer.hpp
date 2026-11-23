@@ -37,7 +37,7 @@ public:
 
     uint32_t page_size(uint32_t buffer_index) const;
 
-    bool globally_allocated() const { return this->config_.globally_allocated_address().has_value(); }
+    bool globally_allocated() const { return this->config_.dynamic_cb(); }
     bool is_global_circular_buffer() const { return this->shadow_global_circular_buffer_ != nullptr; }
 
     uint32_t size() const { return this->config_.total_size(); }
@@ -51,6 +51,7 @@ public:
     const std::optional<FaceGeometry>& unpack_face_geometry(uint32_t buffer_index) const;
 
     uint32_t address() const;
+    void check_bound() const;
 
     bool is_on_logical_corerange(const CoreRange& logical_cr) const;
 
@@ -90,5 +91,9 @@ private:
     const experimental::GlobalCircularBuffer* shadow_global_circular_buffer_ = nullptr;
     // add a callback to invalidate circular buffer allocation
 };
+
+bool cb_descriptor_is_backed(const CBDescriptor& descriptor);
+
+void validate_cb_descriptor_backing(const CBDescriptor& descriptor);
 
 }  // namespace tt::tt_metal
