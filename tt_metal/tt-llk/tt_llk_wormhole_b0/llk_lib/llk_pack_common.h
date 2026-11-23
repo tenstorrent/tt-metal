@@ -92,8 +92,7 @@ inline void _llk_pack_dest_section_done_()
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
  * @tparam diagonal: True to lay out dest offsets for diagonal (per-packer split) packing.
- * @param tensor_shape: Tile geometry. A tile one face wide (num_faces_c_dim == 1, i.e. 32x16 or
- *        16x16) is what the legacy narrow_tile flag expressed.
+ * @param tensor_shape: Tile geometry.
  */
 template <DstSync Dst, PackMode pack_mode = PackMode::Default, bool diagonal = false>
 inline void _llk_init_packer_dest_offset_registers_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
@@ -172,8 +171,7 @@ inline void _llk_init_packer_dest_offset_registers_(const ckernel::TensorShape t
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
- * @param tensor_shape: Tile geometry. A tile one face wide (num_faces_c_dim == 1) is what the
- *        legacy narrow_tile flag expressed.
+ * @param tensor_shape: Tile geometry.
  * @ref _llk_init_packer_dest_offset_registers_ performs the dest-offset register setup.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>

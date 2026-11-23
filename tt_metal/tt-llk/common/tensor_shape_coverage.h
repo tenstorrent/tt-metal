@@ -51,7 +51,6 @@ constexpr TensorShape TENSOR_SHAPE_FR16_NF1x1 = {16, MAX_FACE_C_DIM, 1, 1}; ///<
 constexpr TensorShape TENSOR_SHAPE_FR16_NF1x2 = {16, MAX_FACE_C_DIM, 1, 2}; ///< 16x32
 constexpr TensorShape TENSOR_SHAPE_FR16_NF2x1 = {16, MAX_FACE_C_DIM, 2, 1}; ///< 32x16
 constexpr TensorShape TENSOR_SHAPE_FR16_NF2x2 = DEFAULT_TENSOR_SHAPE;       ///< 32x32
-constexpr TensorShape TENSOR_SHAPE_FR16_NF4x1 = {16, MAX_FACE_C_DIM, 4, 1}; ///< 64x16 (untilize dest-init stacks 4 faces along R)
 
 constexpr bool tensor_shape_eq(const TensorShape& lhs, const TensorShape& rhs)
 {

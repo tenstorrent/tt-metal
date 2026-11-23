@@ -181,8 +181,7 @@ inline void _llk_pack_configure_addrmod_()
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
  * @tparam zero_output: When true, packer emits zeros instead of dest data.
  * @param pack_dst_format: Destination (L1) data format.
- * @param tensor_shape: Tile geometry. A tile one face wide (num_faces_c_dim == 1, i.e. 32x16 or
- *        16x16) is what the legacy narrow_tile flag expressed.
+ * @param tensor_shape: Tile geometry.
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param num_tiles: Number of tiles processed per MOP run.
  * @note @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
@@ -288,8 +287,7 @@ inline void _llk_pack_mop_config_(
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
  * @param tile_size: Size of one output tile in bytes.
- * @param tensor_shape: Tile geometry. A tile one face wide (num_faces_c_dim == 1) is what the
- *        legacy narrow_tile flag expressed.
+ * @param tensor_shape: Tile geometry.
  * @param partial_face: True if packing a partial (sub-face-row) face.
  */
 template <bool is_fp32_dest_acc_en>
@@ -321,8 +319,7 @@ inline void _llk_pack_reconfig_data_format_(
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
  * @param tile_size: Size of one output tile in bytes.
- * @param tensor_shape: Tile geometry. A tile one face wide (num_faces_c_dim == 1, i.e. 32x16 or
- *        16x16) is what the legacy narrow_tile flag expressed.
+ * @param tensor_shape: Tile geometry.
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
  */
@@ -357,8 +354,7 @@ inline void _llk_pack_hw_configure_(
  *         so this flag has no effect; retained because existing callers (e.g. SDPA `compute_streaming.hpp`)
  *         and shared tests still pass it.
  * @param pack_dst_format: Destination (L1) data format.
- * @param tensor_shape: Tile geometry. A tile one face wide (num_faces_c_dim == 1, i.e. 32x16 or
- *        16x16) is what the legacy narrow_tile flag expressed.
+ * @param tensor_shape: Tile geometry.
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param num_tiles: Number of tiles processed per MOP run.
  * @note Init programs ADDR_MOD + MOP + the packer X (datum) counter. The X counter is pack_mode-dependent

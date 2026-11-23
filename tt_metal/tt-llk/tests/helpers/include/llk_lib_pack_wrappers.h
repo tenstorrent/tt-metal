@@ -113,12 +113,9 @@ inline void _llk_pack_init_with_src_wrapper_(
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_dest_init_wrapper_(const std::uint32_t face_r_dim = FACE_R_DIM, const bool narrow_tile = false)
+inline void _llk_pack_dest_init_wrapper_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     static_assert(pack_mode != PackMode::Tilize, "Wormhole B0 LLK tests: pack dest init supports PackMode::Default or PackMode::Untilize only");
-    // The wrapper only ever sees full tiles (num_faces == 4); a narrow tile is a 2x1 grid.
-    const ckernel::TensorShape tensor_shape =
-        narrow_tile ? ckernel::make_tensor_shape(face_r_dim, ckernel::MAX_FACE_C_DIM, 4, 1) : ckernel::make_tensor_shape_from_legacy(face_r_dim, 4);
     _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en, pack_mode>(tensor_shape);
 }
 
@@ -251,7 +248,7 @@ inline void _llk_pack_init_with_src_wrapper_(
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode /*maybe_unused*/ = PackMode::Default>
-inline void _llk_pack_dest_init_wrapper_([[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, [[maybe_unused]] const bool narrow_tile = false)
+inline void _llk_pack_dest_init_wrapper_([[maybe_unused]] const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en>();
 }
