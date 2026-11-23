@@ -2216,7 +2216,7 @@ class TestConfig:
 
     def _recover_hung_core(self):
         # SimpleNamespace variants in the hw-free tests call this on self and don't model the device.
-        if TestConfig.TEST_TARGET.run_simulator or not hasattr(
+        if TestConfig.runs_on_ttsim() or not hasattr(
             device_module, "recover_tensix_core"
         ):
             return

@@ -174,7 +174,7 @@ FlatProgramHandles add_flat_routed_expert_program(
     // (gate_up_x_forwarder.cpp) on NOC0 with 3 pieces in flight, the receiver (gate_up_core_reader.cpp, BRISC) on NOC1.
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
     const uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
-    constexpr uint32_t X_FWD_DEPTH = 3;
+    constexpr uint32_t X_FWD_DEPTH = 6;  // (<= 7: ids 8..15 are the weight reads'; 3 -> 6: K3 / M3 M 320 -14 / -18%)
     log_info(
         tt::LogOp,
         "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} NCRISC forwarder NOC0 depth {})",
@@ -649,7 +649,10 @@ FlatProgramHandles add_flat_routed_expert_program(
                 .cat(dyn);
             add_rt(kr, dc, a);
             Args w;
-            w.a(FlatAddr::Down).lit(d % banks).lit(d * p.down_weight_region_bytes).cat(dyn);
+            w.a(FlatAddr::Down)
+                .lit(p.down_bank_pattern[d])
+                .lit(p.down_weight_slot[d] * p.down_weight_region_bytes)
+                .cat(dyn);
             if (y_nc) {
                 w.a(FlatAddr::Y).lit(p.down_first_columns[d]);
             }

@@ -43,6 +43,9 @@ FLAT = dict(
     down_first_columns=list(range(0, 20, 2)),
     down_weight_region_tiles=96,
     row_tiles_per_sub_block=4,
+    down_bank_patterns=[[d % 8] * 8 for d in range(10)],
+    down_weight_slots=[d // 8 for d in range(10)],
+    down_weight_slot_count=2,
 )
 
 
