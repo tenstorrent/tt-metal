@@ -24,6 +24,8 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.sparse_sdpa_prefill import MASKED_INDEX
 
+_ROW_BLOCK = 256  # query rows per block of two_bank_sparse_mla
+
 
 def damp_gate_reference(
     x_prev: torch.Tensor,
@@ -131,12 +133,19 @@ def two_bank_sparse_mla(
             raise ValueError(f"kvpe_{name} must be [T, {width}], got {tuple(kvpe.shape)}")
         if idx.shape[-2] != seq_len:
             raise ValueError(f"indices_{name} rows {idx.shape[-2]} != query rows {seq_len}")
-    rows_a, masked_a = _gather_bank(kvpe_a, indices_a)
-    rows_b, masked_b = _gather_bank(kvpe_b, indices_b)
-    rows = torch.cat([rows_a, rows_b], dim=1)  # [S, ka + kb, D]
-    masked = torch.cat([masked_a, masked_b], dim=1)  # [S, ka + kb]
+    out = []
+    # Query rows are independent; blocks bound the gathered keys ([rows, ka + kb, D] float32) to ~1 GB at production
+    # sizes (5120 rows x 2176 keys x 576 would be 26 GB at once). Same math per row.
+    block = _ROW_BLOCK
+    for lo in range(0, seq_len, block):
+        hi = min(lo + block, seq_len)
+        rows_a, masked_a = _gather_bank(kvpe_a, indices_a[..., lo:hi, :])
+        rows_b, masked_b = _gather_bank(kvpe_b, indices_b[..., lo:hi, :])
+        rows = torch.cat([rows_a, rows_b], dim=1)  # [s, ka + kb, D]
+        masked = torch.cat([masked_a, masked_b], dim=1)  # [s, ka + kb]
 
-    scores = torch.einsum("hsd,sjd->hsj", q[0].float(), rows) * scale  # [H, S, ka + kb]
-    scores = scores.masked_fill(masked.unsqueeze(0), float("-inf"))
-    probs = scores.softmax(dim=-1)
-    return torch.einsum("hsj,sjc->hsc", probs, rows[..., :latent_dim]).unsqueeze(0)  # [1, H, S, latent_dim]
+        scores = torch.einsum("hsd,sjd->hsj", q[0, :, lo:hi].float(), rows) * scale  # [H, s, ka + kb]
+        scores = scores.masked_fill(masked.unsqueeze(0), float("-inf"))
+        probs = scores.softmax(dim=-1)
+        out.append(torch.einsum("hsj,sjc->hsc", probs, rows[..., :latent_dim]))
+    return torch.cat(out, dim=1).unsqueeze(0)  # [1, H, S, latent_dim]
