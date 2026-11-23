@@ -45,7 +45,7 @@ sfpi_inline sfpi::vFloat _slstm_exp_(sfpi::vFloat x) {
         j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
         sfpi::vFloat f = j * -0.693147182f + x;
 #if SLSTM_FASTEXP == 2
-        // Degree-4 poly (rel err ~6e-6), one fewer FMA per exp.
+        // Degree-4 poly (rel err ~6e-6), one fewer FMA per exp. Not the default: less accurate on long recurrences.
         sfpi::vFloat r = 4.15458507e-2f;
         r = r * f + 1.67766179e-1f;
         r = r * f + 5.00021374e-1f;

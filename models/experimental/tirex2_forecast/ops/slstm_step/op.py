@@ -169,7 +169,9 @@ def _plan(device, T, Bt, record, ablate, gate_ablate, compute_ablate):
             ("INP_FLOAT32", "1"),
             ("SLSTM_GABL", str(int(gate_ablate))),
             ("SLSTM_CABL", str(int(compute_ablate))),
-            ("SLSTM_FASTEXP", os.environ.get("SLSTM_FASTEXP", "2")),
+            # Gate exp: 1 = degree-5 poly (default), 2 = degree-4 (one fewer FMA; on 64-row ragged groups it lands
+            # ~1e-4 lower in pcc_final_spread and under the 0.999 floor), 0 = the upstream accurate exp.
+            ("SLSTM_FASTEXP", os.environ.get("SLSTM_FASTEXP", "1")),
         ],
         runtime_args=[((c.x, c.y), [cnt, *rt, s, L]) for c, cnt, s in work],
         config=compute_cfg,
