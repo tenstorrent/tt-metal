@@ -2,10 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Test-only pack wrappers (Blackhole) on top of the HAL-based pack implementation.
-
 #pragma once
 
+// Reduced copy of tests/helpers/include/llk_lib_pack_wrappers.h for the HAL port (Blackhole only): only the wrappers
+// the eltwise binary test uses. The original includes production llk_pack_untilize.h, which would pull the production
+// llk_pack.h in next to the HAL port.
+
+// These wrappers are intended exclusively for LLK tests and are only available
+// when the LLK infrastructure is enabled.
 #ifdef ENV_LLK_INFRA
 
 #include <cstdint>
@@ -15,6 +19,8 @@
 using ckernel::FACE_R_DIM;
 using ckernel::PackMode;
 using ckernel::TILE_C_DIM;
+
+#ifdef ARCH_BLACKHOLE
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_wrapper_(
@@ -32,8 +38,6 @@ inline void _llk_pack_hw_configure_wrapper_(
         pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
 
-// No-src init: the packer strides are owned by the preceding hw-configure, so they are skipped and
-// pack_dst_format stands in for the (unused) source format.
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_wrapper_(
     const std::uint32_t pack_dst_format,
@@ -44,8 +48,13 @@ inline void _llk_pack_init_wrapper_(
     [[maybe_unused]] const bool narrow_tile  = false,
     const std::uint32_t num_tiles            = 1)
 {
-    _llk_pack_init_<pack_mode, zero_output, false /* skip_addrmod_config */, true /* skip_packer_strides */, false /* mutex_ADC */>(
-        pack_dst_format, face_r_dim, tile_c_dim, num_faces, num_tiles, false /* skip_bh_tilize_workaround */);
+    // No-src wrapper: the packer strides are owned by the preceding hw-configure/reconfig, so we skip
+    // them here. Because strides are the only consumer of pack_src_format, we call the internal init
+    // helper directly instead of the public _llk_pack_init_: that avoids fabricating a pack_src_format
+    // (the src format is never read once strides are skipped) and bypasses the public entry point's
+    // format-based num_tiles assert, which would otherwise validate against a placeholder value.
+    llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, false /* skip_addrmod_config */, true /* skip_packer_strides */, false /* mutex_ADC */>(
+        pack_dst_format /* pack_src_format: ignored when strides are skipped */, face_r_dim, tile_c_dim, num_faces, num_tiles);
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode /*maybe_unused*/ = PackMode::Default>
@@ -53,5 +62,9 @@ inline void _llk_pack_dest_init_wrapper_([[maybe_unused]] const std::uint32_t fa
 {
     _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en>();
 }
+
+#else
+#error "Unsupported architecture"
+#endif
 
 #endif // ENV_LLK_INFRA

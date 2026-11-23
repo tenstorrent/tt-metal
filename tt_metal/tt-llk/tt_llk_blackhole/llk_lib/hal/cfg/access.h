@@ -207,7 +207,9 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
     {
         if constexpr (F.scope == RegisterScope::Thread)
         {
-            TT_SETC16(cfg_word_addr, (value << F.shamt(S)) & detail::ThreadCfgWordMask);
+            // value <= max_value is asserted above, so the shifted field already fits the 16-bit word;
+            // masking again only costs an instruction and blocks strength reduction in per-tile loops.
+            TT_SETC16(cfg_word_addr, value << F.shamt(S));
         }
         else
         {
@@ -235,6 +237,28 @@ inline __attribute__((always_inline)) void write(const std::uint32_t section, co
     static_assert(F.shamt(Sec::S0) == 0, "prepacked thread CFG anchor must begin at bit zero");
 
     detail::write_thread_word<F>(section, value);
+}
+
+/**
+ * @brief Write a complete prepacked runtime thread-CFG word using SETC16 from the instruction buffer.
+ *
+ * Use when several fields of one thread-CFG word take runtime values that the caller has already packed
+ * (for example one value replicated into two fields by a multiply), so no per-field masking is emitted.
+ *
+ * @tparam A: Access path; must be Access::TensixCfgUnit.
+ * @tparam F: Thread-CFG field identifying the destination word; must start at bit zero.
+ * @tparam S: Register section; must be within F.count.
+ * @param word: Complete 16-bit register word, already packed into its bit positions.
+ */
+template <Access A, const Field& F, Sec S>
+inline __attribute__((always_inline)) void write_thread_word(const std::uint32_t word)
+{
+    static_assert(A == Access::TensixCfgUnit, "SETC16 requires Access::TensixCfgUnit");
+    static_assert(F.scope == RegisterScope::Thread, "SETC16 targets thread CFG only");
+    static_assert(F.shamt(Sec::S0) == 0, "prepacked thread CFG anchor must begin at bit zero");
+    static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
+    LLK_ASSERT(word <= detail::ThreadCfgWordMask, "prepacked thread CFG value exceeds 16 bits");
+    TT_SETC16(F.addr32(S), word);
 }
 
 /**

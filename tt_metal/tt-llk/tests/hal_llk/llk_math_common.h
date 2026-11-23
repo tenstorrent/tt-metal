@@ -2,65 +2,172 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_math_common.h and the math helpers of common/inc/cmath_common.h
+// (only what eltwise_binary_test.cpp reaches). Same Tensix instruction sequence as production.
+
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <utility>
 
-#include "llk_hal_common.h"
+#include "ckernel_defs.h"
+#include "ckernel_include.h"
+#include "ckernel_ops.h"
+#include "cmath_common.h" // ckernel::math globals (src_zero_flag_*) and pure helpers only
+#include "hal/cfg.h"
+#include "hal/counters/rwc.h"
+#include "hal/dst.h"
+#include "hal/move.h"
+#include "hal/sync.h"
 
-namespace hal_llk
+using namespace ckernel::math;
+
+namespace hal_port
 {
 
-// One math ADDR_MOD slot: how the SrcA/SrcB/Dest/fidelity counters move after an instruction.
-struct MathAddrMod
-{
-    std::uint32_t srca_incr  = 0;
-    std::uint32_t srca_clear = 0;
-    std::uint32_t srcb_incr  = 0;
-    std::uint32_t srcb_clear = 0;
-    std::uint32_t dest_incr  = 0;
-    std::uint32_t dest_clear = 0;
-    std::uint32_t dest_cr    = 0; // increment relative to the carry/reset value
-    std::uint32_t dest_c2cr  = 0; // save the incremented dest counter into carry/reset
-    std::uint32_t fid_incr   = 0;
-    std::uint32_t fid_clear  = 0;
-};
+namespace cfg  = hal::cfg;
+namespace sync = hal::sync;
+namespace rwc  = hal::counters::rwc;
 
-// Program math ADDR_MOD slot S. Every field of the slot's thread-CFG words is supplied, so the
-// grouped SETC16 writes leave no stale bits behind.
-template <hal::cfg::Sec S, MathAddrMod M>
-inline void set_math_addr_mod()
+// ckernel::semaphore::MATH_PACK
+inline constexpr sync::Semaphore MATH_PACK_SEM = sync::Semaphore::S1;
+
+// ---------------------------------------------------------------------------------------------
+// Src zero-substitution flag (cmath_common.h). The tracking variables are the production ones.
+// ---------------------------------------------------------------------------------------------
+
+// The one writer, out-of-line as in production. No STALLWAIT, as in production.
+inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t value)
 {
-    namespace cfg = hal::cfg;
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<cfg::AddrMod[cfg::SrcA].Incr, S, M.srca_incr>(),
-        cfg::set<cfg::AddrMod[cfg::SrcA].CR, S, 0>(),
-        cfg::set<cfg::AddrMod[cfg::SrcA].Clear, S, M.srca_clear>(),
-        cfg::set<cfg::AddrMod[cfg::SrcB].Incr, S, M.srcb_incr>(),
-        cfg::set<cfg::AddrMod[cfg::SrcB].CR, S, 0>(),
-        cfg::set<cfg::AddrMod[cfg::SrcB].Clear, S, M.srcb_clear>(),
-        cfg::set<cfg::AddrMod[cfg::SrcA].Incr2, S, 0>(),
-        cfg::set<cfg::AddrMod[cfg::SrcB].Incr2, S, 0>(),
-        cfg::set<cfg::AddrMod[cfg::Dest].Incr, S, M.dest_incr>(),
-        cfg::set<cfg::AddrMod[cfg::Dest].CR, S, M.dest_cr>(),
-        cfg::set<cfg::AddrMod[cfg::Dest].Clear, S, M.dest_clear>(),
-        cfg::set<cfg::AddrMod[cfg::Dest].CToCR, S, M.dest_c2cr>(),
-        cfg::set<cfg::AddrMod[cfg::Fidelity].Incr, S, M.fid_incr>(),
-        cfg::set<cfg::AddrMod[cfg::Fidelity].Clear, S, M.fid_clear>(),
-        cfg::set<cfg::AddrMod[cfg::Bias].Incr, S, 0>(),
-        cfg::set<cfg::AddrMod[cfg::Bias].Clear, S, 0>());
+    ckernel::math::src_zero_flag_hw = value;
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Zero_Flag_disabled_src, cfg::Sec::S0>(value);
 }
 
-// Point the math thread at a dest row (section base + tile offset).
-inline void set_math_dest_offset(const std::uint32_t row)
+inline void _configure_default_zero_flag_state_()
 {
-    hal::cfg::write<hal::cfg::Access::TensixCfgUnit, hal::cfg::DestTargetRegCfgMath::Offset, hal::cfg::Sec::S0>(row);
+    const std::uint32_t value = requires_disabled_src_zero_flag(ckernel::math::src_zero_flag_srca_fmt, ckernel::math::src_zero_flag_srcb_fmt) ? 1u : 0u;
+    if (ckernel::math::src_zero_flag_hw == value)
+    {
+        return;
+    }
+    _apply_src_zero_flag_(value);
 }
 
-} // namespace hal_llk
+// ---------------------------------------------------------------------------------------------
+// cmath_common.h helpers
+// ---------------------------------------------------------------------------------------------
+
+// TTI_SETRWC(CLR_NONE, 0, 0, 0, 0, setrwc) with a compile-time mask: SET_ABD_F = A, B, D and fidelity.
+inline void reset_counters_abd_f()
+{
+    rwc::set<rwc::MathCounter {.src_a = rwc::Set(0), .src_b = rwc::Set(0), .dest = rwc::Set(0), .clear_fidelity = true}>();
+}
+
+// MOVD2A: Dest face rows -> SrcA rows. Production passes addrmod at runtime but every caller passes a constant.
+template <std::uint8_t addrmod>
+inline void move_d2a_fixed_face()
+{
+    namespace move = hal::move;
+    // Wait until the Matrix Unit owns the bank MOVD2A writes. No Matrix Unit drain: when the instruction that released
+    // SrcA (ELW or SETRWC with CLR_A) is still in the unit, the condition waits for the bank it moves to (MOVD2A.md).
+    // Dst reads by MOVD2A are interlocked against earlier Matrix Unit writes (Dst.md).
+    sync::wait::stall<sync::StallTarget::Math, sync::StallCondition::SrcAValid>();
+    // TTI_MOVD2A(dest_32b_lo, src = SrcA row, addrmod, instr_mod, dst = Dest row)
+    move::run<move::Transfer<move::Dst, move::SrcA> {
+        .source_row = 0, .destination_row = p_mova2d::MATH_HALO_ROWS + 0, .address_mode = addrmod, .number_of_rows = move::rows::Four}>();
+    move::run<move::Transfer<move::Dst, move::SrcA> {
+        .source_row = 4, .destination_row = p_mova2d::MATH_HALO_ROWS + 4, .address_mode = addrmod, .number_of_rows = move::rows::Four}>();
+    move::run<move::Transfer<move::Dst, move::SrcA> {
+        .source_row = 8, .destination_row = p_mova2d::MATH_HALO_ROWS + 8, .address_mode = addrmod, .number_of_rows = move::rows::Four}>();
+    move::run<move::Transfer<move::Dst, move::SrcA> {
+        .source_row = 12, .destination_row = p_mova2d::MATH_HALO_ROWS + 12, .address_mode = addrmod, .number_of_rows = move::rows::Four}>();
+}
+
+// MOVD2B: Dest face rows -> SrcB rows.
+template <std::uint8_t addrmod>
+inline void move_d2b_fixed_face()
+{
+    namespace move = hal::move;
+    // Keeps the Matrix Unit drain: MOVD2B.md, unlike MOVD2A.md, does not say the SrcB-valid wait follows an in-flight release.
+    sync::wait::stall<sync::StallTarget::Math, sync::StallCondition::MathIdle | sync::StallCondition::SrcBValid>();
+    move::run<move::Transfer<move::Dst, move::SrcB> {
+        .source_row = 0, .destination_row = p_movd2b::SRC_ZERO_OFFSET + 0, .address_mode = addrmod, .number_of_rows = move::rows::Four}>();
+    move::run<move::Transfer<move::Dst, move::SrcB> {
+        .source_row = 4, .destination_row = p_movd2b::SRC_ZERO_OFFSET + 4, .address_mode = addrmod, .number_of_rows = move::rows::Four}>();
+    move::run<move::Transfer<move::Dst, move::SrcB> {
+        .source_row = 8, .destination_row = p_movd2b::SRC_ZERO_OFFSET + 8, .address_mode = addrmod, .number_of_rows = move::rows::Four}>();
+    move::run<move::Transfer<move::Dst, move::SrcB> {
+        .source_row = 12, .destination_row = p_movd2b::SRC_ZERO_OFFSET + 12, .address_mode = addrmod, .number_of_rows = move::rows::Four}>();
+}
+
+inline void set_math_semaphores()
+{
+    // Tell packer that it has something to pack: t6_semaphore_post<MATH | WAIT_SFPU>(MATH_PACK)
+    sync::wait::stall<sync::StallTarget::Sync, sync::StallCondition::MathIdle | sync::StallCondition::SfpuIdle>();
+    sync::semaphore::post<MATH_PACK_SEM>();
+}
+
+template <DstTileShape tile_shape, UnpackDestination unpack_destination>
+inline void set_dst_write_addr(std::uint32_t tile_index)
+{
+    static_assert(
+        tile_shape == DstTileShape::Tile32x32 || tile_shape == DstTileShape::Tile32x16 || tile_shape == DstTileShape::Tile16x16, "Invalid tile shape");
+    static_assert(DstTileShape::Tile32x32 == 0, "DstTileShape::Tile32x32 must equal 0");
+    static_assert(DstTileShape::Tile32x16 == 1, "DstTileShape::Tile32x16 must equal 1");
+    static_assert(DstTileShape::Tile16x16 == 2, "DstTileShape::Tile16x16 must equal 2");
+    static_assert(DstTileSizeLog2[DstTileShape::Tile32x32] == 6, "DstTileSizeLog2[Tile32x32] must equal 6");
+    static_assert(DstTileSizeLog2[DstTileShape::Tile32x16] == 5, "DstTileSizeLog2[Tile32x16] must equal 5");
+    static_assert(DstTileSizeLog2[DstTileShape::Tile16x16] == 4, "DstTileSizeLog2[Tile16x16] must equal 4");
+
+    std::uint32_t dst_index = tile_index << DstTileSizeLog2[tile_shape];
+    dst_index               = dst_index + ckernel::get_dest_buffer_base();
+    if constexpr (unpack_destination == UnpackDestination::DestReg)
+    {
+        ckernel::mailbox_write(ThreadId::UnpackThreadId, dst_index); // HAL-GAP: no HAL API for the thread mailbox
+    }
+    else
+    {
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(dst_index);
+    }
+}
+
+// TTI_SETRWC(CLR_NONE, 0, 0, 0, 0, SET_D)
+inline void clear_dst_reg_addr()
+{
+    rwc::set<rwc::MathCounter {.dest = rwc::Set(0)}>();
+}
+
+inline void math_dest_wait()
+{
+    sync::wait::semaphore<sync::StallTarget::Math | sync::StallTarget::Sfpu | sync::StallTarget::Sync, sync::SemaphoreCondition::WhileMaximum, MATH_PACK_SEM>();
+}
+
+inline void dest_section_flip()
+{
+    ckernel::update_dest_offset_id();
+    std::uint32_t base_addr = ckernel::get_dest_buffer_base();
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::MathIdle | sync::StallCondition::SfpuIdle>();
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(base_addr);
+}
+
+template <DstStart Dst>
+inline void set_dest_section_base()
+{
+    if constexpr (Dst == DstStart::StartZero)
+    {
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0, 0>();
+    }
+    else
+    {
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0, DEST_REGISTER_HALF_SIZE>();
+    }
+}
+
+} // namespace hal_port
 
 /**
- * @brief Configure the math ALU control: INT8 math, FP32 dest accumulation, source zero flags.
+ * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
@@ -68,72 +175,80 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     namespace cfg  = hal::cfg;
     namespace sync = hal::sync;
 
+    // SFPU_Fp32_enabled (written below) is read by SFPLOAD/SFPSTORE (MOD0_FMT_SRCB), so the SFPU must drain too.
     sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::MathIdle | sync::StallCondition::SfpuIdle>();
-
-    const std::uint32_t int8_math = (hal_llk::is_int8_or_int32(srca_data_format) || hal_llk::is_int8_or_int32(srcb_data_format)) ? 1 : 0;
-    // Zero-substitution must stay disabled only for 16-bit integer (UInt16) sources.
-    const std::uint32_t keep_src_zeros =
-        (srca_data_format == static_cast<std::uint32_t>(DataFormat::UInt16) || srcb_data_format == static_cast<std::uint32_t>(DataFormat::UInt16)) ? 1 : 0;
-
+    // Configure ZEROACC to auto-detect destination bank (non-legacy mode).
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::DestAccessCfg::zeroacc_absolute_tile_mode, cfg::Sec::S0, 0>();
+    std::uint32_t int8_math_enabled = is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format);
+    // INT8 math, FP32 dest accumulation and SFPU FP32 share ALU_ACC_CTRL word 0 (production: three RMWs).
     cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AluAccCtrl::INT8_math_enabled, cfg::Sec::S0>(int8_math_enabled),
         cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0, is_fp32_dest_acc_en ? 1 : 0>(),
-        cfg::set<cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0, is_fp32_dest_acc_en ? 1 : 0>(),
-        cfg::set<cfg::AluAccCtrl::INT8_math_enabled, cfg::Sec::S0>(int8_math));
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Zero_Flag_disabled_src, cfg::Sec::S0>(keep_src_zeros);
+        cfg::set<cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0, is_fp32_dest_acc_en ? 1 : 0>());
+    LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
+
+    // Establish the no-override baseline for the SrcA/SrcB ALU format-select fields (ADDR32=0): clear
+    // SrcA_val/override and SrcB_val/override. Dstacc fields in the same word are owned by the pack thread.
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 0>(),
+        cfg::set<cfg::AluFormatSpecReg::SrcA_override, cfg::Sec::S0, 0>(),
+        cfg::set<cfg::AluFormatSpecReg::SrcB_val, cfg::Sec::S0, 0>(),
+        cfg::set<cfg::AluFormatSpecReg::SrcB_override, cfg::Sec::S0, 0>());
+
+    // Establish the operand-driven baseline for the Src zero-substitution flag; refresh both format caches first.
+    ckernel::math::src_zero_flag_srca_fmt = srca_data_format;
+    ckernel::math::src_zero_flag_srcb_fmt = srcb_data_format;
+    hal_port::_configure_default_zero_flag_state_();
 }
 
 /**
- * @brief Block math until the packer has released a dest section.
+ * @brief Block the math thread until the destination register is available for writing.
  */
 template <DstSync Dst>
 inline void _llk_math_wait_for_dest_available_()
 {
-    namespace sync = hal::sync;
-    sync::wait::semaphore<sync::StallTarget::Math | sync::StallTarget::Sfpu, sync::SemaphoreCondition::WhileMaximum, hal_llk::MATH_PACK_SEM>();
+    // These lightweight functions for sync with packer imply
+    // no mode change - entire epoch is either double buffer or single buffer
+    hal_port::math_dest_wait();
 }
 
 /**
- * @brief Hand the finished dest section to the packer and, in half-sync mode, move to the other half.
+ * @brief Signal completion of a destination section by setting the math semaphores, flipping banks in half-sync mode.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_dest_section_done_()
 {
-    namespace sync = hal::sync;
-
-    // Post only after every math/SFPU write to the section has landed.
-    sync::wait::stall<sync::StallTarget::Sync, sync::StallCondition::MathIdle | sync::StallCondition::SfpuIdle>();
-    sync::semaphore::post<hal_llk::MATH_PACK_SEM>();
-
+    hal_port::set_math_semaphores();
     if constexpr (Dst == DstSync::SyncHalf)
     {
         math_sync_tile_dst_index = 0;
-        ckernel::dest_offset_id  = 1 - ckernel::dest_offset_id;
-        sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::MathIdle | sync::StallCondition::SfpuIdle>();
-        hal_llk::set_math_dest_offset(hal_llk::dest_section_base());
+        hal_port::dest_section_flip();
     }
 }
 
 /**
- * @brief Initialise the math <-> pack dest handshake and select dest section 0.
+ * @brief Initialize the math/pack synchronization semaphore and reset the destination section base.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_math_pack_sync_init_()
 {
     namespace sync = hal::sync;
 
-    // Let a previous kernel's packer drain everything before claiming dest.
-    while (sync::semaphore::read<hal_llk::MATH_PACK_SEM>() > 0)
+    ckernel::tensix_sync(); // HAL-GAP: no public HAL API for the PC-buffer tensix_sync() RISC fence
+    while (sync::semaphore::read<hal_port::MATH_PACK_SEM>() > 0)
     {
-    }
+    } // Wait for previous packs to finish before claiming all dest
     if constexpr (Dst == DstSync::SyncFull)
     {
-        sync::semaphore::init<0 /* Initial */, 1 /* Maximum */, hal_llk::MATH_PACK_SEM>();
+        sync::semaphore::init<0 /*Initial*/, 1 /*Maximum*/, hal_port::MATH_PACK_SEM>();
+        ckernel::reset_dest_offset_id();
+        hal_port::set_dest_section_base<StartZero>();
     }
     else
     {
-        sync::semaphore::init<0 /* Initial */, 2 /* Maximum */, hal_llk::MATH_PACK_SEM>();
+        static_assert(Dst == DstSync::SyncHalf);
+        sync::semaphore::init<0 /*Initial*/, 2 /*Maximum*/, hal_port::MATH_PACK_SEM>();
+        ckernel::reset_dest_offset_id();
+        hal_port::set_dest_section_base<StartZero>();
     }
-
-    ckernel::dest_offset_id = 0;
-    hal_llk::set_math_dest_offset(0);
 }
