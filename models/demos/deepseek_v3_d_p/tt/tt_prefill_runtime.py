@@ -259,6 +259,8 @@ class TtPrefillRuntime:
                 # reports complete and the placeholder is loaded as the weights.
                 routed_expert_weights_dtype=self.config.routed_expert_weights_dtype,
                 mtp_levels=self.config.mtp_levels,
+                # The kv-only last layer's indexer cache is required iff that layer is a `full` one.
+                hf_config=self.hf_config,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             elif not state_dict:
@@ -372,7 +374,7 @@ class TtPrefillRuntime:
             f"TTNN weight cache at {cfg.weight_cache_path} is missing {weight_categories.format_missing(missing)}; "
             f"building it from the checkpoint at {cfg.hf_model_path}"
         )
-        return weight_categories.load_trunk_state_dict(
+        return self._load_trunk_state_dict(
             cfg.hf_model_path,
             self.hf_config,
             cfg.model_cfg,
@@ -381,6 +383,10 @@ class TtPrefillRuntime:
             num_layers=cfg.num_layers,
         )
 
+    # The checkpoint reader the weight-cache rebuild uses. DeepSeek-V3 HF key layout by default; a model whose
+    # checkpoint is laid out differently (Hy4-preview: fused experts, MXFP8 scales) overrides it.
+    _load_trunk_state_dict = staticmethod(weight_categories.load_trunk_state_dict)
+
     def _build_mtp_predictor(self) -> None:
         """Build this rank's ``TtMTPPredictor``. Last rank only.
 
@@ -388,19 +394,14 @@ class TtPrefillRuntime:
         ``$TT_GLM53_MTP_TTNN_CACHE``.
         """
         k = self.config.mtp_levels
-        path = os.environ.get("GLM53_HF_MODEL") or os.environ.get("PREFILL_HF_MODEL")
-        mtp_cfg = (
-            MTPConfig.from_pretrained(path, num_levels=k)
-            if path
-            else MTPConfig.from_hf_config(self.hf_config, num_levels=k)
-        )
+        mtp_cfg = self._mtp_config(k)
 
         eff = Path(self.config.weight_cache_path)
         assert eff.name and eff.parent.name, (
             f"weight_cache_path {eff} is not the expected <root>/<variant>_<arch>_<N>dev/<sp>x<tp> "
             "layout, so the sibling MTP cache path cannot be derived; set TT_GLM53_MTP_TTNN_CACHE"
         )
-        mtp_root = Path(os.environ.get(MTP_CACHE_ENV) or eff.parent.parent.parent / "glm53_mtp_ttnn_cache")
+        mtp_root = Path(os.environ.get(MTP_CACHE_ENV) or eff.parent.parent.parent / self._mtp_cache_dirname)
         mtp_cache_path = mtp_root / eff.parent.name / eff.name
 
         num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
@@ -429,7 +430,7 @@ class TtPrefillRuntime:
                 f"MTP weight cache incomplete at {mtp_cache_path}; building it from {self.config.hf_model_path}"
             )
             mtp_cache_path.mkdir(parents=True, exist_ok=True)
-            mtp_state_dict = weight_categories.load_mtp_state_dict(
+            mtp_state_dict = self._load_mtp_state_dict(
                 self.config.hf_model_path, self.hf_config, self.config.model_cfg, mtp_cfg.mtp_layer_idx
             )
 
@@ -472,6 +473,19 @@ class TtPrefillRuntime:
             slot_num=self.config.num_users,
             is_balanced=False,
             layer_num=self.config.num_layers + k,
+        )
+
+    # The MTP weight reader and its cache dir name; a model whose checkpoint stores the MTP layer differently
+    # (Hy4-preview: model.mtp_layers.0) overrides them.
+    _load_mtp_state_dict = staticmethod(weight_categories.load_mtp_state_dict)
+    _mtp_cache_dirname = "glm53_mtp_ttnn_cache"
+
+    def _mtp_config(self, num_levels: int) -> MTPConfig:
+        path = os.environ.get("GLM53_HF_MODEL") or os.environ.get("PREFILL_HF_MODEL")
+        return (
+            MTPConfig.from_pretrained(path, num_levels=num_levels)
+            if path
+            else MTPConfig.from_hf_config(self.hf_config, num_levels=num_levels)
         )
 
     def _build_dflash_drafter(self) -> None:
@@ -648,15 +662,18 @@ class TtPrefillRuntime:
 
         ``dflash_packed=False`` asks for the hidden-only width under DFlash, which the traced path needs.
         """
+        from models.demos.deepseek_v3_d_p.tt.hy4.ihc import residual_layout
+
         rows = self.config.chunk_size // self.config.sp_factor
+        streams, dtype = residual_layout(self.config.model_cfg)  # (1, bf16), or iHC's (n, fp32) streams
         emb_per_tp = d2d_activation_width(
-            self.hf_config.hidden_size, dflash=(self.config.dflash_enabled and dflash_packed)
+            self.hf_config.hidden_size, dflash=(self.config.dflash_enabled and dflash_packed), streams=streams
         ) // (self.config.tp_factor)
-        zeros = torch.zeros(1, self.activation_planes, rows, emb_per_tp, dtype=torch.bfloat16)
+        zeros = torch.zeros(1, self.activation_planes, rows, emb_per_tp, dtype=torch.float32)
         return ttnn.from_torch(
             zeros,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),

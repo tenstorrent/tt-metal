@@ -41,13 +41,22 @@ GATE_BIAS_CACHE_NAME = "e_score_correction_bias"
 GATE_BIAS_CENTERED_CACHE_NAME = "e_score_correction_bias_centered"
 
 
-def gate_bias_cache_name(centered: bool) -> str:
-    return GATE_BIAS_CENTERED_CACHE_NAME if centered else GATE_BIAS_CACHE_NAME
+def gate_bias_cache_name(centered: bool, fp32: bool = False) -> str:
+    """The bias cache basename. An fp32 bias gets its own name (``..._fp32``) so a bf16 cache never loads for it."""
+    name = GATE_BIAS_CENTERED_CACHE_NAME if centered else GATE_BIAS_CACHE_NAME
+    return name + "_fp32" if fp32 else name
 
 
 def gate_bias_centered(model_cfg) -> bool:
     """Whether a model caches its gate bias mean-centred (MOE_GATE_BIAS_CENTERED; off unless a config names it)."""
     return bool(getattr(model_cfg, "MOE_GATE_BIAS_CENTERED", False))
+
+
+def gate_bias_fp32(model_cfg) -> bool:
+    """Whether a model keeps its gate correction bias in fp32 on device (MOE_GATE_BIAS_FP32; off unless a config
+    names it). The bias only ranks experts; bf16 rounds it by up to ~2e-4 on Hy4 (layer 40), the size of the margins
+    that decide near-tie picks. ``moe_grouped_topk`` takes an fp32 bias as is."""
+    return bool(getattr(model_cfg, "MOE_GATE_BIAS_FP32", False))
 
 
 def centre_gate_bias(bias: torch.Tensor) -> torch.Tensor:
@@ -435,6 +444,12 @@ class TtMoEGateConfig:
     score_func: str = "sigmoid"
     # Cache and use the correction bias mean-centred (see centre_gate_bias / MOE_GATE_BIAS_CENTERED).
     bias_centered: bool = False
+    # Keep the correction bias fp32 on device instead of bf16 (MOE_GATE_BIAS_FP32, gate_bias_fp32).
+    bias_fp32: bool = False
+
+    @property
+    def bias_dtype(self):
+        return ttnn.float32 if self.bias_fp32 else ttnn.bfloat16
 
     # grid_config
     core_grid: ttnn.CoreRangeSet = field(
@@ -485,6 +500,7 @@ class TtMoEGateConfig:
             "sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", cls.sp_dim),
             "max_sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
             "bias_centered": gate_bias_centered(model_cfg),
+            "bias_fp32": gate_bias_fp32(model_cfg),
         }
         return cls(
             dim=model_cfg.EMB_SIZE,
@@ -502,15 +518,17 @@ class TtMoEGatePrefill(LightweightModule):
     """MoE gate module from DeepSeek-R1."""
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, cache_name_prefix: str, bias_centered: bool = False) -> bool:
-        """Check if gate weight and bias cache files exist. ``bias_centered`` picks the bias file (see
-        gate_bias_centered); a cache holding only the other one is incomplete."""
+    def check_cache_complete(
+        cache_path: Path, cache_name_prefix: str, bias_centered: bool = False, bias_fp32: bool = False
+    ) -> bool:
+        """Check if gate weight and bias cache files exist. ``bias_centered`` / ``bias_fp32`` pick the bias file (see
+        gate_bias_centered / gate_bias_fp32); a cache holding only another one is incomplete."""
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
         if not pattern_exists(f"{cache_name_prefix}.weight*.tensorbin", "MoEGate"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.weight")
             return False
-        bias_name = gate_bias_cache_name(bias_centered)
+        bias_name = gate_bias_cache_name(bias_centered, bias_fp32)
         # The trailing "_dtype" keeps e_score_correction_bias from also matching the _centered file.
         if not pattern_exists(f"{cache_name_prefix}.{bias_name}_dtype*.tensorbin", "MoEGate"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.{bias_name}")
@@ -556,7 +574,7 @@ class TtMoEGatePrefill(LightweightModule):
         else:
             weight_for_ttnn = torch.empty(config.dim, config.n_routed_experts)
 
-        bias_name = gate_bias_cache_name(config.bias_centered)
+        bias_name = gate_bias_cache_name(config.bias_centered, config.bias_fp32)
         if torch_bias is None:
             # Cache-only load. as_tensor DUMPS this placeholder on a miss, so refuse rather than cache garbage
             # under the centred name (an uncentred-only cache is the case this catches).
@@ -591,9 +609,9 @@ class TtMoEGatePrefill(LightweightModule):
 
         # Cache bias unbroadcasted (required by moe_grouped_topk)
         bias_tt = ttnn.as_tensor(
-            torch_bias,
+            torch_bias.float() if config.bias_fp32 else torch_bias,
             device=None,  # Always load to host first
-            dtype=ttnn.bfloat16,
+            dtype=config.bias_dtype,
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=_cache_name(bias_name),
             cache_dump_mode=resolve_cache_dump_mode(cache_dump_mode),
@@ -769,7 +787,7 @@ class TtMoEGatePrefill(LightweightModule):
         self.bias = ttnn.from_torch(
             bias_broadcasted,
             device=mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=config.bias_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )

@@ -566,12 +566,14 @@ def _preload_kvpe_prefix_from_trace(
     host_layout,
     tp_shard_kv=False,
     chunk_size=CHUNK,
+    pe_interleave=True,
 ):
     """Preload the first `preload_isl` tokens of each layer's prior KV into the block-cyclic device KVPE
     cache, so a chunk measured at KV depth preload_isl attends to REAL prior KV (representative MoE routing)
     instead of the zero-init prefix. Mirrors test_mla.py's chunked preload: per layer read the natural-order
     prior KV from the trace's kv_post_transform, re-interleave the k_pe slice (the trace stores HF half-split;
-    the device cache is Meta interleaved), lay it out block-cyclic, and copy host->device.
+    the device cache is Meta interleaved; `pe_interleave=False` when the trace's pe is already in the device
+    pairing, the variant's `kv_pe_interleave`), lay it out block-cyclic, and copy host->device.
 
     Rows past `trace_len` (the trace only goes so deep) are filled with RANDOM KV so we can still exercise
     KV depths beyond the trace — random keeps the MoE gate non-degenerate (unlike a zero prefix), which is
@@ -601,7 +603,8 @@ def _preload_kvpe_prefix_from_trace(
         kv_prior = torch.randn(preload_isl, kvpe_dim, generator=gen).to(torch.bfloat16)
         if real_len > 0:
             real = _load_layer_rows(trace_dir, layout, "kv_cache", i, f"kv_post_transform_layer_{i}", 0, real_len)
-            real[:, kv_lora:] = interleave_pe(real[:, kv_lora:])
+            if pe_interleave:
+                real[:, kv_lora:] = interleave_pe(real[:, kv_lora:])
             kv_prior[:real_len] = real.to(torch.bfloat16)
         bc = blockcyclic_cache_host(kv_prior, stripes, chunk_size, seq_len_cache, kvpe_dim)[0, 0]  # [seq, D]
         if tp_shard_kv:
@@ -1967,11 +1970,18 @@ def run_chunked_transformer_updated(
     # Ask THAT class whether its cache is complete: the answer is model-specific. Kimi-K3 answers
     # from per-layer completion markers rather than by composing each component's own check, since
     # `ttnn.as_tensor` silently caches a `torch.empty` placeholder when a file is absent (#54841).
+    # Check what THIS build loads: the variant's own model_cfg (which bias file its gate reads, centred or not;
+    # a LatentMoE's projections) and the last layer kv-only, as constructed below (kv_only_last_layer=True), with
+    # hf_config so a `full`-indexer last layer (Hy4-preview's) still requires its indexer cache. A fully built
+    # cache passes either way; a runner-built one holds only the kv-only pieces for its last layer.
     assert transformer_cls.check_cache_complete(
         effective_cache_path,
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        kv_only_last_layer=True,
+        model_cfg=variant.model_config,
+        hf_config=config,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     profiler.start("tt_transformer_creation")
@@ -2141,6 +2151,7 @@ def run_chunked_transformer_updated(
             cache_format.storage_layout,
             tp_shard_kv=tp_shard_kv,
             chunk_size=chunk_size,
+            pe_interleave=getattr(variant, "kv_pe_interleave", True),
         )
         if tt_index_kv_cache is not None:
             _preload_indexer_k_prefix_from_trace(
@@ -2594,6 +2605,8 @@ def run_chunked_transformer_updated(
             slot_layer_ids=getattr(variant, "kv_slot_layer_ids", lambda n: None)(num_layers),
             # NoPE models have no rotation in the second half to re-base.
             pe_interleave=getattr(variant, "kv_pe_interleave", True),
+            # The block-cyclic un-rotation follows the chunk width the cache was written with.
+            chunk_size=chunk_size,
         )
         # GLM/DSA only: the indexer's own key cache. Read back after the run like the KVPE cache, so
         # unlike the per-layer decoder PCC (which needs a mid-forward host readback and is therefore
@@ -2611,6 +2624,7 @@ def run_chunked_transformer_updated(
                 config,
                 tp_shard_kv=tp_shard_kv,
                 sp_axis=sp_axis,
+                chunk_size=chunk_size,
             )
 
     # Release the captured trace + the sub-device managers that own its buffers BEFORE the mesh

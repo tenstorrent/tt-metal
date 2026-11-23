@@ -47,6 +47,7 @@ class TtV4Transformer(LightweightModule):
         model_cfg: type | None = None,
         routed_expert_weights_dtype=None,
         mtp_levels: int = 0,
+        hf_config=None,  # TtPrefillTransformer's kv-only indexer check; unused here
     ) -> bool:
         """Always False: V4 attention reads its weights off torch modules and writes no ttnn cache, so a
         model can only be built from source weights."""

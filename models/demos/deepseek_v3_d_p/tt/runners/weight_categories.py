@@ -26,6 +26,8 @@ Categories (rank-local unless noted):
     routed_experts   routed experts of every MoE layer     (by far the largest: 256 fp8 experts per layer)
     lm_head          final norm + LM head                   (last rank running MTP)
     mtp              the MTP predictor tree (its own cache root; last rank running MTP)
+    ihc              iHC parameters of every layer (both sites) and the iHC head (last rank without a kv-only
+                     last layer); only models with ENABLE_IHC (Hy4-preview, #65891)
 """
 
 from __future__ import annotations
@@ -46,8 +48,9 @@ SHARED_EXPERTS = "shared_experts"
 ROUTED_EXPERTS = "routed_experts"
 LM_HEAD = "lm_head"
 MTP = "mtp"
+IHC = "ihc"
 
-CATEGORIES = (EMBEDDING, NORMS, MLA, DENSE_FFN, MOE_GATE, SHARED_EXPERTS, ROUTED_EXPERTS, LM_HEAD, MTP)
+CATEGORIES = (EMBEDDING, NORMS, MLA, DENSE_FFN, MOE_GATE, SHARED_EXPERTS, ROUTED_EXPERTS, LM_HEAD, MTP, IHC)
 _PROJ = ("gate_proj", "up_proj", "down_proj")
 
 
@@ -65,18 +68,45 @@ def _mla_cache_complete(cache_path: Path, prefix: str, layer_idx: int, model_cfg
     """
     from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer, indexer_layer_is_reused, resolve_has_indexer
-    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
 
     # Sparse (DSA) attention is a property of the model; a `shared` layer is still sparse (it replicates wkv_b1) but
     # owns no indexer weights, so only the indexer files depend on the layer's own type.
+    from models.demos.deepseek_v3_d_p.tt.mla.mla_2d import mla_2d_cache_layout, ttMLA2DTP, uses_2d_tp
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
     sparse = hf_config is not None and resolve_has_indexer(hf_config)
     owns_indexer = sparse and not indexer_layer_is_reused(hf_config, layer_idx)
+    if hf_config is not None and uses_2d_tp(hf_config):
+        # 2D TP attention (Hy4 tp32, #65885) caches under layer_{i}.mla2d.*, which the block builds via mla_class.
+        return ttMLA2DTP.check_cache_complete(
+            cache_path,
+            f"{prefix}.mla",
+            has_indexer=owns_indexer,
+            has_output_gate=bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)),
+            has_sink=bool(getattr(model_cfg, "USE_LEARNABLE_SINK", False)),
+            **mla_2d_cache_layout(model_cfg),
+        )
     replicated = sparse and ttMLA.replicates_wkv_b1(hf_config, tp_factor, sparse)
-    for name in ttMLA.weight_names(bool(getattr(model_cfg, "USE_OUTPUT_GATE", False))):
+    names = ttMLA.weight_names(
+        bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)), bool(getattr(model_cfg, "USE_LEARNABLE_SINK", False))
+    )
+    for name in names:
         stem = f"{prefix}.mla_repl.{name}" if replicated and name == "wkv_b1" else f"{prefix}.mla.{name}"
         if not pattern_exists(f"{stem}*.tensorbin", "MLA"):
             return False
     return not owns_indexer or TtIndexer.check_cache_complete(cache_path, f"{prefix}.mla")
+
+
+def _kv_only_indexer_cache_complete(cache_path: Path, prefix: str, layer_idx: int, hf_config) -> bool:
+    """A kv-only last layer still writes its index keys when it is a ``full`` indexer layer (decode reads them), so
+    its TtIndexer loads the indexer cache. GLM-5.3's last layer is ``shared`` and never needs this; Hy4-preview's
+    last layer (77) is ``full``, and without this check a cache missing those files would report complete and the
+    indexer would load placeholders."""
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer, indexer_layer_is_reused, resolve_has_indexer
+
+    if hf_config is None or not resolve_has_indexer(hf_config) or indexer_layer_is_reused(hf_config, layer_idx):
+        return True
+    return TtIndexer.check_cache_complete(cache_path, f"{prefix}.mla")
 
 
 def missing_trunk_categories(
@@ -99,7 +129,12 @@ def missing_trunk_categories(
     ``embedding`` / ``lm_head`` carry ``[-1]``. Uses the same per-component checks as
     ``TtPrefillTransformer.check_cache_complete``, one category at a time.
     """
-    from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGatePrefill, gate_bias_centered
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import TtMlp2D, ffn_2d_layout, ffn_2d_tp
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import (
+        TtMoEGatePrefill,
+        gate_bias_centered,
+        gate_bias_fp32,
+    )
     from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
     from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
@@ -125,13 +160,21 @@ def missing_trunk_categories(
         if not (exists and TtParallelEmbedding.check_cache_complete(cache_path)):
             miss(EMBEDDING, -1)
 
+    from models.demos.deepseek_v3_d_p.tt.hy4 import ihc as hy4_ihc
+
+    ihc = hy4_ihc.ihc_enabled(model_cfg)
+    if ihc and is_last_rank and not kv_only_last_layer and not (exists and hy4_ihc.head_cache_complete(cache_path)):
+        miss(IHC, -1)
+
     first_k_dense = model_cfg.NUM_DENSE_LAYERS
     last_layer_idx = first_layer_idx + num_layers - 1
     for layer_idx in range(first_layer_idx, first_layer_idx + num_layers):
         prefix = f"layer_{layer_idx}"
+        if ihc and not (exists and hy4_ihc.layer_cache_complete(cache_path, layer_idx)):
+            miss(IHC, layer_idx)  # a kv-only last layer needs it too: its KV comes from the collapsed streams
         if kv_only_last_layer and is_last_rank and layer_idx == last_layer_idx:
-            # Built kv-only: the model reads attn_norm and the KV projections of this layer and nothing else, so
-            # that is all a runner-built cache ever holds for it (no Q/indexer/output projections, FFN or MoE).
+            # Built kv-only: the model reads attn_norm, the KV projections and, on a `full` indexer layer, the indexer
+            # (it writes the index keys) of this layer and nothing else (no Q/output projections, FFN or MoE).
             if not (exists and TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm")):
                 miss(NORMS, layer_idx)
             if not (
@@ -140,6 +183,7 @@ def missing_trunk_categories(
                     pattern_exists(f"{prefix}.mla.{name}*.tensorbin", "MLA")
                     for name in ("kv_a_layernorm", "kv_a_proj_with_mqa")
                 )
+                and _kv_only_indexer_cache_complete(cache_path, prefix, layer_idx, hf_config)
             ):
                 miss(MLA, layer_idx)
             continue
@@ -151,18 +195,26 @@ def missing_trunk_categories(
             miss(NORMS, layer_idx)
         if not (exists and _mla_cache_complete(cache_path, prefix, layer_idx, model_cfg, hf_config, tp_factor)):
             miss(MLA, layer_idx)
+        # FFN_2D_TP (Hy4 SC1, #65890): the dense FFN and the shared expert cache as TtMlp2D, under its file names.
+        mlp_check = None
+        if ffn_2d_tp(model_cfg):
+            mlp_layout = ffn_2d_layout(model_cfg)
+            mlp_check = lambda path, prefix: TtMlp2D.check_cache_complete(path, prefix, mlp_layout)  # noqa: E731
         if layer_idx < first_k_dense:
-            if not (exists and TtFfn.check_cache_complete(cache_path, f"{prefix}.ffn")):
+            if not (exists and (mlp_check or TtFfn.check_cache_complete)(cache_path, f"{prefix}.ffn")):
                 miss(DENSE_FFN, layer_idx)
             continue
         if not (
             exists
             and TtMoEGatePrefill.check_cache_complete(
-                cache_path, f"{prefix}.gate", bias_centered=gate_bias_centered(model_cfg)
+                cache_path,
+                f"{prefix}.gate",
+                bias_centered=gate_bias_centered(model_cfg),
+                bias_fp32=gate_bias_fp32(model_cfg),
             )
         ):
             miss(MOE_GATE, layer_idx)
-        if not (exists and TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert")):
+        if not (exists and (mlp_check or TtSharedExpert.check_cache_complete)(cache_path, f"{prefix}.shared_expert")):
             miss(SHARED_EXPERTS, layer_idx)
         if not (
             exists
@@ -272,8 +324,18 @@ class _LazyLayers(Sequence):
     ever resident: the previous layer is dropped when the next is requested.
     """
 
-    def __init__(self, ckpt, config, model_cfg, first_layer_idx: int, num_layers: int, wanted: dict[int, set[str]]):
+    def __init__(
+        self,
+        ckpt,
+        config,
+        model_cfg,
+        first_layer_idx: int,
+        num_layers: int,
+        wanted: dict[int, set[str]],
+        layer_state_dict_fn=None,
+    ):
         self._args = (ckpt, config, model_cfg)
+        self._layer_fn = layer_state_dict_fn or _layer_state_dict
         self._first = first_layer_idx
         self._n = num_layers
         self._wanted = wanted
@@ -295,7 +357,7 @@ class _LazyLayers(Sequence):
                 f"Weight-cache rebuild: reading layer {layer_idx} ({local_idx + 1}/{self._n} on this rank) from the "
                 f"checkpoint for categories {sorted(cats)}"
             )
-        sd = _layer_state_dict(*self._args, layer_idx, cats)
+        sd = self._layer_fn(*self._args, layer_idx, cats)
         self._held = (local_idx, sd)
         return sd
 
@@ -308,9 +370,15 @@ def load_trunk_state_dict(
     missing: dict[str, list[int]],
     first_layer_idx: int,
     num_layers: int,
+    checkpoint: _Checkpoint | None = None,
+    layer_state_dict_fn=None,
 ) -> dict:
-    """The partial ``TtPrefillTransformer`` state dict covering exactly what ``missing`` lists."""
-    ckpt = _Checkpoint(checkpoint_path)
+    """The partial ``TtPrefillTransformer`` state dict covering exactly what ``missing`` lists.
+
+    ``checkpoint`` / ``layer_state_dict_fn`` let a model whose checkpoint is not in the DeepSeek-V3 key layout
+    supply its own reader (``_Checkpoint`` subclass) and per-layer state-dict builder (``_layer_state_dict``'s
+    signature); Hy4-preview does (tt/runners/hy4_checkpoint.py). Defaults keep the DeepSeek-V3 layout."""
+    ckpt = checkpoint if checkpoint is not None else _Checkpoint(checkpoint_path)
     wanted: dict[int, set[str]] = {}
     for category, layers in missing.items():
         for layer in layers:
@@ -324,7 +392,7 @@ def load_trunk_state_dict(
         sd["norm_weight"] = ckpt.bf16("model.norm.weight")
         sd["lm_head_weight"] = ckpt.bf16("lm_head.weight")
     if wanted:
-        sd["layers"] = _LazyLayers(ckpt, config, model_cfg, first_layer_idx, num_layers, wanted)
+        sd["layers"] = _LazyLayers(ckpt, config, model_cfg, first_layer_idx, num_layers, wanted, layer_state_dict_fn)
     return sd
 
 

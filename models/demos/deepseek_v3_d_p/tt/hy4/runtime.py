@@ -1,0 +1,115 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""The prefill runtime for Hy4-preview.
+
+Hy4 runs GLM-5.3's prefill stack unchanged: ``TtPrefillTransformer`` with sparse MLA, the DSA indexer
+on Hy4's full/shared layer map, and the prefill MoE. Everything Hy4 changes there is configuration
+(``reference/hy4_config.py``). The runtime differs from ``TtPrefillRuntime`` in two places:
+
+* the weight-cache rebuild reads Hy4's checkpoint layout (fused routed experts, MXFP8 scales,
+  ``linear_gate``) through ``tt/runners/hy4_checkpoint.py``;
+* MLA / indexer caches built before the RoPE frame reorder (``hy4_checkpoint.HY4_MLA_CACHE_FORMAT``) are stale:
+  their layers carry no format stamp, so their files are deleted and rebuilt from the checkpoint, and every layer
+  is stamped once the model has built;
+* MTP: Hy4 stores its MTP layer as ``model.mtp_layers.0`` (not DeepSeek's ``model.layers.78``), read by
+  ``hy4_checkpoint.load_hy4_mtp_state_dict``; it has no iHC and is fed ``norm(hc_head(streams))`` (vLLM hy_v4).
+
+The mesh layout is checked by the adapter, not here: ``Hy4Adapter`` resolves it (``tt/hy4/layout.py``) when the
+runner asks for the weight-cache path, before the mesh opens, so the TP32 / DP1 layout fails there with its
+blocking issues until the shared stack supports it; the GLM-5.3 dev / numerics layout builds this runtime.
+
+Hooks for the sibling issues:
+
+* iHC (#65891) is in the shared ``TtPrefillTransformer`` / ``TtPrefillBlock``, switched on by
+  ``Hy4Config.ENABLE_IHC`` (tt/hy4/ihc.py): the residual between blocks is 4 fp32 streams, and the iHC parameters are
+  the ``ihc`` weight category, read by ``hy4_checkpoint``.
+* The KV hooks (``build_kv_chunk_table``, ``kv_migration_stages``, ``set_layer_completion_sink``) are
+  inherited. They already follow ``indexer_types``, so the index-key table has Hy4's 21 full layers and
+  completions carry global layer indices. ``build_kv_chunk_table`` first checks the chunk writes the 128-token
+  stripe, and ``kv_layout`` describes the stripe and both caches for decode and serving (#65886).
+"""
+
+from __future__ import annotations
+
+from loguru import logger
+
+from models.demos.deepseek_v3_d_p.tt.hy4.kv_cache import KvBudget, KvStripe, describe_layers, hy4_stripe
+from models.demos.deepseek_v3_d_p.tt.runners import hy4_checkpoint as hc
+from models.demos.deepseek_v3_d_p.tt.runners.hy4_checkpoint import load_hy4_mtp_state_dict, load_hy4_trunk_state_dict
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+
+class TtHy4Runtime(TtPrefillRuntime):
+    # MODEL_CLS stays TtPrefillTransformer: iHC (#65891) is gated inside it by ENABLE_IHC.
+
+    _load_trunk_state_dict = staticmethod(load_hy4_trunk_state_dict)
+    _load_mtp_state_dict = staticmethod(load_hy4_mtp_state_dict)
+    # The MTP layer's attention weights come through hy4_mla_weights too; the format in the name keeps an MTP cache
+    # built under another RoPE frame (format 1: half-split reorder) from loading.
+    _mtp_cache_dirname = f"hy4_mtp_ttnn_cache_mlafmt{hc.HY4_MLA_CACHE_FORMAT}"
+
+    def _mtp_config(self, num_levels: int):
+        # MTPConfig.from_pretrained checks for DeepSeek's model.layers.{N}.eh_proj, which Hy4 does not have; the
+        # layer index (num_hidden_layers) and the rest come from the loaded HF config.
+        from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
+
+        return MTPConfig.from_hf_config(self.hf_config, num_levels=num_levels)
+
+    def _build_model(self, state_dict: dict) -> None:
+        cache = self.config.weight_cache_path
+        layers = range(self.config.first_layer_idx, self.config.first_layer_idx + self.config.num_layers)
+        if cache:
+            stale = hc.stale_mla_cache_layers(cache, layers)
+            if stale:
+                if not self._can_build_missing_cache():
+                    raise RuntimeError(
+                        f"Hy4 MLA/indexer cache at {cache} for layers {stale} predates format "
+                        f"{hc.HY4_MLA_CACHE_FORMAT} (RoPE pairing {hc.HY4_ROPE_PAIRING}) and there is no checkpoint at "
+                        f"{self.config.hf_model_path} to rebuild it from"
+                    )
+                n = hc.purge_mla_cache(cache, stale)
+                logger.warning(
+                    f"Hy4: MLA/indexer cache of layers {stale[0]}..{stale[-1]} ({len(stale)} layers, {n} files) "
+                    f"predates format {hc.HY4_MLA_CACHE_FORMAT}; deleted, rebuilding from the checkpoint"
+                )
+        super()._build_model(state_dict)
+        if cache:
+            hc.stamp_mla_cache(cache, layers)
+
+    # --- context-parallel KV cache (#65886) ---
+    @property
+    def kv_stripe(self) -> KvStripe:
+        """Where each token's KVPE and index-key rows live; raises on a 32-chip mesh if the chunk size would not
+        write 128-token blocks."""
+        return hy4_stripe(self.config.mesh_shape, self.config.sp_axis, self.config.chunk_size)
+
+    def kv_layout(self, kv_caches=None) -> dict:
+        """JSON-able description of both caches for decode (#65888 / #65889) and serving (#65924): the stripe,
+        the slot formula, the layer -> index-key slot map and the per-token bytes. With ``kv_caches`` it also
+        records the allocated shapes and dtypes."""
+        types = list(getattr(self.hf_config, "indexer_types", None) or ["full"] * self.config.num_layers)
+        layers = describe_layers(types)
+        budget = KvBudget(num_layers=len(types), num_index_layers=len(layers["full_indexer_layers"]))
+        extra = {
+            "max_seq_len": self.config.max_seq_len,
+            "num_users": self.config.num_users,
+            "rows_per_chip": self.kv_stripe.rows_per_chip(self.config.max_seq_len),
+            "values_per_token": budget.values_per_token,
+            "bytes_per_token": budget.bytes_per_token,
+            **layers,
+        }
+        if kv_caches is not None:
+            extra["kvpe"] = {
+                "format": str(kv_caches.kvpe.format.value),
+                "shape": list(kv_caches.kvpe.storage.shape),
+                "dtype": str(kv_caches.kvpe.storage.dtype),
+            }
+            if kv_caches.index is not None:
+                extra["index"] = {"shape": list(kv_caches.index.shape), "dtype": str(kv_caches.index.dtype)}
+        return self.kv_stripe.descriptor(**extra)
+
+    def build_kv_chunk_table(self, kv_caches, path, **kwargs) -> str:
+        # The table's block-cyclic period is config.chunk_size; it describes the 128-token stripe only at 4096.
+        self.kv_stripe  # noqa: B018 -- raises on a chunk size decode could not address
+        return super().build_kv_chunk_table(kv_caches, path, **kwargs)
