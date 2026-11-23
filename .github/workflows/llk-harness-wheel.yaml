@@ -85,7 +85,7 @@ jobs:
           # --no-deps: this checks the archive pip is given, not the requirements (the hardware-free suite runs the
           # out-of-tree contract on the installed wheel with them present).
           check-venv/bin/python -m pip install --quiet --no-deps dist/*.whl
-          check-venv/bin/python -m pip show --files tt-llk-harness | head -n 20
+          check-venv/bin/python -m pip show tt-llk-harness
           cd "$RUNNER_TEMP"
           "$GITHUB_WORKSPACE/check-venv/bin/python" - <<'PY'
           import importlib.util
