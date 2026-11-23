@@ -104,6 +104,7 @@ class Hy4Engine:
         # releases the row, so the long chain survives (program hy4pfx: the 'evicted' loss of the AgentX sub-agent requests, 1100-1600 s of cold recompute each).
         self.stash_on = os.environ.get("HY4_STASH", "0") == "1" and self.pfx
         self.last_cached = {}  # mesh row -> prompt tokens not recomputed by the last prefill
+        self.tier_stats = {}  # cumulative per-tier tokens (flag HY4_PFX_TIER_LOG / live file tier_log): row, xrow, cold
         self.stash = {}  # row -> (chain tokens, n pages saved)
         self.stash_stats = dict(saved=0, restored=0, truncated=0, failed=0, seconds=0.0)
         self.bcopy = None  # Hy4PageCopy, built in warm() before the first capture
@@ -244,6 +245,17 @@ class Hy4Engine:
                 pass
         return True
 
+    def _evict_mode(self):
+        """victim policy of a free-row overwrite: 'cost' (flag HY4_PFX_EVICT_COST, env + live file, default off) else HY4_PFX_EVICT (lru | short)."""
+        from models.demos.blackhole.hy4_preview.tt import hy4_sched_flags as SF
+
+        return "cost" if SF.enabled("evict_cost") else os.environ.get("HY4_PFX_EVICT", "lru")
+
+    def _evict_tau(self):
+        return float(
+            os.environ.get("HY4_PFX_COST_TAU", "0")
+        )  # seconds of the reuse discount exp(-age/tau); 0 = pure recompute cost
+
     def match_len(self, r, toks):
         """number of leading tokens of ``toks`` (np.int32) equal to the retained prefix of mesh row r."""
         a = self.ret[r]
@@ -283,6 +295,8 @@ class Hy4Engine:
                     own_hit=self.ret_t,
                     min_hit_tokens=XR.min_hit(),
                     cap=XR.xrow_max(),
+                    evict=self._evict_mode(),
+                    tau_s=self._evict_tau(),
                 )
                 self.xrow_plan = {rows[i]: sc for i, sc in copies.items()}
                 if copies:
@@ -304,7 +318,7 @@ class Hy4Engine:
                 # no usable prefix: prefer to keep the plugin's choice unless it would destroy a retained prefix while an empty / older row exists
                 from models.demos.blackhole.hy4_preview.tt import hy4_pfx_policy as PP
 
-                r = PP.pick_victim(c, self.ret, self.ret_t, cur_rows[i], os.environ.get("HY4_PFX_EVICT", "lru"))
+                r = PP.pick_victim(c, self.ret, self.ret_t, cur_rows[i], self._evict_mode(), tau_s=self._evict_tau())
             out[i] = r
             taken.add(r)
         return out
@@ -614,6 +628,13 @@ class Hy4Engine:
             self.last_cached.update(
                 {r: min(hits[r], start) for r in rows}
             )  # tokens of each row's prompt not recomputed (usage cached_tokens)
+            from models.demos.blackhole.hy4_preview.tt import hy4_sched_flags as SF
+
+            if SF.enabled("tier_log"):
+                from models.demos.blackhole.hy4_preview.tt import hy4_pfx_policy as PP
+
+                call = PP.tier_account(self.tier_stats, hits, start, plan, {r: len(prompts_by_row[r]) for r in rows})
+                logger.info(PP.tier_line(call, self.tier_stats, self.xrow_stats, self.stash_stats, self.blocks_stats))
             if self.loss_log:
                 live_before = list(self.live)
                 loss = self.classify_loss(prompts_by_row, hits, start, live_before, rids)

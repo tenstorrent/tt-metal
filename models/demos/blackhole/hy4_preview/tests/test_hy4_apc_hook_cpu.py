@@ -42,7 +42,11 @@ def test_num_tokens_truncates_prompt_list():
     assert h.peek_home("r", list(a) + [7] * 50, 3000)[:2] == (2560, 0)
 
 
-def test_free_flags_live_and_finished_ids():
+def test_free_flags_live_and_finished_ids(monkeypatch):
+    from models.demos.blackhole.hy4_preview.tt import hy4_sched_flags as SF
+
+    monkeypatch.setenv("HY4_RIDMAP", "1")  # hy4sched: the request-id row map is flag gated (default off)
+    SF.reset_cache()
     e = eng()
     h = Hy4ApcHook(e)
     a = toks(3000, 1)

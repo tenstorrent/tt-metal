@@ -82,7 +82,19 @@ def cold_cost_s(h, per_token_s=5.2e-3):
     return h * per_token_s
 
 
-def plan_copies(rets, live, taken, prompts, cur_rows, pf_rows=512, own_hit=None, min_hit_tokens=1024, cap=1 << 20):
+def plan_copies(
+    rets,
+    live,
+    taken,
+    prompts,
+    cur_rows,
+    pf_rows=512,
+    own_hit=None,
+    min_hit_tokens=1024,
+    cap=1 << 20,
+    evict=None,
+    tau_s=0.0,
+):
     """CPU planner of the row choice policy (engine.assign_rows calls it). rets[r] = retained token array or None, live[r] = row decodes, taken = rows already chosen for requests of this call (updated).
     prompts = token arrays. Returns (rows, copies) with copies {request index: (src row, h tokens)}. Policy: among free rows prefer the row with the longest own match; if no free row
     holds the longest match in the whole table by >= min_hit_tokens (and the copy is cheaper than the cold prefill), serve on the free row the own policy picks and copy from the row with the longest match (any row: a
@@ -116,26 +128,16 @@ def plan_copies(rets, live, taken, prompts, cur_rows, pf_rows=512, own_hit=None,
             continue
         h, r = max(((hit(q, a), q) for q in c), key=lambda x: x[0])
         if h <= 0:
-            if (
-                os.environ.get("HY4_PFX_EVICT", "lru") == "short"
-            ):  # keep the longest chains: overwrite the shortest (cheapest to recompute)
-                r = min(
-                    c,
-                    key=lambda q: (
-                        0 if rets[q] is None else len(rets[q]),
-                        0.0 if own_hit is None else own_hit[q],
-                        q != cur_rows[i],
-                    ),
-                )
-            else:
-                r = min(
-                    c,
-                    key=lambda q: (
-                        rets[q] is not None and len(rets[q]) > 0,
-                        0.0 if own_hit is None else own_hit[q],
-                        q != cur_rows[i],
-                    ),
-                )
+            from models.demos.blackhole.hy4_preview.tt import hy4_pfx_policy as PP
+
+            r = PP.pick_victim(
+                c,
+                rets,
+                own_hit if own_hit is not None else [0.0] * nrows,
+                cur_rows[i],
+                evict if evict is not None else os.environ.get("HY4_PFX_EVICT", "lru"),
+                tau_s=tau_s,
+            )
         # copy candidate: the row (other than r) with the longest match
         cand = [(hit(q, a), q) for q in range(nrows) if q != r and q not in dsts]
         hs, s = max(cand, key=lambda x: x[0], default=(0, None))

@@ -135,8 +135,13 @@ def test_xrow_plan_copies_evict_short(monkeypatch):
     assert rows == [3]
 
 
-def test_cached_tokens_report_wrapper():
+def test_cached_tokens_report_wrapper(monkeypatch):
     from types import SimpleNamespace as NS
+
+    from models.demos.blackhole.hy4_preview.tt import hy4_sched_flags as SF
+
+    monkeypatch.setenv("HY4_CACHED_TOKENS", "1")  # hy4sched: the feature is flag gated (default off)
+    SF.reset_cache()
 
     from models.demos.blackhole.hy4_preview.tt.hy4_apc_hook import Hy4ApcHook, install_cached_tokens_report
 

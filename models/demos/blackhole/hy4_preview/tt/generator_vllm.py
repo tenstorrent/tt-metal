@@ -195,7 +195,9 @@ class HYV4ForCausalLM:
                 self.apc_hook = Hy4ApcHook(self.eng, ROWS)
                 set_prefix_hook(self.apc_hook)
                 logger.info("Hy4 APC hook registered (peek_home over the row-local chains)")
-                if os.environ.get("HY4_CACHED_TOKENS", "1") == "1":
+                if (
+                    True
+                ):  # always installed under the hook; the feature flags (HY4_CACHED_TOKENS, HY4_RIDMAP: env + live file, default OFF) decide at run time (tt/hy4_sched_flags.py)
                     from models.demos.blackhole.hy4_preview.tt.hy4_apc_hook import install_cached_tokens_report
 
                     logger.info(
@@ -298,9 +300,16 @@ class HYV4ForCausalLM:
             )
         rids = {p: str(r) for p, r in zip(phys, kwargs["request_ids"])} if kwargs.get("request_ids") else None
         first = self.eng.prefill(prompts, sampling, rids=rids)
-        if self.apc_hook is not None and kwargs.get("request_ids"):
-            for p, r in zip(phys, kwargs["request_ids"]):
-                self.apc_hook.cached[str(r)] = int(self.eng.last_cached.get(p, 0))
+        if self.apc_hook is not None:
+            if kwargs.get("request_ids"):
+                for p, r in zip(phys, kwargs["request_ids"]):
+                    self.apc_hook.cached[str(r)] = int(self.eng.last_cached.get(p, 0))
+            else:  # the image plugin passes no request ids (policy "model" is not declared): key by the prompt fingerprint
+                self.apc_hook.note_prefill_fp(
+                    [tokens[i, : lens[i]].numpy() for i in range(B)],
+                    phys,
+                    [int(self.eng.last_cached.get(p, 0)) for p in phys],
+                )
         for p in phys:
             self._seeds[p] = sampling[p][3]
         self._samp_set = False  # plain mode: the decode reload contract re-uploads tokens / positions / sampling state after a prefill

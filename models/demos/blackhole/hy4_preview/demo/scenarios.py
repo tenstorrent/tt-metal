@@ -494,3 +494,10 @@ SCENARIOS = {
     "perf": perf,
 }
 DEFAULT = ["multirow", "masked", "cap0", "pfx_hit_cold"]
+
+try:  # hy4sched scenarios (demo/scenario_sched.py): sched_xrow5, sched_cached, sched_victim
+    from models.demos.blackhole.hy4_preview.demo import scenario_sched as _SS
+
+    SCENARIOS.update(_SS.SCENARIOS)
+except Exception:  # noqa: BLE001  (never break the base scenarios)
+    pass
