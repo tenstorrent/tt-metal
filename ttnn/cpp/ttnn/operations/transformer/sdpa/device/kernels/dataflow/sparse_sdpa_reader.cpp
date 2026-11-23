@@ -57,7 +57,11 @@ void kernel_main() {
     constexpr uint32_t passes = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PASSES);
     constexpr uint32_t k_stage = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::K_STAGE_ROWS);
     constexpr bool q_via_k_rm = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::Q_VIA_K_RM) != 0;
-    static_assert(k_stage % tt::constants::TILE_HEIGHT == 0 && k_chunk % k_stage == 0);
+    constexpr uint32_t q_stage = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::Q_STAGE_TILES);
+    static_assert(k_stage % tt::constants::TILE_HEIGHT == 0 && (k_chunk % k_stage == 0 || k_stage % k_chunk == 0));
+    static_assert(q_stage >= 1);
+    // A step's chunks per gather (unscaled KV staged a step at a time): one request per step, not per chunk.
+    constexpr uint32_t stage_chunks = k_stage > k_chunk ? k_stage / k_chunk : 1;
 
     // Element sizes (from the tensors' dtypes).
     constexpr uint32_t q_elem_bytes = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::Q_ELEM_BYTES);  // bf16
@@ -73,6 +77,7 @@ void kernel_main() {
     constexpr bool fused_dequant = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::FUSED_DEQUANT) != 0;
     constexpr uint32_t latent_width = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::LATENT_WIDTH);
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PACKED_ROW_BYTES);
+    static_assert(!scaled_kv || stage_chunks == 1);
 
     // kv carries a RUNTIME tensor shape (its T dim is common runtime args, not compile-time), so its accessor
     // spans both the compile-time AND common-runtime arg streams. Thread both offsets through all three.
@@ -125,9 +130,34 @@ void kernel_main() {
             c_hi = f < tok_count ? n_chunks : tail_c1;
             kind = f < tok_count ? sparse_sdpa::seg_kind::FULL : sparse_sdpa::seg_kind::TAIL;
         }
-        // indices row for this token (page = tok) -> idx_cb scratch
+        // Q rows [t0, t0 + n) of pass `pass` (rows past the token's H heads are zeros) into the reserved Q CB space.
+        // Q is [1,H,S,K_DIM] row-major: row (h,tok) = page h*S+tok.
+        auto read_q_rows = [&](uint32_t pass, uint32_t t0, uint32_t n) {
+            for (uint32_t t = 0; t < n; ++t) {
+                const uint32_t h0 = (pass * q_tiles + t0 + t) * tt::constants::TILE_HEIGHT;
+                const uint32_t offset = t * tt::constants::TILE_HEIGHT * q_row_bytes;
+                if (h0 < H) {
+                    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+                        noc.async_read(
+                            q,
+                            q_cb,
+                            q_row_bytes,
+                            {.page_id = (h0 + r) * S + tok},
+                            {.offset_bytes = offset + r * q_row_bytes});
+                    }
+                } else {
+                    noc.async_write_zeros(q_cb, tt::constants::TILE_HEIGHT * q_row_bytes, {.offset_bytes = offset});
+                }
+            }
+        };
+        // indices row for this token (page = tok) -> idx_cb scratch, with the first pass's first Q rows (they do not
+        // depend on it: one read barrier for both; an empty segment leaves the Q rows unpushed).
         noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = tok}, {.offset_bytes = 0});
+        constexpr uint32_t q_first = q_tiles < q_stage ? q_tiles : q_stage;
+        q_cb.reserve_back(q_first * tt::constants::TILE_HEIGHT);
+        read_q_rows(0, 0, q_first);
         noc.async_read_barrier();
+        noc.write_zeros_l1_barrier();
 
         // nv = valid-key count; only ceil(nv/k_chunk) chunks are active.
         const uint32_t nv = count_valid_keys<topk>(idx_ptr);
@@ -160,28 +190,25 @@ void kernel_main() {
             continue;
         }
         for (uint32_t pass = 0; pass < passes; ++pass) {
-            // Q: the pass's head rows, one tile row (32 heads) per push; rows past the token's H heads are zeros.
-            // Q is [1,H,S,K_DIM] row-major: row (h,tok) = page h*S+tok.
-            for (uint32_t t = 0; t < q_tiles; ++t) {
-                q_cb.reserve_back(tt::constants::TILE_HEIGHT);
-                const uint32_t h0 = (pass * q_tiles + t) * tt::constants::TILE_HEIGHT;
-                if (h0 < H) {
-                    for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
-                        noc.async_read(
-                            q, q_cb, q_row_bytes, {.page_id = (h0 + r) * S + tok}, {.offset_bytes = r * q_row_bytes});
-                    }
+            // Q: the pass's head rows, q_stage tile rows (32 heads each) per push and read barrier (the first pass's
+            // first ones were read with the index row).
+            for (uint32_t t0 = 0; t0 < q_tiles; t0 += q_stage) {
+                const uint32_t n = q_tiles - t0 < q_stage ? q_tiles - t0 : q_stage;
+                if (pass != 0 || t0 != 0) {
+                    q_cb.reserve_back(n * tt::constants::TILE_HEIGHT);
+                    read_q_rows(pass, t0, n);
                     noc.async_read_barrier();
-                } else {
-                    noc.async_write_zeros(q_cb, tt::constants::TILE_HEIGHT * q_row_bytes);
                     noc.write_zeros_l1_barrier();
                 }
-                q_cb.push_back(tt::constants::TILE_HEIGHT);
+                q_cb.push_back(n * tt::constants::TILE_HEIGHT);
             }
-            for (uint32_t chunk = c_lo; chunk < seg_hi; ++chunk) {
+            for (uint32_t chunk = c_lo; chunk < seg_hi; chunk += stage_chunks) {
+                // This gather's chunks: one, or a step's (stage_chunks; a segment's last step may hold fewer).
+                const uint32_t span = (seg_hi - chunk < stage_chunks ? seg_hi - chunk : stage_chunks) * k_chunk;
                 const uint32_t base = chunk * k_chunk;
-                const uint32_t valid = (nv - base) < k_chunk ? (nv - base) : k_chunk;  // (0, k_chunk]
+                const uint32_t valid = (nv - base) < span ? (nv - base) : span;  // (0, span]
                 // The writer drains a pass's output after the pass's last gather request.
-                const bool last_of_pass = chunk == seg_hi - 1;
+                const bool last_of_pass = chunk * k_chunk + span == seg_hi * k_chunk;
 
                 if constexpr (scaled_kv) {
                     // Stream one 32-row compressed slab at a time. cb_k_rm owns the double-buffered packed FIFO;
@@ -249,12 +276,16 @@ void kernel_main() {
                         scale_bcast_cb.push_back(scale_blocks);
                     }
                 } else {
-                    // K chunk rows -> cb_k_rm, k_stage rows per push (compute tilizes 32 at a time): read the real
-                    // keys, zero-fill the sentinel suffix.
-                    for (uint32_t row_base = 0; row_base < k_chunk; row_base += k_stage) {
+                    // K rows of the gather's chunks -> cb_k_rm, `stage` rows per push (compute tilizes 32 at a time):
+                    // read the real keys, zero-fill the sentinel suffix. A step-staged segment's short last step is
+                    // pushed whole (zero rows past its chunks, as compute tilizes them): every push then starts at the
+                    // CB's base, so no reservation runs past its end.
+                    constexpr uint32_t stage = k_stage < k_chunk ? k_stage : k_chunk * stage_chunks;
+                    for (uint32_t row_base = 0; row_base < span; row_base += stage) {
+                        const uint32_t push = stage_chunks > 1 || span - row_base >= stage ? stage : span - row_base;
                         const uint32_t rows =
-                            valid > row_base ? (valid - row_base < k_stage ? valid - row_base : k_stage) : 0u;
-                        k_cb.reserve_back(k_stage);
+                            valid > row_base ? (valid - row_base < push ? valid - row_base : push) : 0u;
+                        k_cb.reserve_back(push);
                         const uint32_t k_write_ptr = k_cb.get_write_ptr();
                         // Dual-NoC split gather: the K-row response data is the op's bottleneck (NoC-link bound, not
                         // DRAM-controller bound), so we spread it across BOTH NoCs. The reader (this NoC) gathers rows
@@ -268,8 +299,7 @@ void kernel_main() {
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
                             request[sparse_sdpa::gather_request::BASE] = base + row_base;
                             request[sparse_sdpa::gather_request::SPLIT] = half;
-                            request[sparse_sdpa::gather_request::IS_LAST] =
-                                last_of_pass && row_base + k_stage == k_chunk;
+                            request[sparse_sdpa::gather_request::IS_LAST] = last_of_pass && row_base + push >= span;
                             request[sparse_sdpa::gather_request::DST_L1] = k_write_ptr;
                             request[sparse_sdpa::gather_request::EMPTY] = 0;
                         }
@@ -294,12 +324,12 @@ void kernel_main() {
                         kack_cb.wait_front(1);  // writer's half landed in cb_k_rm L1
                         kack_cb.pop_front(1);
                         // Zero-fill the sentinel suffix: masked-key scores are a defined 0 before compute masks them.
-                        if (rows < k_stage) {
+                        if (rows < push) {
                             noc.async_write_zeros(
-                                k_cb, (k_stage - rows) * k_row_bytes, {.offset_bytes = rows * k_row_bytes});
+                                k_cb, (push - rows) * k_row_bytes, {.offset_bytes = rows * k_row_bytes});
                             noc.write_zeros_l1_barrier();
                         }
-                        k_cb.push_back(k_stage);
+                        k_cb.push_back(push);
                     }
                 }
             }
