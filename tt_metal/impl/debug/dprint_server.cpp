@@ -607,12 +607,14 @@ bool DPrintServer::Impl::poll_print_buffer(
         }
 
         if (rpos > wpos) {
-            // Read until end of buffer and then from beginning until wpos
-            auto data =
-                cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
+            // Read until end of buffer (nothing to read when rpos is at the end) and then from beginning until wpos
+            if (rpos < print_buffer_size) {
+                auto data =
+                    cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
 
-            // Process buffer data
-            print_buffer_data(device_id, logical_core, data);
+                // Process buffer data
+                print_buffer_data(device_id, logical_core, data);
+            }
 
             // Update rpos, so that device knows it can use rest of the buffer
             rpos = 0;
