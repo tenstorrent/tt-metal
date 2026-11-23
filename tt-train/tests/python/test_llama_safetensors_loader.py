@@ -1113,6 +1113,14 @@ def loaded_model(directory, dtype=ml_dtypes.bfloat16, stored=None, **config_over
     return model, hf
 
 
+def replica_values(param) -> np.ndarray:
+    """*param*'s values as one device holds them: the model is replicated, so every device holds the same."""
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+    values = param.to_numpy(ttnn.DataType.FLOAT32, composer=composer)
+    return values.reshape(-1, *values.shape[-2:])[0]
+
+
 # A few tensors of the synthetic checkpoint each: it is about 450 kB of bf16.
 SHARD_BYTES = 100_000
 
@@ -1172,8 +1180,7 @@ class TestExportHfModel:
         reloaded = Llama(coverage_config())
         load_from_safetensors(reloaded, export)
         for name, param in model.parameters().items():
-            expected = param.to_numpy(ttnn.DataType.FLOAT32)
-            assert np.array_equal(reloaded.parameters()[name].to_numpy(ttnn.DataType.FLOAT32), expected), name
+            assert np.array_equal(replica_values(reloaded.parameters()[name]), replica_values(param)), name
 
     def test_rejects_a_model_with_parameters_it_cannot_write(self, tmp_path, expect_error):
         """Attention biases have no HF tensor in the export, so it refuses rather than drop them, before touching the
