@@ -50,6 +50,15 @@ def glm_random_moe_weights(hidden, moe_intermediate, n_routed, seed):
     return gate_weights, [_expert() for _ in range(n_routed)], _expert()
 
 
+def glm_random_mla_weights(config, layer_idx, seed):
+    """Global layer ``layer_idx``'s MLA weights, as ``glm_random_layer_state_dict`` draws them (a ``shared`` layer
+    owns no indexer weights)."""
+    mla_weights = random_mla_weights(config, seed=seed + 10 * layer_idx)
+    if indexer_layer_is_reused(config, layer_idx):
+        mla_weights = {k: v for k, v in mla_weights.items() if not k.startswith("indexer.")}
+    return mla_weights
+
+
 def glm_random_layer_state_dict(config, model_cfg, layer_idx, seed, experts=None):
     """One TtPrefillBlock state dict for global layer ``layer_idx``: dense FFN below
     first_k_dense_replace, MoE above. A GLM-5.3 ``shared`` layer owns no indexer, so its indexer
@@ -57,9 +66,7 @@ def glm_random_layer_state_dict(config, model_cfg, layer_idx, seed, experts=None
     those expert tensors instead of drawing new ones; the gate is still this layer's own."""
     hidden = config.hidden_size
     base = seed + 10 * layer_idx
-    mla_weights = random_mla_weights(config, seed=base)
-    if indexer_layer_is_reused(config, layer_idx):
-        mla_weights = {k: v for k, v in mla_weights.items() if not k.startswith("indexer.")}
+    mla_weights = glm_random_mla_weights(config, layer_idx, seed)
     layer = {
         "attn_norm_weight": glm_norm_weight(hidden, base + 1),
         "mla_weights": mla_weights,

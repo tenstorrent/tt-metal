@@ -28,6 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import (
     SparseKvPushPart,
     sparse_kv_push_supported,
 )
+from models.demos.deepseek_v3_d_p.tt.mla.two_bank import pack_window_rows, window_kv_format
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
@@ -436,7 +437,11 @@ class ttMLA:
         sparse_mla_overlap_profile: Optional[str] = None,
         tp_shard_kv: Optional[bool] = None,
         use_fused_rmsnorm: bool = False,
+        loop_pass2: bool = False,
     ):
+        # loop_pass2: a GLM-5.4 loop pass-2 layer (A2-A6): two-bank attention over the pass-1 KVPE in `kvpe_cache` at the
+        # injected pass-1 top-k plus this pass's own KVPE in a config.loop_window_size window (see two_bank.py). Its KV
+        # never enters `kvpe_cache`. Needs a 'shared' layer (no indexer) and the sparse KV push.
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
         # v3.1 has none. Sparse capability is resolved below via resolve_has_indexer (config DSA fields /
@@ -833,14 +838,19 @@ class ttMLA:
         # In a packed forward a shared layer also pushes its own next chunk's prefix (PushStep).
         next_layer = layer_idx + 1
         next_in_stage = self.layer_num is not None and next_layer - self._first_layer_idx < self.layer_num
+        # Pass-2 layers push only their own rows into the joint table, never a successor's prefix.
         self._push_next_layer = (
             self._push is not None
+            and not loop_pass2
             and next_in_stage
             and not next_kv_only
             and indexer_layer_is_reused(config, next_layer)
         )
         self._push_own_layer = (
-            self._push is not None and not self.kv_only and indexer_layer_is_reused(config, layer_idx)
+            self._push is not None
+            and not loop_pass2
+            and not self.kv_only
+            and indexer_layer_is_reused(config, layer_idx)
         )
         self._push_prefetch_grids = None
         if self._push_next_layer or self._push_own_layer:
@@ -925,10 +935,46 @@ class ttMLA:
         # Bind the attention core once, by config. Sparse ALWAYS uses the block-cyclic
         # _sparse_chunked_attn (single-shot = one full-seq chunk); dense splits by chunking. forward()
         # then calls self._attention(...) with no mode ladder: the decision is made here, not per call.
-        if self._has_indexer:
+        self._two_bank = None
+        if loop_pass2:
+            self._two_bank = self._build_two_bank_table()
+            self._attention = self._two_bank_attn
+        elif self._has_indexer:
             self._attention = self._sparse_chunked_attn
         else:
             self._attention = self._dense_chunked_attn if self.is_chunked else self._dense_single_attn
+
+    def _build_two_bank_table(self):
+        """The joint table this loop pass-2 layer reads (two_bank.py), shared with the mesh's other pass-2 layers."""
+        if not (self._has_indexer and self._indexer_reuse and self.is_chunked and not self.kv_only):
+            raise ValueError(
+                f"loop pass-2 layer {self.layer_idx} must be a chunked, non-kv-only 'shared' sparse layer: it takes "
+                "pass 1's top-k injected and runs no indexer"
+            )
+        if self._push is None:
+            raise ValueError(
+                "loop pass 2 needs the sparse KV push (bank A's rows land in the joint table's compact region); this "
+                "mesh or cache does not support it (sparse_kv_push_supported)"
+            )
+        window_format = window_kv_format(self.config)
+        if window_format != self.sparse_kv_cache_format:
+            raise ValueError(
+                f"the pass-2 joint table has one format: window format {window_format} must equal the bank-A cache "
+                f"format {self.sparse_kv_cache_format}"
+            )
+        _, _, query_rows, topk = self.indexer_indices_shape()
+        return self.tt_ccl.get_two_bank_table(
+            kv_format=self.sparse_kv_cache_format,
+            geometry=self.kv_cache_geometry,
+            push_rows=self._push_rows,
+            window=int(self.config.loop_window_size),
+            chunk_global=self.active_seq_len,
+            query_rows=query_rows,
+            topk=topk,
+            sp_axis=self.sp_axis,
+            tp_sequence_sharded=self._needs_head_to_seq_reshard,
+            num_links=self.ccl_num_links,
+        )
 
     def release_sparse_mla_overlap_manager(self) -> None:
         """Forward shared sparse-MLA overlap teardown to the model-wide TT_CCL owner."""
@@ -2121,7 +2167,12 @@ class ttMLA:
         force_kv_only: bool = False,
         next_step: "PushStep | str | None" = SAME_CHUNK_NEXT_LAYER,
         push_new_indices: Optional[bool] = None,
+        window_carry: Optional[ttnn.Tensor] = None,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
+        # window_carry (loop pass-2 layers only): this layer's pass-2 KVPE rows of positions actual_start-W+1 ..
+        # actual_start-1, [1, 1, W-1, row] replicated in the window format (the previous chunk's window_carry());
+        # None only at actual_start 0 on the eager path (the metadata path always takes one). Rows of positions < 0
+        # are never read.
         # next_step: the attention step after this one, whose prefix rows this step pushes beside its attention when
         # that step is a pushed (shared) one. SAME_CHUNK_NEXT_LAYER (one chunk per forward): the next layer's step on
         # this chunk. A packed forward passes its next step (PushStep), or None for no pre-send.
@@ -2277,6 +2328,7 @@ class ttMLA:
             metadata=metadata,
             injected=indexer_indices is not None,
             next_step=next_step,
+            window_carry=window_carry,
         )
         if selection_state is not None:
             attn_out, indices = self._sparse_chunked_attn_overlapped(
@@ -2498,6 +2550,90 @@ class ttMLA:
             ),
             compact=True,
         )
+
+    def _two_bank_attn(
+        self,
+        *,
+        tt_q,
+        tt_kvpe,
+        indices,
+        kvpe_cache,
+        kv_actual_isl,
+        cache_layer_idx,
+        cache_user_id,
+        seq_len_local,
+        metadata=None,
+        injected=False,
+        window_carry=None,
+        **_,
+    ):
+        """Loop pass-2 attention (A2-A6): one sparse_sdpa over the joint table (two_bank.py) of bank A, the pass-1 KVPE
+        in `kvpe_cache` at the injected pass-1 top-k, and bank B, this pass's KVPE of positions p-W+1..p. This chunk's
+        KV goes to the table's window region only; `kvpe_cache` is read, never written. Trace-safe on the metadata
+        path: the push slot, the plan's chunk start and the index list's compaction read metadata on device."""
+        if not injected:
+            raise ValueError("a loop pass-2 layer runs no indexer: inject its pass-1 group's top-k (indexer_indices)")
+        expected_shape = self.indexer_indices_shape()
+        if tuple(indices.shape) != expected_shape:
+            raise ValueError(f"pass-2 attention needs this chip's top-k {expected_shape}, got {tuple(indices.shape)}")
+        # The table is shared by the mesh's pass-2 layers, so a missing carry would silently leave another layer's or
+        # chunk's rows in the carry region. The traced (metadata) path cannot see the start: it always takes a carry,
+        # whose contents a chunk at start 0 never reads.
+        if window_carry is None and (metadata is not None or kv_actual_isl):
+            raise ValueError(
+                "a pass-2 chunk needs its window carry (the previous chunk's window_carry()); on the metadata path "
+                "always, at start 0 any [1, 1, W-1, row] tensor"
+            )
+        table = self._two_bank
+        table.write_window(pack_window_rows(kvpe_cache.format, tt_kvpe), window_carry)
+
+        cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
+        plan = self._sparse_push_plan(indices, kv_actual_isl, metadata)
+        storage = kvpe_cache.storage
+        self._push.pushes[SparseKvPushPart.ALL.name] += 1
+        ttnn.experimental.sparse_kv_push(
+            storage,
+            output_tensor=table.storage,
+            table=plan.table,
+            stripe_chunk=plan.stripe_chunk,
+            max_rows=plan.max_rows,
+            part=SparseKvPushPart.ALL,
+            num_links=self.ccl_num_links,
+            sp_axis=self.sp_axis,
+            **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
+            ready_semaphore=self._push.ready_semaphore,
+            done_semaphore=self._push.done_semaphore,
+        )
+        if metadata is not None:
+            chunk_start = metadata[1]
+        else:
+            chunk_start = ttnn.from_torch(
+                torch.tensor([[[[kv_actual_isl or 0]]]], dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        joint_indices = table.index_list(plan.compact_indices, chunk_start)
+        if metadata is None:
+            ttnn.deallocate(chunk_start)
+        out = self._finish_sparse_chunked_attn(
+            tt_q=tt_q,
+            kvpe_dev=table.table(),
+            indices=joint_indices,
+            kvpe_cache=kvpe_cache,
+            seq_len_local=seq_len_local,
+            compact=True,
+        )
+        ttnn.deallocate(joint_indices)
+        return out
+
+    def window_carry(self, start: int, end: int) -> ttnn.Tensor:
+        """After this pass-2 layer's chunk [start, end) (real tokens), the window carry the next chunk passes back
+        (two_bank.TwoBankTable.window_carry). Eager; read it before another pass-2 layer runs on the mesh."""
+        assert self._two_bank is not None, "window_carry belongs to loop pass-2 layers"
+        return self._two_bank.window_carry(start, end)
 
     def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata):
         """Cache slot of a push. On the metadata path it is recomposed on device from the user id tensor, so a captured
