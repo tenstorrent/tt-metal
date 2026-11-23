@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <span>
@@ -75,6 +76,17 @@ compute_output_placements_and_shape(
 std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinates_impl(
     const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors,
     tt::tt_metal::distributed::MeshDevice* mesh_device);
+
+/**
+ * Which of `tensors` are backed by the same MeshTensor: for each tensor, the position of the first
+ * tensor holding the same MeshTensor (its own position if none precedes it). Returns an empty
+ * vector when no two tensors share a MeshTensor, so the common case allocates nothing.
+ *
+ * MeshTensor identity is what the spec-factory adapters bind tensors by, so two calls with equal
+ * signatures can share a cache entry's recorded tensor bindings (see compute_mesh_workload_cache_key).
+ */
+std::vector<std::uint32_t> compute_tensor_alias_signature(
+    const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors);
 
 /**
  * Fail if `tensor` is per-core allocated. Called by launch() for every tensor in tensor_args when

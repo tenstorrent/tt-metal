@@ -71,7 +71,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
 
                    * - Dtypes
                      - Layouts
-                   * - BFLOAT16, FLOAT32, INT32, UINT32
+                   * - BFLOAT16, FLOAT32, INT32, UINT32, UINT8
                      - TILE, ROW_MAJOR
                    * - BFLOAT8_B, BFLOAT4_B
                      - TILE
@@ -83,6 +83,10 @@ void bind_reshape_view_operation(nb::module_& mod) {
                 a padded TILE output, and enough L1 for one of the reshape programs.
 
                 ``BFLOAT8_B`` and ``BFLOAT4_B`` reshapes that move data go through a ``BFLOAT16`` typecast.
+
+                ``UINT8`` reshapes run directly, except that an explicit ``pad_value`` on a TILE output with tile padding
+                fills that padding through a ``BFLOAT16`` typecast, which needs a temporary tensor twice the size of the
+                output. A fractional ``pad_value`` is truncated and one above 255 is clamped to 255.
 
             Memory Support:
                 - Interleaved: DRAM and L1
