@@ -81,6 +81,7 @@ protected:
     // compute: one per TRISC slot in use).
     static std::vector<uint32_t> binary_processor_types(const Kernel& kernel) {
         std::vector<uint32_t> types;
+        types.reserve(kernel.expected_num_binaries());
         for (int i = 0; i < kernel.expected_num_binaries(); i++) {
             types.push_back(kernel.get_kernel_processor_type(i));
         }
@@ -129,7 +130,7 @@ private:
     static bool runner_is_quasar(const llrt::RunTimeOptions& rtoptions) {
         switch (rtoptions.get_target_device()) {
             case tt::TargetDevice::Simulator: {
-                const std::filesystem::path sim_path = rtoptions.get_simulator_path();
+                const std::filesystem::path& sim_path = rtoptions.get_simulator_path();
                 const std::string soc_desc = find_simulator_soc_descriptor_path(sim_path);
                 if (soc_desc.empty()) {
                     // ttsim .so may omit it; an RTL simulator must not.
