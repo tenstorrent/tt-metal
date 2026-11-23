@@ -287,7 +287,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tile.hpp
     api/tt-metalium/data_formats/tilize_utils.hpp
     api/tt-metalium/tilize_utils.hpp
-    api/tt-metalium/tt_align.hpp
     api/tt-metalium/data_formats/data_format.hpp
     api/tt-metalium/tt_backend_api_types.hpp
     api/tt-metalium/execution/slow_dispatch.hpp
