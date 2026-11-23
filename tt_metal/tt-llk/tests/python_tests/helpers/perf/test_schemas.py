@@ -1665,7 +1665,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_sdpa_fw": "perf_sfpu_sdpa_fw"},
     },
     "perf_sfpu_ternary": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "approx_mode",
             "clobber_lregs",
