@@ -53,6 +53,9 @@ class Hy4Engine:
     cap = None  # capacity tiers (hy4_capacity.Capacity), set in warm() when HY4_TAILPARK / HY4_HOSTTIER
     tail_on = host_on = False
     tail_stats = {}
+    cap_round_outputs = ()  # outputs of the decode rounds run between host-tier slices (HY4_HOSTTIER_SLICE_ROUNDS=1): the plugin must consume them (list of round() results)
+    cap_rounds = 0
+    cap_yield = None  # callable(kind, i, n_slices, nbytes) run between host-tier slices (HY4_HOSTTIER_SLICE_MB > 0): the plugin / chunked-prefill glue runs decode rounds here
 
     def __init__(self, md, max_num_seqs, max_seq_len, k=None, log=None):
         from models.demos.blackhole.hy4_preview.tt import hy4_pool_decode as pool_decode
@@ -558,6 +561,23 @@ class Hy4Engine:
             logger.error(f"HY4 cap: pre_prefill FAILED ({type(e).__name__}: {str(e)[:200]}): entries cleared, cold")
             self.cap.reset()
 
+    def _cap_do_yield(self, kind, i, n, nbytes):
+        """between host-tier slices: the plugin's ``cap_yield`` if set, else (HY4_HOSTTIER_SLICE_ROUNDS=1 and the live file HY4_HOSTTIER_SLICE_FILE not 0) ONE greedy decode round for the live rows when any row is live
+        (no live row = nothing happens: behaviour unchanged). The round outputs are queued in ``cap_round_outputs`` (the plugin has to hand them to its requests): [NC] plugin integration; greedy rows only.
+        """
+        if self.cap_yield is not None:
+            return self.cap_yield(kind, i, n, nbytes)
+        if os.environ.get("HY4_HOSTTIER_SLICE_ROUNDS", "0") != "1" or not any(self.live):
+            return None
+        from models.demos.blackhole.hy4_preview.tt import hy4_chainstore as CS
+
+        if not CS.live_file_on("HY4_HOSTTIER_SLICE_FILE"):
+            return None
+        if not isinstance(self.cap_round_outputs, list):
+            self.cap_round_outputs = []
+        self.cap_round_outputs.append(self.round([self.K if self.live[r] else 0 for r in range(ROWS)], False))
+        self.cap_rounds += 1
+
     def _cap_build(self):
         from models.demos.blackhole.hy4_preview.tt import hy4_chainstore as CS
         from models.demos.blackhole.hy4_preview.tt.hy4_capacity import Capacity
@@ -591,6 +611,7 @@ class Hy4Engine:
             lookahead_tokens=int(os.environ.get("HY4_CAP_LOOKAHEAD", "1024")),
             live_headroom_tokens=int(os.environ.get("HY4_CAP_LIVE_HEADROOM", "65536")),
             log=lambda s: logger.info(s),
+            yield_fn=lambda *a: self._cap_do_yield(*a),
         )
         self.cap = Capacity(self, store, log=lambda s: logger.info(s))
         self._dram("after cap build")

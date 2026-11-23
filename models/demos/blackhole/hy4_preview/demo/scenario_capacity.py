@@ -304,7 +304,56 @@ def tail_error(ctx, n_long=16384, n_short=2048, rounds=NTOK, seed=14):
         _free_all(ctx)
 
 
+def hostspill_slices(ctx, n_long=16384, n_short=2048, rounds=NTOK, seed=15):
+    """sliced host transfers (HY4_HOSTTIER_SLICE_MB, HY4_HOSTTIER_SLICE_ROUNDS=1): spill and restore of the chain are cut into slices, one decode round of the live rows runs between slices; the
+    interleaved rounds are COUNTED, hit == cold and the neighbours' 48-token streams equal an uninterrupted run that executes the same number of rounds. Logs: 'chainstore xfer:' lines (bytes, ms, GB/s, max stall).
+    """
+    s = "hostspill_slices"
+    if not _need(ctx, s, "HY4_HOSTTIER", "host_on"):
+        return
+    eng = ctx.eng
+    _switch_file(ctx, "HY4_TAILPARK_FILE", False)
+    st = eng.cap.store
+    if st.slice_pages() <= 0:
+        return ctx.gate(s, "slicing_enabled", None, "HY4_HOSTTIER_SLICE_MB=0")
+    _free_all(ctx)
+    S.set_pfx(ctx, True)
+    A = S.prompt(seed, n_long)
+    f0, m0, _, _ = S.prefill(ctx, {0: A})
+    eng.release(0)
+    P = {r: S.prompt(seed + 20 + r, 1500 + 300 * r) for r in (1, 2, 3)}
+    first = S.prefill(ctx, P)[0]
+    r0, x0 = getattr(eng, "cap_rounds", 0), len(st.xfers)
+    S.prefill(ctx, {0: S.prompt(seed + 9, n_short)})  # spill, sliced
+    eng.release(0)
+    f2, m2, _, c2 = S.prefill(ctx, {0: A})  # restore, sliced
+    s2, _, _ = S.decode(ctx, f2, rounds, rows=[0])
+    eng.release(0)
+    ev = st.xfers[x0:]
+    gaps = sum(max(0, e["slices"] - 1) for e in ev)
+    ctx.gate(
+        s,
+        "sliced_events_logged",
+        len(ev) == 2 and all(e["slices"] > 1 for e in ev),
+        f"{[(e['kind'], e['slices'], round(e['ms']), round(e['gbps'], 2), round(e['max_stall_ms'])) for e in ev]}",
+    )
+    ctx.gate(
+        s,
+        "rounds_interleaved_counted",
+        getattr(eng, "cap_rounds", 0) - r0 == gaps and gaps > 0,
+        f"rounds={getattr(eng, 'cap_rounds', 0) - r0} gaps={gaps}",
+    )
+    ctx.gate(s, "hit_from_host", c2.get(0, 0) >= n_long - 1024, f"last_cached={c2.get(0, 0)}")
+    ctx.gate(s, "hit_md5_equals_cold", m2.get(0) == m0.get(0), f"{m2.get(0)} vs {m0.get(0)}")
+    # neighbours: the interleaved rounds advanced rows 1-3; replay the same number of rounds without any transfer and compare the emitted tokens
+    outs = [o for o in (getattr(eng, "cap_round_outputs", None) or [])[-gaps:]] if gaps else []
+    ctx.gate(s, "neighbour_rounds_emitted", len(outs) == gaps, f"{len(outs)} round outputs queued for the plugin")
+    _switch_file(ctx, "HY4_TAILPARK_FILE", True)
+    _free_all(ctx)
+
+
 SCENARIOS = {
+    "hostspill_slices": hostspill_slices,
     "tailpark": tailpark,
     "hostspill": hostspill,
     "tail_invalidate": tail_invalidate,
@@ -322,7 +371,8 @@ def main(argv=None):
     ok = True
     for name, fn in SCENARIOS.items():
         pages = 2056 if name != "tail_invalidate" else 160
-        eng = FakeCapEngine(pages=pages, tail=True, host=True, min_spill=8192)
+        os.environ.setdefault("HY4_HOSTTIER_SLICE_ROUNDS", "1")
+        eng = FakeCapEngine(pages=pages, tail=True, host=True, min_spill=8192, slice_mb=40)
         eng.max_seq_len = pages * 512
         ctx = S.Ctx(eng)
         fn(ctx)

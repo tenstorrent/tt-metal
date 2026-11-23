@@ -28,10 +28,14 @@ class FakeBackend(CS.Backend):
     def __init__(self, eng):
         self.eng = eng
         self.fail_next = 0  # number of upcoming calls that raise
+        self.skip_ok = 0  # that many calls succeed first (failure in the middle of a sliced transfer)
         self.calls = []
         self.pages_moved = 0
 
     def _maybe_fail(self, what):
+        if self.skip_ok > 0:
+            self.skip_ok -= 1
+            return
         if self.fail_next > 0:
             self.fail_next -= 1
             raise RuntimeError(f"injected {what} failure")
@@ -74,7 +78,16 @@ class FakeCapEngine(Hy4Engine):
     S = 4
 
     def __init__(
-        self, pages=2056, pfx=True, tail=True, host=False, min_spill=2048, host_gb=1.0, costs=None, live_headroom=4096
+        self,
+        pages=2056,
+        pfx=True,
+        tail=True,
+        host=False,
+        min_spill=2048,
+        host_gb=1.0,
+        costs=None,
+        live_headroom=4096,
+        slice_mb=0,
     ):
         self.pages, self.pfx, self.pf_rows, self.pfx_redo = pages, pfx, PAGE, True
         self.xrow, self.xrow_on, self.xrow_plan = None, False, {}
@@ -99,6 +112,8 @@ class FakeCapEngine(Hy4Engine):
             min_spill=min_spill,
             host_cap_tokens=int(host_gb * 1e9 / CS.BYTES_PER_TOKEN),
             live_headroom_tokens=live_headroom,
+            slice_mb=slice_mb,
+            yield_fn=lambda *a: self._cap_do_yield(*a),
             log=lambda s: None,
         )
         self.cap = Capacity(self, store)

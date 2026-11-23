@@ -27,6 +27,7 @@ import numpy as np
 from models.demos.blackhole.hy4_preview.tt.hy4_blocks_store import digests_of
 
 PAGE = 512
+PAGE_BYTES_CHIP = 3_750_912  # [C] bytes of one 512-token page on one chip
 BYTES_PER_TOKEN = 58608  # [C] kv_geometry.py SCALED_FP8, one mesh row, 79 layers
 
 
@@ -141,6 +142,8 @@ class ChainStore:
         clock=time.time,
         log=lambda s: None,
         live_fn=None,
+        slice_mb=None,
+        yield_fn=None,
     ):
         """extent_fn(r) -> tokens of row r that must stay untouched (retained chain / live position), live_fn(r) -> row r decodes (a tail on a live row keeps live_headroom_tokens above the live extent).
         tail / host: callables or bools (live switches)."""
@@ -155,6 +158,11 @@ class ChainStore:
         )  # [E] invalidation risk of a tail with no slack; 0 = place by copy cost only
         self.risk_tokens = float(os.environ.get("HY4_CAP_RISK_TOKENS", "200000"))
         self.live_fn = live_fn or (lambda r: False)
+        # HY4_HOSTTIER_SLICE_MB (per chip, default 0 = one whole-chain transfer = all rows' decode stalls for the transfer time): spill / restore in slices of that many MB per chip (3.75 MB per chip per page
+        # [C]); ``yield_fn(kind, i, n_slices, nbytes)`` (set by the engine / plugin: run decode rounds) is called BETWEEN slices; the per-event log line reports bytes, ms, GB/s and the largest single stall.
+        self.slice_mb = float(os.environ.get("HY4_HOSTTIER_SLICE_MB", "256")) if slice_mb is None else float(slice_mb)
+        self.yield_fn = yield_fn
+        self.xfers = []  # bounded log of transfer events (dicts)
         self.entries = {}  # eid -> Entry
         self._eid = 0
         self.stats = dict(
@@ -172,6 +180,7 @@ class ChainStore:
             skipped_full=0,
             move_s=0.0,
             tokens_moved=0,
+            host_xfer_bytes=0,
         )
 
     # ---- switches
@@ -216,6 +225,65 @@ class ChainStore:
             if hi - lo >= n:
                 return hi - n
         return None
+
+    def slice_pages(self):
+        return 0 if self.slice_mb <= 0 else max(1, int(self.slice_mb * 1e6 // PAGE_BYTES_CHIP))
+
+    def _slices(self, n):
+        sp = self.slice_pages()
+        if sp <= 0 or n <= sp:
+            return [(0, n)]
+        return [(k, min(sp, n - k)) for k in range(0, n, sp)]
+
+    def _event(self, kind, row, tokens, parts_ms, nsl):
+        tot = sum(parts_ms)
+        nb = tokens * BYTES_PER_TOKEN
+        ev = dict(
+            kind=kind,
+            tier="host",
+            row=row,
+            bytes=nb,
+            ms=tot * 1e3,
+            gbps=nb / max(tot, 1e-9) / 1e9,
+            slices=nsl,
+            max_stall_ms=max(parts_ms) * 1e3 if parts_ms else 0.0,
+        )
+        self.xfers.append(ev)
+        del self.xfers[:-256]
+        self.log(
+            f"chainstore xfer: {kind} host row {row} {nb / 1e9:.2f} GB in {ev['ms']:.0f} ms = {ev['gbps']:.2f} GB/s row-aggregate, {nsl} slice(s), max single stall {ev['max_stall_ms']:.0f} ms (all rows' decode frozen for each slice; the yield between slices runs decode rounds)"
+        )
+        self.stats["host_xfer_bytes"] += nb
+        return ev
+
+    def _yield(self, kind, i, n, nbytes):
+        if self.yield_fn is not None:
+            self.yield_fn(kind, i, n, nbytes)
+
+    def _spill(self, row, page0, npages, kind="spill"):
+        """read npages of ``row`` to host in slices; payload = [(page offset, npages, backend payload)]. Raises on error."""
+        parts, ms = [], []
+        sl = self._slices(npages)
+        for i, (k, n) in enumerate(sl):
+            t0 = time.perf_counter()
+            parts.append((k, n, self.be.to_host(row, page0 + k, n)))
+            ms.append(time.perf_counter() - t0)
+            if i + 1 < len(sl):
+                self._yield("spill", i, len(sl), n * PAGE * BYTES_PER_TOKEN)
+        self._event(kind, row, npages * PAGE, ms, len(sl))
+        return parts
+
+    def _restore(self, e, dst_row, npages):
+        ms = []
+        parts = [p for p in e.payload if p[0] < npages]
+        for i, (k, n, pl) in enumerate(parts):
+            n = min(n, npages - k)
+            t0 = time.perf_counter()
+            self.be.from_host(pl, dst_row, k, n)
+            ms.append(time.perf_counter() - t0)
+            if i + 1 < len(parts):
+                self._yield("restore", i, len(parts), n * PAGE * BYTES_PER_TOKEN)
+        self._event("restore", dst_row, npages * PAGE, ms, len(parts))
 
     def _drop(self, e, why):
         self.entries.pop(e.eid, None)
@@ -315,7 +383,7 @@ class ChainStore:
         if tier == "tail" and self.host_on() and len(v.tokens) <= self.host_cap:
             try:  # the victim's pages are still intact: read them to host (best effort)
                 self._room_host(len(v.tokens))
-                payload = self.be.to_host(v.row, v.page0, v.npages)
+                payload = self._spill(v.row, v.page0, v.npages, "evict-cascade")
                 ne = Entry(self._next(), v.tokens, "host", payload=payload, t=v.t)
                 self.entries[ne.eid] = ne
                 self.stats["demoted_host"] += 1
@@ -368,7 +436,7 @@ class ChainStore:
                     e = Entry(self._next(), chain, "tail", row=r, page0=p0, t=self.clock())
                 else:
                     self._room_host(len(chain))
-                    payload = self.be.to_host(src_row, 0, n)
+                    payload = self._spill(src_row, 0, n, "spill")
                     e = Entry(self._next(), chain, "host", payload=payload, t=self.clock())
             except Exception as ex_:  # noqa: BLE001
                 self.stats["failed"] += 1
@@ -405,7 +473,7 @@ class ChainStore:
             if e.tier == "tail":
                 self.be.copy_pages(e.row, e.page0, dst_row, 0, n)
             else:
-                self.be.from_host(e.payload, dst_row, 0, n)
+                self._restore(e, dst_row, n)
         except Exception as ex_:  # noqa: BLE001
             self.stats["failed"] += 1
             self._drop(e, f"promote failed {type(ex_).__name__}: {str(ex_)[:100]}")

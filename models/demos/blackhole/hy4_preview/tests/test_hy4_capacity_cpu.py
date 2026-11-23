@@ -5,6 +5,8 @@ error injection in demote and in promote, switch files, neighbours unaffected, f
 Run: PYTHONPATH=<wt> python_env/bin/python -m pytest --noconftest -q tests/test_hy4_capacity_cpu.py
 """
 
+import os
+
 import numpy as np
 import pytest
 
@@ -403,19 +405,23 @@ def test_digest_keys_not_tokens():
     assert ent is not None and h == 3 * PAGE
 
 
-@pytest.mark.parametrize("name", ["tailpark", "hostspill", "tail_invalidate", "tail_neighbours", "tail_error"])
+@pytest.mark.parametrize(
+    "name", ["tailpark", "hostspill", "hostspill_slices", "tail_invalidate", "tail_neighbours", "tail_error"]
+)
 def test_demo_scenarios_pass_on_fake_engine(name):
     """the device demo scenarios (demo/scenario_capacity.py) run unchanged on the fake engine: every gate PASS (the golden gate is SKIP: no golden recorded on the CPU)."""
     from models.demos.blackhole.hy4_preview.demo import scenarios as S
 
     pages = 160 if name == "tail_invalidate" else 2056
-    eng = FakeCapEngine(pages=pages, tail=True, host=True, min_spill=8192)
+    os.environ["HY4_HOSTTIER_SLICE_ROUNDS"] = "1"  # (restored by the test below via monkeypatch-free cleanup)
+    eng = FakeCapEngine(pages=pages, tail=True, host=True, min_spill=8192, slice_mb=40)
     eng.max_seq_len = pages * 512
     ctx = S.Ctx(eng, log=lambda s: None)
     S.SCENARIOS[name](ctx)
     bad = [g for g in ctx.gates if g[2] == "FAIL"]
     assert ctx.gates and not bad, bad
     assert all(g[2] == "PASS" or "golden" in g[1] for g in ctx.gates)
+    os.environ.pop("HY4_HOSTTIER_SLICE_ROUNDS", None)
 
 
 def test_placement_prefers_slack_over_copy_cost():
@@ -439,3 +445,149 @@ def test_placement_prefers_slack_over_copy_cost():
     run(e2, 0, toks(100000, 3))
     (x,) = e2.cap.store.entries.values()
     assert x.row in (0, 1, 2, 3)  # without the risk term only the copy cost decides (no slack preference asserted)
+
+
+# ---------------------------------------------------------------------------------------------- sliced host transfers (HY4_HOSTTIER_SLICE_MB)
+SLICE_MB = 40  # per chip: 10 pages of 3.75 MB -> a 16384-token chain (32 pages) moves in 4 slices
+
+
+def host_engine(slice_mb=SLICE_MB, **kw):
+    return FakeCapEngine(tail=False, host=True, slice_mb=slice_mb, **kw)
+
+
+def test_sliced_host_spill_restore_equals_cold_and_logs_events():
+    e = host_engine()
+    A, m0 = park_long_on_row0(e)
+    busy(e)
+    run(e, 0, toks(2000, 9))
+    e.release(0)
+    (ent,) = e.cap.store.entries.values()
+    assert len(ent.payload) == 4  # 32 pages / 10 per slice
+    m, c = run(e, 0, A)
+    assert c >= len(A) - 1024 and m == m0 == cold(A)
+    ev = e.cap.store.xfers
+    assert [x["kind"] for x in ev] == ["spill", "restore"] and all(x["slices"] >= 4 for x in ev)
+    assert ev[0]["bytes"] == 16384 * CS.BYTES_PER_TOKEN and ev[0]["gbps"] > 0 and ev[0]["max_stall_ms"] <= ev[0]["ms"]
+    assert sum(1 for c in e.backend.calls if c[0] == "to_host") == 4
+
+
+def test_slice_zero_is_one_whole_transfer():
+    e = host_engine(slice_mb=0)
+    park_long_on_row0(e)
+    busy(e)
+    run(e, 0, toks(2000, 9))
+    (ent,) = e.cap.store.entries.values()
+    assert len(ent.payload) == 1 and e.cap.store.slice_pages() == 0
+
+
+def test_yield_between_slices_runs_decode_neighbours_bit_identical():
+    def scenario(sliced):
+        e = host_engine(slice_mb=SLICE_MB if sliced else 0)
+        A = toks(16384, 1)
+        run(e, 0, A)
+        e.release(0)
+        for r in (1, 2, 3):
+            run(e, r, toks(3000 + 400 * r, 60 + r))
+        out = {r: [] for r in (1, 2, 3)}
+        n = {"y": 0}
+
+        def rd():
+            o = e.round([0] * 4, False)
+            for r in (1, 2, 3):
+                out[r].append(o[r]["tok"])
+
+        def y(kind, i, total, nbytes):
+            n["y"] += 1
+            rd()  # decode keeps running between slices
+
+        e.cap_yield = y
+        run(e, 0, toks(2000, 9))  # spill (sliced)
+        e.release(0)
+        run(e, 0, A)  # restore (sliced)
+        e.release(0)
+        while len(out[1]) < 12:  # same total number of rounds in both runs
+            rd()
+        return out, n["y"]
+
+    ref, y0 = scenario(False)
+    got, y1 = scenario(True)
+    assert y0 == 0 and y1 == 6  # 3 yields per sliced transfer (4 slices)
+    assert got == ref
+
+
+def test_error_in_middle_slice_of_spill_is_cold():
+    e = host_engine()
+    A, m0 = park_long_on_row0(e)
+    busy(e)
+    e.backend.skip_ok = 2
+    e.backend.fail_next = 1  # the 3rd slice of the spill raises
+    run(e, 0, toks(2000, 9))
+    e.release(0)
+    assert not e.cap.store.entries and e.cap.store.stats["failed"] >= 1
+    m, c = run(e, 0, A)
+    assert c == 0 and m == m0
+
+
+def test_error_in_middle_slice_of_restore_drops_entry_and_is_cold():
+    e = host_engine()
+    A, m0 = park_long_on_row0(e)
+    busy(e)
+    run(e, 0, toks(2000, 9))
+    e.release(0)
+    assert len(e.cap.store.entries) == 1
+    e.backend.skip_ok = 1
+    e.backend.fail_next = 1  # the 2nd restore slice raises: pages 0..10 already written, the rest not
+    m, c = run(e, 0, A)
+    assert c == 0 and m == m0 and not e.cap.store.entries  # partial write never served
+
+
+def test_partial_restore_shorter_than_chain_with_slices():
+    e = host_engine()
+    A, m0 = park_long_on_row0(e)
+    busy(e)
+    run(e, 0, toks(2000, 9))
+    e.release(0)
+    B = np.concatenate([A[:8192], toks(4000, 7)])  # shares only the first 8192 tokens (16 pages: 2 slices)
+    mb, c = run(e, 0, B)
+    assert 8192 - 1024 <= c <= 8192 and mb == cold(B)
+
+
+def test_default_engine_yield_runs_one_round_per_gap_only_when_rows_live(monkeypatch):
+    """the engine's own yield (HY4_HOSTTIER_SLICE_ROUNDS=1): one decode round between slices while other rows are live; nothing when no row is live; live file 0 disables"""
+    monkeypatch.setenv("HY4_HOSTTIER_SLICE_ROUNDS", "1")
+
+    def go(live_rows):
+        e = host_engine()
+        A = toks(16384, 1)
+        run(e, 0, A)
+        e.release(0)
+        for r in live_rows:
+            run(e, r, toks(3000, 60 + r))
+        r0 = e.round_no
+        run(e, 0, toks(2000, 9))  # spill: 4 slices -> 3 gaps
+        e.release(0)
+        run(e, 0, A)  # restore: 3 gaps
+        return e, e.round_no - r0
+
+    e, n = go((1, 2, 3))
+    assert n == 6 and e.cap_rounds == 6 and len(e.cap_round_outputs) == 6
+    e, n = go(())
+    assert n == 0 and e.cap_rounds == 0  # no live row: unchanged behaviour
+
+
+def test_default_engine_yield_live_file_off(monkeypatch, tmp_path):
+    f = tmp_path / "sl"
+    f.write_text("0\n")
+    monkeypatch.setenv("HY4_HOSTTIER_SLICE_ROUNDS", "1")
+    monkeypatch.setenv("HY4_HOSTTIER_SLICE_FILE", str(f))
+    e = host_engine()
+    A = toks(16384, 1)
+    run(e, 0, A)
+    e.release(0)
+    busy(e)
+    run(e, 0, toks(2000, 9))
+    assert e.cap_rounds == 0
+    f.write_text("1\n")
+    e.release(0)
+    run(e, 0, A)
+    assert e.cap_rounds == 3
