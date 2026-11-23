@@ -7,6 +7,8 @@
 #include <limits>
 
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -76,16 +78,21 @@ void append_sharded_args(
     if (add_bank_coords) {
         auto* device = buffer.device();
         auto bank_type = buffer.core_type();
+        // Each coordinate is packed into 8 bits; a larger one would be silently truncated to another bank's coordinate.
+        auto check_coord = [](const NodeCoord& coord) {
+            TT_FATAL(coord.x <= 0xFF && coord.y <= 0xFF, "Bank coordinate {} does not fit into 8 bits", coord);
+            return coord;
+        };
         for (size_t i = 0; i < n_banks; i += 2) {
             // We don't virtualize DRAM coord, since we need logical x coord == bank_id to calculate the address
-            const auto coord1 =
-                buffer.is_dram() ? bank_coords[i] : device->virtual_core_from_logical_core(bank_coords[i], bank_type);
+            const auto coord1 = check_coord(
+                buffer.is_dram() ? bank_coords[i] : device->virtual_core_from_logical_core(bank_coords[i], bank_type));
 
             if (i + 1 < n_banks) {
                 // Pack two coordinates into one uint32_t if we have a pair
-                const auto coord2 = buffer.is_dram()
-                                        ? bank_coords[i + 1]
-                                        : device->virtual_core_from_logical_core(bank_coords[i + 1], bank_type);
+                const auto coord2 = check_coord(
+                    buffer.is_dram() ? bank_coords[i + 1]
+                                     : device->virtual_core_from_logical_core(bank_coords[i + 1], bank_type));
                 args.push_back(
                     ((coord2.x & 0xFF) << 24) | ((coord2.y & 0xFF) << 16) | ((coord1.x & 0xFF) << 8) |
                     (coord1.y & 0xFF));
@@ -95,6 +102,25 @@ void append_sharded_args(
             }
         }
     }
+}
+
+void append_interleaved_args(
+    const Buffer* buffer, tensor_accessor::ArgsConfig args_config, std::vector<uint32_t>& args, bool is_runtime) {
+    if (!is_runtime) {
+        args.push_back(args_config.raw());
+    }
+    // The aligned page size goes to exactly one of the two vectors: the compile-time args, or the common runtime args
+    // under RuntimePageSize.
+    if (args_config.test(tensor_accessor::ArgConfig::RuntimePageSize) != is_runtime) {
+        return;
+    }
+    auto aligned_page_size = buffer ? buffer->aligned_page_size() : 0;
+    TT_FATAL(
+        aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+        "Aligned page size {} exceeds uint32_t max {}",
+        aligned_page_size,
+        std::numeric_limits<uint32_t>::max());
+    args.push_back(static_cast<uint32_t>(aligned_page_size));
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
@@ -147,11 +173,22 @@ void TensorAccessorArgs::update_args_config() {
         args_config_ = tensor_accessor::ArgConfig::None;
         return;
     }
+    // A TensorAccessor addresses every node at one base address, which a per-core allocated buffer doesn't have.
+    TT_FATAL(
+        !experimental::per_core_allocation::is_per_core_allocation(*buffer_),
+        "A per-core allocated buffer cannot build a TensorAccessor: each node knows only its own address. "
+        "Use a per-node tensor binding with LocalTensorAccessor instead.");
 
     if (buffer_->buffer_distribution_spec().has_value()) {
         args_config_.set(tensor_accessor::ArgConfig::Sharded);
+        // Reject it on the host: the device-side TensorAccessorArgs rejects it only when the kernel is compiled, with
+        // an error that doesn't name the buffer.
+        TT_FATAL(
+            !args_config_.test(tensor_accessor::ArgConfig::RuntimePageSize),
+            "RuntimePageSize is not supported for a sharded buffer");
     } else {
-        args_config_ = tensor_accessor::ArgConfig::None;
+        // An interleaved buffer can take only its page size at runtime.
+        args_config_ = args_config_ & tensor_accessor::ArgConfig::RuntimePageSize;
     }
     args_config_.set(tensor_accessor::ArgConfig::IsDram, buffer_->is_dram());
 
@@ -174,14 +211,10 @@ void TensorAccessorArgs::append_to(
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, common_runtime_args, /* is_runtime */ true);
     } else {
-        compile_time_args.push_back(args_config_.raw());
-        auto aligned_page_size = buffer_ ? buffer_->aligned_page_size() : 0;
-        TT_FATAL(
-            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
-            "Aligned page size {} exceeds uint32_t max {}",
-            aligned_page_size,
-            std::numeric_limits<uint32_t>::max());
-        compile_time_args.push_back(static_cast<uint32_t>(aligned_page_size));
+        CMAKE_UNIQUE_NAMESPACE::append_interleaved_args(
+            buffer_, args_config_, compile_time_args, /* is_runtime */ false);
+        CMAKE_UNIQUE_NAMESPACE::append_interleaved_args(
+            buffer_, args_config_, common_runtime_args, /* is_runtime */ true);
     }
 }
 
@@ -193,14 +226,8 @@ void TensorAccessorArgs::append_to(std::vector<uint32_t>& compile_time_args) con
     if (args_config_.test(tensor_accessor::ArgConfig::Sharded)) {
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     } else {
-        compile_time_args.push_back(args_config_.raw());
-        auto aligned_page_size = buffer_ ? buffer_->aligned_page_size() : 0;
-        TT_FATAL(
-            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
-            "Aligned page size {} exceeds uint32_t max {}",
-            aligned_page_size,
-            std::numeric_limits<uint32_t>::max());
-        compile_time_args.push_back(static_cast<uint32_t>(aligned_page_size));
+        CMAKE_UNIQUE_NAMESPACE::append_interleaved_args(
+            buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     }
 }
 
@@ -209,14 +236,8 @@ std::vector<uint32_t> TensorAccessorArgs::get_compile_time_args() const {
     if (args_config_.test(tensor_accessor::ArgConfig::Sharded)) {
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     } else {
-        compile_time_args.push_back(args_config_.raw());
-        auto aligned_page_size = buffer_ ? buffer_->aligned_page_size() : 0;
-        TT_FATAL(
-            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
-            "Aligned page size {} exceeds uint32_t max {}",
-            aligned_page_size,
-            std::numeric_limits<uint32_t>::max());
-        compile_time_args.push_back(static_cast<uint32_t>(aligned_page_size));
+        CMAKE_UNIQUE_NAMESPACE::append_interleaved_args(
+            buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     }
     return compile_time_args;
 }
@@ -225,6 +246,9 @@ std::vector<uint32_t> TensorAccessorArgs::get_common_runtime_args() const {
     std::vector<uint32_t> common_runtime_args;
     if (args_config_.test(tensor_accessor::ArgConfig::Sharded)) {
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, common_runtime_args, /* is_runtime */ true);
+    } else {
+        CMAKE_UNIQUE_NAMESPACE::append_interleaved_args(
+            buffer_, args_config_, common_runtime_args, /* is_runtime */ true);
     }
     return common_runtime_args;
 }

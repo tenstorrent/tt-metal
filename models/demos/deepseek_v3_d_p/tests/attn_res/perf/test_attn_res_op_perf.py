@@ -64,7 +64,8 @@ OPS = ("attn_res_block_stats", "attn_res_block_mix", "attn_res_gather_softmax")
 
 # Device kernel duration (us) per op, as CI hardware (bh_sc1_high_power) measures it. SP8xTP4 is the mean of two CI
 # Galaxies' medians over 20 synced blocks, runs 41962421284 and 42058182913: block_stats 139.0 / 119.0, block_mix
-# 275.5 / 275.6, gather_softmax 67.5 / 68.2.
+# 275.5 / 275.6, gather_softmax 67.5 / 68.2; block_stats then re-centred on run 44904800202's median, 73.8 us (min
+# 72.9, max 88.2), where block_mix and gather_softmax stayed on their references (275.4, 67.9).
 #
 # SP4xTP4 has no CI job: it was measured on a Galaxy off the CI pool (bh-glx-120-b07u02, 2026-11-05), which runs the
 # end-to-end boundary layer of `test_attn_res_perf.py` at ~416 us against its 394 us CI reference, and is scaled by
@@ -73,7 +74,7 @@ OPS = ("attn_res_block_stats", "attn_res_block_mix", "attn_res_gather_softmax")
 _CI_OVER_LOCAL = 394.0 / 416.0
 _REFERENCE_US = {
     "SP8xTP4": {
-        "attn_res_block_stats": 129.0,
+        "attn_res_block_stats": 73.8,
         "attn_res_block_mix": 275.6,
         "attn_res_gather_softmax": 67.9,
     },

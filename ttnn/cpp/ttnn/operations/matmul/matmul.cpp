@@ -86,6 +86,28 @@ Tensor handle_zero_volume_matmul(
     return output_tensor;
 }
 
+// Torch-style batch broadcasting with a batched B: gives the lower-rank input leading size-1 dims (a view).
+std::optional<std::pair<Tensor, Tensor>> align_batch_ranks(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+    const auto& a_shape = input_tensor_a.logical_shape();
+    const auto& b_shape = input_tensor_b.logical_shape();
+    const bool ranks_differ_with_batched_b =
+        a_shape.rank() >= 2 && b_shape.rank() >= 2 && a_shape.rank() != b_shape.rank() && is_input_batched(b_shape);
+    if (!ranks_differ_with_batched_b) {
+        return std::nullopt;
+    }
+    const auto rank = std::max(a_shape.rank(), b_shape.rank());
+    auto to_rank = [rank](const Tensor& tensor) {
+        auto with_leading_ones = [rank](const ttnn::Shape& shape) {
+            ttsl::SmallVector<uint32_t> dims(rank - shape.rank(), 1);
+            dims.insert(dims.end(), shape.cbegin(), shape.cend());
+            return ttnn::Shape(dims);
+        };
+        return ttnn::reshape(
+            tensor, with_leading_ones(tensor.logical_shape()), with_leading_ones(tensor.padded_shape()));
+    };
+    return std::make_pair(to_rank(input_tensor_a), to_rank(input_tensor_b));
+}
+
 }  // namespace detail
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Activation>& activation) {
@@ -302,6 +324,10 @@ static ttnn::Tensor bound_matmul(
             bias);
     }
 
+    if (auto aligned = detail::align_batch_ranks(input_tensor_a, input_tensor_b)) {
+        return bound_matmul(aligned->first, aligned->second, bias, parameters, optional_output_tensor);
+    }
+
     //----------------------------------------------------------------------------------------------
     // The following code is replicated from matmul_op.cpp and helps determine the program config
     auto matmul_struct =
@@ -421,13 +447,33 @@ static ttnn::Tensor bound_matmul(
 
     // Apply bias as post-processing if needed
     if (post_process_bias) {
+        // binary_ng broadcasts only up to rank 6, so for an unbatched bias the batch dims are folded into one.
+        auto fold_batch = [](const Tensor& tensor) {
+            const auto& logical = tensor.logical_shape();
+            const auto& padded = tensor.padded_shape();
+            const uint32_t batch = logical.volume() / (logical[-2] * logical[-1]);
+            return ttnn::reshape(
+                tensor, ttnn::Shape({batch, logical[-2], logical[-1]}), ttnn::Shape({batch, padded[-2], padded[-1]}));
+        };
+        const bool fold = output_tensor.logical_shape().rank() > 6 && !detail::is_input_batched(bias->logical_shape());
+        std::optional<Tensor> add_output_tensor = optional_output_tensor;
+        Tensor add_bias = bias.value();
+        if (fold) {
+            output_tensor = fold_batch(output_tensor);
+            if (add_output_tensor.has_value()) {
+                add_output_tensor = fold_batch(*add_output_tensor);
+            }
+            if (add_bias.logical_shape().rank() > 2) {
+                add_bias = fold_batch(add_bias);
+            }
+        }
         output_tensor = ttnn::add(
             output_tensor,
-            bias.value(),
+            add_bias,
             /*output_dtype=*/std::nullopt,
             optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
                                                : output_tensor.memory_config(),
-            optional_output_tensor);
+            add_output_tensor);
     }
 
     const auto& matmul_shape = utilities::compute_matmul_output_shape(

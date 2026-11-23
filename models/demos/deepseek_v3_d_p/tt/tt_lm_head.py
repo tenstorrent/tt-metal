@@ -375,6 +375,8 @@ class TtLMHead(LightweightModule):
             # Find the tile-aligned start position that contains local_token_id.
             tile_start = (local_token_id // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
             token_offset = local_token_id % ttnn.TILE_SIZE
+            # ttnn.narrow bounds-checks the window against x's logical shape, so a token in a trailing partial
+            # tile (tile_start + TILE_SIZE > seq_len_per_device) is rejected there; other tokens are unaffected.
             x = ttnn.narrow(x, dim=-2, start=tile_start, length=ttnn.TILE_SIZE)
             logger.debug(
                 f"[TtLMHead.forward] After narrow ({local_token_id=} {tile_start=}): {x.shape=} {token_offset=}"

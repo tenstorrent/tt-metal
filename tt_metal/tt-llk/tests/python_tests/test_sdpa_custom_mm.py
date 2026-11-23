@@ -72,53 +72,20 @@ from ttexalens.tt_exalens_lib import write_to_device
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
-# ttsim functional gap (NOT a golden/driver defect).
-#
-# sdpa_custom_mm drives the L1 -> SrcB counter-overflow walk in the promoted header
-# llk_unpack_AB_custom_mm.h (_llk_unpack_AB_custom_mm_iter_insns). That header unpacks
-# the two [M,16] SrcB faces at rows 0 and 16, then issues a +48-row CH1-Y increment to
-# return to row 0 for the next k-tile -- relying, BY DESIGN, on the 6-bit CH1 Y counter
-# wrapping at 64 (see the header's own comment, lines 48-52: "an increment of 48 rows or
-# 3 CH1 Y increments wraps us back to 0 ... CH1 counters only use low 6 bits and wrap at
-# the number of rows in a Src reg (64)").
-#
-# The ttsim BH functional model rejects the row=64 UNPACR destination
-# ("UndefinedBehavior: tensix_unpacr: src_b row=64") instead of applying that documented
-# wrap, so every variant traps in the unpack thread before any math runs. The failure is
-# invariant across all shapes / kt / ct (always exactly the 64-row wrap boundary), which
-# is the signature of the header's fixed addressing sequence, not a shape-dependent driver
-# stride bug. The driver only supplies base addresses, tile sizes and face geometry (all
-# already matching the base custom_mm test's config); none of those can change the header's
-# zmask-encoded +48 SrcB increment, so there is no driver-side fix.
-#
-# Corroboration: the only sibling that also drives this header, test_custom_mm.py, traps
-# even earlier on a different ttsim gap (unpacr_nop bank_clr_ctrl=1, the clear_src path the
-# sdpa header skips), and test_sdpa_custom_mm_reuse_dest_srcb.py runs cleanly on ttsim ONLY
-# because it sources SrcB from DEST (MOVD2B) and never performs this L1->SrcB walk.
-#
-# Skipped on ttsim ONLY (the row=64 trap _Exit(1)s the forked child, so xfail can't mark
-# it). A real Blackhole run (where the 6-bit wrap is honored) runs the test for real and
-# validates the golden. The golden is a faithful transcription of the header math and is
-# NOT distorted to match the sim.
-_TTSIM_SRCB_WRAP_REASON = (
-    "ttsim BH does not model the 6-bit CH1-Y SrcB counter wrap that "
-    "llk_unpack_AB_custom_mm.h relies on: it traps the by-design row=64 UNPACR "
-    "destination (UndefinedBehavior: tensix_unpacr: src_b row=64). Header/sim gap, "
-    "not a golden or driver defect; XPASSes on real Blackhole silicon."
+# The simulator exits the process on these, so xfail cannot mark them.
+_SIM_CFG_CONTEXT_REASON = (
+    "simulator does not support tensix_unpacr with cfg_context_id=1, "
+    "used by the mask/restore sequence"
+)
+_SIM_MOP_LOOP_COUNT_REASON = (
+    "simulator does not support a MOP loop count above 31, which kt_dim 256 needs"
 )
 
 
-def _skip_on_simulator(request):
-    """Skip on the ttsim simulator ONLY (see _TTSIM_SRCB_WRAP_REASON).
-
-    ttsim reports the HW-legal 6-bit SrcB counter wrap as an UndefinedBehavior that
-    _Exit(1)s the forked child -- an uncatchable process abort, so a non-strict xfail
-    CANNOT mark it (it still reports FAILED). Skip before config.run() starts the kernel
-    on ttsim. On real silicon (no --run-simulator) the test runs normally and validates
-    the unchanged golden.
-    """
+def _skip_on_simulator(request, reason):
+    """Skip on the simulator only; silicon runs normally."""
     if request.config.getoption("--run-simulator"):
-        pytest.skip(_TTSIM_SRCB_WRAP_REASON)
+        pytest.skip(reason)
 
 
 class _SdpaCustomMMStimuli(StimuliConfig):
@@ -351,9 +318,8 @@ SHAPES = [
 @parametrize(
     shape=SHAPES,
 )
-def test_sdpa_custom_mm(request, shape):
+def test_sdpa_custom_mm(shape):
     """Default configuration: signal_granularity=1 (post per c-tile), no read transpose."""
-    _skip_on_simulator(request)
     # A single-name parametrize axis binds the value as-is (a 1-tuple wrapping the shape),
     # so unwrap one level before destructuring.
     (M, K, N) = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
@@ -362,7 +328,7 @@ def test_sdpa_custom_mm(request, shape):
 
 def test_sdpa_custom_mm_face_walk_exact(request):
     """kt_dim = 256 as two SrcB face walks, compared exactly against A @ B."""
-    _skip_on_simulator(request)
+    _skip_on_simulator(request, _SIM_MOP_LOOP_COUNT_REASON)
     M, kt, ct = 8, 256, 1
     torch_a, torch_b = (t.to(torch.bfloat16) for t in face_walk_operands(M, kt, ct))
     res = _run(
@@ -384,7 +350,7 @@ def test_sdpa_custom_mm_face_walk_exact(request):
 @parametrize(
     shape=SHAPES,
 )
-def test_sdpa_custom_mm_read_transposed(request, shape):
+def test_sdpa_custom_mm_read_transposed(shape):
     """read_transposed=True changes the SrcA L1 read order (block_increment = kt*tile,
     inner_increment jumps back one tile), so the walk reads tile linear-index ``c*kt + k``
     instead of ``k*ct + c``. ``_pack_in1`` packs the buffer C-MAJOR to match, so the
@@ -392,7 +358,6 @@ def test_sdpa_custom_mm_read_transposed(request, shape):
     buffer, not the golden, absorbs the transpose. Exercises the read_transposed unpack
     path for a clean compile + PCC.
     """
-    _skip_on_simulator(request)
     (M, K, N) = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
     # ct>=2 shapes provide the intended transposed-read coverage.
     if N // DEFAULT_TILE_C_DIM == 1:
@@ -411,10 +376,9 @@ def test_sdpa_custom_mm_read_transposed(request, shape):
         ((8, 256, 128), 4),  # sg == ct : fast path
     ],
 )
-def test_sdpa_custom_mm_signal_granularity(request, shape_sg):
+def test_sdpa_custom_mm_signal_granularity(shape_sg):
     """signal_granularity only changes the FPU->SFPU post cadence, never the numbers, so all
     legal granularities must reproduce the same A@B golden."""
-    _skip_on_simulator(request)
     # Single-name parametrize binds the value as-is (a 1-tuple wrapping (shape, sg)).
     (shape, sg) = (
         shape_sg[0]
@@ -440,14 +404,13 @@ class SDPA_MASK_REENTRY(TemplateParameter):
     input_tile_offset=lambda stride_mode: ([0, 1] if stride_mode == "padded" else [0]),
 )
 def test_sdpa_custom_mm_row_stride(
-    request, shape, stride_mode, read_transposed, input_tile_offset
+    shape, stride_mode, read_transposed, input_tile_offset
 ):
     """Contract only K tiles while stepping over poisoned merged-K/V row padding.
 
     Omitted, zero, and explicit kt strides retain tight packing. A stride argument
     must not change contiguous reads. Leading poison also checks tile-index addressing.
     """
-    _skip_on_simulator(request)
     M, K, N = shape
     kt = K // DEFAULT_TILE_R_DIM
     row_stride = {"implicit": None, "zero": 0, "tight": kt, "padded": kt + 2}[
@@ -479,7 +442,7 @@ def test_sdpa_custom_mm_mask_extent_restore(
     request, M, ct, read_transposed, padded_stride
 ):
     """Mask every output face, then reuse the restored SrcB geometry on the next matmul."""
-    _skip_on_simulator(request)
+    _skip_on_simulator(request, _SIM_CFG_CONTEXT_REASON)
     kt, K, N = 2, 64, ct * 32
     row_stride = kt + 2 if padded_stride else None
     input_tile_offset = 1 if padded_stride else 0
@@ -544,7 +507,7 @@ OPERAND_SCALE = 2.0**100
 
 
 @pytest.mark.parametrize("N", [32, 64])
-def test_sdpa_custom_mm_flushes_denormal_srcb_after_keep_flag(request, N):
+def test_sdpa_custom_mm_flushes_denormal_srcb_after_keep_flag(N):
     """The init must restore the Src zero flag a preceding datacopy left at keep.
 
     Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B they give nonzero
@@ -552,7 +515,6 @@ def test_sdpa_custom_mm_flushes_denormal_srcb_after_keep_flag(request, N):
     ones at its tolerance, so only the exact-zero check guards them. Rows 4-7 are normal and check the rest
     of the product.
     """
-    _skip_on_simulator(request)
     M, K = 8, 64
     denormal_rows = 4
 

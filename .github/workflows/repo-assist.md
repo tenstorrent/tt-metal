@@ -122,6 +122,11 @@ safe-outputs:
 
 source: githubnext/agentics/workflows/repo-assist.md@298f992955146a6731d380a9de808e17861708e5
 engine: copilot
+# Pin the model. Without it the compiled workflow falls back to `auto` when the repo
+# variables GH_AW_MODEL_AGENT_COPILOT / GH_AW_DEFAULT_MODEL_COPILOT are unset, and the
+# AWF api-proxy rejects `auto` ("has no AI credits pricing"). Every scheduled run failed
+# on this from 2026-11-09 on. Same Sonnet pin as mattpocock-skills-reviewer.md.
+model: claude-sonnet-5.5
 ---
 
 # Repo Assist (tt-metal)

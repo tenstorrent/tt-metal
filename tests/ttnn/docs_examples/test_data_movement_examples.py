@@ -40,6 +40,16 @@ def test_nonzero(device):
     logger.debug(f"Non-zero indices: {indices.tolist()}")  # [[0, 0, 0, 3], [0, 0, 0, 10], [0, 0, 0, 20]]
 
 
+def test_bcast(device):
+    # Create a tensor and a single row to broadcast over its height
+    input_tensor_a = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    input_tensor_b = ttnn.rand((1, 1, 1, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    # Add the row of input_tensor_b to every row of input_tensor_a
+    output_tensor = ttnn.bcast(input_tensor_a, input_tensor_b, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H)
+    logger.debug(f"Bcast Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 64, 32])
+
+
 def test_pad(device):
     # Create a tensor to pad
     input_tensor = ttnn.rand((1, 1, 4, 4), dtype=ttnn.bfloat16, device=device)
@@ -47,6 +57,16 @@ def test_pad(device):
     # Pad the last two dimensions with 12 zeros at the end
     padded_tensor = ttnn.pad(input_tensor, [(0, 0), (0, 0), (0, 12), (0, 12)], 0)
     logger.debug(f"Padded Tensor Shape: {padded_tensor.shape}")  # Shape([1, 1, 16, 16])
+
+
+def test_chunk(device):
+    # Create a tensor to split
+    input_tensor = ttnn.rand((1, 1, 64, 96), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Split the last dimension into 3 chunks; the output is a list of tensors
+    chunks = ttnn.chunk(input_tensor, 3, dim=-1)
+    logger.debug(f"Number of chunks: {len(chunks)}")  # 3
+    logger.debug(f"Chunk Shape: {chunks[0].shape}")  # Shape([1, 1, 64, 32])
 
 
 def test_permute(device):
