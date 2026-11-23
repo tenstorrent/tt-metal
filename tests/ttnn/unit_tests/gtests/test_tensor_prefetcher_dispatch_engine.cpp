@@ -43,6 +43,7 @@
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
+#include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_validator.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -208,12 +209,14 @@ void queue_layers(
 }
 
 // Validates every entry of `num_layers` copies of the weight as the receivers consume them: of a grouped
-// weight, the `groups` listed, ascending, or every group when none are.
+// weight, the `groups` listed, ascending, or every group when none are. Each entry is compared at every
+// `compare_word_stride`'th word.
 void validate_layers(
     tt::tt_metal::distributed::MeshDevice* device,
     const ReceiverContiguousCase& prefetch,
     uint32_t num_layers,
-    const std::vector<uint32_t>& groups = {}) {
+    const std::vector<uint32_t>& groups = {},
+    uint32_t compare_word_stride = 1) {
     ttnn::operations::experimental::test::test_tensor_prefetcher_pipe_validator(
         device,
         prefetch.weight,
@@ -223,7 +226,15 @@ void validate_layers(
         prefetch.bank_to_receivers,
         /*streaming=*/false,
         /*rotation=*/{},
-        groups);
+        groups,
+        compare_word_stride);
+}
+
+// Pops every entry of `num_layers` copies of the weight as the receivers consume them, without checking any.
+void drain_layers(
+    tt::tt_metal::distributed::MeshDevice* device, const ReceiverContiguousCase& prefetch, uint32_t num_layers) {
+    ttnn::operations::experimental::test::test_tensor_prefetcher_pipe_consumer(
+        device, num_layers * prefetch.block_count, prefetch.block_bytes, prefetch.pipes);
 }
 
 // A group selector's mask on `device`: one UINT16 word per group in a single row-major page, in `memory_config`.
@@ -313,11 +324,16 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForMoreReceivers
         device_, /*receivers_per_bank=*/1, /*ring_entries=*/1, /*num_groups=*/1, WeightWrite::Finished, shape);
     ReceiverContiguousCase wide(
         device_, /*receivers_per_bank=*/2, /*ring_entries=*/1, /*num_groups=*/1, WeightWrite::Finished, shape);
+    // Only the second request's blocks can be overwritten before they are sent, so the first one's are only drained.
+    // The reader that overwrites one overruns the pusher by whole blocks, and a block differs from the one that
+    // overwrote it almost everywhere, so one word in each 256 bytes finds it. Comparing every word of blocks this
+    // large takes hours on a slow simulator.
+    constexpr uint32_t kCompareWordStride = 256 / sizeof(uint32_t);
     metal_exp::StartTensorPrefetcher(*device_, {});
     queue_layers(device_, narrow, narrow_layers);
     queue_layers(device_, wide, wide_layers);
-    validate_layers(device_, narrow, narrow_layers);
-    validate_layers(device_, wide, wide_layers);
+    drain_layers(device_, narrow, narrow_layers);
+    validate_layers(device_, wide, wide_layers, /*groups=*/{}, kCompareWordStride);
     metal_exp::StopTensorPrefetcher(*device_);
 }
 
