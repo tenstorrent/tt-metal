@@ -334,7 +334,8 @@
     )
 
     k3_kda() (
-      timeout -k 2m 18m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # 18.1 min with an empty kernel cache, 16.2 min warm (one Galaxy, outside CI); 24 min bound.
+      timeout -k 2m 24m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/layer/test_acceptance.py::test_synthetic_kimi_k3_accuracy_and_determinism -k "SP8xTP4" -vvv --tb=short
@@ -411,8 +412,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 18 + 7 + 7 + 10).
-      timeout: 54
+      # Exactly the sum of the per-section bounds (12 + 24 + 7 + 7 + 10).
+      timeout: 60
       tier: 2
       release_ready: false
   owner_id: U085GDCAZTN # Pavle Josipovic
