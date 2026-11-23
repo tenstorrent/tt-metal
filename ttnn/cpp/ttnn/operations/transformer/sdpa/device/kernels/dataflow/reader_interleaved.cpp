@@ -276,6 +276,15 @@ void kernel_main() {
     constexpr uint32_t q_heads_per_v = NQH / NVH;
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
+    // Q subblocks pushed in front of V of the first K chunk; the others go out behind it. All of them, unless the
+    // host gives the count of Q tile rows (SDPA_Q_ROWS_BEFORE_FIRST_V, the LLK 2.0 compute kernel).
+#ifdef SDPA_Q_ROWS_BEFORE_FIRST_V
+    constexpr uint32_t q_subblocks_asked_before_v = (SDPA_Q_ROWS_BEFORE_FIRST_V + qk_subblock_h - 1) / qk_subblock_h;
+    constexpr uint32_t q_subblocks_before_first_v =
+        q_subblocks_asked_before_v < q_num_subblocks ? q_subblocks_asked_before_v : q_num_subblocks;
+#else
+    constexpr uint32_t q_subblocks_before_first_v = q_num_subblocks;
+#endif
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
@@ -380,20 +389,28 @@ void kernel_main() {
     // 4-byte read can stage through the same landing spot before the full array overwrites it.
     volatile tt_l1_ptr uint32_t* windowed_cu_ptr = nullptr;
     if constexpr (use_windowed_narrowing) {
-        CircularBuffer cb_cu_reader(cb_id_windowed_cu_reader);
-        cb_cu_reader.reserve_back(1);
-        const uint32_t cu_write_ptr = cb_cu_reader.get_write_ptr();
-        if (windowed_q_tok_offset_addr != 0) {
-            const auto q_offset_reader = TensorAccessor(q_offset_args, windowed_q_tok_offset_addr);
-            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(cu_write_ptr), 4, {.page_id = 0}, {});
+        // Only the Q chunk loop below reads the windows (windowed_mode.hpp, loads_window_lengths).
+        if (loads_window_lengths(global_q_count)) {
+            CircularBuffer cb_cu_reader(cb_id_windowed_cu_reader);
+            cb_cu_reader.reserve_back(1);
+            const uint32_t cu_write_ptr = cb_cu_reader.get_write_ptr();
+            if (windowed_q_tok_offset_addr != 0) {
+                const auto q_offset_reader = TensorAccessor(q_offset_args, windowed_q_tok_offset_addr);
+                noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(cu_write_ptr), 4, {.page_id = 0}, {});
+                noc.async_read_barrier();
+                windowed_q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
+            }
+            const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
+            constexpr uint32_t cu_tile_bytes = get_tile_size(cb_id_windowed_cu_reader);
+            noc.async_read(
+                cu_window_reader,
+                CoreLocalMem<uint32_t>(cu_write_ptr),
+                window_lengths_read_bytes(cu_tile_bytes, cu_window_seqlens_eles),
+                {.page_id = 0},
+                {});
             noc.async_read_barrier();
-            windowed_q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
+            windowed_cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
         }
-        const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
-        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_id_windowed_cu_reader);
-        noc.async_read(cu_window_reader, CoreLocalMem<uint32_t>(cu_write_ptr), cu_tile_bytes, {.page_id = 0}, {});
-        noc.async_read_barrier();
-        windowed_cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
     }
 
     uint32_t read_offset = 0;
@@ -877,20 +894,27 @@ void kernel_main() {
                 // Placed after K forward complete so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside read_q_subblock deadlocks on BH
                 // when NOC writes are in-flight).
-                if constexpr (use_q_subblock_push) {
+                // SDPA_Q_ROWS_BEFORE_FIRST_V (the LLK 2.0 compute kernel): only that many of Q's rows go out in front
+                // of V of the first K chunk, the rest behind it. That kernel computes S of two groups of Q rows and
+                // then needs V, where the 1.0 kernel computes S of every row first: with all of Q ahead of V it idles
+                // until both are in, and with all of Q behind V it starts only when V is in.
+                const auto push_q_rows = [&](uint32_t first_subblock, uint32_t end_subblock) {
+                    for (uint32_t q_sub = first_subblock; q_sub < end_subblock; ++q_sub) {
+                        read_q_subblock<q_tile_bytes>(
+                            q_reader,
+                            cb_q_in,
+                            q_read_tile_id,
+                            q_sub * qk_subblock_h,
+                            qk_subblock_h,
+                            q_row_tile_count,
+                            DHt,
+                            DHt,
+                            barrier_threshold);
+                    }
+                };
+                if constexpr (use_q_subblock_push && q_subblocks_before_first_v != 0) {
                     if (k_chunk == first_k_chunk) {
-                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                            read_q_subblock<q_tile_bytes>(
-                                q_reader,
-                                cb_q_in,
-                                q_read_tile_id,
-                                q_sub * qk_subblock_h,
-                                qk_subblock_h,
-                                q_row_tile_count,
-                                DHt,
-                                DHt,
-                                barrier_threshold);
-                        }
+                        push_q_rows(0, q_subblocks_before_first_v);
                     }
                 }
 
@@ -1029,6 +1053,14 @@ void kernel_main() {
                     }
                     if (!should_receive) {
                         cb_v.push_back(v_chunk_tiles);
+                    }
+                }
+
+                if constexpr (use_q_subblock_push && q_subblocks_before_first_v != q_num_subblocks) {
+                    if (k_chunk == first_k_chunk) {
+                        push_q_rows(
+                            q_subblocks_before_first_v,
+                            q_num_subblocks);  // V is forwarded too by now: no NoC write is in flight
                     }
                 }
             }  // close k_chunk

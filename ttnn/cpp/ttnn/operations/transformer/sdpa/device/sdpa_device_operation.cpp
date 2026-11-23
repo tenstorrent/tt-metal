@@ -11,12 +11,21 @@
 #include "ttnn/device.hpp"
 #include <tt-metalium/data_formats/tile_constants.hpp>
 
+#include <cstdlib>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
 void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, const SDPAInputs& tensors) {
     const bool use_mla = attrs.use_mla;
+
+    if (attrs.llk2_compute) {
+        // What the LLK 2.0 kernel (tt_metal/tt-llk/llk2/kernels/sdpa.cpp) does not do yet.
+        TT_FATAL(
+            tensors.q.device()->arch() == tt::ARCH::BLACKHOLE,
+            "TT_SDPA_LLK2: the LLK 2.0 SDPA kernel is Blackhole-only");
+    }
 
     // Common validations for both modes
     if (use_mla) {
@@ -692,6 +701,15 @@ SDPAOperation::create_op_performance_model(
 }  // namespace ttnn::prim
 
 namespace ttnn::prim {
+namespace {
+// LLK 2.0 demo switch: TT_SDPA_LLK2=1 (unset or 0 = the 1.0 kernel). Read at launch so the value lands in SDPAParams
+// and therefore in the program cache key.
+bool sdpa_llk2_from_env() {
+    const char* value = std::getenv("TT_SDPA_LLK2");
+    return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
+}
+}  // namespace
+
 Tensor sdpa(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
@@ -735,6 +753,7 @@ Tensor sdpa(
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
             .output_concat_heads = output_concat_heads,
+            .llk2_compute = sdpa_llk2_from_env(),
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

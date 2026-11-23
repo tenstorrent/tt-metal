@@ -34,6 +34,10 @@ struct SDPAParams {
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
     bool output_concat_heads = false;
+    // LLK 2.0 demo: the compute kernel is tt_metal/tt-llk/llk2/kernels/sdpa.cpp (Blackhole, plain non-causal streaming
+    // SDPA only), with a buffer per intermediate (sdpa_program_factory.cpp). Set from TT_SDPA_LLK2 when the op is
+    // launched, so it is part of the program cache key.
+    bool llk2_compute = false;
 };
 
 struct SDPAInputs {
