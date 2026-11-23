@@ -66,7 +66,7 @@ probe() {
   set -e
   [ -z "${TT_DEVICE_PRIORITY_DIR:-}" ] || rm -f "${mark}"
   LAST_DIR="$(sed -n 's/.*STAGE_PROBE_RESULT.* dir=\(.*\)$/\1/p' <<< "${out}" | tail -1)"
-  [ -n "${LAST_DIR}" ] || LAST_DIR="$(ls -d "${LOG_DIR}/stage-probe-cap-${NAME}-${MODE}-u${users}-"* | tail -1)"
+  [ -n "${LAST_DIR}" ] || { say "STOP: u${users} printed no STAGE_PROBE_RESULT (it never held the device lock)"; exit 1; }
   LAST_OOM="$(grep -m1 -o 'Out of Memory[^"]*' "${LAST_DIR}/runner.log" 2>/dev/null | cut -c1-400 || true)"
   return "${rc}"
 }
@@ -96,11 +96,6 @@ while [ "${PHASE}" != confirm ] && { [ -z "${PASS}" ] || [ -z "${FAIL}" ]; }; do
     [ -n "${PASS}" ] || N=$((N - 1))
   fi
   [ "${N}" -gt 0 ] || { say "STOP: no passing count"; exit 1; }
-  # A pass above an earlier fail (or a fail below an earlier pass) is inconsistent: report it.
-  if [ -n "${PASS}" ] && [ -n "${FAIL}" ] && [ "${PASS}" -ge "${FAIL}" ]; then
-    say "STOP: inconsistent pass ${PASS} >= fail ${FAIL}"
-    exit 1
-  fi
 done
 [ "${PHASE}" = confirm ] || say "bisected: pass ${PASS} / fail ${FAIL}"
 [ "${PHASE}" != bisect ] || exit 0

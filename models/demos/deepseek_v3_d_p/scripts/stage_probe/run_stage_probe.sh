@@ -98,6 +98,8 @@ stage "power: ${POWER}"
 
 RUNNER_PID=""
 CLEAN=0
+PROD_RC="n/a"
+RUNNER_RC="n/a"
 cleanup() {
   if [ -n "${RUNNER_PID}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
     stage "stopping runner process group ${RUNNER_PID}"
@@ -116,6 +118,8 @@ cleanup() {
   else
     stage "FAILED: device left marked dirty (/tmp/tt-device.dirty); the next lock holder resets it"
   fi
+  # Printed on every exit path once the lock is held, so callers find this run's directory without guessing.
+  echo "STAGE_PROBE_RESULT name=${NAME} first_layer=${FIRST_LAYER} num_layers=${NUM_LAYERS} producer_rc=${PROD_RC} runner_rc=${RUNNER_RC} dir=${RUN_DIR}" | tee -a "${STAGE_LOG}"
 }
 trap cleanup EXIT
 
@@ -178,17 +182,14 @@ stage "runner ready after ~${waited}s; starting producer"
 ) > "${PRODUCER_LOG}" 2>&1 &
 PRODUCER_PID=$!
 RUNNER_CRASHED=0
+runner_gone() { grep -q "PREFILL_UNCAUGHT_EXCEPTION" "${RUNNER_LOG}" 2>/dev/null || ! kill -0 "${RUNNER_PID}" 2>/dev/null; }
 while kill -0 "${PRODUCER_PID}" 2>/dev/null; do
   sleep 20
   stage "request: $(grep -c 'CHUNK_RETIRE' "${PRODUCER_LOG}" 2>/dev/null || true) chunks retired"
   # A rank that dies mid-request leaves tt-run and the producer waiting (the producer's layer-completion wait
-  # times out only after 600 s per phase): stop at once instead of holding the device lock.
-  # A runner that exits after the SHUTDOWN sentinel is normal: the producer then exits too. Only a runner gone while
-  # the producer still waits 30 s later counts as a crash.
-  if ! grep -q "PREFILL_UNCAUGHT_EXCEPTION" "${RUNNER_LOG}" 2>/dev/null && ! kill -0 "${RUNNER_PID}" 2>/dev/null; then
-    timeout 30 tail --pid="${PRODUCER_PID}" -f /dev/null 2>/dev/null && break
-  fi
-  if grep -q "PREFILL_UNCAUGHT_EXCEPTION" "${RUNNER_LOG}" 2>/dev/null || ! kill -0 "${RUNNER_PID}" 2>/dev/null; then
+  # times out only after 600 s per phase): stop instead of holding the device lock. A runner that exits after the
+  # SHUTDOWN sentinel is normal, and the producer then exits too: only a producer still waiting 30 s later is a crash.
+  if runner_gone && ! timeout 30 tail --pid="${PRODUCER_PID}" -f /dev/null 2>/dev/null; then
     stage "runner failed during the request: $(grep -m1 -E 'Error|Out of Memory' "${RUNNER_LOG}" | cut -c1-200)"
     RUNNER_CRASHED=1
     kill "${PRODUCER_PID}" 2>/dev/null || true
@@ -200,7 +201,7 @@ wait "${PRODUCER_PID}"
 PROD_RC=$?
 set -e
 if [ "${RUNNER_CRASHED}" = 1 ]; then
-  echo "STAGE_PROBE_RESULT name=${NAME} first_layer=${FIRST_LAYER} num_layers=${NUM_LAYERS} producer_rc=${PROD_RC} runner_rc=crashed dir=${RUN_DIR}" | tee -a "${STAGE_LOG}"
+  RUNNER_RC=crashed
   exit 1
 fi
 stage "producer rc=${PROD_RC}; $(grep -c 'CHUNK_RETIRE.*warmup=0' "${PRODUCER_LOG}" || true) measured chunks"
@@ -217,5 +218,4 @@ else
 fi
 stage "runner rc=${RUNNER_RC}"
 [ "${PROD_RC}" = 0 ] && [ "${RUNNER_RC}" = 0 ] && CLEAN=1
-echo "STAGE_PROBE_RESULT name=${NAME} first_layer=${FIRST_LAYER} num_layers=${NUM_LAYERS} producer_rc=${PROD_RC} runner_rc=${RUNNER_RC} dir=${RUN_DIR}" | tee -a "${STAGE_LOG}"
 [ "${CLEAN}" = 1 ]
