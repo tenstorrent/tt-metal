@@ -314,8 +314,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Blackhole-only test: call the pack LLKs directly (the _wrapper_ helpers exist
         // only to paper over the WH/BH signature split for dual-arch tests).
         // compute_kernel_hw_startup
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
-            formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face);
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, tile_size, tensor_shape, partial_face);
 
         // No-src init: packer strides are owned by the hw-configure above.
         _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
