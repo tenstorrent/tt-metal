@@ -607,6 +607,10 @@ class Inkling2Prefill:
         self.gate_bf16 = os.environ.get("INKLING_PF_GATE_BF16", "1") != "0"
         self.debug = debug
         self.profile = profile
+        # moe_tap(app, s, x, ids): calibration capture (convert/gptq_calib.py); x the MoE input bf16 [n, C] (after
+        # mlp_norm), ids the routed experts [n, 8], positions [s, s + n) of application `app`. Off (None) by default.
+        self.moe_tap = None
+        self._app_i = None
         self.trace = trace
         self.fused_rel = True  # PfHeads for the 16-wide rel heads (needs _pfheads and r3)
         self._traces, self._warm, self._in = {}, set(), {}
@@ -1148,6 +1152,9 @@ class Inkling2Prefill:
             stable_sort=True,
         )
         self._tick("moe.route")
+        if self.moe_tap is not None:
+            ids = ttnn.to_torch(indices).reshape(t, -1)[:n, :TOP_K]
+            self.moe_tap(self._app_i, self._s, ttnn.to_torch(x).reshape(t, HIDDEN)[:n], ids)
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [t, HIDDEN])
         b = self._route(indices, n, t)  # host sync (a segment boundary when traced)
         if self.unified:
@@ -1513,6 +1520,7 @@ class Inkling2Prefill:
         msgs = None
         taps = self._taps = [] if self.drafter is not None else None
         for a, (L, p) in enumerate(APPS):
+            self._app_i = a
             if L == LOOP_START:
                 if p == 1:
                     pre = (h, stack)
@@ -1726,7 +1734,9 @@ class Inkling2Prefill:
         assert 0 < L <= m.max_ctx
         chunk = chunk or self.chunk
         assert chunk <= self.chunk and self._chunk_ok(chunk), (chunk, self.chunk)
-        traced = self.trace and not (logits_all or force or collect is not None or self.profile or self.debug)
+        traced = self.trace and not (
+            logits_all or force or collect is not None or self.profile or self.debug or self.moe_tap is not None
+        )
         if traced and self._traces and self._mem_print() != self._mem:
             self.n_dropped += 1
             self.release_traces()  # something was allocated since the last prefill call
