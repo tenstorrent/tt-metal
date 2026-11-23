@@ -368,8 +368,6 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
  * @brief Legacy face_r_dim/num_faces overload of @ref _llk_unpack_reconfig_data_format_srca_impl_, kept for the
  *        experimental/2_0 callers until they move to TensorShape.
  *
- * Also used by the metal llk_unpack_reconfig_data_format_srca wrapper: the experimental hybrid_llk_shims.hpp
- * (deepseek_prefill) renames this impl by macro to a shim with this signature.
  * Only face_r_dim and the total face count are programmed, so the 1x2 grid picked for num_faces == 2 gives the
  * same registers as the real CB shape.
  */
@@ -388,9 +386,6 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 /**
  * @brief Legacy face_r_dim/num_faces overload of @ref _llk_unpack_reconfig_data_format_srcb_impl_, kept for the
  *        experimental/2_0 callers until they move to TensorShape.
- *
- * Also used by the metal llk_unpack_reconfig_data_format_srcb wrapper, so the src{a,b} pair moves to TensorShape
- * together. See the srca overload above.
  */
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srcb_impl_(
