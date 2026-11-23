@@ -55,6 +55,10 @@ env:
   # An unmeasured candidate blocks, so the cap has to cover a whole-suite code move: the
   # largest seen on Wormhole is 4,350.
   PLACEMENT_CAP: "8000"
+  # Stage 2 splits its candidates over this many legs at most, about this many tests each,
+  # the way stage 1 splits the suite. A Wormhole code move gives about 4,350 candidates.
+  PLACEMENT_SHARD_SIZE: "400"
+  PLACEMENT_MAX_SHARDS: "5"
 
 concurrency:
   group: llk-perf-gate-${{ github.event.pull_request.number || github.run_id }}-${{ (github.event.action == 'synchronize' || github.event.label.name == 'llk-perf-gate') && 'gate' || github.run_id }}
@@ -211,6 +215,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       arches: ${{ steps.plan.outputs.arches }}
+      legs: ${{ steps.plan.outputs.legs }}
       run: ${{ steps.source.outputs.run }}
       head: ${{ steps.source.outputs.head }}
       base: ${{ steps.source.outputs.base }}
@@ -300,8 +305,11 @@ jobs:
         id: plan
         env:
           CAP: ${{ steps.source.outputs.cap }}
+          PER_SHARD: ${{ env.PLACEMENT_SHARD_SIZE }}
+          MAX_SHARDS: ${{ env.PLACEMENT_MAX_SHARDS }}
         run: |
           ARCHES=()
+          LEGS=()
           for ARCH in blackhole wormhole; do
             CANDIDATES="reports/${ARCH}/perf_gate_report.regressions.csv"
             [ -f "$CANDIDATES" ] || continue
@@ -311,9 +319,24 @@ jobs:
               --map "head/${ARCH}/**/*.windowhash" \
               --cap "$CAP" \
               --out "nodes/${ARCH}/nodes.txt"
-            [ -s "nodes/${ARCH}/nodes.txt" ] && ARCHES+=("\"${ARCH}\"")
+            [ -s "nodes/${ARCH}/nodes.txt" ] || continue
+            ARCHES+=("\"${ARCH}\"")
+            # One leg per shard, so the candidates are measured side by side instead of in turn.
+            # Round robin, because the list is ordered by slowdown and every shard should hold a mix.
+            COUNT=$(wc -l < "nodes/${ARCH}/nodes.txt")
+            SHARDS=$(( (COUNT + PER_SHARD - 1) / PER_SHARD ))
+            [ "$SHARDS" -lt 1 ] && SHARDS=1
+            [ "$SHARDS" -gt "$MAX_SHARDS" ] && SHARDS=$MAX_SHARDS
+            for SHARD in $(seq 1 "$SHARDS"); do
+              mkdir -p "nodes/${ARCH}/${SHARD}"
+              awk -v n="$SHARDS" -v i="$SHARD" 'NR % n == i % n' \
+                "nodes/${ARCH}/nodes.txt" > "nodes/${ARCH}/${SHARD}/nodes.txt"
+              LEGS+=("{\"arch\":\"${ARCH}\",\"shard\":\"${SHARD}\"}")
+            done
+            echo "${ARCH}: ${COUNT} candidate(s) over ${SHARDS} shard(s)"
           done
           echo "arches=[$(IFS=,; echo "${ARCHES[*]}")]" >> "$GITHUB_OUTPUT"
+          echo "legs=[$(IFS=,; echo "${LEGS[*]}")]" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         if: hashFiles('nodes/blackhole/nodes.txt') != ''
         with:
@@ -321,6 +344,7 @@ jobs:
           path: |
             nodes/blackhole/nodes.txt
             nodes/blackhole/nodes.over
+            nodes/blackhole/*/nodes.txt
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         if: hashFiles('nodes/wormhole/nodes.txt') != ''
         with:
@@ -328,46 +352,49 @@ jobs:
           path: |
             nodes/wormhole/nodes.txt
             nodes/wormhole/nodes.over
+            nodes/wormhole/*/nodes.txt
 
   placement-measure-head:
-    name: "Stage 2: measure the PR head on ${{ matrix.arch }} at 5 code positions"
+    name: "Stage 2: measure the PR head on ${{ matrix.arch }} at 5 code positions, shard ${{ matrix.shard }}"
     needs: placement-plan
     if: ${{ !cancelled() && needs.placement-plan.outputs.arches != '[]' && needs.placement-plan.outputs.arches != '' }}
     strategy:
       fail-fast: false
       matrix:
-        arch: ${{ fromJSON(needs.placement-plan.outputs.arches) }}
+        include: ${{ fromJSON(needs.placement-plan.outputs.legs) }}
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: ${{ matrix.arch }}
       ref: ${{ needs.placement-plan.outputs.head }}
-      artifact-suffix: "-head-placement"
+      artifact-suffix: "-head-placement-${{ matrix.shard }}"
       speed-of-light: false
       perf-run-types: L1_TO_L1
       tests-yaml: ./tests/pipeline_reorg/llk_perf_placement_tests.yaml
       node-list-artifact: placement-nodes-${{ matrix.arch }}
+      node-list-shard: "${{ matrix.shard }}/"
       compile-quasar: false
       upload-to-warehouse: false
       pipeline: pr
     secrets: inherit
 
   placement-measure-base:
-    name: "Stage 2: measure the branch point on ${{ matrix.arch }} at 5 code positions"
+    name: "Stage 2: measure the branch point on ${{ matrix.arch }} at 5 code positions, shard ${{ matrix.shard }}"
     needs: placement-plan
     if: ${{ !cancelled() && needs.placement-plan.outputs.arches != '[]' && needs.placement-plan.outputs.arches != '' }}
     strategy:
       fail-fast: false
       matrix:
-        arch: ${{ fromJSON(needs.placement-plan.outputs.arches) }}
+        include: ${{ fromJSON(needs.placement-plan.outputs.legs) }}
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: ${{ matrix.arch }}
       ref: ${{ needs.placement-plan.outputs.base }}
-      artifact-suffix: "-base-placement"
+      artifact-suffix: "-base-placement-${{ matrix.shard }}"
       speed-of-light: false
       perf-run-types: L1_TO_L1
       tests-yaml: ./tests/pipeline_reorg/llk_perf_placement_tests.yaml
       node-list-artifact: placement-nodes-${{ matrix.arch }}
+      node-list-shard: "${{ matrix.shard }}/"
       compile-quasar: false
       upload-to-warehouse: false
       pipeline: pr
@@ -403,12 +430,12 @@ jobs:
           path: nodes
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: perf-data-${{ matrix.arch }}-*-head-placement
+          pattern: perf-data-${{ matrix.arch }}-*-head-placement-*
           merge-multiple: true
           path: current
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: perf-data-${{ matrix.arch }}-*-base-placement
+          pattern: perf-data-${{ matrix.arch }}-*-base-placement-*
           merge-multiple: true
           path: baseline
       - name: Decide
