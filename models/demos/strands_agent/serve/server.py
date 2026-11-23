@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""System One HTTP server for the strands decider: one device worker process, cross-request batching.
+"""System One HTTP server for the strands decider: cross-request batching, one device worker process per chip.
+
+With --chips the server is data parallel: every worker pins one chip and takes batches from one shared task queue,
+so an idle chip takes the next batch. The first worker starts alone and fills the weight and kernel caches; the
+others start when it is ready.
 
 Run from the repo root: python -m models.demos.strands_agent.serve.server [flags]"""
 
@@ -10,6 +14,7 @@ import asyncio
 import gc
 import logging
 import multiprocessing as mp
+import os
 import threading
 import time
 from collections import deque
@@ -37,9 +42,27 @@ DEFAULT_CONFIG = {
     "keep_alive_s": 30.0,
     "model_name": "strands-decider-2B-qwen3.5-v1-2610",
     "verbose": False,
+    "chips": None,  # None: one worker on the devices the process sees; else one worker per chip
+    "tokenizer_threads": None,  # None: 4 for one worker, 16 for several
 }
 SAMPLES = 100_000
 TOKENIZER_THREADS = 4
+
+
+def resolve_chips(spec):
+    """--chips: "" or None (one worker, no pinning), "all" (every /dev/tenstorrent/N, as device indices), or a comma
+    list of device indices or PCI addresses."""
+    if not spec:
+        return None
+    if spec == "all":
+        n = len([d for d in os.listdir("/dev/tenstorrent") if d.isdigit()])
+        if n == 0:
+            raise ValueError("--chips all: no /dev/tenstorrent/N devices")
+        return [str(i) for i in range(n)]
+    chips = [c.strip() for c in spec.split(",") if c.strip()]
+    if len(set(chips)) != len(chips):
+        raise ValueError(f"--chips lists a chip twice: {spec}")
+    return chips
 
 
 def percentiles(values):
@@ -109,12 +132,16 @@ class Runtime:
 
     def __init__(self, cfg):
         self.cfg = cfg
-        self.state = "starting"  # worker: starting | ok | failed
+        self.chips = cfg["chips"] or [None]
+        self.state = "starting"  # workers: starting (none ready) | ok (at least one ready) | failed
         self.tok_state = "starting"  # tokenizer and config: starting | ok | failed
-        self.encoder = Encoder()
+        threads = cfg["tokenizer_threads"] or (TOKENIZER_THREADS if len(self.chips) == 1 else 16)
+        self.encoder = Encoder(threads)
         self.info = {}
         self.error = None
-        self.proc = self.task_q = self.result_q = self.loop = self.collector = None
+        self.procs = [None] * len(self.chips)
+        self.ready = [False] * len(self.chips)
+        self.task_q = self.result_q = self.loop = self.collector = None
         self.pending = {}
         self.next_id = 0
         self.reset_metrics()
@@ -147,17 +174,24 @@ class Runtime:
 
     def start(self, loop):
         self.loop = loop
-        ctx = mp.get_context("spawn")
-        self.task_q, self.result_q = ctx.Queue(), ctx.Queue()
-        self.proc = ctx.Process(
-            target=worker_main, args=(self.cfg, self.task_q, self.result_q), name="decider-worker", daemon=True
-        )
-        self.proc.start()
+        self.ctx = mp.get_context("spawn")
+        self.task_q, self.result_q = self.ctx.Queue(), self.ctx.Queue()
+        self._spawn(0)  # the others start when worker 0 is ready (it fills the weight and kernel caches)
         self.collector = threading.Thread(
             target=self._collect, args=(self.result_q,), name="result-collector", daemon=True
         )
         self.collector.start()
         self.watchdog = loop.create_task(self._watch())
+
+    def _spawn(self, worker):
+        proc = self.ctx.Process(
+            target=worker_main,
+            args=(self.cfg, self.task_q, self.result_q, worker, self.chips[worker]),
+            name=f"decider-worker-{worker}",
+            daemon=True,
+        )
+        proc.start()
+        self.procs[worker] = proc
 
     def _collect(self, result_q):
         while True:
@@ -173,11 +207,17 @@ class Runtime:
             if fut is not None and not fut.done():
                 fut.set_result(msg)
         elif kind == "ready":
-            self.info = msg
-            self.state = "ok"
-            logger.info(f"model ready after {msg['warmup_s']} s")
+            worker = msg["worker"]
+            self.ready[worker] = True
+            self.info = self.info or msg
+            if self.state != "failed":
+                self.state = "ok"
+            logger.info(f"worker {worker} ready after {msg['warmup_s']} s ({sum(self.ready)}/{len(self.ready)})")
+            if worker == 0 and self.state != "failed":
+                for w in range(1, len(self.chips)):
+                    self._spawn(w)
         elif kind == "failed":
-            self._fail(f"model failed: {msg['error']}")
+            self._fail(f"model failed on worker {msg['worker']}: {msg['error']}")
 
     def _fail(self, error):
         self.state, self.error = "failed", error
@@ -190,22 +230,28 @@ class Runtime:
     async def _watch(self):
         while True:
             await asyncio.sleep(1.0)
-            if self.proc is not None and not self.proc.is_alive() and self.state != "failed":
-                self._fail(f"model failed: worker process exited with code {self.proc.exitcode}")
+            for worker, proc in enumerate(self.procs):
+                if proc is not None and not proc.is_alive() and self.state != "failed":
+                    self._fail(f"model failed: worker {worker} process exited with code {proc.exitcode}")
 
     def stop(self):
         self.encoder.shutdown()
-        if self.proc is None:
+        procs = [proc for proc in self.procs if proc is not None]
+        if not procs:
             return
         self.watchdog.cancel()
-        self.task_q.put(None)
-        self.proc.join(30)
-        if self.proc.is_alive():
-            self.proc.terminate()  # a hung device close would block the exit forever
-            self.proc.join(3)
-        if self.proc.is_alive():
-            self.proc.kill()
-            self.proc.join()
+        for _ in procs:
+            self.task_q.put(None)  # one stop sentinel per worker
+        deadline = time.monotonic() + 30
+        for proc in procs:
+            proc.join(max(0.1, deadline - time.monotonic()))
+        for proc in procs:
+            if proc.is_alive():
+                proc.terminate()  # a hung device close would block the exit forever
+                proc.join(3)
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
         self.result_q.put(None)
         self.collector.join(5)  # let it read the sentinel before the queue is closed
         self.task_q.cancel_join_thread()
@@ -318,7 +364,10 @@ def create_app(config=None, start_worker=True) -> FastAPI:
             "model": cfg["model_name"],
             "max_length": rt.info["max_length"],
             "max_seq_len": rt.info["max_seq_len"],
-            "device": "blackhole 1x1",
+            "device": f"blackhole 1x1 x {len(rt.chips)}",
+            "workers": len(rt.chips),
+            "workers_ready": sum(rt.ready),
+            "chips": rt.chips if rt.cfg["chips"] else None,
             "trace": cfg["trace"],
             "traced_buckets_only": cfg["traced_buckets_only"],
             "batch_wait_ms": cfg["batch_wait_ms"],
@@ -338,7 +387,7 @@ def create_app(config=None, start_worker=True) -> FastAPI:
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="System One server for the strands decider on one Blackhole chip.")
+    p = argparse.ArgumentParser(description="System One server for the strands decider on Blackhole chips.")
     p.add_argument("--host", default=DEFAULT_CONFIG["host"])
     p.add_argument("--port", type=int, default=DEFAULT_CONFIG["port"])
     p.add_argument("--max-seq-len", type=int, default=DEFAULT_CONFIG["max_seq_len"])
@@ -350,6 +399,15 @@ def parse_args(argv=None):
     p.add_argument("--model-name", default=DEFAULT_CONFIG["model_name"])
     p.add_argument("--keep-alive-s", type=float, default=DEFAULT_CONFIG["keep_alive_s"], help="HTTP keep-alive timeout")
     p.add_argument("--verbose", action="store_true", help="log one line per batch")
+    p.add_argument(
+        "--chips",
+        default=os.environ.get("DECIDER_CHIPS", ""),
+        help="data parallel: 'all' or a comma list of device indices / PCI addresses, one worker each "
+        "(default: one worker on the devices the process sees; env DECIDER_CHIPS)",
+    )
+    p.add_argument(
+        "--tokenizer-threads", type=int, default=None, help="tokenizer pool size (default 4, 16 with --chips)"
+    )
     args = p.parse_args(argv)
     if args.warmup_eager and not args.eager_buckets:
         p.error("--warmup-eager needs --eager-buckets")
@@ -372,6 +430,8 @@ def main(argv=None):
         "keep_alive_s": args.keep_alive_s,
         "model_name": args.model_name,
         "verbose": args.verbose,
+        "chips": resolve_chips(args.chips),
+        "tokenizer_threads": args.tokenizer_threads,
     }
     uvicorn.run(
         create_app(cfg),

@@ -41,6 +41,18 @@ One device worker process batches the questions of concurrent requests into shar
    ```
 7. Stop the server with Ctrl+C. It closes the device before it exits.
 
+## Data parallel: one worker per chip
+`--chips all` runs one device worker per chip (`/dev/tenstorrent/N`), for example 32 on a Blackhole Galaxy;
+`--chips 0,1,2,3` (device indices or PCI addresses) picks chips. Every worker pins its chip with
+`TT_VISIBLE_DEVICES`, opens it as a single P150, and takes batches from one shared queue, so an idle chip takes the
+next batch. The first worker starts alone and fills `TT_CACHE_PATH` and the kernel cache; the others start when it is
+ready. `/health` reports `workers` and `workers_ready`; requests are served once one worker is ready.
+```bash
+python -m models.demos.strands_agent.serve.server --host 0.0.0.0 --port 8000 --chips all
+```
+Do not set `TT_VISIBLE_DEVICES` or `TT_MESH_GRAPH_DESC_PATH` for the server process with `--chips`; each worker sets
+its own.
+
 ## Benchmark
 `client.py` checks the answers and measures latency and throughput. The server does not need it; any HTTP client works.
 ```bash

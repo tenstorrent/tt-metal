@@ -1,13 +1,27 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device process of the server: opens the chip, warms every shape, then answers batches."""
+"""Device process of the server: opens its chip, warms every shape, then answers batches.
 
+The server runs one of these per chip; all of them take batches from one shared task queue."""
+
+import os
 import signal
 import time
 import traceback
 
 from models.demos.strands_agent.serve.batcher import collect_batch, run_batch
+
+P150_MESH_GRAPH_DESC = "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto"
+
+
+def pin_chip(chip):
+    """Restrict this process to one chip (PCI address or device index) before ttnn is imported, and open it as a
+    single P150: on a Galaxy or a QB2 the default mesh descriptor describes the whole system."""
+    os.environ["TT_VISIBLE_DEVICES"] = str(chip)
+    if "TT_MESH_GRAPH_DESC_PATH" not in os.environ and os.environ.get("TT_METAL_HOME"):
+        os.environ["TT_MESH_GRAPH_DESC_PATH"] = os.path.join(os.environ["TT_METAL_HOME"], P150_MESH_GRAPH_DESC)
+    os.environ.setdefault("TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES", "0")
 
 
 def _open_mesh(device_params):
@@ -67,14 +81,18 @@ def warmup(decider, cfg, log):
         log(f"warmup traced pass {n_pass + 1}: {len(shapes)} shapes, {time.perf_counter() - t:.1f} s")
 
 
-def worker_main(cfg, task_q, result_q):
-    """Entry of the spawned device process; cfg keys: max_seq_len, trace, traced_buckets_only, warmup_eager,
-    batch_wait_ms, max_batch_questions, verbose."""
+def worker_main(cfg, task_q, result_q, worker=0, chip=None):
+    """Entry of a spawned device process; cfg keys: max_seq_len, trace, traced_buckets_only, warmup_eager,
+    batch_wait_ms, max_batch_questions, verbose. chip: PCI address or device index to pin (None: the devices this
+    process sees). Messages carry "worker"."""
     # The server owns shutdown (Ctrl-C reaches the whole process group).
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    if chip is not None:
+        pin_chip(chip)
+    tag = f"worker {worker}" if chip is None else f"worker {worker} {chip}"
 
     def log(msg):
-        print(f"[worker] {msg}", flush=True)
+        print(f"[{tag}] {msg}", flush=True)
 
     mesh = decider = None
     try:
@@ -94,6 +112,7 @@ def worker_main(cfg, task_q, result_q):
         result_q.put(
             {
                 "type": "ready",
+                "worker": worker,
                 "warmup_s": round(warmup_s, 1),
                 "trace_region_use": {f"{k}": v for k, v in getattr(decider, "trace_region_use", {}).items()},
                 "max_length": max_length,
@@ -114,9 +133,9 @@ def worker_main(cfg, task_q, result_q):
             items, stop = collect_batch(get, cfg["batch_wait_ms"] / 1000, cfg["max_batch_questions"])
             if items:
                 batch_id += 1
-                results = run_batch(decider, items, batch_id)
+                results = run_batch(decider, items, f"{worker}:{batch_id}")
                 for r in results:
-                    result_q.put({"type": "result", **r})
+                    result_q.put({"type": "result", "worker": worker, **r})
                 if cfg["verbose"]:
                     ok = [r for r in results if r["ok"]]
                     timing = ok[0]["timing"] if ok else {}
@@ -124,7 +143,7 @@ def worker_main(cfg, task_q, result_q):
             if stop:
                 break
     except BaseException:
-        result_q.put({"type": "failed", "error": traceback.format_exc()})
+        result_q.put({"type": "failed", "worker": worker, "error": traceback.format_exc()})
     finally:
         try:
             if decider is not None:
