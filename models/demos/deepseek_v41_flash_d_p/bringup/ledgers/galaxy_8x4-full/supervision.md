@@ -1363,3 +1363,10 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   (single, 4x2k, 4x1792s, 51200 .. 1024000), cold no-rebuild. Bit-identical + device win -> overseer accepts.
 - 13:42 launched orchestrator resume --until PB.MM256 (tmux orch_pb).
 - 13:45 tasks.yaml is 502 KB (> the 500 KB hook): PB.MM256's entry stays UNCOMMITTED until the run stops (an edit now would be charged to the agent); then trim old PB briefs to git-show pointers (as on 2026-11-20) and commit.
+- 13:58 OWNER: re-sweep the matmuls on BOTH branches (5k and 8k). Paused, aborted PB.MM256 attempt 1 (~15 min, nothing in
+  the tree). tasks.yaml trimmed 513 -> 463 KB (details / prior_work of older PASSED PB tasks -> pointers to
+  224f9a04eb7; validate: valid). PB.MM256 widened: inventory EVERY matmul of layers 0-20 at 8192 (attention, MoE /
+  shared expert, dense, engram, mhc, compressor, indexer, the fork matmuls) with device us a chunk, sweep largest first,
+  bit-identical winners only, behind DS41_MM_TUNED256; same gate. QUEUED for model_bringup after it: MB.9 (the same at
+  5120, switch DS41_MM_TUNED160, wq_b 197.8 -> 185.0 first, fix DS41-306), task text in
+  /data/dnijemcevic/bringup/handoff_20261123/MB9_task.yaml (appended at the branch switch). Resumed --until PB.MM256.
