@@ -767,7 +767,16 @@ _INT_UNARY_OPS = [
     # integer half of the kernel, including its 2's-complement to sign+magnitude threshold
     # conversion, has no coverage at all.
     MathOperation.ReluMin,
+    MathOperation.UnaryBitwiseAnd,
+    MathOperation.UnaryBitwiseOr,
+    MathOperation.UnaryBitwiseXor,
 ]
+
+_UNARY_BITWISE_OPS = (
+    MathOperation.UnaryBitwiseAnd,
+    MathOperation.UnaryBitwiseOr,
+    MathOperation.UnaryBitwiseXor,
+)
 
 # Ops whose kernel interprets DST as unsigned; run them under UInt32.
 _UINT32_INT_UNARY_OPS = {
@@ -782,6 +791,11 @@ def _int_unary_stimuli_spec(mathop):
     # would diverge from the two's-complement golden).
     if mathop in (MathOperation.LeftShift, MathOperation.RightShift):
         return StimuliSpec.uniform(low=0.0, high=1_000_000.0)
+
+    # Bitwise ops against UNARY_BITWISE_SCALAR: non-negative inputs across the int32 range set
+    # every bit below the sign bit and keep the result non-negative (sign-magnitude Dst).
+    if mathop in _UNARY_BITWISE_OPS:
+        return StimuliSpec.uniform(low=0.0, high=2_147_483_000.0)
 
     # Unary max/min compare against a fixed scalar, and a uniform draw reaches that scalar
     # with probability ~0, so the tie would never be driven. Take the exact value from

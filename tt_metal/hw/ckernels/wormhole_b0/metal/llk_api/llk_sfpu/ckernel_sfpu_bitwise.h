@@ -31,7 +31,7 @@ inline Vec compute_unary_bitwise(Vec v, Vec scalar) {
 }
 
 // The store in calculate_sfpu_unary_bitwise advances the destination by one SFPU row
-// (dest.incr = 2, what dst_reg++ does) through ADDR_MOD_6, so each row saves a TTINCRWC.
+// (dest.incr = 2, what dst_reg++ does) through ADDR_MOD_6.
 // The unary SFPU init runs this per-op init rather than the ADDR_MOD_6 whitelist in
 // eltwise_unary_sfpu_configure_addrmod, so the address mod is programmed here (as square_init
 // and unary_max_min_init do).
@@ -73,9 +73,9 @@ inline void calculate_sfpu_unary_bitwise(const uint value) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vUInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>();
-            // ADDR_MOD_6 (bitwise_init) advances the destination on the store, in place of a
-            // separate dst_reg++. Wormhole's SFPU load and store pick ADDR_MOD_4..7 with a
-            // two-bit field, so ADDR_MOD_6 is selected as 2, as in square and unary max/min.
+            // ADDR_MOD_6 (bitwise_init) advances the destination on the store. Wormhole's SFPU
+            // load and store pick ADDR_MOD_4..7 with a two-bit field, so ADDR_MOD_6 is selected
+            // as 2, as in square and unary max/min.
             if constexpr (BITWISE_STORE_INCR) {
                 sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>(ADDR_MOD_2) = compute_unary_bitwise<BITWISE_OP>(v, scalar);
             } else {
