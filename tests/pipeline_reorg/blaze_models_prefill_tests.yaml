@@ -2275,11 +2275,7 @@
     MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
     HOSTS=$(awk 'NF && $1 !~ /^#/ {printf "%s:1,", $1}' "${TTRUN_DIR:-/etc/ttop}/hostfile" | sed 's/,$//')
     "${MPIRUN}" -np 4 --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
-      bash -lc 'timeout 600 tt-smi -glx_reset 2>&1 | tail -2; \
-        for i in $(seq 36); do n=$(ls /dev/tenstorrent 2>/dev/null | grep -c "^[0-9]"); \
-          if [ "$n" -ge 32 ] && timeout 60 tt-smi -ls > /dev/null 2>&1; then echo "$(hostname): $n chips ready after $((i * 5))s"; exit 0; fi; sleep 5; done; \
-        echo "$(hostname): chips not ready 180s after reset"; exit 1' || echo "glx_reset/readiness on some host failed (continuing)"
-    sleep 20
+      bash -lc 'timeout 600 tt-smi -glx_reset 2>&1 | tail -2' || echo "glx_reset on some host failed (continuing)"
     echo "===== [runner] (GLM-5.3-744B) 8x[4,4] RING,RING KV accuracy 1M tail@2.5k, SC4 ====="
     export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr
