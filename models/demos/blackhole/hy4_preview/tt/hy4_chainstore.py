@@ -18,6 +18,7 @@ Any backend exception = cold recompute (entry dropped, destination chain cleared
 """
 from __future__ import annotations
 
+import math
 import os
 import time
 
@@ -149,6 +150,10 @@ class ChainStore:
         self.min_spill, self.host_cap, self.look = min_spill, host_cap_tokens, lookahead_tokens
         self.live_head, self.min_gain = live_headroom_tokens, min_gain
         self.clock, self.log = clock, log
+        self.risk_p0 = float(
+            os.environ.get("HY4_CAP_RISK_P0", "0.3")
+        )  # [E] invalidation risk of a tail with no slack; 0 = place by copy cost only
+        self.risk_tokens = float(os.environ.get("HY4_CAP_RISK_TOKENS", "200000"))
         self.live_fn = live_fn or (lambda r: False)
         self.entries = {}  # eid -> Entry
         self._eid = 0
@@ -280,8 +285,16 @@ class ChainStore:
                 p0 = self._alloc(r, n, fl)
                 if p0 is None or (r == src_row and p0 < n):  # source pages [0, n) and destination must be disjoint
                     continue
+                # risk of being invalidated before the next hit: a row whose floor is close to the entry (a long request or a growing decode would need the pages) loses the chain = a recompute
+                slack = max(0, p0 - fl) * PAGE
+                risk = self.risk_p0 * math.exp(-slack / self.risk_tokens) * (1.5 if self.live_fn(r) else 1.0)
                 out.append(
-                    (self.costs.move_s("tail", tokens, r == src_row) + (0.5 if self.live_fn(r) else 0.0), "tail", r, p0)
+                    (
+                        self.costs.move_s("tail", tokens, r == src_row) + risk * self.costs.recompute_s(tokens),
+                        "tail",
+                        r,
+                        p0,
+                    )
                 )
         if self.host_on() and tokens <= self.host_cap:
             out.append((self.costs.move_s("host", tokens, False), "host", None, None))
@@ -336,7 +349,9 @@ class ChainStore:
             self.stats["skipped_dup"] += 1
             return ex
         rec = self.costs.recompute_s(len(chain))
-        ok = lambda: [c for c in self._candidates(src_row, n, new_extent_src, len(chain)) if 2 * c[0] < rec]
+        ok = lambda: [
+            c for c in self._candidates(src_row, n, new_extent_src, len(chain)) if 2 * c[0] < rec * (1 + self.risk_p0)
+        ]
         cands = ok()
         while not cands and (self._evict_one(len(chain), "tail") or self._evict_one(len(chain), "host")):
             cands = ok()

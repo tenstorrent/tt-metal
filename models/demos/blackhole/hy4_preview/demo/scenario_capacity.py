@@ -29,6 +29,12 @@ def _need(ctx, s, flag, attr):
     if _cap(eng) is None or not getattr(eng, attr, False):
         ctx.gate(s, f"{flag}_enabled", None, f"{flag}=1 not set / capacity tiers not built")
         return False
+    # the scenarios test ONE tier: the other is switched off live (HY4_HOSTTIER_FILE / HY4_TAILPARK_FILE) so the chain cannot go to the other tier
+    if flag == "HY4_TAILPARK":
+        _switch_file(ctx, "HY4_HOSTTIER_FILE", False)
+        _switch_file(ctx, "HY4_TAILPARK_FILE", True)
+    else:
+        _switch_file(ctx, "HY4_HOSTTIER_FILE", True)
     return True
 
 
@@ -170,8 +176,6 @@ def tail_invalidate(ctx, n_long=16384, n_short=2048, rounds=NTOK, seed=12):
         return ctx.gate(
             s, "tail_reachable", None, f"tail at {reach} tokens is above max_seq_len - 4096 (use a small MAXLEN boot)"
         )
-    if need != 0:
-        return ctx.gate(s, "tail_on_row0", None, f"entry on row {need}: invalidation scenario targets row 0")
     big = S.prompt(seed + 3, reach)
     i0 = _stat(eng, "invalidated")
     S.prefill(ctx, {0: big})

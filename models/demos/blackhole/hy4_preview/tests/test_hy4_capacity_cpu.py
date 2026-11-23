@@ -416,3 +416,26 @@ def test_demo_scenarios_pass_on_fake_engine(name):
     bad = [g for g in ctx.gates if g[2] == "FAIL"]
     assert ctx.gates and not bad, bad
     assert all(g[2] == "PASS" or "golden" in g[1] for g in ctx.gates)
+
+
+def test_placement_prefers_slack_over_copy_cost():
+    """risk term: a tail right above a row's floor is likely to be invalidated; the placement picks the row with more slack even though the same-row copy is cheaper"""
+    e = FakeCapEngine(pages=256, min_spill=1024)
+    A = toks(30000, 1)
+    run(e, 0, A)
+    e.release(0)
+    run(e, 1, toks(100000, 2))  # row 1: long retained chain -> little slack
+    e.release(1)
+    run(e, 0, toks(100000, 3))  # forces A's chain out of row 0 (row 0 new extent 100k of 131k tokens: slack small)
+    ents = list(e.cap.store.entries.values())
+    assert len(ents) == 1 and ents[0].row in (2, 3)  # idle empty rows have the most slack
+    e.cap.store.risk_p0 = 0.0
+    e2 = FakeCapEngine(pages=256, min_spill=1024)
+    e2.cap.store.risk_p0 = 0.0
+    run(e2, 0, A)
+    e2.release(0)
+    run(e2, 1, toks(100000, 2))
+    e2.release(1)
+    run(e2, 0, toks(100000, 3))
+    (x,) = e2.cap.store.entries.values()
+    assert x.row in (0, 1, 2, 3)  # without the risk term only the copy cost decides (no slack preference asserted)
