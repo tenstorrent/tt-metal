@@ -58,6 +58,22 @@ from qwen36_resident.model import (
 KDIR = f"{PKG_DIR}/prefill/kernels/"
 # the decode pools' tile bytes, K (bf8) and V (bf8, or bfp4 with S0's RESIDENT_KV_V_BFP4): the handoff copies raw pages
 KV_TILE_BYTES = (TILE_BYTES[ttnn.bfloat8_b], TILE_BYTES[V_DT])
+
+
+def rtn_bfp4(v):
+    """v [..., C, HD] bf16 (tile layout) rounded to nearest on the bfp4 grid it will be packed to: one exponent per 16
+    consecutive elements of a row (the block max's), 3 magnitude bits, the block max's exponent kept (no carry past 7).
+    The device's bfp4 packer truncates toward zero (relative error ~0.20 vs ~0.11 rounded, and a bias toward zero: S0's
+    corpus NLL +0.47% vs +0.13% at 8K, results/20261123-s0-v4-acc); values already on the grid pack exactly"""
+    sh = list(v.shape)
+    x = ttnn.typecast(v, ttnn.float32)
+    g = ttnn.reshape(x, sh[:-2] + [sh[-2] * sh[-1] // 16, 16])
+    a = ttnn.abs(g)
+    step = ttnn.exp2(ttnn.subtract(ttnn.floor(ttnn.log2(ttnn.maximum(ttnn.max(a, dim=-1, keepdim=True), 1e-30))), 2.0))
+    q = ttnn.multiply(ttnn.multiply(ttnn.clamp(ttnn.round(ttnn.divide(a, step)), 0.0, 7.0), step), ttnn.sign(g))
+    return ttnn.typecast(ttnn.reshape(q, sh), ttnn.bfloat16)
+
+
 # 1: reset() uploads host zeros (~65 MB / chip) instead of zero-filling on device (A/B)
 HOST_ZERO = os.environ.get("RESIDENT_PP_HOST_ZERO", "0") == "1"
 QD, VD = NK * DK, NV * DV  # 2048, 6144
@@ -928,6 +944,8 @@ class PPPrefill:
         q = self._qkrope(q, w["wq"])
         k = self._qkrope(k, w["wk"])
         ttnn.experimental.paged_fill_cache(self.K[j], ttnn.typecast(k, ttnn.bfloat8_b), self.fill_pt, batch_idx=0)
+        if V_DT == ttnn.bfloat4_b:  # (S0: rounded to nearest first, the packer truncates)
+            v = rtn_bfp4(v)
         ttnn.experimental.paged_fill_cache(self.V[j], ttnn.typecast(v, V_DT), self.fill_pt, batch_idx=0)
         o = ttnn.transformer.chunked_scaled_dot_product_attention(
             q,
