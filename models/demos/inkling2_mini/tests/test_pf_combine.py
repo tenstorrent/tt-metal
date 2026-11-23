@@ -54,6 +54,9 @@ def test_pf_combine(device, t):
     print(
         f"PF_COMBINE t={t} equal={torch.equal(a, b)} off_exact ops={bad_ops} fused={bad_fused} max_rel_diff={rel:.3g}"
     )
+    narrow = PfCombine(dev, cw=8)  # same sums, other units: bit-equal
+    assert torch.equal(b, ttnn.to_torch(narrow(y, back, wk)).float())
     if t == 8192:
-        print(f"PF_COMBINE_MS t={t} ops {timed(dev, ref):.2f} fused {timed(dev, lambda: mod(y, back, wk)):.2f}")
+        print(f"PF_COMBINE_MS t={t} ops {timed(dev, ref):.2f} fused {timed(dev, lambda: mod(y, back, wk)):.2f}"
+              f" cw8 {timed(dev, lambda: narrow(y, back, wk)):.2f}")  # fmt: skip
     assert bad_fused <= 1.05 * bad_ops + 16 and rel < 2**-6, (bad_ops, bad_fused, rel)
