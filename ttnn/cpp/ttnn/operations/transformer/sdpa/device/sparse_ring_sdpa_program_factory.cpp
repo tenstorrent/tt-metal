@@ -1922,6 +1922,11 @@ tt::tt_metal::WorkloadDescriptor SparseRingSDPAProgramFactory::create_workload_d
                 std::make_shared<Tensor>(create_device_tensor(tensor_args.block_mask.tensor_spec(), mesh));
             balance_res->export_out =
                 std::make_shared<Tensor>(create_device_tensor(output_tensors.at(0).tensor_spec(), mesh));
+            log_debug(
+                tt::LogOp,
+                "SparseRingSDPA: cross-device balancing buffers, {} B of DRAM per device for this program",
+                balance_res->import_q->buffer()->size() + balance_res->import_mask->buffer()->size() +
+                    balance_res->export_out->buffer()->size());
             const CoreRangeSet balance_core_set(CoreRange(balancing.core));
             const auto make_sem = [&] {
                 return ttnn::global_semaphore::create_global_semaphore(mesh, balance_core_set, 0, BufferType::L1);
