@@ -17,7 +17,7 @@ This TG variant is a scaled version tailored for Tenstorrent Galaxy hardware.
 ## How to Run
 - Use the following command to run the model:
 ```
-pytest --disable-warnings models/demos/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
+pytest --disable-warnings models/demos/wormhole/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
 ```
 
 ### Performant Model with Trace+2CQ

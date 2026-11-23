@@ -358,7 +358,7 @@ for the live version):
       http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
     export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "<your selector>"
+    pytest --timeout 600 models/ttt_compat/demo/simple_text_demo.py -k "<your selector>"
   model: llama3.1-8b-dp
   skus:
     bh_p300:

@@ -97,7 +97,7 @@ pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evalua
 ```
 - Semantic Textual Similarity task evaluation:
 ```
-pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evaluation.py::test_bge_sts_evaluation_dp
+pytest --disable-warnings models/demos/wormhole/bge_large_en/demo/dataset_evaluation.py::test_bge_sts_evaluation
 ```
 
 ##  Details
