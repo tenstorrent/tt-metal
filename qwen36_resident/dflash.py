@@ -302,17 +302,14 @@ class ResidentDFlash:
         ttnn.deallocate(fr)
         return dev
 
-    def _fill_context(self, n_tokens, host=False, phys=0, offset=0, s0=None, dev=None):
+    def _fill_context(self, n_tokens, host=False, phys=0, offset=0):
         """the drafter's context (its window) from the last prefill's taps of positions < n_tokens, one fill of
-        fill_rows rows from s0 = the window's first block (or the s0 given: a part of the window). On device: each tap's
-        rows masked to the chip that holds them, one reduce-scatter -> the taps dim-fractured as the drafter reads
-        them. host: through the host (read_taps; the reference). dev: such taps given (a prefix-cache entry's)"""
-        s0 = max(0, n_tokens - self.window) // 64 * 64 if s0 is None else s0
+        fill_rows rows from s0 = the window's first block. On device: each tap's rows masked to the chip that holds
+        them, one reduce-scatter -> the taps dim-fractured as the drafter reads them. host: through the host
+        (read_taps; the reference)"""
+        s0 = max(0, n_tokens - self.window) // 64 * 64
         rows, nt = self.fill_rows, len(self.tap_masks)
-        own = dev is None
-        if dev is not None:
-            pass
-        elif host:
+        if host:
             taps, _ = self.pp.read_taps(n_tokens, self.window)
             full = torch.zeros(nt, rows, H)
             full[:, : taps.shape[1]] = taps.float()
@@ -322,9 +319,8 @@ class ResidentDFlash:
         # (phys: the drafter slot, multi-user; offset: the last prefill's position 0 is the user's position offset, a
         # re-prefill of a sequence's tail as a fresh prompt: DB3 phase 2's drafter refill)
         self.drafter.fill_context(dev, s0 + offset, phys=phys, valid_len=n_tokens - s0)
-        if own:
-            for t in dev:
-                ttnn.deallocate(t)
+        for t in dev:
+            ttnn.deallocate(t)
         if FILL_SYNC:
             # every chip done with the fill before the verify step is enqueued: a resident step's hubs push their first
             # round into the peers' hub slots (CB 0, mlp_hub.cpp) as soon as they start, so a chip still running the
@@ -601,8 +597,8 @@ class ResidentDFlashRows:
         self.m.capture_trace()
         self.drafter.arm_traces()
 
-    def _fill_context(self, n_tokens, phys=0, offset=0, s0=None, dev=None):
-        ResidentDFlash._fill_context(self, n_tokens, phys=phys, offset=offset, s0=s0, dev=dev)
+    def _fill_context(self, n_tokens, phys=0, offset=0):
+        ResidentDFlash._fill_context(self, n_tokens, phys=phys, offset=offset)
 
     def _context_taps(self, s0, n_tokens):
         return ResidentDFlash._context_taps(self, s0, n_tokens)

@@ -13,11 +13,11 @@ served by the rows adapter (device greedy, the plain build). A switch to PLAIN m
 (state + option-B drafter refill) and drafts for them at once.
 
 Every live request owns a plain row (the rows adapter's SlotMap; its KV pages are its block table in the shared pool);
-a spec user index is extra (spec_of[plain row]). Prefill: in SPEC mode while the spec build has room and the live
-count stays <= 8, through SpecRowsSession.start_many; otherwise through the rows adapter (the plain build). A verify
-call carrying rows of plain-geometry users (no drafts: column 0 only) runs a plain launch for them as well (mixed
-steps, right after an arrival that ends SPEC). A token history per request (prompt + every committed token) feeds the
-drafter refill.
+a spec user index is extra (spec_of[plain row]). Prefill: every prompt through the rows adapter into its plain row, as
+the batch profile prefills (the TT chunk core's chunks and gangs, batched PP passes, the host prefix cache). A user a
+decode call showed greedy is promoted into the spec build at the next propose while in SPEC mode (state move +
+option-B drafter refill from its token history: prompt + every committed token), and drafted for at once. A verify
+call carrying rows of plain-build users (no drafts: column 0 only) runs a plain launch for them as well.
 
 Sampling (phase 2b): only greedy requests speculate. A request is non-speculable when a decode call's sampling_params
 show temperature != 0 or a penalty (the runner's own test): from then on the server is in PLAIN while it is live (no
@@ -35,7 +35,7 @@ from loguru import logger
 
 from qwen36_resident import weights as Q
 from qwen36_resident.model import TOP_K
-from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, expand_blocks
+from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, expand_blocks, resident_capabilities
 
 SPEC_USERS = 8
 SPEC_K = 3
@@ -46,33 +46,11 @@ PLAIN_ROWS = 32
 TIMING = os.environ.get("RESIDENT_ADAPTIVE_TIMING", "0") == "1"
 # (0: synchronous serving, the first served version)
 ASYNC = os.environ.get("RESIDENT_ADAPTIVE_ASYNC", "1") == "1"
-# a spec-destined prompt of at least this many tokens goes through the host-tier prefix cache (RESIDENT_PREFIX_CACHE_GB):
-# prefilled into its plain row (restore + the rest + boundary snapshots), then moved into the spec build (option-B
-# drafter refill, ~0.2-0.4 s): the next turn of a conversation restores instead of prefilling
-SPEC_CACHE_MIN = int(os.environ.get("RESIDENT_ADAPTIVE_SPEC_CACHE_MIN", "4096"))
 
 
 class _PlainRowsEngine(RowsEngine):
     """the rows adapter's engine over the plain build (the PP prefill's batched pass runs with the drafter's tap writes
-    sent to scratch: plain-geometry prompts need no drafter context). A prefix-cache entry also keeps the drafter's
-    context taps of the window before its boundary (snapshot_extra), so a hit moving into the spec build fills the
-    drafter from them and the rest's taps instead of re-prefilling the window"""
-
-    spec = None  # (the spec build, ResidentDFlashRows, set by the class)
-
-    def snapshot_extra(self, H, h):
-        import ttnn
-
-        sp = self.spec
-        s0 = max(0, H - sp.window) // 64 * 64
-        if sp is None or h > s0:  # (the window's taps exist only where this prompt's prefill ran)
-            return None
-        dev = sp._context_taps(s0, H)
-        host = [ttnn.from_device(t) for t in dev]
-        for t in dev:
-            ttnn.deallocate(t)
-        nbytes = len(host) * sp.fill_rows * 5120 * 2
-        return {"dft_taps": host, "dft_s0": s0, "dft_n": H, "bytes": nbytes}
+    sent to scratch: plain-build prompts need no drafter context)"""
 
 
 class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
@@ -88,6 +66,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         "supports_spec_decode": True,
         "spec_requirements": ["device_propose"],
         "output_tokens_per_step": 1,
+        # (the TT chunk core, as the batch profile: aligned exclusive chunks and prefill gangs, see resident_capabilities)
+        **{k: v for k, v in resident_capabilities().items() if k.startswith(("supports_chunked", "tt_prefill"))},
     }
 
     @classmethod
@@ -133,6 +113,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         self.last_acc = {}  # resident slot -> tokens its last spec step committed (its next verify applies them)
         self.mode, self.low_calls = "SPEC", 0
         self.sampled = set()  # resident slots of non-speculable requests (temperature != 0 or a penalty)
+        self.greedy_ok = set()  # resident slots a decode call showed greedy (promotable into the spec build)
         # the plain build's hub-fed inputs do not hold every live row's next token (a move into it, a step served by
         # the spec build): its next ordinary call rebuilds them from the history instead of a steady replay
         self._plain_stale = False
@@ -165,7 +146,6 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         self.engine = _PlainRowsEngine(
             self.ae.plain, self.ae.pp, self.ae.emb, self.vocab, d.vocab_chip, PLAIN_ROWS, CHUNK_UNIT, self.mesh
         )
-        self.engine.spec = self.ae.spec
         return []
 
     def warmup_model_prefill(self, *args, **kwargs):
@@ -195,34 +175,16 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self._plain_stale = True
         self.spec_of.clear()
 
-    def _to_spec_all(self):
+    def _promote(self):
+        """every live plain user a decode call showed greedy into a free spec user (its drafter window refilled from
+        its history: option B)"""
         free = self._free_spec()
         for r in sorted(self.live):
-            if r in self.spec_of:
+            if r in self.spec_of or r not in self.greedy_ok or r in self.sampled or not free:
                 continue
             u = free.pop(0)
             self.ae.move_to_spec(r, u, self.tables[r], self.history[r])
             self.spec_of[r], self.last_acc[r] = u, 1
-
-    def _cache_fill(self, h, n):
-        """the drafter fill of a prefix-cache hit at h (prompt run to n): from the entry's stored taps (positions s0 ..
-        h - 1) and the PP ring's (h .. n - 1), or None when the entry has none / the ring covers the window"""
-        snap = getattr(self.engine, "last_snap", None)
-        sp = self.ae.spec
-        if not h or h <= n - sp.window or not snap or "dft_taps" not in snap or snap.get("dft_n") != h:
-            return None
-
-        def fill(u, n_):
-            import ttnn
-
-            dev = [ttnn.to_device(t, self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in snap["dft_taps"]]
-            sp._fill_context(h, phys=u, s0=snap["dft_s0"], dev=dev)  # (positions s0 .. h - 1)
-            for t in dev:
-                ttnn.deallocate(t)
-            if n_ > h:
-                sp._fill_context(n_, phys=u, s0=h)  # (h .. n - 1: this prefill's run, in the ring)
-
-        return fill
 
     @staticmethod
     def _non_speculable(sp, i):
@@ -251,53 +213,24 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
 
     # ------------------------------------------------------------------ prefill
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, start_pos=None, empty_slots=None, **kwargs):
+        """every prompt through the rows adapter into its plain row, as the batch profile prefills (the TT chunk core's
+        chunks and gangs, batched PP passes, the host prefix cache); a greedy user moves into the spec build at a later
+        propose (_promote), once a decode call has shown its sampling parameters"""
         n = int(len(prompt_lens))
-        if start_pos is not None and any(int(x) > 0 for x in start_pos[:n]):
-            raise RuntimeError("the adaptive profile prefills whole prompts (serve without the TT chunk core)")
-        if empty_slots is None:
-            raise RuntimeError("a stateful multi-user model needs the plugin's empty_slots (destination slots)")
-        live_after = len(self.live) + n
-        if self.mode == "PLAIN" and not self.live:  # (nobody to move: an idle server starts speculating again)
+        if self.mode == "PLAIN" and not self.live:  # (an idle server starts speculating again)
             self.mode, self.low_calls = "SPEC", 0
-        to_spec = self.mode == "SPEC" and live_after <= SPEC_USERS and len(self._free_spec()) >= n
-        out = torch.zeros(n, 1, self.vocab)
-        if to_spec:
-            free, items = self._free_spec(), []
-            pc, cached = getattr(self.engine, "prefix_cache", None), set()
-            for j in range(n):
-                T = int(prompt_lens[j])
-                r = self._start_prompt(int(empty_slots[j]))
-                blocks = expand_blocks(page_table[j].tolist(), self.pages_per_block)
-                self.tables[r] = list(blocks)
-                u = free.pop(0)
-                self.spec_of[r], self.last_acc[r] = u, 1
-                self.ae._set_spec_table(u, blocks)  # (the engine's table list stays the one source)
-                ids = [int(t) for t in tokens[j, :T]]
-                self.history[r] = list(ids)
-                if pc is not None and T - 1 >= SPEC_CACHE_MIN:
-                    self._write_tables()
-                    self.engine.prefill_whole(ids[:-1], r, blocks, self._pp_chunk(T))
-                    # (the PP ran every position of the drafter's window unless a restored prefix covers part of it:
-                    # then the entry's stored taps + the ring's for the rest, or a refill without them)
-                    h = getattr(self.engine, "last_restored", T)
-                    ring_ok = h <= T - 1 - self.ae.spec.window
-                    self.ae.move_to_spec(r, u, blocks, ids, refill=not ring_ok, fill=self._cache_fill(h, T - 1))
-                    cached.add(u)
-                items.append((u, ids, None))
-            for j, lg in enumerate(self.sess.start_many(items, prefilled=cached)):
-                out[j, 0] = lg  # (the runner samples the first token on the host, with the request's parameters)
-                self.live.add(self.slots.res_of[int(empty_slots[j])])
-            self._write_tables()
-        else:
-            if self.mode == "SPEC" and self.spec_of and live_after > SPEC_USERS:
-                logger.info(f"adaptive: {live_after} live users -> PLAIN")
-                self.mode = "PLAIN"
-            res = super().prefill_forward(tokens, page_table, kv_cache, prompt_lens, empty_slots=empty_slots, **kwargs)
-            out = res[0] if isinstance(res, tuple) else res
-            for j in range(n):
+        res = super().prefill_forward(
+            tokens, page_table, kv_cache, prompt_lens, start_pos=start_pos, empty_slots=empty_slots, **kwargs
+        )
+        finals = kwargs.get("prefill_final_mask")
+        for j in range(n):
+            if finals is None or bool(finals[j]):  # (a prompt handed off: its tokens, for the drafter refill)
                 r = self.slots.res_of[int(empty_slots[j])]
                 self.history[r] = [int(t) for t in tokens[j, : int(prompt_lens[j])]]
-        return (out, torch.zeros(n, dtype=torch.long)) if self.mrope else out
+        if len(self.live) > SPEC_USERS and self.mode == "SPEC":
+            logger.info(f"adaptive: {len(self.live)} live users -> PLAIN")
+            self.mode, self.low_calls = "PLAIN", 0
+        return res
 
     # ------------------------------------------------------------------ decode
     def decode_forward(
@@ -331,8 +264,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         sp = kwargs.get("sampling_params")
         if sp is not None:
             for i, r in rows.items():
-                if self._non_speculable(sp, i):
-                    self.sampled.add(r)
+                (self.sampled if self._non_speculable(sp, i) else self.greedy_ok).add(r)
         if (self.sampled & self.live or (sp is None and rows)) and self.mode == "SPEC":
             # (sampling_params absent: the runner fell back to host sampling for this step, which a live row needs —
             # penalties, a top_k past max_device_top_k: treat it as non-speculable traffic)
@@ -495,8 +427,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self.low_calls = self.low_calls + 1 if live <= SPEC_BACK else 0
             if self.low_calls >= PLAIN_HOLD and live > 0:
                 logger.info(f"adaptive: {live} live users for {self.low_calls} steps -> SPEC")
-                self._to_spec_all()  # (state moves + drafter refill; their drafts below)
                 self.mode, self.low_calls = "SPEC", 0
+        if self.mode == "SPEC":
+            self._promote()  # (known-greedy plain users into the spec build: state moves + drafter refill; drafts below)
         ids = torch.zeros(B, K, dtype=torch.int32)
         valid = torch.zeros(B, dtype=torch.int32)
         if self.mode == "SPEC" and self.spec_of:
@@ -523,3 +456,4 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self.history.pop(r, None)
             self.last_acc.pop(r, None)
             self.sampled.discard(r)
+            self.greedy_ok.discard(r)

@@ -211,11 +211,10 @@ class AdaptiveEngine:
             ttnn.deallocate(snap[k])
         self._set_spec_table(u, [0])
 
-    def move_to_spec(self, j, u, table, tokens, refill=True, fill=None):
+    def move_to_spec(self, j, u, table, tokens):
         """plain row j's state into spec user u (ring 0, slot 0), its drafter window refilled from the last `window`
         of tokens[:-1] (the run tokens; tokens[-1] is the next, at position len(tokens) - 1) re-prefilled as a fresh
-        prompt at their absolute positions (option B). refill False: the PP prefill's tap ring already holds those
-        positions' taps (the prompt's own prefill ran them all just now): filled from it, as a start is"""
+        prompt at their absolute positions (option B)"""
         e, s = self.spec, self.sess
         snap = self.plain.snapshot_slot(j)
         self._set_spec_table(u, table)
@@ -223,15 +222,10 @@ class AdaptiveEngine:
         for k in ("state", "hist"):
             ttnn.deallocate(snap[k])
         n = len(tokens) - 1
-        if fill is not None:  # (the caller fills the drafter window: a prefix-cache entry's taps + the ring's)
-            fill(u, n)
-        elif refill:
-            s0 = max(0, n - e.window) // 64 * 64
-            self.pp.reset()
-            self.pp.run(torch.as_tensor(list(tokens[s0:n])))
-            e._fill_context(n - s0, phys=u, offset=s0)
-        else:
-            e._fill_context(n, phys=u)
+        s0 = max(0, n - e.window) // 64 * 64
+        self.pp.reset()
+        self.pp.run(torch.as_tensor(list(tokens[s0:n])))
+        e._fill_context(n - s0, phys=u, offset=s0)
         e.ring[u], e.slot[u], e.prev[u] = 0, 0, None
         s.pos[u], s.started[u], s.committed[u], s.last[u] = n, True, 1, None
 

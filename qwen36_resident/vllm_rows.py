@@ -666,8 +666,6 @@ class RowsEngine:
         return self.pp.pick_chunk(n_tokens)
 
     def prefill_whole(self, ids, r, blocks, chunk):
-        # (last_restored: the prefix this prefill took from the cache, 0 when it ran every position of the prompt)
-        self.last_restored = 0
         if self.prefix_cache is not None:
             return self._prefill_cached(ids, r, blocks, chunk)
         self.pp.reset()
@@ -693,7 +691,6 @@ class RowsEngine:
         ids = [int(t) for t in ids]
         n, ids_t = len(ids), torch.as_tensor(ids)
         h, snap = pc.lookup(ids)
-        self.last_restored, self.last_snap = h, snap  # (the hit's host entry: an owner's extras, see snapshot_extra)
         H = max(pc.boundaries(n), default=0)
         if h and H - h < PREFIX_CACHE_STEP:
             H = 0
@@ -717,8 +714,7 @@ class RowsEngine:
             lap("snapshot: slot -> staging")
             host = model.snapshot_to_host(dev)
             lap("snapshot: device -> host")
-            extra = self.snapshot_extra(H, h) if getattr(self, "snapshot_extra", None) else None
-            pc.insert(ids, H, dict(host, **(extra or {})), _host_bytes(host) + int((extra or {}).get("bytes", 0)))
+            pc.insert(ids, H, host, _host_bytes(host))
             h = H
         if h:
             pp.load_prefix(model, h, slot=r, block_table=blocks)

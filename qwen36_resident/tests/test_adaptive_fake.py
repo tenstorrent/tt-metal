@@ -119,7 +119,7 @@ def make(monkeypatch):
     m.sess = m.ae.sess
     m.ae.plain_tables = m.tables
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
-    m.sampled, m._t, m._plain_stale = set(), {}, False
+    m.sampled, m._t, m._plain_stale, m.greedy_ok = set(), {}, False, set()
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
 
@@ -255,9 +255,10 @@ def test_adaptive_ramp(monkeypatch):
     run = Runner(m)
     prompts = {r: [(r * 17 + i * 5) % V for i in range(30 + 3 * r)] for r in range(10)}
     run.arrive(range(4), [prompts[r] for r in range(4)])
-    assert m.mode == "SPEC" and len(m.spec_of) == 4
+    assert m.mode == "SPEC" and not m.spec_of, "prefilled into the plain build"
     kinds = [run.step() for _ in range(8)]
     run.check()
+    assert len(m.spec_of) == 4, "promoted after their first (narrow) decode showed them greedy"
     assert kinds[0] is False and all(kinds[1:]), "first a narrow step (no drafts yet), then verify steps"
     run.arrive(range(4, 10), [prompts[r] for r in range(4, 10)])
     assert m.mode == "PLAIN"
@@ -275,7 +276,7 @@ def test_adaptive_ramp(monkeypatch):
         run.step()
     run.check()
     kinds_moves = [mv[0] for mv in m.ae.moves]
-    assert kinds_moves.count("to_plain") == 4 and kinds_moves.count("to_spec") == 3, m.ae.moves
+    assert kinds_moves.count("to_plain") == 4 and kinds_moves.count("to_spec") == 4 + 3, m.ae.moves
     assert sum(len(q["tokens"]) - len(q["prompt"]) for q in run.req.values()) > 3 * 20
 
 
@@ -291,7 +292,7 @@ def test_sampled_request_joins_spec(monkeypatch):
         run.step()
     run.arrive([3], [prompts[3]])
     run.req[3]["seed"] = 1234  # (the runner sampled its first token on the host; from here the device samples)
-    assert 3 in m.spec_of.values() or m.spec_of, "it started in the spec build (its temperature unknown at prefill)"
+    assert m.slots.res_of[3] not in m.spec_of, "prefilled into the plain build (its temperature unknown there)"
     for _ in range(6):
         run.step()
     run.check()
