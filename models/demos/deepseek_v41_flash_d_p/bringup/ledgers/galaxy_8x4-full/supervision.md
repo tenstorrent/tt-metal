@@ -721,3 +721,8 @@
 - 17:26 MB.9 A/B (5120, off -> on): device ms every rung -0.3..-1.0 (51200 60.3 -> 59.8, 139264 62.8 -> 62.4, 1M 76.2 ->
   75.2); steady walls within noise (51200 73.7 -> 71.7, 524288 81.1 -> 77.7, 786432 82.9 -> 83.8). Gate would PASS.
   ACCEPTED (owner rule: device win + gate PASS). Resumed for the accept gate.
+- 17:27 MB.9 gate PASS -> 35d79c6720f (units kept from the agent's check 2 on the same code: determinism 0.0, ladder
+  err_final_hidden 0.1362 / 0.2422, tuned hits off 0 / on 90, cold no-rebuild 0). MM_TUNED160 default on. DS41-306
+  corrected by the agent. Both branches re-swept (owner): 8192 PB.MM256 (batching d6bc91514d5) device -1.0..-1.5 ms a chunk,
+  5120 MB.9 (model_bringup 35d79c6720f) -0.3..-1.0 ms. MoE block fork matmuls (~23 ms + ~7 ms at 8192) not sweepable at
+  call time (blocking fixed at load). Nothing pushed. Queue empty; idle until the owner's next direction.

@@ -612,6 +612,19 @@ notes:
     Already runtime: update_padded_kv_cache, ring_indexer_score_dsa start / kv_len, topk_large_indices valid_length, high_bw_all_gather.
     Host per chunk: engram C++ job (by design, stays on the host) + the ids readback and re-upload in natural order (model.py:2151,
     adapter.py:247-260): remove the re-upload (device reorder).'
+- id: OV-58
+  tasks:
+  - MB.9
+  status: closed
+  t: '2026-11-23T16:45:04'
+  text: 'The gate check''s test_ladder unit (BRINGUP_RUNG=last DS41_MM_TUNED160=on, in the shared process after test_determinism)
+    gave all 104 err_* metrics EXACTLY equal to MB.8''s: the tuned configs did not reach that run although test_mm160_offon
+    shows on != off from L13. Find why the per-run switch does not take effect on that path (snapshot / site memo / grouped_matmul
+    knobs / test_ladder''s model path) and fix it at the cause; make test_mm160_offon or the ladder record a proof metric
+    (tuned-config hits in the run, > 0). Report it in BREADCRUMBS.'
+  closed: '2026-11-23T17:13:55'
+  why_closed: agent showed the switch reaches the ladder run (hits counted); outputs identical by construction on that chunk;
+    proof metric in the gate
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
