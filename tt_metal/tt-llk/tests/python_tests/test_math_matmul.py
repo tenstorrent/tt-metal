@@ -5,6 +5,7 @@ from itertools import chain, product
 
 import pytest
 import torch
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIM,
@@ -44,6 +45,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_ROW_MOP,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -158,6 +160,7 @@ def odd_reuse_matmul_params():
                         fidelity,
                         config,
                         throttle,
+                        False,
                         id=f"odd_reuse-rt{rt_dim}-ct{ct_dim}-kt{kt_dim}-{fidelity.name}-throttle{throttle}",
                     )
                 )
@@ -168,14 +171,14 @@ ALL_TEST_PARAMS = list(
     chain(
         # Regular matmul with all throttle levels
         (
-            (fidelity, combinations, throttle)
+            (fidelity, combinations, throttle, False)
             for fidelity, combinations, throttle in product(
                 ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
             )
         ),
         # Tiny tiles at throttle 0: the full sweep, unchanged.
         (
-            (fidelity, combinations, 0)
+            (fidelity, combinations, 0, False)
             for fidelity, combinations in product(
                 ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
@@ -183,7 +186,7 @@ ALL_TEST_PARAMS = list(
         # Tiny tiles at a throttled level <= 3: the fallback to the unthrottled MOP is taken
         # at every fidelity.
         (
-            (fidelity, combinations, TINY_TILE_LOW_THROTTLE)
+            (fidelity, combinations, TINY_TILE_LOW_THROTTLE, False)
             for fidelity, combinations in product(
                 ALL_MATH_FIDELITIES, TINY_TILES_THROTTLE_COMBINATIONS
             )
@@ -195,21 +198,31 @@ ALL_TEST_PARAMS = list(
         # the LLK assert, others time out first) and with asserts off. Adding it here would wedge
         # the board rather than fail the case.
         (
-            (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE)
+            (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE, False)
             for combinations in TINY_TILES_THROTTLE_COMBINATIONS
         ),
         # Odd t_dim on the full-dest blocks the sweep cannot reach.
         odd_reuse_matmul_params(),
+        # Blackhole row MOP at throttle 0 over the full sweep, bit-exact vs the per-tile MOP.
+        (
+            pytest.param(fidelity, combinations, 0, True, marks=skip_for_wormhole)
+            for fidelity, combinations in product(
+                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS
+            )
+        ),
     )
 )
 
 
 @pytest.mark.nightly
-@pytest.mark.parametrize("math_fidelity,matmul_config,throttle", ALL_TEST_PARAMS)
+@pytest.mark.parametrize(
+    "math_fidelity,matmul_config,throttle,row_mop", ALL_TEST_PARAMS
+)
 def test_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
+    row_mop,
 ):
     formats = matmul_config.formats
     in0_dimensions = matmul_config.tile_dimensions.in0_dimensions
@@ -318,58 +331,75 @@ def test_math_matmul(
         )
     num_blocks = 1 if dest_straddles_half else 4
 
-    configuration = TestConfig(
-        "sources/math_matmul_test.cpp",
-        formats,
-        templates=[
-            STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
-            MATH_FIDELITY(math_fidelity),
-            THROTTLE_LEVEL(throttle),
-            DEST_SYNC(matmul_config.dest_sync),
-            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
-        ],
-        runtimes=[
-            TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            LOOP_FACTOR(1),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            NUM_FACES(num_faces, num_faces_in0, num_faces_in1),
-            UNPACK_TRANS_FACES(transpose),
-            UNPACK_TRANS_WITHIN_FACE(transpose),
-            PARTIAL_FACE(
-                partial_a=matmul_config.face_layout_config.partial_face_in0,
-                partial_face_pack=matmul_config.face_layout_config.partial_face_pack,
-                partial_b=matmul_config.face_layout_config.partial_face_in1,
-                partial_face_math=matmul_config.face_layout_config.partial_face_math,
+    def make_config(mop_per_row):
+        return TestConfig(
+            "sources/math_matmul_test.cpp",
+            formats,
+            templates=[
+                STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
+                MATH_FIDELITY(math_fidelity),
+                THROTTLE_LEVEL(throttle),
+                MATMUL_ROW_MOP(mop_per_row),
+                DEST_SYNC(matmul_config.dest_sync),
+                PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+            ],
+            runtimes=[
+                TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),
+                NUM_BLOCKS(num_blocks),
+                LOOP_FACTOR(1),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+                NUM_FACES(num_faces, num_faces_in0, num_faces_in1),
+                UNPACK_TRANS_FACES(transpose),
+                UNPACK_TRANS_WITHIN_FACE(transpose),
+                PARTIAL_FACE(
+                    partial_a=matmul_config.face_layout_config.partial_face_in0,
+                    partial_face_pack=matmul_config.face_layout_config.partial_face_pack,
+                    partial_b=matmul_config.face_layout_config.partial_face_in1,
+                    partial_face_math=matmul_config.face_layout_config.partial_face_math,
+                ),
+                CRK_TILE_DIMM(
+                    matmul_config.tile_dimensions.ct_dim,
+                    matmul_config.tile_dimensions.rt_dim,
+                    matmul_config.tile_dimensions.kt_dim,
+                ),
+                IN_TILE_DIMS(
+                    matmul_config.tile_dimensions.in0_tile_r_dim,
+                    matmul_config.tile_dimensions.in0_tile_c_dim,
+                    matmul_config.tile_dimensions.in1_tile_r_dim,
+                    matmul_config.tile_dimensions.in1_tile_c_dim,
+                ),
+                DEST_INDEX(dst_index),
+            ],
+            variant_stimuli=StimuliConfig(
+                tilized_in0_l1_view.flatten(),
+                formats.input_format,
+                tilized_in1_l1_view.flatten(),
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=matmul_config.tile_dimensions.tile_cnt_in0,
+                tile_count_B=matmul_config.tile_dimensions.tile_cnt_in1,
+                tile_count_res=matmul_config.tile_dimensions.tile_cnt * num_blocks,
             ),
-            CRK_TILE_DIMM(
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-                matmul_config.tile_dimensions.kt_dim,
-            ),
-            IN_TILE_DIMS(
-                matmul_config.tile_dimensions.in0_tile_r_dim,
-                matmul_config.tile_dimensions.in0_tile_c_dim,
-                matmul_config.tile_dimensions.in1_tile_r_dim,
-                matmul_config.tile_dimensions.in1_tile_c_dim,
-            ),
-            DEST_INDEX(dst_index),
-        ],
-        variant_stimuli=StimuliConfig(
-            tilized_in0_l1_view.flatten(),
-            formats.input_format,
-            tilized_in1_l1_view.flatten(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=matmul_config.tile_dimensions.tile_cnt_in0,
-            tile_count_B=matmul_config.tile_dimensions.tile_cnt_in1,
-            tile_count_res=matmul_config.tile_dimensions.tile_cnt * num_blocks,
-        ),
-        dest_acc=matmul_config.dest_acc,
-    )
+            dest_acc=matmul_config.dest_acc,
+        )
+
+    configuration = make_config(row_mop)
+    if row_mop:
+        # The row MOP must match the per-tile MOP bit for bit; the golden tolerance alone would
+        # pass a result missing fidelity phases. Build both first: compile-producer skips at run().
+        per_tile = make_config(False)
+        configuration.prepare()
+        per_tile.prepare()
     res_from_L1 = configuration.run().result
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    if row_mop:
+        per_tile_tensor = torch.tensor(per_tile.run().result, dtype=torch_format)
+        bits = torch.int32 if torch_format == torch.float32 else torch.int16
+        n_diff = int((res_tensor.view(bits) != per_tile_tensor.view(bits)).sum())
+        assert (
+            n_diff == 0
+        ), f"Row MOP differs from the per-tile MOP in {n_diff} elements"
 
     # Convert golden tensor to L1 memory view for comparison
     golden_tensor = convert_to_l1_view(

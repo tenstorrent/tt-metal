@@ -68,7 +68,7 @@ import torch
 
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
-from tests.ttnn.utils_for_testing import assert_allclose
+from tt_py_test_utils_common.utils_for_testing import assert_allclose
 
 # Re-exported so generated files need one import only.
 with_default_mesh = U.with_default_mesh

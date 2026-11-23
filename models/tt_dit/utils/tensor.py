@@ -212,6 +212,17 @@ def from_torch_to_devices(
     return [from_torch(x, device=d, mesh_axes=mesh_axes, on_host=on_host) for d in devices]
 
 
+def logical_length_tensor(value: int, *, device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """`value` as the replicated `[1, 1, 1, 1]` uint32 device tensor that carries a runtime row count."""
+    return from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, None],
+    )
+
+
 def to_torch(
     x: ttnn.Tensor,
     /,

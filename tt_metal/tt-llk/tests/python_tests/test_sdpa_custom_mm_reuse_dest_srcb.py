@@ -17,21 +17,20 @@ into SrcA (llk_lib/experimental/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h).
 FPU<->SFPU handshake; with ``signal_output=false`` (used here) they do not change
 the numeric result.
 
-Two driver defects had to be fixed for the op to run standalone on ttsim:
-  1. FPU/SFPU input handshake. The math header unconditionally does
-     ``wait_on_zero(UNPACK_MATH_DONE)`` then ``get(UNPACK_MATH_DONE)`` once per K
-     iteration, gated on ``input_granularity`` (=1 here) and independent of
-     ``signal_output``. In a real SDPA chunk the SFPU exp op is the producer that
-     posts UNPACK_MATH_DONE ("P chunk i is ready in DEST"). In isolation there is
-     no producer, so the MATH thread would stall forever on the first wait_on_zero.
-     Fix (in the .cpp PACK thread): stand in for the SFPU producer and post KT_DIM
-     UNPACK_MATH_DONE tokens up front -- the reduce_block_max_test.cpp cross-layer
-     pattern. Per K iter the MATH consumer then sees value>0 at wait_on_zero and
-     the following get() never underflows; KT_DIM posts balance KT_DIM (wait,get)
-     pairs exactly.
-  2. Pack tile base. The DEST_TARGET offset is in 64-datum units, so DST_INDEX=128
-     lands the O accumulator at physical DEST tile 2 (128/64), not tile 4. The
-     .cpp packs DST_TILE=2.
+Standalone synchronization
+--------------------------
+The math header consumes one ``UNPACK_MATH_DONE`` token per K iteration,
+independent of ``signal_output``. In a real SDPA chunk the SFPU exp op produces
+those tokens as P chunks become ready in DEST. This standalone driver uses the
+PACK thread as that producer: it posts one token at a time and waits for MATH to
+consume it before posting the next. The backpressure keeps the 4-bit semaphore
+bounded while balancing exactly ``LOOP_FACTOR * KT_DIM`` post/get pairs.
+
+DEST addressing
+---------------
+The DEST_TARGET offset is in 64-datum units. ``DST_INDEX = 64 * DST_TILE``
+therefore maps the O accumulator to physical ``DST_TILE``; the datacopy and
+packer use that tile index directly.
 
 Golden and validated region
 ---------------------------
@@ -46,16 +45,13 @@ is swept). The BOTTOM 8 rows of the face carry an
 extra accumulation (a MOVD2B 16-row DEST-band fold: for P=V=1 the face is uniform
 and exact, but a column-varying V doubles rows 8..15) -- an op-level layout quirk
 matching the header's "Further work will uplift the custom mm to support tiles
-along the width." That bottom-band correspondence, and the full 2D (M-varying)
-face permutation, need BH p100a confirmation and are therefore not asserted here.
+along the width." The bottom-band correspondence and full 2D (M-varying) face
+permutation are outside this test's asserted region.
 
 We validate the top 8 rows x 16 cols = 128 defined lanes against the standard
 tiled MatmulGolden, using an M/K-invariant, N-varying stimulus so the check is
 robust to the K pairing/split the op performs internally while still exercising a
 real per-column dot product (distinct V columns), not just a constant fill.
-
-No Blackhole card is available in this environment; this is validated by a clean
-Blackhole compile plus the ttsim numeric result on the derivable region.
 """
 
 import torch
@@ -64,9 +60,9 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     SDPA_CUSTOM_MM_REUSE_DEST,
@@ -101,7 +97,27 @@ FACE0_TOP_ROWS = 8
 DEFINED_LANES = FACE0_TOP_ROWS * FACE_DIM  # 128
 
 
-def _run(math_fidelity, formats, dest_acc, kt_dim, nt_dim):
+@parametrize(
+    # The math LLK implements LoFi only (no fidelity phases), so HiFi4 would only
+    # pass while the HiFi4-vs-LoFi gap stays inside tolerance (it no longer does at kt_dim=7).
+    math_fidelity=[MathFidelity.LoFi],
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No],
+    kt_nt_dims=KT_NT_DIMS,
+)
+def test_sdpa_custom_mm_reuse_dest_srcb(
+    math_fidelity,
+    formats,
+    dest_acc,
+    kt_nt_dims,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
+    """P @ V with SrcB reused from DEST; defined output lanes must match P@V golden."""
+    kt_dim, nt_dim = kt_nt_dims
     torch.manual_seed(0)
 
     torch_format = format_dict[formats.output_format]
@@ -156,52 +172,47 @@ def _run(math_fidelity, formats, dest_acc, kt_dim, nt_dim):
         src_P, dimensions=input_A_dimensions, stimuli_format=formats.input_format
     )
 
-    configuration = TestConfig(
-        "sources/sdpa_custom_mm_reuse_dest_srcb_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=kt_dim, nt_dim=nt_dim),
-        ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            # buffer_A = V (SrcA, unpacked by the reuse unpack)
-            tilized_V.flatten(),
-            formats.input_format,
-            # buffer_B = P (datacopied into DEST as SrcB source)
-            tilized_P.flatten(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_V,
-            tile_count_B=tile_cnt_P,
-            tile_count_res=nt_dim,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sdpa_custom_mm_reuse_dest_srcb_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_FIDELITY(math_fidelity),
+                SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=kt_dim, nt_dim=nt_dim),
+            ],
+            runtimes=[],
+            variant_stimuli=StimuliConfig(
+                # buffer_A = V (SrcA, unpacked by the reuse unpack)
+                tilized_V.flatten(),
+                formats.input_format,
+                # buffer_B = P (datacopied into DEST as SrcB source)
+                tilized_P.flatten(),
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_V,
+                tile_count_B=tile_cnt_P,
+                tile_count_res=nt_dim,
+            ),
+            dest_acc=dest_acc,
         ),
-        dest_acc=dest_acc,
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
     golden_tensor = torch.tensor(golden_tensor, dtype=torch_format)
 
     # Compare only the derivable defined lanes: the top 8 rows of face 0.
-    return golden_tensor[:DEFINED_LANES], res_tensor[:DEFINED_LANES]
-
-
-@parametrize(
-    # The math LLK implements LoFi only (no fidelity phases), so HiFi4 would only
-    # pass while the HiFi4-vs-LoFi gap stays inside tolerance (it no longer does at kt_dim=7).
-    math_fidelity=[MathFidelity.LoFi],
-    formats=FORMATS,
-    dest_acc=[DestAccumulation.No],
-    kt_nt_dims=KT_NT_DIMS,
-)
-def test_sdpa_custom_mm_reuse_dest_srcb(math_fidelity, formats, dest_acc, kt_nt_dims):
-    """P @ V with SrcB reused from DEST; defined output lanes must match P@V golden."""
-    kt_dim, nt_dim = kt_nt_dims
-    golden, device = _run(math_fidelity, formats, dest_acc, kt_dim, nt_dim)
-
-    assert passed_test(golden, device, formats.output_format), (
+    assert passed_test(
+        golden_tensor[:DEFINED_LANES],
+        res_tensor[:DEFINED_LANES],
+        formats.output_format,
+    ), (
         "sdpa_custom_mm_reuse_dest_srcb did not reproduce the tiled P@V golden on the "
         "defined (top 8 rows of face 0) output lanes"
     )

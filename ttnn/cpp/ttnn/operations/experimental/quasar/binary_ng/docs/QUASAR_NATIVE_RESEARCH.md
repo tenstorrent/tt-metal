@@ -2263,7 +2263,7 @@ Why this is safe and cheap:
   precisely why production needs `override_runtime_arguments`. The **quasar** op has no such override, so
   it gets full reflection. Do not carry production's constraint across.
   The real constraint is narrower: on a cache hit the adapter re-applies **only tensor bindings**
-  (`UpdateTensorArgs`), so every non-tensor per-cluster arg must be a function of hashed inputs — and
+  (`Program::update_tensor_args`), so every non-tensor per-cluster arg must be a function of hashed inputs — and
   `worker_grid` is NOT hashed today, which is a hang risk once per-thread counts are baked in.
   `ProgramRunArgs` (and `DFBRunOverrides` if ring depth is dynamic), or folded into the hash.
 - **Divisibility**: with R producer threads and C consumer threads on a DFB, keep `num_entries` a multiple

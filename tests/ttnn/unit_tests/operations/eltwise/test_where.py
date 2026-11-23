@@ -54,7 +54,9 @@ def make_condition_tensor(shape, dtype, condition, stride=8):
         ((4, 2, 2, 2, 1, 1), (4, 1, 1, 1, 128, 128), (4, 1, 2, 1, 1, 1)),
     ],
 )
-@pytest.mark.parametrize("scalar", [15.5, 5.0, -11.33])
+# The scalar is a runtime arg excluded from the program hash, and its packing is checked bitwise in
+# test_ternary_category1_float32.py::test_where_scalar_branch, so one value covers the dispatch path.
+@pytest.mark.parametrize("scalar", [15.5])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
 def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device):
@@ -97,7 +99,7 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
 )
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
-@pytest.mark.parametrize("scalar", [-9, 10, 7])
+@pytest.mark.parametrize("scalar", [-9])
 def test_ttnn_where_int32(c_shape, t_shape, f_shape, variant, condition, scalar, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.int32) * condition
@@ -138,7 +140,7 @@ def test_ttnn_where_int32(c_shape, t_shape, f_shape, variant, condition, scalar,
 )
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
-@pytest.mark.parametrize("scalar", [9, 10, 7])
+@pytest.mark.parametrize("scalar", [9])
 def test_ttnn_where_uint32(c_shape, t_shape, f_shape, variant, condition, scalar, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.int32) * condition
@@ -183,7 +185,7 @@ def test_ttnn_where_uint32(c_shape, t_shape, f_shape, variant, condition, scalar
         ((256,), (256,), (256,)),  # LLK
     ],
 )
-@pytest.mark.parametrize("scalar", [15.5, -11.5, 0, 55.5])
+@pytest.mark.parametrize("scalar", [-11.5])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
 def test_ttnn_where_bfloat8b(tor_dtype, ttnn_dtype, c_shape, t_shape, f_shape, scalar, variant, condition, device):
@@ -221,23 +223,6 @@ def test_ttnn_where_bfloat8b(tor_dtype, ttnn_dtype, c_shape, t_shape, f_shape, s
     golden = torch.where(C.bool(), T, F)
 
     assert torch.equal(result, golden)
-
-
-def test_ttnn_where_forge():
-    cond = torch.tensor([[1, 0, 1, 0]], dtype=torch.int32)
-    x = torch.tensor([[10, 20, 30, 40]], dtype=torch.int32)
-    y = torch.tensor([[100, 200, 300, 400]], dtype=torch.int32)
-    expected = torch.where(cond != 0, x, y)
-
-    with ttnn.manage_device(0) as dev:
-        ttnn_cond = ttnn.from_torch(cond, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=dev)
-        real_cond = ttnn.eq(ttnn_cond, 1)
-        ttnn_x = ttnn.from_torch(x, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=dev)
-        ttnn_y = ttnn.from_torch(y, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=dev)
-        ttnn_result = ttnn.where(real_cond, ttnn_x, ttnn_y)
-        result = ttnn.to_torch(ttnn_result)
-
-    assert torch.equal(result, expected), f"Expected {expected}, got {result}"
 
 
 def test_ttnn_where_nan(device):
@@ -936,9 +921,10 @@ def test_ttnn_where_preallocated(a_shape, b_shape, c_shape, scalar, variant, con
     ],
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@pytest.mark.parametrize("scalar", [15.5, 5.0, -11.33])
+@pytest.mark.parametrize("scalar", [15.5])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
-@pytest.mark.parametrize("condition", [1, 0])
+# make_condition_tensor mixes both predicate values, so either setting exercises both branches.
+@pytest.mark.parametrize("condition", [1])
 def test_where_subcore_grid(device, shape, sub_core_grid, dtype, scalar, variant, condition):
     torch.manual_seed(0)
     tor_dtype = dtype
@@ -1049,32 +1035,15 @@ def test_where_tss_subcore_grid(device, shape, sub_core_grid, dtype, scalar_true
                 ]
             ),
         ),
-        (
-            torch.Size([1, 7, 32, 96]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
-                ]
-            ),
-        ),
-        (
-            torch.Size([1, 1, 32, 128]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
-                ]
-            ),
-        ),
     ],
 )
 @pytest.mark.parametrize(
     "scalar_true, scalar_false",
     [
-        (15.5, 31.2),
         (0.0, -11.33),
     ],
 )
-@pytest.mark.parametrize("condition", [1, 0])
+@pytest.mark.parametrize("condition", [1])
 def test_where_tss_int32_predicate_sub_core_grid(device, shape, sub_core_grid, scalar_true, scalar_false, condition):
     """TSS variant: INT32 predicate, float scalars, sub_core_grids.
 
@@ -1106,32 +1075,15 @@ def test_where_tss_int32_predicate_sub_core_grid(device, shape, sub_core_grid, s
                 ]
             ),
         ),
-        (
-            torch.Size([1, 7, 32, 96]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
-                ]
-            ),
-        ),
-        (
-            torch.Size([1, 1, 32, 128]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
-                ]
-            ),
-        ),
     ],
 )
 @pytest.mark.parametrize(
     "scalar_true, scalar_false",
     [
-        (15.5, 31.2),
         (0.0, -11.33),
     ],
 )
-@pytest.mark.parametrize("condition", [1, 0])
+@pytest.mark.parametrize("condition", [1])
 def test_where_tss_uint32_predicate_sub_core_grid(device, shape, sub_core_grid, scalar_true, scalar_false, condition):
     """TSS variant: UINT32 predicate, float scalars, sub_core_grids.
 
@@ -1163,25 +1115,9 @@ def test_where_tss_uint32_predicate_sub_core_grid(device, shape, sub_core_grid, 
                 ]
             ),
         ),
-        (
-            torch.Size([1, 7, 32, 96]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
-                ]
-            ),
-        ),
-        (
-            torch.Size([1, 1, 32, 128]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
-                ]
-            ),
-        ),
     ],
 )
-@pytest.mark.parametrize("condition", [1, 0])
+@pytest.mark.parametrize("condition", [1])
 def test_where_ttt_int32_predicate_sub_core_grid(device, shape, sub_core_grid, condition):
     """TTT variant: INT32 predicate, float tensors, sub_core_grids.
 

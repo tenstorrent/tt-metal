@@ -12,7 +12,7 @@
 namespace ckernel
 {
 
-typedef struct
+struct risc_compact_mov_instrn_t
 {
     std::uint32_t instrn          : 8;
     std::uint32_t src_offset_addr : 8;
@@ -20,13 +20,13 @@ typedef struct
     std::uint32_t xfer_size       : 6;
     std::uint32_t xfer_dir        : 1; // 0 - l1->cfgreg, 1 - l1->l1
     std::uint32_t no_params       : 1; // 0 - use xmov inputs from param registers, 1 - compact move. all inputs are embedded into instruction
-} risc_compact_mov_instrn_t;
+};
 
-typedef union
+union risc_compact_mov_instrn_u
 {
     std::uint32_t val;
     risc_compact_mov_instrn_t f;
-} risc_compact_mov_instrn_u;
+};
 
 inline void xmov_set_base(const std::uint32_t l1_base_addr_16B)
 {
