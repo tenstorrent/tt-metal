@@ -203,10 +203,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1 /*num_matrices*/);
         }
-        // SFPU uses ADDR_MOD_7 and does not overwrite the datacopy MOP's
-        // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
-        // the INIT zone before the measured TILE_LOOP.
-        // The scalar binops need no init step of their own (binop_with_scalar_tile_init is SFPU_UNARY_INIT(unused)).
+        // SFPU uses ADDR_MOD_7 and leaves the datacopy MOP's ADDR_MOD_0/1 and bank 0 alone, so both inits stay in INIT.
+        // The scalar binops need no init of their own: binop_with_scalar_tile_init is SFPU_UNARY_INIT(unused).
         _llk_math_eltwise_sfpu_init_();
 
         // Program dest-dvalid CFG after HW configure so wait masks are the last
@@ -227,9 +225,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            // CFG wait masks persist across run types. MATH_ISOLATE runs without
-            // a pack consumer; UNPACK_ISOLATE only mocks Src
-            // handshakes. Neither may inherit the FPU→SFPU→PACK chain.
+            // CFG wait masks persist across run types; MATH_ISOLATE has no pack consumer and UNPACK_ISOLATE only
+            // mocks Src handshakes, so neither may inherit the FPU→SFPU→PACK chain.
             set_up_zero_dest_dvalid_handshake_for_math();
             set_up_zero_dest_dvalid_handshake_for_sfpu();
         }
@@ -344,9 +341,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
-                    // Drain this bank's dest-waited pack before issuing the next.
-                    // Queuing all LOOP_FACTOR packs into one tensix_sync makes the
-                    // TILE_LOOP ZONE_END wall-clock read return 0 on long SFPU ops.
+                    // Drain this bank's pack before the next: queuing all LOOP_FACTOR packs into one tensix_sync
+                    // makes the TILE_LOOP ZONE_END wall-clock read return 0 on long SFPU ops.
                     ckernel::wait_pack_idle();
                 }
             }

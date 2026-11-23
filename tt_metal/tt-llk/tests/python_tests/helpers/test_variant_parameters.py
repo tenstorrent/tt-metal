@@ -357,8 +357,7 @@ class SFPU_BINOP_MODE(TemplateParameter):
     Emits ``constexpr int SFPU_BINOP_MODE = <n>;`` consumed by
     ``sfpu_binop_scalar_{test,perf}.cpp``, matching the BINOP_MODE enum in
     ``ckernel_sfpu_binop_with_unary.h`` (ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4).
-    ``quasar/sfpu_binop_scalar_quasar_test.cpp`` also accepts 5 and 6, its own
-    selectors for the int32 add/sub kernels, which take no mode.
+    ``quasar/sfpu_binop_scalar_quasar_test.cpp`` also takes 5 and 6 for the int32 kernels.
     """
 
     # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
@@ -380,12 +379,8 @@ class SFPU_BINOP_MODE(TemplateParameter):
 
 @dataclass
 class SFPU_DEST_16BIT_FORMAT(TemplateParameter):
-    """The format a 16-bit Dest holds, for kernels whose rounding depends on it.
-
-    Emits ``constexpr auto DEST_16BIT_FORMAT = DataFormat::<name>;``, the value the
-    Compute API's ``DEST_16BIT_FORMAT`` template parameter carries (Float16_b or
-    Float16). It has no effect with a 32-bit Dest.
-    """
+    """The format a 16-bit Dest holds (Float16_b or Float16), as the Compute API's
+    ``DEST_16BIT_FORMAT`` carries it; no effect with a 32-bit Dest."""
 
     dest_format: DataFormat = DataFormat.Float16_b
 
