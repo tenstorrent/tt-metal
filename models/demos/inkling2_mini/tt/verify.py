@@ -10,8 +10,8 @@ per row:
 - message gates and router: their R-row forms (fused/gate.py num_tokens / num_rows, fused/router.py rows);
 - attention: the pending-row path of Inkling2AttentionFast (decode_rows' pieces: rings not written during the pass,
   sdpa_decode pending_kv / rows_per_token), here also in the triple input mode (global layers, loop passes 2-3),
-  with the conv window chained through per-token buffers (fused/kernels/verify_window.cpp) so the window state is
-  only replaced by the commit;
+  with the R conv windows built in one program (fused/kernels/verify_windows.cpp) into per-token buffers, so the
+  window state is only replaced by the commit, and stacked for one projection;
 - experts: the multi-row bank expert step (union of the rows' experts read once, per-row chains);
 - head: one unembed for all rows, argmax per row on the raw logits + vocab mask (softcap is monotone, so the
   argmax is the plain step's; shortcut: exact ties after the plain step's softcap can pick another index, upgrade:
@@ -78,23 +78,25 @@ def _gate_weights(root, L):
     return out
 
 
-def window_to(win, hist, hist_out, xs):
-    """AttnWindow.__call__ (fused/attn.py) reading the window from `hist` and writing it to `hist_out`."""
-    for t in [hist, hist_out, *xs]:
+def windows_to(win, hists, xs):
+    """All R tokens' conv windows in one program (fused/kernels/verify_windows.cpp): token t's window from token
+    t-1's (hists[0] = the state), written to hists[t + 1] and to rows 9t.. of the projection input (win.act, L1)."""
+    R = len(xs)
+    for t in [*hists, *(x for xt in xs for x in xt)]:
         F.check_row_input(t)
         assert t.dtype == ttnn.bfloat16, t.dtype
-    xq, xk, xv = xs if len(xs) == 3 else xs * 3
     n = win.ntiles
-    rt = [
-        [hist.buffer_address(), win.act.buffer_address(), i * n, xq.buffer_address(), xk.buffer_address(),
-         xv.buffer_address(), hist_out.buffer_address()]
-        for i in range(len(win.cores))
-    ]  # fmt: skip
+    per_tok = []
+    for t in range(R):
+        xq, xk, xv = xs[t] if len(xs[t]) == 3 else xs[t] * 3
+        per_tok += [xq.buffer_address(), xk.buffer_address(), xv.buffer_address(), hists[t + 1].buffer_address()]
+    rt = [[hists[0].buffer_address(), win.act.buffer_address(), i * n] + per_tok for i in range(len(win.cores))]
     crs = _crs(win.cores)
-    named = dict(ntiles=n, ngroups=1 if len(xs) == 1 else 2)
-    kernels = [_kernel("verify_window.cpp", win.cores, named, rt, ttnn.ReaderConfigDescriptor())]
+    named = dict(ntiles=n, ngroups=1 if len(xs[0]) == 1 else 2, rows=R)
+    kernels = [_kernel("verify_windows.cpp", win.cores, named, rt, ttnn.ReaderConfigDescriptor())]
     cbs = [_cb(0, ttnn.bfloat16, n, crs), _cb(1, ttnn.bfloat16, n, crs), _stage(24, crs, n * 384 + 128)]
-    ttnn.generic_op([hist, hist_out, *xs, win.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
+    io = [*hists, *(x for xt in xs for x in xt), win.act]
+    ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
     return win.act
 
 
@@ -105,17 +107,11 @@ def attn_rows(attn, xs, state, positions, rows, p0, hists):
     assert attn.FUSED and attn.window is not None and len(xs) == rows.R
     R = rows.R
 
-    # One w_all for all tokens: token t's window (hists[t + 1], rows 0..8 used, = the projection input the
-    # plain step projects) goes to rows 9t.. of one input by an exact 0/1 row-shift matmul, w_all reads 9R rows
+    # One w_all for all tokens: token t's window (rows 0..8 used, = the projection input the plain step projects)
+    # goes to rows 9t.. of one input (windows_to, one program for all tokens), w_all reads 9R rows
     # (rows ride in the tile: each output row is the 1-row projection's); token t's rows are shifted back to row 0
     # (exact 0/1 matmul, DRAM) for its prep and output gate.
-    for t in range(R):
-        window_to(attn.window, hists[t], hists[t + 1], xs[t])
-    sh = _shifts(attn.device)
-    act = hists[1] if R == 1 else None
-    for t in range(R):
-        part = ttnn.matmul(sh[t], hists[t + 1], dtype=ttnn.bfloat16, compute_kernel_config=attn.hifi4)
-        act = part if act is None else ttnn.add(act, part, dtype=ttnn.bfloat16)
+    act = windows_to(attn.window, hists, xs)
     # decode staging (mk/overlap.py) swaps w_all.bank for a proxy that reads the next app's weights from L1 where
     # host programs filled them; no verify program hosts fills, so the verify pass uses the raw bank linear
     proxy = attn.w_all.bank
