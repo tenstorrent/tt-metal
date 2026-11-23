@@ -277,8 +277,8 @@ def test_ranks_reading_different_checkpoints_at_one_path_are_refused(two_ranks, 
 
 def test_a_rank_that_placed_its_tensors_says_so_when_another_rank_fails(two_ranks, monkeypatch, expect_error):
     """Rank 1 places every tensor, as rank 0 does (ranks sharing a mesh must make the same device allocations in the
-    same order), but reports a failure at its last one. Rank 0's error then says that it placed all of its tensors and
-    that its model is partly restored; rank 1's message counts its own tensors, once."""
+    same order), but reports a failure at its last one. Every rank's error then says that rank 0 placed all of its
+    tensors and that the model is partly restored; rank 1's message counts its own tensors, once."""
     rank, local, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
@@ -305,10 +305,8 @@ def test_a_rank_that_placed_its_tensors_says_so_when_another_rank_fails(two_rank
         with expect_error(dcp.CheckpointError, pattern) as raised:
             dcp.load(path, model=fresh)
         message = str(raised.value)
-        if rank == 0:
-            assert f"; rank 0 had placed {n} of {n} tensors, so the model and optimizer are partly restored" in message
-        else:
-            assert "rank 1 had placed" not in message, "a failing rank's own message already counts its tensors"
+        assert f"\nrank 0 had placed {n} of {n} tensors, so the model and optimizer are partly restored" in message
+        assert "rank 1 had placed" not in message, "a failing rank's own message already counts its tensors"
         assert "end the job and restart it instead of loading again" in message, "the ranks share a mesh"
     finally:
         ttnn.distributed_context_barrier()

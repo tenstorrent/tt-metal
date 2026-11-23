@@ -110,6 +110,19 @@ def failure_message(rank: int, err: BaseException) -> bytes:
     return f"rank {rank}: {describe_error(err)}".encode("utf-8", errors="backslashreplace")[:MESSAGE_LIMIT]
 
 
+def note_message(note: Callable[[], str | None] | None) -> bytes:
+    """What a rank whose step succeeded adds to another rank's failure (``Group.phase``): ``note()``, encoded and
+    capped as ``failure_message`` encodes, empty without one. Built where ``failure_message`` is, so it must not raise:
+    a note that raises is replaced by its error."""
+    if note is None:
+        return b""
+    try:
+        text = note() or ""
+    except Exception as err:  # noqa: BLE001
+        text = f"(a note that could not be built: {describe_error(err)})"
+    return text.encode("utf-8", errors="backslashreplace")[:MESSAGE_LIMIT]
+
+
 def checked_payload(payload: bytes, what: str) -> bytes:
     """``payload`` when the transport can carry it; run inside a phase, so an oversized payload fails every rank."""
     if len(payload) > MAX_PAYLOAD:
@@ -225,11 +238,14 @@ class Group:
         except Exception as err:  # noqa: BLE001  (MPI_ERR_PROC_FAILED and friends surface as RuntimeError)
             raise self._fatal(f"collective failed ({err}); a peer may have died") from err
 
-    def phase(self, name: str, fn: Callable[[], Any]) -> Any:
+    def phase(self, name: str, fn: Callable[[], Any], note: Callable[[], str | None] | None = None) -> Any:
         """Run ``fn`` on this rank, then exchange its outcome: every rank raises when any rank failed. The group of
         one has no other rank to tell, so its phases run ``fn``; a ``CheckpointError`` propagates as raised, and any
         other error is raised as a ``CheckpointError`` naming the phase, with the error as its cause, as it would be on
         many ranks, so one handler serves both.
+
+        ``note``, called only when ``fn`` succeeded here and failed on another rank, is what this rank adds to that
+        failure (how far it got, say): every rank's error carries it beside the failing ranks' messages.
 
         An interrupt (``KeyboardInterrupt``, ``SystemExit``) is exchanged like any failure, so the other ranks raise
         instead of waiting for this one in the next collective, and is then re-raised here as it was."""
@@ -249,11 +265,15 @@ class Group:
         failed = [r for r, s in enumerate(statuses) if s]
         if failed:
             # Every rank raises the class the first failing rank reported, so callers can catch the typed error, with
-            # the failing ranks' own messages: one gather and one broadcast, on the failure path only.
+            # the failing ranks' own messages, then the other ranks' notes: one gather and one broadcast, on the
+            # failure path only.
             code = statuses[failed[0]]
             cls = ERROR_CLASSES[code - 1] if 0 < code <= len(ERROR_CLASSES) else CheckpointError
-            parts = self.gather(failure_message(self.rank, err) if err is not None else b"")
-            joined = b"\n".join(part for part in parts if part) if self.is_coordinator else None
+            parts = self.gather(failure_message(self.rank, err) if err is not None else note_message(note))
+            joined = None
+            if self.is_coordinator:
+                order = failed + [r for r in range(self.size) if r not in failed]
+                joined = b"\n".join(parts[r] for r in order if parts[r])
             messages = self.broadcast(joined).decode("utf-8", errors="replace")
             if err is not None and not isinstance(err, Exception):
                 raise err  # an interrupt, as it was, once the other ranks have its message too

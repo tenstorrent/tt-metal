@@ -538,6 +538,39 @@ def test_a_failing_rank_stops_every_rank_and_names_itself(failures):
             assert f"rank {failing}: {type(cause).__name__}: {cause}" in str(err), "every rank sees every cause"
 
 
+def test_the_ranks_that_succeeded_add_their_notes_to_another_ranks_failure():
+    """A rank whose step succeeded can say how far it got (a load's placed tensors, so a failing rank of a shared mesh
+    learns that the job must restart): every rank's error carries the failing ranks' messages, then the others' notes.
+    A note is built only on that path, and one that raises is replaced by its error."""
+    built = []
+
+    def note_of(rank):
+        def note():
+            built.append(rank)
+            if rank == 2:
+                raise ValueError("no count")
+            return f"rank {rank} had placed 3 of 3 tensors"
+
+        return note
+
+    def body(group, fake):
+        def work():
+            if group.rank == 1:
+                raise ValueError("disk full")
+
+        group.phase("placing", lambda: None, note=note_of(group.rank))  # no rank fails: no note is built
+        group.phase("placing", work, note=note_of(group.rank))
+
+    _, errors = _run_ranks(3, body)
+    assert set(errors) == {0, 1, 2} and sorted(built) == [0, 2]
+    for rank, err in errors.items():
+        assert str(err) == (
+            "placing failed on rank(s) [1] of 3: rank 1: ValueError: disk full\n"
+            "rank 0 had placed 3 of 3 tensors\n"
+            "(a note that could not be built: ValueError: no count)"
+        ), (rank, str(err))
+
+
 def test_a_message_that_cannot_be_encoded_or_rendered_still_reaches_every_rank():
     """A failing rank's message is built after the status exchange, while the others wait in the gather that follows,
     so building it must not raise: a lone surrogate (a non-UTF-8 file name, as os.fsdecode returns it) is escaped, and

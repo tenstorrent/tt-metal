@@ -39,8 +39,9 @@ def two_ranks():
 
 def test_a_load_one_rank_stops_before_the_other_says_to_restart(two_ranks, monkeypatch, expect_error):
     """Rank 1 fails placing its first tensor while rank 0 places all of its own, as a read error on one rank does.
-    The ranks then hold different device allocations on the mesh they share, so rank 0's error says that it placed its
-    tensors and that the job has to restart rather than load again; rank 1's, which placed none, passes as raised."""
+    The ranks then hold different device allocations on the mesh they share, so every rank's error, rank 1's too,
+    says that rank 0 placed its tensors and that the job has to restart rather than load again: a handler on rank 1
+    that loaded again would wait for rank 0 in a collective rank 0 never reaches."""
     rank, root = two_ranks
     model, params, opt = fresh_tp(DIM)
     train_step(model, opt, DIM)
@@ -62,13 +63,11 @@ def test_a_load_one_rank_stops_before_the_other_says_to_restart(two_ranks, monke
         with expect_error(dcp.CheckpointError, pattern) as raised:
             dcp.load(path, model=fresh)
         message = str(raised.value)
-        if rank == 0:
-            assert (
-                f"; rank 0 had placed {n} of {n} tensors, so the model and optimizer are partly restored, and the ranks "
-                "sharing this mesh may now hold different device allocations: end the job and restart it instead of "
-                "loading again" in message
-            ), message
-        else:
-            assert "partly restored" not in message, "rank 1 placed nothing"
+        assert (
+            f"\nrank 0 had placed {n} of {n} tensors, so the model and optimizer are partly restored, and the ranks "
+            "sharing this mesh may now hold different device allocations: end the job and restart it instead of "
+            "loading again" in message
+        ), message
+        assert "rank 1 had placed" not in message, "rank 1 placed nothing"
     finally:
         ttnn.distributed_context_barrier()

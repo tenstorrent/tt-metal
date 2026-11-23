@@ -423,9 +423,10 @@ def load(
     Everything that can be checked without reading tensor data is checked before the first tensor is placed: keys,
     shapes, dtypes, layouts, param groups, the sizes of the data files and the stored RNG state. A failure after that (a
     read error, the device out of memory) leaves the model and optimizer partly restored; the ``CheckpointError`` raised
-    then says how many tensors were placed, and the model should be loaded again or discarded. On a mesh several ranks
-    share, the ranks may then have placed different tensors, and such a mesh needs every rank to make the same device
-    allocations in the same order: the error then says to end the job and restart it instead of loading again. A
+    then says, on every rank, how many tensors each rank that placed any had placed, and the model should be loaded
+    again or discarded. On a mesh several ranks share, the ranks may then have placed different tensors, and such a mesh
+    needs every rank to make the same device allocations in the same order: the error then says to end the job and
+    restart it instead of loading again, on the ranks that placed nothing too. A
     scheduler or dataloader without a ``set_state_dict`` is refused before anything is placed; one that refuses its
     state can only say so after, and raises a ``CheckpointError`` naming it, with the tensors, the optimizer scalars and
     the scheduler (when the dataloader refuses) already restored.
@@ -553,20 +554,23 @@ def load(
 
         t1 = time.perf_counter()
         placed: list[str] = []
-        try:
-            bytes_read, reads, read_s, place_s = group.phase(
-                "reading and placing the shards",
-                lambda: _read_and_place(plan, files, by_key, threads, local, placed, check),
+
+        def placed_note() -> str | None:
+            # When another rank's failure stops the load after this rank placed tensors, every rank's error says so,
+            # the failing ranks' included: on a shared mesh they must all end the job, not only the ranks that placed.
+            # A failure of this rank's own already says how many it placed.
+            if not placed:
+                return None
+            return (
+                f"rank {group.rank} had placed {len(placed)} of {len(plan.keys)} tensors, so "
+                f"{_partly_restored_advice(_shares_mesh(local))}"
             )
-        except CheckpointError as err:
-            if placed and err.__cause__ is None:
-                # Another rank's failure stopped the load after this rank placed tensors; a failure of this rank's
-                # own (the cause) already says how many it placed.
-                raise type(err)(
-                    f"{err}; rank {group.rank} had placed {len(placed)} of {len(plan.keys)} tensors, so "
-                    f"{_partly_restored_advice(_shares_mesh(local))}"
-                ) from err
-            raise
+
+        bytes_read, reads, read_s, place_s = group.phase(
+            "reading and placing the shards",
+            lambda: _read_and_place(plan, files, by_key, threads, local, placed, check),
+            note=placed_note,
+        )
         stats["read_and_place_s"] = time.perf_counter() - t1
         stats["read_s"] = read_s
         stats["place_s"] = place_s
