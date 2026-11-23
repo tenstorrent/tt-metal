@@ -29,14 +29,22 @@ enum {
  * @tparam BINOP_MODE: ADD, SUB, MUL, DIV or RSUB; DIV expects the host to pass the reciprocal of the scalar
  * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  * @tparam is_fp32_dest_acc_en: with a 16-bit Dest, RSUB rounds its result to bf16 nearest-even, as on BH
+ * @tparam DEST_16BIT_FORMAT: the format a 16-bit Dest holds; RSUB rounds only for Float16_b
  * @param param: fp32 scalar encoded as uint32
  */
-template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
+template <
+    bool APPROXIMATION_MODE,
+    int BINOP_MODE,
+    int ITERATIONS,
+    bool is_fp32_dest_acc_en,
+    DataFormat DEST_16BIT_FORMAT = DataFormat::Float16_b>
 void calculate_binop_with_scalar(std::uint32_t param) {
     const sfpi::vFloat parameter = __builtin_bit_cast(float, param);
     // SFPSTORE truncates fp32 to bf16. RSUB feeds logit(x) = log(x / (1 - x)), where that truncation error is
     // amplified by the log, so on a 16-bit Dest it rounds to nearest even the way torch computes bf16 rsub.
-    constexpr bool round_to_bf16_rne = BINOP_MODE == RSUB && !is_fp32_dest_acc_en;
+    // Only a Float16_b Dest: a Float16 Dest holds more mantissa than bf16, which rounding would throw away.
+    constexpr bool round_to_bf16_rne =
+        BINOP_MODE == RSUB && !is_fp32_dest_acc_en && DEST_16BIT_FORMAT == DataFormat::Float16_b;
     // The RNE constants are bound once, not per row. Unassigned unless the rounding below uses them.
     sfpi::vUInt rne_bias;
     sfpi::vUInt rne_mask;

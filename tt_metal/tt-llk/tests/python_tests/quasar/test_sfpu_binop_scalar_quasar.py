@@ -1,17 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Quasar SFPU binop with a scalar: the kernels behind add/sub/mul/div/rsub_unary_tile
-and add/sub_unary_tile_int32.
-
-Every float variant is held bit-exact against a golden that models the kernel's one
-rounding step: on a 16-bit Dest, SFPSTORE truncates the fp32 result to bf16, except for
-RSUB, which rounds it to nearest even first (as on Blackhole, for logit's sake). The
-int32 kernels wrap in two's complement.
+"""Quasar scalar binop kernels (add/sub/mul/div/rsub_unary_tile, add/sub_unary_tile_int32),
+held bit-exact against a golden that models SFPSTORE truncation and RSUB's bf16 rounding.
 """
 
 import pytest
 import torch
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ScalarBinopGolden,
     get_golden_generator,
@@ -33,6 +28,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     quasar_mx_smoke,
+    quasar_sfpu_fpu_route_variants,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -46,6 +42,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
     SFPU_BINOP_MODE,
+    SFPU_DEST_16BIT_FORMAT,
     SFPU_UNARY_SCALAR,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -75,36 +72,51 @@ _FLOAT_FORMATS = input_output_formats(
 
 
 def _runs_mx_through_unpack_to_dest(variant: QuasarSfpuVariant) -> bool:
-    # The resolver offers MX -> Unpack-to-Dest, but on emu-quasar it lands garbage
-    # (~1e-34) in Dest for every op, and no other Quasar test drives that route; MX
-    # reaches this test through the FPU datacopy route only.
+    # MX through Unpack-to-Dest returns garbage on emu-quasar for every op; MX runs via the FPU route.
     return variant.formats.input_format.is_mx_format() and variant.unpack_to_dest
 
 
-# Every float route Quasar runs SFPU on: a 16-bit and a 32-bit Dest, Unpack-to-Dest and
-# FPU datacopy, bf16 and fp32 at each end, and one MX pair (the unpacker decodes it to
-# Float16_b). The op sweep runs all of them.
-_FLOAT_ROUTES = [
-    variant
+def _float_routes(formats_list):
+    """Unpack-to-Dest and FPU-datacopy routes. The resolver alone never yields an FPU
+    route where Unpack-to-Dest is also valid, so quasar_sfpu_fpu_route_variants adds them.
+    """
+    routes = []
     for variant in generate_quasar_sfpu_format_variants(
-        None, _FLOAT_FORMATS, full_format_route_sweep=True
-    )
-    if not _runs_mx_through_unpack_to_dest(variant)
-]
+        None, formats_list, full_format_route_sweep=True
+    ) + quasar_sfpu_fpu_route_variants(formats_list):
+        if variant not in routes and not _runs_mx_through_unpack_to_dest(variant):
+            routes.append(variant)
+    return routes
+
+
+# Float16 (A-family) is the one 16-bit Dest format where RSUB must not round to bf16.
+_FLOAT16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
+
+# Every float producer route, including one MX pair and Float16; the op sweep runs all of them.
+_FLOAT_ROUTES = _float_routes(_FLOAT_FORMATS + [_FLOAT16])
+
+# bf16 into a 16-bit Dest has both producers; the FPU one is the narrow FPU-to-SFPU handshake.
+assert {
+    v.unpack_to_dest
+    for v in _FLOAT_ROUTES
+    if v.formats.input_format == DataFormat.Float16_b
+    and v.dest_acc == DestAccumulation.No
+} == {
+    True,
+    False,
+}, "the op sweep must run bf16 into a 16-bit Dest through both producers"
+
 # One route per Dest width, for the scalar and Dest-layout sweeps.
 _FLOAT_VARIANTS = generate_quasar_sfpu_format_variants(None, _FLOAT_FORMATS)
 _INT32_VARIANTS = generate_quasar_sfpu_format_variants(
     None, input_output_formats([DataFormat.Int32], same=True)
 )
 
-# A representative scalar for the op sweep, and the rest of the axis on fp32 and bf16
-# routes: zero, unity, a sign flip, a large multiplier and a fraction. Inputs are
-# uniform(-1, 1), so |scalar| <= 8 keeps every result well inside the bf16 range.
+# |scalar| <= 8 on uniform(-1, 1) inputs keeps every result well inside the bf16 range.
 _SCALAR = 2.0
 _MORE_SCALARS = [0.0, 1.0, -2.0, 8.0, 0.25]
 
-# Int32 scalars: positive, and negative so the subtraction adds. Inputs stay within
-# +/-2^30, so no result overflows.
+# A negative scalar makes SUB add; inputs within +/-2^30 keep every result from overflowing.
 _INT32_SCALARS = [1000, -5]
 _INT32_INPUT_SPAN = 2**30
 
@@ -117,13 +129,23 @@ def _scalar_bits(mathop: MathOperation, scalar: float) -> int:
 
 
 def _narrows_fp32_input(variant: QuasarSfpuVariant) -> bool:
-    """An fp32 input unpacked into a 16-bit Dest is narrowed before the SFPU reads it.
-
-    On emu-quasar that narrowing is not a fixed rule: the same lane comes back truncated in
-    one run and rounded up in the next, so no golden reproduces it exactly. It moves the
-    input by less than one bf16 step, which moves the result by at most one.
+    """fp32 into a 16-bit Dest is narrowed non-deterministically on emu-quasar (truncated in
+    one run, rounded up in the next), so these routes allow the one ULP that moves the result.
     """
     return variant.formats.input_format.is_32_bit() and not variant.sfpu_src.is_32_bit()
+
+
+def _truncate_to_float16(values: torch.Tensor) -> torch.Tensor:
+    """fp32 -> Float16 toward zero, as SFPSTORE narrows into a Float16 Dest."""
+    narrowed = values.to(torch.float16)
+    overshoot = narrowed.to(torch.float32).abs() > values.abs()
+    toward_zero = torch.nextafter(narrowed, torch.zeros_like(narrowed))
+    return torch.where(overshoot, toward_zero, narrowed)
+
+
+def _dest_16bit_format(variant: QuasarSfpuVariant) -> DataFormat:
+    """The format a 16-bit Dest holds; Float16_b stands in when the Dest is 32-bit."""
+    return DataFormat.Float16_b if variant.sfpu_dst.is_32_bit() else variant.sfpu_dst
 
 
 def _float_golden(
@@ -132,26 +154,28 @@ def _float_golden(
     value_bits: int,
     variant: QuasarSfpuVariant,
 ) -> torch.Tensor:
-    """The packed result, with the kernel's rounding modelled exactly.
-
-    An MX input reaches the SFPU quantized, and an fp32 input is taken at full precision
-    (see _narrows_fp32_input for the one route where it is not). ScalarBinopGolden gives the fp32 result
-    and its RNE cast to the output format. With a 16-bit SFPU destination only RSUB
-    rounds; the other ops reach Dest through SFPSTORE, which truncates. A 32-bit Dest
-    holds the fp32 result, and the packer rounds it to nearest even on the way to a bf16
-    output.
-    """
+    """SFPSTORE truncates into a 16-bit Dest, except that RSUB rounds to bf16 nearest-even on
+    Float16_b; a 32-bit Dest holds fp32, which the packer rounds to nearest-even."""
     golden = get_golden_generator(ScalarBinopGolden)
     output_format = variant.formats.output_format
     src_A = quantize_input_to_unpack_format(src_A, variant.formats.input_format).to(
         torch.float32
     )
-    if variant.sfpu_dst.is_32_bit() or mathop == MathOperation.ScalarRsub:
+    dest_format = _dest_16bit_format(variant)
+    rounds_to_bf16 = (
+        mathop == MathOperation.ScalarRsub and dest_format == DataFormat.Float16_b
+    )
+    if variant.sfpu_dst.is_32_bit() or rounds_to_bf16:
         return golden(
             mathop, src_A, value_bits, output_format, variant.dest_acc
         ).flatten()
     exact = golden(mathop, src_A, value_bits, DataFormat.Float32, DestAccumulation.Yes)
-    return truncate_to_bfloat16(exact).to(format_dict[output_format]).flatten()
+    stored = (
+        _truncate_to_float16(exact)
+        if dest_format == DataFormat.Float16
+        else truncate_to_bfloat16(exact)
+    )
+    return stored.to(format_dict[output_format]).flatten()
 
 
 def _int32_golden(
@@ -203,6 +227,7 @@ def _run_sfpu_binop_scalar_quasar(
         "templates": [
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(value_bits),
+            SFPU_DEST_16BIT_FORMAT(_dest_16bit_format(variant)),
             APPROX_MODE(_APPROX_MODE),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(

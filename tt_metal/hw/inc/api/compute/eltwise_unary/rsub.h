@@ -28,15 +28,20 @@ namespace ckernel {
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | scalar         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
+ *
+ * | Template Parameter  | Description                                                              | Type       | Valid Range        | Default        |
+ * |---------------------|--------------------------------------------------------------------------|------------|--------------------|----------------|
+ * | is_fp32_dest_acc_en | DST holds fp32; no rounding is applied                                   | bool       | true, false        | DST_ACCUM_MODE |
+ * | DEST_16BIT_FORMAT   | Format a 16-bit DST holds; Float16_b results are rounded to nearest-even | DataFormat | Float16_b, Float16 | Float16_b      |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat DEST_16BIT_FORMAT = DataFormat::Float16_b>
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
-        (APPROX, RSUB_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
+        (APPROX, RSUB_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en, DEST_16BIT_FORMAT),
         idst,
         VectorMode::RC,
         scalar));

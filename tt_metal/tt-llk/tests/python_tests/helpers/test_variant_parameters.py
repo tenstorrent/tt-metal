@@ -379,6 +379,23 @@ class SFPU_BINOP_MODE(TemplateParameter):
 
 
 @dataclass
+class SFPU_DEST_16BIT_FORMAT(TemplateParameter):
+    """The format a 16-bit Dest holds, for kernels whose rounding depends on it.
+
+    Emits ``constexpr auto DEST_16BIT_FORMAT = DataFormat::<name>;``, the value the
+    Compute API's ``DEST_16BIT_FORMAT`` template parameter carries (Float16_b or
+    Float16). It has no effect with a 32-bit Dest.
+    """
+
+    dest_format: DataFormat = DataFormat.Float16_b
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr auto DEST_16BIT_FORMAT = DataFormat::{self.dest_format.name};"
+        )
+
+
+@dataclass
 class SFPU_UNARY_SCALAR(TemplateParameter):
     """Scalar operand for the float unary-with-scalar binops, as raw fp32 bits.
 

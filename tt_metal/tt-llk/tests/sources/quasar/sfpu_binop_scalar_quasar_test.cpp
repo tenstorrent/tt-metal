@@ -151,7 +151,8 @@ constexpr int SUB_INT32_MODE = 6;
 
 /**
  * @brief Run the scalar binop SFPU_BINOP_MODE selects on one Dest tile, as the Compute API's
- * add/sub/mul/div/rsub_unary_tile and add/sub_unary_tile_int32 do.
+ * add/sub/mul/div/rsub_unary_tile and add/sub_unary_tile_int32 do. DEST_16BIT_FORMAT is the format a
+ * 16-bit Dest holds, which decides whether RSUB rounds to bf16.
  */
 inline void call_binop_with_scalar(const std::uint32_t dst_index)
 {
@@ -169,7 +170,7 @@ inline void call_binop_with_scalar(const std::uint32_t dst_index)
             dest_sync,
             is_fp32_dest_acc_en,
             calculate_binop_with_scalar,
-            (APPROX_MODE, SFPU_BINOP_MODE, SFPU_ITERATIONS, is_fp32_dest_acc_en),
+            (APPROX_MODE, SFPU_BINOP_MODE, SFPU_ITERATIONS, is_fp32_dest_acc_en, DEST_16BIT_FORMAT),
             dst_index,
             VectorMode::RC,
             SFPU_UNARY_SCALAR);
