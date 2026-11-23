@@ -390,3 +390,131 @@ def test_fx_controls3(mesh_device):
     SCEN.update(CTRL3)
     for scen in CTRL3:
         run(mesh_device, scen, 8704, tag="ctrl3")
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dev_params(8704)], ids=["pay8704"], indirect=True)
+def test_fx_trace(mesh_device):
+    """One launch of scenario FX_SCEN (FX_BYTES small: the NoC event trace holds ~2,900 events a RISC) for NoC traces
+    (TT_METAL_DEVICE_PROFILER_NOC_EVENTS); prints each flow's chip ids and ethernet NoC x."""
+    from models.demos.ws_expert.ws_lane5 import eth_x
+
+    for d in (CTRL, CTRL2, CTRL3):
+        SCEN.update(d)
+    scen = os.environ.get("FX_SCEN", "two_out_noc1_noc1")
+    fabric_mux = ttnn.experimental.fabric_mux
+    mcfg = fabric_mux.Config(
+        num_full_size_channels=1,
+        num_header_only_channels=0,
+        num_buffers_per_full_size_channel=2,
+        num_buffers_per_header_only_channel=0,
+        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh_device),
+        base_l1_address=ttnn.get_allocator_base_address(mesh_device, ttnn.BufferType.L1),
+    )
+    for f in SCEN[scen]:
+        s_, d_, l = f[:3]
+        logger.info(
+            f"FXT flow {f}: chips {int(node(mesh_device, s_).chip_id)} -> {int(node(mesh_device, d_).chip_id)}, "
+            f"sender eth x {eth_x(mesh_device, mcfg, s_, d_, l)}, receiver eth x {eth_x(mesh_device, mcfg, d_, s_, l)}, "
+            f"sender core noc {noc(mesh_device, *(f[3][0] if isinstance(f[3][0], tuple) else f[3]))}"
+        )
+    global WARM, MEAS
+    WARM, MEAS = 0, 1
+    run(mesh_device, scen, 8704, mode=int(os.environ.get("FX_MODE", "1")), tag="trace")
+    ttnn.ReadDeviceProfiler(mesh_device)
+
+
+ETH_ALL_X = (1, 16, 2, 15, 3, 14, 4, 13, 5, 12, 6, 11, 7, 10)  # (physical ethernet channel -> NoC x)
+P150_ETH_HARVEST = 0x120  # (channels 5 and 8 fused off on a P150; the fabric's channel ids skip them)
+
+
+def eth_phys_x(mesh, src, dst, link, harvest=P150_ETH_HARVEST):
+    """Physical NoC x of the ethernet core the fabric uses from src towards dst on link: the fabric's channel id counts
+    the chip's unharvested channels (checked against the NoC trace's destinations)."""
+    from models.demos.ws_expert.ws_lane5 import BH_ETH_X  # noqa: F401  (the unharvested order)
+
+    fabric_mux = ttnn.experimental.fabric_mux
+    mcfg = fabric_mux.Config(
+        num_full_size_channels=1,
+        num_header_only_channels=0,
+        num_buffers_per_full_size_channel=2,
+        num_buffers_per_header_only_channel=0,
+        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh),
+        base_l1_address=ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1),
+    )
+    a = list(
+        mcfg.kernel_runtime_args(
+            source_node_id=node(mesh, src),
+            destination_node_id=node(mesh, dst),
+            link_index=link,
+            program_descriptor=ttnn.ProgramDescriptor(),
+            mux_logical_core=ttnn.CoreCoord(0, 0),
+        )
+    )
+    chan = a[1 + 2 * a[0]]
+    live = [x for i, x in enumerate(ETH_ALL_X) if not harvest >> i & 1]
+    return live[chan]
+
+
+PHYS_TENSIX = [1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14, 15]  # (logical column -> physical x on bh-lb-09: x 10 harvested)
+
+
+def to_logical(px, py):
+    return (PHYS_TENSIX.index(px), py - 2)
+
+
+def phys_placed_flows(mesh, links=(0, 1), only=None):
+    """Senders right under their ethernet core on NOC1 (one hop north into it), receivers at the bottom row of their
+    ethernet core's column (the routers' NOC1 landing writes: north 1 -> 0 -> 11, no row travel). Ethernet x 10 / 16
+    (no Tensix column): sender at (7, 11) / (15, 11) on NOC0 (east along the bottom row, then south 11 -> 0 -> 1);
+    receiver at x 7 / 15 on the bottom row."""
+    out = []
+    used = {}
+
+    def free(chip, px, py, step):  # (a clash: the next row along the same column, still no row travel)
+        while (px, py) in used.setdefault(chip, set()):
+            py += step
+        used[chip].add((px, py))
+        return px, py
+
+    flows = only if only is not None else all_link_flows(tuple(mesh.shape), links)
+    for f in flows:
+        s_, d_, l = f[:3]
+        ex_s, ex_d = eth_phys_x(mesh, s_, d_, l), eth_phys_x(mesh, d_, s_, l)
+        if ex_s in PHYS_TENSIX:
+            snd, rk = to_logical(*free(s_, ex_s, 2, 1)), 1
+        elif ex_s == 10:  # (every NOC1 path up column 11 shares (11, 2) -> (11, 1) with that column's own sender)
+            snd, rk = to_logical(*free(s_, 7, 11, -1)), 0
+        else:
+            snd, rk = to_logical(*free(s_, 15, 11, -1)), 0
+        rx = ex_d if ex_d in PHYS_TENSIX else {10: 7, 16: 15}[ex_d]
+        out.append((s_, d_, l, (snd, to_logical(*free(d_, rx, 11, -1))), rk))
+    return out
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dev_params(8704)], ids=["pay8704"], indirect=True)
+def test_fx_phys_placed(mesh_device):
+    """Two senders on one chip and every link busy, placed by physical NoC paths (one NoC for every sender)."""
+    for d in (CTRL, CTRL2, CTRL3):
+        SCEN.update(d)
+    SCEN["two_out_phys"] = phys_placed_flows(mesh_device, only=CTRL["two_out"])
+    SCEN["two_in_phys"] = phys_placed_flows(mesh_device, only=CTRL["two_in"])
+    SCEN["2link_2dir_phys"] = phys_placed_flows(mesh_device, only=SCEN["2link_2dir"])
+    SCEN["all_phys"] = phys_placed_flows(mesh_device)
+    for scen in ():
+        logger.info(f"FXP {scen}: {SCEN[scen]}")
+        run(mesh_device, scen, 8704, tag="phys")
+    flows = SCEN["all_phys"]
+    per = run(mesh_device, "all_phys", 8704, tag="phys")
+    out, inn = {}, {}
+    for f, v in zip(flows, per):
+        out[f[0]] = out.get(f[0], 0) + v
+        inn[f[1]] = inn.get(f[1], 0) + v
+    logger.info(
+        f"FX all links phys: GB/s out / in a chip {[(c, round(out[c]), round(inn[c])) for c in sorted(out)]}; per flow "
+        f"min {min(per):.1f} median {statistics.median(per):.1f} max {max(per):.1f}; flows {flows}"
+    )
+
+
+CTRL.update({"north_2link": [((1, 0), (0, 0), 0, (1, 0), 1), ((1, 0), (0, 0), 1, (2, 0), 1)]})

@@ -1916,3 +1916,25 @@ link both ways at once (40 one-hop flows, each its own sender / receiver core), 
   paths share a NoC link (worker -> router writes along the ethernet row; router landing writes along the destination
   row). Put the two on different NoCs and each gets the full link. The earlier placement runs placed cores by logical
   column, not by physical NoC column (one harvested column a chip), so their paths still overlapped.
+- NoC traces of the two-sender cases (device profiler NoC events, FX_MODE 0: the connection's stateful path programs
+  the command buffers directly and is not recorded; tt-npe only to collect, routes counted by hand on the physical
+  17 x 12 torus, NOC0 x+ then y+, NOC1 y- then x-). Sending chip, flow 0 (2,2) -> ethernet (12,1), flow 1 (3,2) -> (7,1):
+  both NOC0 share row 2 x 3 -> 7 (4 links), both NOC1 share the ethernet row x 2 -> 12 westwards (7 links); one each:
+  nothing shared. Two ~47 GB/s streams through one ~81 GB/s link: 40 each.
+- The fabric's ethernet channel ids count the chip's unharvested channels: a P150 has channels 5 / 8 (NoC x 14 / 5)
+  fused off, so channel c is the c-th of (1, 16, 2, 15, 3, 4, 13, 12, 6, 11, 7, 10). ws_lane5.eth_x (and so
+  L5Cfg.place) indexed the unharvested list: wrong for channels >= 5 on the LoudBox. bh-lb-09: every chip has NoC
+  column 10 harvested (logical column c -> x 1-7, 11-15; x 16 dispatch).
+- Placement by physical path (test_fx_phys_placed): a sender right under its ethernet core on NOC1 (one hop north),
+  a receiver at the bottom row of its ethernet core's column (the routers' NOC1 landing writes: 1 -> 0 -> 11, no row
+  travel); an ethernet core over a column without Tensix (x 10 harvested, 16 dispatch): sender on NOC0 from the bottom
+  row (east along row 11, then 11 -> 0 -> 1), since every NOC1 path up the next column shares that column's last link.
+| every sender on NOC1 unless noted | before | placed by physical path |
+|---|---|---|
+| two senders on one chip | 40.5 / 40.5 | 47.9 / 47.9 |
+| two routers receiving on one chip | 41.1 / 41.2 | 48.0 / 48.1 |
+| 2 links both directions | ~40 x 4 | 46.8 x 4 |
+| every link both ways (40 flows), per flow min / median / max | 14.8 / 21.8 / 47.7 | 43.9 / 46.8 / 47.2 |
+| out / in a middle chip (6 links) | 107-193 / 115-176 | 278-281 / 278-281 |
+  So nothing per chip: the NoC paths into and out of the ethernet row. On the Galaxy (8 links at 200G, 25 GB/s a
+  stream) up to 3 streams fit a NoC link, but the same placement rule applies, with each chip's real harvest.
