@@ -107,14 +107,22 @@ constexpr auto reload_zw =
     adc::AddrCounter {.action = adc::Action::AdvanceAndReset, .channel0 = set_zw.channel0, .channel1 = set_zw.channel1}.for_clients<adc::Client::Unpacker1>();
 
 // operation() returns the encoded word; issuing it shows which instruction it encodes.
+// Binding each word to constexpr makes operation() take its constant-evaluated path.
 extern "C" __attribute__((noinline, used)) void issue_encoded_operations()
 {
-    TTI_INSN(set_xy.operation());
-    TTI_INSN(increment_xy.operation());
-    TTI_INSN(reload_xy.operation());
-    TTI_INSN(set_zw.operation());
-    TTI_INSN(increment_zw.operation());
-    TTI_INSN(reload_zw.operation());
+    constexpr auto set_xy_word       = set_xy.operation();
+    constexpr auto increment_xy_word = increment_xy.operation();
+    constexpr auto reload_xy_word    = reload_xy.operation();
+    constexpr auto set_zw_word       = set_zw.operation();
+    constexpr auto increment_zw_word = increment_zw.operation();
+    constexpr auto reload_zw_word    = reload_zw.operation();
+
+    TTI_INSN(set_xy_word);
+    TTI_INSN(increment_xy_word);
+    TTI_INSN(reload_xy_word);
+    TTI_INSN(set_zw_word);
+    TTI_INSN(increment_zw_word);
+    TTI_INSN(reload_zw_word);
 }
 
 // CHECK-LABEL: <issue_encoded_operations>:
@@ -252,9 +260,9 @@ extern "C" __attribute__((noinline, used)) void dual_x_and_packed_y_channels()
 
 extern "C" __attribute__((noinline, used)) void mixed_widths_all_counters()
 {
-    constexpr auto counters = adc::AddrCounter {.channel0 = {.x = 0, .y = 8, .z = 7, .w = 1024}, .channel1 = {.x = 1023, .y = 7, .z = 8191, .w = 0}}
-                                  .for_clients<adc::Client::Unpacker0, adc::Client::Packers>();
-    counters::set<counters>();
+    constexpr auto all_counters = adc::AddrCounter {.channel0 = {.x = 0, .y = 8, .z = 7, .w = 1024}, .channel1 = {.x = 1023, .y = 7, .z = 8191, .w = 0}}
+                                      .for_clients<adc::Client::Unpacker0, adc::Client::Packers>();
+    counters::set<all_counters>();
 }
 
 // Both families mix widths. Prefer XX on the XY tie and preserve explicitly selected zeroes.
@@ -269,13 +277,13 @@ extern "C" __attribute__((noinline, used)) void mixed_widths_all_counters()
 
 extern "C" __attribute__((noinline, used)) void wide_values_all_counters()
 {
-    constexpr auto counters =
+    constexpr auto all_counters =
         adc::AddrCounter {
             .channel0 = {.x = 65535, .y = 8191, .z = 8190, .w = 8189},
             .channel1 = {.x = 65531, .y = 8188, .z = 8187, .w = 8186},
         }
             .for_clients<adc::Client::Unpacker0>();
-    counters::set<counters>();
+    counters::set<all_counters>();
 }
 
 // Every value needs SETADC, reaching the eight-instruction maximum within each dimension's range.

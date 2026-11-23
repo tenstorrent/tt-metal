@@ -62,6 +62,28 @@ extern "C" __attribute__((noinline, used)) void rewind_sources()
 // CHECK-NEXT: ttincrwc 3,0,0,0{{$}}
 // CHECK-NEXT: ret
 
+// A one-sided rewind sets only that source's CR bit.
+extern "C" __attribute__((noinline, used)) void rewind_src_b()
+{
+    constexpr auto rewind = rwc::MathCounter {.src_b = rwc::AdvanceAndReset(2)};
+    counters::set<rewind>();
+}
+
+// CHECK-LABEL: <rewind_src_b>:
+// CHECK-NEXT: ttincrwc 2,0,2,0{{$}}
+// CHECK-NEXT: ret
+
+// Set needs SETRWC, so the SrcA rewind joins it with SrcA's CR and write bits.
+extern "C" __attribute__((noinline, used)) void rewind_src_a_with_dest_set()
+{
+    constexpr auto rewind = rwc::MathCounter {.src_a = rwc::AdvanceAndReset(3), .dest = rwc::Set(1)};
+    counters::set<rewind>();
+}
+
+// CHECK-LABEL: <rewind_src_a_with_dest_set>:
+// CHECK-NEXT: ttsetrwc 0,1,1,0,3,5{{$}}
+// CHECK-NEXT: ret
+
 // Set and AdvanceAndReset share one SETRWC; the flip releases both source banks.
 extern "C" __attribute__((noinline, used)) void next_face()
 {

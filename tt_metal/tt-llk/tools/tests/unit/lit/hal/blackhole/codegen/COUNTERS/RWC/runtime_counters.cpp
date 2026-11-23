@@ -37,7 +37,7 @@ extern "C" __attribute__((noinline, used)) void runtime_increment_dest(std::uint
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_increment_dest(std::uint32_t d)
 {
-    TT_INCRWC(0x0 /*CR_NONE*/, d, 0 /*rwc_b*/, 0 /*rwc_a*/);
+    TT_INCRWC(0 /*rwc_cr*/, d, 0 /*rwc_b*/, 0 /*rwc_a*/);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_advance_and_reset_dest(std::uint32_t d)
@@ -70,8 +70,8 @@ extern "C" __attribute__((noinline, used)) void runtime_set_and_increment(std::u
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_set_and_increment(std::uint32_t a, std::uint32_t d)
 {
-    TT_SETRWC(0x0 /*CLR_NONE*/, 0x0 /*CR_NONE*/, 0 /*rwc_d*/, 0 /*rwc_b*/, a, 0x1 /*SET_A*/);
-    TT_INCRWC(0x0 /*CR_NONE*/, d, 0 /*rwc_b*/, 0 /*rwc_a*/);
+    TT_SETRWC(0x0 /*CLR_NONE*/, 0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, a, 0x1 /*SET_A*/);
+    TT_INCRWC(0 /*rwc_cr*/, d, 0 /*rwc_b*/, 0 /*rwc_a*/);
 }
 
 extern "C" __attribute__((noinline, used)) void runtime_flip_increment_and_advance(std::uint32_t a, std::uint32_t d)
@@ -83,7 +83,7 @@ extern "C" __attribute__((noinline, used)) void runtime_flip_increment_and_advan
 extern "C" __attribute__((noinline, used)) void reference_runtime_flip_increment_and_advance(std::uint32_t a, std::uint32_t d)
 {
     TT_SETRWC(0x3 /*CLR_AB*/, 0x4 /*CR_D*/, d, 0 /*rwc_b*/, 0 /*rwc_a*/, 0x4 /*SET_D*/);
-    TT_INCRWC(0x0 /*CR_NONE*/, 0 /*rwc_d*/, 0 /*rwc_b*/, a);
+    TT_INCRWC(0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, a);
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t runtime_encoded_increment_src_a(std::uint32_t a)
@@ -94,5 +94,5 @@ extern "C" __attribute__((noinline, used)) std::uint32_t runtime_encoded_increme
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_runtime_encoded_increment_src_a(std::uint32_t a)
 {
-    return TT_OP_INCRWC(0x0 /*CR_NONE*/, 0 /*rwc_d*/, 0 /*rwc_b*/, a);
+    return TT_OP_INCRWC(0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, a);
 }

@@ -42,14 +42,15 @@ extern "C" __attribute__((noinline, used)) void reference_runtime_set_single_cou
 
 extern "C" __attribute__((noinline, used)) void runtime_set_x_both_channels(std::uint32_t x0, std::uint32_t x1)
 {
-    const auto x_counters = adc::AddrCounter {.channel0 = {.x = x1}, .channel1 = {.x = x0}}.for_clients<adc::Client::Packers>();
+    const auto x_counters = adc::AddrCounter {.channel0 = {.x = x0}, .channel1 = {.x = x1}}.for_clients<adc::Client::Packers>();
     counters::set(x_counters);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_runtime_set_x_both_channels(std::uint32_t x0, std::uint32_t x1)
 {
-    const auto ch0_x = x1;
-    const auto ch1_x = x0;
+    // The copies keep GCC's add order identical to the HAL path.
+    const auto ch0_x = x0;
+    const auto ch1_x = x1;
     TT_SETADCXX(0b100 /*PAC*/, ch1_x, ch0_x);
 }
 
