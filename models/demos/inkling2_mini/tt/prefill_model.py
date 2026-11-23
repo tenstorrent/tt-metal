@@ -541,6 +541,10 @@ class Inkling2Prefill:
         self.wred = weighted_reduce
         self.r2_step = 1 << 20 if r2 else NUM_EXPERTS  # sparse_matmul ids per call
         self.r3_chunks = tuple(r3_chunks)
+        # Opt-in, changes output: q|k|v|gate (2304 -> 6560) and w_o (3072 -> 2304) projections with hand-set 2D
+        # multicast configs that accumulate K in blocks of 4 tiles (default 1 / 2): other fp32 summation order,
+        # ~-1.3 ms per application at 8K (perf/G5d-report.md). Off by default.
+        self.mm_blocked = False
         self.debug = debug
         self.profile = profile
         self.trace = trace
@@ -615,7 +619,35 @@ class Inkling2Prefill:
 
     # ------------------------------------------------------------------ attention
     def _linear(self, x, w, dtype=ttnn.bfloat16):
-        return ttnn.linear(x, w, dtype=dtype, compute_kernel_config=self.mm_cfg)
+        pc = self._mm_blocked_cfg(x, w) if self.mm_blocked else None
+        return ttnn.linear(x, w, dtype=dtype, compute_kernel_config=self.mm_cfg, program_config=pc)
+
+    def _mm_blocked_cfg(self, x, w):
+        """mm_blocked's config for the two big projections (None for any other shape): grid 11 x 10, transposed
+        multicast (grid columns split M), K blocks of 4 tiles, output blocks that fit L1."""
+        Mt, Kt, Nt = x.padded_shape[-2] // 32, w.padded_shape[-2] // 32, w.padded_shape[-1] // 32
+        if (Kt, Nt) == (72, 205):  # q|k|v|gate
+            sh, sw, obh_max = 1, 3, 8
+        elif (Kt, Nt) == (96, 72):  # w_o
+            sh, sw, obh_max = 4, 1, 12
+        else:
+            return None
+        pm, pn = -(-Mt // 11), -(-Nt // 10)
+        while pm % sh:
+            sh //= 2
+        obh = max(d for d in range(sh, obh_max + 1, sh) if pm % d == 0)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(11, 10),
+            in0_block_w=4,
+            out_subblock_h=sh,
+            out_subblock_w=sw,
+            out_block_h=obh,
+            out_block_w=pn,
+            per_core_M=pm,
+            per_core_N=pn,
+            transpose_mcast=True,
+            fused_activation=None,
+        )
 
     @staticmethod
     def _l2_clip(x32, threshold):
