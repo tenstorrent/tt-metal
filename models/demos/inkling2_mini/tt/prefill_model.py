@@ -57,7 +57,7 @@ from models.demos.inkling2_mini.tt.attention import (
     log_scale,
 )
 from models.demos.inkling2_mini.tt.attention_fast import KV_WIDTH, V_WIDTH
-from models.demos.inkling2_mini.tt.fused.common import dense_matrix
+from models.demos.inkling2_mini.tt.fused.common import dense_matrix, rms_norm_f32
 from models.demos.inkling2_mini.tt.fused.pf_attnres import PfAttnRes
 from models.demos.inkling2_mini.tt.fused.pf_combine import PfCombine
 from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
@@ -1207,8 +1207,8 @@ class Inkling2Prefill:
 
     def _messages(self, h12_in, h17_out):
         """Per-token cross-pass messages: returns fn(l) -> [q, k, v, mlp] fp32 [1,1,T,C]."""
-        n0 = ttnn.rms_norm(_f32(h12_in), epsilon=EPS, compute_kernel_config=self.ckc)
-        n1 = ttnn.rms_norm(_f32(h17_out), epsilon=EPS, compute_kernel_config=self.ckc)
+        n0 = rms_norm_f32(h12_in, epsilon=EPS, compute_kernel_config=self.ckc)
+        n1 = rms_norm_f32(h17_out, epsilon=EPS, compute_kernel_config=self.ckc)
         l0 = ttnn.matmul(n0, self.msg_qT, dtype=ttnn.float32, compute_kernel_config=self.ckc)
         l1 = ttnn.matmul(n1, self.msg_qT, dtype=ttnn.float32, compute_kernel_config=self.ckc)
         w0 = ttnn.sigmoid(ttnn.subtract(l0, l1))  # softmax over the 2 keys

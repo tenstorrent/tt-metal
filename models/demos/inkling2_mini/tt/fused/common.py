@@ -194,3 +194,21 @@ class OutCache:
             self.bufs[tkey] = dense_tensor(self.device, torch.zeros(nvec, c), dtype)
             set_twin(out, self.bufs[tkey], nvec)
         return out, self.bufs[tkey]
+
+
+_RMS_DTYPE = None  # does this build's rms_norm take an output dtype?
+
+
+def rms_norm_f32(x, **kw):
+    """ttnn.rms_norm with an fp32 result for a bf16 or fp32 input. A bf16 input goes in as it is when the build's
+    rms_norm takes `dtype` (bit-equal to typecasting it to fp32 first: the norm's math is fp32 and bf16 is exact in
+    fp32), else through a typecast. Not for a bf16 result: the pack rounds otherwise than ttnn.typecast."""
+    global _RMS_DTYPE
+    if x.dtype != ttnn.float32 and _RMS_DTYPE is not False:
+        try:
+            y = ttnn.rms_norm(x, dtype=ttnn.float32, **kw)
+            _RMS_DTYPE = True
+            return y
+        except TypeError:
+            _RMS_DTYPE = False
+    return ttnn.rms_norm(x if x.dtype == ttnn.float32 else ttnn.typecast(x, ttnn.float32), **kw)

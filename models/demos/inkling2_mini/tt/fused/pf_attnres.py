@@ -58,8 +58,7 @@ class PfAttnRes:
 
     def __call__(self, normed, partial):
         """normed: list of rms-normed sealed states, fp32 [1,1,T,C] DRAM. Returns nq fp32 [1,1,T,C] outputs."""
-        p32 = partial if partial.dtype == ttnn.float32 else ttnn.typecast(partial, ttnn.float32)
-        ns = list(normed) + [ttnn.rms_norm(p32, epsilon=EPS, compute_kernel_config=self.ckc)]
+        ns = list(normed) + [F.rms_norm_f32(partial, epsilon=EPS, compute_kernel_config=self.ckc)]
         lg, stride, off, own = [], [], [], []
         for n in ns:
             e = PfAttnRes.TABLES.get(id(n)) if self.index is not None else None
