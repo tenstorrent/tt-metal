@@ -73,3 +73,49 @@ def test_pf_conv(device, t, mode):
         ms_ref = timed(dev, lambda: ref(mode, taps, x, ta, resid))
         ms_new = timed(dev, lambda: pc(taps, x, tb, mode, resid))
         print(f"PF_CONV_MS t={t} mode={mode} ops {ms_ref:.2f} fused {ms_new:.2f}")
+
+
+@pytest.mark.parametrize("t", [256, 2048])
+def test_pf_conv_dyn(device, t):
+    """dyn mode vs Inkling2Prefill._kv's global k / v conv chain (dyn taps through the expand matmul)."""
+    dev = device
+    g = torch.Generator().manual_seed(t + 1)
+    put = lambda a, dt: ttnn.from_torch(a, dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)  # noqa: E731
+    w, heads, hd = 1024, 8, 128
+    taps = [put(torch.randn(1, 1, 1, w, generator=g) * 0.3, ttnn.float32) for _ in range(4)]
+    x = put(torch.randn(1, 1, t, w, generator=g), ttnn.bfloat16)
+    dyn = put(torch.randn(1, 1, t, 32, generator=g) * 0.5, ttnn.bfloat16)
+    expand = torch.zeros(heads * 4, 4 * w)
+    for h in range(heads):
+        for lag in range(4):
+            expand[h * 4 + lag, lag * w + h * hd : lag * w + (h + 1) * hd] = 1.0
+    expand = put(expand, ttnn.bfloat16)
+    hifi4 = ttnn.init_device_compute_kernel_config(
+        dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )  # fmt: skip
+    scale = 1.0 / math.sqrt(9)
+    tail0 = put(torch.randn(1, 1, 32, w, generator=g), ttnn.bfloat16)
+    ta, tb = _Tail(tail0), _Tail(tail0)
+
+    def ref():
+        dyn_all = ttnn.matmul(dyn, expand, dtype=ttnn.float32, compute_kernel_config=hifi4)
+        _, lags = ta.window(x)
+        acc = None
+        for lag, xl in enumerate(lags):
+            wt = ttnn.add(ttnn.slice(dyn_all, [0, 0, 0, lag * w], [1, 1, t, (lag + 1) * w]), taps[lag])
+            term = ttnn.multiply(xl, wt, dtype=ttnn.float32)
+            acc = term if acc is None else ttnn.add(acc, term)
+        return ttnn.typecast(ttnn.multiply(ttnn.add(acc, _f32(lags[0])), scale), ttnn.bfloat16)
+
+    pc = PfConv(dev)
+    st = PfConv.scale_tile(dev, scale)
+    a, b = ttnn.to_torch(ref()), ttnn.to_torch(pc(taps, x, tb, "dyn", dyn=dyn, scale=st))
+    eq, teq = torch.equal(a, b), torch.equal(ttnn.to_torch(ta.t), ttnn.to_torch(tb.t))
+    print(
+        f"PF_CONV t={t} mode=dyn equal={eq} tail_equal={teq} maxdiff={float((a.float() - b.float()).abs().max()):.3g}"
+    )
+    assert eq and teq
+    if t == 2048:
+        ms_ref, ms_new = timed(dev, ref), timed(dev, lambda: pc(taps, x, tb, "dyn", dyn=dyn, scale=st))
+        print(f"PF_CONV_MS t={t} mode=dyn ops {ms_ref:.2f} fused {ms_new:.2f}")

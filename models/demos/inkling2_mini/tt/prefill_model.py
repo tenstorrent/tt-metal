@@ -359,6 +359,7 @@ class _LayerPF:
                     c0 = lag * N_KV * HEAD_DIM + h * HEAD_DIM
                     expand[h * TAPS + lag, c0 : c0 + HEAD_DIM] = 1.0
             self.expand = put(expand, ttnn.bfloat16)
+            self.conv_scale_t = PfConv.scale_tile(dev, self.conv_scale)  # PfConv "dyn" mode
         self.norms = [
             dev_of(n) for n in (("q_input_norm", "k_input_norm", "v_input_norm") if lay.is_global else ("attn_norm",))
         ]
@@ -603,12 +604,14 @@ class Inkling2Prefill:
         is_global = lp.lay.is_global
         if is_global:
             cur = _cols(proj, 0, width)
-            dyn_all = ttnn.matmul(
-                _cols(proj, width, width + N_KV * TAPS), lp.expand, dtype=ttnn.float32, compute_kernel_config=self.hifi4
-            )
+            dyn = _cols(proj, width, width + N_KV * TAPS)
         else:
             cur = proj
-        if is_global or not self.fused_glue:
+        if is_global and self.fused_glue:  # per-token taps: the same op chain in one program
+            acc = self._pfconv(lp.taps[kv], cur, tail, "dyn", dyn=dyn, scale=lp.conv_scale_t)
+        elif is_global or not self.fused_glue:
+            if is_global:
+                dyn_all = ttnn.matmul(dyn, lp.expand, dtype=ttnn.float32, compute_kernel_config=self.hifi4)
             _, lags = tail.window(cur)
             acc = None
             for lag, xl in enumerate(lags):
