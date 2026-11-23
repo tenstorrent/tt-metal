@@ -924,12 +924,64 @@ void read_k_chunks_two_noc(
     uint32_t grp[2] = {0, 0};  // groups started per NOC
     uint32_t cnt[2] = {0, 0};  // reads in the open group per NOC
     auto trid_of = [](uint32_t g) { return 1 + g % WIN; };
+    // Chunk i + 1's first reads are issued before chunk i is finished (its last groups waited, K pushed, V copied),
+    // so the K stream does not drain at every chunk boundary. Needs room for two chunks in the K buffer; the reads,
+    // the L1 slots and the pushes are the same as without the overlap, only their timing changes.
+    const uint32_t chunk_bytes = k_chunk_tiles * k_tile_bytes;
+    const uint32_t fifo_limit = get_local_cb_interface(cb_k_in).fifo_limit;
+    const uint32_t fifo_size = get_local_cb_interface(cb_k_in).fifo_size;
+    const bool overlap = full_chunks != 0xFFFFFFFF && full_chunks >= 2;
+    // tiles of the next chunk issued before the previous one is finished: enough to have reused every trid
+    const uint32_t lead = !overlap ? 0 : (k_chunk_tiles < 2 * GROUP * WIN ? k_chunk_tiles : 2 * GROUP * WIN);
+    bool pending = false;
+    uint32_t p_base = 0, p_first[2] = {0, 0}, p_last[2] = {0, 0};
+    auto finish = [&]() {
+        // wait for the pending chunk's groups whose trid was not reused since (older ones were waited at reuse)
+        for (uint32_t n = 0; n < 2; ++n) {
+            const uint32_t started = grp[n] + (cnt[n] ? 1 : 0);
+            const uint32_t unwaited = started > WIN ? started - WIN : 0;
+            for (uint32_t g = p_first[n] > unwaited ? p_first[n] : unwaited; g < p_last[n]; ++g) {
+                nocs[n]->async_read_barrier<NocOptions::TXN_ID>({.trid = trid_of(g)});
+            }
+        }
+        cb_k.push_back(k_chunk_tiles);
+        // V chunk (transpose of K) from K's L1 buffer
+        cb_v.reserve_back(v_chunk_tiles);
+        uint32_t v_write_ptr = cb_v.get_write_ptr();
+        UnicastEndpoint v_src;
+        for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+            uint32_t k_read_ptr = p_base + row * k_tile_bytes;
+            for (uint32_t col = 0; col < vDHt; ++col) {
+                noc0.async_read<NocOptions::TXN_ID>(
+                    v_src,
+                    CoreLocalMem<uint32_t>(v_write_ptr),
+                    v_tile_bytes,
+                    {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = k_read_ptr},
+                    {},
+                    {.trid = V_TRID});
+                v_write_ptr += v_tile_bytes;
+                k_read_ptr += Sk_chunk_t * k_tile_bytes;
+            }
+        }
+        noc0.async_read_barrier<NocOptions::TXN_ID>({.trid = V_TRID});
+        cb_v.push_back(v_chunk_tiles);
+        pending = false;
+    };
     for (uint32_t k_chunk = k_chunk_start, i = 0; k_chunk < k_chunk_end; ++k_chunk, ++i) {
+        uint32_t k_base;
+        if (pending) {  // the pending chunk holds the slot at the write pointer; this one takes the next slot
+            cb_k.reserve_back(2 * k_chunk_tiles);
+            k_base = p_base + chunk_bytes;
+            if (k_base >= fifo_limit) {
+                k_base -= fifo_size;
+            }
+        } else {
+            cb_k.reserve_back(k_chunk_tiles);
+            k_base = cb_k.get_write_ptr();
+        }
         const uint32_t first[2] = {grp[0], grp[1]};
-        cb_k.reserve_back(k_chunk_tiles);
-        const uint32_t k_base = cb_k.get_write_ptr();
         const bool skip_const = i >= full_chunks;
-        uint32_t l1 = k_base;
+        uint32_t l1 = k_base, issued = 0;
         for (uint32_t col = 0; col < DHt; ++col) {
             if (col == const_col && skip_const) {
                 l1 += Sk_chunk_t * k_tile_bytes;
@@ -954,41 +1006,32 @@ void read_k_chunks_two_noc(
                 }
                 page += DHt;
                 l1 += k_tile_bytes;
+                if (pending && ++issued == lead) {
+                    finish();
+                }
             }
         }
-        // close open groups, then wait for this chunk's groups whose trid was not reused (older ones were waited)
+        // close open groups
         for (uint32_t n = 0; n < 2; ++n) {
             if (cnt[n]) {
                 cnt[n] = 0;
                 ++grp[n];
             }
-            for (uint32_t g = (grp[n] > first[n] + WIN) ? grp[n] - WIN : first[n]; g < grp[n]; ++g) {
-                nocs[n]->async_read_barrier<NocOptions::TXN_ID>({.trid = trid_of(g)});
-            }
         }
-        cb_k.push_back(k_chunk_tiles);
+        if (pending) {
+            finish();
+        }
         k_start_tile_id += k_chunk_tiles;
-
-        // V chunk (transpose of K) from K's L1 buffer
-        cb_v.reserve_back(v_chunk_tiles);
-        uint32_t v_write_ptr = cb_v.get_write_ptr();
-        UnicastEndpoint v_src;
-        for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-            uint32_t k_read_ptr = k_base + row * k_tile_bytes;
-            for (uint32_t col = 0; col < vDHt; ++col) {
-                noc0.async_read<NocOptions::TXN_ID>(
-                    v_src,
-                    CoreLocalMem<uint32_t>(v_write_ptr),
-                    v_tile_bytes,
-                    {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = k_read_ptr},
-                    {},
-                    {.trid = V_TRID});
-                v_write_ptr += v_tile_bytes;
-                k_read_ptr += Sk_chunk_t * k_tile_bytes;
-            }
+        p_base = k_base;
+        p_first[0] = first[0], p_first[1] = first[1];
+        p_last[0] = grp[0], p_last[1] = grp[1];
+        pending = true;
+        if (!overlap) {
+            finish();
         }
-        noc0.async_read_barrier<NocOptions::TXN_ID>({.trid = V_TRID});
-        cb_v.push_back(v_chunk_tiles);
+    }
+    if (pending) {
+        finish();
     }
     // sticky packet tags back to the default transaction id
     noc_async_read_set_trid(0, noc_id);
