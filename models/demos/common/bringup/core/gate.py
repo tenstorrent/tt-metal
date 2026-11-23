@@ -24,6 +24,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -583,11 +584,33 @@ def format_paths(repo: Path, paths: list[str]) -> None:
             return
 
 
-def _git_retry(cmd: list[str], repo, check: bool = True, tries: int = 20, wait: float = 3.0):
+# F303: repo-wide pre-commit hooks (pass_filenames: false) that fail on violations in files a gate commit never
+# touches: the gate runs the hook's checker on the commit's own files instead (refusing the commit on a violation
+# there) and skips the repo-wide run (DeepSeek-V4.1 PS.1, 2026-11-23: two pre-existing `from tests...` imports
+# elsewhere in models/ refused every gate commit that staged a models/*.py file).
+REPO_WIDE_HOOKS = {"check-models-do-not-import-tests": "scripts/check_models_do_not_import_tests.py"}
+
+
+def repo_wide_hook_env(repo, files: list[str]) -> dict:
+    """F303: the SKIP environment for the repo-wide hooks, after their checkers passed on ``files``."""
+    skip = []
+    for hook, script in REPO_WIDE_HOOKS.items():
+        if not (Path(repo) / script).exists():
+            continue
+        r = subprocess.run([sys.executable, script, *files], cwd=repo, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"git commit refused: {hook} on the commit's own files:\n{r.stdout}{r.stderr}")
+        skip.append(hook)
+    prior = [h for h in os.environ.get("SKIP", "").split(",") if h]
+    return {"SKIP": ",".join(prior + skip)} if skip else {}
+
+
+def _git_retry(cmd: list[str], repo, check: bool = True, tries: int = 20, wait: float = 3.0, env: dict | None = None):
     """Run a git command, waiting out another process's index.lock (a person's or the overseer's git command) instead
     of crashing the run (F74). Other failures are returned (check=False) or raised (check=True) as before."""
+    run_env = dict(os.environ, **env) if env else None
     for i in range(tries):
-        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+        r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, env=run_env)
         if r.returncode == 0 or "index.lock" not in (r.stderr + r.stdout) or i == tries - 1:
             break
         time.sleep(wait)
@@ -647,10 +670,11 @@ def git_commit(spec: Spec, paths: list[str], subject: str, body: str) -> str | N
     trailer = spec.get("commit_trailer", DEFAULT_TRAILER)
     msg = f"{subject}\n\n{body}\n" + (f"\n{trailer}\n" if trailer else "")
     commit = ["git", "commit", "-q", "-m", msg, "--", *files]
+    henv = repo_wide_hook_env(repo, files)  # F303
     # pre-commit hooks may still rewrite files (black, EOF fixer): re-stage and retry once.
-    if _git_retry(commit, repo, check=False).returncode != 0:
+    if _git_retry(commit, repo, check=False, env=henv).returncode != 0:
         _stage(repo, files)
-        r = _git_retry(commit, repo, check=False)
+        r = _git_retry(commit, repo, check=False, env=henv)
         if r.returncode != 0:
             raise RuntimeError(f"git commit failed:\n{r.stdout}\n{r.stderr}")
     return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=repo, text=True).strip()
