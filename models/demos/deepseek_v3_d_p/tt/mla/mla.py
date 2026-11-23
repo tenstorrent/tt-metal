@@ -964,9 +964,10 @@ class ttMLA:
             self._push_geometry, distinct_rows=query_rows * (window + topk)  # window ids beside the top-k
         )
         # Pass 2 runs no full layer, so the dense gather buffer is idle while it runs: its push output goes there when
-        # it fits (as GLM-5.3's shared layers do, _push_reuses_dense), else to a buffer of its own. Nothing the dense
-        # buffer holds outlives a layer: a pass-1 layer pre-sends only into the next layer when that layer is shared
-        # and runs right after it in pass 1.
+        # it fits (as GLM-5.3's shared layers do, _push_reuses_dense), else to a buffer of its own. Safe because the
+        # layers use the buffer serially (pass 1 is done before pass 2 writes it) and _two_bank_attn calls
+        # self._push.invalidate() first, which drops any pre-send record a pass-1 layer left for a buffer pass 2 is
+        # about to overwrite.
         dense = self._sparse_kv_gather_buffer
         self._pass2_push_reuses_dense = (
             self._push.buffer_spec(dense, **self._pass2_push_geometry).shape[2] <= dense.shape[2]
