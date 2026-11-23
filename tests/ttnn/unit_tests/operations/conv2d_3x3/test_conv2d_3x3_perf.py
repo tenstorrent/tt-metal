@@ -264,7 +264,7 @@ def test_conv2d_3x3_perf_focus(case, device):
     from eval.golden_tests.conv2d_3x3 import helpers
 
     torch.manual_seed(0)
-    (H, W, c_in), c_out, padding, stride, dilation = case["inputs"]
+    (H, W, c_in), c_out, padding, stride, dilation, _kernel_size = case["inputs"]
     extras = case["extras"]
     dtype, weight_dtype, layout = case["dtype"], case["weight_dtype"], case["layout"]
     memory_config = helpers.build_input_memory_config(

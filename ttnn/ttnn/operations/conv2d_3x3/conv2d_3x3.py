@@ -76,9 +76,9 @@ def canonical_padding(padding):
     return sides[0] if len(set(sides)) == 1 else sides
 
 
-def output_hw(input_height, input_width, *, padding=0, stride=1, dilation=1):
+def output_hw(input_height, input_width, *, padding=0, stride=1, dilation=1, kernel_size=3):
     top, bottom, left, right = padding_sides(padding)
-    eff_k = 2 * dilation + 1
+    eff_k = dilation * (kernel_size - 1) + 1
     return (
         (input_height + top + bottom - eff_k) // stride + 1,
         (input_width + left + right - eff_k) // stride + 1,
@@ -120,7 +120,7 @@ def padded_k(c_in, input_layout, input_memory_config):
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS — inputs = ((H, W, C_in), C_out, padding, stride, dilation)
+# 1. INPUT_TAGGERS — inputs = ((H, W, C_in), C_out, padding, stride, dilation, kernel_size)
 # ---------------------------------------------------------------------------
 
 
@@ -137,8 +137,8 @@ def tag_channel_alignment(inputs, axes):
 
 
 def tag_hw_alignment(inputs, axes):
-    (H, W, _), _, padding, stride, dilation = inputs
-    h_out, w_out = output_hw(H, W, padding=padding, stride=stride, dilation=dilation)
+    (H, W, _), _, padding, stride, dilation, kernel_size = inputs
+    h_out, w_out = output_hw(H, W, padding=padding, stride=stride, dilation=dilation, kernel_size=kernel_size)
     return "hw_aligned" if (H * W) % TILE == 0 and (h_out * w_out) % TILE == 0 else "hw_non_aligned"
 
 
@@ -147,23 +147,31 @@ def tag_stride_mode(inputs, axes):
 
 
 def tag_dilation_mode(inputs, axes):
-    return "unit" if inputs[4] == 1 else "dilated"
+    # A 1x1 window reads one pixel whatever the dilation.
+    return "unit" if inputs[4] == 1 or inputs[5] == 1 else "dilated"
 
 
 def tag_padding_mode(inputs, axes):
-    padding, dilation = canonical_padding(inputs[2]), inputs[4]
+    padding, dilation, kernel_size = canonical_padding(inputs[2]), inputs[4], inputs[5]
+    # "same" keeps H_out = H at stride 1: dilation on a 3x3 window, 0 on a 1x1 one (which is "valid").
+    same = dilation * (kernel_size - 1) // 2
     if isinstance(padding, tuple):
-        # Per-side padding where each edge is either valid (0) or same (dilation): FLUX.2's halo-exchanged rows
+        # Per-side padding where each edge is either valid (0) or same: FLUX.2's halo-exchanged rows
         # (0, 0, 1, 1) and its stride-2 downsamplers (0, 1, 0, 1).
-        return "asymmetric" if set(padding) <= {0, dilation} else "other"
+        return "asymmetric" if set(padding) <= {0, same} else "other"
     if padding == 0:
         return "valid"
-    if padding == dilation:
+    if padding == same:
         return "same"
     return "other"
 
 
+def tag_kernel_size(inputs, axes):
+    return inputs[5]
+
+
 INPUT_TAGGERS = {
+    "kernel_size": tag_kernel_size,
     "channel_alignment": tag_channel_alignment,
     "hw_alignment": tag_hw_alignment,
     "stride_mode": tag_stride_mode,
@@ -191,6 +199,7 @@ SUPPORTED = {
     "stride_mode": ["unit", "strided"],
     "dilation_mode": ["unit", "dilated"],
     "padding_mode": ["valid", "same", "asymmetric"],
+    "kernel_size": [3],
 }
 
 
@@ -238,9 +247,12 @@ def _check_supported(axes, op_name):
             raise ExcludedCell(f"{op_name}: unsupported combination (refinement candidate): {exc}")
 
 
-def _prepare_axes(*, input_dtype, input_layout, weight_dtype, input_memory_config, stride, padding, dilation):
-    shape_free_inputs = ((0, 0, 0), 0, padding, stride, dilation)
+def _prepare_axes(
+    *, input_dtype, input_layout, weight_dtype, input_memory_config, stride, padding, dilation, kernel_size=3
+):
+    shape_free_inputs = ((0, 0, 0), 0, padding, stride, dilation, kernel_size)
     return {
+        "kernel_size": kernel_size,
         "dtype": input_dtype,
         "layout": input_layout,
         "weight_dtype": weight_dtype,
@@ -305,8 +317,11 @@ def prepare_conv2d_weights_host(
     """prepare_conv2d_weights' checks and row layout as a torch [1, 1, K_p, C_out] tensor, not yet on a device.
     For callers that place it themselves, e.g. one channel shard per device of a mesh. On an interleaved input
     the prepared weights go to ttnn.DRAM_MEMORY_CONFIG (weight_memory_config)."""
-    if torch_weight.dim() != 4 or tuple(torch_weight.shape[2:]) != (3, 3):
-        raise ValueError(f"conv2d_3x3: weight must be [C_out, C_in, 3, 3], got {list(torch_weight.shape)}")
+    if torch_weight.dim() != 4 or tuple(torch_weight.shape[2:]) not in ((3, 3), (1, 1)):
+        raise ValueError(
+            f"conv2d_3x3: weight must be [C_out, C_in, 3, 3] or [C_out, C_in, 1, 1], got {list(torch_weight.shape)}"
+        )
+    kernel_size = int(torch_weight.shape[2])
     c_out, c_in = int(torch_weight.shape[0]), int(torch_weight.shape[1])
     _check_c_in_granule(c_in)
     axes = _prepare_axes(
@@ -317,8 +332,9 @@ def prepare_conv2d_weights_host(
         stride=stride,
         padding=padding,
         dilation=dilation,
+        kernel_size=kernel_size,
     )
-    axes["channel_alignment"] = tag_channel_alignment(((0, 0, c_in), c_out, padding, stride, dilation), {})
+    axes["channel_alignment"] = tag_channel_alignment(((0, 0, c_in), c_out, padding, stride, dilation, kernel_size), {})
     _check_supported(axes, "prepare_conv2d_weights")
 
     import torch
@@ -540,7 +556,12 @@ def validate(
     dilation=1,
     activation=None,
     compute_kernel_config=None,
+    kernel_size=3,
 ):
+    if kernel_size not in (1, 3):
+        raise ValueError(f"conv2d_3x3: kernel_size must be 1 or 3, got {kernel_size}")
+    # Gate the kernel size before the contract: the contract's K_p and output extent are the 3x3 ones.
+    _check_supported({"kernel_size": kernel_size}, "conv2d_3x3")
     _check_contract(
         input_tensor,
         weight_tensor,
@@ -568,6 +589,7 @@ def validate(
         padding,
         stride,
         dilation,
+        kernel_size,
     )
     for axis, tagger in INPUT_TAGGERS.items():
         axes[axis] = tagger(tagger_inputs, axes)
@@ -599,6 +621,7 @@ def conv2d_3x3(
     dilation=1,
     activation=None,
     compute_kernel_config=None,
+    kernel_size=3,
 ):
     padding = canonical_padding(padding)
     validate(
@@ -612,6 +635,7 @@ def conv2d_3x3(
         dilation=dilation,
         activation=activation,
         compute_kernel_config=compute_kernel_config,
+        kernel_size=kernel_size,
     )
     config = compute_kernel_config or default_compute_kernel_config()
     device = input_tensor.device()

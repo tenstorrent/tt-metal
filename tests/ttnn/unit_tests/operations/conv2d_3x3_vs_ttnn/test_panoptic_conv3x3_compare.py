@@ -71,7 +71,8 @@ ACT_BLOCK_H = {
 # the slices are summed afterwards; only the conv calls are timed.
 TTNN_CHANNEL_SLICES = {"aspp.convs.3 (x2 heads)": 2}
 
-CASES = [c for c in feature_spec.LOOSE_CASES if "@ LoFi" not in c["extras"]["layer"]]
+# 1x1 rows have their own harness (test_panoptic_conv1x1_compare.py).
+CASES = [c for c in feature_spec.LOOSE_CASES if "@ LoFi" not in c["extras"]["layer"] and c["inputs"][5] == 3]
 # Comma-separated CASES indices to run. Selects by env var because `python -m tracy` (used by
 # --profile) re-joins argv through a shell and breaks -k quoting on these ids.
 _ONLY = {int(i) for i in os.environ.get("CONV_CMP_CASES", "").split(",") if i.strip()}
@@ -90,7 +91,7 @@ def test_panoptic_conv3x3_compare(device, idx):
     case = CASES[idx]
     extras = case["extras"]
     layer = extras["layer"]
-    (H, W, c_in), c_out, padding, stride, dilation = case["inputs"]
+    (H, W, c_in), c_out, padding, stride, dilation, _kernel_size = case["inputs"]
     dtype, layout, mem = case["dtype"], case["layout"], case["memory_layout"]
     weight_dtype = case["weight_dtype"]
     relu = case["activation"] == "relu"
