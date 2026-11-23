@@ -66,14 +66,14 @@ inline void zero_counters_upper()
     write_csr<CSR_MHPMCOUNTER6>(0);
 }
 
-// The mcycle and minstret a window starts from. Both free-run and are never written, so a window is a difference.
+// Start of a window: mcycle and minstret free-run, so a window is a difference.
 struct Reference
 {
     std::uint32_t cycles;
     std::uint32_t instret;
 };
 
-// Selects the events and zeroes the counters they count into.
+// Selects the events and zeroes their counters.
 __attribute__((always_inline)) inline void arm(std::uint32_t event3, std::uint32_t event4)
 {
     select(event3, event4);
@@ -91,9 +91,8 @@ __attribute__((always_inline)) inline Reference reference()
     return Reference {read_csr<CSR_MCYCLE>(), read_csr<CSR_MINSTRET>()};
 }
 
-// What a window counted: the two programmable counters and the mcycle and minstret deltas, modulo 2^32. The counters are
-// read first and mcycle and minstret last, so the window ends as late as the reads allow. Results come back through
-// references, not a struct, because a struct result is kept in memory by the firmware build.
+// The two counters and the mcycle and minstret deltas (modulo 2^32), read last so the window ends late. Out parameters
+// because a struct result stays in memory in the firmware build.
 __attribute__((always_inline)) inline void sample(
     const Reference& start, std::uint32_t& pmc3, std::uint32_t& pmc4, std::uint32_t& cycles, std::uint32_t& instret)
 {

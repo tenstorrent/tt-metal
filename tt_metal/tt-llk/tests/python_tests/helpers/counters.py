@@ -318,9 +318,8 @@ def configure_quasar_counters(location: str) -> None:
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Optional families next to the Tensix banks: the RISC-V monitor of each TRISC (per zone) and the NoC interface and
-# router counters of the tile (per launch, read by BRISC). Selected with --perf-riscv-pmc, --perf-noc-counters and
-# --perf-router-counters; the device side is counters.h.
+# Optional families: the RISC-V monitor of each TRISC (per zone) and the NoC and router counters of the tile (per
+# launch). Options: --perf-riscv-pmc, --perf-noc-counters, --perf-router-counters.
 # ---------------------------------------------------------------------------------------------------------------------
 
 # Thread order of the per-zone RISC-V blocks, as llk_barrier::THREAD_ID.
@@ -367,9 +366,7 @@ def _split_option(text: str) -> list[str]:
 
 
 def _riscv_or_select(arch: str, kind: str, names: list[str]) -> int:
-    """The select that arms all the named events at once. An mhpmevent has one 4-bit field per pipeline domain, so two
-    events of one domain cannot be armed together: ORing their selects would arm a third event.
-    """
+    """The select arming all the named events; one 4-bit field per pipeline domain, so two of a domain cannot share it."""
     by_name = dict(_llk_headers.riscv_event_tables(arch).get(kind, []))
     domains = {}
     for name in names:
@@ -529,7 +526,7 @@ def _slot_complete(words, token, what) -> bool:
 
 
 def decode_riscv_block(words, arch, thread: str, zone_name: str, token) -> list[dict]:
-    """Rows of one thread's RISC-V monitor block of one zone: cycles, instructions and the armed events."""
+    """Rows of one thread's RISC-V monitor block of one zone."""
     _slot_complete(words, token, f"Zone {zone_name} {thread}: RISC-V monitor block")
     event3, event4 = words[_RISCV_WORD["EVENT3"]], words[_RISCV_WORD["EVENT4"]]
     launch = _riscv_pmc.Launch(
@@ -581,9 +578,8 @@ def riscv_threads_of(run_type, arch=None) -> list[int]:
 def read_riscv_counters(
     location: str, zones: int, token: int, arch=None, threads=None
 ) -> list[dict]:
-    """Rows of the RISC-V monitor of every counted zone, each TRISC in threads (default every TRISC of the arch). A
-    counted zone whose thread left no readout of this launch raises CounterReadoutMissing.
-    """
+    """Rows of the RISC-V monitor of every counted zone; a thread with no readout of this launch raises
+    CounterReadoutMissing."""
     arch = arch if arch is not None else get_chip_architecture()
     threads = threads if threads is not None else riscv_threads_of(None, arch)
     rows = []
@@ -615,9 +611,7 @@ def read_riscv_counters(
 def decode_tile_block(
     words, arch, zone_name: str, noc_groups, router_option, token
 ) -> list[dict]:
-    """Rows of one launch's NoC interface and router captures from the launch block words, named by the counter tables.
-    The echoed masks must equal the requested ones: a stale BRISC would otherwise label another selection's values.
-    """
+    """Rows of one launch's NoC and router captures; the echoed masks must equal the requested ones."""
     name = _arch_name(arch)
     zone = LAUNCH_ZONE_PREFIX + zone_name
     rows = []

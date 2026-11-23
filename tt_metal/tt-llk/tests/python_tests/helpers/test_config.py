@@ -242,9 +242,8 @@ class TestConfig:
         os.environ.get("LLK_PERF_L1_CLIENT_SEL", "-1")
     )
     DUMP_PERF_COUNTERS: ClassVar[bool] = False
-    # Optional counter families on top of the Tensix banks (None = not compiled in). The RISC-V monitor is the two
-    # mhpmevent selects every TRISC programs; the NoC interface and router captures are the group mask and option mask
-    # BRISC reads around a launch. Parsed and validated in counters.py.
+    # Optional counter families (None = not compiled in): the TRISC mhpmevent selects, and the NoC group mask and router
+    # option mask BRISC reads around a launch.
     PERF_RISCV_EVENTS: ClassVar[tuple[int, int] | None] = None
     PERF_NOC_GROUPS: ClassVar[int | None] = None
     PERF_ROUTER_OPTION: ClassVar[int | None] = None
@@ -263,10 +262,8 @@ class TestConfig:
     # Performance counter L1 memory addresses
     # NOTE: These addresses must match the values in tests/helpers/include/counters.h
     # Shared config + per-zone data layout (must match counters.h).
-    # Shared config (128 words = 512 B) at base; per-zone data (5 bank-cycle
-    # words + 128 counter-count words + sync + 4 RISC-V monitor blocks = 700 B) follows,
-    # then the launch word and the launch block of the tile counters.
-    # 512 + 8 zones × 700 + 4 + 272 = 6388 B, fits below profiler region at 0x16AFF0.
+    # Shared config (512 B) at base, then 8 zones of 700 B (cycles, counts, sync, RISC-V blocks), the launch word and
+    # the launch block: 6388 B in all, below the profiler region at 0x16AFF0.
     PERF_COUNTERS_BASE_ADDR: ClassVar[int] = 0x169000
     PERF_COUNTERS_MAX_ZONES: ClassVar[int] = 8  # Max zones (must match counters.h)
     _PERF_COUNTERS_CONFIG_WORDS: ClassVar[int] = 128

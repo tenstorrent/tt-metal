@@ -4,7 +4,7 @@
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.counters import RISCV_BANK_PREFIX, read_riscv_counters
+from helpers.counters import RISCV_BANK_PREFIX, parse_riscv_events, read_riscv_counters
 from helpers.llk_params import PerfRunType
 from helpers.perf.core import COUNT_INIT, COUNT_TILE_LOOP, PerfConfig
 from helpers.profiler import Profiler
@@ -16,6 +16,9 @@ SHORT_ITERATIONS = 100
 LONG_ITERATIONS = 1100
 INSTRUCTIONS_PER_ITERATION = 10
 
+# Named alike on Blackhole and Quasar.
+RETIRED_EVENT = "EX_INST_RET"
+
 PROFILER_THREAD = {"UNPACK": "unpack", "MATH": "math", "PACK": "pack", "SFPU": "sfpu"}
 
 
@@ -25,10 +28,10 @@ def _counts(rows, zone, bank):
         for r in rows
         if r["zone"] == zone and r["bank"] == bank
     }
-    return values["cycles"], values["instructions"]
+    return values["cycles"], values["instructions"], values[RETIRED_EVENT]
 
 
-def test_riscv_pmc_counts_a_known_loop():
+def test_riscv_pmc_counts_a_known_loop(monkeypatch):
     if get_chip_architecture() == ChipArchitecture.WORMHOLE:
         pytest.skip("Wormhole RISC-V cores have no performance counter CSRs")
     if TestConfig.PERF_RISCV_EVENTS is None:
@@ -36,6 +39,11 @@ def test_riscv_pmc_counts_a_known_loop():
     # Built and run in one phase, like the profiler overhead test: the check reads the device directly.
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    # The check needs the retired-instruction event armed, whichever events the run selected.
+    monkeypatch.setattr(
+        TestConfig, "PERF_RISCV_EVENTS", parse_riscv_events(RETIRED_EVENT)
+    )
 
     configuration = PerfConfig(
         "sources/riscv_pmc_count_test.cpp",
@@ -69,8 +77,8 @@ def test_riscv_pmc_counts_a_known_loop():
     report = []
     for bank in banks:
         thread = PROFILER_THREAD[bank[len(RISCV_BANK_PREFIX) :]]
-        short_cycles, short_instructions = _counts(rows, "ZONE_0", bank)
-        long_cycles, long_instructions = _counts(rows, "ZONE_1", bank)
+        short_cycles, short_instructions, short_retired = _counts(rows, "ZONE_0", bank)
+        long_cycles, long_instructions, long_retired = _counts(rows, "ZONE_1", bank)
         frame = zones.zones().frame()
         frame = frame[frame["thread"] == thread]
         short_wall = int(frame[frame["marker"] == "INIT"]["duration"].iloc[0])
@@ -81,6 +89,9 @@ def test_riscv_pmc_counts_a_known_loop():
         )
         # The same capture code surrounds both loops, so only the extra iterations remain.
         assert long_instructions - short_instructions == extra, report[-1]
+        # The armed counter follows the same difference. Zeroing at arm time leaves only the arming overhead in each
+        # zone, equal in both, so the difference is exact; a counter that is not zeroed adds the first zone's count.
+        assert long_retired - short_retired == extra, report[-1]
         assert (
             short_instructions >= SHORT_ITERATIONS * INSTRUCTIONS_PER_ITERATION
         ), report[-1]
