@@ -756,7 +756,7 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
-    TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
+    ckernel::ckernel_template::run_outer(TT_OP_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10));
 
     // The byte-wise destination write leaves the Z counters to the last PACR's ADDR_MOD, which ends every pack at Z 0.
     if constexpr (!rmw_dest)
@@ -848,7 +848,7 @@ inline void _llk_pack_block_closed_(
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
-        TT_MOP(1, 0, num_faces << 10);
+        ckernel::ckernel_template::run_outer(TT_OP_MOP(1, 0, num_faces << 10));
         TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
     }
 
@@ -920,7 +920,7 @@ inline void _llk_pack_block_fast_(const std::uint32_t start_tile_index, const st
 
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
-    TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
+    ckernel::ckernel_template::run_outer(TT_OP_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10));
     // No Z reset: the last PACR's ADDR_MOD clears the source Z and nothing in this program moves the L1 side counters.
 }
 
@@ -986,7 +986,7 @@ inline void _llk_pack_block_w_(const std::uint32_t start_tile_index, const std::
 
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
-    TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
+    ckernel::ckernel_template::run_outer(TT_OP_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10));
     // Back to W 0 so that packs without the W offset write where they program
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
@@ -1027,7 +1027,7 @@ inline void _llk_pack_block_closed_w_mop_(
 
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
-        TT_MOP(1, 0, num_faces << 10);
+        ckernel::ckernel_template::run_outer(TT_OP_MOP(1, 0, num_faces << 10));
         TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
     }
 
