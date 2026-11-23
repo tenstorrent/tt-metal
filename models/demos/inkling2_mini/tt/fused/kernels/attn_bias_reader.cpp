@@ -53,9 +53,11 @@ void kernel_main() {
     noc_async_read_barrier();
 
     // wave 2: rel matrix (head h's 16 values -> row h: face 0 for h < 16, face 2 after), the profile rows
+    // (row prow sits at its offset inside each staged 64B block)
+    const uint32_t rel_in = attnio::row_offset(prow, 2) & (attnio::ALIGN - 1);
     for (uint32_t h = 0; h < 24; ++h) {
         const uint32_t dst = h < 16 ? rw + 32 * h : rw + 1024 + 32 * (h - 16);
-        noc_async_read(get_noc_addr(stage + (h >> 1) * 128 + (h & 1) * 64), dst, 32);
+        noc_async_read(get_noc_addr(stage + (h >> 1) * 128 + (h & 1) * 64 + rel_in), dst, 32);
     }
     const uint32_t rpos = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + st_ring);
     const InterleavedAddrGen<true> tab = {.bank_base_address = table, .page_size = 1};
