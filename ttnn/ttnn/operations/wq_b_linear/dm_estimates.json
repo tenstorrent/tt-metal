@@ -2181,6 +2181,670 @@
    },
    "calculator": "5c96a38e1499653a",
    "measurements": []
+  },
+  {
+   "id": "5f1e6efa",
+   "kind": "sweep",
+   "utc": "2026-11-23T02:34:21.170696+00:00",
+   "phase": "Perf 2",
+   "label": "sweep",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "Perf 2: x [160,1536] bf16 multicast, 491,520 B to the 64-worker 8x8 rect (current: 1 sender (10,9), NoC1, 24 rounds of 20 KB, each 16 KB + 4 KB linked + count write)",
+    "work_bytes": 491520,
+    "top": 4,
+    "max_l1_bytes": 524288,
+    "candidates": [
+     {
+      "name": "current_x_mcast",
+      "family": "multicast",
+      "sender": [
+       10,
+       9
+      ],
+      "rect": [
+       2,
+       2,
+       9,
+       9
+      ],
+      "bytes": 10240,
+      "batch": 2,
+      "noc": 1
+     },
+     {
+      "name": "x_mcast_vary",
+      "family": "multicast",
+      "sender": [
+       10,
+       9
+      ],
+      "rect": [
+       2,
+       2,
+       9,
+       9
+      ],
+      "vary": {
+       "bytes": [
+        4096,
+        8192,
+        10240,
+        16384
+       ],
+       "batch": [
+        1,
+        2,
+        4,
+        8,
+        30
+       ],
+       "noc": [
+        0,
+        1
+       ]
+      }
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "Perf 2: x [160,1536] bf16 multicast, 491,520 B to the 64-worker 8x8 rect (current: 1 sender (10,9), NoC1, 24 rounds of 20 KB, each 16 KB + 4 KB linked + count write)",
+    "work_bytes": 491520,
+    "stats": {
+     "evaluated": 41,
+     "estimated": 41,
+     "refused": 0,
+     "over_l1_cap": 0,
+     "shortlisted": 4,
+     "wall_s": 0.7
+    },
+    "groups": [
+     {
+      "name": "x_mcast_vary batch=30 bytes=16384 noc=1",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 13835.277777777777,
+      "details": {
+       "pass_cycles": 18677.625,
+       "steady_cycles_per_pass": 18677.625,
+       "binding": "path reservation (352 cycles per multicast) and tree delivery",
+       "recipients": 64,
+       "tree_depth_hops": 19,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 13835.277777777777,
+      "rank": 1,
+      "candidate_id": "d8b0943183ce491b",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 491520,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        10,
+        9
+       ],
+       "rect": [
+        2,
+        2,
+        9,
+        9
+       ],
+       "batch": 30,
+       "bytes": 16384,
+       "noc": 1,
+       "name": "x_mcast_vary batch=30 bytes=16384 noc=1",
+       "pages": 30
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_vary batch=8 bytes=16384 noc=1",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 15643.333333333332,
+      "details": {
+       "pass_cycles": 21118.5,
+       "steady_cycles_per_pass": 21118.5,
+       "binding": "path reservation (352 cycles per multicast) and tree delivery",
+       "recipients": 64,
+       "tree_depth_hops": 19,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 15643.333333333332,
+      "rank": 2,
+      "candidate_id": "ee5a45bdc1181328",
+      "padding_pct": 6.666666666666665,
+      "l1_bytes_per_core": 131072,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        10,
+        9
+       ],
+       "rect": [
+        2,
+        2,
+        9,
+        9
+       ],
+       "batch": 8,
+       "bytes": 16384,
+       "noc": 1,
+       "name": "x_mcast_vary batch=8 bytes=16384 noc=1",
+       "pages": 32
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_vary batch=4 bytes=16384 noc=1",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 16851.111111111113,
+      "details": {
+       "pass_cycles": 22749.0,
+       "steady_cycles_per_pass": 22749.0,
+       "binding": "path reservation (352 cycles per multicast) and tree delivery",
+       "recipients": 64,
+       "tree_depth_hops": 19,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 16851.111111111113,
+      "rank": 3,
+      "candidate_id": "f249fdb03001623f",
+      "padding_pct": 6.666666666666665,
+      "l1_bytes_per_core": 65536,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        10,
+        9
+       ],
+       "rect": [
+        2,
+        2,
+        9,
+        9
+       ],
+       "batch": 4,
+       "bytes": 16384,
+       "noc": 1,
+       "name": "x_mcast_vary batch=4 bytes=16384 noc=1",
+       "pages": 32
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_mcast_vary batch=30 bytes=16384 noc=0",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 17036.064814814814,
+      "details": {
+       "pass_cycles": 22998.6875,
+       "steady_cycles_per_pass": 22998.6875,
+       "binding": "path reservation (496 cycles per multicast) and tree delivery",
+       "recipients": 64,
+       "tree_depth_hops": 27,
+       "noc": 0,
+       "issue_cycles_per_request": 65.6875
+      },
+      "steady_ns_per_pass": 17036.064814814814,
+      "rank": 4,
+      "candidate_id": "52f286601886b289",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 491520,
+      "config": {
+       "family": "multicast",
+       "sender": [
+        10,
+        9
+       ],
+       "rect": [
+        2,
+        2,
+        9,
+        9
+       ],
+       "batch": 30,
+       "bytes": 16384,
+       "noc": 0,
+       "name": "x_mcast_vary batch=30 bytes=16384 noc=0",
+       "pages": 30
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     }
+    ],
+    "refusals": {},
+    "cross_family": false,
+    "note": "One family: the order is as reliable as that family's ranking."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": []
+  },
+  {
+   "id": "5b961b05",
+   "kind": "sweep",
+   "utc": "2026-11-23T02:34:21.800879+00:00",
+   "phase": "Perf 2",
+   "label": "sweep",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "Perf 2: x read alone, 491,520 B, 1 sender core (10,9), 2 KB tiles (current: trid window 2 rounds x 10 tiles = 20 reads in flight, NoC0)",
+    "work_bytes": 491520,
+    "top": 4,
+    "max_l1_bytes": 524288,
+    "candidates": [
+     {
+      "name": "current_x_read",
+      "family": "dram_read",
+      "cores": [
+       [
+        10,
+        9
+       ]
+      ],
+      "bytes": 2048,
+      "batch": 20,
+      "noc": 0,
+      "placement": "interleaved"
+     },
+     {
+      "name": "x_read_vary",
+      "family": "dram_read",
+      "cores": [
+       [
+        10,
+        9
+       ]
+      ],
+      "bytes": 2048,
+      "placement": "interleaved",
+      "vary": {
+       "batch": [
+        10,
+        20,
+        40,
+        80,
+        120,
+        240
+       ],
+       "noc": [
+        0,
+        1,
+        "split"
+       ]
+      }
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "Perf 2: x read alone, 491,520 B, 1 sender core (10,9), 2 KB tiles (current: trid window 2 rounds x 10 tiles = 20 reads in flight, NoC0)",
+    "work_bytes": 491520,
+    "stats": {
+     "evaluated": 19,
+     "estimated": 19,
+     "refused": 0,
+     "over_l1_cap": 0,
+     "shortlisted": 4,
+     "wall_s": 0.54
+    },
+    "groups": [
+     {
+      "name": "x_read_vary batch=240 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 3488.1481481481483,
+      "details": {
+       "pass_cycles": 4709.0,
+       "steady_cycles_per_pass": 4716.0,
+       "binding": "latency and issue (no resource above 90% busy)",
+       "lower_bounds_cycles": {
+        "noc_link": 3959.9999999999995,
+        "dram_channel": 1320.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 1,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 3493.333333333333,
+      "rank": 1,
+      "candidate_id": "064f83f5a5499cc3",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 491520,
+      "config": {
+       "family": "dram_read",
+       "cores": [
+        [
+         10,
+         9
+        ]
+       ],
+       "bytes": 2048,
+       "placement": "interleaved",
+       "batch": 240,
+       "noc": "split",
+       "name": "x_read_vary batch=240 noc=split",
+       "pages_per_core": 240
+      },
+      "tie_with_best": true,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_read_vary batch=120 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 3842.2222222222226,
+      "details": {
+       "pass_cycles": 5187.0,
+       "steady_cycles_per_pass": 5186.0,
+       "binding": "latency and issue (no resource above 90% busy)",
+       "lower_bounds_cycles": {
+        "noc_link": 3959.9999999999995,
+        "dram_channel": 1320.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 1,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 3841.4814814814813,
+      "rank": 2,
+      "candidate_id": "95075f525f25059c",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 245760,
+      "config": {
+       "family": "dram_read",
+       "cores": [
+        [
+         10,
+         9
+        ]
+       ],
+       "bytes": 2048,
+       "placement": "interleaved",
+       "batch": 120,
+       "noc": "split",
+       "name": "x_read_vary batch=120 noc=split",
+       "pages_per_core": 240
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_read_vary batch=80 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 4184.444444444445,
+      "details": {
+       "pass_cycles": 5649.0,
+       "steady_cycles_per_pass": 5656.0,
+       "binding": "latency and issue (no resource above 90% busy)",
+       "lower_bounds_cycles": {
+        "noc_link": 3959.9999999999995,
+        "dram_channel": 1320.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 1,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 4189.62962962963,
+      "rank": 3,
+      "candidate_id": "fd1456cce5fc7fc6",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 163840,
+      "config": {
+       "family": "dram_read",
+       "cores": [
+        [
+         10,
+         9
+        ]
+       ],
+       "bytes": 2048,
+       "placement": "interleaved",
+       "batch": 80,
+       "noc": "split",
+       "name": "x_read_vary batch=80 noc=split",
+       "pages_per_core": 240
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     },
+     {
+      "name": "x_read_vary batch=40 noc=split",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 5234.814814814815,
+      "details": {
+       "pass_cycles": 7067.0,
+       "steady_cycles_per_pass": 7066.0,
+       "binding": "latency and issue (no resource above 90% busy)",
+       "lower_bounds_cycles": {
+        "noc_link": 3959.9999999999995,
+        "dram_channel": 1320.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        35.375
+       ],
+       "noc": "split",
+       "cores": 1,
+       "caveat": "a split-NoC read on part of the grid is not modelled well: on 64 and 96 cores it measured 17-26% slower than this estimate and slower than the same read on NoC 0 alone (read_patterns_bh.jsonl); measure it against the NoC 0 read before choosing it"
+      },
+      "steady_ns_per_pass": 5234.074074074074,
+      "rank": 4,
+      "candidate_id": "20dea35b59e21df1",
+      "padding_pct": 0.0,
+      "l1_bytes_per_core": 81920,
+      "config": {
+       "family": "dram_read",
+       "cores": [
+        [
+         10,
+         9
+        ]
+       ],
+       "bytes": 2048,
+       "placement": "interleaved",
+       "batch": 40,
+       "noc": "split",
+       "name": "x_read_vary batch=40 noc=split",
+       "pages_per_core": 240
+      },
+      "tie_with_best": false,
+      "error_band_pct": 10.0
+     }
+    ],
+    "refusals": {},
+    "cross_family": false,
+    "note": "One family: the order is as reliable as that family's ranking."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": [
+    {
+     "group": "x_read_vary batch=240 noc=split",
+     "measured_ns": 6960.0,
+     "measured_at": "2026-11-23T03:00:00+00:00",
+     "recorded_utc": "2026-11-23T03:16:20.284397+00:00",
+     "estimate_ns": 3488.1481481481483,
+     "error_pct": -49.88292890591741,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": "probe: all 240 reads in flight, untagged, both NoCs (one NoC 6,950). 2 KB-page floor ~6.5-7 us; not graduated (whole op flat)"
+    }
+   ]
+  },
+  {
+   "id": "43af4a39",
+   "utc": "2026-11-23T02:34:33.081518+00:00",
+   "phase": "Perf 2",
+   "label": "current",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "Perf 2 current: x mcast 48 x 10 KB-equivalent (24 rounds of 20 KB) NoC1 + x read 1 core 20 in flight NoC0",
+    "groups": [
+     {
+      "name": "current_x_mcast",
+      "family": "multicast",
+      "sender": [
+       10,
+       9
+      ],
+      "rect": [
+       2,
+       2,
+       9,
+       9
+      ],
+      "bytes": 10240,
+      "pages": 48,
+      "batch": 2,
+      "noc": 1
+     },
+     {
+      "name": "current_x_read",
+      "family": "dram_read",
+      "cores": [
+       [
+        10,
+        9
+       ]
+      ],
+      "bytes": 2048,
+      "pages_per_core": 240,
+      "batch": 20,
+      "noc": 0,
+      "placement": "interleaved"
+     },
+     {
+      "name": "x_read_window8_noc0",
+      "family": "dram_read",
+      "cores": [
+       [
+        10,
+        9
+       ]
+      ],
+      "bytes": 2048,
+      "pages_per_core": 240,
+      "batch": 80,
+      "noc": 0,
+      "placement": "interleaved"
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "Perf 2 current: x mcast 48 x 10 KB-equivalent (24 rounds of 20 KB) NoC1 + x read 1 core 20 in flight NoC0",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "current_x_mcast",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 25486.666666666668,
+      "details": {
+       "pass_cycles": 34407.0,
+       "steady_cycles_per_pass": 34407.0,
+       "binding": "path reservation (352 cycles per multicast) and tree delivery",
+       "recipients": 64,
+       "tree_depth_hops": 19,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 25486.666666666668
+     },
+     {
+      "name": "current_x_read",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 10462.22222222222,
+      "details": {
+       "pass_cycles": 14124.0,
+       "steady_cycles_per_pass": 14131.0,
+       "binding": "latency and issue (no resource above 90% busy)",
+       "lower_bounds_cycles": {
+        "noc_link": 5940.000000000001,
+        "dram_channel": 1320.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 1
+      },
+      "steady_ns_per_pass": 10467.407407407407
+     },
+     {
+      "name": "x_read_window8_noc0",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 7328.888888888889,
+      "details": {
+       "pass_cycles": 9894.0,
+       "steady_cycles_per_pass": 9901.0,
+       "binding": "latency and issue (no resource above 90% busy)",
+       "lower_bounds_cycles": {
+        "noc_link": 5940.000000000001,
+        "dram_channel": 1320.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 1
+      },
+      "steady_ns_per_pass": 7334.074074074074
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": [
+    {
+     "group": "current_x_mcast",
+     "measured_ns": 14910.0,
+     "measured_at": "2026-11-23T02:50:00+00:00",
+     "recorded_utc": "2026-11-23T03:16:20.132571+00:00",
+     "estimate_ns": 25486.666666666668,
+     "error_pct": 70.93673150011179,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": "x_mcast_stream baseline: multicast window, x read ablated (estimator models 48 unlinked-equivalent bursts; kernel links each 20 KB round). Graduated one-linked-stream measured 10,310 ns; no estimate (no linked option)"
+    },
+    {
+     "group": "current_x_read",
+     "measured_ns": 9916.0,
+     "measured_at": "2026-11-23T03:00:00+00:00",
+     "recorded_utc": "2026-11-23T03:16:20.207839+00:00",
+     "estimate_ns": 10462.22222222222,
+     "error_pct": 5.50849356819505,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": "x_read_fast baseline, read alone"
+    }
+   ]
   }
  ]
 }

@@ -148,3 +148,63 @@
 
 ### Helper bypasses — none
 The graduated compute stays on `compute_kernel_lib::matmul_block`. Feedback for the helper library from this round, not a bypass: with `LastBlockTarget::Out` + `packer_l1_acc`, the helper drains `cb_interm_acc` on the unpack thread after every K-step and reloads the partials into DEST on the last K-step. This cost 3.1 µs of 15.3 µs here. The `caller_owns_pack_target` + `Interm` configuration avoids both, but the header does not say that the default L1-acc path serializes unpack behind pack.
+
+## Perf 2
+- Date: 2026-11-23. Board: Blackhole p150b, 8 DRAM banks, 1.35 GHz. Whole-op SOL 14.0 µs. Focus case: the op's only cell, x [1,1,160,1536] bf16, W [1536,4096] bf8_b, y L1, HiFi2, fp32_dest_acc_en=False. All of it is in SUPPORTED, and SUPPORTED is unchanged.
+- Instrumentation: the Perf 1 zones were reused and none were removed. The graduated sender path keeps `x_mcast_wait/x_mcast_issue/x_mcast_barrier`. Max 146 markers per RISC.
+
+### Measured breakdown (before; device span, median of dispatches 2–6)
+| Run (ablation) | Span ns | Note |
+|---|---|---|
+| full | 18,665 | x round 0 lands 1.74 µs; sender x reads done 12.86; multicast issue 13.5 µs, done 16.39; TRISC_2 ends 17.20; y done 18.40 |
+| compute stubbed | 17,616 | multicast done 16.06 |
+| compute + W stubbed | 17,236 | multicast done 15.57 |
+| x read + multicast alone (compute, W, y stubbed) | 15,887 | multicast issue 12.9 µs (491 KB, ~38 GB/s); x read ~9.9 µs |
+| W alone (compute, x, y stubbed) | 14,197 | last W read 13.7 median, 14.1 max |
+| x stubbed (W + compute + y real) | 15,656 | |
+| compute alone (W, x, y stubbed) | 13,686 | matmul zone 12.4 µs |
+| all stubbed (pack-only path still runs) | 11,214 | at kb 2, packer L1 accumulation alone takes 10.7 µs |
+
+| Part | Alone | Part SOL | Measured / SOL |
+|---|---|---|---|
+| x multicast (one 64-receiver tree) | 12.9 µs issue | 5.69 µs (sender egress) | 2.3 |
+| x read (1 core) | 9.9 µs | 5.69 µs (one core's NoC ingress) | 1.7 |
+| W read | 14.1 µs | 13.06 µs | 1.08 |
+| compute | 12.4 µs | 11.38 µs | 1.09 |
+
+- Overlap loss = 18,665 − 15,887 = 2.8 µs.
+- **Ranked bottleneck**:
+  1. x multicast pacing. Each 20 KB round paid its own path reservation, because the count write after each round was unlinked.
+  2. The tail (~1.9 µs from the last x round to y done).
+  3. Compute and W, both near their SOL.
+- Paper search (`/perf-calculator`, phase "Perf 2"):
+  - Multicast sweep `5f1e6efa`: rank 1 is the longest linked/batched bursts. The tool has no linked option and estimates the current schedule at 25.5 µs (`43af4a39`) against 14.9 µs measured, so it ranks the direction (fewer reservations) but not the candidate.
+  - x read sweep `5b961b05`: rank 1 is all 240 reads in flight over both NoCs, 3.49 µs, against 10.46 µs for the current schedule.
+  - Op model `--designs --c-mem l1`: current split (65 cores, kb 2) 16.60 µs vs best (73 cores) 16.53 µs. That is a tie, so no split was fanned out. The op model assumes a linked multicast pays its reservation once per stream, which is the first idea below.
+  - Knob check: `X_READ_TRIDS=8` gave 20,543 ns. Reads still ended at 9.8 µs, and in-order retirement delayed round 0 to 3.6 µs.
+
+### Portfolio and verdicts (whole-op span ns; PCC gate 0.9998)
+| Idea | Verdict | Before → after | PCC | Domain |
+|---|---|---|---|---|
+| `x_mcast_stream`: the whole x multicast as one linked sequence (count writes linked, only the last one unlinked), each round's count sent from its own L1 word (no flush) | **WIN** | 18,729 → 16,708. Multicast alone (x read ablated) 14,910 → 10,310. Linked chains of 4: same. 2 / 24 rounds per multicast: 17,268 / not run (multicast alone down to 8.2 µs, but round 0 lands later) | 0.9999734 | everywhere (flat at kb 4, small gain with 2 senders); no exceptions |
+| `x_read_fast`: x read order and issue | **NULL** for the whole op. k-grouped issue order (5 same-bank tiles back to back): read alone 9.92 → 8.88 µs, whole op 18,526 / 18,624 (flat). On top of the graduated multicast: 16,816 / 16,767 vs 16,763 (flat). Eager push + window 4: +1%. Two-NoC split, precomputed addresses, second reader core: no gain. The 2 KB-page read floor measured ~6.5–7 µs however it is issued | flat | 0.9999734 | — |
+| `tail_store2`: last K-step as raw 1×1 matmuls, one push per tile, writer stores each tile as it lands | WIN alone (18,689 → 18,196, −2.6%). On top of the graduated multicast, interleaved A/B gave 16,753 → 16,433 (−1.9%, every pair faster), which is **inside the 2–3% noise band**, so it was **not graduated** (it would add a raw-LLK bypass for a noise-level gain) | 16,753 → 16,433 | 0.9999734 | — |
+| `compute_pack`: DEST windows over several 2-k-tile x rounds (fewer L1-acc packs), shorter final pack | **NULL / REGRESSION**: compute alone at best −2.1% (13,406), but on the x-stubbed path (the post-fix critical path) +2.9 to +8.8%, and whole op flat or +3% | — | 0.99996–0.99997 | measured regression for windows > 1 K-step |
+
+### Graduated
+- **Sender** (`kernels/wq_b_linear_sender.cpp`, `X_ORDERED_SIGNAL` path): the whole x stream is one linked multicast sequence. Every payload burst and every count write is linked except the final count write. Round i's count is written from word i of a new sender-only CB, `CB_COUNT_SRC` (16 B × num_k_blocks, allocated after `cb_x_resident` so the x address still matches the workers'). This deletes the per-round unlinked count write and the `noc_async_writes_flushed()` before each one. It is the only ordered-signal path and has no knob. Workers are unchanged (`ReceiverPipe::receive(r)`). Legality was checked on device: one `--dev` run with the watcher NoC sanitizer passed, and `test_wq_b_linear.py` passes 10/10 under `--dev`. Holding the path while the sender waits on its x-reader is safe, because no other NoC1 multicast or worker NoC1 write crosses the receiver rect until x is done.
+- No carve-outs: there is one cell, and nothing was incorrect or slower.
+- **Whole op: 18,665 → 16,754 ns** (median of 6 runs: 16,763 / 16,668 / 16,780 / 16,753 / 16,673 / 16,755), **−10.2%**, 1.20× the 14.0 µs SOL. PCC 0.9999734, unchanged.
+- Bottleneck now: x is delivered by ~12.2–12.8 µs, so x no longer binds. The critical path is the W stream (last read 14.5 µs median, 15.0–15.2 µs on the slowest worker, against a 13.06 µs SOL), then the last K-step and the y store (~1.2 µs). Knob checks on the new path: `W_DEPTH_BLOCKS` 6 / 8 gave 16,817 / 16,717 (flat), and `BLOCK_K_TILES=4` gave 19,201 (worse). Candidates for later: the W stream's slow-worker spread and DRAM bank balance; the per-tile tail (`perf_experiments/tail_store2`, −1.9% here, which could rise above noise once W is faster); and the k-grouped x read (`perf_experiments/x_read_fast`, useful only if x binds again).
+- Guard set = the single supported cell (one kernel path × TILE × DRAM-in/L1-out): golden 3/3 passed (registry cells + regression bit-identity), unit tests 14/14, `test_wq_b_linear.py` 10/10 under `--dev`. No regression.
+- `estimate.py report`, Perf 2:
+  - Sweep `5b961b05` (x read): 19 evaluated, 4 shortlisted, 1 built as a probe. The predicted best (all in flight, both NoCs, 3.49 µs estimated) measured 6.96 µs and was still the fastest measured, so the selection slowdown is 0%. The real-layout reader with per-round pushes reached 8.36 µs at best.
+  - Sweep `5f1e6efa` (multicast): 41 evaluated, 0 built. The tool cannot express a linked stream, which is what won.
+  - Current-schedule records (`43af4a39`): multicast estimate 25,487 vs 14,910 measured; x read estimate 10,462 vs 9,916 measured.
+- Options not taken (none trade precision): `X_MCAST_GROUP` 2 (17,268, round 0 later); per-tile tail (−1.9%, noise); k-grouped x read (flat); `X_READ_TRIDS` 4 (+1%).
+- Experiment dirs (left uncommitted by the subagents, committed here): `perf_experiments/{x_mcast_stream,x_read_fast,tail_store2,compute_pack}/`, plus the brief `perf_experiments/BRIEF_PERF2.md`.
+
+### Helper bypasses — none
+- No raw-LLK path graduated. The compute stays on `compute_kernel_lib::matmul_block`.
+- The sender's direct `noc_async_write_multicast` calls, used instead of `SenderPipe::send()`, are the deviation documented at the top of `wq_b_linear_sender.cpp` since Refinement 1. This round widened it to link across rounds. Feedback for the Mcast helper: `SenderPipe` has no way to send a resident, handshake-free stream as one linked sequence with the count signal linked behind each round. That is what made the multicast ~30% faster here.
+- Feedback for the matmul helper, from the non-graduated `tail_store2`: in `caller_owns_pack_target` mode the helper cannot push output tiles during the last K-step. A per-tile tail therefore needs raw LLK (details in that kernel's head comment).

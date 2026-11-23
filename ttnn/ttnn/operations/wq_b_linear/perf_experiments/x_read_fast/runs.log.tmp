@@ -1,0 +1,100 @@
+spans: [18759, 18825, 18841, 18627, 18775, 18685]
+span=18775  r0_push=1154  reads_done=12423  issue_end=11735  mcast_done=16724
+base_full
+spans: [11341, 11211, 11213, 11210, 11210, 11225]
+span=11211  r0_push=881  reads_done=9916  issue_end=9535  mcast_done=10413
+base_readalone
+spans: [11336, 11211, 11212, 11206, 11214, 11205]
+span=11211  r0_push=761  reads_done=8884  issue_end=8470  mcast_done=9397
+X_READER='fast' alone
+spans: [11366, 11213, 11206, 11207, 11210, 11217]
+span=11210  r0_push=857  reads_done=9084  issue_end=8664  mcast_done=9604
+X_READER='fast';X_FAST_ISSUE=True alone
+spans: [11356, 11211, 11212, 11213, 11210, 11224]
+span=11212  r0_push=774  reads_done=8919  issue_end=8493  mcast_done=9410
+X_READER='fast';X_SPLIT_NOC=True alone
+spans: [11341, 11211, 11215, 11214, 11205, 11218]
+span=11214  r0_push=913  reads_done=9021  issue_end=8587  mcast_done=9524
+X_READER='fast';X_SPLIT_NOC=True;X_FAST_ISSUE=True alone
+spans: [11350, 11213, 11209, 11217, 11195, 11221]
+span=11213  r0_push=1040  reads_done=8364  issue_end=7955  mcast_done=9027
+X_READER='fast';X_EAGER=True;X_READ_TRIDS=4 alone
+spans: [11350, 11204, 11209, 11210, 11208, 11214]
+span=11209  r0_push=1066  reads_done=8627  issue_end=8215  mcast_done=9292
+X_READER='fast';X_EAGER=True;X_READ_TRIDS=15 alone
+spans: [11350, 11201, 11211, 11207, 11208, 11233]
+span=11208  r0_push=790  reads_done=9095  issue_end=8673  mcast_done=9583
+X_READER='fast';X_EAGER=True;X_READ_TRIDS=15;X_SPLIT_NOC=True alone
+spans: [11347, 11213, 11204, 11209, 11210, 11222]
+span=11210  r0_push=1226  reads_done=9098  issue_end=8663  mcast_done=9612
+X_READER='fast';X_EAGER=True;X_READ_TRIDS=15;X_SPLIT_NOC=True;X_FAST_ISSUE=True alone
+spans: []
+X_READER='fast';X_PROBE_CHUNK=1 alone
+spans: []
+X_READER='fast';X_PROBE_CHUNK=4 alone
+spans: []
+X_READER='fast';X_PROBE_CHUNK=30 alone
+spans: []
+X_READER='fast';X_PROBE_CHUNK=1;X_SPLIT_NOC=True alone
+spans: []
+X_READER='fast';X_PROBE_CHUNK=4;X_SPLIT_NOC=True alone
+spans: [12414, 12430, 12419, 12412, 12410, 12436]
+span=12419  r0_push=6521  reads_done=6481  issue_end=6119  mcast_done=12320
+X_READER='fast';X_PROBE_CHUNK=1 alone
+spans: [12347, 12373, 12367, 12360, 12378, 12344]
+span=12367  r0_push=6464  reads_done=6424  issue_end=1734  mcast_done=12270
+X_READER='fast';X_PROBE_CHUNK=4 alone
+spans: [12310, 12433, 12360, 12419, 12444, 12396]
+span=12419  r0_push=6521  reads_done=6474  issue_end=773  mcast_done=12322
+X_READER='fast';X_PROBE_CHUNK=30 alone
+spans: [13904, 13907, 13899, 13901, 13899, 13910]
+span=13901  r0_push=7999  reads_done=7952  issue_end=7618  mcast_done=13807
+X_READER='fast';X_PROBE_CHUNK=1;X_SPLIT_NOC=True alone
+spans: [11353, 11201, 11210, 11207, 11197, 11215]
+span=11207  r0_push=3593  reads_done=3545  issue_end=2142  mcast_done=9403
+X_READER='fast';X_PROBE_CHUNK=4;X_SPLIT_NOC=True alone
+spans: [12891, 12884, 12894, 12887, 12879, 12906]
+span=12887  r0_push=6994  reads_done=6953  issue_end=6590  mcast_done=12795
+X_READER='fast';X_PROBE_UNTAGGED=True alone
+spans: [12898, 12922, 12913, 12908, 12899, 12941]
+span=12913  r0_push=7009  reads_done=6961  issue_end=6593  mcast_done=12814
+X_READER='fast';X_PROBE_UNTAGGED=True;X_SPLIT_NOC=True alone
+spans: [13896, 13901, 13896, 13897, 13873, 14031]
+span=13897  r0_push=8003  reads_done=7956  issue_end=7619  mcast_done=13801
+X_READER='fast';X_PROBE_CHUNK=1;X_SPLIT_NOC=True alone
+spans: [13110, 13053, 13047, 13047, 13046, 13080]
+span=13047  r0_push=7157  reads_done=7116  issue_end=6737  mcast_done=12955
+X_READER='fast';X_PROBE_UNTAGGED=True;X_SPLIT_NOC=True;X_FAST_ISSUE=True alone
+spans: [12651, 12660, 12699, 12665, 12653, 12619]
+span=12660  r0_push=6763  reads_done=6716  issue_end=6213  mcast_done=12568
+X_READER='fast';X_PROBE_UNTAGGED=True;X_FAST_ISSUE=True alone
+spans: [13417, 13444, 13428, 13433, 13420, 13453]
+span=13433  r0_push=7530  reads_done=7483  issue_end=7119  mcast_done=13333
+X_READER='fast';X_PROBE_UNTAGGED=True;X_PROBE_TAGGED=True alone
+spans: [19107, 19313, 19207, 19276, 19055, 19036]
+span=19207  r0_push=1673  reads_done=9440  issue_end=9385  mcast_done=17189
+helper full
+spans: [11207, 11206, 11207, 11204, 11206, 11230]
+span=11206  r0_push=1273  reads_done=8627  issue_end=8570  mcast_done=9202
+X_READER='fast';X_HELPER=True alone
+spans: [11211, 11203, 11219, 11214, 11210, 11226]
+span=11214  r0_push=1683  reads_done=8545  issue_end=8484  mcast_done=9327
+X_READER='fast';X_HELPER=True;X_READ_TRIDS=4 alone
+spans: [18681, 18817, 18846, 18921, 19009, 18903]
+span=18903  r0_push=1356  reads_done=8619  issue_end=8026  mcast_done=16884
+X_READER='fast';X_EAGER=True;X_READ_TRIDS=4 full
+spans: [18634, 18524, 18526, 18476, 18655, 18645]
+span=18526  r0_push=993  reads_done=11091  issue_end=10630  mcast_done=16545
+X_READER='fast' full
+spans: [18826, 18682, 18794, 18750, 18704, 18711]
+span=18711  r0_push=1131  reads_done=12401  issue_end=11624  mcast_done=16684
+X_READER='base' full
+spans: [18763, 18656, 18633, 18754, 18887, 18693]
+span=18693  r0_push=1161  reads_done=12470  issue_end=11715  mcast_done=16701
+X_READER='base' full r2
+spans: [18530, 18511, 18624, 18625, 18779, 18576]
+span=18624  r0_push=997  reads_done=11244  issue_end=10684  mcast_done=16568
+X_READER='fast' full r2
+spans: [18568, 18719, 18936, 18704, 19104, 18895]
+span=18895  r0_push=1356  reads_done=8536  issue_end=8007  mcast_done=16847
+X_READER='fast';X_EAGER=True;X_READ_TRIDS=4 full r2
