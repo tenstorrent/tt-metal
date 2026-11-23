@@ -123,13 +123,24 @@ def of(column: str, f: Callable[[torch.Tensor], float]) -> Metric:
     return lambda window: f(window[column])
 
 
+ERRORS: dict[str, Callable[[torch.Tensor], float]] = {
+    "nrmse": nrmse,
+    "rms_err": rms_err,
+    "rms_ref": rms_ref,
+    "pcc": pcc,
+}
+
+
+def errors(sums: torch.Tensor, prefix: str = "") -> dict[str, float]:
+    """The absolute and relative error of the rows of ``sums`` together: ``<prefix>nrmse``, ``<prefix>rms_err``,
+    ``<prefix>rms_ref`` and ``<prefix>pcc``."""
+    return {f"{prefix}{name}": f(sums) for name, f in ERRORS.items()}
+
+
 def error_metrics(prefix: str, column: str = "sums") -> dict[str, Metric]:
-    """The absolute and relative error of a continuous product whose ``row_sums`` are in ``column``:
+    """``errors`` as window metrics of a continuous product whose ``row_sums`` are in ``column``:
     ``<prefix>_nrmse``, ``<prefix>_rms_err``, ``<prefix>_rms_ref`` and ``<prefix>_pcc``."""
-    return {
-        f"{prefix}_{name}": of(column, f)
-        for name, f in (("nrmse", nrmse), ("rms_err", rms_err), ("rms_ref", rms_ref), ("pcc", pcc))
-    }
+    return {f"{prefix}_{name}": of(column, f) for name, f in ERRORS.items()}
 
 
 class RowSeries:
