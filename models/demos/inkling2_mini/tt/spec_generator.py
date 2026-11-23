@@ -103,6 +103,18 @@ class SpecGenerator(Generator):
 
         return SHARED_FAR and p0 >= WINDOW and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
 
+    def _feed(self):
+        """Device-side verify inputs: token 0 = the anchor, tokens 1..k = the drafts (no host round trip)."""
+        V, d = self.verify, self.drafter
+        ttnn.copy(ttnn.reshape(d.anchor, [1, 1]), V.tokens[0])
+        for t in range(1, V.R):
+            ttnn.copy(ttnn.reshape(ttnn.slice(d.tokens, [0, 0, 0, t - 1], [1, 1, 1, t]), [1, 1]), V.tokens[t])
+
+    def _set_anchor(self, n):
+        """After the accept of n rows: the next anchor is verify token n - 1 (device copy)."""
+        tok = ttnn.slice(self.vtok, [0, 0, 0, n - 1], [1, 1, 1, n])
+        ttnn.copy(ttnn.reshape(tok, [1, 1]), self.drafter.anchor)
+
     def capture_rows(self, p_shared, p_split):
         """Plain traces (Generator.capture), the draft trace, and per conv phase the verify pass (far call shared or
         per token) and the commit of n = 1 .. R accepted rows. p_shared / p_split: positions >= 1024 whose
@@ -112,6 +124,10 @@ class SpecGenerator(Generator):
         R = V.R
         say = print if os.environ.get("S6_STAGES") else (lambda *a, **k: None)
         assert not self._shared(p_split, R)
+        # verify tokens of the last pass (host reads them; the commit trace copies the next anchor from them):
+        # allocated before any capture so no trace's scratch can overlap it
+        self.vtok = ttnn.from_torch(torch.zeros(1, 1, 1, R, dtype=torch.int32), dtype=ttnn.uint32,
+                                    layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)  # fmt: skip
         m.set_inputs(0, 0)
         m.step()
         if self.use_overlap and self.overlap is None:
@@ -125,14 +141,16 @@ class SpecGenerator(Generator):
             m.step()
             m.step()
         d.set_draft_pos(1)
-        d.draft(d.anchor)
+        d.tokens = d.draft(d.anchor)
         for p in (p_shared, p_split):
             V.set_inputs([0] * R, p)
-            V.step()
+            self._feed()
+            ttnn.copy(V.step()["token"][0], self.vtok)
             ttnn.synchronize_device(self.device)
             say("S6 eager verify", p, flush=True)
         for n in range(1, R + 1):
             V.commit(n)
+            self._set_anchor(n)
             ttnn.synchronize_device(self.device)
             say("S6 eager commit", n, flush=True)
         if self.overlap is not None:  # settle the staging attach pattern again after the verify passes
@@ -151,9 +169,11 @@ class SpecGenerator(Generator):
                          None)  # fmt: skip
                 if p is None:
                     continue
-                V.set_inputs([0] * R, p)
+                V.set_positions(p)
                 tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+                self._feed()
                 out = V.step()
+                ttnn.copy(out["token"][0], self.vtok)
                 ttnn.end_trace_capture(self.device, tid, cq_id=0)
                 self.vtrace[(ph, shared)] = (tid, out)
                 say("S6 verify captured", ph, shared, flush=True)
@@ -161,6 +181,7 @@ class SpecGenerator(Generator):
                 V.set_inputs([0] * R, p_shared - p_shared % 4 + ph)
                 tid = ttnn.begin_trace_capture(self.device, cq_id=0)
                 V.commit(n)
+                self._set_anchor(n)
                 ttnn.end_trace_capture(self.device, tid, cq_id=0)
                 self.ctrace[(ph, n)] = tid
         ttnn.synchronize_device(self.device)
@@ -183,20 +204,17 @@ class SpecGenerator(Generator):
         pos = len(prompt_ids)
         new, acc, t_draft, t_ver = [nxt], [], 0.0, 0.0
         while len(new) < max_new:
+            # one host sync per pass: the anchor (from the last commit / prompt step) and the drafts reach the
+            # verify pass on device; the host reads the verify tokens and the drafts after it
             t0 = _t.perf_counter()
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(torch.tensor([[nxt]], dtype=torch.int32), dtype=ttnn.uint32), d.anchor
-            )
             d.set_draft_pos(pos)
             ttnn.execute_trace(self.device, d.trace, cq_id=0, blocking=False)
             V.set_positions(pos)  # host writes while the draft runs
-            drafts = [int(x) for x in ttnn.to_torch(d.tokens).reshape(-1)[:k].tolist()]
             t1 = _t.perf_counter()
-            V.set_tokens([nxt] + drafts)
             ph = pos % 4
-            tid, vout = self.vtrace[(ph, self._shared(pos, R))]
-            ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
-            tgt = [int(x) for x in ttnn.to_torch(vout["token"][0]).reshape(-1)[:R].tolist()]  # one read
+            ttnn.execute_trace(self.device, self.vtrace[(ph, self._shared(pos, R))][0], cq_id=0, blocking=False)
+            tgt = [int(x) for x in ttnn.to_torch(self.vtok).reshape(-1)[:R].tolist()]
+            drafts = [int(x) for x in ttnn.to_torch(d.tokens).reshape(-1)[:k].tolist()]
             a = 0
             while a < k and drafts[a] == tgt[a]:
                 a += 1
