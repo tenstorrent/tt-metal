@@ -21,9 +21,11 @@ namespace sfpu {
 // ToDo: use sfpi API
 
 // _trunc_body_ reads the constant 23 from LReg3 and never writes it. The per-row loops in this
-// file load it once per call (_load_trunc_k23_) and instantiate the bodies with LOAD_K23 = false;
-// sfpi does not allocate LReg3 inside those loops (checked on the math ELF). Callers that wrap the
-// bodies in their own sfpi code (rdiv, fmod, remainder) keep the default and load it per element.
+// file load it once per call (_load_trunc_k23_) and instantiate the bodies with LOAD_K23 = false.
+// The compiler does not see that load, so this is correct only while sfpi allocates no LReg3 inside
+// those loops: the math ELF must have no LReg3 write in them other than the hoisted SFPLOADI. Callers
+// that wrap the bodies in their own sfpi code (rdiv, fmod, remainder) keep the default and load it
+// per element.
 sfpi_inline void _load_trunc_k23_() { TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_SHORT, 23); }
 
 // compute truncate to zero
@@ -97,49 +99,50 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
     1e25F,  1e26F,  1e27F,  1e28F,  1e29F,  1e30F,  1e31F,  1e32F,  1e33F,  1e34F,  1e35F,  1e36F,  1e37F,  1e38F,
 };
 
-// Applies row(i) to ITERATIONS dest rows. Inside a group of 8 rows, row i is addressed as dst_reg[i], so the group
-// advances the dest pointer with 3 increments instead of 8 (one INCRWC advances dst_reg by at most 3).
+// Applies row(i) to ITERATIONS dest rows (a multiple of 8). Inside a group of 8 rows, row i is addressed as
+// dst_reg[i], so the group advances the dest pointer with 3 increments instead of 8: sfpi encodes the INCRWC dest
+// increment as a signed 4-bit immediate at 2 per row, so one dst_reg += n covers at most 3 rows. row must be
+// always_inline so that i is a compile-time dst_reg offset.
 template <int ITERATIONS, typename Row>
 sfpi_inline void _for_each_row_(Row row) {
-    constexpr int GROUP = ITERATIONS % 8 == 0 ? 8 : 1;
-    for (int d = 0; d < ITERATIONS; d += GROUP) {
+    static_assert(ITERATIONS % 8 == 0, "rows are processed in groups of 8");
+    for (int d = 0; d < ITERATIONS; d += 8) {
 #pragma GCC unroll 8
-        for (int i = 0; i < GROUP; i++) {
+        for (int i = 0; i < 8; i++) {
             row(i);
         }
-        if constexpr (GROUP == 8) {
-            sfpi::dst_reg += 3;
-            sfpi::dst_reg += 3;
-            sfpi::dst_reg += 2;
-        } else {
-            sfpi::dst_reg++;
-        }
+        sfpi::dst_reg += 3;
+        sfpi::dst_reg += 3;
+        sfpi::dst_reg += 2;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_floor_() {
     _load_trunc_k23_();
-    _for_each_row_<ITERATIONS>([](int i) { sfpi::dst_reg[i] = _floor_body_<false>(sfpi::dst_reg[i]); });
+    _for_each_row_<ITERATIONS>(
+        [](const int i) __attribute__((always_inline)) { sfpi::dst_reg[i] = _floor_body_<false>(sfpi::dst_reg[i]); });
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_ceil_() {
     _load_trunc_k23_();
-    _for_each_row_<ITERATIONS>([](int i) { sfpi::dst_reg[i] = _ceil_body_<false>(sfpi::dst_reg[i]); });
+    _for_each_row_<ITERATIONS>(
+        [](const int i) __attribute__((always_inline)) { sfpi::dst_reg[i] = _ceil_body_<false>(sfpi::dst_reg[i]); });
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_trunc_() {
     _load_trunc_k23_();
-    _for_each_row_<ITERATIONS>([](int i) { sfpi::dst_reg[i] = _trunc_body_<false>(sfpi::dst_reg[i]); });
+    _for_each_row_<ITERATIONS>(
+        [](const int i) __attribute__((always_inline)) { sfpi::dst_reg[i] = _trunc_body_<false>(sfpi::dst_reg[i]); });
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_frac_() {
     _load_trunc_k23_();
-    _for_each_row_<ITERATIONS>([](int i) {
-        sfpi::vFloat x = sfpi::dst_reg[i];
+    _for_each_row_<ITERATIONS>([](const int i) __attribute__((always_inline)) {
+        const sfpi::vFloat x = sfpi::dst_reg[i];
         sfpi::dst_reg[i] = x - _trunc_body_<false>(x);
     });
 }
