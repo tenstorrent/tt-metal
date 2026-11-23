@@ -19,6 +19,7 @@ whatever the mode says. A caller that resets between parts runs the phase once p
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -49,6 +50,16 @@ OVERRIDES = {
 SMOKE_S = 2
 SETUP_S = 300  # mesh open, upload and close on top of a part's planned length; past both it counts as hung
 FAIL_LINE = re.compile(r"\b[A-Z][A-Z0-9]* FAIL\b")  # NUMERIC FAIL, QUIET FAIL, G3 FAIL, ...
+CCL_PARTS = {"h3", "h3-ref"}  # chunk_load parts whose output mixes every chip's data (chunk_sched.CCL_PARTS)
+# an error line from a CCL op: the active Ethernet-core timeout, a critical line naming an ERISC, or a traceback, RuntimeError
+# or TT_THROW line with a CCL word; info, warning, debug and trace lines never count (fabric set-up lines are in every log)
+CCL_ERR = re.compile(
+    r"Timed out while waiting for active ethernet core|\| *critical *\|.*erisc"
+    r"|(Traceback|^\s*File \"|RuntimeError|TT_THROW).*(all_gather|reduce_scatter|fabric|erisc|ccl)"
+    r"|(all_gather|reduce_scatter|fabric|erisc|ccl).*(Traceback|RuntimeError|TT_THROW)",
+    re.I,
+)
+LOG_LEVEL = re.compile(r"\| *(info|warning|debug|trace) *\|", re.I)
 
 GAP_MS, HEAVY_N = 50, 16  # the burst's pause after each 8 heavy ops; heavy ops per launch
 DIDT_OPS = "16k_hifi2,16k_bf8_lofi"
@@ -325,12 +336,38 @@ def run_step(step: Step, out: Path, dry_run: bool = False) -> Check:
     )
 
 
+def link_fault(c: Check) -> bool:
+    """True when a step's check is a hang or a CCL failure: a mismatch in a CCL part (its rows' chunk-end verify) or a CCL
+    error in the last 40 lines of its log. A numeric fault in another part, a tray trip or a plain error is not one."""
+    if c.status != FAIL:
+        return False
+    if c.data.get("hung"):
+        return True
+    log_path = Path(c.data.get("log", ""))
+    rows = log_path.parent / "rows.jsonl"
+    if rows.is_file():
+        for ln in rows.read_text(errors="replace").splitlines():
+            if '"verify"' not in ln:
+                continue
+            try:
+                r = json.loads(ln)
+            except ValueError:
+                continue
+            if r.get("event") == "verify" and any(
+                CCL_PARTS & set(x.get("bad_parts") or []) for x in (r.get("chips") or {}).values()
+            ):
+                return True
+    tail = log_path.read_text(errors="replace").splitlines()[-40:] if log_path.is_file() else []
+    return any(CCL_ERR.search(ln) and not LOG_LEVEL.search(ln) for ln in tail)
+
+
 def run_busbar(phase: Phase, out: Path, mode: str, dry_run: bool = False, steps: str | None = None, **over) -> bool:
-    """The bus-bar steps (see plan), in order, into *phase*. True when one hung or failed (the links phase then sweeps)."""
+    """The bus-bar steps (see plan), in order, into *phase*. True when one hung or had a CCL failure (link_fault; the
+    links phase then sweeps); a numeric fault or a tray trip alone is not one."""
     fault = False
     for step in plan(mode, steps, **over):
         log(f"busbar {step.line()}")
         c = run_step(step, out / "busbar", dry_run)
         phase.add(c)
-        fault |= c.status == FAIL
+        fault |= link_fault(c)
     return fault

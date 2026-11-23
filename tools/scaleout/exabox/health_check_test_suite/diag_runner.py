@@ -431,7 +431,8 @@ def run_diag(
     _finish(report, test_phase, t0, summary=False)
 
     # Phase 3b: the galaxy load (--mode): the bus-bar parts, then the pair link
-    # test, its sweep on a fault and the fabric open/close. Inside the AER window.
+    # test, its sweep on a link/CCL failure or a hang (never on a numeric fault or
+    # a tray trip) and the fabric open/close. Inside the AER window.
     # --steps picks the parts: the bus-bar phase runs for its steps, the links phase for "links".
     if plan.busbar and mode:
         load_dir = output.parent / "galaxy"
@@ -463,7 +464,7 @@ def run_diag(
                 links_phase,
                 "links",
                 FAIL,
-                lambda: run_links(links_phase, load_dir, any(fault) or busbar_phase.error != "", sweep_reset, dry_run),
+                lambda: run_links(links_phase, load_dir, any(fault), sweep_reset, dry_run),
             )
             _finish(report, links_phase, t0, summary=True)
 
