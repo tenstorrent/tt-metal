@@ -492,10 +492,6 @@ jobs:
       github.ref_name == 'main' ||
       needs.find-changed-files.outputs.tt-train-changed == 'true')
       }}
-    # tt-train-tests inherits the caller's permissions: keep them read-only.
-    permissions:
-      contents: read
-      packages: read
     uses: ./.github/workflows/tt-train-tests.yaml
     secrets: inherit
     with:

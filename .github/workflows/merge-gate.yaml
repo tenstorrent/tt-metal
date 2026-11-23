@@ -507,10 +507,6 @@ jobs:
             needs.find-changes.outputs.tt-nn-changed == 'true'
         }}
     secrets: inherit
-    # tt-train-tests inherits the caller's permissions: keep them read-only.
-    permissions:
-      contents: read
-      packages: read
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: merge_gate
