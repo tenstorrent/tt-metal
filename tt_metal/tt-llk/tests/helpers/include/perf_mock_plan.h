@@ -8,6 +8,7 @@
 #include <cstdint>
 
 // The Wormhole isolate mocks' MOP stream planning, free of hardware headers so a host test can tabulate it (perf.h emits it).
+// The planners are always_inline so a call with constant arguments folds into the emitted stream, as the old inline code did.
 namespace llk_perf_mock
 {
 constexpr std::uint32_t REPLAY_HANDSHAKES = 32 / 2;        // the replay buffer's 32 instructions, a STALLWAIT and a flip each
@@ -18,7 +19,7 @@ constexpr std::uint32_t REUSE_BURST       = 2;             // the matmul scheme'
 
 // A loop count for the MOP expander's 7 bit loop counters that divides n: n itself up to 127, else its largest power of two
 // factor (at most 64), times 3 when that still fits and divides
-constexpr std::uint32_t mop_loops(const std::uint32_t n)
+constexpr __attribute__((always_inline)) std::uint32_t mop_loops(const std::uint32_t n)
 {
     if (n <= MOP_LOOP_MAX)
     {
@@ -48,7 +49,8 @@ struct SegmentPlan
 };
 
 // allow_split (the consumer only) also replays a period of up to 2 x REPLAY_HANDSHAKES - burst whole
-constexpr SegmentPlan plan_segments(const bool allow_split, const std::uint32_t burst, const std::uint32_t run, const std::uint32_t periods)
+constexpr __attribute__((always_inline)) SegmentPlan
+plan_segments(const bool allow_split, const std::uint32_t burst, const std::uint32_t run, const std::uint32_t periods)
 {
     constexpr std::uint32_t HALF = REPLAY_HANDSHAKES;
     const std::uint32_t period   = burst + run;
@@ -94,7 +96,7 @@ struct MatmulPlan
     SegmentPlan seg;
 };
 
-constexpr MatmulPlan plan_matmul(
+constexpr __attribute__((always_inline)) MatmulPlan plan_matmul(
     const bool produce,
     const std::uint32_t loop_factor,
     const std::uint32_t rt_dim,
@@ -131,7 +133,7 @@ constexpr MatmulPlan plan_matmul(
 
 // periods x (paired handshakes of both sources, then b_only SrcB ones), in that order for the producer and the consumer:
 // the stream's pattern, bit j of the period set for a SrcB handshake (the period is at most the zmask)
-constexpr std::uint32_t plan_ab_then_b_pattern(const std::uint32_t paired, const std::uint32_t b_only)
+constexpr __attribute__((always_inline)) std::uint32_t plan_ab_then_b_pattern(const std::uint32_t paired, const std::uint32_t b_only)
 {
     return b_only == 0 ? 0u : (b_only >= ZMASK_BITS ? ~0u : ((1u << b_only) - 1) << paired); // no shift by 32 for (32, 0)
 }
@@ -145,7 +147,7 @@ struct SrcbReusePlan
     SegmentPlan seg;
 };
 
-constexpr SrcbReusePlan plan_srcb_reuse(const bool produce, const std::uint32_t a_count, const std::uint32_t periods)
+constexpr __attribute__((always_inline)) SrcbReusePlan plan_srcb_reuse(const bool produce, const std::uint32_t a_count, const std::uint32_t periods)
 {
     const SegmentPlan seg = plan_segments(false, 1, a_count, periods);
     if (seg.fits)

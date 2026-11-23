@@ -140,7 +140,7 @@ inline void program(const std::uint32_t kind0, const std::uint32_t kind1, const 
 // REPLAY_HANDSHAKES suffix. A longer period replays the burst around the run (up to 127 periods per MOP). The plan
 // (plan_segments) must fit.
 template <bool PRODUCE>
-inline void emit_segments(const SegmentPlan& plan, const std::uint32_t once, const std::uint32_t burst, const std::uint32_t each, const std::uint32_t run)
+inline void emit_segments(const SegmentPlan plan, const std::uint32_t once, const std::uint32_t burst, const std::uint32_t each, const std::uint32_t run)
 {
     constexpr std::uint32_t HALF = REPLAY_HANDSHAKES;
     const std::uint32_t period   = burst + run;
@@ -227,7 +227,7 @@ inline void stream(const std::uint32_t kind0, const std::uint32_t kind1, const s
 // The matmul mocks' Wormhole scheme (see _perf_unpack_matmul_mock): per kt step, the reused tiles two at a time, each
 // burst followed (unpack) or preceded (math) by the reloaded tiles. kind0 = reload, kind1 = reuse.
 template <bool PRODUCE>
-inline void matmul(
+__attribute__((always_inline)) inline void matmul(
     const std::uint32_t loop_factor, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t ct_dim, const std::uint32_t num_blocks)
 {
     const MatmulPlan plan = plan_matmul(PRODUCE, loop_factor, rt_dim, kt_dim, ct_dim, num_blocks);
@@ -286,7 +286,7 @@ inline void ab_then_b(const std::uint32_t paired, const std::uint32_t b_only, co
 
 // periods x (one SrcB handshake and a_count SrcA ones): the producer gives B first, the consumer takes it back last
 template <bool PRODUCE>
-inline void srcb_reuse(const std::uint32_t a_count, std::uint32_t periods)
+__attribute__((always_inline)) inline void srcb_reuse(const std::uint32_t a_count, std::uint32_t periods)
 {
     const SrcbReusePlan plan = plan_srcb_reuse(PRODUCE, a_count, periods);
     if (plan.route == Route::SEGMENTS)
