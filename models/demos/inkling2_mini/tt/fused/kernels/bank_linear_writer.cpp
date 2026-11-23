@@ -27,6 +27,8 @@ constexpr uint32_t out_tile = get_named_compile_time_arg_val("out_tile");
 constexpr uint32_t x_rows = get_named_compile_time_arg_val("x_rows");
 // x_half: x and the output are 16 x 32 tiles (bank_linear.py HALF): x tiles get faces 0, 1; out_tile is the half
 // tile, written to the start of each 32 x 32 output page (rows 0..15)
+// x_half 2: 8 x 32 tiles of rows xbase .. xbase + 7 (runtime arg after the passes): x tiles get those rows of faces 0
+// and 1, and the 8 output rows go back to rows xbase .. xbase + 7 of each 32 x 32 output page
 constexpr uint32_t x_half = get_named_compile_time_arg_val("x_half");
 constexpr uint32_t DST_TILES = 8;
 // head (the LM head, tt/fused/head.py): out rows are the logits rows; also the argmax of each row over columns
@@ -65,6 +67,7 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, out_addr, out_page);
 
     const uint32_t xtb = get_tile_size(cb_x);
+    const uint32_t xbase = x_half == 2 ? get_arg_val<uint32_t>(4 + 2 * npass) * 32 : 0;  // bf16 face row: 32 B
     cb_reserve_back(cb_x, kt);
     const uint32_t xl = get_write_ptr(cb_x);
     const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
@@ -74,7 +77,11 @@ void kernel_main() {
         noc_async_read_set_trid(p % 4 + 1);
         for (uint32_t r = 0; r < kb; ++r) {
             const uint32_t dst = xl + (p * kb + r) * xtb;
-            if constexpr (x_half) {
+            if constexpr (x_half == 2) {
+                const uint64_t src = xs.get_noc_addr(j * kb + r);
+                noc_async_read(src + xbase, dst, 256);
+                noc_async_read(src + 512 + xbase, dst + 256, 256);
+            } else if constexpr (x_half) {
                 read_x_half_tile<x_rows>(xs.get_noc_addr(j * kb + r), dst, zeros);
             } else if constexpr (x_rows > 0) {
                 read_x_tile<x_rows>(xs.get_noc_addr(j * kb + r), dst, zeros);
@@ -105,7 +112,12 @@ void kernel_main() {
             if (col >= out_cols) {
                 continue;
             }
-            if constexpr (tiles_out) {
+            if constexpr (tiles_out && x_half == 2) {  // face rows of 16 elements: 32 B bf16, 64 B fp32
+                constexpr uint32_t fr = out_tile / 16, half_t = out_tile / 2;
+                const uint64_t d = out.get_noc_addr(n0 + t);
+                noc_async_write(src + t * out_tile, d + xbase / 32 * fr, half_t);
+                noc_async_write(src + t * out_tile + half_t, d + 16 * fr + xbase / 32 * fr, half_t);
+            } else if constexpr (tiles_out) {
                 noc_async_write(src + t * out_tile, out.get_noc_addr(n0 + t), out_tile);
             } else {
 #ifdef BL_ROW_TILES

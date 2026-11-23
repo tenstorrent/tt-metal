@@ -39,11 +39,20 @@ DST_TILES = 8  # fp32 Dest tiles per pass (full sync), as the reference
 HALF = os.environ.get("INKLING_LINEAR_HALF", "1") == "1"
 
 
-def half_tiles(x_rows, tiles_out, out_dtype):
-    """-> (half, x / output TileDescriptor, x tile bytes, output tile bytes) of a call."""
+# EIGHT: with HALF and a per-item row base (BankLinear.x_base(part) -> b), 8 x 32 tiles of rows b .. b + 7 of x: the
+# matmul runs a quarter of the 32-row FPU passes; the writer puts the 8 output rows back at rows b .. b + 7 of each
+# 32 x 32 output page. The caller picks b so every row the item's columns are read at lies in that window. Attention
+# w_all (attention_fast.py x_base), traced decode: 4K 14.86 -> 14.83 ms, 128K 20.20 -> 20.18, bit-equal.
+EIGHT = os.environ.get("INKLING_LINEAR_EIGHT", "1") == "1"
+
+
+def half_tiles(x_rows, tiles_out, out_dtype, x_base=None):
+    """-> (mode, x / output TileDescriptor, x tile bytes, output tile bytes) of a call; mode 0: 32-row tiles, 1: 16-row
+    tiles, 2: 8-row windows at the x_base rows."""
     half = HALF and tiles_out and 0 < x_rows <= 16
-    t = ttnn.Tile([16 if half else TILE, TILE])
-    return half, ttnn.TileDescriptor(t), t.get_tile_size(ttnn.bfloat16), t.get_tile_size(out_dtype)
+    mode = 2 if half and EIGHT and x_base is not None else int(half)
+    t = ttnn.Tile([(TILE, 16, 8)[mode], TILE])
+    return mode, ttnn.TileDescriptor(t), t.get_tile_size(ttnn.bfloat16), t.get_tile_size(out_dtype)
 
 
 def reference_schedule(Kt, Nt, Nbt, C, kb):
@@ -233,6 +242,7 @@ class BankLinear:
         self.out_dtype = out_dtype
         # x_rows > 0: the caller guarantees only the first x_rows rows of every x are non-zero (x_rows.hpp)
         self.x_rows = 0
+        self.x_base = None  # EIGHT: part -> first x row of the item's 8-row window
         # tile output memory (decode consumers that read it right away may take it in L1); out_buf: a persistent
         # output tensor reused by every call (its consumers must be done with it before the next call)
         self.out_mem = ttnn.DRAM_MEMORY_CONFIG
@@ -279,7 +289,7 @@ class BankLinear:
         else:
             assert self.out_dtype == ttnn.float32 and x.shape[-2] == len(outs)
         otb = ttnn.Tile([TILE, TILE]).get_tile_size(self.out_dtype)
-        half, th, xtb, htb = half_tiles(self.x_rows, tiles_out, self.out_dtype)
+        half, th, xtb, htb = half_tiles(self.x_rows, tiles_out, self.out_dtype, self.x_base)
         row_tiles = not tiles_out and out.layout == ttnn.TILE_LAYOUT  # out rows as [1, 1, 1, W] TILE tensors
         named = dict(kt=self.Kt, kb=self.KB, nblk=self.nblk, n_banks=self.nb, out_cols=self.out_cols,
                      out_page=otb if (tiles_out or row_tiles) else out.shape[-1] * 4, max_ncq=self.max_ncq, tiles_out=int(tiles_out),
@@ -298,6 +308,8 @@ class BankLinear:
             r_args[core] = self.reader_args(i)
             c_args[core] = [rot, len(part)] + [n for n, _ in part]
             w_args[core] = [x.buffer_address(), rot, out.buffer_address(), len(part)] + [v for p_ in part for v in p_]
+            if half == 2:
+                w_args[core].append(self.x_base(part))
             if head is not None:
                 w_args[core] += [slot, m.x, m.y, len(self.cores)]
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731

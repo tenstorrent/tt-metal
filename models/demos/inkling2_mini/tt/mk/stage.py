@@ -209,7 +209,7 @@ class StagedBankLinear:
             assert bl.out_dtype == ttnn.float32 and x.shape[-2] == 1
         otb = ttnn.Tile([TILE, TILE]).get_tile_size(bl.out_dtype)
         x_rows = getattr(bl, "x_rows", 0)
-        half, th, xtb, htb = half_tiles(x_rows, tiles_out, bl.out_dtype)
+        half, th, xtb, htb = half_tiles(x_rows, tiles_out, bl.out_dtype, getattr(bl, "x_base", None))
         named = dict(kt=bl.Kt, kb=bl.KB, nblk=bl.nblk, n_banks=bl.nb, out_cols=bl.out_cols,
                      out_page=otb if tiles_out else out.shape[-1] * 4, max_ncq=bl.max_ncq, tiles_out=int(tiles_out),
                      out_tile=htb, x_rows=x_rows, raw_rows=1, x_half=int(half))  # fmt: skip
@@ -221,7 +221,8 @@ class StagedBankLinear:
                                   staged, len(part)] + [n for n, _ in part]))  # fmt: skip
             c_args.append((core, [rot, len(part)] + [n for n, _ in part]))
             w_args.append(
-                (core, [x.buffer_address(), rot, out.buffer_address(), len(part)] + [v for p_ in part for v in p_])
+                (core, [x.buffer_address(), rot, out.buffer_address(), len(part)] + [v for p_ in part for v in p_]
+                 + ([bl.x_base(part)] if half == 2 else []))  # fmt: skip
             )
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         blk = bl.KB * bl.max_ncq

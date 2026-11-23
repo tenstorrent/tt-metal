@@ -303,6 +303,20 @@ class Inkling2AttentionFast(Inkling2Attention):
             b = self.w_all.bank
             b.out_mem = W_ALL_OUT_MEM
             b.out_buf = _shared_out(self.device, b.out_cols, b.out_dtype, W_ALL_OUT_MEM)
+            # bank_linear.py EIGHT: each core's 8-row window of the 9 rows. Triple mode: v columns are read at rows 5..8
+            # (window rows 1..8), q / gate / rel / sink at row 0 and k at rows 1..4 (rows 0..7); the global layers' dynamic
+            # taps at the k / v lag-0 rows 1 and 5 (either window). Single mode: rows 0..3.
+            q1, v0, v1 = KV0 // 32, (KV0 + N_KV * HEAD_DIM) // 32, (KV0 + 2 * N_KV * HEAD_DIM) // 32
+            mode = self._w_all_mode = ["single"]
+
+            def x_base(part):
+                cols = [g0 + t for ncq, g0 in part for t in range(ncq)]
+                if mode[0] != "triple" or not any(v0 <= c < v1 for c in cols):
+                    return 0
+                assert min(cols) >= q1, "a core with q columns (row 0) and v columns (rows 5..8)"
+                return 1
+
+            b.x_base = x_base
 
     def new_state(self, max_ctx, cache_dtype=ttnn.bfloat16):
         if self.is_global and max_ctx % FAR_CHUNK:
@@ -395,6 +409,8 @@ class Inkling2AttentionFast(Inkling2Attention):
         else:
             mode = "single" if (xk is xq and xv is xq) else "triple"
             act = self.window(state.x_hist, [xq] if mode == "single" else [xq, xk, xv])
+            if hasattr(self, "_w_all_mode"):
+                self._w_all_mode[0] = mode
             proj = self.w_all(act, ttnn.bfloat16, self.mm_cfg)
         F.RIDE = None
         rows = ROWS[mode]
