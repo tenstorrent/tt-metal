@@ -1,5 +1,7 @@
 # Health check Blackhole Galaxy diagnostic tool
 
+In works
+
 Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 `tt-smi` snapshot, decodes per-chip telemetry, runs a reset stability loop,
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
