@@ -144,6 +144,7 @@ def load(fake):
         overload=overload,
         logger=SimpleNamespace(debug=lambda *a: None, warning=lambda *a: None),
         _kernel_prewarm_capturing=False,
+        trace_store=SimpleNamespace(enabled=lambda: False),
     )
     ns["_TRACER_VALID_INPUT_TYPES"] = (Tensor, int, float, str, bool, type(None))
     definitions(ROOT / "utils/tracing.py", {"Tracer", "_verify_value", "_tree_map", "_clone_tensor"}, ns)

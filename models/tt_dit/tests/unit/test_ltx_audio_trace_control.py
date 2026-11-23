@@ -129,6 +129,7 @@ def fixture(*, traced=True, independent=True, env=None):
             weakref=weakref,
             _TRACED_WRAPPERS=weakref.WeakSet(),
             _kernel_prewarm_capturing=False,
+            trace_store=SimpleNamespace(enabled=lambda: False),
             _OMITTED=object(),
             _MESH_DEVICE_PARAM_NAMES=("mesh_device", "device"),
             _TRACER_VALID_INPUT_TYPES=(Tensor, int, float, str, bool, type(None)),

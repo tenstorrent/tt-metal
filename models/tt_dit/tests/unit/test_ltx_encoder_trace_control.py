@@ -236,6 +236,7 @@ class EncoderLifecycleTests(unittest.TestCase):
                 overload=overload,
                 logger=Mock(),
                 _kernel_prewarm_capturing=False,
+                trace_store=SimpleNamespace(enabled=lambda: False),
                 _TRACER_VALID_INPUT_TYPES=(torch.Tensor, int, float, str, bool, type(None)),
             ),
         )
