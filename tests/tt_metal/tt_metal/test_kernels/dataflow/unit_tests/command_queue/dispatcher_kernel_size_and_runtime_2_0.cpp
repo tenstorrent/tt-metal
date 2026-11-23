@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Metal 2.0 variant of dispatcher_kernel_size_and_runtime.cpp. KERNEL_RUNTIME_MICROSECONDS is a cycle
-// count on Quasar, and since Gen2 requires a zero semaphore initial value, the semaphore check reads back
-// zero and then leaves it non-zero.
+// count on every arch, and since Gen2 requires a zero semaphore initial value, the semaphore check reads
+// back zero and then leaves it non-zero.
 
 #include <cstdint>
 
