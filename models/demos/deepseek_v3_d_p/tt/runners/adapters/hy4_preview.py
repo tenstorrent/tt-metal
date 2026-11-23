@@ -37,6 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.hy4.paths import HY4_PREFILL_TRACE_DEFAULT
 from models.demos.deepseek_v3_d_p.reference.hy4_config import (
     Hy4Config,
     Hy4TP32Config,
@@ -69,8 +70,9 @@ class Hy4Adapter(GLM53Adapter):
     # BF16 release. The MXFP8 release (tencent/Hy4-preview-FP8) reads through the same path.
     hf_model_default = "/mnt/tt-data/Hy4-Preview"
     ttnn_cache_default = "/mnt/tt-data/Hy4-Preview-Cache/prefill"
-    # Golden traces come from #65919 (HF hy_v4); PREFILL_TRACE_DIR points the producer at one.
-    prefill_trace_default = "/mnt/tt-data/Hy4-Preview-Cache/golden_traces/hy4-prefill"
+    # Golden traces come from #65919 (HF hy_v4); PREFILL_TRACE_DIR points the producer at one. The default is the
+    # golden generator's own (reference/hy4/paths.py: the 32K interleaved-RoPE trace under HY4_GOLDEN_ROOT).
+    prefill_trace_default = HY4_PREFILL_TRACE_DEFAULT
     # MTP: Hy4's layer is model.mtp_layers.0, read by hy4_checkpoint.load_hy4_mtp_state_dict (TtHy4Runtime); it has no
     # iHC and is seeded by norm(hc_head(streams)).
     supports_mtp = True
@@ -95,6 +97,9 @@ class Hy4Adapter(GLM53Adapter):
     # The golden's k_pe is already in the device's interleaved RoPE pairing (the checkpoint's own; reference/hy4), so
     # the KVPE pe half compares directly: no half-split -> interleaved re-base (cache_half_pccs(pe_interleave=False)).
     kv_pe_interleave = False
+    # ... and the producer's trunk KV check refuses a trace whose metadata does not declare that pairing
+    # (frames.kvpe.pe_rope), e.g. the earlier half-split goldens.
+    golden_pe_rope = "interleaved"
 
     def _checkpoint_dir(self) -> str:
         return os.environ.get("PREFILL_HF_MODEL") or os.environ.get(self.env_var, "") or self.hf_model_default

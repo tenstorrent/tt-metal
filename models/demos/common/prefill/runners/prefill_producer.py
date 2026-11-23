@@ -1318,6 +1318,18 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     # attribute, so deriving it a second way here is how the two drift. Absent both, the usual
     # rotated convention.
     _KVPE_INTERLEAVE = getattr(ADAPTER, "kv_pe_interleave", not bool(getattr(ADAPTER.model_config, "USE_NOPE", False)))
+    # An adapter that names the pairing its goldens must be roped in (``golden_pe_rope``; Hy4: interleaved, compared
+    # directly) takes the trace's own declaration from its metadata, as the MTP check does, and refuses a trace that
+    # declares another pairing or none (a stale half-split golden would score the device against the wrong frame).
+    _required_pe = getattr(ADAPTER, "golden_pe_rope", None)
+    if _required_pe is not None:
+        _declared_pe = _golden_rope_layouts(trace_dir)[0]
+        if _declared_pe != _required_pe:
+            raise ValueError(
+                f"golden trace {trace_dir} declares KVPE pe RoPE pairing {_declared_pe!r} (frames.kvpe.pe_rope; "
+                f"half_split when undeclared), but {ADAPTER.name} compares against {_required_pe!r} goldens. Point "
+                f"PREFILL_TRACE_DIR at a trace generated in that pairing."
+            )
 
     KV_LORA = ADAPTER.model_config.KV_LORA_RANK
     HEAD_DIM = KV_LORA + ADAPTER.model_config.QK_ROPE_HEAD_DIM

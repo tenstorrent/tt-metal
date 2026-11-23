@@ -427,6 +427,12 @@ def test_adapter_identity(adapter):
     assert adapter.supports_tp_shard_kv and adapter.tp_shard_kv_default
     # Must not inherit GLM-5.3's golden trace or checkpoint.
     assert "GLM" not in adapter.prefill_trace_default and "GLM" not in adapter.test_prefill_trace_default
+    # The golden generator's default trace (interleaved RoPE), and the producer refuses one that declares otherwise.
+    from models.demos.deepseek_v3_d_p.reference.hy4.paths import HY4_PREFILL_TRACE_DEFAULT
+
+    assert adapter.prefill_trace_default == adapter.test_prefill_trace_default == HY4_PREFILL_TRACE_DEFAULT
+    assert adapter.prefill_trace_default.endswith("-ropeint")
+    assert adapter.golden_pe_rope == "interleaved" and adapter.kv_pe_interleave is False
     assert "GLM" not in adapter.hf_model_default and "GLM" not in adapter.ttnn_cache_default
 
 
