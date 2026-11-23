@@ -66,8 +66,8 @@ void bind_conv2d(nb::module_& mod) {
 
             - ttnn.Tensor: Default. The output tensor, when return_output_dim = False and return_weights_and_bias = False
             - tuple[ttnn.Tensor, tuple[int, int]]: The output tensor, and its height and width, if return_output_dim = True
-            - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its height and width, if return_weights_and_bias = True
-            - tuple[ttnn.Tensor, tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its height and width, if return_output_dim = True and return_weights_and_bias = True
+            - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and the preprocessed weight and bias, if return_weights_and_bias = True
+            - tuple[ttnn.Tensor, tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, its height and width, and the preprocessed weight and bias, if return_output_dim = True and return_weights_and_bias = True
 
         Note:
             The `input_tensor` supports the following data type and layout:
