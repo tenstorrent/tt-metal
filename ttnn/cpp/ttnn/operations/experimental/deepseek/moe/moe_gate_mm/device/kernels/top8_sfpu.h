@@ -79,11 +79,6 @@ inline void _top8_configure_addrmod_() {
         .dest = {.incr = 14, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
         .set(ADDRMOD_OFFSET + ADDR_MOD_2);
-
-    addr_mod_t{
-        .dest = {.incr = -14, .clr = 0, .cr = 0, .c_to_cr = 0},
-    }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_3);
 }
 
 // Load input data (FP16B) from tile layout and fuse with expert indices
@@ -460,6 +455,13 @@ inline void _top8_merge_sorted_8_() {
 }
 
 inline void _calculate_top8_tile_(uint32_t tile_index) {
+    // ADDR_MOD_3 is slot 7 under the SFPU addr-mod base. This op steps dest by -14 through it; restore zero
+    // advance before returning.
+    addr_mod_t{
+        .dest = {.incr = -14, .clr = 0, .cr = 0, .c_to_cr = 0},
+    }
+        .set(ADDR_MOD_7);
+
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     //-------------------------------------------------------------------------
@@ -607,6 +609,9 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
     // Store the result
     TTI_SFPTRANSP(0, 0, 0, 0);
     _top8_store_rows_4_7_final_();
+
+    // Restore the ADDR_MOD_7 invariant (zero advance) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
 }
 
 }  // namespace sfpu

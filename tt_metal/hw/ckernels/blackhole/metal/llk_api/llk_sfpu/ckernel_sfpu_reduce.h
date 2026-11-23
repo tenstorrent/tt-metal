@@ -1186,13 +1186,6 @@ inline void configure_addrmod_max_min(std::uint32_t num_cols) {
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
-
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
         .dest = {.incr = 16},
     }
         .set(ADDR_MOD_6);
