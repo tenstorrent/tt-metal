@@ -16,7 +16,7 @@ class CheckpointFatalError(CheckpointError):
     The ranks are out of step: a peer may still wait in a collective this rank left, and it waits forever. End the job
     instead of continuing: a handler that catches ``CheckpointError`` and keeps training also catches this one, and
     even a normal exit waits for that peer in ``MPI_Finalize``. Flush the logs and call ``os._exit(1)``, which skips
-    ``MPI_Finalize`` so the launcher ends every rank (as the GRPO trainer's ``exit_on_error`` does)::
+    ``MPI_Finalize`` so the launcher ends every rank::
 
         try:
             dcp.save(ckpt_dir, model=model, optimizer=optimizer)
