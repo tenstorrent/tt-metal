@@ -33,7 +33,27 @@ the bank count and every bank serves the same bytes.
 The reads are the core's NCRISC's, on NOC0 beside the x forwarder; each slot's cores are the gate/up cores fewest NOC0
 hops from the bank's anchor, its optimal worker core (`get_optimal_dram_bank_to_logical_worker_assignment`; hops from
 `experimental::Device::get_worker_noc_hop_distance`, the reads' response direction), all (slot, core) pairs taken
-nearest first.
+nearest first, then swapped between slots while that lowers the worst slot's mean hops (min-max): every core waits for
+the whole expert, so the bank with the farthest readers paces every expert, and nearest-first leaves the cores no other
+bank took to the last bank. The swaps only change which core reads which slot, not the weights' layout.
+
+## Down weight reads
+
+The down cores are chosen together with their banks: (hops, bank, core) pairs nearest first, every bank serving the same
+down bytes. A down core's blocks go over its bank pattern (`down_bank_pattern`: 8 positions, block k at position
+k % 8; most cores have all 8 positions in one bank, the rest split over two) in its slot (`down_weight_slot`), which
+`down_weight_reader.cpp` decodes and `flat_weight_regions` packs. The weights' layout therefore follows the plan - the
+chip's DRAM endpoints (firmware) and harvesting place the banks' anchors - so a cache of laid-out weights is keyed on
+the plan's packing fields (`down_bank_patterns`, `down_weight_slots`, `down_weight_slot_count`), not on the layout
+options. Rotating every core over all banks (the earlier layout) averaged 12 NOC0 hops a down byte; the nearest banks
+1.4 (flat -2..-10%, experts + combine K3 / M3 -3..-12%).
+
+## x forwarding
+
+Every gate/up core receives all of x for its sub-block's rows (at M 320 about ten times its weight bytes), forwarded
+hop by hop along its rectangle's snake by the predecessor's NCRISC (`gate_up_x_forwarder.cpp`), 6 pieces in flight
+(transaction ids 1..6; the weight reads on the same RISC use 8..15). One hop's bandwidth is its bytes in flight over
+the NoC latency: 3 in flight capped K3 / M3 at M 320 (6: -14 / -18%); no L1 - the pieces land in the successor's x ring.
 
 ## Roles and kernels (`device/kernels`)
 
