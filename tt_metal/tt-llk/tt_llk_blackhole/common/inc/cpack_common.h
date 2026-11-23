@@ -16,23 +16,6 @@
 #include "llk_memory_checks.h"
 #include "tensor_shape.h"
 
-namespace ckernel
-{
-/**
- * @brief Build a TensorShape from the legacy (face_r_dim, tile_c_dim, num_faces) pack geometry.
- *
- * Face columns are min(tile_c_dim / 16, num_faces), as on the host (compute_num_faces_rc_dims), so a single
- * face stays one face; face rows are num_faces / face columns.
- */
-inline TensorShape tensor_shape_from_legacy_pack_geometry(const std::uint32_t face_r_dim, const std::uint32_t tile_c_dim, const std::uint32_t num_faces)
-{
-    const std::uint32_t tile_face_cols  = tile_c_dim / MAX_FACE_C_DIM;
-    const std::uint32_t num_faces_c_dim = tile_face_cols < num_faces ? tile_face_cols : num_faces;
-    LLK_ASSERT(num_faces % num_faces_c_dim == 0, "num_faces must divide evenly into the tile width's face columns");
-    return make_tensor_shape(face_r_dim, MAX_FACE_C_DIM, num_faces / num_faces_c_dim, num_faces_c_dim);
-}
-} // namespace ckernel
-
 namespace ckernel::packer
 {
 using DataFormatType = std::underlying_type_t<DataFormat>;
