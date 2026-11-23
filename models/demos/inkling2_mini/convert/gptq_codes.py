@@ -22,7 +22,8 @@ consecutive outputs at one input), so ``from_torch(bfloat4_b)`` stores them bit 
     GPTQ values), so only the MXFP8 layers 20-23 (factor 1) map exactly. ``--exact-only`` refuses 0-19.
 ``codes:DIR``  our own calibration (convert/gptq_calib.py, ``L{nn}.pt``: ``gate_up`` / ``down`` dicts of ``q4`` uint8
     [E, out, in / 2], two 4-bit two's complement mantissas -7..7 per byte, low nibble = even input, and uint8 ``e``
-    [E, out / 16, in], value ``q * 2^(e - 129)``), already in the baked domain: every layer exact.
+    [E, out / 16, in], value ``q * 2^(e - 129)``; or ``q8`` int8 [E, out, in] mantissas -127..127, value
+    ``q * 2^(e - 133)``, stored as BFP8), already in the baked domain: every layer exact.
 """
 
 from __future__ import annotations
@@ -115,9 +116,28 @@ def unpack4(b: torch.Tensor) -> torch.Tensor:
     return n - 16 * (n >= 8).to(torch.int8)
 
 
-def decode_codes(q: torch.Tensor, e: torch.Tensor) -> torch.Tensor:
-    """int8 q [..., R, C], uint8 e [..., R / 16, C] -> float32 q * 2^(e - 129)."""
-    return torch.ldexp(q.float(), e.to(torch.int32).repeat_interleave(16, dim=-2) - 129)
+def decode_codes(q: torch.Tensor, e: torch.Tensor, mbits: int = 3) -> torch.Tensor:
+    """int8 q [..., R, C], uint8 e [..., R / 16, C] -> float32 q * 2^(e - 126 - mbits) (BFP4: 3, BFP8: 7)."""
+    return torch.ldexp(q.float(), e.to(torch.int32).repeat_interleave(16, dim=-2) - 126 - mbits)
+
+
+def _code_values(z: dict) -> torch.Tensor:
+    """One tensor of a ``codes:`` layer file: ``q4`` (BFP4) or ``q8`` (int8 mantissas -127..127, BFP8)."""
+    if "q8" in z:
+        return decode_codes(z["q8"], z["e"], 7)
+    return decode_codes(unpack4(z["q4"]), z["e"])
+
+
+def layer_dtypes(source: str, layer: int) -> dict[str, str]:
+    """Stored dtype of each expert tensor for ``layer``: BFP8 for ``q8`` codes, else BFP4."""
+    kind, _, root = source.partition(":")
+    if kind != "codes":
+        return {"experts.w_gate_up": "BFP4", "experts.w_down": "BFP4"}
+    z = torch.load(Path(root) / f"L{layer:02d}.pt", weights_only=True, mmap=True)
+    return {
+        n: ("BFP8" if "q8" in z[k] else "BFP4")
+        for n, k in (("experts.w_gate_up", "gate_up"), ("experts.w_down", "down"))
+    }
 
 
 class Store:
@@ -146,8 +166,8 @@ def layer_store(source: str, layer: int, exact_only: bool = False) -> tuple[Stor
         dn = (z["down_t"].float() * z["f2"][:, None, None]).to(torch.bfloat16).transpose(1, 2)
     elif kind == "codes":
         z = torch.load(Path(root) / f"L{layer:02d}.pt", weights_only=True)
-        gu = decode_codes(unpack4(z["gate_up"]["q4"]), z["gate_up"]["e"]).to(torch.bfloat16)
-        dn = decode_codes(unpack4(z["down"]["q4"]), z["down"]["e"]).to(torch.bfloat16)
+        gu = _code_values(z["gate_up"]).to(torch.bfloat16)
+        dn = _code_values(z["down"]).to(torch.bfloat16)
         exact = True
     else:
         raise ValueError(f"expert source {source!r}: want lotto:DIR or codes:DIR")

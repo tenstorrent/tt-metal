@@ -92,7 +92,7 @@ def capture(args):
     out.mkdir(parents=True, exist_ok=True)
     dev = ttnn.open_device(device_id=0, trace_region_size=256 << 20, l1_small_size=32768)
     try:
-        model = Inkling2Model(dev, max_ctx=SEQ, log=lambda s: None)
+        model = Inkling2Model(dev, max_ctx=d["ids"].shape[1], log=lambda s: None)
         pf = Inkling2Prefill(model)
         seq = {"i": 0}
 
@@ -104,7 +104,7 @@ def capture(args):
 
         pf.moe_tap = tap
         for i in range(args.first, min(args.first + args.n, d["ids"].shape[0])):
-            seq["i"] = i
+            seq["i"] = d.get("first", 0) + i
             t0 = time.time()
             pf.prefill(d["ids"][i].tolist(), chunk=args.chunk)
             print(f"CAPTURE seq {i} {d['kinds'][i]} {time.time() - t0:.1f}s", flush=True)
@@ -113,17 +113,19 @@ def capture(args):
 
 
 # ---------------------------------------------------------------- 3. solve (CPU)
-def bfp4(w: torch.Tensor):
+def bfp4(w: torch.Tensor, mbits: int = 3):
     """w [..., R] fp32 -> (values, q int8, e uint8 [..., R / 16]): one exponent per 16 along the last dim, step
-    2^(floor(log2 max) - 2), mantissa round-to-nearest-even clamped to 7 (ttnn bfloat4_b, moe_pcc.bfp_roundtrip)."""
+    2^(floor(log2 max) - (mbits - 1)), mantissa round-to-nearest-even clamped to 2^mbits - 1 (mbits 3: ttnn
+    bfloat4_b, 7: bfloat8_b; moe_pcc.bfp_roundtrip)."""
     b = w.unflatten(-1, (-1, 16))
     exp = torch.frexp(b.abs().amax(-1, keepdim=True))[1] - 1
-    step = torch.ldexp(torch.ones_like(exp, dtype=torch.float32), exp - 2)
-    q = torch.round(b / step).clamp(-7, 7)
+    step = torch.ldexp(torch.ones_like(exp, dtype=torch.float32), exp - (mbits - 1))
+    qmax = 2**mbits - 1
+    q = torch.round(b / step).clamp(-qmax, qmax)
     return (q * step).flatten(-2), q.to(torch.int8).flatten(-2), (exp + 127).clamp(0, 255).to(torch.uint8).squeeze(-1)
 
 
-def gptq(W: torch.Tensor, Hs: torch.Tensor, damp: float, block: int = 128):
+def gptq(W: torch.Tensor, Hs: torch.Tensor, damp: float, block: int = 128, mbits: int = 3):
     """Batched GPTQ, act order. W [B, out, in] fp32, Hs [B, in, in] fp32 (sum of x x^T). The BFP blocks run along
     out, so a whole block is quantized with its column. Returns (q int8 [B, out, in], e uint8 [B, out/16, in])."""
     B, R, C = W.shape
@@ -149,7 +151,7 @@ def gptq(W: torch.Tensor, Hs: torch.Tensor, damp: float, block: int = 128):
         U1 = U[:, c1:c2, c1:c2]
         for j in range(c2 - c1):
             w = W1[:, :, j]
-            v, q, e = bfp4(w)
+            v, q, e = bfp4(w, mbits)
             Q[:, :, c1 + j], Ex[:, :, c1 + j] = q, e
             d = U1[:, j, j][:, None]
             err = (w - v) / d
@@ -162,8 +164,8 @@ def gptq(W: torch.Tensor, Hs: torch.Tensor, damp: float, block: int = 128):
     return Q, Ex
 
 
-def rtn(W: torch.Tensor):
-    _, q, e = bfp4(W.transpose(-1, -2))  # blocks along out
+def rtn(W: torch.Tensor, mbits: int = 3):
+    _, q, e = bfp4(W.transpose(-1, -2), mbits)  # blocks along out
     return q.transpose(-1, -2).contiguous(), e.transpose(-1, -2).contiguous()
 
 
@@ -173,23 +175,28 @@ def pack4(q: torch.Tensor) -> torch.Tensor:
     return u[..., 0::2] | (u[..., 1::2] << 4)
 
 
-def decode(q, e):
-    return torch.ldexp(q.float(), e.to(torch.int32).repeat_interleave(16, dim=-2) - 129)
+def decode(q, e, mbits: int = 3):
+    return torch.ldexp(q.float(), e.to(torch.int32).repeat_interleave(16, dim=-2) - 126 - mbits)
 
 
 def swiglu(g, u):
     return 4.0 * torch.tanh(g / 4.0) * torch.sigmoid(g) * 25.0 * torch.tanh(u / 25.0)
 
 
-def layer_inputs(cap: Path, layer: int):
-    """All captured MoE inputs of ``layer``: (x fp32 [N, H], ids int64 [N, 8])."""
-    xs, ids = [], []
+def layer_inputs(cap: Path, layer: int, weights: dict | None = None):
+    """All captured MoE inputs of ``layer``: (x fp32 [N, H], ids int64 [N, 8], row weight fp32 [N]). ``weights``
+    {seq: w} picks the sequences and weights their rows in the Hessians (default: all, weight 1)."""
+    xs, ids, ws = [], [], []
     for a in (a for a, l in enumerate(APP_LAYER) if l == layer):
         for f in sorted(cap.glob(f"a{a:02d}_s*.pt")):
+            w = 1.0 if weights is None else weights.get(int(f.name.split("_")[1][1:]))
+            if w is None:
+                continue
             z = torch.load(f, weights_only=True)
             xs.append(z["x"])
             ids.append(z["ids"].long())
-    return torch.cat(xs).float(), torch.cat(ids)
+            ws.append(torch.full((len(z["x"]),), float(w)))
+    return torch.cat(xs).float(), torch.cat(ids), torch.cat(ws)
 
 
 def expert_weights(ck, layer: int):
@@ -213,7 +220,8 @@ def expert_weights(ck, layer: int):
 
 def solve_layer(ck, cap: Path, layer: int, args) -> dict:
     t0 = time.time()
-    X, ids = layer_inputs(cap, layer)
+    X, ids, rw = layer_inputs(cap, layer, args.weights)
+    gb, db = (7 if layer in args.gu8 else 3), (7 if layer in args.dn8 else 3)  # mantissa bits: BFP8 / BFP4
     wgu, wdn = expert_weights(ck, layer)
     rows = [torch.nonzero((ids == e).any(1)).flatten() for e in range(E)]
     n_tok = [len(r) for r in rows]
@@ -234,14 +242,14 @@ def solve_layer(ck, cap: Path, layer: int, args) -> dict:
         es = list(range(e0, min(e0 + bs, E)))
         small = [e for e in es if n_tok[e] < args.min_tokens]
         stats["rtn_experts"] += small
-        Hgu = torch.stack([X[rows[e]].T @ X[rows[e]] for e in es])
+        Hgu = torch.stack([(X[rows[e]] * rw[rows[e], None]).T @ X[rows[e]] for e in es])
         W = wgu[es].float()
-        q, ex = gptq(W, Hgu, args.damp_gu)
+        q, ex = gptq(W, Hgu, args.damp_gu, mbits=gb)
         for k, e in enumerate(es):
             if e in small:
-                q[k], ex[k] = rtn(W[k])
+                q[k], ex[k] = rtn(W[k], gb)
         gu_q[es], gu_e[es] = q, ex
-        Wq = decode(q, ex)
+        Wq = decode(q, ex, gb)
         hs = []
         for k, e in enumerate(es):
             x = X[rows[e]]
@@ -250,24 +258,24 @@ def solve_layer(ck, cap: Path, layer: int, args) -> dict:
             # output error on (up to) 1024 calibration rows (sums of squares), GPTQ vs RTN vs reference
             x, y = x[:1024], y[:1024]
             yr = x @ W[k].T
-            yt = x @ decode(*rtn(W[k])).T
+            yt = x @ decode(*rtn(W[k], gb), gb).T
             err["gu_ref"] += float((yr**2).sum())
             err["gu_gptq"] += float(((y - yr) ** 2).sum())
             err["gu_rtn"] += float(((yt - yr) ** 2).sum())
-        Hdn = torch.stack([h.T @ h for h in hs])
+        Hdn = torch.stack([(h * rw[rows[e], None]).T @ h for e, h in zip(es, hs)])
         Wd = wdn[es].float()
-        q, ex = gptq(Wd, Hdn, args.damp_dn)
+        q, ex = gptq(Wd, Hdn, args.damp_dn, mbits=db)
         for k, e in enumerate(es):
             if e in small:
-                q[k], ex[k] = rtn(Wd[k])
+                q[k], ex[k] = rtn(Wd[k], db)
         dn_q[es], dn_e[es] = q, ex
-        Wdq = decode(q, ex)
+        Wdq = decode(q, ex, db)
         for k, e in enumerate(es):
             h = hs[k][:1024]
             zr = h @ Wd[k].T
             err["dn_ref"] += float((zr**2).sum())
             err["dn_gptq"] += float(((h @ Wdq[k].T - zr) ** 2).sum())
-            err["dn_rtn"] += float(((h @ decode(*rtn(Wd[k])).T - zr) ** 2).sum())
+            err["dn_rtn"] += float(((h @ decode(*rtn(Wd[k], db), db).T - zr) ** 2).sum())
         del Hgu, Hdn, hs, W, Wd, Wq, Wdq
         print(f"  L{layer:02d} experts {es[0]}-{es[-1]} {time.time() - t0:.0f}s", flush=True)
     # relative output MSE on the calibration rows (lower is better; RTN for comparison)
@@ -278,21 +286,25 @@ def solve_layer(ck, cap: Path, layer: int, args) -> dict:
         "down_rtn": err["dn_rtn"] / err["dn_ref"],
     }
     stats["seconds"] = round(time.time() - t0, 1)
-    return {"gate_up": {"q4": pack4(gu_q), "e": gu_e}, "down": {"q4": pack4(dn_q), "e": dn_e}, "stats": stats}
+    stats["mbits"] = {"gate_up": gb, "down": db}
+    code = lambda q, mb: {"q8": q} if mb == 7 else {"q4": pack4(q)}  # noqa: E731
+    return {"gate_up": code(gu_q, gb) | {"e": gu_e}, "down": code(dn_q, db) | {"e": dn_e}, "stats": stats}
+
+
+def layer_list(spec: str) -> list[int]:
+    return [x for part in spec.split(",") if part for x in range(int(part.split("-")[0]), int(part.split("-")[-1]) + 1)]
 
 
 def solve(args):
     from models.demos.inkling2_mini.convert.source import Checkpoint
 
     torch.set_num_threads(args.threads)
+    args.weights = {int(k): v for k, v in json.load(open(args.weights)).items()} if args.weights else None
+    args.gu8, args.dn8 = set(layer_list(args.gu8)), set(layer_list(args.dn8))
     ck = Checkpoint(args.ckpt)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    layers = [
-        int(x)
-        for part in args.layers.split(",")
-        for x in (range(int(part.split("-")[0]), int(part.split("-")[-1]) + 1))
-    ]
+    layers = layer_list(args.layers)
     for layer in layers:
         f = out / f"L{layer:02d}.pt"
         if f.exists():
@@ -331,6 +343,9 @@ def main(argv=None):
     s.add_argument("--damp-dn", type=float, default=1.0)
     s.add_argument("--min-tokens", type=int, default=16)
     s.add_argument("--batch", type=int, default=16, help="experts per batched solve (memory)")
+    s.add_argument("--weights", help="json {seq: weight}: only these sequences, rows weighted in the Hessians")
+    s.add_argument("--gu8", default="", help="layers whose gate_up is solved on the BFP8 grid (q8 codes)")
+    s.add_argument("--dn8", default="", help="layers whose down is solved on the BFP8 grid (q8 codes)")
     s.add_argument("--threads", type=int, default=int(os.environ.get("OMP_NUM_THREADS", "40")))
     args = ap.parse_args(argv)
     {"corpus": corpus, "capture": capture, "solve": solve}[args.cmd](args)

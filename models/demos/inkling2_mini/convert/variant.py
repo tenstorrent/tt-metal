@@ -13,8 +13,8 @@ entry) from another cache instead, e.g. to combine variants without converting t
 written: a rewritten file is unlinked first. The model loads a variant like any cache (``root=`` /
 ``$INKLING_CACHE``) and takes each tensor's dtype from it; the default cache is unchanged.
 
-``--experts-from lotto:DIR | codes:DIR --layers 0-23`` rewrites both expert tensors of those layers as BFP4 from
-GPTQ-calibrated values instead of the checkpoint (convert/gptq_codes.py); each written file is read back and
+``--experts-from lotto:DIR | codes:DIR --layers 0-23`` rewrites both expert tensors of those layers as BFP4 (or BFP8
+for ``q8`` codes) from GPTQ-calibrated values instead of the checkpoint (convert/gptq_codes.py); each written file is read back and
 checked value for value against its source (``gptq_exact`` in the manifest entry).
 
 Dtypes per tensor class the model reads: experts BFP4 / BFP8; attention w_qgrs / w_k / w_v / w_o BFP4 / BFP8;
@@ -58,7 +58,7 @@ class _Only(C.Writer):
         rel = f"global/{name}.tensorbin" if layer is None else f"layers/L{layer:02d}/{name}.tensorbin"
         (self.out / rel).unlink(missing_ok=True)  # a hard link to the base: never write through it
         super().write(name, layer, tensor, self.want[name], layout, src, **kw)
-        if self.check:  # GPTQ source: the stored BFP4 values must be the source values, bit for bit
+        if self.check:  # GPTQ source: the stored BFP values must be the source values, bit for bit
             got = ttnn.to_torch(ttnn.load_tensor(str(self.out / rel))).to(torch.bfloat16).reshape(tensor.shape)
             self.entries[-1]["gptq_exact"] = bool(torch.equal(got, tensor.to(torch.bfloat16)))
 
@@ -147,7 +147,7 @@ def main(argv=None):
             a, _, b = part.partition("-")
             gptq_layers |= set(range(int(a), int(b or a) + 1))
         for layer in gptq_layers:
-            units.setdefault(layer, {}).update({"experts.w_gate_up": "BFP4", "experts.w_down": "BFP4"})
+            units.setdefault(layer, {}).update(gptq_codes.layer_dtypes(args.experts_from, layer))
     if args.set and not units:
         raise SystemExit("--set picked no tensor whose dtype changes")
     ck = Checkpoint(args.ckpt) if units else None
