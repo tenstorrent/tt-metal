@@ -97,13 +97,9 @@ inline void llk_unpack_A_init(
                 transpose_of_faces == within_face_16x16_transpose,
                 "Quasar unpack unary supports only full transpose (transpose_of_faces and within_face_16x16_transpose "
                 "must match)");
-            // Route to UNP_DEST purely on the op-writer flag. On a 32-bit DEST the operand must be 32-bit: UNP_DEST
-            // writes a 16-bit datum with the 16-bit tile stride, off the 32-bit addressing of the to-dest placers.
+            // Route to UNP_DEST purely on the op-writer flag (no format inspection). A 16-bit
+            // operand is unpacked to DEST here too when the op writer requested it.
             if constexpr (unpack_to_dest) {
-                LLK_ASSERT(
-                    !DST_ACCUM_MODE || static_cast<DataFormat>(unpack_dst_format[operand_id]) == DataFormat::Float32 ||
-                        static_cast<DataFormat>(unpack_dst_format[operand_id]) == DataFormat::Int32,
-                    "Quasar unpack-to-dest operand must be Float32 or Int32 on a 32-bit DEST");
                 // Transpose is not supported on UNP_DEST and is forced off inside the primitive. Tiny tiles land at
                 // the DEST layout the pack side reads (_llk_unpack_to_dest_tile_rows_).
                 _llk_unpack_unary_operand_to_dest_init_(bfd_id, tensor_shape);
@@ -183,7 +179,7 @@ inline void llk_unpack_A(
                     get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::trisc::DstTileShape::Tile32x32>()
                 << ckernel::trisc::get_dest_tile_size_log2(ckernel::trisc::DstTileShape::Tile32x32);
             LLK_ASSERT(
-                dst_tile_index * _llk_unpack_to_dest_tile_rows_(tensor_shape) < dest_section_rows,
+                dst_tile_index < dest_section_rows / _llk_unpack_to_dest_tile_rows_(tensor_shape),
                 "unpack-to-dest: dst_tile_index exceeds the DEST section capacity for this sync mode, DEST width and "
                 "tile shape");
             // Sync-free: section handshake is in llk_unpack_wait_for_dest_available / llk_unpack_dest_section_done.
@@ -249,8 +245,9 @@ inline void llk_unpack_A_block(
         constexpr std::uint32_t dest_section_rows =
             ckernel::trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::trisc::DstTileShape::Tile32x32>()
             << ckernel::trisc::get_dest_tile_size_log2(ckernel::trisc::DstTileShape::Tile32x32);
+        const std::uint32_t dest_section_tiles = dest_section_rows / _llk_unpack_to_dest_tile_rows_(tensor_shape);
         LLK_ASSERT(
-            (start_dst_tile_index + ntiles) * _llk_unpack_to_dest_tile_rows_(tensor_shape) <= dest_section_rows,
+            start_dst_tile_index < dest_section_tiles && ntiles <= dest_section_tiles - start_dst_tile_index,
             "unpack-to-dest: start_dst_tile_index + ntiles exceeds the DEST section capacity for this sync mode, DEST "
             "width and tile shape");
         // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194), so the block

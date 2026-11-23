@@ -74,7 +74,7 @@ inline void _llk_unpack_tilize_to_dest_mop_config_(const std::uint32_t buf_desc_
  * face counters do not move it). One tile per run: @ref _llk_unpack_tilize_to_dest_small_faces_ sets the L1 tile index
  * and the DEST row per tile. No dvalid.
  *
- * @param buf_desc_id: Buffer descriptor id, allocated from the unpack TRISC partition at op-init time (llk_bfd_alloc.h)
+ * @param buf_desc_id: Buffer descriptor id, the fixed per-engine BFD id (ckernel_buf_desc.h)
  */
 inline void _llk_unpack_tilize_to_dest_small_faces_mop_config_(const std::uint32_t buf_desc_id)
 {
@@ -210,8 +210,7 @@ inline void _llk_unpack_tilize_to_dest_(const std::uint32_t l1_tile_idx, const s
  *        the current section. No synchronization: bracket with the section handshake.
  *
  * Small-faces counterpart of @ref _llk_unpack_tilize_to_dest_. The strided descriptor indexes 16-datum rows, so the
- * row-of-tiles offset is part of l1_tile_idx (no @ref _llk_unpack_tilize_to_dest_set_src_offset_), as
- * @ref _llk_unpack_tilize_strided_small_faces_ takes it.
+ * row-of-tiles offset is part of l1_tile_idx (no @ref _llk_unpack_tilize_to_dest_set_src_offset_).
  *
  * @param tensor_shape: Tile shape passed to @ref _llk_unpack_tilize_to_dest_init_
  * @param l1_tile_idx: Index of the first tile of the run in tile columns of the row-major input, the rows of tiles
@@ -228,9 +227,7 @@ inline void _llk_unpack_tilize_to_dest_small_faces_(
     const std::uint32_t tile_rows = _llk_unpack_to_dest_tile_rows_(tensor_shape);
     for (std::uint32_t t = 0; t < block_ct_dim; t++)
     {
-        // The strided descriptor indexes 16-datum rows on both sides. UNPACR_DEST_STRIDE addresses DEST through the row
-        // (Y) counter, so the bank base (in rows) and the tile's slot are set as the DEST row; the tile and face counters
-        // are zeroed (STRIDE ignores them; the SEC base registers do not move UNPACR_DEST either).
+        // UNPACR_DEST_STRIDE addresses DEST by the row counter alone: set it to the bank base plus the tile's slot.
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, (l1_tile_idx + t) * tensor_shape.num_faces_c_dim);
         TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_unpacr::UNP_A, 0);
         TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::ROW_SEL, p_unpacr::UNP_A, _get_dest_buffer_base_() + (dst_tile_idx + t) * tile_rows);

@@ -52,6 +52,8 @@ UNPACK_TILIZE_TILE_SIZES = [
     (1, 32),
     (2, 32),
 ]
+# The to-DEST small-faces path also takes faces of 4 and 8 rows.
+UNPACK_TILIZE_TO_DEST_TILE_SIZES = UNPACK_TILIZE_TILE_SIZES + [(4, 32), (8, 32)]
 
 # Rows the SrcA/SrcB tilize takes in more than one MOP run: full_ct_dim -> block_ct_dim, a
 # proper divisor (the init asserts block_ct_dim divides full_ct_dim), so each run past the
@@ -100,10 +102,12 @@ def generate_unpack_tilize_combinations(
             else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
         )
         tile_sizes = (
-            select_perf_tile_sizes(UNPACK_TILIZE_TILE_SIZES)
-            if is_perf
+            UNPACK_TILIZE_TO_DEST_TILE_SIZES
+            if in_fmt.is_32_bit()
             else UNPACK_TILIZE_TILE_SIZES
         )
+        if is_perf:
+            tile_sizes = select_perf_tile_sizes(tile_sizes)
 
         for dest_acc in dest_acc_modes:
             for dest_sync in dest_sync_modes:
