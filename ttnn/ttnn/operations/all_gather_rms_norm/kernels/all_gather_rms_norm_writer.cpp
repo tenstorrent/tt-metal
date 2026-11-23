@@ -155,6 +155,17 @@ void kernel_main() {
         const uint32_t out_tile = scratch + assemble_src_max * out_page_bytes;
         for (uint32_t r = 0; r < w.crt; ++r) {
             const uint32_t tr = w.row_start + r;
+            if constexpr (W_local % TILE == 0) {
+                // aligned slices (probe path): every output tile is one staging tile — whole-page copies
+                for (uint32_t oc = oc0; oc < oc1; ++oc) {
+                    const uint32_t q = oc / Wlt;
+                    noc_async_read(staging.get_noc_addr((q * R + tr) * Wlt + (oc - q * Wlt)), out_tile, out_page_bytes);
+                    noc_async_read_barrier();
+                    noc_async_write(out_tile, out.get_noc_addr(tr * Wt + oc), out_page_bytes);
+                    noc_async_write_barrier();
+                }
+                continue;
+            }
             for (uint32_t oc = oc0; oc < oc1; ++oc) {
                 // source tiles of this output tile, in column order (consecutive columns share a source)
                 uint32_t src_page[assemble_src_max];

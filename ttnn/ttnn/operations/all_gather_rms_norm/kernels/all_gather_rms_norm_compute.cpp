@@ -257,6 +257,9 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         cb_pop_front(cb_x, crt * cw);
         cb_wait_front(cb_x32, crt * cw);
     }
+    {
+        AGRN_ZONE("c_local_start");
+    }
     // ---- local_stats_block ----
     // m (stat 0), then a second copy of m for the shift broadcast
     reduce<
@@ -318,11 +321,20 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         IterationShape::tiles(crt),
         CopyTile<input(cb_ln_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block)>{},
         PackTile<output(cb_partial)>{});
-    cb_pop_front(cb_ln_shift, crt);
+    // cb_ln_shift (K in every column, exact) stays: it is the centering shift of the normalize
 
+    {
+        AGRN_ZONE("c_combine_start");
+    }
     // ---- combine_stats_block ----
     // gathered per row: [m, T, K] (gather_tiles == 1 for LN), all UnpackToDestFp32 (exact copies)
+    {
+        AGRN_ZONE("c_gather_in");
+    }
     transpose_gathered(crt * nstats);
+    {
+        AGRN_ZONE("c_transposed");
+    }
     cb_wait_front(cb_gathered, crt * nstats);
     cb_wait_front(cb_stat_consts, 1);
     constexpr auto g_m = input(
@@ -354,8 +366,26 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         ReduceInputMemoryLayout::contiguous(),
         NoAccumulation{},
         MulScalarPost{inv_w_bits});
-    // the reader broadcasts the exact mean -> cb_mean_b
+    {
+        AGRN_ZONE("c_mean_done");
+    }
+    // d = mean - K (exact in fp32 SFPU), then broadcast: x - mean = (x - K) - d with both K (tf32-exact) and the small
+    // d (its tf32 truncation is ~1e-3 of d, i.e. of the partition-mean scatter, not of the mean) safe to broadcast
+    // on the FPU — no exact fp32 broadcast of the mean is needed (op_design.md Key Risks: LN precision).
+    constexpr auto shift_in = input(cb_ln_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    cb_wait_front(cb_mean_col, crt);
+    eltwise_chain(
+        IterationShape::grid(crt, 1),
+        CopyTile<input(cb_mean_col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col), Dst::D0>{},
+        CopyTile<shift_in, Dst::D1>{},
+        SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
+        PackTile<output(cb_ln_m)>{});
+    cb_pop_front(cb_mean_col, crt);
+    unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_mean_b)>(IterationShape::tiles(crt));
     cb_wait_front(cb_mean_b, crt);
+    {
+        AGRN_ZONE("c_meanb_in");
+    }
     constexpr auto mean_b_in = input(cb_mean_b, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
     eltwise_chain(
         IterationShape::grid(crt, 1),
@@ -368,13 +398,18 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         CopyTile<g_m, Dst::D1>{StridedTileRange{1, nstats}},  // T
         SubBinary<Dst::D1, Dst::D0, Dst::D1>{},               // T - n (m - K)^2 = sum (x - m)^2
         CopyTile<g_m, Dst::D0>{StridedTileRange{0, nstats}},
+        CopyTile<shift_in, Dst::D2>{},
+        SubBinary<Dst::D0, Dst::D2, Dst::D0>{},  // m - K
         CopyTile<mean_b_in, Dst::D2>{},
-        SubBinary<Dst::D0, Dst::D2, Dst::D0>{},
+        SubBinary<Dst::D0, Dst::D2, Dst::D0>{},  // m - mean = (m - K) - d
         Square<Dst::D0>{},
         CopyTile<g_n, Dst::D2>{},
         MulBinary<Dst::D0, Dst::D2, Dst::D0>{},  // n (m - mean)^2
         AddBinary<Dst::D1, Dst::D0, Dst::D1>{},
         PackTile<output(cb_ln_tmp), Dst::D1>{});
+    {
+        AGRN_ZONE("c_m2_done");
+    }
     cb_pop_front(cb_gathered, crt * nstats);
     reduce<
         PoolType::SUM,
@@ -391,11 +426,15 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
     unary_bcast<BroadcastDim::Col, input(cb_inv), output(cb_rstd_b)>(IterationShape::tiles(crt));
     cb_wait_front(cb_rstd_b, crt);
 
+    {
+        AGRN_ZONE("c_rstd_done");
+    }
     // ---- normalize_block ----
     constexpr auto xs_in = input(cb_xs, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block);
     constexpr auto rstd_in = input(cb_rstd_b, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
     using LoadX = CopyTile<xs_in, Dst::D0>;
-    using LoadMean = CopyTile<mean_b_in, Dst::D1>;
+    using LoadShift = CopyTile<shift_in, Dst::D1>;
+    using LoadMean = CopyTile<mean_b_in, Dst::D1>;  // d = mean - K
     using LoadRstd = CopyTile<rstd_in, Dst::D1>;
     using Center = SubBinary<Dst::D0, Dst::D1, Dst::D0>;
     using Scale = MulBinary<Dst::D0, Dst::D1, Dst::D0>;
@@ -405,6 +444,8 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         eltwise_chain(
             IterationShape::grid(crt, cw),
             LoadX{},
+            LoadShift{},
+            Center{},
             LoadMean{},
             Center{},
             LoadRstd{},
@@ -419,6 +460,8 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         eltwise_chain(
             IterationShape::grid(crt, cw),
             LoadX{},
+            LoadShift{},
+            Center{},
             LoadMean{},
             Center{},
             LoadRstd{},
@@ -430,14 +473,20 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         eltwise_chain(
             IterationShape::grid(crt, cw),
             LoadX{},
+            LoadShift{},
+            Center{},
             LoadMean{},
             Center{},
             LoadRstd{},
             Scale{},
             PackTile<output(cb_out_block)>{});
     }
+    {
+        AGRN_ZONE("c_norm_done");
+    }
     cb_pop_front(cb_rstd_b, crt);
     cb_pop_front(cb_mean_b, crt);
+    cb_pop_front(cb_ln_shift, crt);
     cb_pop_front(cb_xs, crt * cw);
 }
 

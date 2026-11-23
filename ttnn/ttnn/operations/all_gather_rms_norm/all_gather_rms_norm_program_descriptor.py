@@ -456,7 +456,8 @@ def create_mesh_program_descriptor(
 
     x_dtype = input_tensor.dtype
     out_dtype = output_tensor.dtype
-    is_ru = not geo.aligned
+    # AGRN_FORCE_STAGED=1: perf probe only — run an aligned slice through the R_U staged regime
+    is_ru = (not geo.aligned) or os.environ.get("AGRN_FORCE_STAGED") == "1"
     fp32_dest = bool(compute_kernel_config.fp32_dest_acc_en)
     acc_dtype = ttnn.float32 if fp32_dest else ttnn.bfloat16
     T_in = ttnn.tile_size(x_dtype)
@@ -579,7 +580,7 @@ def create_mesh_program_descriptor(
     modes = [ttnn.UnpackToDestMode.Default] * 64
     tagged = [CB_GATHER_ROWS]  # exact fp32 copy into DEST for the transpose
     if is_ln:
-        tagged += [CB_X if x_is_f32 else CB_X32, CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_B]
+        tagged += [CB_X if x_is_f32 else CB_X32, CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_COL]
     for cb in tagged:
         modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
     cfg.unpack_to_dest_mode = modes
@@ -587,6 +588,8 @@ def create_mesh_program_descriptor(
     full = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
     # per-stage profiler zones (perf probes only; the harness needs them off)
     defines = [("AGRN_PROFILE_ZONES", "1")] if os.environ.get("AGRN_PROFILE_ZONES") == "1" else []
+    if os.environ.get("AGRN_OWN_FROM_DST") == "1":  # perf probe only (op_design.md: the own slice is pulled from L1)
+        defines.append(("AGRN_OWN_FROM_DST", "1"))
     in_addr = int(input_tensor.buffer_address())
     out_addr = int(output_tensor.buffer_address())
     dst_addr = int(dst_tensor.buffer_address())

@@ -38,8 +38,8 @@ constexpr uint32_t cb_record_landing = 11;  // reader scratch: one tile-row's G 
 constexpr uint32_t cb_gathered = 12;        // Float32 gather tiles: per row [stat][gather tile], col j = partition j
 constexpr uint32_t cb_stat_consts = 13;     // LN: n_j per partition column (Float32)
 constexpr uint32_t cb_inv = 14;             // RMS inv_rms / LN rstd (col 0)
-constexpr uint32_t cb_mean_col = 15;        // LN: exact row mean (col 0), broadcast by the reader
-constexpr uint32_t cb_mean_b = 16;          // LN: exact row mean in every column (dataflow broadcast)
+constexpr uint32_t cb_mean_col = 15;        // LN: exact row mean (col 0)
+constexpr uint32_t cb_mean_b = 16;          // LN: d = mean - K broadcast to every column
 constexpr uint32_t cb_rstd_b = 17;          // LN: rstd broadcast to every column
 constexpr uint32_t cb_ln_tmp = 18;          // LN combine scratch tiles (Float32)
 constexpr uint32_t cb_out_block = 19;       // normalized own block, resident until program end (ports pull it)

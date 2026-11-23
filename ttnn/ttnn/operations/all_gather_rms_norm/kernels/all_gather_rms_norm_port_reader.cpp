@@ -20,6 +20,12 @@
 
 using namespace agrn_port;
 
+#if defined(AGRN_OWN_FROM_DST)
+constexpr bool own_from_dst = true;  // perf probe only: own entry re-read from the own destination pages
+#else
+constexpr bool own_from_dst = false;
+#endif
+
 void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<PORT_CT_ARGS>();
 
@@ -90,7 +96,7 @@ void kernel_main() {
             }
             for (uint32_t ri = 0; ri < pk.nr; ++ri) {
                 const uint32_t n = pk.n[ri];
-                if (k == 0) {
+                if (k == 0 && !own_from_dst) {
                     for (uint32_t t = 0; t < n; ++t) {
                         const uint32_t f = pk.jj[ri] + t * nb;
                         const uint32_t r = flat_slot ? f / Wlt : pk.rr[ri];

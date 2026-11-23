@@ -282,27 +282,4 @@ void kernel_main() {
             cb_push_back(cb_gather_rows, nstats * gather_tiles);
         }
     }
-
-    // ---- LN: exact broadcast of the combined row mean ----
-    if constexpr (is_ln) {
-        for (uint32_t r = 0; r < w.crt; ++r) {
-            cb_wait_front(cb_mean_col, 1);
-            cb_reserve_back(cb_mean_b, 1);
-            asm volatile("" ::: "memory");
-            const uint32_t* src = reinterpret_cast<const uint32_t*>(get_read_ptr(cb_mean_col));
-            uint32_t* dst = reinterpret_cast<uint32_t*>(get_write_ptr(cb_mean_b));
-            for (uint32_t i = 0; i < TILE; ++i) {
-                const uint32_t v = src[f32_tile_word(i, 0)];
-                uint32_t* row0 = dst + f32_tile_word(i, 0);
-#pragma GCC unroll 16
-                for (uint32_t c = 0; c < FACE; ++c) {
-                    row0[c] = v;
-                    row0[256 + c] = v;  // same row, face 1 / 3
-                }
-            }
-            asm volatile("" ::: "memory");
-            cb_push_back(cb_mean_b, 1);
-            cb_pop_front(cb_mean_col, 1);
-        }
-    }
 }
