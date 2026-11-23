@@ -250,7 +250,15 @@ uint32_t turn_bytes = l1::CHUNK_SIZE;
 // at once when no client has a command to carve. Its turn stops accepting; it holds the seat once the transactions in
 // flight retire (main).
 bool drain_handover;
-uint32_t drain_turns;  // copy turns started since the last hold
+uint32_t drain_turns;        // copy turns started since the last hold
+uint32_t drain_handover_at;  // wall clock, low word, when accepting stopped for the pending hold
+
+FORCE_INLINE void request_drain_turn() {
+    if (!drain_handover) {
+        drain_handover = true;
+        drain_handover_at = static_cast<uint32_t>(get_timestamp());
+    }
+}
 
 // Fill the freshly claimed transaction and start its read leg. trid == ring index.
 FORCE_INLINE void start_transaction(
@@ -289,12 +297,14 @@ FORCE_INLINE void accept_transactions(TransactionRing& txn_ring, BounceArena& bo
     while (!txn_ring.full()) {
         if (turn_bytes >= l1::CHUNK_SIZE) {
             if (drain::running() && drain_turns >= drain::hold_turns) {
-                drain_handover = true;
+                request_drain_turn();
                 return;
             }
             uint32_t picked;
             if (!pick_client(picked)) {
-                drain_handover = drain::running();
+                if (drain::running()) {
+                    request_drain_turn();
+                }
                 return;
             }
             turn_slot = picked;
@@ -588,6 +598,9 @@ int main() {
             ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, PUBLISH_TRID)) {
             drain::hold();
             rearm_after_hold();
+            if (drain::running()) {
+                drain::note_handover(static_cast<uint32_t>(get_timestamp()) - drain_handover_at);
+            }
             drain_handover = false;
             drain_turns = 0;
         }

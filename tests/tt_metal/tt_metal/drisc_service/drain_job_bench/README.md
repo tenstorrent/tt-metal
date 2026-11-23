@@ -90,5 +90,20 @@ data in all, so the drain jobs' sweeps find almost nothing. Copy rate before the
 
 At N = 16 an idle profiler costs the copies nothing measurable. At N = 1 it costs local copies 37%, the price of a
 handover (drain the copy pipeline, an empty sweep, re-arm) after every 24 KB turn. d2h copies are bound by PCIe, not
-by the seat, at either N. The 64 B probe's worst case still reaches 8.6-10.4 ms in most idle runs against about
-0.3 ms before the profiler attaches; idle holds do not wait on the host, so that cause is still open.
+by the seat, at either N.
+
+### Where the 64 B probe's ~9 ms worst case comes from
+
+In idle runs the probe's worst case reached 8.6-10.4 ms, against about 0.3 ms before the profiler attaches. Three
+checks place it at the profiler's close, not in normal operation:
+
+- `SteadyLoad`'s own loop never stalled more than 0.3 ms, so the probing thread was not off the CPU.
+- The drain jobs' device counters (longest hold, longest handover, holds over 1 ms) stayed at 6-160 µs on bh-38 and
+  14-18 µs on bh-17 for every hold but the last, which they leave out: the finishing hold that drains the whole spool
+  to the host when the profiler closes.
+- Without the profiler, even with two more idle clients on the seat, no probe took over 2 ms. With it, each run has
+  exactly one slow probe, its client's control page silent for the whole of it, and on bh-17 it falls in the 50 ms
+  window ending 30-43 ms after "workload done", where the close begins.
+
+So the finishing hold keeps the seat for about 9 ms while the host takes the spool's tail. Making it hand the seat
+back between chunks, like any other hold, would remove it.

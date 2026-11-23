@@ -242,6 +242,12 @@ struct DrainJobBlock {
     uint32_t hold_turns;                // N: copy turns (CHUNK_SIZE each) between holds; at least 1
     uint32_t hold_sweeps;               // M: drain sweeps per hold
     uint32_t core_xy[DRAIN_MAX_CORES];  // kernel_profiler::NocXy words of the drained cores
+    // Kernel, for measurement; the host zeroes them with the rest of the block. Times are AICLK cycles. A handover runs
+    // from the kernel's last accept before a hold to its re-arm after it: the time new commands wait on the job.
+    uint32_t stat_holds;
+    uint32_t stat_hold_max_cycles;
+    uint32_t stat_holds_over_1ms;
+    uint32_t stat_handover_max_cycles;
 };
 
 struct DrainLayout {

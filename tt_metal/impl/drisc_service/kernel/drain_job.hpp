@@ -1038,8 +1038,11 @@ inline void start(volatile uint32_t* exit_mailbox, uint32_t exit_word, volatile 
 
 inline bool running() { return state == kRunning; }
 
+constexpr uint32_t kOneMsCycles = 1350000;  // at the 1.35 GHz AICLK
+
 // One hold: hold_sweeps sweeps, or the stop sweeps and the finish once the host asked to stop.
 inline void hold() {
+    const uint32_t start = static_cast<uint32_t>(get_timestamp());
     noc_local_state_init(kEgressNoc);
     if constexpr (!kSingleNoc) {
         noc_local_state_init(kReadNoc);
@@ -1064,6 +1067,27 @@ inline void hold() {
         sweep();
     }
     leave_clean();
+    // The finishing hold drains the whole spool to the host; it says nothing about the holds a running job takes.
+    if (state != kRunning) {
+        return;
+    }
+    const uint32_t cycles = static_cast<uint32_t>(get_timestamp()) - start;
+    volatile abi::DrainJobBlock* job = job_block();
+    job->stat_holds = job->stat_holds + 1;
+    if (cycles > job->stat_hold_max_cycles) {
+        job->stat_hold_max_cycles = cycles;
+    }
+    if (cycles > kOneMsCycles) {
+        job->stat_holds_over_1ms = job->stat_holds_over_1ms + 1;
+    }
+}
+
+// The kernel's handover, from its last accept before a hold to its re-arm after it.
+inline void note_handover(uint32_t cycles) {
+    volatile abi::DrainJobBlock* job = job_block();
+    if (cycles > job->stat_handover_max_cycles) {
+        job->stat_handover_max_cycles = cycles;
+    }
 }
 
 // The owner detached without stopping the job. Holds end with nothing of the job in flight (leave_clean), and the

@@ -2390,8 +2390,9 @@ TEST_F(DriscService, PerfBench) {
 // seats costs the copies: each of the 16 seats keeps its queue full of DRISC_SERVICE_LOAD_OP commands (local: CMD_LOCAL
 // in the seat's bank; d2h: the seat's bank to host memory), 1 MiB each, in batches of 8. A second client on bank 0
 // times one 64 B CMD_LOCAL at a time on the NoC1 seat, the latency a small command sees. Every 50 ms it appends
-// "<unix ns> <GB/s> <probe median us> <probe max us> <probes>" to DRISC_SERVICE_LOAD_REPORT, so the samples can be
-// lined up with another process's timeline.
+// "<unix ns> <GB/s> <probe median us> <probe max us> <probes> <max loop gap us>" to DRISC_SERVICE_LOAD_REPORT, so the
+// samples can be lined up with another process's timeline. The loop gap is the longest time between two passes of
+// this loop: a probe latency no longer than it may be this thread off the CPU rather than the command.
 TEST_F(DriscService, SteadyLoad) {
     const char* seconds_env = std::getenv("DRISC_SERVICE_LOAD_SECONDS");
     if (seconds_env == nullptr) {
@@ -2436,6 +2437,23 @@ TEST_F(DriscService, SteadyLoad) {
     std::optional<Client> probe_client;
     attach(probe_client, {0});
     SeatClient& probe = probe_client->seat(0, 1);
+    // DRISC_SERVICE_LOAD_EXTRA_CLIENTS idle clients on bank 0, to compare a crowded seat with one the profiler shares.
+    const char* extra_env = std::getenv("DRISC_SERVICE_LOAD_EXTRA_CLIENTS");
+    std::vector<std::optional<Client>> extra_clients(extra_env != nullptr ? std::strtoul(extra_env, nullptr, 10) : 0);
+    for (std::optional<Client>& extra : extra_clients) {
+        attach(extra, {0});
+    }
+    // A probe slower than 2 ms: how long the probe client's control page had gone without a new heartbeat when the
+    // completion showed, and whether the completion came with a new one. The kernel writes done_count and the
+    // heartbeat together, on each completion and at least every abi::CONTROL_PAGE_HEARTBEAT_TICKS.
+    struct Spike {
+        double latency_us;
+        double page_still_us;
+        bool with_new_heartbeat;
+    };
+    std::vector<Spike> spikes;
+    uint32_t page_heartbeat = probe.heartbeat();
+    auto page_heartbeat_at = clock::now();
     const uint64_t probe_addr = device().bank_offset(0) + dram_base + 4 * dram_span;
     const abi::KernelCommand probe_cmd = abi::make_local_command(probe_addr, probe_addr + 4096, 64);
 
@@ -2453,7 +2471,12 @@ TEST_F(DriscService, SteadyLoad) {
     auto window_start = clock::now();
     uint64_t window_entries = completed();
     uint64_t total_entries = 0;
+    auto last_pass = clock::now();
+    double max_gap_us = 0;
     while (clock::now() < end) {
+        const auto pass = clock::now();
+        max_gap_us = std::max(max_gap_us, std::chrono::duration<double, std::micro>(pass - last_pass).count());
+        last_pass = pass;
         for (BenchLane& lane : lanes) {
             for (uint32_t k = 0; k < abi::CLIENT_QUEUE_CAPACITY; k++) {
                 if (!lane.seat->issue_batch(lane.batch).has_value()) {
@@ -2462,9 +2485,22 @@ TEST_F(DriscService, SteadyLoad) {
                 lane.issued++;
             }
         }
-        if (probe_ticket.has_value() && probe.done(*probe_ticket)) {
-            probe_us.push_back(std::chrono::duration<double, std::micro>(clock::now() - probe_start).count());
+        const bool probe_done = probe_ticket.has_value() && probe.done(*probe_ticket);
+        const uint32_t heartbeat_now = probe.heartbeat();
+        const bool new_heartbeat = heartbeat_now != page_heartbeat;
+        if (probe_done) {
+            const auto t = clock::now();
+            const double latency = std::chrono::duration<double, std::micro>(t - probe_start).count();
+            probe_us.push_back(latency);
+            if (latency > 2000 && spikes.size() < 64) {
+                spikes.push_back(
+                    {latency, std::chrono::duration<double, std::micro>(t - page_heartbeat_at).count(), new_heartbeat});
+            }
             probe_ticket.reset();
+        }
+        if (new_heartbeat) {
+            page_heartbeat = heartbeat_now;
+            page_heartbeat_at = clock::now();
         }
         if (!probe_ticket.has_value()) {
             probe_start = clock::now();
@@ -2482,9 +2518,11 @@ TEST_F(DriscService, SteadyLoad) {
             const auto unix_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                      std::chrono::system_clock::now().time_since_epoch())
                                      .count();
-            report << unix_ns << ' ' << gbps << ' ' << median << ' ' << max << ' ' << probe_us.size() << '\n';
+            report << unix_ns << ' ' << gbps << ' ' << median << ' ' << max << ' ' << probe_us.size() << ' '
+                   << max_gap_us << '\n';
             report.flush();
             probe_us.clear();
+            max_gap_us = 0;
             window_start = now;
             window_entries = entries;
         }
@@ -2493,6 +2531,13 @@ TEST_F(DriscService, SteadyLoad) {
         lane.seat->drain(drain_timeout);
     }
     probe.drain(drain_timeout);
+    for (const Spike& spike : spikes) {
+        fmt::print(
+            "SPIKE latency {:.1f} us, control page without a new heartbeat for {:.1f} us, {}\n",
+            spike.latency_us,
+            spike.page_still_us,
+            spike.with_new_heartbeat ? "came with a new heartbeat" : "no new heartbeat");
+    }
     fmt::print(
         "LOAD {} {:.3f} GB/s over {:.1f} s\n",
         d2h ? "d2h" : "local",

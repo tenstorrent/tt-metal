@@ -1000,9 +1000,37 @@ void DevicePrograms::quiesce(const RelayStateFn& on_state) {
         }
     }
     for (DeviceCtx& ctx : devices_) {
+        log_drain_stats(ctx);
         write_producers_armed(ctx, 0);
         // Detaches from the DRISC service; the last client to leave a seat stops its kernel.
         ctx.service.reset();
+    }
+}
+
+// How long each drain job held its seat, and how long its seat stopped accepting commands for it (the kernel's
+// counters in the job block; cycles at the 1.35 GHz AICLK).
+void DevicePrograms::log_drain_stats(const DeviceCtx& ctx) {
+    namespace abi = drisc_service::abi;
+    auto& cluster = mc_->get_cluster();
+    constexpr double kCyclesPerUs = 1350.0;
+    for (uint32_t relay_index = 0; relay_index < ctx.relays.size(); relay_index++) {
+        const ResidentCore& relay = ctx.relays[relay_index];
+        std::array<uint32_t, 4> stats{};
+        cluster.read_core(
+            stats.data(),
+            sizeof(stats),
+            tt_cxy_pair(ctx.chip_id, relay.core.virt),
+            abi::DrainLayout::job_addr + offsetof(abi::DrainJobBlock, stat_holds) + drisc_service::drisc_l1_noc_offset);
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] device {} drain job {}: {} holds, longest hold {:.1f} us, {} over 1 ms, longest "
+            "handover {:.1f} us",
+            ctx.chip_id,
+            relay_index,
+            stats[0],
+            stats[1] / kCyclesPerUs,
+            stats[2],
+            stats[3] / kCyclesPerUs);
     }
 }
 

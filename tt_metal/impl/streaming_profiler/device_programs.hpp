@@ -187,6 +187,7 @@ private:
     // Attaches to the DRISC service on both seats of each relay bank, launching its kernels where none runs.
     void attach_service(DeviceCtx& ctx);
     void start_drain(DeviceCtx& ctx, uint32_t relay_index, uint32_t fifo_bytes);
+    void log_drain_stats(const DeviceCtx& ctx);
     void start_resident(
         DeviceCtx& ctx,
         ResidentCore& resident,
