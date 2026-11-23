@@ -6,6 +6,7 @@
 #include <limits>
 #include <new>
 
+#include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -189,7 +190,7 @@ void start_packets_round_robin() {
             Packet& p = window[index];
             p.channel = static_cast<uint8_t>(c);
             p.last_of_request = last;
-            p.header_and_payload_bytes = abi::align_up(HEADER_BYTES + payload, abi::NOC_ALIGNMENT);
+            p.header_and_payload_bytes = align(HEADER_BYTES + payload, abi::NOC_ALIGNMENT);
             s.packets_reading++;
             in_flight++;
             s.bytes_packetized += payload;

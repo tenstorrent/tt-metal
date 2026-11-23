@@ -15,8 +15,6 @@ inline constexpr uint32_t WINDOW = 8;  // packets in flight, each on its own NoC
 inline constexpr uint32_t NOC_ALIGNMENT = 16;
 inline constexpr uint32_t LAYOUT_ALIGNMENT = 64;
 
-constexpr uint32_t align_up(uint32_t value, uint32_t alignment) { return (value + alignment - 1) & ~(alignment - 1); }
-constexpr uint32_t align_down(uint32_t value, uint32_t alignment) { return value & ~(alignment - 1); }
 static_assert((QUEUE_DEPTH & (QUEUE_DEPTH - 1)) == 0);
 
 struct Endpoint {

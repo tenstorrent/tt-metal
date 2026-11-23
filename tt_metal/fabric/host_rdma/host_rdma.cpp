@@ -14,6 +14,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <hostdevcommon/fabric_common.h>
 
@@ -54,7 +55,7 @@ void launch_service_kernel(
 
 sabi::Channel inactive_channel_entry(const fabric_connection_info_t& router, uint32_t max_payload) {
     sabi::Channel entry{};
-    entry.max_payload = sabi::align_down(max_payload, sabi::NOC_ALIGNMENT);
+    entry.max_payload = tt::round_down(max_payload, sabi::NOC_ALIGNMENT);
     entry.router_x = router.edm_noc_x;
     entry.router_y = router.edm_noc_y;
     entry.slots_base = router.edm_buffer_base_addr;
@@ -92,10 +93,10 @@ HostRdmaService::HostRdmaService(
     const uint32_t l1_end = l1_base + static_cast<uint32_t>(hal.get_dev_size(
                                           tt::tt_metal::HalProgrammableCoreType::TENSIX,
                                           tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED));
-    layout_addr_ = sabi::align_up(l1_base, sabi::LAYOUT_ALIGNMENT);
-    const uint32_t staging_addr = sabi::align_up(layout_addr_ + sizeof(sabi::Layout), sabi::LAYOUT_ALIGNMENT);
-    const uint32_t staging_stride = sabi::align_up(
-        static_cast<uint32_t>(fabric_context.get_fabric_channel_buffer_size_bytes()), sabi::LAYOUT_ALIGNMENT);
+    layout_addr_ = tt::align(l1_base, sabi::LAYOUT_ALIGNMENT);
+    const uint32_t staging_addr = tt::align(layout_addr_ + sizeof(sabi::Layout), sabi::LAYOUT_ALIGNMENT);
+    const uint32_t staging_stride =
+        tt::align(static_cast<uint32_t>(fabric_context.get_fabric_channel_buffer_size_bytes()), sabi::LAYOUT_ALIGNMENT);
     TT_FATAL(
         staging_addr + sabi::WINDOW * staging_stride <= l1_end,
         "The host_rdma service core's L1 cannot hold {} staging slots of {} B",
