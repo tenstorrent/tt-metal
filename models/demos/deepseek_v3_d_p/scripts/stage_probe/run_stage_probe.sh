@@ -62,7 +62,7 @@ stage "probe ${NAME} (${PROBE_MODEL}): layers [${FIRST_LAYER}, $((FIRST_LAYER + 
 cat > "${RUN_DIR}/command.txt" <<EOF
 $0 $*
 TT_METAL_HOME=${TT_METAL_HOME} sha=$(git -C "${TT_METAL_HOME}" rev-parse HEAD) host=$(hostname) start=${STAMP}
-warmup_chunks=${WARMUP_CHUNKS} runner_extra_env=${RUNNER_EXTRA_ENV:-<none>}
+probe_model=${PROBE_MODEL} warmup_chunks=${WARMUP_CHUNKS} runner_extra_env=${RUNNER_EXTRA_ENV:-<none>}
 producer_extra_env=${PRODUCER_EXTRA_ENV:-<none>} runner_module=${RUNNER_MODULE}
 EOF
 
