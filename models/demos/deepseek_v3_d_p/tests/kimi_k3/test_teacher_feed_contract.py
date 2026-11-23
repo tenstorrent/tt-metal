@@ -1434,6 +1434,22 @@ def test_dsa_teacher_feed_from_the_chain_scores_against_it(tmp_path: Path, expec
     assert o["recall_gpu_vs_reference_mean"] == pytest.approx((3 + 5 / 6) / 4)  # rows 6-9 select fully (top-k 6)
     assert o["kv_latent_pcc"] > 0.9999 and o["index_key_pcc"] > 0.9999
     assert [w["attn_rows"] for w in result["windows"]] == [1, 1, 1]
+    assert not [f for f in result["bar_failures"] if "_pcc" in f]
+    # a device cache never written past row 8 (all zeros): that window's key PCC bars fail (PCC 0), not skipped
+    torch.save(
+        {
+            "kvpe": kvpe.clone().index_fill_(0, torch.arange(8, 10), 0),
+            "index": p["index_key"].to(torch.bfloat16).index_fill_(0, torch.arange(8, 10), 0),
+        },
+        out / "caches.pt",
+    )
+    unwritten = dsa_teacher_feed.score(trace=Trace(tmp_path / "trace"), out=out, window=4)
+    assert unwritten["windows"][2]["kv_latent_pcc"] == 0.0 and unwritten["windows"][2]["index_key_pcc"] == 0.0
+    assert sorted(f.split()[0] for f in unwritten["bar_failures"] if "[8, 10)" in f) == [
+        "index_key_pcc",
+        "kv_latent_pcc",
+        "kv_rope_pcc",
+    ]
     with expect_error(ValueError, "sampled-row products"):
         fp64_chain.load_products(chain, ["attn_output_3"])
 
