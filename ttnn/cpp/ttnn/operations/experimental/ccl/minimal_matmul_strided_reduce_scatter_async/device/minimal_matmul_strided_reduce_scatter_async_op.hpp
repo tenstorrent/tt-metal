@@ -39,6 +39,10 @@ struct MinimalMatmulStridedReduceScatterAsync {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
+    // Keys on everything that shapes the program except the row count, which the kernels take as a
+    // common runtime arg (see compute_program_hash for the exact field list).
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

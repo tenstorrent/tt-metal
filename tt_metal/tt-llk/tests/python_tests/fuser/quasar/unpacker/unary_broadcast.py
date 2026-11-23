@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.unary_broadcast import unpack_unary_broadcast_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource
+from fuser.operand import BfdId
 from helpers.llk_params import BroadcastType
 
 
@@ -62,9 +62,7 @@ class UnaryBroadcastUnpacker(Unpacker):
         en_32bit_dest = config.dest_acc.cpp_enum_value
         return (
             "{\n"
-            + compute_unit.src_a.bfd_alloc_and_program(
-                BfdResource.UNP1, result_name="bfd_id"
-            )
+            + compute_unit.src_a.program_bfd(BfdId.UNP1, result_name="bfd_id")
             + f"_llk_unpack_unary_broadcast_operands_init_<p_unpacr::UNP_B, {broadcast_type}, {en_32bit_dest}, false>"
             "(bfd_id, 1);\n}\n"
         )

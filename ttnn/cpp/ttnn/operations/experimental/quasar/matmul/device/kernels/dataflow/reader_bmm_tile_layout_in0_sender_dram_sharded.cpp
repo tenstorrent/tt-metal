@@ -61,8 +61,6 @@ void kernel_main() {
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 
-    uint32_t l1_write_addr_in0;
-
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     receiver_sem.set(VALID);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
@@ -76,12 +74,9 @@ void kernel_main() {
             const uint32_t block_id = sender_block_id + i;
 
             // Operand 0
-            l1_write_addr_in0 = cb_in0.get_write_ptr();
-            if (block_id % 2 != 0) {  // double buffer
-                l1_write_addr_in0 += in0_block_size_bytes;
-            }
-
-            // copy start address of block, to be used for mcasting
+            // This core never reserves cb_in0, so its write pointer stays put; the block alternates between its
+            // two halves, as the receivers' double buffer does.
+            const uint32_t in0_block_offset = block_id % 2 != 0 ? in0_block_size_bytes : 0;
 
             // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
             sender_sem.wait(in0_mcast_num_dests);
@@ -111,10 +106,9 @@ void kernel_main() {
 
 #ifndef SKIP_MCAST
             // num_dests must not include source, since we are NOT really doing a local copy!
-            MulticastEndpoint mcast_dst;
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(local_read_addr),
-                mcast_dst,
+                cb_in0,
                 in0_block_size_bytes,
                 in0_mcast_num_cores - 1,
                 {},
@@ -122,7 +116,7 @@ void kernel_main() {
                  .noc_y_start = in0_mcast_dest_noc_start_y,
                  .noc_x_end = in0_mcast_dest_noc_end_x,
                  .noc_y_end = in0_mcast_dest_noc_end_y,
-                 .addr = l1_write_addr_in0},
+                 .offset_bytes = in0_block_offset},
                 true);
 #endif
 
@@ -174,18 +168,16 @@ void kernel_main() {
                     }
                 }
 #ifndef SKIP_MCAST
-                MulticastEndpoint mcast_dst;
                 noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                     CoreLocalMem<uint32_t>(local_read_addr),
-                    mcast_dst,
+                    cb_in0,
                     in0_block_size_bytes,
                     in0_mcast_num_cores,
                     {},
                     {.noc_x_start = in0_mcast_dest_noc_start_x,
                      .noc_y_start = in0_mcast_dest_noc_start_y,
                      .noc_x_end = in0_mcast_dest_noc_end_x,
-                     .noc_y_end = in0_mcast_dest_noc_end_y,
-                     .addr = l1_write_addr_in0},
+                     .noc_y_end = in0_mcast_dest_noc_end_y},
                     true);
 #endif
                 // Set local semaphore to VALID. For single-core configurations, this is all we need.

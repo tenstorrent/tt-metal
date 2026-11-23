@@ -9,8 +9,8 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, DestSync, MathFidelity
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
@@ -31,7 +31,16 @@ from helpers.utils import passed_test
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     kt_dim=[3, 20],
 )
-def test_matmul_in1_column_stride_and_restore(formats, dest_acc, kt_dim):
+def test_matmul_in1_column_stride_and_restore(
+    formats,
+    dest_acc,
+    kt_dim,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     """Strided in1 columns, then contiguous columns without unpacker reinit.
 
     Four output columns exercise address stepping in both destination modes.
@@ -70,33 +79,41 @@ def test_matmul_in1_column_stride_and_restore(formats, dest_acc, kt_dim):
     in1 = torch.cat(
         [strided_tiles, contiguous_tiles, torch.zeros_like(contiguous_tiles)]
     )
-    configuration = TestConfig(
-        "sources/matmul_in1_column_stride_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(MathFidelity.LoFi),
-            THROTTLE_LEVEL(0),
-            DEST_SYNC(),
-            PACK_SRC_FROM_OUTPUT(),
-        ],
-        runtimes=[
-            NUM_FACES(),
-            TILE_COUNT(2 * ct_dim),
-            CRK_TILE_DIMM(ct_dim, 1, kt_dim),
-        ],
-        variant_stimuli=StimuliConfig(
-            tiled(a, a_shape),
-            formats.input_format,
-            in1,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=kt_dim,
-            tile_count_B=3 * kt_dim * ct_dim,
-            tile_count_res=2 * ct_dim,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/matmul_in1_column_stride_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_FIDELITY(MathFidelity.LoFi),
+                THROTTLE_LEVEL(0),
+                DEST_SYNC(),
+                PACK_SRC_FROM_OUTPUT(),
+            ],
+            runtimes=[
+                NUM_FACES(),
+                TILE_COUNT(2 * ct_dim),
+                CRK_TILE_DIMM(ct_dim, 1, kt_dim),
+            ],
+            variant_stimuli=StimuliConfig(
+                tiled(a, a_shape),
+                formats.input_format,
+                in1,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=kt_dim,
+                tile_count_B=3 * kt_dim * ct_dim,
+                tile_count_res=2 * ct_dim,
+            ),
+            dest_acc=dest_acc,
         ),
-        dest_acc=dest_acc,
     )
-    result = torch.tensor(configuration.run().result, dtype=torch.bfloat16)
+    if is_perf:
+        return
+    result = torch.tensor(outcome.result, dtype=torch.bfloat16)
     expected_numel = 2 * ct_dim * 1024
     assert (
         result.numel() == expected_numel
@@ -161,34 +178,42 @@ def test_matmul_in1_column_stride_formats(formats, dest_acc, kt_dim, dest_sync):
     in1 = torch.cat(
         [strided_tiles, contiguous_tiles, torch.zeros_like(contiguous_tiles)]
     )
-    configuration = TestConfig(
-        "sources/matmul_in1_column_stride_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(MathFidelity.LoFi),
-            THROTTLE_LEVEL(0),
-            DEST_SYNC(dest_sync),
-            *MATMUL_STREAM_NARROW.for_block(formats, dest_acc, dest_sync, ct_dim, 1),
-            PACK_SRC_FROM_OUTPUT(),
-        ],
-        runtimes=[
-            NUM_FACES(),
-            TILE_COUNT(2 * ct_dim),
-            CRK_TILE_DIMM(ct_dim, 1, kt_dim),
-        ],
-        variant_stimuli=StimuliConfig(
-            tiled(a, a_shape),
-            formats.input_format,
-            in1,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=kt_dim,
-            tile_count_B=3 * kt_dim * ct_dim,
-            tile_count_res=2 * ct_dim,
+    outcome = execute_llk(
+        is_perf=False,
+        perf_report=None,
+        run_types=None,
+        loop_factor=1,
+        test_config_kwargs=dict(
+            test_name="sources/matmul_in1_column_stride_test.cpp",
+            formats=formats,
+            templates=[
+                MATH_FIDELITY(MathFidelity.LoFi),
+                THROTTLE_LEVEL(0),
+                DEST_SYNC(dest_sync),
+                *MATMUL_STREAM_NARROW.for_block(
+                    formats, dest_acc, dest_sync, ct_dim, 1
+                ),
+                PACK_SRC_FROM_OUTPUT(),
+            ],
+            runtimes=[
+                NUM_FACES(),
+                TILE_COUNT(2 * ct_dim),
+                CRK_TILE_DIMM(ct_dim, 1, kt_dim),
+            ],
+            variant_stimuli=StimuliConfig(
+                tiled(a, a_shape),
+                formats.input_format,
+                in1,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=kt_dim,
+                tile_count_B=3 * kt_dim * ct_dim,
+                tile_count_res=2 * ct_dim,
+            ),
+            dest_acc=dest_acc,
         ),
-        dest_acc=dest_acc,
     )
-    result = torch.tensor(configuration.run().result, dtype=torch.bfloat16)
+    result = torch.tensor(outcome.result, dtype=torch.bfloat16)
     assert result.numel() == 2 * ct_dim * 1024
     mantissa_bits = 7 if formats.output_format == DataFormat.Bfp8_b else 8
     for phase in range(2):

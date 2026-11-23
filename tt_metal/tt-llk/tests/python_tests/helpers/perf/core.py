@@ -946,6 +946,7 @@ class PerfConfig(TestConfig):
         compile_time_formats: bool = False,
         requires_vector_ext: bool = False,
         kernel_flags: list = None,
+        include_dirs: list = None,
     ):
 
         # the report keeps the columns of the templates the module passed, so a main row of the table does not change the CSV schema
@@ -987,11 +988,14 @@ class PerfConfig(TestConfig):
             compile_time_formats,
             requires_vector_ext=requires_vector_ext,
             kernel_flags=kernel_flags,
+            include_dirs=include_dirs,
         )
 
     @staticmethod
     def _dataclass_name_and_values(obj):
         """Return (name, value) pairs for dataclass fields, used as columns for the report."""
+        if getattr(obj, "perf_report_compile_only", False):
+            return []
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
     @staticmethod

@@ -5,7 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <device.hpp>
 #include <global_circular_buffer.hpp>
 #include <host_api.hpp>
@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "distributed.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>

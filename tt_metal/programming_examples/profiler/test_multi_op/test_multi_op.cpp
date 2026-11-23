@@ -23,7 +23,7 @@ void RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         // Mesh workload + device range span the mesh; program encapsulates kernels
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         tt_metal::CreateKernel(
             program,

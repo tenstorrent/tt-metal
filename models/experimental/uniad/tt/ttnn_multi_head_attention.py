@@ -23,8 +23,8 @@ def _canonical_mask(
     if mask is not None:  #  Condition not satisfied
         _mask_is_float = torch.is_floating_point(mask)
         if not _mask_is_float:
-            mask = torch.zeros_like(mask, dtype=target_type)
-            mask = mask.masked_fill_(mask, float("-inf"))
+            # Fill a fresh float tensor, keeping the boolean mask as the predicate.
+            mask = torch.zeros_like(mask, dtype=target_type).masked_fill_(mask, float("-inf"))
 
     return mask
 

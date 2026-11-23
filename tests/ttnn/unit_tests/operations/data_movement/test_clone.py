@@ -375,6 +375,19 @@ def test_clone_sharded_tilized_non_rectangular_grid(device):
     )
 
 
+@pytest.mark.parametrize("tile_shape", [(16, 32), (8, 32), (4, 32)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_clone_rejects_non_default_tile(device, expect_error, tile_shape):
+    tensor = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.clone(tensor, dtype=ttnn.bfloat8_b)
+
+
 @pytest.mark.parametrize(
     "shape",
     [
@@ -483,3 +496,25 @@ def test_clone_sharded_dtype_conversion(
         compute_kernel_options=None,
         device=device,
     )
+
+
+@pytest.mark.parametrize(
+    "layout, dtype",
+    [(ttnn.TILE_LAYOUT, None), (ttnn.TILE_LAYOUT, ttnn.float32), (ttnn.ROW_MAJOR_LAYOUT, None)],
+)
+def test_clone_sub_core_grids(device, layout, dtype):
+    """
+    Clone restricted to two core ranges away from core (0, 0), like a sub-device partition.
+    8 cores give an uneven work split, so both core groups run.
+    """
+    torch.manual_seed(2024)
+    torch_input = torch.randn((3, 97, 160), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 3)),
+            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(4, 1)),
+        ]
+    )
+    output = ttnn.clone(input_tensor, dtype=dtype, sub_core_grids=sub_core_grids)
+    assert torch.equal(ttnn.to_torch(output).to(torch.bfloat16), torch_input)

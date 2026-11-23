@@ -45,7 +45,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import _nearest_y, pad_and_fold_conv_filters_for_unity_stride
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def _cpu_fold_activation(activation_nchw, pad_h, pad_w, stride_h, stride_w, align_c):
@@ -141,7 +141,9 @@ def test_c8_direct_fold_no_strip(mesh_device, batch_size):
     out_c = groups * C  # 32
 
     # Upload channels-last [N,H,W,C] host-padded to the aligned width (Quasar RM shards need width % 8 == 0),
-    # interleaved L1, so the direct fold skips the on-device NCHW->NHWC transpose (no Quasar kernel).
+    # so the direct fold skips the on-device NCHW->NHWC transpose (no Quasar kernel). DRAM interleaved, like
+    # the model's setup_input: an L1 copy of the input stays live through the whole fold and splits the free
+    # L1 so the fold output finds no contiguous block on the 3 MiB L1 of Trinity and Horizon.
     torch_input_nhwc = torch_input.permute(0, 2, 3, 1).contiguous()  # [N,H,W,c]
     torch_input_nhwc = torch.nn.functional.pad(torch_input_nhwc, (0, C - c))  # C: c -> C_aligned(8)
     tt_input = ttnn.from_torch(
@@ -149,7 +151,7 @@ def test_c8_direct_fold_no_strip(mesh_device, batch_size):
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # A device-sized shard grid (the fold reshards the halo/fold intermediates onto it).

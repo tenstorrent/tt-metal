@@ -118,6 +118,24 @@ TEST(RuntimeLengthTest, UnevenSplitsCoverExactly) {
     }
 }
 
+TEST(RuntimeLengthTest, RangePairsMatchTheirStartAndEnd) {
+    // chunked_range wraps core_start / core_end at per_core = div_up(total, cores); balanced_range wraps
+    // balanced_start / balanced_end. The kernels take the pair form.
+    for (uint32_t total : {0u, 1u, 7u, 17u, 148u, 470u}) {
+        for (uint32_t cores : {1u, 3u, 8u, 64u}) {
+            const uint32_t per_core = div_up(total, cores);
+            for (uint32_t core = 0; core < cores; ++core) {
+                const auto [c_start, c_end] = chunked_range(core, total, cores);
+                EXPECT_EQ(c_start, core_start(core, per_core, total)) << "total " << total << " cores " << cores;
+                EXPECT_EQ(c_end, core_end(core, per_core, total));
+                const auto [b_start, b_end] = balanced_range(core, total, cores);
+                EXPECT_EQ(b_start, balanced_start(core, total, cores));
+                EXPECT_EQ(b_end, balanced_end(core, total, cores));
+            }
+        }
+    }
+}
+
 TEST(RuntimeLengthTest, LastCoreIsClampedNotOverrun) {
     // 17 tiles on 8 cores: 3 per core, the sixth core ends at 17, the seventh and eighth are empty.
     const uint32_t per_core = div_up(17, 8);

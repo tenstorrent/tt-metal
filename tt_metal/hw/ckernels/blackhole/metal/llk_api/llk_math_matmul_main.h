@@ -5,7 +5,8 @@
 #pragma once
 
 // main's matmul math init and call (llk_math_matmul.h, llk_math_matmul_api.h and the compute API's dynamic throttle at
-// d6b3ab771ce), verbatim in their own namespace: a plain call that takes none of the matmul forms compiles to main's code
+// d6b3ab771ce), verbatim in their own namespace: a plain call that takes none of the matmul forms compiles to main's
+// code
 #include "llk_math_matmul_api.h"
 #include "llk_math_matmul_main_lib.h"
 #include "llk_math_matmul_phases.h"

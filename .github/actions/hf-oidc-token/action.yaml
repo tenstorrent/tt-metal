@@ -1,0 +1,60 @@
+name: "Hugging Face OIDC token"
+description: >-
+  Exchange the GitHub OIDC identity of this job for a short-lived, read-only
+  Hugging Face token. No stored secret. If the exchange fails, the action
+  warns and returns an empty token, and the caller runs without a token.
+
+# Requirements (set by OSPO, not by the caller):
+#  - The repository variable HF_OIDC_RESOURCE (the Hugging Face service account).
+#  - A Hugging Face "Account CI/CD identity" for this repository.
+# The calling job must have `permissions: id-token: write`.
+
+outputs:
+  token:
+    description: "Short-lived Hugging Face read token (valid 60 minutes). Empty if the exchange failed."
+    value: ${{ steps.exchange.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Get short-lived Hugging Face read token (OIDC)
+      id: exchange
+      shell: bash
+      env:
+        HF_OIDC_RESOURCE: ${{ vars.HF_OIDC_RESOURCE }}
+        # Never use a token file left on the runner.
+        HF_TOKEN_PATH: ${{ runner.temp }}/hf-no-stored-token
+        HF_HUB_DISABLE_UPDATE_CHECK: "1"
+        # No request logging: the exchange body must not reach the log.
+        HF_DEBUG: ""
+      run: |
+        # Only the OIDC exchange may supply the token.
+        unset HF_TOKEN HUGGING_FACE_HUB_TOKEN
+        NO_TOKEN="running without a Hugging Face token (gated models will fail to download)"
+        if [ -z "$HF_OIDC_RESOURCE" ]; then
+          echo "::warning::Repository variable HF_OIDC_RESOURCE is not set: $NO_TOKEN"
+          exit 0
+        fi
+        if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
+          echo "::warning::No OIDC token available (the job needs 'id-token: write'): $NO_TOKEN"
+          exit 0
+        fi
+        # The hf CLI (huggingface_hub>=1.19.0) does the exchange when HF_OIDC_RESOURCE is set.
+        # Use a separate venv so the test environment is not changed.
+        VENV="$RUNNER_TEMP/hf-oidc-venv"
+        if ! python3 -m venv "$VENV" || ! "$VENV/bin/pip" install --quiet --disable-pip-version-check "huggingface_hub>=1.19.0,<2.0"; then
+          echo "::warning::Could not install the hf CLI: $NO_TOKEN"
+          exit 0
+        fi
+        rc=0
+        token="$("$VENV/bin/hf" auth token)" || rc=$?
+        # Mask every line before any other output.
+        while IFS= read -r line; do
+          if [ -n "$line" ]; then echo "::add-mask::$line"; fi
+        done <<< "$token"
+        if [ "$rc" -ne 0 ] || [ -z "$token" ] || [[ "$token" == *[[:space:]]* ]]; then
+          echo "::warning::Hugging Face OIDC exchange failed (exit $rc): $NO_TOKEN"
+          exit 0
+        fi
+        echo "token=$token" >> "$GITHUB_OUTPUT"
+        echo "Hugging Face OIDC exchange OK: short-lived read token created."

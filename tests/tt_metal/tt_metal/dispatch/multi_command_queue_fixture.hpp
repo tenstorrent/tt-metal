@@ -4,17 +4,13 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "gtest/gtest.h"
 #include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
@@ -39,11 +35,9 @@ protected:
         init_max_dfbs();
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
-        // Check to deal with TG systems
         const ChipId device_id =
-            (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
-                ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
-                : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+            enable_remote_chip ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
+                               : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE);
     }
 
@@ -80,7 +74,6 @@ protected:
     }
 
     std::shared_ptr<distributed::MeshDevice> device_;
-    tt::ARCH arch_{tt::ARCH::Invalid};
     uint8_t num_cqs_{};
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
@@ -134,10 +127,9 @@ protected:
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
-        // Check to deal with TG systems
+        // Check to deal with UBB Galaxy systems
         if (enable_remote_chip or
-            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
-            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
             for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
                 chip_ids.push_back(id);
             }
@@ -158,7 +150,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };

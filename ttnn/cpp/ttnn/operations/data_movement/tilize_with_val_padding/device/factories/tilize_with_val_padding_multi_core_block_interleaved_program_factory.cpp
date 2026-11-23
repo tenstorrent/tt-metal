@@ -18,7 +18,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -27,11 +26,53 @@ namespace {
 using ttnn::operations::data_movement::BlockBufferSet;
 using ttnn::operations::data_movement::BlockCoreOrder;
 using ttnn::operations::data_movement::BlockDirection;
+using ttnn::operations::data_movement::BlockL1Fit;
 using ttnn::operations::data_movement::BlockPlan;
 using ttnn::operations::data_movement::buffer_set_for_core;
-using ttnn::operations::data_movement::make_block_plan;
+
+// Quasar caps the block width (QUASAR_MAX_TILIZE_BLOCK_TILES); other archs split on free L1 alone.
+std::optional<uint32_t> block_tiles_cap(const Tensor& input_tensor) {
+    return input_tensor.device()->arch() == tt::ARCH::QUASAR
+               ? std::optional<uint32_t>(ttnn::operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES)
+               : std::nullopt;
+}
 
 }  // namespace
+
+// The two take the same arguments; keep them in step. ColumnMajor: the runtime-arg loop in
+// create_program_artifacts walks `corerange_to_cores(available_grid)`, so the split hands cores out
+// in that same order.
+BlockPlan TilizeWithValPaddingMultiCoreBlockInterleavedFactory::block_plan(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor, const Tensor& output_tensor) {
+    return ttnn::operations::data_movement::make_block_plan(
+        BlockDirection::Tilize,
+        BlockCoreOrder::ColumnMajor,
+        input_tensor,
+        output_tensor,
+        tt::tile_size(datatype_to_dataformat_converter(input_tensor.dtype())),
+        tt::tile_size(datatype_to_dataformat_converter(operation_attributes.output_dtype)),
+        TILE_HEIGHT,
+        TILE_WIDTH,
+        operation_attributes.sub_core_grids,
+        block_tiles_cap(input_tensor));
+}
+
+BlockL1Fit TilizeWithValPaddingMultiCoreBlockInterleavedFactory::block_l1_fit(
+    const TilizeWithValPaddingParams& operation_attributes,
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_padded_shape) {
+    return ttnn::operations::data_movement::block_l1_fit(
+        BlockDirection::Tilize,
+        BlockCoreOrder::ColumnMajor,
+        input_tensor,
+        output_padded_shape,
+        tt::tile_size(datatype_to_dataformat_converter(input_tensor.dtype())),
+        tt::tile_size(datatype_to_dataformat_converter(operation_attributes.output_dtype)),
+        TILE_HEIGHT,
+        TILE_WIDTH,
+        operation_attributes.sub_core_grids,
+        block_tiles_cap(input_tensor));
+}
 
 ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_program_artifacts(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor, Tensor& tensor_return_value) {
@@ -83,22 +124,9 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
 
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
-    // `make_block_plan` reads live L1 occupancy, so it is only valid on a program-cache miss -- which
-    // is the only time this function runs. ColumnMajor: the runtime-arg loop below walks
-    // `corerange_to_cores(available_grid)`, so the split hands cores out in that same order.
-    const BlockPlan plan = make_block_plan(
-        BlockDirection::Tilize,
-        BlockCoreOrder::ColumnMajor,
-        a,
-        output,
-        input_single_tile_size,
-        output_single_tile_size,
-        TILE_HEIGHT,
-        TILE_WIDTH,
-        sub_core_grids,
-        a.device()->arch() == tt::ARCH::QUASAR
-            ? std::optional<uint32_t>(operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES)
-            : std::nullopt);
+    // `block_plan` reads live L1 occupancy. This runs only on a program-cache miss, and
+    // compute_program_hash keys on `block_l1_fit`, so a hit never replays a plan sized for other L1.
+    const BlockPlan plan = block_plan(operation_attributes, a, output);
     const BlockBufferSet& full_set = plan.full;
     const BlockBufferSet& cliffrow_set = plan.cliffrow;
     const auto& [ncores, all_cores, core_range, cliff_row_core_range, cliff_col_core_range, cliff_col_row_core_range, nblocks_per_core, single_block_size, single_block_size_cliff_row, single_block_size_cliff_col, has_cliff_row, has_cliff_col, full_cores_per_row, full_cores_per_col, single_sub_block_size] =
@@ -184,10 +212,6 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
     uint32_t tile_height = output.tensor_spec().tile().get_height();
 
     uint32_t total_num_rows = a.logical_shape()[-2];
-
-    if (output.padded_shape()[-2] > tt::round_up(total_num_rows, tile_height)) {
-        total_num_rows = output.padded_shape()[-2];
-    }
 
     // One reader and one writer per buffer set, each over that set's cores and bound to that set's
     // buffers. A set's cores are exactly the cores whose block width its buffers are sized for, so
@@ -309,6 +333,11 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
             ComputeHardwareConfig compute_cfg_gen2;
             compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
             compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from WH/BH
+            // Quasar unpacks Int32 only into DEST.
+            if (a.dtype() == DataType::INT32) {
+                compute_cfg_gen2.enable_32_bit_dest = true;
+                compute_cfg_gen2.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
+            }
             compute_hw = compute_cfg_gen2;
         }
 

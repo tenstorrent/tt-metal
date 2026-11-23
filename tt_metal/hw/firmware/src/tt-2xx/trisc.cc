@@ -24,9 +24,9 @@
 #endif
 #include "api/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
-#include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
+#include "ckernel_buf_desc.h"  // ckernel::trisc::BD_TABLE_NUM_ENTRIES
 #if defined(UCK_CHLKC_MATH)
-#include "cmath_common.h"    // ckernel::math::DataFormatConfigSet (definition of data_format_config_set below)
+#include "cmath_common.h"    // ckernel::math::AluCfgTracker (definition of alu_cfg below)
 #endif
 
 // clang-format on
@@ -87,8 +87,7 @@ thread_local std::uint32_t tdma_guard_armed_mask __attribute__((used)) = 0;
 namespace llk_reinit_guard {
 // #44071 re-init guard (Quasar). thread_local per TRISC (tt-llk#1678); declared extern in
 // llk_reinit_guard.h.
-thread_local std::uint8_t reinit_guard_slots[static_cast<std::uint8_t>(ckernel::trisc::BfdResource::Count)]
-    __attribute__((used)) = {};
+thread_local std::uint8_t reinit_guard_slots[ckernel::trisc::BD_TABLE_NUM_ENTRIES] __attribute__((used)) = {};
 }  // namespace llk_reinit_guard
 #endif
 
@@ -111,11 +110,6 @@ thread_local std::uint32_t op_info_offset __attribute__((used)) = 0;
 namespace trisc {
 // Flip between 0 and 1 to keep dest pointer between kernel calls
 thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
-// BFD id allocator state (Quasar). Defined for all TRISC images alongside dest_register_offset;
-// thread_local so the host-threaded emulation gives each TRISC its own allocator (tt-llk#1678).
-// do_thread_crt1 clears this per-thread state before first use; bfd_alloc then sets next to the
-// partition base and current[] to BFD_ID_INVALID on the first allocation.
-thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
 }  // namespace trisc
 namespace pack {
 // Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
@@ -130,8 +124,7 @@ using namespace ckernel;
 
 // Per-Neo ALU-format config state; declared extern thread_local in llk_math_common.h.
 #if defined(UCK_CHLKC_MATH)
-thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
-    ckernel::math::DataFormatConfigSet::UNCONFIGURED;
+thread_local ckernel::math::AluCfgTracker alu_cfg __attribute__((used)) = {};
 // Unpack-to-dest: set once math has seen the unpacker's first UNPACK_MATH post of the program.
 thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
@@ -241,6 +234,7 @@ FORCE_INLINE void dfb_clear_packer_remapper_window(
     constexpr std::uint32_t dfb_trisc_mask = (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Unpack) * 8)) |
                                              (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Sfpu) * 8));
     while ((*neo_sync & dfb_trisc_mask) != 0u) {
+        invalidate_l1_cache();
     }
     for (uint32_t i = lo; i < hi; i++) {
         WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(i), 0u);
@@ -277,6 +271,7 @@ extern "C" std::uint32_t _start1() {
 
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
            SHARED_GLOBALS_READY_GO) {
+        invalidate_l1_cache();
     }
     // Initialize GPRs to all 0s
 #pragma GCC unroll 0
@@ -293,6 +288,7 @@ extern "C" std::uint32_t _start1() {
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
+            invalidate_l1_cache();
             if constexpr (COMPILE_FOR_TRISC == 0) {
                 if (*trisc_run == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
                     init_sync_registers();
