@@ -445,43 +445,24 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan sparse_resolve_plan(
 }  // namespace
 
 SparseSDPAOperation::SparseSDPAProgramFactory::Plan SparseSDPAOperation::SparseSDPAProgramFactory::select_plan(
-    const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
-    // Memoized: the plan builds candidate layouts, and a cache hit hashes it. The key holds everything the plan reads
-    // (the device, its free L1, the op's scalars and the input specs it uses), as one flat array: hashing the tensor
-    // shapes and the core range set per call cost more host time than the legacy op's hit path.
-    const auto& qs = t.q.logical_shape();
-    const std::array<uint32_t, 17> fields{
-        attrs.v_dim,
-        static_cast<uint32_t>(attrs.kv_format),
-        attrs.k_chunk_size,
-        static_cast<uint32_t>(attrs.precision),
-        attrs.worker_core_grid.num_cores(),
-        static_cast<uint32_t>(qs.rank()),
-        qs[-3],
-        qs[-2],
-        qs[-1],
-        static_cast<uint32_t>(t.q.dtype()),
-        static_cast<uint32_t>(t.kv.dtype()),
-        static_cast<uint32_t>(t.kv.mesh_buffer().aligned_page_size()),
-        static_cast<uint32_t>(t.kv.element_size()),
-        t.indices.logical_shape()[-1],
-        static_cast<uint32_t>(t.indices.element_size()),
-        static_cast<uint32_t>(t.attention_sink.has_value()),
-        static_cast<uint32_t>(attrs.has_scaled_kv())};
+    const SparseSDPAParams& attrs, const SparseSDPAInputs& t, ttsl::hash::hash_t inputs) {
+    // Memoized: the plan builds candidate layouts, and every call (the program cache's hash) needs it. Its inputs are
+    // the hashed op inputs (input_hash: shapes, dtypes, scalars, grid), the device and the free L1. A repeated call
+    // (the steady state of a model's layers) compares against this thread's last call before the shared memo.
     auto* device = t.q.device();
     const uint64_t free_l1 = recipes::recipe_free_l1(*device);
-    // A repeated call (the steady state of a model's layers) compares against this thread's last call before hashing.
+    const int device_id = static_cast<int>(device->id());
     struct LastCall {
-        std::array<uint32_t, 17> fields{};
+        ttsl::hash::hash_t inputs = 0;
         int device_id = -1;
         uint64_t free_l1 = 0;
         Plan plan;
     };
     thread_local LastCall last;
-    if (last.device_id == static_cast<int>(device->id()) && last.free_l1 == free_l1 && last.fields == fields) {
+    if (last.inputs == inputs && last.device_id == device_id && last.free_l1 == free_l1) {
         return last.plan;
     }
-    const auto key = ttsl::hash::hash_objects_with_default_seed(device->id(), free_l1, fields);
+    const auto key = ttsl::hash::hash_objects(inputs, device_id, free_l1);
     static std::mutex mutex;
     static std::unordered_map<std::size_t, Plan> memo;
     Plan plan;
@@ -501,7 +482,7 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan SparseSDPAOperation::SparseS
         }
         memo.emplace(key, plan);
     }
-    last = LastCall{.fields = fields, .device_id = static_cast<int>(device->id()), .free_l1 = free_l1, .plan = plan};
+    last = LastCall{.inputs = inputs, .device_id = device_id, .free_l1 = free_l1, .plan = plan};
     return plan;
 }
 
@@ -527,7 +508,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     const uint32_t num_cores = cores.size();
 
     const uint32_t n_chunks = topk / k_chunk;
-    const Plan plan = select_plan(attrs, t);
+    const Plan plan = select_plan(attrs, t, input_hash(attrs, t));
     const auto split_k = static_cast<uint32_t>(plan.split_k);
     const uint32_t num_used = plan.num_used;
     SparseLayout layout = sparse_make_layout(
