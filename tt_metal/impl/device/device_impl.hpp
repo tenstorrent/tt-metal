@@ -148,6 +148,9 @@ public:
     void init_command_queue_device();
 
     void init_command_queue_device_with_topology(DispatchTopology* topology);
+    // Virtual coordinates of the Tensix workers whose mailboxes follow the dispatch mode: the full grid minus claimed
+    // service cores and fabric mux cores.
+    std::unordered_set<CoreCoord> dispatch_mode_worker_cores();
     // Points every Tensix worker back at launch slot 0 and go row 0, marks its go messages done, and fills its launch
     // message ring with empty messages in the given dispatch mode. Workers must be idle. Claimed service cores and
     // fabric mux cores are skipped, since their persistent kernels keep running across dispatch mode switches.

@@ -1665,6 +1665,79 @@ TEST_F(DispatchContextFixture, SDFDTransitionDrainsInFlightWorkload) {
     run_blank_workload();
 }
 
+// WHAT: two 1x1 submeshes on different chips. Submesh B launches a long SD workload without waiting, then fast
+//       dispatch is started from submesh A.
+// WHY:  the firmware bring-up rewrites the mailboxes of every active chip, but A's session can only drain A's
+//       queues. This is blaze's multi-stage layout, where each stage holds its own submesh.
+// EXPECT: B's workload finishes before FD comes up, and B can still run SD work after the session.
+TEST_F(DispatchContextFixture, SDFDTransitionWaitsForSiblingSubmeshWorkload) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (mesh->num_devices() < 2) {
+        GTEST_SKIP() << "This test needs at least two chips.";
+    }
+    auto submeshes = mesh->create_submeshes(MeshShape(1, 1));
+    auto session_mesh = submeshes[0];
+    auto busy_mesh = submeshes[1];
+    auto& cluster = MetalContext::instance().get_cluster();
+
+    const CoreCoord core{0, 0};
+    const uint32_t page_size = ::tt::tile_size(DataFormat::UInt32);
+    ShardSpecBuffer shard_spec(
+        CoreRangeSet(CoreRange(core, core)), {page_size, 1}, ShardOrientation::ROW_MAJOR, {page_size, 1}, {1, 1});
+    auto marker_buf = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = page_size},
+        DeviceLocalBufferConfig{
+            .page_size = page_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+            .bottom_up = false},
+        busy_mesh.get());
+    const uint32_t marker_addr = marker_buf->address();
+    EnqueueWriteMeshBuffer(
+        busy_mesh->mesh_command_queue(), marker_buf, std::vector<uint32_t>(page_size / sizeof(uint32_t), 0));
+    Finish(busy_mesh->mesh_command_queue());
+
+    constexpr uint32_t kDoneValue = 0xd0e0d0e0;
+    // About a second on BH, longer than bringing up the dispatch firmware.
+    constexpr uint32_t kDelayCycles = 1'500'000'000;
+    auto make_workload = [&](const std::string& kernel_path, const std::vector<uint32_t>& rt_args) {
+        Program program = CreateProgram();
+        auto kernel = CreateKernel(
+            program,
+            kernel_path,
+            core,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(program, kernel, core, rt_args);
+        MeshWorkload workload;
+        workload.add_program(MeshCoordinateRange(busy_mesh->shape()), std::move(program));
+        return workload;
+    };
+    auto delayed = make_workload(
+        "tests/tt_metal/tt_metal/test_kernels/misc/delayed_l1_write_rt_args.cpp",
+        {marker_addr, kDoneValue, kDelayCycles});
+
+    experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(busy_mesh.get());
+    EnqueueMeshWorkload(busy_mesh->mesh_command_queue(), delayed, false);
+    experimental::DispatchContext::get().initialize_fast_dispatch(session_mesh.get());
+
+    // Read straight from L1, since B's queues are not the ones that were drained.
+    IDevice* busy_device = busy_mesh->get_devices()[0];
+    uint32_t marker = 0;
+    cluster.read_core(
+        &marker, sizeof(marker), tt_cxy_pair(busy_device->id(), busy_device->worker_core_from_logical_core(core)), marker_addr);
+    EXPECT_EQ(marker, kDoneValue) << "submesh B's SD workload was still running when FD came up from submesh A";
+
+    experimental::DispatchContext::get().terminate_fast_dispatch(session_mesh.get());
+    Finish(busy_mesh->mesh_command_queue());
+    auto blank = make_workload("tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp", {});
+    EnqueueMeshWorkload(busy_mesh->mesh_command_queue(), blank, true);
+    Finish(busy_mesh->mesh_command_queue());
+}
+
 // A service core claimed on one chip of a multi-chip mesh shrinks only that chip's grid. Leaving fast dispatch must
 // still work, the mesh must take the smallest grid, and releasing the claim must give the mesh the full grid back.
 TEST_F(DispatchContextFixture, SDFDTransitionServiceClaimOnOneChip) {

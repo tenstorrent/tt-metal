@@ -398,6 +398,36 @@ void Device::init_command_queue_host() {
     }
 }
 
+std::unordered_set<CoreCoord> Device::dispatch_mode_worker_cores() {
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+
+    // Claimed service cores and fabric mux cores run persistent kernels that outlive a dispatch mode switch. Their
+    // mailboxes belong to whoever launched them: a cleared go reads as done, and a launch message switched to DEV
+    // makes the kernel report to the dispatcher when it returns. Fabric launches its mux kernels itself, resetting
+    // the read pointer, so leaving them out is also safe while dispatch first comes up.
+    const auto& service_cores = context_->get_service_core_manager().impl();
+    std::unordered_set<CoreCoord> fabric_mux_cores;
+    if (tt::tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config()) &&
+        env_impl.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        const auto& builder_ctx = env_impl.get_control_plane().get_fabric_context().get_builder_context();
+        if (builder_ctx.has_tensix_config()) {
+            fabric_mux_cores = builder_ctx.get_tensix_config().get_translated_fabric_mux_cores();
+        }
+    }
+
+    std::unordered_set<CoreCoord> workers;
+    for (uint32_t y = 0; y < logical_grid_size().y; y++) {
+        for (uint32_t x = 0; x < logical_grid_size().x; x++) {
+            const CoreCoord logical_core(x, y);
+            const CoreCoord virtual_core = this->worker_core_from_logical_core(logical_core);
+            if (!service_cores.is_service_core(id_, logical_core) && !fabric_mux_cores.contains(virtual_core)) {
+                workers.insert(virtual_core);
+            }
+        }
+    }
+    return workers;
+}
+
 void Device::reset_worker_mailboxes(dev_msgs::dispatch_mode mode) {
     MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
     auto& cluster = env_impl.get_cluster();
@@ -416,48 +446,24 @@ void Device::reset_worker_mailboxes(dev_msgs::dispatch_mode mode) {
         hal.get_dev_size(core_type, HalL1MemAddrType::GO_MSG) / sizeof(uint32_t), 0);
     const uint32_t zero = 0;
 
-    // Claimed service cores and fabric mux cores run persistent kernels that outlive a dispatch mode switch. Their
-    // mailboxes belong to whoever launched them: a cleared go reads as done, and a launch message switched to DEV
-    // makes the kernel report to the dispatcher when it returns. Fabric launches its mux kernels itself, resetting
-    // the read pointer, so skipping them here is also safe while dispatch first comes up.
-    const auto& service_cores = context_->get_service_core_manager().impl();
-    std::unordered_set<CoreCoord> fabric_mux_cores;
-    if (tt::tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config()) &&
-        env_impl.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED) {
-        const auto& builder_ctx = env_impl.get_control_plane().get_fabric_context().get_builder_context();
-        if (builder_ctx.has_tensix_config()) {
-            fabric_mux_cores = builder_ctx.get_tensix_config().get_translated_fabric_mux_cores();
-        }
-    }
-
+    const auto workers = this->dispatch_mode_worker_cores();
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
     if (env_impl.get_rtoptions().get_watcher_enabled() && context_->watcher_server()) {
         watcher_lock = context_->watcher_server()->get_lock();
     }
-    for (uint32_t y = 0; y < logical_grid_size().y; y++) {
-        for (uint32_t x = 0; x < logical_grid_size().x; x++) {
-            const CoreCoord logical_core(x, y);
-            const CoreCoord virtual_core = this->worker_core_from_logical_core(logical_core);
-            if (service_cores.is_service_core(id_, logical_core) || fabric_mux_cores.contains(virtual_core)) {
-                continue;
-            }
-            const tt_cxy_pair core(id_, virtual_core);
-            cluster.write_core(
-                launch_msg_ring.data(),
-                launch_msg_ring.size(),
-                core,
-                hal.get_dev_noc_addr(core_type, HalL1MemAddrType::LAUNCH));
-            cluster.write_core(
-                &zero, sizeof(zero), core, hal.get_dev_noc_addr(core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR));
-            cluster.write_core(
-                go_messages_done.data(),
-                go_messages_done.size() * sizeof(uint32_t),
-                core,
-                hal.get_dev_noc_addr(core_type, HalL1MemAddrType::GO_MSG));
-            cluster.l1_barrier(id_);
-            cluster.write_core(
-                &zero, sizeof(zero), core, hal.get_dev_noc_addr(core_type, HalL1MemAddrType::GO_MSG_INDEX));
-        }
+    for (const CoreCoord& virtual_core : workers) {
+        const tt_cxy_pair core(id_, virtual_core);
+        cluster.write_core(
+            launch_msg_ring.data(), launch_msg_ring.size(), core, hal.get_dev_noc_addr(core_type, HalL1MemAddrType::LAUNCH));
+        cluster.write_core(
+            &zero, sizeof(zero), core, hal.get_dev_noc_addr(core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR));
+        cluster.write_core(
+            go_messages_done.data(),
+            go_messages_done.size() * sizeof(uint32_t),
+            core,
+            hal.get_dev_noc_addr(core_type, HalL1MemAddrType::GO_MSG));
+        cluster.l1_barrier(id_);
+        cluster.write_core(&zero, sizeof(zero), core, hal.get_dev_noc_addr(core_type, HalL1MemAddrType::GO_MSG_INDEX));
     }
 }
 

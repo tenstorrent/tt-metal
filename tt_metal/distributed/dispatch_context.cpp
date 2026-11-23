@@ -338,6 +338,13 @@ void DispatchContext::initialize_fast_dispatch(
     for (auto& cq : mesh_device_impl.mesh_command_queues_) {
         cq->finish();
     }
+    // The firmware bring-up covers every active chip, not just this mesh's, so other mesh views over those chips
+    // may still have slow dispatch work running. Wait on the chips' workers directly, since those queues are not
+    // reachable from here.
+    for (const auto& dev : active_devices) {
+        auto workers = dev->dispatch_mode_worker_cores();
+        tt::llrt::internal_::wait_until_cores_done(metal_context, dev->id(), dev_msgs::RUN_MSG_GO, workers, 0);
+    }
 
     // Enable Fast Dispatch and reinitialize dispatch managers to pick up FD core descriptor before allocating cores
     metal_context.set_fast_dispatch_mode(true);
