@@ -45,7 +45,8 @@ ALWI void acquire_dst() {
  * This register is an array of 16 tiles of 32x32 elements each.
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
  *
- * NOTE: On Quasar, use tile_regs_borrow to lend the acquired section before unpack writes to Dest.
+ * NOTE: On Quasar, unpack-to-dest copies need a loan from MATH: wrap them in tile_regs_borrow and
+ * tile_regs_return.
  */
 ALWI void tile_regs_acquire() { MATH((llk_math_wait_for_dest_available())); }
 
@@ -83,7 +84,7 @@ ALWI void release_dst() {
 /**
  * Release lock on DST register by MATH thread. The lock had to be previously acquired with tile_regs_acquire.
  *
- * Return any borrowed section before committing it.
+ * NOTE: On Quasar, call tile_regs_return for any loan of this section first.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_commit() {
@@ -92,6 +93,8 @@ ALWI void tile_regs_commit() {
 
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
+ *
+ * NOTE: On Quasar, call tile_regs_return for any loan of this section first.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_release() {
@@ -100,9 +103,15 @@ ALWI void tile_regs_release() {
 
 #ifdef ARCH_QUASAR
 /**
- * @brief Borrow a Dest bank from its owner.
+ * Lends the current Dest section from its owner FROM to TO (Quasar only). FROM is MATH between
+ * tile_regs_acquire and tile_regs_commit, or PACK between tile_regs_wait and tile_regs_release.
+ * TO is UNPACK, for unpack-to-dest copies, or SFPU. Call it on every thread, like the other
+ * tile_regs_* calls; only FROM and TO do any work.
  *
- * Each thread can hold only one loan at a time, and the lender must wait for its return before using the bank again.
+ * NOTE: Until tile_regs_return, FROM must not touch Dest, and no thread can start a second loan.
+ *
+ * NOTE: Nothing checks these rules at runtime. Without a borrow, the unpacker writes Dest with no
+ * sync and can land in the wrong section. Without a return, the threads lose sync and can hang.
  */
 template <DstClient FROM, DstClient TO>
 ALWI void tile_regs_borrow() {
@@ -110,7 +119,9 @@ ALWI void tile_regs_borrow() {
 }
 
 /**
- * @brief Return the borrowed DST section and make the lender wait until the borrower has finished.
+ * Ends a Dest loan started by tile_regs_borrow with the same FROM and TO (Quasar only). TO waits
+ * for its Dest writes to finish, and FROM waits for TO. After this call FROM owns the section
+ * again and can use it, commit it, or release it.
  */
 template <DstClient FROM, DstClient TO>
 ALWI void tile_regs_return() {

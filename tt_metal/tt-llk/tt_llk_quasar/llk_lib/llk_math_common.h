@@ -274,6 +274,7 @@ inline void _llk_math_wait_for_dest_available_()
  *
  * @tparam DST: Destination synchronization mode, values = <SyncFull/SyncHalf>
  * @tparam EN_32BIT_DEST: Set to true if the destination register is in 32-bit (Float32/Int32) mode
+ * @note Call @ref _llk_tile_regs_return_ first if this section is on loan.
  */
 template <DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_math_dest_section_done_()

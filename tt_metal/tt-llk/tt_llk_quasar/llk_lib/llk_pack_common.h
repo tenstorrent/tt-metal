@@ -291,6 +291,7 @@ inline void _llk_packer_set_math_semaphore_()
  * @tparam PACK_SEL: Packer to configure, values = <p_pacr::PACK0/PACK1>
  * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
  * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
+ * @note Call @ref _llk_tile_regs_return_ first if this section is on loan.
  */
 template <std::uint32_t PACK_SEL, DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_pack_dest_semaphore_section_done_()

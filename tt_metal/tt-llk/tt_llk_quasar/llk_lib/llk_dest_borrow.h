@@ -68,8 +68,9 @@ inline void drain()
  * it again, committing it or releasing it.
  * Each thread can hold only one loan at a time.
  *
- * @tparam From Lender that owns the section, either DstClient::MATH or DstClient::PACK.
- * @tparam To Borrower, either DstClient::UNPACK or DstClient::SFPU. SFPU runs on TRISC3.
+ * @tparam From: Lender that owns the section, values = <DstClient::MATH/DstClient::PACK>
+ * @tparam To: Borrower, values = <DstClient::UNPACK/DstClient::SFPU>. SFPU runs on TRISC3.
+ * @note Call @ref _llk_tile_regs_return_ with the same From and To on both threads to end the loan.
  */
 template <ckernel::DstClient From, ckernel::DstClient To>
 inline void _llk_tile_regs_borrow_()
@@ -101,8 +102,8 @@ inline void _llk_tile_regs_borrow_()
  *
  * Call on both threads with the same From and To as the matching borrow call.
  *
- * @tparam From Lender that owns the section, either DstClient::MATH or DstClient::PACK.
- * @tparam To Borrower, either DstClient::UNPACK or DstClient::SFPU. SFPU runs on TRISC3.
+ * @tparam From: Lender that owns the section, values = <DstClient::MATH/DstClient::PACK>
+ * @tparam To: Borrower, values = <DstClient::UNPACK/DstClient::SFPU>. SFPU runs on TRISC3.
  */
 template <ckernel::DstClient From, ckernel::DstClient To>
 inline void _llk_tile_regs_return_()
