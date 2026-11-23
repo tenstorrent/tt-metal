@@ -22,6 +22,7 @@ core runs its column group of every chunk. Output: row 0 of every output tile in
 """
 
 import math
+import os
 
 import torch
 
@@ -31,6 +32,18 @@ from models.demos.inkling2_mini.tt.fused.moe_bank import row_placement
 
 TILE = 32
 DST_TILES = 8  # fp32 Dest tiles per pass (full sync), as the reference
+# HALF: when only the first x_rows <= 16 rows of x are in use and the output is whole tiles, x and the output are
+# 16 x 32 tiles: the matmul runs half the FPU passes and the x fetch moves half the bytes. Rows 0..15 of every output
+# tile come out the same (the first half of each 32 x 32 output page); rows 16..31 are not written. Attention w_all
+# (x_rows 9), traced decode: 4K 15.08 -> 14.89 ms, 128K 20.41 -> 20.25, bit-equal.
+HALF = os.environ.get("INKLING_LINEAR_HALF", "1") == "1"
+
+
+def half_tiles(x_rows, tiles_out, out_dtype):
+    """-> (half, x / output TileDescriptor, x tile bytes, output tile bytes) of a call."""
+    half = HALF and tiles_out and 0 < x_rows <= 16
+    t = ttnn.Tile([16 if half else TILE, TILE])
+    return half, ttnn.TileDescriptor(t), t.get_tile_size(ttnn.bfloat16), t.get_tile_size(out_dtype)
 
 
 def reference_schedule(Kt, Nt, Nbt, C, kb):
@@ -266,10 +279,11 @@ class BankLinear:
         else:
             assert self.out_dtype == ttnn.float32 and x.shape[-2] == len(outs)
         otb = ttnn.Tile([TILE, TILE]).get_tile_size(self.out_dtype)
+        half, th, xtb, htb = half_tiles(self.x_rows, tiles_out, self.out_dtype)
         row_tiles = not tiles_out and out.layout == ttnn.TILE_LAYOUT  # out rows as [1, 1, 1, W] TILE tensors
         named = dict(kt=self.Kt, kb=self.KB, nblk=self.nblk, n_banks=self.nb, out_cols=self.out_cols,
                      out_page=otb if (tiles_out or row_tiles) else out.shape[-1] * 4, max_ncq=self.max_ncq, tiles_out=int(tiles_out),
-                     out_tile=otb, x_rows=self.x_rows, raw_rows=1 if tiles_out else len(outs))  # fmt: skip
+                     out_tile=htb, x_rows=self.x_rows, raw_rows=1 if tiles_out else len(outs), x_half=int(half))  # fmt: skip
         r_args, c_args, w_args = {}, {}, {}
         if head is not None:
             assert not tiles_out and len(head["tokens"]) == len(outs)
@@ -312,14 +326,14 @@ class BankLinear:
         ]  # fmt: skip
         t32 = ttnn.TileDescriptor(ttnn.Tile([TILE, TILE]))
 
-        def cb(i, fmt, page, n):
+        def cb(i, fmt, page, n, tile=t32):
             return ttnn.CBDescriptor(total_size=page * n, core_ranges=self.grid,
-                                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=fmt, page_size=page, tile=t32)])  # fmt: skip
+                                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=fmt, page_size=page, tile=tile)])  # fmt: skip
 
         cbs = [
-            cb(0, ttnn.bfloat16, 2048, self.Kt),  # x, whole K resident
+            cb(0, ttnn.bfloat16, xtb, self.Kt, th),  # x, whole K resident
             cb(1, self.dtype, tb, 4 * blk),  # weight blocks: 4 fixed slots (reader keeps 3 in flight)
-            cb(16, self.out_dtype, otb, 2 * DST_TILES),  # output tiles of a pass
+            cb(16, self.out_dtype, htb, 2 * DST_TILES, th),  # output tiles of a pass
         ]
         common = [o.buffer_address() for o in outs[1:]]
         sems, extra = [], []

@@ -24,7 +24,7 @@ import os
 
 import ttnn
 from models.demos.inkling2_mini.tt.fused import common as F
-from models.demos.inkling2_mini.tt.fused.bank_linear import DST_TILES, TILE
+from models.demos.inkling2_mini.tt.fused.bank_linear import DST_TILES, TILE, half_tiles
 from models.demos.inkling2_mini.tt.fused.moe_bank import row_placement
 
 MKDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels")  # not cwd-relative
@@ -208,9 +208,11 @@ class StagedBankLinear:
         else:
             assert bl.out_dtype == ttnn.float32 and x.shape[-2] == 1
         otb = ttnn.Tile([TILE, TILE]).get_tile_size(bl.out_dtype)
+        x_rows = getattr(bl, "x_rows", 0)
+        half, th, xtb, htb = half_tiles(x_rows, tiles_out, bl.out_dtype)
         named = dict(kt=bl.Kt, kb=bl.KB, nblk=bl.nblk, n_banks=bl.nb, out_cols=bl.out_cols,
                      out_page=otb if tiles_out else out.shape[-1] * 4, max_ncq=bl.max_ncq, tiles_out=int(tiles_out),
-                     out_tile=otb, x_rows=getattr(bl, "x_rows", 0), raw_rows=1)  # fmt: skip
+                     out_tile=htb, x_rows=x_rows, raw_rows=1, x_half=int(half))  # fmt: skip
         r_args, c_args, w_args = [], [], []
         for c, i in bl.cores:
             b, rot, part = bl.items[i]
@@ -243,14 +245,14 @@ class StagedBankLinear:
         ]  # fmt: skip
         t32 = ttnn.TileDescriptor(ttnn.Tile([TILE, TILE]))
 
-        def cb(i, fmt, page, n):
+        def cb(i, fmt, page, n, tile=t32):
             return ttnn.CBDescriptor(total_size=page * n, core_ranges=bl.grid,
-                                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=fmt, page_size=page, tile=t32)])  # fmt: skip
+                                     format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=fmt, page_size=page, tile=tile)])  # fmt: skip
 
         cbs = [
-            cb(0, ttnn.bfloat16, 2048, bl.Kt),
+            cb(0, ttnn.bfloat16, xtb, bl.Kt, th),
             cb(1, bl.dtype, tb, 4 * blk),
-            cb(16, bl.out_dtype, otb, 2 * DST_TILES),
+            cb(16, bl.out_dtype, htb, 2 * DST_TILES, th),
         ]
         prog = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[])
         return ttnn.generic_op([x, bl.weight, self.stage, out], prog)

@@ -23,3 +23,16 @@ FORCE_INLINE void read_x_tile(uint64_t src, uint32_t dst, uint64_t zeros) {
     noc_async_read(zeros, dst + 2 * face, face);
     noc_async_read(zeros, dst + 3 * face, face);
 }
+
+// The same into a 16 x 32 tile (faces 0 and 1 only).
+template <uint32_t x_rows>
+FORCE_INLINE void read_x_half_tile(uint64_t src, uint32_t dst, uint64_t zeros) {
+    static_assert(x_rows >= 1 && x_rows <= 16, "rows of faces 0 and 1 (bf16 tile: 32 B per face row)");
+    constexpr uint32_t used = x_rows * 32, face = 512;
+    noc_async_read(src, dst, used);
+    noc_async_read(src + face, dst + face, used);
+    if constexpr (used < face) {
+        noc_async_read(zeros, dst + used, face - used);
+        noc_async_read(zeros, dst + face + used, face - used);
+    }
+}

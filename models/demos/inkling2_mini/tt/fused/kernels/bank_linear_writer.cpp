@@ -25,6 +25,9 @@ constexpr uint32_t tiles_out = get_named_compile_time_arg_val("tiles_out");
 constexpr uint32_t raw_rows = get_named_compile_time_arg_val("raw_rows");  // raw rows written (tiles_out 0)
 constexpr uint32_t out_tile = get_named_compile_time_arg_val("out_tile");
 constexpr uint32_t x_rows = get_named_compile_time_arg_val("x_rows");
+// x_half: x and the output are 16 x 32 tiles (bank_linear.py HALF): x tiles get faces 0, 1; out_tile is the half
+// tile, written to the start of each 32 x 32 output page (rows 0..15)
+constexpr uint32_t x_half = get_named_compile_time_arg_val("x_half");
 constexpr uint32_t DST_TILES = 8;
 // head (the LM head, tt/fused/head.py): out rows are the logits rows; also the argmax of each row over columns
 // < n_arg, as the logits tail: the first NaN wins, else the largest value (-0 == +0), lowest column on ties. Each
@@ -71,7 +74,9 @@ void kernel_main() {
         noc_async_read_set_trid(p % 4 + 1);
         for (uint32_t r = 0; r < kb; ++r) {
             const uint32_t dst = xl + (p * kb + r) * xtb;
-            if constexpr (x_rows > 0) {
+            if constexpr (x_half) {
+                read_x_half_tile<x_rows>(xs.get_noc_addr(j * kb + r), dst, zeros);
+            } else if constexpr (x_rows > 0) {
                 read_x_tile<x_rows>(xs.get_noc_addr(j * kb + r), dst, zeros);
             } else {
                 noc_async_read(xs.get_noc_addr(j * kb + r), dst, xtb);
