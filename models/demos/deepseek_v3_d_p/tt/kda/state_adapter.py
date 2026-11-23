@@ -211,13 +211,8 @@ class KdaContractGeometry:
         """One layer of one device's convolution store: one segment per row."""
         return (1, self.convolution_shards_per_layer, self.convolution_slab_row_width)
 
-    def stored_head(self, h_local: int) -> tuple[int, int]:
-        """``h_local`` -> ``(sp_row, j)``: the SP row of its TP column storing it, and where."""
-        self._check(h_local, self.local_heads, "h_local")
-        return divmod(h_local, self.stored_heads)
-
     def local_head(self, sp_row: int, j: int) -> int:
-        """Inverse of ``stored_head``."""
+        """The TP column's local head that SP row ``sp_row`` stores at ``j``."""
         self._check(sp_row, self.sequence_parallel_size, "sp_row")
         self._check(j, self.stored_heads, "j")
         return sp_row * self.stored_heads + j
@@ -254,13 +249,6 @@ class KdaContractGeometry:
         self._check(j, self.stored_heads, "j")
         self._check(band, self.bands, "band")
         return (batch * self.stored_heads + j) * self.bands + band
-
-    def convolution_native_page(self, branch: int, h_local: int, half: int) -> int:
-        """The page (64-channel column slice) of a chip's native convolution tail holding (branch, head, half)."""
-        self._check(branch, 3, "branch")
-        self._check(h_local, self.local_heads, "h_local")
-        self._check(half, self.halves, "half")
-        return (branch * self.local_heads + h_local) * self.halves + half
 
     def convolution_stored_page(self, branch: int, j: int, half: int) -> int:
         """The row of one stored convolution layer holding (branch, stored head ``j``, half)."""

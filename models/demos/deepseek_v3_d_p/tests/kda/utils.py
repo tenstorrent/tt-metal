@@ -901,6 +901,16 @@ def per_chip_convolution(geometry: KdaContractGeometry, convolution: torch.Tenso
     return torch.cat(parts, dim=-1)
 
 
+def stored_head(geometry: KdaContractGeometry, h_local: int) -> tuple[int, int]:
+    """Reference: local head ``h_local`` -> ``(sp_row, j)``, the SP row of its TP column storing it and where."""
+    return divmod(h_local, geometry.stored_heads)
+
+
+def convolution_native_page(geometry: KdaContractGeometry, branch: int, h_local: int, half: int) -> int:
+    """Reference: the page (64-channel column slice) of a chip's native convolution tail holding (branch, head, half)."""
+    return (branch * geometry.local_heads + h_local) * geometry.halves + half
+
+
 def native_state_from_global(
     mesh_device, geometry: KdaContractGeometry, recurrent, convolution, tp_axis: int
 ) -> KdaState:

@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tests.kda.utils import convolution_native_page, stored_head
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
     assemble_convolution,
@@ -95,7 +96,7 @@ def test_local_shards_match_the_per_chip_channel_layout(sp: int, tp: int) -> Non
     for branch in range(3):
         for h_local in range(geometry.local_heads):
             for half in range(geometry.halves):
-                column = geometry.convolution_native_page(branch, h_local, half)
+                column = convolution_native_page(geometry, branch, h_local, half)
                 channel = branch * geometry.local_heads * 128 + h_local * 128 + half * 64
                 assert column * 64 == channel
                 columns.append(column)
@@ -237,11 +238,11 @@ def test_sharded_segment_owner_is_hand_checked(mesh, kind, segment, expected) ->
     geometry = _geometry(*mesh)
     if kind == "kda_recurrent":
         tp_col, h_local, band = geometry.decompose_recurrent(segment)
-        sp_row, j = geometry.stored_head(h_local)
+        sp_row, j = stored_head(geometry, h_local)
         shard = geometry.recurrent_local_shard(0, j, band)
     else:
         branch, tp_col, h_local, half = geometry.decompose_convolution(segment)
-        sp_row, j = geometry.stored_head(h_local)
+        sp_row, j = stored_head(geometry, h_local)
         shard = geometry.convolution_stored_page(branch, j, half)
     assert (sp_row, tp_col, j, shard) == expected
     assert geometry.local_head(sp_row, j) == h_local
@@ -268,7 +269,7 @@ def test_gather_over_sp_rebuilds_the_native_carry(sp: int, tp: int, heads: int, 
             for branch in range(3):
                 for half in range(halves):
                     convolution[0, geometry.convolution_stored_page(branch, j, half)] = native_convolution[
-                        0, geometry.convolution_native_page(branch, h_local, half)
+                        0, convolution_native_page(geometry, branch, h_local, half)
                     ]
         stores_recurrent.append(recurrent)
         stores_convolution.append(convolution)

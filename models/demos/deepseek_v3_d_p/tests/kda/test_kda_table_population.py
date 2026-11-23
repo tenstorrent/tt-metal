@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tests.kda.utils import stored_head
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaContractGeometry
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     kda_chunk_n_tokens,
@@ -149,11 +150,11 @@ def test_walk_addresses_every_segment_of_every_stage(kind, num_users):
                     assert size == seg_bytes
                     if kind == "kda_recurrent":
                         tp_col, h_local, band = geometry.decompose_recurrent(segment)
-                        sp_row, j = geometry.stored_head(h_local)
+                        sp_row, j = stored_head(geometry, h_local)
                         shard = batch * shards_per_layer + geometry.recurrent_local_shard(0, j, band)
                     else:
                         branch, tp_col, h_local, half = geometry.decompose_convolution(segment)
-                        sp_row, j = geometry.stored_head(h_local)
+                        sp_row, j = stored_head(geometry, h_local)
                         shard = batch * shards_per_layer + geometry.convolution_stored_page(branch, j, half)
                     bank, addr = noc_addr >> 32, noc_addr & 0xFFFFFFFF
                     assert bank == shard % stage["num_banks"]
@@ -296,11 +297,11 @@ def test_sharded_walk_publishes_each_segment_on_its_one_store(sp, tp, heads, kin
                     assert size == seg_bytes
                     if recurrent:
                         tp_col, h_local, band = geometry.decompose_recurrent(segment)
-                        sp_row, j = geometry.stored_head(h_local)
+                        sp_row, j = stored_head(geometry, h_local)
                         shard = geometry.recurrent_local_shard(batch, j, band)
                     else:
                         branch, tp_col, h_local, half = geometry.decompose_convolution(segment)
-                        sp_row, j = geometry.stored_head(h_local)
+                        sp_row, j = stored_head(geometry, h_local)
                         shard = geometry.convolution_local_shard(batch, branch, j, half)
                     (chip,) = table.groups[group_idx]
                     assert chip == (stage["rank"], sp_row, tp_col)
