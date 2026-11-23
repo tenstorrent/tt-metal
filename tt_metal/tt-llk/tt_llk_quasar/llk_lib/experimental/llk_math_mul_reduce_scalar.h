@@ -68,14 +68,16 @@ inline void mul_reduce_scalar_pool_(const std::uint32_t num_phases, const std::u
  * @param src_format: Unpacked source format of the reduced operand.
  * @param tensor_shape: Shape of the reduced tiles.
  * @note On the unpack thread, pair with @ref _llk_unpack_mul_reduce_scalar_switch_to_reduce_ (T0).
+ * @note Run the multiply or copy phase's init first: the tail reuses the DEST tile stride it programmed.
  */
 template <bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_mul_reduce_scalar_init_(const DataFormat src_format, const ckernel::TensorShape& tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    // The DEST tile stride is left as the producing phase's init programmed it (TILE_SHAPE_IDX):
+    // the datacopy and binary inits use different strides for small tiles, and the tail must read
+    // the tiles where they were written.
     mul_reduce_scalar_shape = tensor_shape;
-    // Tiles sit padded_tile_rows apart in DEST, the layout the multiply and copy phases wrote.
-    _set_tile_shape_idx_gpr_(padded_tile_rows(tensor_shape));
 
     const DataFormat dest_src = dest_src_format<EN_32BIT_DEST>(src_format);
     const auto fidelity       = math_fidelity_schedule<MATH_FIDELITY_TYPE>(dest_src, dest_src);

@@ -41,6 +41,8 @@ struct SumReduceScalarConfig {
     // Tile row height. 32 -> standard 32x32 tiles (4 faces); 16 -> 16x32 "tiny
     // tiles" (2 faces, one face-row). Column dimension is always 32.
     uint32_t tile_height = 32;
+    // Tile column width. 16 gives a single-face tile; only the Quasar runner supports it.
+    uint32_t tile_width = 32;
     float scaler = 1.0f;
     // Native fp32 DEST. The reduce tail is templated on DST_ACCUM_MODE, so this
     // selects a different instantiation of the whole op. Inputs stay bfloat16; only
@@ -129,9 +131,9 @@ bool run_sum_reduce_scalar_test_quasar(distributed::MeshDevice& mesh_device, con
     const tt::DataFormat out_format = config.fp32_dest_acc ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     // A tile shorter than 32 rows is described through the DFB tile metadata, so the kernel derives its faces.
     const std::optional<tt::tt_metal::Tile> tile =
-        config.tile_height == tt::constants::TILE_HEIGHT
+        config.tile_height == tt::constants::TILE_HEIGHT && config.tile_width == tt::constants::TILE_WIDTH
             ? std::nullopt
-            : std::optional<tt::tt_metal::Tile>(tt::tt_metal::Tile({config.tile_height, tt::constants::TILE_WIDTH}));
+            : std::optional<tt::tt_metal::Tile>(tt::tt_metal::Tile({config.tile_height, config.tile_width}));
     const std::vector<uint32_t> packed_input =
         make_input(config, config.num_tiles * sn::tile_bytes(tt::DataFormat::Float16_b, tile));
     const std::vector<uint32_t> result_vec = sn::run(
@@ -360,6 +362,27 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Bool(),
     [](const testing::TestParamInfo<bool>& info) {
         return info.param ? "SumReduceScalar_Scaler_2_fp32dest" : "SumReduceScalar_Scaler_0p5";
+    });
+
+// Single-face tiles shorter than 16 rows (Quasar only). The copy phase places them 16 rows apart in
+// DEST, wider than one padded face, so the reduce tail must walk them with the copy phase's stride.
+class SumReduceScalarSingleFaceTest : public LLKQuasarMeshDeviceSingleCardFixture,
+                                      public testing::WithParamInterface<SumReduceScalarConfig> {};
+
+TEST_P(SumReduceScalarSingleFaceTest, SumReduceScalarSingleFace) {
+    ASSERT_TRUE(run_sum_reduce_scalar_test(this->device(), GetParam()));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SumReduceScalarSingleFaces,
+    SumReduceScalarSingleFaceTest,
+    testing::Values(
+        SumReduceScalarConfig{.num_tiles = 8, .tile_height = 8, .tile_width = 16},
+        SumReduceScalarConfig{.num_tiles = 3, .tile_height = 4, .tile_width = 16},
+        SumReduceScalarConfig{.num_tiles = 8, .tile_height = 1, .tile_width = 16}),
+    [](const testing::TestParamInfo<SumReduceScalarConfig>& info) {
+        return "SumReduceScalar_" + std::to_string(info.param.tile_height) + "x" +
+               std::to_string(info.param.tile_width) + "_" + std::to_string(info.param.num_tiles) + "_Tiles";
     });
 
 class SumReduceScalarZeroFlagTest : public LLKMeshDeviceSingleCardFixture {};
