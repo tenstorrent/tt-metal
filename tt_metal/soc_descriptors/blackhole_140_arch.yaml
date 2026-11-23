@@ -24,97 +24,110 @@ dram:
 # For example, a dram view where channel is 0 and worker_endpoint is [1, 2] would resolve to dram core at position [0,2] for noc1 which is 0-11.
 # Endpoint assignment for noc0 needs to be the same endpoint used by CMFW to read DRAM telemetry to avoid SYS-1419.
 #
-# SYS-4948: each view carries two assignments, and the loader picks the one whose MRISC port matches
-# CMFW's GDDR_MRISC_NOC2AXI_PORT telemetry:
-#   eth_endpoint / worker_endpoint                     -> CMFW before the relocation
-#   relocated_eth_endpoint / relocated_worker_endpoint -> CMFW after the relocation
+# CMFW runs MRISC on one noc2axi port of each GDDR instance and reports the ports in its
+# GDDR_MRISC_NOC2AXI_PORT telemetry. The loader picks the first endpoint table, in this order, whose noc0
+# endpoint sits on the reported port in every channel that reports one:
+#   eth_endpoint / worker_endpoint                     -> CMFW before the SYS-4948 relocation
+#   relocated_eth_endpoint / relocated_worker_endpoint -> CMFW after the SYS-4948 relocation
+#   harvested_dram_views                               -> DRAM-harvested chips whose CMFW places MRISC by
+#                                                         translated column (SYS-5391)
 # Delete the pre-relocation pair once the minimum supported firmware has relocated.
 #
-# mrisc_noc2axi_port / relocated_mrisc_noc2axi_port are separate from the endpoint indices because
-# the numbering differs: endpoint index 2 is port 2 on channel 0 but port 0 on channel 4.
-# Keep in sync with kMriscFwNoc2AxiPort in bh_arc/gddr.c.
+# noc2axi_ports gives the noc2axi port of each subchannel in the channel's dram row. CMFW numbers the
+# west column's ports in subchannel order and the east column's in reverse (GetGddrNocCoords in
+# bh_arc/noc.c), so subchannel 2 is port 2 on channel 0 but port 0 on channel 4.
 dram_views:
   [
     {
       channel: 0,
+      noc2axi_ports: [0, 1, 2],
       eth_endpoint: [2, 1],
       worker_endpoint: [2, 1],
-      mrisc_noc2axi_port: 2,
       relocated_eth_endpoint: [0, 2],
       relocated_worker_endpoint: [0, 2],
-      relocated_mrisc_noc2axi_port: 0,
       address_offset: 0
     },
     {
       channel: 1,
+      noc2axi_ports: [0, 1, 2],
       eth_endpoint: [0, 1],
       worker_endpoint: [0, 1],
-      mrisc_noc2axi_port: 0,
       relocated_eth_endpoint: [1, 2],
       relocated_worker_endpoint: [1, 2],
-      relocated_mrisc_noc2axi_port: 1,
       address_offset: 0
     },
     {
       channel: 2,
+      noc2axi_ports: [0, 1, 2],
       eth_endpoint: [0, 1],
       worker_endpoint: [0, 1],
-      mrisc_noc2axi_port: 0,
       relocated_eth_endpoint: [1, 2],
       relocated_worker_endpoint: [1, 2],
-      relocated_mrisc_noc2axi_port: 1,
       address_offset: 0
     },
     {
       channel: 3,
+      noc2axi_ports: [0, 1, 2],
       eth_endpoint: [0, 1],
       worker_endpoint: [0, 1],
-      mrisc_noc2axi_port: 0,
       relocated_eth_endpoint: [1, 2],
       relocated_worker_endpoint: [1, 2],
-      relocated_mrisc_noc2axi_port: 1,
       address_offset: 0
     },
     {
       channel: 4,
+      noc2axi_ports: [2, 1, 0],
       eth_endpoint: [2, 1],
       worker_endpoint: [2, 1],
-      mrisc_noc2axi_port: 0,
       relocated_eth_endpoint: [2, 0],
       relocated_worker_endpoint: [2, 0],
-      relocated_mrisc_noc2axi_port: 0,
       address_offset: 0
     },
     {
       channel: 5,
+      noc2axi_ports: [2, 1, 0],
       eth_endpoint: [2, 1],
       worker_endpoint: [2, 1],
-      mrisc_noc2axi_port: 0,
       relocated_eth_endpoint: [2, 0],
       relocated_worker_endpoint: [2, 0],
-      relocated_mrisc_noc2axi_port: 0,
       address_offset: 0
     },
     {
       channel: 6,
+      noc2axi_ports: [2, 1, 0],
       eth_endpoint: [2, 1],
       worker_endpoint: [2, 1],
-      mrisc_noc2axi_port: 0,
       relocated_eth_endpoint: [2, 0],
       relocated_worker_endpoint: [2, 0],
-      relocated_mrisc_noc2axi_port: 0,
       address_offset: 0
     },
     {
       channel: 7,
+      noc2axi_ports: [2, 1, 0],
       eth_endpoint: [2, 1],
       worker_endpoint: [2, 1],
-      mrisc_noc2axi_port: 0,
       relocated_eth_endpoint: [2, 0],
       relocated_worker_endpoint: [2, 0],
-      relocated_mrisc_noc2axi_port: 0,
       address_offset: 0
     }
+  ]
+
+# Replaces dram_views on a DRAM-harvested chip whose CMFW runs MRISC on subchannel 0 of each GDDR instance
+# in the translated column with four live channels and on subchannel 2 in the other column (SYS-5391).
+# Entry k is DRAM view k, placed on the k-th unharvested channel in translated order: by translated x,
+# then y. Firmware NOC translation keeps the column with no harvested channel at the lower translated x
+# and moves the harvested channel's rows to the bottom of the other column, and subchannel s of a channel
+# sits s translated rows below its subchannel 0. So view k reaches the same translated cores whichever
+# channel is harvested. Subchannel 1 is never an endpoint and stays free for DRISC firmware.
+harvested_dram_views:
+  [
+    { eth_endpoint: [0, 2], worker_endpoint: [0, 2], address_offset: 0 },
+    { eth_endpoint: [0, 2], worker_endpoint: [0, 2], address_offset: 0 },
+    { eth_endpoint: [0, 2], worker_endpoint: [0, 2], address_offset: 0 },
+    { eth_endpoint: [0, 2], worker_endpoint: [0, 2], address_offset: 0 },
+    { eth_endpoint: [2, 0], worker_endpoint: [2, 0], address_offset: 0 },
+    { eth_endpoint: [2, 0], worker_endpoint: [2, 0], address_offset: 0 },
+    { eth_endpoint: [2, 0], worker_endpoint: [2, 0], address_offset: 0 }
   ]
 
 dram_view_size:

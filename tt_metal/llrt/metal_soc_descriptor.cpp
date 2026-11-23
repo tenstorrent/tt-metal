@@ -5,7 +5,12 @@
 #include "llrt/metal_soc_descriptor.hpp"
 
 #include <algorithm>
+#include <map>
 #include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 
@@ -298,75 +303,170 @@ std::optional<uint32_t> read_mrisc_noc2axi_ports(tt::umd::TTDevice* tt_device) {
 }
 
 namespace {
-bool uses_relocated_dram_endpoints(
-    const YAML::Node& device_descriptor_yaml,
-    const std::optional<uint32_t>& mrisc_noc2axi_ports,
-    tt::ARCH arch,
-    uint32_t dram_harvesting_mask,
-    const std::string& descriptor_path) {
-    if (arch != tt::ARCH::BLACKHOLE) {
-        return false;
-    }
-    // No telemetry means pre-relocation CMFW. Guessing wrong collides a noc with MRISC (SYS-1419).
-    if (!mrisc_noc2axi_ports.has_value()) {
-        return false;
-    }
+// One DRAM view to load: the channel it reads (device-descriptor numbering, with harvested-channel gaps)
+// and the device-descriptor entry that holds its endpoints and address offset.
+struct DramViewEntry {
+    size_t channel = 0;
+    YAML::Node entry;
+};
 
-    // Only channels whose two assignments declare different ports are informative; the rest keep
-    // MRISC where it was and move only noc1, so telemetry cannot tell them apart.
-    bool saw_relocated = false;
-    bool saw_legacy = false;
+// One endpoint table of the device descriptor: the keys its entries keep their endpoints under, and its
+// views in Metal view order.
+struct DramEndpointTable {
+    const char* name = "";
+    const char* eth_endpoint_key = "";
+    const char* worker_endpoint_key = "";
+    std::vector<DramViewEntry> views;
+};
+
+// dram_views entries of the unharvested channels, in channel order.
+std::vector<DramViewEntry> dram_views_in_channel_order(
+    const YAML::Node& device_descriptor_yaml, uint32_t dram_harvesting_mask, size_t num_dram_channels) {
+    std::vector<DramViewEntry> views;
     for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
         const size_t channel = dram_view["channel"].as<size_t>();
         if (is_dram_channel_harvested(dram_harvesting_mask, channel)) {
             continue;
         }
-        const uint32_t mrisc_port = mrisc_port_for_channel(mrisc_noc2axi_ports.value(), channel);
-        // A disabled GDDR instance is reported as harvested even when the descriptor still lists the
-        // channel, so it says nothing about which assignment is loaded.
+        if (channel - harvested_before(dram_harvesting_mask, channel) >= num_dram_channels) {
+            break;
+        }
+        views.push_back({channel, dram_view});
+    }
+    return views;
+}
+
+// harvested_dram_views entries, entry k placed on the k-th unharvested channel in translated order: by
+// the translated coord of the channel's subchannel 0, x first, then y. Empty when no channel is
+// harvested, the descriptor has no harvested_dram_views, NOC translation is off, or some channel's
+// subchannels are not one translated column with subchannel s at s rows below subchannel 0. In those
+// cases entry k would not reach the same cores whichever channel is harvested.
+std::vector<DramViewEntry> harvested_dram_views_in_translated_order(
+    const tt::umd::SocDescriptor& soc_desc,
+    const YAML::Node& device_descriptor_yaml,
+    const std::string& descriptor_path) {
+    const uint32_t dram_harvesting_mask = soc_desc.harvesting_masks.dram_harvesting_mask;
+    const YAML::Node harvested_dram_views = device_descriptor_yaml["harvested_dram_views"];
+    if (dram_harvesting_mask == 0 || !harvested_dram_views || !soc_desc.noc_translation_enabled) {
+        return {};
+    }
+    const auto dram_grid = soc_desc.get_grid_size(tt::CoreType::DRAM);
+    // {translated coord of subchannel 0, channel}
+    std::vector<std::pair<tt::tt_metal::CoreCoord, size_t>> channels_by_position;
+    channels_by_position.reserve(dram_grid.x);
+    for (size_t channel = 0, logical_channel = 0; logical_channel < dram_grid.x; ++channel) {
+        if (is_dram_channel_harvested(dram_harvesting_mask, channel)) {
+            continue;
+        }
+        const tt::umd::CoreCoord first =
+            soc_desc.get_dram_core_for_channel(static_cast<int>(logical_channel), 0, tt::CoordSystem::TRANSLATED);
+        for (size_t sub = 1; sub < dram_grid.y; ++sub) {
+            const tt::umd::CoreCoord coord = soc_desc.get_dram_core_for_channel(
+                static_cast<int>(logical_channel), static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+            if (coord.x != first.x || coord.y != first.y + sub) {
+                return {};
+            }
+        }
+        channels_by_position.push_back({{first.x, first.y}, channel});
+        ++logical_channel;
+    }
+    std::sort(channels_by_position.begin(), channels_by_position.end(), [](const auto& a, const auto& b) {
+        return std::tie(a.first.x, a.first.y) < std::tie(b.first.x, b.first.y);
+    });
+    TT_FATAL(
+        channels_by_position.size() == harvested_dram_views.size(),
+        "{} has {} harvested_dram_views entries, but DRAM harvesting mask {:#x} leaves {} channels",
+        descriptor_path,
+        harvested_dram_views.size(),
+        dram_harvesting_mask,
+        channels_by_position.size());
+    std::vector<DramViewEntry> views;
+    views.reserve(channels_by_position.size());
+    for (size_t view = 0; view < channels_by_position.size(); ++view) {
+        views.push_back({channels_by_position[view].second, harvested_dram_views[view]});
+    }
+    return views;
+}
+
+// The noc2axi port of each subchannel, per channel, from the dram_views noc2axi_ports lists.
+std::map<size_t, std::vector<uint32_t>> noc2axi_ports_by_channel(const YAML::Node& device_descriptor_yaml) {
+    std::map<size_t, std::vector<uint32_t>> ports;
+    for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
+        if (dram_view["noc2axi_ports"]) {
+            ports.emplace(dram_view["channel"].as<size_t>(), dram_view["noc2axi_ports"].as<std::vector<uint32_t>>());
+        }
+    }
+    return ports;
+}
+
+// True if every view's noc0 worker endpoint is on the noc2axi port CMFW reports MRISC on for that view's
+// channel. A channel reported as kMriscPortHarvested (a disabled GDDR instance, even one the descriptor
+// still lists) runs no MRISC, so it rules no table out.
+bool noc0_endpoints_on_mrisc_ports(
+    const DramEndpointTable& table,
+    const std::map<size_t, std::vector<uint32_t>>& noc2axi_ports,
+    uint32_t mrisc_noc2axi_ports,
+    const std::string& descriptor_path) {
+    for (const DramViewEntry& view : table.views) {
+        const uint32_t mrisc_port = mrisc_port_for_channel(mrisc_noc2axi_ports, view.channel);
         if (mrisc_port == kMriscPortHarvested) {
             continue;
         }
-        const auto legacy_port = dram_view["mrisc_noc2axi_port"].as<uint32_t>();
-        const auto relocated_port = dram_view["relocated_mrisc_noc2axi_port"].as<uint32_t>();
-        if (legacy_port == relocated_port) {
-            continue;
-        }
+        const YAML::Node worker_endpoints = view.entry[table.worker_endpoint_key];
         TT_FATAL(
-            mrisc_port == legacy_port || mrisc_port == relocated_port,
-            "CMFW reports MRISC on noc2axi port {} for DRAM channel {}, which matches neither the "
-            "pre-relocation ({}) nor the relocated ({}) port declared in {}. Refusing to guess: putting a noc "
-            "on a port MRISC owns hangs the chip (SYS-1419).",
-            mrisc_port,
-            channel,
-            legacy_port,
-            relocated_port,
-            descriptor_path);
-        (mrisc_port == relocated_port ? saw_relocated : saw_legacy) = true;
+            worker_endpoints && worker_endpoints.size() > 0,
+            "The {} DRAM endpoint table in {} has no '{}' for channel {}",
+            table.name,
+            descriptor_path,
+            table.worker_endpoint_key,
+            view.channel);
+        const auto noc0_subchannel = worker_endpoints[0].as<size_t>();
+        const auto channel_ports = noc2axi_ports.find(view.channel);
+        TT_FATAL(
+            channel_ports != noc2axi_ports.end() && noc0_subchannel < channel_ports->second.size(),
+            "dram_views in {} gives no noc2axi_ports entry for subchannel {} of channel {}, so the {} table's "
+            "noc0 endpoint cannot be checked against MRISC",
+            descriptor_path,
+            noc0_subchannel,
+            view.channel,
+            table.name);
+        if (channel_ports->second[noc0_subchannel] != mrisc_port) {
+            return false;
+        }
     }
+    return true;
+}
 
-    // CMFW configures every instance the same way, so the informative channels must agree.
-    TT_FATAL(
-        !(saw_relocated && saw_legacy),
-        "CMFW reports a mix of pre-relocation and relocated MRISC ports across DRAM channels "
-        "(GDDR_MRISC_NOC2AXI_PORT = {:#010x}). The descriptor has no assignment matching that.",
-        mrisc_noc2axi_ports.value());
-
-    return saw_relocated;
+// BH-76 makes the noc2axi port CMFW loads MRISC on the noc0 endpoint of its GDDR instance, and a noc on
+// any other port MRISC owns hangs the chip (SYS-1419). So load the first table whose noc0 endpoints sit
+// on the ports CMFW reports, and refuse to guess when none does.
+size_t select_dram_endpoint_table(
+    const std::vector<DramEndpointTable>& tables,
+    const YAML::Node& device_descriptor_yaml,
+    uint32_t mrisc_noc2axi_ports,
+    const std::string& descriptor_path) {
+    const auto noc2axi_ports = noc2axi_ports_by_channel(device_descriptor_yaml);
+    std::string table_names;
+    for (size_t i = 0; i < tables.size(); ++i) {
+        if (noc0_endpoints_on_mrisc_ports(tables[i], noc2axi_ports, mrisc_noc2axi_ports, descriptor_path)) {
+            return i;
+        }
+        table_names += (i == 0 ? "" : ", ");
+        table_names += tables[i].name;
+    }
+    TT_THROW(
+        "CMFW reports MRISC on noc2axi ports {:#010x} (nibble i is GDDR instance i), which match the noc0 "
+        "endpoints of none of the DRAM endpoint tables in {} ({}). Refusing to guess: a noc on a port MRISC "
+        "owns hangs the chip (SYS-1419).",
+        mrisc_noc2axi_ports,
+        descriptor_path,
+        table_names);
 }
 }  // namespace
 
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(
     const std::optional<uint32_t>& mrisc_noc2axi_ports, std::optional<uint64_t> dram_view_size_limit) {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
-    const bool use_relocated_dram_endpoints = uses_relocated_dram_endpoints(
-        device_descriptor_yaml,
-        mrisc_noc2axi_ports,
-        this->arch,
-        this->harvesting_masks.dram_harvesting_mask,
-        this->device_descriptor_file_path);
-    const char* eth_endpoint_key = use_relocated_dram_endpoints ? "relocated_eth_endpoint" : "eth_endpoint";
-    const char* worker_endpoint_key = use_relocated_dram_endpoints ? "relocated_worker_endpoint" : "worker_endpoint";
     this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
     if (dram_view_size_limit.has_value()) {
         this->dram_view_size = std::min(this->dram_view_size, *dram_view_size_limit);
@@ -384,102 +484,120 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(
     this->dram_view_address_offsets.reserve(num_dram_views_in_descriptor);
     this->dram_bank_endpoint_coords.reserve(num_dram_views_in_descriptor);
 
-    const uint32_t dram_harvesting_mask = this->harvesting_masks.dram_harvesting_mask;
-
-    for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
-        size_t channel = dram_view["channel"].as<size_t>();
-        if (is_dram_channel_harvested(dram_harvesting_mask, channel)) {
-            continue;
+    std::vector<DramEndpointTable> tables;
+    tables.push_back(
+        {"pre-relocation",
+         "eth_endpoint",
+         "worker_endpoint",
+         dram_views_in_channel_order(
+             device_descriptor_yaml,
+             this->harvesting_masks.dram_harvesting_mask,
+             get_grid_size(tt::CoreType::DRAM).x)});
+    size_t selected_table = 0;
+    // No telemetry means CMFW older than 19.12, which runs MRISC where the pre-relocation table expects it.
+    if (this->arch == tt::ARCH::BLACKHOLE && mrisc_noc2axi_ports.has_value()) {
+        tables.push_back({"relocated", "relocated_eth_endpoint", "relocated_worker_endpoint", tables.front().views});
+        auto harvested_views =
+            harvested_dram_views_in_translated_order(*this, device_descriptor_yaml, this->device_descriptor_file_path);
+        if (!harvested_views.empty()) {
+            tables.push_back({"harvested", "eth_endpoint", "worker_endpoint", std::move(harvested_views)});
         }
-        const size_t logical_channel = channel - harvested_before(dram_harvesting_mask, channel);
-        if (logical_channel >= get_grid_size(tt::CoreType::DRAM).x) {
-            break;
-        }
-        size_t address_offset = dram_view["address_offset"].as<size_t>();
-
-        TT_FATAL(
-            dram_view[eth_endpoint_key] && dram_view[worker_endpoint_key],
-            "DRAM view for channel {} is missing '{}'/'{}' in {}",
-            channel,
-            eth_endpoint_key,
-            worker_endpoint_key,
-            this->device_descriptor_file_path);
-
-        const auto eth_endpoint_ids = dram_view[eth_endpoint_key].as<std::vector<int>>();
-        std::vector<tt::tt_metal::CoreCoord> eth_dram_cores;
-        std::vector<size_t> eth_endpoints;
-        eth_dram_cores.reserve(eth_endpoint_ids.size());
-        eth_endpoints.reserve(eth_endpoint_ids.size());
-        for (int eth_endpoint : eth_endpoint_ids) {
-            if (eth_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
-                TT_THROW(
-                    "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
-                    "dram_view.eth_endpoint",
-                    eth_endpoint);
-            }
-            tt::umd::CoreCoord eth_dram_endpoint_coord =
-                get_dram_core_for_channel(logical_channel, eth_endpoint, tt::CoordSystem::TRANSLATED);
-            eth_dram_cores.push_back({eth_dram_endpoint_coord.x, eth_dram_endpoint_coord.y});
-            eth_endpoints.push_back(eth_endpoint);
-        }
-
-        const auto worker_endpoint_ids = dram_view[worker_endpoint_key].as<std::vector<int>>();
-        std::vector<tt::tt_metal::CoreCoord> worker_dram_cores;
-        std::vector<size_t> worker_endpoints;
-        worker_dram_cores.reserve(worker_endpoint_ids.size());
-        worker_endpoints.reserve(worker_endpoint_ids.size());
-        for (int worker_endpoint : worker_endpoint_ids) {
-            if (worker_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
-                TT_THROW(
-                    "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
-                    "dram_view.worker_endpoint",
-                    worker_endpoint);
-            }
-            tt::umd::CoreCoord worker_endpoint_coord =
-                get_dram_core_for_channel(logical_channel, worker_endpoint, tt::CoordSystem::TRANSLATED);
-
-            worker_dram_cores.push_back({worker_endpoint_coord.x, worker_endpoint_coord.y});
-            worker_endpoints.push_back(worker_endpoint);
-        }
-
-        this->dram_view_channels.push_back(channel);
-        this->dram_view_address_offsets.push_back(address_offset);
-        this->dram_view_eth_cores.push_back(std::move(eth_dram_cores));
-        this->dram_view_worker_cores.push_back(std::move(worker_dram_cores));
-
-        // Order a bank's endpoints by role (see dram_bank_endpoint_coords): the worker endpoints in
-        // NOC order first -- NOC0 at y == 0, the endpoint CMFW also uses for DRAM telemetry (SYS-1419)
-        // -- then whatever subchannels are left, ascending. Endpoints that repeat a subchannel
-        // (Wormhole declares the same one for both NOCs) are placed once, which leaves those
-        // descriptors ordered exactly as before.
-        const size_t num_subchannels = get_grid_size(tt::CoreType::DRAM).y;
-        TT_FATAL(
-            !worker_endpoints.empty(),
-            "DRAM view {} declares no worker_endpoint, so its logical y=0 would not name the NOC0 worker endpoint",
-            this->dram_view_channels.size() - 1);
-        std::vector<bool> placed(num_subchannels, false);
-        std::vector<tt::tt_metal::CoreCoord> bank_endpoints;
-        bank_endpoints.reserve(num_subchannels);
-        const auto push_subchannel = [&](size_t sub) {
-            placed[sub] = true;
-            const tt::umd::CoreCoord coord =
-                get_dram_core_for_channel(logical_channel, sub, tt::CoordSystem::TRANSLATED);
-            bank_endpoints.push_back({coord.x, coord.y});
-        };
-        // worker_endpoints entries were bounds-checked above; each subchannel is visited once by
-        // the second loop, so only the first needs the placed[] guard.
-        for (const size_t worker_endpoint : worker_endpoints) {
-            if (!placed[worker_endpoint]) {
-                push_subchannel(worker_endpoint);
-            }
-        }
-        for (size_t sub = 0; sub < num_subchannels; sub++) {
-            if (!placed[sub]) {
-                push_subchannel(sub);
-            }
-        }
-        this->dram_bank_endpoint_coords.push_back(std::move(bank_endpoints));
+        selected_table = select_dram_endpoint_table(
+            tables, device_descriptor_yaml, mrisc_noc2axi_ports.value(), this->device_descriptor_file_path);
     }
+
+    const DramEndpointTable& table = tables[selected_table];
+    for (const DramViewEntry& view : table.views) {
+        add_dram_view(view.channel, view.entry, table.eth_endpoint_key, table.worker_endpoint_key);
+    }
+}
+
+void metal_SocDescriptor::add_dram_view(
+    size_t channel, const YAML::Node& dram_view, const char* eth_endpoint_key, const char* worker_endpoint_key) {
+    const size_t logical_channel = channel - harvested_before(this->harvesting_masks.dram_harvesting_mask, channel);
+    size_t address_offset = dram_view["address_offset"].as<size_t>();
+
+    TT_FATAL(
+        dram_view[eth_endpoint_key] && dram_view[worker_endpoint_key],
+        "DRAM view for channel {} is missing '{}'/'{}' in {}",
+        channel,
+        eth_endpoint_key,
+        worker_endpoint_key,
+        this->device_descriptor_file_path);
+
+    const auto eth_endpoint_ids = dram_view[eth_endpoint_key].as<std::vector<int>>();
+    std::vector<tt::tt_metal::CoreCoord> eth_dram_cores;
+    std::vector<size_t> eth_endpoints;
+    eth_dram_cores.reserve(eth_endpoint_ids.size());
+    eth_endpoints.reserve(eth_endpoint_ids.size());
+    for (int eth_endpoint : eth_endpoint_ids) {
+        if (eth_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
+            TT_THROW(
+                "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
+                "dram_view.eth_endpoint",
+                eth_endpoint);
+        }
+        tt::umd::CoreCoord eth_dram_endpoint_coord =
+            get_dram_core_for_channel(logical_channel, eth_endpoint, tt::CoordSystem::TRANSLATED);
+        eth_dram_cores.push_back({eth_dram_endpoint_coord.x, eth_dram_endpoint_coord.y});
+        eth_endpoints.push_back(eth_endpoint);
+    }
+
+    const auto worker_endpoint_ids = dram_view[worker_endpoint_key].as<std::vector<int>>();
+    std::vector<tt::tt_metal::CoreCoord> worker_dram_cores;
+    std::vector<size_t> worker_endpoints;
+    worker_dram_cores.reserve(worker_endpoint_ids.size());
+    worker_endpoints.reserve(worker_endpoint_ids.size());
+    for (int worker_endpoint : worker_endpoint_ids) {
+        if (worker_endpoint >= get_grid_size(tt::CoreType::DRAM).y) {
+            TT_THROW(
+                "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
+                "dram_view.worker_endpoint",
+                worker_endpoint);
+        }
+        tt::umd::CoreCoord worker_endpoint_coord =
+            get_dram_core_for_channel(logical_channel, worker_endpoint, tt::CoordSystem::TRANSLATED);
+
+        worker_dram_cores.push_back({worker_endpoint_coord.x, worker_endpoint_coord.y});
+        worker_endpoints.push_back(worker_endpoint);
+    }
+
+    this->dram_view_channels.push_back(channel);
+    this->dram_view_address_offsets.push_back(address_offset);
+    this->dram_view_eth_cores.push_back(std::move(eth_dram_cores));
+    this->dram_view_worker_cores.push_back(std::move(worker_dram_cores));
+
+    // Order a bank's endpoints by role (see dram_bank_endpoint_coords): the worker endpoints in
+    // NOC order first -- NOC0 at y == 0, the endpoint CMFW also uses for DRAM telemetry (SYS-1419)
+    // -- then whatever subchannels are left, ascending. Endpoints that repeat a subchannel
+    // (Wormhole declares the same one for both NOCs) are placed once, which leaves those
+    // descriptors ordered exactly as before.
+    const size_t num_subchannels = get_grid_size(tt::CoreType::DRAM).y;
+    TT_FATAL(
+        !worker_endpoints.empty(),
+        "DRAM view {} declares no worker_endpoint, so its logical y=0 would not name the NOC0 worker endpoint",
+        this->dram_view_channels.size() - 1);
+    std::vector<bool> placed(num_subchannels, false);
+    std::vector<tt::tt_metal::CoreCoord> bank_endpoints;
+    bank_endpoints.reserve(num_subchannels);
+    const auto push_subchannel = [&](size_t sub) {
+        placed[sub] = true;
+        const tt::umd::CoreCoord coord = get_dram_core_for_channel(logical_channel, sub, tt::CoordSystem::TRANSLATED);
+        bank_endpoints.push_back({coord.x, coord.y});
+    };
+    // worker_endpoints entries were bounds-checked above; each subchannel is visited once by
+    // the second loop, so only the first needs the placed[] guard.
+    for (const size_t worker_endpoint : worker_endpoints) {
+        if (!placed[worker_endpoint]) {
+            push_subchannel(worker_endpoint);
+        }
+    }
+    for (size_t sub = 0; sub < num_subchannels; sub++) {
+        if (!placed[sub]) {
+            push_subchannel(sub);
+        }
+    }
+    this->dram_bank_endpoint_coords.push_back(std::move(bank_endpoints));
 }
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {

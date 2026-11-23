@@ -19,6 +19,10 @@ namespace tt::umd {
 class TTDevice;
 }
 
+namespace YAML {
+class Node;
+}
+
 // CMFW's GDDR_MRISC_NOC2AXI_PORT telemetry word for `tt_device`, or nullopt when the entry is absent
 // (CMFW older than 19.12) or there is no device to ask.
 std::optional<uint32_t> read_mrisc_noc2axi_ports(tt::umd::TTDevice* tt_device);
@@ -46,8 +50,10 @@ public:
 
     std::map<tt::tt_metal::CoreCoord, int> logical_eth_core_to_chan_map;
 
-    // On Blackhole, `mrisc_noc2axi_ports` selects the DRAM endpoint assignment; nullopt keeps the
-    // pre-relocation one.
+    // On Blackhole, `mrisc_noc2axi_ports` selects the DRAM endpoint table whose NOC0 endpoints sit on
+    // the ports MRISC runs on (see blackhole_140_arch.yaml); nullopt keeps the pre-relocation one. On a
+    // DRAM-harvested chip whose firmware places MRISC by translated column, views are numbered by
+    // translated position, so view k has the same endpoints whichever channel is harvested.
     metal_SocDescriptor(
         const SocDescriptor& other,
         const tt::BoardType& board_type,
@@ -122,6 +128,11 @@ private:
 
     void load_dram_metadata_from_device_descriptor(
         const std::optional<uint32_t>& mrisc_noc2axi_ports, std::optional<uint64_t> dram_view_size_limit);
+    // Appends a DRAM view on `channel` (device-descriptor numbering, with harvested-channel gaps) whose
+    // address offset and endpoints come from `dram_view`, an entry of dram_views or harvested_dram_views,
+    // with the endpoints read from the given keys.
+    void add_dram_view(
+        size_t channel, const YAML::Node& dram_view, const char* eth_endpoint_key, const char* worker_endpoint_key);
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
 };
