@@ -56,31 +56,33 @@ def launch(mesh, flows, PB, NPKT, mode, risc):
         sends = [f for f in flows if f[0] == ch]
         recvs = [f for f in flows if f[1] == ch]
         kernels = []
-        if sends:
-            rt = ttnn.RuntimeArgs()
-            for f in sends:
-                src, dst, link = f[:3]
-                x, y = sc(f)
-                xy = noc(mesh, *rc_(f))
-                rt[x][y] = [int(node(mesh, src).mesh_id), int(node(mesh, dst).chip_id), xy[0] | xy[1] << 8]
-                rt[x][y].append(st.buffer_address())
-            kernels.append(
-                ttnn.KernelDescriptor(
-                    kernel_source=kpath("fx_send.cpp"),
-                    core_ranges=crs([sc(f) for f in sends]),
-                    compile_time_args=[
-                        NPKT,
-                        PB,
-                        buf.buffer_address(),
-                        buf.buffer_address(),
-                        cnt.buffer_address(),
-                        mode,
-                    ],
-                    runtime_args=rt,
-                    defines=FAB_DEFS,
-                    config=dm(risc),
+        for rk in (0, 1):
+            grp = [f for f in sends if (f[4] if len(f) > 4 else risc) == rk]
+            if grp:
+                rt = ttnn.RuntimeArgs()
+                for f in grp:
+                    src, dst, link = f[:3]
+                    x, y = sc(f)
+                    xy = noc(mesh, *rc_(f))
+                    rt[x][y] = [int(node(mesh, src).mesh_id), int(node(mesh, dst).chip_id), xy[0] | xy[1] << 8]
+                    rt[x][y].append(st.buffer_address())
+                kernels.append(
+                    ttnn.KernelDescriptor(
+                        kernel_source=kpath("fx_send.cpp"),
+                        core_ranges=crs([sc(f) for f in grp]),
+                        compile_time_args=[
+                            NPKT,
+                            PB,
+                            buf.buffer_address(),
+                            buf.buffer_address(),
+                            cnt.buffer_address(),
+                            mode,
+                        ],
+                        runtime_args=rt,
+                        defines=FAB_DEFS,
+                        config=dm(rk),
+                    )
                 )
-            )
         if recvs:
             rt = ttnn.RuntimeArgs()
             for f in recvs:
@@ -96,10 +98,13 @@ def launch(mesh, flows, PB, NPKT, mode, risc):
                 )
             )
         p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[])
+        ki = {}
+        for kk, rk in enumerate([rk for rk in (0, 1) if any((f[4] if len(f) > 4 else risc) == rk for f in sends)]):
+            ki[rk] = kk
         for f in sends:
             src, dst, link = f[:3]
             x, y = sc(f)
-            p.kernels[0].runtime_args[x][y].extend(
+            p.kernels[ki[f[4] if len(f) > 4 else risc]].runtime_args[x][y].extend(
                 ttnn.setup_fabric_connection(
                     mesh_device=mesh,
                     src_fabric_node_id=node(mesh, src),
@@ -332,3 +337,56 @@ def test_fx_all_links_rows(mesh_device):
         f"FX all links rows: GB/s out / in a chip {[(c, round(out[c]), round(inn[c])) for c in sorted(out)]}; "
         f"per flow min {min(per):.1f} median {statistics.median(per):.1f} max {max(per):.1f}; flows {flows}"
     )
+
+
+CTRL = {
+    "single_E": [((0, 0), (0, 1), 0, (1, 0))],
+    "single_W": [((0, 1), (0, 0), 0, (1, 0))],
+    "disjoint_2": [((0, 0), (0, 1), 0, (1, 0)), ((0, 2), (0, 3), 0, (2, 0))],
+    "disjoint_3": [((0, 0), (0, 1), 0, (1, 0)), ((0, 2), (0, 3), 0, (2, 0)), ((1, 0), (1, 1), 0, (3, 0))],
+    "two_in": [((0, 1), (0, 0), 0, (1, 0)), ((1, 0), (0, 0), 0, (2, 0))],
+    "two_out": [((0, 0), (0, 1), 0, (1, 0)), ((0, 0), (1, 0), 0, (2, 0))],
+}
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dev_params(8704)], ids=["pay8704"], indirect=True)
+def test_fx_controls(mesh_device):
+    """Is the multi-flow drop per chip? Two / three flows sharing no chip, two flows into one chip, two out of one."""
+    SCEN.update(CTRL)
+    for scen in CTRL:
+        run(mesh_device, scen, 8704, tag="ctrl")
+
+
+CTRL2 = {
+    "one_out_one_in": [((0, 0), (0, 1), 0, (1, 0)), ((1, 0), (0, 0), 0, (2, 0))],
+    "two_out_l1": [((0, 0), (0, 1), 1, (1, 0)), ((0, 0), (1, 0), 1, (2, 0))],
+    "two_out_mixed": [((0, 0), (0, 1), 0, (1, 0)), ((0, 0), (1, 0), 1, (2, 0))],
+}
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dev_params(8704)], ids=["pay8704"], indirect=True)
+def test_fx_controls2(mesh_device):
+    """One chip with one router sending and another receiving; two out on other link pairings."""
+    SCEN.update(CTRL2)
+    for scen in CTRL2:
+        run(mesh_device, scen, 8704, tag="ctrl2")
+
+
+CTRL3 = {
+    "two_out_noc1_noc1": [((0, 0), (0, 1), 0, (1, 0), 1), ((0, 0), (1, 0), 0, (2, 0), 1)],
+    "two_out_noc0_noc0": [((0, 0), (0, 1), 0, (1, 0), 0), ((0, 0), (1, 0), 0, (2, 0), 0)],
+    "two_out_noc0_noc1": [((0, 0), (0, 1), 0, (1, 0), 0), ((0, 0), (1, 0), 0, (2, 0), 1)],
+    "two_out_noc1_noc0": [((0, 0), (0, 1), 0, (1, 0), 1), ((0, 0), (1, 0), 0, (2, 0), 0)],
+    "two_out_noc0_noc1_samecore": [((0, 0), (0, 1), 0, (1, 0), 0), ((0, 0), (1, 0), 0, (1, 0), 1)],
+}
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dev_params(8704)], ids=["pay8704"], indirect=True)
+def test_fx_controls3(mesh_device):
+    """Two senders on one chip: the same NoC (paths can share links) or one on each NoC (they cannot)."""
+    SCEN.update(CTRL3)
+    for scen in CTRL3:
+        run(mesh_device, scen, 8704, tag="ctrl3")

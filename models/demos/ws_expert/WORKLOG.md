@@ -1903,3 +1903,16 @@ link both ways at once (40 one-hop flows, each its own sender / receiver core), 
   29.7), flows to the west or north 27.6-42.7, on the same links, while one link both ways alone is symmetric (45.5 /
   46.8). A chip can push ~190 GB/s out (the middle ones), so it is not a fixed per-chip cap. Not explained: points at
   the 2D routers' arbitration / buffering by direction when all of a chip's routers are busy.
+- Where the "second flow on a chip" drop comes from (test_fx_controls / 2 / 3, 8704 B, 400G):
+| case | GB/s a flow |
+|---|---|
+| one flow, east / west | 47.9 / 46.1 |
+| two or three flows on different chips | 46.1-47.9 (no drop) |
+| one chip: a router sending, another receiving | 47.9 / 47.9 (no drop) |
+| two routers sending from one chip, both senders on NOC1 / both on NOC0 | 40.5 / 39.7 each |
+| the same, one sender on NOC0 and one on NOC1 (different cores, or the same core's two RISCs) | 47.0-47.9 each |
+| two routers receiving on one chip (the routers' landing writes: NOC1) | 41.1 / 41.2 |
+  Two same-kind streams on one chip add up to 80-82 GB/s = one NoC link (~60 B / cycle at 1350 MHz, uc_bench): their
+  paths share a NoC link (worker -> router writes along the ethernet row; router landing writes along the destination
+  row). Put the two on different NoCs and each gets the full link. The earlier placement runs placed cores by logical
+  column, not by physical NoC column (one harvested column a chip), so their paths still overlapped.
