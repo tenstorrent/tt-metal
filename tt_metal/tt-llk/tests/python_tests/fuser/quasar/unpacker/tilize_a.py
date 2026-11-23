@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.tilize_a import tilize_a_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource, L1AccessMode
+from fuser.operand import BfdId, L1AccessMode
 from helpers.llk_params import DestAccumulation
 
 
@@ -59,8 +59,8 @@ class UnpackerTilizeA(Unpacker):
             if compute_unit.src_a.tile_shape.total_num_faces() == 4
             else L1AccessMode.STRIDED
         )
-        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
-            BfdResource.UNP0, mode, result_name="bfd_id"
+        bfd_program = compute_unit.src_a.program_bfd(
+            BfdId.UNP0, mode, result_name="bfd_id"
         )
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         en_32bit_dest = config.dest_acc.cpp_enum_value

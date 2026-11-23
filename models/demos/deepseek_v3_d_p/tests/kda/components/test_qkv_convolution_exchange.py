@@ -93,6 +93,14 @@ _MESHES = [
     _mesh((2, 2), 0, kda_device_params((2, 2)), "mesh-2x2", "quietbox-SP2xTP2-fabric-2d", _COVERAGE),
     # One 4x4 prefill stage (a Galaxy tray half): the SP4 ring is mesh axis 1, a straight X wrap.
     _mesh((4, 4), 1, kda_device_params((4, 4)), "mesh-4x4", "galaxy4x4-SP4xTP4-torus-x", _GALAXY_4X4_SP4XTP4),
+    _mesh(
+        (4, 4),
+        1,
+        kda_device_params((4, 4), wrap_both_axes=True),
+        "mesh-4x4",
+        "galaxy4x4-SP4xTP4-torus-xy",
+        _GALAXY_4X4_SP4XTP4,
+    ),
 ]
 
 

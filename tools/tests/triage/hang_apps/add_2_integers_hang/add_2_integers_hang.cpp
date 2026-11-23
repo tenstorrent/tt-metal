@@ -11,7 +11,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -139,8 +140,11 @@ int main() {
         .dfb_bindings = {ConsumerOf(OUT_DFB, "out")},
         .semaphore_bindings = {{.semaphore_spec_name = PROGRAM_SEM, .accessor_name = "program_sem"}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_T, .accessor_name = "out"}},
-        .runtime_arg_schema = {.common_runtime_arg_names = {"incremented_semaphore"}},
+        .compile_time_args = {{"ct_marker", 0x5678}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"rt_marker"}, .common_runtime_arg_names = {"incremented_semaphore"}},
         .hw_config = writer_dm_config,
+        .advanced_options = {.num_runtime_varargs = 1},
     };
 
     // This kernel performs the actual addition of the two input tiles
@@ -174,18 +178,22 @@ int main() {
 
     // A MeshWorkload is a collection of programs that are executed on a MeshDevice. Building it from the ProgramSpec
     // compiles the kernels; the specific physical devices the workload runs on are determined by the mesh shape.
-    distributed::MeshWorkload workload = tt_metal::experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    distributed::MeshWorkload workload(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     // Bind the tensors the kernels operate on. The reader and writer get their buffer addresses from these tensor
     // arguments and the compute kernel needs none; the writer's one runtime arg is the GlobalSemaphore it bumps.
+    // The writer's ct_marker, rt_marker and unnamed runtime arg are never read by the kernel; test_dump_callstacks
+    // checks them.
     ProgramRunArgs params;
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{.kernel = READER},
         ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
+            .runtime_arg_values = {{"rt_marker", {{node, 0x9abc}}}},
             .common_runtime_arg_values =
                 {{"incremented_semaphore", static_cast<uint32_t>(incremented_semaphore.address())}},
+            .advanced_options = experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, {0x1234}}}},
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -194,7 +202,7 @@ int main() {
         {IN1_T, TensorArgument{src1_tensor}},
         {OUT_T, TensorArgument{dst_tensor}},
     };
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Create the data that will be used as input to the kernels.
     // src0 is a vector of bfloat16 values initialized to random values between 0.0f and 14.0f.

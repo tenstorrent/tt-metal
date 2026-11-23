@@ -13,7 +13,7 @@
 #include <gtest/gtest.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -47,9 +47,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TriscL1CacheRuntimeArgNotStale) {
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
-    workload.add_program(
-        distributed::MeshCoordinateRange(zero_coord, zero_coord),
-        experimental::MakeProgramFromSpec(this->device(), spec));
+    workload.add_program(distributed::MeshCoordinateRange(zero_coord, zero_coord), Program(this->device(), spec));
     Program& program = workload.get_programs().begin()->second;
 
     // Mailboxes and the firmware mem map sit at the low end of L1. This test allocates no L1 buffers, so the
@@ -67,9 +65,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TriscL1CacheRuntimeArgNotStale) {
                 MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", result_l1_addr}, {"value", value}}),
         }};
         if (launch == 0) {
-            experimental::SetProgramRunArgs(program, params);
+            program.set_program_run_args(params);
         } else {
-            experimental::UpdateProgramRunArgs(program, params);
+            program.update_program_run_args(params);
         }
 
         distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);

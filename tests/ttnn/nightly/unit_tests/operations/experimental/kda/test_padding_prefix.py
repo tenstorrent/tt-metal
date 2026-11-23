@@ -15,9 +15,9 @@ pytestmark = run_for_blackhole()
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("width", [32, 128])
 def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
-    # Two heads, four 64-row groups each. Every active summary is (I, (g+1)I).
+    # Two heads, four 64-row groups each. Every active summary is (I, (g+1)I): (0, (g+1)I) in complement form.
     eye = torch.eye(width)
-    a = eye.repeat(8, 1, 1).bfloat16()
+    e = torch.zeros(8, width, width).bfloat16()
     b = torch.stack([(g + 1) * eye for _ in range(2) for g in range(4)]).bfloat16()
     initial = torch.stack([10 * eye, 20 * eye])
 
@@ -25,7 +25,7 @@ def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
         return ttnn.from_torch(tensor, device=mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
     # Two SP ranks need a tail slot; an unsplit start never reads it, so it is NaN.
-    head = torch.cat([a, b], dim=-1)
+    head = torch.cat([e, b], dim=-1)
     summaries_tt = upload(torch.stack([head, torch.full_like(head, float("nan"))]), ttnn.bfloat16)
     initial_tt = upload(initial, ttnn.float32)
     start = make_actual_start(mesh_device, 0)

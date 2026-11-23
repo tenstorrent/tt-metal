@@ -40,7 +40,7 @@ The following models have been traced and their configurations are available in 
 | microsoft/Phi-3-mini-128k-instruct | Small instruction model | `HF_MODEL=microsoft/Phi-3-mini-128k-instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | mistralai/Mistral-7B-Instruct-v0.3 | Instruction-tuned model | `HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | efficientnetb0 | EfficientNet-B0 vision model | `python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model` |
-| vit | Vision Transformer | `python model_tracer/generic_ops_tracer.py models/demos/vision/classification/vit/wormhole/demo/demo_vit_performant_imagenet_inference.py` |
+| vit | Vision Transformer | `python model_tracer/generic_ops_tracer.py models/demos/vision/classification/vit/wormhole/demo/demo_vit_performant_inference.py` |
 | ssd512 | Object detection | `python model_tracer/generic_ops_tracer.py models/experimental/SSD512/tests/perf/test_device_perf_ssd.py` |
 | stable-diffusion-xl | Image generation | `python model_tracer/generic_ops_tracer.py models/demos/stable_diffusion_xl_base/demo/demo_img2img.py` |
 | whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/audio/whisper/demo/demo.py` |
@@ -98,7 +98,7 @@ See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the da
 - **Trace Selection Registry**: `model_tracer/trace_selection_registry.yaml` - Controls which traces are included in test reconstruction
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
-- **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
+- **Config Loader**: `tests/sweep_framework/master_config_loader_v2.py` - Converts JSON configs to sweep test parameters
 
 ---
 
@@ -212,7 +212,7 @@ The sweep framework automatically:
 
 ```python
 # 1. Import and load
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
 loader = MasterConfigLoader()
 model_traced_params = loader.get_suite_parameters("your_operation_name")
@@ -338,7 +338,7 @@ tt-metal/
 │   └── traced_operations/
 │       └── ttnn_operations_master.json # Master config storage
 └── tests/sweep_framework/
-    ├── master_config_loader.py        # Config loader & utilities
+    ├── master_config_loader_v2.py     # Config loader & utilities
     ├── sweeps_parameter_generator.py  # Generate test vectors
     ├── sweeps_runner.py               # Run individual sweep tests
     └── sweeps/
@@ -368,7 +368,7 @@ See any `*_model_traced.py` file in `tests/sweep_framework/sweeps/model_traced/`
 
 **Simple as:**
 ```python
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 loader = MasterConfigLoader()
 parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 ```
@@ -377,4 +377,4 @@ parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 
 For the full model tracer and database workflow, see [GUIDE.md](GUIDE.md).
 
-For complete documentation on running sweep tests, see [Sweep Framework README](tests/sweep_framework/README.md).
+For complete documentation on running sweep tests, see [Sweep Framework README](../tests/sweep_framework/README.md).

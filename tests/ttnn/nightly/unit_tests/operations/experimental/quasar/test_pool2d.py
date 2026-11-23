@@ -478,13 +478,12 @@ UNIT_CASES = [
     # TILE output layout runs single-lane by policy (the tiled-output path is not lane-aware: at
     # num_threads=4 DFB_FAST_TILIZE has in_ntiles_c entries -> TT_FATAL for C<128, hang at C=128;
     # found by resnet50/quasar/tests/ops/test_max_pool2d_correctness.py on the ZeBu emulator).
-    # NOTE: even at T=1 the tiled-output path is WRONG on Quasar RTL (pcc ~0 for C=64), identically
-    # on main -- a pre-existing Quasar bug; these cases are exact on WH silicon.
+    # The tiled-output path packs a full 32x32 untilized tile per stick: the Quasar 1x32 pack_untilize
+    # reads DEST as tiny tiles, not the 32x32 tiles the reduce leaves, and packed the wrong rows.
     (
         "tiled_out_max_k3x3_T1",
         dict(
             out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
         ),
     ),
     (
@@ -494,7 +493,6 @@ UNIT_CASES = [
             in_h=8,
             in_w=4,
             out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
         ),
     ),
     (
@@ -503,8 +501,9 @@ UNIT_CASES = [
             pool="avg",
             stride=(1, 1),
             padding=(0, 0),
+            # one core: its 84 output sticks run two full pre_tilize rounds and a partial one
+            cores=1,
             out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
         ),
     ),
     (
@@ -516,7 +515,6 @@ UNIT_CASES = [
             padding=(0, 0),
             cores=1,
             out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
         ),
     ),
     ("bf8b_k3x3", dict(dtype="bf8b", cores=1, sim_skip="Metal-2.0 DFB bfp8 unsupported (program_spec.cpp:1731)")),
@@ -570,7 +568,6 @@ DRAM_SLICED_CASES = [
             shard_scheme="width",
             out_layout="tile",
             dram_slice=("height", 2),
-            sim_skip="Quasar tiled-output pool bug (see tiled_out_*): the same width-sharded TILE-output pool mismatches identically unsliced in L1 on craq-sim -- not a slicing issue",
         ),
     ),
     # BFLOAT8_B TILE input, untilized to BFLOAT16 before slicing
