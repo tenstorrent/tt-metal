@@ -1088,11 +1088,16 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         sender_channel_to_check);
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
-    // The router across the link published its receivers before any kernel is emitted (FabricBuilderContext).
+    // The router across the link published its receivers before any kernel is emitted (FabricBuilderContext). With no
+    // router there this launch, its receivers are taken to match this router's, as stock does.
     const auto [link_peer_node, link_peer_chan] =
         control_plane.get_connected_mesh_chip_chan_ids(this->local_fabric_node_id, this->my_eth_channel);
-    const RouterChannelLayout& peer_layout =
-        fabric_context.get_builder_context().get_router_channel_layout(link_peer_node, link_peer_chan);
+    const auto peer =
+        fabric_context.get_builder_context().get_peer_router_channel_layout(link_peer_node, link_peer_chan);
+    const RouterChannelLayout peer_layout =
+        std::holds_alternative<NullPeerLayout>(peer)
+            ? static_channel_allocator->get_layout()
+            : std::get<std::reference_wrapper<const RouterChannelLayout>>(peer).get();
 
     constexpr bool enable_risc_cpu_data_cache = false;
 
@@ -1256,6 +1261,17 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // Flat bases for the shared free-slots table, so a VC's boundary is the same on every router.
     named_args["VC1_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(1);
     named_args["VC2_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(2);
+
+    // Where this router's traffic lands on each downstream router: the fabric position of the sender channel it
+    // takes there, per downstream entry. The host places it (the downstream router's own producer-slot mapping), so
+    // the kernel reads its downstream free-slots registers through these instead of deriving the channel.
+    named_args["DOWNSTREAM_VC0_SENDER_POSITIONS"] =
+        receiver_channel_to_downstream_adapter->get_packed_downstream_sender_fabric_positions(
+            0, stream_assignment.sender_flat_base(0));
+    named_args["DOWNSTREAM_VC1_SENDER_POSITIONS"] =
+        needs_vc1 ? receiver_channel_to_downstream_adapter->get_packed_downstream_sender_fabric_positions(
+                        1, stream_assignment.sender_flat_base(1))
+                  : 0;
 
     // Every declared stream-register name, filled from the assignment or the inactive-consumer
     // sentinel. Emplaced with a duplicate check so a collision fails here rather than being absorbed.
@@ -1991,7 +2007,13 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     auto* adapter_ptr = this->receiver_channel_to_downstream_adapter.get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
     adapter_ptr->add_downstream_connection(
-        adapter_spec, upstream_vc_idx, absolute_channel_id, ds_dir, tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
+        adapter_spec,
+        upstream_vc_idx,
+        absolute_channel_id,
+        vc_relative_channel_id,
+        ds_dir,
+        tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y),
+        is_2D_routing);
 }
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
