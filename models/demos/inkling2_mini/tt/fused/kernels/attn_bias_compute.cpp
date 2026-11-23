@@ -24,6 +24,9 @@
 namespace {
 constexpr uint32_t cb_rel = 0, cb_rs = 1, cb_g = 2, cb_tau = 3, cb_p = 4, cb_near = 5;
 constexpr uint32_t cb_r = 16, cb_sq = 17, cb_s = 18, cb_relo = 19, cb_b = 20, cb_mask = 21;
+// SFPU work on faces 0, 2 (columns 0..15: the rel dim; the reader zero-fills columns 16..31, and the per-head sum
+// matrix G is zero there). r * r stays full-tile: it is a matmul operand.
+constexpr VectorMode C = VectorMode::C;
 
 FORCE_INLINE void load(uint32_t cb, uint32_t tile, uint32_t dst) {
     reconfig_data_format_srca(cb);
@@ -51,7 +54,7 @@ void kernel_main() {
     load(cb_rel, 0, 0);
     load(cb_rs, 0, 1);
     mul_binary_tile_init();
-    mul_binary_tile(0, 1, 0);
+    mul_binary_tile(0, 1, 0, C);
     mul_binary_tile(0, 0, 1);
     tile_regs_commit();
     tile_regs_wait();
@@ -70,19 +73,19 @@ void kernel_main() {
     matmul_init(cb_sq, cb_g);
     matmul_tiles(cb_sq, cb_g, 0, 0, 0);
     binop_with_scalar_tile_init();
-    mul_unary_tile(0, inv);
+    mul_unary_tile(0, inv, C);
     unary_max_tile_init();
     unary_max_tile(0, one);
     rsqrt_tile_init();
-    rsqrt_tile(0);
+    rsqrt_tile(0, C);
     if constexpr (has_tau) {
         load(cb_tau, 0, 1);
         mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
+        mul_binary_tile(0, 1, 0, C);
     }
     load(cb_r, 0, 2);
     mul_binary_tile_init();
-    mul_binary_tile(0, 2, 0);
+    mul_binary_tile(0, 2, 0, C);
     tile_regs_commit();
     tile_regs_wait();
     put(0, cb_relo);
