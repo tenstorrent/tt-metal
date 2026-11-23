@@ -188,7 +188,7 @@ public:
      * functional for read() and barrier() operations.
      *
      * @param socket_id The identifier used when the owner called export_descriptor().
-     * @param timeout_ms Max time to wait for the descriptor file (default 10s).
+     * @param timeout_ms Max time to wait for the descriptor file (default: nullopt, 10 s applied in impl).
      * @return A connected D2HSocket ready for data transfer.
      */
     static std::unique_ptr<D2HSocket> connect(

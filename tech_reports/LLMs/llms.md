@@ -94,7 +94,7 @@ The cos/sin matrices, are generated in two slightly different ways, depending on
 
 The following code sample shows how `RotarySetup` can be used in decode mode:
 ```py
-from models.tt_transformers.rope import RotarySetup
+from models.ttt_compat.tt.rope import RotarySetup
 
 # Step 1: Create the setup object
 rope_setup_decode = RotarySetup(
@@ -232,7 +232,6 @@ The distributed implementation is designed for cases where activations are **sha
        dim=3,
        num_links=1,
        cluster_axis=1,
-       mesh_device=mesh_device,
        memory_config=ttnn.DRAM_MEMORY_CONFIG,
        topology=ttnn.Topology.Linear,
    )
@@ -268,7 +267,7 @@ The distributed implementation is designed for cases where activations are **sha
 - Distributed Norm Op Code [[3]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed) [[4]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed)
 - Non-Distributed Norms Unit Tests [[5]](https://github.com/tenstorrent/tt-metal/blob/main/tests/tt_eager/python_api_testing/unit_testing/misc/test_layernorm_sharded.py) [[6]](https://github.com/tenstorrent/tt-metal/blob/main/tests/tt_eager/python_api_testing/unit_testing/misc/test_layernorm.py)
 - Distributed Norms Unit Tests [[7]](https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py) [[8]](https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py)
-- Distributed Norm in TT-Transformers [[9]](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/distributed_norm.py)
+- Distributed Norm in TT-Transformers [[9]](https://github.com/tenstorrent/tt-metal/blob/main/models/ttt_compat/tt/distributed_norm.py)
 
 ### 2.4 Attention
 
@@ -351,7 +350,7 @@ The attention module in prefill mode expects input shape `(1, bsz=1, seqlen, hid
 > [!NOTE]
 > `bsz=1` is required. For multiple batches, run prefill iteratively and populate the KV cache at `batch_id`.
 
-An end-to-end example of the prefill attention module is in the [attention.py](../../models/tt_transformers/tt/attention.py) file, under the `forward_prefill` method. In short, we break down the attention module in prefill mode into the following steps:
+An end-to-end example of the prefill attention module is in the [attention.py](../../models/ttt_compat/tt/attention.py) file, under the `forward_prefill` method. In short, we break down the attention module in prefill mode into the following steps:
 1. QKV projections matmuls.
    - We combine the QKV projection weights into a single tensor, and perform standard `ttnn.linear`. For example:
      ```python
@@ -424,7 +423,7 @@ An end-to-end example of the prefill attention module is in the [attention.py](.
 ### 2.4.2 Attention Decode
 The attention module in decode mode expects input shape `(1, seqlen=1, bsz, hidden_dim)` and outputs a tensor of the same shape. Decode mode expects sequence length of one and parallelizes over batch size due to the auto-regressive nature of decoding.
 
-An end-to-end example of the decode attention module is in the [attention.py](../../models/tt_transformers/tt/attention.py) file, under the `forward_decode` method. The decode mode is broken down into the following steps:
+An end-to-end example of the decode attention module is in the [attention.py](../../models/ttt_compat/tt/attention.py) file, under the `forward_decode` method. The decode mode is broken down into the following steps:
 
 1. **QKV Projections Matmuls**
    - This works the same as in prefill mode, using `ttnn.linear`. Note that the input shape is `(1, 1, bsz, dim)` instead of `(1, 1, seqlen, dim)`.
@@ -475,7 +474,7 @@ An end-to-end example of the decode attention module is in the [attention.py](..
      - `k`: Key tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `v`: Value tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `is_causal`: Bool, defaults to `true`. Whether to apply causal masking.
-     - `attn_mask`: Defaults to `None`, and only valid with `is_causal=False`. Shape `(1, bsz, nh, cache_len)`: dim 2 is the per-device Q head count, not a sequence length, and must match `q`'s dim 2 in both the logical and the padded shape. Dim 3 must match `k`'s `cache_len` and be a multiple of `k_chunk_size`. Unpaged decode defaults the chunk size to `min(512, largest power-of-two divisor of cache_len)`. Paged decode uses `32` when `program_config` is omitted; a custom config for paged non-causal attention must set a positive `k_chunk_size`. For a reference construction, see the `tt_xattn_mask` reshape in [models/tt_transformers/tt/multimodal/llama_vision_model.py](../../models/tt_transformers/tt/multimodal/llama_vision_model.py), which sets logical dim 2 to the per-device head count and pads it to 32.
+     - `attn_mask`: Defaults to `None`, and only valid with `is_causal=False`. Shape `(1, bsz, nh, cache_len)`: dim 2 is the per-device Q head count, not a sequence length, and must match `q`'s dim 2 in both the logical and the padded shape. Dim 3 must match `k`'s `cache_len` and be a multiple of `k_chunk_size`. Unpaged decode defaults the chunk size to `min(512, largest power-of-two divisor of cache_len)`. Paged decode uses `32` when `program_config` is omitted; a custom config for paged non-causal attention must set a positive `k_chunk_size`. For a reference construction, see the `tt_xattn_mask` reshape in [models/ttt_compat/tt/multimodal/llama_vision_model.py](../../models/ttt_compat/tt/multimodal/llama_vision_model.py), which sets logical dim 2 to the per-device head count and pads it to 32.
      - `cur_pos`: (Required for is_causal=True) List of current positions in the sequence for each batch. Defaults to `None`. Must be provided if `cur_pos_tensor` is not provided.
      - `cur_pos_tensor`: (Required for is_causal=True) Optional current position tensor. Defaults to `None`. Must be provided if `cur_pos` is not provided.
      - `scale`: Optional scale factor. Defaults to `None`.
@@ -486,7 +485,7 @@ An end-to-end example of the decode attention module is in the [attention.py](..
    - `ttnn.transformer.paged_scaled_dot_product_attention_decode` takes in the same arguments as `ttnn.transformer.scaled_dot_product_attention_decode`, but also takes in an additional `page_table_tensor` argument.
    - For general decode use cases, we recommend setting `is_causal=True`. This removes the need for `attn_mask` which reduces memory bandwidth usage. For example:
      ```python
-     attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(Q, K, V, cur_pos_tensor=cur_pos, page_table=page_table)
+     attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(Q, K, V, cur_pos_tensor=cur_pos, page_table_tensor=page_table)
      ```
    - For non-causal attention, `attn_mask` must be provided. An example is in the cross attention case in visual language models. For example:
      ```python
@@ -589,7 +588,7 @@ In decode mode provide a list of current positions or a tensor. The tensor versi
 
 ### 2.5 MLP
 
-MLP for Llama-style models is implemented in the `MLP` module class. The tests are available in [test_mlp.py](../../models/tt_transformers/tests/test_mlp.py).
+MLP for Llama-style models is implemented in the `MLP` module class. The tests are available in [test_mlp.py](../../models/ttt_compat/tests/test_mlp.py).
 
 MLP performs the following operations on an input `x` where FF1, FF2, and FF3 are linear transformations (matmuls) with weights `w1`, `w2`, and `w3` respectively. Since FF1 and FF3 share the same inputs, their optimizations are shared as well:
 
@@ -804,7 +803,7 @@ w2_in = ttnn.multiply(
     )
     if mode == "decode"
     else ttnn.DRAM_MEMORY_CONFIG,
-    input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+    input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
     dtype=ttnn.bfloat8_b,
 )
 ```
@@ -846,8 +845,7 @@ Since the output of FF2 is the correct shape but only a partial on each device, 
     ```py
     w2_out_reduced = ttnn.reduce_scatter(
         w2_out,
-        scatter_dim=3,
-        math_op=ttnn.ReduceType.Sum,
+        dim=3,
         num_links=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG if mode == "prefill" else ttnn.L1_MEMORY_CONFIG,
     )
@@ -1141,7 +1139,7 @@ The intermediate activations in prefill mode are kept in DRAM, due to the large 
 
 ##### 3.2.1.1 Reshaping for Large Matrix Multiplications
 
-Please see the [attention source code](/../../models/tt_transformers/tt/attention.py) for reference.
+Please see the [attention source code](/../../models/ttt_compat/tt/attention.py) for reference.
 
 In prefill mode, when the input sequence length is very large, the model reshapes its input tensors to process sequences in smaller chunks in parallel for larger matmuls, such as `wqkv`, `wo` in the attention module, and `w1`, `w2`, `w3` in the MLP module. This reshaping prevents running out of memory in cases of long prefill sequence lengths. For example:
 
@@ -1300,7 +1298,6 @@ The AllGather operation collects data from all devices, concatenating each chunk
   - dim: the dimension to concatenate
   - num_links: number of ethernet links to be used
   - cluster_axis: cluster axis to gather along
-  - mesh_device: mesh device the tensor is mapped to
 
 The following is an example of Ring All-Gather on s 2x4 mesh_device:
 
@@ -1315,7 +1312,7 @@ The following is an example of Linear All-Gather on a 2x4 mesh_device:
 ```py
 # Execute All-Gather on the sharded tensor
 # Assuming mesh_tensor_sharded is a sharded tensor over 2x4 devices where each devices contains a 32x32 sized chunk of data, the output_tensor is of size 32x128 where each row has the same data
-output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=2, cluster_axis=1, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=2, cluster_axis=1, topology=ttnn.Topology.Linear)
 ```
 
 #### 3.3.2 ReduceScatter
@@ -1343,7 +1340,7 @@ The following is example usage of Linear Reduce-Scatter on a 2x4 mesh_devcie:
 ```py
 # Execute Reduce-Scatter on the sharded tensor
 # Assuming mesh_tensor_sharded is a sharded tensor over 2x4 devices where each devices contains a 32x32 sized chunk of data, the output_tensor is of size 32x32 on each device but reduces over each row of devices
-output_tensor = ttnn.reduce_scatter(mesh_tensor_sharded, dim=3, num_links=1, cluster_axis=1, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
+output_tensor = ttnn.reduce_scatter(mesh_tensor_sharded, dim=3, num_links=1, cluster_axis=1, topology=ttnn.Topology.Linear)
 ```
 
 #### 3.3.3 AllReduce
@@ -1418,15 +1415,15 @@ Where K and N are height and width of the weight tensor, DF is the data format m
 
 ##### 3.3.10 Exemplary parallelization scheme: Llama3
 
-For our [Llama3 family of models](/../../models/tt_transformers) we are using the following sharding schemes in our multi-device architectures:
+For our [Llama3 family of models](/../../models/ttt_compat) we are using the following sharding schemes in our multi-device architectures:
 
 | Matmul            | N300            | T3000           | TG              |
 |-------------------|-----------------|-----------------|-----------------|
-| [_QKV projection_](/../../models/tt_transformers/tt/llama_attention.py) | Column Parallel | Column Parallel | 2D              |
-| [_Dense out_](/../../models/tt_transformers/tt/llama_attention.py)  | Row Parallel    | Row Parallel    | 2D              |
-| [_FF1_](/../../models/tt_transformers/tt/llama_mlp.py)             | Column Parallel | Column Parallel | 2D              |
-| [_FF3_](/../../models/tt_transformers/tt/llama_mlp.py)             | Column Parallel | Column Parallel | 2D              |
-| [_FF2_](/../../models/tt_transformers/tt/llama_mlp.py)             | Row Parallel    | Row Parallel    | 2D              |
+| [_QKV projection_](/../../models/ttt_compat/tt/attention.py) | Column Parallel | Column Parallel | 2D              |
+| [_Dense out_](/../../models/ttt_compat/tt/attention.py)  | Row Parallel    | Row Parallel    | 2D              |
+| [_FF1_](/../../models/ttt_compat/tt/mlp.py)             | Column Parallel | Column Parallel | 2D              |
+| [_FF3_](/../../models/ttt_compat/tt/mlp.py)             | Column Parallel | Column Parallel | 2D              |
+| [_FF2_](/../../models/ttt_compat/tt/mlp.py)             | Row Parallel    | Row Parallel    | 2D              |
 
 
 ### 3.4 Continuous Batching
@@ -1498,7 +1495,7 @@ See [Matrix Engine](../matrix_engine/matrix_engine.md) for background on `comput
 #### 4.3.1 Memory Configs
 For the LLM context, memory configs are not as important in prefill mode, where activations are large due to the long sequence lengths. Memory configs should generally be DRAM interleaved; otherwise it wouldn't fit on L1. In prefill mode, each OP should consume DRAM interleaved inputs and produce DRAM interleaved outputs.
 
-Memory configs are most important in decode mode. For an operation like `ttnn.matmul`, both the activation and the output will be sharded according to their memory configs. Decode mode activations are of shape `[batch_size, hidden_size]` and should be width-sharded in L1 (sharding the `hidden_size` dimension). By keeping activations and outputs width-sharded in L1 we reduce DRAM traffic for better performance. The TT-Transformers codebase has examples of how to create a width-sharded memory config (see [model config](/../../models/tt_transformers/tt/model_config.py)).
+Memory configs are most important in decode mode. For an operation like `ttnn.matmul`, both the activation and the output will be sharded according to their memory configs. Decode mode activations are of shape `[batch_size, hidden_size]` and should be width-sharded in L1 (sharding the `hidden_size` dimension). By keeping activations and outputs width-sharded in L1 we reduce DRAM traffic for better performance. The TT-Transformers codebase has examples of how to create a width-sharded memory config (see [model config](/../../models/ttt_compat/tt/model_config.py)).
 
 ```python
 input_memcfg = ttnn.create_sharded_memory_config(
@@ -1588,7 +1585,7 @@ DRAM-sharded matmul should be used in decode mode, where activations are small a
 
 DRAM-Sharded matmul is used for all matmuls in decode mode. The activation and output are width-sharded in L1, and the weights width-sharded in DRAM.
 
-To use DRAM-Sharded matmul, create the weight memory config with this helper function: [`model_config.py`](../../models/tt_transformers/tt/model_config.py).
+To use DRAM-Sharded matmul, create the weight memory config with this helper function: [`model_config.py`](../../models/ttt_compat/tt/model_config.py).
 
 ```python
 weights_memory_config = create_dram_sharded_mem_config(k=K, n=N)
@@ -1662,8 +1659,8 @@ The following is a list of metrics used to evaluate accuracy:
 - **Specialized Benchmark Eval Scores:** Metrics that evaluate specific capabilities of LLMs, such as MMLU for multitask language understanding, or BIG-bench for diverse general knowledge tasks.
 
 To thoroughly test the accuracy of a model, a bottom up approach is taken such that sub-modules are tested all the way up to the full token generation.
-- **Sub-module Unit Tests:** Each sub-module of the model should have its own test. For example, [tt-transformers](../../models/tt_transformers) has a separate [MLP test](../../models/tt_transformers/tests/test_mlp.py), [attention test](../../models/tt_transformers/tests/test_attention.py), and [decoder layer test](../../models/tt_transformers/tests/test_decoder.py). For each of these tests, the outputs produced by the TT implementation of the model are compared against those of the original reference model, typically from Hugging Face, on CPU for a small set of inputs. MLP, attention, and other small sub-modules should have a PCC of ~0.999, while a PCC of ~0.998 would be reasonable for a full decoder layer.
-- **Model-level Unit Tests:** In addition to the sub-module unit tests, there should also be unit tests for a full layer of the model with all sub-modules, and the full model comprising of all layers. For example, the [model test](../../models/tt_transformers/tests/test_model.py) runs one or many layers of the model over multiple iterations and checks the PCC against the reference model. The full model PCC should be approximately ~0.99.
+- **Sub-module Unit Tests:** Each sub-module of the model should have its own test. For example, [tt-transformers](../../models/ttt_compat) has a separate [MLP test](../../models/ttt_compat/tests/test_mlp.py), [attention test](../../models/ttt_compat/tests/test_attention.py), and [decoder layer test](../../models/ttt_compat/tests/test_decoder.py). For each of these tests, the outputs produced by the TT implementation of the model are compared against those of the original reference model, typically from Hugging Face, on CPU for a small set of inputs. MLP, attention, and other small sub-modules should have a PCC of ~0.999, while a PCC of ~0.998 would be reasonable for a full decoder layer.
+- **Model-level Unit Tests:** In addition to the sub-module unit tests, there should also be unit tests for a full layer of the model with all sub-modules, and the full model comprising of all layers. For example, the [model test](../../models/ttt_compat/tests/test_model.py) runs one or many layers of the model over multiple iterations and checks the PCC against the reference model. The full model PCC should be approximately ~0.99.
 - **Dataset Evaluation:** Once a model has been brought up with sufficient accuracy on the smaller unit tests, it should be tested on a larger set of prompts such as a full dataset or a subset of it. For example, the [Falcon7b perplexity test](../../models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py) loads a subset of the [WikiText dataset](https://huggingface.co/datasets/Salesforce/wikitext) and computes several metrics (including perplexity and top-1/5 accuracy) for evaluating the TT model with respect to the ground truth from the dataset. The results of these metrics should be within a couple percentage points of difference to those obtained from running the evaluation with the reference model on CPU / GPU.
 
 #### 4.4.2 Debugging Accuracy
@@ -1859,13 +1856,15 @@ If OPs are reading from the fastest memory they can, sharded if possible, what m
 
 * **Unnecessary `ShardedToInterleaved` and `InterleavedToSharded` calls**. The fastest work is work that you don’t have to do. These calls are pure data movement and it is often better to have some OPs using fewer cores if it means they can use the same sharding of their input data as the previous and subsequent OPs. Always avoid data movement!
 * **Always use `ScaledDotProductAttention` (SDPA) OPs if possible**. These implement FlashAttention / FlashDecode and are much faster than writing attention using individual operations.
-* **Cross-device communication OPs**. `AllGather`, `ReduceScatter` etc. Avoid these where possible, try using `bfp8` inputs instead of `bf16` if you can. There is an `AllGatherMatmul` OP that overlaps `AllGather` with a `Matmul` that you can investigate further too - see `ttnn.experimental.all_gather_matmul` with an [example of its use](https://github.com/tenstorrent/tt-metal/blob/79ff70b0e115ac50e70a72391dde3c4a4a6fab7f/models/demos/llama3/tt/llama_attention.py#L329) looking like this:
+* **Cross-device communication OPs**. `AllGather`, `ReduceScatter` etc. Avoid these where possible, try using `bfp8` inputs instead of `bf16` if you can. There is an `AllGatherMatmul` OP that overlaps `AllGather` with a `Matmul` that you can investigate further too - see `ttnn.experimental.all_gather_matmul_async` with an [example of its use](https://github.com/tenstorrent/tt-metal/blob/79ff70b0e115ac50e70a72391dde3c4a4a6fab7f/models/demos/llama3/tt/llama_attention.py#L329) looking like this:
 
 ```python
-_, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
+_, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
     input_tensor,
     weights,
+    persistent_output_buffer=None,
     dim=3,
+    multi_device_global_semaphore=multi_device_global_semaphore,
     all_gather_core_grid_offset=(0, 4),
     num_links=1,
     memory_config_ag=all_gather_memcfg,
