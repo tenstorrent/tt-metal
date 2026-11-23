@@ -61,7 +61,7 @@ void kernel_main() {
     [[maybe_unused]] constexpr auto out_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
 
     const uint32_t p = get_common_arg_val<uint32_t>(CRT_P);
-    const uint32_t table = get_common_arg_val<uint32_t>(CRT_TABLE_ADDR);
+    const uint32_t table = get_write_ptr(cb_stats_table);  // same address on every core of every chip
     const uint32_t fwd_hub = get_common_arg_val<uint32_t>(CRT_FWD_HUB);
     const uint32_t bwd_hub = get_common_arg_val<uint32_t>(CRT_BWD_HUB);
     constexpr uint32_t slot_bytes = R * K * nstats * RECORD_BYTES;

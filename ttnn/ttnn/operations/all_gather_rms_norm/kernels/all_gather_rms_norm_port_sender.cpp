@@ -62,7 +62,6 @@ void kernel_main() {
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(a++));
     const bool has_conn = get_arg_val<uint32_t>(a++) != 0;
     const bool is_hub = get_arg_val<uint32_t>(a++) != 0;
-    const uint32_t table = get_arg_val<uint32_t>(a++);
     const uint32_t slot_bytes = get_arg_val<uint32_t>(a++);
     const uint32_t stats_arrived_addr = get_arg_val<uint32_t>(a++);
     const uint32_t stats_expect_in = get_arg_val<uint32_t>(a++);
@@ -75,6 +74,7 @@ void kernel_main() {
     a += 2 * n_entries;
 
     const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
+    const uint32_t table = get_write_ptr(agrn::cb_stats_table);  // same address on every core of every chip
     volatile tt_l1_ptr uint32_t* stats_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_arrived_addr);
 
     if (has_conn) {

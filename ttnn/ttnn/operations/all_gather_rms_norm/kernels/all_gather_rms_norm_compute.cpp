@@ -5,9 +5,9 @@
 //
 // RMS:
 //   local_stats_block    sum_squares_block (x*x DEST-accumulated per tile-row, FPU) -> cb_sumsq
-//                        reduce<SUM, ROW, ReduceTile>(crt x 1) -> cb_partial (raw sum x^2, column 0, Float32)
-//   combine_stats_block  reduce<SUM, ROW, AccumulateViaAdd, Collapse>(crt x gather_tiles) over the P = G*k partition
-//                        columns + finalize rsqrt(sum / W + eps) -> cb_inv
+//                        reduce<SUM, ROW, ReduceTile, Accurate>(crt x 1) -> cb_partial (raw sum x^2, column 0, Float32)
+//   combine_stats_block  reduce<SUM, ROW, ReduceTile, Accurate>(crt x gather_tiles) over the P = G*k partition
+//                        columns + finalize rsqrt(sum / W + eps) -> cb_inv (fp32 SFPU sums: prompt precision rule)
 //   normalize_block      eltwise_chain BinaryFpu(x * inv bcast Col) [-> MulGammaRowBcast] -> cb_out_block
 // LN (shifted sums, one stats round, exact in fp32 — op_design.md Key Risks):
 //   [copy x -> cb_x32]   non-Float32 x only: an exact Float32 copy (UnpackToDestFp32 consumers need Float32)
@@ -189,11 +189,17 @@ ALWI void sum_squares_block(uint32_t rows, uint32_t cw) {
     }
 }
 
+// Exact fp32 sums of the RMS partials need fp32 DEST (UnpackToDestFp32-tagged Float32 CBs, host side).
+constexpr ReduceFp32Mode partial_sum_fp32_mode = DST_ACCUM_MODE ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+
 ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize) {
     const uint32_t crt = w.crt, cw = w.cw;
     cb_wait_front(cb_x, crt * cw);
     // local_stats_block
     sum_squares_block(crt, cw);
+    // Partial sums stay fp32 when summed (prompt precision contract): with fp32 DEST, cb_sumsq is a Float32
+    // UnpackToDestFp32 CB and the Accurate (SFPU) reduce copies it into DEST exactly; the FPU path would truncate
+    // every per-tile-row sum to tf32 before the collapse.
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
@@ -202,10 +208,12 @@ ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize) {
         cb_partial,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Fast,
+        partial_sum_fp32_mode,
         ReduceAlgorithm::ReduceTile>(ReduceInputBlockShape::of(crt, 1));
     // combine_stats_block (waits for the reader's gather tiles)
     transpose_gathered(crt * gather_tiles);
+    // The P = G*k gathered partials are summed in fp32 (SFPU, exact copies from the UnpackToDestFp32 cb_gathered):
+    // AccumulateViaAdd / the FPU reduce would read them through srcA as tf32.
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
@@ -214,9 +222,8 @@ ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize) {
         cb_inv,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Fast,
-        ReduceAlgorithm::AccumulateViaAdd,
-        ReduceWithinTile::Collapse>(
+        partial_sum_fp32_mode,
+        ReduceAlgorithm::ReduceTile>(
         ReduceInputBlockShape::of(crt, gather_tiles),
         ReduceInputMemoryLayout::contiguous(),
         NoAccumulation{},

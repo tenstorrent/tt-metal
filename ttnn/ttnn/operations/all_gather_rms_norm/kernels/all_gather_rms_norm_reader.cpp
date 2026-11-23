@@ -5,14 +5,13 @@
 //   constants            1.0 reduce scaler; LN: W-tail 0/1 mask (tail member), n_j partition-width tile
 //   load_gamma_beta_slice  this chip's / member's columns of the full-W gamma (and beta) -> compact row-0 pages
 //   load_x_block         crt x cw tiles of the own slice (one reserve / barrier / push per tile-row; W tail zeroed)
-//   gather_partials_block  after both hubs announce the stats table complete: per tile-row, G reads of the
-//                        k*nstats records of my rows into the landing scratch, scattered into Float32 gather tiles
-//                        (column j = partition q*k + m; columns >= P stay 0)
-//   LN mean broadcast    exact fp32 broadcast of the combined row mean (column 0 -> every column), by word copies:
-//                        an FPU broadcast would truncate the mean to tf32 (op_design.md Key Risks: LN precision)
+//   gather_partials_block  after both hubs announce the stats table (cb_stats_table) complete: per tile-row, one
+//                        contiguous read per slot (k*nstats records of my rows) into the landing scratch, then local
+//                        NoC copies place each record as ROW j (= partition q*k + m) of a Float32 gather tile in
+//                        cb_gather_rows (rows >= P stay 0); compute transposes them exactly in DEST
 //
-// Raw dataflow (documented): the record gather / scatter and the mean broadcast are word-level L1 copies no helper
-// expresses (op_design.md "Helpers considered and rejected").
+// Raw dataflow (documented): the record gather / placement are NoC copies no helper expresses (op_design.md
+// "Helpers considered and rejected"; implementation notes: row-form gather).
 
 #include <cstdint>
 
@@ -233,7 +232,7 @@ void kernel_main() {
         noc_semaphore_wait_min(ready, 1);  // both hubs: own slot + every remote slot of the table landed
         noc_semaphore_wait_min(ready_bwd, 1);
     }
-    const uint32_t table = get_common_arg_val<uint32_t>(CRT_TABLE_ADDR);
+    const uint32_t table = get_write_ptr(cb_stats_table);  // same address on every core of every chip
     const uint32_t hub_mask = get_common_arg_val<uint32_t>(CRT_HUB_MASK);
     const uint32_t fwd_hub = get_common_arg_val<uint32_t>(CRT_FWD_HUB);
     const uint32_t bwd_hub = get_common_arg_val<uint32_t>(CRT_BWD_HUB);

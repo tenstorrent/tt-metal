@@ -37,7 +37,7 @@ Non-CB L1 (mesh-allocated, same address on every chip):
 
 | Buffer | Bytes | Where | Bound |
 |---|---|---|---|
-| stats table | `G · R · k · nstats · 128` | one shard on each hub core of the union of all chips' hubs | ≤ `STATS_TABLE_CAP` = 256 KiB (else RuntimeError) |
+| ~~stats table~~ | — | **now `cb_stats_table` (CB 25), see the As-built table** | — |
 | global semaphores | 3 kinds × 16 B | port cores (union) | constant |
 | R_U staging | `G · R · Wlt · T_out` | **DRAM** interleaved (not L1) | — |
 
@@ -72,7 +72,7 @@ worker/port (one CB list) =
   + [LN]·(2·T_acc + 2·4096 + 4096·gather_tiles)           # ln_sq, ln_scratch, stat_consts
   + [R_U]·3·T_out                                         # assemble scratch
   + 2·batch_chunks·payload_pages·T_out                    # port chunks              — constant (≈ 112 KiB)
-  (+ stats table shard on hub cores only)
+  + G·R·k·nstats·128                                      # cb_stats_table (CB 25, every core; read/written on the hubs only)
 ```
 
 Terms scaling with the block knobs: `crt·cwt` (x, out). With `crt` alone: the per-row stat CBs. With `k` and `G`:
@@ -118,6 +118,7 @@ Total per chip: DRAM ≈ 6S (x 1, own write 1, landed 3, relay read 1) against t
 | `cb_gathered` | 12 | `crt_max · nstats · gather_tiles` Float32 (UnpackToDestFp32 for LN only) | compute → compute (transpose output), as designed otherwise. |
 | `cb_assemble` | 20 | `src_max + 1` pages (R_U) | `src_max` = max distinct staging tiles per output tile (host-computed; 3 for W_local = 50). |
 | `cb_port_chunks` | 21 | `2 · batch_chunks · run_pages` pages | as designed; `run_pages = floor(payload / page)` (7 for bf16 at 14 KiB). |
+| `cb_stats_table` | 25 | `G · R · k · nstats` × 128 B pages, full core range | **Verifier fix** (was a persistent mesh L1 tensor cached per table size, which leaked one L1 buffer per distinct size and collided with the CB region; the golden conftest's frame-tensor deallocation also freed it under the cache). A program-scoped CB has the same address on every core of every chip (identical CB lists) and needs no persistent L1. Live set = capacity on the 2 hubs; on every other core it is unused but allocated (identical-address rule, as `cb_port_chunks`): ≤ `STATS_TABLE_CAP` = 256 KiB, focus case 4·20·4·1·128 = 40 KiB. Bounded by `stats_k_cap` in `select_split`. Shares: none (live the whole call on the hubs). |
 
 Data-movement budget: unchanged from the table above (x 1, own write 1, landed 3, relay read 1 per chip; the ports
 pull the own slice from worker L1). Measured probe: re-reading the own slice from the own DRAM output instead is only

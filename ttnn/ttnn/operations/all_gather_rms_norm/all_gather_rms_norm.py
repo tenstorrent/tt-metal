@@ -106,10 +106,12 @@ SUPPORTED = {
 EXCLUSIONS = [
     # Precision convention: float32 input requires fp32 DEST accumulation.
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
-    # bfloat8_b tails cannot be element-masked / element-shifted (16-datum shared exponents) — base op reason;
-    # R_U's element-shift assembly cannot address shared-exponent blocks.
+    # bfloat8_b with W_local % 32 != 0: the R_U element-shifted assembly (and the reader's W-tail zero-fill) address
+    # datums by byte offset, which a 16-datum shared-exponent block cannot express. Measured (verifier, gate tier):
+    # 19/19 cells severity=bug (PCC ~ 0) with this entry lifted. Base op reason, confirmed for this op.
     {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
-    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
+    # (bfloat8_b x h_non_aligned is NOT excluded: H padding is never element-masked here — rows are independent.
+    #  Measured: 19/19 gate cells pass with the base op's exclusion lifted.)
 ]
 
 

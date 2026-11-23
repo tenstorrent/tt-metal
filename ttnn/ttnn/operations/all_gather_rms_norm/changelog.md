@@ -1,4 +1,21 @@
-# all_gather_rms_norm — changelog
+# Changelog: all_gather_rms_norm
+
+## Phase 0 — Core Implementation
+- **Date**: 2026-11-23
+- **What was done**: Initial implementation via incremental pipeline (planner → implementer → verifier). SF-GN scheme (stats-first, gather-normalized), one `ttnn.generic_op` / `MeshProgramDescriptor` per call; details below ("Phase 0 (ttnn-implementer)").
+- **SUPPORTED at Phase 0**: dtype=[float32, bfloat16, bfloat8_b], fp32_dest_acc_en=[True], layout=[TILE], alignment=[tile_aligned, w_non_aligned, h_non_aligned], rank=[2, 3, 4], gamma_mode=[gamma, no_gamma], gamma_dtype=[float32, bfloat16, "none"], gamma_layout=[TILE, ROW_MAJOR, "none"], norm_type=[rms_norm, layer_norm], beta_mode=[beta, no_beta], memory_layout=[INTERLEAVED], cluster_axis=[0, 1], topology=[Linear, Ring], num_links=[1, 2]; EXCLUSIONS={float32 + fp32_dest_acc_en=False; bfloat8_b + w_non_aligned}
+- **Accuracy achieved** (verifier, `test_all_gather_rms_norm_precision_baseline.py`, 10 cases / 7 shapes, 1×4 ring, 2 links): bf16 RMS PCC ≥ 0.999997, max_abs ≤ 0.088, rel_rms ≤ 0.0040; fp32 RMS PCC 1.000000, rel_rms 0.0017; bfloat8_b RMS PCC 0.999953, rel_rms 0.0097; bf16 LN PCC ≥ 0.999998, rel_rms ≤ 0.0019; fp32 LN rel_rms 0.0014.
+- **Golden suite at Phase 0**: gate tier (1720 cells): 1080 supported_pass, 480 xfail_expected, 0 supported_fail / 0 xpass_drift / 0 xfail_wrong_mode after the verifier fixes (before: 404 supported_fail, 3 xfail_wrong_mode). `agent_logs/verifier_report_summary.json`.
+- **Perf at Phase 0** (eval harness, 5 experiments, fastest / slowest chip): focus 640×384 RMS 35.56 / 35.94 µs (roofline 7.6, target 10.1); LN 640×32 + γ + β 29.60 / 29.88 µs (roofline 0.6, target 0.8). Not dispatch-bound.
+- **Issues encountered**: see "Verifier (Phase 0 hardening)" below — persistent L1 stats-table leak (404 golden failures), the stats-table cap ignored by the split, non-fp32 RMS partial sums (prompt MUST), the base op's bf8b × h_non_aligned exclusion lifted.
+- **Tests added**: test_all_gather_rms_norm.py (planner), test_all_gather_rms_norm_debug.py (implementer), test_all_gather_rms_norm_precision_baseline.py (verifier)
+
+## Verifier (Phase 0 hardening)
+- **Persistent L1 stats table leaked, then collided with the CB region** (fixed). `stats_table()` cached a mesh L1 tensor *per table size* and never freed it. L1 allocates top-down, so every new shape pushed a new table lower (probe: 1570624 → 1529664 → …) until programs failed with "Statically allocated circular buffers ... clash with L1 buffers" (49 cells). The golden conftest deallocates the device tensors a failed call's frames hold, which freed the cached table under the cache and failed every later call with "Tensor is not allocated" (321 cells). The 27 remaining cells are the next item. **Fix:** the table is now `cb_stats_table` (CB 25), a program-scoped CB on the full core range. Identical CB lists give it the same L1 address on every core of every chip, and peers write into it only after the ready fence, i.e. while the receiving program is live. No persistent L1 is left besides the global semaphores. The cached DRAM staging buffer is re-created if it is no longer allocated. Gate tier: 404 supported_fail → 0.
+- **Stats-table cap not honoured by `select_split`** (fixed): LN at R = 64 picked k = 3, a 288 KiB table over `STATS_TABLE_CAP` (27 cells: 2048×1280, 2048×384, 4×1×512×512, LN). `stats_k_cap(R, G, nstats)` now clamps k; the RuntimeError remains only if k = 1 does not fit.
+- **RMS partial sums were truncated to tf32 when summed** (fixed; prompt rule "per-row partial sums MUST stay fp32 on the wire and when summed"): the local collapse (`cb_sumsq`) and the cross-chip combine (`cb_gathered`) went through the FPU / AccumulateViaAdd path, which reads Float32 CBs through srcA as tf32. Under fp32 DEST both CBs are now UnpackToDestFp32-tagged and reduced with `ReduceFp32Mode::Accurate` (SFPU), the same pattern LN's S1 uses. Perf null within noise (35.542 → 35.557 µs, noise 0.050).
+- **EXCLUSIONS re-measured**: `{bfloat8_b, h_non_aligned}` lifted (19/19 gate cells pass: H padding is never element-masked); `{bfloat8_b, w_non_aligned}` kept (19/19 severity=bug with it lifted).
+- Docs: stale reader header comment (word-copy mean broadcast / column scatter, both gone) rewritten; `l1_ledger.md` and `op_design.md` updated for `cb_stats_table`.
 
 ## Phase 0 (ttnn-implementer)
 

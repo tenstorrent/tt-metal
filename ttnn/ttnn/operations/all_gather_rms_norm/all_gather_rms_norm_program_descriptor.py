@@ -70,6 +70,7 @@ CB_PORT_CHUNKS = 21
 CB_X32 = 22
 CB_GAMMA_ROWS = 23
 CB_GATHER_ROWS = 24
+CB_STATS_TABLE = 25  # hubs: per-call stats table (program-scoped, see agrn_common.hpp)
 
 # ---- program-local semaphores (declared before the fabric connections take theirs) ----
 SEM_RECORDS_LOCAL = 0
@@ -150,8 +151,14 @@ class Split:
         return max(0, min(self.cw_nom, Wlt - m * self.cw_nom))
 
 
+def stats_k_cap(R, G, nstats):
+    """Largest k whose stats table (G * R * k * nstats records) fits STATS_TABLE_CAP (Mechanism caps)."""
+    return STATS_TABLE_CAP // (G * R * nstats * RECORD_BYTES)
+
+
 def select_split(R, Wlt, Nw, G, k_cap) -> Split:
-    """op_design.md Work Distribution: cost = rows * (slice + COMB_TILE_COST_FUSED * ceil(G*k/32)), ties -> smaller k."""
+    """op_design.md Work Distribution: cost = rows * (slice + COMB_TILE_COST_FUSED * ceil(G*k/32)), ties -> smaller k.
+    k_cap already folds in P_CAP / G, the LN one-gather-tile rule and the stats-table cap (stats_k_cap)."""
     best = None
     for k in range(1, max(1, min(Wlt, k_cap)) + 1):
         groups = min(Nw // k, R)
@@ -349,36 +356,11 @@ def global_semaphores(mesh_device, plan):
     return [int(ttnn.get_global_semaphore_address(s)) for s in _RES_CACHE[key][1]]  # ready, bulk, stats
 
 
-def stats_table(mesh_device, plan, table_bytes):
-    hub_cores = {
-        (ch["ports"][(d, 0)].x, ch["ports"][(d, 0)].y) for ch in plan["chips"].values() for d in ("fwd", "bwd")
-    }
-    words = max(8, table_bytes // 4)
-    key = ("table", id(mesh_device), tuple(sorted(hub_cores)), words)
-    if key not in _RES_CACHE:
-        import torch
-
-        cores = _single_cores(hub_cores)
-        mem = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(cores, (1, words), ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        t = ttnn.from_torch(
-            torch.zeros((len(hub_cores), words), dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=mem,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        _RES_CACHE[key] = (mesh_device, t)
-    return _RES_CACHE[key][1]
-
-
 def staging_buffer(mesh_device, geo: Geometry, dtype):
     key = ("staging", id(mesh_device), geo.G, geo.R, geo.Wlt, dtype)
-    if key not in _RES_CACHE:
+    # Re-create a cached buffer that is no longer allocated: the golden conftest deallocates the device tensors a
+    # failed call's frames hold, which includes this cached one.
+    if key not in _RES_CACHE or not _RES_CACHE[key][1].is_allocated():
         t = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, geo.G * geo.R * TILE, geo.Wlt * TILE]),
             dtype,
@@ -437,11 +419,12 @@ def create_mesh_program_descriptor(
     n_ports = 2 * L
     Nw = gx * gy - n_ports
     k_cap = P_CAP // G
+    nstats = 3 if is_ln else 1
     if is_ln:
-        k_cap = max(1, min(k_cap, 32 // G))  # LN combine: one gather tile per stat (P <= 32)
+        k_cap = min(k_cap, 32 // G)  # LN combine: one gather tile per stat (P <= 32)
+    k_cap = max(1, min(k_cap, stats_k_cap(geo.R, G, nstats)))
     split = select_split(geo.R, geo.Wlt, Nw, G, k_cap)
     k = split.k
-    nstats = 3 if is_ln else 1
     P = G * k
     gather_tiles = -(-P // 32)
     crt_max = split.rows_hi
@@ -502,8 +485,6 @@ def create_mesh_program_descriptor(
             src_max = max(src_max, len(pages))
 
     ready_addr, bulk_addr, stats_addr = global_semaphores(mesh_device, plan)
-    table = stats_table(mesh_device, plan, table_bytes)
-    table_addr = int(table.buffer_address())
 
     # ---- worker compile-time args (agrn_worker_args.hpp) ----
     worker_ct = [
@@ -581,6 +562,10 @@ def create_mesh_program_descriptor(
     tagged = [CB_GATHER_ROWS]  # exact fp32 copy into DEST for the transpose
     if is_ln:
         tagged += [CB_X if x_is_f32 else CB_X32, CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_COL]
+    elif fp32_dest:
+        # RMS: the local collapse and the cross-chip combine sum the partials in fp32 (Accurate SFPU reduce reading
+        # these CBs exactly): "per-row partial sums MUST stay fp32 on the wire and when summed" (prompt)
+        tagged += [CB_SUMSQ, CB_GATHERED]
     for cb in tagged:
         modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
     cfg.unpack_to_dest_mode = modes
@@ -655,6 +640,8 @@ def create_mesh_program_descriptor(
             _cb(CB_INV, crt_max, T32, ttnn.float32, full),
             _cb(CB_OUT_BLOCK, crt_max * cw_max, out_page, out_dtype, full),
             _cb(CB_PORT_CHUNKS, 2 * batch_chunks * run_pages, out_page, out_dtype, full),
+            # program-scoped: same address on every core of every chip, no persistent L1 (see agrn_common.hpp)
+            _cb(CB_STATS_TABLE, table_bytes // RECORD_BYTES, RECORD_BYTES, ttnn.float32, full),
         ]
         if has_gamma:
             cbs.append(_cb(CB_GAMMA, cw_max, gamma_page, g_dtype, full))
@@ -690,7 +677,6 @@ def create_mesh_program_descriptor(
             out_addr,
             g_addr,
             b_addr,
-            table_addr,
             _f32_bits(epsilon),
             _f32_bits(1.0 / geo.W),
             p,
@@ -782,7 +768,6 @@ def create_mesh_program_descriptor(
                     int(pn.chip_id) if pn is not None else 0,
                     int(peer is not None),
                     int(is_hub),
-                    table_addr,
                     slot_bytes,
                     stats_addr,
                     st_expect,
@@ -827,7 +812,7 @@ def create_mesh_program_descriptor(
                     worker_ct,
                     acc_ct,
                     port_ct,
-                    common[5:],
+                    common[5:],  # everything after the five per-call tensor addresses
                     sig,
                     [(c.x, c.y) for c in port_list],
                     is_ln,
@@ -846,4 +831,4 @@ def create_mesh_program_descriptor(
         program.custom_program_hash = int.from_bytes(h[:8], "little") & ((1 << 63) - 1)
         r, c = coord
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
-    return mesh_desc, [t for t in (staging, table) if t is not None]
+    return mesh_desc, [t for t in (staging,) if t is not None]

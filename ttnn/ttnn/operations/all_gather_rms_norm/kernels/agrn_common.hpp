@@ -49,6 +49,10 @@ constexpr uint32_t cb_x32 = 22;             // LN, non-Float32 x: exact Float32 
 constexpr uint32_t cb_gamma_rows = 23;      // reader scratch: raw gamma / beta source rows (128 B stride)
 constexpr uint32_t cb_gather_rows = 24;     // Float32 gather tiles in ROW form (row j = partition j), read straight
                                             // from the hub tables; compute transposes them into cb_gathered
+constexpr uint32_t cb_stats_table = 25;     // hubs: the per-call stats table (G slots of R x K x nstats records).
+                                            // A program-scoped CB on the full core range: the same L1 address on
+                                            // every core of every chip (identical CB lists), live only while the
+                                            // program runs (peers write into it only after the ready fence)
 
 // ---- program-local semaphores ----
 constexpr uint32_t sem_records_local = 0;  // hubs: one inc per active worker (records written into my table)
