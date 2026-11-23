@@ -275,9 +275,6 @@ TEST_F(UnitMeshFixture, DMTest1xDFB2Bx2B_blk4_entry2048) {
 
 // Implicit sync with NoC transactions larger than one overlay packet (8 KiB on Quasar). The tiles-to-process
 // counter behind the implicit-sync ISR counts one per packet, so the host programs the threshold in packets.
-// Too low a threshold credits entries before their data lands; too high and the ISR never fires and the
-// kernels hang. DM producers count on the read cmd buf (tr_ack), DM consumers on the write cmd buf (wr_sent);
-// the DM->Tensix and Tensix->DM cases check each side on its own.
 #define DFB_MULTI_PACKET_TEST(suffix, p_type, c_type, num_p, num_c, pattern, blk, entry_bytes, entries) \
     TEST_F(UnitMeshFixture, suffix) {                                                                   \
         M2SingleDFBParams params{                                                                       \
