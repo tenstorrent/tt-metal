@@ -49,3 +49,14 @@ def test_lru_budget():
 def test_boundaries():
     pc = PrefixCache(1)
     assert pc.boundaries(1000) == [] and pc.boundaries(2600) == [2048] and pc.boundaries(4096) == [4096]
+
+
+def test_peek_matches_lookup_without_side_effects():
+    pc = PrefixCache(1e9, block=1024)
+    a = toks(5000, 7)
+    pc.insert(a, 4096, "snap", 10)
+    stats = dict(pc.stats)
+    order = list(pc._entries)
+    assert pc.peek(a) == 4096 and pc.peek(toks(5000, 8)) == 0
+    assert dict(pc.stats) == stats and list(pc._entries) == order  # (no count, no LRU touch)
+    assert pc.lookup(a)[0] == pc.peek(a)

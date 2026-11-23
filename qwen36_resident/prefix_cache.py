@@ -59,6 +59,11 @@ class PrefixCache:
         self.stats["hit_tokens"] += h
         return h, value
 
+    def peek(self, tokens):
+        """the prefix lookup() would restore (0: none), without counting it or touching the LRU order"""
+        keys = block_keys(tokens[: len(tokens) - 1], self.block)
+        return max((self._entries[k][0] for k in keys if k in self._entries), default=0)
+
     def insert(self, tokens, h, value, nbytes):
         assert h > 0 and h % self.block == 0 and h <= len(tokens), h
         chain = block_keys(tokens[:h], self.block)

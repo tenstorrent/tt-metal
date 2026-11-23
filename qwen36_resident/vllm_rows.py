@@ -741,12 +741,18 @@ class RowsEngine:
         into its slot as reset + run + handoff of it alone would (run_batch resets the pipeline itself: a split prompt
         the plugin aborted mid-prefill, which the adapter only drops from pp_partial, leaves nothing behind)"""
         if self.prefix_cache is not None:
-            # (prompts of a whole cache block or more go through the cache one by one; shorter ones can neither hit
-            # nor store a prefix and keep the batched pass)
-            blk = self.prefix_cache.block
-            for ids, blocks, r in [it for it in items if len(it[0]) >= blk]:
+            # (a prompt of a whole cache block or more that hits restores its prefix through the cache, one by one; so
+            # does a lone miss, which stores its boundary. Two or more misses keep the batched pass with the shorter
+            # prompts, storing nothing: a burst of unique prompts prefilled one by one to store each cost c32 2K
+            # prompts 2.6x the TTFT (2026-11-24); a conversation's turns, arriving alone, are stored and hit)
+            pc, blk = self.prefix_cache, self.prefix_cache.block
+            long = [it for it in items if len(it[0]) >= blk]
+            hits = [it for it in long if pc.peek([int(t) for t in it[0]])]  # (as _prefill_cached looks up)
+            misses = [it for it in long if not any(it is h for h in hits)]
+            alone = hits + (misses if len(misses) == 1 else [])
+            for ids, blocks, r in alone:
                 self._prefill_cached(ids, r, blocks, chunk)
-            items = [it for it in items if len(it[0]) < blk]
+            items = [it for it in items if len(it[0]) < blk] + (misses if len(misses) > 1 else [])
             if len(items) == 1:
                 ids, blocks, r = items[0]
                 self.pp.reset()
