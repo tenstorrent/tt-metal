@@ -10,9 +10,8 @@ different program: the large-tensor factory, when a whole row no longer fits in 
 pre-all-gather stage by following fp32_dest_acc_en. The distributed norm is covered end to end on one
 device: pre-all-gather statistics, then post-all-gather with the weight.
 
-The row-width test here uses a few tile rows: the factory is chosen from the width, not the height. It runs
-on the Blackhole simulator, but not on the Wormhole one (#38203, see tests/pipeline_reorg/ttsim-skip-list.yaml).
-The full-grid size, with 4 tile rows on every core, is in
+The row-width test here uses a few tile rows, so the simulators run it too: the factory is chosen from the
+width, not the height. The full-grid size, with 4 tile rows on every core, is in
 tests/ttnn/nightly/unit_tests/operations/fused/test_norm_model_widths_full_grid.py.
 """
 
