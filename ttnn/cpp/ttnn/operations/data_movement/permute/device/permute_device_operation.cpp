@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <numeric>
 #include <utility>
+#include <variant>
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -53,6 +55,21 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.dims.size() == tensor_args.input_tensor.logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
+
+    // MultiCoreTiledGeneric indexes rows and tile blocks in uint32_t.
+    if (std::holds_alternative<MultiCoreTiledGeneric>(select_program_factory(attributes, tensor_args))) {
+        const uint64_t logical_volume = tensor_args.input_tensor.logical_shape().volume();
+        TT_FATAL(
+            logical_volume <= std::numeric_limits<uint32_t>::max(),
+            "permute: logical volume of {} elements exceeds the uint32_t limit",
+            logical_volume);
+
+        const uint64_t xw_blocks = MultiCoreTiledGeneric::compute_xw_blocks(attributes, tensor_args);
+        TT_FATAL(
+            xw_blocks <= std::numeric_limits<uint32_t>::max(),
+            "permute: tile-padded volume of {} tiles exceeds the uint32_t work-split limit",
+            xw_blocks);
+    }
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(
