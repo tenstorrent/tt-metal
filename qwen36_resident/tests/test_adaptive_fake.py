@@ -124,7 +124,7 @@ def make(monkeypatch):
     m.ae.plain_tables = m.tables
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
     m.sampled, m._t, m._plain_stale, m.greedy_ok, m._calls = set(), {}, False, set(), [0, 0]
-    m._pay = dict(acc=None, spec_ms={}, plain_ms={}, verifies=0, last_t=None, kind=None, n=0, hold=0, excl=0.0)
+    m._pay = m._new_pay()
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
 
@@ -389,7 +389,36 @@ def test_pay_policy_excludes_prefills(monkeypatch):
         m.prefill_forward(None, None, None, [1], empty_slots=[0], prefill_final_mask=[False])
         m._pay["kind"], m._pay["n"] = "verify", 8
         pays = m._measure([3.2] * 8)
-    assert pays is True and abs(m._pay["spec_ms"][8] - 40.0) < 1e-6, (m._pay, pays)
+    assert pays is True and abs(m._pay["t_act"] - 40.0 * sum(A.PAY_DECAY**k for k in range(A.PAY_MIN + 4))) < 1e-6, (
+        m._pay,
+        pays,
+    )
+
+
+def test_pay_policy_counts_refills(monkeypatch):
+    """the promotions' drafter refills are a cost of speculating (every live user waits for them): 40 ms verify
+    steps with 3.2 tokens each pay at 8 users alone, not with a 600 ms refill every 4 steps (users arriving one by
+    one); the plain step a refill sits in keeps its own time"""
+    import time as _time
+
+    m, pf = make(monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(_time, "perf_counter", lambda: clock[0])
+    m._pay["last_t"] = clock[0]
+    pays = None
+    for k in range(A.PAY_MIN + 4):
+        clock[0] += 0.040
+        m._pay["kind"], m._pay["n"] = "verify", 8
+        pays = m._measure([3.2] * 8)
+        if k % 4 == 0:  # (a promotion right after this propose)
+            clock[0] += 0.600
+            m._pay["refill"] += 0.600
+    assert pays is False, (m._pay, pays)
+    m._pay["refill"] += 0.300
+    clock[0] += 0.320
+    m._pay["kind"], m._pay["n"] = "plain", 8
+    m._measure([1] * 8)
+    assert abs(m._pay["plain_ms"][8] - 20.0) < 1e-6, m._pay
 
 
 def test_no_promotion_with_a_step_in_flight(monkeypatch):
