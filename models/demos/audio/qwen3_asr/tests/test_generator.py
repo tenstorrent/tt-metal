@@ -10,6 +10,10 @@
   test_device_splice_matches_host     on-device audio splice equals the host splice exactly
   test_generator_batch_matches_single greedy on-device decode of 8 requests in one batch
                                       equals each request decoded alone
+  test_generator_session_continuation a streaming session (vLLM /v1/realtime): each 5 s
+                                      segment prefills on top of the session's KV, builds
+                                      no program after warmup, and transcribes as well as
+                                      re-prefilling the whole session (WER vs <name>.txt)
 
 Needs the same data as test_interleaved_lengths.py (QWEN3ASR_INTERLEAVE_DIR with
 <name>.wav files) plus the Qwen3-ASR snapshot and extracted text decoder (see
@@ -19,6 +23,7 @@ demo/transcribe.py). Run on one N150:
 """
 import json
 import os
+import re
 
 import pytest
 import torch
@@ -82,7 +87,8 @@ def _paged(gen):
     return kv_cache, page_table.to(torch.int32)
 
 
-def _prefill(gen, kv_cache, page_table, reqs, slots, sampling_params=None):
+def _prefill(gen, kv_cache, page_table, reqs, slots, sampling_params=None, start_pos=None):
+    """reqs: (input_ids, mel or list of mels) per user."""
     lens = [int(ids.shape[0]) for ids, _ in reqs]
     tokens = torch.zeros(len(reqs), max(lens), dtype=torch.long)
     for i, (ids, _) in enumerate(reqs):
@@ -94,6 +100,7 @@ def _prefill(gen, kv_cache, page_table, reqs, slots, sampling_params=None):
         prompt_lens=torch.tensor(lens),
         empty_slots=slots,
         sampling_params=sampling_params,
+        start_pos=None if start_pos is None else torch.tensor(start_pos),
         input_audio_features=[mel for _, mel in reqs],
         audio_feature_lengths=[None] * len(reqs),
     )
@@ -242,3 +249,113 @@ def test_generator_batch_matches_single(device):
 
     for i, (a, b) in enumerate(zip(single, batched)):
         assert a == b, f"request {i}: batch-1 {a} != batch-{MAX_BATCH} {b}"
+
+
+SEGMENT_S = 5
+SESSION_STEPS = 32
+SESSION_MAX_WER = 0.1
+SESSION_WER_MARGIN = 0.02
+IM_END = 151645
+
+
+def _segments(path):
+    """A clip cut into SEGMENT_S pieces, each as vLLM's Qwen3-ASR realtime prompt (no
+    system turn): (input_ids, mel)."""
+    from transformers import AutoTokenizer, WhisperFeatureExtractor
+
+    snap = T.find_snap()
+    tok = AutoTokenizer.from_pretrained(T.find_text_decoder(snap))
+    fe = WhisperFeatureExtractor.from_pretrained(snap)
+    scaffold = tok("<|im_start|>user\n<|audio_start|><|audio_pad|><|audio_end|><|im_end|>\n<|im_start|>assistant\n")[
+        "input_ids"
+    ]
+    cut = scaffold.index(AUDIO_TOKEN_ID)
+    wav = T.load_wav(path)
+    step = SEGMENT_S * T.SR
+    out = []
+    for lo in range(0, len(wav), step):
+        feats = fe(wav[lo : lo + step], sampling_rate=T.SR, return_attention_mask=True, return_tensors="pt")
+        flen = int(feats["attention_mask"].sum())
+        mel = feats["input_features"][0][:, :flen].float()
+        n = T.feat_out_len(flen)
+        ids = torch.tensor(scaffold[:cut] + [AUDIO_TOKEN_ID] * n + scaffold[cut + 1 :], dtype=torch.long)
+        out.append((ids, mel))
+    return out
+
+
+def _session(gen, kv_cache, page_table, segments, slot, continue_kv):
+    """Greedy outputs per segment of a streaming session in one slot. With continue_kv each
+    segment prefills only its own prompt on top of the session's KV, as vLLM schedules a
+    streaming session; without it each segment re-prefills the whole session from 0."""
+    seq = torch.zeros(0, dtype=torch.long)
+    mels = []
+    computed = 0
+    outputs = []
+    tokens = torch.zeros(MAX_BATCH, dtype=torch.long)
+    positions = torch.zeros(MAX_BATCH, dtype=torch.long)
+    row_greedy = _greedy_params(MAX_BATCH)
+    for ids, mel in segments:
+        seq = torch.cat([seq, ids])
+        mels.append(mel)
+        first = _prefill(
+            gen,
+            kv_cache,
+            page_table,
+            [(seq, list(mels))],
+            [slot],
+            sampling_params=_greedy_params(1),
+            start_pos=[computed if continue_kv else 0],
+        )
+        if isinstance(first, tuple):
+            first = first[0]
+        toks = [int(first.reshape(-1)[0])]
+        computed = seq.shape[0]
+        while toks[-1] != IM_END and len(toks) <= SESSION_STEPS:
+            tokens[slot], positions[slot] = toks[-1], computed
+            toks.append(int(_decode(gen, kv_cache, page_table, tokens, positions, sampling_params=row_greedy)[slot]))
+            computed += 1
+        outputs.append(toks)
+        # vLLM keeps every computed output token as session context; the last sampled one
+        # never went through the model.
+        seq = torch.cat([seq, torch.tensor(toks[:-1], dtype=torch.long)])
+    return outputs
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+def test_generator_session_continuation(device):
+    paths = sorted(_clip_paths(), key=os.path.getsize)
+    gen = _build(device)
+    kv_cache, page_table = _paged(gen)
+    # Captures the decode trace, so the session below runs while it exists.
+    _session(gen, kv_cache, page_table, _segments(paths[-1])[:2], 0, continue_kv=True)
+    cached = device.num_program_cache_entries()
+    segments = _segments(paths[-1]) + _segments(paths[0])
+    session = _session(gen, kv_cache, page_table, segments, 1, continue_kv=True)
+    assert device.num_program_cache_entries() == cached, "session continuation built new programs after warmup"
+    full = _session(gen, kv_cache, page_table, segments, 2, continue_kv=False)
+    tok = gen.tokenizer
+    reference = _words(" ".join(open(p[: -len(".wav")] + ".txt").read() for p in (paths[-1], paths[0])))
+    wer = {}
+    for name, outputs in (("continued", session), ("full prefill", full)):
+        text = " ".join(T.parse_asr(tok.decode([t for t in toks if t != IM_END]))[1] for toks in outputs)
+        wer[name] = _word_errors(_words(text), reference) / len(reference)
+        print(f"{name}: WER {wer[name]:.3f} {text!r}")
+    # Continued and full prefill attend through different SDPA paths over a BFP8 KV cache,
+    # so single words at segment cuts differ; neither path may be worse overall.
+    assert wer["continued"] <= wer["full prefill"] + SESSION_WER_MARGIN, wer
+    assert wer["continued"] <= SESSION_MAX_WER, wer
+
+
+def _words(text):
+    words = re.sub(r"[^A-Z0-9' ]", " ", text.upper()).split()
+    return ["MISTER" if w == "MR" else w for w in words]
+
+
+def _word_errors(hyp, ref):
+    d = list(range(len(ref) + 1))
+    for i, h in enumerate(hyp, 1):
+        prev, d[0] = d[0], i
+        for j, r in enumerate(ref, 1):
+            prev, d[j] = d[j], min(d[j] + 1, d[j - 1] + 1, prev + (h != r))
+    return d[-1]

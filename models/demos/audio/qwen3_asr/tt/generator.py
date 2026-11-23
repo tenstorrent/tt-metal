@@ -11,18 +11,37 @@ shared tt_transformers paged, batched, traced decode with on-device sampling.
 This module does not import vLLM, so it can be driven directly by tests; the vLLM
 class in ``generator_vllm.py`` adds the processor registration on top.
 """
+import collections
+import math
 import os
+import time
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.audio.qwen3_asr.tt import audio_encoder as tt_enc
 from models.demos.audio.qwen3_asr.tt.model_args import Qwen3ASRModelArgs
 from models.demos.audio.qwen3_asr.tt.qwen3_asr_decoder import Qwen3ASRDecoder
+from models.tt_transformers.tt.common import get_block_size, get_padded_prefill_len
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import TensorGroup
 
 AUDIO_TOKEN_ID = 151676
+# Chunked prefill SDPA takes its Q/K chunk from the largest power of two dividing the start
+# (tt_transformers get_attn_sdpa_prefill_program_config); a multiple of 64 keeps the same
+# chunk as a prefill from 0.
+CONTINUATION_ALIGN = 64
+# Recent audio items' mel features (about 256 KB per 5 s), for continued prefills.
+MEL_CACHE_ITEMS = 64
+# Multimodal fields vLLM gathers for every multimodal model besides the audio features.
+MULTIMODAL_KWARGS = (
+    "pixel_values",
+    "image_grid_thw",
+    "mm_placeholder_offsets",
+    "mm_placeholder_lengths",
+    "mm_identifiers",
+)
 
 
 def split_audio_features(features, lengths):
@@ -61,6 +80,7 @@ class Qwen3ASRGenerator(Generator):
     def __init__(self, model, model_args, mesh_device, tokenizer=None, encoder_params=None):
         super().__init__(model, model_args, mesh_device, tokenizer=tokenizer)
         self.encoder_params = encoder_params
+        self._mel_cache = collections.OrderedDict()
 
     @classmethod
     def build(cls, mesh_device, max_batch_size, max_seq_len, snap_dir, text_decoder_dir, optimizations=None):
@@ -140,8 +160,9 @@ class Qwen3ASRGenerator(Generator):
 
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only=False):
         """Also builds, for every warmed prefill length, the audio splice for each encoder
-        bucket and the last-token slice at each 32-row offset (its offset is part of the
-        program), so untraced prefill builds no program once a decode trace exists."""
+        bucket, the last-token slice at each 32-row offset (its offset is part of the
+        program) and the continued prefill from each aligned start, so untraced prefill
+        builds no program once a decode trace exists."""
         if self.already_warmed_up_prefill:
             return
         super().warmup_model_prefill(kv_cache, enable_trace, can_sample_on_device, greedy_only=greedy_only)
@@ -176,6 +197,66 @@ class Qwen3ASRGenerator(Generator):
                 for t in out[:1]:
                     ttnn.deallocate(t)
                 ttnn.deallocate(audio)
+        self._warmup_continued_prefill(kv_cache)
+
+    def _warmup_continued_prefill(self, kv_cache):
+        """A continued prefill's attention reads the page table of its whole prompt, so its
+        programs depend on the start as well as the length: run one per aligned start and
+        warmed length."""
+        if kv_cache is None:
+            return
+        args = self.model_args[0]
+        block = get_block_size(kv_cache[0])
+        align = math.lcm(block, CONTINUATION_ALIGN)
+        started = time.time()
+        count = 0
+        for seq_len in args.get_warmup_prefill_supported_seq_lens():
+            if seq_len > args.max_prefill_chunk_size or get_padded_prefill_len(seq_len) != seq_len:
+                continue
+            # The shortest prompt padded to seq_len bounds the starts a request can reach.
+            shortest = next(n for n in range(1, seq_len + 1) if get_padded_prefill_len(n) == seq_len)
+            for start in range(align, args.max_seq_len - shortest + 1, align):
+                count += 1
+                total = start + seq_len
+                self.prefill_forward_text(
+                    torch.zeros(1, total, dtype=torch.long),
+                    page_table=torch.zeros(1, math.ceil(total / block), dtype=torch.int32),
+                    kv_cache=kv_cache,
+                    prompt_lens=torch.tensor([total]),
+                    start_pos=[start],
+                    empty_slots=[0],
+                    enable_trace=False,
+                    warmup_prefill=False,
+                )
+        logger.info(f"Warmed {count} continued prefills in {time.time() - started:.1f}s")
+
+    def _audio_items(self, features, lengths, identifiers):
+        """Mel features per audio item, in prompt order. vLLM sends an item's features only
+        with the prefill that first covers it, and a continued prefill can restart inside
+        that item, so features are kept by vLLM's item identifier (None if unknown)."""
+        if not isinstance(features, (list, tuple)):
+            return split_audio_features(features, lengths)
+        mels = []
+        for k, item in enumerate(features):
+            key = identifiers[k] if identifiers is not None else None
+            if item is None:
+                mels.append(self._mel_cache.get(key) if key is not None else None)
+                continue
+            mels.extend(split_audio_features(item, None))
+            if key is not None:
+                self._mel_cache[key] = mels[-1]
+                self._mel_cache.move_to_end(key)
+                while len(self._mel_cache) > MEL_CACHE_ITEMS:
+                    self._mel_cache.popitem(last=False)
+        return mels
+
+    def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len, **kwargs):
+        """The base trims a user's untraced page table to the padded length of the tokens it
+        prefills, which drops the blocks past that length of a continued prefill. Keep
+        blocks for the whole prompt (prefill_len counts the cached prefix)."""
+        if not kwargs.get("use_batched_prefill", False) and kwargs.get("prefill_seq_len") is not None:
+            kwargs["prefill_seq_len"] = max(kwargs["prefill_seq_len"], prefill_len)
+        return super()._get_prefill_user_page_table(page_table, kv_cache, prefill_len, **kwargs)
 
     @staticmethod
     def audio_runs(input_ids):
@@ -199,27 +280,45 @@ class Qwen3ASRGenerator(Generator):
         **kwargs,
     ):
         """vLLM prefill. input_audio_features / audio_feature_lengths hold one entry per
-        user (None for a user without audio)."""
-        start_pos = kwargs.get("start_pos")
-        assert start_pos is None or all(int(s) == 0 for s in start_pos), "prefix caching is not supported"
+        user (None for a user without audio), covering every audio item of its prompt.
+
+        start_pos[i] > 0 continues user i on top of its KV cache, as a vLLM streaming
+        session does for each new input. A session's cached length is arbitrary, but a
+        continuation must start on a KV block and an SDPA chunk boundary, so it restarts
+        at the boundary below and recomputes the tokens in between: their KV is rewritten
+        unchanged, and only audio from the boundary on is encoded."""
+        start_pos = kwargs.pop("start_pos", None)
         kwargs.pop("warmup_prefill", None)
+        identifiers = kwargs.get("mm_identifiers")
+        # The audio reaches the model through the splice; a continued prefill would pass any
+        # other multimodal field on to the decoder forward, which takes none.
+        for key in MULTIMODAL_KWARGS:
+            kwargs.pop(key, None)
         batch, seq = tokens.shape
         lens = [seq] * batch if prompt_lens is None else [int(n) for n in prompt_lens]
+        starts = [0] * batch if start_pos is None else [int(s) for s in start_pos]
+        if any(starts):
+            align = math.lcm(get_block_size(kv_cache[0]), CONTINUATION_ALIGN)
+            starts = [s - s % align for s in starts]
         audio_per_user = []
         for i in range(batch):
             feats = input_audio_features[i] if input_audio_features is not None else None
             flens = audio_feature_lengths[i] if audio_feature_lengths is not None else None
-            encoded = self.encode_audio(feats, flens)
+            mels = self._audio_items(feats, flens, identifiers[i] if identifiers is not None else None)
             runs = self.audio_runs(tokens[i, : lens[i]])
-            if [length for _, length in runs] != [n for _, n in encoded]:
-                raise ValueError(
-                    f"user {i}: audio placeholder runs {runs} do not match encoder outputs "
-                    f"{[n for _, n in encoded]}"
-                )
-            audio_per_user.append([(off, length, emb) for (off, length), (emb, _) in zip(runs, encoded)])
+            cached = sum(off + length <= starts[i] for off, length in runs)
+            out_lens = [
+                length if mel is None else tt_enc.feat_out_len(mel.shape[-1]) for (_, length), mel in zip(runs, mels)
+            ]
+            if len(mels) != len(runs) or [length for _, length in runs] != out_lens:
+                raise ValueError(f"user {i}: audio placeholder runs {runs} do not match encoder outputs {out_lens}")
+            if any(mel is None for mel in mels[cached:]):
+                raise ValueError(f"user {i}: an audio item after position {starts[i]} has no features")
+            encoded = self.encode_audio(mels[cached:])
+            audio_per_user.append([(off, length, emb) for (off, length), (emb, _) in zip(runs[cached:], encoded)])
 
         model = self.model[0]
-        model.set_prefill_audio(audio_per_user)
+        model.set_prefill_audio(audio_per_user, starts)
         try:
             # Traced prefill feeds token ids, and warmup prefills would take the queued
             # audio, so this path runs untraced with warmup done beforehand.
@@ -228,6 +327,7 @@ class Qwen3ASRGenerator(Generator):
                 page_table=page_table,
                 kv_cache=kv_cache,
                 prompt_lens=prompt_lens,
+                start_pos=None if start_pos is None else starts,
                 enable_trace=False,
                 warmup_prefill=False,
                 **kwargs,

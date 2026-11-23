@@ -2,18 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""vLLM model class for Qwen3-ASR on Tenstorrent.
+"""vLLM model classes for Qwen3-ASR on Tenstorrent.
 
 Prompt construction and audio preprocessing stay in upstream vLLM's Qwen3-ASR
-processor; this class registers that processor and serves the model through
-``Qwen3ASRGenerator``.
+processors; these classes register them and serve the model through
+``Qwen3ASRGenerator``. ``Qwen3ASRRealtimeGeneration`` adds /v1/realtime, selected
+as upstream does with ``--hf-overrides '{"architectures": ["Qwen3ASRRealtimeGeneration"]}'``.
 """
 import torch
 from huggingface_hub import snapshot_download
-from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsTranscription
+from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsRealtime, SupportsTranscription
 from vllm.model_executor.models.qwen3_asr import Qwen3ASRDummyInputsBuilder
 from vllm.model_executor.models.qwen3_asr import Qwen3ASRForConditionalGeneration as _UpstreamQwen3ASR
 from vllm.model_executor.models.qwen3_asr import Qwen3ASRMultiModalProcessor, Qwen3ASRProcessingInfo
+from vllm.model_executor.models.qwen3_asr_realtime import Qwen3ASRRealtimeGeneration as _UpstreamQwen3ASRRealtime
+from vllm.model_executor.models.qwen3_asr_realtime import Qwen3ASRRealtimeMultiModalProcessor
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 from models.demos.audio.qwen3_asr.demo.transcribe import find_text_decoder
@@ -66,3 +69,15 @@ class Qwen3ASRForConditionalGeneration(Qwen3ASRGenerator, SupportsMultiModal, Su
         if rope_deltas_all_users is not None and any(int(d) != 0 for d in rope_deltas_all_users):
             raise ValueError(f"Qwen3-ASR positions are linear; got M-RoPE deltas {rope_deltas_all_users}")
         return super().decode_forward(*args, **kwargs)
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3ASRRealtimeMultiModalProcessor, info=Qwen3ASRProcessingInfo, dummy_inputs=Qwen3ASRDummyInputsBuilder
+)
+class Qwen3ASRRealtimeGeneration(Qwen3ASRForConditionalGeneration, SupportsRealtime):
+    # vLLM runs one streaming session per connection: each audio segment from
+    # buffer_realtime_audio is a new prompt prefilled on top of the session's KV
+    # (Qwen3ASRGenerator.prefill_forward with start_pos > 0).
+    realtime_max_tokens = _UpstreamQwen3ASRRealtime.realtime_max_tokens
+    buffer_realtime_audio = classmethod(_UpstreamQwen3ASRRealtime.buffer_realtime_audio.__func__)
+    get_speech_to_text_config = classmethod(_UpstreamQwen3ASRRealtime.get_speech_to_text_config.__func__)

@@ -63,13 +63,17 @@ class Qwen3ASRDecoder(Transformer):
         out[0] = emb
         return tuple(out)
 
-    def set_prefill_audio(self, audio_per_user):
+    def set_prefill_audio(self, audio_per_user, first_positions=None):
         """Queue each user's audio for the next token-id prefills: a list per user of
         (offset, length, audio) items, where audio is a device tensor (1, 1, A, dim) whose
-        first `length` rows replace the prompt rows [offset, offset + length). Each prefill
-        that starts at position 0 takes the next user; later chunks of the same prompt keep
-        using it. None clears the queue."""
+        first `length` rows replace the prompt rows [offset, offset + length).
+        first_positions[i] is where user i's prefill starts (its cached prefix length;
+        default 0). The prefill chunk that starts there takes the next user; later chunks
+        of the same prompt keep using it. None clears the queue."""
         self._audio_queue = list(audio_per_user) if audio_per_user is not None else []
+        if first_positions is None:
+            first_positions = [0] * len(self._audio_queue)
+        self._audio_first_positions = list(first_positions)
         self._audio_active = None
 
     def pending_prefill_audio(self):
@@ -77,16 +81,51 @@ class Qwen3ASRDecoder(Transformer):
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, **kwargs):
         """Token embeddings, with queued audio embeddings over their placeholder rows."""
-        if start_pos == 0 and getattr(self, "_audio_queue", None):
+        if getattr(self, "_audio_queue", None) and start_pos == self._audio_first_positions[0]:
+            self._audio_first_positions.pop(0)
             self._audio_active = self._audio_queue.pop(0)
         active = getattr(self, "_audio_active", None)
-        out = super().prepare_inputs_prefill(tokens, start_pos=start_pos, **kwargs)
+        if start_pos == 0 or kwargs.get("trace_enabled", False):
+            out = super().prepare_inputs_prefill(tokens, start_pos=start_pos, **kwargs)
+        else:
+            out = list(super().prepare_inputs_prefill(tokens, start_pos=0, **kwargs))
+            for t, table in zip(out[1], (self.rope_setup.cos_matrix_prefill, self.rope_setup.sin_matrix_prefill)):
+                # A slice of the whole table is the table itself.
+                if t.buffer_address() != table.buffer_address():
+                    ttnn.deallocate(t)
+            out[1] = self._rot_mats_from(start_pos, tokens.shape[-1])
+            out = tuple(out)
         if not active:
             return out
         assert not kwargs.get("trace_enabled", False), "traced prefill takes token ids only"
         out = list(out)
         out[0] = self._splice_audio(out[0], start_pos, tokens.shape[-1], active)
         return tuple(out)
+
+    def _rot_mats_from(self, start, S):
+        """Prefill cos/sin rows [start, start + S), zero past the table. Built on host: a
+        device slice at each start offset is a new program, and continuations start at any
+        block boundary while a decode trace exists."""
+        if hasattr(self, "rope_local_setup"):
+            raise NotImplementedError("continued prefill builds global rotary matrices only")
+        rope = self.rope_setup
+        if getattr(self, "_host_rot_mats", None) is None:
+            self._host_rot_mats = [ttnn.to_torch(m) for m in (rope.cos_matrix_prefill, rope.sin_matrix_prefill)]
+        mats = []
+        for host, dev in zip(self._host_rot_mats, (rope.cos_matrix_prefill, rope.sin_matrix_prefill)):
+            rows = host[:, :, start : start + S, :]
+            rows = torch.nn.functional.pad(rows, (0, 0, 0, S - rows.shape[2]))
+            mats.append(
+                ttnn.from_torch(
+                    rows,
+                    device=self.mesh_device,
+                    dtype=dev.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=dev.memory_config(),
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            )
+        return mats
 
     def _splice_audio(self, x, start, S, items):
         """x: token embeddings (1, 1, S, dim) for prompt rows [start, start + S).
