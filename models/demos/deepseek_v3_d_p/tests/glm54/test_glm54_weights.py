@@ -329,14 +329,18 @@ def test_tier1_cache_write_failure_leaves_nothing(monkeypatch, tmp_path):
     generated weights are returned and neither an entry nor a temporary file stays behind."""
     c = _tiny_tier1_config(monkeypatch)
     monkeypatch.setenv("TT_GLM54_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(gw, "TIER1_CACHE_MIN_FREE_GB", 0)  # the write is attempted whatever this host has free
     expected = gw.Glm54Weights(*gw._generate_tier1(c, 1))
+    saves = []
 
     def failing_save(obj, f):
+        saves.append(f)
         Path(f).write_bytes(b"partial" * 1000)
         raise RuntimeError("[enforce fail at inline_container.cc] PytorchStreamWriter failed writing file")
 
     monkeypatch.setattr(torch, "save", failing_save)
     assert _same(gw.glm54_tier1_weights(c, seed=1), expected)
+    assert len(saves) == 1, "the write was not attempted"
     assert list(gw.tier1_cache_dir().iterdir()) == []
 
 
