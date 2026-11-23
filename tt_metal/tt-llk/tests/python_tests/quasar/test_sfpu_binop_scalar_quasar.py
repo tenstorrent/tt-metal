@@ -70,9 +70,12 @@ _FLOAT_FORMATS = input_output_formats(
 ) + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
 
 
-def _runs_mx_through_unpack_to_dest(variant: QuasarSfpuVariant) -> bool:
+def _is_excluded_route(variant: QuasarSfpuVariant) -> bool:
     # MX through Unpack-to-Dest returns garbage on emu-quasar for every op; MX runs via the FPU route.
-    return variant.formats.input_format.is_mx_format() and variant.unpack_to_dest
+    if variant.formats.input_format.is_mx_format() and variant.unpack_to_dest:
+        return True
+    # ttsim does not implement unpacking fp32 into a 16-bit Dest yet; left out until it does.
+    return variant.formats.input_format.is_32_bit() and not variant.sfpu_src.is_32_bit()
 
 
 def _float_routes(formats_list):
@@ -83,7 +86,7 @@ def _float_routes(formats_list):
     for variant in generate_quasar_sfpu_format_variants(
         None, formats_list, full_format_route_sweep=True
     ) + quasar_sfpu_fpu_route_variants(formats_list):
-        if variant not in routes and not _runs_mx_through_unpack_to_dest(variant):
+        if variant not in routes and not _is_excluded_route(variant):
             routes.append(variant)
     return routes
 
@@ -122,13 +125,6 @@ def _scalar_bits(mathop: MathOperation, scalar: float) -> int:
     if mathop == MathOperation.ScalarDiv:
         return fp32_bits(1.0 / scalar)
     return fp32_bits(scalar)
-
-
-def _narrows_fp32_input(variant: QuasarSfpuVariant) -> bool:
-    """fp32 into a 16-bit Dest is narrowed non-deterministically on emu-quasar (truncated in
-    one run, rounded up in the next), so these routes allow the one ULP that moves the result.
-    """
-    return variant.formats.input_format.is_32_bit() and not variant.sfpu_src.is_32_bit()
 
 
 def _float_golden(
@@ -246,11 +242,7 @@ def _run_sfpu_binop_scalar_quasar(
         )
         return
 
-    # Bit-exact everywhere the input reaches the SFPU unchanged.
-    max_ulp = 1 if _narrows_fp32_input(variant) else 0
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
-    )
+    assert passed_test(golden_tensor, res_tensor, formats.output_format, max_ulp=0)
 
 
 @pytest.mark.quasar
