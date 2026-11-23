@@ -3173,11 +3173,11 @@ TEST_F(UnitMeshAnyDispatchFixture, DfbConfigBaseIsCacheLineAlignedOnDevice) {
     constexpr uint32_t extent_record_bytes = 8 * sizeof(uint32_t);
 
     distributed::MeshDevice& mesh_device = this->device();
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     const CoreCoord core{0, 0};
-    const experimental::DFBSpecName DFB_NAME{"dfb"};
-    const experimental::KernelSpecName PRODUCER{"producer"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
+    const DFBSpecName DFB_NAME{"dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
 
     const uint32_t base_results_l1 =
         top_of_l1_scratch_addr(mesh_device, num_programs * (sizeof(uint32_t) + extent_record_bytes));
@@ -3188,25 +3188,25 @@ TEST_F(UnitMeshAnyDispatchFixture, DfbConfigBaseIsCacheLineAlignedOnDevice) {
     const distributed::MeshCoordinateRange device_range(mesh_device.shape());
     std::vector<distributed::MeshWorkload> workloads(num_programs);
     for (uint32_t i = 0; i < num_programs; ++i) {
-        experimental::KernelSpec producer_spec{
+        KernelSpec producer_spec{
             .unique_id = PRODUCER,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_config_base_probe_dm.cpp",
             .num_threads = 1,
-            .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
+            .dfb_bindings = {ProducerOf(DFB_NAME, "out")},
             .compile_time_args = {{"pad_nops", 4 * i}},
             .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-            .hw_config = experimental::DataMovementHardwareConfig{
-                .config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
-                    .disable_dfb_implicit_sync_for = {DFB_NAME}}}};
-        experimental::KernelSpec consumer_spec{
+            .hw_config = DataMovementHardwareConfig{
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for = {DFB_NAME}}}};
+        KernelSpec consumer_spec{
             .unique_id = CONSUMER,
             .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_extent_probe_compute.cpp",
             .num_threads = 1,
             .dfb_bindings = {{
                 .dfb_spec_name = DFB_NAME,
                 .accessor_name = "in",
-                .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                .endpoint_type = DFBEndpointType::CONSUMER,
+                .access_pattern = DFBAccessPattern::STRIDED,
             }},
             .compile_time_args =
                 {{"num_tc_snapshots", 1u},
@@ -3215,9 +3215,9 @@ TEST_F(UnitMeshAnyDispatchFixture, DfbConfigBaseIsCacheLineAlignedOnDevice) {
                  {"drain_last_tc_credit", 0u},
                  {"num_producers", 1u}},
             .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
-            .hw_config = experimental::ComputeHardwareConfig{},
+            .hw_config = ComputeHardwareConfig{},
         };
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "dfb_config_base_alignment",
             .kernels = {producer_spec, consumer_spec},
             .dataflow_buffers = {{
@@ -3229,17 +3229,17 @@ TEST_F(UnitMeshAnyDispatchFixture, DfbConfigBaseIsCacheLineAlignedOnDevice) {
             .work_units = {{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node}},
         };
 
-        workloads[i].add_program(device_range, experimental::MakeProgramFromSpec(mesh_device, spec));
-        experimental::ProgramRunArgs run_params;
+        workloads[i].add_program(device_range, Program(mesh_device, spec));
+        ProgramRunArgs run_params;
         run_params.kernel_run_args = {
             {.kernel = PRODUCER,
-             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+             .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                  node, {{"result_l1_addr", base_results_l1 + i * static_cast<uint32_t>(sizeof(uint32_t))}})},
             {.kernel = CONSUMER,
-             .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+             .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                  node, {{"result_l1_addr", consumer_results_l1 + i * extent_record_bytes}})},
         };
-        experimental::SetProgramRunArgs(workloads[i].get_programs().at(device_range), run_params);
+        workloads[i].get_programs().at(device_range).set_program_run_args(run_params);
     }
 
     // Queued without blocking so fast dispatch keeps every config live in the ring at once.
