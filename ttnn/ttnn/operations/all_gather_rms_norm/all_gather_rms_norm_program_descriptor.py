@@ -442,7 +442,8 @@ def create_mesh_program_descriptor(
     # AGRN_FORCE_STAGED=1: perf probe only — run an aligned slice through the R_U staged regime
     is_ru = (not geo.aligned) or os.environ.get("AGRN_FORCE_STAGED") == "1"
     fp32_dest = bool(compute_kernel_config.fp32_dest_acc_en)
-    acc_dtype = ttnn.float32 if fp32_dest else ttnn.bfloat16
+    acc_dtype = ttnn.float32 if fp32_dest else ttnn.bfloat16  # T_acc: intermediate CB formats follow the DEST width
+    T_acc = ttnn.tile_size(acc_dtype)
     T_in = ttnn.tile_size(x_dtype)
     out_page = int(output_tensor.buffer_aligned_page_size())
     T32 = ttnn.tile_size(ttnn.float32)
@@ -559,13 +560,17 @@ def create_mesh_program_descriptor(
     cfg.fp32_dest_acc_en = fp32_dest
     cfg.math_approx_mode = compute_kernel_config.math_approx_mode
     modes = [ttnn.UnpackToDestMode.Default] * 64
-    tagged = [CB_GATHER_ROWS]  # exact fp32 copy into DEST for the transpose
-    if is_ln:
-        tagged += [CB_X if x_is_f32 else CB_X32, CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_COL]
-    elif fp32_dest:
-        # RMS: the local collapse and the cross-chip combine sum the partials in fp32 (Accurate SFPU reduce reading
-        # these CBs exactly): "per-row partial sums MUST stay fp32 on the wire and when summed" (prompt)
-        tagged += [CB_SUMSQ, CB_GATHERED]
+    # UnpackToDestFp32 needs a 32-bit DEST: under 16-bit DEST (the caller's choice) nothing is tagged, the records stay
+    # Float32 pages (wire contract) and every DEST-resident sum is 16-bit (op_design.md Key Risks).
+    tagged = []
+    if fp32_dest:
+        tagged = [CB_GATHER_ROWS]  # exact fp32 copy into DEST for the transpose
+        if is_ln:
+            tagged += [CB_X if x_is_f32 else CB_X32, CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_COL]
+        else:
+            # RMS: the local collapse and the cross-chip combine sum the partials in fp32 (Accurate SFPU reduce
+            # reading these CBs exactly): "per-row partial sums MUST stay fp32 on the wire and when summed" (prompt)
+            tagged += [CB_SUMSQ, CB_GATHERED]
     for cb in tagged:
         modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
     cfg.unpack_to_dest_mode = modes
@@ -637,7 +642,7 @@ def create_mesh_program_descriptor(
             _cb(CB_GATHER_ROWS, crt_max * nstats * gather_tiles, T32, ttnn.float32, full),
             _cb(CB_RECORD_LANDING, G * k * nstats, RECORD_BYTES, ttnn.float32, full),
             _cb(CB_GATHERED, crt_max * nstats * gather_tiles, T32, ttnn.float32, full),
-            _cb(CB_INV, crt_max, T32, ttnn.float32, full),
+            _cb(CB_INV, crt_max, T_acc, acc_dtype, full),
             _cb(CB_OUT_BLOCK, crt_max * cw_max, out_page, out_dtype, full),
             _cb(CB_PORT_CHUNKS, 2 * batch_chunks * run_pages, out_page, out_dtype, full),
             # program-scoped: same address on every core of every chip, no persistent L1 (see agrn_common.hpp)
@@ -658,13 +663,13 @@ def create_mesh_program_descriptor(
                 _cb(CB_STAT_CONSTS, 1, T32, ttnn.float32, full),
                 _cb(CB_MEAN_COL, crt_max, T32, ttnn.float32, full),
                 _cb(CB_MEAN_B, crt_max, T32, ttnn.float32, full),
-                _cb(CB_RSTD_B, crt_max, T32, ttnn.float32, full),
+                _cb(CB_RSTD_B, crt_max, T_acc, acc_dtype, full),
                 _cb(CB_LN_TMP, crt_max, T32, ttnn.float32, full),
             ]
-            if not x_is_f32:
+            if not x_is_f32 and fp32_dest:  # 16-bit DEST: the S1 reduce reads cb_x itself (no exact copy)
                 cbs.append(_cb(CB_X32, crt_max * cw_max, T32, ttnn.float32, full))
         else:
-            cbs.append(_cb(CB_SUMSQ, crt_max, ttnn.tile_size(acc_dtype), acc_dtype, full))
+            cbs.append(_cb(CB_SUMSQ, crt_max, T_acc, acc_dtype, full))
         if is_ru:
             cbs.append(_cb(CB_ASSEMBLE, src_max + 1, out_page, out_dtype, full))
         program.cbs = cbs

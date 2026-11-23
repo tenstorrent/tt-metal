@@ -250,13 +250,17 @@ ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize) {
     cb_pop_front(cb_x, crt * cw);
 }
 
-// The Float32 x block the LN SFPU paths read (UnpackToDestFp32: exact in DEST).
-constexpr uint32_t cb_xs = x_is_f32 ? cb_x : cb_x32;
+// The x block the LN paths read: fp32 DEST -> a Float32 block (UnpackToDestFp32: exact in DEST); 16-bit DEST -> cb_x
+// itself (nothing is UnpackToDestFp32-tagged, every DEST value is 16-bit anyway).
+constexpr bool ln_x_copy = !x_is_f32 && DST_ACCUM_MODE;
+constexpr uint32_t cb_xs = ln_x_copy ? cb_x32 : cb_x;
+// Exact (SFPU) fp32 sums need fp32 DEST; under 16-bit DEST the FPU path sums (the caller chose 16-bit accumulation).
+constexpr ReduceFp32Mode ln_exact_mode = DST_ACCUM_MODE ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
 ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bits, uint32_t inv_w_bits, bool tail) {
     const uint32_t crt = w.crt, cw = w.cw;
     cb_wait_front(cb_x, crt * cw);
-    if constexpr (!x_is_f32) {
+    if constexpr (ln_x_copy) {
         eltwise_chain(
             IterationShape::grid(crt, cw),
             CopyTile<input(cb_x, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block)>{},
@@ -277,7 +281,7 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         cb_partial,
         ReduceInputPolicy::NoWaitNoPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Accurate,
+        ln_exact_mode,
         ReduceAlgorithm::ReduceTile>(
         ReduceInputBlockShape::of(crt, cw),
         ReduceInputMemoryLayout::contiguous(),
@@ -291,7 +295,7 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         cb_ln_m,
         ReduceInputPolicy::NoWaitNoPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Accurate,
+        ln_exact_mode,
         ReduceAlgorithm::ReduceTile>(
         ReduceInputBlockShape::of(crt, cw),
         ReduceInputMemoryLayout::contiguous(),

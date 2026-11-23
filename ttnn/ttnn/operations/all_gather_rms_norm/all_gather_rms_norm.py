@@ -83,7 +83,7 @@ def tag_gamma_layout(gamma):
 
 SUPPORTED = {
     "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
-    "fp32_dest_acc_en": [True],
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
