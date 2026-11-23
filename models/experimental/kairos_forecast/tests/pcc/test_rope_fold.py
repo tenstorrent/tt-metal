@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""D3 R1-1: the folded q @ R / k @ R weight columns, as the model stores them on the device, are bitwise the permuted
+"""R1-1: the folded q @ R / k @ R weight columns, as the model stores them on the device, are bitwise the permuted
 and negated stored q / k columns, in both presets (bf16 and bfp8), so RoPE stays order-only
 (a -0 stored as +0 is the one allowed bit difference)."""
 import pytest

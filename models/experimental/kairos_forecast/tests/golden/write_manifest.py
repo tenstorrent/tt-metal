@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Writes goldens/kairos/MANIFEST.json from what the golden jobs wrote (test/MANIFEST.json, bench/cases.json).
+"""Writes <goldens>/MANIFEST.json from what the golden scripts wrote (test/MANIFEST.json, bench/cases.json).
 
 Run after make_goldens.py and make_bench_goldens.py, in the reference venv:
-    KAIROS_GOLDEN_JOBS='{"test_goldens": 1040, "bench_goldens": 1041}' python -I write_manifest.py
+    KAIROS_REFERENCE_SRC=<Kairos clone> <reference venv>/bin/python -I \
+        models/experimental/kairos_forecast/tests/golden/write_manifest.py
 Also writes sha256 of every golden file, so a re-make can be compared bit for bit.
 """
 import hashlib
+import importlib.metadata
 import json
 import os
 import sys
@@ -19,8 +21,7 @@ sys.path.insert(0, str(HERE.parents[2] / "reference"))
 import load_reference as R  # noqa: E402
 from make_bench_goldens import CASES as BENCH_CASES  # noqa: E402
 
-ROOT = Path("/home/andy/bringup/goldens/kairos")
-VENV = Path("/home/andy/bringup/venvs/kairos")
+ROOT = Path(os.environ.get("KAIROS_GOLDEN_DIR", HERE.parents[2] / "goldens"))
 
 
 def sha256(p):
@@ -43,10 +44,10 @@ def main():
         "input_generator": "models/experimental/kairos_forecast/tests/golden/inputs.py",
         "bench_seeds": {k: v[0] for k, v in BENCH_CASES.items()},
         "jobs": json.loads(os.environ.get("KAIROS_GOLDEN_JOBS", "{}")),
-        "pip_freeze": (VENV / "pip_freeze.txt").read_text().split("\n"),
+        "pip_freeze": sorted(f"{d.metadata['Name']}=={d.version}" for d in importlib.metadata.distributions()),
         "test_cases": test["cases"],
         "bench_cases": bench["cases"],
-        # D4 item 6: the two JSONs the golden jobs write are hashed too (19 files)
+        # the two JSONs the golden scripts write are hashed too
         "sha256": {
             f"{d}/{p.name}": sha256(p)
             for d in ("test", "bench")

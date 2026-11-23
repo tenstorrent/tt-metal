@@ -1,0 +1,4 @@
+# Goldens (tests/golden/make_goldens.py, make_bench_goldens.py; a directory or a symlink to one) and weights
+/goldens
+*.safetensors
+*.pt

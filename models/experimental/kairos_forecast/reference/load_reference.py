@@ -13,7 +13,8 @@ REPO_COMMIT = "16eb4b984eb547023187813056a5f289734b9cf6"
 HF_REPO = "mldi-lab/Kairos_50m"
 HF_REVISION = "b788434dd95f9893be002e6858bfb2afb0e3f360"
 SAFETENSORS_SHA256 = "c68503d9a3a3141d25ef40fb71f182556de566989c95331efdab4eeb1b48f177"
-SRC = Path("/home/andy/bringup/venvs/kairos/src/Kairos")
+# A clone of foundation-model-research/Kairos at REPO_COMMIT (README.md); load() checks its HEAD.
+SRC = Path(os.environ.get("KAIROS_REFERENCE_SRC", "Kairos"))
 SOURCE_FILES = [
     "modeling_kairos.py",
     "moe.py",
@@ -45,7 +46,7 @@ def source_hashes():
 
 
 def stored_dtypes(snap=None):
-    """dtype of every safetensors entry as stored on disk (for MANIFEST; D2 fix 1)."""
+    """dtype of every safetensors entry as stored on disk (for MANIFEST)."""
     from safetensors import safe_open
 
     with safe_open(str((snap or snapshot_dir()) / "model.safetensors"), framework="pt") as f:
@@ -76,12 +77,12 @@ def load(num_threads=8):
     assert got == SAFETENSORS_SHA256, got
 
     import torch
-    import tsfm.model.kairos  # noqa: F401  registers the kairos config (confirm the path at stage A)
+    import tsfm.model.kairos  # noqa: F401  registers the kairos config
     from tsfm.model.kairos import AutoModel
 
     torch.set_num_threads(num_threads)
     m = AutoModel.from_pretrained(str(snap), trust_remote_code=True).eval()
-    # D2 fix 1: check the dtypes as loaded, before any cast, so a non-fp32 load cannot be cast up silently.
+    # Check the dtypes as loaded, before any cast, so a non-fp32 load cannot be cast up silently.
     bad = {n: str(p.dtype) for n, p in m.named_parameters() if p.dtype != torch.float32}
     bad.update({n: str(b.dtype) for n, b in m.named_buffers() if b.is_floating_point() and b.dtype != torch.float32})
     assert not bad, f"non-fp32 after load: {bad}"

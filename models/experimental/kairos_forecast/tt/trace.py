@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Traced forward_device, one trace per batch size (N is padded to 64, so the batch fixes every shape).
 
-PLAN v1.21: nothing may be allocated while a trace exists, or it can alias the trace's freed intermediates. So
+Nothing may be allocated while a trace exists, or it can alias the trace's freed intermediates. So
 there is one active trace at a time: a new batch size releases it, allocates that batch's persistent inputs (kept
 for later), warms up eagerly, and captures again. Each replay refreshes the inputs in place with
 copy_host_to_device_tensor. Capturing a second trace while the first is alive allocates its intermediates under

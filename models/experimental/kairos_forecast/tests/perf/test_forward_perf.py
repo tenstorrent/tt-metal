@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Bench: traced generate() on every bench shape and precision, scored and timed; one record per <shape>-<precision>.
 
-    KAIROS_PERF_JSON=<iter_dir>/bench.json pytest models/experimental/kairos_forecast/tests/perf/test_forward_perf.py
+    KAIROS_PERF_JSON=<out_dir>/bench.json pytest models/experimental/kairos_forecast/tests/perf/test_forward_perf.py
     BENCH_LAYERS=2+2   reduced encoder + decoder layers: timing only (no accuracy keys), for screening; written to
                        bench_reduced.json next to $KAIROS_PERF_JSON
     BENCH_RUNS=5       timed generate() runs after one warm-up
 
-Timing per forward (the PLAN G1 split, each part separately, the device part after a 0.3 s idle so no host work
+Timing per forward (each part separately, the device part after a 0.3 s idle so no host work
 overlaps it): prepare_s (host front-end + input build), upload_s (copy into the trace inputs), device_s (trace
 replay + synchronize), post_s (read-back + quantiles). steady_s is the wall time of one whole generate().
 """
@@ -30,7 +30,7 @@ from models.experimental.kairos_forecast.tt.model import TtKairos
 from models.experimental.kairos_forecast.tt.router_state import RouterState
 from models.experimental.kairos_forecast.tt.trace import TracedKairos, _leaves
 
-STAMP = session_stamp()  # v1.23: taken once, at collection (the session start); every record carries it
+STAMP = session_stamp()  # taken once, at collection (the session start); every record carries it
 
 LAYERS = tuple(int(x) for x in os.environ.get("BENCH_LAYERS", "6+6").split("+"))
 RUNS = int(os.environ.get("BENCH_RUNS", "5"))
@@ -74,7 +74,7 @@ class TimedTrace(TracedKairos):
 
 def _record(entry):
     """Full-depth records go to $KAIROS_PERF_JSON; reduced-depth (timing only) ones to bench_reduced.json beside it,
-    so check_gates never sees a record without the gate metrics under a gated name."""
+    so a full-depth record file never holds a record without the gate metrics."""
     path = os.environ.get("KAIROS_PERF_JSON")
     if not path:
         return

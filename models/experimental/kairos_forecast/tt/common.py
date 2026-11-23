@@ -109,9 +109,9 @@ def bmm_config(device, m: int, k: int, n: int, fp32_dest: bool = True):
 
 def linear_config(M: int, K: int, N: int, relu: bool = False, fp32_dest: bool = True, grid=(11, 10)):
     """R1-4: 2D multicast program config for a (M, K) @ (K, N) linear (M over the 10 rows, N over the 11 columns),
-    from the per-role sweep (iter_01/sweep_linear.jsonl): the largest in0_block_w <= 8, the largest output subblock
+    from the per-role sweep (job 1188): the largest in0_block_w <= 8, the largest output subblock
     that fits the dst, and an out_block_h <= 26 tiles with out_block_h x per_core_N <= 84 tiles
-    (bigger blocks overflow L1 in the sweep). relu goes into the epilogue (a precision change, D3).
+    (bigger blocks overflow L1 in the sweep). relu goes into the epilogue (a precision change).
     None for small M (the default config is as fast there)."""
     import ttnn
 

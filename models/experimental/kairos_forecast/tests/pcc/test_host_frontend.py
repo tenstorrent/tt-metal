@@ -10,11 +10,12 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "reference"))
 import dataflow as DF  # noqa: E402
+from models.experimental.kairos_forecast.tests.helpers import BENCH_GOLDENS  # noqa: E402
 from models.experimental.kairos_forecast.tests.pcc.test_dataflow import CASES, GOLD, fronts  # noqa: E402
 from models.experimental.kairos_forecast.tt.host_frontend import front_end  # noqa: E402
 from models.experimental.kairos_forecast.tt.router_state import RouterState, routing_record  # noqa: E402
 
-BENCH = Path("/home/andy/bringup/goldens/kairos/bench")
+BENCH = BENCH_GOLDENS
 BENCH_CASES = ["paper", "long_horizon", "ragged", "single", "single_plain", "single_short", "single_long_horizon"]
 
 

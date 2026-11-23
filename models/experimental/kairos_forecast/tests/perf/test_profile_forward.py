@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reduced-layer Tracy profile of one eager forward_device at the target shape (paper: 512 rows, both flip halves).
 
-    KAIROS_PROFILE_OUT=<iter_dir> python -m tracy -r -p --no-web-server -o <iter_dir>/tracy \\
+    KAIROS_PROFILE_OUT=<out_dir> python -m tracy -r -p --no-web-server -o <out_dir>/tracy \\
         -m pytest models/experimental/kairos_forecast/tests/perf/test_profile_forward.py
 Signposts: KAIROS_START / KAIROS_END around the forward, and one per section (embed, enc_block, enc_norm, dec_block,
-dec_norm, head). layer_counts.json gives the profiled and the full counts for the estimate (summarize_profile.py).
+dec_norm, head). layer_counts.json gives the profiled and the full counts for a full-depth estimate.
 PROFILE_LAYERS (default 2+2), PROFILE_PRECISION (default accuracy).
 """
 import json
@@ -24,7 +24,7 @@ from models.experimental.kairos_forecast.tt.router_state import RouterState
 LAYERS = tuple(int(x) for x in os.environ.get("PROFILE_LAYERS", "2+2").split("+"))
 PRECISION = os.environ.get("PROFILE_PRECISION", "accuracy")
 SHAPE = os.environ.get("PROFILE_SHAPE", "paper")
-STAMP = session_stamp()  # v1.23: profiles are stamped too
+STAMP = session_stamp()  # profiles are stamped too
 
 
 def test_profile_forward(device):

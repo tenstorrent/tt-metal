@@ -15,17 +15,28 @@ EPS = 1e-6
 NEG = torch.finfo(torch.float32).min
 
 
+HF_REPO, HF_REVISION = "mldi-lab/Kairos_50m", "b788434dd95f9893be002e6858bfb2afb0e3f360"
+
+
+def checkpoint_path():
+    """``model.safetensors`` of the pinned snapshot in the HF cache (``HF_HUB_CACHE`` / ``HF_HOME``); never copied."""
+    import os
+    from pathlib import Path
+
+    hub = os.environ.get("HF_HUB_CACHE") or Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface")) / "hub"
+    path = Path(hub) / f"models--{HF_REPO.replace('/', '--')}" / "snapshots" / HF_REVISION / "model.safetensors"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} missing; download it with "
+            f"`hf download {HF_REPO} --revision {HF_REVISION} --include model.safetensors config.json`"
+        )
+    return path
+
+
 def load_weights(path=None):
     from safetensors.torch import load_file
 
-    if path is None:
-        import glob
-
-        path = glob.glob(
-            "/home/andy/.cache/huggingface/hub/models--mldi-lab--Kairos_50m/snapshots/"
-            "b788434dd95f9893be002e6858bfb2afb0e3f360/model.safetensors"
-        )[0]
-    return {k: v.float() for k, v in load_file(path).items()}
+    return {k: v.float() for k, v in load_file(path or checkpoint_path()).items()}
 
 
 def rms_norm(x, w):
@@ -77,7 +88,7 @@ def expert_coeffs(weights, indices):
 
 
 def embed(W, x_final, weights, indices):
-    """Packed form: one [B, N, 3*256] x [3*256, out] matmul per MultiInSizeLinear (CONTRACT §7).
+    """Packed form: one [B, N, 3*256] x [3*256, out] matmul per MultiInSizeLinear.
 
     x_final [3, B, N, 256]. The 128/64-wide experts' unused input columns are masked to zero."""
     c = expert_coeffs(weights, indices)  # [B, N, 3]

@@ -1,15 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Bench goldens: one background `ttq submit --kind cpu` job in the reference venv.
+"""Bench goldens, in the reference venv (README.md).
 
-Stores inputs and outputs only (D0: no per-block intermediates; those belong to the test goldens):
+Stores inputs and outputs only (no per-block intermediates; those belong to the test goldens):
 the context, per-forward head output [R, 2, 576], loc/scale, routing (weights, indices, the selection scores passed to topk, N, n_valid),
 the bias after every forward, the min top-3 margin, and prediction_outputs.
 
-    ttq submit --model kairos --kind cpu -- /home/andy/bringup/venvs/kairos/bin/python -I \
-        <worktree>/models/experimental/kairos_forecast/tests/golden/make_bench_goldens.py
+    KAIROS_REFERENCE_SRC=<Kairos clone> <reference venv>/bin/python -I \
+        models/experimental/kairos_forecast/tests/golden/make_bench_goldens.py
+
+Writes <goldens>/bench/*.pt and bench/cases.json, <goldens> being $KAIROS_GOLDEN_DIR or the model's goldens/.
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -22,7 +25,7 @@ import torch  # noqa: E402
 from inputs import make_batch  # noqa: E402
 from load_reference import load, restore_bias  # noqa: E402
 
-OUT = Path("/home/andy/bringup/goldens/kairos/bench")
+OUT = Path(os.environ.get("KAIROS_GOLDEN_DIR", HERE.parents[2] / "goldens")) / "bench"
 CASES = {  # name: (seed, n_series, horizon, lengths, gift)
     "paper": (1001, 256, 64, None, True),
     "long_horizon": (1002, 64, 720, None, True),

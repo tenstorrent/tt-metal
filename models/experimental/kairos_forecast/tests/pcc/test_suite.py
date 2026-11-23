@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Full-model suite on real weights: generate() on every bench-golden case, both precisions, scored as gate records.
-Records are appended to $KAIROS_RECORDS (JSON lines) for check_gates; the in-test asserts are the contract floors."""
+Records are appended to $KAIROS_RECORDS (JSON lines) when set; the in-test asserts are tests/helpers.py's floors."""
 import json
 import os
 
@@ -14,7 +14,7 @@ from models.experimental.kairos_forecast.tests.perf.suite import run_case
 from models.experimental.kairos_forecast.tt.common import Precision
 from models.experimental.kairos_forecast.tt.model import TtKairos
 
-STAMP = session_stamp()  # v1.23: taken once, at collection (the session start); every record carries it
+STAMP = session_stamp()  # taken once, at collection (the session start); every record carries it
 
 CASES = os.environ.get("KAIROS_CASES", "single,single_plain,single_short,ragged,single_long_horizon,long_horizon,paper")
 

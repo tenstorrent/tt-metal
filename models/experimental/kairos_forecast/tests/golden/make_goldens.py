@@ -1,9 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Small test goldens with per-block intermediates (CONTRACT §6 A). Reference venv, `ttq run --kind cpu`.
+"""Small test goldens with per-block intermediates. Runs in the reference venv (README.md), from the tt-metal root:
+
+    KAIROS_REFERENCE_SRC=<Kairos clone> <reference venv>/bin/python -I \
+        models/experimental/kairos_forecast/tests/golden/make_goldens.py
+
+Writes <goldens>/test/*.pt and test/MANIFEST.json, <goldens> being $KAIROS_GOLDEN_DIR or the model's goldens/.
 
 Every case saves its inputs, bias0, every capture firing (in call order) and the outputs, as one .pt file.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +17,7 @@ HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parents[2] / "reference"))
 
-OUT = Path("/home/andy/bringup/goldens/kairos/test")
+OUT = Path(os.environ.get("KAIROS_GOLDEN_DIR", HERE.parents[2] / "goldens")) / "test"
 
 # name: what it exercises. Bias restored before every call except "bias_5call".
 CASES = {
@@ -28,14 +34,14 @@ CASES = {
     "modules": "small random-input module goldens",
 }
 
-# Capture points (CONTRACT §5), every firing recorded.
+# Capture points, every firing recorded.
 CAPTURE = [
     "fft_norm",
     "patch.moe.gate (weights, indices, selection scores passed to topk, bias before/after)",
     "patch (patched_x, patched_mask, size, weights, indices, x_final, parent/position maps, granularity_mask)",
     "input_patch_embedding",
     "rotary_emb.instance_wise_param_net x18 (gamma, beta)",
-    "rotated q/k, block 0 of each stack (and decoder self-attn block 1: D0 amendment 3)",
+    "rotated q/k, block 0 of each stack (and decoder self-attn block 1)",
     "encoder.block[i], encoder.final_layer_norm",
     "decoder.block[i], decoder.final_layer_norm",
     "output_patch_embedding",

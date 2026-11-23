@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Device module tests (CONTRACT §3, D0 amendment 3, PLAN v1.12 / v1.24): each module alone on the test goldens'
+"""Device module tests: each module alone on the test goldens'
 inputs, compared with the reference's captured output (or the CPU dataflow for intermediates the reference does
 not expose: rotated q / k and the attention sublayers), every comparison asserted against MODULE_FLOORS in both
-precisions. Attention outputs are compared before the residual add (v1.12).
+precisions. Attention outputs are compared before the residual add.
 
     embed        packed patch embedding vs `input_patch_embedding`
     rope_qk      rotated q and k of encoder blocks 0 and 3 (half order) vs the dataflow's pair-order rope, permuted

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Realistic input mix (skill §1, CONTRACT §5). numpy only, so it runs in either venv. Seeds go in MANIFEST."""
+"""Realistic input mix. numpy only, so it runs in either venv. Seeds go in MANIFEST."""
 import numpy as np
 
 CONTEXT = 2048

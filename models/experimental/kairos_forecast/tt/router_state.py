@@ -4,7 +4,7 @@
 
 Update (moe.py Gate, no training guard):
     bias += rate * (target_dist * total - bincount(indices, weights)) / total
-Settled against tsfm/model/kairos/moe.py and modeling_kairos.py at 16eb4b98 (2026-10-28, D2 fix 2):
+Settled against tsfm/model/kairos/moe.py and modeling_kairos.py at 16eb4b98:
   (a) the bias is added before the softmax, so the top-k weights come from the biased scores.
   (b) softmax in fp32 over all 5 experts (3 real + 2 null), then the 3 picked weights are renormalized to sum 1.
   (c) the gate input is the instance-normed context (NaN where masked), patched to [P, 128], nan_to_num(0).
@@ -57,7 +57,7 @@ def top3_margin(ref_scores):
 
 
 def routing_record(ref_indices, dev_indices, ref_bias, dev_bias, ref_scores):
-    """The D0 amendment-1 keys, in every suite and bench record (D2 fix 3).
+    """The routing keys, in every suite and bench record.
 
     ref_* are the reference's captured values from the goldens, never a host RouterState replay, so a shared
     mistake in (a)-(d) above cannot pass both sides. Indices are [rows, patches, 3]."""

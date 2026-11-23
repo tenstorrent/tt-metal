@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gate metrics of a forecast against the upstream goldens (CONTRACT section 3, PLAN section 9).
+"""Gate metrics of a forecast against the upstream goldens.
 
 All head metrics use the head output at the read-out tokens in normalized space, ``[rows, n, 288]`` with 288 =
 9 quantiles x 32 steps (quantile-major):
@@ -17,33 +17,33 @@ All head metrics use the head output at the read-out tokens in normalized space,
     flat_max_err    worst absolute error (normalized units) over the flat rows (0 when there are none)
     inactive_max_err
                     worst absolute error (normalized units) over the inactive rows (the golden-defined complement
-                    of the active set; D4 condition b: ``flat_max_err`` misses inactive rows that are not flat)
+                    of the active set; ``flat_max_err`` misses inactive rows that are not flat)
     abs_err_max     worst absolute error (normalized units) over every element: a gross single-element check, not a
-                    band check (PLAN section 9 v1.16)
+                    band check
     pcc_row_p01_active, pcc_row_min_active
                     per-row PCC over the active rows only: rows whose golden head std is >= ACTIVE_FRAC of the
-                    golden's global std (PLAN section 9 v1.2); the active set depends on the golden only
+                    golden's global std; the active set depends on the golden only
     active_rows, excluded_rows
     spread_ratio_p01, spread_ratio_p99
-                    per active row, |h - mean_q h| / |h_ref - mean_q h_ref| (band amplitude ratio; PLAN v1.3)
+                    per active row, |h - mean_q h| / |h_ref - mean_q h_ref| (band amplitude ratio)
     spread_ratio_p50
                     the median ratio: a uniform band scaling (0.88x, 1.12x) moves it, row noise does not
     spread_ratio_min, spread_ratio_max
-                    the extremes of that ratio (floor-only, no drift; D3 condition 1b)
+                    the extremes of that ratio (floor-only, no drift)
     bias_row_p50, bias_row_max
                     the row's |mean error| (normalized units, head space), p50 taken per flip half and the larger
                     half kept (a shift of one half alone would sit under an all-row median), and the max over rows:
-                    a level shift (PLAN v1.24, D3 item 1). No n_active gate.
+                    a level shift. No n_active gate.
     spread_rows, spread_rows_final
                     the per-row spread ratio (head space per row of each flip half; data space per target over the
-                    first 128 steps), inactive rows None: check_gates scores ``spread_ratio_row_drift_max[_final]``
-                    = max_i |r_i - r0_i| against the fixed record (D5 R1-0a)
+                    first 128 steps), inactive rows None, for a drift check against a fixed record
+                    (``max_i |r_i - r0_i|``)
     bias_rows, bias_rows_final
                     the signed row mean error (head space; data space over the target's scale, first 128 steps), one
-                    value per row: check_gates scores ``bias_row_drift_max[_final]`` = max_i |b_i - b0_i| against
-                    the fixed record (D4 item 1; head space over the active rows, inactive rows stored as None and
+                    value per row, for a drift check against a fixed record (``max_i |b_i - b0_i|``; head space over the
+                    active rows, inactive rows stored as None and
                     gated by ``inactive_max_err``); ``bias_row_argmax[_final]`` name the row of ``bias_row_max[_final]``
-    pcc_step        PCC of the step differences (along the horizon, per quantile): a one-step lag (v1.24)
+    pcc_step        PCC of the step differences (along the horizon, per quantile): a one-step lag
     bias_row_p50_final, bias_row_max_final, pcc_step_final
                     the same on the data-space forecast (after the flip average, where a shift common to both halves
                     cancels), row bias over the target's scale, over the first forward's horizon (<= 128 steps):
@@ -67,7 +67,7 @@ Q = 9  # quantiles; head views are [rows, Q * steps], quantile-major (head_view)
 def head_view(raw: torch.Tensor, steps: int = 64) -> torch.Tensor:
     """Kairos head output [rows, 2, 576] (2 decoder tokens x 9 quantiles x 64 steps) -> [rows, 9 * steps]: the
     quantile-major forecast in normalized space, first `steps` steps (64 at H = 64: decoder token 0 only;
-    128 for pcc_normalized_full, D0 amendment 4)."""
+    128 for pcc_normalized_full)."""
     R = raw.shape[0]
     q = raw.reshape(R, 2, Q, 64).permute(0, 2, 1, 3).reshape(R, Q, 128)[..., :steps]
     return q.reshape(R, -1)
@@ -148,7 +148,7 @@ def gate_metrics(head, g_head, q, g_q, scale_targets, halves: int = 1) -> dict:
         "pcc_row_min": float(rows.min()),
         "pcc_row_p01_active": float(torch.quantile(rows[act], 0.01)),
         "pcc_row_min_active": float(rows[act].min()),
-        "pcc_row_argmin_active": int(act.nonzero().flatten()[rows[act].argmin()]),  # v1.31: the row behind it
+        "pcc_row_argmin_active": int(act.nonzero().flatten()[rows[act].argmin()]),  # the row behind it
         "active_rows": int(act.sum()),
         "excluded_rows": int((~act).sum()),
         "spread_ratio_p01": float(torch.quantile(ratio, 0.01)),
@@ -161,12 +161,12 @@ def gate_metrics(head, g_head, q, g_q, scale_targets, halves: int = 1) -> dict:
         "flat_rows": int(flat.sum()),
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
         "inactive_max_err": float(err[~act].max()) if bool((~act).any()) else 0.0,
-        "abs_err_max": float(err.max()),  # gross single-element check, not a band check (v1.16)
+        "abs_err_max": float(err.max()),  # gross single-element check, not a band check
         "bias_row_p50": max(float(b.median()) for b in bias.chunk(halves)),
         "bias_row_max": float(bias.max()),
         "bias_row_argmax": int(bias.argmax()),
         "bias_rows": [round(float(b), 7) if a else None for b, a in zip(signed, act)],  # inactive rows: None
-        # v1.31 / v1.32: signed mean error per quantile over the active rows (head space)
+        # signed mean error per quantile over the active rows (head space)
         "bias_q": [
             round(float(b), 7)
             for b in (head.double() - g_head.double())[act].reshape(int(act.sum()), Q, -1).mean((0, 2))

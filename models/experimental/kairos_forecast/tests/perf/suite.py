@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Run one bench-golden case through KairosGenerator and score it: the gate records of CONTRACT §3.
+"""Run one bench-golden case through KairosGenerator and score it: the gate records.
 
 Every call starts from the golden's bias0 (RouterState restored). Records:
 - `<case>`: the generate() path. Head metrics over every device row of the comparable forwards (all forwards for

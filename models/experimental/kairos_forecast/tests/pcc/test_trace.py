@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Trace replay on fresh inputs (skill §1 C, PLAN v1.21): four batch sizes (2, 8, 16 and paper's 512 rows) captured
+"""Trace replay on fresh inputs: four batch sizes (2, 8, 16 and paper's 512 rows) captured
 after all buffers exist, each replayed on inputs it was not captured with, interleaved, and compared with the eager
 forward and the golden. Paper is captured on a transformed paper context (rows reversed, x 1.5 + 0.1) and then
-replayed on the golden paper input, scored against the golden head (D3 item 6). ttnn's "active trace" allocation
+replayed on the golden paper input, scored against the golden head. ttnn's "active trace" allocation
 warning fails the test (tests/conftest.py), so the eager references run before the first capture."""
 import os
 
@@ -80,7 +80,7 @@ def test_trace_fresh_inputs(device, prec):
 @pytest.mark.skipif(not os.environ.get("KAIROS_TRACE_ALLOC_CONTROL"), reason="positive control: its own job")
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 64 << 20}], indirect=True)
 def test_trace_alloc_control(device):
-    """Positive control for tests/conftest.py (v1.13): allocate under a live trace; this test must FAIL.
+    """Positive control for tests/conftest.py: allocate under a live trace; this test must FAIL.
     Run alone: KAIROS_TRACE_ALLOC_CONTROL=1 pytest ...test_trace.py -k alloc_control (tt-metal warns once per process).
     """
     import ttnn

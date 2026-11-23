@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """CPU fp32 dataflow vs the reference on the test goldens: every forward's head output within 1e-5 relative."""
+import os
 import sys
 from pathlib import Path
 
@@ -10,7 +11,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "reference"))
 import dataflow as DF  # noqa: E402
 
-GOLD = Path("/home/andy/bringup/goldens/kairos/test")
+GOLD = Path(os.environ.get("KAIROS_GOLDEN_DIR", Path(__file__).resolve().parents[2] / "goldens")) / "test"
 CASES = [
     "single",
     "single_gift",
