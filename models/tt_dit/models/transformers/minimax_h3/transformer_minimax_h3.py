@@ -239,9 +239,11 @@ class MiniMaxH3Transformer3DModel(Module):
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
+        lora_rank: int | None = None,
     ) -> None:
         """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
-        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour."""
+        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour.
+        `lora_rank`: the blocks' q/k/v, to_out, ff1 and ff2 carry an unmerged LoRA of this rank as a side branch."""
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -351,6 +353,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     use_persistent_ccl_buffers=use_persistent_ccl_buffers,
                     dynamic_length=dynamic_length,
                     norm_row_capacity=norm_row_capacity,
+                    lora_rank=lora_rank,
                 )
                 for _ in range(num_layers)
             ]

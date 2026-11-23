@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
+import functools
 import json
 import os
 import time
@@ -998,6 +1000,8 @@ def _block_setup(
         token_tags=token_tags,
         adaln_indices=adaln_indices,
         temb_input=temb_input,
+        spatial_input=spatial_input,
+        rotary_emb=(rope_cos, rope_sin),
         torch_model=torch_model,
         torch_out=torch_out,
         sp_factor=sp_factor,
@@ -1054,6 +1058,106 @@ def test_minimax_h3_transformer_block(
     assert_quality(fixture.torch_out, tt_out, pcc=MIN_PCC)
 
 
+LORA_SIDE_LINEARS = ("attn.to_q", "attn.to_k", "attn.to_v", "attn.to_out.0", "ff.net.0.proj", "ff.net.2")
+
+
+def _random_side_adapter(model: TorchMiniMaxH3Block, rank: int, ratio: float = 0.2) -> dict[str, torch.Tensor]:
+    """bf16 lora_A / lora_B for the side-branch linears, `B A x` about `ratio` of `W x` for a unit-variance `x`."""
+    adapter = {}
+    for name in LORA_SIDE_LINEARS:
+        weight = model.get_submodule(name).weight
+        out_features, in_features = weight.shape
+        a = torch.randn(rank, in_features) / in_features**0.5
+        b = torch.randn(out_features, rank) * (ratio * weight.std().item() * (in_features / rank) ** 0.5)
+        adapter[f"{name}.lora_A.weight"] = a.to(torch.bfloat16)
+        adapter[f"{name}.lora_B.weight"] = b.to(torch.bfloat16)
+    return adapter
+
+
+def _bf8_dit(block: MiniMaxH3TransformerBlock, *, weights_only: bool = False) -> None:
+    """The serving driver's default DiT precision on a loaded block: qkv / ff1 / ff2 weights BFP8, the norms (so the
+    gathered qkv / ff1 inputs) and the to_out input BFP8, bf16 outputs pinned. `weights_only` after a reload."""
+    for param in (block.attn.to_qkv.weight, block.ff.ff1.weight, block.ff.ff2.weight):
+        bf16 = param.data
+        param.dtype = ttnn.bfloat8_b
+        param.data = ttnn.typecast(bf16, ttnn.bfloat8_b)
+        ttnn.deallocate(bf16)
+    if weights_only:
+        return
+    for norm in (block.norm1, block.norm2):
+        norm.forward = functools.partial(norm.forward, dtype=ttnn.bfloat8_b)
+    block.attn.to_out.activation_dtype = ttnn.bfloat8_b
+    for linear in (block.attn.to_qkv, block.attn.to_out, block.ff.ff1):
+        linear.pin_output_bf16 = True
+
+
+@GALAXY_RING
+@pytest.mark.parametrize("bf8_dit", [pytest.param(False, id="tree_defaults"), pytest.param(True, id="bf8_dit")])
+def test_minimax_h3_transformer_block_lora_side(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    is_fsdp: bool,
+    topology: ttnn.Topology,
+    bf8_dit: bool,
+    reset_seeds,
+) -> None:
+    """The unmerged LoRA side branch (rank 128) on one block against the fp32 `W + B @ A` reference: the whole
+    output, and the adapter's own contribution (side-branch block minus base block) against the reference's, which
+    must also beat the same contribution from merged weights on device (the merge rounds B @ A onto W's grid).
+    Under the tree's default switches, and `bf8_dit` also with the serving driver's BFP8 DiT weights and activations."""
+    rank = 128
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
+    base = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
+    randomize_norm_weights(base)
+    base.eval()
+    adapter = _random_side_adapter(base, rank)
+    merged = copy.deepcopy(base)
+    with torch.no_grad():
+        for name in LORA_SIDE_LINEARS:
+            delta = adapter[f"{name}.lora_B.weight"].float() @ adapter[f"{name}.lora_A.weight"].float()
+            merged.get_submodule(name).weight += delta
+
+    fixture = _block_setup(
+        mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, 512, 256, 1280, torch_model=merged
+    )
+    with torch.no_grad():
+        torch_base = base(
+            hidden_states=fixture.spatial_input,
+            temb=fixture.temb_input,
+            adaln_indices=fixture.adaln_indices,
+            rotary_emb=fixture.rotary_emb,
+            attention_mask=None,
+        )
+
+    tt_side = MiniMaxH3TransformerBlock(**fixture.block_kwargs, lora_rank=rank)
+    tt_side.load_torch_state_dict({**base.state_dict(), **adapter})
+    if bf8_dit:
+        _bf8_dit(tt_side)
+    side_out = fixture.run(tt_side)
+    tt_side.deallocate_weights()
+    tt_base = MiniMaxH3TransformerBlock(**fixture.block_kwargs)
+    tt_base.load_torch_state_dict(base.state_dict())
+    if bf8_dit:
+        _bf8_dit(tt_base)
+    base_out = fixture.run(tt_base)
+    tt_base.load_torch_state_dict(merged.state_dict())
+    if bf8_dit:
+        _bf8_dit(tt_base, weights_only=True)
+    merged_out = fixture.run(tt_base)
+
+    def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+        return torch.corrcoef(torch.stack([a.flatten().double(), b.flatten().double()]))[0, 1].item()
+
+    reference_delta = fixture.torch_out - torch_base
+    side_pcc, merged_pcc = pcc(reference_delta, side_out - base_out), pcc(reference_delta, merged_out - base_out)
+    logger.info(f"adapter contribution PCC vs fp32: side branch {side_pcc:.5f}, merged weights {merged_pcc:.5f}")
+    assert_quality(fixture.torch_out, side_out, pcc=0.999 if bf8_dit else 0.9995)
+    assert side_pcc >= (0.97 if bf8_dit else 0.98) and side_pcc > merged_pcc, (side_pcc, merged_pcc)
+
+
 @GALAXY_RING
 def test_minimax_h3_transformer_block_dynamic_length(
     mesh_device: ttnn.MeshDevice,
@@ -1102,8 +1206,9 @@ PERF_ASPECT = (16, 9)
 
 
 def _packed_sizes(duration_s: float, num_text_tokens: int) -> dict:
-    """Token counts for `duration_s` seconds of 768P video, derived from the pipeline's own packing helpers."""
-    height, width = resolve_canvas_size(*PERF_ASPECT)
+    """Token counts for `duration_s` seconds of 768P video (480P with H3_BLOCK_PERF_480P=1), derived from the
+    pipeline's own packing helpers."""
+    height, width = (480, 832) if os.environ.get("H3_BLOCK_PERF_480P") == "1" else resolve_canvas_size(*PERF_ASPECT)
     tokens_per_latent_frame = (height // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[1]) * (
         width // VAE_SPATIAL_DOWNSAMPLE // PATCH_SIZE[2]
     )
@@ -1173,7 +1278,9 @@ def test_minimax_h3_transformer_block_perf(
     reset_seeds,
 ) -> None:
     """One block at the production geometry, legacy or dynamic-length configs. H3_BLOCK_PERF_ITERS=N adds N
-    timed warm iterations (host wall with a sync, min / median logged) after the profiled one."""
+    timed warm iterations (host wall with a sync, min / median logged) after the profiled one. H3_BLOCK_PERF_LORA_RANK=r
+    runs the block with a random rank-r LoRA side branch; H3_BLOCK_PERF_BF8_DIT=1 with the serving driver's BFP8 DiT
+    weights and activations; H3_BLOCK_PERF_PERSISTENT=0 without persistent CCL buffers (the 4x8 preset)."""
     skip_if_unsupported_num_links(mesh_device, num_links)
     # SP simulation emulates the Blackhole 4x32 quad's per-device shard by shrinking the sequence so a
     # 4x8 device carries what a 4x32 device would. There is no Wormhole quad, so sp_sim rows measure
@@ -1209,6 +1316,7 @@ def test_minimax_h3_transformer_block_perf(
     adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + tags.clamp(min=0)
 
     torch_block = TorchMiniMaxH3Block(**REAL_BLOCK_CONFIG).to(torch.float32)
+    lora_rank = int(os.environ["H3_BLOCK_PERF_LORA_RANK"]) if os.environ.get("H3_BLOCK_PERF_LORA_RANK") else None
 
     rope = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)
     with torch.no_grad():
@@ -1230,9 +1338,14 @@ def test_minimax_h3_transformer_block_perf(
         parallel_config=parallel_config,
         is_fsdp=is_fsdp,
         dynamic_length=dynamic_length,
+        lora_rank=lora_rank,
+        use_persistent_ccl_buffers=os.environ.get("H3_BLOCK_PERF_PERSISTENT", "1") == "1",
     )
-    tt_block.load_torch_state_dict(torch_block.state_dict())
-    del torch_block
+    adapter = {} if lora_rank is None else _random_side_adapter(torch_block, lora_rank)
+    tt_block.load_torch_state_dict({**torch_block.state_dict(), **adapter})
+    del torch_block, adapter
+    if os.environ.get("H3_BLOCK_PERF_BF8_DIT") == "1":
+        _bf8_dit(tt_block)
 
     # H3_BLOCK_PERF_LEGACY_PARTS=agmm_attn,agmm_ff1,sdpa,mmrs,gather puts those dynamic-length pins back on
     # the legacy choice (sdpa320 / sdpa256: that chunk pair in every class), to attribute a delta part by part.
@@ -1304,7 +1417,7 @@ def test_minimax_h3_transformer_block_perf(
             times_ms.append(1000 * (time.perf_counter() - t0))
         times_ms.sort()
         logger.info(
-            f"BLOCK_PERF dynamic_length={dynamic_length} legacy_parts={','.join(sorted(legacy_parts)) or '-'} "
+            f"BLOCK_PERF lora_rank={lora_rank} dynamic_length={dynamic_length} legacy_parts={','.join(sorted(legacy_parts)) or '-'} "
             f"duration={duration_s:g}s rows/device={padded_len // sp_factor} "
             f"iters={iters} min={times_ms[0]:.2f} ms median={times_ms[len(times_ms) // 2]:.2f} ms"
         )
