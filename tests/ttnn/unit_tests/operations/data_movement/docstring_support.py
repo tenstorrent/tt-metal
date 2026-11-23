@@ -115,6 +115,28 @@ def docstring_dtype_layout_params(op, caption="Supported dtypes and layouts"):
         return _unreadable_params(op, "dtype/layout table", error, arity=2)
 
 
+def docstring_blackhole_dtype_layout_params(op):
+    """One ``pytest.param(dtype, layout)`` per dtype that the docstring adds for Blackhole only, in a sentence of the
+    form "On Blackhole, ... ``<DTYPE>`` tensor(s) in <LAYOUT> layout". A test that uses them must skip on other
+    architectures.
+
+    The dtype must name a ``ttnn.DataType`` and the layout a ``ttnn.Layout``; any other name fails the test.
+    """
+    try:
+        text = " ".join(op.__doc__.split())
+        found = re.findall(r"On Blackhole, [^.]*?``(\w+)`` tensors? in (\w+) layout", text)
+        assert found, "no 'On Blackhole, ... ``<DTYPE>`` tensor in <LAYOUT> layout' sentence"
+        params = []
+        for dtype_name, layout_name in found:
+            dtype, layout = getattr(ttnn.DataType, dtype_name, None), getattr(ttnn.Layout, layout_name, None)
+            assert isinstance(dtype, ttnn.DataType), f"not a ttnn.DataType: {dtype_name}"
+            assert isinstance(layout, ttnn.Layout), f"not a ttnn.Layout: {layout_name}"
+            params.append(pytest.param(dtype, layout, id=f"{dtype_name}-{layout_name}"))
+        return params
+    except Exception as error:
+        return _unreadable_params(op, "Blackhole dtypes", error, arity=2)
+
+
 def docstring_interleaved_buffer_type_params(op, label=None):
     """One ``pytest.param(buffer_type)`` per buffer type on the docstring's interleaved Memory Support item.
 

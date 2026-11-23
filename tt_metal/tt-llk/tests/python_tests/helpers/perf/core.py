@@ -24,7 +24,7 @@ from ..logger import logger
 from ..metrics import compute_metrics, export_counters, export_metrics
 from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
-from ..test_config import BuildMode, ProfilerBuild, TestConfig
+from ..test_config import LLK_CODE_SHIFT, BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 from . import window_hash
 from .schema import (
@@ -43,6 +43,8 @@ from .schema import (
     text_size_column,
 )
 from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
+
+CODE_SHIFTS = [int(s) for s in os.environ.get("LLK_CODE_SHIFTS", "").split()]
 
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the
@@ -797,6 +799,7 @@ def _selected_run_types(run_types):
 class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
+    SHIFT_REPORTS: ClassVar[dict] = {}
     COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
 
     def __init__(
@@ -815,6 +818,7 @@ class PerfConfig(TestConfig):
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_vector_ext: bool = False,
+        include_dirs: list = None,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -850,11 +854,14 @@ class PerfConfig(TestConfig):
             skip_build_header,
             compile_time_formats,
             requires_vector_ext=requires_vector_ext,
+            include_dirs=include_dirs,
         )
 
     @staticmethod
     def _dataclass_name_and_values(obj):
         """Return (name, value) pairs for dataclass fields, used as columns for the report."""
+        if getattr(obj, "perf_report_compile_only", False):
+            return []
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
     @staticmethod
@@ -992,7 +999,22 @@ class PerfConfig(TestConfig):
     def run(self, perf_report: PerfReport, run_count=1):
         if not self.run_configs:
             pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
+        if not CODE_SHIFTS:
+            self._run_at_position(perf_report, run_count, first=True, last=True)
+            return
+        try:
+            for i, shift in enumerate(CODE_SHIFTS):
+                TestConfig.CODE_SHIFT = shift
+                self._run_at_position(
+                    perf_report if i == 0 else PerfConfig.SHIFT_REPORTS[shift],
+                    run_count,
+                    first=i == 0,
+                    last=i == len(CODE_SHIFTS) - 1,
+                )
+        finally:
+            TestConfig.CODE_SHIFT = LLK_CODE_SHIFT
 
+    def _run_at_position(self, perf_report: PerfReport, run_count, first, last):
         results = []
         counter_results_list = []
         code_sizes = {}
@@ -1014,7 +1036,9 @@ class PerfConfig(TestConfig):
                 self.build_elfs()
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-            pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+            if last:
+                pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+            return
 
         PerfConfig.TEST_COUNTER += 1
 
@@ -1034,6 +1058,8 @@ class PerfConfig(TestConfig):
             elf_dir = (
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
             )
+            if TestConfig.BUILD_MODE == BuildMode.CONSUME and not elf_dir.is_dir():
+                pytest.skip("no ELFs: the compile session did not reach this test")
             components = _CODE_SIZE_COMPONENTS.get(run_type)
             # 4-TRISC tests include SFPU_ISOLATE; L1_TO_L1 code size must count sfpu.elf too.
             if run_type == PerfRunType.L1_TO_L1 and any(
@@ -1053,7 +1079,7 @@ class PerfConfig(TestConfig):
                             window_hash.fingerprint(
                                 TestConfig.OBJDUMP, elf_dir / f"{c}.elf"
                             )
-                            if window_hash.enabled()
+                            if window_hash.enabled() and first
                             else ""
                         ),
                     )
@@ -1142,19 +1168,20 @@ class PerfConfig(TestConfig):
             self.passed_runtimes,
         )
         perf_report.append(combined, label=self.test_name)
-        window_hash.write_rows(
-            TestConfig.perf_run_dir(),
-            self.test_name,
-            PerfConfig._build_sweep_frame(
-                code_sizes,
-                self.formats_config,
-                self.unpack_to_dest,
-                self.dest_acc,
-                self.passed_templates,
-                self.passed_runtimes,
-            ),
-            window_rows,
-        )
+        if first:
+            window_hash.write_rows(
+                TestConfig.perf_run_dir(),
+                self.test_name,
+                PerfConfig._build_sweep_frame(
+                    code_sizes,
+                    self.formats_config,
+                    self.unpack_to_dest,
+                    self.dest_acc,
+                    self.passed_templates,
+                    self.passed_runtimes,
+                ),
+                window_rows,
+            )
 
         # Append raw counter data to the separate counter report
         if counter_results_list and PerfConfig.COUNTER_REPORT is not None:

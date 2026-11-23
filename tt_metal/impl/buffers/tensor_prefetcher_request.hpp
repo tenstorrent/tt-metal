@@ -172,6 +172,15 @@ enum TensorPrefetcherSelectorMode : uint8_t {
     TENSOR_PREFETCHER_SELECTOR_NONZERO_MASK = 1,
 };
 
+// Where an entry's selector page is (TensorPrefetcherEntry::selector_location).
+enum TensorPrefetcherSelectorLocation : uint8_t {
+    // selector_noc_xy names the NoC endpoint that holds the page: a worker core, or a DRAM core.
+    TENSOR_PREFETCHER_SELECTOR_AT_NOC_XY = 0,
+    // selector_noc_xy is a DRAM bank id and selector_addr an address in that bank, for a sender that reaches
+    // DRAM by bank rather than by NoC coordinates.
+    TENSOR_PREFETCHER_SELECTOR_IN_DRAM_BANK = 1,
+};
+
 // Most groups one selector can name: the kernel reads the selector page (one 16-bit word per group)
 // into a scratch buffer of this many words.
 inline constexpr uint32_t kTensorPrefetcherSelectorMaxEntries = 256;
@@ -186,16 +195,17 @@ struct TensorPrefetcherEntry {
     // Byte offset from the page start of this tensor's TensorPrefetcherTensorLayout; its
     // per-receiver rotation table follows the struct.
     uint32_t layout_offset = 0;
-    // Where the selector page lives when selector_mode is not NONE: a NoC endpoint as virtual
-    // coordinates, x in the low 16 bits and y in the high 16, which the kernel maps onto its own NoC
-    // the way it maps the receiver table; and the local address of the page at that endpoint.
+    // Where the selector page lives when selector_mode is not NONE, as selector_location says: a NoC
+    // endpoint as virtual coordinates, x in the low 16 bits and y in the high 16, which the kernel maps onto
+    // its own NoC the way it maps the receiver table, and the local address of the page at that endpoint;
+    // or a DRAM bank id and an address in that bank.
     uint32_t selector_noc_xy = 0;
     uint32_t selector_addr = 0;
     // Groups the tensor stacks per receiver slab: 1 for an ungrouped tensor. With a selector this is
     // also how many selector words the kernel reads.
     uint16_t num_groups = 1;
     TensorPrefetcherSelectorMode selector_mode = TENSOR_PREFETCHER_SELECTOR_NONE;
-    uint8_t pad = 0;
+    TensorPrefetcherSelectorLocation selector_location = TENSOR_PREFETCHER_SELECTOR_AT_NOC_XY;
 } __attribute__((packed));
 
 static_assert(
