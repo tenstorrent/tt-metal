@@ -193,9 +193,9 @@ def chain_layer3(chain: Path) -> tuple[Callable[[list[str], int, int], dict[str,
         raise ValueError(f"{chain}: producer {m['producer']} is not an FP64 chain")
     from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import deep_complete, deep_products
 
-    deep_complete(chain, layers=fp64_chain.DSA_LAYER + 1)
+    rows = deep_complete(chain, layers=fp64_chain.DSA_LAYER + 1)["rows"]
     layer = fp64_chain.DSA_LAYER
-    return (lambda names, lo, hi: deep_products(chain, layer, "attn", names, lo, hi)), True, m["count"]
+    return (lambda names, lo, hi: deep_products(chain, layer, "attn", names, lo, hi)), True, rows
 
 
 def build_dsa_input_from_chain(*, chain: Path, checkpoint: Path, count: int, out: Path, segment: int) -> dict:

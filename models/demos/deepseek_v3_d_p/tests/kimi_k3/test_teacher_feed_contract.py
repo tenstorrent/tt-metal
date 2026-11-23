@@ -1450,6 +1450,121 @@ def test_dsa_teacher_feed_from_the_deep_chain_scores_every_row(tmp_path: Path, e
         dsa_teacher_feed.chain_layer3(deep)
 
 
+def _deep_moe_layer1(tmp_path: Path, chain: Path, moe_output: torch.Tensor) -> Path:
+    """A layer-major ``fp64_deep_chain`` whose layer-1 FFN pass holds the 1M-layout chain's layer-1 MoE input and
+    routing plus ``moe_output`` as every row's MoE output; its manifest in the produced shape (``count``, the passes in
+    ``segments``), passes through layer 1."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain
+
+    m = json.loads((chain / MANIFEST).read_text())
+    count, segment = m["segments"][-1]["end"], m["segment"]
+    names = ["moe_input_1", "routing_ids_1", "routing_weights_1", "routing_margin_1"]
+    p = fp64_chain.load_products(chain, names)
+    deep = tmp_path / "deep"
+    (deep / "L1_ffn").mkdir(parents=True)
+    for i, lo in enumerate(range(0, count, segment)):
+        hi = min(lo + segment, count)
+        seg = {"start": lo, "end": hi, **{n: p[n][lo:hi] for n in names}, "moe_output_1": moe_output[lo:hi]}
+        torch.save(seg, deep / "L1_ffn" / f"segment_{i:06d}.pt")
+    manifest = {
+        "producer": "fp64_deep_chain",
+        "producer_version": 2,
+        "identity": m["identity"],
+        "token_ids_sha256": m["token_ids_sha256"],
+        "kinds": {"0": ["kda", "dense"], "1": ["kda", "moe"], "2": ["kda", "moe"], "3": ["dsa", "moe"]},
+        "count": count,
+        "segment": segment,
+        "segments": [{"layer": l, "site": s} for l in range(2) for s in ("attn", "ffn")],
+    }
+    (deep / MANIFEST).write_text(json.dumps(manifest))
+    return deep
+
+
+def test_moe_teacher_feed_from_the_deep_chain_scores_every_row_by_absolute_error(tmp_path: Path, expect_error):
+    """From the layers 0-7 deep chain, a MoE layer's input is its FFN pass's moe_input rounded once to bf16, equal to
+    the one built from the 1M chain, and the score reads that pass's MoE output and routing on every row. The
+    reference output is bf16-exact, so a device run equal to it except row 5 doubled (an error of ||o_5||, same experts)
+    and row 7 negated with its last expert swapped (an error of 2 ||o_7||, routing flipped) has, per element of
+    ``width``: overall RMS error sqrt((||o_5||^2 + 4 ||o_7||^2) / (10 width)), unflipped-row RMS error
+    sqrt(||o_5||^2 / (9 width)), flip fraction 1/10 and flipped share 4 ||o_7||^2 / (||o_5||^2 + 4 ||o_7||^2); window
+    [4, 8) holds both rows, windows [0, 4) and [8, 10) score 0. The window's FP64 routing margin is the chain's. The
+    same deep chain reads alike with its manifest in the registry's migrated shape (``rows``, ``passes``, row
+    ``segments``); missing passes and a dense layer are refused."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain, moe_teacher_feed
+
+    model, chain, ckpt = _fed_chain(tmp_path)
+    p = fp64_chain.load_products(chain, ["moe_output_1", "routing_ids_1", "routing_weights_1", "routing_margin_1"])
+    ref = p["moe_output_1"].to(torch.bfloat16).float()
+    deep = _deep_moe_layer1(tmp_path, chain, ref)
+    src, src_1m = tmp_path / "moe_in", tmp_path / "moe_in_1m"
+    m = moe_teacher_feed.build_moe_input_from_chain(chain=deep, checkpoint=ckpt, layer=1, count=10, out=src, segment=4)
+    moe_teacher_feed.build_moe_input_from_chain(chain=chain, checkpoint=ckpt, layer=1, count=10, out=src_1m, segment=4)
+    assert m["chain"] == str(deep) and m["input"].startswith("fp64_deep_chain moe_input_1")
+    assert torch.equal(load_input(src, 0, 10), load_input(src_1m, 0, 10))
+    _write_trace(tmp_path / "trace", {"expert_ids_layer_1": p["routing_ids_1"]}, chunk_rows=4)
+    dev, dev_ids = ref.clone(), p["routing_ids_1"].clone()
+    dev[5] *= 2
+    dev[7] *= -1
+    dev_ids[7, 1] = next(e for e in range(6) if e not in dev_ids[7].tolist())
+    out = tmp_path / "dev"
+    run = {"layer": 1, "count": 10, "chunk": 4, "input": str(src)}
+    start_run(out, run)
+    for c, lo in enumerate(range(0, 10, 4)):
+        hi = min(lo + 4, 10)
+        payload = {
+            "start": lo,
+            "end": hi,
+            "moe_out": dev[lo:hi].to(torch.bfloat16),
+            "expert_ids": dev_ids[lo:hi].to(torch.int16),
+            "expert_weights": p["routing_weights_1"][lo:hi].to(torch.bfloat16),
+        }
+        torch.save(payload, chunk_path(out, c))
+    finish_run(out, run, 1.0)
+    w = model.layers[1]["moe"].w
+
+    def scored():
+        return score_moe(
+            trace=Trace(tmp_path / "trace"),
+            out=out,
+            window=4,
+            gate=w["gate.weight"],
+            bias=w["gate.e_score_correction_bias"],
+        )
+
+    result = scored()
+    o, win = result["overall"], result["windows"]
+    width = ref.shape[1]
+    e5, e7 = ref[5].double().square().sum(), 4 * ref[7].double().square().sum()
+    assert result["reference"] == str(deep) and o["recall_vs_reference_mean"] == pytest.approx(1 - 0.5 / 10)
+    assert o["moe_rms_err"] == pytest.approx(float(((e5 + e7) / (10 * width)).sqrt()))
+    assert o["moe_rms_ref"] == pytest.approx(float(ref.double().square().mean().sqrt()))
+    assert o["moe_rms_err_unflipped"] == pytest.approx(float((e5 / (9 * width)).sqrt()))
+    assert o["moe_rms_err_flipped"] == pytest.approx(float((e7 / width).sqrt()))
+    assert o["flip_fraction"] == pytest.approx(0.1) and o["flipped_error_share"] == pytest.approx(float(e7 / (e5 + e7)))
+    assert o["moe_nrmse_median_unflipped"] == 0 and o["moe_row_err_median"] == 0
+    assert win[1]["moe_rms_err"] == pytest.approx(float(((e5 + e7) / (4 * width)).sqrt()))
+    assert win[1]["moe_rms_ref"] == pytest.approx(float(ref[4:8].double().square().mean().sqrt()))
+    assert win[1]["flip_fraction"] == 0.25 and win[0]["moe_rms_err"] == 0 and win[2]["moe_rms_err"] == 0
+    assert (
+        win[0]["flip_fraction"] == 0 and win[0]["flipped_error_share"] != win[0]["flipped_error_share"]
+    )  # NaN: no error
+    margin = p["routing_margin_1"].float()
+    assert win[1]["reference_margin_median"] == pytest.approx(float(margin[4:8].sort().values[1:3].mean()))
+    # The registry's migrated manifest shape reads the same rows and scores the same.
+    produced = json.loads((deep / MANIFEST).read_text())
+    migrated = {k: v for k, v in produced.items() if k not in ("count", "segments")}
+    migrated.update(rows=10, passes=produced["segments"], segments=[{"start": 0, "end": 4}, {"start": 4, "end": 8}])
+    (deep / MANIFEST).write_text(json.dumps(migrated))
+    assert moe_teacher_feed.chain_ffn(deep, 1)[1] == 10
+    assert json.dumps(scored()["windows"]) == json.dumps(win)  # (NaN columns compare as text)
+    migrated["passes"] = migrated["passes"][:3]
+    (deep / MANIFEST).write_text(json.dumps(migrated))
+    with expect_error(ValueError, "3 passes complete, 4 needed"):
+        moe_teacher_feed.chain_ffn(deep, 1)
+    with expect_error(ValueError, "layer 0's FFN is dense, not a MoE"):
+        moe_teacher_feed.chain_ffn(deep, 0)
+
+
 def test_quantile_by_hand_and_beyond_torch_quantile_size():
     """[1, 2, 3, 4]: median 2.5, p10 1.3 (linear interpolation); empty is NaN; 2^24 + 1 values (torch.quantile's
     limit is 2^24) give their exact median."""

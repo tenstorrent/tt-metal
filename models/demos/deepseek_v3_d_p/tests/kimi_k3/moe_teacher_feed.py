@@ -34,6 +34,7 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Callable
 
 import torch
 
@@ -52,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     checkpoint_tensors,
     chunk_path,
     complete_run,
+    error_norms,
     load_input,
     missed_keys,
     quantile,
@@ -183,16 +185,38 @@ def build_moe_input(
     )
 
 
+def chain_ffn(chain: Path, layer: int) -> tuple[Callable[[list[str], int, int], dict[str, torch.Tensor]], int]:
+    """How to read layer ``layer``'s MoE products (``moe_input_L``, ``moe_output_L``, ``routing_ids_L`` /
+    ``_weights_L`` / ``_margin_L``) from an FP64 chain: ``(read(names, start, end), rows)``. ``fp64_chain`` (layers
+    0-3, 1M) keeps them in its per-row segment files (MoE layers 1-2); ``fp64_deep_chain`` (layers 0-7, layer-major) in
+    the layer's FFN pass, every row, read with either manifest shape (``device_chain.deep_manifest``)."""
+    m = json.loads((Path(chain) / MANIFEST).read_text())
+    if m["producer"] == "fp64_chain":
+        rows = m["segments"][-1]["end"] if m["segments"] else 0
+        return (lambda names, lo, hi: load_products(chain, names, lo, hi)), rows
+    if m["producer"] != "fp64_deep_chain":
+        raise ValueError(f"{chain}: producer {m['producer']} is not an FP64 chain")
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import deep_complete, deep_products
+
+    m = deep_complete(chain, layers=layer + 1)
+    kind = m["kinds"][str(layer)][1]
+    if kind != "moe":
+        raise ValueError(f"{chain}: layer {layer}'s FFN is {kind}, not a MoE")
+    return (lambda names, lo, hi: deep_products(chain, layer, "ffn", names, lo, hi)), m["rows"]
+
+
 def build_moe_input_from_chain(*, chain: Path, checkpoint: Path, layer: int, count: int, out: Path, segment: int):
-    """Write (or resume) layer ``layer``'s teacher-fed MoE input from an FP64 chain run: the chain's gate input
-    ``moe_input_L`` (after ``post_attention_layernorm``) rounded once to bf16, the device's input format. Every segment
-    is checked by routing sampled rows of that bf16 input with the layer's gate in fp32 against the chain's FP64
-    routing, and fails closed below ``INPUT_CHECK_RECALL``."""
+    """Write (or resume) layer ``layer``'s teacher-fed MoE input from an FP64 chain run (``chain_ffn``): the chain's
+    gate input ``moe_input_L`` (after ``post_attention_layernorm``) rounded once to bf16, the device's input format.
+    Every segment is checked by routing sampled rows of that bf16 input with the layer's gate in fp32 against the
+    chain's FP64 routing, and fails closed below ``INPUT_CHECK_RECALL``."""
     w = layer_weights(checkpoint, layer)
     gate, bias = w["block_sparse_moe.gate.weight"], w["block_sparse_moe.gate.e_score_correction_bias"]
+    read_chain, _ = chain_ffn(chain, layer)
+    producer = json.loads((Path(chain) / MANIFEST).read_text())["producer"]
 
     def make(start: int, end: int) -> tuple[torch.Tensor, dict[str, float]]:
-        p = load_products(chain, [f"moe_input_{layer}", f"routing_ids_{layer}"], start, end)
+        p = read_chain([f"moe_input_{layer}", f"routing_ids_{layer}"], start, end)
         normed = p[f"moe_input_{layer}"].to(torch.bfloat16)
         rows = torch.linspace(0, normed.shape[0] - 1, min(CHECK_ROWS, normed.shape[0])).long()
         want = p[f"routing_ids_{layer}"][rows].long()
@@ -202,7 +226,7 @@ def build_moe_input_from_chain(*, chain: Path, checkpoint: Path, layer: int, cou
     expected = {
         "layer": layer,
         **chain_identity(chain),
-        "input": f"fp64_chain moe_input_{layer} (post post_attention_layernorm, FP64, stored fp32) rounded to bf16",
+        "input": f"{producer} moe_input_{layer} (post post_attention_layernorm, FP64, stored fp32) rounded to bf16",
         "norm": "in the chain (FP64)",
     }
     return build_input(
@@ -255,24 +279,47 @@ def _mean(t) -> float:
     return float(t.float().mean()) if t.numel() else float("nan")
 
 
+def moe_abs_error(err_sq: torch.Tensor, ref_sq: torch.Tensor, width: int, flipped: torch.Tensor) -> dict:
+    """The MoE output's absolute error over rows with squared row error norms ``err_sq`` and squared reference row
+    norms ``ref_sq`` (``width`` elements per row), keyed ``moe_<measure>``: RMS over elements of the error and of the
+    reference (``rms_err`` / ``rms_ref``, their ratio the pooled NRMSE) and the median per-row RMS of each
+    (``teacher_feed.error_norms`` per element). Split by routing (``flipped``: rows whose device expert set differs
+    from the reference's): ``flip_fraction``, the error RMS of the unflipped rows (the experts' and the input's
+    arithmetic alone: same experts) and the flipped rows' share of the squared error."""
+    nan = float("nan")
+    e = {f"moe_{k}": v for k, v in error_norms(err_sq / width, ref_sq / width).items()}
+    kept = ~flipped
+    total = float(err_sq.double().sum())
+    e["flip_fraction"] = float(flipped.double().mean()) if flipped.numel() else nan
+    e["moe_rms_err_unflipped"] = float((err_sq[kept].double() / width).mean().sqrt()) if kept.any() else nan
+    e["moe_rms_err_flipped"] = float((err_sq[flipped].double() / width).mean().sqrt()) if flipped.any() else nan
+    e["flipped_error_share"] = float(err_sq[flipped].double().sum()) / total if total > 0 else nan
+    return e
+
+
 def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: torch.Tensor) -> dict:
-    """Score a complete device run in ``out`` per context position against its reference; writes metrics.json,
-    windows.tsv and rows.pt. The reference is the run's input's source: the trace (MoE output
+    """Score a complete device run in ``out`` on every row per context position against its reference; writes
+    metrics.json, windows.tsv and rows.pt. The reference is the run's input's source: the trace (MoE output
     ``decoder_output_layer_L``, routing ``expert_ids`` / ``expert_weights``, missed experts ranked by the fp32 router's
-    choice score), or the FP64 chain the input came from (``moe_output_L``, ``routing_ids_L`` / ``routing_weights_L``,
-    best first, so a miss's rank is its FP64 rank), with the GPU trace's routing as a third reference
-    (``recall_gpu_vs_reference``). Routes every row of the run's input with the fp32 router too (``gate`` / ``bias``:
-    the layer's gate weight and selection bias), for the reference's distance to fp32 and the device's."""
+    choice score), or the FP64 chain the input came from (``chain_ffn``: ``moe_output_L``, ``routing_ids_L`` /
+    ``routing_weights_L``, best first, so a miss's rank is its FP64 rank, and the FP64 routing margin ``routing_margin_L``
+    per window), with the GPU trace's routing as a third reference (``recall_gpu_vs_reference``). Routes every row of
+    the run's input with the fp32 router too (``gate`` / ``bias``: the layer's gate weight and selection bias), for the
+    reference's distance to fp32 and the device's. The MoE output is scored relative (per-row NRMSE) and absolute
+    (``moe_abs_error``, which also splits it by whether the row's routing flipped)."""
     manifest = complete_run(out)
     count, chunk, layer = manifest["count"], manifest["chunk"], manifest["layer"]
     source = Path(manifest["input"])
     chain = json.loads((source / MANIFEST).read_text()).get("chain")
+    if chain is not None:
+        read_chain, _ = chain_ffn(Path(chain), layer)
     gate = gate.float()
     num_chunks = -(-count // chunk)
     moe = TokenErrorAccumulator()
     keys = ("recall", "dropped", "weight_err", "recall_reference_vs_fp32", "recall_device_vs_fp32")
-    per_row = {k: [] for k in keys + ("recall_gpu_vs_reference",)}
+    per_row = {k: [] for k in keys + ("recall_gpu_vs_reference", "reference_margin")}
     misses = []
+    width = None
     for c in range(num_chunks):
         payload = torch.load(chunk_path(out, c), weights_only=True)
         lo, hi = payload["start"], payload["end"]
@@ -282,9 +329,15 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
             want = trace.rows(f"expert_ids_layer_{layer}", lo, hi).long()
             want_w = trace.rows(f"expert_weights_layer_{layer}", lo, hi)
         else:
-            names = [f"moe_output_{layer}", f"routing_ids_{layer}", f"routing_weights_{layer}"]
-            expected, want, want_w = load_products(Path(chain), names, lo, hi).values()
+            names = [
+                f"moe_output_{layer}",
+                f"routing_ids_{layer}",
+                f"routing_weights_{layer}",
+                f"routing_margin_{layer}",
+            ]
+            expected, want, want_w, margin = read_chain(names, lo, hi).values()
             want = want.long()
+            per_row["reference_margin"].append(margin.float())
         host_ids, _, choice = route(load_input(source, lo, hi), gate, bias, top_k=want.shape[1])
         if chain is None:
             want_score = choice.gather(1, want)
@@ -294,6 +347,7 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
                 topk_recall(trace.rows(f"expert_ids_layer_{layer}", lo, hi).long(), want)
             )
         moe.update(expected, payload["moe_out"])
+        width = expected.shape[1]
         r = routing_window(got, got_w, want, want_w, want_score)
         for k in ("recall", "dropped", "weight_err"):
             per_row[k].append(r[k])
@@ -304,7 +358,9 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
         print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
     floor = golden_floor(moe.expected_norms())
     row_nrmse = moe.token_nrmse(floor)
+    err_sq, ref_sq = moe.squared_norms()
     per_row = {k: torch.cat(v) if v else torch.zeros(0) for k, v in per_row.items()}
+    flipped = per_row["recall"] < 1
     misses = {k: torch.cat([m[k] for m in misses]) for k in misses[0]}
     windows = []
     for lo in range(0, count, window):
@@ -312,6 +368,7 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
         inside = (misses["row"] >= lo) & (misses["row"] < hi)
         rank, selected = misses["rank"][inside], misses["selected"][inside]
         recall = per_row["recall"][lo:hi]
+        unflipped = row_nrmse[lo:hi][~flipped[lo:hi]]
         windows.append(
             {
                 "start": lo,
@@ -319,6 +376,9 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
                 "moe_nrmse_median": float(row_nrmse[lo:hi].median()),
                 "moe_nrmse_p99": quantile(row_nrmse[lo:hi], 0.99),
                 "moe_nrmse_max": float(row_nrmse[lo:hi].max()),
+                "moe_nrmse_median_unflipped": quantile(unflipped, 0.5),
+                **moe_abs_error(err_sq[lo:hi], ref_sq[lo:hi], width, flipped[lo:hi]),
+                "reference_margin_median": quantile(per_row["reference_margin"][lo:hi], 0.5),
                 "recall_vs_reference_mean": float(recall.mean()),
                 "set_equal_vs_reference": float((recall == 1).float().mean()),
                 "recall_reference_vs_fp32_mean": float(per_row["recall_reference_vs_fp32"][lo:hi].mean()),
@@ -345,6 +405,9 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
         "moe_nrmse_floor": floor,
         "overall": {
             "moe_nrmse_median": float(row_nrmse.median()),
+            "moe_nrmse_median_unflipped": quantile(row_nrmse[~flipped], 0.5),
+            **moe_abs_error(err_sq, ref_sq, width, flipped),
+            "reference_margin_median": quantile(per_row["reference_margin"], 0.5),
             "recall_vs_reference_mean": float(per_row["recall"].mean()),
             "set_equal_vs_reference": float((per_row["recall"] == 1).float().mean()),
             "recall_gpu_vs_reference_mean": _mean(per_row["recall_gpu_vs_reference"]),
@@ -364,7 +427,8 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
     (out / "windows.tsv").write_text(
         "\t".join(columns) + "\n" + "".join("\t".join(f"{w[c]:.6g}" for c in columns) + "\n" for w in windows)
     )
-    torch.save({"moe_nrmse": row_nrmse.float(), **{k: v.float() for k, v in per_row.items()}}, out / "rows.pt")
+    rows = {"moe_nrmse": row_nrmse, "moe_err_sq": err_sq, "moe_ref_sq": ref_sq, **per_row}
+    torch.save({k: v.float() for k, v in rows.items()}, out / "rows.pt")
     return result
 
 
@@ -502,7 +566,11 @@ def main() -> None:
     checkpoint = Path(os.environ.get("KIMI_K31_HF_MODEL", ""))
     build = sub.add_parser("input", help="rebuild the teacher-fed MoE input from the trace, or take it from a chain")
     build.add_argument("--trace", type=Path, help="rebuild from this trace")
-    build.add_argument("--chain", type=Path, help="take the input from this fp64_chain run (and score against it)")
+    build.add_argument(
+        "--chain",
+        type=Path,
+        help="take the input from this FP64 chain (fp64_chain or fp64_deep_chain; scored against it)",
+    )
     build.add_argument("--layer", type=int, required=True)
     build.add_argument("--checkpoint", type=Path, default=checkpoint)
     build.add_argument("--count", type=int, help="rows to build (default: the trace's prompt)")
@@ -530,7 +598,7 @@ def main() -> None:
         print(json.dumps(result))
         raise SystemExit(1 if result["differ"] else 0)
     if args.command == "input" and args.chain:
-        count = args.count or json.loads((args.chain / MANIFEST).read_text())["segments"][-1]["end"]
+        count = args.count or chain_ffn(args.chain, args.layer)[1]
         build_moe_input_from_chain(
             chain=args.chain,
             checkpoint=args.checkpoint,

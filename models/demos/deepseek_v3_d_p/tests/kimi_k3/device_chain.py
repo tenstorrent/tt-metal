@@ -210,20 +210,31 @@ def segment_rows(path_of, segment: int, names: list[str], start: int, end: int) 
     return {n: torch.cat(v) for n, v in parts.items()}
 
 
+def deep_manifest(chain: Path) -> dict:
+    """The deep chain's manifest with its row count as ``rows`` and its layer passes as ``passes``, in either shape:
+    as produced (``count``; the passes listed in ``segments``) or as the golden registry migration rewrites it
+    (``rows``; the passes in ``passes``, ``segments`` then the row segments). ``segment`` (rows per segment file) is
+    the same in both."""
+    m = json.loads((Path(chain) / MANIFEST).read_text())
+    rows = m["rows"] if "rows" in m else m["count"]
+    passes = m["passes"] if "passes" in m else m["segments"]
+    return {**m, "rows": rows, "passes": passes}
+
+
 def deep_products(chain: Path, layer: int, site: str, names: list[str], start: int, end: int) -> dict:
     """Products ``names`` of the deep chain's pass (``layer``, ``site``) for rows ``[start, end)``; the pass's
     segments are ``<chain>/L<layer>_<site>/segment_<i>.pt`` of ``manifest["segment"]`` rows each."""
-    seg = json.loads((chain / MANIFEST).read_text())["segment"]
+    seg = deep_manifest(chain)["segment"]
     return segment_rows(lambda i: chain / f"L{layer}_{site}" / f"segment_{i:06d}.pt", seg, names, start, end)
 
 
 def deep_complete(chain: Path, layers: int | None = None) -> dict:
-    """The deep chain's manifest; refuses a chain whose passes (attention, then FFN) of layers ``0..layers-1``
-    (default: every layer) are not all done."""
-    m = json.loads((chain / MANIFEST).read_text())
+    """The deep chain's manifest (``deep_manifest``); refuses a chain whose passes (attention, then FFN) of layers
+    ``0..layers-1`` (default: every layer) are not all done."""
+    m = deep_manifest(chain)
     need = 2 * (len(m["kinds"]) if layers is None else layers)
-    if len(m["segments"]) < need:
-        raise ValueError(f"{chain}: {len(m['segments'])} passes complete, {need} needed")
+    if len(m["passes"]) < need:
+        raise ValueError(f"{chain}: {len(m['passes'])} passes complete, {need} needed")
     return m
 
 
