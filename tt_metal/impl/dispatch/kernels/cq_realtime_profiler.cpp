@@ -8,6 +8,7 @@
 // via PCIe. This split decouples the NOC read from the PCIe push, allowing
 // dispatch_s to proceed without waiting.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include "risc_common.h"
@@ -86,12 +87,32 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(uint32_t recor
     // to keep it off the dispatch path. Covers unprofiled records too, since they carry the chain forward.
     volatile tt_l1_ptr realtime_profiler_record_t* record =
         reinterpret_cast<volatile tt_l1_ptr realtime_profiler_record_t*>(slot_addr);
-    const uint64_t end = (static_cast<uint64_t>(record->kernel_end.time_hi) << 32) | record->kernel_end.time_lo;
-    if (end < last_record_end) {
-        record->kernel_end.time_hi = static_cast<uint32_t>(last_record_end >> 32);
-        record->kernel_end.time_lo = static_cast<uint32_t>(last_record_end);
+    const uint32_t end_hi = record->kernel_end.time_hi;
+    const uint32_t end_lo = record->kernel_end.time_lo;
+    if (end_hi == static_cast<uint32_t>(last_record_end >> 32)) [[likely]] {
+        // Same high word, so the later of this end and the previous one is the larger low word.
+        const uint32_t latest_lo = std::max(end_lo, static_cast<uint32_t>(last_record_end));
+        record->kernel_end.time_lo = latest_lo;
+        last_record_end = (static_cast<uint64_t>(end_hi) << 32) | latest_lo;
     } else {
-        last_record_end = end;
+        // The high word differs from the previous record's, which happens once per 2^32 cycles. Two cores on the
+        // dispatch tile stamp the end, so a stamp taken as the clock's low word wraps can pair the old low word with
+        // the new high word, which puts it 2^32 cycles ahead of the clock. Such an end is moved back before the clamp.
+        uint64_t end = (static_cast<uint64_t>(end_hi) << 32) | end_lo;
+        volatile tt_reg_ptr uint32_t* p_reg =
+            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        const uint32_t now_lo = p_reg[WALL_CLOCK_LOW_INDEX];
+        const uint32_t now_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+        if (end > ((static_cast<uint64_t>(now_hi) << 32) | now_lo) + (1ull << 31)) {
+            end -= 1ull << 32;
+            record->kernel_end.time_hi = static_cast<uint32_t>(end >> 32);
+        }
+        if (end < last_record_end) {
+            record->kernel_end.time_hi = static_cast<uint32_t>(last_record_end >> 32);
+            record->kernel_end.time_lo = static_cast<uint32_t>(last_record_end);
+        } else {
+            last_record_end = end;
+        }
     }
 
     // A nonzero kernel_end.header is how long dispatch_s waited for a free slot, starting at this record's start.
@@ -143,54 +164,6 @@ __attribute__((noinline)) bool realtime_profiler_drain_records() {
     return (published & REALTIME_PROFILER_RECORD_WR_IDX_TERMINATE) && record_rd_idx == wr_idx;
 }
 
-// Handle sync requests from host: capture device timestamp and enqueue
-// a sync marker record into the ring buffer for the NCRISC pusher.
-__attribute__((noinline)) void realtime_profiler_sync() {
-    DPRINT("REALTIME: entering sync\n");
-
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-
-    uint32_t sync_count = 0;
-    while (rt_profiler_msg->sync_request) {
-        invalidate_l1_cache();
-
-        // Keep serving dispatch_s during a sync, or it would stall once the record ring fills.
-        realtime_profiler_drain_records();
-
-        uint32_t host_time = rt_profiler_msg->sync_host_timestamp;
-        if (host_time > 0) {
-            DPRINT("REALTIME: sync got host_time={}\n", host_time);
-
-            // Spin until ring buffer has space
-            while (rt_ring_full(ring_buffer)) {
-                invalidate_l1_cache();
-            }
-
-            uint32_t slot_addr = rt_ring_data_addr(ring_buffer, ring_buffer->write_index);
-            tt_l1_ptr uint32_t* l1_data = reinterpret_cast<tt_l1_ptr uint32_t*>(slot_addr);
-
-            uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-            uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-
-            l1_data[0] = time_hi;
-            l1_data[1] = time_lo;
-            l1_data[2] = host_time;
-            l1_data[3] = REALTIME_PROFILER_SYNC_MARKER_ID;
-            l1_data[4] = 0;
-            l1_data[5] = 0;
-            l1_data[6] = 0;
-            l1_data[7] = 0;
-
-            ring_buffer->write_index++;
-
-            rt_profiler_msg->sync_host_timestamp = 0;
-            sync_count++;
-            DPRINT("REALTIME: sync pushed count={}\n", sync_count);
-        }
-    }
-    DPRINT("REALTIME: exiting sync, total={}\n", sync_count);
-}
-
 void kernel_main() {
     DPRINT("REALTIME BRISC: kernel started\n");
 
@@ -207,11 +180,6 @@ void kernel_main() {
             noc_async_write_barrier();  // last record_rd_idx ack
             ring_buffer->terminate = 1;
             return;
-        }
-
-        if (rt_profiler_msg->sync_request) {
-            DPRINT("REALTIME: sync_request detected!\n");
-            realtime_profiler_sync();
         }
     }
 }
