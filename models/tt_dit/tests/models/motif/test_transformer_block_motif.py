@@ -109,8 +109,6 @@ def test_transformer_block_motif(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        attention_k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor),
-        attention_exp_approx_mode=MotifTransformer.SDPA_EXP_APPROX_MODE,
     )
     converted_state_dict = dict(torch_model.state_dict())
     convert_motif_transformer_block_state(converted_state_dict, is_last_block=is_last_block)
@@ -121,7 +119,7 @@ def test_transformer_block_motif(
     time_embed = torch.randn([batch_size, modulation_dim])
 
     spatial_padded = Attention.pad_spatial_sequence(
-        spatial, sp_factor=sp_factor, k_chunk_size=MotifTransformer.get_k_chunk_size(sp_factor)
+        spatial, sp_factor=sp_factor, multiple=MotifTransformer.sequence_padding_multiple(sp_factor)
     )
 
     tt_spatial = bf16_tensor_2dshard(spatial_padded, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})

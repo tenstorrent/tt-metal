@@ -10,18 +10,16 @@ Two modes, chosen by `H3_SDPA_ROWS` (padded rows per device; default 13664, the 
     on below 2048 rows per device), PCC and max abs error against torch's SDPA in FP32.
 
 Heads and head dim come from the block config; the SP / TP axes, link count and topology from the mesh's
-pipeline preset; the grid, chunk sizes and `dynamic_local_n` from the attention module's rules for the denoise
-path the preset resolves to (`MINIMAX_H3_DYNAMIC_LENGTH` overrides it, as in the pipeline). So a kernel change
-measured here is the change the pipeline sees. `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` sweeps the
-H3 chunk pairs by device kernel time under the profiler, on its own mesh setup; this times the whole call, ring
-all-gather included, on the preset's mesh and CCL setup, with no profiler.
+pipeline preset; the grid and `dynamic_local_n` from the attention module's rules for the denoise path the preset
+resolves to (`MINIMAX_H3_DYNAMIC_LENGTH` overrides it, as in the pipeline). The op chooses the chunk sizes, as for the
+model; `H3_SDPA_Q` / `H3_SDPA_K` pin them. So a kernel change measured here is the change the pipeline sees. This times
+the whole call, ring all-gather included, on the preset's mesh and CCL setup, with no profiler.
 
     pytest models/tt_dit/tests/models/minimax_h3/test_sdpa_bench_minimax_h3.py -k 4x8_WH -s
 """
 
 from __future__ import annotations
 
-import math
 import os
 import time
 
@@ -32,11 +30,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 
-from ....models.transformers.minimax_h3.attention_minimax_h3 import DYNAMIC_RING_SDPA_CHUNKS, MiniMaxH3Attention
-from ....models.transformers.minimax_h3.length_classes import length_class
 from ....parallel.manager import CCLManager
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Residency, _resolve_denoise_path, resolve_mesh_preset
-from ....utils.device_constants import compute_grid_key
 from .common import GALAXY_MESHES, REAL_BLOCK_CONFIG, fabric_topology
 
 HEADS = REAL_BLOCK_CONFIG["num_attention_heads"]
@@ -70,26 +65,11 @@ def test_h3_ring_sdpa_bench(mesh_device):
     full_grid = mesh_device.compute_with_storage_grid_size()
     worker_grid = (full_grid.x - 1, full_grid.y)
 
-    # The model's chunk rule, without building the whole attention module.
-    if dynamic:
-        q_chunk, k_chunk = DYNAMIC_RING_SDPA_CHUNKS[compute_grid_key(full_grid)][length_class(rows).name]
-    else:
-        q_chunk, k_chunk = MiniMaxH3Attention.measured_sdpa_chunk_sizes.get(rows, (256, 512))
-    q_chunk = int(os.environ.get("H3_SDPA_Q", q_chunk))
-    k_chunk = int(os.environ.get("H3_SDPA_K", k_chunk))
+    # The model's config: its grid, chunk sizes chosen by the op (0) unless pinned.
+    q_chunk = int(os.environ.get("H3_SDPA_Q", 0))
+    k_chunk = int(os.environ.get("H3_SDPA_K", 0))
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(*worker_grid),
-        q_chunk_size=q_chunk,
-        k_chunk_size=k_chunk,
-        exp_approx_mode=False,
-        min_blocked_pack_tiles=2,
-    )
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        compute_with_storage_grid_size=ttnn.CoreCoord(*worker_grid), q_chunk_size=q_chunk, k_chunk_size=k_chunk
     )
 
     torch.manual_seed(1234)
@@ -151,7 +131,7 @@ def test_h3_ring_sdpa_bench(mesh_device):
             joint_strategy="rear",
             logical_n=logical_n,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
+            precision=ttnn.SDPAPrecision.STANDARD,
             dim=2,
             multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(sp_axis),
             num_links=ccl.num_links,
@@ -174,17 +154,12 @@ def test_h3_ring_sdpa_bench(mesh_device):
         ttnn.synchronize_device(mesh_device)
         times.append((time.perf_counter() - t0) * 1e3)
     times.sort()
-    # Per-core steps: each core runs ceil(q chunks x heads / cores) q chunks, each against every k chunk
-    # of the gathered sequence; the median call over that is the inner-loop step period.
-    cores = worker_grid[0] * worker_grid[1]
-    rounds = math.ceil(math.ceil(rows / q_chunk) * local_heads / cores)
-    steps = rounds * math.ceil(seq / k_chunk)
     median = times[len(times) // 2]
+    chunks = f"q{q_chunk} k{k_chunk}" if q_chunk and k_chunk else "op-chosen chunks"
     logger.info(
-        f"H3_SDPA rows/dev {rows} seq {seq} logical {logical} heads/dev {local_heads} q{q_chunk} k{k_chunk} "
+        f"H3_SDPA rows/dev {rows} seq {seq} logical {logical} heads/dev {local_heads} {chunks} "
         f"dynamic_local_n {dynamic} links {ccl.num_links} {topology} "
-        f"grid {worker_grid}: median {median:.2f} ms, min {times[0]:.2f}, max {times[-1]:.2f}; "
-        f"{rounds} rounds x {steps // rounds} k chunks = {median * 1e3 / steps:.2f} us/step"
+        f"grid {worker_grid}: median {median:.2f} ms, min {times[0]:.2f}, max {times[-1]:.2f}"
     )
 
     if check:

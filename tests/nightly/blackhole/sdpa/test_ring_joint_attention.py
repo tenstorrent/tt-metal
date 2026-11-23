@@ -48,7 +48,6 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
     mesh_device,
     input_shape,
     parallel_config,
-    chunk_sizes,
     expected_correctness,
     num_links,
     all_gather_topology,
@@ -59,7 +58,7 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
     trace_enabled = False
     skip_check = False
     pcc_threshold, max_mse = expected_correctness
-    q_chunk_size, k_chunk_size = chunk_sizes
+    q_chunk_size, k_chunk_size = 0, 0  # op-chosen, as the models call it
 
     run_test_ring_joint_sdpa(
         mesh_device,
