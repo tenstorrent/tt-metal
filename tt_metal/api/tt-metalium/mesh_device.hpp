@@ -58,6 +58,10 @@ struct TraceDescriptor;
 
 namespace distributed {
 
+namespace multihost {
+class DistributedContext;
+}  // namespace multihost
+
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
@@ -239,6 +243,10 @@ public:
         "get_device_ids instead. This will be removed after 2026-11-19.")]]
     std::vector<IDevice*> get_devices() const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
+
+    // Sub-context over the ranks driving this mesh's devices, or null when this rank drives all of them. Created on
+    // first use, collectively across the co-owners.
+    const std::shared_ptr<multihost::DistributedContext>& coowner_context() const;
 
     DeviceIds get_device_ids() const;
 

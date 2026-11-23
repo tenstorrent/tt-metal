@@ -45,7 +45,7 @@ ChipRecords exchange_chip_records(
     const std::function<std::vector<uint32_t>(const ttnn::MeshCoordinate&)>& local_record,
     const std::string& config_key = {});
 
-// The context the mesh's ranks share, from the mesh's view. Null on a single-host mesh.
+// The context spanning the ranks that co-own `mesh`. Null when this rank drives every device of the mesh.
 std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> mesh_distributed_context(
     const ttnn::MeshDevice& mesh);
 

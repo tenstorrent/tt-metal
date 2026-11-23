@@ -13,7 +13,7 @@
 #include <utility>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -39,11 +39,7 @@ std::mutex& cache_mutex() {
 }  // namespace
 
 std::shared_ptr<DistributedContext> mesh_distributed_context(const ttnn::MeshDevice& mesh) {
-    auto context = tt::tt_metal::DistributedHostBuffer::create(mesh.get_view()).context();
-    if (context == nullptr || *context->size() == 1) {
-        return nullptr;
-    }
-    return context;
+    return mesh.coowner_context();
 }
 
 ChipRecords exchange_chip_records(
