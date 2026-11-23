@@ -1,24 +1,25 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""GLM-5.4 loop pass-2 two-bank sparse MLA (A2-A6) on device, against the reference given the device's own inputs.
+"""GLM-5.4 loop pass-2 two-bank sparse MLA (A2-A6) with its window carried across chunks and user slots, on device.
 
-Module level (``ttMLA(loop_pass2=True)``), not through prefill_runner: G2's 7-set handoff is not wired into the runner
-yet (q171.2.8). Two loop layers on one 8x4 torus-xy mesh, tier-1 MLA weights (``glm_random_mla_weights``, the
-draw ``glm54_tier1_weights`` makes; layer 2 owns an indexer here so pass 1 produces a second top-k set):
+Module level (``ttMLA(loop_pass2=True)``, ``forward(loop_pass2=True)``), as G2 builds it: two loop layers on one
+8x4 torus-xy mesh, tier-1 MLA weights (``glm_random_mla_weights``, the draw ``glm54_tier1_weights`` makes; layer 2
+owns an indexer here so pass 1 produces a second top-k set). Per chunk:
 
-* pass 1: each layer is a full sparse layer writing its KVPE into the stage cache (bank A) and returning its top-k;
-  the sets are copied into their own buffers, as G2 receives them (``tt.loop_handoff``);
+* pass 1: each layer is a full sparse layer writing its KVPE into its slot's pass-1 rows (bank A) and returning its
+  top-k; the sets are copied into their own buffers, as G2 receives them (``tt.loop_handoff``);
 * pass 2: each layer is a 'shared' pass-2 layer (no indexer) fed its group's set (``pass1_index_set``), reading bank A
-  from the same cache (G2's copy is bit-exact to G1's, q171.2.7) and carrying its window between chunks explicitly.
+  and writing its own KV only to the slot's window ring (two_bank.py), which carries the window to the slot's next
+  chunk.
 
-``test_two_bank_device`` runs a schedule of chunks and checks, per chunk and layer: pass 2 leaves the pass-1 KVPE
-cache (bank A) byte-identical; repeated forwards are bit-identical; every chip holds the same window rows; and
-``LoopPass2MLAReference``, fed the device's own inputs (bank A as pass 1 left it, the top-k set, the carry, the hidden
-states), matches the output (PCC >= 0.99 overall and over each SP shard's first W rows, which read the previous
-shard's rows) and the window rows (PCC >= 0.998). The reference runs in the test, about 20 s per chunk and layer on
-the host. ``test_two_bank_traced`` checks a captured pass-2 forward replays bit-identically to eager across chunk
-starts; ``test_two_bank_index_list`` checks the device index list row for row.
+``test_two_bank_device`` runs a schedule of chunks of two user slots interleaved, and checks: pass 2 leaves every
+slot's pass-1 rows byte-identical and the other slot's ring untouched; repeated forwards are bit-identical; and, per
+slot at the end, ``LoopPass2MLAReference`` run single-shot over the slot's whole prompt (on the device's bank A and
+top-k sets) matches the chunked device output (PCC >= 0.99 per chunk and over each SP shard's first W rows, which read
+the previous shard's rows) and the ring's rows (PCC >= 0.998). The reference is chunk-invariant (q171.2.2), so this is
+chunked vs single-shot. ``test_two_bank_traced`` replays one captured pass-2 forward over the whole interleaved
+schedule bit-identically to eager; ``test_two_bank_index_list`` checks the device index list row for row.
 """
 
 import copy
@@ -42,41 +43,40 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.two_bank import (
     WINDOW_FORMATS,
-    TwoBankTable,
-    chunk_row,
+    TwoBankIndex,
     pass1_index_set,
     pass2_indexer_types,
+    ring_id,
+    ring_rows,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-    MlaKvCacheGeometry,
-    init_kvpe_cache,
-    init_mla_kv_cache,
-    striped_cache_to_host,
-)
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, init_mla_kv_cache, striped_cache_to_host
 
 CHUNK = 5120
-MAX_SEQ = 10240
+MAX_POSITIONS = 3 * CHUNK  # pass-1 positions per slot
+CAPACITY = MAX_POSITIONS + ring_rows(CHUNK)  # cache positions per slot: pass 1, then the window ring
+RING_BASE = MAX_POSITIONS
 LOOP_LAYERS = (1, 2)
+NUM_SLOTS = 2
 OUTPUT_PCC = 0.99
 WINDOW_PCC = 0.998
 SENTINEL = 0xFFFFFFFF
 
-# (start, end) chunks of one request; every chunk is a 5120-row slab, `end` its real tokens.
+# (slot, start, end) chunks in execution order; every chunk is a 5120-row slab, `end` its real tokens.
 SCHEDULES = {
-    "short100": [(0, 100)],  # < W: every row's window is short (compaction on every row)
-    "short1500": [(0, 1500)],  # < index_topk: bank A has a sentinel tail on every row
-    "two_chunks": [(0, CHUNK), (CHUNK, 2 * CHUNK)],  # full chunks: halo across 8 SP shards, carry across chunks
-    "start96": [(0, 96), (96, 96 + CHUNK)],  # a 32-aligned non-chunk start < W: partial carry + compaction
+    # Slot 0: full chunks then a partial one (boundaries at 5120 and 10240; positions past the ring period 10240).
+    # Slot 1: a 96-token chunk, then chunks starting mid-slab (rotated layout, partial carry at 96).
+    "two_slots": [(0, 0, 5120), (1, 0, 96), (0, 5120, 10240), (1, 96, 5216), (0, 10240, 12000), (1, 5216, 9000)],
+    "short": [(0, 0, 100), (1, 0, 1500)],  # < W and < index_topk: every row's window or top-k is short
 }
 FORMATS = list(WINDOW_FORMATS)
 
 
 def _config(window_format: str):
-    """Pass-1 config: the tier-1 reduced stack with loop layers 1-2 both owning an indexer (two top-k sets)."""
-    c = glm54_reduced_config(MAX_SEQ)
+    """The tier-1 reduced stack with loop layers 1-2 both owning an indexer (two top-k sets)."""
+    c = glm54_reduced_config(CAPACITY)
     c.indexer_types = ["full"] * c.num_hidden_layers
     c.loop_window_format = window_format
     return c
@@ -88,9 +88,17 @@ def _pass2_config(config):
     return c
 
 
-def _hidden(layer: int, loop_pass: int, start: int) -> torch.Tensor:
-    g = torch.Generator().manual_seed(1000 * loop_pass + 10 * layer + start)
-    return torch.randn(1, CHUNK, glm_5_4_hf_config().hidden_size, generator=g).to(torch.bfloat16)
+def _prompt(slot: int, layer: int, loop_pass: int, length: int) -> torch.Tensor:
+    """A slot's input hidden states of one layer and pass over its whole prompt, natural order [1, length, D]."""
+    g = torch.Generator().manual_seed(1000 * loop_pass + 100 * slot + layer)
+    return torch.randn(1, length, glm_5_4_hf_config().hidden_size, generator=g).to(torch.bfloat16)
+
+
+def _chunk_rows(slot, layer, loop_pass, start, end) -> torch.Tensor:
+    """One chunk's rows of the slot's prompt, zero-padded to the slab [1, CHUNK, D]."""
+    rows = torch.zeros(1, CHUNK, glm_5_4_hf_config().hidden_size, dtype=torch.bfloat16)
+    rows[:, : end - start] = _prompt(slot, layer, loop_pass, end)[:, start:end]
+    return rows
 
 
 # --- host-only checks (no device) --------------------------------------------------------------------------------
@@ -105,37 +113,54 @@ def test_pass1_index_set_maps_loop_layers_to_groups(expect_error):
         pass1_index_set(c, 25)
 
 
-@pytest.mark.parametrize("start", [0, 96, 640 + 96, 3 * 640 + 608, 5120, 5120 + 7 * 640 + 32])
-def test_chunk_row_inverts_the_rotated_layout(start):
-    """chunk_row(p) is the SP gather's row holding position p: chip s's row i holds rotated_chunk_positions[s][i]."""
-    sp, local = 8, 640
-    positions = rotated_chunk_positions(start, sp, local)
-    for s in range(sp):
-        for i in range(local):
-            assert chunk_row(positions[s][i], start, sp, local) == s * local + i
+RING_SCHEDULES = {
+    "aligned": [(0, 5120), (5120, 10240), (10240, 15360), (15360, 17000)],
+    "start96": [(0, 96), (96, 5216), (5216, 9000), (9000, 14120), (14120, 19240)],
+    "start4064": [(0, 4064), (4064, 9184), (9184, 14304), (14304, 19424), (19424, 20000)],
+    "late": [(0, 5120), (5120, 10208), (10208, 15328)],  # start mod P = P - 32: the second copy ends at 2P + chunk - 32
+}
+
+
+@pytest.mark.parametrize("schedule", list(RING_SCHEDULES))
+def test_ring_canonical_rows_hold_every_window_position(schedule):
+    """Simulate a slot's ring writes (two copies per chunk): before each chunk's attention, the canonical row of every
+    window position p - W + 1 .. p it reads holds that position, written by this or an earlier chunk; no write leaves
+    the ring."""
+    index = TwoBankIndex.__new__(TwoBankIndex)  # host math only: ring_writes needs ring_base and period
+    index.ring_base, index.period, W = 0, 2 * CHUNK, 128
+    held = {}
+    for start, end in RING_SCHEDULES[schedule]:
+        for v, ve in index.ring_writes(start, end):
+            assert ve <= ring_rows(CHUNK), f"chunk {start}: write [{v}, {ve}) leaves the ring"
+            for k in range(ve - v):
+                held[v + k] = start + k
+        for p in range(start, end):
+            for q in range(max(0, p - W + 1), p + 1):
+                got = held.get(ring_id(q, 0, CHUNK))
+                assert got == q, f"chunk {start}: position {q} reads ring row {ring_id(q, 0, CHUNK)} holding {got}"
 
 
 INDEX_STARTS = [0, 32, 96, 160, 640 + 96, 3 * 640 + 608, 5120, 5120 + 96, 2 * 5120 + 7 * 640 + 32, 99840 + 4064]
 
 
-def expected_index_list(table, start: int, bank_a: torch.Tensor, query_rows: int, sp: int, tp: int) -> torch.Tensor:
-    """Host index list of chip (s, t): per query row, its window's table rows (positions >= 0, ascending), then
-    bank A's ids, then sentinels; bank_a is [sp, tp, rows, k] with sentinel tails. [sp, tp, rows, W + k]."""
-    W, width = table.window, table.width
-    positions = rotated_chunk_positions(start, sp, table.chunk_local)
+def expected_index_list(index, start: int, topk: torch.Tensor, query_rows: int, sp: int, tp: int) -> torch.Tensor:
+    """Host index list of chip (s, t): per query row, its window's ring ids (positions >= 0, ascending), then its top-k,
+    then sentinels; topk is [sp, tp, rows, k] with sentinel tails. [sp, tp, rows, W + k]."""
+    W, width = index.window, index.width
+    positions = rotated_chunk_positions(start, sp, index.chunk_local)
     out = torch.full((sp, tp, query_rows, width), SENTINEL, dtype=torch.int64)
     for s in range(sp):
         for t in range(tp):
             for r in range(query_rows):
                 p = positions[s][t * query_rows + r]
-                window = [table.table_row(q, start) for q in range(p - W + 1, p + 1) if q >= 0]
-                a = [v for v in bank_a[s, t, r].tolist() if v != SENTINEL]
+                window = [ring_id(q, index.ring_base, index.chunk_global) for q in range(p - W + 1, p + 1) if q >= 0]
+                a = [v for v in topk[s, t, r].tolist() if v != SENTINEL]
                 row = window + a
                 out[s, t, r, : len(row)] = torch.tensor(row)
     return out
 
 
-# --- device phase ---# --- device phase -----------------------------------------------------------------------------------------------
+# --- device phase -----------------------------------------------------------------------------------------------
 
 
 def _mesh_params():
@@ -148,36 +173,43 @@ def _mesh_params():
     ]
 
 
-@pytest.mark.parametrize("window_format", ["scaled_fp8"])
+def _scalar(mesh_device, value: int) -> ttnn.Tensor:
+    return ttnn.from_torch(
+        torch.tensor([[[[value]]]], dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
 @pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole mesh")
 @pytest.mark.timeout(0)
-def test_two_bank_index_list(mesh_device, window_format):
-    """The device index list (window ids from the chunk start on device, rotated layout, compaction) equals the host
-    expectation from rotated_chunk_positions and table_row, row for row, over aligned, mid-block, boundary-chip and
-    late starts; bank A's ids keep their own sentinel tails."""
-    config = _config(window_format)
+def test_two_bank_index_list(mesh_device):
+    """The device index list (ring ids of each query row's window from the chunk start on device, rotated layout,
+    compaction) equals the host expectation from rotated_chunk_positions and ring_id, row for row, over aligned,
+    mid-block, boundary-chip and late starts; the top-k keeps its own sentinel tails."""
+    config = _config("scaled_fp8")
     sp, tp = tuple(mesh_device.shape)
     rows, topk = CHUNK // (sp * tp), config.index_topk
-    table = TwoBankTable(
+    index = TwoBankIndex(
         mesh_device,
-        kv_format=WINDOW_FORMATS[window_format],
-        geometry=MlaKvCacheGeometry.from_config(config),
-        push_rows=4096,
+        ring_base=RING_BASE,
         window=config.loop_window_size,
         chunk_global=CHUNK,
         query_rows=rows,
         topk=topk,
         sp_axis=0,
         tp_sequence_sharded=True,
-        num_links=1,
     )
     g = torch.Generator().manual_seed(7)
-    bank_a = torch.randint(0, 4096, (sp, tp, rows, topk), generator=g)
+    sets = torch.randint(0, RING_BASE, (sp, tp, rows, topk), generator=g)
     valid = torch.randint(1, topk + 1, (sp, tp, rows, 1), generator=g)
-    bank_a[torch.arange(topk).view(1, 1, 1, -1).expand_as(bank_a) >= valid] = SENTINEL
-    tt_bank_a = ttnn.from_torch(
-        (bank_a - (bank_a >= 2**31).long() * 2**32).to(torch.int32),  # uint32 bits through int32
+    sets[torch.arange(topk).view(1, 1, 1, -1).expand_as(sets) >= valid] = SENTINEL
+    tt_sets = ttnn.from_torch(
+        (sets - (sets >= 2**31).long() * 2**32).to(torch.int32),  # uint32 bits through int32
         device=mesh_device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -185,21 +217,22 @@ def test_two_bank_index_list(mesh_device, window_format):
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(0, 1)),
     )
     for start in INDEX_STARTS:
-        got_tt = table.index_list(tt_bank_a, _scalar(mesh_device, start))
         got = ttnn.to_torch(
-            got_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=(sp, tp))
+            index.index_list(tt_sets, _scalar(mesh_device, start)),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=(sp, tp)),
         )
         got = got.to(torch.int64) & 0xFFFFFFFF
-        expect = expected_index_list(table, start, bank_a, rows, sp, tp)
+        expect = expected_index_list(index, start, sets, rows, sp, tp)
         bad = (got != expect).any(-1).nonzero()
-        assert not len(
-            bad
-        ), f"start {start}: {len(bad)} rows differ, first {bad[0].tolist()}: {got[tuple(bad[0])][:140].tolist()} vs {expect[tuple(bad[0])][:140].tolist()}"
+        assert not len(bad), (
+            f"start {start}: {len(bad)} rows differ, first {bad[0].tolist()}: "
+            f"{got[tuple(bad[0])][:140].tolist()} vs {expect[tuple(bad[0])][:140].tolist()}"
+        )
         logger.info(f"index list at start {start}: all {sp * tp * rows} rows match")
 
 
 class _Stage:
-    """Pass-1 and pass-2 ttMLA for the loop layers over one cache, and host conversions."""
+    """Pass-1 and pass-2 ttMLA for the loop layers over one cache of NUM_SLOTS user slots, and host conversions."""
 
     def __init__(self, mesh_device, window_format: str):
         self.mesh = mesh_device
@@ -210,12 +243,13 @@ class _Stage:
         topology = per_axis_topology(ttnn.FabricConfig.FABRIC_2D_TORUS_XY)
         self.weights = {L: glm_random_mla_weights(self.config, L, GLM54_SYNTHETIC_SEED) for L in LOOP_LAYERS}
         common = dict(
-            seq_len=MAX_SEQ,
+            seq_len=CAPACITY,
             sp_axis=self.sp_axis,
             tp_axis=self.tp_axis,
             topology=topology,
             is_chunked=True,
             active_seq_len=CHUNK,
+            slot_num=NUM_SLOTS,
             layer_num=len(LOOP_LAYERS),
             first_layer_idx=LOOP_LAYERS[0],
             sparse_kv_cache_format=self.kv_format,
@@ -229,25 +263,27 @@ class _Stage:
             cache_format=self.kv_format,
             hf_config=self.config,
             mesh_device=mesh_device,
-            seq_len=MAX_SEQ,
+            seq_len=CAPACITY,
             mesh_shape=list(self.shape),
             sp_axis=self.sp_axis,
             num_kvpe_cache_layers=len(LOOP_LAYERS),
+            num_users=NUM_SLOTS,
             tp_axis=self.tp_axis,
         )
         self.index_cache = init_kvpe_cache(
             kvpe_cache_head_dim=self.config.index_head_dim,
             mesh_device=mesh_device,
-            seq_len=MAX_SEQ,
+            seq_len=CAPACITY,
             mesh_shape=list(self.shape),
             sp_axis=self.sp_axis,
             num_kvpe_cache_layers=num_full_indexer_layers(self.config),
+            num_users=NUM_SLOTS,
             dtype=ttnn.bfloat8_b,
             tp_axis=self.tp_axis,
         )
         self.rope = RotarySetup(
             self.config, mesh_device, sp_axis=self.sp_axis, is_balanced=False
-        ).get_rope_tensors_indexed(MAX_SEQ, CHUNK)
+        ).get_rope_tensors_indexed(CAPACITY, CHUNK)
         self.shard_dims = [None, None]
         self.shard_dims[self.tp_axis], self.shard_dims[self.sp_axis] = -1, -2
 
@@ -281,53 +317,34 @@ class _Stage:
         """[sp, tp, ...] host copy, one block per chip."""
         return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh, dims=(0, 1), mesh_shape=self.shape))
 
-    def rows_logical(self, physical: torch.Tensor) -> torch.Tensor:
-        """Physical table/cache rows [..., row] -> logical bf16 [..., 576]."""
-        return self.pass2[LOOP_LAYERS[0]]._two_bank.table().unpack_host(physical).to(torch.bfloat16)
-
-    def cache_snapshot(self) -> torch.Tensor:
-        """The whole pass-1 KVPE cache (bank A), physical rows in stripe order [layers, MAX_SEQ, row]."""
-        return striped_cache_to_host(self.cache.storage, self.mesh, self.sp_axis)
-
-    def bank_a(self, snapshot: torch.Tensor, layer: int) -> torch.Tensor:
-        """Layer `layer`'s pass-1 KVPE from a cache snapshot, natural order, logical bf16 [MAX_SEQ, 576]."""
-        stripes = self.shape[0] * self.shape[1]
-        flat = snapshot[LOOP_LAYERS.index(layer)]
+    def cache_natural(self) -> torch.Tensor:
+        """The whole KVPE cache, physical rows in natural position order [slots, layers, CAPACITY, row]."""
+        flat = striped_cache_to_host(self.cache.storage, self.mesh, self.sp_axis)  # [slots*layers, CAPACITY, row]
         nat = torch.empty_like(flat)
-        nat[blockcyclic_positions(stripes, CHUNK, flat.shape[0])] = flat
-        return self.rows_logical(nat)
+        nat[:, blockcyclic_positions(self.shape[0] * self.shape[1], CHUNK, flat.shape[1])] = flat
+        return nat.view(NUM_SLOTS, len(LOOP_LAYERS), CAPACITY, -1)
+
+    def logical(self, physical: torch.Tensor) -> torch.Tensor:
+        """Physical cache rows [..., row] -> logical bf16 [..., 576]."""
+        return self.cache.unpack_host(physical).to(torch.bfloat16)
 
     def indices(self, t: ttnn.Tensor, start: int) -> torch.Tensor:
-        """A top-k set: chip (s, t) holds SP-shard rows t*rows..; -> natural row order [1, 1, CHUNK, k] int64."""
+        """A top-k set: chip (s, t) holds SP-shard rows t*rows..; -> natural row order [CHUNK, k] int64."""
         host = (self.per_chip(t).to(torch.int64) & 0xFFFFFFFF).reshape(CHUNK, -1)  # device row order
         out = torch.empty_like(host)
         out[self.device_order(start)] = host
-        return out.view(1, 1, CHUNK, -1)
+        return out
 
-    def window_natural(self, layer: int, window: torch.Tensor, start: int, end: int) -> torch.Tensor:
-        """The window region's chunk rows (`window` = window_rows() host rows) in position order, start .. end-1."""
-        table = self.pass2[layer]._two_bank
-        return window[[table.table_row(p, start) - table.window_base for p in range(start, end)]]
-
-    def replicated(self, t: ttnn.Tensor, first_row: int = 0) -> torch.Tensor:
-        """A replicated tensor's host copy, checked identical on every chip from row `first_row` on (rows of positions
-        before 0 were never written and hold whatever each chip's allocation held)."""
-        chips = self.per_chip(t)
-        flat = chips[:, :, first_row:].reshape(-1, *chips.shape[3:]).contiguous().view(torch.uint8)
-        flat = flat.view(chips.shape[0] * chips.shape[1], -1)
-        for i in range(1, flat.shape[0]):
-            assert torch.equal(flat[i], flat[0]), f"replicated tensor differs on chip {i}"
-        return chips[0, 0]
-
-    def pass1_chunk(self, start: int, end: int) -> list[ttnn.Tensor]:
+    def pass1_chunk(self, slot: int, start: int, end: int) -> list[ttnn.Tensor]:
         """Pass 1 over the chunk: writes bank A, returns the loop's top-k sets (own copies, as G2 receives them)."""
         sets = []
         for L in LOOP_LAYERS:
             _, idx = self.pass1[L].forward(
-                self.to_device(_hidden(L, 1, start), start),
+                self.to_device(_chunk_rows(slot, L, 1, start, end), start),
                 self.rope,
                 self.cache,
                 cache_layer_idx=LOOP_LAYERS.index(L),
+                cache_user_id=slot,
                 actual_start=start,
                 actual_end=end,
                 index_kv_cache=self.index_cache,
@@ -336,18 +353,23 @@ class _Stage:
             sets.append(ttnn.clone(idx))
         return sets
 
-    def pass2_forward(self, layer, start, end, sets, carry, hidden=None, metadata=None):
+    def pass2_forward(self, layer, slot, start, end, sets, hidden=None, metadata=None):
         return self.pass2[layer].forward(
-            hidden if hidden is not None else self.to_device(_hidden(layer, 2, start), start),
+            hidden if hidden is not None else self.to_device(_chunk_rows(slot, layer, 2, start, end), start),
             self.rope,
             self.cache,
             cache_layer_idx=LOOP_LAYERS.index(layer),
+            cache_user_id=slot or 0,
             actual_start=None if metadata is not None else start,
             actual_end=None if metadata is not None else end,
             indexer_indices=sets[pass1_index_set(self.config, layer)],
-            window_carry=carry,
             metadata=metadata,
+            loop_pass2=True,
         )
+
+
+def _byte_rows(t: torch.Tensor) -> torch.Tensor:
+    return t.contiguous().view(torch.uint8)
 
 
 @pytest.mark.parametrize("schedule", list(SCHEDULES))
@@ -356,52 +378,54 @@ class _Stage:
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (sparse SDPA, push) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_two_bank_device(mesh_device, window_format, schedule):
-    """Run the schedule; per chunk and layer check bank A untouched by pass 2, determinism, window replication, and
-    the output and window against the reference given the device's own inputs."""
+    """Run the interleaved schedule; per chunk: pass 2 leaves every slot's pass-1 rows and the other slot's ring
+    byte-identical, and a repeated forward is bit-identical; per slot at the end: chunked device output and ring rows
+    vs the single-shot reference on the device's bank A and top-k."""
     stage = _Stage(mesh_device, window_format)
-    window = stage.config.loop_window_size
-    carries = {L: None for L in LOOP_LAYERS}
-    for start, end in SCHEDULES[schedule]:
-        sets = stage.pass1_chunk(start, end)
-        before = stage.cache_snapshot()  # bank A as pass 1 left it: the reference's bank A
-        set_rows = [stage.indices(s, start) for s in sets]
-        # Window region row i is position start - (W - 1) + i; rows of positions < 0 are never written.
-        real_from = max(0, window - 1 - start)
-        results = {}
+    outputs = {(slot, L): [] for slot in range(NUM_SLOTS) for L in LOOP_LAYERS}
+    # Ring rows of each chunk's positions, read right after the chunk (the ring keeps only the latest P positions).
+    rings = {(slot, L): [] for slot in range(NUM_SLOTS) for L in LOOP_LAYERS}
+    set_rows = {(slot, k): [] for slot in range(NUM_SLOTS) for k in range(len(LOOP_LAYERS))}
+    for slot, start, end in SCHEDULES[schedule]:
+        sets = stage.pass1_chunk(slot, start, end)
+        for k, s in enumerate(sets):
+            set_rows[(slot, k)].append(stage.indices(s, start)[: end - start])
+        before = stage.cache_natural()
         for L in LOOP_LAYERS:
-            carry_in = None if carries[L] is None else stage.rows_logical(stage.replicated(carries[L], real_from))
-            out = stage.output_to_torch(stage.pass2_forward(L, start, end, sets, carries[L]), start)
-            rows = stage.replicated(stage.pass2[L]._two_bank.window_rows(), real_from)
-            # Determinism: the same forward again (same carry, same bank A, same set) is bit-identical.
-            again = stage.output_to_torch(stage.pass2_forward(L, start, end, sets, carries[L]), start)
-            assert torch.equal(out, again), f"layer {L} chunk {start}: repeated pass-2 forward differs"
-            assert torch.equal(
-                stage.replicated(stage.pass2[L]._two_bank.window_rows(), real_from)[real_from:].view(torch.uint8),
-                rows[real_from:].view(torch.uint8),
-            ), f"layer {L} chunk {start}: repeated window differs"
-            results[L] = (out, stage.rows_logical(stage.window_natural(L, rows, start, end)), carry_in)
-            carries[L] = stage.pass2[L].window_carry(start, end)
+            out = stage.output_to_torch(stage.pass2_forward(L, slot, start, end, sets), start)
+            again = stage.output_to_torch(stage.pass2_forward(L, slot, start, end, sets), start)
+            assert torch.equal(out, again), f"slot {slot} layer {L} chunk {start}: repeated pass-2 forward differs"
+            outputs[(slot, L)].append(out[:, : end - start])
         ttnn.synchronize_device(mesh_device)
-        after = stage.cache_snapshot()
-        assert torch.equal(after.view(torch.uint8), before.view(torch.uint8)), (
-            f"chunk {start}: pass 2 changed the pass-1 KVPE cache (bank A) in "
-            f"{int((after.view(torch.uint8) != before.view(torch.uint8)).any(-1).sum())} rows"
+        after = stage.cache_natural()
+        changed = (_byte_rows(after) != _byte_rows(before)).any(-1)  # [slots, layers, CAPACITY]
+        assert not changed[:, :, :RING_BASE].any(), (
+            f"slot {slot} chunk {start}: pass 2 changed pass-1 rows (bank A): "
+            f"{changed[:, :, :RING_BASE].nonzero()[:4].tolist()}"
         )
-        for L, (out, window_rows, carry_in) in results.items():
-            _check_vs_reference(
-                stage.config,
-                f"{window_format} {schedule}",
-                L,
-                start,
-                end,
-                out=out,
-                window_rows=window_rows,
-                carry_in=carry_in,
-                bank_a=stage.bank_a(before, L)[:end],
-                indices=set_rows[pass1_index_set(stage.config, L)],
-            )
+        assert not changed[1 - slot].any(), f"slot {slot} chunk {start}: pass 2 changed the other slot's ring"
+        for L in LOOP_LAYERS:
+            cache = after[slot, LOOP_LAYERS.index(L)]
+            rings[(slot, L)].append(stage.logical(cache[[ring_id(q, RING_BASE, CHUNK) for q in range(start, end)]]))
         for t in sets:
             ttnn.deallocate(t)
+    final = stage.cache_natural()
+    for slot in range(NUM_SLOTS):
+        chunks = [(s, e) for sl, s, e in SCHEDULES[schedule] if sl == slot]
+        total = chunks[-1][1]
+        for L in LOOP_LAYERS:
+            cache = final[slot, LOOP_LAYERS.index(L)]
+            _check_vs_single_shot(
+                stage.config,
+                f"{window_format} {schedule} slot {slot}",
+                L,
+                slot,
+                chunks,
+                out=torch.cat(outputs[(slot, L)], dim=1),
+                ring=torch.cat(rings[(slot, L)], dim=0),
+                bank_a=stage.logical(cache[:total]),
+                indices=torch.cat(set_rows[(slot, pass1_index_set(stage.config, L))], dim=0).view(1, 1, total, -1),
+            )
 
 
 def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -410,46 +434,33 @@ def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a @ b) / (a.norm() * b.norm()))
 
 
-def _check_vs_reference(config, case, layer, start, end, *, out, window_rows, carry_in, bank_a, indices):
-    """LoopPass2MLAReference on the device's inputs vs the device's output (overall and each SP shard's first W rows,
-    which read the previous shard's rows through the halo) and its window rows (positions start .. end-1)."""
-    window, shard, n = config.loop_window_size, CHUNK // 8, end - start
-    mla_ref = SparseMLAReference(config, glm_random_mla_weights(config, layer, GLM54_SYNTHETIC_SEED), seq_len=MAX_SEQ)
-    ref = LoopPass2MLAReference(mla_ref, window=window, latent_dim=config.kv_lora_rank)
-    need = min(window - 1, start)
-    res = ref.forward(
-        _hidden(layer, 2, start)[:, :n],
-        kvpe_a=bank_a,
-        indices_a=indices[..., :n, :],
-        actual_start=start,
-        window_carry=None if carry_in is None else carry_in[window - 1 - need :],
+def _check_vs_single_shot(config, case, layer, slot, chunks, *, out, ring, bank_a, indices):
+    """LoopPass2MLAReference single-shot over the slot's prompt (positions 0 .. end of its last chunk) on the device's
+    bank A and top-k vs the chunked device output, per chunk and over each SP shard's first W rows of a chunk (which
+    read the previous shard's rows), and vs the ring's rows of every position, each read right after its chunk."""
+    window, shard, total = config.loop_window_size, CHUNK // 8, chunks[-1][1]
+    mla_ref = SparseMLAReference(config, glm_random_mla_weights(config, layer, GLM54_SYNTHETIC_SEED), seq_len=CAPACITY)
+    ref = LoopPass2MLAReference(mla_ref, window=window, latent_dim=config.kv_lora_rank).forward(
+        _prompt(slot, layer, 2, total), kvpe_a=bank_a, indices_a=indices, actual_start=0
     )
-    got = out[:, :n]
-    out_pcc = _pearson(got, res.output)
-    window_pcc = _pearson(window_rows, res.kvpe)
-    shard_pccs = [
-        _pearson(got[:, s : min(s + window, n)], res.output[:, s : min(s + window, n)]) for s in range(shard, n, shard)
-    ]
-    logger.info(
-        f"[{case}] L{layer} chunk {start}-{end}: output PCC {out_pcc:.5f}, window PCC {window_pcc:.5f}, "
-        f"shard-start PCC min {min(shard_pccs, default=float('nan')):.5f}"
-    )
-    # The shard halo first: a row near a shard start reads the previous shard's rows (all-gathered).
-    for k, p in enumerate(shard_pccs, start=1):
-        assert p >= OUTPUT_PCC, f"L{layer} chunk {start}: SP shard {k}'s first {window} rows PCC {p:.5f}"
-    assert out_pcc >= OUTPUT_PCC, f"L{layer} chunk {start}: output PCC {out_pcc:.5f} < {OUTPUT_PCC}"
-    assert window_pcc >= WINDOW_PCC, f"L{layer} chunk {start}: window PCC {window_pcc:.5f} < {WINDOW_PCC}"
-
-
-def _scalar(mesh_device, value: int) -> ttnn.Tensor:
-    return ttnn.from_torch(
-        torch.tensor([[[[value]]]], dtype=torch.int32),
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    ring_pcc = _pearson(ring, ref.kvpe)
+    logger.info(f"[{case}] L{layer}: ring rows PCC {ring_pcc:.5f} over {total} positions")
+    for start, end in chunks:
+        got, exp = out[:, start:end], ref.output[:, start:end]
+        n = end - start
+        shard_pccs = [
+            _pearson(got[:, s : min(s + window, n)], exp[:, s : min(s + window, n)]) for s in range(shard, n, shard)
+        ]
+        out_pcc = _pearson(got, exp)
+        logger.info(
+            f"[{case}] L{layer} chunk {start}-{end}: output PCC {out_pcc:.5f}, shard-start PCC min "
+            f"{min(shard_pccs, default=float('nan')):.5f}"
+        )
+        # The shard halo first: a row near a shard start reads the previous shard's rows.
+        for k, p in enumerate(shard_pccs, start=1):
+            assert p >= OUTPUT_PCC, f"L{layer} chunk {start}: SP shard {k}'s first {window} rows PCC {p:.5f}"
+        assert out_pcc >= OUTPUT_PCC, f"L{layer} chunk {start}: output PCC {out_pcc:.5f} < {OUTPUT_PCC}"
+    assert ring_pcc >= WINDOW_PCC, f"L{layer}: ring rows PCC {ring_pcc:.5f} < {WINDOW_PCC}"
 
 
 @pytest.mark.parametrize("window_format", FORMATS)
@@ -457,58 +468,41 @@ def _scalar(mesh_device, value: int) -> ttnn.Tensor:
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (sparse SDPA, push) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_two_bank_traced(mesh_device, window_format):
-    """One pass-2 forward captured at chunk start 5120 replays bit-identically to eager (metadata path) at start 5120
-    and at start 0 (every row compacted): the push slot and plan start, the index-list compaction and the window
-    writes read metadata and persistent inputs on device."""
+    """One pass-2 forward captured at the first chunk replays bit-identically to eager (metadata path) over the whole
+    interleaved two-slot schedule: ring writes, index list, push slot and plan start all follow the metadata. Eager
+    and traced passes run the same schedule from the same state (pass 1 rewrites bank A identically and every chunk
+    rewrites the ring rows it reads before the next chunk of its slot)."""
     stage = _Stage(mesh_device, window_format)
     L = LOOP_LAYERS[0]
-    chunks = [(0, CHUNK), (CHUNK, 2 * CHUNK)]
-    # Eager over both chunks (metadata path); keep each chunk's inputs to replay them.
-    inputs, eager = {}, {}
-    row = stage.pass2[L]._two_bank.row_width
-    # The metadata path always takes a carry; a chunk at start 0 reads none of its rows.
-    carry = ttnn.allocate_tensor_on_device(
-        ttnn.TensorSpec(
-            shape=ttnn.Shape([1, 1, stage.config.loop_window_size - 1, row]),
-            dtype=stage.kv_format.storage_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            buffer_type=ttnn.BufferType.DRAM,
-        ),
-        mesh_device,
-    )
-    for start, end in chunks:
-        sets = stage.pass1_chunk(start, end)
-        metadata = [_scalar(mesh_device, v) for v in (0, start, end)]
-        hidden = stage.to_device(_hidden(L, 2, start), start)
-        out = stage.pass2_forward(L, start, end, sets, carry, hidden=hidden, metadata=metadata)
-        eager[start] = stage.output_to_torch(out, start)
-        inputs[start] = (sets, carry)
-        carry = stage.pass2[L].window_carry(start, end)
+    schedule = SCHEDULES["two_slots"]
+    eager = []
+    for slot, start, end in schedule:
+        sets = stage.pass1_chunk(slot, start, end)
+        metadata = [_scalar(mesh_device, v) for v in (slot, start, end)]
+        hidden = stage.to_device(_chunk_rows(slot, L, 2, start, end), start)
+        eager.append(stage.output_to_torch(stage.pass2_forward(L, slot, start, end, sets, hidden, metadata), start))
     # Persistent inputs the capture reads; their contents change between replays.
-    p_meta = [_scalar(mesh_device, v) for v in (0, chunks[1][0], chunks[1][1])]
-    p_hidden = stage.to_device(_hidden(L, 2, chunks[1][0]), chunks[1][0])
-    p_sets = [ttnn.clone(s) for s in inputs[chunks[1][0]][0]]
-    p_carry = ttnn.clone(inputs[chunks[1][0]][1])
-    assert tuple(p_carry.shape) == (1, 1, stage.config.loop_window_size - 1, row)
-    stage.pass2_forward(L, None, None, p_sets, p_carry, hidden=p_hidden, metadata=p_meta)  # warm at capture shapes
+    slot0, start0, end0 = schedule[0]
+    p_meta = [_scalar(mesh_device, v) for v in (slot0, start0, end0)]
+    p_hidden = stage.to_device(_chunk_rows(slot0, L, 2, start0, end0), start0)
+    p_sets = [ttnn.clone(s) for s in stage.pass1_chunk(slot0, start0, end0)]
+    stage.pass2_forward(L, None, None, None, p_sets, p_hidden, p_meta)  # warm at capture shapes
     ttnn.synchronize_device(mesh_device)
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    out = stage.pass2_forward(L, None, None, p_sets, p_carry, hidden=p_hidden, metadata=p_meta)
+    out = stage.pass2_forward(L, None, None, None, p_sets, p_hidden, p_meta)
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     ttnn.synchronize_device(mesh_device)
     try:
-        for start, end in (chunks[1], chunks[0], chunks[1]):
-            sets, carry = inputs[start]
-            for dst, v in zip(p_meta, (0, start, end)):
-                ttnn.copy(_scalar(mesh_device, v), dst)
-            ttnn.copy(stage.to_device(_hidden(L, 2, start), start), p_hidden)
-            for src, dst in zip(sets, p_sets):
+        for k, (slot, start, end) in enumerate(schedule):
+            for src, dst in zip(stage.pass1_chunk(slot, start, end), p_sets):
                 ttnn.copy(src, dst)
-            if carry is not None:
-                ttnn.copy(carry, p_carry)
+            for dst, v in zip(p_meta, (slot, start, end)):
+                ttnn.copy(_scalar(mesh_device, v), dst)
+            ttnn.copy(stage.to_device(_chunk_rows(slot, L, 2, start, end), start), p_hidden)
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
-            got = stage.output_to_torch(out, start)
-            assert torch.equal(got, eager[start]), f"traced replay at start {start} differs from eager"
-            logger.info(f"[{window_format}] traced replay at start {start}: bit-identical to eager")
+            # Real rows only: rows past `end` attend ring rows of positions no chunk has written yet.
+            got = stage.output_to_torch(out, start)[:, : end - start]
+            assert torch.equal(got, eager[k][:, : end - start]), f"traced replay of slot {slot} chunk {start} differs"
+            logger.info(f"[{window_format}] traced replay slot {slot} chunk {start}-{end}: bit-identical to eager")
     finally:
         ttnn.release_trace(mesh_device, tid)
