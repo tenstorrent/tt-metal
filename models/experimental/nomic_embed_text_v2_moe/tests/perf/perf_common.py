@@ -27,7 +27,6 @@ import time
 import ttnn
 
 from models.experimental.nomic_embed_text_v2_moe.tt.model import TtNomicBertModel
-from models.experimental.nomic_embed_text_v2_moe.tt.model_config import TtModelConfig
 
 # (batch, seqlen). 8x512 is the headline: S = 512 is the tokenizer's truncation limit, and
 # T = 4096 fills one expert pass.
@@ -61,7 +60,7 @@ BENCHMARK_TEXTS = [
 _MODEL_CACHE = {}
 
 
-def build_model(device, config, state_dict) -> tuple[TtNomicBertModel, float]:
+def build_model(device, config, tt_config, state_dict) -> tuple[TtNomicBertModel, float]:
     """Build the model once per device, returning it and the seconds the first build took.
 
     Memoized on the device because the `device` fixture is module-scoped under
@@ -72,7 +71,7 @@ def build_model(device, config, state_dict) -> tuple[TtNomicBertModel, float]:
     key = id(device)
     if key not in _MODEL_CACHE:
         start = time.perf_counter()
-        model = TtNomicBertModel(device, config, TtModelConfig.from_device(device), state_dict)
+        model = TtNomicBertModel(device, config, tt_config, state_dict)
         ttnn.synchronize_device(device)
         _MODEL_CACHE[key] = (model, time.perf_counter() - start)
         return _MODEL_CACHE[key]

@@ -71,6 +71,7 @@ inline bool bf16_dest_silu() {
 #endif
 }
 // Each call records replay slots 0-12, below replay_buf_offset = 16.
+// The slots are the compiled call's, the SFPI compiler's own replay records included.
 template <int ITERATIONS = 32>
 __attribute__((noinline)) inline void calculate_silu_bf16() {
     ckernel::sfpu::bf16::silu::calculate_exponent_alu_product<ckernel::sfpu::SiluBf16Config, ITERATIONS>();

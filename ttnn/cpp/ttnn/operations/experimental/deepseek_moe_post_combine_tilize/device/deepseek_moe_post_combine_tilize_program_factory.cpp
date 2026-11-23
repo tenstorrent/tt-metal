@@ -9,8 +9,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/deepseek_moe_post_combine_tilize_device_operation.hpp"
@@ -18,7 +18,6 @@
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::experimental::prim {
 
@@ -37,10 +36,10 @@ DeepseekMoEPostCombineTilizeDeviceOperation::DeepseekMoEPostCombineTilizeProgram
      * Tensors
      */
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
-    uint32_t input_row_page_size = static_cast<uint32_t>(input_tensor.buffer()->page_size());
+    uint32_t input_row_page_size = static_cast<uint32_t>(input_tensor.mesh_buffer().page_size());
 
     const ttnn::Tensor& output_tensor = tensor_return_value;
-    const uint32_t output_tile_page_size = static_cast<uint32_t>(output_tensor.buffer()->page_size());
+    const uint32_t output_tile_page_size = static_cast<uint32_t>(output_tensor.mesh_buffer().page_size());
     const auto& output_shape = output_tensor.padded_shape();
 
     const auto& input = input_tensor.mesh_tensor();

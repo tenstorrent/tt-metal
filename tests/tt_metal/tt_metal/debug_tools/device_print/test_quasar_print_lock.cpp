@@ -18,7 +18,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 #include "hostdev/device_print_common.h"
 #include "impl/context/metal_context.hpp"
@@ -48,7 +49,7 @@ const char* header_word_name(uint32_t i) {
 
 class QuasarPrintLockFixture : public MeshDispatchFixture {
 protected:
-    static constexpr experimental::NodeCoord core = {0, 0};
+    static constexpr NodeCoord core = {0, 0};
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     uint32_t l1_unreserved_base{0};
     std::vector<uint32_t> result;
@@ -66,26 +67,26 @@ protected:
         const std::string& kernel_src,
         uint32_t num_threads,
         const std::vector<std::string>& arg_names,
-        std::initializer_list<std::pair<std::string, experimental::ArgValue>> args,
+        std::initializer_list<std::pair<std::string, ArgValue>> args,
         bool prints_enabled_build) {
-        const experimental::KernelSpecName name{"print_lock_probe"};
-        experimental::KernelSpec kernel_spec{
+        const KernelSpecName name{"print_lock_probe"};
+        KernelSpec kernel_spec{
             .unique_id = name,
             .source = std::filesystem::path{kernel_src},
             .num_threads = num_threads,
             .runtime_arg_schema = {.runtime_arg_names = arg_names},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         };
         if (prints_enabled_build) {
             kernel_spec.compiler_options.defines = {{"DEBUG_PRINT_ENABLED", "1"}};
         }
-        experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {name}, .target_nodes = core};
-        experimental::ProgramSpec spec{.name = "quasar_print_lock", .kernels = {kernel_spec}, .work_units = {main_wu}};
-        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
-        experimental::ProgramRunArgs params;
-        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel = name, .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(core, args)});
-        experimental::SetProgramRunArgs(program, params);
+        WorkUnitSpec main_wu{.name = "main", .kernels = {name}, .target_nodes = core};
+        ProgramSpec spec{.name = "quasar_print_lock", .kernels = {kernel_spec}, .work_units = {main_wu}};
+        Program program(*mesh_device_, spec);
+        ProgramRunArgs params;
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+            .kernel = name, .runtime_arg_values = MakeRuntimeArgsForSingleNode(core, args)});
+        program.set_program_run_args(params);
 
         distributed::MeshWorkload workload;
         distributed::MeshCoordinate zero_coord{0, 0};

@@ -24,6 +24,7 @@ inline void calculate_silu_bf16_scheduled() {
 // A loop, not unrolled: the body stays in the instruction cache.
 #pragma GCC unroll 1
     for (int pass = 0; pass < 4; ++pass) {
+        asm volatile("" : "+r"(pass));
         TTI_SFPLOADI(3, 8, 0xbfb8);
         TTI_SFPLOAD(1, 0, 7, 0);
         TTI_SFPLOADI(3, 0xa, 0xaa3b);

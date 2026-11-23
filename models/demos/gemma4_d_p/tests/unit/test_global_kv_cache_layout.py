@@ -19,7 +19,7 @@ from models.demos.gemma4_d_p.tt.attention.global_kv_cache import (
     unpack_global_value_device,
     unpack_global_value_reference,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def _partial_rope(x, cos, sin):

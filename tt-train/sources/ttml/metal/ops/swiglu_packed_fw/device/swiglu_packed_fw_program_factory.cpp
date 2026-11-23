@@ -42,8 +42,8 @@ namespace ttml::metal::ops::swiglu_packed_fw::device {
 
 namespace {
 
-// The packed tensor's blocks over the device's compute grid. create_descriptor() pins it against split_work_to_cores,
-// and override_runtime_arguments() walks the same cores from it.
+// The packed tensor's blocks over the device's compute grid. create_descriptor() and override_runtime_arguments() walk
+// the same cores from it.
 WorkSplit make_work_split(const ttnn::Tensor& packed) {
     return compute_work_split(
         packed.device()->compute_with_storage_grid_size(),
@@ -70,15 +70,12 @@ tt::tt_metal::ProgramDescriptor SwigluPackedFwProgramFactory::create_descriptor(
     const auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_g1, num_blocks_g2] =
         tt::tt_metal::split_work_to_cores(grid_size, geometry.total_blocks);
     const WorkSplit split = make_work_split(packed);
-    check_work_split(split, num_cores, core_group_1, core_group_2, num_blocks_g1, num_blocks_g2);
 
     const uint32_t twice_block = 2U * block_size;
-    // CreateCircularBuffer merged CB core ranges (kernels keep the unmerged set); merge here to match.
-    const tt::tt_metal::CoreRangeSet cb_cores = all_cores.merge_ranges();
-    program.cbs.push_back(make_cb_descriptor(cb_cores, kGateCbIndex, data_format, tile_size_bytes, twice_block));
-    program.cbs.push_back(make_cb_descriptor(cb_cores, kUpCbIndex, data_format, tile_size_bytes, twice_block));
-    program.cbs.push_back(make_cb_descriptor(cb_cores, kOutCbIndex, data_format, tile_size_bytes, twice_block));
-    program.cbs.push_back(make_cb_descriptor(cb_cores, kSiluCbIndex, data_format, tile_size_bytes, twice_block));
+    program.cbs.push_back(make_cb_descriptor(all_cores, kGateCbIndex, data_format, tile_size_bytes, twice_block));
+    program.cbs.push_back(make_cb_descriptor(all_cores, kUpCbIndex, data_format, tile_size_bytes, twice_block));
+    program.cbs.push_back(make_cb_descriptor(all_cores, kOutCbIndex, data_format, tile_size_bytes, twice_block));
+    program.cbs.push_back(make_cb_descriptor(all_cores, kSiluCbIndex, data_format, tile_size_bytes, twice_block));
 
     auto* const packed_buf = packed.buffer();
     auto* const output_buf = output.buffer();
@@ -124,8 +121,8 @@ void SwigluPackedFwProgramFactory::override_runtime_arguments(
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     const WorkSplit split = make_work_split(tensor_args.packed);
 
-    const uint32_t packed_addr = tensor_args.packed.buffer()->address();
-    const uint32_t output_addr = output.buffer()->address();
+    const uint32_t packed_addr = tensor_args.packed.mesh_buffer().address();
+    const uint32_t output_addr = output.mesh_buffer().address();
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);

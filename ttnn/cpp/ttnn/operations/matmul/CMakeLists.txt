@@ -47,6 +47,35 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/matmul
         COMPONENT ttnn-runtime
 )
+# The matmul config model blob (device/config/model/README.md) is an OCI artifact on ghcr, fetched at configure time
+# into runtime/ like the SFPI toolchain, and installed at the same path under the runtime root. matmul_model.json pins
+# it, for ttnn's Python package too (device/config/model/README.md, "The model blob").
+option(TT_MATMUL_MODEL_FETCH "Download the matmul config model blob (ttnn.CONFIG.matmul_model_config)" ON)
+set(TT_MATMUL_MODEL_FILE "${PROJECT_SOURCE_DIR}/runtime/matmul_model/matmul_model.blob")
+if(TT_MATMUL_MODEL_FETCH)
+    set(TT_MATMUL_MODEL_REF "${CMAKE_CURRENT_SOURCE_DIR}/device/config/model/matmul_model.json")
+    set_property(
+        DIRECTORY
+        APPEND
+        PROPERTY
+            CMAKE_CONFIGURE_DEPENDS
+                "${TT_MATMUL_MODEL_REF}"
+    )
+    file(READ "${TT_MATMUL_MODEL_REF}" TT_MATMUL_MODEL_REF_JSON)
+    string(JSON TT_MATMUL_MODEL_REPOSITORY GET "${TT_MATMUL_MODEL_REF_JSON}" repository)
+    string(JSON TT_MATMUL_MODEL_SHA256 GET "${TT_MATMUL_MODEL_REF_JSON}" sha256)
+    include(device/config/model/fetch_matmul_model.cmake)
+    file(MAKE_DIRECTORY "${PROJECT_SOURCE_DIR}/runtime/matmul_model")
+    tt_fetch_matmul_model("${TT_MATMUL_MODEL_REPOSITORY}" "${TT_MATMUL_MODEL_SHA256}" "${TT_MATMUL_MODEL_FILE}")
+endif()
+if(EXISTS "${TT_MATMUL_MODEL_FILE}")
+    install(
+        FILES
+            "${TT_MATMUL_MODEL_FILE}"
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime/matmul_model
+        COMPONENT ttnn-runtime
+    )
+endif()
 install(TARGETS ttnn_op_matmul LIBRARY COMPONENT tar)
 
 # Python bindings for this op are registered directly on the shared `ttnn`

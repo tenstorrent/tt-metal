@@ -28,6 +28,8 @@ struct SparseSDPAParams {
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
     bool has_scaled_kv() const { return kv_format == transformer::SparseKVFormat::SCALED_FP8; }
+    // Worker cores: sub_core_grids, or all cores of the first subdevice.
+    tt::tt_metal::CoreRangeSet worker_core_grid;
 };
 
 struct SparseSDPAInputs {

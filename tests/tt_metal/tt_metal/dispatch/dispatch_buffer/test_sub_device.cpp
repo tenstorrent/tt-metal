@@ -126,7 +126,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     mesh_device->load_sub_device_manager(sub_device_manager_1);
 
     auto buffer_1 = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
-    EXPECT_TRUE(buffer_1->address() <= max_addr - buffer_1->get_backing_buffer()->aligned_page_size());
+    EXPECT_TRUE(buffer_1->address() <= max_addr - buffer_1->aligned_page_size());
     distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buffer_1, input_1, false);
     std::vector<uint32_t> output_1;
     distributed::ReadShard(mesh_device->mesh_command_queue(), output_1, buffer_1, zero_coord_, true);
@@ -151,7 +151,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     mesh_device->load_sub_device_manager(sub_device_manager_2);
 
     auto buffer_3 = distributed::MeshBuffer::create(replicated_config_2, local_config_2, mesh_device.get());
-    EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->get_backing_buffer()->aligned_page_size());
+    EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->aligned_page_size());
     distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buffer_3, input_2, false);
     std::vector<uint32_t> output_2;
     distributed::ReadShard(mesh_device->mesh_command_queue(), output_2, buffer_3, zero_coord_, true);
@@ -165,7 +165,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     }
     local_config_1.sub_device_id = SubDeviceId{0};
     auto buffer_4 = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
-    EXPECT_TRUE(buffer_4->address() <= max_addr - buffer_4->get_backing_buffer()->aligned_page_size());
+    EXPECT_TRUE(buffer_4->address() <= max_addr - buffer_4->aligned_page_size());
     local_config_3.sub_device_id = SubDeviceId{0};
     EXPECT_THROW(
         distributed::MeshBuffer::create(replicated_config_3, local_config_3, mesh_device.get()), std::exception);
@@ -178,7 +178,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePers
     auto mesh_device = devices_[0];
 
     // Persistent pipe L1 on (0,0)-(1,0): the space reserves it, the pipe claims it.
-    auto space = experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config());
+    auto space = experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), make_pipe_space_config());
     auto pipe = space.create_pipe(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})));
     const DeviceAddr persistent_end = pipe.config_address() + pipe.config_page_size();
 
@@ -228,10 +228,13 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceManagerSealsPersistentL1U
     SubDevice sub_device(std::array{cores});
     const auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
 
-    EXPECT_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config()), std::exception);
+    EXPECT_THROW(
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), make_pipe_space_config()),
+        std::exception);
 
     mesh_device->remove_sub_device_manager(manager);
-    EXPECT_NO_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config()));
+    EXPECT_NO_THROW(
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), make_pipe_space_config()));
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBankIds) {

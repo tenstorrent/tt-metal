@@ -135,23 +135,21 @@ struct ReaderCtArgs {
         // follows.
         uint32_t own_idx = 0;
         for (const auto& w : work) {
-            blocks_.push_back(w.is_relay ? (SCHED_FWD | w.relay_chunk) : own_idx++);
+            blocks_.push_back(w.is_forward ? (SCHED_FWD | w.forward_chunk) : own_idx++);
         }
         for (const auto& w : work) {
-            if (w.is_relay) {
+            if (w.is_forward) {
                 continue;
             }
             blocks_.push_back(w.dst_chip_id);
-            blocks_.push_back(w.dst_dg_index);
+            blocks_.push_back(w.dst_pos);
             blocks_.push_back(w.split_idx);
             blocks_.push_back(w.split_count);
             blocks_.push_back(op::vc_for_own(w.distance, op::ring_extent(args)));
         }
-        // Chunk descriptors for our own region of the forwarding buffer, in arrival order — which is the
-        // order the upstream sender emits them, because both sides derive it from the same generator. They
-        // are what lets the reader compute every chunk's length, and so its page range, with nothing
-        // exchanged between the two chips. One set serves every local expert: the reader walks them again
-        // per expert, which is the order the upstream sender emits them in too.
+        // Chunk descriptors for our own region of the forwarding buffer, in the order the upstream sender
+        // emits them, because both sides derive it from the same generator. One set serves every local
+        // expert.
         const auto forwarding =
             op::forwarding_chunks(plan.stream, op::my_dg_index(args, coord), op::ring_extent(args), args.num_links);
         num_vcs = static_cast<uint32_t>(forwarding.size());
@@ -303,7 +301,7 @@ private:
     static uint32_t count_own_assignments(const std::vector<op::Assignment>& work) {
         uint32_t num_own = 0;
         for (const auto& w : work) {
-            num_own += w.is_relay ? 0u : 1u;
+            num_own += w.is_forward ? 0u : 1u;
         }
         return num_own;
     }

@@ -1372,7 +1372,7 @@ TEST_F(SDPAForwardTest, GateTest_ProgramCacheHitReadsNewGate) {
     const xt::xarray<float> gate_b_host = -gate_a_host;
     auto gate_a = core::from_xtensor(gate_a_host, device);
     auto gate_b = core::from_xtensor(gate_b_host, device);
-    ASSERT_NE(gate_a.buffer()->address(), gate_b.buffer()->address())
+    ASSERT_NE(gate_a.mesh_buffer().address(), gate_b.mesh_buffer().address())
         << "Both gates must be alive at distinct device addresses for this test to mean anything";
 
     auto ungated = metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, true);

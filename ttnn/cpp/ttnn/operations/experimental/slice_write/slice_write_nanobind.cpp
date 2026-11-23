@@ -32,18 +32,17 @@ void bind_slice_write(nb::module_& mod) {
             Args:
                 input_tensor: Input Tensor.
                 output_tensor: Output Tensor.
-                slice_start: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-                slice_end: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-                slice_step: (Optional[List[int[tensor rank]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
-
-            Keyword Args:
-                memory_config Memory Config of the output tensor
+                start: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+                end: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+                step: (List[int[tensor rank]]) Step size for each dim. Required; must be all ones.
 
             Returns:
                 ttnn.Tensor: the output tensor after writing the input tensor to it.
 
             Example:
-                >>> ttnn.experimental.slice_write(ttnn_input_tensor, ttnn_output_tensor, output_start_indices, output_end_indices, strides)
+                >>> input_tensor = ttnn.from_torch(torch.rand(1, 4, 4, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                >>> output_tensor = ttnn.from_torch(torch.zeros(1, 8, 8, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                >>> ttnn.experimental.slice_write(input_tensor, output_tensor, [0, 0, 0, 0], [1, 4, 4, 32], [1, 1, 1, 1])
                 )doc";
 
     // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better

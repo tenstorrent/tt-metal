@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pad_rm_reader_writer_multi_core_program_factory.hpp"
+#include "ttnn/core.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include <cmath>
@@ -21,7 +22,6 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim::qsr {
@@ -181,7 +181,7 @@ MeshTensor build_pad_value_const_mesh_tensor(const PadInputs& tensor_args, float
         ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR);
-    auto& cq = device->mesh_command_queue();
+    auto& cq = ttnn::core::current_mesh_command_queue(*device);
     // NOTE: The const buffer is always in L1 (mirrors the legacy factory).
     const MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
     return cq.enqueue_write_tensor(host_pad.host_tensor(), mem_cfg);
@@ -244,8 +244,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
     [[maybe_unused]] int32_t src_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * a.element_size();
     int32_t dst_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * output.element_size();
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
+    const auto* src0_buffer = &a.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // ------------------------------------------------------------------------

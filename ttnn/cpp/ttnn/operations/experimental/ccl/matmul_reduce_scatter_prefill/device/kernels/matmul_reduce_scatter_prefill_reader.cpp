@@ -22,8 +22,9 @@
 //
 // Multicast walk: the A parts' receivers ack (consumer-ready) right after reserving their slot, before this core's own
 // DRAM reads/barrier; an A receive is then a wait only. The W parts keep the fused ack + wait in the a, a2, b, b2
-// order, so every W multicast still starts after its whole line received A (grid-wide A-then-W phases): concurrent
-// multicasts on one line or crossing A-column / W-row multicasts stall in the NoC (measured up to 16 us).
+// order (small parts: b and b2 acked together, see w_ack_together), so every W multicast still starts after its whole
+// line received A (grid-wide A-then-W phases): concurrent multicasts on one line or crossing A-column / W-row
+// multicasts stall in the NoC (measured up to 16 us).
 //
 // Raw-API notes (design "Helpers considered and rejected"): try_land is a semaphore poll + CB credit of bytes a remote
 // chip wrote; no helper covers a fabric fused-inc counter with host thresholds. rx_ack / rx_wait are the two halves
@@ -141,6 +142,13 @@ void kernel_main() {
     constexpr uint32_t a_part_bytes[2] = {a_split * kb * a_tile_bytes, (core_m - a_split) * kb * a_tile_bytes};
     constexpr uint32_t w_part_off[2] = {0, w_split * core_n * w_tile_bytes};
     constexpr uint32_t w_part_bytes[2] = {w_split * core_n * w_tile_bytes, (kb - w_split) * core_n * w_tile_bytes};
+    // Small W parts (window handshake latency-bound) ack both parts before either is sent or waited for: a part's
+    // sender also receives the other part, so the in-order ack + wait ran the two handshakes back to back (QB2 1x4
+    // ring, traced: GLM-5.3 wk, 8.7 KB parts, 28.0 -> 24.8 us; Llama-70B w2 M=64, 17 KB, 62.7 -> 55.0 us). Larger parts
+    // keep the in-order walk: their two multicasts then share the line (MiniMax M3 dense, 36 KB: +4.5%; forced M folds,
+    // 100+ KB: +9-10%).
+    constexpr uint32_t W_ACK_TOGETHER_MAX_BYTES = 18 * 1024;
+    constexpr bool w_ack_together = mc_b2.active && w_part_bytes[0] <= W_ACK_TOGETHER_MAX_BYTES;
 
     const uint32_t a_addr = get_common_arg_val<uint32_t>(mrs::reader_common::A_ADDR);
     const uint32_t w_addr = get_common_arg_val<uint32_t>(mrs::reader_common::W_ADDR);
@@ -160,11 +168,12 @@ void kernel_main() {
     // chunks the upstream waits for (num - zone sets)
     const uint32_t report_chunks = get_common_arg_val<uint32_t>(mrs::reader_common::REPORT_CHUNKS);
     // per wave: row_off | col_off << 8 | rows << 16 | cols << 24 inside my per-core block
-    const uint32_t waves_idx = mrs::reader_rt::COUNT;
+    const uint32_t waves_idx = mrs::reader_common::COUNT;  // common args
     // per entry: [block | arrival_mask << 16 | lag << 20, thr_fwd | thr_bwd << 16]; an arrival has landed once my
     // counter of its direction reaches its threshold (one fused increment per (core, unit), in the upstream's order)
-    const uint32_t entries_idx = waves_idx + num_waves;
     constexpr uint32_t ENTRY_WORDS = mrs::reader_rt::ENTRY_WORDS;
+    const uint32_t entries_idx =
+        waves_idx + num_waves + get_arg_val<uint32_t>(mrs::reader_rt::HALF) * ENTRY_WORDS * num_entries;
     constexpr uint32_t total_entries = num_chunks * num_entries;
     // chunk c's tile origin inside the block and my valid extents there
     auto chunk_mn = [](uint32_t c, uint32_t& im, uint32_t& in) {
@@ -215,8 +224,8 @@ void kernel_main() {
         while (land_next < total_entries) {
             const uint32_t le = land_next % num_entries;
             const uint32_t lc = land_next / num_entries;
-            const uint32_t word0 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * le);
-            const uint32_t word1 = get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * le + 1);
+            const uint32_t word0 = get_common_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * le);
+            const uint32_t word1 = get_common_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * le + 1);
             const uint32_t mask = (word0 >> 16) & 0x3;
             invalidate_l1_cache();
             if ((mask & 1) &&
@@ -258,10 +267,10 @@ void kernel_main() {
     const uint32_t w_base = get_write_ptr(cb_weight_k_window);
     constexpr uint32_t num_steps = total_entries * num_k_blocks;
     auto block_of = [&](uint32_t step) {
-        return get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * ((step / num_k_blocks) % num_entries)) & 0xFFFF;
+        return get_common_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * ((step / num_k_blocks) % num_entries)) & 0xFFFF;
     };
     auto wave_of = [&](uint32_t step) {
-        return get_arg_val<uint32_t>(waves_idx + ((step / num_k_blocks) % num_entries) % num_waves);
+        return get_common_arg_val<uint32_t>(waves_idx + ((step / num_k_blocks) % num_entries) % num_waves);
     };
     // valid extent of a wave along one axis: my valid tiles past the wave's offset, capped at its extent
     auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
@@ -489,20 +498,51 @@ void kernel_main() {
             }
         }
         if (w_moves(s)) {
-            if (w_tx) {
-                w_tx->template send<SourceL1Guard::CallerManaged>(
-                    w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]);
+            if constexpr (w_ack_together) {
+                // fused order: W is acked only once my A landed (A-then-W phases); both parts before either is sent
+                // or waited for (see w_ack_together)
+                if (!w_tx) {
+                    rx_ack(mc_b, noc);
+                }
+                if constexpr (mc_b2.active) {
+                    if (!w2_tx) {
+                        rx_ack(mc_b2, noc);
+                    }
+                }
+                if (w_tx) {
+                    w_tx->template send<SourceL1Guard::CallerManaged>(
+                        w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]);
+                }
+                if constexpr (mc_b2.active) {
+                    if (w2_tx) {
+                        w2_tx->template send<SourceL1Guard::CallerManaged>(
+                            w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]);
+                    }
+                }
+                if (!w_tx) {
+                    rx_wait(mc_b, try_land);
+                }
+                if constexpr (mc_b2.active) {
+                    if (!w2_tx) {
+                        rx_wait(mc_b2, try_land);
+                    }
+                }
             } else {
-                rx_ack(mc_b, noc);  // fused order: W is acked only once my A landed (A-then-W phases)
-                rx_wait(mc_b, try_land);
-            }
-            if constexpr (mc_b2.active) {
-                if (w2_tx) {
-                    w2_tx->template send<SourceL1Guard::CallerManaged>(
-                        w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]);
+                if (w_tx) {
+                    w_tx->template send<SourceL1Guard::CallerManaged>(
+                        w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]);
                 } else {
-                    rx_ack(mc_b2, noc);
-                    rx_wait(mc_b2, try_land);
+                    rx_ack(mc_b, noc);  // fused order: W is acked only once my A landed (A-then-W phases)
+                    rx_wait(mc_b, try_land);
+                }
+                if constexpr (mc_b2.active) {
+                    if (w2_tx) {
+                        w2_tx->template send<SourceL1Guard::CallerManaged>(
+                            w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]);
+                    } else {
+                        rx_ack(mc_b2, noc);
+                        rx_wait(mc_b2, try_land);
+                    }
                 }
             }
         }
