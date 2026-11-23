@@ -231,9 +231,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     } else {
         // On Quasar the reader syncs the input DFB once per batch of tiles rather than once per tile. A batch is
         // at most 32 tiles, the same bound slice uses, so the reads in flight behind one barrier stay a fixed
-        // count rather than growing with the tensor width; it divides the tile-row block, and the input ring is
-        // sized in whole blocks, so a batch never straddles the ring wrap. Explicit sync needs implicit sync off.
-        // WH/BH keep the per-tile reader.
+        // count rather than growing with the tensor width. A batch stops at the end of its tile-row block and the
+        // input ring is sized in whole blocks, so a batch never straddles the ring wrap. Explicit sync needs
+        // implicit sync off. WH/BH keep the per-tile reader.
         const bool batched_reader = device->arch() == tt::ARCH::QUASAR;
         reader_spec.source =
             std::filesystem::path{batched_reader ? READER_INTERLEAVED_BATCHED_SRC : READER_INTERLEAVED_SRC};
@@ -241,11 +241,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         reader_spec.runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}};
         if (batched_reader) {
             constexpr uint32_t max_tiles_per_batch = 32;
-            uint32_t tiles_per_batch = std::min(num_tiles_per_input_block, max_tiles_per_batch);
-            while (num_tiles_per_input_block % tiles_per_batch != 0) {
-                --tiles_per_batch;
-            }
-            reader_spec.compile_time_args = {{"tiles_per_batch", tiles_per_batch}};
+            reader_spec.compile_time_args = {
+                {"tiles_per_batch", std::min(num_tiles_per_input_block, max_tiles_per_batch)},
+                {"tiles_per_block", num_tiles_per_input_block}};
             reader_spec.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
         }
     }
