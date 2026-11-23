@@ -132,7 +132,10 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
     const ttml::metal::AttentionMaskType mask_type,
-    const bool reuse_forward_kv) {
+    const bool reuse_forward_kv_requested) {
+    const bool reuse_forward_kv = reuse_forward_kv_requested &&
+                                  autograd::ctx().get_gradient_mode() == autograd::GradMode::ENABLED &&
+                                  autograd::any_requires_grad(query, key, value);
     if (!autograd::ctx().is_parallelism_context_initialized() ||
         !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
         return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
