@@ -75,24 +75,13 @@ ALWI void div_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode 
         param1));
 }
 
-// clang-format off
-/**
- * rsub_unary_tile computes scalar - x. With a 16-bit DST it rounds the result to nearest-even when the DST holds
- * Float16_b; SFPSTORE alone would truncate.
- *
- * | Template Parameter  | Description                                                              | Type       | Valid Range        | Default        |
- * |---------------------|--------------------------------------------------------------------------|------------|--------------------|----------------|
- * | is_fp32_dest_acc_en | DST holds fp32; no rounding is applied                                   | bool       | true, false        | DST_ACCUM_MODE |
- * | DEST_16BIT_FORMAT   | Format a 16-bit DST holds; Float16_b results are rounded to nearest-even | DataFormat | Float16_b, Float16 | Float16_b      |
- */
-// clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat DEST_16BIT_FORMAT = DataFormat::Float16_b>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
-        (APPROX, RSUB_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en, DEST_16BIT_FORMAT),
+        (APPROX, RSUB_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
         vector_mode,
         param1));

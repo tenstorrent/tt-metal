@@ -23,19 +23,12 @@ enum {
     RSUB = 4,
 };  // BINOP_MODE
 
-template <
-    bool APPROXIMATION_MODE,
-    int BINOP_MODE,
-    int ITERATIONS,
-    bool is_fp32_dest_acc_en,
-    DataFormat DEST_16BIT_FORMAT = DataFormat::Float16_b>
+template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_binop_with_scalar(std::uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
     // RSUB's RNE constants bound once per face, not re-materialised on every row.
     // Unassigned unless round_to_bf16_rne, which also gates their use.
-    // Only a Float16_b Dest: a Float16 Dest holds more mantissa than bf16, which rounding would throw away.
-    constexpr bool round_to_bf16_rne =
-        BINOP_MODE == RSUB && !is_fp32_dest_acc_en && DEST_16BIT_FORMAT == DataFormat::Float16_b;
+    constexpr bool round_to_bf16_rne = BINOP_MODE == RSUB && !is_fp32_dest_acc_en;
     sfpi::vUInt rne_bias;
     sfpi::vUInt rne_mask;
     if constexpr (round_to_bf16_rne) {

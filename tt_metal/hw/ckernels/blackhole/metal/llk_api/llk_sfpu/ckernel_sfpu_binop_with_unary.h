@@ -24,12 +24,7 @@ enum {
     RSUB = 4,
 };  // BINOP_MODE
 
-template <
-    bool APPROXIMATION_MODE,
-    int BINOP_MODE,
-    int ITERATIONS,
-    bool is_fp32_dest_acc_en,
-    DataFormat DEST_16BIT_FORMAT = DataFormat::Float16_b>
+template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 void calculate_binop_with_scalar(std::uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
 
@@ -52,8 +47,7 @@ void calculate_binop_with_scalar(std::uint32_t param) {
             // This correction is added for logit(x) = log(x/(1-x)) since bf16 dest stores
             // truncate fp32->bf16 by default, but torch computes rsub result in bf16 with IEEE
             // round-to-nearest-even. The resulting small error is amplified by the log operation.
-            // Only a Float16_b Dest: a Float16 Dest holds more mantissa than bf16, which rounding would throw away.
-            if constexpr (!is_fp32_dest_acc_en && DEST_16BIT_FORMAT == DataFormat::Float16_b) {
+            if constexpr (!is_fp32_dest_acc_en) {
                 result = float32_to_bf16_rne(result);
             }
         }

@@ -6,7 +6,7 @@ held bit-exact against a golden that models SFPSTORE truncation and RSUB's bf16 
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ScalarBinopGolden,
     get_golden_generator,
@@ -42,7 +42,6 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
     SFPU_BINOP_MODE,
-    SFPU_DEST_16BIT_FORMAT,
     SFPU_UNARY_SCALAR,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -89,11 +88,8 @@ def _float_routes(formats_list):
     return routes
 
 
-# Float16 (A-family) is the one 16-bit Dest format where RSUB must not round to bf16.
-_FLOAT16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
-
-# Every float producer route, including one MX pair and Float16; the op sweep runs all of them.
-_FLOAT_ROUTES = _float_routes(_FLOAT_FORMATS + [_FLOAT16])
+# Every float producer route, including one MX pair; the op sweep runs all of them.
+_FLOAT_ROUTES = _float_routes(_FLOAT_FORMATS)
 
 # bf16 into a 16-bit Dest has both producers; the FPU one is the narrow FPU-to-SFPU handshake.
 assert {
@@ -135,19 +131,6 @@ def _narrows_fp32_input(variant: QuasarSfpuVariant) -> bool:
     return variant.formats.input_format.is_32_bit() and not variant.sfpu_src.is_32_bit()
 
 
-def _truncate_to_float16(values: torch.Tensor) -> torch.Tensor:
-    """fp32 -> Float16 toward zero, as SFPSTORE narrows into a Float16 Dest."""
-    narrowed = values.to(torch.float16)
-    overshoot = narrowed.to(torch.float32).abs() > values.abs()
-    toward_zero = torch.nextafter(narrowed, torch.zeros_like(narrowed))
-    return torch.where(overshoot, toward_zero, narrowed)
-
-
-def _dest_16bit_format(variant: QuasarSfpuVariant) -> DataFormat:
-    """The format a 16-bit Dest holds; Float16_b stands in when the Dest is 32-bit."""
-    return DataFormat.Float16_b if variant.sfpu_dst.is_32_bit() else variant.sfpu_dst
-
-
 def _float_golden(
     mathop: MathOperation,
     src_A: torch.Tensor,
@@ -161,21 +144,12 @@ def _float_golden(
     src_A = quantize_input_to_unpack_format(src_A, variant.formats.input_format).to(
         torch.float32
     )
-    dest_format = _dest_16bit_format(variant)
-    rounds_to_bf16 = (
-        mathop == MathOperation.ScalarRsub and dest_format == DataFormat.Float16_b
-    )
-    if variant.sfpu_dst.is_32_bit() or rounds_to_bf16:
+    if variant.sfpu_dst.is_32_bit() or mathop == MathOperation.ScalarRsub:
         return golden(
             mathop, src_A, value_bits, output_format, variant.dest_acc
         ).flatten()
     exact = golden(mathop, src_A, value_bits, DataFormat.Float32, DestAccumulation.Yes)
-    stored = (
-        _truncate_to_float16(exact)
-        if dest_format == DataFormat.Float16
-        else truncate_to_bfloat16(exact)
-    )
-    return stored.to(format_dict[output_format]).flatten()
+    return truncate_to_bfloat16(exact).to(format_dict[output_format]).flatten()
 
 
 def _int32_golden(
@@ -227,7 +201,6 @@ def _run_sfpu_binop_scalar_quasar(
         "templates": [
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(value_bits),
-            SFPU_DEST_16BIT_FORMAT(_dest_16bit_format(variant)),
             APPROX_MODE(_APPROX_MODE),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
