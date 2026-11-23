@@ -26,6 +26,7 @@ Off by default: only `SpecGenerator.generate_rows` (tt/spec_generator.py) uses i
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -50,6 +51,9 @@ from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_STA
 R_MAX = 3
 WIN_ROWS = 9  # rows of a conv window the projection reads (attention_fast: w_all.bank.x_rows)
 _SHIFT = {}
+# One far call shared by all R tokens (rows_per_token) is not exact at long context: the flash-MLA output depends on
+# its core split, which changes with the row count. Default: one far call per token (bit-equal to the 1-row step).
+SHARED_FAR = os.environ.get("INKLING_VERIFY_SHARED_FAR") == "1"
 
 
 def _shifts(device, back=False):
@@ -160,7 +164,8 @@ def attn_rows(attn, xs, state, positions, rows, p0, hists):
     if attn.is_global:
         assert FAR_GRP
         shared = (
-            attn.far_rows_cfg is not None
+            SHARED_FAR
+            and attn.far_rows_cfg is not None
             and R > 1
             and p0 >= WINDOW
             and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK

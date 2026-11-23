@@ -99,8 +99,9 @@ class SpecGenerator(Generator):
     def _shared(p0, R):
         from models.demos.inkling2_mini.tt.attention import WINDOW
         from models.demos.inkling2_mini.tt.attention_fast import FAR_CHUNK
+        from models.demos.inkling2_mini.tt.verify import SHARED_FAR
 
-        return p0 >= WINDOW and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
+        return SHARED_FAR and p0 >= WINDOW and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
 
     def capture_rows(self, p_shared, p_split):
         """Plain traces (Generator.capture), the draft trace, and per conv phase the verify pass (far call shared or
@@ -110,7 +111,7 @@ class SpecGenerator(Generator):
         m, d, V = self.model, self.drafter, self.verify
         R = V.R
         say = print if os.environ.get("S6_STAGES") else (lambda *a, **k: None)
-        assert self._shared(p_shared, R) and not self._shared(p_split, R)
+        assert not self._shared(p_split, R)
         m.set_inputs(0, 0)
         m.step()
         if self.use_overlap and self.overlap is None:
