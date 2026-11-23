@@ -64,6 +64,8 @@ constexpr uint32_t packed_row_bytes = get_named_compile_time_arg_val("packed_row
 constexpr bool split_k = get_named_compile_time_arg_val("split_k") != 0;
 // Q rows arrive through the K row CB (the L1 floor layout: same row format and width, no Q row CB).
 constexpr bool q_via_k_rm = get_named_compile_time_arg_val("q_via_k_rm") != 0;
+// Unscaled KV gathered a step at a time: the reader pushes a short last step whole, zero rows past its chunks.
+constexpr bool k_step_staged = get_named_compile_time_arg_val("k_step_staged") != 0;
 static_assert(recipe::ring && recipe::ring_mask == 0 && !recipe::ring_stream_state, "the host's sparse recipe");
 static_assert(!split_k || passes == 1, "split-K merges one pass per token");
 static_assert(!fused_dequant || (scaled_kv && !recipe::sink), "the fused dequant scales V (undone on the output)");
@@ -221,7 +223,10 @@ SPARSE_STAGE void produce_k_chunk(uint32_t rows) {
             CircularBuffer(cb::k_rm).pop_front(tt::constants::TILE_HEIGHT);
         }
     } else {
-        // BF16 or FP8 rows, d_tiles wide.
+        // BF16 or FP8 rows, d_tiles wide (a step-staged short step's zero rows too).
+        if constexpr (k_step_staged) {
+            rows = k_tiles;
+        }
         reconfig_data_format_srca(cb::k_rm);
         pack_reconfig_data_format(k);
         tilize_init(cb::k_rm, d_tiles, k);
