@@ -2937,3 +2937,11 @@ F292 made results/<task>_*.md gate outputs (a test's report table), so core/gate
 own report written before the final gate was lost (PB.9G's ladder tables came out empty, PB.GAP's gap table vanished).
 The gate now keeps the bytes of every such .md it deletes and puts back each one its tests did not write again; a report
 a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_report_survives_the_gate_a_tests_own_report_is_rewritten.
+
+## F301 (2026-11-23, DeepSeek-V4.1 PS.1): a CPU-only task's gate runs without the device-open memory reserve
+- Seen: PS.1 (device: false, a CPU design test) was refused by the safe runner, 'SAFE_PYTEST_INFRA: host memory'
+  (MemAvailable 237 GiB - the 215 GB model load = 37 < the 40 GiB reserve; 280 GiB leaked driver memory on a node not
+  rebooted since 11-19). The F284 reserve guards device opens; a CPU test opens none.
+- Fix: core/gate.cpu_task_env: a task with `device: false` gets BRINGUP_HOST_MEM_RESERVE_GB=0 in its gate (agent
+  checks and the orchestrator's gate alike, run_gate); the FIX.30 floor check stays. Unmarked perf tasks still count as
+  device tasks. Selftest: selftest/test_cpu_task_hostmem.py.
