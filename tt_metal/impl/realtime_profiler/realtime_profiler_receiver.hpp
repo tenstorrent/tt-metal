@@ -21,6 +21,7 @@
 #include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 #include "context/context_types.hpp"
+#include "tt_metal/impl/realtime_profiler/realtime_profiler_device.hpp"
 #include "tt_metal/common/broadcast_ring.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 
@@ -35,14 +36,6 @@ namespace distributed {
 
 class D2HSocket;
 class MeshDevice;
-
-// L1 carve-out addresses (ring buffer + D2H socket config) for the reserved RT-profiler tensix, anchored past
-// UNRESERVED to bypass the user-space allocator.
-struct RealtimeProfilerCoreL1Addrs {
-    uint32_t base = 0;
-    uint32_t ring_buffer = 0;
-    uint32_t socket_config = 0;
-};
 
 // Owns the RT-profiler subsystem for one MeshDevice: per-device state, the receiver thread, the Tracy handler, and the
 // host-device sync handshake (sharded across a small worker pool, with a 60s per-chip throttle).
