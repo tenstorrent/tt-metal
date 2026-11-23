@@ -993,7 +993,8 @@ class PerfConfig(TestConfig):
         counter_results["run_index"] = run_index
         variant_counter_results.append(counter_results)
 
-    def run(self, perf_report: PerfReport, run_count=1):
+    def run(self, perf_report: PerfReport, run_count=None):
+        run_count = run_count or int(os.environ.get("PERF_RUN_COUNT", "1"))
         if not self.run_configs:
             pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
 
