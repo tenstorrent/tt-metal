@@ -6,6 +6,7 @@ guard tile, word for word against a host model of WH SFPMUL (``fma_model_wh``).
 """
 
 import struct
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -15,7 +16,11 @@ from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import ApproximationMode, DestAccumulation
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import APPROX_MODE, generate_input_dim
+from helpers.test_variant_parameters import (
+    APPROX_MODE,
+    TemplateParameter,
+    generate_input_dim,
+)
 
 pytestmark = [wormhole_only]
 
@@ -40,6 +45,17 @@ FORMAT_CELLS = [
 
 # Lanes whose first element is -0.0 in the "specials" stimuli.
 SIGNED_ZERO_FIRST_LANES = range(SFPU_LANE_COLS)
+
+
+@dataclass
+class MM_THROTTLE(TemplateParameter):
+    """Compiles the kernel's MM_THROTTLE > 0 body (TTINCRWC Dest advance) instead of the default
+    ADDR_MOD_6 one; 0 emits nothing."""
+
+    level: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MM_THROTTLE {self.level}" if self.level > 0 else ""
 
 
 def _lane_elements() -> list[list[int]]:
@@ -201,7 +217,8 @@ def _to_tensor(words: list[int], fmt: DataFormat) -> torch.Tensor:
     ids=[f"{f.name}-dest_acc_{d.name}" for f, d in FORMAT_CELLS],
 )
 @pytest.mark.parametrize("kind", ["near_one", "random_bits", "specials"])
-def test_sfpu_tiled_prod_bit_exact(fmt, dest_acc, kind):
+@pytest.mark.parametrize("mm_throttle", [0, 1], ids=["mm_throttle_0", "mm_throttle_1"])
+def test_sfpu_tiled_prod_bit_exact(fmt, dest_acc, kind, mm_throttle):
     formats = InputOutputFormat(fmt, fmt)
     in_words = [
         w
@@ -219,6 +236,7 @@ def test_sfpu_tiled_prod_bit_exact(fmt, dest_acc, kind):
         templates=[
             generate_input_dim([TILE_DIM, TILE_DIM], [TILE_DIM, TILE_DIM]),
             APPROX_MODE(ApproximationMode.No),
+            MM_THROTTLE(mm_throttle),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -261,7 +279,7 @@ def test_sfpu_tiled_prod_bit_exact(fmt, dest_acc, kind):
     wrong = [i for i in range(words) if got[i] != want[i]]
     width = 2 * word_bytes
     assert not wrong, (
-        f"tiled_prod {fmt.name} dest_acc={dest_acc.name} {kind}: {len(wrong)}/{words} words "
+        f"tiled_prod {fmt.name} dest_acc={dest_acc.name} {kind} mm_throttle={mm_throttle}: {len(wrong)}/{words} words "
         f"differ from the host model, per tile {[sum(i // ELEMENTS_PER_TILE == t for i in wrong) for t in range(TILE_COUNT)]} "
         f"(the last is the guard tile, which the kernel must not touch). Face-order index: "
         f"input, got, expected:\n"

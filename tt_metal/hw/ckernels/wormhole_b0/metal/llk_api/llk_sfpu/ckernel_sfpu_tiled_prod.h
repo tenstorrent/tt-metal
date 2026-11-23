@@ -145,7 +145,7 @@ inline void calculate_tiled_prod() {
     // The first element is multiplied by 1.0 from vConstFloatPrgm0 (set in tiled_prod_init) rather
     // than by a literal: sfpi folds `1.0f * v` to `v`, which skips the first SFPMUL and stores a
     // -0.0 first element as -0.0 instead of the +0 SFPMUL returns. Reading the constant register
-    // keeps every element's SFPMUL, as the plain loop above does, and costs no instruction per call.
+    // keeps every element's SFPMUL and costs no instruction per call.
     //
     // sfpi records repeated instruction sequences into the replay buffer on its own and treats
     // lltt::record as one more instruction, so with back-to-back calls (an unrolled tile loop) it
