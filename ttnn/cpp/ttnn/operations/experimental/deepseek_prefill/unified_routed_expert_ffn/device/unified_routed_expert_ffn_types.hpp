@@ -131,6 +131,9 @@ struct UnifiedRoutedExpertFfnParams {
     // and intermediates (default: bf16 DEST / partials, bf8_b activations). Part of the key (the config is not).
     bool precise = false;
 
+    // Matmul fidelity from compute_kernel_config.math_fidelity (default LoFi). Part of the key (the config is not).
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -144,7 +147,8 @@ struct UnifiedRoutedExpertFfnParams {
         "output_row_major",
         "zero_output_row",
         "stacked_experts",
-        "precise");
+        "precise",
+        "math_fidelity");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -159,7 +163,8 @@ struct UnifiedRoutedExpertFfnParams {
             output_row_major,
             zero_output_row,
             stacked_experts,
-            precise);
+            precise,
+            math_fidelity);
     }
 };
 

@@ -47,16 +47,18 @@ bool is_dram_nd_sharded_by_tile_rows(const ttnn::Tensor& t) {
            shard_shape[-1] % tt::constants::TILE_WIDTH == 0;
 }
 
-// The program factory builds the kernels for LoFi, a bf16 DEST and exact SFPU whatever the
-// caller asks for, and compute_kernel_config is not in the program hash. Reject any other
-// setting instead of silently running LoFi.
+// compute_kernel_config is not in the program hash: the factory reads its fidelity and DEST mode from the op
+// attributes (math_fidelity, precise), which are. Reject settings the kernels do not honor.
 void validate_compute_kernel_config(const std::optional<ttnn::DeviceComputeKernelConfig>& config) {
     if (!config.has_value()) {
         return;
     }
     TT_FATAL(
-        config->math_fidelity == tt::tt_metal::MathFidelity::LoFi,
-        "unified_routed_expert_ffn runs at LoFi only; pass math_fidelity=LoFi");
+        config->math_fidelity == tt::tt_metal::MathFidelity::LoFi ||
+            config->math_fidelity == tt::tt_metal::MathFidelity::HiFi2 ||
+            config->math_fidelity == tt::tt_metal::MathFidelity::HiFi3 ||
+            config->math_fidelity == tt::tt_metal::MathFidelity::HiFi4,
+        "unified_routed_expert_ffn: unsupported math_fidelity");
     // fp32_dest_acc_en=True selects the precise mode (fp32 DEST and partials, bf16 activations / intermediates).
     TT_FATAL(!config->math_approx_mode, "unified_routed_expert_ffn needs math_approx_mode=False");
 }
@@ -138,7 +140,10 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             gate_shape[-1],
             down_shape[-2]);
         TT_FATAL(gate_shape[-3] == down_shape[-3], "stacked gate_up / down expert counts differ");
-        TT_FATAL(down_shape[-2] % tt::constants::TILE_HEIGHT == 0, "stacked hidden ({}) must be tile-aligned", down_shape[-2]);
+        TT_FATAL(
+            down_shape[-2] % tt::constants::TILE_HEIGHT == 0,
+            "stacked hidden ({}) must be tile-aligned",
+            down_shape[-2]);
         for (uint32_t e = 0; e < op.experts_per_chip; ++e) {
             TT_FATAL(
                 t.gate_projs[e].buffer() == ref_gu.buffer() && t.up_projs[e].buffer() == ref_gu.buffer() &&
@@ -146,7 +151,8 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                 "stacked experts: every gate/up slot must hold the gate_up tensor and every down slot the down tensor");
         }
         TT_FATAL(
-            is_dram_interleaved(ref_gu) && is_dram_interleaved(ref_d), "stacked expert weights must be DRAM-interleaved");
+            is_dram_interleaved(ref_gu) && is_dram_interleaved(ref_d),
+            "stacked expert weights must be DRAM-interleaved");
     } else {
         TT_FATAL(
             gate_shape[-1] == up_shape[-1] && gate_shape[-1] == down_shape[-2],
@@ -508,8 +514,8 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t l1_end,
     const std::optional<ttnn::Tensor>& x_row_index,
     uint32_t zero_output_row) {
-    using OperationType =
-        ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
+    using OperationType = ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::
+        UnifiedRoutedExpertFfnDeviceOperation;
     // Checked here, not in validate_on_program_cache_miss, so it also runs on cache hits: the reader uses
     // x_row_index's DRAM address on x's chips, so an index tensor on another mesh device reads unrelated memory.
     if (x_row_index.has_value()) {
@@ -530,9 +536,11 @@ ttnn::Tensor unified_routed_expert_moe(
             .x_indexed = x_row_index.has_value(),
             .output_row_major = output.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             .zero_output_row = zero_output_row,
-            .stacked_experts = !gate_projs.empty() && !up_projs.empty() &&
-                               gate_projs[0].buffer() == up_projs[0].buffer(),
-            .precise = compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en},
+            .stacked_experts =
+                !gate_projs.empty() && !up_projs.empty() && gate_projs[0].buffer() == up_projs[0].buffer(),
+            .precise = compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en,
+            .math_fidelity = compute_kernel_config.has_value() ? compute_kernel_config->math_fidelity
+                                                               : tt::tt_metal::MathFidelity::LoFi},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,
