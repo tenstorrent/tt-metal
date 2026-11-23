@@ -39,6 +39,7 @@ set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/port_descriptor_table.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_grouping_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/pipeline_ir.proto
 )
 
 # Collect all generated protobuf files

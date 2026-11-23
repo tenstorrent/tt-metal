@@ -1,0 +1,65 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package tt.tt_fabric.proto;
+
+// Pipeline Graph IR: the placement-relevant shape of a model pipeline (stage mesh shapes in chain order,
+// where it forks and joins, and whether placement may use host hops and passthrough stages). A model's
+// launch tooling writes it as a textproto without hardware; a placer reads it with an MGD to decide where
+// the pipeline can go.
+//
+// Example (a 4x2 host stage followed by 62 more 4x2 stages; the last loops back to the root):
+//   schema_version: 1
+//   allow_host_traffic: false
+//   allow_passthroughs: true
+//   root { rows: 4 cols: 2 }
+//   stages { seq { stages { shape { rows: 4 cols: 2 } } repeat: 62 } }
+message PipelineIR {
+  // Whether placement may route an edge over the host instead of fabric links.
+  bool allow_host_traffic = 1;
+  // Whether placement may add passthrough stages that only forward data, for example to pad the
+  // pipeline out to the placed hosts.
+  bool allow_passthroughs = 2;
+  // The host-I/O stage, position 0 of the chain.
+  Shape root = 3;
+  // The stages after the root, in chain order. The last one loops back to the root; the loopback edge
+  // is not written.
+  repeated Stage stages = 4;
+  // The version of this schema the writer used. A reader rejects a version it does not know.
+  uint32 schema_version = 5;
+}
+
+// The mesh shape of one stage.
+message Shape {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
+
+message Stage {
+  oneof kind {
+    Shape shape = 1;
+    Seq seq = 2;
+    Fork fork = 3;
+  }
+}
+
+// stages, written out repeat times in order.
+message Seq {
+  repeated Stage stages = 1;
+  uint32 repeat = 2;
+}
+
+// Forks from the stage before it and joins at the stage after it. A fork first in its list forks from
+// the root; a fork last in PipelineIR.stages joins at the root. A fork has exactly two branches, not both
+// empty. Two forks need a stage between them, and a fork that joins at the root holds no other fork.
+message Fork {
+  repeated Branch branches = 1;
+}
+
+// The stages of one branch, in order. An empty branch is a direct edge from the fork stage to the join.
+message Branch {
+  repeated Stage stages = 1;
+}
