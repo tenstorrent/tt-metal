@@ -322,7 +322,8 @@ class Sim:
         # lag (with swap): a preemption lands while the device has drawn a token the host has not seen (async
         # scheduling): the request forgets its last token and the swap entry must supply it from the device
         self.lag = lag
-        self.sampled_share = 0.0 if lag == 1 else 0.4  # (lag 1: greedy, the Sim's prefill check samples greedily)
+        # (lag 1 / 3: greedy, the Sim's prefill check samples greedily and lag 3 extends with greedy tokens)
+        self.sampled_share = 0.0 if lag in (1, 3) else 0.4
         # sync: the runner without async scheduling hands decode_forward's handle straight to
         # process_decode_output_host (finalize_decode); async: read_decode_output(async_read=True) first
         self.sync = sync
@@ -399,6 +400,11 @@ class Sim:
             prompt_token_ids=r.tokens[: r.n_prompt], output_token_ids=r.tokens[r.n_prompt : seen]
         )
         TTModelRunner._release_model_request(self.runner, rid, preempted=True)
+        if self.lag == 3 and rid in self.rows:
+            # (a speculative step in flight at the preemption: the scheduler keeps the 1-3 tokens it committed after
+            # the state was kept, the replay carries them)
+            for _ in range(self.rng.randint(1, 3)):
+                r.tokens.append(ref_next(r.tokens))
         TTModelRunner._release_dead_state_slots(
             self.runner, SimpleNamespace(finished_req_ids=[], preempted_req_ids=[rid])
         )
@@ -672,6 +678,19 @@ def test_churn_swap_runner_lags(seed, sync):
     sw = sim.adapter.engine.swap
     assert stats["preempted_live"] > 5 and sw.stats["inserts"] == stats["preempted_live"], (sw.stats, stats)
     assert sw.stats["hits"] > 3 and sim.model.restores == sw.stats["hits"], (sw.stats, stats)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_churn_swap_extra_tokens(seed):
+    """Strata S3 with a speculative step in flight at the preemption: the replay carries up to EXTRA tokens past the kept
+    state's next one; the swap-in feeds them one decode step each (the fake checks the history and KV)"""
+    sim = Sim(seed, sample=True, swap=True, lag=3)
+    stats = sim.run(700)
+    sw = sim.adapter.engine.swap
+    assert stats["preempted_live"] > 5 and sw.stats["hits"] > 3 and sim.model.restores == sw.stats["hits"], (
+        sw.stats,
+        stats,
+    )
 
 
 def test_swap_off_keeps_the_recompute():

@@ -442,8 +442,17 @@ class ResidentRowsAdapter:
             r = self._start_prompt(vslot)
         self.engine.swap_restore(r, key, self._blocks_for(table_row, q))
         logger.info(f"swap: resident slot {r} resumed from host at {q} tokens (prompt {len(ids)}), no prefill")
-        if len(ids) == q + 1:
-            return "launch", (r, int(ids[q]), q, table_row)
+        if len(ids) >= q + 1:
+            # (q + 1: the usual first-token launch of the next token; more: tokens committed after the state was kept — a speculative step in flight at the preemption: each
+            # through a one-row decode launch (its logits unused), the prompt's last one as the first-token launch)
+            self.tables[r] = expand_blocks([int(b) for b in table_row], self.pages_per_block)
+            self._write_tables()
+            launch = self._launch(r)
+            keep = {launch} if any(self._launch(s) == launch for s in self.live) else set()
+            for p in range(q, len(ids) - 1):
+                self.engine.first_tokens({r: (int(ids[p]), p)}, [launch], keep)
+                keep = {launch}  # (r's own conv history from here on)
+            return "launch", (r, int(ids[-1]), len(ids) - 1, table_row)
         self.tables[r] = expand_blocks([int(b) for b in table_row], self.pages_per_block)
         self._write_tables()
         self.live.add(r)

@@ -75,7 +75,7 @@ def test_swap_store_match_candidate_lru():
     assert sw.match(toks + [98]) is None  # (another next token: not this request's continuation)
     assert sw.match(toks[:-1]) is None and sw.match(toks[:-1] + [7]) is None
     assert sw.candidate(toks[:8], 20) and sw.candidate(toks[:8], 21)
-    assert not sw.candidate(toks[:8], 22) and not sw.candidate([0] + toks[1:8], 20)
+    assert not sw.candidate(toks[:8], 26) and not sw.candidate([0] + toks[1:8], 20)
     key = sw.match(toks + [99])[0]
     assert sw.take(key) == "A" and len(sw) == 0 and sw.match(toks) is None and sw.bytes == 0
     assert sw.insert([1, 2], 3, "B", 60) and sw.insert([4, 5], 6, "C", 60)  # (B evicted: 120 > 100)
@@ -91,3 +91,17 @@ def test_swap_store_unknown_next_token():
     assert sw.insert([1, 2, 3], None, "A", 10)
     assert sw.match([1, 2, 3]) is None
     assert sw.match([1, 2, 3, 9])[1:] == (3, None) and sw.match([1, 2, 3, 4])[1:] == (3, None)
+
+
+def test_swap_store_extra_tokens():
+    """a replay up to EXTRA tokens past the next matches (a speculative step's commits); further, or another next
+    token, does not"""
+    from qwen36_resident.prefix_cache import SwapStore
+
+    sw = SwapStore(100)
+    assert sw.insert([1, 2, 3], 4, "A", 10)
+    for extra in range(1, SwapStore.EXTRA + 1):
+        assert sw.match([1, 2, 3, 4] + [9] * extra)[1:] == (3, 4)
+    assert sw.match([1, 2, 3, 4] + [9] * (SwapStore.EXTRA + 1)) is None
+    assert sw.match([1, 2, 3, 5, 9]) is None
+    assert sw.candidate([1, 2], 3 + 1 + SwapStore.EXTRA) and not sw.candidate([1, 2], 3 + 2 + SwapStore.EXTRA)

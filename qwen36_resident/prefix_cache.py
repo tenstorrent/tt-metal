@@ -109,7 +109,10 @@ class SwapStore:
     q: the device's draw, or the host's when it saw it), the host snapshot. A resumed prompt replays either exactly the
     q tokens (its next token is the entry's) or the q tokens and the next one (one decode step from the state); any
     other prompt is not a match (a plain prefill). The next token may be unknown (None): then only a replay that
-    carries it matches."""
+    carries it matches. A replay may also carry up to EXTRA more tokens past the next (a speculative step in flight
+    at the preemption committed them after the state was kept): the adapter feeds them one decode step each."""
+
+    EXTRA = 4  # (a verify step's commits: K = 3 drafts + 1)
 
     def __init__(self, budget_bytes):
         self.budget = int(budget_bytes)
@@ -149,14 +152,14 @@ class SwapStore:
         prefix = tuple(int(t) for t in prefix)
         n = len(prefix)
         return any(
-            len(tok) in (total, total - 1) and n <= len(tok) and tok[:n] == prefix
+            total - 1 - self.EXTRA <= len(tok) <= total and n <= len(tok) and tok[:n] == prefix
             for tok, _, _, _ in self._entries.values()
         )
 
     def match(self, ids):
         """the entry the prompt `ids` replays, as (key, q, next token), or None (not removed: take() does)"""
         ids = tuple(int(t) for t in ids)
-        for q in (len(ids), len(ids) - 1):
+        for q in range(len(ids), max(0, len(ids) - 1 - self.EXTRA) - 1, -1):
             if q <= 0:
                 continue
             key = self._key(ids[:q])
