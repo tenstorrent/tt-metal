@@ -246,15 +246,15 @@ GLM_4X4_PERF_CASES = {
     "glm53_dense_ffn_down": ((1, 1, 640, 3072), (3072, 6144), -1, ttnn.bfloat16, ttnn.bfloat8_b),
 }
 
-# Ceilings [ns] per case on the high-power (14 kW) Galaxies the GLM chunked perf leg runs on: the slowest median over the
-# calibration runs plus 10%. Provisional until recalibrated on CI's runners. Override per case with
+# Ceilings [ns] per case: the slowest median over six runs on two 8 kW Galaxies (a07u14, a08u14; the medians agree within
+# 3%) plus 10%. Provisional: recalibrate on the high-power (14 kW) Galaxies the GLM chunked perf leg runs on. Override per case with
 # TT_METAL_MRS_RING_RING_4X4_CEILING_US='{"glm53_o_proj": 300.0}' (us).
 RING_RING_4X4_CEILING_NS = {
-    "glm53_q_a_proj": None,
-    "glm53_o_proj": None,
-    "glm53_indexer_wk": None,
-    "glm53_indexer_weights_proj": None,
-    "glm53_dense_ffn_down": None,
+    "glm53_q_a_proj": 62000,
+    "glm53_o_proj": 201000,
+    "glm53_indexer_wk": 28000,
+    "glm53_indexer_weights_proj": 19000,
+    "glm53_dense_ffn_down": 159000,
 }
 
 
