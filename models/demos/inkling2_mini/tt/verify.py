@@ -25,6 +25,8 @@ Off by default: only `SpecGenerator.generate_rows` (tt/spec_generator.py) uses i
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 import ttnn
@@ -98,6 +100,25 @@ def windows_to(win, hists, xs):
     io = [*hists, *(x for xt in xs for x in xt), win.act]
     ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
     return win.act
+
+
+def copy_tensors(device, pairs, n_cores=24):
+    """dst <- src for every (src, dst) pair of same-shape bf16 TILE DRAM tensors, in one program
+    (fused/kernels/verify_copy.cpp)."""
+    src0 = pairs[0][0]
+    page = ttnn.Tile([32, 32]).get_tile_size(src0.dtype)
+    vol = lambda t: math.prod(tuple(t.padded_shape))  # noqa: E731
+    pages = vol(src0) // (32 * 32)
+    cores, crs = F.core_list(device, min(n_cores, len(pairs)))
+    rt = {c: [0] for c in cores}
+    for i, (a, b) in enumerate(pairs):
+        assert a.dtype == b.dtype == src0.dtype and vol(a) == vol(src0)
+        r = rt[cores[i % len(cores)]]
+        r[0] += 1
+        r += [a.buffer_address(), b.buffer_address()]
+    named = F.fixed_rt(dict(pages=pages, page_bytes=page), rt)
+    k = F.kernel("verify_copy.cpp", ttnn.ReaderConfigDescriptor(), named, rt, crs)
+    F.run([t for p in pairs for t in p], [k], [F.cb(0, src0.dtype, 8, page, cores=crs)])
 
 
 def attn_rows(attn, xs, state, positions, rows, p0, hists):
@@ -343,16 +364,17 @@ class VerifyStep:
         as n plain steps would have left it."""
         m, R = self.m, self.R
         assert 1 <= n <= R
-        pairs = []
+        pairs, wins = [], []
         for L, p in APPS:
             c = cache_index(L, p)
             lay = m.layers[L]
             attn_st, conv_a, conv_m = m.states[c]
             lay.attn.commit_rows(attn_st, self.rows[c], self.positions[0], n)
-            ttnn.copy(self.hists[c][n], attn_st.x_hist)
+            wins.append((self.hists[c][n], attn_st.x_hist))
             for conv, ring in ((lay.conv_attn, conv_a), (lay.conv_mlp, conv_m)):
                 pairs += [
                     (conv.pending_slot(ring, r), ring[(self.phase + r) % FusedShortConv.PHASES]) for r in range(n)
                 ]
         conv_commit(self.device, pairs, F.pages(HIDDEN))
+        copy_tensors(self.device, wins)  # window states of the accepted token, all apps in one program
         ttnn.copy(ttnn.slice(self.d.f_rnn_rows, [0, 0, n - 1, 0], [1, 1, n, HIDDEN]), self.d.f_rnn)
