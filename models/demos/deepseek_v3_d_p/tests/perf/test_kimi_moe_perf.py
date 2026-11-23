@@ -62,7 +62,7 @@ TARGETS_MS = {
         2.17,
         2.06,
     ),  # (2.38, 2.27 before the flat expert's nearest-bank down cores, min-max gate/up banks)
-    "kimi_k3_1-4x4-sp1-2560": (3.63, 3.54),
+    "kimi_k3_1-4x4-sp1-2560": (3.28, 3.17),  # (3.63, 3.54 before the flat expert's nearest-bank down cores)
 }
 
 
