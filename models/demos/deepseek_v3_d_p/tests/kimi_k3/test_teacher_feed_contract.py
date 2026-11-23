@@ -672,6 +672,40 @@ def _fp64_upcasts(monkeypatch):
         yield
 
 
+def _assert_identical(a, b, where) -> None:
+    """``a`` and ``b`` are the same value: tensors of one dtype and shape, element for element, NaN matching NaN."""
+    if torch.is_tensor(a):
+        torch.testing.assert_close(b, a, rtol=0, atol=0, equal_nan=True, msg=lambda m: f"{where}: {m}")
+    else:
+        assert a == b, where
+
+
+def _assert_identical_files(old: Path, new: Path, files: list[Path]) -> None:
+    """Every ``files`` path under ``old`` holds, under ``new``, the same keys with identical values."""
+    for f in files:
+        a, b = torch.load(f, weights_only=True), torch.load(new / f.relative_to(old), weights_only=True)
+        assert a.keys() == b.keys(), f
+        for k in a:
+            _assert_identical(a[k], b[k], (f, k))
+
+
+def test_assert_identical_tells_apart_what_it_must(expect_error):
+    """The byte-identity check the resume tests rely on accepts only equal values (NaN equal to NaN)."""
+    nan = float("nan")
+    _assert_identical(torch.tensor([1.0, nan]), torch.tensor([1.0, nan]), "same")
+    _assert_identical(3, 3, "same")
+    for a, b in [
+        (torch.zeros(3), torch.ones(3)),
+        (torch.tensor([1.0, nan]), torch.tensor([1.0, 2.0])),
+        (torch.tensor([1, 2]), torch.tensor([1, 3])),
+        (torch.zeros(3), torch.zeros(3, dtype=torch.float64)),
+        (torch.zeros(3), torch.zeros(1, 3)),
+        (3, 4),
+    ]:
+        with expect_error(AssertionError, "different"):
+            _assert_identical(a, b, "different")
+
+
 def _rel(got: torch.Tensor, want: torch.Tensor) -> float:
     return float((got.double() - want.double()).norm() / want.double().norm())
 
@@ -985,9 +1019,7 @@ def test_fp64_chain_segments_match_a_one_shot_reference_walk_and_resume(tmp_path
         old = flat(old)
         assert new.keys() == old.keys()
         for k, v in old.items():
-            assert (
-                (torch.equal(new[k], v) or (new[k].isnan() == v.isnan()).all()) if torch.is_tensor(v) else new[k] == v
-            ), k
+            _assert_identical(v, new[k], k)
 
 
 def test_fp64_chain_refuses_a_different_run(tmp_path: Path, expect_error):
@@ -1616,15 +1648,7 @@ def test_fp64_deep_chain_matches_a_one_shot_walk_and_fp64_chain_and_resumes(
     assert len(json.loads((again / MANIFEST).read_text())["segments"]) == 15
     resumed = _run_deep(model, layers, ids, again)
     assert len(resumed["sessions"]) == 2
-    for f in sorted(out.rglob("segment_*.pt")) + [out / "live.pt"]:
-        a, b = torch.load(f, weights_only=True), torch.load(again / f.relative_to(out), weights_only=True)
-        assert a.keys() == b.keys(), f
-        for k in a:
-            assert (
-                (torch.equal(a[k], b[k]) or (a[k].isnan() == b[k].isnan()).all())
-                if torch.is_tensor(a[k])
-                else a[k] == b[k]
-            ), (f, k)
+    _assert_identical_files(out, again, sorted(out.rglob("segment_*.pt")) + [out / "live.pt"])
     with expect_error(ValueError, "different run"):
         _run_deep(model, layers, (ids + 1) % 50, again)
 
@@ -1632,8 +1656,10 @@ def test_fp64_deep_chain_matches_a_one_shot_walk_and_fp64_chain_and_resumes(
 def test_fp64_deep_chain_backfill_brings_a_version_1_run_to_version_2(tmp_path: Path, expect_error):
     """A version-1 run (the KDA and dense passes' products stripped, the manifest at version 1) backfilled equals the
     version-2 run on every KDA / dense product to the fp32 rounding of the replayed outputs (<= 1e-6), with each
-    replayed pass's reconstructed input within 1e-6 of its stored one and the DSA / MoE files untouched; a backfill
-    interrupted in its third rerun pass resumes to byte-identical files; another token sequence is refused."""
+    replayed pass's reconstructed input within 1e-6 of its stored one and the DSA / MoE files untouched; the manifest
+    then says version 2 backfilled from 1 with the session's code revision, and a second backfill changes nothing; a
+    backfill interrupted in its third rerun pass stays at version 1, then resumes to byte-identical files; another
+    token sequence is refused."""
     import shutil
 
     from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_deep_chain
@@ -1670,8 +1696,12 @@ def test_fp64_deep_chain_backfill_brings_a_version_1_run_to_version_2(tmp_path: 
 
     one = tmp_path / "one"
     make_v1(one)
-    m = run(one)["backfill"]
-    assert m["complete"] and len(m["passes"]) == 16 and m["live_rel"] <= 1e-6
+    manifest = run(one)
+    assert manifest["producer_version"] == 2 and manifest["backfilled_from"] == 1
+    m = manifest["backfill"]
+    assert len(m["passes"]) == 16 and m["live_rel"] <= 1e-6
+    assert [s["first_pass"] for s in m["sessions"]] == [0] and m["sessions"][0]["code_revision"]
+    assert json.loads((one / MANIFEST).read_text()) == manifest and run(one) == manifest  # stored; a rerun is a no-op
     assert all(p["input_rel"] <= 1e-6 for p in m["passes"] if "input_rel" in p)
     for f in sorted(full.rglob("segment_*.pt")):
         a, b = torch.load(f, weights_only=True), torch.load(one / f.relative_to(full), weights_only=True)
@@ -1682,7 +1712,7 @@ def test_fp64_deep_chain_backfill_brings_a_version_1_run_to_version_2(tmp_path: 
             elif (int(f.parent.name[1]), f.parent.name[3:]) in rerun:
                 assert _rel(b[k], a[k]) <= 1e-6, (f, k)
             else:
-                assert torch.equal(a[k], b[k]) or (a[k].isnan() == b[k].isnan()).all(), (f, k)
+                _assert_identical(a[k], b[k], (f, k))
     two = tmp_path / "two"
     make_v1(two)
     calls = []
@@ -1695,22 +1725,39 @@ def test_fp64_deep_chain_backfill_brings_a_version_1_run_to_version_2(tmp_path: 
 
     with expect_error(RuntimeError, "interrupted"):
         run(two, load=failing)
-    assert (
-        len(json.loads((two / MANIFEST).read_text())["backfill"]["passes"]) == 2
-    )  # L0 attn and L0 ffn rerun; L1 attn interrupted
-    run(two)
-    for f in sorted(one.rglob("segment_*.pt")):
-        a, b = torch.load(f, weights_only=True), torch.load(two / f.relative_to(one), weights_only=True)
-        for k in a:
-            assert (
-                (torch.equal(a[k], b[k]) or (a[k].isnan() == b[k].isnan()).all())
-                if torch.is_tensor(a[k])
-                else a[k] == b[k]
-            ), (f, k)
+    interrupted = json.loads((two / MANIFEST).read_text())
+    assert len(interrupted["backfill"]["passes"]) == 2  # L0 attn and L0 ffn rerun; L1 attn interrupted
+    assert interrupted["producer_version"] == 1 and "backfilled_from" not in interrupted
+    assert [s["first_pass"] for s in run(two)["backfill"]["sessions"]] == [0, 2]
+    _assert_identical_files(one, two, sorted(one.rglob("segment_*.pt")))
     three = tmp_path / "three"
     make_v1(three)
     with expect_error(ValueError, "other tokens"):
         run(three, token_ids=(ids + 1) % 50)
+
+
+def test_fp64_deep_chain_layer_kinds_from_a_config(expect_error):
+    """The config's 1-based KDA / full-attention layer lists become 0-based kinds, the first ``first_k_dense_replace``
+    layers dense; a layer in both lists or in neither is refused."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_deep_chain import layer_kinds
+
+    def config(kda, full):
+        linear = {"kda_layers": kda, "full_attn_layers": full}
+        return {"text_config": {"linear_attn_config": linear, "first_k_dense_replace": 1}}
+
+    assert layer_kinds(config([1, 2, 3, 5], [4, 6]), 6) == {
+        0: ("kda", "dense"),
+        1: ("kda", "moe"),
+        2: ("kda", "moe"),
+        3: ("dsa", "moe"),
+        4: ("kda", "moe"),
+        5: ("dsa", "moe"),
+    }
+    assert layer_kinds(config([1, 2, 3, 5], [4, 6])["text_config"], 4)[3] == ("dsa", "moe")  # no text_config wrapper
+    with expect_error(ValueError, "layer 3 is not exactly one"):
+        layer_kinds(config([1, 2, 3, 4, 5], [4, 6]), 6)
+    with expect_error(ValueError, "layer 4 is not exactly one"):
+        layer_kinds(config([1, 2, 3], [4, 6]), 6)
 
 
 def test_fp64_deep_chain_scores_hand_made_differences(tmp_path: Path):

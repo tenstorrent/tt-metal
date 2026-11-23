@@ -27,7 +27,9 @@ segment's last row, ``kda_state_L_<field>`` (``KDAReferenceState``'s fields, bat
 ``backfill`` brings a complete version-1 run (whose KDA and dense passes stored nothing) to version 2: it replays
 the stored passes (the live sum adds their stored fp32 outputs, and each pass's reconstructed input is compared with
 its stored one) and reruns the KDA and dense passes, so their products carry the fp32 rounding of the replayed
-outputs (recorded per pass as ``input_rel``).
+outputs (recorded per pass as ``input_rel``). On completion the manifest says ``producer_version`` 2 with
+``backfilled_from`` 1; until then it stays at version 1. A run holds every version-2 product exactly when its
+``producer_version`` is 2, whichever way it got there.
 
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_deep_chain run --trace T --count N --layers 8 --out G
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_deep_chain score --chain G --trace T --out S
@@ -50,6 +52,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     MANIFEST,
     atomic_save,
+    provenance,
     resume_manifest,
     token_ids_sha256,
     write_manifest,
@@ -303,20 +306,23 @@ def backfill(
 ) -> dict:
     """Bring a complete version-1 run to version 2 (module docstring); resumable after each rerun pass from
     ``live_backfill.pt``. ``load(l, "norms")`` gives a layer's norms and AttnRes queries only. Returns the manifest,
-    whose ``backfill`` entry lists every pass with its ``input_rel`` (replayed) or seconds (rerun)."""
+    whose ``backfill`` entry lists every pass with its ``input_rel`` (replayed) or seconds (rerun) and each backfill
+    session's provenance (code revision included). A run already backfilled is returned unchanged."""
     run_dir = Path(run_dir)
     manifest = json.loads((run_dir / MANIFEST).read_text())
     kinds = {int(l): tuple(k) for l, k in manifest["kinds"].items()}
     todo = passes(len(kinds))
+    if manifest.get("backfilled_from") == 1:
+        return manifest
     if manifest["producer_version"] != 1 or len(manifest["segments"]) != len(todo):
         raise ValueError(f"{run_dir} is not a complete version-1 run")
     if manifest["token_ids_sha256"] != token_ids_sha256(token_ids.tolist()) or manifest[
         "embedding_sha256"
     ] != tensor_digest({"w": embedding}):
         raise ValueError(f"{run_dir} was run on other tokens or another embedding")
-    record = manifest.setdefault("backfill", {"to_version": PRODUCER_VERSION, "passes": [], "complete": False})
-    if record["complete"]:
-        return manifest
+    record = manifest.setdefault("backfill", {"sessions": [], "passes": []})
+    record["sessions"].append({"first_pass": len(record["passes"]), **provenance()})
+    write_manifest(run_dir, manifest)
     dims, eps, segment = dsa.Dims(**manifest["dsa_dims"]), manifest["eps"], manifest["segment"]
     emb = embedding[token_ids.long()]
     checkpoint = run_dir / "live_backfill.pt"
@@ -366,7 +372,7 @@ def backfill(
         log(f"backfill pass {p + 1}/{len(todo)} {entry}")
     final = torch.load(run_dir / "live.pt", weights_only=True)["live"]
     record["live_rel"] = float((live - final).norm() / final.norm())
-    record["complete"] = True
+    manifest.update(producer_version=PRODUCER_VERSION, backfilled_from=1)
     write_manifest(run_dir, manifest)
     checkpoint.unlink()
     log(f"backfill complete; final live sum relative distance {record['live_rel']:.3e}")
