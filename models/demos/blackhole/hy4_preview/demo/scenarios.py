@@ -494,3 +494,8 @@ SCENARIOS = {
     "perf": perf,
 }
 DEFAULT = ["multirow", "masked", "cap0", "pfx_hit_cold"]
+
+# capacity tiers (tail-park / host tier): demo/scenario_capacity.py overrides the SKIP stub ``tailpark`` above
+from models.demos.blackhole.hy4_preview.demo.scenario_capacity import SCENARIOS as _CAP  # noqa: E402
+
+SCENARIOS.update(_CAP)
