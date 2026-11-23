@@ -135,13 +135,13 @@ def postprocess_unet_output_tensor(x):
 
 The sliding window ops support HEIGHT, BLOCK, and WIDTH sharding, which have different benefits depending on the types of convolutions present in your specific model architecture.
 
-An overview of the sliding window TT-NN operations (such as `ttnn.conv2d`, `ttnn.maxpool2d`) can be found here: [link](./ttcnn.md).
+An overview of the sliding window TT-NN operations (such as `ttnn.conv2d`, `ttnn.max_pool2d`) can be found here: [link](./ttcnn.md).
 
 ## Optimizations
 
 ### Grouped Convolutions
 
-The most impactful model-level optimization for CNNs is achieved by using grouped convolutions. This is done by moving the batch dimension into the channel dimension (`BxHxWxC -> 1xHxWxBC`) and then setting the `groups` parameter equal to `B`. This is beneficial because the sliding window operations (`conv2d`, `maxpool2d`) give a perfect linear speedup because they are entirely bound by the tall shard size. Since these operations make up most of the FLOPs in CNNs, this optimization is a net-performance gain despite the additional overhead incurred when concatenating residual connections.
+The most impactful model-level optimization for CNNs is achieved by using grouped convolutions. This is done by moving the batch dimension into the channel dimension (`BxHxWxC -> 1xHxWxBC`) and then setting the `groups` parameter equal to `B`. This is beneficial because the sliding window operations (`conv2d`, `max_pool2d`) give a perfect linear speedup because they are entirely bound by the tall shard size. Since these operations make up most of the FLOPs in CNNs, this optimization is a net-performance gain despite the additional overhead incurred when concatenating residual connections.
 
 To preserve the correctness of our grouped convolutions, we must properly concatenate the activations with residual connections. The following figure shows the non-grouped convolution concatenation vs. the grouped convolution:
 

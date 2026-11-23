@@ -111,7 +111,7 @@ std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index}
 TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 auto reader_id = tt_metal::CreateKernel(
     program,
-    "tt_metal/programming_examples/sharding/kernels/reader_sharded_rm.cpp",
+    "tt_metal/programming_examples/shard_data_rm/kernels/reader_sharded_rm.cpp",
     cores,
     tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
 ```
