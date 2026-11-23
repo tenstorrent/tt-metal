@@ -41,15 +41,8 @@ inline void llk_math_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim) {
-    const auto shape_from_tile_dims = [](const std::uint32_t tile_r_dim, const std::uint32_t tile_c_dim) {
-        return ckernel::make_tensor_shape(
-            static_cast<std::uint8_t>(tile_r_dim < FACE_R_DIM ? tile_r_dim : FACE_R_DIM),
-            static_cast<std::uint8_t>(FACE_C_DIM),
-            static_cast<std::uint8_t>(tile_r_dim > FACE_R_DIM ? ckernel::MAX_NUM_FACES_R_DIM : 1),
-            static_cast<std::uint8_t>(tile_c_dim > FACE_C_DIM ? ckernel::MAX_NUM_FACES_C_DIM : 1));
-    };
-    const ckernel::TensorShape in0_tensor_shape = shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
-    const ckernel::TensorShape in1_tensor_shape = shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
+    const ckernel::TensorShape in0_tensor_shape = ckernel::tensor_shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = ckernel::tensor_shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
     LLK_ASSERT(
         in0_tensor_shape.total_row_dim() == in0_tile_r_dim && in0_tensor_shape.total_col_dim() == in0_tile_c_dim &&
             in1_tensor_shape.total_row_dim() == in1_tile_r_dim && in1_tensor_shape.total_col_dim() == in1_tile_c_dim,
@@ -70,13 +63,6 @@ inline void llk_math_matmul_init(
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
 
-    [[maybe_unused]] const std::uint32_t in0_tile_r_dim = get_operand_tile_r_dim(in0_id);
-    [[maybe_unused]] const std::uint32_t in0_tile_c_dim = get_operand_tile_c_dim(in0_id);
-    [[maybe_unused]] const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
-    [[maybe_unused]] const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
-
-    [[maybe_unused]] const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
-
     // In0/operandA -> srcB, In1/operandB -> srcA
     SAN_HOOK(init<OperationFpuMatmul>(
         StateVal<OperationFpuMatmul::MathFidelity>(to_underlying(math_fidelity)),
@@ -85,11 +71,11 @@ inline void llk_math_matmul_init(
         StateVal<OperationFpuMatmul::RtDim>(rt_dim),
         StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[in1_id]),
         StateDiscard<std::uint32_t>(transpose),
-        StateDiscard<std::uint32_t>(in0_tile_r_dim),
-        StateDiscard<std::uint32_t>(in0_tile_c_dim),
-        StateDiscard<std::uint32_t>(in1_tile_r_dim),
-        StateDiscard<std::uint32_t>(in1_tile_c_dim),
-        StateDiscard<bool>(partial_face)));
+        StateDiscard<std::uint32_t>(get_operand_tile_r_dim(in0_id)),
+        StateDiscard<std::uint32_t>(get_operand_tile_c_dim(in0_id)),
+        StateDiscard<std::uint32_t>(get_operand_tile_r_dim(in1_id)),
+        StateDiscard<std::uint32_t>(get_operand_tile_c_dim(in1_id)),
+        StateDiscard<bool>(get_operand_tile_r_dim(in0_id) < FACE_R_DIM)));
 
     llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(
         get_operand_tensor_shape(in0_id), get_operand_tensor_shape(in1_id), transpose, ct_dim, rt_dim);

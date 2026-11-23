@@ -23,13 +23,6 @@ inline void llk_math_matmul_init(
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
 
-    [[maybe_unused]] const std::uint32_t in0_tile_r_dim = get_operand_tile_r_dim(in0_id);
-    [[maybe_unused]] const std::uint32_t in0_tile_c_dim = get_operand_tile_c_dim(in0_id);
-    [[maybe_unused]] const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
-    [[maybe_unused]] const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
-
-    [[maybe_unused]] const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
-
     // In0/operandA -> srcB, In1/operandB -> srcA
     SAN_HOOK(init<OperationFpuMatmul>(
         StateVal<OperationFpuMatmul::MathFidelity>(to_underlying(math_fidelity)),
@@ -38,11 +31,11 @@ inline void llk_math_matmul_init(
         StateVal<OperationFpuMatmul::RtDim>(rt_dim),
         StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[in1_id]),
         StateDiscard<std::uint32_t>(transpose),
-        StateDiscard<std::uint32_t>(in0_tile_r_dim),
-        StateDiscard<std::uint32_t>(in0_tile_c_dim),
-        StateDiscard<std::uint32_t>(in1_tile_r_dim),
-        StateDiscard<std::uint32_t>(in1_tile_c_dim),
-        StateDiscard<bool>(partial_face)));
+        StateDiscard<std::uint32_t>(get_operand_tile_r_dim(in0_id)),
+        StateDiscard<std::uint32_t>(get_operand_tile_c_dim(in0_id)),
+        StateDiscard<std::uint32_t>(get_operand_tile_r_dim(in1_id)),
+        StateDiscard<std::uint32_t>(get_operand_tile_c_dim(in1_id)),
+        StateDiscard<bool>(get_operand_tile_r_dim(in0_id) < FACE_R_DIM)));
 
     _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(
         get_operand_tensor_shape(in0_id), get_operand_tensor_shape(in1_id), transpose, ct_dim, rt_dim);

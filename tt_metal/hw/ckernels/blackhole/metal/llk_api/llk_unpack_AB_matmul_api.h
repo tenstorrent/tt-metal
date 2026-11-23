@@ -106,7 +106,9 @@ inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim) {
     constexpr ckernel::TensorShape partial_shape =
-        ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, 1, ckernel::MAX_NUM_FACES_C_DIM);  // 16x32
+        ckernel::make_tensor_shape(FACE_R_DIM, FACE_C_DIM, 1, ckernel::MAX_NUM_FACES_C_DIM);
+    static_assert(
+        partial_shape.total_row_dim() == 16 && partial_shape.total_col_dim() == 32, "partial shape must be 16x32");
     llk_unpack_AB_matmul_impl(
         base_address_a,
         base_address_b,
