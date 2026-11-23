@@ -422,6 +422,25 @@ its four methods:
 `save_pretrained` writes one. By default it is `model.name`, so the files come from the hub; a provider whose model
 isn't on the hub overrides it. The trainer loads the tokenizer from it too.
 
+### What a model must accept and return
+
+The SFT trainer calls the model `build()` returns as `model(input_ids, None)`, then computes
+`mean(cross_entropy_loss(logits, labels, NONE) * loss_mask)`. With `B` the batch size, `T` the config's `max_length` and
+`V` the vocabulary size:
+
+| Tensor      | Shape          | Layout, dtype       | Role                                                             |
+| ----------- | -------------- | ------------------- | ---------------------------------------------------------------- |
+| `input_ids` | `[B, 1, 1, T]` | ROW_MAJOR, UINT32   | Model input; right-padded with the tokenizer's pad token.        |
+| `logits`    | `[B, 1, T, V]` | TILE, BFLOAT16      | Model output; one row of scores per input position.              |
+| `labels`    | `[B, T]`       | ROW_MAJOR, UINT32   | Cross-entropy target: the next token at each position.           |
+| `loss_mask` | `[B, 1, T, 1]` | TILE, BFLOAT16      | Multiplies the `[B, 1, T, 1]` per-token loss; 0 at padding.      |
+
+The second argument is the attention mask. `None` means the model applies causal attention itself; that is exact
+because padding comes after every real token. `T` is not always a multiple of 32, so a model whose ops need
+tile-aligned sequences pads and slices internally, as the Llama model does around its embedding. The model must also
+provide `parameters()`, `train()` and `eval()`, which the trainer uses for the optimizer, gradient clipping and
+validation.
+
 What a checkpoint holds and how it is laid out is the provider's: `LlamaProvider` writes the layouts in the table under
 [Checkpoints](#checkpoints). Anything else a provider needs it reads itself: `LlamaProvider` reads the model's HF
 `config.json` from `model_source()`. `ttml/experimental/models/utils/` has shared helpers for HF hub models and PEFT
