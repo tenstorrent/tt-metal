@@ -23,7 +23,7 @@ import sys
 import numpy as np
 import pytest
 from dcp_driver import LOGITS_TOLERANCE, RESUME, compare
-from dcp_harness import DRIVER, HERE, TT_RUN, output_lines, run_checked, run_world, tt_run_command
+from dcp_harness import DRIVER, HERE, TIMED_OUT, TT_RUN, output_lines, run_checked, run_world, tt_run_command
 
 # Each child is one process opening a mesh, training or loading a tiny Llama: in CI the whole module takes about
 # 3.5 minutes and its slowest case (two children) 78 s, while on a host reading its files over NFS one child has taken
@@ -211,8 +211,9 @@ def test_a_scrambled_fused_weight_fails_the_logits_check(tmp_path, release_metal
 
 DUAL_RANK_MGD = "tests/ttnn/distributed/config/bh_1x4_dual_rank_mesh_graph_descriptor.textproto"
 TWO_MESH_MGD = os.path.join(HERE, "bh_two_1x2_meshes_one_host.textproto")
-# A tt-run module runs its two-rank tests in one world; on a QuietBox 2 each module takes under three minutes.
-MODULE_TIMEOUT_S = 600
+# A tt-run module runs its two-rank tests in one world; on a QuietBox 2 each takes under a minute. A world that hangs
+# fails within this budget, leaving the leg's time to the tests after it.
+MODULE_TIMEOUT_S = CHILD_TIMEOUT_S
 
 
 def _run_module_on_two_ranks(module: str, mgd: str, env: dict, results: str) -> None:
@@ -229,6 +230,8 @@ def _run_module_on_two_ranks(module: str, mgd: str, env: dict, results: str) -> 
     command = [sys.executable, "-m", "pytest", "-q", "--color=no", "-p", "no:cacheprovider", os.path.join(HERE, module)]
     proc = run_world(tt_run_command(mgd, socket.gethostname(), command), env, MODULE_TIMEOUT_S)
     tail = "\n".join(output_lines(proc)[-60:])
+    # A world that hangs after its ranks wrote their outcomes (in MPI_Finalize, say) is a failure too.
+    assert proc.returncode != TIMED_OUT, f"{module}: the world was terminated after {MODULE_TIMEOUT_S} s:\n{tail}"
     for rank in (0, 1):
         path = os.path.join(results, f"rank-{rank}.json")
         assert os.path.isfile(path), f"{module}: rank {rank} reported no outcome (exit {proc.returncode}):\n{tail}"
