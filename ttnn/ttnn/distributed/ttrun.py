@@ -193,21 +193,21 @@ PHASE1_CACHE_KEY_FILENAME = ".phase1_cache_key"
 PHASE1_CACHE_ID_HEX_LEN = 16
 
 
-def find_signal_helper() -> Tuple[Optional[str], str]:
-    """(path to tt-run-rank, the signal tool, "") or (None, why not): TT_RUN_SIGNAL_HELPER, else the
-    build tree (TT_METAL_HOME or the launch directory), else tt-run-rank on PATH."""
-    override = os.environ.get("TT_RUN_SIGNAL_HELPER")
-    if override:
-        return (override, "") if os.access(override, os.X_OK) else (None, f"no signal tool at {override}")
+def find_tt_run_rank_executable() -> Optional[str]:
+    """tt-run-rank from the build, found like generate_rank_bindings (TT_METAL_HOME, the launch directory, ./build);
+    None when it is not built."""
     roots = [Path(os.environ["TT_METAL_HOME"])] if os.environ.get("TT_METAL_HOME") else []
-    for root in roots + [ORIGINAL_CWD]:
+    for root in roots + [ORIGINAL_CWD, Path(".")]:
         candidate = root / "build" / "tools" / "scaleout" / "tt-run-rank"
         if os.access(candidate, os.X_OK):
-            return str(candidate), ""
-    installed = shutil.which("tt-run-rank")
-    if installed:
-        return installed, ""
-    return None, "tt-run-rank is not built (tools/scaleout, needs the ULFM Open MPI install)"
+            return str(candidate.resolve())
+    return None
+
+
+def find_signal_helper() -> Tuple[Optional[str], str]:
+    """(tt-run-rank, "") to signal the job with, or (None, why not)."""
+    path = find_tt_run_rank_executable()
+    return (path, "") if path else (None, "tt-run-rank is not built (build/tools/scaleout/tt-run-rank)")
 
 
 def mpi_args_timeout(mpi_args: Optional[List[str]]) -> Optional[str]:
@@ -222,16 +222,8 @@ def mpi_args_timeout(mpi_args: Optional[List[str]]) -> Optional[str]:
 
 
 def find_rank_wrapper() -> Optional[str]:
-    """tt-run-rank, the wrapper every rank runs in: TT_RUN_RANK_WRAPPER ("none" turns it off), else the signal
-    tool's binary. None when it is not built."""
-    override = os.environ.get("TT_RUN_RANK_WRAPPER")
-    if override is not None:
-        return override if override not in ("", "none") and os.access(override, os.X_OK) else None
-    helper, _ = find_signal_helper()
-    if helper is None:
-        return None
-    candidate = Path(helper).parent / "tt-run-rank"
-    return str(candidate) if os.access(candidate, os.X_OK) else shutil.which("tt-run-rank")
+    """tt-run-rank, the wrapper every rank runs in; None when it is not built."""
+    return find_tt_run_rank_executable()
 
 
 class LaunchedJob:

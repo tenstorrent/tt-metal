@@ -21,6 +21,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -220,8 +221,12 @@ def test_ttrun_stop_on_each_mpi_install(prefix):
 
 def _ttrun_stop(sig, case, mpi_prefix=None):
     env = {**NP, "PROBE_SCENARIO": "all_hang" if case == "delivered" else "victim_hang"}
-    if case == "no_helper":
-        env["TT_RUN_SIGNAL_HELPER"] = "/nonexistent/tt-run-rank"
+    cwd = None
+    if case == "no_helper":  # a tree with the sources but no build/: tt-run finds no tt-run-rank
+        cwd = Path(tempfile.mkdtemp(prefix="sanity_nobuild_"))
+        for d in ("tt_metal", "tests"):
+            (cwd / d).symlink_to(ROOT / d)
+        env["TT_METAL_HOME"] = str(cwd)
     r = run_case(
         f"ttrun_stop_{signal.Signals(sig).name}_{case}",
         env,
@@ -231,6 +236,7 @@ def _ttrun_stop(sig, case, mpi_prefix=None):
         launcher_ready=(0, "ready"),  # the ranks are up and hanging before we stop them, not still starting
         signal_after=1,
         mpi_prefix=mpi_prefix,
+        cwd=cwd,
     )
     fault_delivered(r)
     ended(r)

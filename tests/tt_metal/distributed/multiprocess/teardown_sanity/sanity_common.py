@@ -316,6 +316,7 @@ def run_case(
     signal_on_marker: str | None = None,  # gate rank_signal on this phase marker file (e.g. "open_enter") not the pid
     phase1_kill: bool = False,  # SIGKILL the first generate_rank_bindings process that appears (new mode)
     mpi_prefix: str | None = None,  # the MPI install for this run (default: TT_SANITY_MPI_PREFIX)
+    cwd: Path | None = None,  # where tt-run starts (default: the repo root)
 ) -> Result:
     cmd = cmd or legacy_cmd()
     piddir = tempfile.mkdtemp(prefix="sanity_pids_")
@@ -330,7 +331,13 @@ def run_case(
     before_shm = _shm()
     t0 = time.time()
     proc = subprocess.Popen(
-        cmd, env=env, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True
+        cmd,
+        env=env,
+        cwd=str(cwd or ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
     )
     sent = []
 

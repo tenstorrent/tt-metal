@@ -55,8 +55,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 @pytest.fixture(autouse=True)
 def _no_rank_wrapper(monkeypatch):
     """Launch lines here are compared verbatim, so they never depend on whether tt-run-rank happens to be built; the
-    wrapper's own tests set TT_RUN_RANK_WRAPPER themselves."""
-    monkeypatch.setenv("TT_RUN_RANK_WRAPPER", "none")
+    wrapper's own tests patch find_rank_wrapper themselves."""
+    monkeypatch.setattr(ttrun_module, "find_rank_wrapper", lambda: None)
 
 
 @pytest.fixture
@@ -1498,19 +1498,19 @@ class TestJobOwnership:
 
     def test_build_mpi_command_runs_each_rank_in_the_wrapper(self, sample_rank_binding_yaml, tmp_path, monkeypatch):
         # Each rank's program runs under tt-run-rank, which stops the job if the program dies; gdbserver launches
-        # and TT_RUN_RANK_WRAPPER=none run the program bare.
+        # and a build without tt-run-rank run the program bare.
         wrapper = tmp_path / "tt-run-rank"
         wrapper.write_text("#!/bin/sh\n")
         wrapper.chmod(0o755)
         config = parse_binding_config(sample_rank_binding_yaml)
-        monkeypatch.setenv("TT_RUN_RANK_WRAPPER", str(wrapper))
+        monkeypatch.setattr(ttrun_module, "find_rank_wrapper", lambda: str(wrapper))
         cmd = build_mpi_command(config, ["python3", "train.py"])
         n = len(config.rank_bindings)
         assert cmd.count(str(wrapper)) == n, cmd
         i = cmd.index(str(wrapper))
         assert cmd[i : i + 4] == [str(wrapper), "--", "python3", "train.py"], cmd
         assert str(wrapper) not in build_mpi_command(config, ["python3", "train.py"], debug_gdbserver=True)
-        monkeypatch.setenv("TT_RUN_RANK_WRAPPER", "none")
+        monkeypatch.setattr(ttrun_module, "find_rank_wrapper", lambda: None)
         assert str(wrapper) not in build_mpi_command(config, ["python3", "train.py"])
 
     # A fake prterun for the stop tests: it publishes the PMIx tool rendezvous file the way prterun does
@@ -1543,7 +1543,7 @@ class TestJobOwnership:
         monkeypatch.setenv("REC", str(rec))
         monkeypatch.setenv("TMPDIR", str(tmp_path))
         monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", str(helper))
+        monkeypatch.setattr(ttrun_module, "find_signal_helper", lambda: (str(helper), ""))
         monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
         monkeypatch.setenv("IGNORE_TERM", "0")
         text, rc = self._logged_rc(
@@ -1588,10 +1588,10 @@ class TestJobOwnership:
         monkeypatch.setenv("REC", str(rec))
         monkeypatch.setenv("TMPDIR", str(tmp_path))
         monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-        monkeypatch.setenv(
-            "TT_RUN_SIGNAL_HELPER",
-            "/nonexistent/tt-run-rank" if case in ("no_helper", "launcher_ignores_force") else str(helper),
+        found = (
+            (None, "tt-run-rank is not built") if case in ("no_helper", "launcher_ignores_force") else (str(helper), "")
         )
+        monkeypatch.setattr(ttrun_module, "find_signal_helper", lambda: found)
         monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1" if case == "grace_expired" else "60")
         monkeypatch.setenv("IGNORE_TERM", "1" if case == "launcher_ignores_force" else "0")
         monkeypatch.setattr(m, "KILL_GRACE_S", 1.0)
@@ -1658,7 +1658,7 @@ class TestJobOwnership:
         monkeypatch.setenv("REC", str(rec))
         monkeypatch.setenv("TMPDIR", str(tmp_path))
         monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", str(helper))
+        monkeypatch.setattr(ttrun_module, "find_signal_helper", lambda: (str(helper), ""))
         monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "60")
         monkeypatch.setenv("IGNORE_TERM", "0")
         return rec
@@ -1710,7 +1710,7 @@ class TestJobOwnership:
         # orphan the ranks, never is (tt-run says it could not pass it on).
         rec = tmp_path / "rec"
         rec.mkdir()
-        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", "/nonexistent/tt-run-rank")
+        monkeypatch.setattr(ttrun_module, "find_signal_helper", lambda: (None, "tt-run-rank is not built"))
         fake = (
             f'trap "echo USR1 >> {rec}/launcher.signals" USR1; trap "echo QUIT >> {rec}/launcher.signals" QUIT; '
             "trap 'exit 130' INT; while :; do sleep 0.1; done"
@@ -1873,8 +1873,7 @@ class TestJobOwnership:
 
         # P19: the launcher's daemon on a host is killed. The rank under it would run on forever (nothing can stop it
         # any more); its tt-run-rank wrapper sees it was reparented and sends its program SIGTERM.
-        monkeypatch.delenv("TT_RUN_RANK_WRAPPER")  # the built one, not the autouse "none"
-        wrapper = m.find_rank_wrapper()
+        wrapper = m.find_tt_run_rank_executable()  # the built one, not the autouse stand-in
         if wrapper is None:
             pytest.skip("tt-run-rank is not built")
         out = tmp_path / "out"
@@ -1927,8 +1926,7 @@ class TestJobOwnership:
         # does nothing. When its stdin closes without "done" (tt-run was SIGKILLed, aborted, crashed) and the launcher
         # still runs, it stops the job as tt-run would: SIGTERM to every rank through job control, then, if the ranks
         # do not exit within the stop grace (or it cannot reach prterun), the force through the launcher.
-        monkeypatch.delenv("TT_RUN_RANK_WRAPPER")  # the built one, not the autouse "none"
-        wrapper = m.find_rank_wrapper()
+        wrapper = m.find_tt_run_rank_executable()  # the built one, not the autouse stand-in
         if wrapper is None:
             pytest.skip("tt-run-rank is not built")
         rec = self._fake_job(tmp_path, monkeypatch, stop_ends_ranks=case == "ttrun_died")
@@ -1940,7 +1938,7 @@ class TestJobOwnership:
                 assert time.time() < end, "the fake launcher did not publish its rendezvous file"
                 time.sleep(0.05)
             read_fd, write_fd = os.pipe()
-            helper = [] if case == "no_helper" else [os.environ["TT_RUN_SIGNAL_HELPER"]]
+            helper = [] if case == "no_helper" else [str(tmp_path / "tt-run-rank")]
             guard = subprocess.Popen(
                 [wrapper, "--guard", str(launcher.pid)] + helper, stdin=read_fd, stderr=subprocess.PIPE, text=True
             )
@@ -2020,7 +2018,7 @@ class TestJobOwnership:
 
         # The CI shape: tt-run forced the job (no signal tool) and the launcher returned with a rank still alive. The
         # stop grace was already spent, so the leftover is ended after the short settle, not after another grace.
-        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", "/nonexistent/tt-run-rank")
+        monkeypatch.setattr(ttrun_module, "find_signal_helper", lambda: (None, "tt-run-rank is not built"))
         running = threading.Event()
 
         def stop():
@@ -2312,7 +2310,7 @@ class TestJobOwnership:
         helper = tmp_path / "tt-run-rank"
         helper.write_text(f'#!/bin/bash\necho "$@" >> "{calls}"\n')
         helper.chmod(0o755)
-        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", str(helper))
+        monkeypatch.setattr(ttrun_module, "find_signal_helper", lambda: (str(helper), ""))
         monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
         monkeypatch.setattr(m, "KILL_GRACE_S", 1.0)
         job = m.LaunchedJob(["true"], Path("."))
