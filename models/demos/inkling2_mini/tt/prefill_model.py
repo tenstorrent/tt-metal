@@ -203,6 +203,9 @@ def _has_r2(dev):
 
 # Expert-op worker columns: 9 x 4 = the 36 gate tiles (11 columns pad them to 44); bit-equal, ~3% less prefill time
 EXPERT_GRID_X = 9
+# Expert-op row groups: the 8 worker rows as independent groups running different experts, so an expert's tail
+# rounds up to 8 / groups tile-rows per core row instead of 8; bit-equal
+EXPERT_ROW_GROUPS = 2  # 4: no faster on prose8k
 
 
 def _has_unified(dev, w_gate_up, w_down, fidelity):
@@ -222,7 +225,11 @@ def _has_unified(dev, w_gate_up, w_down, fidelity):
         dev.arch(), math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=True
     )
     e = [w_gate_up] * NUM_EXPERTS
-    for kw in ({"core_grid_x": EXPERT_GRID_X}, {}):
+    for kw in (
+        {"core_grid_x": EXPERT_GRID_X, "core_row_groups": EXPERT_ROW_GROUPS},
+        {"core_grid_x": EXPERT_GRID_X},
+        {},
+    ):
         try:
             op(x, u32([0] * NUM_EXPERTS), u32([0] * NUM_EXPERTS), u32(list(range(NUM_EXPERTS))), e, e,
                [w_down] * NUM_EXPERTS, 32, compute_kernel_config=ckc, activation=ttnn.RoutedExpertActivation.SituGlu,
