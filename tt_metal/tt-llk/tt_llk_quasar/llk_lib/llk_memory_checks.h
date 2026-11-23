@@ -9,7 +9,6 @@
 #include "core_config.h"
 #include "dev_mem_map.h"
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
-#endif
 
 /**
  * @brief Transform L1 address to the format used by LLK functions
