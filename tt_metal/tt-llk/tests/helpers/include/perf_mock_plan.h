@@ -13,7 +13,7 @@ namespace llk_perf_mock
 constexpr std::uint32_t REPLAY_HANDSHAKES = 32 / 2;        // the replay buffer's 32 instructions, a STALLWAIT and a flip each
 constexpr std::uint32_t MOP_LOOP_MAX      = (1u << 7) - 1; // the MOP expander's 7 bit loop counters
 constexpr std::uint32_t ZMASK_BITS        = 32;            // template 0's zmask: one handshake kind per iteration
-constexpr std::uint32_t MAX_MOPS          = 32;            // template 1 MOPs one segments() pushes back to back
+constexpr std::uint32_t MAX_MOPS          = 32;            // template 1 MOPs one emit_segments() pushes back to back
 constexpr std::uint32_t REUSE_BURST       = 2;             // the matmul scheme's reused handshakes in a row
 
 // A loop count for the MOP expander's 7 bit loop counters that divides n: n itself up to 127, else its largest power of two
@@ -32,7 +32,7 @@ constexpr std::uint32_t mop_loops(const std::uint32_t n)
     return loops;
 }
 
-// How segments() runs periods x (a burst of `burst` handshakes and a run of `run` ones). fits is false when no plan exists.
+// How emit_segments() runs periods x (a burst of `burst` handshakes and a run of `run` ones). fits is false when no plan exists.
 // whole: the inner loop replays a period from the replay buffer; split: that period is the run's first period - REPLAY_HANDSHAKES
 // handshakes and then the buffer; else the inner loop is the run and the burst is replayed around it. buffered is the replay
 // buffer's handshakes, inner and outer the loop counts of a MOP and mops the MOPs pushed.
