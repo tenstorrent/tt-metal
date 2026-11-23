@@ -16,6 +16,9 @@
 namespace ckernel {
 namespace sfpu {
 
+// Bytes between idx_addr and the first mask byte (the tile header).
+constexpr std::uint32_t RESHUFFLE_MASK_HEADER_BYTES = 16;
+
 /**
  * @brief Implements gradient accumulation with row reshuffling for embedding backward pass
  *
@@ -36,7 +39,8 @@ namespace sfpu {
  * - Employs transpose operations to work around SFPLOAD/SFPSTORE 4-row granularity constraints
  * - Processes both even/odd columns simultaneously using +2 offset addressing
  *
- * @param idx_addr: L1 address of the mask tile containing destination row mappings (uint8_t[32])
+ * @param idx_addr: L1 address of the mask (uint8_t[32], byte r is the target row of input row r) minus
+ * RESHUFFLE_MASK_HEADER_BYTES; 4-byte aligned.
  */
 inline void reshuffle_rows_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
@@ -53,10 +57,10 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
     //     TT_SFPSTORE(p_sfpu::LCONST_0, 0, ADDR_MOD_3, output_tile_offset + row + 34);
     // }
 
-    // Skip tile header, hence + 16. The mask is read one 4-row group (4 bytes, little endian) per L1 load, so
-    // idx_addr must be 4-byte aligned (callers pass a CB tile / L1 buffer address minus the 16-byte header).
+    // The mask is read one 4-row group (4 bytes, little endian) per L1 load.
     LLK_ASSERT((idx_addr & 0x3) == 0, "reshuffle_rows: idx_addr must be 4-byte aligned");
-    volatile tt_l1_ptr std::uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(idx_addr + 16);
+    volatile tt_l1_ptr std::uint32_t* idx_ptr =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(idx_addr + RESHUFFLE_MASK_HEADER_BYTES);
 
     // TODO: Add dynamic assert for idx_ptr being within L1 memory bounds
     // using hardware memory map constants: MEM_L1_BASE and MEM_L1_SIZE
@@ -75,7 +79,7 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
         // Rows 12-15 → addr 12 (12 + 0 = 12) Faces 0/1, group 3
         // Rows 16-19 → addr 32 (16 + 16 = 32) Faces 2/3, group 0
         // Rows 20-23 → addr 36 (20 + 16 = 36) Faces 2/3, group 1
-        std::uint32_t input_row_addr = group + (group & 0x10);
+        const std::uint32_t input_row_addr = group + (group & 0x10);
         // Issued ahead of the input loads so the L1 read latency overlaps them
         const std::uint32_t group_dst_rows = idx_ptr[group / 4];
 
