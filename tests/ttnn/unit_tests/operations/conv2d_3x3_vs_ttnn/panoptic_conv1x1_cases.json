@@ -1,0 +1,1809 @@
+[
+ {
+  "layer": "res2.0.shortcut",
+  "calls": 1,
+  "members": [
+   "backbone.res2.0.shortcut"
+  ],
+  "input_height": 128,
+  "input_width": 256,
+  "in_channels": 128,
+  "out_channels": 256,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": null,
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": true,
+   "override_core_grid": null,
+   "act_block_h_override": 320
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    32768,
+    128
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "HEIGHT_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     10,
+     9
+    ]
+   ],
+   "shard_shape": [
+    320,
+    128
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "res2.0.conv1",
+  "calls": 1,
+  "members": [
+   "backbone.res2.0.conv1"
+  ],
+  "input_height": 128,
+  "input_width": 256,
+  "in_channels": 128,
+  "out_channels": 64,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": true,
+   "override_core_grid": null,
+   "act_block_h_override": 320
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    32768,
+    128
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "HEIGHT_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     10,
+     9
+    ]
+   ],
+   "shard_shape": [
+    320,
+    128
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "res2.{0,1,2}.conv3",
+  "calls": 3,
+  "members": [
+   "backbone.res2.0.conv3",
+   "backbone.res2.1.conv3",
+   "backbone.res2.2.conv3"
+  ],
+  "input_height": 128,
+  "input_width": 256,
+  "in_channels": 64,
+  "out_channels": 256,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": null,
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 320
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    32768,
+    64
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "HEIGHT_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     10,
+     8
+    ],
+    [
+     0,
+     9,
+     3,
+     9
+    ]
+   ],
+   "shard_shape": [
+    320,
+    64
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "res2.{1,2}.conv1",
+  "calls": 2,
+  "members": [
+   "backbone.res2.1.conv1",
+   "backbone.res2.2.conv1"
+  ],
+  "input_height": 128,
+  "input_width": 256,
+  "in_channels": 256,
+  "out_channels": 64,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": true,
+   "override_core_grid": null,
+   "act_block_h_override": 320
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    32768,
+    256
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "HEIGHT_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     10,
+     8
+    ],
+    [
+     0,
+     9,
+     3,
+     9
+    ]
+   ],
+   "shard_shape": [
+    320,
+    256
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "res3.0.shortcut",
+  "calls": 1,
+  "members": [
+   "backbone.res3.0.shortcut"
+  ],
+  "input_height": 128,
+  "input_width": 256,
+  "in_channels": 256,
+  "out_channels": 512,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   2,
+   2
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": null,
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 96
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    128,
+    256,
+    256
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "DRAM",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "res3.0.conv1",
+  "calls": 1,
+  "members": [
+   "backbone.res3.0.conv1"
+  ],
+  "input_height": 128,
+  "input_width": 256,
+  "in_channels": 256,
+  "out_channels": 128,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 96
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    128,
+    256,
+    256
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "DRAM",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "res3.{0,1,2,3}.conv3",
+  "calls": 4,
+  "members": [
+   "backbone.res3.0.conv3",
+   "backbone.res3.1.conv3",
+   "backbone.res3.2.conv3",
+   "backbone.res3.3.conv3"
+  ],
+  "input_height": 64,
+  "input_width": 128,
+  "in_channels": 128,
+  "out_channels": 512,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": null,
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 96
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    8192,
+    128
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "HEIGHT_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     10,
+     6
+    ],
+    [
+     0,
+     7,
+     8,
+     7
+    ]
+   ],
+   "shard_shape": [
+    96,
+    128
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "res3.{1,2,3}.conv1",
+  "calls": 3,
+  "members": [
+   "backbone.res3.1.conv1",
+   "backbone.res3.2.conv1",
+   "backbone.res3.3.conv1"
+  ],
+  "input_height": 64,
+  "input_width": 128,
+  "in_channels": 512,
+  "out_channels": 128,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 96
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    8192,
+    512
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "HEIGHT_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     10,
+     6
+    ],
+    [
+     0,
+     7,
+     8,
+     7
+    ]
+   ],
+   "shard_shape": [
+    96,
+    512
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "res4.0.shortcut",
+  "calls": 1,
+  "members": [
+   "backbone.res4.0.shortcut"
+  ],
+  "input_height": 64,
+  "input_width": 128,
+  "in_channels": 512,
+  "out_channels": 1024,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   2,
+   2
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": null,
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": true,
+   "override_core_grid": null,
+   "act_block_h_override": 224,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    64,
+    128,
+    512
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "DRAM",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "res4.0.conv1",
+  "calls": 1,
+  "members": [
+   "backbone.res4.0.conv1"
+  ],
+  "input_height": 64,
+  "input_width": 128,
+  "in_channels": 512,
+  "out_channels": 256,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": true,
+   "override_core_grid": null,
+   "act_block_h_override": 256,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": true,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    64,
+    128,
+    512
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "DRAM",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "res4.{0,1,2,3,4,5}.conv3",
+  "calls": 6,
+  "members": [
+   "backbone.res4.0.conv3",
+   "backbone.res4.1.conv3",
+   "backbone.res4.2.conv3",
+   "backbone.res4.3.conv3",
+   "backbone.res4.4.conv3",
+   "backbone.res4.5.conv3"
+  ],
+  "input_height": 32,
+  "input_width": 64,
+  "in_channels": 256,
+  "out_channels": 1024,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": null,
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 256,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": true,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    2048,
+    256
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "BLOCK_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     7,
+     7
+    ]
+   ],
+   "shard_shape": [
+    256,
+    32
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "res4.{1,2,3,4,5}.conv1",
+  "calls": 5,
+  "members": [
+   "backbone.res4.1.conv1",
+   "backbone.res4.2.conv1",
+   "backbone.res4.3.conv1",
+   "backbone.res4.4.conv1",
+   "backbone.res4.5.conv1"
+  ],
+  "input_height": 32,
+  "input_width": 64,
+  "in_channels": 1024,
+  "out_channels": 256,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": true,
+   "override_core_grid": null,
+   "act_block_h_override": 256,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": true,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    2048,
+    1024
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "BLOCK_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     7,
+     7
+    ]
+   ],
+   "shard_shape": [
+    256,
+    128
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "res5.0.shortcut",
+  "calls": 1,
+  "members": [
+   "backbone.res5.0.shortcut"
+  ],
+  "input_height": 32,
+  "input_width": 64,
+  "in_channels": 1024,
+  "out_channels": 2048,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": null,
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 224,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    32,
+    64,
+    1024
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "DRAM",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "res5.0.conv1",
+  "calls": 1,
+  "members": [
+   "backbone.res5.0.conv1"
+  ],
+  "input_height": 32,
+  "input_width": 64,
+  "in_channels": 1024,
+  "out_channels": 512,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 224,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": true,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    32,
+    64,
+    1024
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "DRAM",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "res5.{0,1,2}.conv3",
+  "calls": 3,
+  "members": [
+   "backbone.res5.0.conv3",
+   "backbone.res5.1.conv3",
+   "backbone.res5.2.conv3"
+  ],
+  "input_height": 32,
+  "input_width": 64,
+  "in_channels": 512,
+  "out_channels": 2048,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": null,
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 224,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": true,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    2048,
+    512
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "BLOCK_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     7,
+     9
+    ]
+   ],
+   "shard_shape": [
+    224,
+    64
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "res5.{1,2}.conv1",
+  "calls": 2,
+  "members": [
+   "backbone.res5.1.conv1",
+   "backbone.res5.2.conv1"
+  ],
+  "input_height": 32,
+  "input_width": 64,
+  "in_channels": 2048,
+  "out_channels": 512,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 224,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": true,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    2048,
+    2048
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "BLOCK_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     7,
+     9
+    ]
+   ],
+   "shard_shape": [
+    224,
+    256
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "aspp.convs.0 (x2 heads)",
+  "calls": 2,
+  "members": [
+   "semantic_head.decoder.res5.project_conv.convs.0",
+   "instance_head.decoder.res5.project_conv.convs.0"
+  ],
+  "input_height": 32,
+  "input_width": 64,
+  "in_channels": 2048,
+  "out_channels": 256,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 256,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": true,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    32,
+    64,
+    2048
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "L1",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "aspp.convs.4 pooling conv (x2 heads)",
+  "calls": 2,
+  "members": [
+   "semantic_head.decoder.res5.project_conv.convs.4.1",
+   "instance_head.decoder.res5.project_conv.convs.4.1"
+  ],
+  "input_height": 1,
+  "input_width": 1,
+  "in_channels": 2048,
+  "out_channels": 256,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 512,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": false,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    1,
+    2048
+   ],
+   "dtype": "BFLOAT16",
+   "layout": "ROW_MAJOR",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "L1",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "aspp.project (x2 heads)",
+  "calls": 2,
+  "members": [
+   "semantic_head.decoder.res5.project_conv.project",
+   "instance_head.decoder.res5.project_conv.project"
+  ],
+  "input_height": 32,
+  "input_width": 64,
+  "in_channels": 1280,
+  "out_channels": 256,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "BlockShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 512,
+   "act_block_w_div": 1,
+   "override_output_sharding_config": false
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": true,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    32,
+    64,
+    1280
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "L1",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "dec res3.project_conv (x2 heads)",
+  "calls": 2,
+  "members": [
+   "semantic_head.decoder.res3.project_conv",
+   "instance_head.decoder.res3.project_conv"
+  ],
+  "input_height": 64,
+  "input_width": 128,
+  "in_channels": 512,
+  "out_channels": 64,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 64
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    64,
+    128,
+    512
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "L1",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "dec res2.project_conv (x2 heads)",
+  "calls": 2,
+  "members": [
+   "semantic_head.decoder.res2.project_conv",
+   "instance_head.decoder.res2.project_conv"
+  ],
+  "input_height": 128,
+  "input_width": 256,
+  "in_channels": 256,
+  "out_channels": 32,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": {
+   "op_type": "RELU",
+   "params": []
+  },
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 64
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    128,
+    256,
+    256
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "INTERLEAVED",
+   "buffer_type": "L1",
+   "shard_grid": null,
+   "shard_shape": null,
+   "shard_orientation": null
+  }
+ },
+ {
+  "layer": "semantic_head.predictor",
+  "calls": 1,
+  "members": [
+   "semantic_head.predictor"
+  ],
+  "input_height": 128,
+  "input_width": 256,
+  "in_channels": 256,
+  "out_channels": 32,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": null,
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 320
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    128,
+    256,
+    256
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "HEIGHT_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     10,
+     8
+    ],
+    [
+     0,
+     9,
+     3,
+     9
+    ]
+   ],
+   "shard_shape": [
+    320,
+    256
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ },
+ {
+  "layer": "center_predictor + offset_predictor",
+  "calls": 2,
+  "members": [
+   "instance_head.center_predictor",
+   "instance_head.offset_predictor"
+  ],
+  "input_height": 128,
+  "input_width": 256,
+  "in_channels": 32,
+  "out_channels": 32,
+  "batch_size": 1,
+  "kernel_size": [
+   1,
+   1
+  ],
+  "stride": [
+   1,
+   1
+  ],
+  "padding": [
+   0,
+   0
+  ],
+  "groups": 1,
+  "dilation": [
+   1,
+   1
+  ],
+  "activation": null,
+  "has_bias": true,
+  "activation_dtype": "BFLOAT8_B",
+  "weights_dtype": "BFLOAT8_B",
+  "output_dtype": "BFLOAT8_B",
+  "output_layout": "TILE",
+  "sharding_strategy": {
+   "type": "HeightShardedStrategyConfiguration",
+   "reshard_if_not_optimal": false,
+   "override_core_grid": null,
+   "act_block_h_override": 64
+  },
+  "slice_strategy": {
+   "type": "L1FullSliceStrategyConfiguration",
+   "num_slices": 0
+  },
+  "math_fidelity": "LoFi",
+  "fp32_dest_acc_en": true,
+  "packer_l1_acc": false,
+  "enable_act_double_buffer": true,
+  "enable_weights_double_buffer": true,
+  "deallocate_activation": true,
+  "reallocate_halo_output": true,
+  "config_tensors_in_dram": true,
+  "input": {
+   "shape": [
+    1,
+    1,
+    32768,
+    32
+   ],
+   "dtype": "BFLOAT8_B",
+   "layout": "TILE",
+   "memory_layout": "HEIGHT_SHARDED",
+   "buffer_type": "L1",
+   "shard_grid": [
+    [
+     0,
+     0,
+     10,
+     8
+    ],
+    [
+     0,
+     9,
+     3,
+     9
+    ]
+   ],
+   "shard_shape": [
+    320,
+    32
+   ],
+   "shard_orientation": "ROW_MAJOR"
+  }
+ }
+]
