@@ -149,6 +149,11 @@ struct HaloGatherKernelConfig {
     std::vector<std::vector<uint16_t>> gather_config0;
     std::vector<std::vector<uint16_t>> gather_config1;
     std::vector<uint16_t> number_of_blocks_per_core;
+    // Block -> gather-RISC assignment (blocked path): blocks [0, left_blocks) write to cores behind this core in NOC-0
+    // order and go to RISC 1 (NOC 1, the short way), blocks [right_block_start, n) write to cores ahead and go to
+    // RISC 0 (NOC 0); the blocks in between alternate. The compute kernel uses the same rule to pick the output CB.
+    std::vector<uint16_t> left_blocks_per_core;
+    std::vector<uint16_t> right_block_start_per_core;
 };
 
 HaloGatherKernelConfig generate_halo_kernel_config_tensors(

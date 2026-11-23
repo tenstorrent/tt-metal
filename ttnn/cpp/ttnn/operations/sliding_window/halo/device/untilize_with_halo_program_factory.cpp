@@ -23,8 +23,11 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-// TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
+// Untilize block height (sticks). 32 is the baseline (one tile row per block); select_untilize_block_size() picks
+// 64 when the shard allows it, halving the per-block CB round trips of the untilize and the gather (#19980).
 constexpr int UNTILIZE_BLOCK_SIZE = 32;
+constexpr int UNTILIZE_BLOCK_SIZE_LARGE = 64;
+constexpr uint32_t UNTILIZE_LARGE_BLOCK_MAX_TILES_PER_ROW = 8;  // keeps the two double-buffered untilize CBs <= 128 KB
 
 // In order to make circular buffer indices sequential, we use variable to keep track of the next available index.
 // Circular buffer indices should be assigned right before their creation.
@@ -77,6 +80,27 @@ void add_cb(
     });
 }
 
+// Pick the untilize block height. The compute kernel untilizes whole blocks and the gather kernels wait/pop whole
+// blocks, so the block must divide the per-core tile rows exactly: the large block is used only when the per-core
+// tile-row count is even (and large enough to matter) and the row is narrow enough for the L1 budget.
+int select_untilize_block_size(const Tensor& input_tensor, uint32_t ncores_nhw) {
+    if (input_tensor.layout() != Layout::TILE) {
+        return UNTILIZE_BLOCK_SIZE;
+    }
+    const auto& input_shape = input_tensor.padded_shape();
+    const auto input_shard_shape = input_tensor.shard_spec().value().shape;
+    const uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
+    const uint32_t rows_per_core = tt::div_up(input_nhw_height, ncores_nhw);
+    const uint32_t tile_rows_per_core = tt::div_up(rows_per_core, tt::constants::TILE_HEIGHT);
+    const uint32_t ntiles_per_row = tt::div_up(input_shard_shape[1], tt::constants::TILE_WIDTH);
+    const uint32_t large_tile_rows = UNTILIZE_BLOCK_SIZE_LARGE / tt::constants::TILE_HEIGHT;
+    if (tile_rows_per_core >= 2 * large_tile_rows && tile_rows_per_core % large_tile_rows == 0 &&
+        ntiles_per_row <= UNTILIZE_LARGE_BLOCK_MAX_TILES_PER_ROW) {
+        return UNTILIZE_BLOCK_SIZE_LARGE;
+    }
+    return UNTILIZE_BLOCK_SIZE;
+}
+
 // Build the per-coord halo ProgramDescriptor.  All workload-scoped
 // intermediate buffers (the four halo config tensors) are passed in by
 // pointer — their owning Tensors live on the WorkloadDescriptor.
@@ -88,9 +112,11 @@ ProgramDescriptor build_halo_program(
     Buffer* padding_config_buffer1,
     Buffer* gather_config_buffer0,
     Buffer* gather_config_buffer1,
-    const std::vector<uint16_t>& number_of_blocks_per_core) {
+    const std::vector<uint16_t>& number_of_blocks_per_core,
+    const std::vector<uint16_t>& left_blocks_per_core,
+    const std::vector<uint16_t>& right_block_start_per_core,
+    int block_size) {
     const auto& pad_val = operation_attributes.pad_val;
-    const int block_size = UNTILIZE_BLOCK_SIZE;
     const uint32_t ncores_nhw = operation_attributes.config.num_cores_nhw;
     const uint32_t max_out_nsticks_per_core = operation_attributes.max_out_nsticks_per_core;
     const bool config_tensors_in_dram = operation_attributes.config_tensors_in_dram;
@@ -216,7 +242,11 @@ ProgramDescriptor build_halo_program(
 
         for (size_t core_id = 0; core_id < cores.size(); core_id++) {
             compute_desc.runtime_args.emplace_back(
-                cores[core_id], std::vector<uint32_t>{number_of_blocks_per_core[core_id]});
+                cores[core_id],
+                std::vector<uint32_t>{
+                    number_of_blocks_per_core[core_id],
+                    left_blocks_per_core[core_id],
+                    right_block_start_per_core[core_id]});
         }
 
         desc.kernels.push_back(std::move(compute_desc));
@@ -304,16 +334,20 @@ ProgramDescriptor build_halo_program(
         // so their device allocations stay valid for the cached workload's
         // lifetime — the address embedded below remains correct on cache hit
         // because the buffers are not re-allocated.
-        core_0_reader_ct_args.push_back(padding_config_buffer0->address());
+        core_0_reader_ct_args.push_back(
+            padding_config_buffer0->address());  // smuggled-rta-ok: pre-existing; workload-owned config tensor
         core_0_reader_ct_args.push_back(padding_config_buffer0->page_size());
 
-        core_0_reader_ct_args.push_back(gather_config_buffer0->address());
+        core_0_reader_ct_args.push_back(
+            gather_config_buffer0->address());  // smuggled-rta-ok: pre-existing; workload-owned config tensor
         core_0_reader_ct_args.push_back(gather_config_buffer0->page_size());
 
-        core_1_reader_ct_args.push_back(padding_config_buffer1->address());
+        core_1_reader_ct_args.push_back(
+            padding_config_buffer1->address());  // smuggled-rta-ok: pre-existing; workload-owned config tensor
         core_1_reader_ct_args.push_back(padding_config_buffer1->page_size());
 
-        core_1_reader_ct_args.push_back(gather_config_buffer1->address());
+        core_1_reader_ct_args.push_back(
+            gather_config_buffer1->address());  // smuggled-rta-ok: pre-existing; workload-owned config tensor
         core_1_reader_ct_args.push_back(gather_config_buffer1->page_size());
 
         tt::tt_metal::TensorAccessorArgs(padding_config_buffer0).append_to(core_0_reader_ct_args);
@@ -359,20 +393,27 @@ ProgramDescriptor build_halo_program(
         .noc = NOC::RISCV_1_default,
     };
 
-    if (config_tensors_in_dram) {
+    {
+        // Runtime args: [0] config page index (used when the config tensors are in DRAM), [1] left_blocks,
+        // [2] right_block_start, [3] number of blocks (block -> RISC assignment, see halo_gather.cpp).
         uint32_t core_index = 0;
-        for (const auto& core : cores) {
-            if (is_height_sharded) {
-                reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{core_index});
-                reader_1_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{core_index});
-            } else if (is_width_sharded) {
-                reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0});
-                reader_1_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0});
-            } else if (is_block_sharded) {
-                const auto nhw_index = is_rm_orientation ? core.y : core.x;
-                reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{nhw_index});
-                reader_1_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{nhw_index});
+        for (size_t core_id = 0; core_id < cores.size(); core_id++) {
+            const auto& core = cores[core_id];
+            uint32_t config_index = 0;
+            if (config_tensors_in_dram) {
+                if (is_height_sharded) {
+                    config_index = core_index;
+                } else if (is_block_sharded) {
+                    config_index = is_rm_orientation ? core.y : core.x;
+                }
             }
+            const std::vector<uint32_t> args{
+                config_index,
+                left_blocks_per_core[core_id],
+                right_block_start_per_core[core_id],
+                number_of_blocks_per_core[core_id]};
+            reader_0_desc.runtime_args.emplace_back(core, args);
+            reader_1_desc.runtime_args.emplace_back(core, args);
             core_index++;
         }
     }
@@ -407,6 +448,7 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
         sliding_window::generate_tensor_metadata(pad_metadata, operation_attributes.config, input_shard_height);
 
     const uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+    const int block_size = select_untilize_block_size(input_tensor, operation_attributes.config.num_cores_nhw);
 
     auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
         tensor_metadata,
@@ -417,7 +459,7 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
         device,
         num_cores_x,
         is_in_tiled,
-        UNTILIZE_BLOCK_SIZE);
+        block_size);
 
     const auto& pad_config0 = kernel_config.pad_config0;
     const auto& pad_config1 = kernel_config.pad_config1;
@@ -488,6 +530,10 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
 
     const auto number_of_blocks_per_core = sliding_window::remap_nhw_scalar_argument_across_full_grid(
         kernel_config.number_of_blocks_per_core, operation_attributes.parallel_config);
+    const auto left_blocks_per_core = sliding_window::remap_nhw_scalar_argument_across_full_grid(
+        kernel_config.left_blocks_per_core, operation_attributes.parallel_config);
+    const auto right_block_start_per_core = sliding_window::remap_nhw_scalar_argument_across_full_grid(
+        kernel_config.right_block_start_per_core, operation_attributes.parallel_config);
 
     // Single-device op: the kernel program is structurally identical for every
     // coord in `tensor_coords` (halo doesn't depend on cluster position).
@@ -501,7 +547,10 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
         pad1_buf,
         gather0_buf,
         gather1_buf,
-        number_of_blocks_per_core);
+        number_of_blocks_per_core,
+        left_blocks_per_core,
+        right_block_start_per_core,
+        block_size);
 
     auto ranges = tensor_coords.ranges();
     workload_descriptor.programs.reserve(ranges.size());
