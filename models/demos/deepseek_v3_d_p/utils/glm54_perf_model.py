@@ -13,9 +13,9 @@ gate 2, G3 = layers 54-77 (MTP excluded on both models). Node names (G1.5, G2.6,
 
 How a stage time is built (``stage_times``):
 
-  * **unchanged GLM-5.3 work, measured** (``Glm53Anchor``): GLM-5.3 run on GLM-5.4's layer ranges, each stage alone
-    on one 8x4 Galaxy, traced, per chunk at the probe depth: ``stage_ms`` for layers 0-25 / 26-53 / 54-77. No
-    theoretical MoE or projection model exists in tree, so the unchanged work is the measured stage itself.
+  * **unchanged GLM-5.3 work, measured** (``Glm53Anchor``): GLM-5.3's layers 0-25 / 26-53 / 54-77 cut by layer acks
+    out of one traced 78-layer run on one 8x4 Galaxy (each layer fed its real predecessor), per chunk at the probe
+    depth. No theoretical MoE or projection model exists in tree, so the unchanged work is the measured span itself.
   * **G2's base is G1's minus its indexers**: pass 2 has no indexer, so all 28 layers are reuse layers (sparse KV
     push at the injected top-k). G2's base = G1's measured time - 7 x ``full_extra_ms``, the measured extra cost of a
     full-indexer layer (indexer + KVPE prefix gather) over a reuse layer at the same depth.
@@ -51,14 +51,16 @@ exclude D2D, as do the stage-by-stage b06u02 measurements the met / unmet rule c
 2026-11-23), so ``slowest_stage_ms``, ``ratio_vs_glm53`` and ``tok_s`` are b06u02-comparable. ``sc4_period_ms`` adds
 the G1->G2 D2D (a pipeline resource of its own when overlapped; its extra segments on G1 and G2 when serialized), and
 ``sc4_tok_s`` rescales it by GLM-5.3's ratio of SC4 CI period to b06u02 slowest stage at the same probe (context
-only: that ratio is 0.75 at 5k and 1.04 at 1020k on the first anchor, so it is not a constant machine factor).
-``g2_d2d_headroom_ms`` is how much serialized D2D G2 absorbs before it, not G1, paces the pipeline.
+only: on the full78 anchor b06u02 runs 2-18% faster than SC4 CI, growing with depth, so it is not a constant
+machine factor). ``g2_d2d_headroom_ms`` is how much serialized D2D G2 absorbs before it, not G1, paces the pipeline.
 
-Tolerance (``TOLERANCE``): G0, G1 and G3 are >= 98% measured GLM-5.3 work, so they carry the anchor's own chunk-to-
-chunk spread (~3%) and its known bias (an offset stage's first layer is fed embeddings, not hidden states): +-10%.
-G2 adds the full-indexer subtraction (the ack-delta estimate and the isolated sparse-MLA CI measurement, #66182,
-differ by up to ~20% at 500k), so +-15%. A measured stage outside its band is a deviation to attribute; beyond 25% it
-is a big gap (knowledge note "Performance models are estimates with a tolerance band not oracles").
+Tolerance (``TOLERANCE``): G0, G1 and G3 are >= 99% measured GLM-5.3 work, so they carry the anchor's chunk-to-chunk
+spread (~3%) and the difference between a 78-layer run's slice and a stage run on its own rank (not measured;
+stage-alone runs of the offset stages were rejected, they feed embeddings to the first layer): +-10%. G2 adds the
+full-indexer subtraction (the full78 ack-delta estimate exceeds the isolated sparse-MLA CI measurement, #66182, by
+0.6-1.0 ms per layer at 50k-500k, i.e. <= 7 ms or ~4% of G2) and new nodes whose implementation does not exist yet: +-15%. A measured stage
+outside its band is a deviation to attribute; beyond 25% it is a big gap (knowledge note "Performance models are
+estimates with a tolerance band not oracles").
 
 Not modelled: MTP; the decode window publication (deferred); the window storage format other than scaled FP8 (a bf16
 joint table would change push bytes, q171.2.5 decides); host-side gaps between chunks; any interference of the D2D
@@ -75,8 +77,8 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config as
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheGeometry
 
 CHUNK = 5120
-# CI probe labels -> probe chunk index (summarize_ci_run.py); the chunk's prefix is index * CHUNK tokens.
-PROBES = {"5k": 0, "50k": 9, "100k": 19, "255k": 50, "510k": 101, "1020k": 203}
+# CI probe labels (summarize_ci_run.py): tokens prefilled through probe chunk 0 / 9 / 19 / 50 / 101 / 203.
+PROBES = ("5k", "50k", "100k", "255k", "510k", "1020k")
 STAGES = ("G0", "G1", "G2", "G3")
 LOOP_LAYERS = 28  # 0-indexed 26..53
 LOOP_FULL_LAYERS = 7  # full-indexer layers among 26..53: 26, 30, ..., 50
@@ -158,7 +160,6 @@ class OpBound:
 
 def _op(
     name: str,
-    hw: Galaxy8x4,
     *,
     matmul_flop: float = 0.0,
     fidelity: str = "HiFi2",
@@ -168,13 +169,13 @@ def _op(
     fixed_ns: float = 0.0,
     sfpu: dict | None = None,
 ) -> OpBound:
-    per_ns = hw.cores * hw.clock_ghz
-    cycles = matmul_flop * FIDELITY_PHASES[fidelity] / hw.matmul_flop_per_cycle_core
-    cycles += eltwise / hw.eltwise_per_cycle_core
+    per_ns = GALAXY.cores * GALAXY.clock_ghz
+    cycles = matmul_flop * FIDELITY_PHASES[fidelity] / GALAXY.matmul_flop_per_cycle_core
+    cycles += eltwise / GALAXY.eltwise_per_cycle_core
     return OpBound(
         name,
         compute_ns=cycles / per_ns,
-        dram_ns=dram_bytes / hw.dram_bytes_per_ns,
+        dram_ns=dram_bytes / GALAXY.dram_bytes_per_ns,
         fabric_ns=fabric_ns,
         fixed_ns=fixed_ns,
         matmul_flop=matmul_flop,
@@ -187,7 +188,7 @@ def _op(
 # --- operation models of the new nodes (per chip) -----------------------------------------------------------------
 
 
-def damp_gate(sc: Scenario, width: str = "scalar", hw: Galaxy8x4 = GALAXY) -> OpBound:
+def damp_gate(sc: Scenario, width: str = "scalar") -> OpBound:
     """G1.7 / G2.12: ``x_k = x + sigmoid(RMSNorm(x) @ W + b) * (h - x)`` on this chip's ``[640, 6144 / tp]`` shard.
 
     RMSNorm: sum of squares (mul + add per element), TP all-reduce of the per-row partial sums, rsqrt, two scaling
@@ -198,24 +199,23 @@ def damp_gate(sc: Scenario, width: str = "scalar", hw: Galaxy8x4 = GALAXY) -> Op
     collective.
     """
     assert width in ("scalar", "channel"), f"unknown gate width {width}"
-    rows, cols = CHUNK // hw.sp, C.EMB_SIZE // hw.tp
+    rows, cols = CHUNK // GALAXY.sp, C.EMB_SIZE // GALAXY.tp
     elems = rows * cols
     act = elems * HIDDEN_BYTES
     eltwise = 4 * elems + 3 * elems  # norm: square, sum, two scalings; lerp: subtract, multiply, add
-    fabric = hw.ccl_ns("all_reduce", "line", hw.tp, rows * 4)  # norm partial sums, fp32
+    fabric = GALAXY.ccl_ns("all_reduce", "line", GALAXY.tp, rows * 4)  # norm partial sums, fp32
     if width == "scalar":
         matmul = 2 * elems
         weight = cols * HIDDEN_BYTES
         betas = rows
-        fabric += hw.ccl_ns("all_reduce", "line", hw.tp, rows * 4)
+        fabric += GALAXY.ccl_ns("all_reduce", "line", GALAXY.tp, rows * 4)
     else:
         matmul = 2 * rows * C.EMB_SIZE * cols
         weight = C.EMB_SIZE * cols * HIDDEN_BYTES
         betas = elems
-        fabric += hw.ccl_ns("all_gather", "line", hw.tp, act)
+        fabric += GALAXY.ccl_ns("all_gather", "line", GALAXY.tp, act)
     return _op(
         f"damp_gate[{width}]",
-        hw,
         matmul_flop=matmul,
         eltwise=eltwise,
         dram_bytes=3 * act + weight,  # read x and h, write x_k, read the weight shard
@@ -225,14 +225,14 @@ def damp_gate(sc: Scenario, width: str = "scalar", hw: Galaxy8x4 = GALAXY) -> Op
     )
 
 
-def keep_pass_input(sc: Scenario, hw: Galaxy8x4 = GALAXY) -> OpBound:
+def keep_pass_input(sc: Scenario) -> OpBound:
     """G1.2 / G2.3: copy the pass input x0 / x1 (``[640, 1536]`` bf16 per chip) into a persistent buffer, because the
     traced D2D drain refills the input buffer every chunk. One copy per chunk."""
-    act = (CHUNK // hw.sp) * (C.EMB_SIZE // hw.tp) * HIDDEN_BYTES
-    return _op("keep_pass_input", hw, dram_bytes=2 * act, fixed_ns=sc.launch_ns)
+    act = (CHUNK // GALAXY.sp) * (C.EMB_SIZE // GALAXY.tp) * HIDDEN_BYTES
+    return _op("keep_pass_input", dram_bytes=2 * act, fixed_ns=sc.launch_ns)
 
 
-def two_bank_attention_delta(sc: Scenario, hw: Galaxy8x4 = GALAXY) -> OpBound:
+def two_bank_attention_delta(sc: Scenario) -> OpBound:
     """G2.9: what one pass-2 attention core adds over a GLM-5.3 reuse layer's, per layer.
 
     The bank-A select (G2.8) is the reuse layer's push at the injected top-k, so it is not counted again. Added:
@@ -243,7 +243,7 @@ def two_bank_attention_delta(sc: Scenario, hw: Galaxy8x4 = GALAXY) -> OpBound:
         their exp, and their reads (once per chip when ``window_reuse``, once per query otherwise).
     Launches: table build and index-list build.
     """
-    q = CHUNK // hw.chips
+    q = CHUNK // GALAXY.chips
     heads, latent, rope = C.NUM_ATTENTION_HEADS, C.KV_LORA_RANK, C.QK_ROPE_HEAD_DIM
     pairs = q * WINDOW
     table_rows = q + WINDOW - 1
@@ -253,7 +253,6 @@ def two_bank_attention_delta(sc: Scenario, hw: Galaxy8x4 = GALAXY) -> OpBound:
     dram += window_reads * KVPE_PAGE_BYTES + q * WINDOW * INDEX_BYTES
     return _op(
         "two_bank_attention_delta",
-        hw,
         matmul_flop=2 * pairs * heads * (2 * latent + rope),
         eltwise=pairs * heads * 3,  # scale, running max/sum update
         dram_bytes=dram,
@@ -262,47 +261,47 @@ def two_bank_attention_delta(sc: Scenario, hw: Galaxy8x4 = GALAXY) -> OpBound:
     )
 
 
-def sp_halo(sc: Scenario, hw: Galaxy8x4 = GALAXY) -> OpBound:
+def sp_halo(sc: Scenario) -> OpBound:
     """G2.6: the first 127 window rows of SP shard s come from shard s-1 of the same chunk, per layer.
 
     ``p2p``: 127 pass-2 latent pages from the predecessor (a 2-device line all-gather's cost, one hop).
     ``sp_all_gather``: the graph's default, an SP all-gather of the chunk's 640-row shards (8-device ring).
     The receiver writes what arrives."""
-    rows = CHUNK // hw.sp
+    rows = CHUNK // GALAXY.sp
     if sc.halo == "p2p":
         sent = (WINDOW - 1) * KVPE_PAGE_BYTES
-        fabric = hw.ccl_ns("all_gather", "line", 2, sent)
+        fabric = GALAXY.ccl_ns("all_gather", "line", 2, sent)
         received = sent
     else:
-        fabric = hw.ccl_ns("all_gather", "ring", hw.sp, rows * KVPE_PAGE_BYTES)
-        received = (hw.sp - 1) * rows * KVPE_PAGE_BYTES
-    return _op(f"sp_halo[{sc.halo}]", hw, dram_bytes=2 * received, fixed_ns=fabric)
+        fabric = GALAXY.ccl_ns("all_gather", "ring", GALAXY.sp, rows * KVPE_PAGE_BYTES)
+        received = (GALAXY.sp - 1) * rows * KVPE_PAGE_BYTES
+    return _op(f"sp_halo[{sc.halo}]", dram_bytes=2 * received, fixed_ns=fabric)
 
 
-def window_carry(sc: Scenario, hw: Galaxy8x4 = GALAXY) -> OpBound:
+def window_carry(sc: Scenario) -> OpBound:
     """G2.7: keep the chunk's last 127 pass-2 latent rows per loop layer per user (read + write), one copy. The
     next chunk's read of the carry is in ``two_bank_attention_delta``'s table build."""
-    return _op("window_carry", hw, dram_bytes=2 * (WINDOW - 1) * KVPE_PAGE_BYTES, fixed_ns=sc.launch_ns)
+    return _op("window_carry", dram_bytes=2 * (WINDOW - 1) * KVPE_PAGE_BYTES, fixed_ns=sc.launch_ns)
 
 
-def bank_a_page_copy(sc: Scenario, hw: Galaxy8x4 = GALAXY) -> OpBound:
+def bank_a_page_copy(sc: Scenario) -> OpBound:
     """G2.2 option (a): copy the 160 pass-1 KVPE pages this chip stored per layer on G1 from the received D2D segment
     into the same (user, layer) slot positions of bank A, per layer. Replaces nothing: pass 2's own latent goes to
     the window (G2.5), and its write is costed as the reuse layer's KV write it replaces."""
-    pages = CHUNK // hw.chips
-    return _op("bank_a_page_copy", hw, dram_bytes=2 * pages * KVPE_PAGE_BYTES, fixed_ns=sc.launch_ns)
+    pages = CHUNK // GALAXY.chips
+    return _op("bank_a_page_copy", dram_bytes=2 * pages * KVPE_PAGE_BYTES, fixed_ns=sc.launch_ns)
 
 
-def g1_collect(sc: Scenario, hw: Galaxy8x4 = GALAXY) -> OpBound:
+def g1_collect(sc: Scenario) -> OpBound:
     """G1.5 + G1.6, per chunk: slice the 160 KVPE pages stored per loop layer into the send buffer (28 copies), and
     keep the 7 top-k sets ``[160, 2048]`` u32 (resident, or copied into the send buffer when ``topk_copy``)."""
-    q = CHUNK // hw.chips
+    q = CHUNK // GALAXY.chips
     dram = LOOP_LAYERS * 2 * q * KVPE_PAGE_BYTES
     launches = LOOP_LAYERS
     if sc.topk_copy:
         dram += LOOP_FULL_LAYERS * 2 * q * C.INDEX_TOPK * INDEX_BYTES
         launches += LOOP_FULL_LAYERS
-    return _op("g1_collect", hw, dram_bytes=dram, fixed_ns=launches * sc.launch_ns)
+    return _op("g1_collect", dram_bytes=dram, fixed_ns=launches * sc.launch_ns)
 
 
 def d2d_payload_bytes(boundary: str) -> float:
@@ -317,12 +316,12 @@ def d2d_payload_bytes(boundary: str) -> float:
 SEAM_GB_S = 16 * GALAXY.link_bytes_per_ns  # q171.3.2's SC4 seam: 16 cables x 25 GB/s per direction (assumption)
 
 
-def d2d_transfer(boundary: str, seam_gb_s: float = SEAM_GB_S, hw: Galaxy8x4 = GALAXY) -> OpBound:
+def d2d_transfer(boundary: str, seam_gb_s: float = SEAM_GB_S) -> OpBound:
     """X.8: one chunk's payload over the inter-Galaxy seam at ``seam_gb_s`` (decimal GB/s = bytes/ns, per direction;
     pass q171.3.2's measured effective rate when known). Per chip, the sender reads and the receiver writes its 1/32
     share. Socket set-up, relay hops inside each Galaxy and flow control are not modelled."""
     payload = d2d_payload_bytes(boundary)
-    return _op(f"d2d[{boundary}]", hw, dram_bytes=payload / hw.chips, fabric_ns=payload / seam_gb_s)
+    return _op(f"d2d[{boundary}]", dram_bytes=payload / GALAXY.chips, fabric_ns=payload / seam_gb_s)
 
 
 # --- composition --------------------------------------------------------------------------------------------------
@@ -332,10 +331,14 @@ def d2d_transfer(boundary: str, seam_gb_s: float = SEAM_GB_S, hw: Galaxy8x4 = GA
 class Glm53Anchor:
     """Measured GLM-5.3 costs by probe label (ms per chunk at the probe depth).
 
-    ``stage_ms``: GLM-5.3 run on GLM-5.4's ranges ``G0`` (layers 0-25), ``G1`` (26-53), ``G3`` (54-77);
-    ``full_extra_ms``: a full-indexer layer's cost over a reuse layer's; ``glm53_slowest_ms``: GLM-5.3's slowest stage
-    on its own production split, measured the same way (the met / unmet reference); ``sc4_ci_tok_s``: GLM-5.3's SC4 CI
-    throughput (optional, context)."""
+    Stage time is ``period_ms``: from the ack of the layer before the stage (the previous chunk's retire for the first
+    stage) to the stage's last layer ack, median over chunks d-4..d+4. It spans every layer of the stage, including the
+    first layer's work before its KV-write ack (a full-indexer layer's indexer); first-to-last ack (CI chunk_time) does
+    not. Measure GLM-5.4 stages the same way.
+
+    ``stage_ms``: GLM-5.3 layers ``G0`` (0-25), ``G1`` (26-53), ``G3`` (54-77); ``full_extra_ms``: a full-indexer
+    layer's cost over a reuse layer's; ``glm53_slowest_ms``: GLM-5.3's slowest stage on its own production split
+    (the met / unmet reference); ``sc4_ci_tok_s``: GLM-5.3's SC4 CI throughput (optional, context)."""
 
     stage_ms: dict
     full_extra_ms: dict
@@ -372,19 +375,17 @@ class StageTime:
         return self.total_ms * (1 - tol), self.total_ms * (1 + tol)
 
 
-def stage_times(
-    probe: str, anchor: Glm53Anchor, sc: Scenario, gate_width: str = "scalar", hw: Galaxy8x4 = GALAXY
-) -> dict:
-    """GLM-5.4 stage times for the chunk at ``probe``, each stage alone (no D2D), as the b06u02 stage-by-stage
-    measurements the met / unmet rule compares."""
+def stage_times(probe: str, anchor: Glm53Anchor, sc: Scenario, gate_width: str = "scalar") -> dict:
+    """GLM-5.4 stage times for the chunk at ``probe`` without D2D, in the anchor's ``period_ms`` definition (the
+    stage's whole layer span), as the b06u02 measurements the met / unmet rule compares."""
     ms = lambda op: op.time_ns / 1e6
-    gate = ms(damp_gate(sc, gate_width, hw))
-    keep = ms(keep_pass_input(sc, hw))
+    gate = ms(damp_gate(sc, gate_width))
+    keep = ms(keep_pass_input(sc))
     per_layer = {
-        "two_bank_attention_delta": two_bank_attention_delta(sc, hw),
-        "sp_halo": sp_halo(sc, hw),
-        "window_carry": window_carry(sc, hw),
-        "bank_a_page_copy": bank_a_page_copy(sc, hw),
+        "two_bank_attention_delta": two_bank_attention_delta(sc),
+        "sp_halo": sp_halo(sc),
+        "window_carry": window_carry(sc),
+        "bank_a_page_copy": bank_a_page_copy(sc),
     }
     g2_nodes = {name: LOOP_LAYERS * ms(op) for name, op in per_layer.items()}
     g2_nodes.update(keep_pass_input=keep, damp_gate=gate)
@@ -392,7 +393,7 @@ def stage_times(
     return {
         "G0": StageTime("G0", s["G0"][probe], {}),
         "G1": StageTime(
-            "G1", s["G1"][probe], {"keep_pass_input": keep, "damp_gate": gate, "g1_collect": ms(g1_collect(sc, hw))}
+            "G1", s["G1"][probe], {"keep_pass_input": keep, "damp_gate": gate, "g1_collect": ms(g1_collect(sc))}
         ),
         "G2": StageTime("G2", s["G1"][probe] - LOOP_FULL_LAYERS * anchor.full_extra_ms[probe], g2_nodes),
         "G3": StageTime("G3", s["G3"][probe], {}),
@@ -448,15 +449,14 @@ def pipeline(
     sc: Scenario,
     gate_width: str = "scalar",
     seam_gb_s: float = SEAM_GB_S,
-    hw: Galaxy8x4 = GALAXY,
 ) -> PipelinePrediction:
     """Per-stage times, D2D, and the composed period and throughput of the 4-stage pipeline at ``probe``.
 
     The activation hop exists on every GLM-5.3 boundary too and stays inside the SC4 rescaling; in the serialized
     scenario only G1->G2's extra segments (KVPE rows and top-k sets) add to G1's and G2's periods."""
     assert probe in PROBES, f"unknown probe {probe}"
-    stages = stage_times(probe, anchor, sc, gate_width, hw)
-    d2d = {b: d2d_transfer(b, seam_gb_s, hw).time_ns / 1e6 for b in ("G0->G1", "G1->G2", "G2->G3")}
+    stages = stage_times(probe, anchor, sc, gate_width)
+    d2d = {b: d2d_transfer(b, seam_gb_s).time_ns / 1e6 for b in ("G0->G1", "G1->G2", "G2->G3")}
     periods = {k: v.total_ms for k, v in stages.items()}
     if sc.d2d == "overlapped":
         periods.update(d2d)
