@@ -153,6 +153,9 @@ CASES = [
     BlockCase("glm53", "4x4-sp1", 10240),
     BlockCase("kimi_k3", "4x4-sp1", 10240),
     BlockCase("glm53", "4x4-sp1", 2560, pad=(2560, 2560 + 1600)),
+    # Kimi-K3.1's production stage (its runner's 4x4 manifests: SP=4 on mesh axis 1, one 2,560-token chunk a forward) on
+    # K3.1's own config: K3's MoE, the mesh opened with K3.1's L1_SMALL_SIZE
+    BlockCase("kimi_k3_1", "4x4-sp1", 2560),
 ]
 
 
@@ -389,6 +392,7 @@ BLOCK_US = {
     "kimi_k3-8x4-10240": (870.3, 324.8, 1686.2, 248.0),
     "kimi_k3-8x4-5120": (408.3, 184.4, 1495.9, 140.0),  # (moe_tail: 137.9 us uncapped, 151.2 us on an 8 kW CI Galaxy)
     "kimi_k3-8x4-5120-weka-L1": (427.1, 203.2, 1542.2, 163.3),
+    "kimi_k3_1-4x4-sp1-2560": (529.8, 158.5, 2653.9, 152.2),  # (14 kW CI Galaxy)
     "minimax_m3-2x4-2048-c2048": (564.8, 195.7, 1345.9, 85.6),
     "minimax_m3-2x4-4096-4xc1024": (1107.0, 345.0, 1440.9, 153.0),
     "minimax_m3-2x4-5120-c5120": (1292.0, 431.8, 1483.2, 185.9),
