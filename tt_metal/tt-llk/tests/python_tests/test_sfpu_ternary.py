@@ -19,6 +19,7 @@ from helpers.llk_params import (
     MathOperation,
     PerfRunType,
     Transpose,
+    VectorMode,
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
@@ -46,16 +47,17 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     ITERATIONS,
     LOOP_FACTOR,
+    MATH_OP,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     PERF_RUN_TYPE,
     SFPU_CLOBBER_LREGS,
-    SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    VECTOR_MODE,
 )
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 
@@ -99,7 +101,7 @@ def _sfpu_ternary_compile_params(
     mathop, approx_mode, tile_count, loop_factor, faces_to_generate
 ):
     return [
-        SFPU_TERNARY_OP(mathop),
+        MATH_OP(mathop=mathop),
         SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
         APPROX_MODE(approx_mode),
         ITERATIONS(_SFPU_ITERATIONS),
@@ -108,6 +110,8 @@ def _sfpu_ternary_compile_params(
         NUM_FACES(num_faces=faces_to_generate),
         UNPACK_TRANS_FACES(Transpose.No),
         UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        # The kernel runs the op over all rows and columns of the tile.
+        VECTOR_MODE(VectorMode.RC),
     ]
 
 
@@ -143,7 +147,7 @@ def _run_sfpu_ternary(
     if is_perf:
         # Literal list: the perf schema gate reads templates= and runtimes= lists.
         templates = [
-            SFPU_TERNARY_OP(mathop),
+            MATH_OP(mathop=mathop),
             SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
             APPROX_MODE(approx_mode),
             ITERATIONS(_SFPU_ITERATIONS),
@@ -152,10 +156,10 @@ def _run_sfpu_ternary(
             NUM_FACES(num_faces=faces_to_generate),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            VECTOR_MODE(VectorMode.RC),
+            SFPU_CLOBBER_LREGS(clobber_lregs),
             DEST_SYNC(),
         ]
-        if clobber_lregs:
-            templates.append(SFPU_CLOBBER_LREGS())
         runtimes = []
         # C must exist so L1_TO_L1 builds the third Operand; values are unused.
         perf_c = torch.zeros(input_dimensions)

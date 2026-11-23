@@ -15,7 +15,6 @@ Divisors are kept away from 0 (|b| + 0.5); the model's count is clamped to >= 1.
 
 import pytest
 
-import ttnn
 from models.experimental.ops.quasar.tests.vad_variant_ops import op_utils as U
 
 Q, E = U.NUM_QUERY, U.EMBED
@@ -37,7 +36,7 @@ SCALAR_CASES = [
 def test_div(ttnn_mesh_device, reset_seeds, a_shape, b_shape, a_dt, b_dt, a_mem, b_mem, out_mem):
     U.run_binary(
         ttnn_mesh_device,
-        ttnn.div,
+        U.op("div"),
         lambda x, y: x / y,
         a_shape,
         b_shape,
@@ -57,5 +56,5 @@ def test_div_scalar(ttnn_mesh_device, reset_seeds, shape, dt, mem, scalar):
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape)
     x = U.to_tt_mem(x_torch, mesh, mem, dtype=U.DTYPES[dt])
-    out = ttnn.div(x, scalar, memory_config=U.resolve_memcfg(mem, mesh))
+    out = U.op("div")(x, scalar, memory_config=U.resolve_memcfg(mem, mesh))
     U.assert_pcc(x_torch.float() / scalar, out, pcc=0.999, mesh_device=mesh)

@@ -108,6 +108,8 @@ struct ComputeHardwareConfig {
     // If no mode is specified for a (consumed-from) DFB, UnpackToSrc is assumed.
     // However, if enable_32_bit_dest is true and the DFB carries a 32-bit format, you must
     // EXPLICITLY specify an UnpackMode for that DFB. (Enforced by validation checks.)
+    // On Quasar, a consumed Int16 DFB with enable_32_bit_dest set also requires UnpackToDest.
+    // The FPU cannot datacopy Int16 into a 32-bit Dest. UnpackToDest is the SFPU typecast path.
     //
     using ComputeUnpackModes = Table<DFBSpecName, tt::tt_metal::UnpackMode>;
     ComputeUnpackModes unpack_modes;
@@ -116,7 +118,7 @@ struct ComputeHardwareConfig {
     // Optional and unset by default. Each config applies only to the architecture named in
     // its header, and is ignored on any other.
     // NOTE: The target architecture is selected at program construction time.
-    //       See MakeProgramFromSpec for more details.
+    //       See Program(MeshDevice&, const ProgramSpec&) for more details.
 
     // ---- TT-1.x.x specific (Wormhole, Blackhole) ----
     struct Compute1XXConfig {

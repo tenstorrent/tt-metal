@@ -14,6 +14,7 @@ set(CPACK_DEBIAN_NN_PACKAGE_SECTION "libs")
 set(CPACK_DEBIAN_NN-DEV_PACKAGE_SECTION "devel")
 set(CPACK_DEBIAN_NN-EXAMPLES_PACKAGE_SECTION "doc")
 set(CPACK_DEBIAN_NN-VALIDATION_PACKAGE_SECTION "utils")
+set(CPACK_DEBIAN_ML-VALIDATION_PACKAGE_SECTION "utils")
 
 set(CPACK_DEBIAN_COMPRESSION_TYPE zstd)
 set(CPACK_THREADS 0) # Enable multithreading for compression
@@ -181,5 +182,16 @@ cpack_add_component(
     DESCRIPTION "TT-Train runtime library"
 )
 cpack_add_component(ttml GROUP ml)
+
+cpack_add_component_group(ml-validation)
+cpack_add_component(
+    ml-validation
+    DEPENDS
+        nn
+        metalium
+    GROUP ml-validation
+    DESCRIPTION "TT-Train validation tools"
+)
+cpack_add_component(ttml-validation GROUP ml-validation)
 
 include(CPack)

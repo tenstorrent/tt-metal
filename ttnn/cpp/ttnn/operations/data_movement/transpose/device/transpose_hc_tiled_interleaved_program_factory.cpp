@@ -161,7 +161,11 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
     if (C % tile_shape[1] != 0) {
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
         num_writes = max_padding_write / num_packed_values;
-        padding_val_packed = pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
+        // INT32 pad values arrive as the int32 bit pattern carried in the float (the INT32 max/min
+        // reductions pad with INT32_MIN + 1 and INT32_MAX this way), so keep those bits.
+        padding_val_packed = input_tensor.dtype() == DataType::INT32
+                                 ? std::bit_cast<uint32_t>(pad_value)
+                                 : pack_scalar_into_uint32(input_tensor.dtype(), pad_value);
     }
 
     // The reader is the shared Metal 2.0 fork that the permute op also binds; its binding

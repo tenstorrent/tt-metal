@@ -20,7 +20,7 @@
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -101,7 +101,7 @@ Program MakeTensixPrependProgram(distributed::MeshDevice& mesh_device, const Cor
         .work_units = {WorkUnitSpec{
             .name = "main", .kernels = {kBrisc, kNcrisc, kCompute}, .target_nodes = NodeRange{cores}}},
     };
-    return tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
+    return tt_metal::Program(mesh_device, spec);
 }
 
 void RunTest(

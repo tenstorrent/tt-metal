@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import eh_proj_to_tt_layout
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 
 class TtFusedMTP(LightweightModule):
@@ -135,6 +136,7 @@ class TtFusedMTP(LightweightModule):
                 dtype=weights_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
                 cache_file_name=cache_file_name,
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         if eh_proj_weight is not None:
@@ -280,6 +282,9 @@ class TtMTPModule(LightweightModule):
             topology=topology,
             tp_axis=tp_axis,
             weight_cache_path=weight_cache_path,
+            # (the MTP layer's MoE: the model's default (tt/moe_impl.py; GLM-5.3 the MoE block - its gate / shared expert
+            # from the checkpoint's layer mtp_layer_idx, its routed experts from this cache's TtMoe tensorbins) unless the
+            # caller passes moe_impl)
             **block_kwargs,
         )
 
@@ -319,9 +324,16 @@ class TtMTPModule(LightweightModule):
 
         Returns ``(x, out, out_head_normed, *block_extras)``; ``out_head_normed`` is what the next level
         consumes. Both are None when the level runs kv_only.
+
+        A ``chunks`` keyword (None in the traced packed form) runs the block packed (TtPrefillBlock.forward_packed).
         """
         x = self.fused(embed, hidden)
-        out, *extras = self.layer(x, rope_tensors, kvpe_cache, **fwd_kwargs)
+        packed = "chunks" in fwd_kwargs
+        chunks = fwd_kwargs.pop("chunks", None)
+        if packed:
+            out, *extras = self.layer.forward_packed(x, rope_tensors, kvpe_cache, chunks, **fwd_kwargs)
+        else:
+            out, *extras = self.layer(x, rope_tensors, kvpe_cache, **fwd_kwargs)
         out_head_normed = self.shared_head_norm(out) if out is not None else None
         return (x, out, out_head_normed, *extras)
 
@@ -479,7 +491,10 @@ class TtMTPPredictor(LightweightModule):
             h = out_head_normed
 
         if shared_indices is not None and not return_indexer_indices:
-            ttnn.deallocate(shared_indices)
+            # A packed forward's indices are one tensor per chunk (None for an empty one).
+            for t in shared_indices if isinstance(shared_indices, list) else [shared_indices]:
+                if t is not None:
+                    ttnn.deallocate(t)
 
         return MTPPredictorOutput(
             x=xs,

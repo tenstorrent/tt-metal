@@ -6,7 +6,8 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -16,13 +17,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm::quasar_idma {
 
-bool should_skip_test() {
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch != tt::ARCH::QUASAR) {
-        return true;
-    }
-    return std::getenv("TT_METAL_SIMULATOR") == nullptr;
-}
+bool should_skip_test() { return tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::QUASAR; }
 
 constexpr auto kIdmaBasic =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/idma_basic_example.cpp";
@@ -55,11 +50,11 @@ void run_kernel(
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
@@ -188,7 +183,7 @@ class QuasarIdmaOps : public QuasarMeshDeviceSingleCardFixture {};
 
 TEST_F(QuasarIdmaOps, IDMA_Basic) {
     if (unit_tests::dm::quasar_idma::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     // Host writes pattern to src, kernel copies 16*8=128 B to dst, host verifies dst==src
     EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_basic_test(this->device()));
@@ -196,7 +191,7 @@ TEST_F(QuasarIdmaOps, IDMA_Basic) {
 
 TEST_F(QuasarIdmaOps, IDMA_1D_Strided) {
     if (unit_tests::dm::quasar_idma::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     // Host writes pattern to src, kernel copies 10 elements with src_stride=16 B to dst linearly
     EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_1d_strided_test(this->device()));

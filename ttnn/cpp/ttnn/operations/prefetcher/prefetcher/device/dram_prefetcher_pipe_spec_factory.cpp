@@ -14,7 +14,6 @@
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
 
 #include "dram_prefetcher_program_factory.hpp"
 
@@ -36,6 +35,7 @@ using tt::tt_metal::KernelSpec;
 using tt::tt_metal::KernelSpecName;
 using tt::tt_metal::ProgramRunArgs;
 using tt::tt_metal::ProgramSpec;
+using tt::tt_metal::TensorBinding;
 using tt::tt_metal::TensorParameter;
 using tt::tt_metal::TensorParamName;
 using tt::tt_metal::WorkUnitSpec;
@@ -63,7 +63,6 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
     const CoreRangeSet reader_core_range(std::vector<CoreRange>(reader_cores.begin(), reader_cores.end()));
 
     const DFBSpecName STAGING_DFB{"staging"};
-    const DFBSpecName ADDRS_DFB{"addrs"};
     const DFBSpecName SYNC_DFB{"sync"};
     const TensorParamName TENSOR_ADDRS{"tensor_addrs"};
     const KernelSpecName READER{"reader"};
@@ -80,13 +79,6 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
             .unique_id = STAGING_DFB,
             .entry_size = geometry.max_tile_size,
             .num_entries = staging_num_entries,
-        },
-        // The weight addresses, read in place from the address tensor's shard on each reader.
-        DataflowBufferSpec{
-            .unique_id = ADDRS_DFB,
-            .entry_size = tensor_addrs.mesh_buffer().aligned_page_size(),
-            .num_entries = 1,
-            .borrowed_from = TENSOR_ADDRS,
         },
         // The writer's exit signal to the reader (see the kernels comment below). Only the push carries
         // meaning, so one entry of the smallest size.
@@ -147,14 +139,12 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
                     .dfb_spec_name = STAGING_DFB,
                     .accessor_name = "staging",
                     .endpoint_type = DFBEndpointType::PRODUCER},
-                // Only the reader touches the addresses, so it holds both endpoints.
-                DFBBinding{
-                    .dfb_spec_name = ADDRS_DFB, .accessor_name = "addrs", .endpoint_type = DFBEndpointType::PRODUCER},
-                DFBBinding{
-                    .dfb_spec_name = ADDRS_DFB, .accessor_name = "addrs", .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{
                     .dfb_spec_name = SYNC_DFB, .accessor_name = "sync", .endpoint_type = DFBEndpointType::CONSUMER},
             },
+        // The reader reads the weight addresses in place from this tensor's shard on its own core, so it
+        // takes the shard as a LocalTensorAccessor rather than through a buffer.
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = TENSOR_ADDRS, .accessor_name = "addrs"}},
         .compile_time_args =
             {
                 {"num_layers", num_layers},

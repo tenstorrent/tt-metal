@@ -27,6 +27,13 @@ import ttnn
 from models.experimental.ops.quasar.tests.vad_variant_ops import op_utils as U
 
 Q, E = U.NUM_QUERY, U.EMBED
+
+
+def _add():
+    """ttnn.add, or its Quasar port on Quasar (mainline binary_ng builds legacy DataMovementKernels)."""
+    return ttnn.experimental.quasar.add if U.is_quasar() else ttnn.add
+
+
 HS_Q = ("hs", (512, E))  # [1, 10000, 256] height-sharded 20 cores -> 512-row shards
 
 # fmt: off
@@ -71,7 +78,7 @@ def test_add_sharded(ttnn_mesh_device, reset_seeds, a_shape, b_shape, a_dt, b_dt
     pcc = 0.99 if "bfp8" in (a_dt, b_dt) else 0.999
     U.run_binary(
         ttnn_mesh_device,
-        ttnn.add,
+        _add(),
         lambda x, y: x + y,
         a_shape,
         b_shape,
@@ -90,7 +97,7 @@ def test_add_sharded(ttnn_mesh_device, reset_seeds, a_shape, b_shape, a_dt, b_dt
 def test_add(ttnn_mesh_device, reset_seeds, a_shape, b_shape, a_dt, b_dt, a_mem, b_mem, out_mem):
     pcc = 0.99 if "bfp8" in (a_dt, b_dt) else 0.999
     U.run_binary(
-        ttnn_mesh_device, ttnn.add, lambda x, y: x + y, a_shape, b_shape, a_dt, b_dt, a_mem, b_mem, out_mem, pcc=pcc
+        ttnn_mesh_device, _add(), lambda x, y: x + y, a_shape, b_shape, a_dt, b_dt, a_mem, b_mem, out_mem, pcc=pcc
     )
 
 
@@ -102,9 +109,12 @@ def test_add(ttnn_mesh_device, reset_seeds, a_shape, b_shape, a_dt, b_dt, a_mem,
     [pytest.param((1, 300, 2), id="B19-fp32-rowmajor-971191")],
 )
 def test_add_fp32_row_major(ttnn_mesh_device, reset_seeds, a_shape):
+    U.xfail_on_quasar(
+        "Quasar binary_ng add: ROW_MAJOR layout unsupported (gate requires TILE; QUASAR_PARITY_GAPS.md §1)"
+    )
     U.run_binary(
         ttnn_mesh_device,
-        ttnn.add,
+        _add(),
         lambda x, y: x + y,
         a_shape,
         a_shape,

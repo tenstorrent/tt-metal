@@ -8,6 +8,7 @@ the pipeline can pack, and the text budget must sit exactly inside the prompt ar
 import pytest
 from PIL import Image
 
+from ....encoders.qwen3vl.model_qwen3vl import dynamic_length_warm_rows, prompt_warm_walk
 from ....models.vae.minimax_h3.vae_minimax_h3 import DEFAULT_TILE_OVERLAP, DEFAULT_TILE_SIZE, split_tiles
 from ....pipelines.minimax_h3 import packing as p
 from ....pipelines.minimax_h3 import packing_ref2va as rp
@@ -183,6 +184,38 @@ def test_prompt_pad_warm_lengths_are_every_padded_prompt_below_the_cap():
     alignment = 1024
     padded = {-(-length // alignment) * alignment for length in range(1, caps.prompt + 1)}
     assert padded - {caps.prompt} == set(range(alignment, caps.prompt, alignment))
+
+
+def _vision_rows(alignment: int) -> list[int]:
+    # One row per merged 32x32 patch plus 8 template rows per keyframe: 6 label tokens, vision start, vision end.
+    multiple = p.MINIMAX_H3_CANVAS_MULTIPLE
+    return [n * ((h // multiple) * (w // multiple) + 8) for n, (h, w) in policy.served_keyframe_layouts(alignment)]
+
+
+@pytest.mark.parametrize(("alignment", "passes", "dynamic_passes"), [(256, 32, 30), (1024, 9, 9)])
+def test_prompt_warm_walk_covers_every_unit_and_every_length(alignment, passes, dynamic_passes):
+    cap = MiniMaxH3ArenaCaps().prompt
+
+    def span(vision_rows: int) -> tuple[int, int]:
+        budget = min(policy.MINIMAX_H3_MAX_TEXT_TOKENS, cap - vision_rows)
+        return -(-(vision_rows + 1) // alignment) * alignment, -(-(vision_rows + budget) // alignment) * alignment
+
+    spans = [span(rows) for rows in (0, *_vision_rows(alignment))]
+    walk = prompt_warm_walk(spans, alignment)
+    reachable = {length for first, last in spans for length in range(first, last + 1, alignment)}
+    assert {unit for unit, _ in walk} == set(range(len(spans)))
+    assert {length for _, length in walk} == reachable == set(range(alignment, cap + 1, alignment))
+    assert all(spans[unit][0] <= length <= spans[unit][1] for unit, length in walk)
+    assert len(walk) == len(set(walk)) == passes
+    assert sum(len(range(first, last + 1, alignment)) for first, last in spans) == {256: 355, 1024: 33}[alignment]
+    # The `dynamic_length` decoder needs every length up to 128 rows per chip, and the cap.
+    sp_factor = alignment // 32
+    lengths = {rows * sp_factor for rows in dynamic_length_warm_rows(cap // sp_factor)}
+    short = prompt_warm_walk(spans, alignment, lengths=lengths)
+    assert lengths <= {length for _, length in short} and {unit for unit, _ in short} == set(range(len(spans)))
+    assert len(short) == dynamic_passes
+    # A unit with no room for text is not encoded.
+    assert prompt_warm_walk([(alignment, cap), (cap + alignment, cap)], alignment, lengths=(cap,)) == [(0, cap)]
 
 
 def test_a_32_tile_canvas_fills_the_4x32_decode_wave():

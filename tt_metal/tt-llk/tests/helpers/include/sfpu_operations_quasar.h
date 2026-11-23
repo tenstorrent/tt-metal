@@ -336,7 +336,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
-        hardmish_init();
+        // The Compute API's hardmish_tile_init expression, so the bare init's dispatch to hardmish_init is what runs.
+        SFPU_UNARY_INIT(hardmish);
     }
     else if constexpr (OPERATION == SfpuType::mish)
     {
@@ -373,6 +374,11 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == SfpuType::sigmoid_appx)
     {
         sigmoid_appx_init();
+    }
+    else if constexpr (OPERATION == SfpuType::tanh)
+    {
+        // calculate_tanh stores through the ADDR_MOD_6 tanh_init programs, as tanh_tile_init does.
+        tanh_init<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::tanhshrink)
     {
@@ -432,7 +438,8 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::i0)
     {
-        i0_init();
+        // The Compute API's i0_tile_init expression, so the bare init's dispatch to i0_init is what runs.
+        SFPU_UNARY_INIT(i0);
     }
     else if constexpr (OPERATION == SfpuType::i1)
     {
@@ -1665,7 +1672,12 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         calculate_gcd_init();
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / RESHUFFLE_ROWS are stateless — no init.
+    else if constexpr (OP == BinaryOp::LOGSIGMOID)
+    {
+        // logsigmoid_tile_init: loads the polynomial tail d6..d8 into vConstFloatPrgm0..2.
+        logsigmoid_init<APPROXIMATION_MODE>();
+    }
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / RESHUFFLE_ROWS are stateless — no init.
 }
 
 /**

@@ -15,6 +15,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -22,36 +23,49 @@ namespace ckernel::sfpu {
 // =============================================================================
 // Approximate GELU - 6-segment piecewise-linear LUT
 // =============================================================================
-// GELU(x) ~= 0.5 * x + f(|x|), with f evaluated by the SFPU LUT unit. Same table and same math as
-// Blackhole's calculate_gelu_appx (gelu_init has the segment breakdown); only the table location
-// differs. Quasar's SFPLUTFP32 reads the table from the constant LRegs 9-14 and the looked-up value
-// from LReg3, where WH/BH read the table from LReg0-2/LReg4-6.
+// GELU(x) ~= 0.5 * x + f(|x|), f from the SFPU LUT unit; same table and math as Blackhole.
+// gelu_init loads the table into the LUT config registers, overwriting the SFPU constants in
+// LReg9-12, so no sfpi code that needs them may run between the init and the loop.
 //
-// So gelu_init loads the table with _sfpu_load_config32_ rather than sfpi: vCReg assignment reaches
-// SFPCONFIG, but the assembler rejects dests 9 and 10 ("permitted mask is 0xf9ff"), which is two of
-// the six table words. See tt-metal issue #51346.
-//
-// The loop below is still plain sfpi. lut2_sign() wants six LReg operands because that is where WH/BH
-// keep the table, and it pins the looked-up value to LReg3, which is what this hardware wants anyway.
-// The LUT ignores those six registers here, so reading them back through l_reg[] (no instructions
-// emitted) is enough to satisfy the intrinsic. Loading the table into them, the way Blackhole's init
-// does, is what miscompares.
-//
-// Two things to avoid: vConstFloatPrgm0 for the 0.5 (that is LReg12, a table intercept word; an
-// SFPMULI immediate is free), and any sfpi code between this init and the loop, since the table
-// overwrites the SFPU constants 0.0/1.0/-1.0 in LReg9/10/11. Each op's init restores them via
-// _init_sfpu_config_reg_, so a following op is unaffected.
+// Passes are pipelined (4 slots each): the next pass's load and the previous pass's store sit
+// between the MAD and the LUT. The store advances Dest through ADDR_MOD_6, set by gelu_init<true>.
+// Values carried between passes are pinned through l_reg[] so the recorded body ends in the state it
+// starts in. Quasar cannot execute while recording, so the body is recorded, then replayed per pass.
 // =============================================================================
+
+inline constexpr sfpi::LRegs GELU_APPX_HALF_LREG = sfpi::LRegs::LReg0;
+inline constexpr sfpi::LRegs GELU_APPX_RESULT_LREG = sfpi::LRegs::LReg1;
+inline constexpr unsigned GELU_APPX_REPLAY_START = 0;
+inline constexpr unsigned GELU_APPX_REPLAY_LEN = 4;
 
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_gelu_appx() {
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
+    static_assert(ITERATIONS >= 1, "calculate_gelu_appx needs at least one pass");
+
+    sfpi::l_reg[GELU_APPX_HALF_LREG] = sfpi::vFloat(0.5f);
+    {
+        sfpi::vFloat half = sfpi::l_reg[GELU_APPX_HALF_LREG];
         sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat piecewise = sfpi::lut<sfpi::LutMode::Fp16x6_HWM3>(in, sfpi::LutSign::Update);
-        sfpi::dst_reg[0] = in * 0.5f + piecewise;
-        sfpi::dst_reg++;
+        sfpi::l_reg[GELU_APPX_RESULT_LREG] =
+            in * half + sfpi::lut<sfpi::LutMode::Fp16x6_HWM3>(in, sfpi::LutSign::Update);
+        sfpi::l_reg[GELU_APPX_HALF_LREG] = half;
     }
+    // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), lut pass r+1, mad pass r+1.
+    lltt::record(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN);
+    {
+        sfpi::vFloat half = sfpi::l_reg[GELU_APPX_HALF_LREG];
+        sfpi::vFloat result = sfpi::l_reg[GELU_APPX_RESULT_LREG];
+        sfpi::vFloat in = sfpi::dst_reg[1];
+        sfpi::dst_reg[0].mode(ADDR_MOD_6) = result;
+        sfpi::l_reg[GELU_APPX_RESULT_LREG] =
+            in * half + sfpi::lut<sfpi::LutMode::Fp16x6_HWM3>(in, sfpi::LutSign::Update);
+        sfpi::l_reg[GELU_APPX_HALF_LREG] = half;
+    }
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        lltt::replay(GELU_APPX_REPLAY_START, GELU_APPX_REPLAY_LEN);
+    }
+    sfpi::dst_reg[0].mode(ADDR_MOD_6) = sfpi::vFloat(sfpi::l_reg[GELU_APPX_RESULT_LREG]);
 }
 
 // =============================================================================
@@ -170,6 +184,9 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
+        // calculate_gelu_appx stores through ADDR_MOD_6: Dest += SFP_ROWS per pass.
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
+
         // Segment slopes/intercepts, packed hi/lo the way SFPLUTFP32's FP16 6-entry mode 1 reads
         // them. Same values as the Blackhole table (l_reg0 = 0x37E7322B, l_reg4 = 0xB12286D8, ...).
         sfpi::lut_init(

@@ -9,7 +9,8 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "context/metal_context.hpp"
 
@@ -19,12 +20,6 @@ using namespace std;
 using namespace tt::test_utils;
 
 namespace unit_tests::dm::quasar_cache {
-
-// Skip test if simulator is not available (arch check is handled by fixture)
-bool should_skip_test() {
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    return env_var == nullptr;
-}
 
 // Start of the cache tests' buffer: the first unreserved L1 address, clear of the firmware's own memory.
 uint32_t buffer_address() {
@@ -79,7 +74,7 @@ bool run_l2_flush_test(distributed::MeshDevice& mesh_device, const L2FlushTestCo
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -88,7 +83,7 @@ bool run_l2_flush_test(distributed::MeshDevice& mesh_device, const L2FlushTestCo
             MakeRuntimeArgsForSingleNode(node, {{"base_addr", base_addr}, {"test_mode", config.test_mode}}),
         .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
     }};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
@@ -161,7 +156,7 @@ bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTest
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -170,7 +165,7 @@ bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTest
             MakeRuntimeArgsForSingleNode(node, {{"base_addr", base_addr}, {"test_mode", config.test_mode}}),
         .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
     }};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
@@ -205,10 +200,6 @@ bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTest
 class QuasarL2CacheOps : public QuasarMeshDeviceSingleCardFixture {};
 
 TEST_F(QuasarL2CacheOps, FlushLine) {
-    if (unit_tests::dm::quasar_cache::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-
     unit_tests::dm::quasar_cache::L2FlushTestConfig config = {
         .num_words = 16,
         .value = 0x12340000,
@@ -218,10 +209,6 @@ TEST_F(QuasarL2CacheOps, FlushLine) {
 }
 
 TEST_F(QuasarL2CacheOps, FlushRange) {
-    if (unit_tests::dm::quasar_cache::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-
     unit_tests::dm::quasar_cache::L2FlushTestConfig config = {
         .num_words = 64,  // Multiple cache lines (4 lines worth)
         .value = 0xABCD0000,
@@ -231,10 +218,6 @@ TEST_F(QuasarL2CacheOps, FlushRange) {
 }
 
 TEST_F(QuasarL2CacheOps, FlushFull) {
-    if (unit_tests::dm::quasar_cache::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-
     unit_tests::dm::quasar_cache::L2FlushTestConfig config = {
         .num_words = 64,
         .value = 0x55550000,
@@ -244,10 +227,6 @@ TEST_F(QuasarL2CacheOps, FlushFull) {
 }
 
 TEST_F(QuasarL2CacheOps, InvalidateLine) {
-    if (unit_tests::dm::quasar_cache::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-
     unit_tests::dm::quasar_cache::L2FlushTestConfig config = {
         .num_words = 16,
         .value = 0x99990000,
@@ -258,10 +237,6 @@ TEST_F(QuasarL2CacheOps, InvalidateLine) {
 }
 
 TEST_F(QuasarL2CacheOps, InvalidateFreshRead) {
-    if (unit_tests::dm::quasar_cache::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-
     // Test that invalidation causes fresh read from TL1:
     // Kernel reads (caches), writes new value via uncached path, invalidates, host verifies new value
     unit_tests::dm::quasar_cache::L2FlushTestConfig config = {
@@ -280,10 +255,6 @@ TEST_F(QuasarL2CacheOps, InvalidateFreshRead) {
 class QuasarL1DCacheOps : public QuasarMeshDeviceSingleCardFixture {};
 
 TEST_F(QuasarL1DCacheOps, FlushLine) {
-    if (unit_tests::dm::quasar_cache::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-
     unit_tests::dm::quasar_cache::L1DCacheTestConfig config = {
         .num_words = 16,
         .value = 0x11110000,
@@ -293,10 +264,6 @@ TEST_F(QuasarL1DCacheOps, FlushLine) {
 }
 
 TEST_F(QuasarL1DCacheOps, FlushFull) {
-    if (unit_tests::dm::quasar_cache::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-
     unit_tests::dm::quasar_cache::L1DCacheTestConfig config = {
         .num_words = 16,
         .value = 0x22220000,
@@ -306,10 +273,6 @@ TEST_F(QuasarL1DCacheOps, FlushFull) {
 }
 
 TEST_F(QuasarL1DCacheOps, InvalidateLine) {
-    if (unit_tests::dm::quasar_cache::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-
     // Invalidate should NOT write back - old values should persist
     unit_tests::dm::quasar_cache::L1DCacheTestConfig config = {
         .num_words = 16,
@@ -321,10 +284,6 @@ TEST_F(QuasarL1DCacheOps, InvalidateLine) {
 }
 
 TEST_F(QuasarL1DCacheOps, InvalidateFull) {
-    if (unit_tests::dm::quasar_cache::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-
     // Invalidate should NOT write back - old values should persist
     unit_tests::dm::quasar_cache::L1DCacheTestConfig config = {
         .num_words = 16,
@@ -336,10 +295,6 @@ TEST_F(QuasarL1DCacheOps, InvalidateFull) {
 }
 
 TEST_F(QuasarL1DCacheOps, InvalidateFreshRead) {
-    if (unit_tests::dm::quasar_cache::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
-
     // Test that invalidation causes fresh read from TL1:
     // Kernel reads (caches), writes new value via uncached path, invalidates L1+L2, host verifies new value
     unit_tests::dm::quasar_cache::L1DCacheTestConfig config = {

@@ -185,6 +185,7 @@ State the before/after counts in the PR description.
 
 ## Checklist
 
+- [ ] Axis names follow `perf-test`, "Canonical axis names"
 - [ ] A few representative shapes, at least one of which overflows dest
 - [ ] Kernel loops `NUM_BLOCKS`, releasing the dest section at the block boundary
 - [ ] MX spot-tested rather than swept, unless this is the pack or unpack test

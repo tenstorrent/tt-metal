@@ -336,11 +336,10 @@ _FABRIC_2D_CONFIGS = (
 _logged_index_k_routes = set()
 
 
-def _log_index_k_route_once(is_2d, *, sp, tp, rows, sp_axis=0):
+def _log_index_k_route_once(is_2d, fabric, *, sp, tp, rows, sp_axis=0):
     if (is_2d, sp_axis) in _logged_index_k_routes:
         return
     _logged_index_k_routes.add((is_2d, sp_axis))
-    fabric = ttnn.get_fabric_config()
     if is_2d:
         logger.info(f"[msa] index_k TP-dedup gather route: 2D full-mesh snake (fabric={fabric})")
         return
@@ -387,8 +386,9 @@ def _gather_tp_sharded_index_k(
     # The full-mesh snake orders the stripes by the cache's row-major topology label, which is the sp*tp order
     # only with SP on mesh axis 0. With SP on axis 1 (chip (t, s) holds stripe s*tp + t) it would return rows
     # out of order, so take the two-leg route, whose axis gathers follow physical coordinates.
-    is_2d = ttnn.get_fabric_config() in _FABRIC_2D_CONFIGS and sp_axis == 0
-    _log_index_k_route_once(is_2d, sp=sp, tp=tp, rows=rows, sp_axis=sp_axis)
+    fabric = ttnn.get_fabric_config(index_k_cache.device())
+    is_2d = fabric in _FABRIC_2D_CONFIGS and sp_axis == 0
+    _log_index_k_route_once(is_2d, fabric, sp=sp, tp=tp, rows=rows, sp_axis=sp_axis)
     if is_2d:
         assert_full_mesh_stripe_order(index_k_cache, sp_axis, "MiniMax index_k full-mesh gather")
         return ttnn.experimental.high_bw_all_gather(

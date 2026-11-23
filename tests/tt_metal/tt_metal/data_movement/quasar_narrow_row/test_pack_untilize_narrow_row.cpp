@@ -32,7 +32,8 @@
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "kernels/narrow_row_engine_mode.hpp"
 
 namespace tt::tt_metal {
@@ -87,13 +88,7 @@ const char* engine_name(EngineMode e) {
     return "unknown";
 }
 
-bool should_skip_test() {
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch != tt::ARCH::QUASAR) {
-        return true;
-    }
-    return std::getenv("TT_METAL_SIMULATOR") == nullptr;
-}
+bool should_skip_test() { return tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::QUASAR; }
 
 // Unique, bit-stable Float16_b stimulus: each datum names its own position in the PADDED
 // untilized matrix, so a datum that lands in the wrong place is caught by value, not just by
@@ -293,7 +288,7 @@ bool run_narrow_row(
         .dataflow_buffers = {src_dfb_spec, pad_dfb_spec},
         .work_units = {{.name = "main", .kernels = {READER, COMPUTE, COMPACT}, .target_nodes = node}},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -317,7 +312,7 @@ bool run_narrow_row(
                  {"num_channels", cfg.num_channels}}),
         },
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
@@ -417,7 +412,7 @@ class QuasarNarrowRowUntilize : public QuasarMeshDeviceSingleCardFixture {};
 TEST_F(QuasarNarrowRowUntilize, WidthAndTileRowSweep) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
     for (std::uint32_t ct_dim : {1u, 2u, 4u, 8u}) {
@@ -437,7 +432,7 @@ TEST_F(QuasarNarrowRowUntilize, WidthAndTileRowSweep) {
 TEST_F(QuasarNarrowRowUntilize, SubFaceWidths) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/2);
     // ct_dim 1 is the case that actually tests the claim: it produces 2 B to 40 B rows, below
@@ -466,7 +461,7 @@ TEST_F(QuasarNarrowRowUntilize, SubFaceWidths) {
 TEST_F(QuasarNarrowRowUntilize, EngineParity) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
     struct Shape {

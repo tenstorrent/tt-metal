@@ -119,6 +119,15 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="SP4xTP4-torus-x-4x4",
         ),
+        pytest.param(
+            (4, 4),
+            0,
+            kda_device_params((4, 4), wrap_both_axes=True),
+            PREFILL_CHUNK_TOKENS,
+            None,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-torus-xy-4x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -163,7 +172,8 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     padded = case.hidden.clone()
     padded[:, length:] = float("nan")
     ttnn.deallocate(hidden_tt)
-    hidden_tt = to_sp_input(padded[:, permutation, :], mesh_device, sequence_parallel_axis)
+    # TP-sharded, as the model's residual hands it over: the layer gathers it (inside the input projection on Galaxy).
+    hidden_tt = to_sp_input(padded[:, permutation, :], mesh_device, sequence_parallel_axis, tensor_parallel_axis)
     valid_rows = to_sp_input(
         (permutation < length).to(torch.bfloat16).reshape(1, -1, 1), mesh_device, sequence_parallel_axis
     )
@@ -257,6 +267,14 @@ _REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.022, recurrent=0.017, convol
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="SP4xTP4-torus-x-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            0,
+            kda_device_params((4, 4), wrap_both_axes=True),
+            512,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-torus-xy-4x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
