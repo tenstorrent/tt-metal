@@ -52,6 +52,7 @@ from models.demos.inkling2_mini.tt.attention import (
     Inkling2Attention,
     _DramShardedLinear,
 )
+from models.demos.inkling2_mini.tt.fused import attn as FA
 from models.demos.inkling2_mini.tt.fused import common as F
 from models.demos.inkling2_mini.tt.fused.attn import AttnNear, AttnOut, AttnPrep, AttnWindow, KvCommit, RowsOut
 from models.demos.inkling2_mini.tt.fused.attn_wo import AttnWo
@@ -386,12 +387,16 @@ class Inkling2AttentionFast(Inkling2Attention):
         xv = xq if xv is None else xv
         if not self.FUSED:
             return self._post(self._decode_ops(xq, state, positions, xk, xv), post)
+        F.RIDE = (
+            self.prep.ride(positions) if FA.PREP_PRE and FA.PREP_SLIM else None
+        )  # the prep's input fetch, in the w_all program
         if self.window is None:
             proj, mode = self._window(state, xq, xk, xv)
         else:
             mode = "single" if (xk is xq and xv is xq) else "triple"
             act = self.window(state.x_hist, [xq] if mode == "single" else [xq, xk, xv])
             proj = self.w_all(act, ttnn.bfloat16, self.mm_cfg)
+        F.RIDE = None
         rows = ROWS[mode]
         q, mask, sink_t = self.prep(proj, positions, {"q": 0, "k": rows["k"], "v": rows["v"]}, state)
         if self.is_global:  # q pre-scaled; prep's mask (bias + near mask) and q_grp are in kv-group layout

@@ -135,6 +135,18 @@ def core_list(device, n, first_row=0):
     return cores, ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
 
 
+# One-shot kernels for the next bank-streamed linear program (BankLinear / StagedBankLinear): a callable
+# busy -> (kernels, io tensors), busy = the {(x, y)} logical cores the linear uses (the kernels must avoid them). The
+# attention prep's input fetch rides in the w_all program this way (fused/attn.py PREP_PRE).
+RIDE = None
+
+
+def take_ride(cores):
+    global RIDE
+    ride, RIDE = RIDE, None
+    return ride({tuple(c) for c in cores}) if ride is not None else ([], [])
+
+
 def run(io_tensors, kernels, cbs):
     """io_tensors: every tensor the kernels touch (keeps them alive / tracked); the last one is returned.
     Inside per_row(): recorded for the merged R-row program instead."""

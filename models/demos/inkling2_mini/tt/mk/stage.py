@@ -254,5 +254,6 @@ class StagedBankLinear:
             cb(1, bl.dtype, tb, 4 * blk),
             cb(16, bl.out_dtype, htb, 2 * DST_TILES, th),
         ]
-        prog = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[])
-        return ttnn.generic_op([x, bl.weight, self.stage, out], prog)
+        ride_k, ride_io = F.take_ride(c for c, _ in bl.cores) if tiles_out else ([], [])
+        prog = ttnn.ProgramDescriptor(kernels=kernels + ride_k, cbs=cbs, semaphores=[])
+        return ttnn.generic_op([x, bl.weight, self.stage, *ride_io, out], prog)

@@ -345,5 +345,6 @@ class BankLinear:
             extra = list(head["tokens"])
         if common:
             kernels[2].common_runtime_args = common
-        prog = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems)
-        return ttnn.generic_op([x, self.weight, *outs[1:], *extra, out], prog)
+        ride_k, ride_io = F.take_ride(c for c, _ in self.cores) if tiles_out else ([], [])
+        prog = ttnn.ProgramDescriptor(kernels=kernels + ride_k, cbs=cbs, semaphores=sems)
+        return ttnn.generic_op([x, self.weight, *outs[1:], *extra, *ride_io, out], prog)

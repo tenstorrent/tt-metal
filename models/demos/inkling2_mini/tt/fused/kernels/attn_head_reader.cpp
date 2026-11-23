@@ -8,6 +8,11 @@
 // slim: read only the bytes the compute uses and build the constant pages in L1 (same CB bytes as reading the
 // whole pages): taps 512 of 4096 bytes per page, tau its first 64 bytes; the scaler and the mass page are built.
 // The DRAM is busy with the expert stream here, so fewer bytes ends the reads sooner.
+// pre (with slim; attn.py PREP_PRE): runtime args after the fixed five: scratch (an L1 shard on this core, the same
+// address on every prep core) and use: this call's taps / tau are in the scratch (attn_prep_fetch.cpp, in the w_all
+// program): taps of item i lag l at 512 (i nlag + l), tau's first 64 bytes at 2048; a 4 KB zero block at 4096. Then
+// (projection in L1) the reader issues few NOC reads: zeros from that block, the projection rows straight from L1
+// (no staging wave), the rest as before. Same bytes in the CBs.
 #include "attn_io.hpp"
 
 constexpr bool proj_dram = get_named_compile_time_arg_val("proj_dram");  // projection output in DRAM (else L1)
@@ -19,6 +24,9 @@ void kernel_main() {
     constexpr uint32_t has_tau = get_named_compile_time_arg_val("has_tau");
     constexpr uint32_t mass = get_named_compile_time_arg_val("mass");  // far-cache mass chunk page (cb_mass)
     constexpr uint32_t slim = get_named_compile_time_arg_val("slim");
+    constexpr uint32_t pre = get_named_compile_time_arg_val("pre");
+    static_assert(!pre || slim, "pre needs slim");
+    static_assert(nitems * nlag * 512 <= 2048, "scratch taps");
     constexpr uint32_t cb_x = 0, cb_t = 1, cb_d = 2, cb_scaler = 3, cb_tau = 4, cb_mass = 5, cb_stage = 24;
     constexpr uint32_t n = nitems * nlag;
 
@@ -28,7 +36,20 @@ void kernel_main() {
     const uint32_t scaler = get_arg_val<uint32_t>(a++);
     const uint32_t tau = get_arg_val<uint32_t>(a++);
     const uint32_t mass_addr = get_arg_val<uint32_t>(a++);
+    uint32_t scratch = 0, use = 0;
+    if constexpr (pre) {
+        scratch = get_arg_val<uint32_t>(a++);
+        use = get_arg_val<uint32_t>(a++);
+    }
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), attnio::ALIGN);
+    const bool fast = pre && use && !proj_dram;
+    auto zero = [&](uint32_t dst, uint32_t bytes) {
+        if (fast) {
+            attnio::zero_from(scratch + 4096, 4096, dst, bytes);
+        } else {
+            attnio::zero_l1(dst, bytes);
+        }
+    };
 
     cb_reserve_back(cb_scaler, 1);
     if constexpr (has_tau) {
@@ -38,14 +59,14 @@ void kernel_main() {
         cb_reserve_back(cb_mass, 1);
     }
     if constexpr (slim) {
-        attnio::zero_l1(get_write_ptr(cb_scaler), 4096);  // built after the wave 1 barrier
+        zero(get_write_ptr(cb_scaler), 4096);             // built after the wave 1 barrier
         if constexpr (has_tau) {                          // tau at [0, 0]: the compute uses f[0, 0] only
-            attnio::zero_l1(get_write_ptr(cb_tau) + 64, 4096 - 64);
+            zero(get_write_ptr(cb_tau) + 64, 4096 - 64);
             const InterleavedAddrGen<true> tau_a = {.bank_base_address = tau, .page_size = 4096};
-            noc_async_read(tau_a.get_noc_addr(0, 0), get_write_ptr(cb_tau), 64);
+            noc_async_read(use ? get_noc_addr(scratch + 2048) : tau_a.get_noc_addr(0, 0), get_write_ptr(cb_tau), 64);
         }
         if constexpr (mass) {
-            attnio::zero_l1(get_write_ptr(cb_mass), 4096);
+            zero(get_write_ptr(cb_mass), 4096);
         }
     } else {
         attnio::read_pages(scaler, 4096, 0, 1, get_write_ptr(cb_scaler));
@@ -61,7 +82,13 @@ void kernel_main() {
     const uint32_t xw = get_write_ptr(cb_x);
     const uint32_t tw = get_write_ptr(cb_t);
     // wave 1: zeros, taps, the staged row blocks and (dyn) the d block - one read barrier
-    attnio::zero_l1(xw, n * 2048);
+    if (fast) {  // the rows land in bytes 0..255 of each page
+        for (uint32_t k = 0; k < n; ++k) {
+            zero(xw + k * 2048 + 256, 2048 - 256);
+        }
+    } else {
+        attnio::zero_l1(xw, n * 2048);
+    }
     uint32_t t0s[nitems], r0s[nitems], dcol = 0, d_elem = 0, dw = 0;
     for (uint32_t i = 0; i < nitems; ++i) {
         t0s[i] = get_arg_val<uint32_t>(a++);               // projection tile of the head's first column
@@ -71,20 +98,26 @@ void kernel_main() {
             const InterleavedAddrGen<true> taps_a = {.bank_base_address = taps, .page_size = 4096};
             for (uint32_t l = 0; l < nlag; ++l) {
                 const uint32_t dst = tw + (i * nlag + l) * 4096;
-                attnio::zero_l1(dst + 512, 4096 - 512);
-                noc_async_read(taps_a.get_noc_addr(page + l, 0), dst, 512);
+                zero(dst + 512, 4096 - 512);
+                const uint64_t src =
+                    use ? get_noc_addr(scratch + (i * nlag + l) * 512) : taps_a.get_noc_addr(page + l, 0);
+                noc_async_read(src, dst, 512);
             }
         } else {
             attnio::read_pages(taps, 4096, page, nlag, tw + i * nlag * 4096);
         }
         for (uint32_t l = 0; l < nlag; ++l) {
-            attnio::stage_row<proj_dram>(proj, 2048, 2, t0s[i], 4, r0s[i] + l, stage + (i * nlag + l) * 512);
+            if (fast) {
+                attnio::l1_row(proj, 2048, 2, t0s[i], 4, r0s[i] + l, xw + (i * nlag + l) * 2048);
+            } else {
+                attnio::stage_row<proj_dram>(proj, 2048, 2, t0s[i], 4, r0s[i] + l, stage + (i * nlag + l) * 512);
+            }
         }
         if constexpr (dyn) {                    // nitems == 1
             dcol = get_arg_val<uint32_t>(a++);  // column of d_0 (lags follow) in row r0
             cb_reserve_back(cb_d, nlag);
             dw = get_write_ptr(cb_d);
-            attnio::zero_l1(dw, nlag * 4096);
+            zero(dw, nlag * 4096);
             d_elem = attnio::stage_elem_block<proj_dram>(proj, 2048, 2, r0s[i], dcol, stage + n * 512);
         }
     }
@@ -101,7 +134,7 @@ void kernel_main() {
         }
     }
     // wave 2: chunks into the zeroed pages, d pages filled
-    for (uint32_t i = 0; i < nitems; ++i) {
+    for (uint32_t i = 0; i < nitems && !fast; ++i) {
         for (uint32_t l = 0; l < nlag; ++l) {
             const uint32_t k = i * nlag + l;
             attnio::unstage_row(2, 4, r0s[i] + l, xw + k * 2048, stage + k * 512);

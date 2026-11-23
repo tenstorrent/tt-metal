@@ -57,6 +57,30 @@ FORCE_INLINE void zero_l1(uint32_t dst, uint32_t bytes) {
     }
 }
 
+// zero_l1 from a larger zero block in local L1 (zsrc, zbytes): one NOC read per zbytes instead of per 512.
+FORCE_INLINE void zero_from(uint32_t zsrc, uint32_t zbytes, uint32_t dst, uint32_t bytes) {
+    const uint64_t z = get_noc_addr(zsrc);
+    while (bytes > 0) {
+        const uint32_t n = bytes < zbytes ? bytes : zbytes;
+        noc_async_read(z, dst, n);
+        dst += n;
+        bytes -= n;
+    }
+}
+
+// Row r, tiles t0 .. t0 + ntc - 1 of a row-form L1 tensor straight into dense L1 at dst (32 * ntc elements): one
+// 16-element chunk read per face (L1 reads need 16-byte alignment only, so no staging), the layout unstage_row
+// gives.
+FORCE_INLINE void l1_row(
+    uint32_t base, uint32_t tile_bytes, uint32_t es, uint32_t t0, uint32_t ntc, uint32_t r, uint32_t dst) {
+    const InterleavedAddrGen<false> src = {.bank_base_address = base, .page_size = tile_bytes};
+    const uint32_t off = row_offset(r, es), chunk = 16 * es;
+    for (uint32_t j = 0; j < ntc; ++j) {
+        noc_async_read(src.get_noc_addr(t0 + j, off), dst + j * 2 * chunk, chunk);
+        noc_async_read(src.get_noc_addr(t0 + j, off + 256 * es), dst + j * 2 * chunk + chunk, chunk);
+    }
+}
+
 // Row r, tiles t0 .. t0 + ntc - 1 of a row-form DRAM tensor -> dense L1 at dst (32 * ntc elements), in two halves
 // so that several rows share one read barrier: stage_row issues the 64B-aligned block reads into stage (ntc * 128
 // bytes, 64B aligned), unstage_row (after a read barrier) the local chunk copies into dst.

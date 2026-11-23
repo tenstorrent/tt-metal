@@ -28,16 +28,25 @@ D_REL = 16
 WINDOW = 1024
 TAPS = 4
 TABLE_ROWS = WINDOW + 34  # wrap rows so a 1088-byte aligned read never runs past the end
-# Prep layout: q cores (24 = one head each, 8 = three each) and bias cores (32 = one slot tile each, 8 = four).
-# Same per-head / per-tile math, so the same bits. 4K / 128K ms with slim reads: q 8 + bias 8 15.14 / 20.49,
-# q 8 + bias 32 15.11 / 20.44, q 24 + bias 32 15.07 / 20.41. (Without slim reads more cores were slower: their
-# DRAM reads queued behind the expert stream.)
+# Prep layout: q cores (24 = one head each, 8 = three each) and bias cores (32 = one slot tile each, 16 = two,
+# 8 = four), from logical row 0: 56 cores on rows 0..5, off the w_all staging cores (rows 6..9), so PREP_PRE's fetch
+# can ride in the w_all program on all of them. Same per-head / per-tile math, so the same bits. 4K / 128K ms with
+# slim reads, no fetch: q 8 + bias 8 15.14 / 20.49, q 8 + bias 32 15.11 / 20.44, q 24 + bias 32 15.07 / 20.41.
+# (Without slim reads more cores were slower: their DRAM reads queued behind the expert stream.)
 Q_CORES = int(os.environ.get("INKLING_PREP_Q_CORES", "24"))
-BIAS_CORES = int(os.environ.get("INKLING_PREP_BIAS_CORES", "32"))
+BIAS_CORES = int(os.environ.get("INKLING_PREP_BIAS_CORES", "16"))
+PREP_ROW = int(os.environ.get("INKLING_PREP_ROW", "0"))  # first logical row of the prep cores
 # Slim prep reads: only the bytes of the constant pages the compute uses, the rest zeroed / built in L1 (same CB
 # bytes). The expert stream keeps DRAM busy while the prep runs, so its reads end sooner: 4K 15.28 -> 15.14 ms,
 # 128K 20.59 -> 20.49 (8 bias cores).
 PREP_SLIM = os.environ.get("INKLING_PREP_SLIM", "1") == "1"
+# Prefetched prep inputs (with slim reads): a fetch kernel rides in the w_all projection's program on the prep cores
+# (idle there; attn_prep_fetch.cpp) and reads this app's prep DRAM inputs (taps, tau, rel_scale, near rows, ring slot,
+# profile rows) into an L1 scratch on those cores; the prep then reads only L1. Prep cores the projection itself uses
+# read DRAM as before. The readers of fetched cores also issue far fewer NOC reads (zeros from a 4 KB block, the
+# projection rows straight from L1, one wave): prep 7.2 -> 5.7 us per app. Traced, bit-equal: 4K 14.91 -> 14.86 ms,
+# 128K 20.24 -> 20.21.
+PREP_PRE = os.environ.get("INKLING_PREP_PRE", "1") == "1"
 NEG = -1.0e9  # masked logit (attention.py)
 
 
@@ -80,6 +89,20 @@ def _shared_l1(device, name, c, mem):
         t = ttnn.from_torch(
             torch.zeros(1, 1, 32, c), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
         )
+        _SHARED[key] = (device, t)
+    return _SHARED[key][1]
+
+
+def _prep_scratch(device, cores):
+    """PREP_PRE scratch: an 8 KB L1 shard on each prep core (the same address on every core), shared by every
+    AttnPrep: [0, 4096) this app's fetched inputs (attn_prep_fetch.cpp), [4096, 8192) zeros (the readers' zero
+    source; never written)."""
+    key = (id(device), "prep_scratch", tuple((c.x, c.y) for c in cores))
+    if key not in _SHARED or not _SHARED[key][1].is_allocated():
+        spec = ttnn.ShardSpec(_crs(cores), (1, 2048), ttnn.ShardOrientation.ROW_MAJOR)
+        mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, spec)
+        t = ttnn.from_torch(torch.zeros(1, 1, len(cores), 2048, dtype=torch.int32), dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem)  # fmt: skip
         _SHARED[key] = (device, t)
     return _SHARED[key][1]
 
@@ -159,16 +182,16 @@ class AttnPrep:
         self.mass = F.dense_tensor(device, mass)
 
         assert N_HEADS % Q_CORES == 0 and (WINDOW // 32) % BIAS_CORES == 0, (Q_CORES, BIAS_CORES)
-        cores, _ = F.core_list(device, Q_CORES + 2 * N_KV + BIAS_CORES, first_row=1)
+        cores, _ = F.core_list(device, Q_CORES + 2 * N_KV + BIAS_CORES, first_row=PREP_ROW)
         self.q_cores, cores = cores[:Q_CORES], cores[Q_CORES:]
         self.k_cores, self.v_cores, self.b_cores = cores[:N_KV], cores[N_KV : 2 * N_KV], cores[2 * N_KV :]
         self.cache = {}
 
-    def _head_group(self, cores, proj, kind, mode_rows, tau, state, positions, rows=None, chain=None):
+    def _head_group(self, cores, proj, kind, mode_rows, tau, state, positions, rows=None, chain=None, pre=None):
         """kind: q / k / v. Returns (kernels, cbs) for one group of 8 cores. rows = (t, RowsOut): token t of a
         multi-token verify pass (local layers): q into batch t * 8 + g of rows.q, k / v into row t of rows.pending
         instead of the ring. chain = (wait, next token's cores or None): k / v writers of tokens in one program
-        (rows()) take turns (attn_kv_writer.cpp)."""
+        (rows()) take turns (attn_kv_writer.cpp). pre = (scratch, fetched cores): PREP_PRE."""
         q = kind == "q"
         nitems, nlag = (N_HEADS // len(cores), 1) if q else (1, TAPS)  # q: heads per core (3, or 1 on 24 cores)
         assert not q or nitems * len(cores) == N_HEADS, len(cores)
@@ -178,7 +201,9 @@ class AttnPrep:
         r_rt, w_rt = [], []
         for g, _ in enumerate(cores):
             r = [proj.buffer_address(), (self.q_taps if q else self.kv_taps[kind]).buffer_address()]
-            r += [self.scaler.buffer_address(), tau.buffer_address() if has_tau else 0, self.mass.buffer_address()]
+            r += [self.scaler.buffer_address(), tau.buffer_address(), self.mass.buffer_address()]
+            if pre is not None:  # scratch, whether this core's inputs were fetched into it
+                r += [pre[0].buffer_address(), int((cores[g].x, cores[g].y) in pre[1])]
             if q:
                 w = []
                 for h in range(g * nitems, (g + 1) * nitems):
@@ -221,7 +246,7 @@ class AttnPrep:
             r_rt.append(r)
             w_rt.append(w)
         named = dict(nitems=nitems, nlag=nlag, dyn=dyn, has_tau=has_tau, mass=mass, proj_dram=_is_dram(proj))
-        r_named = dict(named, slim=int(PREP_SLIM))
+        r_named = dict(named, slim=int(PREP_SLIM), pre=int(pre is not None))
         c_named = dict(
             named,
             norm=int(kind == "v"),
@@ -270,12 +295,13 @@ class AttnPrep:
         ]
         return kernels, cbs
 
-    def _bias_group(self, proj, positions, tau, rows=None, prow=0, cores=None):
+    def _bias_group(self, proj, positions, tau, rows=None, prow=0, cores=None, pre=None):
         cores = self.b_cores if cores is None else cores
         nj = WINDOW // 32 // len(cores)  # slot tiles per core
         has_tau = int(self.dyn)
         named = dict(nj=nj, has_tau=has_tau, rel_tile=6144 // 32, proj_dram=_is_dram(proj), prow=prow)
         named["slim"] = int(PREP_SLIM)
+        named["pre"] = int(pre is not None)
         r_rt, w_rt = [], []
         for i, _ in enumerate(cores):
             r_rt.append(
@@ -283,13 +309,15 @@ class AttnPrep:
                     proj.buffer_address(),
                     self.rel_scale.buffer_address(),
                     self.g.buffer_address(),
-                    tau.buffer_address() if has_tau else 0,
+                    tau.buffer_address(),
                     positions.near_mask.buffer_address(),
                     positions.ring.buffer_address(),
                     self.table.buffer_address(),
                     i * nj,
                 ]
             )
+            if pre is not None:
+                r_rt[-1] += [pre[0].buffer_address(), int((cores[i].x, cores[i].y) in pre[1])]
             blk = self.sink_blk.buffer_address() if self.dyn else 0
             if rows is not None and self.dyn:  # global: this token's near inputs
                 t, ro = rows
@@ -356,12 +384,14 @@ class AttnPrep:
         F.check_row_input(proj, l1_ok=True)  # readers take proj_dram
         assert proj.dtype == ttnn.bfloat16
         tau = positions.tau
+        fetched, self._fetched = getattr(self, "_fetched", None), None
+        pre = (self._scratch(), fetched) if (PREP_PRE and PREP_SLIM and rows is None and fetched) else None
         kernels, cbs = [], []
         for cores, kind in ((self.q_cores, "q"), (self.k_cores, "k"), (self.v_cores, "v")):
-            k, c = self._head_group(cores, proj, kind, mode_rows, tau, state, positions, rows)
+            k, c = self._head_group(cores, proj, kind, mode_rows, tau, state, positions, rows, pre=pre)
             kernels += k
             cbs += c
-        k, c = self._bias_group(proj, positions, tau, rows, prow=mode_rows["q"])
+        k, c = self._bias_group(proj, positions, tau, rows, prow=mode_rows["q"], pre=pre)
         kernels += k
         cbs += c
         io = [proj, self.q_taps, self.kv_taps["k"], self.kv_taps["v"], self.scaler, tau, self.rel_scale, self.g]
@@ -372,10 +402,53 @@ class AttnPrep:
         io += [self.q]
         if rows is not None:
             io += rows[1].tensors(rows[0])
+        if pre is not None:
+            io = [pre[0]] + io
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         if rows is not None and not self.dyn:
             return None
         return self.q, self.mask, self.sink_blk if self.dyn else self.sink
+
+    def _scratch(self):
+        assert 1664 + 1216 * (WINDOW // 32 // len(self.b_cores)) <= 4096, "bias inputs fit the scratch (<= 2 tiles)"
+        return _prep_scratch(self.device, self.q_cores + self.k_cores + self.v_cores + self.b_cores)
+
+    def ride(self, positions):
+        """PREP_PRE: busy cores -> (kernels, io) of the fetch for this app's prep, for the projection program that runs
+        right before it (fused/common.py RIDE); records the prep cores it covers for __call__."""
+
+        def kernels(busy):
+            scr, tau = self._scratch(), positions.tau
+            ks, fetched = [], set()
+            for cores, kind in ((self.q_cores, "q"), (self.k_cores, "k"), (self.v_cores, "v")):
+                q = kind == "q"
+                nitems, nlag = (N_HEADS // len(cores), 1) if q else (1, TAPS)
+                taps = self.q_taps if q else self.kv_taps[kind]
+                rt = []
+                for g, c in enumerate(cores):
+                    pages = list(range(g * nitems, (g + 1) * nitems)) if q else [g * TAPS]
+                    rt.append([scr.buffer_address(), taps.buffer_address(), tau.buffer_address(), int(q and self.dyn)]
+                              + pages)  # fmt: skip
+                use = [(c, r) for c, r in zip(cores, rt) if (c.x, c.y) not in busy]
+                if use:
+                    named = dict(role=0, nitems=nitems, nlag=nlag, nj=0)
+                    ks.append(_kernel("attn_prep_fetch.cpp", [c for c, _ in use], named, [r for _, r in use],
+                                      ttnn.ReaderConfigDescriptor()))  # fmt: skip
+                    fetched |= {(c.x, c.y) for c, _ in use}
+            nj = WINDOW // 32 // len(self.b_cores)
+            use = [(c, i) for i, c in enumerate(self.b_cores) if (c.x, c.y) not in busy]
+            if use:
+                rt = [[scr.buffer_address(), self.rel_scale.buffer_address(), positions.near_mask.buffer_address(),
+                       positions.ring.buffer_address(), tau.buffer_address(), int(self.dyn),
+                       self.table.buffer_address(), i * nj] for _, i in use]  # fmt: skip
+                named = dict(role=1, nitems=0, nlag=0, nj=nj)
+                ks.append(_kernel("attn_prep_fetch.cpp", [c for c, _ in use], named, rt, ttnn.ReaderConfigDescriptor()))
+                fetched |= {(c.x, c.y) for c, _ in use}
+            self._fetched = fetched
+            io = [scr, self.q_taps, *self.kv_taps.values(), self.rel_scale, self.table]
+            return ks, io + [positions.near_mask, positions.ring, tau]
+
+        return kernels
 
     def rows(self, proj, positions, sels, state, rows, t0=0):
         """Multi-token verify: the preps of tokens t0 .. t0 + R - 1 (__call__ with rows = (t0 + t, rows[t])) as one
