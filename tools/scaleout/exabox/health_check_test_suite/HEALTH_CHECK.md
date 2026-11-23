@@ -162,8 +162,9 @@ from the counters as the reset left them.
   `busbar` (not a numeric fault or a tray trip alone), it runs
   `tt-smi -glx_reset`, asks UMD for the links again (the reset can bring back a
   tray that dropped under the load) and runs the pair test on them again at
-  10 s per pair within a 300 s total cap (`links_sweep`); pairs the cap does not
-  reach are SKIP, never PASS. Under `--skip-reset` the sweep runs with no reset
+  10 s per pair, with no new round of pairs started after 300 s in total (a round
+  under way finishes) (`links_sweep`); pairs the cap does not reach are SKIP,
+  never PASS. Under `--skip-reset` the sweep runs with no reset
   first, on the unit as it is. Then one whole-box fabric open and close
   (`links_fabric`).
 
@@ -775,7 +776,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 |---|---|---|
 | `busbar_<step>` (`qb`, `mix`, `step`, `heavy`, `code`) | The step's program exits 0, prints no `<NAME> FAIL` line, and exits within its planned length plus 300 s | **FAIL** with the first FAIL line, or the exit code or hang and the last line of the log. **SKIP** on a dry run. |
 | `links_pair` | Every linked chip pair passes a 2-chip all-gather, data checked bit for bit | **FAIL** naming the pairs and channels; each link end, by tray, ASIC, port and BDF, in `link_ends` |
-| `links_sweep` | After a pair failure or hang, or a bus-bar hang or CCL failure: a `tt-smi -glx_reset` (none under `--skip-reset`), then the pair test again at 10 s per pair within a 300 s total cap, on the links UMD finds after the reset | **FAIL** as `links_pair`, or when UMD discovery after the reset fails. **SKIP** when the reset failed, or when the cap left pairs not reached (listed in `not_reached`). |
+| `links_sweep` | After a pair failure or hang, or a bus-bar hang or CCL failure: a `tt-smi -glx_reset` (none under `--skip-reset`), then the pair test again at 10 s per pair, no new round started after 300 s in total, on the links UMD finds after the reset | **FAIL** as `links_pair`, or when UMD discovery after the reset fails. **SKIP** when the reset failed, or when the cap left pairs not reached (listed in `not_reached`). |
 | `links_fabric` | One whole-box fabric open and close | **FAIL** on a non-zero exit, a FAIL line or a hang |
 
 ### GDDR
