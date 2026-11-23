@@ -349,6 +349,8 @@ def reference_unnormalized_actions(tokens, stats):
     return np.where(mask, 0.5 * (normalized + 1) * (high - low) + low, normalized)
 
 
+# Six 32-layer predict_action calls (about 34 s each on an N150) after loading the 7B weights
+@pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [OPENVLA_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [OPENVLA_MESH_DEVICE], indirect=True)
 def test_predict_action_tokens(mesh_device, openvla_weights_path, llama2_hf_model):
@@ -545,7 +547,7 @@ def test_language_model_decode_order_and_page_table(seq_len, monkeypatch):
     logits = language_model(inputs_embeds=FakeTTTensor((1, 1, seq_len, 8)), return_dict=True)
 
     assert language_model._last_generated_tokens == [prefill_token] + decode_tokens
-    # generate() reads the returned logits, one per action token, the prefill's first
+    # forward() hands these logits out one per call (the first as .logits), so the prefill's must come first
     assert [int(step.reshape(-1).argmax()) for step in logits] == [prefill_token] + decode_tokens
     assert [token for token, _, _ in calls] == [prefill_token] + decode_tokens[:-1]
     assert [position for _, position, _ in calls] == list(range(seq_len, seq_len + 6))
