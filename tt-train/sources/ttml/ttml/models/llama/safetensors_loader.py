@@ -545,7 +545,8 @@ def export_hf_model(
     are copied alongside, so the directory loads with ``AutoModelForCausalLM.from_pretrained``.
 
     Raises:
-        NotImplementedError: a parameter is sharded (TP or FSDP); only replicated models are exported.
+        NotImplementedError: a parameter is sharded (TP or FSDP); only replicated models are exported. Or the model
+            has a parameter with no HF tensor to write it to (an attention bias): the export would drop it.
         ValueError: *dtype* is not float32, float16, or bfloat16; or it was left unset and the parameters are
             stored as more than one dtype, or as a dtype this export cannot write.
     """
@@ -554,6 +555,11 @@ def export_hf_model(
 
     parameters = model.parameters()
     layout = hf_layout(model)
+    if unmapped := sorted(set(parameters) - set(layout)):
+        detail = "".join(f"\n  {name}" for name in unmapped)
+        raise NotImplementedError(
+            f"export_hf_model has no HF tensor to write these parameters to, and would drop them:{detail}"
+        )
     stored: set[np.dtype] = set()
     for name in layout:
         param = parameters[name]

@@ -1175,6 +1175,23 @@ class TestExportHfModel:
             expected = param.to_numpy(ttnn.DataType.FLOAT32)
             assert np.array_equal(reloaded.parameters()[name].to_numpy(ttnn.DataType.FLOAT32), expected), name
 
+    def test_rejects_a_model_with_parameters_it_cannot_write(self, tmp_path, expect_error):
+        """Attention biases have no HF tensor in the export, so it refuses rather than drop them, before touching the
+        directory: an earlier export there survives."""
+        model, _ = loaded_model(tmp_path / "source", attention_bias=True)
+        biases = sorted(name for name in model.parameters() if name.endswith("/bias"))
+        assert biases, "premise: the model has attention biases"
+        export = tmp_path / "export"
+        export.mkdir()
+        earlier = export / "model.safetensors"
+        earlier.write_bytes(b"an earlier export")
+
+        with expect_error(NotImplementedError, biases[0]):
+            export_hf_model(model, export)
+
+        assert sorted(path.name for path in export.iterdir()) == ["model.safetensors"]
+        assert earlier.read_bytes() == b"an earlier export"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
