@@ -193,8 +193,10 @@ std::vector<CBInfo> get_cb_info(
                     // 1D depthwise (non-coalesced) streams num_blocks_act_w one-tap weight blocks per
                     // height block. Buffer all of them so they stay resident and are reused across
                     // height blocks (the writer reads weights once, on the first block) instead of
-                    // re-reading from DRAM each block. Normal conv buffers kernel_size[0] blocks.
-                    weight_block_num_tiles *= is_1d_depthwise_conv ? num_blocks_act_w : kernel_size[0];
+                    // re-reading from DRAM each block. A normal conv buffers num_blocks_act_w blocks: kernel_size[0]
+                    // when the inner dim is sliced per kernel row, 1 with full_inner_dim (the writer pushes exactly
+                    // num_blocks_act_w blocks per height block, so the ring must hold exactly that many).
+                    weight_block_num_tiles *= num_blocks_act_w;
                 } else if (conv_config.enable_weights_double_buffer) {
                     weight_block_num_tiles *= 2;
                 }

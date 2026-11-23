@@ -1633,11 +1633,13 @@ static ttnn::Tensor prepare_conv_weights_internal(
                 weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
                     weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
             } else {
+                // Activation reuse and full_inner_dim both feed the whole kh x kw window of a pixel as one inner-dim
+                // block, so the weight rows are laid out (kh, kw, c) contiguously with the padding at the end.
                 weight_tensor_ = convert_conv_weight_tensor_to_special_padding_tiled_layout(
                     weight_tensor_,
                     params.weight_block_h_ntiles,
                     params.weight_block_w_ntiles,
-                    params.enable_activation_reuse,
+                    params.enable_activation_reuse || params.full_inner_dim,
                     weight_tensor_.dtype());
             }
         } else if (input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
