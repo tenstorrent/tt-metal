@@ -507,6 +507,152 @@ GALAXY: dict = {
     ),
 }
 
+# MM_TUNED160=on (MB.9, OWNER 2026-11-23, call-time): the 8x4 re-sweep of every dense matmul a 5120 chunk runs (160
+# rows a chip; layers 0-20 under DECODER_SKIP=decode: results/MB.9_ladder.md), keyed as GALAXY. Swept in parallel on
+# single cards (tests/perf/test_matmul_sweep.py::test_sweep_card, P23_WIDE=1, P23_SHARD=i/12 over
+# tests/test_mm160_offon.py's capture of a real chunk), every candidate held to the 11 x 10 matmul grid (FIX.15: <= 110
+# cores; "minimal auto" takes the card's 12 x 10: refused) and the model's L1; fidelity, dtypes, accumulation the call's
+# own. Kept (OWNER rule 3, 2026-11-23): deterministic (every chip equal, 2 repeats), error vs float64 not worse than
+# today's config's (+1 %), > 1 % faster. Bit-identity with today's config or its summation order is NOT a criterion
+# (DS41-390): judged end to end by the gate's test_ladder with the switch on. Looked up before GALAXY / the rule.
+GALAXY160: dict = {
+    # attn.wo_b x20 a chunk: 0.1392 -> 0.1365 ms (1d in0 pm5 pn2 bw8 sb1x1)
+    ((1, 1, 160, 8192), (1, 1, 8192, 5120), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "1d",
+        {
+            "grid": (11, 10),
+            "in0_block_w": 8,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 5,
+            "out_block_w": 2,
+            "per_core_M": 5,
+            "per_core_N": 2,
+            "mcast_in0": True,
+        },
+    ),
+    # attn.wq_b x20 a chunk: 0.1941 -> 0.1756 ms (1d in0 pm5 pn10 ob5x2 bw20 sb1x2)
+    ((1, 1, 160, 1280), (1, 1, 1280, 32768), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "1d",
+        {
+            "grid": (11, 10),
+            "in0_block_w": 20,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 5,
+            "out_block_w": 2,
+            "per_core_M": 5,
+            "per_core_N": 10,
+            "mcast_in0": True,
+        },
+    ),
+    # compressor x1 a chunk: 0.0275 -> 0.0260 ms (2d 8x5 pm1 pn2 ob1x2 bw32 sb1x2)
+    ((1, 1, 160, 5120), (1, 1, 5120, 512), "BFLOAT16", "BFLOAT16", "FLOAT32", True, 11, 10): (
+        "2d",
+        {
+            "grid": (8, 5),
+            "in0_block_w": 32,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 1,
+            "out_block_w": 2,
+            "per_core_M": 1,
+            "per_core_N": 2,
+            "transpose_mcast": False,
+            "fuse_batch": True,
+        },
+    ),
+    # engram_kv x2 a chunk: 0.2504 -> 0.2366 ms (minimal M2 K24 N8 sb1x4)
+    ((1, 1, 640, 6144), (1, 1, 6144, 6400), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "minimal",
+        {"grid": (11, 10), "M_block_size": 2, "K_block_size": 24, "N_block_size": 8, "subblock_h": 1, "subblock_w": 4},
+    ),
+    # hc.fn x1 a chunk: 0.0881 -> 0.0745 ms (2d 1x5 pm1 pn1 ob1x1 bw64 sb1x1)
+    ((1, 1, 160, 20480), (1, 1, 20480, 32), "BFLOAT16", "FLOAT32", "FLOAT32", True, 11, 10): (
+        "2d",
+        {
+            "grid": (1, 5),
+            "in0_block_w": 64,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 1,
+            "out_block_w": 1,
+            "per_core_M": 1,
+            "per_core_N": 1,
+            "transpose_mcast": False,
+            "fuse_batch": True,
+        },
+    ),
+    # indexer.weights_proj x3 a chunk: 0.0161 -> 0.0134 ms (2d 1x5 pm1 pn1 ob1x1 bw40 sb1x1)
+    ((1, 1, 160, 5120), (1, 1, 5120, 32), "BFLOAT16", "BFLOAT16", "BFLOAT16", True, 11, 10): (
+        "2d",
+        {
+            "grid": (1, 5),
+            "in0_block_w": 40,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 1,
+            "out_block_w": 1,
+            "per_core_M": 1,
+            "per_core_N": 1,
+            "transpose_mcast": False,
+            "fuse_batch": True,
+        },
+    ),
+    # indexer.wq_b x3 a chunk: 0.0261 -> 0.0247 ms (1d in0 pm5 pn2 bw20 sb1x2)
+    ((1, 1, 160, 1280), (1, 1, 1280, 4096), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "1d",
+        {
+            "grid": (11, 10),
+            "in0_block_w": 20,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 5,
+            "out_block_w": 2,
+            "per_core_M": 5,
+            "per_core_N": 2,
+            "mcast_in0": True,
+        },
+    ),
+    # q_a x20 a chunk: 0.0468 -> 0.0442 ms (1d in0 pm5 pn1 bw32 sb1x1)
+    ((1, 1, 160, 5120), (1, 1, 5120, 1792), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "1d",
+        {
+            "grid": (11, 10),
+            "in0_block_w": 32,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 5,
+            "out_block_w": 1,
+            "per_core_M": 5,
+            "per_core_N": 1,
+            "mcast_in0": True,
+        },
+    ),
+}
+# MM_TUNED160=on: ttnn.bringup.grouped_matmul knobs (block_w, depth, rt) of the attention's wo_a by (x shape, weight
+# shape) (WO_A_GMM_BLOCK_W / WO_A_GMM_DEPTH, rt 1 otherwise); the same sweep (tests/perf/test_matmul_sweep._sweep_gmm)
+GMM160: dict = {
+    # attn.wo_a.gmm x20: 0.1312 -> 0.1271 ms (gmm bw2 depth4 rt1)
+    ((1, 8, 160, 4096), (1, 8, 4096, 1024)): (2, 4, 1),
+}
+
+
+def tuned160() -> bool:
+    """MM_TUNED160=on (call-time, MB.9): GALAXY160 / GMM160 entries first."""
+    return settings.get("MM_TUNED160") == "on"
+
+
+def gmm_knobs(x_shape, w_shape) -> tuple:
+    """(block_w, depth, rt) of the attention's grouped wo_a: the GMM160 entry under MM_TUNED160=on, else the
+    settings (rt 1, the op's default)."""
+    if mode() == "galaxy" and tuned160():
+        e = GMM160.get((tuple(x_shape), tuple(w_shape)))
+        if e is not None:
+            return tuple(e)
+    return settings.get("WO_A_GMM_BLOCK_W"), settings.get("WO_A_GMM_DEPTH"), 1
+
+
 # minimal_matmul blocking (tiles): the sweep's best within 1-2 % on every bf16-output projection of this run
 MIN_BLOCK_M, MIN_BLOCK_K, MIN_BLOCK_N = 4, 4, 8
 # at most this many row tiles: a wide-N bf16 projection on 1D multicast (P.9: the 160-row projections of ATTN_SP32_PROJ)
@@ -629,7 +775,8 @@ def _mcast_1d(Mt, Kt, Nt, a_dt, w_dt, o_dt, fp32, grid, l1_budget):
 def program_config(x, w, dtype, ckc, batched: bool = False):
     """The tuned (kind, config) of one call, or None (auto); cached by (M, K, N, batch, dtypes, fp32 DEST, grid).
     A batched call (attention wo_a) under WO_A_CONFIG=auto: None (P.24's switch; the path before it).
-    MATMUL_CONFIG=galaxy: the GALAXY entry of the same key when there is one, else the rule."""
+    MATMUL_CONFIG=galaxy: the GALAXY entry of the same key when there is one (under MM_TUNED160=on the GALAXY160
+    entry first), else the rule."""
     shape, wshape = tuple(x.shape), tuple(w.shape)
     if batched and math.prod(wshape[:-2]) > 1 and settings.get("WO_A_CONFIG") == "auto":
         return None
@@ -637,11 +784,15 @@ def program_config(x, w, dtype, ckc, batched: bool = False):
     grid = worker_grid(dev)  # FIX.15: the grid under MAX_WORKER_CORES (11 x 10 on a Galaxy), the whole grid elsewhere
     fp32 = _ckc_fp32(ckc)
     galaxy = mode() == "galaxy"
-    key = (shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y, galaxy)
+    t160 = galaxy and tuned160()
+    key = (shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y, galaxy, t160)
     if key in _cache:
         return _cache[key]
     if galaxy:
-        spec = GALAXY.get(table_key(shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y))
+        tk = table_key(shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y)
+        spec = GALAXY160.get(tk) if t160 else None
+        if spec is None:
+            spec = GALAXY.get(tk)
         if spec is not None:
             _cache[key] = pc = build(spec)
             return pc
@@ -689,7 +840,7 @@ def _site_config(x, w, dtype, ckc, batched: bool = False, rule: bool = True):
         _SITE_MEMO[0] = snap
         _SITE_MEMO[1] = {}
     memo = _SITE_MEMO[1]
-    key = (id(w), id(ckc), dtype, x.dtype, batched, rule)
+    key = (id(w), id(ckc), dtype, x.dtype, batched, rule, snap.get("MM_TUNED160"))
     shape = x.shape
     hit = memo.get(key)
     if hit is not None and hit[0] is w and hit[1] is ckc and hit[2] == shape:

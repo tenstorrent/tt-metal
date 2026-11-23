@@ -1,0 +1,102 @@
+{
+ "used": [
+  {
+   "id": "DS41-191",
+   "how": "set the expectation (weight-DRAM-bound 160-row projections: a few % a call) written in BREADCRUMBS before the change",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-139",
+   "how": "kept the 1D in0 family as the baseline for the Mt <= 8 projections; the winners for wq_b / wo_b / q_a / indexer.wq_b stay 1D in0",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-175",
+   "how": "single-card sweep processes open the card without the fabric keys (test_sweep_card._card_params); the brief's owner instruction is the yes for single-card jobs on the Galaxy",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-311",
+   "how": "Record / switch in test_mm160_offon set RECORD on every live tt/mm_configs module dict (_mm_globals), not only the import",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-329",
+   "how": "same: hooks set on the module globals the held model's functions use",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-314",
+   "how": "the call-time switch sets only settings.snap[MM_TUNED160] (+ env) per side, never settings.refresh()",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-114",
+   "how": "the sweep's L1 filler held every candidate to the model's 1399 KiB free for CBs from the capture",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-306",
+   "how": "corrected to match the code (the brief): GALAXY ships wq_b 1d bw8 ob5x10; PS.2's bw20 ob5x2 is now GALAXY160",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-306",
+   "evidence": "tt/mm_configs.py GALAXY key ((1,1,160,1280),(1,1,1280,32768),...,11,10) ships 1d in0 bw8 ob5x10 (197.9 us in the MB.9 op profile, generated/ds41_mm160/ops_single.json); ATTN_ROOFLINE (tt/attention.py _out_wo) only switches wo_a to grouped_matmul. The 'wq_b out_block 5x2, bw 20: 0.182 ms' fix never shipped. Entry rewritten in MB.9.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the orchestrator measure --part names are run names (determinism, last, test_mm160_offon), not test-file stems as the brief says (test_determinism / test_ladder)",
+  "how to tell a call-time switch that did not reach a path from a change that is bit-identical on that path's data: count the tuned-config hits at call time (tests/test_mm160_offon.Hits)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-57",
+   "answer": "n/a",
+   "evidence": "the note audits per-chunk program builds / host tables in serving; MB.9 changes only program configs keyed by shapes / dtypes and a call-time switch (no position, slot or segment value enters a config); the gate's cold test_no_rebuild checks program_builds_after_warmup_serving == 0 with the change"
+  },
+  {
+   "id": "OV-58",
+   "answer": "disagree",
+   "evidence": "no lost switch: tests/test_mm160_ladder_hits.py ran testing/ladder.run_ladder (rung last, the gate's accuracy load) off then on: tuned-config hits off 0, on 220 across all 9 tuned sites (wq_b/wo_b/q_a/wo_a 40 each); the 42 layer outputs are byte-identical off vs on. 7 of 9 winners keep the K summation order by construction (fp32 DEST reload); engram_kv K24 / wo_a bw2 regroup L1-acc sums that are exact on the ladder chunk (DS41-390). Done part: test_mm160_offon records mm160_tuned_hits_single_<off|on> (gate run 2: 0 / 90) and asserts off == 0, on > 0; BREADCRUMBS MB.9 OV-58."
+  }
+ ],
+ "cited_only": [
+  "DS41-188"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "MB.9",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-23T17:19:30",
+  "head": "359c3bce50b",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.9.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.9_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/MB.9.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_mm160_ladder_hits.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_mm160_offon.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

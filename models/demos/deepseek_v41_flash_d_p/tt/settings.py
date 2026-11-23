@@ -41,6 +41,16 @@ TABLE = {
         "DEST, grid), tuned's rule for any call not in it. Dtypes, compute kernel configs, memory configs and the op "
         "sequence are the same either way",
     ),
+    "MM_TUNED160": Setting(
+        "on",
+        ("on", "off"),
+        "MB.9 (OWNER 2026-11-23), read per call (CALL-TIME, bringup/hooks.py batch_call_settings / batch_call_apply). "
+        "on = the dense matmuls of a 5120 chunk on the 8x4 (160 rows a chip, and the 320 / 640 rows some of them pass) "
+        "take the 8x4 re-sweep's configs (tt/mm_configs.GALAXY160; GMM160 for the grouped wo_a's knobs): each faster, "
+        "deterministic and within the accuracy limits; a winner may change the fp32 summation order over K (DS41-390; "
+        "OWNER rule 3: not a criterion) (results/MB.9_ladder.md); off = the path before (GALAXY / the rule; wo_a "
+        "WO_A_GMM_*). Other chunk sizes make none of these keys: unchanged either way",
+    ),
     "WO_A_CONFIG": Setting(
         "tuned",
         ("tuned", "auto"),

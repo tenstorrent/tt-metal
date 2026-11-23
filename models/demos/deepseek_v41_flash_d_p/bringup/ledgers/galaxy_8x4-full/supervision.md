@@ -702,3 +702,22 @@
   (P.19 / PB.MM256 machinery), judged on accuracy limits (test_ladder last rung, switch on) + fresh-process determinism +
   on-repeats exact + 5120 ladder + cold no-rebuild (owner rule 3: no bit-identity criterion). Switch DS41_MM_TUNED160.
   Starts with wq_b 197.8 -> 185.0 (PS.2) and DS41-306's fix. Rebuilt for this branch.
+- 16:13 heartbeat: MB.9 agent active; the per-card parallel sweep running (several single-card processes done, rc 0, ~7 min each; more in flight). RAM used 111 GB, avail 448.
+- 16:25 INCIDENT (overseer's): at 15:53 I checked out model_bringup while the batching orchestrator (orch_pb) was still exiting after PB.MM256's commit; it then read model_bringup's tasks.yaml and crashed in decided_picks ('unknown task PB.0'; read only, no writes). PB.MM256 was already committed (d6bc91514d5); both ledgers checked consistent (model_bringup: 132 tasks resolve, MB.9 RUNNING). Lesson: before a branch switch, wait until no orchestrator process is alive (ps, not only the log line).
+- 16:43 heartbeat: MB.9 agent's gate check PASS (5 units, 552 s); agent finishing.
+- 16:50 CHECKED MB.9's gate check: all 104 err_* metrics EXACTLY equal MB.8's -> the test_ladder unit (shared process,
+  per-run DS41_MM_TUNED160=on, default off) did not run the tuned configs, although test_mm160_offon shows on != off from
+  L13. So the check's accuracy proves nothing about the change. PB.MM256 is not affected the same way: its accuracy ran in
+  the ACCEPT gate after the accept flipped the default to on (the model loaded with the configs); its A/B device times
+  moved as expected. Plan: MB.9's accept gate (default flipped) is the real accuracy check; I verify its err_* differ from
+  MB.8's before the commit stands. Note for MB.9 (any further attempt): find and fix why the per-run switch misses
+  test_ladder's path; add a proof metric.
+- 17:13 OV-58 resolved by the agent (gate check 2 PASS 17:10): NOT a lost switch. Probe test_mm160_ladder_hits.py: on
+  the ladder's last rung the tuned configs ARE hit (wq_b / wo_b / q_a / wo_a 40 each ...) and the 42 layer outputs are
+  byte-identical off vs on: 7 of 9 winners keep the K order (fp32 DEST reloads, identical by construction); engram_kv
+  (K block 16 -> 24) and wo_a (block_w 4 -> 2) regroup fp32 sums that are exact on that chunk; the 138240 serving chunk
+  rounds differently from L13. Proof metric now in the gate: mm160_tuned_hits off 0 / on 90. Device off 66.68 / on 65.85
+  ms (-0.43..-0.83). Agent finishing; then the A/B.
+- 17:26 MB.9 A/B (5120, off -> on): device ms every rung -0.3..-1.0 (51200 60.3 -> 59.8, 139264 62.8 -> 62.4, 1M 76.2 ->
+  75.2); steady walls within noise (51200 73.7 -> 71.7, 524288 81.1 -> 77.7, 786432 82.9 -> 83.8). Gate would PASS.
+  ACCEPTED (owner rule: device win + gate PASS). Resumed for the accept gate.

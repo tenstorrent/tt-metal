@@ -1402,6 +1402,8 @@ def batch_call_settings(env=None) -> tuple:
     # likewise, refreshed like POS_DYNAMIC
     # INDEXER_BMAX_COMPUTE (MB.8, PB.FBM: the block maxes on the score's compute kernel, read per indexer call)
     # likewise, refreshed like POS_DYNAMIC
+    # MM_TUNED160 (MB.9: the 5120 chunk's re-swept matmul configs, tt/mm_configs.py, read per call) likewise,
+    # refreshed like POS_DYNAMIC
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1410,6 +1412,7 @@ def batch_call_settings(env=None) -> tuple:
         "INDEXER_BLOCK_SELECT",
         "INDEXER_BLOCK_SELECT_MIN",
         "INDEXER_BMAX_COMPUTE",
+        "MM_TUNED160",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))
 
 
@@ -1426,6 +1429,7 @@ def batch_call_apply(model) -> None:
         _settings.snap["INDEXER_BLOCK_SELECT"] = _settings._read("INDEXER_BLOCK_SELECT")  # MB.6: likewise
         _settings.snap["INDEXER_BLOCK_SELECT_MIN"] = _settings._read("INDEXER_BLOCK_SELECT_MIN")  # MB.6: likewise
         _settings.snap["INDEXER_BMAX_COMPUTE"] = _settings._read("INDEXER_BMAX_COMPUTE")  # MB.8: likewise
+        _settings.snap["MM_TUNED160"] = _settings._read("MM_TUNED160")  # MB.9: likewise
     want = _settings.get("DECODER_SKIP")
     have = getattr(model, "skip_mode", None)
     if have is None or want == have or "replay128" in (want, have) or getattr(model, "tail_of", None) is not None:

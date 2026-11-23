@@ -1650,3 +1650,79 @@
   -1.3..-1.5 at 1M: at 160 rows a chip the writer's max cost the score little. Rungs <= 262144: same code both sides.
   `orchestrator measure --task MB.8` rc 0 (on side: test_skip_positions, test_no_rebuild). Report:
   ledgers/galaxy_8x4-full/results/MB.8_ladder.md.
+
+## MB.9 perf (attempt 1): every matmul of the 5120 chunk (160 rows a chip) re-swept (DS41_MM_TUNED160 off | on)
+
+- Expected saving per chunk (perf_guide read; DS41-191: the 160-row bfp8 projections are weight-DRAM bound, so a
+  config reorders the same reads and buys a few % a call; PB.MM256 at 256 rows got -1.56 ms by the sweep, -2.1 ms
+  measured): device ~0.6-0.9 ms of ~76 ms (wq_b 197.2 -> 185.0 us x20 = 0.24 (PS.2); wo_b / q_a / wo_a gmm a few % each
+  x20 ~0.3-0.5; engram_kv / indexer / hc / compressor <= 0.1); host 0 (a config per shape, cached; the site memo keys
+  on the switch). The moe_block fork's matmuls take their blocking from the load-time flat layout: no call-time knob.
+- Load reason (capture): needs the perf model (layers 0-20, DECODER_SKIP=decode) because the inventory is every matmul
+  call of a REAL 5120 chunk with the model's own L1 view; one load, reused by test_mm160_offon and the gate's units.
+- Code: switch MM_TUNED160 (tt/settings.py, default on; read per call: bringup/hooks.py batch_call_settings +
+  batch_call_apply), tt/mm_configs.GALAXY160 (looked up before GALAXY under MATMUL_CONFIG=galaxy; program_config's
+  cache and the HOST_GLUE site memo key on the switch) and GMM160 + mm.gmm_knobs (attention wo_a's grouped_matmul
+  knobs, rt passed). Default on: the brief's generic rule ("make the change the default"; the orchestrator sets both
+  sides) over the task text's "default off until accepted"; PB.MM256 shipped the same way. Flip the default if the
+  owner wants off.
+- Sweep tooling (tests/perf/test_matmul_sweep.py, ported from PB.MM256 d6bc91514d5: P23_OUT, P23_EXACT / P23_ASSOC,
+  _sweep_gmm, GALAXY256 table writer) + MB.9's P23_WIDE=1: in0 blocks = every divisor of K (<= 64; PS.2's wq_b bw 20),
+  1D out blocks narrower than per_core_N, minimal M blocks dividing M; accepted by OWNER rule 3 (deterministic, every
+  chip equal, rel vs fp64 <= today's x 1.01, within a bf16 step of auto, never "minimal auto" (12 x 10 > 110 cores)),
+  not by bit-identity; grouped_matmul likewise (fp64 truth added). Table names GALAXY160 / GMM160.
+- Capture: tests/test_mm160_offon.py MM160_PARTS=capture (resident runner, real agentic_cc chunk at 138240, off):
+  97 matmul calls a chunk, 12 distinct (generated/ds41_mm160/calls_mm160.json; op-mode profile ops_single.json: dense
+  + gmm matmuls 11.3 of 71.9 ms). hc.fn is now 160 x 20480 (no GALAXY entry: rule). Sweep: resident runner stopped, 12
+  single-card processes (devjob mb9_sw0..11, --device auto: the brief's owner instruction overrides agent rule 19 /
+  DS41-175 here), ~14 min wall (engram_kv 1035 configs the longest); merge_shards(12).
+- Winners (sweep us -> us, x calls): wq_b 194.1 -> 175.6 (1d ob5x2 bw20 = PS.2's), wo_a gmm 131.2 -> 127.1 (bw2 depth4),
+  wo_b 139.2 -> 136.5 (sb1x1), q_a 46.8 -> 44.2 (bw32), engram_kv 250.4 -> 236.6 (minimal M2 K24 N8), hc.fn 88.1 -> 74.5
+  (bw64), indexer.weights_proj 16.1 -> 13.4, indexer.wq_b 26.1 -> 24.7, compressor 5120x512 27.5 -> 26.0. No winner:
+  compressor 5120x1024, 320/640x512x128. Sum 11.11 -> 10.50 ms a chunk (-0.61). All bit-identical to today's config
+  on random inputs (DS41-390: random bfp8 sums exact); on the real chunk off vs on first differs at L13 (7e-4 rel L2),
+  3.8e-2 at L18-19 (the order changes of gmm bw2 / minimal K24 / bw changes on real outliers).
+- test_mm160_offon (gate unit, PASS): on vs on repeat 0.0 (20 layer outputs, 29 served records); confirm (mesh, every
+  chip, 2 repeats a side) 0.0 for all 9 entries, on-mesh us off -> on: wq_b 195.9 -> 180.1, wo_b 139.5 -> 137.0, gmm
+  131.5 -> 128.3, q_a 47.2 -> 44.3, engram_kv 250.7 -> 237.4, hc.fn 87.6 -> 74.1, weights_proj 16.1 -> 13.6, idx wq_b
+  28.2 -> 27.0, compressor 28.0 -> 27.8. Device ms a chunk (H 138240, 2 runs a side): off 66.40 / 66.49, on 66.06 /
+  65.46.
+- Per-chunk values (rule 20): none touched. A config is picked by the call's shapes / dtypes (fixed by the chunk
+  size) and the switch; no position, slot or segment value enters a program config or a grouped_matmul knob; no new
+  host transfer.
+- Accuracy (switch on): `orchestrator measure --part determinism` 0.0; `--part last` (test_ladder last rung) PASS, all
+  104 limits: err_final_hidden 0.1362 / 0.2422 (MB.8 0.136), top5 1.0, L39 0.755 / 1.533. Note: --part takes the run
+  names (determinism, last, test_mm160_offon, test_skip_positions, test_no_rebuild), not the test-file stems.
+- Gate `gate MB.9 --check` (devjob mb9_gate): PASS (test_mm160_offon reused; determinism + ladder re-run by the gate in
+  one process; skip_positions + no_rebuild shared, rc 0). Steady tok/s (switch on via the default) 51200 70.1k, 131072
+  68.8k, 139264 69.1k, 262144 67.6k, 524288 65.5k, 786432 62.7k, 1024000 62.7k (MB.8's gate, other process: 69.1 / 67.9
+  / 66.1 / 66.7 / 65.6 / 63.0 / 61.6k); builds after warm-up 0; ids uploads 0; determinism 0.0.
+- Outcome vs the estimate: device -0.43 ms a chunk in test_mm160_offon (estimate -0.6..-0.9; sweep sum -0.61); host 0.
+  Report: ledgers/galaxy_8x4-full/results/MB.9_ladder.md.
+- Re-run: capture `resident submit --cmd "MM160_PARTS=capture <walls env> DS41_MM_TUNED160=off scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_mm160_offon.py"`; sweep (resident stopped)
+  `for i in 0..11: devjob start mb9_sw$i -- env P23_OUT=generated/ds41_mm160 P23_WIDE=1 P23_SHARD=$i/12
+  P23_CALLS=calls_mm160.json P23_MIN_MS=0 P23_TIMEOUT_S=3600 scripts/run_safe_pytest.sh --device auto --run-all
+  --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py -k test_sweep_card`, then
+  `P23_OUT=generated/ds41_mm160 P23_WIDE=1 python -c "...test_matmul_sweep import merge_shards; merge_shards(12)"`;
+  gate `gate MB.9 --spec $BRINGUP_SPEC --check`; A/B `orchestrator measure --task MB.9`.
+- `orchestrator measure --task MB.9` (devjob mb9_measure): rc 0 on determinism, last, test_mm160_offon,
+  test_skip_positions, test_no_rebuild. Its test_mm160_offon: device off [65.94, 66.38] / on [65.80, 65.85] ms
+  (attention 21.73 -> 21.19).
+- OV-58 (gate test_ladder's 104 err_* metrics bit-equal to MB.8's): not a lost switch. Probe
+  tests/test_mm160_ladder_hits.py (diagnostic; resident runner, the gate's accuracy load, testing/ladder.run_ladder on
+  rung last, off then on, tuned-config hits counted at call time): off hits {} ; on hits 160x1280x32768 (wq_b) 40,
+  160x8192x5120 (wo_b) 40, 160x5120x1792 (q_a) 40, wo_a gmm 40, 640x6144x6400 (engram_kv) 2, 160x1280x4096 8,
+  160x5120x32 8, 160x20480x32 1, 160x5120x512 1; the 42 layer outputs the ladder reads back are byte-identical off vs
+  on. Cause: 7 of the 9 winners only change in0 block / out subblock / out block / grid, and with fp32 DEST the K-block
+  partials are reloaded exactly, so the K summation order is the same (bit-identical by construction); only engram_kv
+  (minimal K block 16 -> 24) and wo_a (gmm block_w 4 -> 2) regroup packer-L1-accumulated fp32 sums, and on the ladder's
+  chunk those sums are exact (DS41-390). The serving chunk at 138240 (test_mm160_offon) does hit a rounding there from
+  L13. Proof metric added: test_mm160_offon records mm160_tuned_hits_single_<off|on>[_<site>] and asserts off == 0,
+  on > 0 (the hits are counted in the test by wrapping mm_configs._site_config / gmm_knobs in every live module dict;
+  no model code for it). Re-run: `resident submit --cmd "BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all
+  --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_mm160_ladder_hits.py"`.
+- Gate run 2 (`gate MB.9 --check`, devjob mb9_gate2, after the test-only OV-58 change): PASS, every unit re-run.
+  mm160_tuned_hits_single off 0 / on 90; device ms off 66.68 / on 65.85; steady tok/s 51200 70.6k, 131072 67.7k,
+  139264 68.5k, 262144 68.0k, 524288 65.8k, 786432 61.6k, 1024000 62.1k; determinism 0.0; builds after warm-up 0.
+  Gotcha: a gate --check moves results/<task>* aside while it runs (the report reappears after it).
