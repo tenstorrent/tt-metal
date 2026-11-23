@@ -14,6 +14,7 @@ Drop-in for residual.RowOps.seal / residual.AttnRes (same signatures). Differenc
   * Outputs are per-module buffers, valid until that module's next call (the model consumes them in the app).
 """
 
+import os
 import struct
 
 import torch
@@ -22,6 +23,8 @@ import ttnn
 from models.demos.inkling2_mini.tt.fused import common as F
 
 MAX_DEPTH = 5
+# one-query calls with sealed rows: their products before the partial arrives (same products, same order)
+EARLY_PROD = os.environ.get("INKLING_ATTNRES_EARLY", "1") == "1"
 
 
 def f32_bits(x):
@@ -114,7 +117,7 @@ class FusedRowOps:
                 0,  # no rms weight
                 *self._norm_args(norm, True),
             ],
-            defines=[("ATTNRES_WAIT_SEM", "1")] if wait else None,
+            defines=self._defines(wait, nq, k),
         )
         writer = F.kernel(
             "attnres_writer.cpp",
@@ -144,6 +147,7 @@ class FusedRowOps:
                 inv_c=f32_bits(1.0 / self.c),
                 eps=f32_bits(self.eps),
             ),
+            defines=[d for d in self._defines(False, nq, k) or [] if d[0] != "ATTNRES_WAIT_SEM"] or None,
         )
         f32 = ttnn.float32
         cbs = [
@@ -169,6 +173,13 @@ class FusedRowOps:
         F.run(io, [reader, writer, compute], cbs)
         self.fresh[k] = partial
         return out
+
+    @staticmethod
+    def _defines(wait, nq, k):
+        d = [("ATTNRES_WAIT_SEM", "1")] if wait else []
+        if EARLY_PROD and nq == 1 and k > 0 and F._REC is None:
+            d.append(("ATTNRES_EARLY_PROD", "1"))
+        return d or None
 
     @staticmethod
     def _has_norm(norm):

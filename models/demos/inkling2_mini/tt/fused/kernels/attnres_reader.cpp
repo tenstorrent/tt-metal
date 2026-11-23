@@ -25,6 +25,18 @@ void kernel_main() {
 
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), rowio::DRAM_RD_ALIGN);
 
+#ifdef ATTNRES_EARLY_PROD  // queries and sealed rows first: the compute starts their products before the partial
+    {
+        DeviceZoneScopedN("R_qs");
+        cb_reserve_back(cb_q, nq * T);
+        rowio::read_pages(q_addr, 4096, 0, nq * T, get_write_ptr(cb_q));
+        cb_reserve_back(cb_s, k * T);
+        rowio::read_pages(s_addr, 4096, 0, k * T, get_write_ptr(cb_s));
+        noc_async_read_barrier();
+        cb_push_back(cb_q, nq * T);
+        cb_push_back(cb_s, k * T);
+    }
+#endif
     {
         DeviceZoneScopedN("R_gather");
 #ifdef ATTNRES_WAIT_SEM  // joined program (common.py joined): the partial is written by the part before this one
@@ -60,6 +72,7 @@ void kernel_main() {
         cb_push_back(cb_wt, T);
     }
 
+#ifndef ATTNRES_EARLY_PROD
     if constexpr (nq > 0) {
         DeviceZoneScopedN("R_qs");
         cb_reserve_back(cb_q, nq * T);
@@ -74,6 +87,7 @@ void kernel_main() {
             cb_push_back(cb_s, k * T);
         }
     }
+#endif
 
     if constexpr (get_named_compile_time_arg_val("split_out")) {
         // row norm (E10d): first half of the output row scatter (the writer does the rest)

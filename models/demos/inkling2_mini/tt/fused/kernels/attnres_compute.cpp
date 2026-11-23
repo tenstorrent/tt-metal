@@ -71,6 +71,31 @@ void kernel_main() {
     constexpr uint32_t d = k + 1;
 
     compute_kernel_hw_startup(cb_p, cb_p, cb_sq);
+#ifdef ATTNRES_EARLY_PROD
+    // one query, sealed rows: their products need no partial, so they run while it is still on its way (pushed to
+    // cb_prod in the same order as below: rows 0 .. k-1, then the partial's)
+    static_assert(nq == 1 && k > 0);
+    cb_wait_front(cb_q, T);
+    cb_wait_front(cb_s, k * T);
+    {
+        DeviceZoneScopedN("C_prod0");
+        for (uint32_t j = 0; j < k; ++j) {
+            tile_regs_acquire();
+            reconfig_data_format(cb_q, cb_s);
+            mul_init(cb_q, cb_s);
+            for (uint32_t t = 0; t < T; ++t) {
+                mul_tiles(cb_q, cb_s, t, j * T + t, t);
+            }
+            sum_dst(T);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_prod);
+            put(0, cb_prod);
+            tile_regs_release();
+        }
+    }
+    reconfig_data_format(cb_p, cb_p);
+#endif
     cb_wait_front(cb_scaler, 1);
     cb_wait_front(cb_p, T);
 
@@ -153,7 +178,11 @@ void kernel_main() {
         DeviceZoneScopedN("C_prod");
         // ---- elementwise products q_i * s_j, summed over the T pages: one tile per (i, j)
         for (uint32_t i = 0; i < nq; ++i) {
+#ifdef ATTNRES_EARLY_PROD
+            for (uint32_t j = k; j < d; ++j) {
+#else
             for (uint32_t j = 0; j < d; ++j) {
+#endif
                 const uint32_t scb = j < k ? cb_s : cb_np;
                 const uint32_t sbase = j < k ? j * T : 0;
                 tile_regs_acquire();
