@@ -9,13 +9,15 @@ Galaxies) and is split with ``create_submesh`` into a sender and a receiver half
 and socket settings follow the prefill runner's stage boundary: lease mode (push, grant both sides, drain, wait
 both sides), an 8x8 worker grid, the minimal L1 FIFO, and a 12 B chunk record as metadata.
 
-Payload of one chunk of ``tokens`` rows (5120 = one GLM-5.3 chunk), all segments rows over SP; ``full`` sends
-all three on one socket, the others one segment alone:
+Payload of one chunk of ``tokens`` rows (5120 = one GLM-5.3 chunk), dim 2 over SP and dim 3 (or 1) over TP;
+``full`` sends every segment on one socket, the others one kind alone:
 
 * activation: bf16 TILE ``[1, 1, tokens, 6144]``, embedding over TP (the runner's D2D mapper);
 * KVPE rows: ``[1, 28, tokens, 176]`` uint32 ROW_MAJOR = 704 B pages for the 28 loop layers, layers over TP
   (GLM TP-dedups its KVPE cache, so each row crosses once);
-* top-k: ``[1, 7, tokens, 2048]`` uint32 ROW_MAJOR, k over TP (the runner's index mapper).
+* top-k: 7 segments, one per set, ``[1, 1, tokens // tp, tp * 2048]`` uint32 ROW_MAJOR: the runner's index
+  layout (runner_utils.indexer_indices_global_spec), each chip holding its own rows with the full k = 2048 (8 KB
+  pages).
 
 Relay mode is the deployed GLM path (only cable chips cross; here chips directly linked to the other half).
 Each case prints one ``[d2d-cost] {json}`` line with eager and traced per-chunk times and the bytes moved; the
@@ -24,6 +26,7 @@ on a transfer into zeroed destinations outside the timed loop.
 """
 
 import json
+import math
 import statistics
 import time
 
@@ -52,6 +55,7 @@ _FIFO_BYTES = 256  # the runner's minimum: the L1-aligned chunk record
 _WARMUP = 2
 _ITERS = 10
 _TRACE_REGION_BYTES = 32 * 1024 * 1024
+_PAYLOADS = ("activation", "kvpe", "topk", "full")
 
 
 def _mapper(mesh, tp_dim):
@@ -60,21 +64,21 @@ def _mapper(mesh, tp_dim):
     )
 
 
-def _segments(payload, tokens):
-    """(name, global shape, dtype, layout, TP-sharded dim) per segment."""
+def _segments(payload, tokens, tp):
+    """(kind, name, global shape, dtype, layout, TP-sharded dim) per segment."""
     segs = [
-        ("activation", [1, 1, tokens, _HIDDEN], ttnn.bfloat16, ttnn.TILE_LAYOUT, 3),
-        ("kvpe", [1, _LOOP_LAYERS, tokens, _KVPE_PAGE_WORDS], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 1),
-        ("topk", [1, _TOPK_SETS, tokens, _TOPK], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 3),
+        ("activation", "activation", [1, 1, tokens, _HIDDEN], ttnn.bfloat16, ttnn.TILE_LAYOUT, 3),
+        ("kvpe", "kvpe", [1, _LOOP_LAYERS, tokens, _KVPE_PAGE_WORDS], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 1),
+    ]
+    segs += [
+        ("topk", f"topk{i}", [1, 1, tokens // tp, tp * _TOPK], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 3)
+        for i in range(_TOPK_SETS)
     ]
     return segs if payload == "full" else [s for s in segs if s[0] == payload]
 
 
 def _nbytes(shape, dtype):
-    n = 1
-    for d in shape:
-        n *= d
-    return n * (2 if dtype == ttnn.bfloat16 else 4)
+    return math.prod(shape) * (2 if dtype == ttnn.bfloat16 else 4)
 
 
 def _host_data(shape, dtype, seed):
@@ -108,10 +112,6 @@ def _record(mesh, words):
     )
 
 
-def _zero_fill(t, zeros_host):
-    ttnn.copy_host_to_device_tensor(zeros_host, t)
-
-
 def _assert_equal(sent, got, what):
     a_shards, b_shards = ttnn.get_device_tensors(sent), ttnn.get_device_tensors(got)
     assert len(a_shards) == len(b_shards), f"{what}: {len(b_shards)} shards != {len(a_shards)}"
@@ -129,31 +129,32 @@ def _stats(samples):
     }
 
 
-@pytest.mark.parametrize("tokens", [5120, 2560], ids=["t5120", "t2560"])
-@pytest.mark.parametrize("payload", ["activation", "kvpe", "topk", "full"])
-@pytest.mark.parametrize("split", ["rows", "cols"])
-@pytest.mark.parametrize("relay", [True, False], ids=["relay", "direct"])
+def _case(fabric, split, relay, payload, tokens=5120):
+    profile = torus_xy_device_params if fabric == "torus-xy" else fabric2d_device_params
+    return pytest.param(
+        (8, 4),
+        profile(fabric_payload_size=model_fabric_payload("glm_5_3"), trace_region_size=_TRACE_REGION_BYTES),
+        split,
+        relay,
+        payload,
+        tokens,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id=f"{fabric}-{split}-{'relay' if relay else 'direct'}-{payload}-t{tokens}",
+    )
+
+
+# Relay (the deployed GLM path) per payload on 4 cables (rows) and 8 cables (cols); the 2560-token pair checks
+# linearity in bytes; direct mode is context; one Fabric2D case checks the fabric profile does not matter.
+_CASES = [
+    *[_case("torus-xy", split, True, payload) for split in ("rows", "cols") for payload in _PAYLOADS],
+    *[_case("torus-xy", "rows", True, payload, 2560) for payload in ("activation", "full")],
+    *[_case("torus-xy", split, False, "full") for split in ("rows", "cols")],
+    _case("fabric2d", "rows", True, "full"),
+]
+
+
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(
-                fabric_payload_size=model_fabric_payload("glm_5_3"), trace_region_size=_TRACE_REGION_BYTES
-            ),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
-        ),
-        pytest.param(
-            (8, 4),
-            fabric2d_device_params(
-                fabric_payload_size=model_fabric_payload("glm_5_3"), trace_region_size=_TRACE_REGION_BYTES
-            ),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
+    "mesh_device, device_params, split, relay, payload, tokens", _CASES, indirect=["mesh_device", "device_params"]
 )
 def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payload, tokens):
     if not is_blackhole():
@@ -168,7 +169,7 @@ def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payloa
     sender_mesh.enable_program_cache()
     receiver_mesh.enable_program_cache()
 
-    segs = _segments(payload, tokens)
+    segs = _segments(payload, tokens, tp=shape[1])
     spec = lambda shape, dtype, layout: ttnn.TensorSpec(
         shape=ttnn.Shape(shape), dtype=dtype, layout=layout, buffer_type=ttnn.BufferType.DRAM
     )
@@ -176,8 +177,8 @@ def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payloa
     sender, receiver = ttnn.D2DStreamService.create_pair(
         sender_mesh=sender_mesh,
         receiver_mesh=receiver_mesh,
-        global_spec=spec(*segs[0][1:4]),
-        mapper=_mapper(sender_mesh, segs[0][4]),
+        global_spec=spec(*segs[0][2:5]),
+        mapper=_mapper(sender_mesh, segs[0][5]),
         fifo_size_bytes=_FIFO_BYTES,
         sender_worker_cores=_WORKERS,
         receiver_worker_cores=_WORKERS,
@@ -185,25 +186,28 @@ def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payloa
         metadata_size_bytes=_METADATA_BYTES,
         share_fabric_links=True,
         relay=relay,
-        extra_tensors=[(spec(*s[1:4]), _mapper(sender_mesh, s[4])) for s in segs[1:]],
+        extra_tensors=[(spec(*s[2:5]), _mapper(sender_mesh, s[5])) for s in segs[1:]],
     )
 
     stamp("host data")
-    hosts = [_host_data(s[1], s[2], seed=i) for i, s in enumerate(segs)]
+    hosts = [_host_data(s[2], s[3], seed=i) for i, s in enumerate(segs)]
     zeros = [
-        ttnn.from_torch(
-            torch.zeros(s[1], dtype=torch.bfloat16 if s[2] == ttnn.bfloat16 else torch.int32),
-            dtype=s[2],
-            layout=s[3],
-            mesh_mapper=_mapper(receiver_mesh, s[4]),
-        )
-        for s in segs
+        ttnn.from_torch(torch.zeros_like(h), dtype=s[3], layout=s[4], mesh_mapper=_mapper(receiver_mesh, s[5]))
+        for h, s in zip(hosts, segs)
     ]
-    inputs = [_to_mesh(h, sender_mesh, s[2], s[3], s[4]) for h, s in zip(hosts, segs)]
-    outputs = [_to_mesh(torch.zeros_like(h), receiver_mesh, s[2], s[3], s[4]) for h, s in zip(hosts, segs)]
+    inputs = [_to_mesh(h, sender_mesh, *s[3:6]) for h, s in zip(hosts, segs)]
+    outputs = [_to_mesh(torch.zeros_like(h), receiver_mesh, *s[3:6]) for h, s in zip(hosts, segs)]
     del hosts
     send_md = _record(sender_mesh, [0, 0, tokens])
     recv_md = _record(receiver_mesh, [0, 0, 0])
+    zero_md = ttnn.from_torch(
+        torch.zeros(1, 1, 1, 3, dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            receiver_mesh, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+        ),
+    )
     payload_arg = inputs if len(inputs) > 1 else inputs[0]
 
     def push():
@@ -232,14 +236,16 @@ def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payloa
         return (time.perf_counter() - t0) * 1e3
 
     def check(mode):
-        for t, z in zip(outputs, zeros):
-            _zero_fill(t, z)
+        # Zero every destination, metadata included, so a transfer that delivers nothing fails the checks.
+        for t, z in zip(outputs + [recv_md], zeros + [zero_md]):
+            ttnn.copy_host_to_device_tensor(z, t)
         ttnn.synchronize_device(receiver_mesh)
         transfer(*mode)
-        for (name, *_), a, b in zip(segs, inputs, outputs):
-            _assert_equal(a, b, f"{name}")
-        got_md = ttnn.to_torch(ttnn.get_device_tensors(recv_md)[0]).flatten().tolist()
-        assert got_md == [0, 0, tokens], f"metadata {got_md}"
+        for (_, name, *_), a, b in zip(segs, inputs, outputs):
+            _assert_equal(a, b, name)
+        for dev_md in ttnn.get_device_tensors(recv_md):
+            got_md = ttnn.to_torch(dev_md).flatten().tolist()
+            assert got_md == [0, 0, tokens], f"metadata {got_md}"
 
     send_trace = recv_trace = None
     try:
@@ -263,7 +269,7 @@ def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payloa
         stamp(f"traced median {statistics.median(traced):.3f} ms; checking")
         check(traced_mode)
 
-        seg_bytes = {name: _nbytes(shape, dtype) for name, shape, dtype, *_ in segs}
+        seg_bytes = {name: _nbytes(shape, dtype) for _, name, shape, dtype, *_ in segs}
         total = sum(seg_bytes.values())
         result = {
             "fabric": str(device_params.get("fabric_config")),
@@ -272,6 +278,7 @@ def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payloa
             "tokens": tokens,
             "split": split,
             "half_shape": list(shape),
+            "segment_shapes": {name: shape for _, name, shape, *_ in segs},
             "segment_bytes": seg_bytes,
             "total_bytes": total,
             "eager": _stats(eager),
