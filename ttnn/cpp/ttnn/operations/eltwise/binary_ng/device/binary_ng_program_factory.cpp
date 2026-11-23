@@ -1557,6 +1557,37 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
     };
 
+    // LLK 2.0 trial (TT_BINARY_LLK2=1): add, sub and mul of two bf16 tensors without broadcast or activations run
+    // tt_metal/tt-llk/llk2/kernels/eltwise_binary_no_bcast.cpp. Same CBs, args, reader and writer.
+    {
+        const char* llk2 = std::getenv("TT_BINARY_LLK2");
+        const auto no_activation = [&](const char* key) {
+            const auto it = compute_kernel_defines.find(key);
+            return it == compute_kernel_defines.end() || it->second.empty();
+        };
+        const bool plain_op =
+            op_type == BinaryOpType::ADD || op_type == BinaryOpType::SUB || op_type == BinaryOpType::MUL;
+        const bool bf16 = a_data_format == tt::DataFormat::Float16_b && b_data_format == tt::DataFormat::Float16_b &&
+                          c_data_format == tt::DataFormat::Float16_b;
+        if (llk2 != nullptr && llk2[0] == '1' && !is_sfpu_op && !is_where_op && b.has_value() && plain_op && bf16 &&
+            !fp32_dest_acc_en && operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE &&
+            no_activation("PROCESS_LHS_ACTIVATIONS(i)") && no_activation("PROCESS_RHS_ACTIVATIONS(i)") &&
+            no_activation("PROCESS_POST_ACTIVATIONS(i)")) {
+            compute_desc.kernel_source = "tt_metal/tt-llk/llk2/kernels/eltwise_binary_no_bcast.cpp";
+            compute_desc.defines.emplace_back("LLK2_DEST_FP32", "0");
+            compute_desc.defines.emplace_back("LLK2_MATH_FIDELITY", "4");  // the descriptor's default: HiFi4
+            compute_desc.named_compile_time_args = {
+                {"binary_op", op_type == BinaryOpType::ADD ? 0u : (op_type == BinaryOpType::SUB ? 1u : 2u)},
+                {"cb_lhs", static_cast<uint32_t>(tt::CBIndex::c_0)},
+                {"cb_rhs", static_cast<uint32_t>(tt::CBIndex::c_1)},
+                {"cb_out", static_cast<uint32_t>(tt::CBIndex::c_2)},
+                {"cb_lhs_format", static_cast<uint32_t>(a_data_format)},
+                {"cb_rhs_format", static_cast<uint32_t>(b_data_format)},
+                {"cb_out_format", static_cast<uint32_t>(c_data_format)},
+            };
+        }
+    }
+
     // READER KERNEL DESCRIPTOR
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> reader_common_runtime_args;

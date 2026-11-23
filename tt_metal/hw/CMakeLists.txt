@@ -106,7 +106,15 @@ else()
     endif()
 endif()
 
-set(GPP_CMD "${SFPI_BASE}/sfpi/compiler/bin/riscv-tt-elf-g++")
+# TT_METAL_SFPI_PATH overrides the packaged/system toolchain with a custom SFPI
+# root (a directory containing compiler/ and include/), e.g. a
+# folding-instrumented SFPI under evaluation. The version check below is skipped:
+# a custom toolchain is allowed to differ from the pinned version.
+if(NOT "$ENV{TT_METAL_SFPI_PATH}" STREQUAL "")
+    set(GPP_CMD "$ENV{TT_METAL_SFPI_PATH}/compiler/bin/riscv-tt-elf-g++")
+else()
+    set(GPP_CMD "${SFPI_BASE}/sfpi/compiler/bin/riscv-tt-elf-g++")
+endif()
 if(NOT EXISTS "${GPP_CMD}")
     message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
 endif()
@@ -123,7 +131,7 @@ execute_process(
 message(STATUS "Using SFPI compiler: ${GPP_CMD} ${GPP_VERSION}")
 # check this is the version we want (the system version might be wrong)
 string(REGEX REPLACE "^\\([^:]+:([^[)]+)(\\[[0-9]+\\])?\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
-if(NOT ${GPP_VERSION} STREQUAL "${SFPI_version}")
+if(NOT ${GPP_VERSION} STREQUAL "${SFPI_version}" AND "$ENV{TT_METAL_SFPI_PATH}" STREQUAL "")
     if(TT_USE_SYSTEM_SFPI)
         message(
             FATAL_ERROR

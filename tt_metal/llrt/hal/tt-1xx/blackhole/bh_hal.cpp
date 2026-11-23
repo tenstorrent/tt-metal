@@ -169,6 +169,13 @@ public:
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
         }
         includes.push_back("tt_metal/hw/firmware/src/tt-1xx");
+        if (params.core_type == HalProgrammableCoreType::TENSIX &&
+            params.processor_class == HalProcessorClassType::COMPUTE) {
+            // LLK 2.0: arch-independent headers plus exactly one arch directory. Last, so they never
+            // shadow an existing header; llk2 headers are reached only by kernels that include them.
+            includes.push_back("tt_metal/tt-llk/llk2/inc/common");
+            includes.push_back("tt_metal/tt-llk/llk2/inc/blackhole");
+        }
         return includes;
     }
 

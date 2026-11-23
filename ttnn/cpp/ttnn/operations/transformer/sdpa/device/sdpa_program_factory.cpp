@@ -1395,7 +1395,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t fp32_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
     const uint32_t l1_budget_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    // The LLK 2.0 kernel has one flow, the streaming one, in either Dest mode: reader, writer, masks and buffers
+    // are then the streaming ones with fp32_dest_acc_en too, and only the Dest mode and the formats of S, P, L and
+    // 1 / L differ.
+    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en) || operation_attributes.llk2_compute;
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -1765,7 +1768,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
     // both must share the same data format for the unpack config to be correct.
     TT_ASSERT(
-        !use_streaming_compute || sum_df == im_df,
+        !use_streaming_compute || operation_attributes.llk2_compute || sum_df == im_df,
         "SDPA fused SALAD correction requires out and sum CBs to share data format");
 
     uint32_t q_tile_size = tt::tile_size(q_df);
@@ -1860,21 +1863,75 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.attention_sink = allocate_tile_cb(attention_sink_tiles, sink_tile_size, sink_df);
     }
 
-    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
-    // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
-    if (use_streaming_compute) {
-        cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
-    }
+    // TT_SDPA_LLK2: the LLK 2.0 kernel (tt_metal/tt-llk/llk2/kernels/sdpa.cpp, next to the bmm kernel). It works on
+    // groups of Q tile rows, and each of its intermediates has a buffer of its own, sized in groups, so that every
+    // tensor it reads is at the front of a buffer and every tensor it writes at the back:
+    //   scores         S of the group being turned into P, and of the group after it   2 x [group, Sk_chunk_t] tiles
+    //   probabilities  P of one group                                                  1 x [group, Sk_chunk_t]
+    //   row max        m of one group                                                  1 x [group, 1]
+    //   alpha          of the group in P V, and of the group after it                  2 x [group, 1]
+    //   inverse        1 / L of one group                                              1 x [group, 1]
+    //   sink term      exp(scale (sink - m)) of one group, with an attention sink      1 x [group, 1]
+    // They take the place of the 1.0 kernel's qk_im (Sq_chunk_t rows), exp_max_diff (Sq_chunk_t tiles) and
+    // recip_scratch (1 tile), which are then not allocated: with three groups per Q chunk, two tiles more in total.
+    // A group is 3, 2 or 1 rows: one that divides the Q chunk and whose buffers fit in L1 beside the others. Three
+    // rows before two when the keys are at least four K chunks, two before three when they are fewer: a Q chunk's
+    // first group computes its S, and its last group its P, with nothing beside them, and with few K chunks that
+    // is a larger share of the Q chunk the larger the group (measured: Q chunks of 6 and 12 rows, 1 to 4 K chunks).
+    const bool llk2_group_buffers = operation_attributes.llk2_compute;
+    struct {
+        uint32_t scores, probabilities, row_max, alpha, inverse, sink_term;
+    } llk2_cbs{};
 
-    cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
+    if (!llk2_group_buffers) {
+        // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
+        // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
+        if (use_streaming_compute) {
+            cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
+        }
+        cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
+    }
     cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.max_A = allocate_tile_cb(statistics_tiles, max_tile_size, max_df);
     cb_ids.max_B = allocate_tile_cb(statistics_tiles, max_tile_size, max_df);
     cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    if (!llk2_group_buffers) {
+        cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    }
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+    uint32_t llk2_group_rows = 1;
+    bool llk2_last_p_beside_m = false;
+    if (llk2_group_buffers) {
+        uint32_t other_cb_bytes = 0;
+        for (const auto& cb : desc.cbs) {
+            other_cb_bytes += cb.total_size;
+        }
+        const uint32_t bytes_per_group_row =
+            3 * Sk_chunk_t * qk_im_tile_size + 3 * stats_tile_size + (use_attention_sink ? 2 : 1) * sum_tile_size;
+        const bool few_k_chunks = k_num_chunks < 4;
+        for (const uint32_t rows : {few_k_chunks ? 2u : 3u, few_k_chunks ? 3u : 2u}) {
+            if (Sq_chunk_t % rows == 0 && other_cb_bytes + rows * bytes_per_group_row <= l1_budget_bytes) {
+                llk2_group_rows = rows;
+                break;
+            }
+        }
+        // Pooling a group's S for m takes the unpacker 16 cycles a tile with the pack thread idle; the exp and the
+        // two packs of a P block take the pack thread about as long as pooling 48 tiles (6 blocks). From that size
+        // on the kernel runs a pass's last P block next to m of the next group instead of in front of the last S
+        // block; below it U would wait for that block.
+        llk2_last_p_beside_m = llk2_group_rows * Sk_chunk_t >= 6 * dst_size;
+        const uint32_t group_tiles = llk2_group_rows * Sk_chunk_t;
+        llk2_cbs.scores = allocate_tile_cb(2 * group_tiles, qk_im_tile_size, qk_im_df);
+        llk2_cbs.probabilities = allocate_tile_cb(group_tiles, qk_im_tile_size, qk_im_df);
+        llk2_cbs.row_max = allocate_tile_cb(llk2_group_rows, stats_tile_size, stats_df);
+        llk2_cbs.alpha = allocate_tile_cb(2 * llk2_group_rows, stats_tile_size, stats_df);
+        llk2_cbs.inverse = allocate_tile_cb(llk2_group_rows, sum_tile_size, sum_df);  // 1 / L in L's format
+        if (use_attention_sink) {
+            llk2_cbs.sink_term = allocate_tile_cb(llk2_group_rows, sum_tile_size, sum_df);  // added into L: its format
+        }
+    }
 
     const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
     const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
@@ -2001,6 +2058,15 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = reader_compile_time_args;
     reader_desc.defines = defines;
+    if (operation_attributes.llk2_compute) {
+        // The two switches of the LLK 2.0 route in the dataflow kernels; without them they are the 1.0 route's.
+        // SDPA_Q_ROWS_BEFORE_FIRST_V (reader): the LLK 2.0 kernel needs V of the first K chunk after S of two groups
+        // of Q rows, so the reader sends that many rows of Q in front of that V and the rest behind it.
+        // SDPA_WINDOWS_READ_BY_WORKING_CORES (reader and writer, windowed_mode.hpp): only a core with a Q chunk loads
+        // cu_window_seqlens, and only its values.
+        reader_desc.defines.emplace_back("SDPA_Q_ROWS_BEFORE_FIRST_V", std::to_string(2 * llk2_group_rows));
+        reader_desc.defines.emplace_back("SDPA_WINDOWS_READ_BY_WORKING_CORES", "1");
+    }
     reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;
@@ -2010,6 +2076,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.defines = defines;
+    if (operation_attributes.llk2_compute) {
+        writer_desc.defines.emplace_back("SDPA_WINDOWS_READ_BY_WORKING_CORES", "1");
+    }
     writer_desc.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute_desc;
@@ -2018,6 +2087,74 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_compile_time_args;
     compute_desc.defines = defines;
+    if (operation_attributes.llk2_compute) {
+        // LLK 2.0 kernel (TT_SDPA_LLK2): the 1.0 kernel's protocol for Q, K, V and the output, and its run-time
+        // args. LLK 2.0 plans on every TRISC, so it needs the kernel settings and the buffers' formats identically on
+        // all three: the settings as defines (MATH_FIDELITY exists only on math and pack), the op as named args, each
+        // buffer's id as the named arg <name> and its format as <name>_format.
+        TT_FATAL(use_streaming_compute, "TT_SDPA_LLK2: the LLK 2.0 kernel follows the streaming CB protocol only");
+        compute_desc.kernel_source = "tt_metal/tt-llk/llk2/kernels/sdpa.cpp";
+        auto llk2_defines = defines_map;  // reader and writer keep `defines`
+        llk2_defines["LLK2_DEST_FP32"] = fp32_dest_acc_en ? "1" : "0";
+        llk2_defines["LLK2_MATH_FIDELITY"] = std::to_string(static_cast<uint32_t>(math_fidelity));
+        compute_desc.defines = KernelDescriptor::Defines(llk2_defines.begin(), llk2_defines.end());
+        auto& named = compute_desc.named_compile_time_args;
+        const auto buffer = [&](const std::string& name, uint32_t id, tt::DataFormat data_format) {
+            named.emplace_back(name, id);
+            named.emplace_back(name + "_format", static_cast<uint32_t>(data_format));
+        };
+        // The op: what the 1.0 kernel reads from its positional args, by name.
+        named.emplace_back("DHt", DHt);
+        named.emplace_back("vDHt", vDHt);
+        named.emplace_back("Sq_chunk_t", Sq_chunk_t);
+        named.emplace_back("q_num_chunks", q_num_chunks);
+        named.emplace_back("Sk_chunk_t", Sk_chunk_t);
+        named.emplace_back("k_num_chunks", k_num_chunks);
+        named.emplace_back("valid_Skt", valid_Skt);
+        named.emplace_back("scale", scale_packed);
+        named.emplace_back("is_causal", static_cast<uint32_t>(use_causal_kernel));
+        named.emplace_back("use_provided_mask", static_cast<uint32_t>(compute_use_provided_mask));
+        named.emplace_back("is_chunked", static_cast<uint32_t>(is_chunked));
+        named.emplace_back("sliding_window_size", sliding_window_size.value_or(0));
+        named.emplace_back("use_attention_sink", static_cast<uint32_t>(use_attention_sink));
+        named.emplace_back("k_partial_col", k_partial_col);
+        named.emplace_back("use_zigzag", static_cast<uint32_t>(use_zigzag_balancing));
+        named.emplace_back("use_k_range", static_cast<uint32_t>(use_k_range_ctrl));
+        named.emplace_back("kv_retain_heads", kv_retain);
+        named.emplace_back("q_rows_per_group", llk2_group_rows);
+        named.emplace_back("last_p_beside_m", static_cast<uint32_t>(llk2_last_p_beside_m));
+        buffer("cb_q_in", cb_ids.q_in, q_df);
+        buffer("cb_k_in", cb_ids.k_in, k_df);
+        buffer("cb_v_in", cb_ids.v_in, v_df);
+        buffer("cb_identity_scale_in", cb_ids.identity_scale_in, scalar_df);
+        // The mask buffer: a mask tensor's tiles in its format, or the tiles the writer makes (Float16_b). An op with
+        // neither has no such buffer, and the kernel then reads none: the id is a placeholder.
+        buffer(
+            "cb_mask_in", needs_mask_cb ? cb_ids.mask_in : 0u, lightweight_mask ? tt::DataFormat::Float16_b : mask_df);
+        // The sink's buffer and the one for a group's sink terms: placeholders, as the mask buffer's, without a sink.
+        buffer(
+            "cb_attention_sink",
+            use_attention_sink ? cb_ids.attention_sink : 0u,
+            use_attention_sink ? tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype())
+                               : tt::DataFormat::Float16_b);
+        buffer("cb_sink_term", llk2_cbs.sink_term, sum_df);
+        // The reader's pages of words: a chunked op's start position (when it is a tensor) and each Q chunk's range
+        // of K chunks. Placeholders, as the mask buffer's, for an op without them.
+        buffer("cb_chunk_start_idx", flexible_chunked ? cb_ids.chunk_start_idx_compute : 0u, tt::DataFormat::Int32);
+        buffer("cb_k_range", use_k_range_ctrl ? cb_ids.windowed_k_range : 0u, tt::DataFormat::Int32);
+        buffer("cb_scores", llk2_cbs.scores, qk_im_df);
+        buffer("cb_probabilities", llk2_cbs.probabilities, qk_im_df);
+        buffer("cb_row_max", llk2_cbs.row_max, stats_df);
+        buffer("cb_alpha", llk2_cbs.alpha, stats_df);
+        buffer("cb_inverse", llk2_cbs.inverse, sum_df);
+        buffer("cb_max_A", cb_ids.max_A, stats_df);
+        buffer("cb_max_B", cb_ids.max_B, stats_df);
+        buffer("cb_sum_A", cb_ids.sum_A, sum_df);
+        buffer("cb_sum_B", cb_ids.sum_B, sum_df);
+        buffer("cb_out_im_A", cb_ids.out_im_A, im_df);
+        buffer("cb_out_im_B", cb_ids.out_im_B, im_df);
+        buffer("cb_out", cb_ids.out, out_df);
+    }
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
