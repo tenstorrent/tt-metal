@@ -13,7 +13,8 @@
 // 3. gate_up cores: each union expert's column (kt_gu tiles) whole into cb_w, one at a time (two in flight).
 // 4. down columns through an 8-slot cache (cb_wd, pushed once): before row r, the experts of row r not in a slot
 //    are read into slots row r does not use, after compute finished row r - 1 (cb_done); then one token in cb_tok.
-// Runtime args: as moe_bank_reader.cpp (no PF / X_MCAST / IDS_FROM_SEM).
+// Runtime args: as moe_bank_reader.cpp (no PF_RING / IDS_FROM_SEM). PF_LAYOUT: as moe_bank_reader.cpp (the extra
+// pair and down's last columns from two more tensors, runtime args 10, 11).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -71,6 +72,14 @@ void kernel_main() {
     const auto ids = TensorAccessor(ids_args, ids_addr);
     const auto gu = TensorAccessor(gu_args, gu_addr);
     const auto dn = TensorAccessor(dn_args, dn_addr);
+#ifdef PF_LAYOUT
+    constexpr uint32_t n_pf = get_named_compile_time_arg_val("n_pf");  // base columns (70)
+    constexpr auto gux_args = TensorAccessorArgs<dn_args.next_compile_time_args_offset()>();
+    constexpr auto dnx_args = TensorAccessorArgs<gux_args.next_compile_time_args_offset()>();
+    const auto gux = TensorAccessor(gux_args, get_arg_val<uint32_t>(a++));
+    const auto dnx = TensorAccessor(dnx_args, get_arg_val<uint32_t>(a++));
+    const uint32_t m = bank + nb * dslot;  // ring position
+#endif
 
     // ids rows (row r: face 0 row r, 8 uint16 = 16 B at byte r * 32) and routing weights rows (bf16, same layout)
     const uint32_t scr = get_write_ptr(cb_scr);  // ids at r * 16, weights at 64 + r * 16
@@ -199,8 +208,14 @@ void kernel_main() {
             }
             for (uint32_t s = 0; s < topk; ++s) {
                 if (loads[r] & (1u << s)) {
-                    const uint32_t slot = (uid[load_u[r][s]] * dn_slots + dslot) * kt_dn;
-                    noc_async_read(dn.get_noc_addr(slot * nb + bank), wd + s * kt_dn * tb, kt_dn * tb);
+                    const uint32_t id = uid[load_u[r][s]];
+#ifdef PF_LAYOUT
+                    const uint64_t src =
+                        m < n_pf ? dn.get_noc_addr(id * kt_dn * n_pf + m) : dnx.get_noc_addr(id * kt_dn * nb + bank);
+#else
+                    const uint64_t src = dn.get_noc_addr(((id * dn_slots + dslot) * kt_dn) * nb + bank);
+#endif
+                    noc_async_read(src, wd + s * kt_dn * tb, kt_dn * tb);
                 }
             }
             noc_async_read_barrier();
@@ -226,7 +241,13 @@ void kernel_main() {
         const bool active = !(flags & F_EXTRA) || extra_bank(uid[u]) == bank;
         cb_reserve_back(cb_w, kt_gu);
         if (active) {  // not this expert's extra bank: stale tiles, the writer drops the results
+#ifdef PF_LAYOUT
+            const uint64_t src = (flags & F_EXTRA)
+                                     ? gux.get_noc_addr(((uid[u] / (nb - x_lo)) * 2 * kt_gu + col_off) * nb + bank)
+                                     : gu.get_noc_addr(uid[u] * kt_gu * n_pf + m);
+#else
             const uint64_t src = gu.get_noc_addr((gu_slot(uid[u], bank, kslot) * 2 * kt_gu + col_off) * nb + bank);
+#endif
             noc_async_read(src, get_write_ptr(cb_w), kt_gu * tbw);
             noc_async_read_barrier();
         }

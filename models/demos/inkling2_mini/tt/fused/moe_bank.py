@@ -253,8 +253,9 @@ class BankMoeExperts:
 
     def _call_rows(self, x, weights, indices, R):
         """R verify rows (x [1,1,R,H], weights / indices [1,1,R,8]): the union of the rows' experts is read once; row
-        r's output is bit-equal to the 1-row call on row r alone (module moe_bank_mr_reader.cpp). Bank layout only."""
-        assert not self.pf and 1 < R <= 4, (self.pf, R)
+        r's output is bit-equal to the 1-row call on row r alone (module moe_bank_mr_reader.cpp). Bank or PF layout
+        (PF: no ring)."""
+        assert 1 < R <= 4, R
         assert x.dtype == ttnn.bfloat16 and weights.dtype == ttnn.bfloat16 and indices.dtype == ttnn.uint16
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, R, HIDDEN]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, ttnn.L1_MEMORY_CONFIG
@@ -267,6 +268,8 @@ class BankMoeExperts:
             "cb_done": CB_DONE, "kt_gu": KT_GU, "kt_dn": KT_DN, "x_tiles": KT_GU, "n_banks": self.nb, "base": self.base,
             "x_lo": X_LO, "dn_slots": self.dn_slots, **common,
         }  # fmt: skip
+        if self.pf:
+            r_named["n_pf"] = len(pf_columns("experts.w_down", self.nb))
         w_named = {
             "cb_ga": CB_GA, "cb_g32": CB_G32, "cb_u16": CB_U16, "cb_h16": CB_H16, "cb_hid": CB_HID, "cb_o": CB_O,
             "cb_z": CB_Z, "cb_scr": CB_SCR, "sem_u": SEM_U, "sem_g": SEM_G, "sem_r": SEM_R, "n_banks": self.nb,
@@ -289,7 +292,8 @@ class BankMoeExperts:
             core = ttnn.CoreCoord(*c)
             px, py = self.noc[gate]
             r_args.append((core, [x.buffer_address(), weights.buffer_address(), indices.buffer_address(),
-                                  self.w_gate_up.buffer_address(), self.w_down.buffer_address(), f, b, k, off, dslot]))  # fmt: skip
+                                  self.w_gate_up.buffer_address(), self.w_down.buffer_address(), f, b, k, off, dslot]
+                           + ([self.gu_x.buffer_address(), self.dn_x.buffer_address()] if self.pf else [])))  # fmt: skip
             w_args.append((core, [f, j, px, py, cx, cy, out.buffer_address(), n, indices.buffer_address(), b]
                            + ([dense.buffer_address()] if dense is not None else [])))  # fmt: skip
             c_args.append((core, [f]))
@@ -306,8 +310,10 @@ class BankMoeExperts:
             kernels += [
                 ttnn.KernelDescriptor(
                     kernel_source=f"{KDIR}/moe_bank_mr_reader.cpp", core_ranges=_range_set(cores),
-                    compile_time_args=acc(x) + acc(weights) + acc(indices) + acc(self.w_gate_up) + acc(self.w_down),
-                    named_compile_time_args=list(r_named.items()), runtime_args=pick(r_args), defines=xdef,
+                    compile_time_args=acc(x) + acc(weights) + acc(indices) + acc(self.w_gate_up) + acc(self.w_down)
+                    + (acc(self.gu_x) + acc(self.dn_x) if self.pf else []),
+                    named_compile_time_args=list(r_named.items()), runtime_args=pick(r_args),
+                    defines=xdef + [("PF_LAYOUT", "1")] * self.pf,
                     config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=rnoc),
                 ),
                 ttnn.KernelDescriptor(
@@ -342,7 +348,8 @@ class BankMoeExperts:
             for i in (SEM_U, SEM_G, SEM_R, SEM_X)
         ]
         prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=self._cbs_rows(R))
-        io = [x, weights, indices, self.w_gate_up, self.w_down] + ([dense] if dense is not None else []) + [out]
+        io = ([x, weights, indices, self.w_gate_up, self.w_down] + ([self.gu_x, self.dn_x] if self.pf else [])
+              + ([dense] if dense is not None else []) + [out])  # fmt: skip
         y = ttnn.generic_op(io, prog)
         if dense is not None:  # register the twin for this output; drop the previous output's entry (no leak)
             last = getattr(self, "_last_rows", None)
