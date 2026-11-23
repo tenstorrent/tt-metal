@@ -307,6 +307,97 @@ def _mtp_input_verdict() -> None:
     )
 
 
+def _profile_window(runtime, run_chunk, label: str, out_dir: str):
+    """Run one chunk inside a real-time profiler window and save every program record of every chip.
+
+    The device is synchronized before the window opens (so only this chunk's programs land in it) and after the
+    chunk, then records are drained until none arrives for 0.5 s. Saved per record: runtime_id, chip_id, raw start
+    and end ticks, frequency, and an index into a table of kernel-source sets (the op identity)."""
+    import gzip
+    import pickle
+    import threading
+    import time
+
+    import ttnn
+
+    mesh = runtime.mesh_device
+    lock = threading.Lock()
+    rows, sources, src_of_rid, dropped = [], [], {}, [0]
+
+    def collect(batch):
+        with lock:
+            dropped[0] += int(batch.dropped)
+            for r in batch.records:
+                rid = int(r.runtime_id)
+                key = src_of_rid.get(rid)
+                if key is None:
+                    key = len(sources)
+                    sources.append(tuple(str(s) for s in r.kernel_sources))
+                    src_of_rid[rid] = key
+                rows.append(
+                    (rid, int(r.chip_id), int(r.start_timestamp), int(r.end_timestamp), float(r.frequency), key)
+                )
+
+    ttnn.synchronize_device(mesh)
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect)
+    t0 = time.monotonic()
+    try:
+        out = run_chunk()
+        ttnn.synchronize_device(mesh)
+        wall_ms = (time.monotonic() - t0) * 1e3
+        last, last_change = -1, time.monotonic()
+        while time.monotonic() - last_change < 0.5:
+            time.sleep(0.05)
+            with lock:
+                n = len(rows)
+            if n != last:
+                last, last_change = n, time.monotonic()
+    finally:
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
+    path = os.path.join(out_dir, f"rtprof-{label}.pkl.gz")
+    with gzip.open(path, "wb") as f:
+        pickle.dump({"label": label, "rows": rows, "sources": sources, "dropped": dropped[0], "wall_ms": wall_ms}, f)
+    logger.info(
+        f"TRUNK_PROFILE {label} records={len(rows)} programs={len(sources)} dropped={dropped[0]} "
+        f"sync_wall_ms={wall_ms:.1f} file={path}"
+    )
+    return out
+
+
+def _patch_profile() -> None:
+    """Env-gated real-time profiler windows (q171.3.15): TRUNK_PROFILE_CHUNKS lists measured-request chunk indices
+    (e.g. "1,101"), TRUNK_PROFILE_WARMUP the producer's warm-up chunk count (they reuse starts 0..warmup-1 chunks),
+    TRUNK_PROFILE_DIR the output directory. Each listed chunk runs synchronized inside its own window; all other
+    chunks run as before."""
+    wanted = {int(x) for x in os.environ.get("TRUNK_PROFILE_CHUNKS", "").split(",") if x.strip()}
+    if not wanted:
+        return
+    import ttnn
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+    warmup = int(os.environ.get("TRUNK_PROFILE_WARMUP", "10"))
+    out_dir = os.environ["TRUNK_PROFILE_DIR"]
+    os.makedirs(out_dir, exist_ok=True)
+    seen = {}
+    prefill_chunk = TtPrefillRuntime.prefill_chunk
+
+    def profiled_prefill_chunk(self, input_tensor, kv_caches, slot_id, actual_start, actual_end, *args, **kwargs):
+        run = lambda: prefill_chunk(self, input_tensor, kv_caches, slot_id, actual_start, actual_end, *args, **kwargs)
+        if actual_start is None:
+            return run()
+        c = int(actual_start) // self.config.chunk_size
+        seen[c] = seen.get(c, 0) + 1
+        measured = seen[c] == (2 if c < warmup else 1)
+        if not (measured and c in wanted):
+            return run()
+        if not _STATE.get("rt_logged"):
+            _STATE["rt_logged"] = True
+            logger.info(f"TRUNK_PROFILE realtime_profiler_active={ttnn.device.IsProgramRealtimeProfilerActive()}")
+        return _profile_window(self, run, f"chunk{c}", out_dir)
+
+    TtPrefillRuntime.prefill_chunk = profiled_prefill_chunk
+
+
 def _patch_runtime() -> None:
     from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_4 import GLM54Adapter
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
@@ -349,6 +440,7 @@ def main() -> None:
     _patch_mla()
     _patch_runtime()
     _patch_mtp_wiring()
+    _patch_profile()
     runpy.run_module("models.demos.common.prefill.runners.prefill_runner", run_name="__main__")
 
 
