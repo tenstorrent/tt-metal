@@ -459,28 +459,41 @@ class AttnWindow:
         return self.act
 
     def rows(self, hist, xs, scratch):
-        """Multi-token verify (single-input mode): token t's lag group at rows 4 t .. 4 t + 3 of the projection input
-        (attn_window_rows.cpp), also into scratch [1, 1, 32, C] (for commit); hist is not written. Returns self.act."""
+        """Multi-token verify: xs[t] = token t's input row (single mode) or [xq, xk, xv] (triple mode, all tokens the
+        same mode). Token t's rows start at row G t of the projection input (G = 4 single, 9 triple; laid out as
+        __call__ lays out rows 0 .. G - 1, attn_window_rows.cpp), also into scratch [1, 1, 32, C] (for commit); hist
+        is not written. Returns (self.act, G)."""
         R = len(xs)
-        assert 1 <= R <= 4
+        xs = [list(x) if isinstance(x, (list, tuple)) else [x] for x in xs]
+        nin = len(xs[0])
+        assert nin in (1, 3) and all(len(x) == nin for x in xs), [len(x) for x in xs]
+        G = 4 if nin == 1 else 9
+        assert 1 <= R and R * G <= 32, (R, G)
+        flat = [t for x in xs for t in x]
+        for t in flat:
+            F.check_row_input(t)
+            assert t.dtype == ttnn.bfloat16, t.dtype
         n = self.ntiles
         rt = [
             [hist.buffer_address(), self.act.buffer_address(), i * n, scratch.buffer_address()]
             for i in range(len(self.cores))
         ]
-        rt = [r + [x.buffer_address() for x in xs] for r in rt]
+        rt = [r + [t.buffer_address() for t in flat] for r in rt]
         crs = _crs(self.cores)
-        kernels = [_kernel("attn_window_rows.cpp", self.cores, dict(ntiles=n, R=R), rt, ttnn.ReaderConfigDescriptor())]
-        cbs = [_cb(0, ttnn.bfloat16, n, crs), _cb(1, ttnn.bfloat16, n, crs), _stage(24, crs, n * 128 * R + 128)]
-        ttnn.generic_op([hist, scratch, *xs, self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
-        return self.act
+        named = dict(ntiles=n, R=R, ngroups=1 if nin == 1 else 2)
+        kernels = [_kernel("attn_window_rows.cpp", self.cores, named, rt, ttnn.ReaderConfigDescriptor())]
+        cbs = [_cb(0, ttnn.bfloat16, n, crs), _cb(1, ttnn.bfloat16, n, crs), _stage(24, crs, n * 128 * R * nin + 128)]
+        ttnn.generic_op(
+            [hist, scratch, *flat, self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[])
+        )
+        return self.act, G
 
-    def commit(self, hist, scratch, n_acc):
-        """The window state after n_acc accepted tokens of a rows() pass (win_commit.cpp)."""
+    def commit(self, hist, scratch, n_acc, G=4):
+        """The window state after n_acc accepted tokens of a rows() pass (win_commit.cpp); G as rows() returned."""
         n = self.ntiles
         rt = [[hist.buffer_address(), scratch.buffer_address(), i * n, n_acc] for i in range(len(self.cores))]
         crs = _crs(self.cores)
-        kernels = [_kernel("win_commit.cpp", self.cores, dict(ntiles=n), rt, ttnn.ReaderConfigDescriptor())]
+        kernels = [_kernel("win_commit.cpp", self.cores, dict(ntiles=n, G=G), rt, ttnn.ReaderConfigDescriptor())]
         cbs = [_cb(0, ttnn.bfloat16, n, crs), _cb(1, ttnn.bfloat16, n, crs)]
         ttnn.generic_op([hist, scratch], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 

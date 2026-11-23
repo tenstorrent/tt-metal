@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Multi-token verify for local attention layers (Inkling2AttentionFast.decode_rows + commit_rows): R tokens in one
+"""Multi-token verify for attention layers, single and triple input mode (Inkling2AttentionFast.decode_rows + commit_rows): R tokens in one
 pass against R plain decode steps on a copy of the state. The o-projection input rows (row t = token t) and, after
 commit_rows, the k / v rings and the conv history are bit-equal. Seeded prefix (bfp8 rings, max_ctx 128K), positions
 around a ring wrap and far from it.
@@ -20,12 +20,11 @@ from models.demos.inkling2_mini.tt.attention_fast import V_WIDTH, DecodePosition
 
 
 def _one(attn, x, state, pos):
-    """plain decode of one token up to the o-projection input (decode's local path minus w_o)"""
-    if attn.window is None:
-        proj, mode = attn._window(state, x, x, x)
-    else:
-        mode = "single"
-        proj = attn.w_all(attn.window(state.x_hist, [x]), ttnn.bfloat16, attn.mm_cfg)
+    """plain decode of one token up to the o-projection input (decode's local path minus w_o); x: one input row
+    (single mode) or [xq, xk, xv] (triple mode)"""
+    xs = list(x) if isinstance(x, list) else [x]
+    mode = "single" if len(xs) == 1 else "triple"
+    proj = attn.w_all(attn.window(state.x_hist, xs), ttnn.bfloat16, attn.mm_cfg)
     r = ROWS[mode]
     q, mask, sink = attn.prep(proj, pos, {"q": 0, "k": r["k"], "v": r["v"]}, state)
     if attn.is_global:
@@ -62,7 +61,8 @@ def _one(attn, x, state, pos):
 @pytest.mark.parametrize("R", [2, 3])
 @pytest.mark.parametrize("is_global", [False, True], ids=["local", "global"])
 @pytest.mark.parametrize("n_acc", ["all", 1], ids=["accept_all", "accept_1"])
-def test_decode_rows(device, p, R, is_global, n_acc):
+@pytest.mark.parametrize("mode", ["single", "triple"])
+def test_decode_rows(device, p, R, is_global, n_acc, mode):
     n_acc = R if n_acc == "all" else n_acc
     sd = ta.random_state_dict(is_global, seed=11 if is_global else 7)
     attn = Inkling2AttentionFast(device, T.host_weights_from_hf(sd, is_global), is_global)
@@ -75,8 +75,11 @@ def test_decode_rows(device, p, R, is_global, n_acc):
     ref_st, st, ref_n = states
     k0 = ttnn.to_torch(st.k_ring).float()
     g = torch.Generator().manual_seed(p + R)
-    xs_host = [torch.randn(T.HIDDEN, generator=g) for _ in range(R)]
-    xs = [ttnn.to_device(ta._x_host(x), device) for x in xs_host]
+    nin = 1 if mode == "single" else 3
+    xs_host = [[torch.randn(T.HIDDEN, generator=g) for _ in range(nin)] for _ in range(R)]
+    xs = [[ttnn.to_device(ta._x_host(x), device) for x in xt] for xt in xs_host]
+    if mode == "single":
+        xs = [xt[0] for xt in xs]
 
     pos = DecodePositionsFast(device, T.MAX_CTX)
     ref = []
