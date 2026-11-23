@@ -67,7 +67,12 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.utils.sharded_cache import LayoutCacheGuard, layout_descriptor, layout_tag
+from models.demos.deepseek_v3_d_p.utils.sharded_cache import (
+    LayoutCacheGuard,
+    as_tensor_file,
+    layout_descriptor,
+    layout_tag,
+)
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # Prefill collectives: "persistent" (default) runs on the prefill's persistent TT_CCL buffers / semaphores and fp32
@@ -258,9 +263,19 @@ class TtMlp2D(LightweightModule):
             )
 
         gate_up_name, down_name = cache_names(layout)
+        if torch_weights is None and cached:
+            # Placeholders: as_tensor would dump torch.empty on a miss (and the stamp would then vouch for it), so a
+            # load without weights needs both files already cached under a matching stamp.
+            guard.require_cached(
+                [
+                    as_tensor_file(cache_path / f"{cache_name_prefix}.{n}", weights_dtype, ttnn.TILE_LAYOUT)
+                    for n in (gate_up_name, down_name)
+                ]
+            )
         gate_up_tt = _to_ttnn(gate_up, "hidden", gate_up_name)
         down_tt = _to_ttnn(down, "inter", down_name)
-        guard.write()
+        if torch_weights is not None:  # only real weights are stamped (a cache-only load found the stamp already)
+            guard.write()
         if device is None:
             return None
         return gate_up_tt, down_tt

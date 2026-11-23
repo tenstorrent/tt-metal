@@ -312,3 +312,100 @@ def test_cache_stamp_guards_the_shards(tmp_path, monkeypatch, expect_error):
         ttMLA2DTP.cache_guard(tmp_path, layer, mesh, sp_axis, tp_axis).check()
     with expect_error(ValueError, "needs mesh_shape"):
         ttMLA2DTP.check_cache_complete(tmp_path, f"layer_{layer}.mla")
+
+
+class _FakeAsTensor:
+    """``ttnn.as_tensor`` without a device: records each call and, as the real one does on a miss, writes the cache
+    file it was named (whatever tensor it got)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, t, *, dtype, layout, cache_file_name=None, **_):
+        from models.demos.deepseek_v3_d_p.utils.sharded_cache import as_tensor_file
+
+        self.calls.append(cache_file_name)
+        if cache_file_name is not None:
+            as_tensor_file(cache_file_name, dtype, layout).touch()
+        return t
+
+
+def _convert_on_cpu(monkeypatch):
+    """``ttMLA2DTP._convert_and_cache_weights`` on a 2 x 4 host mesh with ``SMALL`` dims, ttnn's mappers and
+    ``as_tensor`` faked. Returns (convert(state_dict, kv_only, device), the fake as_tensor)."""
+    import ttnn
+
+    fake = _FakeAsTensor()
+    monkeypatch.setattr(ttnn, "as_tensor", fake)
+    monkeypatch.setattr(ttnn, "ShardTensor2dMesh", lambda *a, **k: None)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda *a, **k: None)
+    mesh = types.SimpleNamespace(shape=(2, 4))
+    config = _config(SMALL, SMALL_HIDDEN)
+
+    def convert(tmp_path, state_dict, kv_only=False, device=object()):
+        return ttMLA2DTP._convert_and_cache_weights(
+            state_dict, mesh, config, 0, 0, 1, tmp_path, device=device, kv_only=kv_only
+        )
+
+    return convert, fake
+
+
+def _complete(tmp_path) -> bool:
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+
+    init_checker(tmp_path)
+    layout = dict(mesh_shape=(2, 4), sp_axis=0, tp_axis=1)
+    return ttMLA2DTP.check_cache_complete(tmp_path, "layer_0.mla", False, True, True, **layout)
+
+
+def test_cache_only_load_never_caches_placeholders(tmp_path, monkeypatch, expect_error):
+    """Review #66682: with no source weights a cache miss would dump ``torch.empty`` and stamp it. It must raise,
+    write nothing, and leave the layer incomplete; a real build stamps; a cache-only load of a stamped layer works,
+    and one missing a shard raises."""
+    convert, fake = _convert_on_cpu(monkeypatch)
+    guard = ttMLA2DTP.cache_guard(tmp_path, 0, (2, 4), 0, 1)
+    for empty in ({}, None):
+        with expect_error(RuntimeError, "no source weights"):
+            convert(tmp_path, empty)
+    assert fake.calls == [] and list(tmp_path.iterdir()) == [] and not _complete(tmp_path)
+
+    sd = _ttmla_names(_hf_weights(SMALL, SMALL_HIDDEN))
+    convert(tmp_path, sd)
+    assert guard.stamped() and _complete(tmp_path)
+    files = sorted(tmp_path.glob("*.tensorbin"))
+    convert(tmp_path, {})  # every shard on disk under the stamp: a cache-only load
+    assert sorted(tmp_path.glob("*.tensorbin")) == files
+
+    files[0].unlink()
+    fake.calls.clear()
+    with expect_error(RuntimeError, "1 shard file"):
+        convert(tmp_path, {})
+    assert fake.calls == [] and not (tmp_path / files[0].name).exists()
+    convert(tmp_path, sd)  # real weights refill the miss
+    assert files[0].exists() and _complete(tmp_path)
+
+
+def test_kv_only_build_does_not_vouch_for_the_layer(tmp_path, monkeypatch, expect_error):
+    """A kv_only build converts two weights; on a cold cache it must not leave a stamp (or shards) that a later
+    full-layer check or cache-only build would trust. Under a full build's stamp it uses the cache."""
+    convert, fake = _convert_on_cpu(monkeypatch)
+    guard = ttMLA2DTP.cache_guard(tmp_path, 0, (2, 4), 0, 1)
+    sd = _ttmla_names(_hf_weights(SMALL, SMALL_HIDDEN))
+
+    out = convert(tmp_path, sd, kv_only=True)
+    assert set(out) == {"kv_a_proj_with_mqa", "kv_a_layernorm"} and fake.calls == [None, None]
+    assert list(tmp_path.iterdir()) == [] and not guard.stamped() and not _complete(tmp_path)
+    assert convert(tmp_path, sd, kv_only=True, device=None) is None  # cache-only build: nothing to write
+    assert list(tmp_path.iterdir()) == []
+    for kv_only in (True, False):  # and no cache-only build may follow it
+        with expect_error(RuntimeError, "no source weights"):
+            convert(tmp_path, {}, kv_only=kv_only)
+
+    convert(tmp_path, sd)  # a full build stamps the layer
+    assert _complete(tmp_path)
+    fake.calls.clear()
+    convert(tmp_path, {}, kv_only=True)  # kv_only now reads the cache
+    assert all(c is not None for c in fake.calls) and len(fake.calls) == 2
+    stamp = guard.stamp.read_text()
+    convert(tmp_path, sd, kv_only=True)
+    assert guard.stamp.read_text() == stamp

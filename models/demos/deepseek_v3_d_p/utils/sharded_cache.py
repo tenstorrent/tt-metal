@@ -67,12 +67,17 @@ def layout_descriptor(
     return d
 
 
+def as_tensor_file(cache_file_name, dtype, layout) -> Path:
+    """The file ``ttnn.as_tensor(..., dtype=dtype, layout=layout, cache_file_name=cache_file_name)`` reads / writes."""
+    return Path(f"{cache_file_name}_dtype_{dtype.name}_layout_{layout.name}.tensorbin")
+
+
 class LayoutCacheGuard:
     """Stamp-checked access to one 2D-sharded cache entry.
 
     ``name``: the stamp's basename (``{name}.layout.stamp``) in ``cache_path``. ``shard_glob``: the glob matching the
     entry's tensorbins in ``cache_path``. Call ``check()`` before reading or writing the shards and ``write()`` after
-    they are on disk."""
+    they are on disk, and only when they hold real weights (``require_cached`` for a load without them)."""
 
     def __init__(self, cache_path: Optional[Path], name: str, shard_glob: str, descriptor: dict):
         self.cache_path = None if cache_path is None else Path(cache_path)
@@ -117,6 +122,21 @@ class LayoutCacheGuard:
                 f"2D weight cache {self.cache_path}/{self.name}: {len(shards)} shard file(s) ({self.shard_glob}) but no "
                 f"layout stamp {self.stamp.name}, so their layout is unknown. Delete them to rebuild for "
                 f"{self.descriptor}."
+            )
+
+    def require_cached(self, files: Sequence[Path]) -> None:
+        """A load with no source weights (placeholders): every one of ``files`` must already be on disk under a
+        matching stamp. ``ttnn.as_tensor`` converts and DUMPS whatever it is given on a cache miss, so a miss here
+        would cache ``torch.empty`` as the weights; refuse instead. No cache path: nothing is cached, nothing to
+        check."""
+        if self.stamp is None:
+            return
+        missing = [Path(f).name for f in files if not Path(f).is_file()]
+        if missing or not self.stamped():
+            raise RuntimeError(
+                f"2D weight cache {self.cache_path}/{self.name}: no source weights and "
+                + (f"{len(missing)} shard file(s) missing ({', '.join(missing)})" if missing else "no matching stamp")
+                + ". Refusing to fill the cache from placeholders; build it from the checkpoint weights."
             )
 
     def write(self) -> None:

@@ -401,3 +401,53 @@ def test_router_bias_stays_fp32_for_hy4(tmp_path):
     # The rounding fp32 avoids: a typical Hy4 bias magnitude in bf16 loses ~1e-4.
     b = torch.tensor([7.123456e-2, -3.31e-2, 1.0e-3])
     assert (b.to(torch.bfloat16).float() - b).abs().max() > 1e-5
+
+
+def test_2d_cache_only_load_never_caches_placeholders(tmp_path, monkeypatch, expect_error):
+    """Review #66682: TtMlp2D without weights must not dump ``torch.empty`` on a miss nor stamp it."""
+    import types
+
+    import ttnn
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_mlp_2d import TtMlp2D
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+    from models.demos.deepseek_v3_d_p.utils.sharded_cache import as_tensor_file
+
+    calls = []
+
+    def fake_as_tensor(t, *, dtype, layout, cache_file_name=None, **_):
+        calls.append(cache_file_name)
+        if cache_file_name is not None:
+            as_tensor_file(cache_file_name, dtype, layout).touch()
+        return t
+
+    monkeypatch.setattr(ttnn, "as_tensor", fake_as_tensor)
+    monkeypatch.setattr(ttnn, "ShardTensor2dMesh", lambda *a, **k: None)
+    prefix, sc1 = "layer_1.shared_expert", Mlp2DLayout((8, 4), 1)
+    kw = dict(
+        emb_dim=256,
+        hidden_dim=512,
+        mesh_device=types.SimpleNamespace(shape=(8, 4)),
+        hidden_axis=1,
+        weights_dtype=ttnn.bfloat8_b,
+        cache_path=tmp_path,
+        cache_name_prefix=prefix,
+        device=object(),
+    )
+
+    def complete():
+        init_checker(tmp_path)
+        return TtMlp2D.check_cache_complete(tmp_path, prefix, sc1)
+
+    with expect_error(RuntimeError, "no source weights"):
+        TtMlp2D._convert(None, **kw)
+    assert calls == [] and list(tmp_path.iterdir()) == [] and not complete()
+
+    w = {"gate_proj": torch.randn(512, 256), "up_proj": torch.randn(512, 256), "down_proj": torch.randn(256, 512)}
+    TtMlp2D._convert(w, **kw)
+    assert complete()
+    TtMlp2D._convert(None, **kw)  # cache-only load of a stamped cache
+    files = sorted(tmp_path.glob("*.tensorbin"))
+    files[1].unlink()
+    with expect_error(RuntimeError, "1 shard file"):
+        TtMlp2D._convert(None, **kw)
+    assert not files[1].exists()

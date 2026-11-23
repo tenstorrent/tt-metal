@@ -87,7 +87,12 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache
-from models.demos.deepseek_v3_d_p.utils.sharded_cache import LayoutCacheGuard, layout_descriptor, layout_tag
+from models.demos.deepseek_v3_d_p.utils.sharded_cache import (
+    LayoutCacheGuard,
+    as_tensor_file,
+    layout_descriptor,
+    layout_tag,
+)
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # The config switch: models that set it (Hy4-preview on the tp32 layout) build ttMLA2DTP; GLM-5.x, DeepSeek and
@@ -156,6 +161,11 @@ class ttMLA2DTP(ttMLA):
             raise ValueError(f"2D TP attention (SP {sp} x TP {tp}) does not tile: {bad}")
 
     @staticmethod
+    def has_weights(state_dict: dict | None) -> bool:
+        """Real source weights (else ``host_weights_2d`` returns placeholders: a cache-only load)."""
+        return bool(state_dict) and "q_a_proj.weight" in state_dict
+
+    @staticmethod
     def host_weights_2d(state_dict: dict | None, config, sp: int, tp: int) -> dict:
         """Host tensors laid out for the 2D mesh mappers, as ``name -> (tensor, sp_dim, tp_dim)``: the tensor dim
         sharded over the SP axis and the one sharded over the TP axis (None = replicated over that axis).
@@ -168,7 +178,7 @@ class ttMLA2DTP(ttMLA):
         N, R, V = config.qk_nope_head_dim, config.qk_rope_head_dim, config.v_head_dim
         use_gate = bool(getattr(config, "mla_use_output_gate", False))
         use_sink = bool(getattr(config, "mla_learnable_sink", False))
-        real = bool(state_dict) and "q_a_proj.weight" in state_dict
+        real = ttMLA2DTP.has_weights(state_dict)
         order = torch.tensor(ttMLA2DTP.core_head_order(H, sp, tp))
         if real:
             sd = state_dict
@@ -299,34 +309,52 @@ class ttMLA2DTP(ttMLA):
         sp, tp = mesh_device.shape[sp_axis], mesh_device.shape[tp_axis]
         ttMLA2DTP.check_dims(config, sp, tp)
         host = ttMLA2DTP.host_weights_2d(state_dict, config, sp, tp)
+        real = ttMLA2DTP.has_weights(state_dict)
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
         kv_names = ("kv_a_proj_with_mqa", "kv_a_layernorm")
         mesh_shape = tuple(mesh_device.shape)
         guard = ttMLA2DTP.cache_guard(cache_path, layer_idx, mesh_shape, sp_axis, tp_axis)
         guard.check()  # shards from another layout (or unstamped) refuse to load
+        # The stamp vouches for the whole layer (check_cache_complete trusts it), so only a full build from real
+        # weights writes it. A kv_only build reads / fills the cache only under a stamp a full build wrote; on a cold
+        # cache it converts its two weights uncached rather than leave shards no stamp may vouch for.
+        use_cache = cache_path is not None and (not kv_only or guard.stamped())
+        if device is None and not use_cache:
+            logger.info(f"layer {layer_idx}: kv_only 2D-TP cache build on an unstamped cache writes nothing")
+            return None
         prefix = f"layer_{layer_idx}.{ttMLA2DTP.cache_name(mesh_shape, sp_axis, tp_axis)}"
-        result = {}
+        todo = {}
         for name, (t, sp_dim, tp_dim) in host.items():
             if kv_only and name not in kv_names:
                 continue
+            vector = name in ttMLA2DTP.VECTOR_WEIGHTS
+            dtype = ttnn.bfloat16 if vector else ttnn.bfloat8_b
+            layout = ttnn.ROW_MAJOR_LAYOUT if vector else ttnn.TILE_LAYOUT
+            cache_file = str(cache_path / f"{prefix}.{name}") if use_cache else None
+            todo[name] = (t, sp_dim, tp_dim, dtype, layout, cache_file)
+        if not real:
+            # Placeholders: as_tensor would dump torch.empty on a miss, so every shard must already be cached.
+            guard.require_cached([as_tensor_file(f, dt, lo) for (_, _, _, dt, lo, f) in todo.values() if f])
+        result = {}
+        for name, (t, sp_dim, tp_dim, dtype, layout, cache_file) in todo.items():
             if sp_dim is None and tp_dim is None:
                 mapper = ttnn.ReplicateTensorToMesh(mesh_device)
             else:
                 dims = [None, None]
                 dims[sp_axis], dims[tp_axis] = sp_dim, tp_dim
-                mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
-            vector = name in ttMLA2DTP.VECTOR_WEIGHTS
+                mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims)
             result[name] = ttnn.as_tensor(
                 t,
                 device=device,
-                dtype=ttnn.bfloat16 if vector else ttnn.bfloat8_b,
-                layout=ttnn.ROW_MAJOR_LAYOUT if vector else ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                layout=layout,
                 memory_config=mem,
                 mesh_mapper=mapper,
-                cache_file_name=str(cache_path / f"{prefix}.{name}") if cache_path else None,
+                cache_file_name=cache_file,
                 cache_dump_mode=weight_cache_dump_mode(),
             )
-        guard.write()
+        if real and not kv_only:
+            guard.write()
         if device is None:
             return None
         return result
