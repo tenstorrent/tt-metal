@@ -110,11 +110,14 @@ struct ReaderState {
     StageGeometry pass_geometry[kMaxPasses] = {};
     TridQueue queue;
 
-    // Starts every share over, for a new receiver count. Nothing is in flight.
-    FORCE_INLINE void reset_cursors() {
+    // Starts every share over, empty, for a new receiver count: nothing is in flight, and the pusher has sent
+    // everything staged for every receiver. The pusher's counts as last read catch up too. A share's free bytes are
+    // its size less their lag, which could be as much as a share of the old layout, more than a smaller new share.
+    FORCE_INLINE void empty_shares() {
         for (uint32_t i = 0; i < fifo::kMaxReceivers; ++i) {
             issue[i].reset();
             land[i].reset();
+            pushed_seen[i] = issued[i];
         }
     }
 };
@@ -291,7 +294,7 @@ bool stage_request(
                 return false;
             }
             layout_receivers = stream.num_receivers;
-            state.reset_cursors();
+            state.empty_shares();
         }
         uint32_t blocks = 0;
         if constexpr (kPlansBlocks) {

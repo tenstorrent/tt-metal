@@ -36,6 +36,12 @@
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/buffers/tensor_prefetcher_fifo.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_validator.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -232,6 +238,13 @@ Tensor make_group_mask(
     return Tensor::from_vector(std::vector<uint16_t>(words), spec).to_device(device);
 }
 
+// The bytes of the dispatch engine's stage ring, as fast dispatch sizes it for the Tensor prefetcher kernels.
+uint32_t stage_ring_bytes(tt::tt_metal::distributed::MeshDevice* device) {
+    const auto& impl = device->impl();
+    return tt::tt_metal::tensor_prefetcher_region_layout(impl.metal_env().get_cluster())
+        .stage_ring_bytes(impl.metal_context().dispatch_mem_map().unused_l1_size());
+}
+
 // Every block of one tensor arrives, through two-entry rings.
 TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversReceiverContiguousWeight) {
     ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2);
@@ -255,7 +268,7 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, TradesCreditsAcrossLayersAndRuns) 
 
 // Back-to-back requests for different receiver counts: the stage ring is laid out per receiver count, so the
 // second request waits for the first one's blocks to leave the stage ring before it stages into it.
-TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForANewReceiverCount) {
+TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForFewerReceivers) {
     ReceiverContiguousCase wide(device_, /*receivers_per_bank=*/2, /*ring_entries=*/1);
     ReceiverContiguousCase narrow(device_, /*receivers_per_bank=*/1, /*ring_entries=*/1);
     metal_exp::StartTensorPrefetcher(*device_, {});
@@ -263,6 +276,48 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForANewReceiverC
     queue_layers(device_, narrow, /*num_layers=*/2);
     validate_layers(device_, wide, /*num_layers=*/2);
     validate_layers(device_, narrow, /*num_layers=*/2);
+    metal_exp::StopTensorPrefetcher(*device_);
+}
+
+// Back-to-back requests for one receiver per bank, then two, so every receiver's share of the stage ring halves.
+// The first request stages more than a new share for each receiver without filling its own share, so the reader
+// never reads the pusher's count again, and that count as last read trails by more than a new share. The second
+// request stages more than two new shares for each receiver, through one-entry rings that hold the pusher back, so a
+// reader that counted a share's free bytes from that stale count would overwrite blocks before they were sent.
+TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForMoreReceivers) {
+    namespace fifo = tt::tt_metal::tensor_prefetcher_fifo;
+    // queue_layers puts every layer in one request, as the delivery cases below do with eight.
+    constexpr uint32_t kMaxLayers = 8;
+    const uint32_t narrow_receivers = device_->dram_grid_size().x;
+    const uint32_t wide_receivers = 2 * narrow_receivers;
+    const uint32_t ring_bytes = stage_ring_bytes(device_);
+    const uint32_t narrow_share = fifo::stage_share_bytes(ring_bytes, narrow_receivers);
+    const uint32_t wide_share = fifo::stage_share_bytes(ring_bytes, wide_receivers);
+    // Blocks of about a third of a new share, so a new share holds three. Each receiver takes one block per receiver
+    // of every layer, an even count, so a block overwritten before it was sent differs from the block that
+    // overwrote it, although every layer repeats the weight.
+    BlockShape shape;
+    shape.k_block_tiles = std::max(1u, wide_share / 3 / BlockShape{.k_block_tiles = 1}.block_bytes());
+    const uint32_t block_footprint = fifo::stage_block_footprint(shape.block_bytes());
+    ASSERT_LE(block_footprint, fifo::max_stage_block_bytes(wide_share));
+    ASSERT_NE(wide_share / block_footprint % wide_receivers, 0u);
+    // The fewest layers that stage just over one new share per receiver in the first request, within its own share,
+    // and just over two in the second.
+    const uint32_t narrow_layers = std::min(kMaxLayers, wide_share / (narrow_receivers * block_footprint) + 1);
+    const uint32_t wide_layers = std::min(kMaxLayers, 2 * wide_share / (wide_receivers * block_footprint) + 1);
+    ASSERT_GT(narrow_layers * narrow_receivers * block_footprint, wide_share);
+    ASSERT_LE(narrow_layers * narrow_receivers * block_footprint, narrow_share);
+    ASSERT_GT(wide_layers * wide_receivers * block_footprint, 2 * wide_share);
+
+    ReceiverContiguousCase narrow(
+        device_, /*receivers_per_bank=*/1, /*ring_entries=*/1, /*num_groups=*/1, WeightWrite::Finished, shape);
+    ReceiverContiguousCase wide(
+        device_, /*receivers_per_bank=*/2, /*ring_entries=*/1, /*num_groups=*/1, WeightWrite::Finished, shape);
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    queue_layers(device_, narrow, narrow_layers);
+    queue_layers(device_, wide, wide_layers);
+    validate_layers(device_, narrow, narrow_layers);
+    validate_layers(device_, wide, wide_layers);
     metal_exp::StopTensorPrefetcher(*device_);
 }
 
@@ -343,6 +398,33 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversTheGroupsAMaskSelects) {
             validate_layers(device_, prefetch, /*num_layers=*/1, *groups);
         }
     }
+    metal_exp::StopTensorPrefetcher(*device_);
+}
+
+// Six-entry rings, so the pusher writes runs of up to three blocks, half a ring, where the tests above, with one-
+// and two-entry rings, write one block at a time. Every receiver takes several blocks of each group, so the runs wrap
+// the ring and split at its end, and with a mask the reader's runs stop at each group it skips.
+TEST_F(DispatchEngineTensorPrefetcherFixture, CoalescesRunsThroughDeepRings) {
+    constexpr uint32_t kNumGroups = 4;
+    constexpr uint32_t kNumLayers = 2;
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/6, kNumGroups);
+    const Tensor mask =
+        make_group_mask(device_, {1, 0, 1, 1}, MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    // The mask was written through the command queue, which the prefetcher does not follow on its own.
+    metal_exp::WaitForCqOnTensorPrefetcher(device_->mesh_command_queue(), std::nullopt);
+
+    queue_layers(device_, prefetch, kNumLayers);
+    validate_layers(device_, prefetch, kNumLayers);
+    const std::vector<metal_exp::TensorPrefetcherInput> inputs(
+        kNumLayers,
+        metal_exp::TensorPrefetcherInput{
+            .tensor = prefetch.weight.mesh_tensor(),
+            .block_count = prefetch.block_count,
+            .group_selector = metal_exp::TensorPrefetcherGroupSelector{mask.mesh_tensor()}});
+    metal_exp::QueueTensorPrefetcherRequest(
+        *device_, prefetch.pipe_refs(), std::nullopt, inputs, &device_->mesh_command_queue());
+    validate_layers(device_, prefetch, kNumLayers, {0, 2, 3});
     metal_exp::StopTensorPrefetcher(*device_);
 }
 
