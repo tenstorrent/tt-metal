@@ -639,7 +639,7 @@ def main() -> int:
         with prepare_dist_test_runner(dbpath, mergeid, runid, links) as wfds:
             test_pass = test_pass and test_dist(db, [DistTestCase(opts.t)], hs, links, wfds)
 
-    return n if test_pass else 1
+    return int(not test_pass)
 
 
 if __name__ == "__main__":
