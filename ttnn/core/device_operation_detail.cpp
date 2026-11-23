@@ -233,6 +233,12 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
             }
         }
     }
+    // A mesh that several hosts share ([RING,RING] seam stage): every process launches on the chips it drives and
+    // the co-owners launch on theirs. A tensor allocated on the whole mesh still lists every coordinate, so drop the
+    // remote ones here; a program factory would otherwise ask for a device this process does not have.
+    if (mesh_device != nullptr && mesh_device->get_devices().size() != mesh_device->num_devices()) {
+        std::erase_if(tensor_coordinates, [mesh_device](const auto& coord) { return !mesh_device->is_local(coord); });
+    }
     return tensor_coordinates;
 }
 
