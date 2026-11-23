@@ -164,22 +164,24 @@ inline void calculate_tanh() {
         // LUT's one-cycle shadow (3 slots per row, no SFPNOP). The steady-state body is recorded
         // once and replayed; the store walks dest through ADDR_MOD_2 -- physical slot 6 under the
         // SFPU addr-mod base, programmed by tanh_init as dest += 2 -- so no TTI_INCRWC per row
-        // (one per row under MM_THROTTLE, see LUT_APPX_STORE_INCR). Same instruction and mode
-        // bits as before; only the destination register and the schedule change.
-        static_assert(ITERATIONS >= 2, "calculate_tanh<true> pipelines at least two rows");
+        // (one per row under MM_THROTTLE, see LUT_APPX_STORE_INCR). A single row skips the body
+        // and goes straight to the drain.
+        static_assert(ITERATIONS >= 1, "calculate_tanh<true> needs at least one row");
         constexpr unsigned LUT_MODE = sfpi::SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | sfpi::SFPLUTFP32_MOD0_SGN_RETAIN;
         constexpr unsigned BODY_LEN = 2 + LUT_APPX_STORE_SLOTS;
 
         TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
-        // Body for row r: load row r+1, store row r (dest += 2), lut row r+1.
-        TTI_REPLAY(0, BODY_LEN, 1, 1);
-        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
-        lut_appx_store_row<p_sfpu::LREG7>();
-        TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
+        if constexpr (ITERATIONS >= 2) {
+            // Body for row r: load row r+1, store row r (dest += 2), lut row r+1.
+            TTI_REPLAY(0, BODY_LEN, 1, 1);
+            TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+            lut_appx_store_row<p_sfpu::LREG7>();
+            TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
 #pragma GCC unroll 8
-        for (int d = 2; d < ITERATIONS; d++) {
-            TTI_REPLAY(0, BODY_LEN, 0, 0);
+            for (int d = 2; d < ITERATIONS; d++) {
+                TTI_REPLAY(0, BODY_LEN, 0, 0);
+            }
         }
         TTI_SFPNOP;
         lut_appx_store_row<p_sfpu::LREG7>();

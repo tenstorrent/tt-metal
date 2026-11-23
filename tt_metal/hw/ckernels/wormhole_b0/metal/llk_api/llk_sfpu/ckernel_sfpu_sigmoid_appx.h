@@ -45,6 +45,27 @@ inline void lut_appx_init_addr_mod() {
     }
 }
 
+// One row at a time, for row counts the paired pipeline in calculate_sigmoid_appx cannot take.
+template <int ITERATIONS>
+inline void calculate_sigmoid_appx_rows() {
+    sfpi::vLut8si si0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut8si si1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut8si si2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat val = sfpi::dst_reg[0];
+
+        sfpi::dst_reg[0] = sfpi::lut(val, si0, si1, si2) + 0.5f;
+
+        sfpi::dst_reg++;
+    }
+
+    sfpi::l_reg[sfpi::LRegs::LReg0] = si0;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = si1;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = si2;
+}
+
 // result = lut(x) + 0.5 over the 3-entry 8-bit SFPLUT table in LReg0/1/2 (sigmoid_appx_init).
 //
 // Raw TTI rather than sfpi::lut: sfpi writes the LUT result back into LReg3, the register SFPLUT
@@ -54,40 +75,43 @@ inline void lut_appx_init_addr_mod() {
 // and SFPADDI shadows (4 slots per row, no SFPNOP). The two-row steady state is recorded once and
 // replayed; the stores walk dest through ADDR_MOD_2 -- physical slot 6 under the SFPU addr-mod
 // base, programmed by sigmoid_appx_init as dest += 2 -- so no TTI_INCRWC per row (one per row
-// under MM_THROTTLE, see LUT_APPX_STORE_INCR). Same SFPLUT mode and SFPADDI immediate as before;
-// only the destination registers and the schedule change.
+// under MM_THROTTLE, see LUT_APPX_STORE_INCR). The pipeline runs rows in pairs from four rows
+// up; other counts take calculate_sigmoid_appx_rows.
 template <int ITERATIONS = 8>
 inline void calculate_sigmoid_appx() {
-    static_assert(ITERATIONS >= 4 && ITERATIONS % 2 == 0, "calculate_sigmoid_appx pipelines rows in pairs");
-    constexpr unsigned HALF_BF16 = 0x3F00;  // SFPADDI immediate: 0.5f
-    constexpr unsigned LUT_MODE = sfpi::SFPLUT_MOD0_SGN_RETAIN;
-    constexpr unsigned BODY_LEN = 6 + 2 * LUT_APPX_STORE_SLOTS;
+    if constexpr (ITERATIONS < 4 || ITERATIONS % 2 != 0) {
+        calculate_sigmoid_appx_rows<ITERATIONS>();
+    } else {
+        constexpr unsigned HALF_BF16 = 0x3F00;  // SFPADDI immediate: 0.5f
+        constexpr unsigned LUT_MODE = sfpi::SFPLUT_MOD0_SGN_RETAIN;
+        constexpr unsigned BODY_LEN = 6 + 2 * LUT_APPX_STORE_SLOTS;
 
-    // Rows 0 and 1 in flight.
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-    TTI_SFPLUT(p_sfpu::LREG4, LUT_MODE, 0);
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
-    TTI_SFPLUT(p_sfpu::LREG5, LUT_MODE, 0);
-    TTI_SFPADDI(HALF_BF16, p_sfpu::LREG4, 0);
-    // Body for rows r, r+1 (r even): load r+2, store r, lut r+2, addi r+1; then the same one row
-    // on. The two rows still unstored put each load four dest steps ahead of the counter.
-    TTI_REPLAY(0, BODY_LEN, 1, 1);
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
-    lut_appx_store_row<p_sfpu::LREG4>();
-    TTI_SFPLUT(p_sfpu::LREG4, LUT_MODE, 0);
-    TTI_SFPADDI(HALF_BF16, p_sfpu::LREG5, 0);
-    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
-    lut_appx_store_row<p_sfpu::LREG5>();
-    TTI_SFPLUT(p_sfpu::LREG5, LUT_MODE, 0);
-    TTI_SFPADDI(HALF_BF16, p_sfpu::LREG4, 0);
+        // Rows 0 and 1 in flight.
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        TTI_SFPLUT(p_sfpu::LREG4, LUT_MODE, 0);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
+        TTI_SFPLUT(p_sfpu::LREG5, LUT_MODE, 0);
+        TTI_SFPADDI(HALF_BF16, p_sfpu::LREG4, 0);
+        // Body for rows r, r+1 (r even): load r+2, store r, lut r+2, addi r+1; then the same one row
+        // on. The two rows still unstored put each load four dest steps ahead of the counter.
+        TTI_REPLAY(0, BODY_LEN, 1, 1);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+        lut_appx_store_row<p_sfpu::LREG4>();
+        TTI_SFPLUT(p_sfpu::LREG4, LUT_MODE, 0);
+        TTI_SFPADDI(HALF_BF16, p_sfpu::LREG5, 0);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 4);
+        lut_appx_store_row<p_sfpu::LREG5>();
+        TTI_SFPLUT(p_sfpu::LREG5, LUT_MODE, 0);
+        TTI_SFPADDI(HALF_BF16, p_sfpu::LREG4, 0);
 #pragma GCC unroll 8
-    for (int d = 4; d < ITERATIONS; d += 2) {
-        TTI_REPLAY(0, BODY_LEN, 0, 0);
+        for (int d = 4; d < ITERATIONS; d += 2) {
+            TTI_REPLAY(0, BODY_LEN, 0, 0);
+        }
+        // Drain rows ITERATIONS-2 and ITERATIONS-1.
+        TTI_SFPADDI(HALF_BF16, p_sfpu::LREG5, 0);
+        lut_appx_store_row<p_sfpu::LREG4>();
+        lut_appx_store_row<p_sfpu::LREG5>();
     }
-    // Drain rows ITERATIONS-2 and ITERATIONS-1.
-    TTI_SFPADDI(HALF_BF16, p_sfpu::LREG5, 0);
-    lut_appx_store_row<p_sfpu::LREG4>();
-    lut_appx_store_row<p_sfpu::LREG5>();
 }
 
 inline void sigmoid_appx_init() {

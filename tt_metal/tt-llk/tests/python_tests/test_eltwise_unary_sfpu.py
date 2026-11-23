@@ -2063,3 +2063,76 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     assert torch.all(
         is_valid
     ), f"Test failed: {(~is_valid).sum()} elements outside tolerance (atol={atol}, rtol={rtol})"
+
+
+def _lut_appx_rows_config(mathop, src, iterations):
+    """One bf16 tile through the approx LUT kernel of *mathop* with *iterations* rows."""
+    return build_eltwise_unary_sfpu_config(
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.Yes,
+        mathop,
+        [32, 32],
+        src,
+        src,
+        1,
+        1,
+        iterations=iterations,
+    )
+
+
+def _result_bits(configuration):
+    res = configuration.run().result
+    return torch.tensor(res, dtype=torch.bfloat16).flatten().view(torch.int16)
+
+
+@skip_for_quasar
+@pytest.mark.parametrize(
+    "lut_mathop",
+    [MathOperation.SigmoidAppx, MathOperation.Tanh, MathOperation.GeluAppx],
+    ids=lambda op: op.name,
+)
+@pytest.mark.parametrize("lut_iterations", [1, 2, 3, 4, 5, 7, 8])
+def test_eltwise_unary_sfpu_lut_appx_iterations(lut_mathop, lut_iterations):
+    """The approx LUT kernels accept any positive row count.
+
+    One iteration is 32 lanes; an even count covers the first 32 * iterations datums, while
+    an odd one also covers half of the next 64-datum block (an SFPU row spans four Dest rows).
+    Computed lanes must match the 32-row run bit for bit, the rest must keep their input.
+    """
+    gen = torch.Generator().manual_seed(11)
+    # [-5, -0.5]: none of sigmoid, tanh or gelu maps an input there onto itself.
+    src = (-0.5 - torch.rand(1024, generator=gen) * 4.5).to(torch.bfloat16)
+    full_config = _lut_appx_rows_config(lut_mathop, src, 32)
+    config = _lut_appx_rows_config(lut_mathop, src, lut_iterations)
+    # Both variants must be built before the first run: a compile-only pass stops there.
+    full_config.prepare()
+    config.prepare()
+    full = _result_bits(full_config)
+    got = _result_bits(config)
+    inp = src.view(torch.int16)
+    assert full.ne(
+        inp
+    ).all(), "stimuli must change every lane so computed lanes are visible"
+    whole = 64 * (lut_iterations // 2)
+    tail = whole + (64 if lut_iterations % 2 else 0)
+    assert torch.equal(got[:whole], full[:whole]), (
+        f"{int((got[:whole] != full[:whole]).sum())} of {whole} computed lanes differ "
+        "from the 32-row run"
+    )
+    assert torch.equal(
+        got[tail:], inp[tail:]
+    ), f"{int((got[tail:] != inp[tail:]).sum())} lanes past the last row changed"
+    if tail > whole:
+        block_got, block_full, block_in = (
+            got[whole:tail],
+            full[whole:tail],
+            inp[whole:tail],
+        )
+        computed = block_got.eq(block_full)
+        assert (
+            computed | block_got.eq(block_in)
+        ).all(), "half-block lane is neither result nor input"
+        assert (
+            int(computed.sum()) == 32
+        ), f"half block computed {int(computed.sum())} of 64 lanes, expected 32"
