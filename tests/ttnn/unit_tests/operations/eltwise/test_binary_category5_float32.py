@@ -397,6 +397,57 @@ def test_modulo_ops_by_zero(device, ttnn_op):
     assert torch.isnan(scalar_result).all(), f"{ttnn_op.__name__}(a, 0.0) must be NaN"
 
 
+@pytest.mark.skipif(
+    is_blackhole(),
+    reason="Blackhole fmod returns +0 for zero results, 0 for a == b = ±inf or NaN, and can flip the sign for abs(a / b) > 2^22",
+)
+def test_fmod_sign_of_dividend(device):
+    """fmod takes the sign of a on every finite lane, checked bitwise with signbit.
+
+    | Stimulus                           | Expected                                 |
+    |------------------------------------|------------------------------------------|
+    | a = ±k * b, k in [0, 1000)         | ±0 with the sign of a (fmod(-4, 2) = -0) |
+    | abs(a / b) in [2^20, 2^40)         | sign of a; magnitude not checked: the    |
+    |                                    | quotient is several units off past 2^22  |
+    | a == b = ±inf or NaN               | NaN                                      |
+    """
+    count = 32 * 256
+    generator = torch.Generator().manual_seed(0)
+
+    def random_signs():
+        return torch.where(torch.rand(count, generator=generator) < 0.5, -1.0, 1.0)
+
+    mantissas = 1 + torch.randint(0, 128, (count,), generator=generator).float() / 128
+    divisor = torch.exp2(torch.randint(-20, 20, (count,), generator=generator).float()) * mantissas
+    multiples = torch.randint(0, 1000, (count,), generator=generator).float()
+    exact_a, exact_b = random_signs() * multiples * divisor, random_signs() * divisor
+
+    divisor = torch.exp2(torch.rand(count, generator=generator) * 20 - 10)
+    quotient = torch.exp2(torch.rand(count, generator=generator) * 20 + 20)
+    large_a, large_b = random_signs() * quotient * divisor, random_signs() * divisor
+
+    input_a = torch.cat([exact_a, large_a]).reshape(-1, 32)
+    input_b = torch.cat([exact_b, large_b]).reshape(-1, 32)
+    result = ttnn.to_torch(ttnn.fmod(to_float32_tt_tensor(input_a, device), to_float32_tt_tensor(input_b, device)))
+    result = _float32_result(result, "fmod")
+
+    exact_result = result.reshape(-1)[:count]
+    assert (exact_result == 0).all(), "fmod of an exact multiple must be zero"
+    wrong_sign = torch.isnan(result) | (torch.signbit(result) != torch.signbit(input_a))
+    if wrong_sign.any():
+        first = tuple(wrong_sign.nonzero()[0].tolist())
+        raise AssertionError(
+            f"fmod: {int(wrong_sign.sum())} results do not take the sign of a; first: "
+            f"a={input_a[first].item()!r}, b={input_b[first].item()!r}, actual={result[first].item()!r}"
+        )
+
+    special = torch.tensor([float("inf"), -float("inf"), float("nan")]).repeat(32 * 32 // 3 + 1)[: 32 * 32]
+    special = special.reshape(32, 32)
+    special_tt = to_float32_tt_tensor(special, device)
+    special_result = ttnn.to_torch(ttnn.fmod(special_tt, special_tt))
+    assert torch.isnan(special_result).all(), "fmod(a, a) must be NaN for a = ±inf or NaN"
+
+
 _MODULO_SCALAR_VALUES = [-0.002, 0.001, 0.1, 2.5, -3.0, 7.0]
 
 

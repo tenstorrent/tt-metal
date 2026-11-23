@@ -40,12 +40,8 @@ sfpi_inline void calculate_fmod_int32_body(
 
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat a, sfpi::vFloat b) {
-    // fmod(a, b) = a - trunc(a/b) * b, evaluated on the magnitudes. The reciprocal
-    // works on copyman(-1, b) and re-applies the sign, the multiply and the MAD round
-    // symmetrically, and _trunc_body_ masks the sign bit through, so every lane of this
-    // chain equals the signed chain up to the sign of a. That collapses the four
-    // sign-dependent correction branches into unsigned ones; the sign of a is applied
-    // once at the end.
+    // fmod(a, b) = a - trunc(a/b) * b, evaluated on |a| and |b| so the corrections
+    // below are sign-independent; the sign of a is applied once at the end.
     sfpi::vFloat a_abs = sfpi::abs(a);
     sfpi::vFloat b_abs = sfpi::abs(b);
 
@@ -53,11 +49,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat a, sfpi::vFloat b) {
     sfpi::vFloat trunc_div = _trunc_body_(a_abs * recip);
     sfpi::vFloat result = a_abs - trunc_div * b_abs;
 
-    // Post-correction: the reciprocal error can put trunc(a/b) one (or, for quotients
-    // above 2^22, several) unit(s) off. The result must satisfy 0 <= result < |b|:
-    // result >= |b| means the truncation was too low, result < 0 too high. The second
-    // negative step keeps the correction identical to the signed kernel, which adds |b|
-    // once for |result| >= |b| and once more for a result still below zero.
+    // The reciprocal error can put trunc(a/b) a unit off (several units for quotients
+    // above 2^22). One step down and two steps up bring the result into [0, |b|) when
+    // trunc is at most one unit too low or two units too high; larger misses stay out
+    // of range.
     v_if(result >= b_abs) { result = result - b_abs; }
     v_endif;
     v_if(result < sfpi::vFloat(0.0f)) { result = result + b_abs; }
@@ -65,11 +60,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat a, sfpi::vFloat b) {
     v_if(result < sfpi::vFloat(0.0f)) { result = result + b_abs; }
     v_endif;
 
-    // No a == b override: for finite a == b the chain above already yields 0 (trunc of
-    // |a| * recip(|b|) is 0 or 1, and the corrections bring the result into [0, |b|)).
+    // Finite a == b needs no override: trunc gives 0 or 1 and the corrections yield 0.
+    // a == b = +-inf or NaN gives NaN, as in torch.
 
-    // fmod takes the sign of a, on a zero result too (fmod(-4, 2) = -0, as in IEEE and
-    // torch). a dies here, so the sign copy needs no register move.
+    // Zero results take the sign of a too: fmod(-4, 2) = -0, as in torch.
     result = sfpi::copysgn(result, a);
 
     // Handle division by zero - return NaN
