@@ -152,34 +152,18 @@ ALWI void process_tile(
         tile_regs_acquire();
         // Startup and preprocessing preserve the physical-LHS SrcA format.
         copy_init(dfb_post_lhs_id);
-#ifdef ARCH_QUASAR
-        if constexpr (UnpackToDestEn) {
-            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
-        }
-#endif
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(dfb_post_lhs_id, i, i * 2);
         }
-#ifdef ARCH_QUASAR
-        if constexpr (UnpackToDestEn) {
-            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
-        }
-#endif
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
         copy_init(dfb_post_rhs_id);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             // One loan per tile: the binary op below works on Dest from MATH, so it cannot run under the loan.
-#ifdef ARCH_QUASAR
-            if constexpr (UnpackToDestEn) {
-                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
-            }
-#endif
+            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
-#ifdef ARCH_QUASAR
-            if constexpr (UnpackToDestEn) {
-                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
-            }
-#endif
+            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT;
 #endif

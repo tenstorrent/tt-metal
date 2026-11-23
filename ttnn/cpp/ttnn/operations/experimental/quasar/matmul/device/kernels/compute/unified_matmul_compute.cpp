@@ -146,21 +146,13 @@ TT_KERNEL void compute(uint32_t num_C_slices) {  // num_C_slices: this core's C 
                         mm_uninit(dfb::A_slice, dfb::B_slice);
                         reconfig_data_format_srca(dfb::B_slice, dfb::C_partials);
                         copy_init(dfb::C_partials);
-#ifdef ARCH_QUASAR
-                        if constexpr (UnpackToDestEn) {
-                            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
-                        }
-#endif
+                        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
                         copy_block(
                             dfb::C_partials,
                             /*start_in_tile_index=*/entry_tile,
                             /*start_dst_tile_index=*/0,
                             subblock_tiles);
-#ifdef ARCH_QUASAR
-                        if constexpr (UnpackToDestEn) {
-                            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
-                        }
-#endif
+                        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                         reconfig_data_format_srca(dfb::C_partials, dfb::B_slice);
                         matmul_block_init(
                             dfb::A_slice,

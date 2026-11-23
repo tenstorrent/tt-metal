@@ -45,17 +45,9 @@ ALWI void preprocess_sfpu_impl_dfb(
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
         copy_init(dfb_pre_id);
         // One loan per tile: the activation works on Dest from MATH, so it cannot run under the loan.
-#ifdef ARCH_QUASAR
-        if constexpr (UnpackToDestEn) {
-            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
-        }
-#endif
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(dfb_pre_id, i, i);
-#ifdef ARCH_QUASAR
-        if constexpr (UnpackToDestEn) {
-            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
-        }
-#endif
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         process_activations(i);
     }
     tile_regs_commit();

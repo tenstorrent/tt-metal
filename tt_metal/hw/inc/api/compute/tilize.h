@@ -170,12 +170,8 @@ ALWI void tilize_block(
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
 
-#ifdef ARCH_QUASAR
-        if constexpr (UnpackToDestEn) {
-            MATH((tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>()));
-            MATH((tile_regs_return<DstClient::MATH, DstClient::UNPACK>()));
-        }
-#endif
+        MATH((tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>()));
+        MATH((tile_regs_return<DstClient::MATH, DstClient::UNPACK>()));
 
         MATH((llk_math_eltwise_unary_datacopy<
               DataCopyType::A2D,
