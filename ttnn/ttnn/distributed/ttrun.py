@@ -4055,6 +4055,8 @@ def new_mode_flow(
     help="Stop the job gracefully after this many seconds: SIGTERM to every rank, then TT_RUN_STOP_GRACE_S, then the "
     "force (exit 241). No clock by default. A --timeout in --mpi-args is PRRTE's own and kills every rank at once.",
 )
+# TODO(https://github.com/tenstorrent/tt-metal/pull/64546): a per-collective timeout in the rank side, so a barrier a
+# peer never joins fails on its own instead of hanging until --job-timeout or a person.
 @click.option(
     "--tracy",
     "tracy_args",
