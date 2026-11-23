@@ -83,6 +83,11 @@ void kernel_main() {
         if (k == 0) {
             AGRN_ZONE("pr_own_first");  // marker: own entry starts
         }
+#if defined(AGRN_ABL_MINSEND)
+        if (k == 0) {
+            continue;  // perf ablation only: the sender sends the own entry without a source
+        }
+#endif
         uint32_t c = 0;
         for_each_packet(q, part, first_bank, bank_stride, [&](const Packet& pk) {
             if (batch == 0) {
@@ -96,7 +101,11 @@ void kernel_main() {
             }
             for (uint32_t ri = 0; ri < pk.nr; ++ri) {
                 const uint32_t n = pk.n[ri];
-                if (k == 0 && !own_from_dst) {
+#if defined(AGRN_ABL_NOREAD)
+                if (k == 0) {  // perf ablation only: the own entry is sent without reading it (wrong output)
+                } else
+#endif
+                    if (k == 0 && !own_from_dst) {
                     for (uint32_t t = 0; t < n; ++t) {
                         const uint32_t f = pk.jj[ri] + t * run_stride;
                         const uint32_t r = flat_slot ? f / Wlt : pk.rr[ri];
