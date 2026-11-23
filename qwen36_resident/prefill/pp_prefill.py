@@ -60,25 +60,11 @@ KDIR = f"{PKG_DIR}/prefill/kernels/"
 KV_TILE_BYTES = (TILE_BYTES[ttnn.bfloat8_b], TILE_BYTES[V_DT])
 
 
-# (S0 bfp4 V) 1: rtn_bfp4 before the typecast (accuracy: NLL +0.05% at 8K vs +0.47% truncated) — but served with the
-# 32-row decode build it HANGS at the PP's chunk 512 (2K prompts; results/20261123-s0-bisect: rtn off fine, on stuck;
-# fine natively with an 8-row build and at chunk 256 / 1024): off by default until the cause is found or a custom kernel
-# replaces the ttnn ops (PLAN S0-6)
-V_RTN = os.environ.get("RESIDENT_KV_V_RTN", "0") == "1"
-
-
-def rtn_bfp4(v):
-    """v [..., C, HD] bf16 (tile layout) rounded to nearest on the bfp4 grid it will be packed to: one exponent per 16
-    consecutive elements of a row (the block max's), 3 magnitude bits, the block max's exponent kept (no carry past 7).
-    The device's bfp4 packer truncates toward zero (relative error ~0.20 vs ~0.11 rounded, and a bias toward zero: S0's
-    corpus NLL +0.47% vs +0.13% at 8K, results/20261123-s0-v4-acc); values already on the grid pack exactly"""
-    sh = list(v.shape)
-    x = ttnn.typecast(v, ttnn.float32)
-    g = ttnn.reshape(x, sh[:-2] + [sh[-2] * sh[-1] // 16, 16])
-    a = ttnn.abs(g)
-    step = ttnn.exp2(ttnn.subtract(ttnn.floor(ttnn.log2(ttnn.maximum(ttnn.max(a, dim=-1, keepdim=True), 1e-30))), 2.0))
-    q = ttnn.multiply(ttnn.multiply(ttnn.clamp(ttnn.round(ttnn.divide(a, step)), 0.0, 7.0), step), ttnn.sign(g))
-    return ttnn.typecast(ttnn.reshape(q, sh), ttnn.bfloat16)
+# (S0 bfp4 V) the device's bfp4 packer truncates toward zero (relative error ~0.20 vs ~0.11 rounded, biased toward zero:
+# corpus NLL +0.47% vs +0.05% at 8K, results/20261123-s0-v4-acc): 1 = V rounded to nearest on the bfp4 grid first, in
+# place by kernels/v_rtn.cpp (software on data-movement cores; a ttnn-op version allocated intermediates inside the
+# prefill trace and hung served, 2026-11-23); 0 = truncated (an A/B)
+V_RTN = os.environ.get("RESIDENT_KV_V_RTN", "1") == "1"
 
 
 # 1: reset() uploads host zeros (~65 MB / chip) instead of zero-filling on device (A/B)
@@ -939,6 +925,40 @@ class PPPrefill:
         out = self._linear(o, w["out"], "out")
         return out
 
+    def _v_rtn(self, v):
+        """S0: v (a bf16 tile tensor in DRAM) rounded to nearest on the bfp4 grid in place (kernels/v_rtn.cpp, software
+        on data-movement cores: allocates nothing, unlike rtn_bfp4's ttnn ops, which hung served inside the trace)"""
+        tiles = v.volume() // (TILE * TILE)  # (a mesh tensor's volume: one chip's)
+        grid = self.mesh.compute_with_storage_grid_size()
+        cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
+        cores = cores[: max(1, min(len(cores), tiles))]
+        per, extra = divmod(tiles, len(cores))
+        rt, t0 = ttnn.RuntimeArgs(), 0
+        for i, c in enumerate(cores):
+            n = per + (i < extra)
+            rt[c.x][c.y] = [v.buffer_address(), t0, n]
+            t0 += n
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        cb = ttnn.CBDescriptor(
+            total_size=2048,
+            core_ranges=crs,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=2048)],
+        )
+        kernel = ttnn.KernelDescriptor(
+            kernel_source=KDIR + "v_rtn.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=crs,
+            compile_time_args=[],
+            runtime_args=rt,
+            config=ttnn.DataMovementConfigDescriptor(
+                processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+            ),
+        )
+        program = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb])
+        mesh_pd = ttnn.MeshProgramDescriptor()
+        mesh_pd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, self.n - 1))] = program
+        ttnn.generic_op([v, v], mesh_pd)  # (in place: the tensor is its own output)
+
     def _attn(self, h, j):
         C, w = self.C, self.w[j]
         p = self._proj(h, j, "W")
@@ -952,7 +972,7 @@ class PPPrefill:
         k = self._qkrope(k, w["wk"])
         ttnn.experimental.paged_fill_cache(self.K[j], ttnn.typecast(k, ttnn.bfloat8_b), self.fill_pt, batch_idx=0)
         if V_DT == ttnn.bfloat4_b and V_RTN:  # (S0: rounded to nearest first, the packer truncates)
-            v = rtn_bfp4(v)
+            self._v_rtn(v)
         ttnn.experimental.paged_fill_cache(self.V[j], ttnn.typecast(v, V_DT), self.fill_pt, batch_idx=0)
         o = ttnn.transformer.chunked_scaled_dot_product_attention(
             q,
