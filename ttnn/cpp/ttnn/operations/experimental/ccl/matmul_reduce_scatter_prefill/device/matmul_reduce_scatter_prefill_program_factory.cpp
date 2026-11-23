@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <exception>
 #include <fmt/format.h>
 #include <map>
 #include <mutex>
@@ -103,8 +104,8 @@ std::map<PortKey, CoreCoord> mrs_spread_ports(detail::Strip strip, uint32_t gx, 
 }
 
 // _place_ports_near_eth: each linked port at the free strip cell with the fewest NoC1 hops to its link's Ethernet core
-// (ties to the lower row, then the lower column); receive-only ends take the lowest free strip cell. Emulation has no
-// Ethernet cores to resolve, so it takes the spread placement.
+// (ties to the lower row, then the lower column); receive-only ends take the lowest free strip cell. Falls back to the
+// spread placement under emulation or when the Ethernet core cannot be resolved.
 std::map<PortKey, CoreCoord> mrs_place_ports(
     distributed::MeshDevice* mesh,
     const MeshCoordinate& coord,
@@ -113,8 +114,9 @@ std::map<PortKey, CoreCoord> mrs_place_ports(
     uint32_t gy,
     uint32_t num_links,
     const std::array<std::optional<MeshCoordinate>, 2>& peers) {
+    auto fallback = mrs_spread_ports(strip, gx, num_links);
     if (std::getenv("TT_METAL_EMULE_MODE") != nullptr) {
-        return mrs_spread_ports(strip, gx, num_links);
+        return fallback;
     }
     std::vector<CoreCoord> allowed;  // sorted by (x, y)
     if (strip == detail::Strip::Row) {
@@ -128,47 +130,49 @@ std::map<PortKey, CoreCoord> mrs_place_ports(
     }
     std::set<std::pair<size_t, size_t>> taken;
     std::map<PortKey, CoreCoord> cores;
-    IDevice* device = tt::tt_metal::internal::get_device(*mesh, coord);
-    const auto src = mesh->get_fabric_node_id(coord);
-    for (uint32_t l = 0; l < num_links; ++l) {
-        for (uint32_t d : {kFwd, kBwd}) {
-            if (!peers[d].has_value()) {
-                continue;
-            }
-            const auto dst = mesh->get_fabric_node_id(*peers[d]);
-            const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, src, dst);
-            TT_FATAL(
-                l < links.size(),
-                "matmul_reduce_scatter_prefill: {} forwarding links from {} to {}, link {} requested",
-                links.size(),
-                src,
-                dst,
-                l);
-            const CoreCoord eth = tt::tt_fabric::get_forwarding_eth_core(*mesh, src, dst, links[l]);
-            // NoC1 hops are directional (-y, then -x, wrapping). The worker grid is a product of physical columns
-            // and rows, so the closest worker minimizes each axis' hop term on its own, and a cell's hops to the
-            // Ethernet core are its hops to that worker plus the worker's own.
-            const auto closest =
-                tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(*device, eth, NOC::NOC_1);
-            std::optional<CoreCoord> best;
-            std::tuple<uint32_t, size_t, size_t> best_key{};
-            for (const CoreCoord& c : allowed) {
-                if (taken.contains({c.x, c.y})) {
+    try {
+        IDevice* device = tt::tt_metal::internal::get_device(*mesh, coord);
+        const auto src = mesh->get_fabric_node_id(coord);
+        for (uint32_t l = 0; l < num_links; ++l) {
+            for (uint32_t d : {kFwd, kBwd}) {
+                if (!peers[d].has_value()) {
                     continue;
                 }
-                const uint32_t hops =
-                    closest.distance_in_noc_hops + tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                                                       device, c, closest.logical_coord, NOC::NOC_1);
-                const std::tuple<uint32_t, size_t, size_t> key{hops, c.y, c.x};
-                if (!best.has_value() || key < best_key) {
-                    best = c;
-                    best_key = key;
+                const auto dst = mesh->get_fabric_node_id(*peers[d]);
+                const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, src, dst);
+                if (l >= links.size()) {
+                    return fallback;
                 }
+                const CoreCoord eth = tt::tt_fabric::get_forwarding_eth_core(*mesh, src, dst, links[l]);
+                // NoC1 hops are directional (-y, then -x, wrapping). The worker grid is a product of physical columns
+                // and rows, so the closest worker minimizes each axis' hop term on its own, and a cell's hops to the
+                // Ethernet core are its hops to that worker plus the worker's own.
+                const auto closest =
+                    tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(*device, eth, NOC::NOC_1);
+                std::optional<CoreCoord> best;
+                std::tuple<uint32_t, size_t, size_t> best_key{};
+                for (const CoreCoord& c : allowed) {
+                    if (taken.contains({c.x, c.y})) {
+                        continue;
+                    }
+                    const uint32_t hops =
+                        closest.distance_in_noc_hops + tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                                                           device, c, closest.logical_coord, NOC::NOC_1);
+                    const std::tuple<uint32_t, size_t, size_t> key{hops, c.y, c.x};
+                    if (!best.has_value() || key < best_key) {
+                        best = c;
+                        best_key = key;
+                    }
+                }
+                if (!best.has_value()) {
+                    return fallback;
+                }
+                cores[{d, l}] = *best;
+                taken.insert({best->x, best->y});
             }
-            TT_FATAL(best.has_value(), "matmul_reduce_scatter_prefill: no free strip cell for a linked port");
-            cores[{d, l}] = *best;
-            taken.insert({best->x, best->y});
         }
+    } catch (const std::exception&) {
+        return fallback;
     }
     for (uint32_t i = 0; i < 2 * num_links; ++i) {
         const PortKey key{i % 2, i / 2};
