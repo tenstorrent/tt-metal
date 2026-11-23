@@ -19,16 +19,17 @@ void bind_isin_operation(nb::module_& mod) {
                 * `elements` (Tensor): Tensor of integers to be checked for presence in test_elements. The output will have 0xFFFFFFFF (true) or 0x00000000 (false) at each position depending on whether the corresponding element is present in test_elements (and the invert flag).
                 * `test_elements` (Tensor): Tensor containing the values to be checked against. If an element from `elements` is present in `test_elements`, the corresponding output value will be 0xFFFFFFFF (unless inverted).
             Keyword Arguments:
-                * `invert` (bool): If True, inverts the output so that elements present in test_elements are marked with 0x00000000 and others with 0xFFFFFFFF.
+                * `assume_unique` (bool): Currently has no effect, but is reserved for potential future optimizations. Defaults to False.
+                * `invert` (bool): If True, inverts the output so that elements present in test_elements are marked with 0x00000000 and others with 0xFFFFFFFF. Defaults to False.
+                * `out` (Tensor, optional): preallocated output tensor. Defaults to None.
             Notes:
-                * `assume_unique` (bool): Currently has no effect, but is reserved for potential future optimizations.
                 * The input tensors should be interleaved and in DRAM.
                 * Both input tensors can be of any specification.
 
             Example:
                 >>> device = ttnn.open_device(device_id=0)
-                >>> elements = ttnn.Tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]], device=device)
-                >>> test_elements = ttnn.Tensor([2, 3, 5, 7], device=device)
+                >>> elements = ttnn.from_torch(torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]], dtype=torch.int32), device=device, dtype=ttnn.int32)
+                >>> test_elements = ttnn.from_torch(torch.tensor([2, 3, 5, 7], dtype=torch.int32), device=device, dtype=ttnn.int32)
                 >>> output = ttnn.experimental.isin(elements, test_elements)
                 >>> # output is [[False, True, True], [False, True, False], [True, False, False]], use the `invert=True` flag to invert this effect
         )doc";

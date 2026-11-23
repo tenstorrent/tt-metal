@@ -29,6 +29,7 @@ void bind_typecast(nb::module_& mod) {
             "input_tensor", "Input tensor to typecast", "Tensor", "Yes"
             "dtype", "datatype of typecast", "Datatype", "Yes"
             "memory_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
+            "optional_output_tensor", "Preallocated output tensor to write the result into", "Tensor", "No"
     )doc";
 
     ttnn::bind_function<"typecast", "ttnn.experimental.">(
