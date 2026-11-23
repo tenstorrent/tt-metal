@@ -89,6 +89,7 @@ struct RunOptions {
     bool bidirectional = false;
     std::optional<Block> block;
     uint32_t num_calls = kCalls;
+    std::optional<ttnn::CoreCoord> grid;
 };
 
 float round_to_bf16(float v) {
@@ -226,7 +227,8 @@ std::vector<tt::tt_metal::GlobalSemaphore> make_semaphores(ttnn::distributed::Me
         ttnn::global_semaphore::create_global_semaphore(device, cores, 0)};
 }
 
-std::optional<MinimalMatmulConfig> make_config(const std::optional<Block>& block) {
+std::optional<MinimalMatmulConfig> make_config(
+    const std::optional<Block>& block, const std::optional<ttnn::CoreCoord>& grid) {
     if (!block.has_value()) {
         return std::nullopt;
     }
@@ -236,7 +238,8 @@ std::optional<MinimalMatmulConfig> make_config(const std::optional<Block>& block
         .N_block_size = block->N_block,
         .subblock_h = block->subblock_h,
         .subblock_w = block->subblock_w,
-        .compute_with_storage_grid_size = ttml::autograd::ctx().get_device().compute_with_storage_grid_size()};
+        .compute_with_storage_grid_size =
+            grid.value_or(ttml::autograd::ctx().get_device().compute_with_storage_grid_size())};
 }
 
 struct DeviceInputs {
@@ -273,7 +276,7 @@ ttnn::Tensor call_op(
         semaphores,
         kClusterAxis,
         opt.num_links,
-        make_config(opt.block),
+        make_config(opt.block, opt.grid),
         std::nullopt,
         std::nullopt,
         std::nullopt,
@@ -395,6 +398,23 @@ TEST_F(MinimalMatmulReduceScatterAsyncTest, RowsNotMultipleOfBlocks) {
                 SCOPED_TRACE(testing::Message() << "M=" << s.M << " " << describe(opt));
                 run(p, in, opt);
             }
+        }
+    }
+}
+
+TEST_F(MinimalMatmulReduceScatterAsyncTest, SenderOnEveryColumnOfTheSinkRow) {
+    const ttnn::CoreCoord device_grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    const ttnn::CoreCoord grid{4, device_grid.y};
+    for (const Shape& s : {Shape{1280, 256, 512}, Shape{512, 256, 1280}}) {
+        for (const bool transpose_a : {false, true}) {
+            const Problem p = make_problem(s, ring_size(), false, transpose_a);
+            const DeviceInputs in = upload(p, false);
+            const RunOptions opt{
+                .num_links = 2, .bidirectional = true, .block = Block{4, 4, 2, 2, 1}, .num_calls = 2, .grid = grid};
+            SCOPED_TRACE(
+                testing::Message() << "M=" << s.M << " N=" << s.N << " transpose_a=" << transpose_a << " "
+                                   << describe(opt));
+            run(p, in, opt);
         }
     }
 }

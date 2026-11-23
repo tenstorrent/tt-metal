@@ -176,12 +176,12 @@ void MinimalMatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_m
     const ttnn::CoreCoord matmul_grid =
         attrs.config.has_value() ? attrs.config->compute_with_storage_grid_size : device_grid;
     TT_FATAL(
-        attrs.num_directions * attrs.num_links <= matmul_grid.x - 1,
-        "num_links={} needs {} fabric senders (one per link and direction) in the matmul grid's bottom row, which has "
-        "{} cores past column 0",
+        attrs.num_directions * attrs.num_links <= matmul_grid.x,
+        "num_links={} needs {} fabric senders (one per link and direction) in one row of the matmul grid, which has "
+        "{} cores",
         attrs.num_links,
         attrs.num_directions * attrs.num_links,
-        matmul_grid.x - 1);
+        matmul_grid.x);
     TT_FATAL(attrs.cluster_axis.has_value(), "cluster_axis must be set: it names the ring the rows are scattered over");
     TT_FATAL(
         ttnn::ccl::is_axis_wrap_wired(*x.device(), attrs.cluster_axis.value()),
@@ -252,7 +252,7 @@ ttnn::Tensor ttml_minimal_matmul_reduce_scatter_async(
             config.has_value() ? config->compute_with_storage_grid_size : device->compute_with_storage_grid_size();
         const auto available =
             static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*device, cluster_axis));
-        links = std::max<uint32_t>(1, std::min<uint32_t>(available, (grid.x - 1) / num_directions));
+        links = std::max<uint32_t>(1, std::min<uint32_t>(available, grid.x / num_directions));
     }
     const auto arch = device->arch();
     auto kernel_config_val = init_device_compute_kernel_config(

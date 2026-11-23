@@ -256,7 +256,8 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
         "Fabric packet header ({} B) or send slot ({} B) does not fit the senders' slot layout",
         tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
         slot_bytes);
-    const uint64_t matmul_cb_bytes = tt::tt_metal::calculate_total_cb_size(program);
+    const uint64_t injector_cb_bytes = transpose_a ? static_cast<uint64_t>(in0_block_num_tiles + 1) * in0_tile_size : 0;
+    const uint64_t matmul_cb_bytes = tt::tt_metal::calculate_total_cb_size(program) + injector_cb_bytes;
     const uint64_t free_l1 = ttml::metal::available_l1_bytes(*device);
     TT_FATAL(
         matmul_cb_bytes + ready_bytes + kSendSlotAlignBytes < free_l1,
@@ -280,14 +281,6 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
     }
     const ttnn::CoreRangeSet in0_injectors(in0_injector_cores);
     if (transpose_a) {
-        const uint64_t injector_cb_bytes = static_cast<uint64_t>(in0_block_num_tiles + 1) * in0_tile_size;
-        TT_FATAL(
-            matmul_cb_bytes + injector_cb_bytes < free_l1,
-            "The matmul's circular buffers ({} B) and the in0 injectors' transposed copy ({} B) do not fit in L1 ({} B "
-            "free); use smaller blocks",
-            matmul_cb_bytes,
-            injector_cb_bytes,
-            free_l1);
         tt::tt_metal::create_cb(
             tt::CBIndex::c_7, program, in0_injectors, in0_tile_size, in0_block_num_tiles, in0_data_format);
         tt::tt_metal::create_cb(tt::CBIndex::c_8, program, in0_injectors, in0_tile_size, 1, in0_data_format);
@@ -470,9 +463,9 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
                 tt::tt_fabric::get_forwarding_eth_core(*device, sender_node_id, peer_node_id, fabric_links[link]);
             const auto closest =
                 tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(*chip, eth_core, large_input_noc);
-            uint32_t best_column = 0;
+            std::optional<uint32_t> best_column;
             uint32_t best_hops = 0;
-            for (uint32_t x = 1; x < grid_size.x; ++x) {
+            for (uint32_t x = 0; x < grid_size.x; ++x) {
                 if (sender_columns.contains(x)) {
                     continue;
                 }
@@ -480,21 +473,20 @@ MinimalMatmulReduceScatterAsyncProgramFactory::create_at(
                     closest.distance_in_noc_hops +
                     tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
                         device, mesh_coordinate, ttnn::CoreCoord{x, sink_row}, closest.logical_coord, large_input_noc);
-                if (best_column == 0 || hops < best_hops) {
+                if (!best_column.has_value() || hops < best_hops) {
                     best_column = x;
                     best_hops = hops;
                 }
             }
             TT_FATAL(
-                best_column != 0,
-                "No free core on the sink row for the sender of link {} in direction {}: {} senders need {} columns "
-                "past column 0",
+                best_column.has_value(),
+                "No free core on the sink row for the sender of link {} in direction {}: {} senders need {} columns",
                 link,
                 dir,
                 num_dirs * num_links,
-                grid_size.x - 1);
-            sender_columns.insert(best_column);
-            const ttnn::CoreCoord core{best_column, sink_row};
+                grid_size.x);
+            sender_columns.insert(*best_column);
+            const ttnn::CoreCoord core{*best_column, sink_row};
             senders_by_dir[dir].push_back({core, device->worker_core_from_logical_core(core)});
         }
     }
