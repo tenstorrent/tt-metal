@@ -280,6 +280,7 @@ enum class EnvVarID {
     TT_METAL_TRACE_ALLOC_TRACKING,            // Enable per-trace unsafe allocation accounting
     TT_METAL_TRACE_ALLOC_TRACEBACKS,          // Capture diagnostics for unsafe trace allocations
     TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE,  // Exclude program-cache buffers from trace accounting
+    TT_METAL_SOCKET_COOWNERS_MIRROR,          // Every co-owner of a shared mesh builds matching sockets
 
     // ========================================
     // SHM TRACKING
@@ -2067,6 +2068,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (lockstep-only allocation)
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
+
+        // TT_METAL_SOCKET_COOWNERS_MIRROR
+        // Every rank co-owning a mesh builds a matching socket of the same shape in the same order, so lockstep socket
+        // buffers and service-core claims are symmetric across the co-owners. The caller vouches for that.
+        // Accepts exactly 0 or 1.
+        // Default: false
+        // Usage: export TT_METAL_SOCKET_COOWNERS_MIRROR=1
+        case EnvVarID::TT_METAL_SOCKET_COOWNERS_MIRROR: {
+            const std::string_view flag(value);
+            TT_FATAL(flag == "0" || flag == "1", "TT_METAL_SOCKET_COOWNERS_MIRROR must be 0 or 1, got '{}'.", flag);
+            this->socket_coowners_mirror = flag == "1";
+            break;
+        }
 
         // These process-wide settings are parsed together by get_trace_allocation_options(). That snapshot may be
         // initialized before this instance exists and is explicitly touched at the start of the constructor.

@@ -39,8 +39,7 @@ void validate_host_socket_allocation(MeshDevice& mesh_device, const MeshCoreCoor
         ttsl::Span<uint32_t>(&local_service_core, 1), ttsl::Span<uint32_t>(&service_core, 1), ReduceOp::MAX);
     // TT_METAL_SOCKET_COOWNERS_MIRROR=1 (see mesh_socket.cpp): every co-owner builds the same host socket on its own
     // chips' service cores, so the claim is symmetric across the shared mesh.
-    const char* mirror = std::getenv("TT_METAL_SOCKET_COOWNERS_MIRROR");
-    if (mirror != nullptr && std::string_view(mirror) == "1") {
+    if (mesh_device.impl().metal_env().get_rtoptions().get_socket_coowners_mirror()) {
         return;
     }
     TT_FATAL(service_core == 0, "Host sockets on shared meshes do not support claimed service-core endpoints.");

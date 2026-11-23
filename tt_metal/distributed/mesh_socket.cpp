@@ -266,10 +266,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     // the same order (a [RING,RING] seam stage's two hosts each build one row-block D2D receiver and sender over their
     // own rows), so lockstep socket buffers land at the same address on every co-owner and nothing is left
     // unreserved; the caller vouches for that, and the per-core requirement below does not apply.
-    static const bool coowners_mirror = [] {
-        const char* v = std::getenv("TT_METAL_SOCKET_COOWNERS_MIRROR");
-        return v != nullptr && std::string_view(v) == "1";
-    }();
+    const bool coowners_mirror = device->impl().metal_env().get_rtoptions().get_socket_coowners_mirror();
     if ((rank_scoped_socket_ || same_mesh) && mesh_is_coowned(*device) && !coowners_mirror) {
         const auto sender_cores = socket_endpoint_cores(config_, SocketEndpoint::SENDER).size();
         const auto receiver_cores = socket_endpoint_cores(config_, SocketEndpoint::RECEIVER).size();
