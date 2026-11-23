@@ -13,9 +13,8 @@ per row:
   with the R conv windows built in one program (fused/kernels/verify_windows.cpp) into per-token buffers, so the
   window state is only replaced by the commit, and stacked for one projection;
 - experts: the multi-row bank expert step (union of the rows' experts read once, per-row chains);
-- head: one unembed for all rows, argmax per row on the raw logits + vocab mask (softcap is monotone, so the
-  argmax is the plain step's; shortcut: exact ties after the plain step's softcap can pick another index, upgrade:
-  the R-row fused tail).
+- head: the fused logits tail's R-row form (FusedLogitsTail.rows: one unembed, one softcap / argmax program),
+  each row's logits and token bit-equal to the plain step's.
 Nothing the next pass reads is written for a token that may be rejected: rings, conv rings and window states change
 only in `commit(n)` (the first n rows, n = accepted + 1). The drafter context of all R rows is committed inside the
 pass: rejected rows sit at positions >= the next anchor, which the next draft overwrites first.
@@ -319,8 +318,8 @@ class VerifyStep:
         return list(out), n_sealed
 
     def step(self):
-        """One verify pass on (tokens, positions). Returns {"token": [device uint32 [1, 1, R, 1]] (row t = token t's
-        argmax), "logits": raw + vocab mask [1, 1, R, V] fp32}."""
+        """One verify pass on (tokens, positions). Returns {"token": [device uint32, R values] (value t = token t's
+        argmax), "logits": per-row softcapped logits (fused head)}."""
         m, R, dev = self.m, self.R, self.device
         for pos in self.positions:
             pos.prepare()
@@ -352,11 +351,15 @@ class VerifyStep:
         # final attn-res: one shared [1, 1, R, C] output (row r = token r); the final norm is row-wise
         x_all = m._rms(F.per_row(dev, R, lambda r: m.final_res(None, hs[r], n + 1)[0])[0], m.final_norm)
         fin = [ttnn.slice(x_all, [0, 0, t, 0], [1, 1, t + 1, HIDDEN]) for t in range(R)]
-        logits = m.unembed(x_all)  # [1, 1, R, V] fp32 (bank linear, every row)
-        logits = ttnn.add(logits, m.vocab_mask)
-        rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
-        am = ttnn.argmax(rm, dim=-1, keepdim=True)  # [1, 1, R, 1]: every row in one op
-        tokens = [am]
+        if m.head_tail is not None:  # the plain step's fused tail, all rows in one program: logits / token bit-equal
+            lt = m.head_tail.rows(x_all)
+            logits = [lg for lg, _ in lt]
+            tokens = [ttnn.concat([tk for _, tk in lt], dim=-1)]  # [1, 1, 1, R]: one host read
+        else:
+            logits = ttnn.add(m.unembed(x_all), m.vocab_mask)  # [1, 1, R, V] fp32
+            # shortcut: argmax on raw + mask, not on the softcapped row (ties after softcap may differ); only
+            # reached without the fused head
+            tokens = [ttnn.argmax(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True)]
         # drafter context for every row in one pass (rejected rows land at positions the next draft overwrites first)
         feats = [ttnn.pad(ttnn.concat(taps[t] + [fin[t]], dim=2), [(0, 0), (0, 0), (0, 28), (0, 0)], 0.0)
                  for t in range(R)]  # fmt: skip
