@@ -38,7 +38,11 @@ inline void calculate_logit_bw_bf16() {
             v_if(setsgn(q, 0) == 0.0f) {
                 vFloat infinity = sFloat16b(std::numeric_limits<float>::infinity());
                 result = copysgn(infinity, grad);
-                v_if(setsgn(grad, 0) == 0.0f) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_if(setsgn(grad, 0) == 0.0f) {
+                    result = std::numeric_limits<float>::quiet_NaN();
+                    v_if(x > 0.0f && setsgn(x, 0) < 1.1754943508222875e-38f) { result = 0.0f; }
+                    v_endif;
+                }
                 v_endif;
             }
             v_endif;
