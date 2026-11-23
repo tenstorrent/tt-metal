@@ -419,7 +419,7 @@ public:
     uint32_t index() const { return index_; }
 
     // Published word of the job this worker holds, or 0 when it holds none.
-    uint64_t holding() const noexcept { return holding_.load(std::memory_order_seq_cst); }
+    uint64_t held_job() const noexcept { return held_job_.load(std::memory_order_seq_cst); }
 
     // Returns the first exception thrown by a task since the last call, once the pool has joined.
     std::exception_ptr take_exception() { return std::exchange(stored_exception_, nullptr); }
@@ -469,7 +469,7 @@ private:
     uint64_t last_seen_job_ = 0;
     // Written by this worker only, on a line of its own, so that taking part in a job is not an exchange on a line
     // every worker writes.
-    alignas(64) std::atomic<uint64_t> holding_ = 0;
+    alignas(64) std::atomic<uint64_t> held_job_ = 0;
     std::exception_ptr stored_exception_;
 };
 
@@ -483,8 +483,8 @@ public:
 
     using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;  // 32: one per Galaxy device
 
-    static constexpr uint64_t pack(uint32_t generation, uint32_t slot_or_holders) {
-        return (static_cast<uint64_t>(generation) << GENERATION_SHIFT) | slot_or_holders;
+    static constexpr uint64_t pack(uint32_t generation, uint32_t slot_or_held) {
+        return (static_cast<uint64_t>(generation) << GENERATION_SHIFT) | slot_or_held;
     }
     static constexpr uint32_t generation_of(uint64_t word) { return static_cast<uint32_t>(word >> GENERATION_SHIFT); }
     static constexpr uint32_t slot_of(uint64_t published) { return static_cast<uint32_t>(published & LOW_HALF); }
@@ -506,16 +506,16 @@ public:
         if ((state & LOW_HALF) != 0) {
             return false;
         }
-        const uint64_t next = pack(generation_of(state) + 1, 1);  // The caller becomes the only holder.
+        const uint64_t next = pack(generation_of(state) + 1, 1);  // 1: held by the caller.
         // seq_cst pairs with a worker's hold: either it sees this next use and lets go, or the scan below sees it.
         if (!state_.compare_exchange_strong(state, next, std::memory_order_seq_cst, std::memory_order_relaxed)) {
             return false;
         }
         for (const auto& worker : workers) {
-            uint64_t held = worker->holding();
+            uint64_t held = worker->held_job();
             while (held != 0 && slot_of(held) == slot_) {
                 ttsl::pause();
-                held = worker->holding();
+                held = worker->held_job();
             }
         }
         generation_ = generation_of(next);
@@ -523,11 +523,12 @@ public:
         return true;
     }
 
-    // Worker, holding this job's published word: whether `generation` is still the job's current use.
-    bool is_use(uint32_t generation) const noexcept {
+    // Worker, with its hold recorded: whether `generation` is still the job's current use.
+    bool is_current(uint32_t generation) const noexcept {
         return generation_of(state_.load(std::memory_order_seq_cst)) == generation;
     }
 
+    // Caller: frees the job for its next use.
     void release() noexcept { state_.fetch_sub(1, std::memory_order_acq_rel); }
 
     // Caller: plans one call of fn per device id, each for the executor `executor_of` returns. A plan for the same
@@ -594,7 +595,8 @@ public:
 
     // Runs all calls of participant `node` in order, so that calls for one worker never overlap.
     void run_if_unclaimed(size_t node) noexcept {
-        // A read first: the caller's sweep would otherwise pay one serialized exchange per participant a worker holds.
+        // A read first: the caller's sweep would otherwise pay one serialized exchange per participant a worker
+        // already claimed.
         if (claims_[node].use.load(std::memory_order_relaxed) == use_ ||
             claims_[node].use.exchange(use_, std::memory_order_acq_rel) == use_) {
             return;
@@ -647,9 +649,9 @@ private:
     static constexpr unsigned GENERATION_SHIFT = 32;
     static constexpr uint64_t LOW_HALF = (uint64_t{1} << GENERATION_SHIFT) - 1;
 
-    std::atomic<uint64_t> state_ = 0;  // (generation << 32) | 1 while a caller holds it; workers hold it on their own.
-    uint32_t generation_ = 0;  // Of the current use, as published; set by the caller on acquire, read by holders.
-    uint64_t use_ = 0;         // Counts the job's uses, for claims; set by the caller on acquire, read by holders.
+    std::atomic<uint64_t> state_ = 0;  // (generation << 32) | 1 while the caller holds it; workers: held_job_.
+    uint32_t generation_ = 0;  // Of the current use, as published; set by the caller on acquire, read by workers.
+    uint64_t use_ = 0;         // Counts the job's uses, for claims; set by the caller on acquire, read by workers.
     const uint32_t slot_;
     // Valid until the caller returns, which happens only after every claimed call has finished.
     ttsl::move_only_function<void(size_t)>* fn_ = nullptr;
@@ -693,11 +695,11 @@ inline void NumaAwareExecutor::worker_loop() {
             last_seen_job_ = published;
             auto* job = pool_jobs_[ParallelJob::slot_of(published)].get();
             // seq_cst pairs with try_acquire(): either the caller sees this hold, or this sees the job's next use.
-            holding_.store(published, std::memory_order_seq_cst);
-            if (job->is_use(ParallelJob::generation_of(published))) {
+            held_job_.store(published, std::memory_order_seq_cst);
+            if (job->is_current(ParallelJob::generation_of(published))) {
                 job->participate(this);
             }
-            holding_.store(0, std::memory_order_release);
+            held_job_.store(0, std::memory_order_release);
             continue;
         }
         if (shutdown_.load(std::memory_order_acquire)) {
