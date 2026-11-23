@@ -171,9 +171,10 @@ def test_sdpa_rejects_broadcast_mask(device, expect_error):
 
 
 @pytest.mark.parametrize("s_pad,chunk", [(384, 128), (1088, 64)])
-def test_sdpa_odd_chunk_count_bug(device, s_pad, chunk):
-    """Regression record of the ttnn bug the chunk table avoids: an odd q-chunk count at B = 16 is wrong even
-    unmasked. If this starts passing, the bug is fixed and the table can be revisited."""
+def test_sdpa_odd_chunk_count(device, s_pad, chunk):
+    """An odd q-chunk count at B = 16, unmasked. ttnn SDPA got this wrong at tt-metal fae9a1ea287 (worst row PCC
+    0.9796 at 384/128, 0.9982 at 1088/64) and is exact (1.0000) from c83644ccafa on. ``dataflow.PAD_TABLE`` still
+    avoids odd counts; this keeps the case covered for when the table is revisited."""
     B = 16
     g = torch.Generator().manual_seed(0)
     q, k, v = (torch.randn(B, NH, s_pad, DH, generator=g) * 0.6 for _ in range(3))
@@ -182,5 +183,5 @@ def test_sdpa_odd_chunk_count_bug(device, s_pad, chunk):
     ref = torch.nn.functional.scaled_dot_product_attention(qb, kb, vb, attn_mask=bias, scale=1.0)
     out = run_sdpa(device, q, k, v, bias, chunk, Precision.accuracy())
     worst = float(M.row_pccs(ref.reshape(B, -1), out.reshape(B, -1)).min())
-    print(f"[sdpa-bug] {s_pad}-c{chunk}-B{B}: worst row {worst:.4f}")
-    assert worst < 0.999, "the odd-chunk-count SDPA bug is gone"
+    print(f"[sdpa-odd] {s_pad}-c{chunk}-B{B}: worst row {worst:.4f}")
+    assert worst > 0.999, "ttnn SDPA is wrong at an odd q-chunk count"

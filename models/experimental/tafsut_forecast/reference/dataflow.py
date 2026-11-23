@@ -40,9 +40,10 @@ MEDIAN_IDX = 4
 MASK_FILL = -1e9
 
 # Bucket context lengths and their (padded S, masked SDPA chunk).
-# ttnn SDPA returns wrong values (masked or not) when the q-chunk count s_pad / chunk is odd and > 1 at B = 16 or 32
-# (fine at B = 2 and 64): 160/32, 384/128, 640/128, 1088/64, 1152/128 all fail (job 933). Every row here has an even
-# count or a single chunk; tests/pcc/test_sdpa_mask.py checks each at the batches the model runs.
+# At tt-metal fae9a1ea287, ttnn SDPA returned wrong values (masked or not) when the q-chunk count s_pad / chunk was odd
+# and > 1 at B = 16 or 32 (fine at B = 2 and 64): 160/32, 384/128, 640/128, 1088/64, 1152/128 all failed (job 933);
+# it is exact from c83644ccafa on. Every row here has an even count or a single chunk;
+# tests/pcc/test_sdpa_mask.py checks each at the batches the model runs.
 BUCKETS = (2048, 3072, 4096, 8192, 16384, 32768)
 PAD_TABLE = {2048: (128, 128), 3072: (256, 128), 4096: (256, 128), 8192: (384, 64), 16384: (640, 64), 32768: (1088, 32)}
 

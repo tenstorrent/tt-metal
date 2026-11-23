@@ -95,10 +95,12 @@ checks that a collapsed forecast fails them.
   with the watcher were not run. `long_context` and `gift_ragged` gained only about 5 %; both run 1088 padded tokens
   per row, where round 2's first candidate (the SDPA chunk choice at that length, R1-6) applies. They were not
   profiled separately.
-- **ttnn SDPA bug at an odd q-chunk count.** `ttnn.transformer.scaled_dot_product_attention` returns wrong values
-  (masked or not) when `s_pad / q_chunk_size` is odd and greater than 1 at batch 16 or 32 (fine at 2 and 64): for
-  example 160/32, 384/128, 640/128, 1088/64 and 1152/128 give worst-row PCC 0.90-0.998 against torch, while every even count is exact. The
-  model avoids it with a per-bucket `(s_pad, chunk)` table (`reference/dataflow.py:PAD_TABLE`, asserted by
-  `chunk_count_ok`). `tests/pcc/test_sdpa_mask.py::test_sdpa_odd_chunk_count_bug` keeps the repro and asserts the bug
-  is still there; once ttnn fixes it, that test fails and the table can be revisited.
+- **SDPA chunk table.** The port was brought up on tt-metal `fae9a1ea287`. There,
+  `ttnn.transformer.scaled_dot_product_attention` returned wrong values (masked or not) when `s_pad / q_chunk_size`
+  was odd and greater than 1 at batch 16 or 32 (fine at 2 and 64). For example, 160/32, 384/128, 640/128, 1088/64
+  and 1152/128 gave worst-row PCC 0.90-0.998 against torch, while every even count was exact.
+  - The model avoids odd counts with a per-bucket `(s_pad, chunk)` table (`reference/dataflow.py:PAD_TABLE`, asserted
+    by `chunk_count_ok`).
+  - From `c83644ccafa` on, SDPA is exact at odd counts too (worst row 1.0000).
+    `tests/pcc/test_sdpa_mask.py::test_sdpa_odd_chunk_count` now asserts that, so the table can be revisited.
 - Context is capped at 32768 steps (as upstream); horizons above 1024 run one forward per 1024 steps.
