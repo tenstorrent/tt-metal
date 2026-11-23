@@ -316,7 +316,7 @@ one checkpoint.
 | `rotation_strategy` | Keeps |
 |---|---|
 | `last` | The `keep_n` (3) most recent checkpoints. |
-| `best` | The `keep_n` (3) with the best `metric` (`val/loss`, so it needs `metrics.validation.frequency` and validation data; without them the job stops when training starts): the lowest with `mode: min` (the default), the highest with `mode: max`. And the latest checkpoint. |
+| `best` | The `keep_n` (3) with the best `metric` (`val/loss` by default; a `val/` metric needs `metrics.validation.frequency` and validation data, while a training metric such as `train/loss` doesn't; a metric the run doesn't track stops the job when training starts): the lowest with `mode: min` (the default), the highest with `mode: max`. And the latest checkpoint. |
 | `none` | Every checkpoint. |
 
 Rotation never deletes the checkpoint just saved, and only deletes checkpoints of the same run: an earlier run's in the

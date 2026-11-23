@@ -7,8 +7,10 @@ error hook keeps the run's exception as its ``__context__``, and ``cleanup`` sti
 Device-free."""
 
 import contextlib
+import json
+import os
 
-from ttml.experimental.trainer import Callback, MetricsCallback, Trainer, TrainerConfig
+from ttml.experimental.trainer import Callback, CheckpointCallback, MetricsCallback, Trainer, TrainerConfig
 
 
 class _Device:
@@ -112,8 +114,20 @@ class _Recorder(Callback):
         self._record("on_train_error", str(exception))
 
 
-def _config():
-    return TrainerConfig(model={"name": "stub"}, dataset={"id": "stub"}, optimizer={"lr": 1e-3}, batch_size=1)
+def _config(**overrides):
+    return TrainerConfig(
+        model={"name": "stub"}, dataset={"id": "stub"}, optimizer={"lr": 1e-3}, batch_size=1, **overrides
+    )
+
+
+def _best_rotation_config(project_dir, metric):
+    return _config(
+        metrics={"train": {"frequency": 1}},
+        checkpoint={
+            "save_strategy": {"type": "step", "frequency": 1, "project_dir": str(project_dir)},
+            "rotation_strategy": {"type": "best", "keep_n": 1, "metric": metric},
+        },
+    )
 
 
 def test_failing_setup_error_hook_fails_setup(expect_error):
@@ -175,6 +189,24 @@ def test_metrics_log_the_summed_loss_from_callback_state():
         assert trainer.callback_handler.state == {}
     finally:
         trainer.cleanup()
+
+
+def test_best_rotation_by_a_train_metric_needs_no_validation(tmp_path):
+    trainer = _StubTrainer([MetricsCallback(), CheckpointCallback()], fail_in=None, batches=(3.0, 1.0, 2.0, 4.0))
+    trainer.setup(_best_rotation_config(tmp_path, "train/loss"))
+    try:
+        trainer.train()
+    finally:
+        trainer.cleanup()
+    with open(os.path.join(tmp_path, "checkpoints", "checkpoint_history.json")) as f:
+        history = json.load(f)["checkpoints"]
+    # The lowest train/loss, step 2's, and the latest.
+    assert [(entry["step"], entry["metrics"]["train/loss"]) for entry in history] == [(2, 1.0), (4, 4.0)]
+
+
+def test_best_rotation_by_a_validation_metric_needs_validation(tmp_path, expect_error):
+    with expect_error(ValueError, "val/loss, a validation metric, so set metrics.validation.frequency"):
+        _best_rotation_config(tmp_path, "val/loss")
 
 
 def test_cleanup_frees_callback_state_an_error_hook_left_behind(expect_error):

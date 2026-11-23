@@ -45,7 +45,8 @@ class BestRotation(BaseModel):
     type: Literal["best"] = "best"
     keep_n: int = Field(default=3, ge=1)
     # Checkpoints carry the metrics MetricsCallback logs, of their own step: "val/loss" needs "loss" in
-    # metrics.validation.metric_names, and a run that validates.
+    # metrics.validation.metric_names, and a run that validates; "train/loss" needs "loss" in
+    # metrics.train.metric_names.
     metric: str = "val/loss"
     # "min" keeps the lowest values, "max" the highest.
     mode: Literal["min", "max"] = "min"
