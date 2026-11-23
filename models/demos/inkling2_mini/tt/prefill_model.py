@@ -200,13 +200,18 @@ def _has_r2(dev):
     return bool(ttnn.to_torch(out).float().flatten()[0] == 32.0)
 
 
+# Expert-op worker columns: 9 x 4 = the 36 gate tiles (11 columns pad them to 44); bit-equal, ~3% less prefill time
+EXPERT_GRID_X = 9
+
+
 def _has_unified(dev, w_gate_up, w_down, fidelity):
     """Does this build's deepseek_prefill.unified_routed_expert_moe take stacked expert weights (the same
     [1, E, K, 2I] tensor in every gate / up slot) at this math fidelity (precise mode)? A no-expert call: older
-    builds reject the shapes or any fidelity but LoFi."""
+    builds reject the shapes or any fidelity but LoFi. Returns None (no), or the op's extra keywords: core_grid_x
+    when the build takes it."""
     op = getattr(getattr(ttnn.experimental, "deepseek_prefill", None), "unified_routed_expert_moe", None)
     if op is None:
-        return False
+        return None
     rm = ttnn.ROW_MAJOR_LAYOUT
     u32 = lambda v: ttnn.from_torch(
         torch.tensor(v, dtype=torch.int32).view(1, -1), dtype=ttnn.uint32, layout=rm, device=dev
@@ -216,13 +221,15 @@ def _has_unified(dev, w_gate_up, w_down, fidelity):
         dev.arch(), math_fidelity=fidelity, math_approx_mode=False, fp32_dest_acc_en=True
     )
     e = [w_gate_up] * NUM_EXPERTS
-    try:
-        op(x, u32([0] * NUM_EXPERTS), u32([0] * NUM_EXPERTS), u32(list(range(NUM_EXPERTS))), e, e,
-           [w_down] * NUM_EXPERTS, 32, compute_kernel_config=ckc, activation=ttnn.RoutedExpertActivation.SituGlu,
-           x_row_index=u32([32] * 64), output_row_major=True, zero_output_row=32)  # fmt: skip
-    except (RuntimeError, TypeError):
-        return False
-    return True
+    for kw in ({"core_grid_x": EXPERT_GRID_X}, {}):
+        try:
+            op(x, u32([0] * NUM_EXPERTS), u32([0] * NUM_EXPERTS), u32(list(range(NUM_EXPERTS))), e, e,
+               [w_down] * NUM_EXPERTS, 32, compute_kernel_config=ckc, activation=ttnn.RoutedExpertActivation.SituGlu,
+               x_row_index=u32([32] * 64), output_row_major=True, zero_output_row=32, **kw)  # fmt: skip
+            return kw
+        except (RuntimeError, TypeError):
+            pass
+    return None
 
 
 def _host(t):
@@ -443,9 +450,12 @@ class Inkling2Prefill:
         self.layers = [_LayerPF(self, lay, root) for lay in model.layers]
         # the expert fidelity of the exact path (HiFi2, as the sparse matmuls); LoFi only when asked for
         self.expert_fidelity = expert_fidelity or ttnn.MathFidelity.HiFi2
-        if experts == "auto":
-            ok = _has_unified(dev, self.layers[0].w_gate_up, self.layers[0].w_down, self.expert_fidelity)
-            experts = "unified" if ok else "sparse"
+        self.unified_kw = {}  # extra unified_routed_expert_moe keywords this build takes
+        if experts in ("auto", "unified"):
+            kw = _has_unified(dev, self.layers[0].w_gate_up, self.layers[0].w_down, self.expert_fidelity)
+            if experts == "auto":
+                experts = "unified" if kw is not None else "sparse"
+            self.unified_kw = kw or {}
         self.unified = experts == "unified"
         if chunk is None:  # one chunk up to 10K tokens (11264+ runs out of DRAM in a multi-prompt process at 32K)
             chunk = 10240 if self.unified else 8192
@@ -1018,6 +1028,7 @@ class Inkling2Prefill:
             x_row_index=b["u_xri"],
             output_row_major=True,
             zero_output_row=b["u_rows"] - 32,
+            **self.unified_kw,
         )
         self._tick("moe.experts")
         wk = _bf16(ttnn.permute(weights, (0, 3, 2, 1)))  # [1,8,T,1]
