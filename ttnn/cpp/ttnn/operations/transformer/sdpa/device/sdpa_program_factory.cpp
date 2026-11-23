@@ -1939,6 +1939,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     }
     writer_compile_time_args.insert(
         writer_compile_time_args.end(), writer_cb_compile_time_args.begin(), writer_cb_compile_time_args.end());
+    // Skewed rel bias: the writer builds the row-major bias blocks (DMA + out-of-band fill) instead of the reader,
+    // which then only streams Q / K / V. Same blocks, same order.
+    const bool rel_in_writer = use_rel_bias && operation_attributes.rel_skewed && !is_chunked;
+    // runtime arg of the rel address: after the windowed slots 9..12 and the causal-chain tail
+    const uint32_t rel_writer_arg = 13 + (kv_chain_mode >= 2 ? 3 : 0);
+    if (rel_in_writer) {
+        TensorAccessorArgs(tensor_args.rel_logits->buffer()).append_to(writer_compile_time_args);
+    }
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
@@ -2071,6 +2079,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.defines = defines;
+    if (rel_in_writer) {
+        writer_desc.defines.emplace_back("SDPA_REL_WRITER", "1");
+        writer_desc.defines.emplace_back("SDPA_REL_WRITER_ARG", std::to_string(rel_writer_arg));
+        writer_desc.defines.emplace_back("SDPA_REL_RM_CB", std::to_string(cb_ids.rel_scratch));
+        writer_desc.defines.emplace_back("SDPA_REL_VALID_SKT", std::to_string(valid_Skt));
+        writer_desc.defines.emplace_back("SDPA_REL_WINDOW", std::to_string(sliding_window_size.value_or(0)));
+        reader_desc.defines.emplace_back("SDPA_REL_WRITER", "1");
+    }
     writer_desc.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute_desc;
@@ -2181,6 +2197,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             writer_args.push_back(static_cast<uint32_t>(chain.participates));
             writer_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
             writer_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
+        }
+        if (rel_in_writer) {  // runtime arg rel_writer_arg (13 + the chain tail above)
+            writer_args.push_back(tensor_args.rel_logits->buffer());
         }
         writer_desc.emplace_runtime_args(core, writer_args);
 

@@ -14,6 +14,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "windowed_mask_gen.hpp"
+#ifdef SDPA_REL_WRITER
+#include "rel_bias_blocks.hpp"
+#endif
 
 void kernel_main() {
     Noc noc;
@@ -124,6 +127,12 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
+#ifdef SDPA_REL_WRITER
+    // Skewed rel bias blocks built here instead of in the reader (the reader also streams Q / K / V): the rel
+    // accessor follows the CB-id block, its address is runtime arg SDPA_REL_WRITER_ARG.
+    constexpr auto rel_args = TensorAccessorArgs<cb_arg_offset + 8>();
+    const auto rel_reader = TensorAccessor(rel_args, get_arg_val<uint32_t>(SDPA_REL_WRITER_ARG));
+#endif
 
     // Packed, the output is [B, 1, gqa_pack_sqt, NQH*gqa_pack*vDH], and a Q chunk may run into the next query head of
     // its group (q chunk not dividing Sq); the drain wraps those rows (head_wrap_tile_skip).
@@ -237,6 +246,44 @@ void kernel_main() {
                     0,
                     is_causal);
             }
+
+#ifdef SDPA_REL_WRITER
+            {
+                // This Q chunk's bias blocks, in the order compute takes them: the reader's K range (keys any row
+                // sees, see its SDPA_REL_BIAS range), no block for a chunk entirely >= W behind the first query,
+                // one row-major [32, Sk_chunk] block per Q tile row.
+                // the window (the writer's sliding_window_size arg is 0 when the mask comes from elsewhere)
+                constexpr uint32_t window = SDPA_REL_WINDOW;
+                constexpr uint32_t kc = Sk_chunk_t * tt::constants::TILE_HEIGHT;
+                const uint32_t p0 = q_chunk * Sq_chunk_t * tt::constants::TILE_HEIGHT + kRelQOff;
+                const uint32_t p1 = p0 + Sq_chunk_t * tt::constants::TILE_HEIGHT - 1;
+                const uint32_t k_lo = (window > 0 && p0 + 1 > window) ? (p0 + 1 - window) / kc : 0;
+                uint32_t k_hi = p1 / kc + 1;
+                k_hi = k_hi > k_num_chunks ? k_num_chunks : k_hi;
+                const uint32_t page0 = (nb * NQH + nq) * valid_Sqt * tt::constants::TILE_HEIGHT;
+                CircularBuffer cb_rel_rm(SDPA_REL_RM_CB);
+                for (uint32_t k_chunk = k_lo; k_chunk < k_hi; ++k_chunk) {
+                    const int32_t far_d = static_cast<int32_t>(p0) - static_cast<int32_t>((k_chunk + 1) * kc - 1);
+                    if (far_d >= static_cast<int32_t>(kRelW)) {
+                        continue;
+                    }
+                    for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+                        const uint32_t q_tile = q_chunk * Sq_chunk_t + row;
+                        cb_rel_rm.reserve_back(Sk_chunk_t);
+                        rel_rm_block<kc, window>(
+                            noc,
+                            rel_reader,
+                            page0,
+                            q_tile,
+                            k_chunk * kc,
+                            SDPA_REL_VALID_SKT * tt::constants::TILE_HEIGHT,
+                            !use_padded_mask || q_tile < valid_Sqt,
+                            cb_rel_rm.get_write_ptr());
+                        cb_rel_rm.push_back(Sk_chunk_t);
+                    }
+                }
+            }
+#endif
 
             // Windowed: synthesize this Q chunk's block-diagonal mask (all K chunks) before draining its
             // output. The call resolves to a no-op overload for WindowedMode::None, so the generator is only
