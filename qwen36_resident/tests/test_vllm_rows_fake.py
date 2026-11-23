@@ -70,6 +70,7 @@ class FakeModel:
         self.params = [(0.0, 1, 1.0, 0)] * n_slots
         self.steps = 0
         self.head_groups = 2
+        self.snapshots = self.restores = 0
 
     def row_order(self):
         """rows of different GDN head cores first (core g runs rows 4g..4g+3 one after another)"""
@@ -139,6 +140,36 @@ class FakeModel:
     def out_tensor(self, k):
         """launch k's out tensor (8 rows x (token, position + 1, active, 0)); a fake's is already on the host"""
         return self.out[k * ROWS : (k + 1) * ROWS]
+
+    # ---- snapshots (Strata S1 / S3): a slot's consumed tokens and its KV entries, restored into any slot's blocks
+    def snapshot_slot(self, s, n_tokens=0, table=None):
+        h = self.hist[s]
+        assert h is not None and self.conv_ok[s], f"snapshot of slot {s} without a state"
+        assert len(h) == n_tokens, f"slot {s}: snapshot at {n_tokens} tokens, its state consumed {len(h)}"
+        kv = []
+        for q in range(n_tokens):
+            got = self.pool.get((table[q // BLOCK], q % BLOCK))
+            assert got == (s, h[q]), f"slot {s}: KV at {q} through the snapshot's table is {got}"
+            kv.append(h[q])
+        self.snapshots += 1
+        return dict(hist=list(h), kv=kv, n_tokens=n_tokens, device=True)
+
+    def snapshot_to_host(self, snap):
+        assert snap.pop("device")
+        return dict(snap, host=True)
+
+    def snapshot_from_host(self, host):
+        assert host["host"]
+        return dict(hist=list(host["hist"]), kv=list(host["kv"]), n_tokens=host["n_tokens"], device=True)
+
+    def restore_slot(self, s, snap, table=None):
+        assert snap["device"], "restore from a device snapshot"
+        n = snap["n_tokens"]
+        assert len(table) * BLOCK >= n
+        self.hist[s], self.conv_ok[s] = list(snap["hist"]), True
+        for q in range(n):
+            self.pool[(table[q // BLOCK], q % BLOCK)] = (s, snap["kv"][q])
+        self.restores += 1
 
     def set_sampling(self, rows):
         assert len(rows) == self.S
@@ -224,6 +255,7 @@ MODEL_API = (
     "row_order",
     "head_groups",
 )
+SWAP_API = MODEL_API + ("snapshot_slot", "snapshot_to_host", "snapshot_from_host", "restore_slot")
 PP_API = ("pick_chunk", "reset", "run", "run_span", "handoff")
 PP_BATCH_API = PP_API + ("run_batch",)  # a PP prefill with PPPrefill.run_batch (lane prefill)
 
@@ -245,14 +277,20 @@ class Contract:
         raise AttributeError(f"the adapter set {name} on {type(self._obj).__name__}")
 
 
-def make_adapter(max_seqs, unit, sample, vocab=V, max_len=4096, cls=ResidentRowsAdapter, pp_batch=False):
-    """the adapter on contract views of a fresh FakeModel / FakePP (pp_batch: with run_batch); returns (adapter, the raw
-    FakeModel)"""
+def make_adapter(max_seqs, unit, sample, vocab=V, max_len=4096, cls=ResidentRowsAdapter, pp_batch=False, swap=False):
+    """the adapter on contract views of a fresh FakeModel / FakePP (pp_batch: with run_batch; swap: with the snapshot
+    calls and a swap store, Strata S3); returns (adapter, the raw FakeModel)"""
     n_slots = -(-max_seqs // ROWS) * ROWS
     model = FakeModel(n_slots, sample, vocab)
     pp = FakePP(unit, model)
     pp_view = Contract(pp, PP_BATCH_API if pp_batch else PP_API)
-    engine = RowsEngine(Contract(model, MODEL_API), pp_view, torch.eye(vocab), vocab, vocab, n_slots, unit)
+    engine = RowsEngine(
+        Contract(model, SWAP_API if swap else MODEL_API), pp_view, torch.eye(vocab), vocab, vocab, n_slots, unit
+    )
+    if swap:
+        from qwen36_resident.prefix_cache import SwapStore
+
+        engine.swap = SwapStore(1 << 40)
     return cls(engine, vocab, max_len, max_seqs, unit), model
 
 
@@ -277,13 +315,19 @@ class Sim:
         max_tokens=(1, 40),
         sync=False,
         pp_batch=False,
+        swap=False,
+        lag=False,
     ):
         self.rng = random.Random(seed)
+        # lag (with swap): a preemption lands while the device has drawn a token the host has not seen (async
+        # scheduling): the request forgets its last token and the swap entry must supply it from the device
+        self.lag = lag
+        self.sampled_share = 0.0 if lag else 0.4  # (lag: greedy requests, the Sim's prefill check samples greedily)
         # sync: the runner without async scheduling hands decode_forward's handle straight to
         # process_decode_output_host (finalize_decode); async: read_decode_output(async_read=True) first
         self.sync = sync
         self.max_tokens = max_tokens
-        self.adapter, self.model = make_adapter(max_seqs, unit, sample, pp_batch=pp_batch)
+        self.adapter, self.model = make_adapter(max_seqs, unit, sample, pp_batch=pp_batch, swap=swap)
         self.sample, self.unit, self.max_seqs, self.max_len = sample, unit, max_seqs, max_len
         self.runner = SimpleNamespace(
             tt_per_lane_max_num_seqs=max_seqs,
@@ -299,13 +343,15 @@ class Sim:
         self.waiting, self.rows, self.reqs = deque(), [], {}
         self.partial, self.next_id, self.chunk_due = None, 0, True
         self.last_rows, self.last_tokens, self.last_table, self.layout_changed = None, None, None, True
-        self.stats = dict(prefill=0, chunks=0, decode=0, tokens=0, finished=0, preempted=0, aborted=0, skipped=0)
+        self.stats = dict(
+            prefill=0, chunks=0, decode=0, tokens=0, finished=0, preempted=0, preempted_live=0, aborted=0, skipped=0
+        )
 
     # ---- requests
     def arrive(self):
         n = self.rng.choice([1, 2, 5, 63, 64, 65, 127, 128, 129, 200, 300, 513, 700, 1100, 1500])
         prompt = [self.rng.randrange(V) for _ in range(n)]
-        sampled = (0.8, self.rng.randrange(1000)) if self.sample and self.rng.random() < 0.4 else None
+        sampled = (0.8, self.rng.randrange(1000)) if self.sample and self.rng.random() < self.sampled_share else None
         r = Req(f"r{self.next_id}", prompt, self.rng.randint(*self.max_tokens), sampled)
         self.next_id += 1
         self.reqs[r.rid] = r
@@ -338,7 +384,15 @@ class Sim:
 
     def preempt(self, rid):
         r = self.reqs[rid]
-        TTModelRunner._release_model_request(self.runner, rid)
+        self.stats["preempted_live"] += rid in self.rows  # (decoding: its slot has a state to keep)
+        if self.lag and rid in self.rows and r.out > 1:
+            r.tokens.pop()  # (the host has not seen the device's last draw)
+            r.out -= 1
+        # the runner's request state: prompt + the outputs it saw (what preempt_request gets)
+        self.runner.requests[rid] = SimpleNamespace(
+            prompt_token_ids=r.tokens[: r.n_prompt], output_token_ids=r.tokens[r.n_prompt :]
+        )
+        TTModelRunner._release_model_request(self.runner, rid, preempted=True)
         TTModelRunner._release_dead_state_slots(
             self.runner, SimpleNamespace(finished_req_ids=[], preempted_req_ids=[rid])
         )
@@ -561,6 +615,49 @@ def test_churn(seed, sample, sync, pp_batch):
     assert set(pp.span_chunks) == {64, 128}, "split prompts at both PP chunks"
     assert stats["preempted"] > 0 and stats["aborted"] > 0 and stats["skipped"] > 0 and n["remaps"] > 50
     assert bool(pp.batches) == pp_batch, "steps with several whole prompts of one PP chunk share a PP pass"
+
+
+@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize("sample", [False, True], ids=["host-sampled", "device-sampled"])
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+def test_churn_swap(seed, sample, sync):
+    """Strata S3: preempted requests keep their state in the swap store and their replays restore it instead of
+    prefilling (the fake checks every restored slot's history and KV through its new blocks; the driver checks every
+    token against its reference)"""
+    sim = Sim(seed, sample=sample, sync=sync, swap=True)
+    stats = sim.run(700)
+    sw, model = sim.adapter.engine.swap, sim.model
+    assert stats["preempted"] > 5 and stats["tokens"] > 1000
+    assert sw.stats["hits"] > 3 and model.restores == sw.stats["hits"], (sw.stats, model.restores, stats)
+    # every decoding request's preemption kept its state (the host saw its next token), and every replay found it
+    assert sw.stats["inserts"] == stats["preempted_live"] == model.snapshots, (sw.stats, stats, model.snapshots)
+
+
+@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+def test_churn_swap_device_ahead(seed, sync):
+    """Strata S3 under async scheduling: the device drew a token the host had not seen when the request was preempted;
+    the resume replays only the tokens the state consumed and gets the device's token from the swap entry"""
+    sim = Sim(seed, sample=True, sync=sync, swap=True, lag=True)
+    logits_hits = []
+    orig = sim.adapter._swap_in
+
+    def swap_in(*a, **k):
+        hit = orig(*a, **k)
+        if hit is not None:
+            logits_hits.append(hit[0] == "logits")
+        return hit
+
+    sim.adapter._swap_in = swap_in
+    stats = sim.run(700)
+    assert stats["preempted"] > 5 and any(logits_hits), (stats, logits_hits)
+
+
+def test_swap_off_keeps_the_recompute():
+    """without the swap store a preemption releases the slot as before (the replay prefills prompt + output)"""
+    sim = Sim(1)
+    stats = sim.run(400)
+    assert stats["preempted"] > 0 and sim.model.restores == 0 and sim.adapter.engine.swap is None
 
 
 @pytest.mark.parametrize("seed", range(3))

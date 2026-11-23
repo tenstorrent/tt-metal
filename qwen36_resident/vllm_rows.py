@@ -50,11 +50,19 @@ PREFIX_CACHE_GB = float(os.environ.get("RESIDENT_PREFIX_CACHE_GB", "0"))
 # (the least a new boundary must extend a hit by to be stored on the way: storing stops the prefill there for a
 # handoff, a snapshot and a reload, ~0.3 s at 14K — not worth it for a chat turn's few hundred tokens)
 PREFIX_CACHE_STEP = int(os.environ.get("RESIDENT_PREFIX_CACHE_STEP", "4096"))
+# Strata S3 (GB of host memory; 0 = off): a request vLLM preempts keeps its decode state in host memory
+# (prefix_cache.SwapStore) and its resume restores it instead of prefilling prompt + output again (needs the plugin's
+# preempt_request hook, vllm-tt-plugin 0c319a7 / c0ec046)
+SWAP_GB = float(os.environ.get("RESIDENT_SWAP_GB", "0"))
 
 
 def _host_bytes(snap):
     """bytes of a snapshot_to_host result's tensors (every chip's)"""
-    return sum(int(v.volume() * v.element_size()) for k, v in snap.items() if k != "n_tokens")
+    return sum(
+        int(v.volume() * v.element_size()) if hasattr(v, "volume") else 1  # (a fake's entries count 1)
+        for k, v in snap.items()
+        if k != "n_tokens"
+    )
 
 
 BLOCK = 64  # KV block (positions): the engine's page
@@ -193,6 +201,9 @@ class ResidentRowsAdapter:
         self._expect_moves = None  # the moves note_state_slots_moved must report for the last applied remap
         self._sampling = None  # per resident slot (temperature, top_k, top_p, seed) of the device sampler
         self._fed_launches = None  # launches the last device-sampled step replayed (their token states are fed)
+        # (Strata S3) each live slot's last stepped position and whether that step was device-sampled; a resumed split
+        # prompt that may replay a swap entry (its spans deferred until the last decides)
+        self.pos_of, self.dev_tok, self.swap_pending = {}, {}, None
 
     # ------------------------------------------------------------------ helpers
     def _launch(self, r):
@@ -267,10 +278,24 @@ class ResidentRowsAdapter:
                     out[j, 0] = lg
             first_ms.append(round((time.perf_counter() - t0) * 1000, 2))
 
+        # (Strata S3) whole resumed prompts that replay a swap entry: restored, not prefilled (before the others' PP
+        # work; their first-token launches go with the others')
+        restored = []
+        if getattr(self.engine, "swap", None) is not None and len(self.engine.swap):
+            keep = []
+            for j in wholes:
+                hit = self._swap_in(tokens[j, : ends[j]], page_table[j], vslots[j])
+                if hit is None:
+                    keep.append(j)
+                elif hit[0] == "logits":
+                    out[j, 0] = hit[1]
+                else:
+                    restored.append((j,) + hit[1])
+            wholes = keep
         # whole prompts first, the first chunk of a split prompt last: a whole prompt restarts the PP pipeline; the
         # whole prompts' first tokens launch before the split prompt's span (its pipeline state stays untouched)
         rows = [(j, tokens[j, : ends[j]], page_table[j], vslots[j], ends[j], totals[j]) for j in wholes]
-        first_tokens(self._prefill_wholes(rows, trace))
+        first_tokens(restored + self._prefill_wholes(rows, trace))
         handed = []
         for j in conts + firsts:
             ids = tokens[j, : ends[j]]
@@ -278,7 +303,13 @@ class ResidentRowsAdapter:
             h = self._prefill_row(ids, page_table[j], vslots[j], starts[j], ends[j], finals[j], totals[j], trace)
             if trace is not None:
                 trace[-1]["ms"] = round((time.perf_counter() - t0) * 1000, 2)
-            if h is not None:
+            if h is None:
+                continue
+            if h[0] == "logits":
+                out[j, 0] = h[1]
+            elif h[0] == "launch":
+                handed.append((j,) + h[1])
+            else:
                 handed.append((j,) + h)
         first_tokens(handed)
         if trace is not None:
@@ -344,6 +375,10 @@ class ResidentRowsAdapter:
         C = self.chunk
         if trace is not None:
             trace.append(dict(start=start, end=end, total=total, final=final))
+        if getattr(self.engine, "swap", None) is not None:
+            hit = self._prefill_row_swap(ids, table_row, vslot, start, end, final, total)
+            if hit is not False:
+                return hit
         if getattr(self.engine, "prefix_cache", None) is not None:
             return self._prefill_row_cached(ids, table_row, vslot, start, end, final, total)
         if start == 0:
@@ -380,6 +415,61 @@ class ResidentRowsAdapter:
         # the churn check counts these: split prompts are the ones whose numerics the per-sequence chunk keeps whole
         logger.info(f"split prefill: resident slot {r}, {T} tokens in {calls + 1} calls at PP chunk {c}")
         return r, int(ids[T - 1]), T - 1, table_row
+
+    def _swap_in(self, ids, table_row, vslot, r=None):
+        """(Strata S3) a resumed prompt that replays a swap entry (prefix_cache.SwapStore.match): the entry's state into
+        a fresh slot (or r) through the request's blocks. Its prompt is the q tokens the state consumed and maybe the
+        next one: ("launch", first-token launch args) when the next token is in the prompt (one decode step from the
+        state gives the token after it), ("logits", a [vocab] row that samples only the entry's next token) when it is
+        not; None if the prompt replays no entry"""
+        sw = self.engine.swap
+        m = sw.match(ids)
+        if m is None:
+            return None
+        key, q, nxt = m
+        if r is None:
+            r = self._start_prompt(vslot)
+        self.engine.swap_restore(r, key, self._blocks_for(table_row, q))
+        logger.info(f"swap: resident slot {r} resumed from host at {q} tokens (prompt {len(ids)}), no prefill")
+        if len(ids) == q + 1:
+            return "launch", (r, int(ids[q]), q, table_row)
+        self.tables[r] = expand_blocks([int(b) for b in table_row], self.pages_per_block)
+        self._write_tables()
+        self.live.add(r)
+        self.pos_of[r], self.dev_tok[r] = q - 1, False
+        self._fed_launches = None  # (the next decode reloads every input: the plugin does after a prefill)
+        lg = torch.full((self.vocab,), -1e4)
+        lg[nxt] = 0.0
+        return "logits", lg
+
+    def _prefill_row_swap(self, ids, table_row, vslot, start, end, final, total):
+        """(Strata S3) a split resumed prompt: its first span defers (no PP work) while it may replay a swap entry
+        (SwapStore.candidate), the later spans too; the last restores the entry, or (not a replay after all) prefills
+        the whole prompt. False: not this path (the usual split prefill)"""
+        sw, st = self.engine.swap, self.swap_pending
+        if start == 0:
+            if final or not len(sw) or not sw.candidate([int(t) for t in ids[:end]], total):
+                return False
+            r = self._start_prompt(vslot)
+            self.swap_pending = dict(r=r, total=total)
+            self.pp_partial = (r, end, total, self._pp_chunk(total), 1)
+            return None
+        if st is None:
+            return False
+        r = self.slots.res_of.get(vslot)
+        _, fed, seq_total, c, calls = self.pp_partial
+        if r != st["r"] or start != fed or total != seq_total:
+            raise RuntimeError(f"continuation for vLLM slot {vslot} at {start} but the PP holds {self.pp_partial}")
+        if not final:
+            self.pp_partial = (r, end, total, c, calls + 1)
+            return None
+        self.pp_partial, self.swap_pending = None, None
+        hit = self._swap_in(ids[:end], table_row, vslot, r=r)
+        if hit is not None:
+            return hit
+        logger.info(f"swap: resident slot {r}: {end} tokens replay no swap entry, prefilled whole")
+        self.engine.prefill_whole(ids[: end - 1], r, self._blocks_for(table_row, end), self._pp_chunk(end))
+        return r, int(ids[end - 1]), end - 1, table_row
 
     def _prefill_row_cached(self, ids, table_row, vslot, start, end, final, total):
         """_prefill_row through the host-tier prefix cache (RowsEngine.prefix_cache). vLLM allocates a split prompt's
@@ -468,6 +558,8 @@ class ResidentRowsAdapter:
         preserve = {self._launch(s) for s in keep if self._launch(s) in launches}
         lg = self.engine.first_tokens({r: (tok, pos) for r, tok, pos, _ in handed}, launches, preserve)
         self.live.update(new)
+        for r, _, pos, _ in handed:  # (a first token is sampled on the host)
+            self.pos_of[r], self.dev_tok[r] = pos, False
         # the launches' token states now run only the new rows: the next decode must rewrite them (the plugin reloads
         # inputs after a prefill), and the device sampler's fed state of these launches is stale
         self._fed_launches = None
@@ -537,6 +629,12 @@ class ResidentRowsAdapter:
                     f"{self._fed_launches}: the plugin should have reloaded the inputs"
                 )
             self.engine.decode(None, launches)
+        # (Strata S3) each row's stepped position: the wire's on a fed step, one past the last on a steady one (its
+        # start_pos lags a step there)
+        for i, r in zip(rows, row_slot):
+            fed = reload_inputs or not device
+            self.pos_of[r] = pos[i] if fed or r not in self.pos_of else self.pos_of[r] + 1
+            self.dev_tok[r] = device
         self._fed_launches = launches if device else None
         # accepted: commit the remap (exactly once) and expect the plugin's note of the same moves
         if slot_remap is not None:
@@ -596,11 +694,37 @@ class ResidentRowsAdapter:
             raise RuntimeError(f"slot moves {moves} do not match the applied remap {self._expect_moves}")
         self._expect_moves = None
 
+    def preempt_request(self, vslot, token_ids=None):
+        """the plugin's hook for a preempted request (vllm-tt-plugin 0c319a7): with the swap store on (RESIDENT_SWAP_GB),
+        a live slot's state goes to host memory keyed by the tokens it consumed (token_ids: prompt + the outputs the
+        runner saw), for its resume to restore; then the slot is released as release_request does"""
+        r = self.slots.res_of.get(int(vslot))
+        if (
+            getattr(self.engine, "swap", None) is not None
+            and r is not None
+            and r in self.live
+            and r in self.pos_of
+            and token_ids is not None
+        ):
+            q = self.pos_of[r] + 1
+            try:
+                kept = self.engine.swap_out(
+                    r, self.tables[r], q, [int(t) for t in token_ids], self.dev_tok.get(r, False)
+                )
+                logger.info(f"swap: resident slot {r} preempted at {q} tokens, state {'kept' if kept else 'dropped'}")
+            except Exception as e:  # (a failed swap-out only costs the recompute vLLM planned anyway)
+                logger.warning(f"swap: resident slot {r}: swap-out failed ({e!r}); its resume prefills again")
+        self.release_request(vslot)
+
     def release_request(self, vslot):
         r = self.slots.release(int(vslot))
         if r is None:
             return
         self.live.discard(r)
+        self.pos_of.pop(r, None)
+        self.dev_tok.pop(r, None)
+        if self.swap_pending is not None and self.swap_pending["r"] == r:
+            self.swap_pending = None
         if self.pp_partial is not None and self.pp_partial[0] == r:
             # a split prompt preempted or aborted mid-prefill: its resume starts from the first chunk
             self.pp_partial = None
@@ -625,6 +749,11 @@ class RowsEngine:
             from qwen36_resident.prefix_cache import PrefixCache
 
             self.prefix_cache = PrefixCache(int(PREFIX_CACHE_GB * 1e9))
+        self.swap = None  # (Strata S3, RESIDENT_SWAP_GB > 0)
+        if SWAP_GB > 0 and hasattr(model, "snapshot_slot"):
+            from qwen36_resident.prefix_cache import SwapStore
+
+            self.swap = SwapStore(int(SWAP_GB * 1e9))
         self.vocab, self.vocab_chip, self.n_slots = vocab, vocab_chip, n_slots
         self.launch_rows = int(getattr(model, "launch_rows", ROWS))  # users per launch (8 * row groups)
         self.chunk = chunk_unit
@@ -771,6 +900,31 @@ class RowsEngine:
     def prefill_end(self, ids, first_chunk, n_tokens, r, blocks, chunk):
         self.pp.run_span(torch.as_tensor(ids), first_chunk, n_tokens, drain=True, chunk=chunk)
         self.pp.handoff(self.model, n_tokens, block_table=blocks, slot=r)
+
+    def swap_out(self, r, table, q, tokens, device_tok):
+        """Strata S3: slot r's state (positions < q consumed) into the swap store, keyed by those q tokens, with its next
+        token: the host's if it saw it (tokens[q]), else the device's draw (device_tok: the slot's last step was
+        device-sampled; its out word holds the token for position q). False when the next token is unknown."""
+        self.sync()
+        nxt = int(tokens[q]) if len(tokens) > q else None
+        if nxt is None and device_tok and self.device_sampling:
+            k, u = divmod(r, self.launch_rows)
+            out = self.model.out_tensor(k)
+            if not isinstance(out, torch.Tensor):
+                import ttnn
+
+                out = ttnn.to_torch(ttnn.from_device(ttnn.get_device_tensors(out)[0]))
+            w = out.reshape(-1)[: self.launch_rows * 4].reshape(self.launch_rows, 4)[u].to(torch.int64)
+            if int(w[2]) == 1 and int(w[1]) == q:  # (active, and its token is for position q)
+                nxt = int(w[0])
+        if nxt is None or not 0 < q <= len(tokens) <= q + 1:  # (more tokens than the state consumed + 1: inconsistent)
+            return False
+        host = self.model.snapshot_to_host(self.model.snapshot_slot(r, n_tokens=q, table=table))
+        return self.swap.insert(tokens[:q], nxt, host, _host_bytes(host))
+
+    def swap_restore(self, r, key, table):
+        """a swap entry back into slot r (its state, its KV pages into the slot's blocks `table`)"""
+        self.model.restore_slot(r, self.model.snapshot_from_host(self.swap.take(key)), table=table)
 
     def clear_slot(self, r):
         self.model.clear_slot(r)

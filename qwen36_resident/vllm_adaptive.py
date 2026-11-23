@@ -597,6 +597,11 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         return DraftOutput(draft_token_ids=ids, num_valid=valid)
 
     # ------------------------------------------------------------------ lifecycle
+    def preempt_request(self, vslot, token_ids=None):
+        """(Strata S3) not here yet: a spec user's state lives in the spec build and verify steps do not update the rows
+        adapter's position tracking, so a preempted request is released (its resume prefills again, as vLLM plans)"""
+        self.release_request(vslot)
+
     def release_request(self, vslot):
         r = self.slots.res_of.get(int(vslot))
         super().release_request(vslot)

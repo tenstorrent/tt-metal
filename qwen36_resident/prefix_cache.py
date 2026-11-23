@@ -100,3 +100,74 @@ class PrefixCache:
         rounded down), the point a re-sent prompt or the next turn of the conversation hits"""
         h = (n_tokens // self.block) * self.block
         return [h] if h else []
+
+
+class SwapStore:
+    """Strata S3: preempted users' decode states in host memory, LRU under a byte budget. vLLM's preemption frees a
+    running request's blocks and later resumes it by prefilling prompt + output again (recompute); a model that kept
+    the state restores it instead. An entry: the tokens the state consumed (positions < q), the next token (position
+    q: the device's draw, or the host's when it saw it), the host snapshot. A resumed prompt replays either exactly the
+    q tokens (its next token is the entry's) or the q tokens and the next one (one decode step from the state); any
+    other prompt is not a match (a plain prefill)."""
+
+    def __init__(self, budget_bytes):
+        self.budget = int(budget_bytes)
+        self._entries = OrderedDict()  # key -> (tokens, next token, value, nbytes)
+        self.bytes = 0
+        self.stats = dict(inserts=0, hits=0, hit_tokens=0, evictions=0, refused=0)
+
+    def __len__(self):
+        return len(self._entries)
+
+    @staticmethod
+    def _key(tokens):
+        return hashlib.sha256(b",".join(str(int(t)).encode() for t in tokens)).digest()
+
+    def insert(self, tokens, nxt, value, nbytes):
+        tokens = tuple(int(t) for t in tokens)
+        key = self._key(tokens)
+        if key in self._entries:
+            self._drop(key)
+        if nbytes > self.budget:
+            self.stats["refused"] += 1
+            return False
+        self._entries[key] = (tokens, int(nxt), value, int(nbytes))
+        self.bytes += int(nbytes)
+        self.stats["inserts"] += 1
+        while self.bytes > self.budget:
+            self._drop(next(iter(self._entries)))
+            self.stats["evictions"] += 1
+        return True
+
+    def _drop(self, key):
+        self.bytes -= self._entries.pop(key)[3]
+
+    def candidate(self, prefix, total):
+        """whether a resumed prompt of `total` tokens whose first tokens are `prefix` (a split prompt's first span) may
+        replay an entry (decided at its last span by match())"""
+        prefix = tuple(int(t) for t in prefix)
+        n = len(prefix)
+        return any(
+            len(tok) in (total, total - 1) and n <= len(tok) and tok[:n] == prefix
+            for tok, _, _, _ in self._entries.values()
+        )
+
+    def match(self, ids):
+        """the entry the prompt `ids` replays, as (key, q, next token), or None (not removed: take() does)"""
+        ids = tuple(int(t) for t in ids)
+        for q in (len(ids), len(ids) - 1):
+            if q <= 0:
+                continue
+            key = self._key(ids[:q])
+            e = self._entries.get(key)
+            if e is not None and e[0] == ids[:q] and (q == len(ids) or ids[q] == e[1]):
+                return key, q, e[1]
+        return None
+
+    def take(self, key):
+        """remove and return an entry's host snapshot (its state goes back into a slot once)"""
+        tokens, _, value, nb = self._entries.pop(key)
+        self.bytes -= nb
+        self.stats["hits"] += 1
+        self.stats["hit_tokens"] += len(tokens)
+        return value
