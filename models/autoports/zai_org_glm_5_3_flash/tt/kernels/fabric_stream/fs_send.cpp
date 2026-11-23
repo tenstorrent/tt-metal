@@ -34,7 +34,10 @@
 // (DONE), the waiter's completion (lane 0) -> one row of the MkMla probe tensor. FS_SRC_STRIDE (rev 76,
 // tt/fabric_stream.py FabricStreamScatter srcs=: GLM53_DSA_SHARD_RS1_SPLIT, the column scatter over both links): the
 // waiter's sources are first_src, first_src + stride, .. (the reserved word = the stride) -- the receiver's blocks on
-// this stream's link.
+// this stream's link. FS_SPAN0 / FS_SPANN (GLM53_DSA_SHARD_RS1_TSPLIT, tt/fabric_stream.py sub=(.., span0, spann), on
+// FS_SUBD): this stream stages / sends only the staged pages [FS_SPAN0, FS_SPAN0 + FS_SPANN) of every chunk (both even:
+// whole pairs) -- the split RS1's two lanes take the two halves of each destination block, every page to its knob-off
+// page; the chunk-end packet is the span's last pair.
 #include <cstddef>
 #include <cstdint>
 
@@ -61,7 +64,15 @@ constexpr uint32_t NHDR = 4;  // data-header ring per direction: flush only when
 constexpr uint32_t SUB_N = PPC / FS_SUBPC;               // sub-chunks per chunk
 constexpr uint32_t DPC = (SUB_N * FS_SUBD + 1) / 2 * 2;  // pages staged / sent per chunk (pairs)
 static_assert(PPC % FS_SUBPC == 0 && FS_SUBD > 0 && FS_SUBD < FS_SUBPC, "sub-chunks: data pages, then pad");
+#if defined(FS_SPANN)  // the split RS1's half: staged pages [FS_SPAN0, FS_SPAN0 + FS_SPANN) of the chunk's DPC
+constexpr uint32_t SPN = FS_SPANN;
+static_assert(FS_SPAN0 % 2 == 0 && SPN % 2 == 0 && SPN > 0 && FS_SPAN0 + SPN <= DPC, "a span of whole pairs");
+#endif
+#if defined(FS_SPANN)
+static_assert(SPN % NB == 0 && NB % 2 == 0, "page pairs never straddle a batch or a span");
+#else
 static_assert(DPC % NB == 0 && NB % 2 == 0, "page pairs never straddle a batch or a chunk");
+#endif
 // staged page s of a chunk -> its page in the chunk: sub-chunk s / FS_SUBD, data page s % FS_SUBD; s = SUB_N FS_SUBD
 // (the filler of an odd data count) -> the last sub-chunk's first pad page
 inline uint32_t sub_col(uint32_t s) {
@@ -70,6 +81,9 @@ inline uint32_t sub_col(uint32_t s) {
 }
 #else
 static_assert(PPC % NB == 0 && NB % 2 == 0, "page pairs never straddle a batch or a chunk");
+#endif
+#if defined(FS_SPANN) && !defined(FS_SUBD)
+#error "FS_SPANN: on FS_SUBD (the RSNP chunks)"
 #endif
 
 using Hdr = tt::tt_fabric::LowLatencyPacketHeader;
@@ -177,7 +191,9 @@ void kernel_main() {
         d.conn.send_payload_without_header_non_blocking_from_address(src, 2 * TB);
         d.conn.send_payload_flush_non_blocking_from_address((uint32_t)h, sizeof(Hdr));
     };
-#if defined(FS_SUBD)
+#if defined(FS_SPANN)
+    const uint32_t nbat = c_n * SPN / NB;
+#elif defined(FS_SUBD)
     const uint32_t nbat = c_n * DPC / NB;
 #else
     const uint32_t nbat = c_n * PPC / NB;
@@ -221,6 +237,12 @@ void kernel_main() {
 #else
                 const uint32_t g0 = (row_base + chunk) * FS_KEYPACK + col;
 #endif
+#elif defined(FS_SPANN)  // the span's pair (col, col + 1) -> pages sub_col(FS_SPAN0 + col), sub_col(.. + 1)
+            for (uint32_t i = 0; i < NB; i += 2) {
+                const uint32_t idx = b * NB + i;  // this lane's staged page index
+                const uint32_t chunk = c_lo + idx / SPN, col = idx % SPN;
+                const uint32_t g0 = (row_base + chunk) * PPC + sub_col(FS_SPAN0 + col);
+                const uint32_t g1 = (row_base + chunk) * PPC + sub_col(FS_SPAN0 + col + 1);
 #elif defined(FS_SUBD)  // the staged pair (col, col + 1) of the chunk -> pages sub_col(col), sub_col(col + 1)
             for (uint32_t i = 0; i < NB; i += 2) {
                 const uint32_t idx = b * NB + i;  // this lane's staged page index
@@ -251,6 +273,8 @@ void kernel_main() {
                 const bool last = col + 2 == FS_KEYPACK && (chunk + 1) % FS_KP_XPER == 0;
 #elif defined(FS_KEYPACK)
                 const bool last = col + 2 == FS_KEYPACK;
+#elif defined(FS_SPANN)
+                const bool last = col + 2 == SPN;  // the span's last pair (this stream's chunk end)
 #elif defined(FS_SUBD)
                 const bool last = col + 2 == DPC;  // the chunk's last staged pair
 #else

@@ -460,7 +460,7 @@ offset), header count, kept pairs and records bitwise; the upward drops equal th
 ~0.15-0.2 us): a B 1 round 27 -> ~11-14 us, ~55-65 us per DSA layer at 1 M x 1 (~0.6-0.7 ms per 45-layer step), small
 at B 16 (8 cores per lane). Validation: `_logs/mesh/chain_dsa_2.sh`.
 
-### RS1_SPLIT: the column scatter over both links (2026-11-15, MLA_REV 76, opt-in)
+### RS1_SPLIT: the column scatter over both links (2026-11-15, MLA_REV 76, default on the 8x4)
 
 At 1 M x 16 (probe, layer 3) RS1 is the largest share of the DSA chain: wait 305 us, send 308 us of 1,518 us. RSB /
 RSNP left it bytes-bound on link 1: the column's middle segment carries 16 blocks per direction per launch (4 sources
@@ -540,6 +540,67 @@ Every span after the merge is unchanged (the root's marks 2 -> 10 within 0.5 us)
 pins hold (32,767 x 4 / OSL 128: ids c4e99f0da946d7e5, 55.3 tok/s/u; 1,048,447 x 1: 8effa1b6f899e4c4, 63.2 tok/s/u),
 and 16 identical rows at 4,095 give one id-sequence class with the knob-off hash 8efe8c2ff60acc34. Validation:
 `_logs/mesh/chain_pipe_ab.sh`, `_logs/mesh/chain_pipe_1m.sh`.
+
+### The DSA layer's critical path after MFAST (2026-11-20, probe rows only)
+
+Traced probe marks of DSA layer 3 (plain step, B 16 x 16 live distinct rows, width 16, galaxy defaults; chip medians, us;
+`_devstep/chips2.py` over the `MK_BACKEND_SHARD_PROBE_TRACED` lines). The RS1 split's link-0 lane (rs1a) writes probe
+row 240 and the latent core's NCRISC row (start, cache written, QL in, q sent) is decoded with the rest:
+
+| span | 32 K | 1 M |
+|---|---|---|
+| index core start -> local select coordinated | 79.3 | 358.2 |
+| -> AG1 open (the last of AG1's t (chunk cores + coordinator) + 1 producers) | 75.5 | 23.9 |
+| latent core: QL in / q sent (after the index core start) | 90.7 / 120.0 | 90.4 / 119.6 |
+| q sent -> AG1 open | 34.7 | 261.2 |
+| all-gather (AG1 + AG2) / global merge | 224.3 / 95.6 | 194.5 / 116.0 |
+| RS1: rs1 (link 1) / rs1a (link 0) send | 130.6 / 165.2 | 128.5 / 164.7 |
+| RS1: rs1 / rs1a landed, root's round 1 landed (after the attention start) | 229.6 / 257.7, 257.4 | 230.6 / 258.8, 258.5 |
+| index core start -> finalize | 787.7 | 1,060.9 |
+
+- AG1 at 32 K: the local select takes LOCAL_ALL (<= 512 local pools), so the coordinator is done at 79 us while the
+  owners still score; AG1 opens when the owners' candidate records land (~152 us), 35 us after the latent core's q
+  piece. The q copy (29 us, after the paged-latent cache write) is the last producer only on the chip that owns the
+  launch's cache rows (all 16 probe rows sit at one position: one chip writes 16 rows), where AG1 opens 23 us late.
+  Moving the q copy ahead of the cache write and the owners' LAT_SEM wait behind the pre-sweep removes that straggler
+  (AG1 open max 178 -> 156 us) for -15 to -34 us per step at 4 K / 32 K (-0.06 to -0.13 %) and -3 to -13 us at 1 M:
+  not taken.
+- RS1: the parity split gives link 0 four of a source's seven blocks (two per RS1-early phase) and link 1 three, at the
+  same per-block rate (41.3 / 43.5 us): rs1a lands 28 us after rs1 and the roots' round 1 waits for it (RS1_TSPLIT below).
+
+### RS1_TSPLIT: the split column scatter by block halves (2026-11-20, default on the 8x4)
+
+RS1_SPLIT sends the block of source p for destination q on link 0 when p + q is odd: four of a source's seven blocks
+on link 0 and three on link 1 (two / one per RS1-early phase). The probe row of the link-0 lane (rs1a, row 240) shows
+both lanes opening together, rs1a sending for 164 us against rs1's 130 (41.3 / 43.5 us per block), landing 28 us
+later, and the roots' round 1 waiting for it. No whole-block assignment does better: one lane always carries four
+blocks, and the three own-half blocks of the second phase split two / one. RS1_TSPLIT (on RS1_SPLIT + RSNP) keeps both
+lanes, their links, gates, release order and the roots' protocol, and changes what each lane sends. Each lane sends
+every destination's block chunk, but only half of its staged RSNP pages: link 1 (rs1) the first half and link 0 (rs1a)
+the second (shard_plan.rs1_tsplit_spans: 72 + 72 of 144 pages at t 16; fs_read.cpp / fs_send.cpp FS_SPAN0 /
+FS_SPANN). The chunk-end packet goes on each half's last pair, and each lane's waiter counts every source (one half
+chunk each, no strided sources). The x / y pages and bytes are the same, and the roots land once both waiters have
+signalled, so the result is bit-exact. Host models: fs_scatter_packets with the span (both halves = the RSNP lane's
+pages, each once, one chunk end per destination and half, every source counted once per lane) and audit_rs_blocks
+rs1t. Knob off: the 32 fs_send / fs_read JIT builds logged by the 2026-11-19 CI-pin, identical-rows and probe rows
+recompile offline to the same ELFs.
+
+Device (wt_main19 5ff56ffe2ce = this change on the probe-row commit; plain traced step, 16 live distinct rows, width
+16, galaxy defaults; DSA layer 3 chip medians in us):
+
+| row | ISL (position) | OSL | concurrency | rs1 / rs1a send | rs1 / rs1a landed | roots' round 1 | step | per-row rate |
+|---|---|---|---|---|---|---|---|---|
+| off | 32,768 | - (probe step) | 16 | 130.4 / 163.9 | 229.4 / 257.1 | 256.9 | 27,192.8 us | 36.77 tok/s/u |
+| TSPLIT | 32,768 | - | 16 | 151.0 / 152.1 | 247.8 / 248.2 | 248.0 | 27,102.0 us (-0.33 %) | 36.90 tok/s/u |
+| off | 1,048,000 | - | 16 | 130.4 / 162.4 | 231.2 / 259.5 | 259.2 | 30,132.3 us | 33.19 tok/s/u |
+| TSPLIT | 1,048,000 | - | 16 | 150.0 / 148.6 | 249.5 / 250.9 | 250.6 | 30,055.8 us (-0.25 %) | 33.27 tok/s/u |
+
+The roots' round 1 lands 8.9 / 8.6 us earlier per DSA layer; the step saves up to 11 x that: 90.8 of 98 us at 32 K,
+76.5 of 95 us at 1 M (the rest is absorbed after round 1). Bitwise with the default on (wt_main19 c7a35ae3bbf): the CI
+pins hold (32,767 x 4 / OSL 128: ids c4e99f0da946d7e5, 55.3 tok/s/u; 1,048,447 x 1 / OSL 128: 8effa1b6f899e4c4, 63.3
+tok/s/u), 16 identical rows at 4,095 / OSL 128 give one id-sequence class with 8efe8c2ff60acc34, and the served gate
+(glm53_flash_1m, 1 user ISL 32,768 / OSL 256) keeps the 1-user hash 4aab67fb with no errors. AGX_LINE
+Validation: `_logs/mesh/chain_dtrim_k6n2.sh`, `chain_dtrim2.sh`, `chain_dtrim_srv.sh`.
 
 ## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 685aaccbc5e defaults)
 
