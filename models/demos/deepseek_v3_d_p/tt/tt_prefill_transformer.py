@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import LoopStep, lo
 from models.demos.deepseek_v3_d_p.tt.glm54.damp_gate import TtDampGate
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.two_bank import loop_pass2_layers, pass1_index_set, pass2_kv_cache_seq_len
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     global_to_local_token_id,
@@ -262,6 +263,19 @@ class TtPrefillTransformer(LightweightModule):
 
         self.num_kvpe_cache_layers = num_layers + num_mtp_levels
 
+        # GLM-5.4 loop pass 2 (two-bank attention, A2-A6): the loop layers this instance holds run it with the
+        # pass-1 blocks (shared weights). Their window lives in a ring past each cache slot's pass-1 positions, so
+        # the KVPE cache holds kv_cache_seq_len positions per slot; allocate it (and the index cache) with that.
+        self._config = config
+        self._pass2_layers = [
+            i for i in loop_pass2_layers(config) if first_layer_idx <= i < first_layer_idx + num_layers
+        ]
+        if self._pass2_layers:
+            assert is_chunked and max_seq_len is not None, "loop pass 2 runs chunked over a max_seq_len cache"
+            self.kv_cache_seq_len = pass2_kv_cache_seq_len(max_seq_len, seq_len)
+        else:
+            self.kv_cache_seq_len = max_seq_len
+
         # --- Transformer layers ---
         # layer_idx is the GLOBAL index (drives weight cache keys + dense/MoE selection);
         # sparse indexer which stage it is, so its (separately numbered) key cache is rank-local too.
@@ -301,7 +315,7 @@ class TtPrefillTransformer(LightweightModule):
                 is_chunked=is_chunked,
                 slot_num=slot_num,
                 layer_num=self.num_kvpe_cache_layers,
-                max_seq_len=max_seq_len,
+                max_seq_len=self.kv_cache_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 next_kv_only=kv_only_last_layer and local_idx == num_layers - 2,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
@@ -313,11 +327,26 @@ class TtPrefillTransformer(LightweightModule):
                 llama4_scale_cache=self._llama4_scale_cache,
                 use_fused_rmsnorm=use_fused_rmsnorm,
                 forward_chunks=forward_chunks,
+                loop_pass2=layer_idx in self._pass2_layers,
             )
             self.layers.append(layer)
 
         # GLM-5.4 loop: the order the blocks run in, and one damp gate per loop pass (see _build_schedule).
         self.steps, self.loop_gates = self._build_schedule(config, state_dict, num_links, tp_topology, tp_axis)
+        # Pass 2 reuses pass 1's top-k (A5): one persistent set per full layer of the loop, in layer order (the
+        # sets tt.loop_handoff sends), filled by pass 1 as each full layer makes it (its output can alias scratch
+        # the next full layer reuses) and injected into every pass-2 layer of that reuse group.
+        self.loop_index_sets = []
+        if self._pass2_layers:
+            mla = self.layers[self._pass2_layers[0] - first_layer_idx].mla
+            num_sets = pass1_index_set(config, self._pass2_layers[-1]) + 1
+            spec = ttnn.TensorSpec(
+                shape=ttnn.Shape(list(mla.indexer_indices_shape())),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                buffer_type=ttnn.BufferType.DRAM,
+            )
+            self.loop_index_sets = [ttnn.allocate_tensor_on_device(spec, mesh_device) for _ in range(num_sets)]
 
         build_tail = mtp_predictor is not None and is_last_rank and not kv_only_last_layer
         self.norm = (
@@ -372,6 +401,7 @@ class TtPrefillTransformer(LightweightModule):
         self._has_indexer = resolve_has_indexer(config)
         self.indexed_rope = (
             self.rope_setup.get_rope_tensors_indexed(
+                # Positions only: pass 2's window ring past them is written from already-rotated KV.
                 cache_seq_len_global=max_seq_len if max_seq_len is not None else seq_len,
                 chunk_size_global=seq_len,
                 tail_slack=is_chunked,
@@ -676,12 +706,11 @@ class TtPrefillTransformer(LightweightModule):
             "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
             "d2h_service and would silently drop on_layer_complete"
         )
-        # While pass 2 runs the GLM-5.3 attention stand-in it rewrites the pass-1 KV slot and would ack the same
-        # layer id twice, so a loop model takes no layer acks until two-bank pass 2 (q171.2.5) and the stage ack
-        # identities (q171.2.8) exist.
+        # A loop model would ack each loop layer once per pass; the pass-k ack identities are the stage placement's
+        # (q171.2.8), so a loop model takes no layer acks here.
         assert not self.loop_gates or (d2h_service is None and on_layer_complete is None), (
-            "a GLM-5.4 loop model takes no layer acks (d2h_service / on_layer_complete) while pass 2 runs the "
-            "GLM-5.3 attention stand-in"
+            "a GLM-5.4 loop model takes no layer acks (d2h_service / on_layer_complete) until the stage placement "
+            "defines the pass-k ack identities"
         )
         if chunks is not None:
             assert (
@@ -770,11 +799,33 @@ class TtPrefillTransformer(LightweightModule):
             # A later loop pass reruns the pass-1 block (shared weights) and names its output by pass.
             name = f"layer_{i}" if step.loop_pass <= 1 else f"layer_{i}.pass{step.loop_pass}"
             signpost(f"forward_{name}_start")
+            if step.loop_pass >= 2:
+                # Loop pass 2 (A2-A6): two-bank attention at the pass-1 group's top-k; no indexer, no pass-1 writes.
+                h, _ = layer(
+                    h,
+                    rope_tensors,
+                    kvpe_cache,
+                    cache_layer_idx=i,
+                    return_intermediates=return_intermediates,
+                    on_layer_hidden=on_layer_hidden,
+                    actual_start=actual_start,
+                    actual_end=actual_end,
+                    cache_user_id=cache_user_id,
+                    actual_isl=actual_isl,
+                    padding_side=self.padding_side,
+                    indexer_indices=self.loop_index_sets[pass1_index_set(self._config, step.layer)],
+                    metadata=metadata,
+                    loop_pass2=True,
+                )
+                signpost(f"forward_{name}_end")
+                if return_intermediates:
+                    ttnn.synchronize_device(self.mesh_device)
+                    intermediates[name] = self._to_host(h)
+                if read_profiler:
+                    ttnn.ReadDeviceProfiler(self.mesh_device)
+                continue
             mode = self.indexer_types[step.layer] if reuse else "full"
             inject = indexer_indices if (reuse and mode == "shared") else None
-            # STAND-IN until q171.2.5: a later loop pass runs the block's own (GLM-5.3) attention, which computes
-            # a fresh top-k and writes this layer's KVPE / index-cache slot for the chunk over pass 1's. GLM-5.4
-            # pass 2 instead reads pass-1 KVPE at pass-1 top-k plus its own window (two-bank sparse MLA).
             ret = layer(
                 h,
                 rope_tensors,
@@ -797,6 +848,8 @@ class TtPrefillTransformer(LightweightModule):
             )
             if reuse:
                 h, _, new_idx = ret
+                if mode == "full" and step.loop_pass == 1 and step.layer in self._pass2_layers:
+                    ttnn.copy(new_idx, self.loop_index_sets[pass1_index_set(self._config, step.layer)])
                 if mode == "full":
                     # Keep the full layer's indices alive through every shared consumer. TP sequence
                     # shards own their top-k allocation; reference replacement releases it when no
