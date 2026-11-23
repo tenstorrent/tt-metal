@@ -300,3 +300,57 @@
 - The Panoptic `[perf]` cases are within noise.
 
 **Outcome**: per-side padding is coordinate algebra on the interleaved walk (rows by `top`, columns by `left`); sharded x asymmetric is EXCLUSIONS. All 17 FLUX.2 bh2x4 `[perf]` cases, real `(0, 0, 1, 1)` call, median of 3: -0.44% to +0.72% of `measured_ns_blackhole` (e.g. up3.res 1026x2048 32->128 3584587 vs 3583793 ns, up2.upsample 1026x2048 64->256 9657214 vs 9659221 ns), PCC 0.999999. Panoptic: the 45 LOOSE outputs are bit-identical (sha256) and the 22 compare cases move -1.7% to +1.75% (same kernels; noise). Not covered by a bar: the encoder downsamplers `(0, 1, 0, 1)` s2 are 13-17% slower than the symmetric proxy at 512² x 256, 1024² x 256 and 2048² x 128 (flat elsewhere), because left pad 0 closes S2_TAPS and they take the strided window. Next: teach S2_TAPS the left-pad-0 layout (kw = 0 even pixels, kw = 1 odd, kw = 2 even shifted one with the next input tile's pixel 0 in place of the previous tile's pixel 31). Not done here: it is a new DEST/packer move pattern in raw LLK, not coordinate algebra, and no FLUX.2 perf case runs it.
+
+### [ ] Refinement 8 — kernel_size 1: Panoptic-DeepLab's 1x1 convs
+
+**Goal**:
+- Add `1` to `SUPPORTED["kernel_size"]`. The taggers, `output_hw`, `validate()` and `prepare_conv2d_weights` already classify a 1x1 call (`kernel_size=1`) and a 1x1 weight (`[C_out, C_in, 1, 1]`) and refuse them (`conv2d_3x3.py`: `tag_kernel_size`, the gate at the top of `validate()`). Golden today: 382 1x1 cells xfail, 120 are INVALID-skipped.
+- Required:
+  - The 22 `k1x1 ...` LOOSE_CASES in `feature_spec.py`: 47 of Panoptic's 49 1x1 calls per inference, each with the input the model hands it. All bf8_b TILE with bias, ReLU or none. Placements:
+    - HEIGHT_SHARDED L1 on 110 / 103 / 86 cores;
+    - BLOCK_SHARDED L1 on 8x8 (res4) and 8x10 (res5);
+    - DRAM interleaved: the res3 / res4 / res5 entries, the res3.0 and res4.0 shortcuts at stride 2;
+    - L1 interleaved (the `buffer_type` pin): ASPP convs.0 and projection, the decoder projections.
+  - The TILE `test_op` cells of the five 1x1 INPUTS: 240 cells (bf16 / bf8_b activations and weights, interleaved / HEIGHT / BLOCK, bias, ReLU; stride 1 and 2).
+- ROW_MAJOR 1x1 cells (120 `test_op` cells): optional. No model runs a 1x1 conv on ROW_MAJOR input; EXCLUSIONS `{"kernel_size": 1, "layout": ttnn.ROW_MAJOR_LAYOUT}` are allowed. If excluded, say so in the outcome and tick `[x]`.
+
+**Implementation skill**: /memory-layouts (TILE page reads from an interleaved buffer in DRAM or L1)
+
+**Verifier notes**:
+- **API** (`eval/prompts/conv2d_3x3.txt`): `prepare_conv2d_weights` reads k from the torch weight's shape; `conv2d_3x3(..., kernel_size=1)`. Prepared 1x1 weight: rows (slice, c), C_in zero-padded to C_in_p, `K_p = slices * roundup32(C_in_p)`. `_check_contract`'s K_p check must follow the kernel size; `output_hw(..., kernel_size=1)` already sizes the output.
+- **A 1x1 conv is the matmul itself**: out [M x N] = in [M x K] . W [K x N] + bias, M = H_out*W_out, K = C_in. No halo, slab, im2col or tap build (prompt rule).
+  - HEIGHT_SHARDED, stride 1: a core's in0 is its own input shard, read in place (the TILE pages already are the matmul's rows). Weights by the existing weight-server multicast; bias and ReLU in the final pack.
+  - BLOCK_SHARDED: the N-slice ring is already the K split this needs (C_in split over grid columns, partials reduce-scattered along the row). A_c is the core's own shard, so the 3x3 tap prelude drops out.
+  - Stride 2 (the res3.0 / res4.0 shortcuts, DRAM interleaved): output pixel (h, w) reads input pixel (2h, 2w), every other pixel of every other image row. The S2_TAPS DEST decimation (round 12) already builds stride-2 taps from TILE pages; at 1x1 it is the single centre tap with no padding.
+  - Interleaved input, DRAM or L1: each core reads the input tile-rows of its own output block straight from the buffer through a TensorAccessor. MUST NOT reshard first (prompt rule): that interleaved-to-sharded step is 5-25 us of `ttnn.conv2d`'s time on these calls.
+- **Output placement**: the golden test checks values only. Keep the op's existing rule per input placement and list, in the outcome, the output memory config each LOOSE case gets; the model's next layer expects the grid `ttnn.conv2d` returns (the compare harness below records it per case).
+- **Performance bar**: device kernel time per call at Panoptic's config (LoFi, fp32 DEST, bf8_b), measured with `tests/ttnn/unit_tests/operations/conv2d_3x3_vs_ttnn/test_panoptic_conv1x1_compare.py`.
+  - The harness replays each call through TtConv2d with the model's captured `ttnn.conv2d` config (`panoptic_conv1x1_cases.json`). Add a `conv2d_3x3` side on the same input, weights and seed, signposted the same way (`cmp|<layer>|conv2d_3x3|<i>`). Run with `scripts/run_safe_pytest.sh --profile --run-all`, select cases with `CONV_CMP_CASES`.
+  - The 16 calls whose roofline is at least 3 us must be faster than the best `ttnn.conv2d` config that keeps the output grid (the harness's `CONV1X1_TUNE=1` sweep):
+
+    | Case | Calls | Roofline (us) | ttnn.conv2d best (us) |
+    |:---|---:|---:|---:|
+    | res2.0.shortcut | 1 | 5.0 | 10.0 |
+    | res3.0.shortcut (stride 2) | 1 | 10.0 | 50.1 |
+    | res3.0.conv1 | 1 | 19.4 | 34.5 |
+    | res4.0.shortcut (stride 2) | 1 | 6.1 | 33.9 |
+    | res4.0.conv1 | 1 | 10.0 | 29.0 |
+    | res5.0.shortcut | 1 | 20.2 | 38.3 |
+    | res5.0.conv1 | 1 | 6.1 | 18.5 |
+    | res5.{0,1,2}.conv3 | 3 | 10.1 | 24.5 |
+    | res5.{1,2}.conv1 | 2 | 10.1 | 16.3 |
+    | aspp.convs.0 (x2 heads) | 2 | 5.0 | 20.7 |
+    | aspp.project (x2 heads) | 2 | 3.2 | 24.1 |
+
+  - The other 11 configs (roofline 0.2-2.5 us, `ttnn.conv2d` 3.7-16.5 us): report the time, no bar. The model routes a 1x1 layer to conv2d_3x3 only where it wins.
+  - Roofline = max(compute at 70% of the 110-core LoFi peak, 16 cycles per tile-MAC at 1.35 GHz; DRAM at 90% of 512 GB/s for weights, bias and a DRAM-resident input, half of it at stride 2).
+- **3x3 must not move**: the 1x1 path is new code beside the 3x3 paths.
+  - The 45 Panoptic 3x3 LOOSE outputs stay bit-identical.
+  - The 22 cases of `test_panoptic_conv3x3_compare.py` stay within noise (±2%), as do FLUX.2's 17 bh2x4 `[perf]` cases.
+  - In a worktree, `export TT_METAL_HOME=$PWD PYTHONPATH=$PWD` first (golden tests also need `tt_metal/third_party/tt_ops_code_gen` on PYTHONPATH), or the run silently tests the main checkout.
+
+**Done when**:
+- The 22 `k1x1` LOOSE_CASES and the 240 TILE 1x1 `test_op` cells pass, both dispatches, with a program-cache hit; the 120 ROW_MAJOR 1x1 cells pass or are EXCLUSIONS.
+- Every previously passing cell still passes (before this refinement: `test_golden.py` 1663 passed / 526 xfailed / 696 skipped, `test_regression.py` 33 passed).
+- The 16 large calls meet the performance bar; the other 11 are reported.
+- 3x3 non-regression as above.
