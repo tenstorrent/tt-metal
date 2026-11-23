@@ -256,11 +256,8 @@ jobs:
             echo "pr=${PR_NUMBER}"
             echo "cap=${CAP}"
           } >> "$GITHUB_OUTPUT"
-      # One arch can have a report while the other has none, so a missing one is not a failure.
-      # Both sides must measure at the same code positions, or nothing pairs up and every
-      # candidate reads as "not measured on the base". The base leg runs the branch point's
-      # copy of the placement script: when that copy cannot take the list from the gate, the
-      # gate sends the list that copy has, so the two sides still line up.
+      # Both sides must measure at the same code positions, or nothing pairs up. When the branch
+      # point's copy of the placement script cannot take a list from the gate, both sides use its list.
       - name: Pick the code positions both sides can measure at
         id: shifts
         env:
@@ -287,9 +284,10 @@ jobs:
               SHIFTS="$BASE_SHIFTS"
             fi
           fi
-          echo "Stage 2 measures at: ${SHIFTS:-the script's own list}"
+          echo "Stage 2 measures at: ${SHIFTS:-the list in the script}"
           echo "shifts=$SHIFTS" >> "$GITHUB_OUTPUT"
 
+      # One arch can have a report while the other has none, so a missing one is not a failure.
       - name: Download the stage-1 Blackhole report
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
