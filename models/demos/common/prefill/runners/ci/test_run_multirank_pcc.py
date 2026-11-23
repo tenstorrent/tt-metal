@@ -251,7 +251,14 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
             )
         # Kimi-K3's, Kimi-K3.1's and GLM-5.3's layouts are their manifests', so the harness reads the real ones.
-        for name in ("kimi_k3.json", "kimi_k3_1.json", "glm53.json", "glm53_4x4.json", "glm53_mtp_kv_share.json"):
+        for name in (
+            "kimi_k3.json",
+            "kimi_k3_1.json",
+            "kimi_k3_1_packed.json",
+            "glm53.json",
+            "glm53_4x4.json",
+            "glm53_mtp_kv_share.json",
+        ):
             shutil.copyfile(REPO / MANIFESTS / name, manifest_dir / name)
         checkpoint = root / "checkpoint"
         checkpoint.mkdir()
@@ -576,6 +583,42 @@ class MultirankPccHarnessTests(unittest.TestCase):
             # K3's 1M request in 2560-token chunks: 1049600 tokens, 410 chunks; the 8192-token golden is its head.
             self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], "410")
         self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_kimi_k3_1_sc1_packed_runs_two_chunks_per_forward(self):
+        """--variant packed: kimi_k3_1_packed.json's 2560-token chunks, two per forward (budget 5120), at one slot
+        fewer than kimi_k3_1.json, on the same two 4x4 stages, golden and PCC gate."""
+        result, records = self.run_harness(
+            "kimi_k3_1", config="sc1", hosts=self.SC4_HOSTS[:1], args=["--variant", "packed"]
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        runner = self.one_record(records, "runner")["env"]
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/kimi_k3_1_packed.json"))
+        manifest = json.loads(Path(runner["PREFILL_MANIFEST"]).read_text())["env"]
+        # What makes the run packed: the manifest's budget is two of its chunks, and the chunk the harness exports
+        # over the manifest is that chunk (an 8x4 layout's 5120 would leave one chunk per forward).
+        self.assertEqual(manifest["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertEqual(manifest["PREFILL_FORWARD_TOKENS_BUDGET"], "5120")
+        self.assertEqual(runner["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertNotIn("PREFILL_FORWARD_TOKENS_BUDGET", runner)
+        self.assertEqual(runner["PREFILL_NUM_LAYERS"], "24")
+        self.assertEqual(runner["PREFILL_NUM_USERS"], str(int(self.KIMI_4X4_USERS["kimi_k3_1"]) - 1))
+        self.assert_kimi_4x4_cache_check(records, "kimi_k3_1")
+        producer = self.one_record(records, "producer")["env"]
+        self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/kimi_k3_1_packed.json"))
+        self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_kimi_k3_1_packed_refuses_the_8x4_configs(self):
+        """The 8x4 layout's chunk (5120) equals kimi_k3_1_packed.json's budget: one chunk per forward under a packed
+        name. Refused before anything launches."""
+        for config in ("sc1_8x4", "sc4_8x4"):
+            with self.subTest(config=config):
+                result, records = self.run_harness(
+                    "kimi_k3_1", config=config, hosts=self.SC4_HOSTS, args=["--variant", "packed"]
+                )
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("--variant packed runs the 4x4 configs", result.stderr)
+                self.assertFalse([r for r in records if r["kind"] in ("runner", "producer")])
 
     def test_a_capacity_probe_sends_its_own_request_at_its_own_slot_count(self):
         """PREFILL_REQUEST_LEN replaces the config's request (K3.1 sc1: 1049600) and PREFILL_NUM_USERS the slots."""

@@ -213,21 +213,19 @@ def _k31_params(forward_chunks, use_trace, num_users=4):
 
 
 def test_k31_adapter_packs_on_pp4():
-    """K3.1 packs with K3's capabilities. Its PP4 split passes no indexer indices (every DSA layer owns its indexer),
-    so the runner's multi-rank check (indexer_indices = num_ranks > 1 and passes_indexer_indices) refuses nothing."""
+    """K3.1 packs, traced and with per-chunk D2H acks (the runner's kimi_k3_1_packed.json run). Its PP4 split passes no
+    indexer indices (every DSA layer owns its indexer), so the runner's multi-rank check (indexer_indices = num_ranks
+    > 1 and passes_indexer_indices) refuses nothing."""
     from models.demos.common.prefill.prefill_chunk import packed_forward_capabilities, packed_forward_refusals
-    from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
     from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
 
     assert KimiK31Adapter.supports_packed_forward
     assert not KimiK31Adapter.passes_indexer_indices
     caps = packed_forward_capabilities(KimiK31Adapter)
-    assert caps == packed_forward_capabilities(KimiK3Adapter)
     assert packed_forward_refusals(2, indexer_indices=KimiK31Adapter.passes_indexer_indices, **caps) == []
-    # Trace and D2H acks stay refused at the runner, as for K3, until a runner-level run has driven them.
-    assert packed_forward_refusals(2, use_trace=True, **caps) == packed_forward_refusals(
-        2, use_trace=True, **packed_forward_capabilities(KimiK3Adapter)
-    )
+    assert packed_forward_refusals(2, use_trace=True, d2h_acks=True, **caps) == []
+    # No MTP or drafter on K3.1's packed path.
+    assert packed_forward_refusals(2, mtp_levels=1, **caps)
 
 
 @pytest.mark.parametrize("forward_chunks,use_trace,extra", [(1, True, 0), (2, False, 0), (2, True, 1)])

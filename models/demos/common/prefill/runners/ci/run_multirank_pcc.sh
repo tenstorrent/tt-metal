@@ -238,6 +238,16 @@ case "${MODEL}" in
     # The adapter's defaults already name the K3.1 weights and golden, so only the 4x4 cache is resolved here.
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
+    if [ "${VARIANT}" = _packed ]; then
+      # Two 2,560-token chunks per forward (kimi_k3_1_packed.json), traced with D2H acks; one slot fewer than
+      # kimi_k3_1.json, for the traced packed forward's scratch slot. Same golden and PCC gate. 4x4 only: the 8x4
+      # layout's 5,120-token chunk equals the budget, so it would run one chunk per forward.
+      case "${CONFIG}" in
+        sc1|sc4) ;;
+        *) echo "${MODEL} --variant packed runs the 4x4 configs (sc1, sc4) only" >&2; exit 2 ;;
+      esac
+      MANIFEST="${MANIFEST_DIR}/kimi_k3_1_packed.json"
+    fi
     SC1_NUM_LAYERS=24
     RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # The cache root is the adapter's ttnn_cache_default; 76 slots measured for the 8x4 stage.
