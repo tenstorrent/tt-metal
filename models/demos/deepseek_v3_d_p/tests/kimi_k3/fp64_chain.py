@@ -31,6 +31,11 @@ except the token embedding, which must equal the trace's ``decoder_input_layer_0
 and FFN outputs, routing recall of layers 1-2 (and 3 on sampled rows, whose FFN read only needs those rows'
 attention), layer 3 keys (PCC, NRMSE) and top-k recall. The results go into the manifest's segment entries.
 
+``--kda-precision fp32|vllm`` runs KDA layers 0-2 at another precision (fp32 reference; or vLLM's FlashKDA rounding
+points, ``kda_vllm_emulation``) with everything else FP64, recorded in the manifest's model identity; scoring such a
+run against the FP64 chain (``chain_vs_trace --candidate``) isolates what that KDA precision does to the products
+over long context.
+
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain run --trace T --count N --out G
 """
 
@@ -64,6 +69,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     write_manifest,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as dsa
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_vllm_emulation import kda_flashkda_emulation
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, checkpoint_tensors, missed_keys, topk_recall
 
 C = KimiK31Config
@@ -76,9 +82,27 @@ PRODUCER_VERSION = 2  # 2: buffered indexer blocks of 4096 keys (FP64 summation 
 # blocks (16 threads, logs/indexer-buffers-probe-*). The rate is then the FP64 matmul's.
 KEY_BLOCK = 4096
 QUERY_BLOCK = 16  # query rows per indexer block
+# Precision of the KDA layers 0-2; everything else stays FP64. "fp64" is the golden. "fp32" runs the same reference
+# in fp32 (fp32 state); "vllm" emulates vLLM's FlashKDA rounding points (``kda_vllm_emulation``). The non-golden arms
+# measure how a KDA precision alone moves the chain's products over long context.
+KDA_PRECISIONS = ("fp64", "fp32", "vllm")
 
 
 # --- math, FP64 ----------------------------------------------------------------------------------------------------
+
+
+def kda_layer(precision: str, hidden: torch.Tensor, weights: dict, config: KDAConfig, state: KDAReferenceState | None):
+    """One KDA layer over ``hidden`` ``[1, T, d]`` at ``precision`` (``KDA_PRECISIONS``); the output in FP64 and the
+    carried state in the arm's own dtypes."""
+    if precision == "fp64":
+        return kda_forward_reference(hidden, weights, config, state, dtype=F64)
+    if precision == "fp32":
+        out, state = kda_forward_reference(hidden, weights, config, state, dtype=torch.float32)
+    elif precision == "vllm":
+        out, state = kda_flashkda_emulation(hidden, weights, config, state)
+    else:
+        raise ValueError(f"KDA precision {precision!r} not in {KDA_PRECISIONS}")
+    return out.to(F64), state
 
 
 rms64 = dsa.rms64  # RMSNorm in FP64: x rsqrt(mean(x^2) + eps) weight
@@ -180,6 +204,23 @@ def index_topk(
     return F.pad(indices, (0, pad), value=-1), F.pad(values, (0, pad), value=float("nan"))
 
 
+def dsa_topk(
+    hidden: torch.Tensor, w: dict, dims: dsa.Dims, eps: float, index_keys: torch.Tensor, start: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Each row's FP64 indexer top-k (``index_topk``) for the normed DSA input ``hidden`` of rows
+    ``[start, start + n)``, in blocks of ``QUERY_BLOCK`` rows; ``index_keys``: every row's index key so far."""
+    indices, scores = [], []
+    for lo in range(0, hidden.shape[0], QUERY_BLOCK):
+        hi = min(lo + QUERY_BLOCK, hidden.shape[0])
+        qr = rms64(hidden[lo:hi] @ w["q_a_proj.weight"].T, w["q_a_layernorm.weight"], eps)
+        index_q = (qr @ w["indexer.wq_b.weight"].T).reshape(-1, dims.index_heads, dims.index_dim)
+        index_w = (hidden[lo:hi] @ w["indexer.weights_proj.weight"].T) * (dims.index_heads**-0.5 * dims.index_dim**-0.5)
+        i, s = index_topk(index_q, index_w, index_keys, torch.arange(start + lo, start + hi), dims.topk)
+        indices.append(i)
+        scores.append(s)
+    return torch.cat(indices), torch.cat(scores)
+
+
 # --- model ---------------------------------------------------------------------------------------------------------
 
 
@@ -199,6 +240,7 @@ class ChainModel:
     block_size: int = C.ATTN_RES_BLOCK_SIZE
     top_k: int = C.NUM_EXPERTS_PER_TOKEN
     digests: dict[str, str] = field(default_factory=dict)
+    kda_precision: str = "fp64"
 
     @classmethod
     def from_checkpoint(
@@ -209,59 +251,94 @@ class ChainModel:
         config = json.loads((checkpoint / "config.json").read_text())
         kda_config = KDAConfig.from_model_config(config)
         eps = float(config.get("text_config", config)["rms_norm_eps"])
-        num_experts = int(config.get("text_config", config)["num_experts"])
         embedding = checkpoint_tensors(checkpoint, None, ["embed_tokens.weight"])["embed_tokens.weight"]
         layers, digests = {}, {"embed_tokens": tensor_digest({"w": embedding})}
         for l in range(DSA_LAYER + 1):
-            names = ["input_layernorm.weight", "mlp_res_norm.weight", "mlp_res_proj.weight"]
-            names += ["post_attention_layernorm.weight", "self_attention_res_norm.weight"]
-            names += ["self_attention_res_proj.weight"]
-            if l in KDA_LAYERS:
-                names += [f"self_attn.{n}" for n in required_kda_weight_names(kda_config)]
-            if l == 0:
-                names += [f"mlp.{n}" for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")]
-            if l in MOE_LAYERS or l == DSA_LAYER:
-                names += [f"block_sparse_moe.gate.{n}" for n in ("weight", "e_score_correction_bias")]
-            if l in MOE_LAYERS:
-                names += [f"block_sparse_moe.{n}" for n in MoE_NON_ROUTED if not n.startswith("gate.")]
-            if l == DSA_LAYER:
-                names += [f"self_attn.{n}" for n in dsa.WEIGHTS]
-            t = checkpoint_tensors(checkpoint, l, names)
-            digests[f"layers.{l}"] = tensor_digest(t)
-            layer = {
-                "input_layernorm": t["input_layernorm.weight"].to(F64),
-                "attn_res": (t["self_attention_res_norm.weight"].to(F64), t["self_attention_res_proj.weight"].to(F64)),
-                "mlp_res": (t["mlp_res_norm.weight"].to(F64), t["mlp_res_proj.weight"].to(F64)),
-                "post_attention_layernorm": t["post_attention_layernorm.weight"].to(F64),
-            }
-            if l in KDA_LAYERS:
-                kda = {n: t[f"self_attn.{n}"] for n in required_kda_weight_names(kda_config)}
-                layer["kda"] = {n: v.to(F64) for n, v in normalize_kda_state_dict(kda, kda_config).items()}
-            if l == 0:
-                layer["mlp"] = {
-                    n: t[f"mlp.{n}"].to(F64) for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")
-                }
-            if l in MOE_LAYERS and routed_experts:
-                experts, digests[f"layers.{l}.experts"] = load_experts(checkpoint, l, num_experts, threads, log)
-                w = {n: t[f"block_sparse_moe.{n}"] for n in MoE_NON_ROUTED}
-                layer["moe"] = MoE64(w, experts, C.NUM_EXPERTS_PER_TOKEN, eps)
-            if l == DSA_LAYER:
-                layer["dsa"] = {n: t[f"self_attn.{n}"].to(F64) for n in dsa.WEIGHTS}
-            if l in MOE_LAYERS or l == DSA_LAYER:  # the router alone (layer 3: sampled rows; 1-2: kda_chain_feed)
-                layer["gate"] = t["block_sparse_moe.gate.weight"].to(F64)
-                layer["gate_bias"] = t["block_sparse_moe.gate.e_score_correction_bias"].to(F64)
-            layers[l] = layer
-            log(f"loaded layer {l} weights")
+            layers[l], d = load_layer(
+                checkpoint,
+                l,
+                kda=l in KDA_LAYERS,
+                dense=l == 0,
+                moe=l in MOE_LAYERS,
+                dsa_attn=l == DSA_LAYER,
+                threads=threads,
+                log=log,
+                routed_experts=routed_experts,
+            )
+            digests.update(d)
         return cls(embedding, layers, kda_config, dsa.Dims(eps=eps), eps, digests=digests)
 
     def identity(self) -> dict:
-        return {
+        identity = {
             "kda_config": asdict(self.kda_config),
             "dsa_dims": asdict(self.dsa_dims),
             "eps": self.eps,
             "block_size": self.block_size,
             "weights_sha256": dict(sorted(self.digests.items())),
         }
+        if self.kda_precision != "fp64":  # absent for the golden, so existing FP64 runs keep their identity
+            identity["kda_precision"] = self.kda_precision
+        return identity
+
+
+def load_layer(
+    checkpoint: Path,
+    l: int,
+    *,
+    kda: bool,
+    dense: bool,
+    moe: bool,
+    dsa_attn: bool,
+    threads: int,
+    log: Callable[[str], None] = print,
+    routed_experts: bool = True,
+) -> tuple[dict, dict[str, str]]:
+    """Layer ``l``'s weights as ``ChainModel.layers[l]`` holds them, and their digests: the norms and AttnRes queries;
+    ``kda`` (KDA attention), ``dsa_attn`` (DSA attention), ``dense`` (dense FFN) or ``moe`` (the full MoE). Every MoE
+    or DSA layer also gets its router alone (``gate`` / ``gate_bias``: a DSA layer routes sampled rows for a
+    cross-check, ``kda_chain_feed`` routes the MoE layers). ``routed_experts=False`` leaves out a MoE layer's routed
+    experts and its ``moe`` entry (and their digest); every other digest is the same."""
+    config = json.loads((checkpoint / "config.json").read_text())
+    kda_config = KDAConfig.from_model_config(config)
+    eps = float(config.get("text_config", config)["rms_norm_eps"])
+    names = ["input_layernorm.weight", "mlp_res_norm.weight", "mlp_res_proj.weight"]
+    names += ["post_attention_layernorm.weight", "self_attention_res_norm.weight"]
+    names += ["self_attention_res_proj.weight"]
+    if kda:
+        names += [f"self_attn.{n}" for n in required_kda_weight_names(kda_config)]
+    if dense:
+        names += [f"mlp.{n}" for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")]
+    if moe or dsa_attn:
+        names += [f"block_sparse_moe.gate.{n}" for n in ("weight", "e_score_correction_bias")]
+    if moe:
+        names += [f"block_sparse_moe.{n}" for n in MoE_NON_ROUTED if not n.startswith("gate.")]
+    if dsa_attn:
+        names += [f"self_attn.{n}" for n in dsa.WEIGHTS]
+    t = checkpoint_tensors(checkpoint, l, names)
+    digests = {f"layers.{l}": tensor_digest(t)}
+    layer = {
+        "input_layernorm": t["input_layernorm.weight"].to(F64),
+        "attn_res": (t["self_attention_res_norm.weight"].to(F64), t["self_attention_res_proj.weight"].to(F64)),
+        "mlp_res": (t["mlp_res_norm.weight"].to(F64), t["mlp_res_proj.weight"].to(F64)),
+        "post_attention_layernorm": t["post_attention_layernorm.weight"].to(F64),
+    }
+    if kda:
+        weights = {n: t[f"self_attn.{n}"] for n in required_kda_weight_names(kda_config)}
+        layer["kda"] = {n: v.to(F64) for n, v in normalize_kda_state_dict(weights, kda_config).items()}
+    if dense:
+        layer["mlp"] = {n: t[f"mlp.{n}"].to(F64) for n in ("gate_proj.weight", "up_proj.weight", "down_proj.weight")}
+    if moe and routed_experts:
+        num_experts = int(config.get("text_config", config)["num_experts"])
+        experts, digests[f"layers.{l}.experts"] = load_experts(checkpoint, l, num_experts, threads, log)
+        w = {n: t[f"block_sparse_moe.{n}"] for n in MoE_NON_ROUTED}
+        layer["moe"] = MoE64(w, experts, C.NUM_EXPERTS_PER_TOKEN, eps)
+    if dsa_attn:
+        layer["dsa"] = {n: t[f"self_attn.{n}"].to(F64) for n in dsa.WEIGHTS}
+    if moe or dsa_attn:
+        layer["gate"] = t["block_sparse_moe.gate.weight"].to(F64)
+        layer["gate_bias"] = t["block_sparse_moe.gate.e_score_correction_bias"].to(F64)
+    log(f"loaded layer {l} weights")
+    return layer, digests
 
 
 MoE_NON_ROUTED = (
@@ -352,8 +429,8 @@ def chain_segment(
         hidden = rms64(hidden, L["input_layernorm"], eps)
         if l % model.block_size == 0:
             sealed, live = torch.cat([sealed, live.unsqueeze(1)], dim=1), None
-        attn, carried.kda[l] = kda_forward_reference(
-            hidden.unsqueeze(0), L["kda"], model.kda_config, carried.kda[l], dtype=F64
+        attn, carried.kda[l] = kda_layer(
+            model.kda_precision, hidden.unsqueeze(0), L["kda"], model.kda_config, carried.kda[l]
         )
         attn = attn[0]
         live = attn if live is None else live + attn
@@ -380,18 +457,8 @@ def chain_segment(
     out["dsa_input_3"] = read
     stage("layer 3 keys")
     n = x.shape[0]
-    indices, scores = [], []
-    for lo in range(0, n, QUERY_BLOCK):
-        hi = min(lo + QUERY_BLOCK, n)
-        qr = rms64(hidden[lo:hi] @ L["dsa"]["q_a_proj.weight"].T, L["dsa"]["q_a_layernorm.weight"], eps)
-        index_q = (qr @ L["dsa"]["indexer.wq_b.weight"].T).reshape(-1, dims.index_heads, dims.index_dim)
-        index_w = (hidden[lo:hi] @ L["dsa"]["indexer.weights_proj.weight"].T) * (
-            dims.index_heads**-0.5 * dims.index_dim**-0.5
-        )
-        i, s = index_topk(index_q, index_w, index_keys, torch.arange(start + lo, start + hi), dims.topk)
-        indices.append(i)
-        scores.append(s)
-    out["topk_indices_3"], out["topk_scores_3"] = torch.cat(indices).int(), torch.cat(scores)
+    indices, out["topk_scores_3"] = dsa_topk(hidden, L["dsa"], dims, eps, index_keys, start)
+    out["topk_indices_3"] = indices.int()
     stage("layer 3 indexer top-k")
     local = [r - start for r in sampled if start <= r < start + n]
     out["sampled_rows"] = torch.tensor([start + r for r in local], dtype=torch.int64)
@@ -628,6 +695,7 @@ def main() -> None:
         ),
     )
     parser.add_argument("--no-checks", action="store_true", help="skip the per-segment trace cross-checks")
+    parser.add_argument("--kda-precision", choices=KDA_PRECISIONS, default="fp64", help="KDA layers 0-2 only")
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
 
@@ -641,6 +709,7 @@ def main() -> None:
         raise ValueError(f"{trace.path} has {token_ids.numel()} prompt tokens, fewer than --count {count}")
     log(f"loading weights from {args.checkpoint}")
     model = ChainModel.from_checkpoint(args.checkpoint, args.threads, log)
+    model.kda_precision = args.kda_precision
     log(f"weights loaded; rss {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20:.1f} GB")
     identity = {
         "model": "Kimi-K3.1",
