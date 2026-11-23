@@ -57,30 +57,30 @@ from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
-# process per model). LoudBox: CI hosts. Galaxy: the mean of 3 runs on one Galaxy, after #65125, unscaled; GLM-5.3
-# rows re-centred on the CI nightly after #66140 (run 44241638855, one run). Galaxy 4x4 (2 runs): one local Galaxy,
-# unscaled, as its CI leg has no recent run; recheck once it runs. Galaxy 4x4 subtorus has no CI leg: measured on a
-# subtorus-cabled Galaxy (3 runs), unscaled.
+# process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox, Galaxy and Galaxy 4x4: CI
+# hosts; Galaxy and Galaxy 4x4 then scaled by the q-in-L1 change's measured speedup (3 interleaved runs each of main and
+# the change on one Galaxy; ratios under 1% left unapplied), LoudBox by Galaxy's (same 160 q rows per chip, not
+# measured). Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (3.53, 3.18, 7.64, 7.28),
-        "glm_5_3": (3.11, 2.65, 6.65, 6.29),
-        "glm_5_3-no_indexer": (2.46, 2.16, 2.53, 2.21),
+        "kimi_k3_1": (2.88, 2.54, 6.47, 6.18),
+        "glm_5_3": (2.91, 2.44, 6.46, 6.01),
+        "glm_5_3-no_indexer": (2.34, 2.00, 2.39, 2.07),
     },
     "Galaxy 4x4": {
-        "kimi_k3_1": (3.87, 3.56, 7.98, 7.58),
-        "glm_5_3": (3.38, 3.07, 7.30, 6.93),
-        "glm_5_3-no_indexer": (2.69, 2.58, 5.10, 4.92),
+        "kimi_k3_1": (3.25, 3.00, 7.21, 6.98),
+        "glm_5_3": (2.91, 2.69, 6.81, 6.53),
+        "glm_5_3-no_indexer": (2.29, 2.23, 4.72, 4.56),
     },
     "Galaxy 4x4 subtorus": {
-        "kimi_k3_1": (3.48, 3.14, 7.32, 6.93),
-        "glm_5_3": (3.18, 2.76, 6.85, 6.42),
-        "glm_5_3-no_indexer": (2.40, 2.11, 2.48, 2.20),
+        "kimi_k3_1": (2.97, 2.80, 6.62, 6.37),
+        "glm_5_3": (2.78, 2.52, 6.43, 6.15),
+        "glm_5_3-no_indexer": (2.14, 1.98, 2.22, 2.08),
     },
     "LoudBox": {
-        "kimi_k3_1": (2.99, 2.77, 4.23, 4.04),
-        "glm_5_3": (2.73, 2.40, 3.83, 3.60),
-        "glm_5_3-no_indexer": (2.15, 2.10, 2.80, 2.72),
+        "kimi_k3_1": (2.57, 2.38, 3.82, 3.71),
+        "glm_5_3": (2.36, 2.20, 3.62, 3.46),
+        "glm_5_3-no_indexer": (1.97, 1.92, 2.71, 2.67),
     },
 }
 PERF_TARGETS_MS = {

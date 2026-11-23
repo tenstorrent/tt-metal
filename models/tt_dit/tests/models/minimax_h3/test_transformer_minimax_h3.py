@@ -1313,6 +1313,7 @@ def test_minimax_h3_transformer_block_perf(
                         q_chunk_size=q_chunk,
                         k_chunk_size=k_chunk,
                         exp_approx_mode=False,
+                        min_blocked_pack_tiles=2,
                     )
                     for name in tt_block.attn._ring_sdpa_configs
                 }

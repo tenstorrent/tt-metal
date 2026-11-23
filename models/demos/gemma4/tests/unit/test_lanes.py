@@ -506,7 +506,7 @@ def _lane_engine(mesh_device, monkeypatch, *, max_seq_len, pool_blocks, slots=SL
     if shape not in ((2, 4), (8, 4)):
         pytest.skip(f"the lane engine's shapes are (2,4) and (8,4); got {shape}")
     try:
-        fabric = str(ttnn.get_fabric_config())
+        fabric = str(ttnn.get_fabric_config(mesh_device))
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"fabric config unavailable: {exc}")
     if "FABRIC_1D" not in fabric:
@@ -991,7 +991,7 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, rope, reset_seeds, monk
     if shape not in ((2, 4), (8, 4)):
         pytest.skip(f"the lane engine's shapes are (2,4) and (8,4); got {shape}")
     try:
-        fabric = str(ttnn.get_fabric_config())
+        fabric = str(ttnn.get_fabric_config(mesh_device))
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"fabric config unavailable: {exc}")
     if "FABRIC_1D" not in fabric:

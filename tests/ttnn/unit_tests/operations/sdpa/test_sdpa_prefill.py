@@ -468,7 +468,19 @@ def run_test_sdpa_sliding_window(
 
 
 def run_test_sdpa_with_attention_sink(
-    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal=True, sink_values=None, rmse_threshold=None
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    dtype,
+    is_causal=True,
+    sink_values=None,
+    rmse_threshold=None,
+    fp32_dest_acc_en=False,
 ):
     """Test SDPA with attention sinks using per-head sink values."""
     program_config = ttnn.SDPAProgramConfig(
@@ -481,7 +493,7 @@ def run_test_sdpa_with_attention_sink(
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )
 
@@ -743,6 +755,7 @@ def test_sdpa_sliding_window_streaming_parity(
     )
 
 
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_dest", "fp32_dest"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
@@ -751,7 +764,9 @@ def test_sdpa_sliding_window_streaming_parity(
     "b, nh, nkv, s, d",
     ([1, 8, 1, 256, 32],),
 )
-def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, is_causal, q_chunk_size, k_chunk_size, reset_seeds):
+def test_sdpa_with_attention_sink(
+    device, b, nh, nkv, s, d, dtype, is_causal, q_chunk_size, k_chunk_size, fp32_dest_acc_en, reset_seeds
+):
     """Test SDPA with per-head attention sinks on device."""
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
@@ -760,7 +775,18 @@ def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, is_causal, q_
 
     rmse_threshold = 0.02
     run_test_sdpa_with_attention_sink(
-        device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal=is_causal, rmse_threshold=rmse_threshold
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        is_causal=is_causal,
+        rmse_threshold=rmse_threshold,
+        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
@@ -959,6 +985,97 @@ def test_sdpa_block_map_rejects_windowed_and_sliding(device, mode, expect_error)
         ttnn.transformer.scaled_dot_product_attention(
             q, k, v, is_causal=False, program_config=program_config, attn_mask_block_map=block_map, **kwargs
         )
+
+
+@pytest.mark.parametrize(
+    "s, d, is_causal, chunk_size, math_fidelity, math_approx_mode, exp_approx_mode",
+    [
+        (32, 32, False, 32, ttnn.MathFidelity.HiFi4, False, False),
+        (64, 64, True, None, ttnn.MathFidelity.HiFi2, True, None),
+        (128, 64, True, 32, ttnn.MathFidelity.HiFi4, False, False),
+    ],
+    ids=["accurate_exp", "fp32_dest_default_config", "accurate_exp_k_chunks"],
+)
+def test_sdpa_fp32_dest_wide_score_rows(
+    device, s, d, is_causal, chunk_size, math_fidelity, math_approx_mode, exp_approx_mode
+):
+    """With fp32 scores, the row max must equal each row's peak exactly: scores spanning 2^±12 scales
+    put a bf16-rounded max hundreds of units from the peak once scaled, which zeroed whole rows."""
+    torch.manual_seed(20261110)
+    q, k, v = (
+        (torch.randn(1, 1, s, d) * torch.exp2(torch.randint(-12, 13, (1, 1, s, d)).float())).bfloat16()
+        for _ in range(3)
+    )
+    expected = torch.nn.functional.scaled_dot_product_attention(q.double(), k.double(), v.double(), is_causal=is_causal)
+
+    program_config = None
+    if chunk_size is not None:
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=chunk_size,
+            k_chunk_size=chunk_size,
+            exp_approx_mode=exp_approx_mode,
+        )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=math_approx_mode,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_q, tt_k, tt_v = (
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v)
+    )
+    actual = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=is_causal,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+    ).double()
+
+    zero_rows = (actual == 0).all(-1).reshape(-1).nonzero().reshape(-1).tolist()
+    assert not zero_rows, f"rows {zero_rows} are all zero"
+    relative_rms = ((actual - expected).square().sum() / expected.square().sum()).sqrt().item()
+    assert relative_rms < 0.02, f"relative RMS error {relative_rms:.4f} against a float64 reference"
+
+
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(256, 512), (192, 192)], ids=["q256_k512", "q192_k192"])
+def test_sdpa_min_blocked_pack_tiles(device, q_chunk_size, k_chunk_size):
+    """Every min_blocked_pack_tiles setting packs the same values, and each one is its own cached program."""
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, 8, 1536, 128) for _ in range(3))
+    tt_q, tt_k, tt_v = (
+        ttnn.from_torch(t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16) for t in (q, k, v)
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
+    )
+    outputs = []
+    for min_blocked_pack_tiles in (None, 2, 8):
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            min_blocked_pack_tiles=min_blocked_pack_tiles,
+        )
+        out = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=False,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        outputs.append(ttnn.to_torch(out))
+    passing, pcc = comp_pcc(torch.nn.functional.scaled_dot_product_attention(q, k, v), outputs[0], 0.999)
+    assert passing, pcc
+    for out in outputs[1:]:
+        assert torch.equal(out, outputs[0])
+    assert device.num_program_cache_entries() == 3
 
 
 @pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(0, 128), (128, 0)])

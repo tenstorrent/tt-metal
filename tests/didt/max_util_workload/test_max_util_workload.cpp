@@ -37,6 +37,7 @@
 #include "multi_device_fixture.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include "impl/buffers/buffer_impl.hpp"
+#include "impl/dispatch/host_device_transfer.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -403,7 +404,7 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
 
     // Populate with a recognisable pattern so DRAM contains live data.
     std::vector<uint32_t> pattern(total_size / sizeof(uint32_t), 0xDEADBEEFu);
-    detail::WriteToBuffer(dram_buffer, pattern);
+    slow_dispatch::WriteToBuffer(*dram_buffer, pattern);
 
     return dram_buffer;
 }
@@ -440,12 +441,12 @@ static PrefillProgram build_prefill_program(distributed::MeshDevice& mesh_device
     // Fill buffer 0 with random data
     std::vector<uint32_t> data0 =
         rng_bfp16(buffer_size_bfloat16, tile_rows, tile_cols, /*mean=*/0.0f, /*stdev=*/1.0f, /*seed=*/42);
-    detail::WriteToBuffer(dram_buffer0, data0);
+    slow_dispatch::WriteToBuffer(*dram_buffer0, data0);
 
     // Fill buffer 1 with random data
     std::vector<uint32_t> data1 =
         rng_bfp16(buffer_size_bfloat16, tile_rows, tile_cols, /*mean=*/0.0f, /*stdev=*/1.0f, /*seed=*/43);
-    detail::WriteToBuffer(dram_buffer1, data1);
+    slow_dispatch::WriteToBuffer(*dram_buffer1, data1);
 
     // Get L1 base address and pack all buffers densely
     uint64_t l1_base_addr = MetalContext::instance().hal().get_dev_addr(
@@ -943,7 +944,7 @@ static bool log_eth_bw(IDevice* device, const MaxUtilConfig& cfg, const shared_p
     }
 
     std::vector<uint32_t> readback;
-    detail::ReadFromBuffer(dram_buffer, readback);
+    slow_dispatch::ReadFromBuffer(*dram_buffer, readback);
 
     // Each stream reads cfg.eth_pages_per_bank pages from 1 bank per iteration.
     uint64_t bytes_per_stream =

@@ -61,7 +61,7 @@ inline void _llk_unpack_reduce_mop_config_(
     if (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR || tensor_shape.face_r_dim < MAX_FACE_R_DIM || clear_data_src)
     {
         const std::uint32_t clear_data_bank =
-            TT_OP_UNPACR_NOP(data_unpacker, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC_ZERO /* UNP_CLR_SRC */);
+            TT_OP_UNPACR_NOP(data_unpacker, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC);
 
         ckernel_template temp(num_tiles, num_faces, clear_data_bank, unpack_data_face);
         temp.set_start_op(unpack_scaler);

@@ -73,8 +73,8 @@ The convolution order is the golden's `[all q | all k | all v]`. The recurrent g
 
 `models/demos/deepseek_v3_d_p/tt/kda/state_adapter.py` owns the geometry, the maps, the slabs and the
 host decoders (`recurrent_segment_to_torch`, `convolution_segment_to_torch`, `assemble_*`). Every K3 KDA
-layer (`ttKDA.forward` on `KdaStates.entry`) runs on the slabs directly: the convolution, the SP relay
-and the final carry read batch `slot * L + layer_position` (slot read on device) and write the
+layer (`ttKDA.forward` on `KdaStates.entry`) runs on the slabs directly: the convolution and the SP relay
+(which also forms the final carry) read batch `slot * L + layer_position` (slot read on device) and write the
 replacement back in place inside the captured region, so the state a reader sees is the one after the
 last committed chunk, and it lands before any later MLA layer acks that chunk, and before the KDA
 layer's own ack. Nothing clears a slot: on a request's head chunk (`actual_start == 0`, evaluated on

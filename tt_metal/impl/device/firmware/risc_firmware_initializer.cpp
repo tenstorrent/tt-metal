@@ -19,8 +19,8 @@
 #include "context/metal_context.hpp"
 #include "debug/l1_ecc_halt.hpp"
 #include "impl/context/context_descriptor.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/noc_logging.hpp"
 #include "dispatch/dispatch_core_manager.hpp"

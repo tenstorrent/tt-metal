@@ -132,8 +132,8 @@ class MiniMaxH3CausalConv3d(Module):
         self.ccl_manager = ccl_manager
         self.height_factor = 1 if parallel_config is None else parallel_config.height_parallel.factor
         self.width_factor = 1 if parallel_config is None else parallel_config.width_parallel.factor
-        self.is_sharded = self.height_factor > 1 or self.width_factor > 1
-        if self.is_sharded and ccl_manager is None:
+        self.is_spatially_sharded = self.height_factor > 1 or self.width_factor > 1
+        if self.is_spatially_sharded and ccl_manager is None:
             raise ValueError("a sharded parallel_config needs a ccl_manager for the halo exchange")
 
         kernel = list(_ntuple(kernel_size, 3))
@@ -187,7 +187,7 @@ class MiniMaxH3CausalConv3d(Module):
         self.local_pad_w = (0, 0) if self.width_factor > 1 else (pad_before, pad_after)
 
         self._edge_masks: dict[int, tuple] = {}
-        if self.is_sharded and pad_after > 0:
+        if self.is_spatially_sharded and pad_after > 0:
             if self.height_factor > 1:
                 self._edge_masks[2] = edge_mask_pair(
                     mesh_device, self.height_factor, parallel_config.height_parallel.mesh_axis, dtype

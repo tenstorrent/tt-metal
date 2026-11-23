@@ -7,7 +7,7 @@
 #include <gtest/gtest.h>
 #include <numeric>
 #include <vector>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/host_api.hpp>
 

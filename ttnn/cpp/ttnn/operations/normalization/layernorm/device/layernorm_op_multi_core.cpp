@@ -234,7 +234,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
     const std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     const auto input_format = datatype_to_dataformat_converter(input.dtype());
-    const auto output_format = input_format;
+    const auto output_format = datatype_to_dataformat_converter(operation_attributes.dtype.value_or(input.dtype()));
     const bool row_major_affine = (gamma.has_value() && gamma->layout() == Layout::ROW_MAJOR) ||
                                   (beta.has_value() && beta->layout() == Layout::ROW_MAJOR);
     const bool fp32_finalizer_arch = device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;

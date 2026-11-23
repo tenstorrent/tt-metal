@@ -2,19 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device, the 4-chip ring (one LoudBox row): full-size (256x256, all 65,536 padded rows real) encoder layers, each on
-its own, the full 27-layer encoder and the full model against reference outputs saved by `goldens.py`,
-real weights only.
+"""Device, the 4-chip ring (one LoudBox row): full-size encoder layers, each on its own, the full 27-layer
+encoder and the full model against reference outputs saved by `goldens.py`, real weights only.
+
+Two image sizes (`SIZES`), each with its own saved outputs:
+  256x256: 65,536 of the 67,584 padded rows real
+  510x132: 67,320 real rows, the largest grid the processor makes (`MAX_PROCESSOR_PATCHES`)
 
 The reference outputs are fp32 (`goldens.py`): the bf16 reference's own
 rounding is larger than the device's error in deeper layers. The CPU reference is slow at this
-length, so it is not recomputed here: generate it once with
-`python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens`.
+length, so it is not recomputed here: generate it once per size with
+`python -m models.experimental.kimi_k3_moonvit_v2.tests.goldens --grid <H>x<W>`.
 The tests skip when `$MOONVIT_GOLDEN_DIR` is unset, or the saved outputs or the checkpoint are missing.
 
-Every chip holds 16,384 real rows, so besides the PCC over the whole image each chip's quarter
-(in window order, as the device splits it) is checked on its own; a wrong chip cannot hide behind
-three right ones.
+Every chip holds real rows (16,896 on chips 0-2; on chip 3, 14,848 at 256x256 and 16,632 at 510x132),
+so besides the PCC over the whole image each chip's real rows (in window order, as the device splits
+it) are checked on their own; a wrong chip cannot hide behind three right ones.
 
 The `_trace` variants are the traced perf tests: they capture the same forward in a trace, check its
 first replay (it must equal the untraced run exactly and pass the same checks), then time back-to-back
@@ -58,7 +61,9 @@ from models.experimental.kimi_k3_moonvit_v2.tt.rope import TT_Rope
 from models.experimental.kimi_k3_moonvit_v2.tt.vision_block import TT_Vision_Block
 from models.experimental.kimi_k3_moonvit_v2.tt.vision_model import TT_MoonViT_Encoder, TT_MoonViT_Vision_Model
 
-H, W, SEED = 256, 256, 0
+# Image sizes in patches, each against its own saved outputs (`goldens.case_dir`).
+SIZES = {"256x256": (256, 256), "510x132": (510, 132)}
+SEED = 0
 TRACE_LAYER = 0
 # Against the fp32 outputs, over every row and over each chip's quarter. Relative RMSE is RMS error over
 # the golden's standard deviation; limits as in common.py.
@@ -69,9 +74,16 @@ ENCODER_RELATIVE_RMSE = 0.15
 MODEL_RELATIVE_RMSE = 0.17
 
 
+@pytest.fixture(params=list(SIZES.values()), ids=list(SIZES))
+def size(request) -> tuple[int, int]:
+    """`(H, W)` of the image, in patches."""
+    return request.param
+
+
 @pytest.fixture
-def saved():
-    """`goldens.load` for this case; skips when the outputs or the checkpoint are missing."""
+def saved(size):
+    """`goldens.load` for this size; skips when the outputs or the checkpoint are missing."""
+    H, W = size
     if checkpoint_path() is None:
         pytest.skip("set $KIMI_K3_HF_MODEL to a Kimi-K3 checkpoint folder")
     if goldens.golden_dir() is None:
@@ -95,26 +107,29 @@ def check_quality(
     relative_rmse: float | None,
     config,
     sp_factor: int,
+    size: tuple[int, int],
     label: str,
     merged: bool = False,
 ) -> None:
-    """`quality` over every row, then over each chip's quarter. Both in raster order; the quarters are
-    taken in window order, the order the rows are split across the ring. `merged`: one row per 2x2
-    window (merger and projector outputs), already in the order the ring splits them."""
+    """`quality` over every row, then over each chip's real rows. Both in raster order; each chip's rows
+    are taken in window order, the order the rows are split across the ring, at the chip's share of
+    `max_patches`. `merged`: one row per 2x2 window (merger and projector outputs), already in the order
+    the ring splits them."""
     parts = [("all", golden, actual)]
     if merged:
         golden_w, actual_w = golden, actual
     else:
-        golden_w, actual_w = (host_prep.to_window_order(t, H, W, config.merge_kernel_size) for t in (golden, actual))
-    rows = golden_w.shape[0] // sp_factor
+        golden_w, actual_w = (host_prep.to_window_order(t, *size, config.merge_kernel_size) for t in (golden, actual))
+    rows = config.max_patches // (config.merge_area if merged else 1) // sp_factor
     for chip in range(sp_factor):
-        part = slice(chip * rows, (chip + 1) * rows)
+        part = slice(chip * rows, min((chip + 1) * rows, golden_w.shape[0]))
         parts.append((f"chip {chip}", golden_w[part], actual_w[part]))
     assert_quality_parts(parts, pcc, relative_rmse, label)
 
 
-def to_host(t: ttnn.Tensor, mesh_device, sp_axis: int, config) -> torch.Tensor:
+def to_host(t: ttnn.Tensor, mesh_device, sp_axis: int, config, size) -> torch.Tensor:
     """Gather the device rows and put them back in raster order."""
+    H, W = size
     return host_prep.from_window_order(sp_gather(t, mesh_device, sp_axis, H * W), H, W, config.merge_kernel_size)
 
 
@@ -133,7 +148,7 @@ def share_parameters(source, target) -> None:
         target_parameter._data = parameter.data
 
 
-def layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, layer, *, twice=False):
+def layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, size, layer, *, twice=False):
     """`(forward, parallel)`: `forward()` runs `blocks[layer]` on the saved input to that block (the
     patch-embed output for layer 0, else the previous block's saved output), held on device.
 
@@ -145,6 +160,7 @@ def layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, lay
     tt = TT_Vision_Block(config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=ckc, ccl_slot=0)
     tt.load_torch_state_dict(reference.vision_tower.encoder.blocks[layer].state_dict())
 
+    H, W = size
     x = saved("patch_embed" if layer == 0 else goldens.block_file(layer - 1)[:-3])
     rope = TT_Rope(config, mesh_device=mesh_device, parallel=parallel).write(*host_prep.rope_tables(config, H, W))
     x_window = host_prep.to_window_order(x, H, W, config.merge_kernel_size)
@@ -165,7 +181,7 @@ def layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, lay
     return forward, parallel
 
 
-def check_layer(saved, out, config, parallel, layer, label=""):
+def check_layer(saved, out, config, parallel, size, layer, label=""):
     check_quality(
         saved(goldens.block_file(layer)[:-3]),
         out,
@@ -173,6 +189,7 @@ def check_layer(saved, out, config, parallel, layer, label=""):
         LAYER_RELATIVE_RMSE,
         config,
         parallel.sp_factor,
+        size,
         f"{label}layer {layer}",
     )
 
@@ -180,33 +197,35 @@ def check_layer(saved, out, config, parallel, layer, label=""):
 @RING
 @REAL
 @ALL_LAYERS
-def test_full_size_layer(mesh_device, sp_axis, num_links, config, reference, saved, layer):
+def test_full_size_layer(mesh_device, sp_axis, num_links, config, reference, saved, size, layer):
     """`blocks[layer]` on the saved input to that block against its saved output. Each layer's own
     error, without the error of the layers before it."""
-    forward, parallel = layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, layer)
-    check_layer(saved, to_host(forward(), mesh_device, sp_axis, config), config, parallel, layer)
+    forward, parallel = layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, size, layer)
+    check_layer(saved, to_host(forward(), mesh_device, sp_axis, config, size), config, parallel, size, layer)
 
 
 @RING_TRACE
 @REAL
-def test_full_size_layer_trace(mesh_device, sp_axis, num_links, config, reference, saved):
+def test_full_size_layer_trace(mesh_device, sp_axis, num_links, config, reference, saved, size):
     """`test_full_size_layer` traced, for `blocks[TRACE_LAYER]`. The trace runs the layer twice on the
     same input (CCL slots 0 and 1, `layer_forward(twice=True)`); the time per layer is half a replay."""
     layer = TRACE_LAYER
-    forward, parallel = layer_forward(mesh_device, sp_axis, num_links, config, reference, saved, layer, twice=True)
+    forward, parallel = layer_forward(
+        mesh_device, sp_axis, num_links, config, reference, saved, size, layer, twice=True
+    )
     out = forward()
-    untraced = to_host(out, mesh_device, sp_axis, config)
+    untraced = to_host(out, mesh_device, sp_axis, config, size)
     ttnn.deallocate(out)
 
     with Trace(mesh_device, forward) as trace:
-        out = to_host(trace.replay(), mesh_device, sp_axis, config)
+        out = to_host(trace.replay(), mesh_device, sp_axis, config, size)
         assert_same_as_untraced(untraced, out, f"layer {layer}")
-        check_layer(saved, out, config, parallel, layer, "traced ")
-        seconds = trace.time_replays(f"full-size layer {layer}, run twice")
-        logger.info(f"full-size layer {layer}: {seconds / 2 * 1e3:.3f} ms per traced layer")
+        check_layer(saved, out, config, parallel, size, layer, "traced ")
+        seconds = trace.time_replays(f"full-size {size[0]}x{size[1]} layer {layer}, run twice")
+        logger.info(f"full-size {size[0]}x{size[1]} layer {layer}: {seconds / 2 * 1e3:.3f} ms per traced layer")
 
 
-def encoder_inputs(mesh_device, sp_axis, num_links, config, reference):
+def encoder_inputs(mesh_device, sp_axis, num_links, config, reference, size):
     """`(patch_embed, encoder, inputs, parallel)`: both modules with the checkpoint's weights, and the
     device inputs for the pixels `goldens.py` used, held on device."""
     parallel = resolve_parallel(mesh_device, *ring_parallel(mesh_device, sp_axis, num_links), config)
@@ -217,7 +236,7 @@ def encoder_inputs(mesh_device, sp_axis, num_links, config, reference):
     encoder = TT_MoonViT_Encoder(config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=ckc)
     encoder.load_torch_state_dict(tower.encoder.state_dict())
 
-    pixels, grid_thws = random_patches(config, [(1, H, W)], SEED)
+    pixels, grid_thws = random_patches(config, [(1, *size)], SEED)
     host = host_prep.prepare_host_inputs(config, patch_embed.pos_emb_weight, pixels, grid_thws)
     inputs = {
         "patches": sp_shard(host["patches"], mesh_device, sp_axis, config.max_patches, layout=ttnn.ROW_MAJOR_LAYOUT),
@@ -228,7 +247,7 @@ def encoder_inputs(mesh_device, sp_axis, num_links, config, reference):
     return patch_embed, encoder, inputs, parallel
 
 
-def check_encoder(saved, out, config, parallel, label=""):
+def check_encoder(saved, out, config, parallel, size, label=""):
     check_quality(
         saved("final_layernorm"),
         out,
@@ -236,37 +255,39 @@ def check_encoder(saved, out, config, parallel, label=""):
         ENCODER_RELATIVE_RMSE,
         config,
         parallel.sp_factor,
+        size,
         f"{label}encoder",
     )
 
 
 @RING
 @REAL
-def test_full_size_encoder(mesh_device, sp_axis, num_links, config, reference, saved):
+def test_full_size_encoder(mesh_device, sp_axis, num_links, config, reference, saved, size):
     """Patch embed then all 27 blocks and the final norm on the same pixels `goldens.py` used, against
     the saved patch-embed and `final_layernorm` outputs."""
-    patch_embed, encoder, inputs, parallel = encoder_inputs(mesh_device, sp_axis, num_links, config, reference)
+    patch_embed, encoder, inputs, parallel = encoder_inputs(mesh_device, sp_axis, num_links, config, reference, size)
     x = patch_embed(inputs["patches"], inputs["pos_emb"])
     # Checked first so a wrong encoder input is reported as such, not as an encoder error.
     check_quality(
         saved("patch_embed"),
-        to_host(x, mesh_device, sp_axis, config),
+        to_host(x, mesh_device, sp_axis, config, size),
         LAYER_PCC,
         LAYER_RELATIVE_RMSE,
         config,
         parallel.sp_factor,
+        size,
         "patch embed",
     )
     out = encoder(x, inputs["rope"], inputs["logical_n"])
-    check_encoder(saved, to_host(out, mesh_device, sp_axis, config), config, parallel)
+    check_encoder(saved, to_host(out, mesh_device, sp_axis, config, size), config, parallel, size)
 
 
 @RING_TRACE
 @REAL
-def test_full_size_encoder_trace(mesh_device, sp_axis, num_links, config, reference, saved):
+def test_full_size_encoder_trace(mesh_device, sp_axis, num_links, config, reference, saved, size):
     """`test_full_size_encoder` traced: patch embed and the encoder in one trace, checked on the encoder
     output only (`test_full_size_encoder` checks the patch embed)."""
-    patch_embed, encoder, inputs, parallel = encoder_inputs(mesh_device, sp_axis, num_links, config, reference)
+    patch_embed, encoder, inputs, parallel = encoder_inputs(mesh_device, sp_axis, num_links, config, reference, size)
 
     def forward():
         x = patch_embed(inputs["patches"], inputs["pos_emb"])
@@ -275,27 +296,27 @@ def test_full_size_encoder_trace(mesh_device, sp_axis, num_links, config, refere
         return out
 
     out = forward()
-    untraced = to_host(out, mesh_device, sp_axis, config)
+    untraced = to_host(out, mesh_device, sp_axis, config, size)
     ttnn.deallocate(out)
 
     with Trace(mesh_device, forward) as trace:
-        out = to_host(trace.replay(), mesh_device, sp_axis, config)
+        out = to_host(trace.replay(), mesh_device, sp_axis, config, size)
         assert_same_as_untraced(untraced, out, "encoder")
-        check_encoder(saved, out, config, parallel, "traced ")
-        trace.time_replays(f"full-size patch embed + {config.num_hidden_layers}-layer encoder")
+        check_encoder(saved, out, config, parallel, size, "traced ")
+        trace.time_replays(f"full-size {size[0]}x{size[1]} patch embed + {config.num_hidden_layers}-layer encoder")
 
 
-def model_inputs(mesh_device, sp_axis, num_links, config, reference):
+def model_inputs(mesh_device, sp_axis, num_links, config, reference, size):
     """`(model, pixels, grid_thws)`: the full model with the checkpoint's weights, and the pixels
     `goldens.py` used."""
     sequence_parallel, ccl = ring_parallel(mesh_device, sp_axis, num_links)
     tt = TT_MoonViT_Vision_Model(config, mesh_device=mesh_device, sequence_parallel=sequence_parallel, ccl=ccl)
     tt.load_torch_state_dict(reference.state_dict())
-    pixels, grid_thws = random_patches(config, [(1, H, W)], SEED)
+    pixels, grid_thws = random_patches(config, [(1, *size)], SEED)
     return tt, pixels, grid_thws
 
 
-def check_model(saved, out, config, parallel, label=""):
+def check_model(saved, out, config, parallel, size, label=""):
     check_quality(
         saved("mm_projector"),
         out,
@@ -303,6 +324,7 @@ def check_model(saved, out, config, parallel, label=""):
         MODEL_RELATIVE_RMSE,
         config,
         parallel.sp_factor,
+        size,
         f"{label}model",
         merged=True,
     )
@@ -310,21 +332,21 @@ def check_model(saved, out, config, parallel, label=""):
 
 @RING
 @REAL
-def test_full_size_model(mesh_device, sp_axis, num_links, config, reference, saved):
+def test_full_size_model(mesh_device, sp_axis, num_links, config, reference, saved, size):
     """The full model (patch embed, all 27 blocks, final norm, patch merger, projector) on the pixels
     `goldens.py` used, against the saved `mm_projector` output."""
-    tt, pixels, grid_thws = model_inputs(mesh_device, sp_axis, num_links, config, reference)
-    check_model(saved, tt.run(pixels, grid_thws), config, tt.parallel)
+    tt, pixels, grid_thws = model_inputs(mesh_device, sp_axis, num_links, config, reference, size)
+    check_model(saved, tt.run(pixels, grid_thws), config, tt.parallel, size)
 
 
 @RING_TRACE
 @REAL
-def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, reference, saved):
+def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, reference, saved, size):
     """`test_full_size_model` traced: the device forward (patch embed through projector) in one trace.
     Host prep, the input writes and the gather stay outside it. Logs the traced device time, then one
     host-in, host-out run that rewrites the inputs, replays and gathers (`run` with the trace)."""
-    tt, pixels, grid_thws = model_inputs(mesh_device, sp_axis, num_links, config, reference)
-    merged_n = H * W // config.merge_area
+    tt, pixels, grid_thws = model_inputs(mesh_device, sp_axis, num_links, config, reference, size)
+    merged_n = size[0] * size[1] // config.merge_area
     inputs = tt.prepare_inputs(pixels, grid_thws)
 
     def forward():
@@ -337,8 +359,10 @@ def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, referenc
     with Trace(mesh_device, forward) as trace:
         out = tt.gather_output(trace.replay(), logical_n=merged_n)
         assert_same_as_untraced(untraced, out, "model")
-        check_model(saved, out, config, tt.parallel, "traced ")
-        trace.time_replays(f"full-size model ({config.num_hidden_layers} layers, merger, projector)")
+        check_model(saved, out, config, tt.parallel, size, "traced ")
+        trace.time_replays(
+            f"full-size {size[0]}x{size[1]} model ({config.num_hidden_layers} layers, merger, projector)"
+        )
 
         # Host in, host out. The inputs are rewritten in place, so the trace reads the new values.
         start = time.perf_counter()
@@ -351,7 +375,7 @@ def test_full_size_model_trace(mesh_device, sp_axis, num_links, config, referenc
         assert all(prepared[k] is inputs[k] for k in ("patches", "pos_emb", "logical_n"))
         assert_same_as_untraced(untraced, out, "model, host in, host out")
         logger.info(
-            f"full-size model host in, host out: {(done - start) * 1e3:.1f} ms "
+            f"full-size {size[0]}x{size[1]} model host in, host out: {(done - start) * 1e3:.1f} ms "
             f"(host prep + input writes {(written - start) * 1e3:.1f} ms, traced replay "
             f"{(ran - written) * 1e3:.1f} ms, gather {(done - ran) * 1e3:.1f} ms)"
         )
