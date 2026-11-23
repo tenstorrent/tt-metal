@@ -3706,6 +3706,67 @@ bool run_sfpu_typecast(
     return sfpu_util::typecast_compare(out_fmt, got, golden);
 }
 
+// copy_dest_values must move a Dest word's bits unchanged (#54899): a copy made with a converting SFPLOAD/SFPSTORE
+// mode flushes denormals to zero, and one made with a mode narrower than the Dest word drops part of it.
+// 64K words are placed in DEST 0, copied to DEST 1 with copy_dest_values<copy_format>, and DEST 1 is packed out; it
+// must equal the input bit for bit. For a 16-bit Dest the words are every 16-bit pattern, fed as UInt16 tiles: the
+// integer unpack -> Dest -> pack path is bit-transparent, where a bfloat16 tile loses its subnormals and NaN payloads
+// on the way through whether or not it is copied. For a 32-bit Dest they are Float32 tiles unpacked straight to Dest,
+// covering every sign, exponent and high mantissa over a nonzero low half.
+bool run_sfpu_copy_dest_bits(distributed::MeshDevice& mesh_device, const std::string& copy_format, bool en_32bit_dest) {
+    constexpr uint32_t num_patterns = 1u << 16;
+    const tt::DataFormat l1_format = en_32bit_dest ? tt::DataFormat::Float32 : tt::DataFormat::UInt16;
+    const auto pattern = [&](uint32_t i) {
+        return en_32bit_dest ? (i << 16) | ((i * 0x9E37u + 0x5A5Au) & 0xFFFFu) : i;
+    };
+    // One word per pattern for a 32-bit format, two patterns per word for a 16-bit one.
+    const uint32_t per_word = en_32bit_dest ? 1 : 2;
+    const auto read = [&](const std::vector<uint32_t>& packed, uint32_t i) {
+        return en_32bit_dest ? packed[i] : (packed[i / 2] >> (16 * (i % 2))) & 0xFFFFu;
+    };
+    std::vector<uint32_t> packed_input(num_patterns / per_word, 0);
+    for (uint32_t i = 0; i < num_patterns; ++i) {
+        packed_input[i / per_word] |= pattern(i) << (en_32bit_dest ? 0 : 16 * (i % 2));
+    }
+
+    const SfpuConfig test_config = {
+        .num_tiles = num_patterns / tt::constants::TILE_HW,
+        .tile_byte_size = tt::tile_size(l1_format),
+        .l1_input_data_format = l1_format,
+        .l1_output_data_format = l1_format,
+        .cores = CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        .sfpu_op = "copy_dest_bits",
+        .approx_mode = false,
+        .unpack_to_dest = en_32bit_dest,
+        .en_32bit_dest = en_32bit_dest};
+    const std::map<std::string, std::string> defines = {
+        {"SFPU_UNARY_OP", "1"},
+        {"SFPU_OP_COPY_DEST_INCLUDE", "1"},
+        {"SFPU_OP_CHAIN_0", "copy_dest_values_init(); copy_dest_values<DataFormat::" + copy_format + ">(0, 1);"},
+        {"SFPU_PACK_DST_INDEX", "1"}};
+    const std::vector<uint32_t> output = run_sfpu_pipeline(mesh_device, test_config, defines, packed_input);
+    if (output.size() != packed_input.size()) {
+        log_error(tt::LogTest, "copy_dest_values: got {} words, expected {}", output.size(), packed_input.size());
+        return false;
+    }
+
+    size_t mismatches = 0;
+    for (uint32_t i = 0; i < num_patterns; ++i) {
+        if (read(output, i) != pattern(i) && mismatches++ < 8) {
+            log_error(
+                tt::LogTest,
+                "copy_dest_values<{}> changed 0x{:x} into 0x{:x}",
+                copy_format,
+                pattern(i),
+                read(output, i));
+        }
+    }
+    if (mismatches != 0) {
+        log_error(tt::LogTest, "copy_dest_values<{}> changed {} of {} words", copy_format, mismatches, num_patterns);
+    }
+    return mismatches == 0;
+}
+
 }  // namespace unit_tests::compute::sfpu
 
 TEST_F(LLKBlackholeSingleCardFixture, SfpuExp21fRetainedCoefficients) {
@@ -4986,6 +5047,35 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUnpackToDestDestIndex) {
         }
     }
 }
+
+// copy_dest_values bit-exactness (#54899): (device DataFormat enumerator, 32-bit Dest), see run_sfpu_copy_dest_bits.
+class SingleCoreSingleMeshDeviceSfpuCopyDestBitsFixture
+    : public LLKMeshDeviceFixture,
+      public testing::WithParamInterface<std::tuple<std::string, bool>> {};
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuCopyDestBitsFixture, TensixSfpuCopyDestBits) {
+    if (arch_ != tt::ARCH::WORMHOLE_B0 && arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Quasar's copy_dest_value is a separate kernel and is not covered here";
+    }
+    const auto& [copy_format, en_32bit_dest] = GetParam();
+    for (auto& device : this->devices_) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_copy_dest_bits(*device, copy_format, en_32bit_dest));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuCopyDestBits,
+    SingleCoreSingleMeshDeviceSfpuCopyDestBitsFixture,
+    ::testing::Values(
+        std::make_tuple("Float16_b", false),
+        std::make_tuple("UInt16", false),
+        std::make_tuple("Int8", false),
+        std::make_tuple("Float32", true),
+        std::make_tuple("Int32", true),
+        std::make_tuple("Float16_b", true)),
+    [](const testing::TestParamInfo<std::tuple<std::string, bool>>& info) {
+        return std::get<0>(info.param) + (std::get<1>(info.param) ? "_dest32" : "_dest16");
+    });
 
 // Typecast test fixture: one (in_format -> out_format) pair per instance. The matrix is Float16_b,
 // Float32, Int32, Int16, Int8, UInt8, and MxFp8P / MxFp8R. UInt16, UInt32, and MxFp4 are out of scope.
