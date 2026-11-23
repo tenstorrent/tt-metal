@@ -224,11 +224,20 @@ class VerifyStep:
     def set_inputs(self, tokens, p0):
         """tokens: R host ints (anchor + R-1 drafts) at p0 .. p0 + R - 1. A traced pass replays only at the conv
         phase (p0 % 4) and far-chunk sharing it was captured with (Generator keeps one trace per phase)."""
+        self.set_positions(p0)
+        self.set_tokens(tokens)
+
+    def set_tokens(self, tokens):
         assert len(tokens) == self.R
-        for t, (tok, pos) in enumerate(zip(tokens, self.positions)):
+        for t, tok in enumerate(tokens):
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(torch.tensor([[tok]], dtype=torch.int32), dtype=ttnn.uint32), self.tokens[t]
             )
+
+    def set_positions(self, p0):
+        """The position inputs of a pass at p0 (independent of the drafts: the spec loop writes them while the
+        draft runs)."""
+        for t, pos in enumerate(self.positions):
             pos.update(p0 + t)
         ids = torch.arange(p0, p0 + self.R, dtype=torch.int32).view(1, -1)
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), self.ids)

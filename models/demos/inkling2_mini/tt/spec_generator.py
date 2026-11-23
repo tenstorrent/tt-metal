@@ -186,9 +186,12 @@ class SpecGenerator(Generator):
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(torch.tensor([[nxt]], dtype=torch.int32), dtype=ttnn.uint32), d.anchor
             )
-            drafts = d.run(pos)[:k]
+            d.set_draft_pos(pos)
+            ttnn.execute_trace(self.device, d.trace, cq_id=0, blocking=False)
+            V.set_positions(pos)  # host writes while the draft runs
+            drafts = [int(x) for x in ttnn.to_torch(d.tokens).reshape(-1)[:k].tolist()]
             t1 = _t.perf_counter()
-            V.set_inputs([nxt] + drafts, pos)
+            V.set_tokens([nxt] + drafts)
             ph = pos % 4
             tid, vout = self.vtrace[(ph, self._shared(pos, R))]
             ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
