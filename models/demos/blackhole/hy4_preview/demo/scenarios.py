@@ -299,84 +299,11 @@ def stash(ctx, n_long=16384, n_short=1024, rounds=16, seed=5):
     ctx.gate(s, "stream_equals_cold", s2[0] == s0[0], md5_ints(s2[0]))
 
 
-def chunked_pf(ctx, lens=(16384,), rounds_per_chunk=(2, 8), chunks_per_call=(1, 2, 4), rounds_ref=32, seed=6):
-    """E7 of the plan. Needs the engine API prefill_begin / prefill_chunks(h, n) / prefill_end (HY4_CHUNKED_PF=1; NOT implemented yet -> SKIP).
-    3 rows decode short prompts; a long cold prompt on row 3 is prefilled in chunks interleaved with decode rounds.
-    Gates: logits md5 of the chunked call == monolithic (lg_md5), first token and 48 greedy tokens equal; the 3 decoders' streams bit-identical to the uninterrupted run; decode rounds/s during the prefill; prefill slowdown; state integrity afterwards.
-    """
-    s = "chunked_pf"
-    eng = ctx.eng
-    if not all(hasattr(eng, a) for a in ("prefill_begin", "prefill_chunks", "prefill_end")):
-        return ctx.gate(
-            s, "api_present", None, "engine has no prefill_begin/prefill_chunks/prefill_end (trigger T2 of the plan)"
-        )
-    for L in lens:
-        L3 = prompt(seed, L)
-        short = {r: prompt(60 + r, 2048) for r in range(3)}
-        # reference: decoders uninterrupted, then monolithic long prefill
-        release_all(eng)
-        f, _, _, _ = prefill(ctx, short)
-        ref, _, _ = decode(ctx, f, rounds_ref, rows=[0, 1, 2])
-        release_all(eng)
-        fm, mm, tmono, _ = prefill(ctx, {3: L3})
-        sm, _, _ = decode(ctx, fm, 16, rows=[3])
-        eng.release(3)
-        for n in chunks_per_call:
-            for m in rounds_per_chunk:
-                tag = f"L{L}_n{n}_m{m}"
-                release_all(eng)
-                f, _, _, _ = prefill(ctx, short)
-                dec = {r: [f[r]] for r in range(3)}
-                h = eng.prefill_begin({3: L3})
-                t0 = time.perf_counter()
-                rounds = 0
-                done = False
-                while not done:
-                    done = eng.prefill_chunks(h, n)
-                    for _ in range(m if not done else 0):
-                        c = [eng.K if eng.live[r] else 0 for r in range(R)]
-                        out = eng.round(c, False)
-                        for r in range(3):
-                            dec[r] += out[r]["a"][: out[r]["m"] + 1]
-                        rounds += 1
-                n0 = len(ctx.md5_calls)
-                first = eng.prefill_end(h)
-                dt = time.perf_counter() - t0
-                m_c = ctx.md5_calls[n0:][-1].get(3) if len(ctx.md5_calls) > n0 else None
-                sc, _, _ = decode(ctx, first, 16, rows=[3])
-                ctx.gate(s, f"{tag}:lg_md5_equals_mono", m_c is not None and m_c == mm.get(3), f"{m_c} vs {mm.get(3)}")
-                ctx.gate(s, f"{tag}:first_and_stream_equal", sc[3] == sm[3], md5_ints(sc[3]))
-                for r in range(3):
-                    ctx.gate(
-                        s,
-                        f"{tag}:decoder{r}_bit_identical",
-                        common_prefix_equal(ref[r], dec[r]),
-                        f"{len(dec[r])} tokens",
-                    )
-                ctx.perf.append(
-                    dict(
-                        kind="chunked",
-                        scen=s,
-                        L=L,
-                        chunks_per_call=n,
-                        rounds_per_chunk=m,
-                        wall_s=dt,
-                        mono_s=tmono,
-                        slowdown_pct=100 * (dt / tmono - 1),
-                        decode_rounds_per_s=rounds / dt,
-                    )
-                )
-                ctx.gate(
-                    s, f"{tag}:perf", True, f"wall {dt:.1f}s vs mono {tmono:.1f}s, decode {rounds / dt:.2f} rounds/s"
-                )
-        # abort: begin, a few chunks, release, row reusable and equal to mono
-        release_all(eng)
-        h = eng.prefill_begin({3: L3})
-        eng.prefill_chunks(h, 2)
-        eng.release(3)
-        fa, ma, _, _ = prefill(ctx, {3: L3})
-        ctx.gate(s, f"L{L}:abort_then_clean_md5", ma.get(3) == mm.get(3), f"{ma.get(3)} vs {mm.get(3)}")
-        eng.release(3)
+def chunked_pf(ctx, **kw):
+    """E7: chunked prefill interleaved with decode. Implemented in demo/scenario_chunked.py (HY4_CHUNKED_PF=1); reports SKIP when the engine has no prefill_begin / prefill_chunks / prefill_end."""
+    from models.demos.blackhole.hy4_preview.demo.scenario_chunked import chunked_pf as impl
+
+    return impl(ctx, **kw)
 
 
 def tailpark(ctx, n_long=16384, n_short=2048, rounds=16, seed=8):

@@ -49,6 +49,25 @@ class _Seed:
         return int(torch.multinomial(p.float(), 1, generator=g))
 
 
+class PfSub:
+    """one lock-step sub-call of a chunked prefill (rows share the chunk loop)."""
+
+    def __init__(self, rows, pbr, sampling, st, start, hits):
+        self.rows, self.pbr, self.sampling, self.st, self.start, self.hits = rows, pbr, sampling, st, start, hits
+        self.done_rows, self.aborted, self.md5, self.seed_sec = set(), set(), {}, 0.0
+        self.pending = (
+            set()
+        )  # rows whose last chunk ran but whose first token / seed round waits for the caller's ``finish`` (the plugin has not asked for that piece yet: a live row would decode unseen)
+
+
+class PfHandle:
+    """handle of ``Hy4Engine.prefill_begin``: the sub-calls (one per lock-step group), the first tokens found so far."""
+
+    def __init__(self, t0, rows):
+        self.t0, self.rows, self.subs, self.idx = t0, rows, [], 0
+        self.first, self.closed, self.chunk_sec, self.rounds_between = {}, False, 0.0, 0
+
+
 class Hy4Engine:
     def __init__(self, md, max_num_seqs, max_seq_len, k=None, log=None):
         from models.demos.blackhole.hy4_preview.tt import hy4_pool_decode as pool_decode
@@ -220,6 +239,9 @@ class Hy4Engine:
         self.pipe_idle = (
             os.environ.get("HY4_SPEC_PIPE_IDLE", "1") == "1"
         )  # speculate also with idle (parked) rows: their device state drifts instead of being re-parked every round
+        self.last_logits = {}
+        self.pf_park, self.pf_owner = {}, {}  # rows part-way through a chunked prefill: park position / owning handle
+        self.cpf_stats = dict(begun=0, ended=0, aborted=0, chunks=0)
         self.pipe_discards = 0
         self.pipe_hits = 0
         self.pipe_resync = int(os.environ.get("HY4_SPEC_PIPE_RESYNC", "256"))
@@ -228,7 +250,12 @@ class Hy4Engine:
 
     # ------------------------------------------------------------------------------------------------ prefix cache (row local)
     def park_pos(self, r):
-        """position an idle row keeps: just past its retained prefix (0 when nothing is retained or the cache is off)."""
+        """position an idle row keeps: just past its retained prefix (0 when nothing is retained or the cache is off). A row that is part-way through a chunked prefill (HY4_CHUNKED_PF) parks at the last S
+        positions of its own last chunk (junk written by a decode round there is overwritten by that chunk before it can be read; position 0 would destroy chunk 0).
+        """
+        pk = getattr(self, "pf_park", None)
+        if pk and r in pk:
+            return pk[r]
         return int(len(self.ret[r])) if (self.pfx and self.ret[r] is not None) else 0
 
     def park_pos_all(self):
@@ -268,6 +295,9 @@ class Hy4Engine:
             return list(cur_rows)
         taken, out = set(), [None] * len(prompts)
         arrs = [torch.as_tensor(p, dtype=torch.int32).numpy() for p in prompts]
+        busy = [
+            bool(self.live[r]) or r in (getattr(self, "pf_owner", None) or {}) for r in range(ROWS)
+        ]  # a row part-way through a chunked prefill is as taken as a live one
         self.xrow_plan = {}
         if self.xrow is not None and self.xrow_on:
             from models.demos.blackhole.hy4_preview.tt import hy4_xrow as XR
@@ -275,7 +305,7 @@ class Hy4Engine:
             if XR.enabled():
                 rows, copies = XR.plan_copies(
                     self.ret,
-                    self.live,
+                    busy,
                     taken,
                     arrs,
                     cur_rows,
@@ -288,7 +318,7 @@ class Hy4Engine:
                 if copies:
                     logger.info(f"HY4 xrow plan: rows={rows} copies={ {rows[i]: sc for i, sc in copies.items()} }")
                 return rows
-        cand = lambda: [r for r in range(ROWS) if not self.live[r] and r not in taken]
+        cand = lambda: [r for r in range(ROWS) if not busy[r] and r not in taken]
         order = []
         for i, a in enumerate(arrs):
             best = max(((self.hit_len(r, a), r) for r in cand()), default=(0, None))
@@ -545,13 +575,10 @@ class Hy4Engine:
             self.pipe_discards += 1
 
     # ------------------------------------------------------------------------------------------------ prefill
-    def prefill(self, prompts_by_row, sampling=None, rids=None, _sub=False):
-        """prompts_by_row {mesh row: list[int]} -> {row: first token}. ``sampling`` {row: (temperature, top_k, top_p, seed)}. Direct-to-pool chunked prefill (+ MTP prompt KV + seed round in spec mode).
-        The other mesh rows keep their pool pages (masked writes) and their decode state."""
-        t0 = time.perf_counter()
-        if not _sub:
-            self.last_cached = {}
-        self.drain()
+    def _pf_prepare(self, prompts_by_row, sampling, rids, _sub):
+        """everything a prefill call decides before its first chunk: row-local prefix hits, cross-row copies, blocks pre-prefill, lock-step split, loss accounting, stash save, counters. Shared by ``prefill`` and
+        ``prefill_begin``. Returns ("split", groups, None, None, None, None) when the call must be split into sub-calls, else ("leaf", rows, prompts, cap, start, hits).
+        """
         rows = sorted(prompts_by_row)
         prompts = [prompts_by_row.get(r, [PAD]) for r in range(ROWS)]
         cap = self.hybrid_cap
@@ -600,17 +627,7 @@ class Hy4Engine:
                     logger.info(
                         "HY4 pfx split: rows %s starts %s -> groups %s", rows, {r: sof(r) for r in rows}, groups
                     )
-                    first = {}
-                    for g in groups:
-                        first.update(
-                            self.prefill(
-                                {r: prompts_by_row[r] for r in g},
-                                {r: v for r, v in (sampling or {}).items() if r in g} or None,
-                                {r: v for r, v in (rids or {}).items() if r in g} if rids else None,
-                                _sub=True,
-                            )
-                        )
-                    return first
+                    return "split", groups, None, None, None, None
             self.last_cached.update(
                 {r: min(hits[r], start) for r in rows}
             )  # tokens of each row's prompt not recomputed (usage cached_tokens)
@@ -632,6 +649,29 @@ class Hy4Engine:
             if start > 0:
                 self.pfx_stats["hit_calls"] += 1
                 self.pfx_stats["hit_tokens"] += start * len(rows)
+        return "leaf", rows, prompts, cap, start, hits
+
+    def prefill(self, prompts_by_row, sampling=None, rids=None, _sub=False):
+        """prompts_by_row {mesh row: list[int]} -> {row: first token}. ``sampling`` {row: (temperature, top_k, top_p, seed)}. Direct-to-pool chunked prefill (+ MTP prompt KV + seed round in spec mode).
+        The other mesh rows keep their pool pages (masked writes) and their decode state."""
+        t0 = time.perf_counter()
+        if not _sub:
+            self.last_cached = {}
+            self.last_logits = {}
+        self.drain()
+        kind, rows, prompts, cap, start, hits = self._pf_prepare(prompts_by_row, sampling, rids, _sub)
+        if kind == "split":
+            first = {}
+            for g in rows:  # ``rows`` carries the groups of a split call
+                first.update(
+                    self.prefill(
+                        {r: prompts_by_row[r] for r in g},
+                        {r: v for r, v in (sampling or {}).items() if r in g} or None,
+                        {r: v for r, v in (rids or {}).items() if r in g} if rids else None,
+                        _sub=True,
+                    )
+                )
+            return first
         chain = cap > 0 and start == 0 and max(len(prompts_by_row[r]) for r in rows) <= cap
         res = self.pp.prefill(
             prompts,
@@ -658,6 +698,9 @@ class Hy4Engine:
         for r in rows:
             sp = (sampling or {}).get(r, (0.0, -1, 1.0, 0))
             first[r] = _Seed.sample(res.logits[r], sp[0], sp[1], sp[2], sp[3], len(prompts_by_row[r]))
+        self.last_logits.update(
+            {r: res.logits[r] for r in rows}
+        )  # host-sampling callers (chunked adapter) return these
         t1 = time.perf_counter()
         if self.spec:
             self._seed_rows(rows, first, res, prompts_by_row, sampling or {})
@@ -666,6 +709,231 @@ class Hy4Engine:
             f"(chunk median {sorted(res.chunk_sec)[len(res.chunk_sec) // 2]:.2f}s) chunks_s={[round(x, 1) for x in res.chunk_sec[:6]]}..{[round(x, 1) for x in res.chunk_sec[-2:]]} seed={time.perf_counter() - t1:.2f}s"
         )
         return first
+
+    # ------------------------------------------------------------------------------------------------ chunked prefill interleaved with decode (HY4_CHUNKED_PF, default off)
+    def cpf_on(self):
+        """runtime switch of the chunked mode: HY4_CHUNKED_PF=1 at boot, HY4_CHUNKED_PF_FILE (live: a file holding 0 / 1) overrides it per call. Off = the adapter defers every prompt to ONE monolithic call at its final chunk."""
+        f = os.environ.get("HY4_CHUNKED_PF_FILE")
+        if f:
+            try:
+                with open(f) as fh:
+                    return fh.read().strip() == "1"
+            except (OSError, ValueError):
+                pass
+        return os.environ.get("HY4_CHUNKED_PF", "0") == "1"
+
+    def prefill_begin(self, prompts_by_row, sampling=None, rids=None, _sub=False):
+        """Admit a prefill call without running it: returns a handle (``PfHandle``). Same admission as ``prefill`` (row-local prefix hit => ``start``, cross-row copies, lock-step split into sub-calls, stash, counters);
+        ``prefill_chunks(h, n)`` then runs n chunks of the existing eager loop, ``prefill_end(h)`` returns the first tokens. Decode rounds of the other rows may run between ``prefill_chunks`` calls. Always the direct-to-pool path
+        (no hybrid chain: its replicated cache cannot be carried over decode rounds). Needs spec mode (the seed round makes a finished row live).
+        """
+        assert self.spec, "chunked prefill needs the speculative engine (seed round)"
+        t0 = time.perf_counter()
+        if not _sub:
+            self.last_cached = {}
+        self.drain()
+        kind, rows, prompts, cap, start, hits = self._pf_prepare(prompts_by_row, sampling, rids, _sub)
+        h = PfHandle(t0=t0, rows=sorted(prompts_by_row))
+        if kind == "split":
+            for g in rows:
+                sub = self.prefill_begin(
+                    {r: prompts_by_row[r] for r in g},
+                    {r: v for r, v in (sampling or {}).items() if r in g} or None,
+                    {r: v for r, v in (rids or {}).items() if r in g} if rids else None,
+                    _sub=True,
+                )
+                h.subs += sub.subs
+        else:
+            st = self.pp.prefill_begin(
+                prompts, keep_hidden=True, keep_logits=True, mtp=self.mtp, keep_rows=rows, start=start
+            )
+            h.subs.append(
+                PfSub(rows=list(rows), pbr=prompts_by_row, sampling=sampling or {}, st=st, start=start, hits=hits)
+            )
+            for r in rows:
+                self.pf_park[r] = max(0, (-(-len(prompts_by_row[r]) // self.pf_rows)) * self.pf_rows - max(self.S, 1))
+        for sub in h.subs:
+            for r in sub.rows:
+                self.pf_owner[r] = h
+        self.cpf_stats["begun"] += 1
+        return h
+
+    def prefill_progress(self, h):
+        """{row: prompt tokens whose chunk has run (>= the hit start)}; a row past its last chunk reports its full length."""
+        out = {}
+        for sub in h.subs:
+            for r in sub.rows:
+                out[r] = (
+                    len(sub.pbr[r])
+                    if (r in sub.done_rows or r in sub.pending)
+                    else min(len(sub.pbr[r]), max(sub.st.c, 0) * sub.st.PF)
+                )
+        return out
+
+    def pf_find(self, toks):
+        """the mesh row part-way through a chunked prefill whose prompt is exactly ``toks`` (continuation lookup of the adapter), else None."""
+        for r, h in (self.pf_owner or {}).items():
+            for sub in h.subs:
+                if r in sub.rows and r not in sub.aborted and sub.pbr[r] == list(toks):
+                    return r
+        return None
+
+    def row_busy(self, r):
+        return bool(self.live[r]) or r in (self.pf_owner or {})
+
+    def cpf_pending(self):
+        """a chunked prefill is in flight (rows still owned by a handle)."""
+        return bool(self.pf_owner)
+
+    def prefill_chunks(self, h, n=1, sampling=None, finish=None):
+        """run up to n chunks (of the current sub-call). Rows whose last token lay in a chunk get their first token and their seed round right there (they are live afterwards: rounds may include them).
+        ``finish`` = None (every row that ends is finished at once) or the set of rows allowed to finish now: a row that ended earlier waits (``sub.pending``) until it is named (n = 0 only flushes).
+        Returns dict(chunks=int run, first={row: token} newly finished, done=bool all rows done)."""
+        assert not h.closed, "prefill handle already ended / aborted"
+        self.drain()
+        if (
+            sampling
+        ):  # sampling params known only now (the earlier steps of a vLLM chunked prefill carry none): {row: (temperature, top_k, top_p, seed)}
+            for sub in h.subs:
+                sub.sampling.update({r: v for r, v in sampling.items() if r in sub.rows})
+        ran, newly = 0, {}
+        while ran < n and h.idx < len(h.subs):
+            sub = h.subs[h.idx]
+            st = sub.st
+            if st.done:
+                h.idx += 1
+                continue
+            t = time.perf_counter()
+            k = min(n - ran, st.nch - st.c)
+            fin = [
+                r for r in self.pp.prefill_step(st, k) if r in sub.rows and r not in sub.aborted
+            ]  # (the pad rows of the call "end" at chunk 0)
+            ran += k
+            self.cpf_stats["chunks"] += k
+            h.chunk_sec += time.perf_counter() - t
+            for r in fin:
+                sub.pending.add(r)
+                self.pf_park[r] = len(
+                    sub.pbr[r]
+                )  # its last chunk is complete: park PAST the prompt, not inside the chunk
+            newly.update(self._cpf_seed_ready(h, finish))
+            if st.done:
+                self._cpf_sub_done(h, sub)
+        newly.update(self._cpf_seed_ready(h, finish))
+        # a prefill chunk may have changed state a decode round keeps resident: the next round reloads from the mirror (conservative)
+        self.dirty = True
+        self.q_valid = False
+        self.params_dirty = True
+        h.first.update(newly)
+        return dict(chunks=ran, first=newly, done=self.prefill_done(h))
+
+    def prefill_done(self, h):
+        return all(sub.st.done and not sub.pending for sub in h.subs)
+
+    def _cpf_seed_ready(self, h, finish):
+        out = {}
+        for sub in h.subs:
+            rows = sorted(r for r in sub.pending if (finish is None or r in finish) and r not in sub.aborted)
+            if rows:
+                out.update(self._cpf_rows_done(sub, rows))
+                sub.pending -= set(rows)
+        return out
+
+    def _cpf_rows_done(self, sub, fin):
+        """first token + prefix-cache bookkeeping + seed round of the rows that just finished their last chunk (monolithic ``prefill`` does the same after its loop)."""
+        res, pbr = sub.st.res, sub.pbr
+        if self.pfx:
+            if self.loss_log:
+                self.remember_prompts(pbr, fin)
+            now = time.time()
+            for r in fin:
+                n = (len(pbr[r]) // PAGE) * PAGE
+                self.ret[r] = torch.as_tensor(pbr[r][:n], dtype=torch.int32).numpy().copy() if n else None
+                self.ret_t[r] = now
+        first = {}
+        for r in fin:
+            sp = sub.sampling.get(r, (0.0, -1, 1.0, 0))
+            first[r] = _Seed.sample(res.logits[r], sp[0], sp[1], sp[2], sp[3], len(pbr[r]))
+            self.last_logits[r] = res.logits[r]
+            self.pf_park.pop(r, None)
+            self.pf_owner.pop(r, None)
+            sub.done_rows.add(r)
+        t1 = time.perf_counter()
+        self._seed_rows(list(fin), first, res, pbr, sub.sampling)
+        sub.seed_sec += time.perf_counter() - t1
+        for r in fin:
+            sub.md5[r] = hashlib.md5(res.logits[r].numpy().tobytes()).hexdigest()[:12]
+        return first
+
+    def _cpf_sub_done(self, h, sub):
+        self.pp.prefill_finish(sub.st)
+
+    def prefill_end(self, h):
+        """all rows done -> {row: first token}; logs the usual call line (mode=chunked)."""
+        assert self.prefill_done(h), "prefill_end before the last chunk"
+        assert not h.closed
+        h.closed = True
+        first = dict(h.first)
+        for sub in h.subs:
+            res = sub.st.res
+            logger.info(
+                f"HY4 prefill call: lg_md5={ {r: sub.md5.get(r) for r in sub.rows if r not in sub.aborted} } pfx_start={sub.start} hits={sub.hits} pfx_stats={self.pfx_stats} xrow={self.xrow_stats} blocks={self.blocks_stats} mode=chunked rows={sub.rows} lens={[len(sub.pbr[r]) for r in sub.rows]} chunks={len(res.chunk_sec)} chunk_wall={h.chunk_sec:.2f}s total={time.perf_counter() - h.t0:.2f}s seed={sub.seed_sec:.2f}s decode_rounds_between={h.rounds_between} cpf_stats={self.cpf_stats}"
+            )
+        self.cpf_stats["ended"] += 1
+        return first
+
+    def prefill_abort(self, h, rows=None):
+        """cancel the prefill of ``rows`` (default all unfinished rows of the handle): the row ends clean (not live, no retained chain, nothing parked at a stale position, stash restored). Rows that already finished
+        (live decoders) are untouched. When no row of a sub-call is left its carried state is freed."""
+        for sub in h.subs:
+            for r in list(sub.rows):
+                if (rows is not None and r not in rows) or r in sub.done_rows or r in sub.aborted:
+                    continue
+                sub.aborted.add(r)
+                sub.pending.discard(r)
+                sub.st.finished.add(r)  # drops it from the write mask of the next chunks
+                self.pf_park.pop(r, None)
+                self.pf_owner.pop(r, None)
+                self.ret[r] = None
+                self.live[r] = False
+                if r in self.stash:
+                    self._stash_restore(r)
+                self.pend[r], self.pos[r] = PAD, self.park_pos(r)
+                self.drafts[r] = [-1] * max(self.K, 1)
+                self.dirty = True
+            if not sub.st.done and all(r in sub.done_rows or r in sub.aborted for r in sub.rows):
+                self.pp.prefill_abort(sub.st)
+                sub.st.c = sub.st.nch
+        self.cpf_stats["aborted"] += 1
+        if all(r in sub.done_rows or r in sub.aborted for sub in h.subs for r in sub.rows):
+            h.closed = True
+
+    def prefill_md5(self, h):
+        """{row: md5 of the logits row of the last prompt token} of the rows that finished (the same value as lg_md5 of a monolithic call)."""
+        return {r: v for sub in h.subs for r, v in sub.md5.items()}
+
+    def pool_md5(self, row, npages=8, layers=(0, 1, 39, 77)):
+        """SAMPLED pool-page fingerprint of a mesh row: md5 of the first ``npages`` x 64 local rows of the kv pool of the given layers on the 8 devices of the row (physically the same region in two runs that
+        wrote the same bytes). Device read; layout not yet validated on hardware (NEED DEVICE: check once)."""
+        cols = int(self.md.shape[1])
+        out = {}
+        for li in layers:
+            t = self.dec.kv_pools[li]
+            m = hashlib.md5()
+            devs = ttnn.get_device_tensors(t)
+            for c in range(cols):
+                d = devs[row * cols + c]
+                shp = list(d.shape)
+                k = min(npages * 64, shp[2])
+                sl = ttnn.slice(d, [0] * len(shp), shp[:2] + [k] + shp[3:])
+                m.update(ttnn.to_torch(sl).float().numpy().tobytes())
+                ttnn.deallocate(sl)
+            out[f"kv{li}"] = m.hexdigest()[:12]
+        return out
+
+    def note_decode_rounds(self, h, n=1):
+        """bookkeeping for the log line: decode rounds that ran between the chunk groups of this handle."""
+        h.rounds_between += n
 
     def _upload_rows(self, host, dt, lay, tgt):
         mp = ttnn.ShardTensor2dMesh(self.md, dims=(0, None), mesh_shape=tuple(self.md.shape))
@@ -721,6 +989,9 @@ class Hy4Engine:
 
     def release(self, row):
         """request on this mesh row finished: park the row (pos 0, pad token) at the next round."""
+        h = self.pf_owner.get(row) if getattr(self, "pf_owner", None) else None
+        if h is not None:  # released while part-way through a chunked prefill = cancel
+            self.prefill_abort(h, [row])
         self.live[row] = False
         if row in self.stash:
             self._stash_restore(row)  # before park_pos: the parked row sits past the restored chain
