@@ -1613,8 +1613,21 @@ _OP_PICKS_GRID_OPS = frozenset({"ttnn.conv2d"})
 
 
 def _op_picks_grid(case, op_name, mesh_device):
-    """Did the op choose this output's shard grid itself, for a grid other than the capture's?"""
-    if op_name not in _OP_PICKS_GRID_OPS or case["kwargs"].get("memory_config") is not None:
+    """Did the op choose this output's shard grid itself, for a grid other than the capture's?
+
+    Not when the call fixes the grid: an explicit ``override_sharding_config`` names it, and
+    an input that is already sharded keeps its own grid unless ``reshard_if_not_optimal``
+    asks conv2d to re-derive one (conv2d_utils.cpp, ``needs_shard_or_reshard``). Those
+    outputs land on the captured grid on any device it fits, so they keep the full check.
+    """
+    kwargs = case["kwargs"]
+    if op_name not in _OP_PICKS_GRID_OPS or kwargs.get("memory_config") is not None:
+        return False
+    conv_config = (kwargs.get("conv_config") or {}).get("fields", {})
+    if conv_config.get("override_sharding_config"):
+        return False
+    input_mem = (kwargs.get("input_tensor") or {}).get("mem") or {}
+    if input_mem.get("shard") is not None and not conv_config.get("reshard_if_not_optimal"):
         return False
     grid = mesh_device.compute_with_storage_grid_size()
     return (grid.x, grid.y) != _CAPTURE_GRID
