@@ -64,7 +64,9 @@ def _ranks_in_step(request, two_ranks):
 def ranks_in_lockstep():
     """Ranks that share a mesh must make the same device allocations and frees in the same order. A test can leave
     device tensors to the cyclic garbage collector, whose runs differ between the ranks (an exception's traceback
-    holds the frames that raised it), so every test ends with a collection on each rank before the next one starts."""
+    holds the frames that raised it), so every test ends with a collection on each rank before the next one starts.
+    This barrier is also the only one a test ends with: a rank that fails an assertion skips the rest of its test, and
+    a barrier of the test's own would leave it one collective behind the other rank."""
     yield
     gc.collect()
     ttnn.distributed_context_barrier()
@@ -140,7 +142,6 @@ def test_ranks_write_their_coordinates(two_ranks):
     model3, params3, opt3 = fresh_tp(DIM)
     plain = dcp.load(path, model=model3)
     assert plain.unexpected == [] and plain.missing == []
-    ttnn.distributed_context_barrier()
 
 
 def test_rank_failing_mid_save_stops_every_rank(two_ranks, expect_error):
@@ -161,7 +162,6 @@ def test_rank_failing_mid_save_stops_every_rank(two_ranks, expect_error):
         dcp.save(path, model=other)
     ttnn.distributed_context_barrier()
     assert not os.path.exists(path) and not any(n.startswith("refused.partial-") for n in os.listdir(root))
-    ttnn.distributed_context_barrier()
 
 
 def test_a_rank_called_with_a_bad_argument_stops_every_rank(two_ranks, expect_error):
@@ -176,7 +176,6 @@ def test_a_rank_called_with_a_bad_argument_stops_every_rank(two_ranks, expect_er
         dcp.load(path, model=model)
     ttnn.distributed_context_barrier()
     assert not os.path.exists(os.path.join(root, "bad_argument"))
-    ttnn.distributed_context_barrier()
 
 
 def test_ranks_whose_optimizers_differ_are_refused(two_ranks, expect_error):
@@ -193,7 +192,6 @@ def test_ranks_whose_optimizers_differ_are_refused(two_ranks, expect_error):
         dcp.save(path, model=model, optimizer=opt if rank == 0 else None)
     ttnn.distributed_context_barrier()
     assert not os.path.exists(path) and not any(n.startswith("optimizers_differ.partial-") for n in os.listdir(root))
-    ttnn.distributed_context_barrier()
 
 
 def test_truncated_file_on_one_rank_stops_all(two_ranks, expect_error):
@@ -217,7 +215,6 @@ def test_truncated_file_on_one_rank_stops_all(two_ranks, expect_error):
     ):
         dcp.load(path, model=fresh)
     assert_same_shards(model_shards(fresh_params, local), before, "no rank placed anything")
-    ttnn.distributed_context_barrier()
 
 
 def test_a_directory_the_ranks_do_not_share_is_refused_before_any_write(two_ranks, monkeypatch, expect_error):
@@ -247,7 +244,6 @@ def test_a_directory_the_ranks_do_not_share_is_refused_before_any_write(two_rank
     ttnn.distributed_context_barrier()
     if rank == 0:
         shutil.rmtree(own_disk)
-    ttnn.distributed_context_barrier()
 
 
 def test_ranks_reading_different_checkpoints_at_one_path_are_refused(two_ranks, monkeypatch, expect_error):
@@ -272,7 +268,6 @@ def test_ranks_reading_different_checkpoints_at_one_path_are_refused(two_ranks, 
     with expect_error(dcp.CheckpointError, r"the ranks disagree on the checkpoint \(its id and creation time\): rank "):
         dcp.load(path, model=fresh)
     assert_same_shards(model_shards(fresh_params, local), before, "no rank placed anything")
-    ttnn.distributed_context_barrier()
 
 
 def test_a_rank_that_placed_its_tensors_says_so_when_another_rank_fails(two_ranks, monkeypatch, expect_error):
@@ -337,7 +332,6 @@ def test_differing_dataloaders_are_stored_per_rank(two_ranks, expect_error):
         r"reading the index and collecting the live tensors failed on rank\(s\) \[1\] of 2: .*train_state/dataloader",
     ):
         dcp.load(path, model=model, dataloader=Loader(), rng=False)
-    ttnn.distributed_context_barrier()
 
 
 def test_the_ranks_restore_their_generators_together_when_one_alone_resumes_a_dataloader(two_ranks):
@@ -387,7 +381,6 @@ def test_a_failure_on_one_rank_stops_every_rank_and_names_it(two_ranks, monkeypa
     dcp.save(path, model=model)
     with expect_error(dcp.CheckpointError, r"the ranks disagree on strict and whether an optimizer is loaded: rank"):
         dcp.load(path, model=model, strict=rank == 0)
-    ttnn.distributed_context_barrier()
 
 
 def test_a_checkpoint_for_the_one_process_load(two_ranks):
@@ -415,4 +408,3 @@ def test_a_checkpoint_for_the_one_process_load(two_ranks):
     )
     index = dcp.read_index(os.path.join(out, "ckpt"))
     assert {f.world_rank for f in index.files} == {0, 1}
-    ttnn.distributed_context_barrier()
