@@ -15,18 +15,20 @@ top-k. So past pass 1 the stages are not expected to equal the undivided run; wh
 
 Checks, two chunks (a full one, then a partial one reading the first from cache), eager:
 
-* Pass 1 is the undivided model's: G0's and G1's block outputs bit-identical to the undivided runtime's.
+* Pass 1 is the undivided model's: G0's block output bit-identical to the undivided runtime's on both chunks, G1's
+  on chunk 0 (on chunk 1 the undivided runtime's pass-2 stand-in has overwritten the loop KV that G1 keeps).
 * Each stage runs its own gate: G1's output fits damp gate 1 on (G1 input, G1's last block output) at the gate bar
   and not gate 2's weights; G2's output fits gate 2 and not gate 1's weights.
 * Handoff: the KVPE rows G1 sends, written at the chunk's metadata into a fresh copy, equal G1's whole cache after
   every chunk; on chunk 0 G2's own cache just before its forward equals G1's (bank A, written by the runtime); G2
   receives G1's top-k set.
 * Layer acks: G0 0, G1 1 2, G2 5 6 (layer + 4: pass 2's own ids), G3 3; the undivided runtime 0 1 2 5 6 3.
-* Finite outputs; a second eager chain is bit-identical.
+* Finite outputs; a second eager chain is bit-identical (caches compared after the last chunk).
 
-Traced: the four stages rebuilt with use_trace, captured, replayed for the same two chunks (records as the runner
-forwards them); G0/G1 outputs bit-identical to the eager chain's, G2/G3 finite and repeat-identical, G1's traced
-send of the KVPE rows bit-exact against its cache.
+Traced: each stage rebuilt with use_trace alone on the mesh (one traced runtime per mesh, as on a rank), captured,
+replayed twice for the same two chunks (records as the runner forwards them), fed the previous stage's outputs;
+G0/G1 outputs at PCC >= 0.999 against the eager chain's (the traced MoE is not bit-identical to eager), G0-G2
+repeat-identical and G2 finite, G1's traced send of the KVPE rows bit-exact against its cache, acks as above.
 """
 
 import gc
@@ -49,6 +51,7 @@ from models.demos.deepseek_v3_d_p.tests.glm54_weights import (
 from models.demos.deepseek_v3_d_p.tt.loop_handoff import write_kvpe_copy
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_4 import GLM54Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
@@ -58,8 +61,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 SP = 8
 CHUNK = PREFILL_CHUNK_TOKENS_PER_CHIP * SP
 CHUNKS = [(0, CHUNK), (CHUNK, CHUNK + 3008)]  # (start, end): full, then partial reading the first from cache
-SEQ = 2 * CHUNK
+SEQ = 8 * CHUNK  # cache length: a multiple of the chunk and of 8192 (KV slots start on DRAM bank 0)
 GATE_PCC = 0.999
+TRACED_VS_EAGER_PCC = 0.999
 FORMAT = MlaKvCacheFormat.SCALED_FP8
 TOKEN_SEED = 11
 STAGES = {"G0": (0, 1), "G1": (1, 2), "G2": (3, 2), "G3": (5, 1)}  # pass positions
@@ -75,12 +79,21 @@ def _pcc(a, b) -> float:
 
 
 def _raw(t: ttnn.Tensor) -> list[torch.Tensor]:
-    """Per-device host copies, bit-exact."""
-    return [ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)]
+    """Per-device host copies in mesh order, bit-exact. Read through a mesh composer: single-device to_torch rejects
+    FP8 (the KVPE caches)."""
+    mesh = t.device()
+    whole = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+    return list(torch.chunk(whole, mesh.get_num_devices(), dim=0))
+
+
+def _bits(t: torch.Tensor) -> torch.Tensor:
+    """Bit pattern, so NaN payloads compare too."""
+    width = {4: torch.int32, 2: torch.int16}.get(t.element_size(), torch.uint8)
+    return t.contiguous().view(width)
 
 
 def _same(a: list, b: list) -> bool:
-    return len(a) == len(b) and all(torch.equal(x, y) for x, y in zip(a, b))
+    return len(a) == len(b) and all(torch.equal(_bits(x), _bits(y)) for x, y in zip(a, b))
 
 
 def _host(mesh_device, t: ttnn.Tensor) -> torch.Tensor:
@@ -89,6 +102,15 @@ def _host(mesh_device, t: ttnn.Tensor) -> torch.Tensor:
     h = ttnn.to_torch(
         t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
     )
+    return h.reshape(-1, h.shape[-1]).float()
+
+
+def _token_rows(mesh_device, per_dev: list) -> torch.Tensor:
+    """[chunk rows, hidden] fp32 in token order from per-device copies: SP chips hold contiguous row blocks (a chunk is
+    not load-balanced), hidden is split over TP."""
+    rows, cols = mesh_device.shape
+    grid = [torch.cat(per_dev[r * cols : (r + 1) * cols], dim=-1) for r in range(rows)]
+    h = torch.cat(grid, dim=-2)
     return h.reshape(-1, h.shape[-1]).float()
 
 
@@ -103,10 +125,9 @@ class _AckSink:
 class _Rig:
     """One runtime per stage (and the undivided one) on the mesh, with its caches, taps and ack sink."""
 
-    def __init__(self, mesh_device, device_params, num_links, config, weights, *, use_trace: bool, undivided: bool):
+    def __init__(self, mesh_device, device_params, num_links, config, weights, *, use_trace: bool, names: list):
         self.mesh, self.config, self.use_trace = mesh_device, config, use_trace
         schedule = pass_schedule(config)
-        names = (["U"] if undivided else []) + list(STAGES)
         self.rt, self.caches, self.sinks, self.taps = {}, {}, {}, {}
         for name in names:
             first_pos, n_pos = (0, len(schedule)) if name == "U" else STAGES[name]
@@ -201,7 +222,7 @@ def _record(rt, slot, start, end):
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM54ReducedConfig), l1_small_size=GLM53Adapter.l1_small_size
+                fabric_payload_size=moe_fabric_payload(GLM54ReducedConfig), l1_small_size=GLM54Adapter.l1_small_size
             ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -223,7 +244,7 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
     failures = []
 
     # ---------------- eager ----------------
-    rig = _Rig(mesh_device, device_params, num_links, config, weights, use_trace=False, undivided=True)
+    rig = _Rig(mesh_device, device_params, num_links, config, weights, use_trace=False, names=["U", *STAGES])
     rt = rig.rt
     _stage("eager runtimes built and compiled", t0)
     g2_forward = rt["G2"].model.forward
@@ -292,11 +313,7 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
 
     def rig_last_tap_host(rig, name):
         # The stage's last block output (its pass output h_k), from the per-device raw copies.
-        layer, per_dev = rig.taps[name][-1]
-        rows, cols = mesh_device.shape
-        grid = [torch.cat(per_dev[r * cols : (r + 1) * cols], dim=-1) for r in range(rows)]
-        h = torch.cat(grid, dim=-2)
-        return h.reshape(-1, h.shape[-1]).float()
+        return _token_rows(mesh_device, rig.taps[name][-1][1])
 
     first = eager_chain("1")
     rt["G2"].model.forward = g2_forward  # one bank-A snapshot (chunk 0) is enough
@@ -308,11 +325,13 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
             failures.append(f"{name} acked {first['acks'][name]}, expected {ids} per chunk")
     for c in range(len(CHUNKS)):
         taps = first[f"taps.{c}"]
-        # Pass 1 equals the undivided model, bit for bit: G0's L0, G1's L1 L2.
+        # Pass 1 equals the undivided model, bit for bit: G0's L0, G1's L1 L2. G1 only on chunk 0: the undivided
+        # runtime's pass-2 stand-in overwrites the loop layers' KV, so its pass 1 on chunk 1 reads chunk 0's pass-2
+        # KV where G1 reads pass 1's (bank A); the two-bank pass 2 (q171.2.6) removes the difference.
         u = taps["U"]
         if not (_same(taps["G0"][0][1], u[0][1]) and taps["G0"][0][0] == u[0][0] == 0):
             failures.append(f"chunk {c}: G0 L0 differs from the undivided L0")
-        for i in range(2):
+        for i in range(2 if c == 0 else 0):
             if not (_same(taps["G1"][i][1], u[1 + i][1]) and taps["G1"][i][0] == u[1 + i][0]):
                 failures.append(f"chunk {c}: G1 block {i} differs from the undivided pass-1 block")
         # Each stage's own gate.
@@ -336,41 +355,64 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
             failures.append(f"chunk {c}: G2 received other top-k sets than G1 sent")
     if not _same(g2_bank_a["before"], first["G1.cache.0"]):
         failures.append("chunk 0: G2's bank A before its forward differs from G1's cache")
-    # Determinism.
+    # Determinism. Caches only after the last chunk: the second chain's chunk 0 writes into caches that still hold the
+    # first chain's later rows.
+    last = len(CHUNKS) - 1
     for key, val in first.items():
+        cumulative = key.startswith(("G1.cache.", "shadow."))
+        if cumulative and not key.endswith(f".{last}"):
+            continue
         if key.startswith(("G", "shadow")) and not _same(val, second[key]):
             failures.append(f"eager {key} differs between two chains")
         if key.startswith("G2.") and not all(torch.isfinite(t.float()).all() for t in val):
             failures.append(f"{key} not finite")
-    _stage(f"eager checks done ({len(failures)} failures so far)", t0)
+    _stage(f"eager checks done ({len(failures)} failures so far): {failures}", t0)
     rig.release()
     del rig, rt, shadow
     gc.collect()
 
     # ---------------- traced ----------------
-    rig = _Rig(mesh_device, device_params, num_links, config, weights, use_trace=True, undivided=False)
-    rt = rig.rt
-    _stage("traced runtimes built, compiled, captured", t0)
-    traced = {}
-    for sink in rig.sinks.values():
-        sink.layers.clear()  # acks of the warm-up and capture passes
-    for rep in range(2):
-        for c, (start, end) in enumerate(CHUNKS):
-            chunk_tokens = tokens[start:end] + [0] * (CHUNK - (end - start))
-            x0 = rt["G0"].prefill_chunk(
-                rt["G0"].make_chunk_input(chunk_tokens),
-                rig.caches["G0"],
-                None,
-                None,
-                None,
-                metadata_msg=_record(rt["G0"], 0, start, end),
-            )
-            traced[f"G0.{c}.{rep}"] = _raw(x0)
-            g1 = rt["G1"].prefill_chunk(
-                ttnn.clone(x0), rig.caches["G1"], None, None, None, metadata_msg=_record(rt["G1"], 0, start, end)
-            )
-            x1, kvpe_rows, *sets = g1
-            traced[f"G1.{c}.{rep}"] = _raw(x1)
+    # One traced runtime on the mesh at a time, as on a rank: each stage is built, captured and replayed alone, fed
+    # the previous stage's outputs, held on host: a device buffer allocated after a capture can sit on the trace's
+    # scratch, which the next replay overwrites. The next stage's prefill_chunk copies an upload into its persistent
+    # buffers before its replay.
+    traced, traced_acks = {}, {}
+    feed = {}  # chunk -> the next stage's inputs
+
+    def _upload(host: ttnn.Tensor) -> ttnn.Tensor:
+        return ttnn.to_device(host, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def run_traced(name, step):
+        rig = _Rig(mesh_device, device_params, num_links, config, weights, use_trace=True, names=[name])
+        rig.sinks[name].layers.clear()  # acks of the warm-up and capture passes
+        _stage(f"traced {name} built, compiled, captured", t0)
+        nxt = {}
+        for rep in range(2):
+            for c, (start, end) in enumerate(CHUNKS):
+                out = step(rig.rt[name], rig.caches[name], c, start, end, rep)
+                if out:
+                    traced[f"{name}.{c}.{rep}"] = _raw(out[0])
+                if rep == 0:
+                    nxt[c] = [ttnn.from_device(t) for t in out]
+                ttnn.synchronize_device(mesh_device)
+        traced_acks[name] = list(rig.sinks[name].layers)
+        rig.release()
+        feed.clear()
+        feed.update(nxt)
+        gc.collect()
+
+    def g0_step(r, cache, c, start, end, rep):
+        chunk_tokens = tokens[start:end] + [0] * (CHUNK - (end - start))
+        x0 = r.prefill_chunk(
+            r.make_chunk_input(chunk_tokens), cache, None, None, None, metadata_msg=_record(r, 0, start, end)
+        )
+        return [x0]
+
+    def g1_step(r, cache, c, start, end, rep):
+        x1, kvpe_rows, *sets = r.prefill_chunk(
+            _upload(feed[c][0]), cache, None, None, None, metadata_msg=_record(r, 0, start, end)
+        )
+        if c == 0 and rep == 0:  # before chunk 1's rows reach the cache
             shadow = init_mla_kv_cache(
                 cache_format=FORMAT,
                 hf_config=config,
@@ -380,31 +422,48 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
                 sp_axis=0,
                 tp_axis=1,
                 num_kvpe_cache_layers=2,
-                num_users=rt["G2"].config.cache_num_users,
+                num_users=r.config.cache_num_users,
                 bank_aligned=True,
             )
-            md = tuple(rt["G1"]._meta1_dev(v) for v in (0, start, end))
-            write_kvpe_copy(shadow.storage, kvpe_rows, md, rt["G1"]._loop_handoff, first_kv_layer=0, num_kv_layers=2)
-            if c == 0 and not _same(_raw(shadow.storage), _raw(rig.caches["G1"].kvpe.storage)):
-                failures.append(f"traced rep {rep}: G1's traced KVPE send does not rebuild its cache")
-            x2 = rt["G2"].prefill_chunk(
-                ttnn.clone(x1),
-                rig.caches["G2"],
-                None,
-                None,
-                None,
-                metadata_msg=_record(rt["G2"], 0, start, end),
-                loop_handoff=[ttnn.clone(t) for t in [kvpe_rows, *sets]],
-            )
-            traced[f"G2.{c}.{rep}"] = _raw(x2)
-            rt["G3"].prefill_chunk(
-                ttnn.clone(x2), rig.caches["G3"], None, None, None, metadata_msg=_record(rt["G3"], 0, start, end)
-            )
-            ttnn.synchronize_device(mesh_device)
+            md = tuple(r._meta1_dev(v) for v in (0, start, end))
+            write_kvpe_copy(shadow.storage, kvpe_rows, md, r._loop_handoff, first_kv_layer=0, num_kv_layers=2)
+            if not _same(_raw(shadow.storage), _raw(cache.kvpe.storage)):
+                failures.append(f"traced chunk {c}: G1's traced KVPE send does not rebuild its cache")
+            del shadow
+        return [x1, kvpe_rows, *sets]
+
+    def g2_step(r, cache, c, start, end, rep):
+        x1, *handoff = feed[c]
+        x2 = r.prefill_chunk(
+            _upload(x1),
+            cache,
+            None,
+            None,
+            None,
+            metadata_msg=_record(r, 0, start, end),
+            loop_handoff=[_upload(t) for t in handoff],
+        )
+        return [x2]
+
+    def g3_step(r, cache, c, start, end, rep):
+        r.prefill_chunk(_upload(feed[c][0]), cache, None, None, None, metadata_msg=_record(r, 0, start, end))
+        return []  # the last stage's output is its cache
+
+    for name, step in (("G0", g0_step), ("G1", g1_step), ("G2", g2_step), ("G3", g3_step)):
+        run_traced(name, step)
     for c in range(len(CHUNKS)):
+        # Traced vs eager: not bit-identical through the MoE (as for GLM-5.3, test_prefill_chunk_traced_vs_eager).
+        # Over the chunk's valid rows only (a partial chunk's tail is padding).
+        n_valid = CHUNKS[c][1] - CHUNKS[c][0]
         for name in ("G0", "G1"):
-            if not _same(traced[f"{name}.{c}.0"], first[f"{name}.{c}"]):
-                failures.append(f"traced {name} chunk {c} differs from the eager chain")
+            got, want = (_token_rows(mesh_device, d)[:n_valid] for d in (traced[f"{name}.{c}.0"], first[f"{name}.{c}"]))
+            bad = int((~torch.isfinite(got)).sum()), int((~torch.isfinite(want)).sum())
+            pcc = _pcc(got, want)
+            logger.info(f"traced vs eager {name} chunk {c}: PCC {pcc} over {n_valid} rows, non-finite {bad}")
+            if bad != (0, 0) or not pcc >= TRACED_VS_EAGER_PCC:
+                failures.append(
+                    f"traced {name} chunk {c} vs eager: PCC {pcc} (bar {TRACED_VS_EAGER_PCC}), non-finite {bad}"
+                )
         for name in ("G0", "G1", "G2"):
             if not _same(traced[f"{name}.{c}.0"], traced[f"{name}.{c}.1"]):
                 failures.append(f"traced {name} chunk {c} differs between two replays")
@@ -413,8 +472,7 @@ def test_glm54_stages_on_device(mesh_device, device_params, num_links):
         if not _same(traced[f"G2.{c}.0"], first[f"G2.{c}"]):
             logger.info(f"traced G2 chunk {c} differs from eager (stand-in pass 2; reported only)")
     for name, ids in ACKS.items():
-        if name != "U" and rig.sinks[name].layers != ids * 2 * len(CHUNKS):
-            failures.append(f"traced {name} acked {rig.sinks[name].layers}, expected {ids} per chunk")
+        if name != "U" and traced_acks[name] != ids * 2 * len(CHUNKS):
+            failures.append(f"traced {name} acked {traced_acks[name]}, expected {ids} per chunk")
     _stage(f"traced checks done ({len(failures)} failures)", t0)
-    rig.release()
     assert not failures, failures

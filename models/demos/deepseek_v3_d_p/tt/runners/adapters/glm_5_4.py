@@ -32,6 +32,9 @@ class GLM54Adapter(GLM53Adapter):
     # GLM-5.3's checkpoint, cache and golden trace (inherited paths), read unchanged.
     weight_cache_model = "glm_5_3"
     builds_missing_weight_cache = False
+    # GLM-5.3's budget plus the damp gate's two collectives (its norm's stats all_gather and its own all_gather of the
+    # normed input), each an all_gather multicast program at two 16 B/bank semaphores; both gates share the programs.
+    l1_small_size = GLM53Adapter.l1_small_size + 2 * 2 * 16
     # The loop runs per chunk: TtPrefillTransformer.forward_packed does not run it.
     supports_packed_forward = False
     supports_packed_forward_trace = False
