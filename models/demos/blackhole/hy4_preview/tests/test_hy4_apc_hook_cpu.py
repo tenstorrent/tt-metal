@@ -9,6 +9,7 @@ from models.demos.blackhole.hy4_preview.tt.hy4_serve_engine import ROWS, Hy4Engi
 
 def eng():
     e = object.__new__(Hy4Engine)
+    e.xrow, e.xrow_on, e.xrow_plan = None, False, {}
     e.pfx, e.pf_rows, e.pfx_redo = True, 512, True
     e.ret, e.ret_t, e.live = [None] * ROWS, [0.0] * ROWS, [False] * ROWS
     e.pfx_stats = dict(calls=0, hit_calls=0, hit_tokens=0, prompt_tokens=0, computed_tokens=0)

@@ -116,14 +116,26 @@ def plan_copies(rets, live, taken, prompts, cur_rows, pf_rows=512, own_hit=None,
             continue
         h, r = max(((hit(q, a), q) for q in c), key=lambda x: x[0])
         if h <= 0:
-            r = min(
-                c,
-                key=lambda q: (
-                    rets[q] is not None and len(rets[q]) > 0,
-                    0.0 if own_hit is None else own_hit[q],
-                    q != cur_rows[i],
-                ),
-            )
+            if (
+                os.environ.get("HY4_PFX_EVICT", "lru") == "short"
+            ):  # keep the longest chains: overwrite the shortest (cheapest to recompute)
+                r = min(
+                    c,
+                    key=lambda q: (
+                        0 if rets[q] is None else len(rets[q]),
+                        0.0 if own_hit is None else own_hit[q],
+                        q != cur_rows[i],
+                    ),
+                )
+            else:
+                r = min(
+                    c,
+                    key=lambda q: (
+                        rets[q] is not None and len(rets[q]) > 0,
+                        0.0 if own_hit is None else own_hit[q],
+                        q != cur_rows[i],
+                    ),
+                )
         # copy candidate: the row (other than r) with the longest match
         cand = [(hit(q, a), q) for q in range(nrows) if q != r and q not in dsts]
         hs, s = max(cand, key=lambda x: x[0], default=(0, None))

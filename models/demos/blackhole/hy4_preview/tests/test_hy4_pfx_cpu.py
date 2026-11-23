@@ -7,6 +7,7 @@ from models.demos.blackhole.hy4_preview.tt.hy4_serve_engine import ROWS, Hy4Engi
 
 def eng(pf=512):
     e = object.__new__(Hy4Engine)
+    e.xrow, e.xrow_on, e.xrow_plan = None, False, {}
     e.pfx, e.pf_rows, e.pfx_redo = True, pf, True
     e.ret, e.ret_t, e.live = [None] * ROWS, [0.0] * ROWS, [False] * ROWS
     return e

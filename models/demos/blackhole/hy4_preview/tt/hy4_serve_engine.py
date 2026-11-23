@@ -99,6 +99,12 @@ class Hy4Engine:
         # copied back before the prefill. Live switch HY4_BLOCKS_FILE (0 / 1): 0 = row-local behaviour (nothing published, nothing copied in). Any copy error = cold recompute.
         self.blocks_on = os.environ.get("HY4_BLOCKS", "0") == "1" and self.pfx
         self.blocks = None  # ShadowStore
+        # HY4_STASH=1 (default 0; needs HY4_BLOCKS=1 for the shadow pages, which then serve ONLY the stash: the block-store bookkeeping is off): a short request (prompt + HY4_STASH_MARGIN decode tokens fit the
+        # shadow pages) that must run on the row holding a long retained chain (>= HY4_STASH_MIN tokens) first saves the leading pages of that row to the shadow region and copies them back when the request
+        # releases the row, so the long chain survives (program hy4pfx: the 'evicted' loss of the AgentX sub-agent requests, 1100-1600 s of cold recompute each).
+        self.stash_on = os.environ.get("HY4_STASH", "0") == "1" and self.pfx
+        self.stash = {}  # row -> (chain tokens, n pages saved)
+        self.stash_stats = dict(saved=0, restored=0, truncated=0, failed=0, seconds=0.0)
         self.bcopy = None  # Hy4PageCopy, built in warm() before the first capture
         self.blocks_pages = 0
         self.blocks_stats = dict(out_pages=0, in_pages=0, in_calls=0, failed=0, seconds=0.0)
@@ -295,9 +301,9 @@ class Hy4Engine:
             h, r = max(scored, key=lambda x: x[0])
             if h <= 0:
                 # no usable prefix: prefer to keep the plugin's choice unless it would destroy a retained prefix while an empty / older row exists
-                r = min(
-                    c, key=lambda q: (self.ret[q] is not None and len(self.ret[q]) > 0, self.ret_t[q], q != cur_rows[i])
-                )
+                from models.demos.blackhole.hy4_preview.tt import hy4_pfx_policy as PP
+
+                r = PP.pick_victim(c, self.ret, self.ret_t, cur_rows[i], os.environ.get("HY4_PFX_EVICT", "lru"))
             out[i] = r
             taken.add(r)
         return out
@@ -407,7 +413,7 @@ class Hy4Engine:
         )
 
     def _blocks_live(self):
-        if self.blocks is None:
+        if self.blocks is None or self.stash_on:
             return False
         f = os.environ.get("HY4_BLOCKS_FILE")
         if f:
@@ -454,6 +460,64 @@ class Hy4Engine:
             logger.info(
                 f"HY4 blocks: row {r} hit {plan.start} tokens ({plan.active_blocks} active + {plan.shadow_blocks} shadow blocks), out {len(out)} / in {len(plan.copy_in)} pages in {dt * 1e3:.0f} ms (stats {st})"
             )
+
+    def _stash_save(self, r, prompt_len):
+        """row r holds a long retained chain that the request about to be prefilled on it would destroy: save the leading pages it will overwrite (+ decode margin) to the shadow region. Never raises."""
+        from models.demos.blackhole.hy4_preview.tt import hy4_pfx_policy as PP
+
+        a = self.ret[r]
+        if not self.stash_on or self.bcopy is None or a is None or r in self.stash:
+            return
+        n = PP.stash_pages(
+            len(a),
+            prompt_len,
+            self.blocks_pages,
+            int(os.environ.get("HY4_STASH_MARGIN", "4096")),
+            int(os.environ.get("HY4_STASH_MIN", "32768")),
+            PAGE,
+            int(os.environ.get("HY4_STASH_MAX_PROMPT", "24576")),
+        )
+        if n <= 0:
+            return
+        try:
+            dt = self.bcopy.copy(r, [(p, self.pages + p) for p in range(n)])  # active -> shadow
+        except Exception as e:  # noqa: BLE001
+            self.stash_stats["failed"] += 1
+            logger.error(
+                f"HY4 stash: save row {r} pages {n} FAILED ({type(e).__name__}: {str(e)[:200]}): chain dropped"
+            )
+            return
+        self.stash[r] = (a.copy(), n)
+        self.stash_stats["saved"] += 1
+        self.stash_stats["seconds"] += dt
+        logger.info(
+            f"HY4 stash: row {r} chain {len(a)} tokens, saved {n} pages in {dt * 1e3:.0f} ms (stats {self.stash_stats})"
+        )
+
+    def _stash_restore(self, r):
+        """the request on row r released it: copy the saved pages back and make the long chain retained again (truncated when the decode ran past the saved pages). Never raises."""
+        from models.demos.blackhole.hy4_preview.tt import hy4_pfx_policy as PP
+
+        ent = self.stash.pop(r, None)
+        if ent is None:
+            return
+        chain, n = ent
+        self.drain()
+        try:
+            dt = self.bcopy.copy(r, [(self.pages + p, p) for p in range(n)])  # shadow -> active
+        except Exception as e:  # noqa: BLE001
+            self.stash_stats["failed"] += 1
+            self.ret[r] = None
+            logger.error(f"HY4 stash: restore row {r} FAILED ({type(e).__name__}: {str(e)[:200]}): chain dropped")
+            return
+        self.ret[r] = PP.restored_chain(chain, n, int(self.pos[r]), self.S + 4, PAGE)
+        self.ret_t[r] = time.time()
+        self.stash_stats["restored"] += 1
+        self.stash_stats["truncated"] += int(len(self.ret[r]) < len(chain))
+        self.stash_stats["seconds"] += dt
+        logger.info(
+            f"HY4 stash: row {r} restored {n} pages in {dt * 1e3:.0f} ms, chain {len(self.ret[r])}/{len(chain)} tokens valid (stats {self.stash_stats})"
+        )
 
     def _xrow_build(self):
         from models.demos.blackhole.hy4_preview.tt.hy4_xrow import Hy4Xrow
@@ -515,18 +579,19 @@ class Hy4Engine:
             start = max(0, min(st)) if st else 0
             # HY4_PFX_SPLIT=1 (default off): a lock-step call starts at the COMMON MINIMUM start of its rows ('lockstep' loss: rows with a deeper hit recompute down to it). Rows whose starts differ by more than
             # HY4_PFX_SPLIT_MIN tokens (default 8192) are prefilled in SEPARATE sub-calls (cheapest first); the other rows keep their pool pages / decode state exactly as in any call for a subset of the rows.
-            if os.environ.get("HY4_PFX_SPLIT", "0") == "1" and not _sub and len(rows) > 1:
+            if os.environ.get("HY4_PFX_SPLIT", "0") in ("1", "dp") and not _sub and len(rows) > 1:
+                from models.demos.blackhole.hy4_preview.tt import hy4_pfx_policy as PP
+
                 thr = int(os.environ.get("HY4_PFX_SPLIT_MIN", "8192"))
-                srt = sorted(rows, key=lambda r: max(0, hits[r] - A if (self.pfx_redo and hits[r] > 0) else hits[r]))
-                groups, cur = [], [srt[0]]
                 sof = lambda r: max(0, hits[r] - A if (self.pfx_redo and hits[r] > 0) else hits[r])
-                for r in srt[1:]:
-                    if sof(r) - sof(cur[0]) > thr:
-                        groups.append(cur)
-                        cur = [r]
-                    else:
-                        cur.append(r)
-                groups.append(cur)
+                # HY4_PFX_SPLIT=dp : exact cheapest partition (a call costs max(len) - min(start) whatever its row count); =1 : gap > HY4_PFX_SPLIT_MIN tokens
+                groups = PP.plan_groups(
+                    {r: sof(r) for r in rows},
+                    {r: len(prompts_by_row[r]) for r in rows},
+                    "dp" if os.environ.get("HY4_PFX_SPLIT") == "dp" else "thr",
+                    thr,
+                    A,
+                )
                 if len(groups) > 1:
                     groups.sort(key=lambda g: max(len(prompts_by_row[r]) - sof(r) for r in g))
                     logger.info(
@@ -552,6 +617,8 @@ class Hy4Engine:
                         f"pfx_loss rid={d['rid']} row={r} prompt={d['prompt']} hit={d['hit']} potential={d['potential']} cause={d['cause']} home={d['home']} live={live_before}"
                     )
             for r in rows:
+                if hits[r] == 0 and self.stash_on and r not in self.stash:
+                    self._stash_save(r, len(prompts_by_row[r]))
                 self.ret[r] = None  # the pages of this row change from position ``start`` on
             self.pfx_stats["calls"] += 1
             self.pfx_stats["prompt_tokens"] += sum(len(prompts_by_row[r]) for r in rows)
@@ -649,6 +716,8 @@ class Hy4Engine:
     def release(self, row):
         """request on this mesh row finished: park the row (pos 0, pad token) at the next round."""
         self.live[row] = False
+        if row in self.stash:
+            self._stash_restore(row)  # before park_pos: the parked row sits past the restored chain
         self.pend[row], self.pos[row] = PAD, self.park_pos(row)
         self.drafts[row] = [-1] * max(self.K, 1)
         self.dirty = True
