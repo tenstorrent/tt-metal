@@ -380,12 +380,8 @@ jobs:
       (github.event_name == 'schedule' || inputs.run_tt_train_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    # id-token: write is for the Hugging Face OIDC exchange (hf-oidc) in tt-train-tests,
-    # which inherits these permissions.
     permissions:
-      contents: read
-      packages: read
-      id-token: write
+      id-token: write # Hugging Face OIDC exchange (hf-oidc)
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: unit
@@ -402,12 +398,8 @@ jobs:
       (github.event_name == 'schedule' || inputs.run_tt_train_perf_pretraining_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    # id-token: write is for the Hugging Face OIDC exchange (hf-oidc) in tt-train-tests,
-    # which inherits these permissions.
     permissions:
-      contents: read
-      packages: read
-      id-token: write
+      id-token: write # Hugging Face OIDC exchange (hf-oidc)
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: perf
@@ -425,12 +417,8 @@ jobs:
       (github.event_name == 'schedule' || inputs.run_tt_train_perf_finetuning_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
     secrets: inherit
-    # id-token: write is for the Hugging Face OIDC exchange (hf-oidc) in tt-train-tests,
-    # which inherits these permissions.
     permissions:
-      contents: read
-      packages: read
-      id-token: write
+      id-token: write # Hugging Face OIDC exchange (hf-oidc)
     uses: ./.github/workflows/tt-train-tests.yaml
     with:
       test-category: perf
