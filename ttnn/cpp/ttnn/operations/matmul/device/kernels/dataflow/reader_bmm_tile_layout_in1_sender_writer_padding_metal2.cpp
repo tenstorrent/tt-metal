@@ -17,7 +17,7 @@
 //   IN1_SHARDED               -- in1 arrives in the resident dfb::in1 shard; no tensor binding
 //   IN1_DRAM_WIDTH_SHARDED    -- in1 is read bank-by-bank from DRAM using tensor::in1's base address
 //   IN1_DRAM_HEIGHT_SHARDED   -- ditto, one complete [K, N] matrix per bank
-//   SPARSITY                  -- the sparsity operand (dfb::sparsity + tensor::sparsity) is bound
+//   SPARSITY                  -- the sparsity operand (scratch::sparsity + tensor::sparsity) is bound
 //   OUT_SHARDED               -- output stays resident in dfb::out; the writer loop is compiled out
 //
 // The DRAM-width-sharded path takes its per-bank list as runtime varargs, walked two at a time:
@@ -37,8 +37,8 @@
 //     this op's directory (ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp), so they cannot
 //     be fed from named arguments without changing a file this port may not touch.
 //
-// SPARSITY is likewise define-gated rather than arg-gated: the sparsity dataflow buffer and its
-// tensor accessor produce no dfb::/tensor:: token at all when the host does not declare them, so the
+// SPARSITY is likewise define-gated rather than arg-gated: the sparsity scratchpad and its tensor
+// accessor produce no scratch::/tensor:: token at all when the host does not declare them, so the
 // references must not reach C++ name lookup. The legacy kernel guarded them with
 // `if constexpr (batchB > 0)`, which still looks the names up in the discarded branch.
 
@@ -58,12 +58,46 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 
 #ifdef ENABLE_PREFETCHER_PIPE
 #include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
+#ifdef ARCH_QUASAR
+#error "PrefetcherPipe weight delivery into this matmul has not been brought up on Quasar"
 #endif
+#endif
+#ifdef BATCH_BROADCAST
+#include "ttnn/operations/matmul/device/kernels/dataflow/batch_broadcast_offset.hpp"
+#endif
+
+// Reads one in1 block (BLOCK_H x BLOCK_W tiles, of which the first block_w_to_read per row exist) from an
+// interleaved tensor. Kept out of line, with its inputs by value, so the per-tile loop is register-allocated on its
+// own: inlined into kernel_main it competes with the multicast and writer state and spills per tile.
+template <
+    uint32_t BLOCK_H,
+    uint32_t BLOCK_W,
+    uint32_t STRIDE_W,
+    uint32_t STRIDE_H,
+    uint32_t TILE_BYTES,
+    uint32_t ALIGNED_TILE_BYTES,
+    typename Accessor>
+__attribute__((noinline)) void read_in1_block(
+    const Noc noc, const Accessor s1, uint32_t l1_write_addr, uint32_t start_tile_id, uint32_t block_w_to_read) {
+    uint32_t row_start_tile_id = start_tile_id;
+    for (uint32_t h = 0; h < BLOCK_H; ++h) {
+        uint32_t tile_id = row_start_tile_id;
+        uint32_t tile_l1_addr = l1_write_addr;
+        for (uint32_t w = 0; w < block_w_to_read; ++w) {
+            noc.async_read(s1, CoreLocalMem<uint32_t>(tile_l1_addr), TILE_BYTES, {.page_id = tile_id}, {});
+            tile_l1_addr += ALIGNED_TILE_BYTES;
+            tile_id += STRIDE_W;
+        }
+        l1_write_addr += BLOCK_W * ALIGNED_TILE_BYTES;
+        row_start_tile_id += STRIDE_H;
+    }
+}
 
 void kernel_main() {
     // READER
@@ -139,7 +173,7 @@ void kernel_main() {
     // operand. Each iteration gathers the weights of group indices[i] and writes its result to COMPACT
     // output slot i, so there is no sparsity scan and no skipped slot.
     //
-    // The id list rides in the sparsity operand's plumbing (tensor binding, sparsity DataflowBuffer):
+    // The id list rides in the sparsity operand's plumbing (tensor binding, sparsity scratchpad):
     // the sparsity mask itself is never read in this mode, so reusing those slots keeps this shared
     // kernel's binding set unchanged.
     //
@@ -275,8 +309,17 @@ void kernel_main() {
 
 #ifdef SPARSITY
     // sparsity accessor
-    DataflowBuffer dfb_sparsity(dfb::sparsity);
+    // This kernel's own copy of one sparsity page, or of the active-group id list in indexed/gather
+    // mode: the NoC writes it and only this kernel reads it back.
+    Scratchpad<volatile uint16_t> sparsity(scratch::sparsity);
     const auto s_sparsity = TensorAccessor(tensor::sparsity);
+    // On Quasar the data movement core reads the scratchpad through its cache while the NoC writes it
+    // straight to SRAM, so the cache can hold stale data from an earlier read; the scoped_lock
+    // invalidates the cache line before each read. No-op on WH/BH.
+    const auto read_sparsity = [&sparsity](uint32_t i) -> uint16_t {
+        const auto sparsity_lock = sparsity.scoped_lock(i, 1);
+        return sparsity[i];
+    };
 #endif  // SPARSITY
 
 #ifdef IN1_SHARDED
@@ -284,17 +327,11 @@ void kernel_main() {
 #endif  // IN1_SHARDED
 
 #ifdef SPARSITY
-    uint32_t l1_write_addr_sparsity = 0;
-    if constexpr (batchB > 0) {
-        dfb_sparsity.reserve_back(1);
-        l1_write_addr_sparsity = dfb_sparsity.get_write_ptr();
-    }
-
     if constexpr (use_indices) {
         // Indexed/gather mode: the sparsity operand slot carries the active-group id list instead of
         // the mask. It is a single ROW_MAJOR stick (validated on the host), so one page-0 read pulls
         // in the whole list, once, for every outer batch.
-        noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read(s_sparsity, sparsity, sparsity_pagesize, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
     }
 #endif  // SPARSITY
@@ -308,8 +345,18 @@ void kernel_main() {
     constexpr uint32_t in1_batch_stride_bytes = in1_KtNt_per_batch * in1_single_tile_size_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
+#ifdef BATCH_BROADCAST
+    // Each batch starts at the broadcast offset from this core's batch-0 tile, replacing the KtNt advance.
+    const uint32_t in1_core_start_tile_id = in1_tensor_start_tile_id;
+    constexpr auto batch_dims = get_arg(args::batch_dims);
+    constexpr auto in1_batch_strides = get_arg(args::in1_batch_strides);
+#endif
     for (uint32_t b = 0; b < batch; ++b) {
+#ifdef BATCH_BROADCAST
+        uint32_t in1_batch_tile_id = in1_core_start_tile_id + batch_broadcast_offset(b, batch_dims, in1_batch_strides);
+#else
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
+#endif
 
 #ifdef IN1_DRAM_HEIGHT_SHARDED
         // Compute DRAM bank and offset for this batch
@@ -321,7 +368,7 @@ void kernel_main() {
 
 #ifdef SPARSITY
         if constexpr (batchB > 0 && !use_indices) {
-            noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
+            noc.async_read(s_sparsity, sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 #endif  // SPARSITY
@@ -340,7 +387,7 @@ void kernel_main() {
             if constexpr (use_indices) {
                 // Gather: jump straight to group indices[bB]'s weight block, scatter its result to
                 // compact output slot bB. Every iterated group is active, so nothing is skipped.
-                const uint32_t group_id = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB];
+                const uint32_t group_id = read_sparsity(bB);
 #ifdef BIAS_PER_GROUP
                 in3_group_tile_offset = group_id * out_tensor_stride_h;
 #endif
@@ -351,7 +398,7 @@ void kernel_main() {
                 in1_batch_tile_id = in1_tensor_start_tile_id + group_id * KtNt;
                 out_tensor_start_tile_id = out_base_tile_id + bB * MtNt;
             } else if constexpr (batchB > 0) {
-                if (reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB] == 0) {
+                if (read_sparsity(bB) == 0) {
                     if constexpr (!compact_output) {
                         out_tensor_start_tile_id += MtNt;
                     }
@@ -487,28 +534,22 @@ void kernel_main() {
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
                         dfb_in1.reserve_back(in1_block_num_tiles);
-                        uint32_t in1_write_offset = 0;
                         in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
 
                         // Copy in1 block into the buffer, as the default kernel
-                        uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
-                        for (uint32_t h = 0; h < in1_block_h; ++h) {
-                            uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
-                            for (uint32_t w = 0; w < in1_block_w; ++w) {
-                                if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
-                                    noc.async_read(
-                                        s1,
-                                        dfb_in1,
-                                        in1_single_tile_size_bytes,
-                                        {.page_id = in1_tensor_tile_id},
-                                        {.offset_bytes = in1_write_offset});
-                                }
-                                in1_write_offset += in1_aligned_tile_size_bytes;
-                                in1_tensor_tile_id += in1_tensor_stride_w;
-                            }
-                            in1_tensor_row_start_tile_id += in1_tensor_stride_h;
-                        }
+                        read_in1_block<
+                            in1_block_h,
+                            in1_block_w,
+                            in1_tensor_stride_w,
+                            in1_tensor_stride_h,
+                            in1_single_tile_size_bytes,
+                            in1_aligned_tile_size_bytes>(
+                            noc,
+                            s1,
+                            static_cast<uint32_t>(in1_start_address),
+                            in1_tensor_current_inner_dim_block_start_tile_id,
+                            bw < num_blocks_w_dim - 1 ? in1_block_w : last_block_w);
                         in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
 
                         // Barrier! make sure the reads are done
@@ -759,13 +800,4 @@ void kernel_main() {
         NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
 #endif
-
-    // The sparsity slot is reserved once to take its base address and is re-read by this kernel
-    // alone; it is never handed to a consumer, so complete the handshake here rather than leaving
-    // the reserve dangling. The guards match the ones on the reserve.
-#ifdef SPARSITY
-    if constexpr (batchB > 0) {
-        dfb_sparsity.push_back(1);
-    }
-#endif  // SPARSITY
 }

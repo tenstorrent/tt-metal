@@ -59,9 +59,11 @@ def test_cumsum_uint32(ttnn_mesh_device, reset_seeds, shape, dim):
     """One integral-image pass. Integer add: checked exactly (sums kept below 2^31)."""
     mesh = ttnn_mesh_device
     x = torch.randint(0, 2**16, shape, dtype=torch.int32)
-    tt_x = U.to_tt(x, mesh, dtype=ttnn.uint32)  # uint32 TILE DRAM
-    out = ttnn.cumsum(tt_x, dim=dim, dtype=ttnn.uint32)
-    U.assert_shape_dtype(out, shape=shape, dtype=ttnn.uint32, finite=False)
+    # Quasar has no UInt32 DataFormat; the values (< 2^16, sums < 2^31) are the same in int32.
+    dt = ttnn.int32 if U.is_quasar() else ttnn.uint32
+    tt_x = U.to_tt(x, mesh, dtype=dt)  # TILE DRAM
+    out = ttnn.cumsum(tt_x, dim=dim, dtype=dt)
+    U.assert_shape_dtype(out, shape=shape, dtype=dt, finite=False)
     got = _host_int(out, shape)
     ref = torch.cumsum(x.to(torch.int64), dim=dim)
     assert torch.equal(got, ref), f"{(got != ref).sum().item()}/{ref.numel()} elements differ"
@@ -79,6 +81,7 @@ def test_integral_image_uint32_chain(ttnn_mesh_device, reset_seeds, shape):
     """``tt_oft.py`` "to_uint32" integral image end to end: mul 2^20 -> typecast uint32 -> cumsum
     dim 1 -> cumsum dim 2 -> typecast bf16 -> mul 2^-20, on bf16 TILE DRAM features."""
     mesh = ttnn_mesh_device
+    U.xfail_on_quasar("Quasar has no UInt32 DataFormat / LLK store mode: typecast to or from uint32 is unsupported")
     _, h, w, _ = shape
     # Post-ReLU features, bounded so the full H x W sum of x * 2^20 stays below 2^31 (no uint32 wrap).
     x = (U.rand_nonneg(shape) * (2.0**31 / PRESCALE / (h * w)) * 0.9).to(torch.bfloat16)

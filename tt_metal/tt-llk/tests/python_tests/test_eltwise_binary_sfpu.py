@@ -11,6 +11,7 @@ from typing import Dict
 import numpy as np
 import pytest
 import torch
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
@@ -76,7 +77,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import (
     assert_bf16_separates_rne,
     assert_bit_exact,
@@ -224,6 +225,7 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuEqInt,
         MathOperation.SfpuFmodInt32,
         MathOperation.SfpuGcd,
+        MathOperation.SfpuGegluTanh,
         MathOperation.SfpuIsclose,
         MathOperation.SfpuIscloseEqualNan,
         MathOperation.SfpuLcm,
@@ -1121,6 +1123,28 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwa
     )
 
 
+# -0.0 dividends, the extended sweep only feeds remainder positive values
+_REMAINDER_SIGNED_ZERO_PAIRS = [
+    (a, b) for a in (-0.0, 0.0) for b in (2.0, 3.0, 0.5, 7.25, -2.0, -3.0, -0.5)
+] + [(a, b) for a in (5.5, -5.5) for b in (2.0, -2.0)]
+
+
+# Float32 with a 32-bit Dest is the pipeline that delivers -0.0 to the SFPU intact.
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32]),
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_remainder_signed_zero(formats, dest_acc):
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuBinaryRemainder,
+        src_A_override=_build_paired_tile_override(
+            _REMAINDER_SIGNED_ZERO_PAIRS, torch.float32
+        ),
+    )
+
+
 @parametrize(**MASK_SWEEP)
 def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0
@@ -1211,11 +1235,12 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
 def test_eltwise_binary_sfpu_xlogy_denormal(mathop, dest_acc):
     # xlogy(x, denormal) = x * ln(denormal) = -inf, because the kernel flushes its log operand
     # (see _xlogy_denormal_stimuli_specs). Float32 into a 32-bit Dest is the only pipeline in
-    # this harness that delivers a denormal to the SFPU, and the flush is measured on Blackhole.
-    if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            "the denormal flush of the xlogy log operand is measured on Blackhole only"
-        )
+    # this harness that delivers a denormal to the SFPU. Quasar has no xlogy kernel.
+    if TestConfig.CHIP_ARCH not in (
+        ChipArchitecture.WORMHOLE,
+        ChipArchitecture.BLACKHOLE,
+    ):
+        pytest.skip("xlogy has a kernel on Wormhole and Blackhole only")
 
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     spec_A, spec_B = _xlogy_denormal_stimuli_specs()
@@ -1882,6 +1907,29 @@ INT_SWEEP = dict(
     ],
     dest_acc=[DestAccumulation.Yes],
 )
+
+
+GEGLU_TANH_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.SfpuGegluTanh],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**GEGLU_TANH_SWEEP)
+def test_eltwise_binary_sfpu_geglu_tanh(formats, dest_acc, mathop, **run_kwargs):
+    # geglu_tanh(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
+    # Both signs, past each clamp and below where the logistic factor underflows.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-13.0, high=16.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+        **run_kwargs,
+    )
 
 
 @parametrize(**INT_SWEEP)
@@ -2811,7 +2859,9 @@ def _golden_sfpu_binary_bcast(
         b_bcast = b[:, 0].unsqueeze(1).expand_as(b)
 
     golden_rm = op(a, b_bcast.contiguous()).flatten()
-    return tilize(golden_rm, stimuli_format=stimuli_format)
+    return tilize_block(
+        golden_rm, TILE_DIMENSIONS, stimuli_format=stimuli_format
+    ).flatten()
 
 
 def _run_sfpu_binary_bcast(
@@ -2889,9 +2939,9 @@ def _run_sfpu_binary_bcast(
             OUT_ZERO_POINT(0),
         ],
         "variant_stimuli": StimuliConfig(
-            tilize(src_A, stimuli_format=formats.input_format),
+            tilize_block(src_A, input_dimensions, formats.input_format).flatten(),
             formats.input_format,
-            tilize(src_B, stimuli_format=formats.input_format),
+            tilize_block(src_B, input_dimensions, formats.input_format).flatten(),
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,

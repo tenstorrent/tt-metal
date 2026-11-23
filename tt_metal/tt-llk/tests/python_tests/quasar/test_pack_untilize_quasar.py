@@ -5,13 +5,14 @@ from typing import List
 
 import pytest
 from helpers.data_format_inference import unpacks_to_dest
-from helpers.format_config import DataFormat, FormatConfig
+from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import (
     DestAccumulation,
     PerfRunType,
 )
 from helpers.param_config import (
+    flat_axes,
     generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
@@ -149,6 +150,14 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ],
 )
+# Column names of the tuples ``generate_pack_untilize_combinations`` returns.
+PACK_UNTILIZE_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "input_dimensions",
+    "tile_dimensions",
+)
 ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
     PACK_UNTILIZE_FORMATS
 )
@@ -156,27 +165,33 @@ PERF_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
     PACK_UNTILIZE_FORMATS,
     is_perf=True,
 )
+# Float32 unpacks straight to a 32-bit Dest, then packs untilized to Float32 or Float16_b.
+PACK_UNTILIZE_FLOAT32_COMBINATIONS = generate_pack_untilize_combinations(
+    [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    ]
+)
 
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_dimensions_tile_dims=ALL_PACK_UNTILIZE_COMBINATIONS,
+    **flat_axes(PACK_UNTILIZE_FLAT_NAMES, ALL_PACK_UNTILIZE_COMBINATIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_pack_untilize_quasar(
-    formats_dest_acc_sync_dimensions_tile_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    input_dimensions,
+    tile_dimensions,
     run_types,
     loop_factor,
     *,
     is_perf=False,
     perf_report=None,
 ):
-    combination = formats_dest_acc_sync_dimensions_tile_dims
-    if len(combination) == 1 and isinstance(combination[0], tuple):
-        combination = combination[0]
-    (formats, dest_acc, dest_sync_mode, input_dimensions, tile_dimensions) = combination
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     sequential_spec = StimuliSpec.sequential()
@@ -212,7 +227,7 @@ def test_pack_untilize_quasar(
             generate_input_dim(
                 input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
             ),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
             UNPACKER_ENGINE_SEL(),
         ],
         "runtimes": [
@@ -260,3 +275,21 @@ def test_pack_untilize_quasar(
         formats.output_format,
         tile_shape=tile_shape,
     ), "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(
+    **flat_axes(PACK_UNTILIZE_FLAT_NAMES, PACK_UNTILIZE_FLOAT32_COMBINATIONS),
+)
+def test_pack_untilize_float32_quasar(
+    formats, dest_acc, dest_sync, input_dimensions, tile_dimensions
+):
+    test_pack_untilize_quasar(
+        formats,
+        dest_acc,
+        dest_sync,
+        input_dimensions,
+        tile_dimensions,
+        [PerfRunType.L1_TO_L1],
+        1,
+    )

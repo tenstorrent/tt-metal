@@ -13,6 +13,7 @@
 #include <functional>
 #include <numeric>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,6 +26,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
@@ -33,6 +35,7 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -84,6 +87,33 @@ TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     }
 }
 
+TEST_F(PerCoreAllocationTest, TensorAccessorArgsRejectsPerCoreBuffer) {
+    auto* device = this->devices_[0]->impl().get_devices()[0];
+    NodeRange node_range(NodeCoord(0, 0), NodeCoord(1, 0));
+    ShardSpecBuffer shard_spec(NodeRangeSet(node_range), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
+
+    auto per_core_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(per_core_args, true);
+    auto per_core_buf = BufferImpl::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, per_core_args);
+    auto lockstep_buf = BufferImpl::create(
+        device,
+        2 * PAGE_SIZE,
+        PAGE_SIZE,
+        BufferType::L1,
+        BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED));
+
+    EXPECT_THROW(TensorAccessorArgs{*per_core_buf}, std::runtime_error);
+    EXPECT_NO_THROW(TensorAccessorArgs{*lockstep_buf});
+
+    // The MeshBuffer constructor, which MeshTensor ops go through, reads the reference device buffer.
+    auto per_core_mesh_buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 2 * PAGE_SIZE},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = per_core_args},
+        this->devices_[0].get());
+    EXPECT_THROW(TensorAccessorArgs{*per_core_mesh_buf}, std::runtime_error);
+}
+
 TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
     auto* device = this->devices_[0]->impl().get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
@@ -129,7 +159,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     auto space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device,
+        mesh_device->mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = CoreRangeSet(CoreRange(receiver)),
@@ -548,7 +578,7 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesIncludePersistentL1) {
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     auto space = experimental::CreatePrefetcherPipeSpace(
-        mesh_device,
+        mesh_device.mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = CoreRangeSet(CoreRange(receiver)),
@@ -576,7 +606,7 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesIncludePersistentL1AcrossSubmeshes) 
     // A pipe reserves persistent L1 on the mesh it is created on; the other mesh must still see it.
     for (const auto& [owner, viewer] : {std::pair{parent, submesh}, std::pair{submesh, parent}}) {
         auto space = experimental::CreatePrefetcherPipeSpace(
-            *owner,
+            owner->mesh_command_queue(0),
             experimental::PrefetcherPipeSpaceConfig{
                 .sender_cores = CoreRangeSet(CoreRange(sender)),
                 .receiver_domain = CoreRangeSet(CoreRange(receiver)),
@@ -605,6 +635,60 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesWholeDeviceMatchesPerCore) {
     EXPECT_EQ(by_core.size(), device->allocator()->get_num_banks(BufferType::L1));
     for (const auto& [core, ranges] : by_core) {
         EXPECT_EQ(ranges, per_core::get_l1_occupied_ranges(mesh_device, coord, core)) << core.str();
+    }
+}
+
+TEST_F(PerCoreAllocationTest, DeviceBuffersShareMeshBufferUniqueId) {
+    auto& mesh_device = *this->devices_[0];
+    CoreRange core_range(CoreCoord(0, 0), CoreCoord(1, 0));
+    ShardSpecBuffer shard_spec(CoreRangeSet(core_range), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
+    auto sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(sharding_args, true);
+    const distributed::DeviceLocalBufferConfig local_config{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = sharding_args};
+    const distributed::ReplicatedBufferConfig buffer_config{.size = 2 * PAGE_SIZE};
+
+    // The allocator and graph tracking see the device buffers' IDs, so they must identify the MeshBuffer.
+    auto mesh_buffer = distributed::MeshBuffer::create(buffer_config, local_config, &mesh_device);
+    ASSERT_TRUE(mesh_buffer->unique_id().has_value());
+    for (const auto& coord : mesh_device.get_view().get_local_mesh_coord_range()) {
+        EXPECT_EQ(mesh_buffer->get_device_buffer(coord)->unique_id(), *mesh_buffer->unique_id());
+    }
+
+    const distributed::MeshCoordinate coord(0, 0);
+    auto single_device = per_core::create_on_single_device(buffer_config, local_config, &mesh_device, coord);
+    ASSERT_TRUE(single_device->unique_id().has_value());
+    EXPECT_NE(*single_device->unique_id(), *mesh_buffer->unique_id());
+    EXPECT_EQ(single_device->get_device_buffer(coord)->unique_id(), *single_device->unique_id());
+}
+
+// Frees a per-core MeshBuffer of a submesh after the submesh closed, and also after it was destroyed, while its parent
+// keeps the devices open. The free must still release the allocation on the devices, so that the parent can allocate
+// the same address again.
+TEST_F(PerCoreAllocationTest, ClosedSubmeshFreesPerCoreAllocationOnOpenParent) {
+    auto parent = this->devices_[0];
+    const CoreCoord core(0, 0);
+    ShardSpecBuffer shard_spec(CoreRangeSet(CoreRange(core)), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {1, 1});
+    auto sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(sharding_args, true);
+    const distributed::DeviceLocalBufferConfig local_config{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = sharding_args};
+    const distributed::ReplicatedBufferConfig buffer_config{.size = PAGE_SIZE};
+    const distributed::MeshCoordinate coord(0, 0);
+
+    for (const bool destroy_submesh : {false, true}) {
+        SCOPED_TRACE(destroy_submesh ? "submesh destroyed" : "submesh closed");
+        auto submesh = parent->create_submesh(distributed::MeshShape(1, 1));
+        auto stale = distributed::MeshBuffer::create(buffer_config, local_config, submesh.get());
+        const DeviceAddr address = per_core::get_per_core_address(*stale, coord, core);
+        submesh->close();
+        if (destroy_submesh) {
+            submesh.reset();
+        }
+        stale.reset();
+
+        auto reallocated = distributed::MeshBuffer::create(buffer_config, local_config, parent.get());
+        EXPECT_EQ(per_core::get_per_core_address(*reallocated, coord, core), address);
     }
 }
 

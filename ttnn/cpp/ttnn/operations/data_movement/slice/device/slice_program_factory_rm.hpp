@@ -6,7 +6,7 @@
 #include <vector>
 
 #include <optional>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -24,11 +24,16 @@ struct SliceRmProgramFactory {
 
     // Cache-hit hook: only the two tensor bindings move; every other argument is derived from
     // values the cache key already separates on.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const SliceParams& args,
         const SliceInputs& tensor_args,
         Tensor& output,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+
+    // The input DFB's entry size for the L1 free right now: a wide row is split into chunks when a
+    // double-buffered row no longer fits. Shapes and slice_start fix everything else in the plan.
+    static uint32_t dfb_entry_size(
+        const SliceParams& args, const SliceInputs& tensor_args, const tt::tt_metal::TensorSpec& output);
 };
 
 }  // namespace ttnn::prim

@@ -46,11 +46,11 @@ def test_interleaved_sharded_roundtrip(ttnn_mesh_device, reset_seeds, shape, dt,
     x = U.to_tt_mem(x_torch, mesh, mem, dtype=U.DTYPES[dt])
     ref = U.seen(x, x_torch, mesh)
 
-    sharded = ttnn.to_memory_config(x, U.resolve_memcfg(shard_spec, mesh))  # interleaved_to_sharded
+    sharded = U.op("to_memory_config")(x, U.resolve_memcfg(shard_spec, mesh))  # interleaved_to_sharded
     assert sharded.is_sharded()
     U.assert_lossless(ref, sharded, mesh_device=mesh)
 
-    back = ttnn.to_memory_config(sharded, U.resolve_memcfg(mem, mesh))  # sharded_to_interleaved
+    back = U.op("to_memory_config")(sharded, U.resolve_memcfg(mem, mesh))  # sharded_to_interleaved
     assert not back.is_sharded()
     U.assert_lossless(ref, back, mesh_device=mesh)
 
@@ -63,6 +63,6 @@ def test_reshard(ttnn_mesh_device, reset_seeds, shape):
     x_torch = U.torch_rand(shape)
     x = U.to_tt_mem(x_torch, mesh, BLOCK_SPEC, dtype=ttnn.bfloat8_b)
     ref = U.seen(x, x_torch, mesh)
-    out = ttnn.to_memory_config(x, U.resolve_memcfg(("hs", (32, E)), mesh))
+    out = U.op("to_memory_config")(x, U.resolve_memcfg(("hs", (32, E)), mesh))
     assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     U.assert_lossless(ref, out, mesh_device=mesh)
