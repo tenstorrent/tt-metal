@@ -1,1 +1,2 @@
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/wq_b_linear/test_wq_b_linear.py","modes":["dev","prod"],"golden":"3 passed","ts":"2026-11-23T00:15:11+00:00"}
+{"event":"test_run","status":"pass","note":"split sender + kb=8; unit 10/10 dev+prod, golden 3/3; device kernel ~26.4us (was 37.5us)","ts":"2026-11-23T00:22:46+00:00"}

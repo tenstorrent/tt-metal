@@ -1,6 +1,6 @@
 # L1 Ledger: wq_b_linear
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes: `m` (`block_m_tiles` = 5), `k` (`block_k_tiles` = 4, `num_k_blocks` = 12), `n` (`block_n_tiles` = 2). `fp32_dest_acc_en = False` (16-bit DEST).
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes: `m` (`block_m_tiles` = 5), `k` (`block_k_tiles` = 8, `num_k_blocks` = 6 — implementer turned the knob from the design's 4/12, see Implementation notes), `n` (`block_n_tiles` = 2). `fp32_dest_acc_en = False` (16-bit DEST).
 
 ## Worker cores (64)
 
@@ -15,7 +15,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes: 
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_x_resident` (same descriptor as on workers, so the address matches) | 240 × 2048 B = 491,520 B | 240: each round's slot is the multicast source and is never rewritten | `{m: spans → block_m_tiles, k: spans → tensor_k_tiles, n: —}` | Float16_b | sender kernel (DRAM reads, raw L1 use, no push/pop) | sender kernel (multicast source, same thread) | whole program | Not shared: it is the only buffer on the sender core. A 2-slot ring would need the consumer handshake (rejected regime). |
+| `cb_x_resident` (same descriptor as on workers, so the address matches) | 240 × 2048 B = 491,520 B | 240: each round's slot is the multicast source and is never rewritten | `{m: spans → block_m_tiles, k: spans → tensor_k_tiles, n: —}` | Float16_b | x-reader kernel (NCRISC / NoC0, DRAM reads, push per round) | multicast kernel (BRISC / NoC1, wait/pop per round; the slot is the multicast source) | whole program | Not shared: it is the only buffer on the sender core. A 2-slot ring would need the consumer handshake (rejected regime). |
 
 ## Symbol table
 
@@ -61,3 +61,14 @@ Totals: DRAM 7,176,192 B (= SOL minimum; 16,018 ns at 448 GB/s on p100a). NoC: 4
 | | 2 | 16 KB, 4 between barriers, NoC 1 | 16,851 | no | 65,536 |
 
 Phase 0 choices from the sweeps: W reader batch 8 (one K-step per barrier) on NoC0 — tie with rank 1; NoC split for W is excluded because the op model shows W on NoC1 colliding with the x multicast tree (22.6 vs 16.6 us). x: the sender issues one round (20 pages) per barrier and overlaps the next round's reads with the current multicast; the sweep's batch-80 figure (7.3 us for all of x) is a lower bound on the sender's read, which is off the critical path per the op model (ablating x: 15.0 vs 17.4 us). The multicast estimate (14.4 us standalone, path-reserving, non-posted) runs concurrently with the 15.6 us W stream on the other NoC. An earlier exploratory W sweep (`0d5aab10`) varied the core count; it is superseded because the core count is fixed by the split. No refusals.
+
+## Implementation notes (ttnn-implementer)
+
+- `block_k_tiles` 4 → 8 (`num_k_blocks` 12 → 6). Totals unchanged: both resident CBs scale with
+  `block_k_tiles · num_k_blocks = tensor_k_tiles`. Measured: each Counter-mode multicast round has
+  ~1 µs fixed cost (write barrier + counter increment over 64 receivers), so fewer, larger rounds win.
+  Device kernel time (p150, 11×10, 8 banks): kb 4 → 31.8 µs, 6 → 27.4, 8 → 26.4, 12 → 26.5 (split sender).
+- Sender core is split over its two RISCs (design perf option "x sender read NoC"): NCRISC reads x on NoC0
+  and pushes each round to `cb_x_resident`; BRISC waits for each round and multicasts it on NoC1. One producer
+  and one consumer for the CB on that core. Single-RISC sender measured 30.5 µs at kb 12, split 26.5 µs.
+- Data-movement budget unchanged (x 1×, W 1× from DRAM; y to L1).

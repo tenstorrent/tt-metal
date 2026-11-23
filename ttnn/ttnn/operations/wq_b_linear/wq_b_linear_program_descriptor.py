@@ -4,9 +4,9 @@
 """ProgramDescriptor for wq_b_linear (N-split, x multicast resident, W streamed per worker).
 
 Cores:
-  * 1 x-sender (outside the receiver rectangle): reads x from DRAM one round
-    (block_m_tiles x block_k_tiles tiles) at a time into its cb_x_resident slot r and
-    multicasts the slot to the same address on every worker (Counter data-ready, no handshake).
+  * 1 x-sender (outside the receiver rectangle): its NCRISC reads x from DRAM (NoC0) one round
+    (block_m_tiles x block_k_tiles tiles) at a time into cb_x_resident; its BRISC multicasts each
+    round to the same address on every worker (NoC1, Counter data-ready, no handshake).
   * num_workers workers (one rectangle): reader streams the worker's W columns per K-step,
     writer waits for each x round and pushes it to compute, compute runs one matmul_block over
     all K-steps, writer stores the 5 x block_n_tiles output block into the L1-interleaved y.
@@ -21,7 +21,7 @@ TILE = 32
 
 # ---- Blocking knobs (single source of truth; see op_design.md "Blocking Model") ----
 BLOCK_N_TILES = 2  # output columns per worker; num_workers = tensor_n_tiles / BLOCK_N_TILES
-BLOCK_K_TILES = 4  # K tiles per K-step (matmul in0_block_k); num_k_blocks derived
+BLOCK_K_TILES = 8  # K tiles per K-step (matmul in0_block_k) = one x multicast round; num_k_blocks derived
 W_DEPTH_BLOCKS = None  # cb_w_block depth in K-steps; None = num_k_blocks (whole W slice resident)
 OUT_DEPTH_BLOCKS = 1  # one output block per core
 MCAST_RECT_WIDTH_MAX = 8
@@ -154,17 +154,27 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         ],
     )
 
-    # ---- Sender kernel (x DRAM -> slot -> multicast), BRISC / NoC1 ----
-    sender_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks, tensor_k_tiles, x_tile_bytes]
-    sender_ct.extend(ttnn.TensorAccessorArgs(x).get_compile_time_args())
+    # ---- Sender core: x-reader (NCRISC / NoC0) -> cb_x_resident -> multicaster (BRISC / NoC1) ----
+    x_reader_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks, tensor_k_tiles]
+    x_reader_ct.extend(ttnn.TensorAccessorArgs(x).get_compile_time_args())
+    x_reader_rt = ttnn.RuntimeArgs()
+    x_reader_rt[sender[0]][sender[1]] = [x.buffer_address()]
+    x_reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "wq_b_linear_x_reader.cpp"),
+        core_ranges=sender_crs,
+        compile_time_args=x_reader_ct,
+        runtime_args=x_reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    sender_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks]
     sender_rt = ttnn.RuntimeArgs()
-    sender_rt[sender[0]][sender[1]] = [x.buffer_address()]
+    sender_rt[sender[0]][sender[1]] = []
     sender_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "wq_b_linear_sender.cpp"),
         core_ranges=sender_crs,
         compile_time_args=sender_ct,
         runtime_args=sender_rt,
-        config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
+        config=ttnn.WriterConfigDescriptor(),
     )
 
     # ---- Worker reader (W columns per K-step), NCRISC / NoC0 ----
@@ -231,5 +241,5 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
 
     descriptor = ttnn.ProgramDescriptor(cbs=[cb_x_resident, cb_w_block, cb_interm_acc, cb_out_block])
     mcast.attach(descriptor, "x_mcast", [sender_kernel, writer_kernel], 0)
-    descriptor.kernels = [sender_kernel, reader_kernel, writer_kernel, compute_kernel]
+    descriptor.kernels = [x_reader_kernel, sender_kernel, reader_kernel, writer_kernel, compute_kernel]
     return descriptor
