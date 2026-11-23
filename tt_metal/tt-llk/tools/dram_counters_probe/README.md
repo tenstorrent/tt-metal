@@ -1,6 +1,6 @@
 # DRAM counter probes
 
-Read-only scripts for a Blackhole card; see `docs/performance_counters/dram_counters.md` section 6.
+Read-only scripts for Blackhole and Wormhole cards; see `docs/performance_counters/dram_counters.md` section 6.
 
 - `dram_idle_drift.py`: idle drift of the DRAM tile NIU counters per reader (tt_umd, exalens, exalens re-initialised).
 - `dram_niu_probe.py`: do the NIU read counters of the DRAM tiles move at the header address (known host read), any architecture.

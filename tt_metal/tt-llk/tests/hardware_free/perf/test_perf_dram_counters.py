@@ -124,6 +124,15 @@ def test_idle_drift_is_subtracted_and_clamped():
     assert p.tiles[(0, 2)].read_words == 0
 
 
+def test_idle_estimate_rounds_to_the_nearest_word():
+    rows = _rows(((0, 1), 0, "NIU_SLV_RD_DATA_WORD_SENT", 1000), elapsed=1_000_000_000)
+    idle = {
+        (0, (0, 1), 0, "NIU_SLV_RD_DATA_WORD_SENT"): dram_counters.Idle(0.0, 1.4),
+    }
+    (p,) = dram_counters.per_program(rows, "blackhole", idle)
+    assert p.tiles[(0, 1)].read_words == 999
+
+
 def test_launches_stay_separate_and_none_row_is_empty_program():
     rows = _rows(((0, 1), 0, "NIU_SLV_RD_DATA_WORD_SENT", 4), seq=0, program=1) + _rows(
         ((-1, -1), -1, "NONE", 0), seq=1, program=1

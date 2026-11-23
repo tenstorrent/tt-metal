@@ -43,6 +43,9 @@ inline constexpr uint32_t FLAG_UNSETTLED = 1u << 1;   // write counters were sti
 inline constexpr uint32_t FLAG_INTERVAL_WRAPPED = 1u << 2;  // the controller interval ran out inside the window, so
                                                             // its counts cover only the window's last part
 
+// Flags of the rows of one launch, shared by the traffic and controller files.
+uint32_t launch_flags(bool overlapped, bool settled, uint32_t extra_flags);
+
 // Longest controller interval, about 2.1 s at a 2 GHz memory clock.
 inline constexpr uint32_t CONTROLLER_INTERVAL = 0xFFFFFFFFu;
 

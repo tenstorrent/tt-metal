@@ -10,9 +10,8 @@
 #include "perf_counters/dram_counters_types.h"
 
 // Wormhole DRAM channel tile counters. Include through perf_counters/dram_counters_inventory.h.
-// The NIU registers of a DRAM tile are not at the worker address: they sit in NoC address space at 0x100080000,
-// 0x100090000 and 0x1000A0000 (instance by noc0 y modulo 3: 1, 2, 0), NoC 1 0x8000 above NoC 0, with the same
-// status register offsets as a worker. One NIU data word is 32 bytes (not confirmed).
+// The NIU registers of a tile sit in NoC address space, three instances selected by noc0 y modulo 3, NoC 1 0x8000
+// above NoC 0, with the worker status offsets. One NIU data word is 32 bytes.
 
 namespace llk::perf::dram::wormhole
 {

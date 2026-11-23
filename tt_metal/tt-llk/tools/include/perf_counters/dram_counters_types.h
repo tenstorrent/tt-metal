@@ -34,7 +34,7 @@ enum class Arch : std::uint8_t
 
 inline constexpr std::size_t NUM_ARCHES = 3;
 
-// {counter name, offset from the NoC register base of the tile, plus noc_instance_stride per NoC}; every counter is a free running 32-bit register.
+// {counter, offset from the NoC register base of the tile}; every counter is a free running 32-bit register.
 using Entry = std::pair<DramCounter, std::uint32_t>;
 
 struct Table
@@ -43,9 +43,8 @@ struct Table
     std::size_t size;
 };
 
-// What a table of one architecture is relative to. A zero niu_base or word_bytes means the value is not known.
-// A tile reaches its NIU through one of tile_instance_count register instances that the tiles of a column share; the
-// instance of a tile is (noc0 y + tile_instance_bias) % tile_instance_count.
+// What a table is relative to; a zero niu_base or word_bytes means unknown.
+// The instance of a tile is (noc0 y + tile_instance_bias) % tile_instance_count.
 struct Layout
 {
     std::uint64_t niu_base;            // address of the NoC 0 register space of instance 0
@@ -57,8 +56,7 @@ struct Layout
     std::uint32_t num_nocs;
 };
 
-// A counter of the memory controller's activity monitor: a 32-bit register that holds the count of the last capture
-// interval, read through the register window of the DRAM tile.
+// A 32-bit register of the memory controller activity monitor holding the count of the last interval.
 struct ControllerEntry
 {
     const char* name;
@@ -71,7 +69,7 @@ struct ControllerTable
     std::size_t size;
 };
 
-// Registers that frame a capture interval. A zero register_window means the architecture has no known controller map.
+// Registers that frame a capture interval; a zero register_window means no known controller map.
 struct ControllerLayout
 {
     std::uint64_t register_window;       // OR-ed into every controller register address

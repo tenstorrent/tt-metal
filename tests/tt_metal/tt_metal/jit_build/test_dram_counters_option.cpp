@@ -94,6 +94,14 @@ TEST(DramCountersPlan, BlackholeCapturesThreeCountersPerNoc) {
     EXPECT_TRUE(is_write_counter(plan->counters[2]));
 }
 
+TEST(DramCountersFlags, OverlapAndSettleBitsAreIndependent) {
+    EXPECT_EQ(launch_flags(false, true, 0), 0u);
+    EXPECT_EQ(launch_flags(true, true, 0), FLAG_OVERLAPPED);
+    EXPECT_EQ(launch_flags(false, false, 0), FLAG_UNSETTLED);
+    EXPECT_EQ(launch_flags(true, false, 0), FLAG_OVERLAPPED | FLAG_UNSETTLED);
+    EXPECT_EQ(launch_flags(false, true, FLAG_OVERLAPPED), FLAG_OVERLAPPED);
+}
+
 TEST(DramCountersPlan, QuasarHasNoMap) { EXPECT_FALSE(make_plan(dc::Arch::QUASAR, 8).has_value()); }
 
 TEST(DramCountersLayout, BlackholeAddressIsTheWorkerOne) {

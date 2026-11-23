@@ -9,9 +9,7 @@
 
 #include "perf_counters/dram_counters_types.h"
 
-// Quasar: the NIU status registers have the same offsets as on the other architectures inside a NoC register space
-// that starts at 0x02000000 on a tile with a Tensix-style NoC overlay. How a host reaches a DRAM tile, how many NoCs
-// it has and the width of a data word are not known, so the table is empty and the layout has zeros.
+// Quasar: how a host reaches a DRAM tile, its NoC count and the data word width are unknown, so the table is empty.
 // Include through perf_counters/dram_counters_inventory.h.
 
 namespace llk::perf::dram::quasar

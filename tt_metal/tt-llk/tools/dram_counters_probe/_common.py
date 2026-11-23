@@ -12,13 +12,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from tt_llk_perf import headers  # noqa: E402
 
+# Both architectures share the offsets; the header holds them.
 NIU_COUNTERS = {
-    "RD_REQ_RECEIVED": 0x2D4,
-    "RD_DATA_WORD_SENT": 0x2CC,
-    "NONPOSTED_WR_REQ_RECEIVED": 0x2E8,
-    "POSTED_WR_REQ_RECEIVED": 0x2EC,
-    "NONPOSTED_WR_DATA_WORD_RECEIVED": 0x2E0,
-    "POSTED_WR_DATA_WORD_RECEIVED": 0x2E4,
+    name.removeprefix("NIU_SLV_"): offset
+    for name, offset in headers.dram_counter_table("blackhole")
 }
 
 

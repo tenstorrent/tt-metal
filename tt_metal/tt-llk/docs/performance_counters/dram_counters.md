@@ -7,7 +7,7 @@ Reference for the counters that sit in a DRAM channel tile and for `TT_METAL_PRO
 | Architecture | NIU slave counters | Captured |
 |---|---|---|
 | Blackhole | yes, host reads of the tile NIU, one data word is 64 B | yes |
-| Wormhole | NIU registers of a DRAM tile are in NoC address space at `0x100080000` plus an instance per tile, one data word is 32 B (assumed) | yes, address from the exalens register map, not yet confirmed to count |
+| Wormhole | NIU registers of a DRAM tile are in NoC address space at `0x100080000` plus an instance per tile, one data word is 32 B, measured | yes, measured on an n150 |
 | Quasar | NIU status offsets equal the other architectures, but how a host reaches a DRAM tile, the NoC count and the word width are not known | no, the table is empty and the option logs a warning |
 
 On Blackhole the memory controller behind the tiles of a channel has its own activity monitor (DRAM commands, row activations, power states, AXI port handshakes and stalls). `TT_METAL_PROFILE_DRAM_CONTROLLER` captures it per program next to the tile counters, see section 7. Wormhole and Quasar have no controller map here.
@@ -20,9 +20,9 @@ Headers in `tools/include/perf_counters/`, namespace `llk::perf::dram`, self-con
 |---|---|
 | `dram_counters_types.h` | `DramCounter` (names, append only), `Arch`, `Entry` = `{counter, register offset}`, `Layout`, and for the controller `ControllerEntry` = `{name, address}` and `ControllerLayout` |
 | `dram_counters_blackhole.h`, `dram_counters_wormhole.h`, `dram_counters_quasar.h` | `layout` (NIU base, NoC instance stride, word bytes, NoC count) and the `niu_counters` table; Blackhole also `controller_layout` and `controller_counters` |
-| `dram_counters_inventory.h` | `niu_table(arch)`, `layout_for(arch)`, `niu_address(arch, noc, offset)`, `controller_layout_for(arch)`, `controller_table(arch)`; the host picks the architecture at run time, so there is no `ARCH_*` switch |
+| `dram_counters_inventory.h` | `niu_table(arch)`, `layout_for(arch)`, `niu_address(arch, noc, tile_noc0_y, offset)`, `controller_layout_for(arch)`, `controller_table(arch)`; the host picks the architecture at run time, so there is no `ARCH_*` switch |
 
-Every counter is a free-running 32-bit register: deltas are taken with wrapping subtraction. The NIU offsets are `0x200 + 4 * index` inside the NoC register space of the tile. On Blackhole that space is `0xFFB20000` for NoC 0 and `0x10000` further for NoC 1. On Wormhole a DRAM tile has no worker-style register window: its NIU registers are at `0x100080000`, `0x100090000` or `0x1000A0000` for NoC 0 (instance 0, 1, 2 for noc0 y modulo 3 equal to 1, 2, 0) and `0x8000` above that for NoC 1, so the host needs the noc0 y of each tile (`Layout` holds base, strides, instance count and bias; `niu_address(arch, noc, noc0_y, offset)`):
+Every counter is a free-running 32-bit register: deltas are taken with wrapping subtraction. The NIU offsets are `0x200 + 4 * index` inside the NoC register space of the tile. On Blackhole that space is `0xFFB20000` for NoC 0 and `0x10000` further for NoC 1. On Wormhole a DRAM tile has no worker-style register window: its NIU registers are at `0x100080000`, `0x100090000` or `0x1000A0000` for NoC 0 (instance 0, 1, 2 for noc0 y modulo 3 equal to 1, 2, 0) and `0x8000` above that for NoC 1, so the host needs the noc0 y of each tile (`Layout` holds base, strides, instance count and bias; `niu_address(arch, noc, tile_noc0_y, offset)`):
 
 | Counter | Index | Meaning |
 |---|---|---|
@@ -93,12 +93,12 @@ for p in dram_counters.per_program(rows, "blackhole", idle):
 
 ## 6. What has to be checked on hardware
 
-The NIU write counters matched a kernel's output exactly on a Blackhole card. Open:
+The NIU write counters matched a kernel's output exactly on a Blackhole card. On a Wormhole n150 the eltwise binary example read exactly 262144 B and wrote 131072 B, and a 64 KiB host read from each DRAM tile moved its read word counter by 2049 (2048 plus the probe's own read), so the 32 B word and the address map are measured there. Open:
 
 1. The own-read correction and the idle rate inside the runtime: `tools/dram_counters_probe/dram_validate.py` runs a program that moves a known number of bytes with the option off and on and compares `bytes / 64` with the measured words; expect writes exact and reads within 2 percent, no flags.
 2. `tools/dram_counters_probe/dram_idle_drift.py` measures the drift and the per-read increment on the UMD and exalens paths.
 3. The controller capture on Wormhole and Quasar: no map yet. On a Blackhole p100a the eltwise binary example (slow dispatch, 2 x 128 KiB in, 128 KiB out) gave 4096 read and 2048 write commands over the seven channels, exactly its 262144 and 131072 bytes and the tile write words; read data handshakes 3456 + 640 on ports 1 and 3, write data 2048 on port 2; 96 percent row hits; the same counts with `raw`, and every controller back on its firmware interval and gating afterwards.
-4. `tools/dram_counters_probe/dram_niu_probe.py --arch wormhole --mode umd|exalens` reads the read counter of every DRAM tile around a known host read of the tile and prints the change against the expected words; run it before trusting Wormhole numbers. Quasar: not tried.
+4. `tools/dram_counters_probe/dram_niu_probe.py --arch wormhole --mode umd|exalens` reads the read counter of every DRAM tile around a known host read of the tile and prints the change against the expected words. Quasar: not tried.
 
 ## 7. Memory controller activity monitor (Blackhole)
 

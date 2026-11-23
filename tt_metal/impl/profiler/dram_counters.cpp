@@ -454,7 +454,7 @@ uint64_t write_launch(
     DeviceState& st, ChipId chip, const Pending& pending, const Reading& after, bool settled, uint32_t extra_flags) {
     const uint64_t elapsed_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(after.time - pending.before.time).count();
-    const uint32_t flags = (pending.overlapped ? FLAG_OVERLAPPED : 0u) | (settled ? 0u : FLAG_UNSETTLED) | extra_flags;
+    const uint32_t flags = launch_flags(pending.overlapped, settled, extra_flags);
     const std::vector<Delta> deltas = diff(st.plan, st.coupling, pending.before, after);
     std::ofstream out = open_log(TRAFFIC_LOG, TRAFFIC_HEADER, g_traffic_started);
     const uint64_t seq = st.launch_seq++;
@@ -478,7 +478,9 @@ void close_launch_controllers(
     const Pending& pending,
     const Reading& after,
     uint64_t seq,
-    uint32_t flags) {
+    bool settled,
+    uint32_t extra_flags) {
+    const uint32_t flags = launch_flags(pending.overlapped, settled, extra_flags);
     const uint64_t elapsed_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(after.time - pending.before.time).count();
     try {
@@ -497,6 +499,10 @@ void disable_after_failure(DeviceState& st, const std::exception& e) {
 }
 
 }  // namespace
+
+uint32_t launch_flags(bool overlapped, bool settled, uint32_t extra_flags) {
+    return (overlapped ? FLAG_OVERLAPPED : 0u) | (settled ? 0u : FLAG_UNSETTLED) | extra_flags;
+}
 
 std::optional<Plan> make_plan(dc::Arch arch, uint32_t num_tiles) {
     const dc::Layout layout = dc::layout_for(arch);
@@ -601,7 +607,7 @@ void begin_program(MetalContext& ctx, IDevice& device, const Program& program) {
             // The earlier program is still in flight: close it at this instant, its number includes the new program.
             const Reading now = read_all(ctx, chip, st);
             const uint64_t seq = write_launch(st, chip, *st.pending, now, true, FLAG_OVERLAPPED);
-            close_launch_controllers(ctx, chip, st, *st.pending, now, seq, FLAG_OVERLAPPED);
+            close_launch_controllers(ctx, chip, st, *st.pending, now, seq, true, FLAG_OVERLAPPED);
         }
         // The controller register writes go before the tile snapshot so the tile counters never see them.
         if (!st.controllers.empty()) {
@@ -643,7 +649,7 @@ void end_pending(MetalContext& ctx, ChipId chip) {
         }
         const Reading after = read_all(ctx, chip, st);
         const uint64_t seq = write_launch(st, chip, pending, after, settled, 0u);
-        close_launch_controllers(ctx, chip, st, pending, after, seq, settled ? 0u : FLAG_UNSETTLED);
+        close_launch_controllers(ctx, chip, st, pending, after, seq, settled, 0u);
     } catch (const std::exception& e) {
         abandon_controllers(ctx, chip, st);
         disable_after_failure(st, e);
@@ -656,7 +662,7 @@ void release(MetalContext& ctx) {
     for (auto& [key, st] : g_devices) {
         if (key.first == context && st.controller_open && st.pending) {
             // A program nobody waited for still holds the controllers: hand them back to the firmware.
-            close_launch_controllers(ctx, key.second, st, *st.pending, st.pending->before, st.launch_seq++, 0u);
+            close_launch_controllers(ctx, key.second, st, *st.pending, st.pending->before, st.launch_seq++, false, 0u);
         }
     }
     std::erase_if(g_devices, [context](const auto& entry) { return entry.first.first == context; });

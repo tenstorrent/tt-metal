@@ -41,6 +41,7 @@ def run_example(example, device, env_extra, profiler_dir):
     env["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
     env["TT_METAL_PROFILER_DIR"] = str(profiler_dir)
     env.pop("TT_METAL_PROFILE_DRAM_COUNTERS", None)
+    env.pop("TT_METAL_PROFILE_DRAM_CONTROLLER", None)
     env.update(env_extra)
     t0 = time.monotonic()
     proc = subprocess.run(

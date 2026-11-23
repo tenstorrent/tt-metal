@@ -26,7 +26,7 @@ inline constexpr std::array<Entry, 6> niu_counters = {{
     {DramCounter::NIU_SLV_POSTED_WR_DATA_WORD_RECEIVED, 0x2E4},
 }};
 
-// GDDR6 controller behind the tiles of one channel. AXI ports are numbered 1 to 3 as in the controller's own map.
+// GDDR6 controller behind the tiles of one channel; AXI ports are numbered 1 to 3.
 inline constexpr ControllerLayout controller_layout = {1ull << 40, 0xFC104A30u, 0xFC104A34u, 0xFC200004u, 0x7u, 0x7u << 16};
 
 inline constexpr std::array<ControllerEntry, 42> controller_counters = {{
