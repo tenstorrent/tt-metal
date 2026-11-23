@@ -133,14 +133,14 @@ DATACOPY_SUB_BYTE_SWEEP = dict(
 DATACOPY_BLOCK_SWEEP = dict(
     formats=DATACOPY_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
-    num_faces=[1, 2, 4],
+    tile_dimensions=[[16, 16], [16, 32], [32, 32]],
     tilize=Tilize.No,
     input_dimensions=[[128, 256]],
 )
 DATACOPY_SUB_BYTE_BLOCK_SWEEP = dict(
     formats=SUB_BYTE_DATACOPY_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
-    num_faces=[4],
+    tile_dimensions=[[32, 32]],
     tilize=Tilize.No,
     input_dimensions=[[128, 256]],
 )
@@ -325,12 +325,12 @@ def test_eltwise_unary_datacopy_sub_byte_bfp(
 def test_eltwise_unary_datacopy_block(
     formats,
     dest_acc,
-    num_faces,
+    tile_dimensions,
     tilize,
     input_dimensions,
 ):
     _run_unary_datacopy_test(
-        formats, dest_acc, num_faces, tilize, input_dimensions, unpack_block=True
+        formats, dest_acc, tile_dimensions, tilize, input_dimensions, unpack_block=True
     )
 
 
@@ -339,14 +339,14 @@ def test_eltwise_unary_datacopy_block(
 def test_eltwise_unary_datacopy_sub_byte_bfp_block(
     formats,
     dest_acc,
-    num_faces,
+    tile_dimensions,
     tilize,
     input_dimensions,
 ):
     _run_unary_datacopy_test(
         formats,
         dest_acc,
-        num_faces,
+        tile_dimensions,
         tilize,
         input_dimensions,
         quantize_golden_input=True,
