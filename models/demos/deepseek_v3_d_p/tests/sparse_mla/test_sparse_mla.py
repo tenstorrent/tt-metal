@@ -1212,7 +1212,7 @@ def test_sparse_mla_push_layers_chunked(
             ]
         # The push is on for every layer and each layer prefetches its successor's prefix, or it is off everywhere.
         assert all((layer._push is not None) == push for layer in layers)
-        assert [layer._push_prefetch_grids is not None for layer in layers] == [push, push, False]
+        assert [layer._push_next_layer for layer in layers] == [push, push, False]
         kvpe_cache = init_mla_kv_cache(
             cache_format=MlaKvCacheFormat.BF16_RM,
             hf_config=config,
@@ -1313,13 +1313,23 @@ SPARSE_SP1_MESH_CASES = [
     ],
     # The 4x4 stage: one Galaxy tray half (run_4x4_stage_tests.sh), SP on the axis-1 ring. Square, but
     # still a check: the KV write orders chips by SP axis, so a row-major reader would read the
-    # transpose, a different permutation on 4x4.
+    # transpose, a different permutation on 4x4. GLM and K3.1 both run 4x4 stages.
+    *[
+        pytest.param(
+            variant_name,
+            (4, 4),
+            torus_x_device_params(worker_l1_size=_worker_l1_size()),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id=f"{variant_name}-shape-4x4-sp1",
+        )
+        for variant_name in SPARSE_VARIANTS
+    ],
     pytest.param(
         "glm_5_3",
         (4, 4),
-        torus_x_device_params(worker_l1_size=_worker_l1_size()),
+        torus_xy_device_params(worker_l1_size=_worker_l1_size()),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-        id="glm_5_3-shape-4x4-sp1",
+        id="glm_5_3-shape-xy4-sp1",
     ),
 ]
 
@@ -1327,7 +1337,8 @@ SPARSE_SP1_MESH_CASES = [
 # SP on mesh axis 1: every full-mesh step (KVPE gather, fused indexer) must order chips SP-major, which
 # is column-major here. Non-square meshes, because a square one (the 4x4 tray half) cannot tell a
 # transposed order from the right one. TP stays <= 4: the indexer's TP gather needs index_head_dim / tp
-# (128 / tp) to be whole tiles, so 8x4 at SP on axis 1 (TP=8) is not a valid GLM layout.
+# (128 / tp) to be whole tiles, so 8x4 at SP on axis 1 (TP=8) is not a valid GLM layout. Each variant runs
+# its main KVPE cache format (SPARSE_MAIN_KV_FORMAT), the one it serves with.
 @pytest.mark.parametrize(
     "variant, mesh_device, device_params",
     SPARSE_SP1_MESH_CASES,
@@ -1335,14 +1346,12 @@ SPARSE_SP1_MESH_CASES = [
 )
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
-@pytest.mark.parametrize("cache_format", [MlaKvCacheFormat.BF16_RM], ids=["kv_bf16"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_chunked_sp_axis_1(
     mesh_device,
     seq_len,
     chunk,
-    cache_format,
     device_params,
     variant,
     config_only,
@@ -1357,7 +1366,7 @@ def test_sparse_mla_chunked_sp_axis_1(
         mesh_device,
         seq_len,
         chunk,
-        cache_format,
+        SPARSE_MAIN_KV_FORMAT[variant.name],
         ds_layer,
         ds_checkpoint,
         ds_repo,
@@ -1366,20 +1375,38 @@ def test_sparse_mla_chunked_sp_axis_1(
     )
 
 
+# The cases each variant runs at SP on axis 0, minus determinism for K3.1, which
+# test_sparse_mla_determinism.py owns at production shapes (8x4 and the 4x4 stage). The rest are GLM's alone:
+# indexer reuse needs a shared indexer layer, and kv_only and rotated run GLM only at SP on axis 0 too.
+SPARSE_SP1_CASES = {
+    "glm_5_3": (
+        "accuracy",
+        "determinism",
+        "indexer_reuse",
+        "indexer_reuse_push_off",
+        "kv_only",
+        "pad_overflow",
+        "rotated",
+    ),
+    "kimi_k3_1": ("accuracy", "pad_overflow"),
+}
+
+
 # The remaining sparse cases at SP on mesh axis 1, on the same meshes as test_sparse_mla_chunked_sp_axis_1,
-# with the arguments their sp_axis=0 tests use.
+# with the arguments their sp_axis=0 tests use, in the variant's main KVPE cache format.
 @pytest.mark.parametrize(
     "variant, mesh_device, device_params",
     SPARSE_SP1_MESH_CASES,
     indirect=["variant", "mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("case", ["accuracy", "determinism", "indexer_reuse", "kv_only", "pad_overflow", "rotated"])
+@pytest.mark.parametrize("case", SPARSE_SP1_CASES["glm_5_3"])
+@pytest.mark.uncollect_if(pred=lambda variant, case, **_: case not in SPARSE_SP1_CASES[variant])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_sp_axis_1(
-    mesh_device, device_params, case, variant, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input
+    mesh_device, device_params, case, variant, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input, monkeypatch
 ):
-    seq_len, chunk, fmt = 5120, 1024, MlaKvCacheFormat.BF16_RM
+    seq_len, chunk, fmt = 5120, 1024, SPARSE_MAIN_KV_FORMAT[variant.name]
     topology = per_axis_topology(device_params["fabric_config"])
     ds = (ds_layer, ds_checkpoint, ds_repo)
     if case == "accuracy":
@@ -1387,6 +1414,11 @@ def test_sparse_mla_sp_axis_1(
     elif case == "determinism":
         run_sparse_mla_determinism_case(variant, config_only, mesh_device, seq_len, 3, topology, *ds, sp_axis=1)
     elif case == "indexer_reuse":
+        run_sparse_mla_indexer_reuse_case(variant, config_only, mesh_device, seq_len, device_params, *ds, sp_axis=1)
+    elif case == "indexer_reuse_push_off":
+        # The same compute-vs-inject check with shared layers gathering the whole prefix instead of receiving it
+        # through the sparse KV push, which isolates the push on meshes that enable it.
+        monkeypatch.setattr(mla_module, "sparse_kv_push_supported", lambda *_: False)
         run_sparse_mla_indexer_reuse_case(variant, config_only, mesh_device, seq_len, device_params, *ds, sp_axis=1)
     elif case == "kv_only":
         run_sparse_mla_kv_only_case(variant, config_only, mesh_device, seq_len, chunk, fmt, *ds, sp_axis=1)

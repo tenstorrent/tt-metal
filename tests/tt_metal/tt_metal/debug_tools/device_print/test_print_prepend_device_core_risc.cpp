@@ -20,7 +20,7 @@
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include "distributed/mesh_device_impl.hpp"

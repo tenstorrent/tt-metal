@@ -134,12 +134,6 @@ inline void expect_cache(std::size_t entries_before, CacheExpectation expectatio
     }
 }
 
-// A later launch must not write into an earlier launch's tensors: `tensor` still holds `snapshot`.
-inline void expect_unchanged(const ttnn::Tensor& tensor, const xt::xarray<float>& snapshot, const std::string& label) {
-    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(tensor), snapshot)))
-        << label << " changed after a later launch";
-}
-
 // Equal bits: tells -0 from 0, and a NaN equals the same NaN.
 inline bool same_bits(float a, float b) {
     return std::bit_cast<uint32_t>(a) == std::bit_cast<uint32_t>(b);
@@ -155,6 +149,13 @@ inline std::size_t count_bit_mismatches(const xt::xarray<float>& expected, const
         mismatches += static_cast<std::size_t>(!same_bits(expected.flat(i), actual.flat(i)));
     }
     return mismatches;
+}
+
+// A later launch must not write into an earlier launch's tensors: `tensor` still holds `snapshot`, bit for bit, so
+// memory the op never writes still compares equal when it holds a NaN.
+inline void expect_unchanged(const ttnn::Tensor& tensor, const xt::xarray<float>& snapshot, const std::string& label) {
+    EXPECT_EQ(count_bit_mismatches(snapshot, ttml::core::to_xtensor(tensor)), 0U)
+        << label << " changed after a later launch";
 }
 
 // A suite that opens the device once for all of its tests.

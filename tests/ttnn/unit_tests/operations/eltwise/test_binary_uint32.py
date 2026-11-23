@@ -481,6 +481,86 @@ def test_bitwise_uint32_full_range(device, ttnn_function):
 
 
 @pytest.mark.parametrize(
+    "ttnn_function, torch_function",
+    [
+        (ttnn.bitwise_and, torch.bitwise_and),
+        (ttnn.bitwise_or, torch.bitwise_or),
+        (ttnn.bitwise_xor, torch.bitwise_xor),
+    ],
+)
+@pytest.mark.parametrize("scalar", [0, 1, 2147483647, 2147483648, 3000000000, 4294967294, 4294967295])
+# RELU is an identity on UINT32 and forces the binary_ng tensor-scalar path instead of the unary SFPU path.
+@pytest.mark.parametrize("lhs_activations", [None, [ttnn.UnaryOpType.RELU]])
+def test_bitwise_uint32_scalar_full_range(device, ttnn_function, torch_function, scalar, lhs_activations):
+    x_int64 = torch.linspace(0, 4294967295, 32 * 64, dtype=torch.float64).to(torch.int64)
+    x_int64[:4] = torch.tensor([2147483648, 2147483649, 4294967294, 4294967295])
+    golden = torch_function(x_int64, scalar).reshape(32, 64)
+
+    x_tt = ttnn.from_torch(
+        x_int64.to(torch.uint32).reshape(32, 64), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    kwargs = {} if lhs_activations is None else {"input_tensor_a_activations": lhs_activations}
+    tt_out = ttnn.to_torch(ttnn_function(x_tt, scalar, **kwargs), dtype=torch.uint32)
+
+    assert torch.equal(golden, tt_out.to(torch.int64))
+
+
+@pytest.mark.parametrize(
+    "ttnn_function, torch_function",
+    [
+        (ttnn.bitwise_and, torch.bitwise_and),
+        (ttnn.bitwise_or, torch.bitwise_or),
+        (ttnn.bitwise_xor, torch.bitwise_xor),
+    ],
+)
+@pytest.mark.parametrize("scalar", [0, 1, 0x5E00, 0xFFFF])
+@pytest.mark.parametrize("lhs_activations", [None, [ttnn.UnaryOpType.RELU]])
+def test_bitwise_uint16_scalar_full_range(device, ttnn_function, torch_function, scalar, lhs_activations):
+    x_torch = torch.arange(0, 65536, 32, dtype=torch.int32).reshape(32, 64)
+    x_torch[0, :4] = torch.tensor([0, 1, 0x1234, 65535])
+    golden = torch_function(x_torch.to(torch.int64), scalar)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {} if lhs_activations is None else {"input_tensor_a_activations": lhs_activations}
+    tt_out = ttnn.to_torch(ttnn_function(x_tt, scalar, **kwargs)).to(torch.int64)
+
+    assert torch.equal(golden, tt_out)
+
+
+@pytest.mark.parametrize("ttnn_function", [ttnn.bitwise_and, ttnn.bitwise_or, ttnn.bitwise_xor])
+@pytest.mark.parametrize("scalar", [65536, 2147483647, 2147483648, 3000000000, 4294967295, -1, -2147483648])
+def test_bitwise_uint16_rejects_scalar_out_of_range(device, expect_error, ttnn_function, scalar):
+    x_tt = ttnn.from_torch(
+        torch.ones(32, 32, dtype=torch.int32), dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "on a UINT16 tensor requires a scalar in") as exc_info:
+        ttnn_function(x_tt, scalar)
+    assert f"65535], got {scalar}." in str(exc_info.value)
+
+
+@pytest.mark.parametrize("ttnn_function", [ttnn.bitwise_and, ttnn.bitwise_or, ttnn.bitwise_xor])
+@pytest.mark.parametrize("scalar", [2147483648, 3000000000, 4294967295])
+def test_bitwise_int32_rejects_scalar_out_of_range(device, expect_error, ttnn_function, scalar):
+    x_tt = ttnn.from_torch(
+        torch.ones(32, 32, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "on an INT32 tensor requires a scalar in") as exc_info:
+        ttnn_function(x_tt, scalar)
+    assert f"2147483647], got {scalar}." in str(exc_info.value)
+
+
+@pytest.mark.parametrize("ttnn_function", [ttnn.bitwise_and, ttnn.bitwise_or, ttnn.bitwise_xor])
+@pytest.mark.parametrize("scalar", [-1, -32, -2147483648])
+def test_bitwise_uint32_rejects_negative_scalar(device, expect_error, ttnn_function, scalar):
+    x_tt = ttnn.from_torch(
+        torch.ones(32, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "on a UINT32 tensor requires a scalar in") as exc_info:
+        ttnn_function(x_tt, scalar)
+    assert f"4294967295], got {scalar}." in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
     "ttnn_op",
     [
         ttnn.eq,

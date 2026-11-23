@@ -39,7 +39,7 @@
 #include "host_api.hpp"
 #include "mesh_config.hpp"
 #include "mesh_trace.hpp"
-#include "profiler_types.hpp"
+#include <tt-metalium/profiler_types.hpp>
 #include <experimental/fabric/routing_table_generator.hpp>
 #include "shape_base.hpp"
 #include <tt_stl/cleanup.hpp>
@@ -61,7 +61,7 @@
 #include "impl/dispatch/kernel_config/tensor_prefetcher.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
-#include <env_lib.hpp>
+#include "common/env_lib.hpp"
 
 #include "allocator/l1_banking_allocator.hpp"
 #include "impl/device/mock_allocator.hpp"

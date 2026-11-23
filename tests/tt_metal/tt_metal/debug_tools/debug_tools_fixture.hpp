@@ -8,7 +8,7 @@
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 
 #include "debug_tools_test_utils.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include <impl/debug/dprint_server.hpp>
 #include <impl/debug/watcher_server.hpp>
 #include <sys/mman.h>

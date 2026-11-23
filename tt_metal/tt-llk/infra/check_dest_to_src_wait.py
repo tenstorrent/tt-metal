@@ -34,6 +34,7 @@ import argparse
 import glob
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -45,6 +46,11 @@ TREE_GLOB = os.path.join(LLK, "tt_llk_*", "**", "*.h")
 COPIES_GLOB = os.path.join(
     LLK, "..", "..", "ttnn", "**", "kernel_includes", "**", "*.h"
 )
+REPO = os.path.normpath(os.path.join(LLK, "..", ".."))
+# The same two globs as git pathspecs, relative to REPO.
+LLK_PATHSPEC = ":(glob)tt_metal/tt-llk/tt_llk_*/**/*.h"
+COPIES_PATHSPEC = ":(glob)ttnn/**/kernel_includes/**/*.h"
+TREE_PATHSPECS = (LLK_PATHSPEC, COPIES_PATHSPEC)
 
 # (move, the valid bit that must be waited on)
 PAIRS = (("MOVD2A", "SRCA_VLD"), ("MOVD2B", "SRCB_VLD"))
@@ -164,7 +170,11 @@ def wait_providers(paths):
         kind: {vld: set() for _, vld in PAIRS} for kind in ("full", "vld_only")
     }
     for path in paths:
-        src = open(path, errors="ignore").read()
+        try:
+            with open(path, errors="ignore") as f:
+                src = f.read()
+        except OSError:
+            continue
         if "STALLWAIT" not in src or "_VLD" not in src:
             continue
         lines = _blank_noncode(src).split("\n")
@@ -197,7 +207,11 @@ def scan(path, providers):
     `kind` is "none" (no wait on the bank at all) or "vld_only" (a wait on the valid bit that
     does not drain math).
     """
-    src = open(path, errors="ignore").read()
+    try:
+        with open(path, errors="ignore") as f:
+            src = f.read()
+    except OSError:
+        return
     if "MOVD2" not in src:
         return
     code = _blank_noncode(src)
@@ -242,6 +256,109 @@ def scan(path, providers):
             yield line + 1, move, vld, kind, lines[sig].strip()[:76]
 
 
+def _git_ls_files(*args):
+    # utf-8 with surrogateescape: a filename git lists that is not valid UTF-8 must not raise.
+    # This hook only warns, so a bad name has to be skipped or escaped, never abort the commit.
+    # os.fsencode turns the surrogates back into the original bytes, so the path still opens.
+    res = subprocess.run(
+        ["git", "-C", REPO, "ls-files", "-z", *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="surrogateescape",
+    )
+    if res.returncode != 0:
+        return None
+    return [
+        os.path.normpath(os.path.join(REPO, p)) for p in res.stdout.split("\0") if p
+    ]
+
+
+def _printable(path):
+    """A path that can be written to a UTF-8 stream. An undecodable name is escaped."""
+    return os.fsencode(path).decode("utf-8", "backslashreplace")
+
+
+def _copy_dir(path):
+    """The ``kernel_includes`` directory that contains ``path``, relative to the repo."""
+    rel = path.replace("\\", "/")
+    if os.path.isabs(rel):
+        rel = os.path.relpath(rel, REPO).replace("\\", "/")
+    if rel.startswith("../"):
+        return None
+    marker = "/kernel_includes/"
+    at = rel.find(marker)
+    if at >= 0:
+        return rel[: at + len(marker) - 1]
+    if rel == "kernel_includes" or rel.endswith("/kernel_includes"):
+        return rel
+    return None
+
+
+def tree_headers(files=()):
+    """The LLK headers and their ttnn copies. Listed from git when it can answer.
+
+    ``--cached`` reads the index and does not walk ``ttnn/``. An explicit-file run lists
+    untracked headers under the LLK tree, under ``kernel_includes/`` directories already in
+    the index, and under a ``kernel_includes/`` directory named by one of ``files``. Walking
+    ``ttnn/`` for a copy directory that nobody has named takes several seconds on a network
+    mount, so that query is reserved for a whole-tree run, which passes no files.
+    """
+    try:
+        tracked = _git_ls_files("--cached", "--", *TREE_PATHSPECS)
+        if tracked is not None:
+            copy_dirs = {d for p in tracked if (d := _copy_dir(p))}
+            copy_dirs.update(d for p in files if (d := _copy_dir(p)))
+            # No file arguments: a whole-tree scan has to see a copy directory that is not
+            # indexed yet. The copies pathspec is what walks ttnn/.
+            untracked_specs = (
+                TREE_PATHSPECS
+                if not files
+                else (LLK_PATHSPEC, *(f":(glob){d}/**/*.h" for d in sorted(copy_dirs)))
+            )
+            untracked = _git_ls_files(
+                "--others",
+                "--exclude-standard",
+                "--",
+                *untracked_specs,
+            )
+            if untracked is not None:
+                combined = set(tracked) | set(untracked)
+                # ls-files --cached still names a header after it is deleted in the work tree.
+                # Opening that path raises, so keep only files that are still there.
+                present = sorted(path for path in combined if os.path.isfile(path))
+                if present:
+                    return present
+    except (OSError, UnicodeError):
+        pass
+    return sorted(
+        os.path.normpath(p)
+        for g in (TREE_GLOB, COPIES_GLOB)
+        for p in glob.glob(g, recursive=True)
+    )
+
+
+def _has_move(path):
+    try:
+        with open(path, errors="ignore") as f:
+            return "MOVD2" in f.read()
+    except OSError:
+        return False
+
+
+# A change to either moves the verdict on every header, not just the ones named on the command
+# line. check_mutex_balance.py is the lexer `_blank_noncode` and `functions` come from.
+_RESCAN_TRIGGERS = {
+    os.path.abspath(__file__),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_mutex_balance.py"),
+}
+
+
+def rescans_all(paths):
+    """True when a path is this checker or the lexer it imports."""
+    return any(os.path.abspath(p) in _RESCAN_TRIGGERS for p in paths)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -251,12 +368,17 @@ def main():
     )
     args = ap.parse_args()
 
-    tree = sorted(
-        os.path.normpath(p)
-        for g in (TREE_GLOB, COPIES_GLOB)
-        for p in glob.glob(g, recursive=True)
-    )
-    files = args.files or tree
+    # No files, or a change to this checker or its lexer: the verdict covers every header,
+    # including a kernel_includes/ directory that is not indexed yet. Passing no files is
+    # what makes tree_headers walk ttnn/ for that directory.
+    whole_tree = not args.files or rescans_all(args.files)
+    # A file without a move has nothing to report, so the whole-tree provider pass is skipped.
+    if not whole_tree and not any(
+        f.endswith((".h", ".hpp")) and _has_move(f) for f in args.files
+    ):
+        return 0
+    tree = tree_headers(() if whole_tree else args.files)
+    files = tree if whole_tree else args.files
     # Wait helpers live in shared headers a commit seldom touches, so find them in the whole tree.
     providers = wait_providers(sorted(set(tree) | set(files)))
 
@@ -266,9 +388,10 @@ def main():
             continue
         for line, move, vld, kind, head in scan(path, providers):
             n += 1
+            where = _printable(path)
             if kind == "vld_only":
                 print(
-                    f"{path}:{line}: warning: {move} behind a {vld} wait that does not drain"
+                    f"{where}:{line}: warning: {move} behind a {vld} wait that does not drain"
                     " math (no p_stall::MATH)"
                 )
                 print(f"  in: {head}")
@@ -279,7 +402,7 @@ def main():
                 )
             else:
                 print(
-                    f"{path}:{line}: warning: {move} with no {vld} wait before it in this function"
+                    f"{where}:{line}: warning: {move} with no {vld} wait before it in this function"
                 )
                 print(f"  in: {head}")
                 print(

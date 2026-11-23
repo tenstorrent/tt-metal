@@ -103,7 +103,7 @@ ExchangeRoute exchange_route(const ttnn::MeshDevice& device, const ttnn::MeshCoo
     route.backward_range = ring ? sp_size - 1 - sp_size / 2 : rank;
     route.successor_connection = successor_forward ? route.forward_connection : route.backward_connection;
     route.successor_hops = successor_forward ? 1 : sp_size - 1;
-    route.unicast_peers = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
+    route.unicast_peers = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(device)) &&
                           !ttnn::ccl::is_axis_straight(device, axis);
     if (route.unicast_peers) {
         const auto source = device.get_fabric_node_id(coordinate);
