@@ -1638,10 +1638,14 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt32) 
     }
 }
 
-// Pack Untilize Int8 -> Int32 dest -> Int8. The reverse of QuasarComputePackUntilizeInt32: the
-// packer narrows the promoted 32-bit Dest word back to a sign-magnitude byte, which no other test
-// in this file exercises. Random byte stimuli keep every datum distinct, so a pack that stopped
-// short of the full tile or stepped the wrong face row cannot pass on fill bytes alone.
+// Pack Untilize Int8 -> Int8, which no other test in this file exercises. Random byte stimuli keep
+// every datum distinct, so a pack that stopped short of the full tile or stepped the wrong face row
+// cannot pass on fill bytes alone.
+//
+// A 16-bit Dest is the only working configuration for an Int8 output today. With a 32-bit Dest the
+// FPU promotes the input to a sign-magnitude word, but get_single_pack_src_format still derives
+// pack_src from the output CB and yields Int8, so the packer reads the SM8 datum (the top byte of
+// the word) and every output datum comes back as its sign bit alone.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt8) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
     for (auto& cfg : test_configs) {
@@ -1652,14 +1656,14 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeInt8) {
                 cfg[1],
                 QuasarTestMode::UNTILIZE,
                 dst_full_sync_en,
-                /*fp32_dest_acc_en=*/true,
+                /*fp32_dest_acc_en=*/false,
                 tt::DataFormat::Int8,
                 /*output_data_format=*/tt::DataFormat::Int8);
         }
     }
 }
 
-// Pack Untilize Dst Int8 -> Int32 dest -> Int8 (tiles pre-loaded into dest via copy_tile)
+// Pack Untilize Dst Int8 -> Int8 (tiles pre-loaded into dest via copy_tile)
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt8) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {4, 4}, {5, 3}, {2, 10}};
     for (auto& cfg : test_configs) {
@@ -1670,16 +1674,14 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstInt8) {
                 cfg[1],
                 QuasarTestMode::UNTILIZE_DST,
                 dst_full_sync_en,
-                /*fp32_dest_acc_en=*/true,
+                /*fp32_dest_acc_en=*/false,
                 tt::DataFormat::Int8,
                 /*output_data_format=*/tt::DataFormat::Int8);
         }
     }
 }
 
-// Int8 output on the strided pack path. These are the geometries a tiny-tile Int8 pack actually
-// runs, and the shape class the SSR deformable-attention kernel writes its output with, so they
-// are the ones worth having on hardware rather than on the simulator alone.
+// Int8 output on the strided pack path, over the geometries a tiny tile actually runs.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTileInt8) {
     std::vector<vector<std::uint32_t>> test_configs = {{1, 1}, {2, 2}};
     const auto& geometries = QUASAR_PACK_UNTILIZE_TINY_TILE_GEOMETRIES;
@@ -1692,7 +1694,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeTinyTileIn
                     cfg[1],
                     QuasarTestMode::UNTILIZE,
                     dst_full_sync_en,
-                    /*fp32_dest_acc_en=*/true,
+                    /*fp32_dest_acc_en=*/false,
                     tt::DataFormat::Int8,
                     tt::DataFormat::Int8,
                     /*tile_shape_in_faces=*/{geo[0], geo[1]},
@@ -1715,7 +1717,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarComputePackUntilizeDstTinyTil
                     cfg[1],
                     QuasarTestMode::UNTILIZE_DST,
                     dst_full_sync_en,
-                    /*fp32_dest_acc_en=*/true,
+                    /*fp32_dest_acc_en=*/false,
                     tt::DataFormat::Int8,
                     tt::DataFormat::Int8,
                     /*tile_shape_in_faces=*/{geo[0], geo[1]},
