@@ -118,12 +118,10 @@ def component_bytes(mesh: Mesh) -> dict[str, int]:
         "dense_ffn": dense_ffn,
         "embedding": vocab_table,
         "lm_head": vocab_table,
-        "mtp_eh_proj": 2 * C.EMB_SIZE // tp * C.EMB_SIZE * 2,
+        "mtp_eh_proj": 2 * C.EMB_SIZE // tp * C.EMB_SIZE * 2,  # [12288 / tp, 6144] bf16
         # A trunk-only last rank builds its last layer kv-only (prefill_runner.py kv_only_last_layer): attn_norm and
         # the KV projection, no Q/O, wkv_b, indexer or FFN.
-        "mla_kv_only": BFP8_TILE * _tiles(h, C.KV_LORA_RANK + C.QK_ROPE_HEAD_DIM)
-        + 16 * 32 * 2
-        + 48 * 32 * 2,  # [12288 / tp, 6144] bf16
+        "mla_kv_only": BFP8_TILE * _tiles(h, C.KV_LORA_RANK + C.QK_ROPE_HEAD_DIM) + 16 * 32 * 2 + 48 * 32 * 2,
         # GLM-5.4 damp gate (A1): RMSNorm gain + Linear(6144 -> width) + bias, bf16. Synthetic weights use the
         # scalar width; a per-channel gate [6144, 6144] would add at most 75.5 MB per chip if replicated.
         "damp_gate": (C.EMB_SIZE + C.EMB_SIZE * 1 + 1) * 2,
