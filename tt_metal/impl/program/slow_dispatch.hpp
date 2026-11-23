@@ -24,21 +24,35 @@ class KernelConfigBufferImpl;
 // `force_slow_dispatch` allows mixing with an active fast dispatch session (advanced feature, used internally to launch
 // dispatch firmware, fabric, and profiler programs).
 //
-// `kernel_config_buffer`, when given, holds the program's Tensix kernel-config blocks in place of the HAL KERNEL_CONFIG
-// window, each core's at its own address (experimental::EnqueueMeshWorkload with a KernelConfigBuffer).
+// `kernel_config_buffer`, when given, holds the program's Tensix kernel binaries in place of the HAL KERNEL_CONFIG
+// window, each core's at its own address (experimental::EnqueueMeshWorkload with a KernelConfigBuffer). The rest of
+// the kernel-config block (runtime args, semaphores, CB and DFB configs) stays in the window.
 namespace tt::tt_metal::slow_dispatch {
 
-// Where `logical_core`'s kernel-config block starts on `device_id`: its shard of `kernel_config_buffer` for a Tensix
-// core when one is given, otherwise the HAL KERNEL_CONFIG address of the core type.
-uint32_t GetKernelConfigBase(
+// The address `logical_core`'s kernel text offsets count from on `device_id`: the HAL KERNEL_CONFIG address of the
+// core type, or, for a Tensix core with a `kernel_config_buffer`, the address that puts the program's text section at
+// the start of the core's shard.
+uint32_t GetKernelTextBase(
     const Hal& hal,
+    const Program& program,
+    uint32_t programmable_core_type_index,
+    ChipId device_id,
+    const CoreCoord& logical_core,
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer);
+
+// Points the kernel text offsets of `launch_msg`, a copy of `logical_core`'s kernel group's, at the core's shard of
+// `kernel_config_buffer`. Does nothing without a buffer or for a non-Tensix core.
+void SetKernelTextOffsets(
+    dev_msgs::launch_msg_t& launch_msg,
+    const Hal& hal,
+    const Program& program,
     uint32_t programmable_core_type_index,
     ChipId device_id,
     const CoreCoord& logical_core,
     const experimental::KernelConfigBufferImpl* kernel_config_buffer);
 
 // Compiles `program` for `device` and lays out its kernel-config blocks, once. Checks no size limit: launch checks the
-// blocks against the KERNEL_CONFIG window or a kernel config buffer.
+// blocks against the KERNEL_CONFIG window, and the kernel binaries against a kernel config buffer when one is given.
 void PrepareProgram(IDevice& device, Program& program);
 
 // Allocates circular / dataflow buffers and writes kernel binaries and configs to the device.

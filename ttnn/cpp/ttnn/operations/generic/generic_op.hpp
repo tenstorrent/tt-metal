@@ -93,9 +93,8 @@ void prepare_generic_op(
 uint64_t compute_program_spec_hash(const ProgramSpec& spec);
 
 // Compiles and lays out the program that generic_op would enqueue, into a CompiledProgram, without enqueueing it or
-// touching the program cache (ttnn::device_operation::compile). In slow dispatch its kernel-configuration blocks may
-// outgrow the KERNEL_CONFIG window, to run from a kernel config buffer
-// (ttnn::device_operation::create_kernel_config_buffer).
+// touching the program cache (ttnn::device_operation::compile). In slow dispatch its kernel binaries may outgrow the
+// KERNEL_CONFIG window, to run from a kernel config buffer (ttnn::device_operation::create_kernel_config_buffer).
 ttnn::device_operation::CompiledProgram compile_generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor);
@@ -105,8 +104,7 @@ ttnn::device_operation::CompiledProgram compile_generic_op(
 // generic_op, launching `compiled` (from compile_generic_op) instead of a program from the program cache: the
 // descriptor's runtime arguments, and the buffers of its CBs, are applied to it as a cache hit applies them
 // (ttnn::device_operation::run). The descriptor must have the program cache key of the one `compiled` was compiled
-// from. `kernel_config_buffer`, when given, holds the Tensix kernel-configuration blocks instead of the KERNEL_CONFIG
-// window.
+// from. `kernel_config_buffer`, when given, holds the Tensix kernel binaries instead of the KERNEL_CONFIG window.
 Tensor run_compiled_program(
     ttnn::device_operation::CompiledProgram& compiled,
     const std::vector<Tensor>& io_tensors,

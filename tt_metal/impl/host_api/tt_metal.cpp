@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include "impl/allocator/allocator.hpp"
 #include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
 #include <tt_stl/assert.hpp>
@@ -328,11 +329,14 @@ void ConfigureProgramWithoutLaunch(
             auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
             dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
             local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
-            if (kernel_config_buffer != nullptr) {
-                local_launch_msg.view().kernel_config().kernel_config_base()[programmable_core_type_index] =
-                    GetKernelConfigBase(
-                        hal, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
-            }
+            SetKernelTextOffsets(
+                local_launch_msg,
+                hal,
+                program,
+                programmable_core_type_index,
+                device_id,
+                logical_core,
+                kernel_config_buffer);
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             slow_dispatch::WriteLaunchMsgToCore(
                 *device, physical_core, local_launch_msg.view(), kg->go_msg.view(), /*send_go=*/false);
@@ -400,11 +404,14 @@ void DispatchCompiledProgram(
             // Use a thread-local copy of launch_msg to avoid racing on the shared KernelGroup state
             dev_msgs::launch_msg_t local_launch_msg = kg->launch_msg;
             local_launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
-            if (kernel_config_buffer != nullptr) {
-                local_launch_msg.view().kernel_config().kernel_config_base()[programmable_core_type_index] =
-                    GetKernelConfigBase(
-                        hal, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
-            }
+            SetKernelTextOffsets(
+                local_launch_msg,
+                hal,
+                program,
+                programmable_core_type_index,
+                device_id,
+                logical_core,
+                kernel_config_buffer);
 
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             slow_dispatch::WriteLaunchMsgToCore(
@@ -466,6 +473,12 @@ CapturedKernelConfig CaptureKernelConfig(IDevice* device, const CoreCoord& logic
     for (uint32_t i = 0; i < kc.kernel_text_offset().size(); i++) {
         kernel_config_size = std::max(kernel_config_size, kc.kernel_text_offset()[i] + kc.kernel_text_size()[i]);
     }
+    // Binaries run from a kernel config buffer (experimental::EnqueueMeshWorkload) sit past the window, and stay
+    // there: capture only the window, which holds the rest of the kernel config.
+    const uint32_t window_size = static_cast<uint32_t>(
+        device->allocator_impl()->get_config().l1_unreserved_base -
+        hal.get_dev_addr(core_type, HalL1MemAddrType::KERNEL_CONFIG));
+    kernel_config_size = std::min(kernel_config_size, window_size);
 
     std::vector<uint8_t> launch_kernel_config(kc.size());
     std::memcpy(launch_kernel_config.data(), kc.data(), kc.size());

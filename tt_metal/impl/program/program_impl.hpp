@@ -144,10 +144,9 @@ struct ProgramConfig {
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
 
-// Bytes from kernel_config_base to the end of `kernel_group`'s part of the kernel-config block: its
-// packed kernel text, or the start of the text section when the group packs none. Each core needs
-// only its group's footprint; the program's block size is the largest footprint.
-uint32_t kernel_config_footprint(const KernelGroup& kernel_group, const ProgramConfig& program_config);
+// Bytes of `kernel_group`'s packed kernel text, from the start of the program's text section: what a
+// core of the group needs in a kernel config buffer.
+uint32_t kernel_text_footprint(const KernelGroup& kernel_group, const ProgramConfig& program_config);
 
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
 enum class ProgramBinaryStatus : uint8_t {
@@ -275,13 +274,8 @@ public:
     std::vector<CoreRange> dataflow_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
-    // Writes the semaphores' initial values into the block at `kernel_config_base` on `logical_core`: the HAL
-    // KERNEL_CONFIG address, or the core's kernel config buffer address when the program runs from one.
     void init_semaphores(
-        const IDevice& device,
-        const CoreCoord& logical_core,
-        uint32_t programmable_core_type_index,
-        uint64_t kernel_config_base) const;
+        const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
     /// Compiles all kernels in the program for `device`. Binaries are written to
     /// `<cache root>/<build key>/kernels/<kernel name>/<kernel hash>/`, where the cache root is TT_METAL_CACHE
@@ -395,19 +389,11 @@ public:
         const SemaphoresGetter& semaphores_getter,
         ttsl::Span<ProgramImpl*> programs);
 
-    // Throws if this program's kernel-config block does not fit where it runs on `device`: the Tensix
-    // blocks in `kernel_config_buffer` when one is given, every other block in its core type's
-    // KERNEL_CONFIG window. Does nothing for a program that is not finalized.
+    // Throws if this program's kernel-config block does not fit where it runs on `device`: its core
+    // type's KERNEL_CONFIG window, except the Tensix kernel binaries, which go in `kernel_config_buffer`
+    // when one is given. Does nothing for a program that is not finalized.
     void check_kernel_config_fits(
         IDevice* device, const experimental::KernelConfigBufferImpl* kernel_config_buffer = nullptr);
-
-    // Throws if the program has Tensix program semaphores, which a kernel config buffer cannot run: each core's block,
-    // and so each semaphore, sits at a different address.
-    void check_no_tensix_semaphores() const;
-
-    // Whether this program's kernel config fits the KERNEL_CONFIG window of `core_type` on `device`. The program
-    // must be finalized.
-    bool kernel_config_fits_window(IDevice* device, HalProgrammableCoreType core_type) const;
 
     // Marks a fast-dispatch kernels' program. Its Tensix KERNEL_CONFIG window ends at DEFAULT_UNRESERVED, where the
     // dispatch kernels' own L1 starts, rather than at the allocator's l1_unreserved_base, which a large

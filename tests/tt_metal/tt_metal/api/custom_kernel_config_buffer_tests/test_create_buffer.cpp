@@ -71,8 +71,8 @@ TEST_F(CustomKernelConfigBufferTest, CreatesPerCoreBufferForWorkload) {
     EXPECT_NE(buffer.address(kDevice, kBlockedCore), buffer.address(kDevice, kFreeCore));
 }
 
-// Each core's shard is sized for its own kernel group: kFreeCore also runs a second kernel, so its block, and its
-// shard, is larger than kBlockedCore's.
+// Each core's shard is sized for its own kernel group: kFreeCore also runs a second kernel, so its binaries, and its
+// shard, are larger than kBlockedCore's.
 TEST_F(CustomKernelConfigBufferTest, SizesEachCoreForItsKernelGroup) {
     auto& device = *this->devices_[0];
 
@@ -94,22 +94,6 @@ TEST_F(CustomKernelConfigBufferTest, SizesEachCoreForItsKernelGroup) {
 
     EXPECT_LT(buffer.size(kDevice, kBlockedCore), buffer.size(kDevice, kFreeCore));
     EXPECT_EQ(buffer.max_size(), buffer.size(kDevice, kFreeCore));
-}
-
-TEST_F(CustomKernelConfigBufferTest, RejectsProgramSemaphores) {
-    auto& device = *this->devices_[0];
-
-    Program program = CreateProgram();
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
-        CoreRange(kBlockedCore, kFreeCore),
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    CreateSemaphore(program, CoreRange(kBlockedCore, kFreeCore), 0);
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(device.shape()), std::move(program));
-
-    EXPECT_ANY_THROW(experimental::CreateKernelConfigBuffer(device, workload));
 }
 
 }  // namespace tt::tt_metal

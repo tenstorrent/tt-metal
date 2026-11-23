@@ -6,7 +6,7 @@
 
 #include "api/compute/common.h"
 
-// Each TRISC writes back what it read from its kernel-config block, starting at result word `slot`:
+// Each TRISC writes back what it read from its kernel config, starting at result word `slot`:
 // UNPACK, MATH and PACK each write their runtime arg plus 0, 1 and 2, then UNPACK writes a common
 // runtime arg.
 //

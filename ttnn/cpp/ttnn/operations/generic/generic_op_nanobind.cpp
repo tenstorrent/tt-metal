@@ -294,7 +294,7 @@ void bind_generic_operation_compilation(nb::module_& mod) {
         not part of the key (whether a CB has a backing buffer is), so each run may name other tensors and buffers.
 
         In slow dispatch the program's kernel-configuration blocks are not checked against the KERNEL_CONFIG window
-        here: a program too large for it runs from a kernel config buffer
+        here: a program whose kernel binaries make it too large for the window runs them from a kernel config buffer
         (``ttnn.experimental.create_kernel_config_buffer``), and running it without one fails.
 
         Args:
@@ -337,16 +337,17 @@ void bind_generic_operation_compilation(nb::module_& mod) {
             mesh_program_descriptor (ttnn.MeshProgramDescriptor): The per-device programs, with this run's runtime
                 arguments. Pass exactly one of ``program_descriptor`` and ``mesh_program_descriptor``; it must have
                 the program cache key of the descriptor the program was compiled from.
-            kernel_config_buffer (ttnn.experimental.KernelConfigBuffer, optional): Run the Tensix
-                kernel-configuration blocks from this buffer instead of the KERNEL_CONFIG window. Slow dispatch only.
+            kernel_config_buffer (ttnn.experimental.KernelConfigBuffer, optional): Run the Tensix kernel binaries
+                from this buffer instead of the KERNEL_CONFIG window. Slow dispatch only.
 
         Returns:
             ttnn.Tensor: Handle to the output tensor.
 
         Raises:
             RuntimeError: If the descriptor or tensors have a different program cache key than the compiled ones,
-                if the kernel-configuration blocks do not fit the KERNEL_CONFIG window or the kernel config buffer,
-                or if a kernel config buffer is given while a CommandListBuilder records on this thread.
+                if the kernel configuration does not fit the KERNEL_CONFIG window or the kernel binaries do not fit
+                the kernel config buffer, or if a kernel config buffer is given while a CommandListBuilder records on
+                this thread.
         )doc";
     ttnn::bind_function<"run_compiled_program", "ttnn.experimental.">(
         mod,

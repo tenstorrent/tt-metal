@@ -36,8 +36,9 @@ void py_module(nb::module_& mod) {
             "The device operation it was compiled from.");
 
     nb::class_<tt::tt_metal::experimental::KernelConfigBuffer>(mod, "KernelConfigBuffer", R"doc(
-            L1 that a compiled program's Tensix kernel-configuration blocks run from, at a per-core address, instead
-            of the KERNEL_CONFIG window. Slow dispatch only. Experimental API; may change.
+            L1 that a compiled program's Tensix kernel binaries run from, at a per-core address, instead of the
+            KERNEL_CONFIG window. The rest of the kernel configuration stays in the window. Slow dispatch only.
+            Experimental API; may change.
         )doc")
         .def_prop_ro(
             "max_size",
@@ -50,14 +51,13 @@ void py_module(nb::module_& mod) {
 
     const char* doc = R"doc(
         Allocate a kernel config buffer for a compiled program: L1 on its Tensix cores, each core's shard sized for
-        its own kernel group's Tensix kernel-configuration block, at a per-core address.
+        its own kernel group's Tensix kernel binaries, at a per-core address.
 
-        Pass it to the program's run function to launch the program from it instead of the KERNEL_CONFIG window,
-        whose size then does not limit the program. The L1 is freed by ``deallocate()`` or when the buffer is
-        garbage collected.
+        Pass it to the program's run function to run the binaries from it instead of the KERNEL_CONFIG window, whose
+        size then limits only the rest of the kernel configuration: runtime arguments, semaphores, and CB and DFB
+        configs. The L1 is freed by ``deallocate()`` or when the buffer is garbage collected.
 
-        Needs slow dispatch and the device opened with ``TT_METAL_ALLOCATOR_MODE_HYBRID=1``. Rejects programs with
-        Tensix program semaphores.
+        Needs slow dispatch and the device opened with ``TT_METAL_ALLOCATOR_MODE_HYBRID=1``.
 
         Args:
             compiled_program (ttnn.experimental.CompiledProgram): The program to size the buffer for.

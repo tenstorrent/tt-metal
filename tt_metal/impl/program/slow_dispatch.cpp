@@ -54,12 +54,12 @@ void ConfigureKernelGroup(
     const KernelGroup* kernel_group,
     IDevice& device,
     const CoreCoord& logical_core,
-    uint32_t kernel_config_base) {
+    uint32_t kernel_text_base) {
     for (auto kernel_id : kernel_group->kernel_ids) {
         // Need the individual offsets of each bin
         // TODO: make configure take a std::span
         program.impl().get_kernel(kernel_id)->configure(
-            &device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets.data());
+            &device, logical_core, kernel_text_base, kernel_group->kernel_text_offsets.data());
     }
 }
 
@@ -110,17 +110,44 @@ bool program_targets_only_dram_cores(const Program& program, const Hal& hal) {
 
 }  // namespace
 
-uint32_t GetKernelConfigBase(
+uint32_t GetKernelTextBase(
     const Hal& hal,
+    const Program& program,
     uint32_t programmable_core_type_index,
     ChipId device_id,
     const CoreCoord& logical_core,
     const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     const HalProgrammableCoreType core_type = hal.get_programmable_core_type(programmable_core_type_index);
-    if (kernel_config_buffer != nullptr && core_type == HalProgrammableCoreType::TENSIX) {
-        return static_cast<uint32_t>(kernel_config_buffer->address(device_id, logical_core));
+    const auto kernel_config_base = static_cast<uint32_t>(hal.get_dev_addr(core_type, HalL1MemAddrType::KERNEL_CONFIG));
+    if (kernel_config_buffer == nullptr || core_type != HalProgrammableCoreType::TENSIX) {
+        return kernel_config_base;
     }
-    return hal.get_dev_addr(core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    // Shifted back by the text section's offset in the block, so the section starts at the shard.
+    return static_cast<uint32_t>(kernel_config_buffer->address(device_id, logical_core)) -
+           program.impl().get_program_config(programmable_core_type_index).kernel_text_offset;
+}
+
+void SetKernelTextOffsets(
+    dev_msgs::launch_msg_t& launch_msg,
+    const Hal& hal,
+    const Program& program,
+    uint32_t programmable_core_type_index,
+    ChipId device_id,
+    const CoreCoord& logical_core,
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
+    if (kernel_config_buffer == nullptr ||
+        hal.get_programmable_core_type(programmable_core_type_index) != HalProgrammableCoreType::TENSIX) {
+        return;
+    }
+    // Firmware finds each binary at kernel_config_base + its offset, in 32-bit arithmetic, so the offset reaches the
+    // shard wherever it is. kernel_config_base stays at KERNEL_CONFIG, where the rest of the block is.
+    const uint32_t shift =
+        GetKernelTextBase(hal, program, programmable_core_type_index, device_id, logical_core, kernel_config_buffer) -
+        static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG));
+    auto kernel_text_offsets = launch_msg.view().kernel_config().kernel_text_offset();
+    for (uint32_t i = 0; i < kernel_text_offsets.size(); i++) {
+        kernel_text_offsets[i] = kernel_text_offsets[i] + shift;
+    }
 }
 
 void PrepareProgram(IDevice& device, Program& program) {
@@ -193,12 +220,10 @@ void ConfigureDeviceWithProgram(
         throw;
     }
 
-    // Where the block lands is known only now: each core type's KERNEL_CONFIG window, except Tensix when it runs
-    // from a kernel config buffer.
-    if (kernel_config_buffer != nullptr) {
-        TT_FATAL(!is_emulated, "A kernel config buffer is not supported on emulated devices");
-        program.impl().check_no_tensix_semaphores();
-    }
+    // Where the kernel binaries land is known only now: each core type's KERNEL_CONFIG window, except Tensix when it
+    // runs them from a kernel config buffer.
+    TT_FATAL(
+        kernel_config_buffer == nullptr || !is_emulated, "A kernel config buffer is not supported on emulated devices");
     program.impl().check_kernel_config_fits(&device, kernel_config_buffer);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
@@ -212,14 +237,19 @@ void ConfigureDeviceWithProgram(
             KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
             CoreCoord physical_core = device.virtual_core_from_logical_core(logical_core, core_type);
             const uint64_t kernel_config_base =
-                GetKernelConfigBase(hal, index, device_id, logical_core, kernel_config_buffer);
+                hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
             // Skip binary writing for emulated mode (JIT compilation happens in execute_program_emulated)
             if (!is_emulated) {
                 ScopedHostTransfer binary_upload(
                     transfer_stats,
                     HostTransferCategory::ProgramBinariesSlowDispatch,
                     transfer_stats->enabled() ? kernel_group_binary_bytes(program, kernel_group, device) : 0);
-                ConfigureKernelGroup(program, kernel_group, device, logical_core, kernel_config_base);
+                ConfigureKernelGroup(
+                    program,
+                    kernel_group,
+                    device,
+                    logical_core,
+                    GetKernelTextBase(hal, program, index, device_id, logical_core, kernel_config_buffer));
             }
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
@@ -333,7 +363,7 @@ void ConfigureDeviceWithProgram(
                 transfer_stats->enabled()
                     ? program.impl().semaphores_on_core(logical_core, core_type).size() * sizeof(uint32_t)
                     : 0);
-            program.impl().init_semaphores(device, logical_core, index, kernel_config_base);
+            program.impl().init_semaphores(device, logical_core, index);
         }
     }
 }
@@ -365,17 +395,13 @@ void WriteRuntimeArgsToDevice(
         uint64_t l1_noc_offset = hal.get_l1_noc_offset(programmable_core_type);
         for (const auto& kg : program.impl().get_kernel_groups(index)) {
             auto kernel_config = kg->launch_msg.view().kernel_config();
+            uint64_t kernel_config_base =
+                static_cast<uint64_t>(kernel_config.kernel_config_base()[index]) + l1_noc_offset;
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core(x, y);
                         auto physical_core = device.virtual_core_from_logical_core(logical_core, core_type);
-                        const uint64_t kernel_config_base =
-                            static_cast<uint64_t>(
-                                kernel_config_buffer != nullptr
-                                    ? GetKernelConfigBase(hal, index, device_id, logical_core, kernel_config_buffer)
-                                    : kernel_config.kernel_config_base()[index]) +
-                            l1_noc_offset;
                         for (auto kernel_id : kg->kernel_ids) {
                             const auto& kernel = program.impl().get_kernel(kernel_id);
                             const auto& rt_args = kernel->runtime_args(logical_core);
@@ -490,13 +516,10 @@ void LaunchProgramAsync(
             auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
             // Raw runtime id matches Tracy / fast dispatch; profiler ingest encodes with device_id once.
             kg->launch_msg.view().kernel_config().host_assigned_id() = program.get_runtime_id();
-            // A copy, so a per-core base never stays in the group's launch message.
+            // A copy, so per-core kernel text offsets never stay in the group's launch message.
             dev_msgs::launch_msg_t launch_msg = kg->launch_msg;
-            if (kernel_config_buffer != nullptr) {
-                launch_msg.view().kernel_config().kernel_config_base()[programmable_core_type_index] =
-                    GetKernelConfigBase(
-                        hal, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
-            }
+            SetKernelTextOffsets(
+                launch_msg, hal, program, programmable_core_type_index, device_id, logical_core, kernel_config_buffer);
 
             auto physical_core = device.virtual_core_from_logical_core(logical_core, core_type);
             if (force_slow_dispatch) {

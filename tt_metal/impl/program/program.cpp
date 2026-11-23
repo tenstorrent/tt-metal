@@ -2830,15 +2830,12 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
 }
 
 void detail::ProgramImpl::init_semaphores(
-    const IDevice& device,
-    const CoreCoord& logical_core,
-    uint32_t programmable_core_type_index,
-    uint64_t kernel_config_base) const {
+    const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
     MetalContext& metal_ctx = MetalContext::instance(context_id_);
     const auto& hal = metal_ctx.hal();
     HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
-    uint64_t addr = kernel_config_base + hal.get_l1_noc_offset(programmable_core_type) +
-                    this->program_configs_[programmable_core_type_index].sem_offset;
+    uint64_t kernel_config_base = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
     CoreType core_type = hal.get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
     for (auto semaphore : semaphores_on_core) {
@@ -3724,8 +3721,9 @@ std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaph
     return semaphores;
 }
 
-uint32_t kernel_config_footprint(const KernelGroup& kernel_group, const ProgramConfig& program_config) {
-    return std::max(program_config.kernel_text_offset, kernel_text_end(kernel_group));
+uint32_t kernel_text_footprint(const KernelGroup& kernel_group, const ProgramConfig& program_config) {
+    return std::max(program_config.kernel_text_offset, kernel_text_end(kernel_group)) -
+           program_config.kernel_text_offset;
 }
 
 bool detail::ProgramImpl::is_finalized() const { return this->finalized_; }
@@ -3990,24 +3988,6 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     return max_program_sizeB;
 }
 
-bool detail::ProgramImpl::kernel_config_fits_window(IDevice* device, HalProgrammableCoreType core_type) const {
-    const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
-    return program_config_sizes_[hal.get_programmable_core_type_index(core_type)] <=
-           get_ringbuffer_size(device, core_type, runs_on_dispatch_cores_);
-}
-
-void detail::ProgramImpl::check_no_tensix_semaphores() const {
-    for (const Semaphore& semaphore : semaphores()) {
-        TT_FATAL(
-            semaphore.core_type() != CoreType::WORKER,
-            "A program run from a kernel config buffer cannot have Tensix program semaphores (semaphore {} on {}): "
-            "each core's block, and so each semaphore, sits at a different address, but a kernel signals a peer's "
-            "semaphore at its own address. Use a global semaphore instead.",
-            semaphore.id(),
-            semaphore.core_range_set());
-    }
-}
-
 void detail::ProgramImpl::check_kernel_config_fits(
     IDevice* device, const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     if (!is_finalized()) {
@@ -4034,40 +4014,17 @@ void detail::ProgramImpl::check_kernel_config_fits(
     const auto& hal = metal_ctx.hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
-        if (kernel_config_buffer != nullptr && programmable_core_type == HalProgrammableCoreType::TENSIX) {
-            // Each core holds only its kernel group's part of the block, in a shard sized for it.
-            const ChipId device_id = device->id();
-            const ProgramConfig& program_config = program.get_program_config(index);
-            for (const auto& kernel_group : kernel_groups_getter(index)) {
-                const uint32_t footprint = kernel_config_footprint(*kernel_group, program_config);
-                for (const CoreCoord& core : corerange_to_cores(kernel_group->core_ranges)) {
-                    const experimental::KernelConfigBufferImpl::Shards* shards =
-                        kernel_config_buffer->find(device_id, core);
-                    TT_FATAL(
-                        shards != nullptr,
-                        "Allocated kernel config buffer has no shard on device {} core {}, "
-                        "where the program runs a kernel",
-                        device_id,
-                        core);
-                    TT_FATAL(
-                        footprint <= shards->size,
-                        "Program size ({}) too large for allocated kernel config buffer ({}) on device {} "
-                        "core {}, {} B over",
-                        footprint,
-                        shards->size,
-                        device_id,
-                        core,
-                        footprint - shards->size);
-                }
-            }
-        } else {
-            const uint32_t size = program.program_config_sizes_[index];
-            const size_t max_size =
-                get_ringbuffer_size(device, programmable_core_type, program.runs_on_dispatch_cores_);
+        const ProgramConfig& config = program.get_program_config(index);
+        // With a kernel config buffer, the Tensix kernel binaries run from it, and the rest of the block, everything
+        // before the text section, stays in the window.
+        const bool binaries_in_buffer =
+            kernel_config_buffer != nullptr && programmable_core_type == HalProgrammableCoreType::TENSIX;
+        const uint32_t size = binaries_in_buffer ? config.kernel_text_offset : program.program_config_sizes_[index];
+        const size_t max_size = get_ringbuffer_size(device, programmable_core_type, program.runs_on_dispatch_cores_);
+        if (size > max_size) {
             // The layout finalize stored on the program, for the breakdown.
-            const ProgramConfig& config = program.get_program_config(index);
             ProgramOffsetsState state;
-            state.offset = size;
+            state.offset = program.program_config_sizes_[index];
             state.rta_offset = config.rta_offset;
             state.sem_offset = config.sem_offset;
             state.sem_size = config.sem_size;
@@ -4080,15 +4037,42 @@ void detail::ProgramImpl::check_kernel_config_fits(
             state.prefetcher_pipe_offset = config.prefetcher_pipe_offset;
             state.kernel_text_offset = config.kernel_text_offset;
             state.kernel_text_size = config.kernel_text_size;
-            TT_FATAL(
-                program.kernel_config_fits_window(device, programmable_core_type),
-                "Program size ({}) too large for kernel config buffer ({}) on {}, {} B over:{}",
+            TT_THROW(
+                "Program size ({}{}) too large for kernel config buffer ({}) on {}, {} B over:{}",
                 size,
+                binaries_in_buffer ? ", without the kernel binaries the allocated kernel config buffer holds" : "",
                 max_size,
                 enchantum::to_string(programmable_core_type),
                 size - max_size,
                 format_rows(program_config_breakdown(
                     metal_ctx, programmable_core_type, state, kernel_groups_getter(index), kernels_getter(index))));
+        }
+        if (!binaries_in_buffer) {
+            continue;
+        }
+        // Each core holds only its kernel group's binaries, in a shard sized for them.
+        const ChipId device_id = device->id();
+        for (const auto& kernel_group : kernel_groups_getter(index)) {
+            const uint32_t footprint = kernel_text_footprint(*kernel_group, config);
+            for (const CoreCoord& core : corerange_to_cores(kernel_group->core_ranges)) {
+                const experimental::KernelConfigBufferImpl::Shards* shards =
+                    kernel_config_buffer->find(device_id, core);
+                TT_FATAL(
+                    shards != nullptr,
+                    "Allocated kernel config buffer has no shard on device {} core {}, where the program runs a "
+                    "kernel",
+                    device_id,
+                    core);
+                TT_FATAL(
+                    footprint <= shards->size,
+                    "Kernel binaries ({}) too large for allocated kernel config buffer ({}) on device {} core {}, {} B "
+                    "over",
+                    footprint,
+                    shards->size,
+                    device_id,
+                    core,
+                    footprint - shards->size);
+            }
         }
     }
 }
