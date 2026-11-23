@@ -1587,6 +1587,9 @@ class ttMLA:
         if not self._q_distnorm or qr.memory_config().buffer_type == ttnn.BufferType.L1:
             ttnn.deallocate(qr)
 
+        if self._early_q_reshard:
+            return self._q_stem_seq_sharded(tt_q, rope_tensors, kv_actual_isl, seq_len_local, metadata)
+
         # The Q stem uses interleaved head creation. Write the two channel regions directly.
         tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
             tt_q,
@@ -1595,8 +1598,6 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(tt_q)
-        if self._early_q_reshard:
-            return self._q_stem_seq_sharded(tt_q_nope, tt_q_rope, rope_tensors, kv_actual_isl, seq_len_local, metadata)
 
         tt_q_nope = ttnn.linear(
             tt_q_nope,
@@ -1624,20 +1625,28 @@ class ttMLA:
         qk_nope + qk_rope wide instead of 576; RoPE writes it row-major for sparse_sdpa. Needs wkv_b1 replicated."""
         return ttMLA.replicates_wkv_b1(self.config, self.tp_factor, self._has_indexer)
 
-    def _q_stem_seq_sharded(self, tt_q_nope, tt_q_rope, rope_tensors, kv_actual_isl, seq_len_local, metadata):
-        """_q_stem after the head split, for _early_q_reshard: all-to-all heads -> sequence, wkv_b1 over all heads on
-        this chip's quarter of the rows, then RoPE with the prefix, row-major. Returns [1, H, S/(sp*tp), 576]."""
-        a2a = lambda t: ttnn.experimental.all_to_all_async_generic(
-            t,
-            in_dim=1,
+    def _q_stem_seq_sharded(self, tt_q, rope_tensors, kv_actual_isl, seq_len_local, metadata):
+        """_q_stem after q_b_proj, for _early_q_reshard: one all-to-all heads -> sequence on the projected rows, the
+        head split over all heads, wkv_b1 over all heads on this chip's 1/tp of the rows, then RoPE with the
+        prefix, row-major. Returns [1, H, S/(sp*tp), 576]."""
+        # [1, 1, S/sp, H/tp*qk] -> [1, 1, S/(sp*tp), H*qk]: each TP rank's head columns are contiguous, so the
+        # concatenation is in global head order.
+        q_seq = ttnn.experimental.all_to_all_async_generic(
+            tt_q,
+            in_dim=3,
             out_dim=2,
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cluster_axis=self.tp_axis,
         )
-        nope_seq, rope_seq = a2a(tt_q_nope), a2a(tt_q_rope)
-        ttnn.deallocate(tt_q_nope)
-        ttnn.deallocate(tt_q_rope)
+        ttnn.deallocate(tt_q)
+        nope_seq, rope_seq = ttnn.experimental.nlp_create_q_heads_split(
+            q_seq,
+            num_heads=self.num_heads,
+            split_head_dim=self.qk_nope_head_dim,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(q_seq)
         # wkv_b1 holds every head here (replicate_wkv_b1).
         prefix = ttnn.linear(nope_seq, self.wkv_b1_weight, **self._early_q_wkv_b1_kwargs(seq_len_local))
         ttnn.deallocate(nope_seq)
