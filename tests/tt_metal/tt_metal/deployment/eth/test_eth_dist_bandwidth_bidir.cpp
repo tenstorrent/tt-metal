@@ -73,7 +73,7 @@ static bool run_test_bandwidth_bidir(
             .program = programs[mesh_device],
             .mesh_device = mesh_device,
             .core = core,
-            .iter_l1_addr = iter_l1_address,
+            .iter_l1_addr = 0,  // TODO iter_l1_address,
             .expected_count = transfer_count,
         },
     };
