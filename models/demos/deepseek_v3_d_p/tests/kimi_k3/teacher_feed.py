@@ -265,6 +265,19 @@ def quantile(t: torch.Tensor, q: float) -> float:
     return float(v[lo] + (v[hi] - v[lo]) * (pos - lo))
 
 
+def error_norms(err_sq: torch.Tensor, ref_sq: torch.Tensor) -> dict:
+    """Absolute error of rows with squared error norms ``err_sq`` (``||x - y||^2``) and squared reference norms
+    ``ref_sq`` (``||y||^2``): the median per-row ``||x - y||`` and ``||y||``, and their RMS over rows. ``rms_err /
+    rms_ref`` is the pooled NRMSE; RMS values of windows combine exactly."""
+    err_sq, ref_sq = err_sq.double(), ref_sq.double()
+    return {
+        "row_err_median": quantile(err_sq.sqrt(), 0.5),
+        "row_ref_median": quantile(ref_sq.sqrt(), 0.5),
+        "rms_err": float(err_sq.mean().sqrt()),
+        "rms_ref": float(ref_sq.mean().sqrt()),
+    }
+
+
 def topk_recall(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
     """Per row the fraction of `want`'s valid (>= 0) keys that occur in `got`, i.e. |got ∩ want| / |want| as sets
     (a key `got` holds twice counts once). Both `[rows, k]` int64; `got`'s no-key entries (the uint32 0xFFFFFFFF

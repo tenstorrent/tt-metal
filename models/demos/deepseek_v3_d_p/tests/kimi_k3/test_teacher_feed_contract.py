@@ -1362,6 +1362,94 @@ def test_dsa_teacher_feed_from_the_chain_scores_against_it(tmp_path: Path, expec
         fp64_chain.load_products(chain, ["attn_output_3"])
 
 
+def _deep_layer3(tmp_path: Path, chain: Path, attn: torch.Tensor) -> Path:
+    """A layer-major ``fp64_deep_chain`` (``device_chain.deep_products`` layout) whose layer-3 attention pass holds the
+    1M-layout chain's layer-3 read, keys and top-k plus ``attn`` as every row's attention output."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain
+
+    m = json.loads((chain / MANIFEST).read_text())
+    count, segment = m["segments"][-1]["end"], m["segment"]
+    names = ["dsa_input_3", "latent", "kpe", "index_key", "topk_indices_3", "topk_scores_3"]
+    p = fp64_chain.load_products(chain, names)
+    deep = tmp_path / "deep"
+    (deep / "L3_attn").mkdir(parents=True)
+    for i, lo in enumerate(range(0, count, segment)):
+        hi = min(lo + segment, count)
+        seg = {"start": lo, "end": hi, **{n: p[n][lo:hi] for n in names}, "attn_output_3": attn[lo:hi]}
+        torch.save(seg, deep / "L3_attn" / f"segment_{i:06d}.pt")
+    kinds = {"0": ["kda", "dense"], "1": ["kda", "moe"], "2": ["kda", "moe"], "3": ["dsa", "moe"]}
+    manifest = {
+        "producer": "fp64_deep_chain",
+        "producer_version": 2,
+        "identity": m["identity"],
+        "token_ids_sha256": m["token_ids_sha256"],
+        "kinds": kinds,
+        "count": count,
+        "segment": segment,
+        "segments": [{"layer": l, "site": s} for l in range(4) for s in ("attn", "ffn")],
+    }
+    (deep / MANIFEST).write_text(json.dumps(manifest))
+    return deep
+
+
+def test_dsa_teacher_feed_from_the_deep_chain_scores_every_row(tmp_path: Path, expect_error):
+    """From the layers 0-7 deep chain, the DSA input is the same input_layernorm of its layer-3 read, and the score
+    reads the attention output on every row (the 1M chain keeps sampled rows only). A run equal to the reference but
+    with row 5's attention doubled scores 0 on every other row and, by absolute error, ||attn_5|| / sqrt(10) overall
+    and ||attn_5|| / 2 in window [4, 8), whose RMS reference norm is that of rows 4-7; RMS error / RMS norm is the
+    window's pooled NRMSE. A deep chain whose layer-3 passes are not done is refused."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_teacher_feed, fp64_chain
+
+    _, chain, ckpt = _fed_chain(tmp_path)
+    hidden = fp64_chain.load_products(chain, ["dsa_input_3"])["dsa_input_3"].shape[1]
+    attn = torch.randn(10, hidden, generator=torch.Generator().manual_seed(5)).to(torch.bfloat16).float()
+    deep = _deep_layer3(tmp_path, chain, attn)
+    src, src_1m = tmp_path / "dsa_in", tmp_path / "dsa_in_1m"
+    m = dsa_teacher_feed.build_dsa_input_from_chain(chain=deep, checkpoint=ckpt, count=10, out=src, segment=4)
+    dsa_teacher_feed.build_dsa_input_from_chain(chain=chain, checkpoint=ckpt, count=10, out=src_1m, segment=4)
+    assert m["chain"] == str(deep) and m["layer"] == 3
+    assert torch.equal(load_input(src, 0, 10), load_input(src_1m, 0, 10))
+    p = fp64_chain.load_products(chain, ["latent", "kpe", "index_key", "topk_indices_3"])
+    _write_trace(tmp_path / "trace", {"dsa_topk_indices_layer_3": p["topk_indices_3"]}, chunk_rows=4)
+    dev = attn.clone()
+    dev[5] *= 2
+    out = tmp_path / "dev"
+    run = {"layer": 3, "count": 10, "chunk": 4, "input": str(src)}
+    start_run(out, run)
+    for c, lo in enumerate(range(0, 10, 4)):
+        hi = min(lo + 4, 10)
+        payload = {
+            "start": lo,
+            "end": hi,
+            "attn_out": dev[lo:hi].to(torch.bfloat16),
+            "topk": p["topk_indices_3"][lo:hi],
+        }
+        torch.save(payload, chunk_path(out, c))
+    torch.save(
+        {"kvpe": torch.cat([p["latent"], p["kpe"]], -1).to(torch.bfloat16), "index": p["index_key"].to(torch.bfloat16)},
+        out / "caches.pt",
+    )
+    finish_run(out, run, 1.0)
+    result = dsa_teacher_feed.score(trace=Trace(tmp_path / "trace"), out=out, window=4)
+    o, w = result["overall"], result["windows"]
+    norms = attn.double().norm(dim=1)
+    assert result["reference"] == str(deep) and o["attn_rows"] == 10 and [x["attn_rows"] for x in w] == [4, 4, 2]
+    assert o["attn_nrmse_median"] == 0 and o["recall_mean"] == 1.0
+    assert o["attn_rms_err"] == pytest.approx(float(norms[5]) / 10**0.5)
+    assert o["attn_rms_ref"] == pytest.approx(float(norms.square().mean().sqrt()))
+    assert w[1]["attn_rms_err"] == pytest.approx(float(norms[5]) / 2) and w[1]["attn_row_err_median"] == 0
+    assert w[1]["attn_rms_ref"] == pytest.approx(float(norms[4:8].square().mean().sqrt()))
+    assert w[1]["attn_rms_err"] / w[1]["attn_rms_ref"] == pytest.approx(
+        float(norms[5] / norms[4:8].square().sum().sqrt())
+    )
+    assert w[0]["attn_rms_err"] == 0 and w[2]["attn_rms_err"] == 0
+    manifest = json.loads((deep / MANIFEST).read_text())
+    manifest["segments"] = manifest["segments"][:7]
+    (deep / MANIFEST).write_text(json.dumps(manifest))
+    with expect_error(ValueError, "7 passes complete, 8 needed"):
+        dsa_teacher_feed.chain_layer3(deep)
+
+
 def test_quantile_by_hand_and_beyond_torch_quantile_size():
     """[1, 2, 3, 4]: median 2.5, p10 1.3 (linear interpolation); empty is NaN; 2^24 + 1 values (torch.quantile's
     limit is 2^24) give their exact median."""

@@ -166,6 +166,10 @@ class TokenErrorAccumulator:
     def expected_norms(self) -> torch.Tensor:
         return self._sums()[1].sqrt()
 
+    def error_norms(self) -> torch.Tensor:
+        """Each token's ``||actual - expected||``."""
+        return self._sums()[0].sqrt()
+
     @staticmethod
     def _ratio(error: torch.Tensor, expected: torch.Tensor) -> torch.Tensor:
         # As ``nrmse``: an exact match is 0 (also on an all-zero golden), any error on a zero golden is inf.

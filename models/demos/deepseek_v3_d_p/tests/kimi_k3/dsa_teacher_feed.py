@@ -31,6 +31,7 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Callable
 
 import torch
 
@@ -47,6 +48,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     checkpoint_tensors,
     chunk_path,
     complete_run,
+    error_norms,
     missed_keys,
     quantile,
     replay_live_and_sealed,
@@ -175,18 +177,40 @@ def build_dsa_input(
     return build_input(out=out, expected=expected, count=count, segment=segment, make=make, check_bars=bars)
 
 
-def build_dsa_input_from_chain(*, chain: Path, checkpoint: Path, count: int, out: Path, segment: int) -> dict:
-    """Write (or resume) DSA layer 3's teacher-fed input from an FP64 chain run: ``input_layernorm`` of the chain's
-    ``dsa_input_3`` (the AttnRes read, FP64 stored fp32) in FP64, rounded once to bf16, the device's input format.
-    Every segment is checked by recomputing (fp32) the KV latent and index key of sampled rows from that bf16 input
-    against the chain's FP64 keys, and fails closed below ``INPUT_CHECK_PCC``."""
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import DSA_LAYER, load_products
+def chain_layer3(chain: Path) -> tuple[Callable[[list[str], int, int], dict[str, torch.Tensor]], bool, int]:
+    """How to read an FP64 chain's layer-3 products: ``(read(names, start, end), every_row, rows)``.
 
+    ``fp64_chain`` (layers 0-3, 1M) keeps the attention output ``attn_output_3`` of its sampled rows only
+    (``load_sampled``); ``fp64_deep_chain`` (layers 0-7, layer-major) attends every row, and its layer-3 attention pass
+    holds ``attn_output_3`` beside the read, keys and top-k of every row. ``rows`` is how many rows the chain holds."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain
+
+    m = json.loads((Path(chain) / MANIFEST).read_text())
+    if m["producer"] == "fp64_chain":
+        rows = m["segments"][-1]["end"] if m["segments"] else 0
+        return (lambda names, lo, hi: fp64_chain.load_products(chain, names, lo, hi)), False, rows
+    if m["producer"] != "fp64_deep_chain":
+        raise ValueError(f"{chain}: producer {m['producer']} is not an FP64 chain")
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import deep_complete, deep_products
+
+    deep_complete(chain, layers=fp64_chain.DSA_LAYER + 1)
+    layer = fp64_chain.DSA_LAYER
+    return (lambda names, lo, hi: deep_products(chain, layer, "attn", names, lo, hi)), True, m["count"]
+
+
+def build_dsa_input_from_chain(*, chain: Path, checkpoint: Path, count: int, out: Path, segment: int) -> dict:
+    """Write (or resume) DSA layer 3's teacher-fed input from an FP64 chain run (``chain_layer3``): ``input_layernorm``
+    of the chain's ``dsa_input_3`` (the AttnRes read, FP64 stored fp32) in FP64, rounded once to bf16, the device's
+    input format. Every segment is checked by recomputing (fp32) the KV latent and index key of sampled rows from that
+    bf16 input against the chain's FP64 keys, and fails closed below ``INPUT_CHECK_PCC``."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import DSA_LAYER
+
+    read_chain, _, _ = chain_layer3(chain)
     w = layer_weights(checkpoint, DSA_LAYER)
     norm = w["input_layernorm.weight"].double()
 
     def make(start: int, end: int) -> tuple[torch.Tensor, dict[str, float]]:
-        p = load_products(chain, ["dsa_input_3", "latent", "index_key"], start, end)
+        p = read_chain(["dsa_input_3", "latent", "index_key"], start, end)
         read = p["dsa_input_3"].double()
         normed = (read * torch.rsqrt(read.pow(2).mean(-1, keepdim=True) + EPS) * norm).to(torch.bfloat16)
         rows = check_rows(normed.shape[0])
@@ -214,25 +238,30 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
     windows.tsv and rows.pt.
 
     The reference is the run's input's source. From a trace: the trace's attention output (every row), top-k and its
-    scores, kv_post_transform and indexer_k. From an FP64 chain (``fp64_chain.py``): the chain's FP64 attention output
-    on its sampled rows only, its top-2048 and FP64 scores, and its FP64 keys; the GPU trace's top-k recall of the
-    chain's selection is reported beside the device's (``recall_gpu_vs_reference``). Streams chunk by chunk (the 1M
-    attention output is 15 GB per side). Per row: attention output NRMSE (floored at 1% of the median reference row
-    norm, as the KDA golden), top-k recall, and each missed key's rank and spread share in the reference's scores.
-    Per ``window`` rows: summaries of those, and the kvpe latent / rope and index key PCC.
+    scores, kv_post_transform and indexer_k. From an FP64 chain (``chain_layer3``): the chain's FP64 attention output
+    (on its sampled rows only for the 1M ``fp64_chain``, on every row for ``fp64_deep_chain``), its top-2048 and FP64
+    scores, and its FP64 keys; the GPU trace's top-k recall of the chain's selection is reported beside the device's
+    (``recall_gpu_vs_reference``). Streams chunk by chunk (the 1M attention output is 15 GB per side). Per row:
+    attention output NRMSE (floored at 1% of the median reference row norm, as the KDA golden), top-k recall, and each
+    missed key's rank and spread share in the reference's scores. Per ``window`` rows: summaries of those, the
+    attention output's absolute error (``attn_abs_error``: a window's NRMSE also moves with its reference norms), and
+    the kvpe latent / rope and index key PCC.
     """
     manifest = complete_run(out)
     count, chunk, layer = manifest["count"], manifest["chunk"], manifest["layer"]
     chain = json.loads((Path(manifest["input"]) / MANIFEST).read_text()).get("chain")
     num_chunks = -(-count // chunk)
+    nan = float("nan")
     attn, attn_rows = TokenErrorAccumulator(), []
     recall, gpu_recall, misses = [], [], []
     if chain is not None:
-        from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import load_products, load_sampled
+        from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import load_sampled
 
-        sampled = load_sampled(Path(chain))
-        keep = sampled["sampled_rows"] < count
-        sampled = {k: v[keep] for k, v in sampled.items()}
+        read_chain, every_row, _ = chain_layer3(Path(chain))
+        if not every_row:
+            sampled = load_sampled(Path(chain))
+            keep = sampled["sampled_rows"] < count
+            sampled = {k: v[keep] for k, v in sampled.items()}
     for c in range(num_chunks):
         payload = torch.load(chunk_path(out, c), weights_only=True)
         lo, hi = payload["start"], payload["end"]
@@ -242,13 +271,18 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
             attn_rows.append(torch.arange(lo, hi))
             want = trace.rows(f"dsa_topk_indices_layer_{layer}", lo, hi).long()
             want_scores = trace.rows(f"dsa_topk_scores_layer_{layer}", lo, hi).float()
+        elif every_row:
+            p = read_chain(["attn_output_3", "topk_indices_3", "topk_scores_3"], lo, hi)
+            attn.update(p["attn_output_3"].float(), payload["attn_out"])
+            attn_rows.append(torch.arange(lo, hi))
         else:
             inside = (sampled["sampled_rows"] >= lo) & (sampled["sampled_rows"] < hi)
             if inside.any():
                 rows = sampled["sampled_rows"][inside]
                 attn.update(sampled["attn_output_3"][inside].float(), payload["attn_out"][rows - lo])
                 attn_rows.append(rows)
-            p = load_products(Path(chain), ["topk_indices_3", "topk_scores_3"], lo, hi)
+            p = read_chain(["topk_indices_3", "topk_scores_3"], lo, hi)
+        if chain is not None:
             want, want_scores = p["topk_indices_3"].long(), p["topk_scores_3"].float()
             gpu_recall.append(topk_recall(trace.rows(f"dsa_topk_indices_layer_{layer}", lo, hi).long(), want))
         recall.append(topk_recall(got, want))
@@ -258,6 +292,15 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
     floor = golden_floor(attn.expected_norms())
     row_nrmse, attn_rows = attn.token_nrmse(floor), torch.cat(attn_rows)
+    row_err, row_ref = attn.error_norms(), attn.expected_norms()
+
+    def attn_abs_error(inside: torch.Tensor) -> dict:
+        """``error_norms`` of the attention output's scored rows ``inside``, keyed ``attn_<measure>``."""
+        if not inside.any():
+            return dict.fromkeys(("attn_row_err_median", "attn_row_ref_median", "attn_rms_err", "attn_rms_ref"), nan)
+        e = error_norms(row_err[inside].square(), row_ref[inside].square())
+        return {f"attn_{k}": v for k, v in e.items()}
+
     recall = torch.cat(recall)
     gpu_recall = torch.cat(gpu_recall) if gpu_recall else None
     misses = {k: torch.cat([m[k] for m in misses]) for k in misses[0]}
@@ -267,10 +310,9 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         kv_ref = trace.rows(f"kv_post_transform_layer_{layer}", 0, count)
         key_ref = trace.rows(f"indexer_k_layer_{layer}", 0, count)
     else:
-        k = load_products(Path(chain), ["latent", "kpe", "index_key"], 0, count)
+        k = read_chain(["latent", "kpe", "index_key"], 0, count)
         lora, kv_ref, key_ref = k["latent"].shape[1], torch.cat([k["latent"], k["kpe"]], -1), k["index_key"]
     topk = want.shape[1]  # the reference's selection size (2048)
-    nan = float("nan")
 
     windows = []
     for lo in range(0, count, window):
@@ -287,6 +329,7 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
                 "attn_nrmse_median": float(nr.median()) if nr.numel() else nan,
                 "attn_nrmse_p99": quantile(nr, 0.99),
                 "attn_nrmse_max": float(nr.max()) if nr.numel() else nan,
+                **attn_abs_error((attn_rows >= lo) & (attn_rows < hi)),
                 "kv_latent_pcc": pcc(kv_ref[lo:hi, :lora], caches["kvpe"][lo:hi, :lora]),
                 "kv_rope_pcc": pcc(kv_ref[lo:hi, lora:], caches["kvpe"][lo:hi, lora:]),
                 "index_key_pcc": pcc(key_ref[lo:hi], caches["index"][lo:hi]),
@@ -316,6 +359,7 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         "overall": {
             "attn_rows": int(row_nrmse.numel()),
             "attn_nrmse_median": float(row_nrmse.median()),
+            **attn_abs_error(torch.ones_like(attn_rows, dtype=torch.bool)),
             "kv_latent_pcc": pcc(kv_ref[:, :lora], caches["kvpe"][:, :lora]),
             "kv_rope_pcc": pcc(kv_ref[:, lora:], caches["kvpe"][:, lora:]),
             "index_key_pcc": pcc(key_ref, caches["index"]),
@@ -360,7 +404,7 @@ def main() -> None:
     rate.add_argument("--window", type=int, default=4096)
     args = parser.parse_args()
     if args.command == "input" and args.chain:
-        count = args.count or json.loads((args.chain / MANIFEST).read_text())["segments"][-1]["end"]
+        count = args.count or chain_layer3(args.chain)[2]
         build_dsa_input_from_chain(
             chain=args.chain, checkpoint=args.checkpoint, count=count, out=args.out, segment=args.segment
         )

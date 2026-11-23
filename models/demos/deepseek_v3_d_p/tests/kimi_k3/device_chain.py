@@ -51,6 +51,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     checkpoint_tensors,
     chunk_path,
     complete_run,
+    error_norms,
     missed_keys,
     quantile,
     topk_recall,
@@ -352,15 +353,8 @@ def rows_of(directory: Path, names: list[str], start: int, end: int) -> dict:
 
 
 def row_error_norms(sums: torch.Tensor) -> dict:
-    """Absolute error of the rows whose ``key_sums`` are given: the median per-row ``||x - y||`` and ``||y||``, and
-    their RMS over rows. ``rms_err / rms_ref`` is ``pcc_nrmse``'s NRMSE; RMS values of windows combine exactly."""
-    see, syy = sums[:, 5], sums[:, 3]
-    return {
-        "row_err_median": quantile(see.sqrt(), 0.5),
-        "row_ref_median": quantile(syy.sqrt(), 0.5),
-        "rms_err": float(see.mean().sqrt()),
-        "rms_ref": float(syy.mean().sqrt()),
-    }
+    """``error_norms`` of the rows whose ``key_sums`` are given; ``rms_err / rms_ref`` is ``pcc_nrmse``'s NRMSE."""
+    return error_norms(sums[:, 5], sums[:, 3])
 
 
 def input_pair_keys(spec: Taps) -> tuple[str, ...]:
