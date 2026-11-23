@@ -2297,6 +2297,43 @@
   sp_config: sc4
 
 
+# GLM-5.3 on the production prefill shape: the SC4 pod carved into eight [RING,RING] 4x4 tori (sc4_4x4_rr_mgd), 12
+# ranks by tt-run discovery. Four stages sit inside one Galaxy; the four seam stages span two neighbouring hosts
+# (PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2), with row-block D2D services on each 1-host <-> 2-host boundary. [1/2] runs
+# one 2,560-token chunk per forward, [2/2] two per forward (packed, traced, D2H layer acks from each stage
+# leader's chips); both PCC every rank's KV and index caches against the 1M golden tail. Each step takes ~5-6 min
+# and the whole job ~32 min including the reset (run 45154375989). Perf is reported, not gated: no [RING,RING]
+# baseline yet.
+- name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] [RING,RING] KV accuracy 1M tail@2.5k, unpacked + packed, SC4"
+  cmd: |
+    set -uo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
+    echo "===== [1/2] (GLM-5.3-744B) 8x[4,4] [RING,RING] KV accuracy 1M tail@2.5k, one chunk per forward, SC4 ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr; rc1=$?
+    echo "===== [1/2] rc=${rc1} ====="
+    echo "===== [2/2] (GLM-5.3-744B) 8x[4,4] [RING,RING] packed KV accuracy 1M tail@2.5k, two chunks per forward, SC4 ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr --variant packed; rc2=$?
+    echo "===== [2/2] rc=${rc2} ====="
+    exit $(( rc1 != 0 || rc2 != 0 ))
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 60
+      tier: 1
+      release_ready: false
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
 # Kimi-K3 with RadixArk's DSpark drafter, through the same launcher and the same 8 stages of [4,4]. Traced at 1M
 # with 24 slots: the drafter's K/V on the last stage leaves room for 26 (it fails at 27 in the per-stage
 # capacity probe, PR #61481), and 24 keeps two of margin as the trunk leg does. Slot 0 is PCC'd on 55k, where
@@ -2375,31 +2412,6 @@
   skus:
     bh_sc1_high_power:
       timeout: 80
-  owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  budget_type: demo
-  sp_config: sc1
-
-
-# The SC1 trunk leg on 4x4 stages: all 78 layers as two [4,4] stages, one per tray half, SP on mesh axis 1,
-# bound by tt-run discovery on the intragalaxy descriptor, at one slot (glm53_4x4.json's layout, 2560-token
-# chunks). It tracks the 4x4 layout against the 8x4 SC1 leg above until 4x4 runs in production; there is
-# no SC4 4x4 leg. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1) first.
-- name: "(GLM-5.3-744B) disaggregated prefill 2x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC1"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4
-  test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
-  test_group: disagg_prefill
-  skus:
-    bh_sc1_high_power:
-      timeout: 40
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   budget_type: demo
