@@ -51,16 +51,14 @@ exclude D2D, as do the stage-by-stage b06u02 measurements the met / unmet rule c
 2026-11-23), so ``slowest_stage_ms``, ``ratio_vs_glm53`` and ``tok_s`` are b06u02-comparable. ``sc4_period_ms`` adds
 the G1->G2 D2D (a pipeline resource of its own when overlapped; its extra segments on G1 and G2 when serialized), and
 ``sc4_tok_s`` rescales it by GLM-5.3's ratio of SC4 CI period to b06u02 slowest stage at the same probe (context
-only: on the full78 anchor b06u02 runs 2-18% faster than SC4 CI, growing with depth, so it is not a constant
-machine factor). ``g2_d2d_headroom_ms`` is how much serialized D2D G2 absorbs before it, not G1, paces the pipeline.
+only: that ratio varies with depth, so it is not a constant machine factor; values in the report). ``g2_d2d_headroom_ms`` is how much serialized D2D G2 absorbs before it, not G1, paces the pipeline.
 
-Tolerance (``TOLERANCE``): G0, G1 and G3 are >= 99% measured GLM-5.3 work, so they carry the anchor's chunk-to-chunk
-spread (~3%) and the difference between a 78-layer run's slice and a stage run on its own rank (not measured;
-stage-alone runs of the offset stages were rejected, they feed embeddings to the first layer): +-10%. G2 adds the
-full-indexer subtraction (the full78 ack-delta estimate exceeds the isolated sparse-MLA CI measurement, #66182, by
-0.6-1.0 ms per layer at 50k-500k, i.e. <= 7 ms or ~4% of G2) and new nodes whose implementation does not exist yet: +-15%. A measured stage
+Tolerance (``TOLERANCE``): G0, G1 and G3 are almost entirely measured GLM-5.3 work, so they carry the anchor's
+chunk-to-chunk spread and the unmeasured difference between a slice of one 78-layer run and a stage run on its own
+rank: +-10%. G2 adds the full-indexer subtraction (the anchor's ack-delta estimate and the isolated sparse-MLA CI
+measurement, #66182, disagree) and new nodes whose implementation does not exist yet: +-15%. A measured stage
 outside its band is a deviation to attribute; beyond 25% it is a big gap (knowledge note "Performance models are
-estimates with a tolerance band not oracles").
+estimates with a tolerance band not oracles"). The report quantifies these against the anchor it used.
 
 Not modelled: MTP; the decode window publication (deferred); the window storage format other than scaled FP8 (a bf16
 joint table would change push bytes, q171.2.5 decides); host-side gaps between chunks; any interference of the D2D
@@ -332,7 +330,7 @@ class Glm53Anchor:
     """Measured GLM-5.3 costs by probe label (ms per chunk at the probe depth).
 
     Stage time is ``period_ms``: from the ack of the layer before the stage (the previous chunk's retire for the first
-    stage) to the stage's last layer ack, median over chunks d-4..d+4. It spans every layer of the stage, including the
+    stage) to the stage's last layer ack (reduced over chunks around the probe by the anchor's producer). It spans every layer of the stage, including the
     first layer's work before its KV-write ack (a full-indexer layer's indexer); first-to-last ack (CI chunk_time) does
     not. Measure GLM-5.4 stages the same way.
 
