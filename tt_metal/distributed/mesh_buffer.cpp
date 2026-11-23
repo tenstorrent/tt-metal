@@ -212,6 +212,10 @@ std::mutex& lazy_device_buffer_mutex(const MeshBuffer* mesh_buffer) {
 
 }  // namespace
 
+std::weak_ptr<const void> MeshBuffer::devices_lifetime_of(MeshDevice& mesh_device) {
+    return mesh_device.impl().devices_lifetime();
+}
+
 uint32_t ShardedBufferConfig::compute_datum_size_bytes() const {
     return global_size / (global_buffer_shape.height() * global_buffer_shape.width());
 }
@@ -385,11 +389,14 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     config_((Inspector::mesh_buffer_deallocated(&other), other.config_)),
     device_local_config_(std::move(other.device_local_config_)),
     mesh_device_(std::move(other.mesh_device_)),
+    devices_lifetime_(std::move(other.devices_lifetime_)),
     address_(other.address_),
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
     unique_id_(std::exchange(other.unique_id_, std::nullopt)),
-    state_(std::move(other.state_)) {
+    state_(std::move(other.state_)),
+    built_device_buffers_(std::move(other.built_device_buffers_)),
+    cached_close_count_(other.cached_close_count_.load(std::memory_order_relaxed)) {
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
@@ -403,11 +410,14 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         config_ = other.config_;
         device_local_config_ = std::move(other.device_local_config_);
         mesh_device_ = std::move(other.mesh_device_);
+        devices_lifetime_ = std::move(other.devices_lifetime_);
         address_ = other.address_;
         device_local_size_ = other.device_local_size_;
         buffers_ = std::move(other.buffers_);
         unique_id_ = std::exchange(other.unique_id_, std::nullopt);
         state_ = std::move(other.state_);
+        built_device_buffers_ = std::move(other.built_device_buffers_);
+        cached_close_count_.store(other.cached_close_count_.load(std::memory_order_relaxed), std::memory_order_relaxed);
 
         other.state_ = DeallocatedState{};
         other.address_ = 0;
@@ -424,22 +434,44 @@ void MeshBuffer::deallocate() {
         Inspector::mesh_buffer_deallocated(this);
     }
 
-    // get_device_buffer() checks state_ under this lock, so it cannot build a device buffer at an address that is being
-    // freed. The old state frees the allocation when it is destroyed, after the lock is released. A MeshBuffer that is
-    // already deallocated, as in the destructor after deallocate(), has nothing to change.
-    auto set_deallocated_state = [this]() {
-        if (std::holds_alternative<DeallocatedState>(state_)) {
-            return;
-        }
+    // get_device_buffer() checks state_ and builds device buffers under this lock, so it cannot build a device buffer
+    // at an address that is being freed. The old state frees the allocation when it is destroyed, after the lock is
+    // released. A MeshBuffer that is already deallocated, as in the destructor after deallocate(), has no state to
+    // change. With mark_device_buffers, the per-device Buffers are also marked as deallocated under this lock, before
+    // the state changes, so get_device_buffer() cannot build one that misses the marking.
+    auto set_deallocated_state = [this](bool mark_device_buffers) {
         decltype(state_) old_state = DeallocatedState{};
         {
             std::lock_guard<std::mutex> lock(lazy_device_buffer_mutex(this));
+            if (mark_device_buffers) {
+                for (auto& device_buffer : buffers_.values()) {
+                    if (device_buffer.is_local() && device_buffer.value() != nullptr) {
+                        device_buffer.value()->impl().mark_as_deallocated();
+                    }
+                }
+            }
+            if (std::holds_alternative<DeallocatedState>(state_)) {
+                return;
+            }
+            if (built_device_buffers_) {
+                for (size_t i = 0; i < buffers_.shape().mesh_size(); i++) {
+                    built_device_buffers_[i].store(nullptr, std::memory_order_relaxed);
+                }
+            }
             state_.swap(old_state);
         }
     };
 
     auto mesh_device = mesh_device_.lock();
-    if (mesh_device) {
+    // The devices can close before this MeshBuffer is freed: a closed MeshDevice can outlive its close when something
+    // still references it, such as a tensor that a Python reference cycle keeps alive, and another MeshDevice may since
+    // have reopened the same chips. Their memory may then belong to the new devices, so nothing may be freed on them.
+    // Whether the devices are open comes from devices_lifetime_, not MeshDevice::is_initialized(): that is also false
+    // for a MeshDevice that was never initialized but whose devices are open, such as the parent create_unit_meshes()
+    // builds, and while the MeshDevice is open it queries every device and throws if they disagree, which must not
+    // happen in a destructor.
+    const bool devices_released = devices_lifetime_.expired();
+    if (mesh_device && !devices_released) {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
         // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
         // 2. During teardown, device state may be partially destroyed, causing segfaults.
@@ -470,16 +502,21 @@ void MeshBuffer::deallocate() {
             }
         }
 
-        set_deallocated_state();
+        set_deallocated_state(/*mark_device_buffers=*/false);
         return;
     }
 
-    // Special handling is required if MeshDevice is already deallocated
+    // Here the MeshDevice is gone or its devices are released. Either way, the allocator that held its lockstep
+    // allocation is gone, so the backing Buffer is only marked as deallocated.
     if (std::holds_alternative<OwnedBufferState>(state_)) {
         auto& owned_state = std::get<OwnedBufferState>(state_);
         owned_state.backing_buffer->impl().mark_as_deallocated();
     }
-    set_deallocated_state();
+    // If the devices are released, free nothing on them: mark every per-device Buffer as deallocated, so that its
+    // destructor leaves its device alone. That includes each device's own allocation of a per-core MeshBuffer and the
+    // Buffers an explicit deallocate() kept; a moved-from MeshBuffer has none. If only the MeshDevice is gone and the
+    // devices are open, the Buffers are left as they are, and their destructors free their allocations.
+    set_deallocated_state(/*mark_device_buffers=*/devices_released);
 }
 
 MeshDevice* MeshBuffer::device() const {
@@ -489,6 +526,16 @@ MeshDevice* MeshBuffer::device() const {
 }
 
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
+    // Built entries skip the lock and the MeshDevice reference while no MeshDevice has closed since they were cached.
+    // A close that overlaps the call is not caught: callers keep the MeshDevice open, as they must for the result.
+    const size_t index = device_coord.to_linear_index(buffers_.shape());
+    const uint64_t close_count = MeshDeviceImpl::close_count();
+    if (built_device_buffers_ && cached_close_count_.load(std::memory_order_acquire) == close_count) {
+        Buffer* built = built_device_buffers_[index].load(std::memory_order_acquire);
+        if (built != nullptr && built->device()->is_initialized()) {
+            return built;
+        }
+    }
     // Builds the entry on first use; see initialize_device_buffers(). The entries live in the container's heap storage,
     // not in the MeshBuffer object, so filling one in from this const method is well defined.
     auto& device_buffer = const_cast<std::shared_ptr<Buffer>&>(buffers_.at(device_coord).value());
@@ -501,6 +548,18 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
         !std::holds_alternative<DeallocatedState>(state_) && mesh_device != nullptr,
         "MeshBuffer::get_device_buffer({}): the MeshBuffer is deallocated or its MeshDevice is gone",
         device_coord);
+    // Checked before the device's own is_initialized(): after the devices close, another MeshDevice may have reopened
+    // the chip, and the stale Device* would then report the new device as initialized.
+    TT_FATAL(
+        !devices_lifetime_.expired(),
+        "MeshBuffer::get_device_buffer({}): the MeshBuffer's devices are closed",
+        device_coord);
+    // Also when only its MeshDevice is closed, such as a submesh whose parent keeps the devices open: the close
+    // released the MeshBuffer's allocation, and a new MeshDevice may since have allocated the same address.
+    TT_FATAL(
+        !mesh_device->impl().is_closed(),
+        "MeshBuffer::get_device_buffer({}): the MeshBuffer's MeshDevice is closed",
+        device_coord);
     IDevice* device = mesh_device->impl().get_device(device_coord);
     TT_FATAL(
         device->is_initialized(), "MeshBuffer::get_device_buffer({}): device {} is closed", device_coord, device->id());
@@ -509,6 +568,16 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
         // Keep lazily built buffers out of a light-metal capture that started after this allocation.
         LIGHT_METAL_TRACE_FUNCTION_ENTRY();
         device_buffer = create_device_buffer_at_lockstep_address(*this, device);
+    }
+    if (built_device_buffers_) {
+        // Entries checked before a close are dropped, not revalidated by this one's check.
+        if (cached_close_count_.load(std::memory_order_relaxed) != close_count) {
+            for (size_t i = 0; i < buffers_.shape().mesh_size(); ++i) {
+                built_device_buffers_[i].store(nullptr, std::memory_order_relaxed);
+            }
+        }
+        built_device_buffers_[index].store(device_buffer.get(), std::memory_order_release);
+        cached_close_count_.store(close_count, std::memory_order_release);
     }
     return device_buffer.get();
 }
@@ -576,24 +645,6 @@ std::pair<bool, bool> MeshBuffer::replicated_dims() const {
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query replicated dims for buffers sharded across the Mesh");
     return this->global_shard_spec().replicated_dims();
-}
-
-AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), holder_(std::move(buffer)) {}
-AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
-    buffer_(buffer->get_reference_buffer()), holder_(std::move(buffer)) {}
-
-Buffer* AnyBuffer::get_buffer() const { return buffer_; }
-
-bool AnyBuffer::is_mesh_buffer() const { return get_mesh_buffer() != nullptr; }
-
-std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
-    if (const auto* mesh_buffer_ptr = std::get_if<std::shared_ptr<MeshBuffer>>(&holder_)) {
-        auto mesh_buffer = *mesh_buffer_ptr;
-        if (mesh_buffer->is_allocated()) {
-            return mesh_buffer;
-        }
-    }
-    return nullptr;
 }
 
 }  // namespace tt::tt_metal::distributed

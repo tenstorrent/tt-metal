@@ -144,7 +144,8 @@ class TT_CCL:
         # layout every iteration so the op's fabric reduction order is identical -> bit-exact
         # determinism. One buffer for the whole model (layers share the shape and run sequentially)
         # keeps the memory cost flat. See TtSharedExpert.forward.
-        self.shared_rs_intermediate = None
+        # One per input shape (see get_shared_rs_intermediate).
+        self.shared_rs_intermediates = {}
 
         # Keepalive for the shared-expert reduce_scatter INPUT (output_full). The overlapped
         # dispatch must not reuse this buffer's DRAM slot mid-flight, so it is held until the next
@@ -184,20 +185,47 @@ class TT_CCL:
         # Full-indexer layers execute serially, so they reuse the same resources. The pair belongs
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
+        # The pair itself, per profile, for the life of this TT_CCL (the mesh): releasing the overlap removes only its
+        # sub-device manager. Cached gather programs keep their own references to the pair, so a pair created anew for
+        # each model built on the mesh would leave the previous one pinned in L1_SMALL beside it.
+        self.sparse_mla_overlap_semaphores: dict[str, tuple] = {}
 
         self.sparse_kv_push_planner = None  # SparseKvPushPlanner, created on first use
 
-        # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
-        # MoE layer. Created on first use; see get_combine_overlap_semaphores.
-        self.combine_overlap_semaphores = None
-        # The same overlap's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
+        # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, then its channel
+        # counters, shared by every MoE layer; one set per combine axis. Created on first use; see
+        # get_combine_overlap_semaphores.
+        self.combine_overlap_semaphores = {}
+        # combine_fabric2d's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
         self.combine_forwarding_buffers = {}
         # dispatch_fabric2d's forwarding and staging buffers, one pair per shape; see get_dispatch_fabric2d_buffers.
         self.dispatch_fabric2d_buffers = {}
         # ready/data_valid pair for MLA's TP high_bw_all_gather calls; see get_mla_high_bw_gather_semaphores.
         self.mla_high_bw_gather_semaphores = None
 
-    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
+    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links, memo=None):
+        """The next (semaphores, stats) pair for this input. A caller that always passes the same axis and links can
+        pass a memo ([None, None, None], kept by the caller): its entry is then reused while x's spec and the weight
+        object are unchanged, which skips building the lookup key (~5 us) on every call."""
+        if memo is not None and memo[2] is weight and x.spec == memo[0]:
+            resources = memo[1]
+        else:
+            resources = self._fused_rmsnorm_entry(x, weight, cluster_axis, num_links)
+            if memo is not None:
+                memo[0], memo[1], memo[2] = x.spec, resources, weight
+        index = resources["next"]
+        resources["next"] = 1 - index
+        return resources["pairs"][index]
+
+    def preallocate_fused_rmsnorm_resources(self, shape, dtype, weight, cluster_axis, num_links):
+        """Create get_fused_rmsnorm_resources' entry for a TILE input of this shape, at model construction."""
+        x = ttnn.empty(
+            shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        self._fused_rmsnorm_entry(x, weight, cluster_axis, num_links)
+        ttnn.deallocate(x)
+
+    def _fused_rmsnorm_entry(self, x, weight, cluster_axis, num_links):
         key = (
             tuple(x.shape),
             tuple(x.padded_shape),
@@ -217,46 +245,49 @@ class TT_CCL:
                 )
                 pairs.append((semaphores, stats))
             # All chips must initialize their semaphores before any peer sends.
-            # This allocation happens during the first warmup, once per geometry.
             ttnn.synchronize_device(self.mesh_device)
             resources = {"pairs": pairs, "next": 0}
             self.fused_rmsnorm_resources[key] = resources
-        index = resources["next"]
-        resources["next"] = 1 - index
-        return resources["pairs"][index]
+        return resources
 
-    def get_combine_overlap_semaphores(self):
+    def get_combine_overlap_semaphores(self, combine_axis: int):
         """fwd_arrived, final_arrived and expert_go, then combine's channel counters, for
-        hybrid_routed_expert_moe overlapped with combine.
+        hybrid_routed_expert_moe overlapped with combine along mesh axis ``combine_axis`` (the MoE's SP axis).
 
-        Neighbouring chips bump these across launches, so they must outlive every program: one set for the mesh,
-        shared by all MoE layers, which run one after another and each leave the counts as they found them. On every
-        worker core, so the address is uniform across the mesh and covers both ops' rows.
+        Neighbouring chips bump these across launches, so they must outlive every program: one set for the mesh
+        and combine axis, shared by all MoE layers, which run one after another and each leave the counts as they
+        found them. On every worker core, so the address is uniform across the mesh and covers both ops' rows.
+
+        The channel counter count depends on the length of the combine axis, and the op requires exactly that many:
+        a set sized for axis 0 of an 8x4 mesh (19) is refused by a combine along axis 1 (4).
 
         The channel counters are here rather than inside the op for a second reason: the routed expert's L1
         arena takes every free byte before combine is built, so nothing can be allocated there at all.
         """
-        if self.combine_overlap_semaphores is None:
+        semaphores = self.combine_overlap_semaphores.get(combine_axis)
+        if semaphores is None:
             channels = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_channel_semaphore_count(
-                self.mesh_device
+                self.mesh_device, combine_axis=combine_axis
             )
-            self.combine_overlap_semaphores = tuple(
+            semaphores = tuple(
                 ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3 + channels)
             )
             # Every chip must have zeroed its copies before any neighbour bumps them.
             ttnn.synchronize_device(self.mesh_device)
-        return self.combine_overlap_semaphores
+            self.combine_overlap_semaphores[combine_axis] = semaphores
+        return semaphores
 
     def get_combine_forwarding_buffer(
-        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages
+        self, emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages, combine_axis=0
     ):
-        """combine_fabric2d's DRAM forwarding buffer for hybrid_routed_expert_moe overlapped with combine.
+        """combine_fabric2d's DRAM forwarding buffer, for hybrid_routed_expert_moe overlapped with combine and for
+        the standalone combine_fabric2d alike: both size it from emb_dim, num_links, fwd_vc_pages and the ring.
 
-        One per shape, shared by every MoE layer, which run one after another. Call it before the first overlapped
-        forward: left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays
-        pinned there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
+        One per shape, shared by every MoE layer, which run one after another. Call it before the first forward:
+        left to the op, it is allocated while that forward's dispatch buffer and outputs are live and stays pinned
+        there, splitting the DRAM each later layer's dispatch buffer needs in one piece.
         """
-        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages)
+        key = (emb_dim, experts_per_chip, num_experts_per_tok, seq_len_per_chip, num_links, fwd_vc_pages, combine_axis)
         buffer = self.combine_forwarding_buffers.get(key)
         if buffer is None:
             buffer = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_forwarding_buffer(
@@ -265,7 +296,7 @@ class TT_CCL:
                 experts_per_chip=experts_per_chip,
                 num_experts_per_tok=num_experts_per_tok,
                 seq_len_per_chip=seq_len_per_chip,
-                combine_axis=0,
+                combine_axis=combine_axis,
                 combine_num_links=num_links,
                 combine_fwd_vc_pages=fwd_vc_pages,
             )
@@ -300,7 +331,8 @@ class TT_CCL:
 
         Resource creation happens outside the hot forward path. Semaphore allocation is followed by a
         mesh-wide synchronization so every participating device observes the zero initialization before
-        the first Fabric atomic increment.
+        the first Fabric atomic increment. After a release, the next call registers a new manager over the
+        same semaphore pair (see sparse_mla_overlap_semaphores).
         """
         profile = profile.lower()
         profile = _SPARSE_MLA_OVERLAP_PROFILE_ALIASES.get(profile, profile)
@@ -345,23 +377,25 @@ class TT_CCL:
             [ttnn.CoreRange(ttnn.CoreCoord(0, rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
         )
 
-        manager_id = self.mesh_device.create_sub_device_manager(
-            [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
-            0,
-        )
-        try:
+        semaphores = self.sparse_mla_overlap_semaphores.get(profile)
+        if semaphores is None:
             l1_small_view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL)
             semaphore_buffer_type = (
                 ttnn.BufferType.L1_SMALL if l1_small_view.total_bytes_per_bank > 0 else ttnn.BufferType.L1
             )
-            ready_semaphore = ttnn.create_global_semaphore(self.mesh_device, gather_core_grid, 0, semaphore_buffer_type)
-            data_valid_semaphore = ttnn.create_global_semaphore(
-                self.mesh_device, gather_core_grid, 0, semaphore_buffer_type
+            semaphores = tuple(
+                ttnn.create_global_semaphore(self.mesh_device, gather_core_grid, 0, semaphore_buffer_type)
+                for _ in range(2)
             )
             ttnn.synchronize_device(self.mesh_device)
-        except Exception:
-            self.mesh_device.remove_sub_device_manager(manager_id)
-            raise
+            self.sparse_mla_overlap_semaphores[profile] = semaphores
+        # A reused pair is at zero: release resets it after draining.
+        ready_semaphore, data_valid_semaphore = semaphores
+
+        manager_id = self.mesh_device.create_sub_device_manager(
+            [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
+            0,
+        )
 
         resources = SparseMlaOverlapResources(
             profile=profile,
@@ -391,7 +425,9 @@ class TT_CCL:
         ttnn.synchronize_device(self.mesh_device)
 
     def release_sparse_mla_overlap_manager(self) -> None:
-        """Idempotently drain, reset, and unregister sparse-MLA overlap resources before mesh close."""
+        """Idempotently drain, reset the semaphores, and unregister the overlap's sub-device manager before mesh close.
+
+        The semaphore pair stays with this TT_CCL for the next model built on the mesh."""
         resources = self.sparse_mla_overlap_resources
         if resources is None:
             return
@@ -583,19 +619,22 @@ class TT_CCL:
         return self.indexer_ring_k_buffers[key]
 
     def get_shared_rs_intermediate(self, input_tensor, topology):
-        """Lazily allocate (once per mesh) and return the shared reduce_scatter intermediate
+        """Lazily allocate (once per mesh and input shape) and return the shared reduce_scatter intermediate
         accumulator. The Ring tiled path requires the persistent intermediate to have the same
         shape, dtype, and layout as its input. The Linear path retains its double-sized leading
         dimension for forward/backward halves. Interleaved DRAM, replicated across the mesh. A
-        single buffer is reused at a stable address by every shared-expert reduce_scatter — all
-        layers share the same shape and run sequentially, so one buffer for the whole model is safe."""
+        single buffer is reused at a stable address by every shared-expert reduce_scatter of one shape — all
+        layers of a model share the same shape and run sequentially, so one buffer per shape is safe. Keyed by
+        shape because models of different sequence lengths can share a mesh (a packed model, whose shared expert
+        sees forward_chunks chunks' rows, and a one-chunk model built after it on the same device)."""
         import torch
 
-        if self.shared_rs_intermediate is None:
-            intermediate_shape = list(input_tensor.shape)
-            if topology == ttnn.Topology.Linear:
-                intermediate_shape = [2] + intermediate_shape
-            self.shared_rs_intermediate = ttnn.from_torch(
+        intermediate_shape = list(input_tensor.shape)
+        if topology == ttnn.Topology.Linear:
+            intermediate_shape = [2] + intermediate_shape
+        key = (tuple(intermediate_shape), input_tensor.dtype, input_tensor.layout)
+        if key not in self.shared_rs_intermediates:
+            self.shared_rs_intermediates[key] = ttnn.from_torch(
                 torch.zeros(intermediate_shape),
                 device=self.mesh_device,
                 layout=input_tensor.layout,
@@ -603,7 +642,7 @@ class TT_CCL:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        return self.shared_rs_intermediate
+        return self.shared_rs_intermediates[key]
 
     def set_shared_rs_input_keepalive(self, input_tensor):
         """Hold the shared-expert reduce_scatter INPUT alive until the next shared-expert forward,
@@ -658,14 +697,15 @@ def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
     return None
 
 
-# Per-axis CCL topology. Mesh dim 0 = rows = "Y" = sp_axis; dim 1 = cols = "X" = tp_axis.
+# Per-axis CCL topology, indexed by mesh axis: dim 0 = rows = "Y", dim 1 = cols = "X". SP and TP can sit on
+# either axis, so callers pick their entry with [sp_axis] / [tp_axis] (see resolve_per_axis_topology).
 # A torus fabric physically wraps a given axis; Ring is only valid on a wrapped axis (otherwise the
 # collective hangs forever on a wrap link the fabric does not service — get_usable_topology() keeps
 # Ring because the coords span the axis). Reading the *active* fabric config keeps the returned
 # topology consistent with whatever was opened, so a (descriptor, fabric, topology) mismatch can't
 # silently ask Ring on an unwrapped axis.
 _FABRIC_PER_AXIS_TOPOLOGY = {
-    # fabric_config: (sp_topology [dim 0 / Y], tp_topology [dim 1 / X])
+    # fabric_config: (dim 0 / Y topology, dim 1 / X topology)
     ttnn.FabricConfig.FABRIC_2D_TORUS_X: (ttnn.Topology.Linear, ttnn.Topology.Ring),
     ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (ttnn.Topology.Ring, ttnn.Topology.Linear),
     ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (ttnn.Topology.Ring, ttnn.Topology.Ring),
@@ -675,16 +715,20 @@ _FABRIC_PER_AXIS_TOPOLOGY = {
 
 def per_axis_topology(
     fabric_config: Optional[ttnn.FabricConfig] = None,
+    *,
+    mesh_device: Optional[ttnn.MeshDevice] = None,
 ) -> tuple[ttnn.Topology, ttnn.Topology]:
-    """Return the per-axis CCL topology ``(sp_topology, tp_topology)`` for the fabric.
+    """Return the per-axis CCL topology ``(dim0_topology, dim1_topology)`` for the fabric.
 
-    ``sp_topology`` drives cluster_axis=0 (rows / Y) collectives, ``tp_topology`` drives
-    cluster_axis=1 (cols / X). Ring is returned only for an axis the fabric physically wraps; every
-    other axis is Linear. When ``fabric_config`` is None the currently-active fabric is queried so
-    the result always matches the opened fabric.
+    Entry ``i`` drives cluster_axis=i collectives (0 = rows / Y, 1 = cols / X), so the SP and TP
+    topologies are ``result[sp_axis]`` and ``result[tp_axis]``. Ring is returned only for an axis the
+    fabric physically wraps; every other axis is Linear. When ``fabric_config`` is None the fabric
+    opened for ``mesh_device`` is queried so the result always matches it; one of the two must be given.
     """
     if fabric_config is None:
-        fabric_config = ttnn.get_fabric_config()
+        if mesh_device is None:
+            raise ValueError("per_axis_topology needs fabric_config or mesh_device")
+        fabric_config = ttnn.get_fabric_config(mesh_device)
     mapped = _FABRIC_PER_AXIS_TOPOLOGY.get(fabric_config)
     if mapped is not None:
         return mapped
@@ -718,10 +762,9 @@ def resolve_per_axis_topology(topology, sp_axis: int, tp_axis: int):
     if isinstance(topology, tuple):
         if len(topology) != 2:
             raise ValueError(f"a per-axis topology tuple must be (dim0, dim1), got {topology}")
-        # Unpacking the (dim0, dim1) tuple as (sp, tp) is only correct at sp_axis=0/tp_axis=1.
-        if sp_axis != 0 or tp_axis != 1:
-            raise ValueError("per-axis topology tuple assumes sp_axis=0, tp_axis=1")
-        return topology
+        if {sp_axis, tp_axis} != {0, 1}:
+            raise ValueError(f"sp_axis and tp_axis must be 0 and 1 in some order, got {sp_axis=}, {tp_axis=}")
+        return topology[sp_axis], topology[tp_axis]
     return topology, topology
 
 
@@ -806,25 +849,51 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
     return min(device_links)
 
 
+def _fabric_wraps_axis(fabric_config, cluster_axis: int) -> bool:
+    """Whether `fabric_config` closes mesh axis `cluster_axis` into a ring (axis 0 is Y, axis 1 is X)."""
+    wrapped = {
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X: (1,),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y: (0,),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (0, 1),
+    }
+    return cluster_axis in wrapped.get(fabric_config, ())
+
+
 def _live_links_on_axis(mesh_device: ttnn.MeshDevice, cluster_axis: int) -> int | None:
     """The fewest fabric links any hop along `cluster_axis` forwards on, or None where the
-    fabric is not up to ask."""
+    fabric is not up to ask. On an axis the fabric wraps, the last-to-first hop counts when
+    the two chips are physical neighbours (a submesh of a longer ring has no such hop). A hop
+    with no live link counts as 0."""
     shape = tuple(mesh_device.shape)
     if len(shape) != 2 or shape[cluster_axis] < 2:
         return None
+    wrapped = shape[cluster_axis] > 2 and _fabric_wraps_axis(ttnn.get_fabric_config(mesh_device), cluster_axis)
     try:
         fewest = None
         for row in range(shape[0]):
             for col in range(shape[1]):
                 src = [row, col]
-                if src[cluster_axis] + 1 == shape[cluster_axis]:
-                    continue
                 dst = list(src)
                 dst[cluster_axis] += 1
+                if dst[cluster_axis] == shape[cluster_axis]:
+                    if not wrapped:
+                        continue
+                    dst[cluster_axis] = 0
+                    # Across a physical wrap the first hop keeps the direction of the line's own forward hop.
+                    after_dst = list(dst)
+                    after_dst[cluster_axis] = 1
+                    src_node, dst_node, after_node = (
+                        mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(coord)) for coord in (src, dst, after_dst)
+                    )
+                    wrap_direction = ttnn.get_eth_forwarding_direction(mesh_device, src_node, dst_node)
+                    if wrap_direction is None or wrap_direction != ttnn.get_eth_forwarding_direction(
+                        mesh_device, dst_node, after_node
+                    ):
+                        continue
                 src_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(src))
                 dst_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(dst))
                 count = len(ttnn.get_forwarding_link_indices(mesh_device, src_node, dst_node))
                 fewest = count if fewest is None else min(fewest, count)
-        return fewest or None
+        return fewest
     except RuntimeError:
         return None

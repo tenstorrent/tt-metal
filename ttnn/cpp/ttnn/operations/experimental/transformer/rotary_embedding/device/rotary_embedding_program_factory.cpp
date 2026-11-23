@@ -927,8 +927,8 @@ void RotaryEmbeddingProgramFactory::override_runtime_arguments(
     auto* src_buffer = input.buffer();
     auto* dst_buffer = output.buffer();
     const auto src_addr = static_cast<uint32_t>(src_buffer->address());
-    const auto cos_addr = static_cast<uint32_t>(tensor_args.cos.buffer()->address());
-    const auto sin_addr = static_cast<uint32_t>(tensor_args.sin.buffer()->address());
+    const auto cos_addr = static_cast<uint32_t>(tensor_args.cos.mesh_buffer().address());
+    const auto sin_addr = static_cast<uint32_t>(tensor_args.sin.mesh_buffer().address());
     const auto dst_addr = static_cast<uint32_t>(dst_buffer->address());
     const uint32_t reader_cos_sin_start_id_arg_idx = work.in_sharded ? 4 : 6;
 

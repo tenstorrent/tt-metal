@@ -2,10 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <atomic>
+#include <cstdint>
 #include <gmock/gmock.h>
 #include <type_traits>
+#include <utility>
 
+#include "ttnn/command_list_params.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
@@ -14,6 +18,7 @@
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/operations/reduction/prod/device/prod_all_device_operation.hpp"
+#include "ttnn/operations/reduction/sampling/device/sampling_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -24,6 +29,7 @@ namespace ttnn {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
 using ::ttnn::device_operation::mesh_device_operation_utils::all_tensors_have_uniform_storage;
@@ -71,9 +77,8 @@ struct NewInfraProgramFactory {
     using tensor_args_t = Tensor;
     using tensor_return_value_t = Tensor;
 
-    static cached_program_t create(
-        const tensor_args_t& /*tensor_args*/, tensor_return_value_t& /*tensor_return_value*/) {
-        return cached_program_t(tt::tt_metal::Program(), SharedVariables{});
+    static cached_program_t create(const tensor_args_t& tensor_args, tensor_return_value_t& /*tensor_return_value*/) {
+        return cached_program_t(tt::tt_metal::CreateProgram(*tensor_args.device()), SharedVariables{});
     }
 
     static void override_runtime_arguments(
@@ -109,7 +114,7 @@ static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloa
 static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFactory>);
 
 // ---------------------------------------------------------------------------
-// ProgramSpecFactoryConcept (Metal 2.0 op-porting stepping stone)
+// ProgramSpecFactoryConcept (Metal 2.0)
 //
 // Real ops already use create_program_artifacts (typecast, prod_all, …). The
 // checks below still (a) pin the concept's classification (it recognizes a
@@ -132,13 +137,13 @@ struct ProgramSpecFactory {
 
 // Same, but additionally provides override_runtime_arguments -> classified as the
 // custom variant, whose cache-hit path applies the returned ProgramRunArgs via
-// UpdateProgramRunArgs.
+// Program::update_program_run_args.
 struct CustomProgramSpecFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
         return ttnn::device_operation::ProgramArtifacts{};
     }
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const OperationAttributes& /*attrs*/,
         const Tensor& /*tensor_args*/,
         Tensor& /*tensor_return_value*/,
@@ -168,11 +173,32 @@ struct MeshWorkloadSpecFactoryWithOverride {
         const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/) {
         return ttnn::device_operation::MeshWorkloadArtifacts{};
     }
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const OperationAttributes& /*attrs*/,
         const Tensor& /*tensor_args*/,
         Tensor& /*tensor_return_value*/,
         const ttnn::MeshCoordinateRange& /*range*/) {
+        return {};
+    }
+};
+
+// The override factories again, plus the TTNN command-list parameters a recording binds.
+struct CustomProgramSpecFactoryWithCmdListParams : CustomProgramSpecFactory {
+    static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        const tt::tt_metal::ProgramSpec& /*spec*/,
+        const tt::tt_metal::ProgramRunArgs& /*run_params*/) {
+        return {};
+    }
+};
+
+struct MeshWorkloadSpecFactoryWithOverrideAndCmdListParams : MeshWorkloadSpecFactoryWithOverride {
+    static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        const tt::tt_metal::ProgramSpec& /*spec*/,
+        const tt::tt_metal::ProgramRunArgs& /*run_params*/) {
         return {};
     }
 };
@@ -206,11 +232,23 @@ static_assert(ttnn::device_operation::MeshWorkloadSpecFactoryConcept<MeshWorkloa
 static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<MeshWorkloadSpecFactoryWithOverride>);
 static_assert(!ttnn::device_operation::CustomProgramSpecFactoryConcept<MeshWorkloadSpecFactoryWithOverride>);
 
+// Command-list parameters leave the classification as it was.
+static_assert(ttnn::device_operation::CustomProgramSpecFactoryConcept<CustomProgramSpecFactoryWithCmdListParams>);
+static_assert(
+    ttnn::device_operation::MeshWorkloadSpecFactoryConcept<MeshWorkloadSpecFactoryWithOverrideAndCmdListParams>);
+static_assert(
+    ttnn::device_operation::detail::HasSpecRuntimeArgsOverride<MeshWorkloadSpecFactoryWithOverrideAndCmdListParams>);
+static_assert(ttnn::device_operation::detail::MapsCmdListParameters<CustomProgramSpecFactoryWithCmdListParams>);
+static_assert(!ttnn::device_operation::detail::MapsCmdListParameters<CustomProgramSpecFactory>);
+
 // Every flavor is exactly one alternative as far as a program_factory_t variant is concerned.
 static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<ProgramSpecFactory>>);
 static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<CustomProgramSpecFactory>>);
 static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<MeshWorkloadSpecFactory>>);
 static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<MeshWorkloadSpecFactoryWithOverride>>);
+static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<CustomProgramSpecFactoryWithCmdListParams>>);
+static_assert(
+    ttnn::device_operation::AllFactoriesValid<std::variant<MeshWorkloadSpecFactoryWithOverrideAndCmdListParams>>);
 
 template <typename Factory>
 using WorkloadSpecAdapter =
@@ -219,6 +257,30 @@ using WorkloadSpecAdapter =
 // The cache-hit path forks on this; pin both directions.
 static_assert(!WorkloadSpecAdapter<MeshWorkloadSpecFactory>::has_override_runtime_arguments());
 static_assert(WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverride>::has_override_runtime_arguments());
+
+template <typename... Factories>
+struct OpWithFactories : ProgramSpecMinimalOp {
+    using program_factory_t = std::variant<Factories...>;
+    static program_factory_t select_program_factory(const OperationAttributes&, const Tensor&);
+};
+
+template <typename... Factories>
+constexpr bool keys_on_tensor_aliasing_v =
+    device_operation::MeshDeviceOperationAdapter<OpWithFactories<Factories...>>::keys_on_tensor_aliasing;
+
+// Only factories whose cache hit reads the bindings recorded on the miss (tensor refresh or
+// command-list recording) key the cache on tensor aliasing; the others re-derive their tensors on
+// every hit, so their keys stay as they were.
+static_assert(keys_on_tensor_aliasing_v<ProgramSpecFactory>);
+static_assert(keys_on_tensor_aliasing_v<MeshWorkloadSpecFactory>);
+static_assert(!keys_on_tensor_aliasing_v<CustomProgramSpecFactory>);
+static_assert(!keys_on_tensor_aliasing_v<MeshWorkloadSpecFactoryWithOverride>);
+static_assert(keys_on_tensor_aliasing_v<CustomProgramSpecFactoryWithCmdListParams>);
+static_assert(keys_on_tensor_aliasing_v<MeshWorkloadSpecFactoryWithOverrideAndCmdListParams>);
+static_assert(!keys_on_tensor_aliasing_v<NewInfraProgramFactory>);
+static_assert(!device_operation::MeshDeviceOperationAdapter<ProgramSpecMinimalOp>::keys_on_tensor_aliasing);
+// One replaying factory is enough: any call of the op may select it.
+static_assert(keys_on_tensor_aliasing_v<CustomProgramSpecFactory, ProgramSpecFactory>);
 
 // Compile-coverage: taking the adapter methods' addresses ODR-uses them, forcing
 // the (otherwise un-instantiated) bodies to compile. Never dispatched.
@@ -239,6 +301,13 @@ TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
     [[maybe_unused]] auto wapply = &WorkloadSpecAdapter<MeshWorkloadSpecFactory>::apply_descriptor;
     [[maybe_unused]] auto wocreate = &WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverride>::create_mesh_workload;
     [[maybe_unused]] auto woapply = &WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverride>::apply_descriptor;
+
+    // The miss stores command-list bindings for override factories too.
+    using CustomCmdListAdapter = device_operation::MeshDeviceOperationAdapter<
+        ProgramSpecMinimalOp>::CustomProgramSpecMeshWorkloadFactoryAdapter<CustomProgramSpecFactoryWithCmdListParams>;
+    [[maybe_unused]] auto cclcreate = &CustomCmdListAdapter::create_mesh_workload;
+    [[maybe_unused]] auto wclcreate =
+        &WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverrideAndCmdListParams>::create_mesh_workload;
     SUCCEED();
 }
 
@@ -468,11 +537,11 @@ TEST_F(LaunchOperation2x4Test, MeshWorkloadSpecAdapterMapsProgramsPerCoordinate)
 }
 
 // Same per-coordinate mapping, but with an override so the cache-hit path takes the
-// UpdateProgramRunArgs branch instead of the tensor-only refresh.
+// Program::update_program_run_args branch instead of the tensor-only refresh.
 struct PerCoordProdAllFactoryWithOverride : PerCoordProdAllFactory {
     static std::atomic<int> override_calls;
 
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const Op::operation_attributes_t& attrs,
         const Op::tensor_args_t& tensor_args,
         Op::tensor_return_value_t& tensor_return_value,
@@ -651,6 +720,161 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopologyMultipleShardDims) {
     EXPECT_EQ(
         sum.tensor_topology().placements(),
         (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
+}
+
+// Cache keys do not depend on the mesh size, so these tests run on any machine.
+using LaunchOperationMeshTest = tt::tt_metal::GenericMeshDeviceFixture;
+
+TEST_F(LaunchOperationMeshTest, TensorAliasSignature) {
+    using TensorRefs = std::vector<std::reference_wrapper<const Tensor>>;
+    using device_operation::detail::compute_tensor_alias_signature;
+
+    const tt::tt_metal::TensorSpec spec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const auto make_tensor = [&]() { return ttnn::create_device_tensor(spec, mesh_device_.get()); };
+    const auto a = make_tensor();
+    const auto b = make_tensor();
+    const auto c = make_tensor();
+
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{}), IsEmpty());
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{a, b, c}), IsEmpty());
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{a, b, a}), ElementsAre(0u, 1u, 0u));
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{a, b, b, a, c}), ElementsAre(0u, 1u, 1u, 0u, 4u));
+
+    // A storage re-wrapping a's MeshTensor in new TensorAttributes still aliases a.
+    const auto a_coords = a.device_storage().get_coords();
+    const Tensor a_rewrapped{
+        ttnn::DeviceStorage(a.device_storage(), std::vector<ttnn::MeshCoordinate>(a_coords.begin(), a_coords.end()))};
+    ASSERT_NE(a_rewrapped.tensor_attributes, a.tensor_attributes);
+    EXPECT_THAT(compute_tensor_alias_signature(TensorRefs{b, a, a_rewrapped}), ElementsAre(0u, 1u, 1u));
+
+    std::vector<Tensor> distinct_tensors;
+    distinct_tensors.reserve(20);
+    for (int i = 0; i < 20; ++i) {
+        distinct_tensors.push_back(make_tensor());
+    }
+    EXPECT_THAT(
+        compute_tensor_alias_signature(TensorRefs(distinct_tensors.begin(), distinct_tensors.end())), IsEmpty());
+
+    const std::array<const Tensor*, 3> cycle{&a, &b, &c};
+    TensorRefs cycled;
+    std::vector<std::uint32_t> expected;
+    for (std::uint32_t i = 0; i < 40; ++i) {
+        cycled.push_back(std::cref(*cycle[i % 3]));
+        expected.push_back(i % 3);
+    }
+    EXPECT_THAT(compute_tensor_alias_signature(cycled), ElementsAreArray(expected));
+
+    // Ops whose cache hit re-derives tensor bindings never key on aliasing.
+    using CustomAdapter = device_operation::MeshDeviceOperationAdapter<OpWithFactories<CustomProgramSpecFactory>>;
+    EXPECT_THAT(CustomAdapter::tensor_alias_signature(TensorRefs{a, a}), IsEmpty());
+}
+
+// Sampling is a base spec op whose factory lists TEMP before P in its Table, the reverse of SamplingInputs;
+// with p and temp aliased, the miss cannot tell which slot each parameter came from (#57248).
+using SamplingOp = ttnn::prim::SamplingDeviceOperation;
+using SamplingAdapter = device_operation::MeshDeviceOperationAdapter<SamplingOp>;
+static_assert(SamplingAdapter::keys_on_tensor_aliasing);
+
+TEST_F(LaunchOperationMeshTest, ProgramCacheKeySeparatesTensorAliasingPatterns) {
+    auto* mesh_device = mesh_device_.get();
+    const auto make_tensor = [&](const ttnn::Shape& shape, DataType dtype, Layout layout) {
+        return ttnn::create_device_tensor(
+            tt::tt_metal::TensorSpec(shape, tt::tt_metal::TensorLayout(dtype, layout, MemoryConfig{})), mesh_device);
+    };
+    const auto values = make_tensor(ttnn::Shape{1, 1, 32, 64}, DataType::BFLOAT16, Layout::TILE);
+    const auto indices = make_tensor(ttnn::Shape{1, 1, 32, 64}, DataType::INT32, Layout::ROW_MAJOR);
+    // k, p and temp share one spec so that only which of them alias tells the calls apart.
+    const auto make_user_tensor = [&]() { return make_tensor(ttnn::Shape{32}, DataType::BFLOAT16, Layout::ROW_MAJOR); };
+    const auto k = make_user_tensor();
+    const auto p = make_user_tensor();
+    const auto temp = make_user_tensor();
+    const auto p_2 = make_user_tensor();
+    const auto temp_2 = make_user_tensor();
+    const auto shared = make_user_tensor();
+    const auto shared_2 = make_user_tensor();
+
+    const SamplingOp::operation_attributes_t attrs{};
+    const auto args = [&](const Tensor& k_arg, const Tensor& p_arg, const Tensor& temp_arg) {
+        return SamplingOp::tensor_args_t{
+            .input_values = values,
+            .input_indices = indices,
+            .k = k_arg,
+            .p = p_arg,
+            .temp = temp_arg,
+            .preallocated_output = std::nullopt};
+    };
+    const auto key = [&](const SamplingOp::tensor_args_t& tensor_args) {
+        auto cache_key = SamplingAdapter::compute_mesh_workload_cache_key(
+            mesh_device, ttsl::get_type_name<SamplingOp>(), attrs, tensor_args);
+        return std::pair{cache_key.hash, std::move(cache_key.canonical)};
+    };
+
+    // Calls without aliasing share one entry, keyed exactly as before the signature existed.
+    const auto distinct = key(args(k, p, temp));
+    EXPECT_EQ(key(args(k, p_2, temp_2)), distinct);
+    auto baseline_hash = SamplingAdapter::compute_program_hash(attrs, args(k, p, temp));
+    for (const auto& coord : extract_tensor_coordinates(args(k, p, temp), mesh_device)) {
+        baseline_hash = ttsl::hash::hash_objects(baseline_hash, coord);
+    }
+    EXPECT_EQ(distinct.first, baseline_hash);
+
+    // An aliased call gets its own entry, which another call with the same aliasing reuses.
+    const auto p_is_temp = key(args(k, shared, shared));
+    EXPECT_NE(p_is_temp.first, distinct.first);
+    EXPECT_NE(p_is_temp.second, distinct.second);
+    EXPECT_EQ(key(args(k, shared_2, shared_2)), p_is_temp);
+
+    // A different aliasing pattern of the same specs is a different entry again.
+    const auto k_is_p = key(args(shared, shared, temp));
+    EXPECT_NE(k_is_p.first, p_is_temp.first);
+    EXPECT_NE(k_is_p.second, p_is_temp.second);
+    EXPECT_NE(k_is_p.first, distinct.first);
+}
+
+// A spec op with its own compute_program_hash: its canonical key carries no attributes, so the
+// aliasing the adapter folds into its hash has to be in the key too, or a collision is a wrong hit.
+struct TwoTensorArgs {
+    Tensor first;
+    Tensor second;
+};
+
+struct CustomHashSpecOp {
+    using operation_attributes_t = OperationAttributes;
+    using tensor_args_t = TwoTensorArgs;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<ProgramSpecFactory>;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&) { return 0; }
+};
+using CustomHashSpecAdapter = device_operation::MeshDeviceOperationAdapter<CustomHashSpecOp>;
+static_assert(CustomHashSpecAdapter::keys_on_tensor_aliasing);
+
+TEST_F(LaunchOperationMeshTest, CanonicalKeySeparatesTensorAliasingPatternsWithCustomHash) {
+    auto* mesh_device = mesh_device_.get();
+    const tt::tt_metal::TensorSpec spec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const auto make_tensor = [&]() { return ttnn::create_device_tensor(spec, mesh_device); };
+    const auto a = make_tensor();
+    const auto b = make_tensor();
+    const auto x = make_tensor();
+    const auto y = make_tensor();
+
+    const auto op_name = ttsl::get_type_name<CustomHashSpecOp>();
+    const auto key = [&](const Tensor& first, const Tensor& second) {
+        return CustomHashSpecAdapter::compute_mesh_workload_cache_key(
+                   mesh_device, op_name, OperationAttributes{}, TwoTensorArgs{.first = first, .second = second})
+            .canonical;
+    };
+
+    // Calls without aliasing keep the op-identity key they had before the signature existed.
+    EXPECT_EQ(key(a, b), op_name);
+
+    // An aliased call has its own key, which another call with the same aliasing shares.
+    const auto aliased = key(x, x);
+    EXPECT_NE(aliased, op_name);
+    EXPECT_EQ(key(y, y), aliased);
 }
 
 }  // namespace

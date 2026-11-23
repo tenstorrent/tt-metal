@@ -157,7 +157,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_init_(
     const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t unit_dim,
     [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const std::uint32_t pack_src_format            = (std::uint32_t)DataFormat::Float16_b)
+    const std::uint32_t pack_src_format            = static_cast<std::uint32_t>(DataFormat::Float16_b))
 {
     ckernel::packer::llk_pack_live_forget();
     // DEST remap (remap_addrs + swizzle_32b) is set by _llk_math_fast_tilize_init_
@@ -293,7 +293,7 @@ inline void _llk_pack_fast_tilize_uninit_(
     const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t face_r_dim,
     [[maybe_unused]] const std::uint32_t num_faces,
-    const std::uint32_t pack_src_format = (std::uint32_t)DataFormat::Float16_b)
+    const std::uint32_t pack_src_format = static_cast<std::uint32_t>(DataFormat::Float16_b))
 {
     ckernel::packer::llk_pack_live_forget();
     if constexpr (is_fp32_dest_acc_en)

@@ -57,6 +57,7 @@ from helpers.test_variant_parameters import (
     PACK_RMW_DEST,
     PACK_SRC_FROM_OUTPUT,
     RELU_CONFIG,
+    RELU_TYPE,
     TILE_COUNT,
     TILIZE,
     generate_input_dim,
@@ -294,6 +295,7 @@ def test_pack(
             PACK_BLOCK(pack_block_arg),
             PACK_SRC_FROM_OUTPUT(),
             PACK_RMW_DEST(),
+            RELU_TYPE(relu_type),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
