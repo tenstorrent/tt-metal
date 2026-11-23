@@ -19,8 +19,9 @@ constexpr uint32_t REALTIME_PROFILER_DISPATCH_STALL_MARKER_ID = 0xFFFFFFFE;
 
 // CQDispatchSetWriteOffsetCmd::program_host_id and RT timestamp correlation: this value means the
 // dispatch event is not tied to a profiled program (raw streams, preamble defaults). dispatch_d
-// must not push it into the program-id FIFO; dispatch_s passes it to write_buffer_id for non-GO
-// commands so the host can filter those records out.
+// pushes it into the program-id FIFO like any other id, so the FIFO holds one entry per go signal;
+// dispatch_s also passes it to write_buffer_id for non-GO commands. The RT-profiler BRISC drops
+// records that carry it.
 constexpr uint16_t REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID = 0;
 
 // Program ID FIFO size
