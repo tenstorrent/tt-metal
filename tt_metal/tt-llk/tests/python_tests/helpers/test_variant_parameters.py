@@ -23,6 +23,7 @@ from .llk_params import (
     CustomMmDestLayout,
     DataCopyType,
     DestSync,
+    DestSyncMechanism,
     DstRoundingMode,
     EltwiseBinaryReuseDestType,
     FastMode,
@@ -1075,6 +1076,22 @@ class DEST_SYNC(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return (
             f"constexpr auto dest_sync = ckernel::DstSync::Sync{self.dest_sync.name};"
+        )
+
+
+@dataclass
+class DEST_SYNC_MECHANISM(TemplateParameter):
+    dest_sync_mechanism: DestSyncMechanism = DestSyncMechanism.Semaphore
+
+    def convert_to_cpp(self) -> str:
+        flags = {
+            "dest_sync_uses_semaphore": DestSyncMechanism.Semaphore,
+            "dest_sync_uses_tile_counters": DestSyncMechanism.TileCounter,
+            "dest_sync_uses_dest_dvalid": DestSyncMechanism.DestDvalid,
+        }
+        return "\n".join(
+            f"constexpr bool {name} = {str(self.dest_sync_mechanism == mechanism).lower()};"
+            for name, mechanism in flags.items()
         )
 
 

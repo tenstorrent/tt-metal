@@ -73,6 +73,7 @@ DB_SCHEMA = [
     Column("c_dimm", "int64", True, "configuration"),
     Column("data_copy_type", "string", True, "configuration"),
     Column("dest_sync", "string", True, "configuration"),
+    Column("dest_sync_mechanism", "string", True, "configuration"),
     Column("dst_index", "int64", True, "configuration"),
     Column("dst_rounding", "string", True, "configuration"),
     Column("dst_tile_idx", "int64", True, "configuration"),

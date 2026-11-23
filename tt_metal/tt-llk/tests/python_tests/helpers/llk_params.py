@@ -600,6 +600,12 @@ class DestSync(Enum):
         return f"DstSync::{self.value}"
 
 
+class DestSyncMechanism(Enum):
+    Semaphore = "Semaphore"
+    TileCounter = "TileCounter"
+    DestDvalid = "DestDvalid"
+
+
 class CustomMmDestLayout(Enum):
     """Where custom_mm puts its output tiles in DEST; the values of ckernel::CustomMmDestLayout."""
 
