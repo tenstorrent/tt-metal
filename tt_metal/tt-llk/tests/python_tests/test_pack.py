@@ -751,7 +751,7 @@ def test_pack_block_equivalence(
     pack_block,
     allow_int32_mix,
 ):
-    """The default W offset (2), W offset (3) and plain (5) block forms write the same L1 bytes as the per-tile packs (0, the first of the four runs of a cell), for the formats the golden cannot judge too."""
+    """The default W offset (2), W offset (3) and plain (5) block forms write the same L1 bytes as the per-tile packs (0), for the formats the golden cannot judge too."""
     if (
         formats.output_format in (DataFormat.Int8, DataFormat.UInt8)
         and dest_acc == DestAccumulation.No
@@ -760,6 +760,7 @@ def test_pack_block_equivalence(
             "llk_pack_block keeps these per tile: from a 16 bit DEST the per-tile pack writes two faces, the block forms four."
         )
     raw = {}
+    rng_state = torch.get_rng_state()
     test_pack(
         formats,
         dest_acc,
@@ -782,6 +783,23 @@ def test_pack_block_equivalence(
     if pack_block == 0:
         _EQUIV_PER_TILE[cell] = raw[0]
     elif TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+        if cell not in _EQUIV_PER_TILE:
+            # the per-tile id of the cell ran on another xdist worker, or not yet: the same stimuli, packed per tile
+            ref_raw = {}
+            torch.set_rng_state(rng_state)
+            test_pack(
+                formats,
+                dest_acc,
+                input_dimensions,
+                relu_type,
+                dest_sync,
+                dest_index,
+                pack_block=0,
+                block_tiles=block_tiles,
+                allow_int32_mix=allow_int32_mix,
+                equiv_out=ref_raw,
+            )
+            _EQUIV_PER_TILE[cell] = ref_raw[0]
         ref = _EQUIV_PER_TILE[cell]
         diff = [i for i in range(len(ref)) if ref[i] != raw[pack_block][i]]
         assert (

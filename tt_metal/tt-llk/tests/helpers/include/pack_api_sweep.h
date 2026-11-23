@@ -107,8 +107,18 @@ __attribute__((always_inline)) inline void pack(const std::uint32_t dst)
 
 // One block, as a compute kernel packs it: wait for math, the state's reconfigure or init, the kernel's pack-thread work,
 // pack_block, release DEST, cb_push_back.
-template <std::uint32_t ntiles, bool is_fp32_dest_acc_en, std::uint32_t kt, std::uint32_t state, char arm, std::uint32_t out, class BlockInit, class Tail>
-__attribute__((always_inline)) inline void block(const std::uint32_t dst, BlockInit& block_init, Tail& tail)
+// pre_reconfig: the kernel's pack-thread work ahead of the state's reconfigure (a reduce kernel clears its edge masks, as reduce_uninit).
+template <
+    std::uint32_t ntiles,
+    bool is_fp32_dest_acc_en,
+    std::uint32_t kt,
+    std::uint32_t state,
+    char arm,
+    std::uint32_t out,
+    class BlockInit,
+    class Tail,
+    class PreReconfig>
+__attribute__((always_inline)) inline void block(const std::uint32_t dst, BlockInit& block_init, Tail& tail, PreReconfig& pre_reconfig)
 {
     if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
     {
@@ -116,6 +126,7 @@ __attribute__((always_inline)) inline void block(const std::uint32_t dst, BlockI
     }
     if constexpr (state == 2 || state == 3)
     {
+        pre_reconfig();
 #if PACK_API_SHIM_PR
         pack_api_shim::pack_reconfig_data_format<is_fp32_dest_acc_en, out>();
 #else
@@ -146,8 +157,9 @@ template <
     std::uint32_t out_a,
     std::uint32_t out_b,
     class BlockInit,
-    class Tail>
-inline void run(const std::uint32_t loops, const std::uint32_t blocks, const std::uint32_t dst, BlockInit block_init, Tail tail)
+    class Tail,
+    class PreReconfig>
+inline void run(const std::uint32_t loops, const std::uint32_t blocks, const std::uint32_t dst, BlockInit block_init, Tail tail, PreReconfig pre_reconfig)
 {
     if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
     {
@@ -157,13 +169,29 @@ inline void run(const std::uint32_t loops, const std::uint32_t blocks, const std
     {
         for (std::uint32_t b = 0; b < blocks; b += (state == 2 ? 2 : 1))
         {
-            block<ntiles, is_fp32_dest_acc_en, kt, state, arm, out_a>(dst, block_init, tail);
+            block<ntiles, is_fp32_dest_acc_en, kt, state, arm, out_a>(dst, block_init, tail, pre_reconfig);
             if constexpr (state == 2)
             {
-                block<ntiles, is_fp32_dest_acc_en, kt, state, arm_b, out_b>(dst, block_init, tail);
+                block<ntiles, is_fp32_dest_acc_en, kt, state, arm_b, out_b>(dst, block_init, tail, pre_reconfig);
             }
         }
     }
+}
+
+template <
+    std::uint32_t ntiles,
+    bool is_fp32_dest_acc_en,
+    std::uint32_t kt,
+    std::uint32_t state,
+    char arm,
+    char arm_b,
+    std::uint32_t out_a,
+    std::uint32_t out_b,
+    class BlockInit,
+    class Tail>
+inline void run(const std::uint32_t loops, const std::uint32_t blocks, const std::uint32_t dst, BlockInit block_init, Tail tail)
+{
+    run<ntiles, is_fp32_dest_acc_en, kt, state, arm, arm_b, out_a, out_b>(loops, blocks, dst, block_init, tail, [] {});
 }
 
 // Binds output A over the result buffer from base (16 byte words) and, for state 2, output B behind it at the next 1 KB;
