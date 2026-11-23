@@ -35,6 +35,36 @@ enum class PoolType : std::uint8_t
     MIN,
 };
 
+enum class GatherCompressModeSelect : std::uint8_t
+{
+    GATHER   = 0,
+    COMPRESS = 1,
+};
+
+/**
+ * @brief Whether the reduce swaps its operands: the scaler goes to SrcA and the data to SrcB.
+ *
+ * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
+ * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ */
+template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION>
+constexpr bool reduce_swaps_operands()
+{
+    return REDUCE_DIMENSION == ReduceDim::REDUCE_ROW && POOL_TYPE != PoolType::MAX;
+}
+
+/**
+ * @brief Whether the reduce moves pooled Dest rows back into the source registers (MOVD2B) for a second pool.
+ *
+ * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
+ * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ */
+template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION>
+constexpr bool reduce_moves_dest_to_src()
+{
+    return REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR || (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW && POOL_TYPE == PoolType::MAX);
+}
+
 enum class DataCopyType : std::uint8_t
 {
     A2D,
@@ -127,6 +157,7 @@ enum class SfpuType : std::uint32_t
     less_than_equal_zero,
     greater_than_equal_zero,
     cumsum,
+    cumprod,
     reduce,
     add1,
     hardsigmoid,
@@ -193,6 +224,7 @@ enum class SfpuType : std::uint32_t
     softcap,
     tanh_derivative,
     abs_int32,
+    reshuffle_rows,
     // Named by compute API init macros for the ported SFPI kernels; Quasar's init wrappers ignore
     // the SfpuType, so these only need to exist.
     acos,
@@ -206,7 +238,9 @@ enum class SfpuType : std::uint32_t
     div_int32_floor,
     div_int32_trunc,
     fmod_int32,
+    gcd,
     isclose,
+    lcm,
     lerp,
     log_with_base,
     mac,
@@ -224,22 +258,24 @@ enum class SfpuType : std::uint32_t
     unary_min,
     unary_max_int32,
     unary_min_int32,
+    dropout,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its
-// sfpi::DataLayout from DEFAULT / LO16 / INT32. The numbers are the Blackhole SFPLOAD instr_mod0
+// sfpi::DataLayout from DEFAULT / UINT16 / INT32. The numbers are the Blackhole SFPLOAD instr_mod0
 // codes, kept so the names mean the same on every arch; Quasar's own SFPLOAD/SFPSTORE encodings are
 // p_sfpu::sfpmem, so never pack these values into a Quasar instruction word.
 enum class InstrModLoadStore
 {
-    DEFAULT       = 0,
-    FP16A         = 1,
-    FP16B         = 2,
-    FP32          = 3,
-    INT32         = 4,
-    INT8          = 5,
-    LO16          = 6,
-    HI16          = 7,
+    DEFAULT = 0,
+    FP16A   = 1,
+    FP16B   = 2,
+    FP32    = 3,
+    INT32   = 4,
+    INT8    = 5,
+    UINT16  = 6, // load/store the 16-bit Dest view (Dst16b)
+    HI16    = 7,
+    // Modes 8-11 are intentionally left out, including the ISA's LO16 (9).
     INT32_2S_COMP = 12,
     INT8_2S_COMP  = 13,
     LO16_ONLY     = 14,
@@ -249,7 +285,7 @@ enum class InstrModLoadStore
 // The integer layouts the WH/BH SFPI integer kernels accept (e.g. calculate_rsub_int), as on Blackhole.
 inline constexpr bool is_valid_instruction_mode(InstrModLoadStore mode)
 {
-    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
+    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::UINT16;
 }
 
 enum class DstSync : std::uint8_t

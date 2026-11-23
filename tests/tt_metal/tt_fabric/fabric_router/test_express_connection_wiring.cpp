@@ -18,8 +18,10 @@
 namespace tt::tt_fabric {
 namespace {
 
-constexpr bool k_express = true;
-constexpr bool k_no_express = false;
+constexpr ExpressAxis k_express = ExpressAxis::Y;
+constexpr ExpressAxis k_express_on_x = ExpressAxis::X;
+constexpr ExpressAxis k_no_express = ExpressAxis::NONE;
+constexpr std::array<ExpressAxis, 3> k_all_express_axes = {ExpressAxis::NONE, ExpressAxis::Y, ExpressAxis::X};
 
 const IntermeshVCConfig k_full_mesh = IntermeshVCConfig::full_mesh();
 
@@ -50,7 +52,7 @@ bool wires_into_chip(
     EdgeCapability producer_capability,
     RoutingDirection egress_direction,
     ZPortRole chip_z_role,
-    bool express_routing_enabled,
+    ExpressAxis express_axis,
     uint32_t vc) {
     return wires_into(
         producer_direction,
@@ -58,7 +60,7 @@ bool wires_into_chip(
         egress_direction,
         egress_capability_on(egress_direction, chip_z_role),
         chip_z_role,
-        express_routing_enabled,
+        express_axis,
         vc);
 }
 
@@ -98,12 +100,12 @@ TEST(ExpressConnectionWiringTest, NoRouterIsWiredBackOverItsOwnLink) {
     for (const auto ingress : k_all_directions) {
         for (const auto capability : k_all_capabilities) {
             for (const auto role : k_all_z_roles) {
-                for (const bool express : {false, true}) {
+                for (const auto express : k_all_express_axes) {
                     for (const uint32_t vc : {0u, 1u}) {
                         EXPECT_FALSE(wires_into_chip(ingress, capability, ingress, role, express, vc))
                             << "ingress " << enchantum::to_string(ingress) << " (" << enchantum::to_string(capability)
-                            << "), chip role " << enchantum::to_string(role) << ", express " << express << ", vc "
-                            << vc;
+                            << "), chip role " << enchantum::to_string(role) << ", express "
+                            << enchantum::to_string(express) << ", vc " << vc;
                     }
                 }
             }
@@ -113,7 +115,7 @@ TEST(ExpressConnectionWiringTest, NoRouterIsWiredBackOverItsOwnLink) {
 
 TEST(ExpressConnectionWiringTest, BoundaryProducerFeedsNothingOnVC0InEitherMode) {
     // A boundary receiver crosses VC0 traffic over and fans out only from VC1.
-    for (const auto express : {false, true}) {
+    for (const auto express : k_all_express_axes) {
         for (const auto egress : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
             EXPECT_FALSE(wires_into_chip(
                 RoutingDirection::Z,
@@ -122,7 +124,7 @@ TEST(ExpressConnectionWiringTest, BoundaryProducerFeedsNothingOnVC0InEitherMode)
                 ZPortRole::INTERMESH_BOUNDARY,
                 express,
                 /*vc=*/0))
-                << "express=" << express << " egress " << enchantum::to_string(egress);
+                << "express=" << enchantum::to_string(express) << " egress " << enchantum::to_string(egress);
             EXPECT_TRUE(wires_into_chip(
                 RoutingDirection::Z,
                 EdgeCapability::INTERMESH,
@@ -130,7 +132,7 @@ TEST(ExpressConnectionWiringTest, BoundaryProducerFeedsNothingOnVC0InEitherMode)
                 ZPortRole::INTERMESH_BOUNDARY,
                 express,
                 /*vc=*/1))
-                << "express=" << express << " egress " << enchantum::to_string(egress);
+                << "express=" << enchantum::to_string(express) << " egress " << enchantum::to_string(egress);
         }
     }
 }
@@ -145,7 +147,7 @@ TEST(ExpressConnectionWiringTest, IntrameshXWiresIntoAnIntermeshEgressOnAnyLette
                 seam,
                 EdgeCapability::INTERMESH,
                 seam == RoutingDirection::Z ? ZPortRole::INTERMESH_BOUNDARY : ZPortRole::EXPRESS_CHORD,
-                /*express_routing_enabled=*/true,
+                k_express,
                 /*vc=*/0))
                 << "X producer " << enchantum::to_string(x) << " must reach the seam on " << enchantum::to_string(seam);
 
@@ -159,7 +161,7 @@ TEST(ExpressConnectionWiringTest, IntrameshXWiresIntoAnIntermeshEgressOnAnyLette
                 seam,
                 intramesh,
                 ZPortRole::EXPRESS_CHORD,
-                /*express_routing_enabled=*/true,
+                k_express,
                 /*vc=*/0));
         }
     }
@@ -170,14 +172,27 @@ TEST(ExpressConnectionWiringTest, IntrameshXWiresIntoAnIntermeshEgressOnAnyLette
 TEST(ExpressConnectionWiringTest, ExpressSenderCountsAreFamilyMaxOverFacing) {
     // E/W routers determine the five-sender family maximum.
     const auto canonical = canonical_express_endpoint_capabilities();
-    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::E, canonical), 5u);
-    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::W, canonical), 5u);
-    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, canonical), 3u);
-    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::S, canonical), 3u);
-    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::Z, canonical), 3u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::E, canonical, k_express), 5u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::W, canonical, k_express), 5u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, canonical, k_express), 3u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::S, canonical, k_express), 3u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::Z, canonical, k_express), 3u);
 
     EXPECT_EQ(express_vc0_sender_count(), 5u);
     EXPECT_EQ(express_vc1_sender_count(), 4u);
+}
+
+TEST(ExpressConnectionWiringTest, XExpressArityMovesTheWidestFacingButNotTheFamilyMax) {
+    // With the chord on X, Z joins E/W as an X resource: it gains the E/W producers and loses its
+    // place as a Y egress for them, so N/S drop to worker + opposite. E/W and Z attain the max.
+    const auto canonical = canonical_express_endpoint_capabilities();
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::E, canonical, k_express_on_x), 5u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::W, canonical, k_express_on_x), 5u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, canonical, k_express_on_x), 2u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::S, canonical, k_express_on_x), 2u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::Z, canonical, k_express_on_x), 5u);
+
+    EXPECT_ANY_THROW(express_vc0_producer_arity(RoutingDirection::E, canonical, k_no_express));
 }
 
 TEST(ExpressConnectionWiringTest, ArityRespectsPerChipCapabilities) {
@@ -185,23 +200,24 @@ TEST(ExpressConnectionWiringTest, ArityRespectsPerChipCapabilities) {
     auto landing = canonical_express_endpoint_capabilities();
     landing.at(RoutingDirection::E) = EdgeCapability::INTERMESH;
 
-    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, landing), 4u);
-    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::Z, landing), 4u);
-    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::W, landing), 5u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, landing, k_express), 4u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::Z, landing, k_express), 4u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::W, landing, k_express), 5u);
 
     auto leaf = canonical_express_endpoint_capabilities();
     leaf.at(RoutingDirection::Z) = std::nullopt;
-    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, leaf), 2u);
-    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::E, leaf), 4u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::N, leaf, k_express), 2u);
+    EXPECT_EQ(express_vc0_producer_arity(RoutingDirection::E, leaf, k_express), 4u);
 }
 
 // Legal input combinations for the property sweeps.
-bool archetype_buildable(RoutingDirection facing, EdgeCapability capability, ZPortRole role, bool express) {
+bool archetype_buildable(RoutingDirection facing, EdgeCapability capability, ZPortRole role, ExpressAxis express) {
     if (facing == RoutingDirection::Z) {
         if (is_z_boundary_router(facing, capability)) {
             return role == ZPortRole::INTERMESH_BOUNDARY;
         }
-        return capability == EdgeCapability::INTRAMESH_EXPRESS && role == ZPortRole::EXPRESS_CHORD && express;
+        return capability == EdgeCapability::INTRAMESH_EXPRESS && role == ZPortRole::EXPRESS_CHORD &&
+               express != ExpressAxis::NONE;
     }
     return capability != EdgeCapability::INTRAMESH_EXPRESS;
 }
@@ -220,7 +236,7 @@ TEST(ExpressConnectionWiringTest, TurnSetMembershipMatchesThePrimitive) {
                 continue;  // the boundary template, not turn-matrix-derived
             }
             for (const auto role : k_all_z_roles) {
-                for (const bool express : {false, true}) {
+                for (const auto express : k_all_express_axes) {
                     if (!archetype_buildable(facing, capability, role, express)) {
                         continue;
                     }
@@ -231,8 +247,8 @@ TEST(ExpressConnectionWiringTest, TurnSetMembershipMatchesThePrimitive) {
                             turn_set_has_direction(turns, 0, egress),
                             wires_into_chip(facing, capability, egress, role, express, /*vc=*/0))
                             << "facing " << enchantum::to_string(facing) << " (" << enchantum::to_string(capability)
-                            << "), chip role " << enchantum::to_string(role) << ", express " << express << ", egress "
-                            << enchantum::to_string(egress);
+                            << "), chip role " << enchantum::to_string(role) << ", express "
+                            << enchantum::to_string(express) << ", egress " << enchantum::to_string(egress);
                     }
                 }
             }
@@ -249,13 +265,13 @@ TEST(ExpressConnectionWiringTest, OnlyTheBoundaryProducerIsVcSensitive) {
             }
             for (const auto egress : k_all_directions) {
                 for (const auto role : k_all_z_roles) {
-                    for (const bool express : {false, true}) {
+                    for (const auto express : k_all_express_axes) {
                         EXPECT_EQ(
                             wires_into_chip(producer, capability, egress, role, express, /*vc=*/0),
                             wires_into_chip(producer, capability, egress, role, express, /*vc=*/1))
                             << "producer " << enchantum::to_string(producer) << " (" << enchantum::to_string(capability)
                             << ") -> egress " << enchantum::to_string(egress) << ", chip role "
-                            << enchantum::to_string(role) << ", express " << express;
+                            << enchantum::to_string(role) << ", express " << enchantum::to_string(express);
                     }
                 }
             }
@@ -276,7 +292,7 @@ TEST(ExpressConnectionWiringTest, Vc1CarriesEveryVc0OutputExceptTheBoundaryTarge
                 continue;  // the boundary template has its own VC1 shape
             }
             for (const auto role : k_all_z_roles) {
-                for (const bool express : {false, true}) {
+                for (const auto express : k_all_express_axes) {
                     if (!archetype_buildable(facing, capability, role, express)) {
                         continue;
                     }
@@ -296,7 +312,8 @@ TEST(ExpressConnectionWiringTest, Vc1CarriesEveryVc0OutputExceptTheBoundaryTarge
                         }
                         EXPECT_EQ(target_directions(turns, 1), expected)
                             << "facing " << enchantum::to_string(facing) << " (" << enchantum::to_string(capability)
-                            << "), chip role " << enchantum::to_string(role) << ", express " << express;
+                            << "), chip role " << enchantum::to_string(role) << ", express "
+                            << enchantum::to_string(express);
                     }
                 }
             }
@@ -322,6 +339,43 @@ TEST(ExpressConnectionWiringTest, SameMeshXIngressNeverReentersY) {
                 }
             }
         }
+    }
+}
+
+TEST(ExpressConnectionWiringTest, XExpressChordIsAnXResourceUnderDimensionOrder) {
+    // With the chord on X, E/W and Z are all mid-X-phase: each may continue onto the other X
+    // resources but never back into N/S.
+    constexpr auto chip = ZPortRole::EXPRESS_CHORD;  // the chip's Z port is the chord
+    const struct {
+        RoutingDirection direction;
+        EdgeCapability capability;
+    } x_producers[] = {
+        {RoutingDirection::E, EdgeCapability::INTRAMESH_CARDINAL},
+        {RoutingDirection::W, EdgeCapability::INTRAMESH_CARDINAL},
+        {RoutingDirection::Z, EdgeCapability::INTRAMESH_EXPRESS},
+    };
+    for (const auto& producer : x_producers) {
+        for (const uint32_t vc : {0u, 1u}) {
+            for (const auto egress : {RoutingDirection::N, RoutingDirection::S}) {
+                EXPECT_FALSE(wires_into_chip(producer.direction, producer.capability, egress, chip, k_express_on_x, vc))
+                    << "X producer " << enchantum::to_string(producer.direction) << " -> "
+                    << enchantum::to_string(egress) << ", vc " << vc;
+            }
+            for (const auto egress : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::Z}) {
+                if (egress == producer.direction) {
+                    continue;
+                }
+                EXPECT_TRUE(wires_into_chip(producer.direction, producer.capability, egress, chip, k_express_on_x, vc))
+                    << "X producer " << enchantum::to_string(producer.direction) << " -> "
+                    << enchantum::to_string(egress) << ", vc " << vc;
+            }
+        }
+    }
+    // Y producers keep every turn, the chord included: Y -> X is the legal dimension change.
+    for (const auto producer : {RoutingDirection::N, RoutingDirection::S}) {
+        EXPECT_TRUE(wires_into_chip(
+            producer, EdgeCapability::INTRAMESH_CARDINAL, RoutingDirection::Z, chip, k_express_on_x, /*vc=*/0))
+            << "Y producer " << enchantum::to_string(producer) << " -> Z";
     }
 }
 
@@ -356,12 +410,12 @@ TEST(ExpressConnectionWiringTest, ZEgressIsWiredOnlyWhenTheChipHasThePort) {
     // router -- so no producer is ever wired into a Z egress on one, in either mode.
     for (const auto producer : k_all_directions) {
         for (const auto capability : k_all_capabilities) {
-            for (const bool express : {false, true}) {
+            for (const auto express : k_all_express_axes) {
                 for (const uint32_t vc : {0u, 1u}) {
                     EXPECT_FALSE(
                         wires_into_chip(producer, capability, RoutingDirection::Z, ZPortRole::NONE, express, vc))
                         << "producer " << enchantum::to_string(producer) << " (" << enchantum::to_string(capability)
-                        << "), express " << express << ", vc " << vc;
+                        << "), express " << enchantum::to_string(express) << ", vc " << vc;
                 }
             }
         }

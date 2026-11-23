@@ -37,8 +37,9 @@ pytestmark = skip_for_coverage
 @parametrize(
     # `same=False` sweeps mismatched input/output format pairs too; the canonical
     # SrcA baseline keys off `unpack_A_dst` either way. The formats span all
-    # canonical x-stride buckets: Float16->2, Float32->4, and the "else->1" bucket
-    # (Float16_b and Bfp8_b). Bfp8_b is applicable here even
+    # canonical x-stride buckets, which key off the format's low two bits:
+    # Float32->4, Float16_b->2 (it shares Float16's low bits), and the "else->1"
+    # bucket (Bfp8_b). Bfp8_b is applicable here even
     # though the tilize unpacker can't read Bfp8_b input: this test only
     # `configure_unpack_AB`s the unpacker and reads the descriptor/stride
     # registers back (no actual tilize), so it directly checks the helper buckets
@@ -46,7 +47,6 @@ pytestmark = skip_for_coverage
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Float32,
             DataFormat.Bfp8_b,
         ],

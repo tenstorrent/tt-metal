@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -28,7 +29,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in buffers on device!");
 
     // Constraints on other inputs
     const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
@@ -97,30 +98,18 @@ AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_
 
 AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::compute_output_topologies(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
+    // The gathered mesh axis becomes Replicate; the other axes keep their placements even when they shard the
+    // gathered tensor dim (their pieces are still distinct after the gather). Without a cluster_axis the gather
+    // spans the whole mesh and every placement becomes Replicate. The helper expands a collapsed 1-D label to one
+    // placement per mesh axis first and compares Shard dims normalised, treating an out-of-range dim left behind by
+    // a rank-changing op (#52331) as matching nothing. `dim_from_end` is negative by construction; the helper
+    // normalises it. No honest label (nullopt, already
+    // reported): the output keeps the input's label. Returning {} would instead hand the framework the union over
+    // every tensor argument, the persistent output tensor's label included.
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_topology = input_tensor.tensor_topology();
-    auto output_placements = input_topology.placements();
-
-    // For each distribution dimension, if sharded on the gather dim, make it replicated
-    const auto& logical_shape = input_tensor.logical_shape();
-    const uint32_t gather_dim = logical_shape.get_normalized_index(args.dim_from_end);
-    const int32_t rank = static_cast<int32_t>(logical_shape.rank());
-    for (auto& output_placement : output_placements) {
-        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&output_placement)) {
-            // Temp workaround for #52331:
-            // Rank-changing ops don't renumber Shard::dim, so skip over invalid shard dims
-            if (shard->dim >= rank || shard->dim < -rank) {
-                continue;
-            }
-            // Shard::dim is always unnormalized by construction, so normalize here
-            if (logical_shape.get_normalized_index(shard->dim) == gather_dim) {
-                output_placement = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-            }
-        }
-    }
-
-    return {tt::tt_metal::TensorTopology(
-        input_topology.distribution_shape(), output_placements, input_topology.mesh_coords())};
+    const auto output_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(input_tensor, args.cluster_axis, args.dim_from_end);
+    return {output_topology.value_or(input_tensor.tensor_topology())};
 }
 
 AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create_output_tensors(
@@ -190,10 +179,10 @@ AllGatherDeviceOperation::create_op_performance_model(
     // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
     // Roofline assumes all device compute cores drive DRAM concurrently
     // (hardware max parallelism). DRAM terms compete (overlap) with Fabric.
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t read_page_size = input_tensor.buffer()->page_size();
-    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t write_page_size = output_tensor.mesh_buffer().page_size();
 
     // Hardware ceiling: total compute cores available to drive DRAM
     const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
@@ -245,8 +234,9 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint32_t axis = args.get_1d_axis();
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
-                const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
-                const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
+                const uint64_t num_pages = input_tensor.mesh_buffer().num_pages();  // per-device shard
+                const bool large_page =
+                    input_tensor.mesh_buffer().page_size() >= 4096;  // fp32 / int32 / wide row-major
                 if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
                     use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
                 }
@@ -287,12 +277,7 @@ tt::tt_metal::TensorSpec compute_output_specs_helper(
     int32_t gather_dim_from_end,
     uint32_t num_devices,
     const std::optional<MemoryConfig>& memory_config) {
-    auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
-    if (output_mem_config.created_with_nd_shard_spec()) {
-        // Forward only the nd_shard_spec: the legacy 2D spec that TensorSpec back-fills describes the
-        // *input* shape, and its one-shard-per-core rule rejects valid ND configs for the larger output.
-        output_mem_config = MemoryConfig(output_mem_config.buffer_type(), output_mem_config.nd_shard_spec());
-    }
+    const auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
     auto shape = input_tensor.logical_shape();
     shape[gather_dim_from_end] *= num_devices;
     return tt::tt_metal::TensorSpec(
@@ -314,7 +299,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor should be on device for all_gather operation");
     const auto mesh_shape = mesh_device->shape();
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     // Axis 0 is N/S, and axis 1 is E/W.
     // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
     std::array<tt::tt_fabric::Topology, 2> axis_topology{

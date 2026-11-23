@@ -12,8 +12,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
@@ -22,7 +22,7 @@ namespace ttnn::prim {
 
 namespace {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 constexpr auto SAMPLING_READER_SOURCE =
     "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/reader_values_indices_tensor.cpp";
@@ -99,7 +99,6 @@ DataflowBufferSpec make_dfb(
 ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_artifacts(
     const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor) {
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_values_tensor = tensor_args.input_values.mesh_tensor();
     const auto& input_indices_tensor = tensor_args.input_indices.mesh_tensor();
@@ -115,7 +114,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     const auto& device = input_values_tensor.device();
 
     // The bitonic top-k LLK carries sort indices through the dest register, and the index
-    // load/store width is tied to fp32_dest_acc_en (INT32 when enabled, LO16 otherwise). WH/BH
+    // load/store width is tied to fp32_dest_acc_en (INT32 when enabled, UINT16 otherwise). WH/BH
     // support the cheaper 16-bit (UInt16) path with fp32 dest accumulation disabled (unchanged
     // behaviour) so that WH/BH does not suffer any restrictions on the dest register. Every other
     // architecture (e.g. Quasar, which additionally lacks UInt16/UInt32 tile (DFB) metadata
@@ -197,7 +196,10 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     uint32_t num_out_tiles = Ht;
 
-    // random number
+    // Random digits stay in a BF16 tile. They are integers 0..255 (exact in BF16); the writer
+    // assembles three of them into a k/2^24 threshold. The tile is not Float32: on Wormhole and
+    // Blackhole this kernel leaves FP32 dest accumulation off so top-k indices stay 16-bit, and a
+    // wider pack of that dest would not keep a finer uniform than the digits already do.
     const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float16_b);
 
     // final indices
@@ -284,7 +286,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     };
 
     // 32-bit (Int32) sort indices require fp32 dest accumulation so the top-k LLK loads/stores
-    // indices in INT32 mode; the 16-bit (UInt16) path uses LO16 mode with fp32 dest acc off. Every
+    // indices in INT32 mode; the 16-bit (UInt16) path uses UINT16 mode with fp32 dest acc off. Every
     // other field keeps its default, matching what the compute config defaulted to before.
     const ComputeHardwareConfig compute_config{
         .enable_32_bit_dest = use_32bit_index,

@@ -17,9 +17,9 @@ using D = ckl::Dst;
 
 // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
 template <
-    uint32_t dfb_batch_id,
-    uint32_t dfb_old_id,
-    uint32_t dfb_updated_id,
+    const auto& dfb_batch_token,
+    const auto& dfb_old_token,
+    const auto& dfb_updated_token,
     bool AlsoOut0,
     typename DFB0,
     typename DFB1,
@@ -39,13 +39,13 @@ ALWI void update_running_stat(
         ckl::CopyTile<ckl::input(dfb::one, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D0>{dfb_one_obj},
         ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D1>{dfb_momentum_obj},
         ckl::SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
-        ckl::CopyTile<ckl::input(dfb_old_id), D::D1>{dfb_old_obj},
+        ckl::CopyTile<ckl::input(dfb_old_token), D::D1>{dfb_old_obj},
         ckl::MulBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old_stat
         ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D1>{dfb_momentum_obj},
-        ckl::CopyTile<ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D2>{dfb_batch_obj},
+        ckl::CopyTile<ckl::input(dfb_batch_token, ckl::WaitPolicy::None, ckl::PopPolicy::None), D::D2>{dfb_batch_obj},
         ckl::MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
-        ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{
+        ckl::PackTile<ckl::output(dfb_updated_token, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{
             dfb_updated_obj},
         // For the output tensor, return the same values as either of the stats.
         ckl::Optional<AlsoOut0, ckl::PackTile<ckl::output(dfb::out, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{
@@ -56,13 +56,13 @@ template <
     bool NeedsTypecast,
     uint32_t TcInFmt,
     uint32_t TcOutFmt,
-    uint32_t SrcDfb,
-    uint32_t DstDfb,
+    const auto& SrcToken,
+    const auto& DstToken,
     typename DFB0,
     typename DFB1>
 ALWI void maybe_typecast_stat(DFB0& src_dfb_obj, DFB1& dst_dfb_obj) {
     if constexpr (NeedsTypecast) {
-        ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, ckl::input(SrcDfb), ckl::output(DstDfb)>(
+        ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, ckl::input(SrcToken), ckl::output(DstToken)>(
             ckl::IterationShape::one_tile(), src_dfb_obj, dst_dfb_obj);
     }
 }

@@ -117,7 +117,7 @@ void benchmark_args_combinations_single_core(
             tt::LogTest,
             "Creating single-core benchmarking program with the following args config: {}",
             crta_config_str);
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh_device_);
 
         constexpr CoreCoord grid = {0, 0};
 
@@ -326,6 +326,22 @@ INSTANTIATE_TEST_SUITE_P(
             .input_shard_spec =
                 InputBufferParams::DistributionSpecParams{
                     .physical_shard_shape = tt::tt_metal::Shape{2, 2, 2, 2, 2, 96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        // One-page-wide shard, so contiguous_page_stride() > 1. Not covered by the rank sweep.
+        InputBufferParams{
+            .test_name = "one_page_wide_shard",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{320, 32},
                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,

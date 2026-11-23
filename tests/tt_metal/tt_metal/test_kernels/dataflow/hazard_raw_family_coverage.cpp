@@ -12,10 +12,12 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 void kernel_main() {
     Scratchpad<uint32_t> pad(scratch::pad);
-    const uint32_t l1 = pad.get_base_address();
+    // Raw address: this kernel exercises the raw-address dataflow_api families on purpose.
+    const uint32_t l1 = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem()));
     const uint32_t size = pad.size_in_bytes();
     const uint64_t self_addr = get_noc_addr(l1);
 

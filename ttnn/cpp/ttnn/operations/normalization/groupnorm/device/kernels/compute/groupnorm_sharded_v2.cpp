@@ -392,7 +392,8 @@ void kernel_main() {
                     ckl::input(
                         dfb_ones_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                     ckl::Dst::D0,
-                    ckl::DestAccumulation::WholeShape>{dfb_x, dfb_ones, ckl::StridedTileRange{0, block_w}},
+                    ckl::DestAccumulation::WholeShape>{
+                    dfb_x, dfb_ones, ckl::StridedTileRange{.base = 0, .row_stride = block_w}},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
                     ckl::ReservePolicy::OneUpfront,
@@ -532,7 +533,10 @@ void kernel_main() {
                     x_strided_block_input,
                     ckl::Dst::D0,
                     ckl::DestAccumulation::WholeShape>{
-                    dfb_x, dfb_x, ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
+                    dfb_x,
+                    dfb_x,
+                    ckl::StridedTileRange{.base = 0, .row_stride = block_w},
+                    ckl::StridedTileRange{.base = 0, .row_stride = block_w}},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
                     ckl::ReservePolicy::OneUpfront,
@@ -625,8 +629,9 @@ void kernel_main() {
             // buffers.
             if constexpr (!use_negative_mask) {
                 for (uint32_t w = 0; w < block_w_curr; ++w) {
-                    const ckl::StridedTileRange input_range{w, block_w};
-                    const ckl::StridedTileRange output_range{index_b_offset + index_g_offset + w, per_core_N};
+                    const ckl::StridedTileRange input_range{.base = w, .row_stride = block_w};
+                    const ckl::StridedTileRange output_range{
+                        .base = index_b_offset + index_g_offset + w, .row_stride = per_core_N};
                     if (copy_or_add) {
                         ckl::eltwise_chain(
                             ckl::IterationShape::col(block_h),
@@ -661,7 +666,8 @@ void kernel_main() {
             } else {
                 // zero out values in cb_tilized_in input by multiplying with negative mask for the current group
                 dfb_in_negative_mask.wait_front(block_w);
-                const ckl::StridedTileRange output_range{index_b_offset + index_g_offset, per_core_N};
+                const ckl::StridedTileRange output_range{
+                    .base = index_b_offset + index_g_offset, .row_stride = per_core_N};
                 reconfig_data_format_srcb(dfb_x_id, dfb_in_negative_mask_id);
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(block_h, block_w_curr),
@@ -684,7 +690,7 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(block_h, block_w_curr),
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Add, in_strided_block_input, x_strided_block_input>{
-                        dfb_in, dfb_x, output_range, ckl::StridedTileRange{0u, block_w}},
+                        dfb_in, dfb_x, output_range, ckl::StridedTileRange{.base = 0u, .row_stride = block_w}},
                     ckl::PackTile<in_strided_output>{dfb_in, output_range});
                 dfb_in_negative_mask.pop_front(block_w);
             }
@@ -732,7 +738,11 @@ void kernel_main() {
 
     if constexpr (!use_negative_mask) {
         dfb_out.push_back(per_core_MN);
+#ifdef TILIZE_IN
+        // Only the tilize path fills dfb_in (and waits on it above); without TILIZE_IN nothing was
+        // pushed, so a pop would over-acknowledge and break the later gamma/beta waits on this CB.
         dfb_in.pop_front(per_core_MN);
+#endif
 
     } else {
         // nothing, for the negative mask implementation, cb_in_id is the only cb in use, and it already has the data

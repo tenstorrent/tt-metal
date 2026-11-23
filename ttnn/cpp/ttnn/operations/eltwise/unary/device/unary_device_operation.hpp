@@ -17,6 +17,8 @@
 
 namespace ttnn::operations::unary {
 
+void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype);
+
 struct UnaryDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
@@ -47,7 +49,7 @@ struct UnaryDeviceOperation {
 
         // Cache-hit re-apply of all per-dispatch state (per-core args + tensor bindings, which also back the
         // sharded-path DFB addresses), since the hash excludes volume. See the .cpp.
-        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,

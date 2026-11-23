@@ -61,6 +61,7 @@ struct DfbGroup {
     std::vector<std::pair<CoreCoord, uint32_t>> l1_by_core; // (core, alloc_addr)
 };
 
+// Host configuration and backing-memory state for a DFB.
 struct DataflowBufferImpl {
     // Unique, program-wide handle
     uint32_t id{};
@@ -70,6 +71,8 @@ struct DataflowBufferImpl {
     // used as the config-table index in the dispatch payload.
     uint32_t device_slot{};
     CoreRangeSet core_ranges;
+    // Unset uses core_ranges for backing-memory allocation.
+    std::optional<CoreRangeSet> allocation_placement;
     DataflowBufferConfig config;
 
     ContextId get_context_id() const { return context_id_; }
@@ -112,6 +115,16 @@ struct DataflowBufferImpl {
     std::vector<uint32_t>   alias_secondary_ids;
 
     bool borrows_memory() const { return config.borrows_memory; }
+
+    // Return the nodes on which backing memory is reserved.
+    const CoreRangeSet& allocation_core_ranges() const {
+        return allocation_placement ? *allocation_placement : core_ranges;
+    }
+
+    // Apply a backing-memory address to every configured node.
+    // precondition: The DFB's device configuration is finalized.
+    // side-effect: Marks device configuration for refresh when the address is first set or changes.
+    void set_configured_address(uint32_t alloc_addr);
 
     void set_borrowed_memory_base_addr(uint32_t new_addr) {
         TT_FATAL(borrows_memory(), "Cannot set borrowed address on DFB {} that does not borrow memory", id);

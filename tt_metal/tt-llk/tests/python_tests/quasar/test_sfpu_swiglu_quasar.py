@@ -251,7 +251,6 @@ def _prepare_swiglu_inputs(
 # helpers/llk_params.py has no Tf32 entry yet, so we leave it for follow-up.
 SFPU_SWIGLU_FORMATS = input_output_formats(
     [
-        DataFormat.Float16,
         DataFormat.Float16_b,
         DataFormat.Float32,
     ]

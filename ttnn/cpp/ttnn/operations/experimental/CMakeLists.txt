@@ -34,11 +34,15 @@ add_subdirectory(reduction)
 add_subdirectory(high_bw_all_gather)
 add_subdirectory(indexer_score)
 add_subdirectory(kda)
+add_subdirectory(sparse_kv_push)
 add_subdirectory(topk_large_indices)
 
 # metallium-maintainers-llama-models
 add_subdirectory(indexed_page_cache)
 add_subdirectory(paged_cache)
+
+# Gemma4 model owners
+add_subdirectory(gemma4)
 
 # metalium-developers-external-experience
 add_subdirectory(isin)
@@ -46,6 +50,9 @@ add_subdirectory(isin)
 # cglagovichTT, jonathansuTT (named individuals, not a team)
 add_subdirectory(minimal_matmul)
 add_subdirectory(rgb_to_yuv)
+
+# mstaletovic (named individual): the MoE block's prefill ops
+add_subdirectory(moe_block)
 
 # Jointly owned by convolutions + ops-data-movement — already covered by this
 # file's CODEOWNERS union above, so no separate decision was needed to fold
@@ -65,7 +72,14 @@ add_subdirectory(deepseek_moe_post_combine_tilize)
 add_subdirectory(dropout)
 add_subdirectory(fft)
 add_subdirectory(fused_msda)
+add_subdirectory(modulated_deform_conv2d)
 add_subdirectory(multi_scale_deformable_attn)
+add_subdirectory(nomic_embed_text_v2_moe/routed_combine)
+add_subdirectory(nomic_embed_text_v2_moe/grouped_matmul_w1)
+add_subdirectory(nomic_embed_text_v2_moe/grouped_matmul_w2)
+add_subdirectory(nomic_embed_text_v2_moe/pirotski_matmul)
+add_subdirectory(nomic_embed_text_v2_moe/routing_metadata)
+add_subdirectory(nomic_embed_text_v2_moe/router_front_end)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
 add_subdirectory(ssm)
@@ -94,12 +108,15 @@ target_link_libraries(
         TTNN::Ops::Experimental::HighBwAllGather
         TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::KDA
+        TTNN::Ops::Experimental::SparseKvPush
         TTNN::Ops::Experimental::TopkLargeIndices
+        TTNN::Ops::Experimental::Gemma4
         TTNN::Ops::Experimental::IndexedPageCache
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::MinimalMatmul
         TTNN::Ops::Experimental::RgbToYuv
+        TTNN::Ops::Experimental::MoEBlock
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::SliceWrite
         TTNN::Ops::Experimental::BcastTo
@@ -112,7 +129,14 @@ target_link_libraries(
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::FusedMSDA
+        TTNN::Ops::Experimental::ModulatedDeformConv2d
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmulW1
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmulW2
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::PirotskiMatmul
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata
+        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RouterFrontEnd
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SSM
@@ -146,12 +170,15 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reduction>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::SparseKvPush>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Gemma4>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexedPageCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::RgbToYuv>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEBlock>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PaddedSlice>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SliceWrite>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::BcastTo>
@@ -164,7 +191,14 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Dropout>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FFT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FusedMSDA>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::ModulatedDeformConv2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmulW1>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmulW2>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::PirotskiMatmul>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RouterFrontEnd>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SSM>

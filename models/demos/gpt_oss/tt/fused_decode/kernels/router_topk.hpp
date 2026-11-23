@@ -87,3 +87,139 @@ inline void topk_softmax(volatile tt_l1_ptr uint16_t* logits, volatile tt_l1_ptr
     }
 }
 }  // namespace router_topk
+
+namespace router_topk {
+// Multi-row router tail (DFlash verify, the fused MoE's router: dflash/moe_fused.py, MOE_EARLY_UNION), in parts so
+// that BRISC and NCRISC split the rows and the union (all the gate|up / down cores need to start) goes out before the
+// softmax weights. words = the [rows, 32] BF16 logits tile (row r: 16 values in face 0 at word 8 r, 16 in face 1 at
+// word 8 (rows + r)). rows_ids: rows [r0, r1)'s sorted top-4 ids (ties to the lower id) and order keys (ids /
+// keys[r * topk + j]); rows_softmax: their BF16 softmax weights from the keys (wq[r * topk + j]); union_ids: the
+// union list uni[0] = U, uni[1 + i] = union id i (ascending); union_weights: the [rows, 32] weight matrix,
+// wts[32 r + i] = row r's weight of union expert i (0 if not routed).
+template <uint32_t topk, uint32_t rows>
+inline void rows_ids(
+    const uint32_t* words,
+    uint32_t r0,
+    uint32_t r1,
+    volatile tt_l1_ptr uint32_t* ids,
+    volatile tt_l1_ptr uint32_t* keys) {
+    static_assert(topk == 4, "rows_ids: register top-4");
+    for (uint32_t r = r0; r < r1; ++r) {
+        uint32_t b0 = 0, b1 = 0, b2 = 0, b3 = 0, i0 = 0, i1 = 0, i2 = 0, i3 = 0;
+        auto ins = [&](uint32_t key, uint32_t id) __attribute__((always_inline)) {
+            if (key > b3) {
+                if (key > b2) {
+                    b3 = b2;
+                    i3 = i2;
+                    if (key > b1) {
+                        b2 = b1;
+                        i2 = i1;
+                        if (key > b0) {
+                            b1 = b0;
+                            i1 = i0;
+                            b0 = key;
+                            i0 = id;
+                        } else {
+                            b1 = key;
+                            i1 = id;
+                        }
+                    } else {
+                        b2 = key;
+                        i2 = id;
+                    }
+                } else {
+                    b3 = key;
+                    i3 = id;
+                }
+            }
+        };
+#pragma GCC unroll 2
+        for (uint32_t f = 0; f < 2; ++f) {
+            const uint32_t* w = words + 8 * (f * rows + r);
+#pragma GCC unroll 8
+            for (uint32_t q = 0; q < 8; ++q) {
+                const uint32_t v = w[q];
+                const uint32_t lo = v & 0xFFFF, hi = v >> 16;
+                ins((lo & 0x8000) ? (~lo & 0xFFFF) : (lo | 0x8000), f * 16 + 2 * q);
+                ins((hi & 0x8000) ? (~hi & 0xFFFF) : (hi | 0x8000), f * 16 + 2 * q + 1);
+            }
+        }
+        ids[r * 4 + 0] = i0;
+        ids[r * 4 + 1] = i1;
+        ids[r * 4 + 2] = i2;
+        ids[r * 4 + 3] = i3;
+        keys[r * 4 + 0] = b0;
+        keys[r * 4 + 1] = b1;
+        keys[r * 4 + 2] = b2;
+        keys[r * 4 + 3] = b3;
+    }
+}
+
+template <uint32_t topk>
+inline void rows_softmax(uint32_t r0, uint32_t r1, volatile tt_l1_ptr uint32_t* keys, volatile tt_l1_ptr uint32_t* wq) {
+    for (uint32_t r = r0; r < r1; ++r) {
+        int32_t v0 = 0;
+        uint32_t e[topk];
+        uint32_t sum = 0;
+        for (uint32_t j = 0; j < topk; ++j) {
+            const uint32_t k = keys[r * topk + j];
+            const uint16_t b = (k & 0x8000) ? static_cast<uint16_t>(k & 0x7FFF) : static_cast<uint16_t>(~k & 0xFFFF);
+            const int32_t v = bf16_to_q16(b);
+            if (j == 0) {
+                v0 = v;
+            }
+            e[j] = exp_q16(v - v0);
+            sum += e[j];
+        }
+        for (uint32_t j = 0; j < topk; ++j) {
+            wq[r * topk + j] = q16_to_bf16((e[j] << 15) / (sum >> 1));
+        }
+    }
+}
+
+// the union list ([U, ids ascending] UINT16) into uni_w; slot[id] = its union index
+template <uint32_t topk, uint32_t rows>
+inline uint32_t union_ids(volatile tt_l1_ptr uint32_t* ids, volatile tt_l1_ptr uint32_t* uni_w, uint32_t* slot) {
+    uint32_t mask = 0;
+    for (uint32_t i = 0; i < rows * topk; ++i) {
+        mask |= 1u << ids[i];
+    }
+    uint16_t list[64];
+    uint32_t u = 0;
+    for (uint32_t m = mask; m; m &= m - 1) {
+        const uint32_t e = __builtin_ctz(m);
+        slot[e] = u;
+        list[1 + u] = e;
+        ++u;
+    }
+    list[0] = u;
+    list[1 + u] = 0;
+    const uint32_t uw = (u + 2) / 2;
+    for (uint32_t i = 0; i < uw; ++i) {
+        uni_w[i] = list[2 * i] | (static_cast<uint32_t>(list[2 * i + 1]) << 16);
+    }
+    return u;
+}
+
+template <uint32_t topk, uint32_t rows>
+inline void union_weights(
+    uint32_t u,
+    const uint32_t* slot,
+    volatile tt_l1_ptr uint32_t* ids,
+    volatile tt_l1_ptr uint32_t* wq,
+    volatile tt_l1_ptr uint32_t* wts_w) {
+    const uint32_t ww = (u + 1) / 2;
+    for (uint32_t r = 0; r < rows; ++r) {
+        uint16_t wt[34];
+        for (uint32_t i = 0; i < 2 * ww; ++i) {
+            wt[i] = 0;
+        }
+        for (uint32_t j = 0; j < topk; ++j) {
+            wt[slot[ids[r * topk + j]]] = static_cast<uint16_t>(wq[r * topk + j]);
+        }
+        for (uint32_t i = 0; i < ww; ++i) {
+            wts_w[16 * r + i] = wt[2 * i] | (static_cast<uint32_t>(wt[2 * i + 1]) << 16);
+        }
+    }
+}
+}  // namespace router_topk

@@ -21,8 +21,8 @@ namespace ckernel::sfpu {
 //
 // The lengths below are the instructions sfpi emits for mac_init()'s body:
 //   3x SFPLOAD, SFPMAD, [SFPSTOCHRND for bf16,] SFPSTORE
-// These differ from Wormhole, which needs one more on each path: sfpi there inserts an
-// SFPNOP after SFPMAD for the LREG write latency, a hazard Blackhole does not have.
+// Wormhole records a two-row body instead (its SFPMAD has a write latency that a one-row
+// body could only fill with an SFPNOP), so its lengths differ.
 // The count is therefore a property of what sfpi emits for this arch, not of the source
 // below - if mac_init()'s body changes, or sfpi changes how it schedules the block,
 // re-check these against the generated kernel's disassembly.
@@ -59,17 +59,18 @@ inline void mac_init() {
     // is what we want; only the store overrides it, with the auto-advancing mod set above.
     constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
 
-    lltt::record<lltt::NoExec>(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
-    sfpi::vFloat a = sfpi::dst_reg[0].mode<dst_fmt>();
-    sfpi::vFloat b = sfpi::dst_reg[32].mode<dst_fmt>();
-    sfpi::vFloat c = sfpi::dst_reg[64].mode<dst_fmt>();
-    sfpi::vFloat result = a * b + c;
-    if constexpr (!is_fp32_dest_acc_en) {
-        // SFPMAD accumulates in fp32; an SFPSTORE into a 16-bit DST truncates the
-        // mantissa, so round to nearest-even on the way down to bf16 instead.
-        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-    }
-    sfpi::dst_reg[0].mode<dst_fmt>(ADDR_MOD_6) = result;
+    load_replay_buf(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>, [] {
+        sfpi::vFloat a = sfpi::dst_reg[0].mode<dst_fmt>();
+        sfpi::vFloat b = sfpi::dst_reg[32].mode<dst_fmt>();
+        sfpi::vFloat c = sfpi::dst_reg[64].mode<dst_fmt>();
+        sfpi::vFloat result = a * b + c;
+        if constexpr (!is_fp32_dest_acc_en) {
+            // SFPMAD accumulates in fp32; an SFPSTORE into a 16-bit DST truncates the
+            // mantissa, so round to nearest-even on the way down to bf16 instead.
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0].mode<dst_fmt>(ADDR_MOD_6) = result;
+    });
 }
 
 // mac: out = a * b + c, computed in FP32 accumulator via SFPMAD.
@@ -86,7 +87,7 @@ inline void mac_init() {
 // recorded replay sequence, so the operand tiles are always (0, 1, 2) and the
 // result is always written to tile 0.  Passing anything else has no effect.
 //
-// Because the replay slots (0..6) are shared with other SFPU ops, this must be
+// Because the replay slots mac_init records into are shared with other SFPU ops, this must be
 // replayed while mac_init's recording is still the resident one - i.e. a
 // mac_tile call is only valid immediately after mac_tile_init.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>

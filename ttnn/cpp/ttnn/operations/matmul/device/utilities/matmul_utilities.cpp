@@ -5,10 +5,12 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <numeric>
 #include <limits>
 #include <set>
 
 #include "tt-metalium/allocator.hpp"
+#include "tt-metalium/workload/specification/kernel_spec.hpp"
 #include "tt-metalium/experimental/device.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/hal.hpp"
@@ -18,6 +20,7 @@
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <internal/mesh_device.hpp>
 
 namespace ttnn::operations::matmul::utilities {
 
@@ -130,13 +133,23 @@ ttnn::Shape compute_matmul_output_shape(
 
     // Handle batch dimensions for the case where b_rank > a_rank
     for (auto index = 0; index < rank_difference; ++index) {
-        TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
+        TT_FATAL(
+            a_rank > 1 || input_shape_b[index] == 1,
+            "When in1 rank greater than in0 rank front dimensions need to be 1");
         output_shape[index] = input_shape_b[index];
     }
 
     // Copy dimensions from input_shape_a except the last one
     for (auto index = 0; index < a_rank - 1; ++index) {
         output_shape[rank_difference + index] = input_shape_a[index];
+    }
+
+    // Torch-style batch broadcasting: batch dims align from the right, and a size-1 dim takes the other's size.
+    if (a_rank >= 2 && b_rank >= 2) {
+        const auto batch_dims = get_output_batch_dims(input_shape_a, input_shape_b);
+        for (size_t index = 0; index < batch_dims.size(); ++index) {
+            output_shape[index] = batch_dims[index];
+        }
     }
 
     // The last dimension comes from input_tensor_b
@@ -163,18 +176,6 @@ ttnn::Shape compute_matmul_output_shape(
         }
         output_shape = ttnn::Shape(new_shape);
     }
-
-    // Optimization: Reuse input A (in0) across batches when A's batch dimensions are all 1
-    // and B's corresponding batch dimensions are > 1. The same A tensor is reused for each
-    // batch element of B rather than reading A repeatedly. Supported for rank >= 3 tensors
-    // with matching ranks and interleaved (non-sharded) memory layout.
-    if (a_rank >= 3 && b_rank == a_rank) {
-        for (int i = 0; i < static_cast<int>(a_rank) - 2; i++) {
-            if (input_shape_a[i] == 1 && input_shape_b[i] > 1) {
-                output_shape[i] = input_shape_b[i];
-            }
-        }
-    }
     return output_shape;
 }
 
@@ -198,6 +199,113 @@ ttnn::Shape compute_matmul_with_bias_output_shape(const ttnn::Shape& matmul_shap
     }
 
     return ttnn::Shape(result_shape);
+}
+
+ttsl::SmallVector<uint32_t> get_output_batch_dims(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
+    const auto batch_rank = [](const ttnn::Shape& shape) -> size_t { return shape.rank() > 2 ? shape.rank() - 2 : 0; };
+    const size_t rank = std::max(batch_rank(a_shape), batch_rank(b_shape));
+    // A shape with fewer batch dims reads as size 1 in the leading ones.
+    const auto batch_dim = [&](const ttnn::Shape& shape, size_t index) -> uint32_t {
+        const size_t missing = rank - batch_rank(shape);
+        return index < missing ? 1u : shape[static_cast<int>(index - missing)];
+    };
+    ttsl::SmallVector<uint32_t> dims(rank);
+    for (size_t index = 0; index < rank; ++index) {
+        const uint32_t a_dim = batch_dim(a_shape, index);
+        const uint32_t b_dim = batch_dim(b_shape, index);
+        TT_FATAL(
+            a_dim == b_dim || a_dim == 1 || b_dim == 1,
+            "Batch dims of {} and {} are not broadcastable",
+            a_shape,
+            b_shape);
+        dims[index] = a_dim == 1 ? b_dim : a_dim;
+    }
+    return dims;
+}
+
+uint32_t get_output_batch_size(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
+    const auto dims = get_output_batch_dims(a_shape, b_shape);
+    return std::accumulate(dims.begin(), dims.end(), 1u, std::multiplies<>());
+}
+
+std::optional<BatchBroadcast> get_batch_broadcast(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
+    const bool batch_dims_differ_with_batched_b = a_shape.rank() == b_shape.rank() && get_batch_size(b_shape) > 1 &&
+                                                  !std::equal(a_shape.cbegin(), a_shape.cend() - 2, b_shape.cbegin());
+    if (!batch_dims_differ_with_batched_b) {
+        return std::nullopt;
+    }
+    // Built innermost dim first. Size-1 dims are dropped and neighbours that broadcast alike are merged, since the
+    // readers pay a division per dim for every batch.
+    const auto output_dims = get_output_batch_dims(a_shape, b_shape);
+    BatchBroadcast broadcast;
+    uint32_t a_stride = 1;
+    uint32_t b_stride = 1;
+    for (size_t index = output_dims.size(); index-- > 0;) {
+        const uint32_t dim = output_dims[index];
+        const uint32_t in0_stride = a_shape[index] == 1 ? 0 : a_stride;
+        const uint32_t in1_stride = b_shape[index] == 1 ? 0 : b_stride;
+        a_stride *= a_shape[index];
+        b_stride *= b_shape[index];
+        if (dim == 1) {
+            continue;
+        }
+        const bool same_pattern = !broadcast.dims.empty() && (broadcast.in0_strides.back() == 0) == (in0_stride == 0) &&
+                                  (broadcast.in1_strides.back() == 0) == (in1_stride == 0);
+        if (same_pattern) {
+            broadcast.dims.back() *= dim;
+        } else {
+            broadcast.dims.push_back(dim);
+            broadcast.in0_strides.push_back(in0_stride);
+            broadcast.in1_strides.push_back(in1_stride);
+        }
+    }
+    std::reverse(broadcast.dims.begin(), broadcast.dims.end());
+    std::reverse(broadcast.in0_strides.begin(), broadcast.in0_strides.end());
+    std::reverse(broadcast.in1_strides.begin(), broadcast.in1_strides.end());
+    return broadcast;
+}
+
+void add_batch_broadcast_args(
+    tt::tt_metal::KernelSpec& kernel,
+    const BatchBroadcast& broadcast,
+    std::optional<uint32_t> in0_tiles_per_batch,
+    std::optional<uint32_t> in1_tiles_per_batch) {
+    const auto tile_strides = [](const std::vector<uint32_t>& strides, uint32_t tiles_per_batch) {
+        std::vector<uint32_t> result;
+        result.reserve(strides.size());
+        for (const uint32_t stride : strides) {
+            result.push_back(stride * tiles_per_batch);
+        }
+        return result;
+    };
+    kernel.compiler_options.defines.insert({"BATCH_BROADCAST", "1"});
+    kernel.compile_time_array_args.insert({"batch_dims", broadcast.dims});
+    if (in0_tiles_per_batch.has_value()) {
+        kernel.compile_time_array_args.insert(
+            {"in0_batch_strides", tile_strides(broadcast.in0_strides, *in0_tiles_per_batch)});
+    }
+    if (in1_tiles_per_batch.has_value()) {
+        kernel.compile_time_array_args.insert(
+            {"in1_batch_strides", tile_strides(broadcast.in1_strides, *in1_tiles_per_batch)});
+    }
+}
+
+bool supports_batch_broadcast(
+    const MatmulProgramConfig& program_config,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded() || output_mem_config.is_sharded()) {
+        return false;
+    }
+    if (const auto* mcast_2d = std::get_if<MatmulMultiCoreReuseMultiCastProgramConfig>(&program_config)) {
+        return !mcast_2d->fuse_batch;
+    }
+    if (const auto* mcast_1d = std::get_if<MatmulMultiCoreReuseMultiCast1DProgramConfig>(&program_config)) {
+        return !mcast_1d->fuse_batch && !mcast_1d->gather_in0;
+    }
+    return std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(program_config) ||
+           std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config);
 }
 
 tt::tt_metal::Tile get_output_tile(
@@ -279,7 +387,7 @@ void validate_matmul_reuse_work_split(
     const MatmulMultiCoreReuseProgramConfig& program_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set) {
-    const uint32_t B = ttnn::get_batch_size(a_shape_padded);
+    const uint32_t B = get_output_batch_size(a_shape_padded, b_shape_padded);
     const uint32_t Mt = get_M_dim(a_shape_padded, in0_tile, false);
     const uint32_t Nt = get_N_dim(b_shape_padded, in1_tile);
     const uint32_t per_core_M = program_config.per_core_M;
@@ -348,7 +456,7 @@ tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const tt
     if (!view.contains(coord) || !view.is_local(coord)) {
         return device;
     }
-    return a.device()->get_device(coord);
+    return tt::tt_metal::internal::get_device(*a.device(), coord);
 }
 
 void get_max_page_size_and_num_pages(
@@ -385,6 +493,25 @@ void move_common_entries(
     }
 }
 
+namespace {
+
+// Per DRAM bank, its NOC-optimal reader core on the chip at coord (the chips of a mesh can be harvested differently,
+// and logical columns skip harvested ones, so the best reader's logical column can differ per chip).
+std::vector<tt::tt_metal::CoreCoord> dram_bank_workers(
+    const tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    const auto per_bank = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
+    std::vector<tt::tt_metal::CoreCoord> workers(per_bank.size());
+    for (const auto& [bank, core] : per_bank) {
+        TT_FATAL(bank < workers.size(), "DRAM bank id {} out of range", bank);
+        workers[bank] = core;
+    }
+    return workers;
+}
+
+}  // namespace
+
 void get_optimal_dram_bank_to_reader_assignment(
     const tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
@@ -402,10 +529,11 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores) {
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
     validate_num_workers_per_dram_bank(workers_per_bank);
 
-    const auto primary_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const auto primary_workers = dram_bank_workers(device, noc, coord);
     std::vector<DramBankReaderAssignment> assignments;
     assignments.reserve(primary_workers.size() * workers_per_bank);
 
@@ -437,18 +565,14 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     if (used.contains(candidate) || secondary_reader_excluded_cores.contains(candidate)) {
                         continue;
                     }
-                    // All readers use AllocatorBank on the same NOC and therefore target the same
+                    // All readers address the bank by allocator bank id on the same NOC and therefore target the same
                     // firmware-approved endpoint. Place additional readers near the bank's primary
                     // reader to minimize NOC hops without routing one NOC to multiple endpoints.
                     // This factory shares one logical reader placement across the mesh, as it
                     // already does for primary readers. Use a representative chip for the hop
                     // heuristic; bank addressing still uses each executing chip's allocator table.
                     const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                        &device,
-                        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
-                        candidate,
-                        primary_workers[bank],
-                        noc);
+                        &device, coord, candidate, primary_workers[bank], noc);
                     // Equal-cost candidates use the same endpoint and hop count. Keep the first candidate in ascending
                     // x/y scan order so that the assignment is deterministic without adding a second routing objective.
                     if (cost < best_cost) {
@@ -464,5 +588,75 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
         }
     }
     return assignments;
+}
+
+bool use_dram_sharded_multicore(
+    bool use_multicore_pipeline,
+    std::size_t workers_per_bank,
+    bool has_bias,
+    bool has_fused_activation,
+    bool untilize_out,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    uint32_t k_logical,
+    tt::tt_metal::BufferType a_buffer_type,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    auto full_tile = [](const tt::tt_metal::Tile& t) {
+        return t.get_height() == tt::constants::TILE_HEIGHT && t.get_width() == tt::constants::TILE_WIDTH &&
+               !t.get_transpose_within_face() && !t.get_transpose_of_faces();
+    };
+    return use_multicore_pipeline && workers_per_bank >= 2 && !has_bias && !has_fused_activation && !untilize_out &&
+           full_tile(in0_tile) && full_tile(in1_tile) && k_logical % tt::constants::TILE_WIDTH == 0 &&
+           a_buffer_type == tt::tt_metal::BufferType::L1 &&
+           output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 &&
+           output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
+           (!output_mem_config.shard_spec().has_value() ||
+            output_mem_config.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+}
+
+std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
+    tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    uint32_t cores_per_bank,
+    uint32_t num_banks,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    const auto anchors = dram_bank_workers(device, noc, coord);
+    TT_FATAL(num_banks <= anchors.size(), "{} banks requested, the device has {}", num_banks, anchors.size());
+    const auto grid = device.compute_with_storage_grid_size();
+    TT_FATAL(
+        static_cast<std::size_t>(cores_per_bank) * num_banks <= grid.x * grid.y,
+        "{} cores per bank over {} banks do not fit the {}x{} worker grid",
+        cores_per_bank,
+        num_banks,
+        grid.x,
+        grid.y);
+    std::vector<std::vector<tt::tt_metal::CoreCoord>> cores(num_banks);
+    std::set<tt::tt_metal::CoreCoord> taken;
+    auto dist = [](uint32_t a, uint32_t b) { return a > b ? a - b : b - a; };
+    for (uint32_t c = 0; c < cores_per_bank; ++c) {
+        for (uint32_t bank = 0; bank < num_banks; ++bank) {
+            const auto& anchor = anchors[bank];
+            std::pair<uint32_t, uint32_t> best_key{std::numeric_limits<uint32_t>::max(), 0};
+            tt::tt_metal::CoreCoord best{};
+            // Row-major scan: among equal keys the first core in (y, x) order wins.
+            for (uint32_t y = 0; y < grid.y; ++y) {
+                for (uint32_t x = 0; x < grid.x; ++x) {
+                    const tt::tt_metal::CoreCoord candidate{x, y};
+                    if (taken.contains(candidate)) {
+                        continue;
+                    }
+                    const std::pair<uint32_t, uint32_t> key{
+                        dist(x, anchor.x) + dist(y, anchor.y), dist(y, anchor.y)};
+                    if (key < best_key) {
+                        best_key = key;
+                        best = candidate;
+                    }
+                }
+            }
+            taken.insert(best);
+            cores[bank].push_back(best);
+        }
+    }
+    return cores;
 }
 }  // namespace ttnn::prim::dram_sharded_helpers

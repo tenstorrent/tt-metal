@@ -13,7 +13,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::ccl::common {
@@ -259,6 +259,11 @@ std::vector<tt::tt_metal::CoreCoord> build_matmul_ring_cores(
     ttnn::MeshDevice* mesh_device, uint32_t ring_size, const CoreCoordPairSet& mux_pairs) {
     auto cores = mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
     const uint32_t num_banks = static_cast<uint32_t>(cores.size());
+    // Multiple DRAM banks can map to the same logical worker. Such an assignment cannot form a
+    // ring of distinct workers; use the existing compact placement instead.
+    if (core_coords_to_pair_set(cores).size() != cores.size()) {
+        return {};
+    }
 
     if (num_banks >= ring_size) {
         cores.resize(ring_size);

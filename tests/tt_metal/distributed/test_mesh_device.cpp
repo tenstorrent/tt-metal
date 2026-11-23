@@ -28,10 +28,10 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/device.hpp>
@@ -103,7 +103,7 @@ std::shared_ptr<MeshDevice> create_unit_mesh_for_close_tests() {
 void compile_and_cache_dummy_workload(MeshDevice& mesh, const program_cache::detail::ProgramCacheKey& key) {
     mesh.enable_program_cache();
 
-    Program program;
+    Program program = CreateProgram(mesh);
     const CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
     CreateKernel(
         program,
@@ -172,27 +172,27 @@ TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
 
 TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
     auto stats = mesh_device_->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
-    for (auto* device : mesh_device_->get_devices()) {
+    for (auto* device : mesh_device_->impl().get_devices()) {
         auto device_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
         EXPECT_EQ(stats.total_allocatable_size_bytes, device_stats.total_allocatable_size_bytes);
     }
 }
 
 TEST_F(MeshDevice2x4Test, ViewIs2D) {
-    std::vector<IDevice*> devices;
+    std::vector<Device*> devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         devices.push_back(mesh_device_->get_view().impl().get_device(coord));
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
     }
 
-    MeshDeviceView view_1d(MeshShape(8), devices, fabric_node_ids);
+    MeshDeviceView view_1d(std::make_unique<MeshDeviceViewImpl>(MeshShape(8), devices, fabric_node_ids));
     EXPECT_FALSE(view_1d.is_mesh_2d());
 
-    MeshDeviceView view_2d(MeshShape(2, 4), devices, fabric_node_ids);
+    MeshDeviceView view_2d(std::make_unique<MeshDeviceViewImpl>(MeshShape(2, 4), devices, fabric_node_ids));
     EXPECT_TRUE(view_2d.is_mesh_2d());
 
-    MeshDeviceView view_3d(MeshShape(2, 2, 2), devices, fabric_node_ids);
+    MeshDeviceView view_3d(std::make_unique<MeshDeviceViewImpl>(MeshShape(2, 2, 2), devices, fabric_node_ids));
     EXPECT_FALSE(view_3d.is_mesh_2d());
 }
 
@@ -207,14 +207,14 @@ TEST_F(MeshDevice2x4Test, CreateSubmeshInvalidConfig) {
 
 TEST_F(MeshDevice2x4Test, CreateSubmesh) {
     EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
-    EXPECT_THAT(mesh_device_->get_devices(), SizeIs(8));
+    EXPECT_THAT(mesh_device_->impl().get_devices(), SizeIs(8));
     EXPECT_TRUE(mesh_device_->is_parent_mesh());
     EXPECT_THAT(mesh_device_->get_submeshes(), IsEmpty());
 
     auto submesh = mesh_device_->create_submesh(MeshShape{1, 2}, MeshCoordinate{1, 1});
     EXPECT_THAT(mesh_device_->get_submeshes(), SizeIs(1));
     EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
-    EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+    EXPECT_THAT(submesh->impl().get_devices(), SizeIs(2));
     EXPECT_FALSE(submesh->is_parent_mesh());
     EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
 
@@ -240,7 +240,7 @@ TEST_F(MeshDevice2x4Test, CreateSubmeshes) {
     EXPECT_THAT(submeshes, SizeIs(4));
     for (const auto& submesh : submeshes) {
         EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
-        EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+        EXPECT_THAT(submesh->impl().get_devices(), SizeIs(2));
     }
 
     EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
@@ -279,8 +279,8 @@ TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) 
 
 TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
     const CoreCoord logical_core{0, 0};
-    auto& metal_context = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id());
-    const auto& control_plane = metal_context.get_control_plane();
+    auto& env = mesh_device_->impl().metal_env();
+    const auto& control_plane = env.get_control_plane();
 
     for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
         // Derive the expected coordinate from the chip's SoC descriptor rather than from the device
@@ -290,7 +290,7 @@ TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
         EXPECT_EQ(
             tt::tt_metal::experimental::Device::worker_core_from_logical_core(
                 *mesh_device_, mesh_coordinate, logical_core),
-            metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 physical_chip_id, logical_core, CoreType::WORKER));
     }
 

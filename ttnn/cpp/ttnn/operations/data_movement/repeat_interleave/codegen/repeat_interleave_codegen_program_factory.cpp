@@ -123,9 +123,8 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
         KernelDescriptor writer_desc;
         writer_desc.kernel_source = kWriterSrc;
         writer_desc.core_ranges = all_cores;
-        writer_desc.compile_time_args = {cb_id, out_page_size};
+        writer_desc.compile_time_args = {cb_id, out_page_size, kRiWriteBatch};
         TensorAccessorArgs(*out_buffer).append_to(writer_desc.compile_time_args);
-        writer_desc.compile_time_args.push_back(kRiWriteBatch);
         writer_desc.config = WriterConfigDescriptor{};
 
         for (const auto& work : layout) {
@@ -191,9 +190,8 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     // and the L1 slot stride from the CB descriptor, then clamps the transfer to the smallest of the
     // three. Requesting the stick keeps each output page's alignment padding untouched, which is what
     // the host expects to trim on read-back.
-    writer_desc.compile_time_args = {cb_id, operation_attributes.stick_size};
+    writer_desc.compile_time_args = {cb_id, operation_attributes.stick_size, batch};
     TensorAccessorArgs(*out_buffer).append_to(writer_desc.compile_time_args);
-    writer_desc.compile_time_args.push_back(batch);
     writer_desc.config = WriterConfigDescriptor{};
 
     for (const auto& work : layout) {

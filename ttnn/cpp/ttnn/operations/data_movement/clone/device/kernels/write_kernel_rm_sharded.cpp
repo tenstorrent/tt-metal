@@ -6,7 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
-#include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -15,24 +15,16 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dst_dfb(dfb::dst);
-    // Case 2 (raw pointer): the TensorBinding supplies the per-enqueue base address;
-    // the raw local-L1 walk over the resident shard is unchanged from the legacy kernel.
-    const auto s = TensorAccessor(tensor::output);
-    uint32_t local_l1_write_addr = s.get_bank_base_address();
+    // The resident shard is this core's L1: walk it as a loopback NoC endpoint (same transfers as the legacy kernel).
+    const LocalTensorAccessor<uint32_t> s(tensor::output);
+    uint32_t local_l1_write_offset = 0;
 
     for (uint32_t i = 0; i < num_sticks; ++i) {
         dst_dfb.wait_front(1);
-        noc.async_write(
-            dst_dfb,
-            UnicastEndpoint{},
-            stick_size,
-            {.offset_bytes = 0},
-            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-             .addr = local_l1_write_addr});
+        noc.async_write(dst_dfb, s, stick_size, {.offset_bytes = 0}, {.offset_bytes = local_l1_write_offset});
         noc.async_write_barrier();
 
         dst_dfb.pop_front(1);
-        local_l1_write_addr += stick_size;
+        local_l1_write_offset += stick_size;
     }
 }

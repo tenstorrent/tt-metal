@@ -32,8 +32,8 @@ work can resume as-is.
 | Chunked prefill, full 36-layer model, real weights | merged; every chunk goes through the cache-backed ring SDPA |
 | Variable chunk sizes (one runtime serving several sizes) | merged |
 | Bounded sliding-window KV cache (circular window for the 18 sliding layers) | merged, opt-in (`GPT_OSS_BOUNDED_SLIDING_KV=1`) |
-| Per-layer KV-PCC validation vs a CPU golden, in one galaxy CI job (runner e2e, 5k@1k harness, variable-chunk smoke) | merged |
-| GPT-OSS through the common prefill runner (producer/runner e2e), with its galaxy CI section | merged, [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) |
+| Per-layer KV-PCC validation vs a CPU golden, in two galaxy CI jobs (runner gate; 5k@1k harness and variable-chunk smoke suite) | merged |
+| GPT-OSS through the common prefill runner (`run_multirank_pcc.sh gptoss120b sc1`), with its galaxy CI section | merged, [#56519](https://github.com/tenstorrent/tt-metal/pull/56519) |
 | Trace capture of the prefill chunk | planned, [#56661](https://github.com/tenstorrent/tt-metal/issues/56661) (stage one [#56660](https://github.com/tenstorrent/tt-metal/issues/56660), stage two [#56115](https://github.com/tenstorrent/tt-metal/issues/56115)) |
 | Bounded sliding cache as the default, KV migration of a bounded cache | planned, [#55646](https://github.com/tenstorrent/tt-metal/issues/55646) |
 | Hoisting shared prefill scaffolding into `common/prefill` | open, [#55647](https://github.com/tenstorrent/tt-metal/issues/55647) |
@@ -107,8 +107,9 @@ fills in, and `bounded_sliding_kv_cache`. The runtime has no trace path.
 `mpirun`, not pytest. It loads real weights from the tilized TTNN cache and prefills the golden
 prompt in chunks. It prints throughput two ways, over the real prompt tokens and over the processed
 (padded) tokens. Then it reads every layer's K and V back, PCCs them against the golden, and fails
-below `GPT_OSS_KV_PCC_MIN`. The 5k@1k section of the CI job runs exactly this; it is the quickest way to
-reproduce a number.
+below `GPT_OSS_KV_PCC_MIN`. With `PREFILL_RESUME_AT=R` it then re-prefills slot 0 as `[0, R)` plus one chunk
+from `R`, the way a follow-up chat turn resumes mid-chunk, and gates that PCC too. The 5k@1k section of the
+CI job runs exactly this with `R=992`; it is the quickest way to reproduce a number.
 
 ```bash
 cd <tt-metal>; source python_env/bin/activate
@@ -133,12 +134,11 @@ carries the mesh defaults. The adapter allocates the cache, builds the runtime a
 at the model's weight-cache layout. Layer completion is reported to the migration layer through the
 host `on_layer_complete` callback (`set_layer_completion_sink`), not through D2H device records.
 `tt/runners/kv_chunk_table.py` builds the KV chunk address table for migration from the packed
-cache. The producer/runner e2e scenario `single_user_full_depth`
-(`models/demos/common/prefill/tests/test_producer_runner_e2e.py`, 11 × 5120-token chunks) runs
-GPT-OSS end to end and checks the producer's KV PCC over the first 5000 positions, which is all the
-golden holds. GPT-OSS acks layers through the host callback, so the scenario runs with
-`PREFILL_LAYER_ACK_D2H=0`. The runner section of the CI job runs it; that section in the matrix is the
-reference launch command. General runner usage: `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`
+cache. `scripts/ci/run_prefill_acceptance.sh` runs the common launcher
+(`models/demos/common/prefill/runners/ci/run_multirank_pcc.sh gptoss120b sc1`, configured by
+`scripts/ci/runner_config.sh`): two 1K chunks per slot over all 36 layers and both slots, with the
+producer's K/V PCC against the golden. GPT-OSS acks layers through the host callback, so it runs with
+`PREFILL_LAYER_ACK_D2H=0`. The runner job in the CI matrix is the reference launch command. General runner usage: `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`
 and `models/demos/common/prefill/runners/RUN_COMMANDS.md`.
 
 ## The KV cache
@@ -208,11 +208,11 @@ Unit tests: `pytest models/demos/gpt_oss_d_p/tests/unit` (the CPU-only ones run 
 | `tests/galaxy_prefill_kv_pcc.py` | galaxy | full model, real weights, throughput + per-layer PCC |
 | `tests/variable_chunk_smoke.py` | galaxy | one runtime prefilling the same tokens as a 1k and an 8k chunk (no PCC) |
 
-Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests") runs
-one job, `(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k + chunked prefill KV accuracy longbook 5k@1k + variable-chunk smoke 1k vs 8k`
-(`-f test-type=gpt_oss_prefill_suite`), with three time-bounded sections on one allocation: the
-producer/runner e2e through the common runner, the harness with the PCC gate at 5k@1k, then the
-variable-chunk smoke. The job stops at the first failed section. Op-level coverage for the sliding ring read lives in
+Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests") runs two
+GPT-OSS jobs. The runner gate (`-f test-type=gpt_oss_prefill_runner`) runs the KV-table tests, then the common
+launcher's all-layer K/V PCC over two 1K chunks per slot. The suite (`-f test-type=gpt_oss_prefill_suite`) runs two
+time-bounded sections on one allocation: the harness with the PCC gate at 5k@1k plus the mid-chunk resume pass,
+then the variable-chunk smoke; it stops at the first failed section. Op-level coverage for the sliding ring read lives in
 `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` (production and circular-cache accuracy,
 metadata-path rejection) and the header gtest
 `tests/ttnn/unit_tests/gtests/sdpa/test_sliding_window_work_plan.cpp`.
