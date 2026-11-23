@@ -48,6 +48,9 @@ PREP_SLIM = os.environ.get("INKLING_PREP_SLIM", "1") == "1"
 # 128K 20.24 -> 20.21.
 PREP_PRE = os.environ.get("INKLING_PREP_PRE", "1") == "1"
 NEG = -1.0e9  # masked logit (attention.py)
+# Near combine SFPU rows: 4-row groups per face of the ops in attn_comb_compute.cpp (2 = rows 0..3, the 3 heads of a
+# kv group; 8 = whole faces). Same per-element ops on the rows the consumers read.
+COMB_IT = int(os.environ.get("INKLING_COMB_IT", "2"))
 
 
 def f32_bits(x):
@@ -739,7 +742,7 @@ class AttnNear:
                 w_rt,
                 ttnn.WriterConfigDescriptor(),
             ),
-            _kernel("attn_comb_compute.cpp", cc, named, [[]] * n, _comb_cfg()),
+            _kernel("attn_comb_compute.cpp", cc, dict(named, it=COMB_IT), [[]] * n, _comb_cfg()),
         ]
         crs = _crs(cc)
         cbs = [
@@ -859,7 +862,7 @@ class AttnNear:
                     w_rt,
                     ttnn.WriterConfigDescriptor(),
                 ),
-                _kernel("attn_comb_compute.cpp", cc, named, [[]] * N_KV, _comb_cfg()),
+                _kernel("attn_comb_compute.cpp", cc, dict(named, it=COMB_IT), [[]] * N_KV, _comb_cfg()),
             ]
             io += [zp, op, mp, r_t, s_t, o_t]
         crs = _crs(all_cc)

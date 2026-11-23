@@ -24,6 +24,37 @@ constexpr uint32_t cb_m = 21, cb_s = 22;
 constexpr uint32_t dt = 4;
 // SFPU ops on the top two faces only (rows 0..15; the group's heads are rows 0..2, every op is per element)
 constexpr VectorMode VM = VectorMode::R;
+// and of those, rows 0..3 (IT 4-row groups per face; 8 = the whole face): every consumer reads rows 0..2 only
+// (AttnOut's merge, the far call's sink rows), so the other rows' values do not matter. Same op per element.
+constexpr int IT = get_named_compile_time_arg_val("it");
+using ckernel::DstRoundingMode;
+
+FORCE_INLINE void vmax(uint32_t a, uint32_t b, uint32_t o) {
+    MATH((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_binary_max_min, (true, IT), a, b, o, VM)));
+}
+FORCE_INLINE void vsub(uint32_t a, uint32_t b, uint32_t o) {
+    sub_binary_tile<DstRoundingMode::Default, DST_ACCUM_MODE, IT>(a, b, o, VM);
+}
+FORCE_INLINE void vadd(uint32_t a, uint32_t b, uint32_t o) {
+    add_binary_tile<DstRoundingMode::Default, DST_ACCUM_MODE, IT>(a, b, o, VM);
+}
+FORCE_INLINE void vmul(uint32_t a, uint32_t b, uint32_t o) { mul_binary_tile<DST_ACCUM_MODE, IT>(a, b, o, VM); }
+FORCE_INLINE void vexp(uint32_t a) { exp_tile<false, false, InputClamping::ClampToNegative, IT>(a, VM); }
+FORCE_INLINE void vdiv(uint32_t a, uint32_t b, uint32_t o) {  // div_binary_tile on those rows
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_div,
+        (APPROX, ckernel::BinaryOp::DIV, IT, DST_ACCUM_MODE),
+        a,
+        b,
+        o,
+        VM)));
+}
+FORCE_INLINE void vlog(uint32_t a) {  // log_tile on those rows
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_log, (APPROX, false, false, DST_ACCUM_MODE, IT), a, VM, 0));
+}
 
 FORCE_INLINE void load(uint32_t cb, uint32_t tile, uint32_t dst) {
     reconfig_data_format_srca(cb);
@@ -52,16 +83,16 @@ FORCE_INLINE void wsum(uint32_t cb, uint32_t first, uint32_t stride, uint32_t n,
     }
     mul_binary_tile_init();
     for (uint32_t i = 0; i < n; ++i) {
-        mul_binary_tile(i, n + i, i, VM);
+        vmul(i, n + i, i);
     }
     add_binary_tile_init();
     for (uint32_t i = 1; i < n; ++i) {
-        add_binary_tile(0, i, 0, VM);
+        vadd(0, i, 0);
     }
     if (divide) {
         load(cb_zs, 0, 1);
         div_binary_tile_init();
-        div_binary_tile(0, 1, 0);
+        vdiv(0, 1, 0);
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -89,15 +120,15 @@ void kernel_main() {
     copy_tile(cb_c, 0, nsplit);
     binary_max_tile_init();
     for (uint32_t i = 1; i < nsplit; ++i) {
-        binary_max_tile(nsplit, i, nsplit, VM);
+        vmax(nsplit, i, nsplit);
     }
     sub_binary_tile_init();
     for (uint32_t i = 0; i < nsplit; ++i) {
-        sub_binary_tile(i, nsplit, i, VM);
+        vsub(i, nsplit, i);
     }
     exp_tile_init();
     for (uint32_t i = 0; i < nsplit; ++i) {
-        exp_tile(i, VM);
+        vexp(i);
     }
     tile_regs_commit();
     tile_regs_wait();
@@ -121,9 +152,9 @@ void kernel_main() {
         load(cb_m, 0, 0);
         load(cb_zs, 0, 1);
         log_tile_init();
-        log_tile(1);
+        vlog(1);
         add_binary_tile_init();
-        add_binary_tile(0, 1, 0, VM);
+        vadd(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
         put(0, cb_lf);
@@ -135,9 +166,9 @@ void kernel_main() {
         load(cb_st, 0, 0);
         load(cb_lf, 0, 1);
         sub_binary_tile_init();
-        sub_binary_tile(0, 1, 0, VM);
+        vsub(0, 1, 0);
         exp_tile_init();
-        exp_tile(0, VM);
+        vexp(0);
         tile_regs_commit();
         tile_regs_wait();
         put(0, cb_r);
