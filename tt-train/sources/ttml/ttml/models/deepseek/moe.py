@@ -460,14 +460,11 @@ class MoE(AbstractModuleBase):
     def _global_token_counts(self) -> ttnn.Tensor:
         """The token counts since the last update over the whole batch, averaged over every mesh axis.
 
-        The bias is replicated, so every device must make the same update, from the counts of the whole batch. A
-        device's ``_token_counts`` cover only the tokens it routed, and under data parallelism ("dp", and "fsdp",
-        which shards the parameters but not the batch) each device routes its own slice of the batch. From its own
-        slice alone each replica would move its bias differently, and the replicas, which must hold the same model,
-        would drift apart and route the same token to different experts. Megatron-LM likewise all-reduces the
-        counts over its data, tensor and context parallel ranks before the same update. Devices along an axis that
-        routed the same tokens (tensor or expert parallelism, or ``SparseMoEEP``'s batch gathered over "dp") hold
-        equal counts, which the average returns unchanged. The average gives the update the same signs as the sum.
+        The bias is replicated, so every device must make the same update, from the counts of the whole batch, while a
+        device's ``_token_counts`` cover only the tokens it routed: every data-parallel axis ("dp" and "fsdp") gives
+        each device its own slice of the batch. Devices along an axis that routed the same tokens (tensor or expert
+        parallelism, or ``SparseMoEEP``'s batch gathered over "dp") hold equal counts, which the average returns
+        unchanged. The average gives the update the same signs as the sum.
         """
         counts = self._token_counts.tensor.get_value()
         # Each device's own counts under the buffer's replicated topology, as a replicated parameter's gradient is
