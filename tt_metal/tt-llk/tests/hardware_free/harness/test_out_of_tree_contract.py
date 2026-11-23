@@ -26,11 +26,13 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 import pytest
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / "out_of_tree"
+WHEEL_BUILDER = Path(__file__).resolve().parents[2] / "harness_wheel" / "make_wheel.py"
 # Deliberately below the pytest-timeout budget tests/run_hardware_free.sh passes
 # (--timeout=120): our own timeout has to fire first, because ``_run_fixture``
 # turns it into a failure carrying the child's output, whereas pytest-timeout
@@ -105,8 +107,55 @@ def test_out_of_tree_contract_fixture_passes():
         _assert_the_child_ran_the_fixture(report, result)
 
 
-def _run_fixture(child_temp: str, report: Path) -> subprocess.CompletedProcess:
+def test_out_of_tree_contract_fixture_passes_on_the_installed_wheel():
+    """The same contract, with the harness taken from its wheel.
+
+    ``tests/harness_wheel/make_wheel.py`` packages the harness so an external
+    suite can install it instead of putting a checkout on ``sys.path``. This
+    builds that wheel, unpacks it the way installing a pure-Python wheel does,
+    and points the fixture at the result (``LLK_HARNESS_SITE``). The fixture
+    asserts that ``helpers`` resolved from there, so a pass means the installed
+    copy was the one exercised.
+
+    What this catches that the checkout run cannot: a module that reads a file
+    by a path relative to the tt-llk tree, or a package or data file the wheel
+    does not carry. Either works from a checkout and fails once installed.
+    """
+    with tempfile.TemporaryDirectory(prefix="oot-wheel-") as child_temp:
+        built = subprocess.run(
+            [sys.executable, str(WHEEL_BUILDER), "--out-dir", child_temp],
+            capture_output=True,
+            text=True,
+        )
+        assert built.returncode == 0, f"wheel build failed:\n{built.stderr}"
+        site = Path(child_temp) / "site"
+        with zipfile.ZipFile(built.stdout.strip()) as wheel:
+            wheel.extractall(site)
+
+        report = Path(child_temp) / "fixture-report.xml"
+        result = _run_fixture(child_temp, report, harness_site=site)
+
+        assert result.returncode == 0, (
+            "The out-of-tree contract fails on the installed harness wheel, "
+            "though it may pass from the checkout. Look for a path derived "
+            "from __file__ that assumes the tt-llk tree (use "
+            "helpers.harness_files.harness_files_root) or a file missing from "
+            "tests/harness_wheel/make_wheel.py.\n\n"
+            f"--- fixture stdout ---\n{result.stdout}\n"
+            f"--- fixture stderr ---\n{result.stderr}"
+        )
+
+        _assert_the_child_ran_the_fixture(report, result)
+
+
+def _run_fixture(
+    child_temp: str, report: Path, harness_site: Path | None = None
+) -> subprocess.CompletedProcess:
     env = dict(os.environ)
+    # Where the fixture takes the harness from: the checkout unless a test names an installed copy.
+    env.pop("LLK_HARNESS_SITE", None)
+    if harness_site is not None:
+        env["LLK_HARNESS_SITE"] = str(harness_site)
     # The fixture resolves LLK_HOME itself; keep whatever CI set, and drop
     # outer-run pytest state that would otherwise leak into the child.
     # PYTEST_ADDOPTS matters as much as the xdist pair: pytest splices it

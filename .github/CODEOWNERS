@@ -43,6 +43,7 @@ tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
 .github/workflows/bh-lb-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
+.github/workflows/llk-harness-wheel.yaml @ldjurovicTT @fvranicTT @tenstorrent/metalium-developers-infra
 .github/workflows/llk-sfpu-report.yaml @nstamatovicTT @tenstorrent/metalium-developers-infra
 .github/workflows/llk-sfpu-test-command.yaml @nstamatovicTT @tenstorrent/metalium-developers-infra
 .github/workflows/models-t1*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra

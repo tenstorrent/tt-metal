@@ -33,6 +33,7 @@ import pytest
 from fixture_paths import (
     FIXTURE_ROOT,
     cpp_source,
+    harness_python_root,
     helpers_tree,
     llk_python_tests,
     shadowed_include_dirs,
@@ -94,6 +95,51 @@ CONTRACT_SURFACES = {
             "get_num_blocks_and_num_tiles_in_block",
             "golden_registry",
             "goldens",
+            "input_output_formats",
+            "parametrize",
+            "params",
+            "passed_test",
+            "quasar_only",
+            "register_golden",
+            "require_version",
+            "round_to_dest_width",
+            "skip_for_blackhole",
+            "skip_for_coverage",
+            "skip_for_quasar",
+            "skip_for_wormhole",
+            "tilize_block",
+            "untilize_block",
+            "wormhole_only",
+        }
+    ),
+    (1, 1): frozenset(
+        {
+            "ApproximationMode",
+            "BlocksCalculationAlgorithm",
+            "ChipArchitecture",
+            "DataFormat",
+            "DestAccumulation",
+            "DestSync",
+            "ELEMENTS_PER_TILE",
+            "HARNESS_API_VERSION",
+            "L1Accumulation",
+            "MathOperation",
+            "PYTEST_PLUGIN",
+            "StimuliConfig",
+            "StimuliSpec",
+            "TILE_DIM",
+            "TestConfig",
+            "Tilize",
+            "VectorMode",
+            "blackhole_only",
+            "format_dict",
+            "generate_stimuli",
+            "get_chip_architecture",
+            "get_golden_generator",
+            "get_num_blocks_and_num_tiles_in_block",
+            "golden_registry",
+            "goldens",
+            "harness_files_root",
             "input_output_formats",
             "parametrize",
             "params",
@@ -412,7 +458,7 @@ def test_helpers_resolves_to_the_harness_not_a_local_shadow():
     import helpers
     import helpers.golden_generators as goldens_mod
 
-    assert Path(helpers.__file__).resolve().is_relative_to(llk_python_tests())
+    assert Path(helpers.__file__).resolve().is_relative_to(harness_python_root())
     assert goldens_mod.golden_registry is golden_registry
 
 
@@ -444,7 +490,7 @@ def test_register_golden_is_the_harness_decorator():
     assert (
         Path(register_golden.__code__.co_filename)
         .resolve()
-        .is_relative_to(llk_python_tests() / "helpers")
+        .is_relative_to(harness_python_root() / "helpers")
     )
     assert goldens.DataCopyGolden in golden_registry, "in-tree goldens still resolve"
 

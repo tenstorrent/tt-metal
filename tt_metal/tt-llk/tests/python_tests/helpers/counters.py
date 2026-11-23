@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
-from pathlib import Path
 
 import pandas as pd
 from loguru import logger
@@ -12,6 +11,7 @@ from tt_llk_perf.metrics import quasar_l1_client_label
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .harness_files import harness_files_root
 from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
@@ -36,9 +36,9 @@ _TABLE_BANK_TO_HARNESS = {
     "L1": "L1",
 }
 
-# parents[2] is tests/: the device-side header whose layout this module mirrors.
+# The device-side header whose layout this module mirrors.
 LLK_COUNTERS_HEADER = (
-    Path(__file__).resolve().parents[2] / "helpers" / "include" / "counters.h"
+    harness_files_root() / "tests" / "helpers" / "include" / "counters.h"
 )
 
 _C_LITERAL = r"0[xX][0-9a-fA-F]+|\d+"

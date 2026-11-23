@@ -17,28 +17,29 @@ import os
 import sys
 
 from fixture_paths import (
+    harness_python_root,
     helpers_tree,
     llk_home,
-    llk_python_tests,
     shadowed_include_dirs,
 )
 
 os.environ.setdefault("LLK_HOME", str(llk_home()))
 
-_llk_python = llk_python_tests()
-if not _llk_python.is_dir():
+_harness_python = harness_python_root()
+if not (_harness_python / "tt_llk_harness").is_dir():
     raise RuntimeError(
-        f"tt-llk python_tests not found at {_llk_python}. "
-        "Set LLK_HOME to the tt-llk root (contains tests/ and tt_llk_*)."
+        f"tt-llk harness not found at {_harness_python}. Set LLK_HOME to the "
+        "tt-llk root (contains tests/ and tt_llk_*), or LLK_HARNESS_SITE to the "
+        "directory an installed harness lives in."
     )
-sys.path.insert(0, str(_llk_python))
+sys.path.insert(0, str(_harness_python))
 
 pytest_plugins = ["tt_llk_harness.plugin"]
 
 import tt_llk_harness  # noqa: E402
 from tt_llk_harness import TestConfig  # noqa: E402
 
-tt_llk_harness.require_version(1, 0)
+tt_llk_harness.require_version(1, 1)
 
 # Registered low-priority first: add_include_dirs prepends, so include_high
 # must end up winning. The driver #errors if that stops being true.

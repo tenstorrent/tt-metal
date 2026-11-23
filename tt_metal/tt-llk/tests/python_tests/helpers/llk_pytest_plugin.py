@@ -86,6 +86,7 @@ import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import LLKAssertException
 from helpers.format_config import InputOutputFormat
+from helpers.harness_files import harness_files_root
 from helpers.logger import configure_logger, logger
 from helpers.perf.core import (
     CODE_SHIFTS,
@@ -826,7 +827,7 @@ def _module_costs():
         if TestConfig.SPEED_OF_LIGHT
         else "perf_split_costs.json"
     )
-    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
+    table = json.loads((harness_files_root() / "tests" / costs_file).read_text())
     return costs_file, table.get(TestConfig.CHIP_ARCH.value)
 
 

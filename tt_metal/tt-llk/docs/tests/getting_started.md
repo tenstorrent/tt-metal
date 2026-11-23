@@ -553,6 +553,8 @@ External suites import from **`tt_llk_harness`** and from nowhere else. Everythi
 | `tt_llk_harness.goldens`, `tt_llk_harness.params` | Catalogues that grow with the LLKs under test. Both spellings work — `params.DEST_INDEX` and `from tt_llk_harness.params import DEST_INDEX` — so an in-tree test can be lifted into an external suite without rewriting its parameter references. Adding an entry is not breaking; removing or renaming one is. |
 | Anything else under `helpers` | Implementation. No promises. |
 
+API 1.1 adds `MathOperation`, `ApproximationMode`, `StimuliSpec` and `harness_files_root` to `__all__`; a suite that uses them calls `require_version(1, 1)`.
+
 `tt_llk_harness.require_version(major, minor)` fails fast and legibly instead of surfacing as an `AttributeError` mid-run. Compatible means *same major, minor no older than requested* — a newer major is a rejection, not an upgrade, since a major bump only happens for a breaking change that has completed its deprecation period. `HARNESS_API_VERSION` is kept honest mechanically: `tests/out_of_tree/` pins the exported surface *per version*, so a surface that grows has nowhere to be recorded except under a version that does not exist yet — additions need a new minor entry, a removal that has completed its deprecation needs a new major one. Editing an existing entry in place is still possible, and is the thing to look for in review.
 
 This is enforced, not just documented: `tests/out_of_tree/` is a consumer that uses only the facade, and it runs in the PR pipeline via `tests/hardware_free/harness/test_out_of_tree_contract.py`. A change that breaks external suites fails there, in the PR that makes it, rather than during a later tt-metal uplift. If a real consumer needs something the facade lacks, add it to `__all__` — do not reach into `helpers`. The fixture's driver uses the letter-named Wormhole/Blackhole LLK headers, so what CI exercises is the contract on those two architectures; Quasar uses semantic header names and would need its own driver, as the in-tree suite already does.
@@ -587,3 +589,36 @@ An external pytest suite should:
 The C++ driver must follow the usual `LLK_TRISC_UNPACK` / `MATH` / `PACK` + `run_kernel()` contract and call the underscored LLK APIs. Reuse the existing venv/SFPI under `tests/.venv` — do not invent a second toolchain.
 
 In-tree tests are unchanged: `conftest.py` still re-exports the arch skip markers (`from conftest import skip_for_wormhole`).
+
+### Installing the harness as a wheel
+
+An external suite does not need a tt-llk checkout on `sys.path`: the harness is also built as a wheel, `tt_llk_harness-<version>-py3-none-any.whl`.
+
+```bash
+tests/harness_wheel/make_wheel.py --out-dir dist          # needs only the Python standard library
+pip install "dist/tt_llk_harness-<version>-py3-none-any.whl[pinned]" \
+    --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+The `pinned` extra is `tests/requirements.txt`, the versions the harness is tested with; the wheel also carries that file as `tt_llk_harness/requirements.txt`. Install without the extra (or with `--no-deps`) to manage the requirements yourself.
+
+The **LLK harness wheel** workflow (`.github/workflows/llk-harness-wheel.yaml`) builds the wheel every day and keeps it as the `llk-harness-wheel` artifact of the run. If the repository variable `LLK_HARNESS_WHEEL_RELEASE_REPO` names a repository, the workflow also publishes the wheel there as a release, using the token in the `LLK_HARNESS_WHEEL_RELEASE_TOKEN` secret. Who can download that release is decided by that repository's visibility.
+
+The version is `<API major>.<API minor>.<commit date>+g<commit>`: the first two numbers are `HARNESS_API_VERSION`, so wheels order by the contract first and by day within it, and an installed wheel names the commit it was built from (`pip show tt-llk-harness`).
+
+What the wheel holds:
+
+| | |
+| --- | --- |
+| `tt_llk_harness` | the supported interface, as above |
+| `helpers` | the implementation: build and run of a variant, stimuli generation, golden generators, packing and unpacking of L1 data, comparison, the pytest plugin |
+| `tt_llk_perf`, `ttsim_error` | imported by `helpers` |
+| `tt_llk_harness/llk_home/` | the tt-llk files the harness's own Python reads and the headers its generated `build.h` includes, in tt-llk layout: `tests/helpers/include/{counters,operand}.h`, `tools/include/perf_counters/`, the perf split cost tables. `tt_llk_harness.harness_files_root()` returns this directory (the tt-llk root, when the harness runs from a checkout) |
+
+It holds no LLK, kernel, test driver, firmware source (`trisc.cpp`), linker script or toolchain. With an installed harness, step 1 above loses its `sys.path` line and the suite supplies everything that gets compiled:
+
+- `LLK_HOME` must be set: there is no checkout to infer it from. The harness expects `$LLK_HOME/tests/sfpi` (the toolchain), `$LLK_HOME/tests/helpers` (`include/`, `src/`, `ld/`) and `$LLK_HOME/tools/include`; a suite that keeps these elsewhere puts a directory of links together and points `LLK_HOME` at it.
+- Add `harness_files_root() / "tests/helpers/include"` with `TestConfig.add_include_dirs`, so the generated `build.h` finds `operand.h`, and make `harness_files_root() / "tools"` the `$LLK_HOME/tools` of that directory unless the suite has its own perf counter headers.
+- Register the suite's LLK headers, helpers tree and drivers as in steps 2 and 3.
+
+`tests/hardware_free/harness/test_out_of_tree_contract.py` builds the wheel and runs the `tests/out_of_tree/` fixture on the installed copy in the PR pipeline, so a harness module that only works from a checkout (a path derived from `__file__`, a data file the wheel does not list) fails there. A module that reads a tt-llk file outside `helpers` goes through `helpers.harness_files.harness_files_root()` and lists the file in `LLK_HOME_FILES` of `make_wheel.py`.

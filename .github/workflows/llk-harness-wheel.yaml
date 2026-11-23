@@ -1,0 +1,144 @@
+name: "LLK harness wheel"
+
+# Builds the wheel of the tt-llk Python test harness (tt_metal/tt-llk/tests/harness_wheel/make_wheel.py) every day
+# and keeps it as a workflow artifact. When the repository variable LLK_HARNESS_WHEEL_RELEASE_REPO names a
+# repository, the wheel is also published there as a release; that repository's visibility decides who can download
+# it, so a private one makes the release private. LLK_HARNESS_WHEEL_RELEASE_TOKEN is a token that can write releases
+# to it. Without the variable the publish job is skipped.
+
+on:
+  schedule:
+    # Every day at 4AM UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit, branch or tag to build from (blank = the default branch)"
+        required: false
+        type: string
+        default: ""
+      publish:
+        description: "Publish the wheel as a release in LLK_HARNESS_WHEEL_RELEASE_REPO"
+        required: false
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - ".github/workflows/llk-harness-wheel.yaml"
+      - "tt_metal/tt-llk/tests/harness_wheel/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  build:
+    name: "Build the wheel"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+    steps:
+      - name: Checkout tt-llk
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 1
+          sparse-checkout: |
+            tt_metal/tt-llk
+          sparse-checkout-cone-mode: true
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.10'
+      - name: Build
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel=$(python3 "$LLK_PATH/tests/harness_wheel/make_wheel.py" --out-dir dist)
+          # The pinned requirements beside the wheel, for an install that names the package indexes itself.
+          cp "$LLK_PATH/tests/requirements.txt" dist/requirements.txt
+          version=$(basename "$wheel" | cut -d- -f2)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          {
+            echo "### tt-llk harness wheel"
+            echo ""
+            echo "\`$(basename "$wheel")\`"
+            echo ""
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Check that the wheel installs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv check-venv
+          # --no-deps: this checks the archive pip is given, not the requirements (the hardware-free suite runs the
+          # out-of-tree contract on the installed wheel with them present).
+          check-venv/bin/python -m pip install --quiet --no-deps dist/*.whl
+          check-venv/bin/python -m pip show --files tt-llk-harness | head -n 20
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/check-venv/bin/python" - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          for name in ("tt_llk_harness", "helpers", "tt_llk_perf", "ttsim_error"):
+              spec = importlib.util.find_spec(name)
+              assert spec is not None and "check-venv" in spec.origin, (name, spec)
+          package = Path(importlib.util.find_spec("tt_llk_harness").origin).parent
+          for carried in ("llk_home/tests/helpers/include/counters.h", "requirements.txt"):
+              assert (package / carried).is_file(), carried
+          PY
+      - name: Upload the wheel
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-harness-wheel
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: "Publish the release"
+    needs: build
+    if: >-
+      ${{ github.event_name != 'pull_request'
+          && vars.LLK_HARNESS_WHEEL_RELEASE_REPO != ''
+          && (github.event_name != 'workflow_dispatch' || inputs.publish) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Download the wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: llk-harness-wheel
+          path: dist
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.LLK_HARNESS_WHEEL_RELEASE_TOKEN }}
+          RELEASE_REPO: ${{ vars.LLK_HARNESS_WHEEL_RELEASE_REPO }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SOURCE_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # A tag cannot hold the '+' of the wheel's version.
+          tag="v${VERSION//+/-}"
+          if gh release view "$tag" --repo "$RELEASE_REPO" > /dev/null 2>&1; then
+            # A second build of the same commit gives the same bytes; replace the assets.
+            gh release upload "$tag" dist/* --repo "$RELEASE_REPO" --clobber
+          else
+            gh release create "$tag" dist/* --repo "$RELEASE_REPO" --latest \
+              --title "tt-llk harness $VERSION" \
+              --notes "The tt-llk Python test harness, built from $SOURCE_REPO at the commit the version names."
+          fi
+          echo "Published $tag to $RELEASE_REPO" >> "$GITHUB_STEP_SUMMARY"

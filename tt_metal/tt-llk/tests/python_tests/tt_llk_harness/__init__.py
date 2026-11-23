@@ -11,7 +11,7 @@ Usage::
 
     # conftest.py, at the pytest rootdir of your suite
     import sys
-    sys.path.insert(0, "<tt-llk>/tests/python_tests")
+    sys.path.insert(0, "<tt-llk>/tests/python_tests")  # not needed with the installed wheel
 
     import tt_llk_harness
     pytest_plugins = ["tt_llk_harness.plugin"]
@@ -32,6 +32,10 @@ the LLKs under test, so enumerating them here would be churn with no benefit.
 Reach a specific entry through the alias (``goldens.DataCopyGolden``,
 ``params.DEST_INDEX``). Adding an entry is not a breaking change; removing or
 renaming one is, and is reviewed the same way.
+
+The harness is also built as a wheel (``tests/harness_wheel/make_wheel.py``),
+for a suite that installs it instead of using a checkout; see "Installing the
+harness as a wheel" in ``docs/tests/getting_started.md``.
 
 ``tests/out_of_tree/`` is a consumer that uses only this module, and it runs in
 tt-llk's PR CI. If something a real consumer needs is missing here, that suite
@@ -68,11 +72,14 @@ from helpers.golden_generators import (
 
 # NOTE: ``get_golden_generator`` is deliberately absent from that list. It is
 # defined as a forwarding function at the bottom of this module; see why there.
+from helpers.harness_files import harness_files_root
 from helpers.llk_params import (
+    ApproximationMode,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
     L1Accumulation,
+    MathOperation,
     Tilize,
     VectorMode,
     format_dict,
@@ -94,7 +101,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 
 # --- Mechanism ----------------------------------------------------------------
 from helpers.test_config import TestConfig
@@ -109,7 +116,7 @@ PYTEST_PLUGIN = "tt_llk_harness.plugin"
 #: Version of *this interface*, not of tt-llk. Bumped when the contract
 #: changes: minor for additions, major for a breaking change that has completed
 #: its deprecation period. See :func:`require_version`.
-HARNESS_API_VERSION = (1, 0)
+HARNESS_API_VERSION = (1, 1)
 
 
 def require_version(major: int, minor: int = 0) -> None:
@@ -142,7 +149,7 @@ def require_version(major: int, minor: int = 0) -> None:
         raise RuntimeError(
             f"This suite needs tt-llk harness API {major}.{minor}, but the "
             f"harness on LLK_HOME provides {have_major}.{have_minor}. Bump the "
-            "tt-llk submodule, or stop using whatever was added in "
+            "tt-llk submodule or the installed wheel, or stop using whatever was added in "
             f"{major}.{minor}."
         )
 
@@ -155,7 +162,9 @@ __all__ = [
     # configuring and running
     "TestConfig",
     "StimuliConfig",
+    "StimuliSpec",
     "generate_stimuli",
+    "harness_files_root",
     # describing a variant
     "DataFormat",
     "input_output_formats",
@@ -167,6 +176,8 @@ __all__ = [
     "L1Accumulation",
     "Tilize",
     "VectorMode",
+    "MathOperation",
+    "ApproximationMode",
     "format_dict",
     # goldens
     "register_golden",
