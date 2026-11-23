@@ -50,8 +50,11 @@ permissions:
   pull-requests: write
 
 env:
-  # Stage 2 re-measures at most this many tests per arch, so its job stays short; see placement_check.py.
-  PLACEMENT_CAP: "1000"
+  # Stage 2 re-measures at most this many tests per arch; see placement_check.py. A leg
+  # measures about 1,000 tests in 8 minutes, so this fits the 60-minute perf_placement budget.
+  # An unmeasured candidate blocks, so the cap has to cover a whole-suite code move: the
+  # largest seen on Wormhole is 4,350.
+  PLACEMENT_CAP: "8000"
 
 concurrency:
   group: llk-perf-gate-${{ github.event.pull_request.number || github.run_id }}-${{ (github.event.action == 'synchronize' || github.event.label.name == 'llk-perf-gate') && 'gate' || github.run_id }}
