@@ -552,6 +552,7 @@ void launch_operation_with_adapter(
     // Skip if operation should be skipped
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
             return;
         }
     }
@@ -605,6 +606,7 @@ void prepare_operation_with_adapter(
     ttnn::MeshDevice* mesh_device) {
     if constexpr (HasSkipLaunch<mesh_device_operation_t>) {
         if (mesh_device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
             return;
         }
     }
