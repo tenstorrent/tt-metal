@@ -844,14 +844,24 @@ _do_simulate() {
       # holding the device, the NEXT run's consumer phase hangs on device
       # acquisition and looks like "tt-smi -r didn't work" — it did, but
       # there was nothing to reset to.
-      pkill -9 -f "pytest.*--compile-consumer" 2>/dev/null || true
+      # TT_LLK_CHIP (set by chip_queue.py) means other chips may be running other
+      # tests: their consumers must survive, so skip the machine-wide pkill
+      # (_kill_tree already ended ours) and reset only this chip.
+      if [[ -z "${TT_LLK_CHIP:-}" ]]; then
+        pkill -9 -f "pytest.*--compile-consumer" 2>/dev/null || true
+      fi
       # LLK-specific triage runs HERE: the consumer's ttexalens session
       # was released by _kill_tree + the safety-net pkill, but the Tensix
       # is still wedged. A fresh ttexalens session can now read mailbox /
       # RISC state. After triage, tt-smi -r fully resets the device.
       _run_llk_triage
-      echo "Resetting device (tt-smi -r)..." >&2
-      tt-smi -r >&2 || echo "WARNING: tt-smi -r failed" >&2
+      if [[ -n "${TT_LLK_CHIP:-}" ]]; then
+        echo "Resetting chip ${TT_LLK_CHIP} (tt-smi -r ${TT_LLK_CHIP})..." >&2
+        env -u TT_VISIBLE_DEVICES tt-smi -r "${TT_LLK_CHIP}" >&2 || echo "WARNING: tt-smi -r ${TT_LLK_CHIP} failed" >&2
+      else
+        echo "Resetting device (tt-smi -r)..." >&2
+        tt-smi -r >&2 || echo "WARNING: tt-smi -r failed" >&2
+      fi
     fi
     echo "========================================" >&2
     sim_exit=5
