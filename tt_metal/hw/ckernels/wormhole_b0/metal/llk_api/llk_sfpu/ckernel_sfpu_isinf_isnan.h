@@ -129,8 +129,9 @@ inline void _calculate_sfpu_isinf_isnan_() {
             _isinf_isnan_row_<operation, 0>(bound_v);
         }
     } else {
-        // Two SFPU rows per TTINCRWC. The pair (13 insns, isinf 15) is replayed from the SFPU half of the
-        // replay buffer, below math::replay_buf_offset where a throttled matmul keeps its MOP body.
+        // Two SFPU rows per TTINCRWC. sfpi replays the unrolled pair from replay slot 0; the window must end
+        // at or below math::replay_buf_offset, where a throttled matmul keeps its MOP body
+        // (checked on the ELF by test_eltwise_unary_sfpu_isinf_isnan_mm_throttle).
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS / 2; d++) {
             _isinf_isnan_row_<operation, 0>(bound_v);

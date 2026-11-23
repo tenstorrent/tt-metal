@@ -3,7 +3,9 @@
 
 
 import math
+import re
 import struct
+import subprocess
 from itertools import product
 
 import pytest
@@ -1466,9 +1468,12 @@ def test_eltwise_unary_sfpu_compare_zero_bit_patterns(
 @wormhole_only
 @pytest.mark.parametrize("mathop", ISINF_ISNAN_MATHOPS, ids=lambda op: op.name)
 def test_eltwise_unary_sfpu_isinf_isnan_mm_throttle(mathop: MathOperation):
-    """The MM_THROTTLE build (``dst_reg++`` body, ADDR_MOD_6 untouched) on the fp32 edge words."""
+    """The MM_THROTTLE build (``dst_reg++`` body, ADDR_MOD_6 untouched) on the fp32 edge words,
+    with a hostile ADDR_MOD_6 between init and body. Its math ELF must keep every compiler
+    replay window below the FPU's replay slots."""
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     dest_acc = DestAccumulation.Yes
+    input_dimensions = [64, 64]
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -1476,11 +1481,65 @@ def test_eltwise_unary_sfpu_isinf_isnan_mm_throttle(mathop: MathOperation):
         ApproximationMode.No,
         mathop,
         FastMode.No,
-        [64, 64],
+        input_dimensions,
         spec_A=_isinf_isnan_stimuli_spec(
             unpacks_to_dest(formats.input_format, dest_acc)
         ),
         mm_throttle=1,
+    )
+
+    tile_cnt_A, tile_cnt_B, _ = calculate_tile_and_face_counts(
+        input_dimensions,
+        input_dimensions,
+        face_r_dim=MAX_FACE_R_DIM,
+        num_faces=MAX_NUM_FACES,
+    )
+    configuration = build_eltwise_unary_sfpu_config(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        input_dimensions,
+        None,
+        None,
+        tile_cnt_A,
+        tile_cnt_B,
+        mm_throttle=1,
+    )
+    _assert_replay_below_fpu_slots(configuration)
+
+
+# ckernel::math::replay_buf_offset on Wormhole: replay slots from here up hold a throttled
+# matmul's MOP body, so SFPU code built with MM_THROTTLE must not record over them.
+WH_REPLAY_BUF_OFFSET = 16
+
+
+def _assert_replay_below_fpu_slots(configuration):
+    """Every ``ttreplay start,len`` in the variant's math ELF ends at or below
+    WH_REPLAY_BUF_OFFSET. sfpi places unrolled loop bodies in the replay buffer from slot 0
+    on its own, so only the built ELF shows how far they reach."""
+    configuration.generate_variant_hash()
+    elf = (
+        TestConfig.ARTEFACTS_DIR
+        / configuration.test_name
+        / configuration.variant_id
+        / "elf"
+        / "math.elf"
+    )
+    dump = subprocess.run(
+        [TestConfig.OBJDUMP, "-d", "--no-show-raw-insn", str(elf)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    windows = [
+        (int(m.group(1)), int(m.group(2)))
+        for m in re.finditer(r"\bttreplay\s+(\d+),\s*(\d+),", dump)
+    ]
+    overlapping = sorted({(s, n) for s, n in windows if s + n > WH_REPLAY_BUF_OFFSET})
+    assert not overlapping, (
+        f"replay windows (start, len) {overlapping} in {elf} reach the FPU replay slots "
+        f"[{WH_REPLAY_BUF_OFFSET}, 32)"
     )
 
 
