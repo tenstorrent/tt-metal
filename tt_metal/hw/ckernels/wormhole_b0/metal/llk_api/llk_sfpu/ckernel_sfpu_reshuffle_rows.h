@@ -18,6 +18,8 @@ namespace sfpu {
 
 // Bytes between idx_addr and the first mask byte (the tile header).
 constexpr std::uint32_t RESHUFFLE_MASK_HEADER_BYTES = 16;
+// Mask word of a 4-row group whose rows are all skipped.
+constexpr std::uint32_t RESHUFFLE_ALL_SKIP = 0xFFFFFFFF;
 
 /**
  * @brief Implements gradient accumulation with row reshuffling for embedding backward pass
@@ -80,8 +82,10 @@ inline void calculate_reshuffle_rows(uint idx_addr) {
         // Rows 16-19 → addr 32 (16 + 16 = 32) Faces 2/3, group 0
         // Rows 20-23 → addr 36 (20 + 16 = 36) Faces 2/3, group 1
         const std::uint32_t input_row_addr = group + (group & 0x10);
-        // Issued ahead of the input loads so the L1 read latency overlaps them
         const std::uint32_t group_dst_rows = idx_ptr[group / 4];
+        if (group_dst_rows == RESHUFFLE_ALL_SKIP) {
+            continue;
+        }
 
         // load in the input block once per group, targeting even/odd columns with +2 offset
         TT_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, input_row_addr);       // Face 0/2, even columns
