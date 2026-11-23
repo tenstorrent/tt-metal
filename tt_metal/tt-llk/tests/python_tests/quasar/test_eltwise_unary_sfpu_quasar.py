@@ -72,8 +72,11 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
+    SFPU_CLAMP_INT32_BOUNDS,
     SFPU_DROPOUT_PARAMS,
     SFPU_POWER_ITERATIVE_EXPONENT,
+    SFPU_RELU_MAX_INT_THRESHOLD,
+    SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_UNARY_MAX_MIN_SCALAR,
     SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE,
     TEST_FACE_DIMS,
@@ -1887,6 +1890,7 @@ def run_eltwise_unary_sfpu_quasar(
     power_iterative_exponent=None,
     power_iterative_runtime=False,
     zero_comp_edges=False,
+    int32_case=None,
 ):
     """Shared unary SFPU runner for the functional and perf tests.
 
@@ -1895,6 +1899,8 @@ def run_eltwise_unary_sfpu_quasar(
     *power_iterative_exponent* sets the exponent and swaps in the power_iterative stimulus and model;
     *power_iterative_runtime* has the kernel see it as a runtime value.
     *zero_comp_edges* swaps it for prepare_zero_comp_edge_inputs and the golden for zero_comp_expected.
+    *int32_case* (an :class:`Int32TwosComplementCase`) supplies the stimuli, kernel parameters
+    and exact integer reference of a two's-complement Int32 run.
     """
     if format_variant is None:
         format_variant = resolve_quasar_sfpu_variant(mathop, formats, dest_acc)
@@ -1922,6 +1928,8 @@ def run_eltwise_unary_sfpu_quasar(
         )
         scalar = default_scalar if max_min_scalar is None else max_min_scalar
         spec = unary_max_min_stimuli_spec(mathop, scalar)
+    if int32_case is not None:
+        spec = StimuliSpec.custom(values=[float(v) for v in int32_case.values], seed=0)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -1937,7 +1945,7 @@ def run_eltwise_unary_sfpu_quasar(
         )
     elif power_iterative_exponent is not None:
         src_A = prepare_power_iterative_inputs(src_A, formats.input_format)
-    elif not is_max_min:
+    elif not is_max_min and int32_case is None:
         src_A = prepare_unary_inputs(
             mathop, src_A, src_B, formats.input_format, formats.output_format
         )
@@ -1951,7 +1959,12 @@ def run_eltwise_unary_sfpu_quasar(
     num_faces = MAX_NUM_FACES
 
     if not is_perf:
-        if is_max_min:
+        if int32_case is not None:
+            golden_tensor = torch.tensor(
+                [int32_case.reference(int(x)) for x in src_A.flatten().tolist()],
+                dtype=format_dict[formats.output_format],
+            )
+        elif is_max_min:
             generate_golden = get_golden_generator(UnarySFPUGolden)
             golden_tensor = generate_golden(
                 mathop,
@@ -2068,6 +2081,7 @@ def run_eltwise_unary_sfpu_quasar(
                 else []
             ),
             *([INP_FLOAT32()] if _erf_fp32_table(mathop, formats) else []),
+            *(int32_case.templates if int32_case is not None else []),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
@@ -2087,7 +2101,8 @@ def run_eltwise_unary_sfpu_quasar(
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
             twos_complement=(
-                mathop in UNARY_MAX_MIN_INT32_OPS and not max_min_sign_magnitude
+                int32_case is not None
+                or (mathop in UNARY_MAX_MIN_INT32_OPS and not max_min_sign_magnitude)
             ),
         ),
         "unpack_to_dest": unpack_to_dest,
@@ -2437,6 +2452,116 @@ def test_unary_max_min_scalar_quasar(
         max_min_scalar=max_min_scalar,
         max_min_sign_magnitude=max_min_sign_magnitude,
         format_variant=format_variant,
+    )
+
+
+# Two's-complement Int32 entry points of float ops: negative_tile_int32, relu_tile_int32,
+# relu_min/relu_max_tile_int32 and clamp_tile_int32. The fuser stages Int32 in L1 as sign-magnitude,
+# so their negative inputs and results are only reachable here. Each golden is an exact integer
+# reference, so a wrong compare shows up as a wrong value rather than a tolerance miss.
+_INT32_MAX = 2**31 - 1
+
+
+@dataclass(frozen=True)
+class Int32TwosComplementCase:
+    """One Int32 run: the op, its stimuli, the kernel parameters and the exact reference."""
+
+    name: str
+    mathop: MathOperation
+    values: tuple
+    reference: object
+    templates: tuple = ()
+
+    def __str__(self) -> str:
+        return self.name
+
+
+def _int32_straddle(*centres: int) -> tuple:
+    """Values straddling each centre, plus both ends of int32 (INT_MIN is not stageable)."""
+    offsets = (-1000, -100, -10, -2, -1, 0, 1, 2, 10, 100, 1000)
+    candidates = [c + d for c in centres for d in offsets] + [-_INT32_MAX, _INT32_MAX]
+    return tuple(sorted({v for v in candidates if -_INT32_MAX <= v <= _INT32_MAX}))
+
+
+# The extremes are where the SFPU's subtracting signed compare overflows (operands 2**31 or more
+# apart), which is what the Blackhole kernels split on the threshold's sign to avoid.
+_RELU_MIN_INT32_THRESHOLDS = (-(_INT32_MAX - 1), -1000, -1, 0, 5, _INT32_MAX)
+_RELU_MAX_INT32_THRESHOLDS = (-1000, 0, 5, 1000, _INT32_MAX)
+# (min, max) pairs: both signs, a negative-only and a positive-only window, the full range and a
+# reversed pair (min > max), where max(x, min) then min(., max) gives max everywhere.
+_CLAMP_INT32_BOUNDS = (
+    (-1000, 1000),
+    (-100000, -5),
+    (5, 100000),
+    (-_INT32_MAX, _INT32_MAX),
+    (10, -10),
+)
+
+
+def _int32_twos_complement_cases() -> List[Int32TwosComplementCase]:
+    cases = [
+        Int32TwosComplementCase(
+            "neg",
+            MathOperation.Neg,
+            _int32_straddle(0, 123456789, -123456789),
+            lambda x: -x,
+        ),
+        Int32TwosComplementCase(
+            "relu",
+            MathOperation.Relu,
+            _int32_straddle(0, 1000000, -1000000),
+            lambda x: max(x, 0),
+        ),
+    ]
+    for t in _RELU_MIN_INT32_THRESHOLDS:
+        cases.append(
+            Int32TwosComplementCase(
+                f"relu_min_{t}",
+                MathOperation.ReluMin,
+                _int32_straddle(t, 0),
+                lambda x, t=t: max(x, t),
+                (SFPU_RELU_MIN_INT_THRESHOLD(t),),
+            )
+        )
+    for t in _RELU_MAX_INT32_THRESHOLDS:
+        cases.append(
+            Int32TwosComplementCase(
+                f"relu_max_{t}",
+                MathOperation.ReluMax,
+                _int32_straddle(t, 0),
+                lambda x, t=t: max(min(x, t), 0),
+                (SFPU_RELU_MAX_INT_THRESHOLD(t),),
+            )
+        )
+    for lo, hi in _CLAMP_INT32_BOUNDS:
+        cases.append(
+            Int32TwosComplementCase(
+                f"clamp_{lo}_{hi}",
+                MathOperation.Clamp,
+                _int32_straddle(lo, hi, 0),
+                lambda x, lo=lo, hi=hi: min(max(x, lo), hi),
+                (SFPU_CLAMP_INT32_BOUNDS(lo, hi),),
+            )
+        )
+    return cases
+
+
+@pytest.mark.quasar
+@parametrize(
+    int32_case=_int32_twos_complement_cases(),
+    input_dimensions=runtime([[64, 64]]),
+)
+def test_eltwise_unary_sfpu_int32_twos_complement_quasar(int32_case, input_dimensions):
+    """The *_tile_int32 entry points of float ops on two's-complement Int32 of both signs."""
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    run_eltwise_unary_sfpu_quasar(
+        formats,
+        DestAccumulation.Yes,
+        int32_case.mathop,
+        ApproximationMode.No,
+        input_dimensions,
+        DestSync.Half,
+        int32_case=int32_case,
     )
 
 
