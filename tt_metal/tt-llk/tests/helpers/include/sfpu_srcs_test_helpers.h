@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <utility>
-
 #include "llk_assert.h"
 #include "llk_sfpu/ckernel_sfpu_srcs.h"
 #include "sfpi.h"
