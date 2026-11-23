@@ -463,6 +463,11 @@ class LaunchedJob:
         # A prterun launcher starts with SIGTERM blocked (it keeps it so; its ranks start with it unblocked): a SIGTERM
         # sent to every process at once must not start its kill path. tt-run forces it with SIGINT instead.
         shield = os.path.basename(self.cmd[0]).startswith(("mpirun", "prterun", "mpiexec"))
+        if shield and self._helper is None:
+            logger.warning(
+                f"{TT_RUN_PREFIX} {self._helper_why}: the job runs without it (no rank wrapper, no guard), so a stop is "
+                "forced instead of graceful and a dead rank is not named. Build tools/scaleout to get it back."
+            )
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM}) if shield else None
         try:
             self.proc = subprocess.Popen(

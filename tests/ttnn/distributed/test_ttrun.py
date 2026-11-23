@@ -1521,6 +1521,22 @@ class TestJobOwnership:
         assert m.find_tt_run_rank_executable() is None
         assert m.find_signal_helper() == (None, "no tt-run-rank in build/tools/scaleout or on PATH")
 
+    @pytest.mark.parametrize("present", [False, True], ids=["missing", "present"])
+    def test_a_missing_tt_run_rank_is_warned_and_the_job_still_runs(self, present, tmp_path, monkeypatch):
+        from ttnn.distributed import ttrun as m
+
+        # No tt-run-rank (neither built nor installed): one warning, then the job runs as before, unwrapped.
+        launcher = tmp_path / "mpirun"
+        launcher.write_text("#!/bin/sh\nexit 0\n")
+        launcher.chmod(0o755)
+        found = (str(launcher), "") if present else (None, "no tt-run-rank in build/tools/scaleout or on PATH")
+        monkeypatch.setattr(m, "find_signal_helper", lambda: found)
+        text, rc = self._logged_rc(lambda: m.run_launcher([str(launcher)], cwd=Path.cwd()))
+        assert rc == 0, text
+        assert "job end: outcome=clean exit=0" in text, text
+        warned = "no tt-run-rank in build/tools/scaleout or on PATH: the job runs without it" in text
+        assert warned != present, text
+
     def test_build_mpi_command_runs_each_rank_in_the_wrapper(self, sample_rank_binding_yaml, tmp_path, monkeypatch):
         # Each rank's program runs under tt-run-rank, which stops the job if the program dies; gdbserver launches
         # and a build without tt-run-rank run the program bare.
