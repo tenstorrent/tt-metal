@@ -1693,7 +1693,7 @@ class Inkling2Prefill:
         if traced and self._traces and self._mem_print() != self._mem:
             self.n_dropped += 1
             self.release_traces()  # something was allocated since the last prefill call
-        m.reset()
+        # no m.reset(): it zeroes the conv histories (x_hist, conv rings), and _handoff rewrites every one of them
         ctx = self._new_ctx()
         ctx["L"] = L
         outs = []
