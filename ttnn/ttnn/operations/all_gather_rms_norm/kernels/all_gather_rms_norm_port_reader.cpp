@@ -32,12 +32,21 @@ void kernel_main() {
     const uint32_t first_bank = get_arg_val<uint32_t>(a++);
     const uint32_t bank_stride = get_arg_val<uint32_t>(a++);
     const uint32_t arrival_addr = get_arg_val<uint32_t>(a++);
+#if defined(AGRN_ABL_NO_BULK)
+    const uint32_t expect_in = 0 * get_arg_val<uint32_t>(a++);  // ablation: bulk stubbed
+#else
     const uint32_t expect_in = get_arg_val<uint32_t>(a++);
+#endif
     const uint32_t n_active = get_arg_val<uint32_t>(a++);
     const uint32_t notify_landed = get_arg_val<uint32_t>(a++);
-    const uint32_t n_entries = get_arg_val<uint32_t>(a++);
+    const uint32_t n_entries_args = get_arg_val<uint32_t>(a++);
+#if defined(AGRN_ABL_NO_BULK)
+    const uint32_t n_entries = 0;  // ablation: bulk stubbed (output garbage; perf ablation only)
+#else
+    const uint32_t n_entries = n_entries_args;
+#endif
     const uint32_t entries_idx = a;
-    a += 3 * n_entries;
+    a += 3 * n_entries_args;
     const uint32_t workers_idx = a;  // n_active worker NoC coords (x | y << 16), ordered worker index
     a += n_active;
     const uint32_t hub_sem = get_arg_val<uint32_t>(a++);   // 0: not a hub; else 1 + the stats-ready semaphore id
@@ -180,7 +189,9 @@ void kernel_main() {
         const uint32_t q = e & 0xFFFF, part = e >> 16;
         if (k == 0 && own_bands == 1) {
             AGRN_ZONE("pr_wait_own");
+#if !defined(AGRN_ABL_NO_OWN_WAIT)  // ablation: the bulk starts without the normalized slice (output garbage)
             noc_semaphore_wait_min(own_ready, n_active);
+#endif
         }
         if (k == 0) {
             AGRN_ZONE("pr_own_first");  // marker: own entry starts

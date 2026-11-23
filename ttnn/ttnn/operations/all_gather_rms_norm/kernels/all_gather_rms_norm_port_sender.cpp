@@ -84,9 +84,14 @@ void kernel_main() {
     const uint32_t n_stats = get_arg_val<uint32_t>(a++);
     const uint32_t stats_idx = a;
     a += n_stats;
-    const uint32_t n_entries = get_arg_val<uint32_t>(a++);
+    const uint32_t n_entries_args = get_arg_val<uint32_t>(a++);
+#if defined(AGRN_ABL_NO_BULK)
+    const uint32_t n_entries = 0;  // ablation: bulk stubbed (output garbage; perf ablation only)
+#else
+    const uint32_t n_entries = n_entries_args;
+#endif
     const uint32_t entries_idx = a;  // per entry: slot | part << 16, chunks
-    a += 2 * n_entries;
+    a += 2 * n_entries_args;
 
     const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
     const uint32_t table = get_write_ptr(agrn::cb_stats_table);  // same address on every core of every chip
@@ -121,7 +126,7 @@ void kernel_main() {
             conn.send_payload_flush_blocking_from_address(
                 reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
         }
-        if (n_entries > 0 || n_stats > 0) {
+        if (n_entries_args > 0 || n_stats > 0) {
             volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
             AGRN_ZONE("ps_fence_wait");
             noc_semaphore_wait_min(ready, 1);

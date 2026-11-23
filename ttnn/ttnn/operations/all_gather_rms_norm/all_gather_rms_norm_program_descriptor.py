@@ -822,6 +822,8 @@ def create_mesh_program_descriptor(
     full = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
     # per-stage profiler zones (perf probes only; the harness needs them off)
     defines = [("AGRN_PROFILE_ZONES", "1")] if os.environ.get("AGRN_PROFILE_ZONES") == "1" else []
+    # perf ablations (stubbed payloads, output garbage): env AGRN_ABLATE="NO_BULK,NO_OWN_WAIT" -> AGRN_ABL_<name>
+    defines += [(f"AGRN_ABL_{n.strip()}", "1") for n in os.environ.get("AGRN_ABLATE", "").split(",") if n.strip()]
     in_addr = int(input_tensor.buffer_address())
     out_addr = int(output_tensor.buffer_address())
     dst_addr = int(dst_tensor.buffer_address())
