@@ -30,6 +30,7 @@ inline bool unpack_matmul_init_reuse_a = true;
 // wait for them.
 inline void _llk_unpack_AB_matmul_ttsync_enable_()
 {
+#if !defined(TT_METAL_TTSIM) // ttsim models neither RESOURCEDECL nor Auto TTSync, and its matmul unpack polls
     TTI_RESOURCEDECL(1, 0x19F, 13);
     TTI_RESOURCEDECL(1, 0x19F, 14);
     set_ttsync_enables<TRACK_GPR | TRACK_TENSIX_INSTRUCTIONS>();
@@ -37,15 +38,18 @@ inline void _llk_unpack_AB_matmul_ttsync_enable_()
     TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::TRISC_CFG);
     TTI_NOP;
     tensix_sync();
+#endif
 }
 
 // Turn Auto TTSync off and restore the MOP and REPLAY declarations.
 inline void _llk_unpack_AB_matmul_ttsync_restore_()
 {
+#if !defined(TT_METAL_TTSIM)
     TTI_RESOURCEDECL(1, 0x1FF, 13);
     TTI_RESOURCEDECL(1, 0x1FF, 14);
     set_ttsync_enables<0>();
     tensix_sync();
+#endif
 }
 
 /**
@@ -566,6 +570,27 @@ inline void _llk_unpack_AB_matmul_(
 {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
+
+#if defined(TT_METAL_TTSIM)
+    // ttsim models no Auto TTSync, so a row's GPR stores would overtake the previous row's WRCFGs: run the polling unpack
+    if constexpr (auto_ttsync != 0)
+    {
+        _llk_unpack_AB_matmul_<kernel_broadcast_a, kernel_broadcast_b, 0, dest_max_tiles, hoist_rows, max_row_tiles, stream_z, reuse_dir, one_tile_calls>(
+            base_address_a,
+            base_address_b,
+            tile_index_a,
+            tile_index_b,
+            tile_size_a,
+            tile_size_b,
+            unpA_partial_face,
+            unpB_partial_face,
+            ct_dim,
+            rt_dim,
+            kt_dim,
+            held_a);
+        return;
+    }
+#endif
 
     volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
