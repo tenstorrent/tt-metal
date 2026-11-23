@@ -57,9 +57,12 @@ std::vector<DispatchCoreAxis> supported_dispatch_axes() {
     const char* arch_env = std::getenv("ARCH_NAME");
     const std::string arch_name = arch_env == nullptr ? "" : arch_env;
     // Not tt::get_arch_from_string: it throws on an unset or unknown name.
-    const tt::ARCH arch = arch_name == "blackhole" ? tt::ARCH::BLACKHOLE
-                          : arch_name == "quasar"  ? tt::ARCH::QUASAR
-                                                   : tt::ARCH::Invalid;
+    tt::ARCH arch = tt::ARCH::Invalid;
+    if (arch_name == "blackhole") {
+        arch = tt::ARCH::BLACKHOLE;
+    } else if (arch_name == "quasar") {
+        arch = tt::ARCH::QUASAR;
+    }
     std::vector<DispatchCoreAxis> axes;
     for (DispatchCoreAxis axis : {DispatchCoreAxis::COL, DispatchCoreAxis::ROW}) {
         if (is_axis_supported(arch, axis)) {
