@@ -941,9 +941,9 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/rsqrt.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/elu.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/relu.h \
+                         tt_metal/hw/inc/api/compute/eltwise_unary/rsub.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/i0.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/i1.h \
-                         tt_metal/hw/inc/api/compute/eltwise_unary/reverseops.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/isinf_isnan.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/logical_not.h \
                          tt_metal/hw/inc/api/compute/eltwise_unary/trigonometry.h \
