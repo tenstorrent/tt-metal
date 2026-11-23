@@ -18,7 +18,7 @@ int main() {
 
     // In a typical single-device fashion, instantiate a program with
     // an example compute kernel targeting a 2x2 core range.
-    auto example_program = CreateProgram();
+    auto example_program = CreateProgram(*mesh_device);
     auto target_tensix_cores = CoreRange{
         CoreCoord{0, 0} /* start_coord */, CoreCoord{1, 1} /* end_coord */
     };

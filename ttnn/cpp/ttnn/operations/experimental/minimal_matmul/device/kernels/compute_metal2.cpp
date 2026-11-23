@@ -21,6 +21,7 @@
 #include "api/dataflow/dfb_binding_token.h"
 #include "experimental/kernel_args.h"
 #include "swiglu_sfpu.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 // Quasar: the packer's destination buffer descriptor (BFD) is baked in by the last PACK init;
 // pack_reconfig_data_format only reprograms the format gasket, and none of the inits this kernel
@@ -462,6 +463,7 @@ void matmul_blocks(
 // subblock, and no epilogue pass re-reads the intermediate (which cost ~2100 cycles per output tile on the math
 // thread). The out tiles land row-major in a half-width block, as swiglu_block writes them. block_float_output selects
 // the cheaper sigmoid (swiglu_sfpu.hpp).
+#ifndef ARCH_QUASAR  // drives the SFPU from the pack thread with WH/BH-only instructions (TTI_SEMWAIT, SETC16)
 template <bool block_float_output, typename In0Tok, typename In1Tok, typename IntermTok, typename OutTok>
 void matmul_blocks_swiglu(
     const In0Tok in0_dfb,
@@ -475,6 +477,7 @@ void matmul_blocks_swiglu(
     const uint32_t subblock_h,
     const uint32_t subblock_w,
     const bool add_partials) {
+#ifndef ARCH_QUASAR  // Wormhole/Blackhole LLK internals; kernel_main refuses fused SwiGLU on Quasar
     const uint32_t out_full_N_block_tiles = full_N_block_tiles >> 1;
     uint32_t in0_index_offset = 0;
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
@@ -541,14 +544,16 @@ void matmul_blocks_swiglu(
         }
         in0_index_offset += subblock_h * K_block_tiles;
     }
+#endif
 }
+#endif  // !ARCH_QUASAR
 
 void kernel_main() {
     constexpr auto K_num_blocks = get_arg(args::K_num_blocks);
     constexpr auto M_block_tiles = get_arg(args::M_block_tiles);
     constexpr auto K_block_tiles = get_arg(args::K_block_tiles);
     constexpr auto N_block_tiles = get_arg(args::N_block_tiles);
-    constexpr auto M_blocks_per_core = get_arg(args::M_blocks_per_core);
+    constexpr auto M_cores = get_arg(args::M_cores);
     constexpr auto N_blocks_per_core = get_arg(args::N_blocks_per_core);
     constexpr auto subblock_h = get_arg(args::subblock_h);
     constexpr auto subblock_w = get_arg(args::subblock_w);
@@ -556,10 +561,14 @@ void kernel_main() {
     constexpr bool swiglu_in_k_loop = get_arg(args::swiglu_in_k_loop) == 1;
     constexpr bool swiglu_block_float_output = get_arg(args::swiglu_block_float_output) == 1;
 
-    const auto M_start_tile = get_arg(args::M_start_tile);
-    const auto M_end_tile = get_arg(args::M_end_tile);
+    const auto in0_idx = get_arg(args::in0_idx);
     const auto N_start_tile = get_arg(args::N_start_tile);
     const auto N_end_tile = get_arg(args::N_end_tile);
+
+    // The row count is a common runtime arg; the DM kernels derive the same range from it.
+    const uint32_t M_tiles = get_arg(args::M_tiles);
+    [[maybe_unused]] const auto [M_tiles_per_core, M_blocks_per_core, padded_M_tiles, M_start_tile, M_end_tile] =
+        ttnn::runtime_length::uniform_split(M_tiles, M_cores, in0_idx, M_block_tiles);
 
 #ifdef FUSE_TERNARY
     const auto fused_ternary_scalar_uint = get_arg(args::fused_ternary_scalar);
@@ -588,6 +597,9 @@ void kernel_main() {
 #endif
 
     matmul_init(dfb::in0, dfb::in1);
+#ifdef ARCH_QUASAR
+    static_assert(!swiglu_in_k_loop, "fused SwiGLU (matmul_blocks_swiglu) is not ported to Quasar");
+#endif
     if constexpr (swiglu_in_k_loop) {
         PACK((minimal_matmul_swiglu_tile_init()));  // once: nothing else on the pack thread reprograms the SFPU
     }
@@ -636,6 +648,7 @@ void kernel_main() {
                 dfb_in0.wait_front(in0_block_num_tiles);
                 dfb_in1.wait_front(in1_block_num_tiles);
 
+#ifndef ARCH_QUASAR  // the host never selects swiglu_in_k_loop on Quasar (see matmul_blocks_swiglu)
                 if (swiglu_in_k_loop && k_block == K_num_blocks - 1) {
                     if (K_num_blocks > 1) {  // publish the partial sums of K blocks 0..K-2 for the add
                         dfb_intermediate.push_back(out_block_num_tiles);
@@ -661,7 +674,9 @@ void kernel_main() {
                     if (K_num_blocks > 1) {
                         dfb_intermediate.pop_front(out_block_num_tiles);
                     }
-                } else {
+                } else
+#endif  // !ARCH_QUASAR
+                {
                     matmul_blocks(
                         dfb::in0,
                         dfb::in1,

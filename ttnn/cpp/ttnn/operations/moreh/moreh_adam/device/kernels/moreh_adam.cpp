@@ -35,31 +35,31 @@ void kernel_main() {
     uint32_t step = get_arg_val<uint32_t>(0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
-    constexpr auto cb_param_in = tt::CBIndex::c_0;
-    constexpr auto cb_grad_in = tt::CBIndex::c_1;
-    constexpr auto cb_exp_avg_in = tt::CBIndex::c_2;
-    constexpr auto cb_exp_avg_sq_in = tt::CBIndex::c_3;
+    static constexpr auto cb_param_in = tt::CBIndex::c_0;
+    static constexpr auto cb_grad_in = tt::CBIndex::c_1;
+    static constexpr auto cb_exp_avg_in = tt::CBIndex::c_2;
+    static constexpr auto cb_exp_avg_sq_in = tt::CBIndex::c_3;
 #ifdef AMSGRAD
     constexpr auto cb_max_exp_avg_sq_in = tt::CBIndex::c_4;
 #endif
     // lr, beta1, beta2, eps, weight_decay
-    constexpr auto cb_scalar_args = tt::CBIndex::c_5;
-    constexpr auto cb_one = tt::CBIndex::c_6;
-    constexpr auto cb_param_out = tt::CBIndex::c_16;
-    constexpr auto cb_exp_avg_out = tt::CBIndex::c_17;
-    constexpr auto cb_exp_avg_sq_out = tt::CBIndex::c_18;
+    static constexpr auto cb_scalar_args = tt::CBIndex::c_5;
+    static constexpr auto cb_one = tt::CBIndex::c_6;
+    static constexpr auto cb_param_out = tt::CBIndex::c_16;
+    static constexpr auto cb_exp_avg_out = tt::CBIndex::c_17;
+    static constexpr auto cb_exp_avg_sq_out = tt::CBIndex::c_18;
 #ifdef AMSGRAD
-    constexpr auto cb_max_exp_avg_sq_out = tt::CBIndex::c_19;
+    static constexpr auto cb_max_exp_avg_sq_out = tt::CBIndex::c_19;
 #endif
 
-    constexpr auto tmp_cb_grad = tt::CBIndex::c_24;
-    constexpr auto tmp_cb_exp_avg = tt::CBIndex::c_25;
-    constexpr auto tmp_cb_exp_avg_sq = tt::CBIndex::c_26;
+    static constexpr auto tmp_cb_grad = tt::CBIndex::c_24;
+    static constexpr auto tmp_cb_exp_avg = tt::CBIndex::c_25;
+    static constexpr auto tmp_cb_exp_avg_sq = tt::CBIndex::c_26;
 #ifdef AMSGRAD
-    constexpr auto tmp_cb_max_exp_avg_sq = tt::CBIndex::c_27;
+    static constexpr auto tmp_cb_max_exp_avg_sq = tt::CBIndex::c_27;
 #endif
-    constexpr auto cb_tmp1 = tt::CBIndex::c_30;
-    constexpr auto cb_tmp2 = tt::CBIndex::c_31;
+    static constexpr auto cb_tmp1 = tt::CBIndex::c_30;
+    static constexpr auto cb_tmp2 = tt::CBIndex::c_31;
 
     constexpr uint32_t first_tile = 0;
     constexpr uint32_t lr_tile = 0;

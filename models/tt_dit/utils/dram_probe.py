@@ -33,6 +33,7 @@ _SKIP_ATTRS = {
     "_coresident_peers",
     "ccl_manager",
     "encoder_ccl_manager",
+    "vae_ccl_manager",
     "audio_ccl_manager",
     "mesh_device",
     "device",
@@ -135,7 +136,7 @@ def _walk(
 
 def _ccl_entries(pipeline: Any) -> list[tuple[str, ttnn.Tensor]]:
     managers = {}
-    for name in ("encoder_ccl_manager", "ccl_manager", "audio_ccl_manager"):
+    for name in ("encoder_ccl_manager", "vae_ccl_manager", "ccl_manager", "audio_ccl_manager"):
         m = getattr(pipeline, name, None)
         if m is not None:
             managers.setdefault(id(m), (name, m))

@@ -5,6 +5,7 @@
 #include "roll_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -21,9 +22,16 @@ namespace {
 void validate_roll(const RollParams& operation_attributes, const RollInputs& tensor_args) {
     const Tensor& input = tensor_args.input;
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to roll need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input.is_sharded(), "Native sharded roll requires a sharded input");
     TT_FATAL(operation_attributes.output_mem_config.is_sharded(), "Native sharded roll requires a sharded output");
+    TT_FATAL(
+        input.shard_spec().has_value(),
+        "Native sharded roll requires a 2D shard spec; ttnn::roll routes ND-sharded inputs without one through DRAM");
+    // The program factory picks DRAM or L1 mode from the input alone and maps output shards the same way.
+    TT_FATAL(
+        operation_attributes.output_mem_config.buffer_type() == input.memory_config().buffer_type(),
+        "Native sharded roll requires the output to use the same buffer type as the input");
     // The program factory enumerates a single rectangular grid row-major; a multi-range grid
     // would map cells to the wrong cores.
     TT_FATAL(
@@ -33,9 +41,9 @@ void validate_roll(const RollParams& operation_attributes, const RollInputs& ten
         !ttnn::prim::sharded_roll_input_has_padding(input),
         "Native sharded roll does not support tile or shard padding; ttnn::roll routes these through DRAM");
     if (input.layout() == Layout::TILE) {
-        // The factory derives cell_h/cell_w/cell_size from the architectural 32x32 constants, and the
-        // tile is absent from compute_program_hash, so a non-standard tile would both compile a
-        // mis-sized program and alias onto a cached 32x32 one.
+        // The factory derives cell_h/cell_w/cell_size from the architectural 32x32 constants, so a
+        // non-standard tile would compile a mis-sized program. (The tile is part of the page config,
+        // which compute_program_hash keys, so it would not alias onto a cached 32x32 program.)
         const auto tile = input.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
@@ -62,15 +70,17 @@ ttsl::hash::hash_t RollDeviceOperation::compute_program_hash(
     // padded_shape drives the N-D decomposition the factory writes into per-core runtime args, and it
     // changes their count, which override_runtime_arguments cannot resize. output_mem_config supplies
     // the output shard grid and orientation, which become the kernels' core ranges and select the
-    // shard-linear mapping; only the shard shape is re-checked on a hit.
+    // shard-linear mapping; only the shard shape is re-checked on a hit. The input is keyed as Metal 2.0
+    // matches it under match_padded_shape_only + relax_tensor_layout_alignment: its padded shape and the
+    // rest of its TensorLayout (dtype, page config, memory config) (#59915). Its logical shape and
+    // Alignment are left out: the factory works only from the padded shape, and validate_roll rejects any
+    // input whose logical and padded shapes differ, on hits too.
     return tt::tt_metal::operation::hash_operation<RollDeviceOperation>(
         attrs.shift,
         attrs.dim,
         attrs.output_mem_config,
-        args.input.memory_config(),
-        args.input.dtype(),
-        args.input.layout(),
-        args.input.padded_shape());
+        tt::tt_metal::hash_tensorspec_with_relaxation(
+            args.input.tensor_spec(), {.match_padded_shape_only = true, .relax_tensor_layout_alignment = true}));
 }
 
 RollDeviceOperation::spec_return_value_t RollDeviceOperation::compute_output_specs(

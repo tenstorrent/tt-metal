@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -20,16 +20,16 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
+using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundTwiceInOneKernelFails) {
-    // One kernel binds the SAME scratchpad twice under two different accessor_names. Illegal: a kernel
-    // may bind a given scratchpad at most once (two bindings would request two separate per-node
-    // allocations under one name). This is a structural input error with no node-set dependency, so
-    // it is caught up front during collection rather than by the placement census.
+    // One kernel may bind a given scratchpad only once, even under distinct accessor names.
+    // This structural error is caught during collection, before placement validation.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch_0"}, .size_per_node = 1024}};
@@ -39,7 +39,27 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundTwiceInOneKernelFails) {
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("binds scratchpad 'scratch_0' more than once")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_ScratchpadBoundTwiceInOneKernelWithMultiKernelBindingEnabledFails) {
+    // Sharing across kernels does not permit duplicate bindings within one kernel.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .advanced_options = {.allow_instance_multi_binding = true},
+    }};
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_a"},
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_b"},
+    };
+
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("binds scratchpad 'scratch_0' more than once")));
 }
@@ -61,7 +81,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateScratchpadAccessorNameFails) {
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate scratchpad accessor_name")));
 }
 
@@ -82,7 +102,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidScratchpadAccessorNameFails) {
             .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = bad_name}};
 
         EXPECT_THAT(
-            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+            [&] { Program(*mesh_device_, spec); },
             ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be a valid C++ identifier")))
             << "Expected rejection for scratchpad accessor_name: '" << bad_name << "'";
     }
@@ -94,7 +114,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidScratchpadAccessorNameFails) {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = too_long}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be at most")));
 }
 
@@ -124,7 +144,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_MultipleScratchpadsEachBoundToOwnKernelSucceed
         MakeMinimalWorkUnit("wu_b", node1, {"kernel_b"}),
     };
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 }  // namespace

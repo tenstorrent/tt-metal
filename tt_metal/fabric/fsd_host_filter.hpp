@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -92,6 +93,20 @@ void agree_or_throw_fsd_host_filter(
 void align_factory_descriptor_with_live(
     ::tt::tt_metal::PhysicalSystemDescriptor& fsd, const ::tt::tt_metal::PhysicalSystemDescriptor& live);
 
+// Whether this job owns a chip subset of its hosts: TT_VISIBLE_DEVICES (which UMD honours) or
+// TT_METAL_VISIBLE_DEVICES is set. Under such an allocation the live descriptor's *chip* set is the
+// allocation, the way its host set is otherwise, and a factory chip absent from live on a live host is
+// outside the job rather than missing -- UMD refuses to start when a device it was told to open is not
+// there, so a chip that was meant to be opened cannot be silently absent.
+//
+// Agreed across ranks (any rank restricted => every rank prunes): one rank mapping on the pruned
+// descriptor and another on the full one would disagree on the placement. Collective; call on every rank.
+bool agree_job_runs_on_device_subset(const ::tt::tt_metal::distributed::multihost::DistributedContext& ctx);
+
+// The live chip set as the addresses the builder's allocation filter takes.
+std::set<::tt::tt_metal::experimental::PhysicalNodeId> live_allocation(
+    const ::tt::tt_metal::PhysicalSystemDescriptor& live);
+
 // Throw if the factory descriptor declares a whole ASIC that the live cluster does not have.
 //
 // A missing *cable* is the downed-link feature. A missing *chip* is a wrong allocation, and the two must
@@ -106,7 +121,8 @@ void align_factory_descriptor_with_live(
 // Only ASICs on hosts the live descriptor enumerates are considered. Callers are expected to have filtered
 // the factory descriptor to the live host set already, which makes that a no-op; it matters when discovery
 // was local-only, where every remote chip would otherwise look absent and every rank would fatal on a
-// healthy system.
+// healthy system. Likewise a job on a device subset filters the descriptor to live_allocation() first
+// (see agree_job_runs_on_device_subset), so the chips it does not own never reach this check.
 //
 // Deliberately not a check on ASIC ids: the two descriptors label chips from unrelated spaces (1..N in file
 // order versus UMD chip unique ids), so this joins on address like everything else on this path.

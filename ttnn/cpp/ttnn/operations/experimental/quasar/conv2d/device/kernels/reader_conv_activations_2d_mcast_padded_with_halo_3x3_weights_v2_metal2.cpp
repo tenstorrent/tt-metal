@@ -42,20 +42,20 @@
 //   is_receiver_core && act_mcast_num_cores == 0: local self-write (mcast loopback hangs with 0 destinations)
 //   !is_receiver_core:                            standard mcast EXCLUDE_SRC (even when act_mcast_num_cores == 0,
 //                                                 because the sender still needs to send to the output core)
-template <uint32_t act_mcast_num_cores, typename SrcDFB>
+template <uint32_t act_mcast_num_cores, typename SrcDFB, typename DstDFB>
 void multicast_data(
     Noc noc,
-    MulticastEndpoint mcast_ep,
     bool is_receiver_core,
-    SrcDFB src_cb,
+    SrcDFB& src_cb,
     uint32_t src_offset,
-    McastDst& dst,
+    DstDFB& dst_cb,
+    const noc_dst_args_mcast_t<DstDFB>& dst,
     uint32_t total_bytes) {
     auto& src = src_cb;  // DataflowBuffer src -> read_ptr (was use<READ_PTR> on CircularBuffer)
     if (is_receiver_core) {
         if constexpr (act_mcast_num_cores > 0) {
             noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                src, mcast_ep, total_bytes, act_mcast_num_cores + 1, {.offset_bytes = src_offset}, dst, true);
+                src, dst_cb, total_bytes, act_mcast_num_cores + 1, {.offset_bytes = src_offset}, dst, true);
         } else {
             // Sender is the only receiver — can't use multicast loopback (hangs with 0 destinations)
             noc.async_write(
@@ -63,11 +63,13 @@ void multicast_data(
                 UnicastEndpoint{},
                 total_bytes,
                 {.offset_bytes = src_offset},
-                {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = dst.addr});
+                {.noc_x = my_x[noc.get_noc_id()],
+                 .noc_y = my_y[noc.get_noc_id()],
+                 .addr = dst_cb.get_write_ptr() + dst.offset_bytes});
         }
     } else {
         noc.async_write_multicast(
-            src, mcast_ep, total_bytes, act_mcast_num_cores + 1, {.offset_bytes = src_offset}, dst, true);
+            src, dst_cb, total_bytes, act_mcast_num_cores + 1, {.offset_bytes = src_offset}, dst, true);
     }
 }
 
@@ -89,13 +91,8 @@ template <
     typename SrcDFB,
     typename DstDFB>
 void mcast_block_chunked(
-    Noc noc,
-    MulticastEndpoint mcast_ep,
-    SrcDFB src_cb_obj,
-    bool is_receiver_core,
-    DstDFB dst_cb_obj,
-    const McastRect& rect) {
-    // Build mcast dst once; only .addr is updated per burst
+    Noc noc, SrcDFB& src_cb_obj, bool is_receiver_core, DstDFB& dst_cb_obj, const McastRect& rect) {
+    // Build mcast dst once; only .offset_bytes is updated per burst
     // number of full bursts
     constexpr uint32_t mcast_full_burst_cnt = block_tile_count * tile_size / mcast_noc_burst_size;
     // size of the leftover burst, if 0 means we have no leftover burst
@@ -115,21 +112,21 @@ void mcast_block_chunked(
     constexpr uint32_t wait_tile_full_iter_cnt = (wait_tile_full_done / wait_tile_full_cnt) - 1;
 
     uint32_t src_offset = 0;
-    McastDst dst = {
+    noc_dst_args_mcast_t<DstDFB> dst = {
         .noc_x_start = rect.noc_x_start,
         .noc_y_start = rect.noc_y_start,
         .noc_x_end = rect.noc_x_end,
         .noc_y_end = rect.noc_y_end,
-        .addr = dst_cb_obj.get_write_ptr()};
+    };
 
     constexpr uint32_t wait_tile_start_cnt = std::min(block_tile_count, wait_tile_full_cnt);
     uint32_t wait_tile_curr = wait_tile_start_cnt;
     for (uint32_t i = 0; i < mcast_full_burst_cnt; i++) {
         src_cb_obj.wait_front(wait_tile_curr);
         multicast_data<act_mcast_num_dest_cores>(
-            noc, mcast_ep, is_receiver_core, src_cb_obj, src_offset, dst, mcast_noc_burst_size);
+            noc, is_receiver_core, src_cb_obj, src_offset, dst_cb_obj, dst, mcast_noc_burst_size);
         src_offset += mcast_noc_burst_size;
-        dst.addr += mcast_noc_burst_size;
+        dst.offset_bytes += mcast_noc_burst_size;
 
         if constexpr (no_need_partial_wait_tile) {
             wait_tile_curr += wait_tile_full_cnt;
@@ -145,7 +142,7 @@ void mcast_block_chunked(
     if constexpr (mcast_leftover_burst_size > 0) {
         src_cb_obj.wait_front(block_tile_count);
         multicast_data<act_mcast_num_dest_cores>(
-            noc, mcast_ep, is_receiver_core, src_cb_obj, src_offset, dst, mcast_leftover_burst_size);
+            noc, is_receiver_core, src_cb_obj, src_offset, dst_cb_obj, dst, mcast_leftover_burst_size);
     }
 
     // In case we only do local l1 writes, we need to wait for the barrier to complete
@@ -184,7 +181,6 @@ void kernel_main() {
     Noc noc;
     Semaphore act_mcast_sender_sem(sem::act_mcast_sender);
     Semaphore act_mcast_receiver_sem(sem::act_mcast_receiver);
-    MulticastEndpoint mcast_ep;
     DataflowBuffer cb_act_obj(cb_id_act);
     DataflowBuffer cb_act_rm_obj(cb_id_act_row_major_bfloat16);
     DataflowBuffer cb_tilized_in0_obj(tilized_in0_cb_id);
@@ -304,7 +300,7 @@ void kernel_main() {
                         NOC_MAX_BURST_SIZE,
                         act_block_num_tiles,
                         act_mcast_tile_size_bytes>(
-                        noc, mcast_ep, cb_tilized_in0_obj, is_receiver_core, cb_act_obj, act_mcast_rect);
+                        noc, cb_tilized_in0_obj, is_receiver_core, cb_act_obj, act_mcast_rect);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs

@@ -6,12 +6,17 @@
 
 #include <algorithm>
 #include <numeric>
+#include <string>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim {
 
@@ -66,10 +71,11 @@ RiscBlockPartition choose_risc_block_partition(
 
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts ConcatS2SMultiProgramFactory::create_program_artifacts(
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
+    using tt::tt_metal::experimental::KernelAdvancedOptions;
 
     const auto& input_tensors = tensor_args.input_tensors;
     Tensor& output = tensor_return_value;
@@ -81,17 +87,34 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     // well-defined, since a core's rows can straddle leading indices. Pinning it to 1 there keeps
     // width concat untouched by construction.
     const uint32_t num_blocks = height_concat ? num_leading_blocks(input_tensors[0]) : 1u;
-    ProgramDescriptor desc;
 
     const uint32_t num_input_tensors = input_tensors.size();
-    const uint32_t cb_dst_id = 16;
-    TT_FATAL(num_input_tensors <= cb_dst_id, "Not enough circular buffer for {} inputs.", num_input_tensors);
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    constexpr uint32_t max_input_tensors = 16;
+    TT_FATAL(
+        num_input_tensors <= max_input_tensors,
+        "Sharded concat supports at most {} inputs, got {}.",
+        max_input_tensors,
+        num_input_tensors);
+    const tt::DataFormat data_format = datatype_to_dataformat_converter(output.dtype());
     const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
+
+    // Program-scope resource names. Declared function-local (not at namespace scope) so that the
+    // unity build, which concatenates every op's factory into one translation unit, cannot collide
+    // these very generic identifiers across ops.
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const TensorParamName OUTPUT{"output"};
+    // One TensorParameter per input; the count is an op attribute, so these are built rather than
+    // declared.
+    std::vector<TensorParamName> INPUTS;
+    INPUTS.reserve(num_input_tensors);
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        INPUTS.emplace_back(TensorParamName{"input_" + std::to_string(i)});
+    }
 
     // Assume inputs and output have the same element size and alignment.
     const uint32_t element_size = input_tensors[0].element_size();
-    const uint32_t alignment = input_tensors[0].buffer()->alignment();
+    const uint32_t alignment = input_tensors[0].mesh_buffer().alignment();
 
     uint32_t page_size;
     uint32_t elements_per_page_width;
@@ -108,7 +131,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         elements_per_page_width = page_size / element_size;
         elements_per_page_height = 1;
     } else {
-        page_size = tt::tile_size(cb_data_format);
+        page_size = tt::tile_size(data_format);
         elements_per_page_width = TILE_WIDTH;
         elements_per_page_height = TILE_HEIGHT;
     }
@@ -127,7 +150,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     // Assume inputs and output have the same sharding grid.
     const auto all_cores = input_tensors[0].shard_spec().value().grid;
 
-    // Input CBs
+    // Per-input shard layout
     //
     // For height concat the write offset carries only this input's *prefix within one leading
     // block*: block b of input i starts b * output_block_stride further on, and the kernel adds
@@ -156,38 +179,16 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         input_block_strides.push_back(
             page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_block[input_id]);
 
-        const uint32_t input_num_pages = input_num_pages_per_stick[input_id] * input_num_sticks[input_id];
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = page_size * input_num_pages,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(input_id),
-                .data_format = cb_data_format,
-                .page_size = page_size,
-            }}},
-            .buffer = input_tensors[input_id].buffer(),
-        });
-
         // Height concat: this input's rows within one block. Width concat: one stick.
         // input_block_strides is page_size * input_num_pages when num_blocks == 1.
         curr_input_write_offset +=
             height_concat ? input_block_strides[input_id] : page_size * input_num_pages_per_stick[input_id];
     }
 
-    // Output CB
+    // Output shard layout
     const auto output_shard_spec = output.shard_spec().value();
     const uint32_t output_num_pages_per_stick = tt::div_up(output_shard_spec.shape[1], elements_per_page_width);
     const uint32_t output_num_sticks = tt::div_up(output_shard_spec.shape[0], elements_per_page_height);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = page_size * output_num_sticks * output_num_pages_per_stick,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb_dst_id),
-            .data_format = cb_data_format,
-            .page_size = page_size,
-        }}},
-        .buffer = output.buffer(),
-    });
 
     const uint32_t output_stride = page_size * output_num_pages_per_stick;
 
@@ -236,21 +237,33 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         choose_risc_block_partition(num_blocks, input_num_sticks_per_block);
 
     // Each kernel carries its own block range as compile-time args so its loop bound is constant.
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        cb_dst_id, page_size, output_stride, num_input_tensors, output_block_stride, 0, reader_block_count};
-    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
-        cb_dst_id,
-        page_size,
-        output_stride,
-        num_input_tensors,
-        output_block_stride,
-        writer_block_start,
-        writer_block_count};
+    const KernelSpec::CompileTimeArgs reader_compile_time_args = {
+        {"page_size", page_size},
+        {"output_stride", output_stride},
+        {"output_block_stride", output_block_stride},
+        {"block_start", 0},
+        {"block_count", reader_block_count},
+    };
+    const KernelSpec::CompileTimeArgs writer_compile_time_args = {
+        {"page_size", page_size},
+        {"output_stride", output_stride},
+        {"output_block_stride", output_block_stride},
+        {"block_start", writer_block_start},
+        {"block_count", writer_block_count},
+    };
 
-    std::vector<uint32_t> runtime_args_0;
-    std::vector<uint32_t> runtime_args_1;
-    runtime_args_0.reserve(num_input_tensors * 5);
-    runtime_args_1.reserve(num_input_tensors * 5);
+    std::vector<uint32_t> reader_num_sticks;
+    std::vector<uint32_t> reader_write_offsets;
+    std::vector<uint32_t> reader_read_offsets;
+    std::vector<uint32_t> writer_num_sticks;
+    std::vector<uint32_t> writer_write_offsets;
+    std::vector<uint32_t> writer_read_offsets;
+    reader_num_sticks.reserve(num_input_tensors);
+    reader_write_offsets.reserve(num_input_tensors);
+    reader_read_offsets.reserve(num_input_tensors);
+    writer_num_sticks.reserve(num_input_tensors);
+    writer_write_offsets.reserve(num_input_tensors);
+    writer_read_offsets.reserve(num_input_tensors);
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const uint32_t sticks_per_block = input_num_sticks_per_block[input_id];
         // Under a block split each RISC copies every stick of the blocks it owns. Otherwise both
@@ -259,57 +272,137 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         const uint32_t reader_sticks = split_blocks ? sticks_per_block : tt::div_up(sticks_per_block, 2);
         const uint32_t writer_sticks = split_blocks ? sticks_per_block : sticks_per_block - reader_sticks;
         const uint32_t writer_stick_offset = split_blocks ? 0 : reader_sticks;
-        runtime_args_0.push_back(input_num_pages_per_stick[input_id]);
-        runtime_args_0.push_back(reader_sticks);
-        runtime_args_0.push_back(input_write_offsets[input_id]);
-        runtime_args_0.push_back(0);
-        runtime_args_0.push_back(input_block_strides[input_id]);
-        runtime_args_1.push_back(input_num_pages_per_stick[input_id]);
-        runtime_args_1.push_back(writer_sticks);
-        runtime_args_1.push_back(input_write_offsets[input_id] + (output_stride * writer_stick_offset));
-        runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * writer_stick_offset);
-        runtime_args_1.push_back(input_block_strides[input_id]);
+        reader_num_sticks.push_back(reader_sticks);
+        reader_write_offsets.push_back(input_write_offsets[input_id]);
+        reader_read_offsets.push_back(0);
+        writer_num_sticks.push_back(writer_sticks);
+        writer_write_offsets.push_back(input_write_offsets[input_id] + (output_stride * writer_stick_offset));
+        writer_read_offsets.push_back(page_size * input_num_pages_per_stick[input_id] * writer_stick_offset);
     }
 
-    // Match the legacy CachedProgram path: SetRuntimeArgs(..., all_cores, args).
-    // These values must live in per-core runtime args, not common_runtime_args.
-    // BRISC (writer) and NCRISC (reader) each have their own RTA region; using
-    // common_runtime_args for both kernels made both RISCs observe the same
-    // offsets (precision failures in sharded concat).
-    KernelDescriptor::CoreRuntimeArgs reader_rt_args(runtime_args_0.begin(), runtime_args_0.end());
-    KernelDescriptor::CoreRuntimeArgs writer_rt_args(runtime_args_1.begin(), runtime_args_1.end());
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
+    static constexpr const char* KERNEL_SOURCE =
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = reader_compile_time_args;
-    reader_desc.runtime_args.reserve(all_cores.num_cores());
+
+    // Both instances bind every input shard and the output shard, and reach them only as
+    // node-local L1 (LocalTensorAccessor); nothing crosses cores. The kernel picks input i with its
+    // loop counter, so the inputs are also bound positionally, as a sequence; the sequence carries
+    // its own length, which is why no tensor-count argument is passed.
+    Group<TensorBinding> tensor_bindings;
+    std::vector<std::string> input_accessor_names;
+    tensor_bindings.reserve(num_input_tensors + 1);
+    input_accessor_names.reserve(num_input_tensors);
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        input_accessor_names.push_back("input_" + std::to_string(i));
+        tensor_bindings.push_back(TensorBinding{
+            .tensor_parameter_name = INPUTS[i],
+            .accessor_name = input_accessor_names.back(),
+        });
+    }
+    tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"});
+
+    // Five values per input, read by input index.
+    const KernelSpec::RuntimeArgSchema runtime_arg_schema{
+        .runtime_array_args =
+            {
+                {.name = "input_num_pages_per_stick", .size = num_input_tensors},
+                {.name = "input_num_sticks", .size = num_input_tensors},
+                {.name = "input_write_offset", .size = num_input_tensors},
+                {.name = "input_read_offset", .size = num_input_tensors},
+                {.name = "input_block_stride", .size = num_input_tensors},
+            },
+    };
+    const KernelAdvancedOptions advanced_options{
+        .tensor_binding_sequences =
+            {
+                KernelAdvancedOptions::TensorBindingSequence{
+                    .sequence_name = "inputs",
+                    .members = input_accessor_names,
+                },
+            },
+    };
+
+    Group<KernelSpec> kernels;
+    kernels.reserve(2);
+    kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = KERNEL_SOURCE,
+        .tensor_bindings = tensor_bindings,
+        .compile_time_args = reader_compile_time_args,
+        .runtime_arg_schema = runtime_arg_schema,
+        .hw_config = ttnn::create_reader_datamovement_config(),
+        .advanced_options = advanced_options,
+    });
+    kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = KERNEL_SOURCE,
+        .tensor_bindings = std::move(tensor_bindings),
+        .compile_time_args = writer_compile_time_args,
+        .runtime_arg_schema = runtime_arg_schema,
+        .hw_config = ttnn::create_writer_datamovement_config(),
+        .advanced_options = advanced_options,
+    });
+
+    Group<TensorParameter> tensor_parameters;
+    tensor_parameters.reserve(num_input_tensors + 1);
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        tensor_parameters.push_back(TensorParameter{
+            .unique_id = INPUTS[i],
+            .spec = input_tensors[i].mesh_tensor().tensor_spec(),
+        });
+    }
+    tensor_parameters.push_back(TensorParameter{
+        .unique_id = OUTPUT,
+        .spec = output.mesh_tensor().tensor_spec(),
+    });
+
+    ProgramSpec spec{
+        .name = "concat_s2s_multi",
+        .kernels = std::move(kernels),
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
+
+    // Per-node runtime arrays, even though every node gets identical values (the reader's and the
+    // writer's differ). Switching to common runtime arrays is a candidate, but an earlier move to
+    // common args caused unexplained precision failures in sharded concat, so it is left per-node.
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
     for (const auto& range : all_cores.ranges()) {
         for (const CoreCoord& core : range) {
-            reader_desc.runtime_args.emplace_back(core, reader_rt_args);
+            reader_run_args.runtime_array_arg_values["input_num_pages_per_stick"][core] = input_num_pages_per_stick;
+            reader_run_args.runtime_array_arg_values["input_num_sticks"][core] = reader_num_sticks;
+            reader_run_args.runtime_array_arg_values["input_write_offset"][core] = reader_write_offsets;
+            reader_run_args.runtime_array_arg_values["input_read_offset"][core] = reader_read_offsets;
+            reader_run_args.runtime_array_arg_values["input_block_stride"][core] = input_block_strides;
+            writer_run_args.runtime_array_arg_values["input_num_pages_per_stick"][core] = input_num_pages_per_stick;
+            writer_run_args.runtime_array_arg_values["input_num_sticks"][core] = writer_num_sticks;
+            writer_run_args.runtime_array_arg_values["input_write_offset"][core] = writer_write_offsets;
+            writer_run_args.runtime_array_arg_values["input_read_offset"][core] = writer_read_offsets;
+            writer_run_args.runtime_array_arg_values["input_block_stride"][core] = input_block_strides;
         }
     }
-    reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = writer_compile_time_args;
-    writer_desc.runtime_args.reserve(all_cores.num_cores());
-    for (const auto& range : all_cores.ranges()) {
-        for (const CoreCoord& core : range) {
-            writer_desc.runtime_args.emplace_back(core, writer_rt_args);
-        }
+    ProgramRunArgs run_args;
+    // push_back rather than brace-init: an initializer_list would copy the per-node arg tables.
+    run_args.kernel_run_args.reserve(2);
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        run_args.tensor_args.emplace(INPUTS[i], input_tensors[i].mesh_tensor());
     }
-    writer_desc.config = WriterConfigDescriptor{};
+    run_args.tensor_args.emplace(OUTPUT, output.mesh_tensor());
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim

@@ -6,9 +6,9 @@
 // subtile-broadcast binary op.
 //
 // Copy of eltwise_binary_row_col_bcast_dfb.cpp (the FPU MIXED kernel) with the binary-op section swapped to
-// the SFPU path -- the SAME delta eltwise_binary_sfpu_col_bcast_dfb.cpp applies (unary_op_init_common +
-// BINARY_SFPU_INIT + the copy-both-operands-to-DST / BINARY_SFPU_OP body, with the ARCH_QUASAR
-// copy_tile_to_dst_init_short handling). The HYBRID broadcast is identical to the FPU MIXED kernel: the ROW
+// the SFPU path -- the SAME delta eltwise_binary_sfpu_col_bcast_dfb.cpp applies (compute_kernel_hw_startup + copy_init
+// + BINARY_SFPU_INIT + the copy-both-operands-to-DST / BINARY_SFPU_OP body, with reconfig_data_format_srca + copy_init
+// before each operand copy). The HYBRID broadcast is identical to the FPU MIXED kernel: the ROW
 // operand is expanded by the compute (unary_bcast<ROW> through llk_post, per output tile); the COL operand
 // is expanded by the READER's software-fill (FILL_TILE_WITH_FIRST_COLUMN), delivered pre-expanded once per
 // tile-row and reused across the row (freq = Wt). unary_bcast is FPU-side regardless of the binary op that
@@ -34,6 +34,7 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/atan2.h"
 // SFPU op headers NOT yet ported to Quasar: they unconditionally pull in WH/BH-only ckernel impls or
 // symbols (InstrModLoadStore, DataFormat::UInt32, ckernel_sfpu_div_int32_floor.h, ...) absent from the
 // Quasar ckernel tree, so they only compile off-Quasar. The float SFPU binary ops this kernel runs on
@@ -50,7 +51,6 @@
 #include "api/compute/gcd.h"
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
-#include "api/compute/atan2.h"
 #include "api/compute/isclose.h"
 #endif
 #include "api/compute/bcast.h"

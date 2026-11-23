@@ -7,12 +7,17 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image
 
+# MINIMAX_H3_SHORT_EDGE, MINIMAX_H3_MAX_REFERENCE_AUDIOS and MINIMAX_H3_MAX_REFERENCES are unused here:
+# they are re-exported for the server, which imports every H3 value from this module.
+from .packing import MINIMAX_H3_SHORT_EDGE  # noqa: F401
 from .packing import (
+    MINIMAX_H3_AUDIO_CHANNELS,
     MINIMAX_H3_CANVAS_MULTIPLE,
     MINIMAX_H3_FPS,
     MINIMAX_H3_FRAMES_PER_CHUNK,
@@ -22,10 +27,14 @@ from .packing import (
     MINIMAX_H3_MIN_ASPECT_RATIO,
     resolve_canvas_size,
 )
-from .packing_ref2va import (
+from .packing_ref2va import (  # noqa: F401
+    MINIMAX_H3_MAX_REFERENCE_AUDIOS,
     MINIMAX_H3_MAX_REFERENCE_IMAGES,
     MINIMAX_H3_MAX_REFERENCE_VIDEOS,
+    MINIMAX_H3_MAX_REFERENCES,
     MiniMaxH3Reference,
+    check_reference_aspect_ratio,
+    check_reference_kinds,
     resolve_reference_image_size,
     sample_reference_video_frames,
 )
@@ -83,7 +92,7 @@ MINIMAX_H3_MAX_REFERENCE_PATCHES = MINIMAX_H3_MAX_REFERENCE_BLOCK_PATCHES * (
     * len(sample_reference_video_frames(np.zeros((MINIMAX_H3_MAX_NUM_FRAMES, 1, 1, 3), np.uint8))[1])
 )
 
-# MiniMax API limits on an fl2va keyframe.
+# MiniMax API limits on an fl2va keyframe (server-enforced).
 MINIMAX_H3_KEYFRAME_MIN_SIDE = 256
 MINIMAX_H3_KEYFRAME_MAX_SIDE = 5760
 
@@ -112,6 +121,15 @@ def minimax_h3_frames_are_aligned(num_frames: int) -> bool:
         num_frames >= MINIMAX_H3_LATENTS_PER_CHUNK
         and num_frames % MINIMAX_H3_FRAMES_PER_CHUNK == MINIMAX_H3_LATENTS_PER_CHUNK
     )
+
+
+def validate_duration(duration_s: float) -> None:
+    """`duration_s` must be one of the served whole-second durations."""
+    if duration_s != int(duration_s) or int(duration_s) not in MINIMAX_H3_DURATIONS_S:
+        raise ValueError(
+            f"duration must be a whole number of seconds from {MINIMAX_H3_DURATIONS_S[0]} "
+            f"to {MINIMAX_H3_DURATIONS_S[-1]}; got {duration_s:g}"
+        )
 
 
 def validate_num_frames(num_frames: int) -> None:
@@ -185,23 +203,17 @@ def validate_fl2va(
     height: int | None,
     width: int | None,
 ) -> None:
-    """Every keyframe must be within the side and aspect ratio limits, and an explicit canvas must be servable."""
+    """Every keyframe must be within the aspect ratio limits, and an explicit canvas must be servable."""
     for name, keyframe in (("image", image), ("last_image", last_image)):
-        if keyframe is None:
-            continue
-        keyframe_width, keyframe_height = keyframe.size
-        if not (
-            MINIMAX_H3_KEYFRAME_MIN_SIDE <= min(keyframe_width, keyframe_height)
-            and max(keyframe_width, keyframe_height) <= MINIMAX_H3_KEYFRAME_MAX_SIDE
-        ):
-            raise ValueError(
-                f"{name} is {keyframe_width}x{keyframe_height}; each side must be from "
-                f"{MINIMAX_H3_KEYFRAME_MIN_SIDE} to {MINIMAX_H3_KEYFRAME_MAX_SIDE} pixels"
-            )
-        if not MINIMAX_H3_MIN_ASPECT_RATIO <= keyframe_width / keyframe_height <= MINIMAX_H3_MAX_ASPECT_RATIO:
-            raise ValueError(f"{name} is {keyframe_width}x{keyframe_height}; its aspect ratio must be from 1:4 to 4:1")
+        if keyframe is not None:
+            _validate_keyframe_aspect_ratio(name, *keyframe.size)
     if height is not None:
         _validate_explicit_canvas(height, width)
+
+
+def _validate_keyframe_aspect_ratio(name: str, width: int, height: int) -> None:
+    if not MINIMAX_H3_MIN_ASPECT_RATIO <= width / height <= MINIMAX_H3_MAX_ASPECT_RATIO:
+        raise ValueError(f"{name} is {width}x{height}; its aspect ratio must be from 1:4 to 4:1")
 
 
 def validate_ref2va(*, aspect_ratio: tuple[int, int], height: int | None, width: int | None) -> None:
@@ -227,6 +239,81 @@ def _validate_explicit_canvas(height: int, width: int) -> None:
         raise ValueError(f"canvas {height}x{width} exceeds the {MINIMAX_H3_MAX_PIXELS}-pixel area cap")
     if not MINIMAX_H3_MIN_ASPECT_RATIO <= (width / height) <= MINIMAX_H3_MAX_ASPECT_RATIO:
         raise ValueError(f"canvas {height}x{width} is outside the 1:4 to 4:1 aspect ratio range")
+
+
+@dataclass(frozen=True)
+class MiniMaxH3ReferenceInfo:
+    """Container metadata for one ref2va reference; `size` is `(width, height)`."""
+
+    name: str
+    kind: str
+    size: tuple[int, int] | None = None
+    fps: float | None = None
+    audio_channels: int | None = None
+
+
+class MiniMaxH3AdmissionError(ValueError):
+    """Every reason `admit_request` rejected a request.
+
+    `errors` holds `(name, message)` pairs: `name` is the keyframe key or `MiniMaxH3ReferenceInfo.name`
+    the problem is about, or None when it is about the request as a whole.
+    """
+
+    def __init__(self, errors: list[tuple[str | None, str]]):
+        super().__init__("; ".join(message for _, message in errors))
+        self.errors = errors
+
+
+def _collect(errors: list[tuple[str | None, str]], name: str | None, check, *args) -> None:
+    try:
+        check(*args)
+    except ValueError as error:
+        errors.append((name, str(error)))
+
+
+def _check_reference_media(reference: MiniMaxH3ReferenceInfo) -> None:
+    if reference.kind == "video" and not (reference.fps and reference.fps > 0):
+        raise ValueError(f"{reference.name} reports no frame rate")
+    if reference.kind == "audio" and reference.audio_channels is None:
+        raise ValueError(f"{reference.name} has no audio stream")
+    if reference.audio_channels is not None and reference.audio_channels not in (1, MINIMAX_H3_AUDIO_CHANNELS):
+        raise ValueError(f"{reference.name} has {reference.audio_channels} audio channels; must be mono or stereo")
+
+
+def admit_request(
+    *,
+    aspect_ratio: str | None,
+    duration_s: float | None,
+    height: int | None,
+    width: int | None,
+    keyframe_sizes: Mapping[str, tuple[int, int]] | None = None,
+    references: Sequence[MiniMaxH3ReferenceInfo] | None = None,
+) -> None:
+    """Reject an unserved request from metadata alone, before queueing; `validate_request` checks decoded inputs.
+
+    Raises `MiniMaxH3AdmissionError` listing every problem found, not only the first.
+    """
+    errors: list[tuple[str | None, str]] = []
+    if aspect_ratio is not None:
+        _collect(errors, None, minimax_h3_parse_aspect_ratio, aspect_ratio)
+    if duration_s is not None:
+        _collect(errors, None, validate_duration, duration_s)
+    if (height is None) != (width is None):
+        errors.append((None, "pass both height and width, or neither"))
+    elif height is not None:
+        _collect(errors, None, _validate_explicit_canvas, height, width)
+    for name, size in (keyframe_sizes or {}).items():
+        _collect(errors, name, _validate_keyframe_aspect_ratio, name, *size)
+    if references is not None:
+        if keyframe_sizes:
+            errors.append((None, "references (ref2va) and keyframes (fl2va) are different tasks"))
+        _collect(errors, None, check_reference_kinds, [reference.kind for reference in references])
+    for reference in references or ():
+        if reference.size is not None:
+            _collect(errors, reference.name, check_reference_aspect_ratio, reference.name, *reference.size)
+        _collect(errors, reference.name, _check_reference_media, reference)
+    if errors:
+        raise MiniMaxH3AdmissionError(errors)
 
 
 def served_canvases() -> tuple[tuple[int, int], ...]:

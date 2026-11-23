@@ -387,7 +387,7 @@ int main(int argc, char** argv) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*mesh_device);
 
     std::vector<CoreCoord> worker_logical_cores;
     auto grid_size = mesh_device->compute_with_storage_grid_size();
@@ -417,6 +417,7 @@ int main(int argc, char** argv) {
     test_params.buffer_size_bytes_header_only_channel = packet_header_size;
 
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         test_params.num_full_size_channels,
         test_params.num_header_only_channels,
         test_params.num_buffers_full_size_channel,
@@ -430,6 +431,7 @@ int main(int argc, char** argv) {
     };
 
     auto drainer_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        *mesh_device,
         1,                         /* num_full_size_channels */
         0,                         /* num_header_only_channels */
         16,                        /* num_buffers_full_size_channel */

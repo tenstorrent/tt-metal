@@ -63,6 +63,8 @@ _MESHES = {
 }
 _SEQ_LEN_PER_CHIP = 640
 _CAPACITY_FACTOR = 8
+# Pages one of combine's forwarding channels holds, for the overlap and the standalone combine alike.
+_FWD_VC_PAGES = 64
 # The models this op is deployed for. Each contributes its own emb, MoE hidden, expert count and top-k.
 _MODELS = {"kimi-k27": KimiK27Config, "glm-53": GLM53Config}
 # Routing captured off-device from total_counts_per_expert, one dispatch group of a 32-chip chunked prefill
@@ -475,6 +477,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             hybrid_token_threshold=threshold,
             compute_kernel_config=tt_expert.compute_kernel_config,
             activation=ttnn.RoutedExpertActivation.Silu,
+            weight_address_table=tt_expert.weight_address_table,
             **overlap,
         )
 
@@ -499,14 +502,16 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             seq_len_per_chip=_SEQ_LEN_PER_CHIP,
             cluster_axis=sp_axis,
             num_links=num_links,
+            fwd_vc_pages=_FWD_VC_PAGES,
             topology=per_axis_topology(device_params["fabric_config"])[0],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    # The overlap's fwd_arrived, final_arrived and expert_go outlive every launch -- neighbouring chips bump them
-    # across launches -- so the case keeps one set for all of its calls, as a model keeps one per mesh. Created on
-    # the overlap's first call, not here: the solo routed expert's arena is the whole L1 bank, so it only fits
-    # while nothing else is allocated, and the perf test runs it first. That first call is eager, never a capture.
+    # The overlap's fwd_arrived, final_arrived and expert_go, then combine's channel counters, outlive every
+    # launch -- neighbouring chips bump them across launches -- so the case keeps one set for all of its calls, as
+    # a model keeps one per mesh. Created on the overlap's first call, not here: the solo routed expert's arena is
+    # the whole L1 bank, so it only fits while nothing else is allocated, and the perf test runs it first. That
+    # first call is eager, never a capture.
     overlap_semaphores = []
 
     def overlapped():
@@ -515,9 +520,14 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             all_cores = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
             )
-            overlap_semaphores.extend(ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(3))
+            channels = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_channel_semaphore_count(
+                mesh_device, combine_axis=sp_axis
+            )
+            overlap_semaphores.extend(
+                ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(3 + channels)
+            )
             ttnn.synchronize_device(mesh_device)
-        fwd_arrived, final_arrived, expert_go = overlap_semaphores
+        fwd_arrived, final_arrived, expert_go = overlap_semaphores[:3]
         return routed_expert(
             dispatched_metadata=tt_metadata,
             expert_offsets=tt_expert_offsets,
@@ -529,6 +539,8 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             fwd_arrived_semaphore=fwd_arrived,
             final_arrived_semaphore=final_arrived,
             expert_go_semaphore=expert_go,
+            channel_semaphores=overlap_semaphores[3:],
+            combine_fwd_vc_pages=_FWD_VC_PAGES,
         )
 
     reference = []

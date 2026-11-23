@@ -25,7 +25,7 @@ CASES. Run one op (from tests/python_tests, Quasar simulator):
 
 import math
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -50,8 +50,8 @@ from helpers.llk_params import (
 )
 from helpers.logger import logger
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     QuasarSfpuVariant,
+    max_dest_tiles,
     resolve_quasar_sfpu_variant,
 )
 from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand
@@ -169,7 +169,7 @@ class Case:
 
     op: MathOperation
     spec: StimuliSpec
-    fmt: InputOutputFormat = BF16
+    fmt: InputOutputFormat = field(default_factory=lambda: BF16)
     expect_pass: bool = True
     name: Optional[str] = None
     approx_mode: ApproximationMode = ApproximationMode.No
@@ -276,13 +276,6 @@ _TILE_ELEMENTS = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
 _MAX_SWEEP_BATCHES = 512
 
 
-def _dest_capacity_tiles(dest_sync: DestSync, dest_acc: DestAccumulation) -> int:
-    """Tiles one Quasar kernel run may hold in Dest (all tiles share one section)."""
-    return DEST_SYNC_TILE_LIMITS[dest_sync] // (
-        2 if dest_acc == DestAccumulation.Yes else 1
-    )
-
-
 def _ulp_sweep_dims(
     stimuli_format: DataFormat,
     low: float,
@@ -339,7 +332,7 @@ def run_case(case: Case) -> bool:
         )
     variant = _resolve_variant(case, dest_acc)
     unpack_to_dest = variant.unpack_to_dest
-    capacity_tiles = _dest_capacity_tiles(case.dest_sync, dest_acc)
+    capacity_tiles = max_dest_tiles(dest_acc, case.dest_sync)
     logger.info(
         "[{}] route: unpack_to_dest={} unpack_dst={} sfpu={}/{} pack_src={} "
         "dest_acc={} (Dest capacity {} tiles)",

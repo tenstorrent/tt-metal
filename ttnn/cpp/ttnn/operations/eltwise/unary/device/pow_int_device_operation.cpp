@@ -30,7 +30,7 @@ void PowIntDeviceOperation::validate_on_program_cache_miss(
         input.storage_type() == StorageType::DEVICE,
         "pow_int: input must be on device, got storage type {}",
         input.storage_type());
-    TT_FATAL(input.buffer() != nullptr, "pow_int: input must be allocated in a device buffer");
+    TT_FATAL(input.is_allocated(), "pow_int: input must be allocated in a device buffer");
     TT_FATAL(input.device()->arch() != tt::ARCH::QUASAR, "pow_int is not supported on Quasar");
     TT_FATAL(input.layout() == Layout::TILE, "pow_int: input must be in TILE layout, got {}", input.layout());
     const auto& input_tile = input.tensor_spec().tile();
@@ -49,7 +49,7 @@ void PowIntDeviceOperation::validate_on_program_cache_miss(
             output.storage_type() == StorageType::DEVICE,
             "pow_int: output must be on device, got storage type {}",
             output.storage_type());
-        TT_FATAL(output.buffer() != nullptr, "pow_int: output must be allocated in a device buffer");
+        TT_FATAL(output.is_allocated(), "pow_int: output must be allocated in a device buffer");
         TT_FATAL(output.device() == input.device(), "pow_int: output must be on the same device as input");
         TT_FATAL(
             output.dtype() == input.dtype(),

@@ -20,7 +20,7 @@ using namespace ckernel::trisc;
  * @brief Configures packer ReLU (mode and threshold) for the selected packer only.
  *
  * Programs RELU_MODE and RELU_THRESHOLD via THCON_PACKER*_REG3_*_RMW (cfg_defines.h).
- * Quasar layout (see tests/hw_specific/quasar/inc/cfg_defines.h):
+ * Quasar layout (see tt_llk_quasar/common/inc/cfg_defines.h):
  *   - RELU_MODE: NO_RELU, ZERO_RELU, MIN_THRESHOLD_RELU, MAX_THRESHOLD_RELU.
  *   - RELU_THRESHOLD: separate 32-bit register. Format depends on pack input: FP16 path expects 16-bit
  *     threshold in low 16 bits; FP32 path expects BF16/FP16 threshold in high 16 bits.
@@ -65,7 +65,7 @@ inline void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config = cker
  * @brief Programs the packer input data format (THCON) for the selected packer and the packer ReLU (mode and threshold).
  *
  * L1 output encoding is not programmed here: it lives in buffer descriptors, which op inits
- * program via the per-TRISC allocator (see llk_bfd_alloc.h).
+ * program via the engine's fixed id (see ckernel_buf_desc.h).
  *
  * PACK1 instructions require autoloop setup: use _llk_pack_srcs_config_ / _llk_pack_srcs_ in
  * llk_srcs.h — do not drive Packer 1 via the llk_pack.h MOP APIs.

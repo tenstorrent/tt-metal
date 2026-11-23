@@ -27,7 +27,7 @@ static_assert(EMA_TILE_PER_SECTION || !MATH_TRANSPOSE_FACES, "the transpose_dest
 #ifdef LLK_TRISC_UNPACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -38,8 +38,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
         ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
     if constexpr (is_fp32_dest_acc_en)
     {
@@ -109,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_rows  = params.num_faces * params.TEST_FACE_R_DIM;
     constexpr bool interleave_fpu = MATH_TRANSPOSE_FACES;
 
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
     _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1 /*num_matrices*/);
 
     llk_math_ema_sfpu_init();
@@ -127,13 +128,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Datacopy and transpose_dest share bank 0's MOP, so each re-inits before running.
                 // EMA's bank-1 body, weights and carry survive both: no EMA re-init.
-                _configure_default_alu_data_format_state_<false, is_fp32_dest_acc_en>(src_format, src_format);
+                _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(src_format, src_format);
                 _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1 /*num_matrices*/);
             }
             _llk_math_eltwise_unary_datacopy_(EMA_SECTION_IN_TILE);
             if constexpr (interleave_fpu)
             {
-                _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(src_format, src_format);
+                _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
                 _llk_math_transpose_dest_init_<true /*TRANSPOSE_OF_FACES*/, is_fp32_dest_acc_en>();
                 _llk_math_transpose_dest_(EMA_SECTION_IN_TILE);
             }
@@ -168,7 +169,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -178,8 +179,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
         ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     // One tile per pack: outputs are interleaved with inputs in Dest.

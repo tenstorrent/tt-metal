@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul reader: per batch, C slice and K chunk it pushes one A slice
+// Unified matmul reader: per batch of its batch group, C slice and K chunk it pushes one A slice
 // ([C_slice_M_tiles][K_chunk_tiles] tiles) and one B slice ([K_chunk_tiles][C_slice_N_tiles]), both
 // row-major, matching the compute kernel's loop order and indexing. Slices are sized to the
 // subblock-padded C slice dims; tiles past the true slice or past M/N are never read (their stale
@@ -10,8 +10,11 @@
 // Reader thread t (Quasar DM cores; one thread elsewhere) reads K chunks t, t + num_reader_threads, ... of every
 // C slice into its own part of the A and B DFBs, and the compute's waits take the threads' parts in turn.
 // K_chunks_per_C_slice_padded rounds the K chunks up to the reader threads; the extra ones carry credits only.
-// With multicast, the first core of a row reads the row's A slices and multicasts them to the rest of the row,
-// and the first core of a column does the same with B; a receiving core reads none of that operand.
+// With multicast, the first core of a row (or of all the cores) reads the A slices and multicasts them to the rest,
+// and the first core of a column (or of all) does the same with B; a receiving core reads none of that operand.
+// FUSE_BIAS: before a C slice's K chunks, one reader thread pushes the bias tiles of the C slice's columns.
+// B_FROM_PREFETCHER_PIPES: B arrives over prefetcher pipes, one entry per K chunk; after pushing a K chunk's A slice
+// this reader publishes the entry to the compute through B_relay, and acks it once the compute has popped it.
 // Compile-time args are the template parameters, runtime args the function parameters.
 
 #include <stdint.h>
@@ -27,6 +30,9 @@
 #include "api/semaphore.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+#ifdef B_FROM_PREFETCHER_PIPES
+#include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
+#endif
 
 template <
     uint32_t M_tiles,
@@ -48,18 +54,23 @@ template <
     uint32_t A_mcast_num_dests,   // cores an A sender multicasts to (its row minus itself); 0 = no A multicast
     uint32_t B_mcast_num_dests>   // cores a B sender multicasts to (its column minus itself); 0 = no B multicast
 TT_KERNEL void reader(
+    uint32_t first_batch,
+    uint32_t num_batches,
     uint32_t first_C_slice,
     uint32_t num_C_slices,
-    uint32_t A_mcast_receiver,  // 1 when this core's A slices come from the first core of its row
-    uint32_t A_mcast_sender_x,  // NoC coordinates of that core, which multicasts along the row to A_mcast_end_x
+    uint32_t A_mcast_receiver,  // 1 when this core's A slices come from the first core of its multicast group
+    uint32_t A_mcast_sender_x,  // NoC coordinates of that core, which multicasts to the rectangle up to A_mcast_end_x/y
     uint32_t A_mcast_sender_y,
     uint32_t A_mcast_end_x,
-    uint32_t B_mcast_receiver,  // the same for B and the first core of this core's column, down to B_mcast_end_y
+    uint32_t A_mcast_end_y,
+    uint32_t B_mcast_receiver,  // the same for B
     uint32_t B_mcast_sender_x,
     uint32_t B_mcast_sender_y,
+    uint32_t B_mcast_end_x,
     uint32_t B_mcast_end_y) {
-    // first_C_slice: this core's first C slice in the row-major walk over C (across N, then down M);
-    // num_C_slices: how many consecutive ones it produces, per batch.
+    // first_batch, num_batches: the batches of this core's batch group; first_C_slice: this core's first C slice in the
+    // row-major walk over one batch's C (across N, then down M); num_C_slices: how many consecutive ones it produces,
+    // per batch.
     constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
     constexpr uint32_t A_slice_tiles = C_slice_M_padded_tiles * K_chunk_tiles;
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_padded_tiles;
@@ -69,10 +80,22 @@ TT_KERNEL void reader(
 
     Noc noc;
     DataflowBuffer A_slice(dfb::A_slice);
+#ifdef B_FROM_PREFETCHER_PIPES
+    static_assert(num_reader_threads == 1, "the pipes' receiver publishes and acks every K chunk itself");
+    // One accessor names every pipe; the one present on this core is bound here.
+    experimental::PrefetcherPipe B_pipe(pipe::B);
+    auto B_relay = B_pipe.bind_relay();
+#else
     DataflowBuffer B_slice(dfb::B_slice);
+#endif
 
     [[maybe_unused]] const auto A = TensorAccessor(tensor::A);
     [[maybe_unused]] const auto B = TensorAccessor(tensor::B);
+#ifdef FUSE_BIAS
+    DataflowBuffer bias_row(dfb::bias);
+    const auto bias = TensorAccessor(tensor::bias);
+    const uint32_t bias_tile_bytes = get_tile_size(dfb::bias);
+#endif
 
     // A borrowed operand's DFB IS its resident L1 shard: hand the whole DFB to the compute once and never
     // read it. (A: the single K chunk covers all of K; B: the compute consumes it one K chunk at a time.)
@@ -80,15 +103,17 @@ TT_KERNEL void reader(
         A_slice.reserve_back(A_slice_tiles);
         A_slice.push_back(A_slice_tiles);
     }
+#ifndef B_FROM_PREFETCHER_PIPES
     if constexpr (B_borrowed) {
         B_slice.reserve_back(K_tiles * C_slice_N_tiles);
         B_slice.push_back(K_tiles * C_slice_N_tiles);
     }
+    const uint32_t B_tile_bytes = get_tile_size(dfb::B_slice);
+#endif
 
     // One DFB entry per tile: a slice is stored row-major in tiles, entry (row, column) at
     // (row * columns + column) * tile bytes, which is how the compute kernel indexes it.
     const uint32_t A_tile_bytes = get_tile_size(dfb::A_slice);
-    const uint32_t B_tile_bytes = get_tile_size(dfb::B_slice);
 
     // Multicast handshake per slice: a receiver clears its data_ready flag and, once its DFB has room, counts itself
     // into the sender's receivers_ready; the sender then multicasts the slice and its VALID flag along its row or
@@ -111,7 +136,9 @@ TT_KERNEL void reader(
     const uint32_t A_rows_to_read = A_mcast_receiver ? 0 : C_slice_M_tiles;
     const uint32_t B_rows_to_read = B_mcast_receiver ? 0 : K_chunk_tiles;
 
-    for (uint32_t batch = 0; batch < batch_size; ++batch) {
+    // With one batch the bounds are compile-time, so the address math folds away.
+    const uint32_t end_batch = batch_size == 1 ? 1 : first_batch + num_batches;
+    for (uint32_t batch = batch_size == 1 ? 0 : first_batch; batch < end_batch; ++batch) {
         const uint32_t A_batch_first_tile = batch * A_batch_stride_tiles;
         const uint32_t B_batch_first_tile = batch * B_batch_stride_tiles;
 
@@ -119,12 +146,33 @@ TT_KERNEL void reader(
             // Origin of this C slice, in tiles, from its position in the walk.
             const uint32_t C_slice_first_M_tile = ((first_C_slice + MN_chunk) / C_slices_across_N) * C_slice_M_tiles;
             const uint32_t C_slice_first_N_tile = ((first_C_slice + MN_chunk) % C_slices_across_N) * C_slice_N_tiles;
+#ifdef FUSE_BIAS
+            // The compute's bias waits take the reader threads' parts of the DFB in turn, one per C slice.
+            const uint32_t C_slice_on_core = (batch - first_batch) * num_C_slices + MN_chunk;  // over its batches
+            if (C_slice_on_core % num_reader_threads == thread) {
+                bias_row.reserve_back(C_slice_N_padded_tiles);
+                for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles && C_slice_first_N_tile + n_tile < N_tiles;
+                     ++n_tile) {
+                    const uint32_t bias_N_tile = C_slice_first_N_tile + n_tile;  // bias is one tile row: page = N tile
+                    noc.async_read(
+                        bias,
+                        bias_row,
+                        bias_tile_bytes,
+                        {.page_id = bias_N_tile},
+                        {.offset_bytes = n_tile * bias_tile_bytes});
+                }
+                noc.async_read_barrier();
+                bias_row.push_back(C_slice_N_padded_tiles);
+            }
+#endif
             for (uint32_t K_chunk = thread; K_chunk < K_chunks_per_C_slice_padded; K_chunk += num_reader_threads) {
                 if (K_chunk >= K_chunks_per_C_slice) {
                     A_slice.reserve_back(A_slice_tiles);
                     A_slice.push_back(A_slice_tiles);
+#ifndef B_FROM_PREFETCHER_PIPES
                     B_slice.reserve_back(B_slice_tiles);
                     B_slice.push_back(B_slice_tiles);
+#endif
                     continue;
                 }
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
@@ -154,17 +202,9 @@ TT_KERNEL void reader(
                                 {.page_id = A_row_first_tile + k_tile},
                                 {.offset_bytes = A_row_offset_bytes + k_tile * A_tile_bytes});
                         }
-                        if constexpr (A_last_K_tile_valid_columns > 0) {
-                            // K is not a tile multiple, and this row's last tile is A's last K tile: once it has
-                            // landed, zero its padding columns so they add nothing to C.
-                            if (K_chunk == K_chunks_per_C_slice - 1) {
-                                noc.async_read_barrier();
-                                pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
-                                    A_slice.get_write_ptr() + A_row_offset_bytes + (K_chunk_tiles - 1) * A_tile_bytes);
-                            }
-                        }
                     }
                 }
+#ifndef B_FROM_PREFETCHER_PIPES
                 if constexpr (!B_borrowed) {
                     // B slice: rows K_chunk_first_K_tile.., columns C_slice_first_N_tile.., entry (k_tile, n_tile).
                     // Columns past the edge of B are clipped; they keep their entry, which only feeds clipped C.
@@ -188,7 +228,19 @@ TT_KERNEL void reader(
                         }
                     }
                 }
+#endif
                 noc.async_read_barrier();
+                if constexpr (!A_borrowed && A_last_K_tile_valid_columns > 0) {
+                    // K is not a tile multiple: in the last K chunk each row's last tile is A's last K tile, whose
+                    // padding columns are zeroed once the reads have landed so they add nothing to C.
+                    if (K_chunk == K_chunks_per_C_slice - 1) {
+                        for (uint32_t m_tile = 0; m_tile < A_rows_to_read && C_slice_first_M_tile + m_tile < M_tiles;
+                             ++m_tile) {
+                            pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
+                                A_slice.get_write_ptr() + (m_tile * K_chunk_tiles + K_chunk_tiles - 1) * A_tile_bytes);
+                        }
+                    }
+                }
 
                 if constexpr (A_mcast_num_dests > 0) {
                     if (A_mcast_receiver) {
@@ -198,25 +250,20 @@ TT_KERNEL void reader(
                         A_receivers_ready.set(0);
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(A_slice.get_write_ptr()),
-                            MulticastEndpoint{},
+                            A_slice,
                             A_slice_tiles * A_tile_bytes,
                             A_mcast_num_dests,
                             {},
                             {.noc_x_start = A_mcast_sender_x,
                              .noc_y_start = A_mcast_sender_y,
                              .noc_x_end = A_mcast_end_x,
-                             .noc_y_end = A_mcast_sender_y,
-                             .addr = A_slice.get_write_ptr()},
+                             .noc_y_end = A_mcast_end_y},
                             /*linked=*/true);
                         A_data_ready.set_multicast(
-                            noc,
-                            A_mcast_sender_x,
-                            A_mcast_sender_y,
-                            A_mcast_end_x,
-                            A_mcast_sender_y,
-                            A_mcast_num_dests);
+                            noc, A_mcast_sender_x, A_mcast_sender_y, A_mcast_end_x, A_mcast_end_y, A_mcast_num_dests);
                     }
                 }
+#ifndef B_FROM_PREFETCHER_PIPES
                 if constexpr (B_mcast_num_dests > 0) {
                     if (B_mcast_receiver) {
                         B_data_ready.wait(VALID);
@@ -225,36 +272,42 @@ TT_KERNEL void reader(
                         B_receivers_ready.set(0);
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(B_slice.get_write_ptr()),
-                            MulticastEndpoint{},
+                            B_slice,
                             B_slice_tiles * B_tile_bytes,
                             B_mcast_num_dests,
                             {},
                             {.noc_x_start = B_mcast_sender_x,
                              .noc_y_start = B_mcast_sender_y,
-                             .noc_x_end = B_mcast_sender_x,
-                             .noc_y_end = B_mcast_end_y,
-                             .addr = B_slice.get_write_ptr()},
+                             .noc_x_end = B_mcast_end_x,
+                             .noc_y_end = B_mcast_end_y},
                             /*linked=*/true);
                         B_data_ready.set_multicast(
-                            noc,
-                            B_mcast_sender_x,
-                            B_mcast_sender_y,
-                            B_mcast_sender_x,
-                            B_mcast_end_y,
-                            B_mcast_num_dests);
+                            noc, B_mcast_sender_x, B_mcast_sender_y, B_mcast_end_x, B_mcast_end_y, B_mcast_num_dests);
                     }
                 }
+#endif
 
                 // A borrowed operand was published once above; only copied slices are pushed here.
                 if constexpr (!A_borrowed) {
                     A_slice.push_back(A_slice_tiles);
                 }
+#ifdef B_FROM_PREFETCHER_PIPES
+                publish_in1_block_from_pipe(B_pipe, B_relay, noc, K_chunk, B_slice_tiles);
+#else
                 if constexpr (!B_borrowed) {
                     B_slice.push_back(B_slice_tiles);
                 }
+#endif
             }
+#ifdef B_FROM_PREFETCHER_PIPES
+            drain_in1_pipe_window(B_pipe, noc, K_chunks_per_C_slice);
+#endif
         }
     }
+#ifdef B_FROM_PREFETCHER_PIPES
+    // The acks are non-posted NoC atomics.
+    noc.async_atomic_barrier();
+#endif
     if constexpr (A_mcast_num_dests > 0 || B_mcast_num_dests > 0) {
         noc.async_write_barrier();
         noc.async_atomic_barrier();

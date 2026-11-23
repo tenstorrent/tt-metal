@@ -24,8 +24,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "ckernel_buf_desc.h"
 #include "experimental/llk_unpack_AB_sub_bcast_col_custom.h"
-#include "llk_bfd_alloc.h"
 #include "llk_unpack_common.h"
 #include "params.h"
 
@@ -44,8 +44,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
-    const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-    const auto bfd_b = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+    constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+    constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
@@ -84,7 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     const DataFormat math_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
@@ -104,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -123,7 +125,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
-    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(bfd_pack, tensor_shape, 1 /*num_tiles_per_pack*/);
 

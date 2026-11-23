@@ -38,6 +38,7 @@ from typing import Optional
 import torch
 import ttnn
 
+from models.demos.utils.common_demo_utils import report_e2e_metrics
 from models.experimental.vibevoice.common.config import DEFAULT_TXT_PATH, TEXT_EXAMPLES_DIR, VIBEVOICE_ROOT
 from models.experimental.vibevoice.common.safe_paths import safe_join, safe_output_path
 from models.experimental.vibevoice.common.model_utils import ensure_model_weights
@@ -449,6 +450,21 @@ def main() -> int:
                 steady_decode_frames=tt_out.steady_decode_frames,
             )
             print(f"[vibevoice_demo] {format_perf_line(perf)}", flush=True)
+        # Report-only perf for the CI dashboard (#58596): emit the already-measured
+        # rtf / decode / prefill numbers from the final chunk. No-op outside CI; emitted
+        # while the device is still open so the SKU lookup succeeds.
+        report_e2e_metrics(
+            "vibevoice-1.5b",
+            {
+                "rtf": perf["rtf"],
+                "decode_t/s": perf["decode_tok_s"],
+                "prefill_t/s": perf["prefill_tok_s"],
+                "prefill_time_to_first_token": perf["ttft_s"],
+            },
+            batch_size=1,
+            seq_len=perf["prefill_tokens"],
+            model_type="speech",
+        )
         tt_speech = speech_parts[0] if len(speech_parts) == 1 else torch.cat(speech_parts)
         if len(speech_parts) > 1:
             print(

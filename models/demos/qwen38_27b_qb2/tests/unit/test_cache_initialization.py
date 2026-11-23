@@ -105,7 +105,7 @@ class Runtime:
 class TestCacheInitialization(unittest.TestCase):
     def setUp(self):
         self.runtime = Runtime()
-        with patch.dict("sys.modules", {"ttnn": self.runtime, "models.common.modules.tt_ccl": NS(TT_CCL=object)}):
+        with patch.dict("sys.modules", {"ttnn": self.runtime, "models.common.tt_ccl": NS(TT_CCL=object)}):
             self.cache_initialization = load_module("cache_initialization")
             load_module("decode_conv")
             self.decoder_module = load_module("decoder")

@@ -19,13 +19,12 @@ void kernel_main() {
     const uint32_t start_id_offset = get_arg(args::start_id_offset);
     const uint32_t start_id_base = get_arg(args::start_id_base);
 
-    // single-tile ublocks
-    const uint32_t tile_bytes = DataflowBuffer(dfb::out).get_entry_size();
-
     const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
     DataflowBuffer cb_out(dfb::out);
+    // single-tile ublocks
+    const uint32_t tile_bytes = cb_out.get_entry_size();
 
     uint32_t row_start_tile_id = start_id_base + start_id_offset;
     cb_out.wait_front(block_width_padded_num_tiles);

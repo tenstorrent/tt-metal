@@ -5,19 +5,29 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <type_traits>
 #include <unordered_set>
+#include <vector>
 
 #include "host_tensor_impl.hpp"
 #include "mesh_tensor_impl.hpp"
 #include "tensor_impl.hpp"
 
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+// Redeclares the HostTensor overloads defined below as deprecated. The attribute must come before
+// their definitions, or a later file of the same unity batch that includes it fails to compile.
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "pinned_upload.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 
@@ -38,14 +48,16 @@ MeshTensor mesh_tensor_from_buffer_with_topology(
 
 MeshTensor allocate_mesh_tensor_on_device_with_topology(
     distributed::MeshDevice& mesh_device, TensorSpec spec, TensorTopology topology) {
-    // Catch-all guard enforced at the device-binding boundary so any path that produces an FP8 tensor on
-    // unsupported hardware fails loudly rather than silently generating programs that misbehave later.
-    // Gate on the data-format capability (the same predicate used in data_format.cpp / program_spec.cpp)
-    // rather than an arch list, so this stays correct as arches are added or drop FP8 support.
-    if (spec.data_type() == DataType::FP8_E4M3) {
+    // Stop an FP8 or MX tensor on an arch without that format here, before programs that use it misbehave.
+    // Use the data-format capability check, not an arch list, so that new arches stay correct.
+    // Only FP8 and MX are checked: is_data_format_supported says what the compute pipeline can unpack and pack,
+    // but other dtypes are still valid as plain storage (e.g. reshape's UInt32 page mapping on Quasar).
+    const DataType dtype = spec.data_type();
+    if (dtype == DataType::FP8_E4M3 || is_mx(dtype)) {
         TT_FATAL(
-            tt::is_data_format_supported(tt::DataFormat::Fp8_e4m3, mesh_device.arch()),
-            "FP8_E4M3 is not supported on arch {}",
+            tt::is_data_format_supported(datatype_to_dataformat_converter(dtype), mesh_device.arch()),
+            "{} is not supported on arch {}",
+            dtype,
             mesh_device.arch());
     }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
@@ -178,7 +190,7 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
         const auto& old_spec = host_tensor.tensor_spec();
         tensor_spec_overriden_memory_config = TensorSpec(
             old_spec.logical_shape(),
-            TensorLayout(
+            experimental::tensor_layout_with_custom_alignment(
                 old_spec.tensor_layout().get_data_type(),
                 old_spec.tensor_layout().get_page_config(),
                 *memory_config,
@@ -265,7 +277,7 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         std::move(*mesh_buffer),
         TensorSpec(
             old_spec.logical_shape(),
-            TensorLayout(
+            experimental::tensor_layout_with_custom_alignment(
                 old_spec.tensor_layout().get_data_type(),
                 old_spec.tensor_layout().get_page_config(),
                 device_tensor.memory_config(),
@@ -352,7 +364,7 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
         std::move(*mesh_buffer),
         TensorSpec(
             old_spec.logical_shape(),
-            TensorLayout(
+            experimental::tensor_layout_with_custom_alignment(
                 old_spec.tensor_layout().get_data_type(),
                 old_spec.tensor_layout().get_page_config(),
                 device_tensor.memory_config(),
@@ -363,5 +375,85 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 }
 
 }  // namespace non_uniform_data_movement
+
+// ======================================================================================
+//                                  Utility functions
+// ======================================================================================
+
+namespace host_buffer {
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+template <typename T>
+void validate_datatype(DataType dtype) {
+    using BaseType = std::remove_cvref_t<T>;
+    if constexpr (std::is_same_v<BaseType, uint32_t>) {
+        TT_FATAL(
+            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B or is_mx(dtype),
+            "Incorrect data type {}",
+            dtype);
+    } else if constexpr (std::is_same_v<BaseType, int32_t>) {
+        TT_FATAL(dtype == DataType::INT32, "Incorrect data type {}", dtype);
+    } else if constexpr (std::is_same_v<BaseType, int8_t>) {
+        TT_FATAL(dtype == DataType::INT8, "Incorrect data type {}", dtype);
+    } else if constexpr (std::is_same_v<BaseType, float>) {
+        TT_FATAL(dtype == DataType::FLOAT32, "Incorrect data type {}", dtype);
+    } else if constexpr (std::is_same_v<BaseType, bfloat16>) {
+        TT_FATAL(dtype == DataType::BFLOAT16, "Incorrect data type {}", dtype);
+    } else if constexpr (std::is_same_v<BaseType, uint16_t>) {
+        TT_FATAL(dtype == DataType::UINT16, "Incorrect data type {}", dtype);
+    } else if constexpr (std::is_same_v<BaseType, uint8_t>) {
+        TT_FATAL(dtype == DataType::UINT8, "Incorrect data type {}", dtype);
+    } else {
+        static_assert(sizeof(BaseType) == 0, "Unsupported DataType");
+    }
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
+HostBuffer get_host_buffer(const HostTensor& tensor) {
+    std::vector<HostBuffer> buffers;
+    tensor.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+    TT_FATAL(
+        buffers.size() == 1,
+        "Can't get a single buffer from host storage distributed over mesh shape {}",
+        tensor.buffer().shape());
+    return buffers.front();
+}
+
+template <typename T>
+ttsl::Span<const T> get_as(const HostTensor& tensor) {
+    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor.dtype());
+    HostBuffer buffer = get_host_buffer(tensor);
+    return buffer.template view_as<T>();
+}
+
+template <typename T>
+ttsl::Span<T> get_as(HostTensor& tensor) {
+    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor.dtype());
+    HostBuffer buffer = get_host_buffer(tensor);
+    return buffer.template view_as<T>();
+}
+
+// Explicit template instantiations
+#define INSTANTIATE_HOST_BUFFER_FUNCTIONS(T)                         \
+    template ttsl::Span<const T> get_as<T>(const HostTensor&);       \
+    template ttsl::Span<const T> get_as<const T>(const HostTensor&); \
+    template ttsl::Span<T> get_as<T>(HostTensor&);                   \
+    template ttsl::Span<const T> get_as<const T>(HostTensor&);
+
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint32_t)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(int32_t)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(float)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(bfloat16)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint16_t)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(uint8_t)
+INSTANTIATE_HOST_BUFFER_FUNCTIONS(int8_t)
+
+#undef INSTANTIATE_HOST_BUFFER_FUNCTIONS
+
+}  // namespace host_buffer
 
 }  // namespace tt::tt_metal

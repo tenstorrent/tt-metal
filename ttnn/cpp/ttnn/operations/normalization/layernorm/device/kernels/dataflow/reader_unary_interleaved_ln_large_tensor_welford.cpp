@@ -37,9 +37,7 @@ void kernel_main() {
 #ifdef AFFINE_MCAST
     Semaphore<> affine_ready_sem(sem::affine_ready);
     Semaphore<> affine_done_sem(sem::affine_done);
-#ifdef AFFINE_MCAST_SENDER
-    MulticastEndpoint mcast_ep;
-#else
+#ifndef AFFINE_MCAST_SENDER
     // Trace and program-cache replay retain semaphore storage.
     affine_done_sem.set(0);
 #endif
@@ -127,11 +125,11 @@ void kernel_main() {
             if constexpr (fp32_sfpu_finalizer) {
                 // These aliases share the input SRAM but maintain independent FIFO state. Advance
                 // them in both passes so their pointers remain aligned with the primary input CBs.
-                dfb_in0_fp32.reserve_back(block.full_block_size());
-                dfb_in0_fp32.push_back(block.full_block_size());
+                dfb_in0_fp32.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                dfb_in0_fp32.push_back(static_cast<uint16_t>(block.full_block_size()));
 #ifdef FUSE_PRE_ADD
-                dfb_in1_fp32.reserve_back(block.full_block_size());
-                dfb_in1_fp32.push_back(block.full_block_size());
+                dfb_in1_fp32.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                dfb_in1_fp32.push_back(static_cast<uint16_t>(block.full_block_size()));
 #endif
             }
         }  // wt loop
@@ -164,11 +162,11 @@ void kernel_main() {
 #endif
 #endif
             if constexpr (fp32_sfpu_finalizer) {
-                dfb_in0_fp32.reserve_back(block.full_block_size());
-                dfb_in0_fp32.push_back(block.full_block_size());
+                dfb_in0_fp32.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                dfb_in0_fp32.push_back(static_cast<uint16_t>(block.full_block_size()));
 #ifdef FUSE_PRE_ADD
-                dfb_in1_fp32.reserve_back(block.full_block_size());
-                dfb_in1_fp32.push_back(block.full_block_size());
+                dfb_in1_fp32.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                dfb_in1_fp32.push_back(static_cast<uint16_t>(block.full_block_size()));
 #endif
             }
 #endif
@@ -194,27 +192,25 @@ void kernel_main() {
             const uint32_t beta_l1_addr = dfb_beta.get_write_ptr();
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(gamma_l1_addr),
-                mcast_ep,
+                dfb_gamma,
                 block.size() * gamma_tile_bytes,
                 num_mcast_dests,
                 {},
                 {.noc_x_start = mcast_start_x,
                  .noc_y_start = mcast_start_y,
                  .noc_x_end = mcast_end_x,
-                 .noc_y_end = mcast_end_y,
-                 .addr = gamma_l1_addr},
+                 .noc_y_end = mcast_end_y},
                 true /* linked */);
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(beta_l1_addr),
-                mcast_ep,
+                dfb_beta,
                 block.size() * beta_tile_bytes,
                 num_mcast_dests,
                 {},
                 {.noc_x_start = mcast_start_x,
                  .noc_y_start = mcast_start_y,
                  .noc_x_end = mcast_end_x,
-                 .noc_y_end = mcast_end_y,
-                 .addr = beta_l1_addr},
+                 .noc_y_end = mcast_end_y},
                 true /* linked */);
             affine_done_sem.set(++affine_block_sequence);
             // This unlinked semaphore multicast closes the chain; do not insert a barrier before it.

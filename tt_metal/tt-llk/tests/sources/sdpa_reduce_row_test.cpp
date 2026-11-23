@@ -59,8 +59,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
+#include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -80,6 +83,7 @@ constexpr std::uint32_t SDPA_DST_INDEX          = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
@@ -88,15 +92,43 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
-
-    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_A         = params.buffer_A;
+#endif
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            4 /* num_faces */,
+            4 /* num_faces */);
+        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                {
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -106,6 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "ckernel_sfpu.h"
 #include "llk_lib_math_wrappers.h"
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 
 using namespace ckernel;
@@ -116,18 +149,47 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-
-    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        4 /* num_faces */, formats.math);
-    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+#endif
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, TILE_NUM_FACES);
     {
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            tile, formats.math, formats.math);
+        START_PERF_MEASURE("INIT")
+        _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false /* is_int_fpu_en */,
+            PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
+        PROFILER_SYNC();
     }
-    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(src_handshake_iters);
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                {
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        tile, formats.math, formats.math);
+                }
+                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -144,40 +206,72 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
-
-    _llk_packer_wait_for_math_done_();
-
-    // Enable the SFPU (config reg + counter reset), then run the op's self-contained init:
-    // _init_sdpa_reduce_row_8x32_ sets the ZERO / TILE_OFFSET addr_mods, and the replay-buffer
-    // recorder lays down the pool-specific fold sequence. sdpa.h records the replay buffer for
-    // exactly the pool it is about to compute, so we do the same here.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
-    ckernel::sfpu::_init_sdpa_reduce_row_8x32_<DataFormat::Float16_b>();
-    _llk_math_eltwise_sfpu_start_(SDPA_DST_INDEX);
-
-    if constexpr (SDPA_REDUCE_POOL == SDPA_REDUCE_POOL_MAX)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_Res       = params.buffer_Res;
+#endif
     {
-        ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_();
-        ckernel::sfpu::_calculate_sdpa_reduce_max_row_8x32_<DataFormat::Float16_b, SDPA_REDUCE_BLOCK_WIDTH, true /* skip_signalling */>(
-            SDPA_SRC_INDEX, SDPA_DST_INDEX, false /* prev_max */);
-    }
-    else
-    {
-        ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_();
-        ckernel::sfpu::_calculate_sdpa_reduce_sum_row_8x32_<DataFormat::Float16_b, SDPA_REDUCE_BLOCK_WIDTH, true /* skip_signalling */>(
-            SDPA_SRC_INDEX, SDPA_DST_INDEX, false /* prev_sum */);
-    }
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
+        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 
-    _llk_math_eltwise_sfpu_done_();
-
-    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
-    {
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
+        // Configure invariant SFPU state once. Each build selects one pool, and nothing below
+        // re-records its replay-buffer region before the per-tile calculations reuse it.
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
+        ckernel::sfpu::_init_sdpa_reduce_row_8x32_<DataFormat::Float16_b>();
+        if constexpr (SDPA_REDUCE_POOL == SDPA_REDUCE_POOL_MAX)
+        {
+            ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_();
+        }
+        else
+        {
+            ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_();
+        }
+        PROFILER_SYNC();
     }
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
+
+                _llk_math_eltwise_sfpu_start_(SDPA_DST_INDEX);
+
+                if constexpr (SDPA_REDUCE_POOL == SDPA_REDUCE_POOL_MAX)
+                {
+                    ckernel::sfpu::_calculate_sdpa_reduce_max_row_8x32_<DataFormat::Float16_b, SDPA_REDUCE_BLOCK_WIDTH, true /* skip_signalling */>(
+                        SDPA_SRC_INDEX, SDPA_DST_INDEX, false /* prev_max */);
+                }
+                else
+                {
+                    ckernel::sfpu::_calculate_sdpa_reduce_sum_row_8x32_<DataFormat::Float16_b, SDPA_REDUCE_BLOCK_WIDTH, true /* skip_signalling */>(
+                        SDPA_SRC_INDEX, SDPA_DST_INDEX, false /* prev_sum */);
+                }
+
+                _llk_math_eltwise_sfpu_done_();
+
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                {
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif

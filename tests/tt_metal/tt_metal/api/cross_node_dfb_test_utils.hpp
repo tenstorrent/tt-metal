@@ -65,7 +65,8 @@ inline std::shared_ptr<Buffer> make_cross_node_data_buffer(
 }
 
 inline uint32_t data_pattern_for_write_primitive(uint32_t write_primitive) {
-    if (write_primitive == 1) {
+    // 1 (write_strided) and 6 (write_strided_and_push_back) scatter strided staging.
+    if (write_primitive == 1 || write_primitive == 6) {
         return static_cast<uint32_t>(SenderDataPattern::StridedPerReceiver);
     }
     if (write_primitive == 2 || write_primitive == 3) {
