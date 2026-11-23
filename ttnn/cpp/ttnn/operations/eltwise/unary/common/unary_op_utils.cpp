@@ -434,6 +434,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("exp_tile<{1}u>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::SIGMOID: {
             uint32_t param1 = (uint32_t)params[1];
+            // Mode 2 (accurate to BF16) exists only in a matmul's fused activation.
+            TT_FATAL(param1 <= 1, "Invalid sigmoid mode {}: expected 0 (accurate) or 1 (fast)", param1);
             TT_FATAL(
                 (int32_t)param0 == (int32_t)VecMode::C || (int32_t)param0 == (int32_t)VecMode::RC,
                 "Invalid Vector mode value. Expected vector mode C (2) or RC (4) for sigmoid");
