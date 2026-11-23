@@ -21,11 +21,21 @@ TILE = 32
 
 # ---- Blocking knobs (single source of truth; see op_design.md "Blocking Model") ----
 BLOCK_N_TILES = 2  # output columns per worker; num_workers = tensor_n_tiles / BLOCK_N_TILES
-BLOCK_K_TILES = 8  # K tiles per K-step (matmul in0_block_k) = one x multicast round; num_k_blocks derived
+# K tiles per K-step (matmul in0_block_k) = one x multicast round; num_k_blocks derived.
+# Precision ceiling: with 16-bit DEST each K-step accumulates block_k_tiles products in DEST, and the
+# DEST rounding drifts the output scale upward with that length (measured slope 1.0002 @2, 1.007 @8,
+# 1.013 @16, 1.018 @24; PCC 0.99996 / 0.99993 / 0.99986 / 0.99979). Keep block_k_tiles <= 16 so the
+# 0.9998 PCC gate holds (verification_report.md, precision baseline).
+BLOCK_K_TILES = 8
 W_DEPTH_BLOCKS = None  # cb_w_block depth in K-steps; None = num_k_blocks (whole W slice resident)
 OUT_DEPTH_BLOCKS = 1  # one output block per core
 MCAST_RECT_WIDTH_MAX = 8
-DEST_TILE_LIMIT = 8  # 16-bit DEST, half-sync (DEST_AUTO_LIMIT)
+
+
+def _dest_tile_limit(fp32_dest_acc_en):
+    """DEST_AUTO_LIMIT (half-sync): 8 tiles at 16-bit DEST, 4 at fp32 DEST."""
+    return 4 if fp32_dest_acc_en else 8
+
 
 # ---- CB indices (semantic names) ----
 CB_X_RESIDENT = 0
@@ -104,7 +114,8 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
     x_depth_rounds = num_k_blocks  # whole x resident (handshake-free multicast)
     w_depth_blocks = num_k_blocks if W_DEPTH_BLOCKS is None else W_DEPTH_BLOCKS
 
-    sb_h, sb_w = _choose_subblock(block_m_tiles, block_n_tiles, DEST_TILE_LIMIT)
+    fp32_dest_acc_en = bool(compute_config.fp32_dest_acc_en)
+    sb_h, sb_w = _choose_subblock(block_m_tiles, block_n_tiles, _dest_tile_limit(fp32_dest_acc_en))
     in0_num_subblocks = block_m_tiles // sb_h
     in1_num_subblocks = block_n_tiles // sb_w
 
@@ -225,7 +236,7 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         runtime_args=[],
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_config.math_fidelity,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             math_approx_mode=compute_config.math_approx_mode,
         ),
     )
