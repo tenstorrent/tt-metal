@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -48,7 +48,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceUnknownMemberFails) {
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("references unknown tensor accessor_name 'missing'")));
 }
@@ -62,7 +62,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceDuplicateMembersFails) {
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has duplicate member 'in0'")));
 }
 
@@ -75,7 +75,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceNameCollidesWithBindingFail
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("collides with a TensorBinding accessor_name")));
 }
@@ -91,7 +91,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceNameCollidesWithGeneratedTy
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("collides with generated type alias 'in0_t'")));
 }
@@ -106,7 +106,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceDuplicateSequenceNamesFails
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("has duplicate tensor binding sequence_name 'inputs'")));
 }
@@ -120,7 +120,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceInvalidIdentifierFails) {
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor binding sequence_name 'has-dash' must be a valid C++ identifier")));
 }
@@ -142,7 +142,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_VarargPerNodeOverlapFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("overlapping entries")));
 }
 

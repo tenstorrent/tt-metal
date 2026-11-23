@@ -65,7 +65,8 @@ asserts.
   ±10% away because the kernel layout moved. Prove whether the measured code changed with the
   "Layout sensitivity" steps in `SKILL.md` before calling it a regression.
 - **Accounting:** a schema version or `tile_cnt` change makes points incomparable; it is not a
-  regression (`../perf-test/references/perf-facts.md`).
+  regression; a rename recorded in the catalog still matches
+  (`../perf-test/references/perf-facts.md`).
 
 ## Cost
 A full sweep per side per iteration, plus a build per commit — for a test like
@@ -79,7 +80,8 @@ includes from outside it), a private build tree, then N producer/consumer sweeps
 between the two sides so thermals and other tenants bias neither. The two sets of CSVs go to
 `perf/regression_compare.py` — the same module the PR gate runs — which reads the raw
 `perf_data` CSVs directly (no Parquet, no database — works on any commit, merged or not) and
-reports median-vs-median per point.
+reports median-vs-median per point. Renames recorded in the schema catalog are mapped first
+(`SKILL.md`, "Interpreting results").
 
 A point is a regression only when it is **both** more than `--threshold` slower **and** more
 than `--min-cycles` slower. Either clause alone produces false positives: percentage on small

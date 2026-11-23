@@ -16,7 +16,7 @@ from test_unpack_reduce_col_tilizeA_strided import (
 )
 from test_unpack_reduce_col_tilizeA_strided import (
     unpack_reduce_col_tilizeA_strided_dest_acc,
-    unpack_reduce_col_tilizeA_strided_max_tiles_per_iter,
+    unpack_reduce_col_tilizeA_strided_tile_cnt,
 )
 
 
@@ -24,7 +24,7 @@ from test_unpack_reduce_col_tilizeA_strided import (
 @parametrize(
     formats=UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS,
     dest_acc=unpack_reduce_col_tilizeA_strided_dest_acc,
-    max_tiles_per_iter=unpack_reduce_col_tilizeA_strided_max_tiles_per_iter,
+    tile_cnt=unpack_reduce_col_tilizeA_strided_tile_cnt,
     # Perf runs full-face tiles only; the functional sweep also covers the 8x32 and 4x32 partial
     # face heights.
     tile_dimensions=[
@@ -41,7 +41,7 @@ def test_perf_unpack_reduce_col_tilizeA_strided(
     perf_report,
     formats,
     dest_acc,
-    max_tiles_per_iter,
+    tile_cnt,
     tile_dimensions,
     pool_type,
     dest_sync,
@@ -51,7 +51,7 @@ def test_perf_unpack_reduce_col_tilizeA_strided(
     run_unpack_reduce_col_tilizeA_strided(
         formats,
         dest_acc,
-        max_tiles_per_iter,
+        tile_cnt,
         tile_dimensions,
         pool_type,
         dest_sync,

@@ -61,8 +61,8 @@ inline Tensor typecast_impl(
     // the caller's tensor untouched. Block-aligned widths take the direct path unchanged.
     Tensor typecast_input = input_tensor;
     if (needs_zeroed_tile_padding(input_tensor, output_dtype)) {
-        typecast_input = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
-        typecast_input = ttnn::fill_implicit_tile_padding(typecast_input, 0.0f);
+        typecast_input = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt, sub_core_grids);
+        typecast_input = ttnn::fill_implicit_tile_padding(typecast_input, 0.0f, std::nullopt, sub_core_grids);
     }
     bool preserve_fp32_precision =
         (input_dtype == DataType::FLOAT32) or

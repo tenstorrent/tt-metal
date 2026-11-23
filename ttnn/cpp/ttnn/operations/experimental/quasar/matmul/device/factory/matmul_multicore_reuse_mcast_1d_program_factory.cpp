@@ -2122,7 +2122,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     /* in2 */
     uint32_t in2_single_tile_size = in0_single_tile_size;
     uint32_t in2_CB_tiles = (ring_size - 1) * in0_CB_tiles;  // All shards except local
-    uint32_t in2_CB_size = in2_CB_tiles * in2_single_tile_size;
+    // A one-core ring has no remote shards, but a circular buffer cannot be zero-sized.
+    uint32_t in2_CB_size = std::max(in2_CB_tiles, 1u) * in2_single_tile_size;
 
     /* out */
     uint32_t out_block_tiles = per_core_M * per_core_N;
@@ -7727,7 +7728,7 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
             }
             auto mesh_grid = pc.allowed_worker_cores.value().bounding_box().grid_size();
             DeviceComputeKernelConfig ckc = attributes.compute_kernel_config.value();
-            tt_metal::Program program{};
+            tt_metal::Program program = tt_metal::CreateProgram(*tensor_args.input_tensors.at(0).device());
             std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_signaler = std::nullopt;
             auto b_tensors =
                 std::vector<Tensor>{tensor_args.input_tensors.begin() + 1, tensor_args.input_tensors.end()};

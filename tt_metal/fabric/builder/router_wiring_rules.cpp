@@ -67,6 +67,8 @@ TurnRole turn_role(RoutingDirection dir, EdgeCapability cap, ExpressAxis express
     return TurnRole::UNRESTRICTED;  // Y cardinal, any capability
 }
 
+}  // namespace
+
 // Emit flat-index prefix sums and enforce capacity ceilings at the common construction site.
 // Express with VC2 reaches the sender ceiling exactly (5+4+1).
 void finalize_vc_shape_bases(RouterVcShape& shape) {
@@ -89,6 +91,8 @@ void finalize_vc_shape_bases(RouterVcShape& shape) {
         receiver_base,
         builder_config::num_max_receiver_channels);
 }
+
+namespace {
 
 // This router's own edge, read off the chip it sits on. A router exists because discovery
 // classified a neighbor in its facing direction, so an absent entry is a caller error rather than

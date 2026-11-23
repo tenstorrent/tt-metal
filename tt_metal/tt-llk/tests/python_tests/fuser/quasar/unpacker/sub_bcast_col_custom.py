@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.sub_bcast_col_custom import unpack_sub_bcast_col_custom_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource
+from fuser.operand import BfdId
 
 
 class SubBcastColCustomUnpacker(Unpacker):
@@ -53,9 +53,9 @@ class SubBcastColCustomUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
-            BfdResource.UNP0
-        ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP1)
+        bfd_program = compute_unit.src_a.program_bfd(
+            BfdId.UNP0
+        ) + compute_unit.src_b.program_bfd(BfdId.UNP1)
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return (
             "{\n"
@@ -74,7 +74,7 @@ class SubBcastColCustomUnpacker(Unpacker):
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return (
             "_llk_unpack_AB_sub_bcast_col_custom_("
-            f"ckernel::trisc::bfd_current<{BfdResource.UNP0.value}>(), "
-            f"ckernel::trisc::bfd_current<{BfdResource.UNP1.value}>(), "
+            f"{BfdId.UNP0.value}, "
+            f"{BfdId.UNP1.value}, "
             f"{block.tile_id_src_a}, {block.tile_id_src_b}, {block.block_cols}, {tensor_shape});\n"
         )

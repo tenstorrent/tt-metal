@@ -38,6 +38,11 @@ struct PagedTiledFusedUpdateCacheProgramFactory {
     static std::vector<PerIndexOffsets> compute_tiled_fused_offsets(
         const PagedFusedUpdateCacheParams& operation_attributes, const PagedFusedUpdateCacheInputs& tensor_args);
 
+    // Bytes of program L1 (dataflow buffers not backed by a tensor) that the program needs on each core,
+    // from the same buffer sizes as create_program_artifacts.
+    static uint64_t program_l1_bytes_per_core(
+        const PagedFusedUpdateCacheParams& operation_attributes, const PagedFusedUpdateCacheInputs& tensor_args);
+
     // Cache-hit hook: re-applies every tensor binding plus the hash-excluded cache_start_id /
     // tile_update_offset_B.
     static tt::tt_metal::ProgramRunArgs override_runtime_arguments(

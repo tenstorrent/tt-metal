@@ -7,7 +7,7 @@
 #include <mutex>
 #include "sd_mesh_command_queue.hpp"
 #include "mesh_event_impl.hpp"
-#include <tt-metalium/tt_metal_profiler.hpp>
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"

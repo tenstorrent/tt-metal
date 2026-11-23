@@ -141,6 +141,9 @@ struct RouterVcShape {
  * with zero VC1 channels. The derivation emits all flat bases and enforces the channel ceilings.
  * Reading facing capability and Z role from one capability set prevents inconsistent inputs.
  */
+// Fill the flat-index bases from the counts and enforce the channel ceilings.
+void finalize_vc_shape_bases(RouterVcShape& shape);
+
 RouterVcShape router_vc_shape(
     Topology topology,
     RoutingDirection facing,

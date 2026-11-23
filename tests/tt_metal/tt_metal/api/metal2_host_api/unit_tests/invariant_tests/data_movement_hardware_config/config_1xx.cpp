@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -40,7 +40,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DMKernelWithoutGen1SpecificFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no config_1xx processor/NOC")));
 }
 
@@ -59,7 +59,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DMProcessorBeyondRiscv1Fails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Gen1 has only")));
 }
 
@@ -76,7 +76,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DMKernelWithDefaultConfigSucceeds) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 }  // namespace
