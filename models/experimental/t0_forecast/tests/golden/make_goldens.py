@@ -3,11 +3,14 @@
 
 """CPU fp32 goldens for t0-gamma from the pinned reference (tfc-t0 v0.6.0), written outside git.
 
-Runs only inside the reference venv, isolated from the worktree's import path (it imports nothing from it):
+Runs only inside the reference venv (README.md), isolated from the repo's import path (it imports nothing from it).
+From the tt-metal root:
 
-    ttq run --model t0-gamma --kind cpu --sh 'env -u PYTHONPATH -u VIRTUAL_ENV HF_HUB_OFFLINE=1 \
-        /home/andy/bringup/venvs/t0-gamma/bin/python -I <this file> --out /home/andy/bringup/goldens/t0-gamma \
-        --manifest <worktree>/models/experimental/t0_forecast/tests/golden/MANIFEST.json --only single,modules,e2e'
+    <reference venv>/bin/python -I models/experimental/t0_forecast/tests/golden/make_goldens.py [--only single,e2e]
+
+``--out`` defaults to ``models/experimental/t0_forecast/goldens`` (git-ignored; the tests read it, or
+``$T0_GOLDEN_DIR``), ``--manifest`` to ``<out>/MANIFEST.json``. ``tests/golden/MANIFEST.json`` is the manifest of the
+goldens the test floors were set on.
 
 Every golden saves its inputs; device tests load them and never regenerate them.
 
@@ -466,16 +469,17 @@ def golden_paths(m, out: Path) -> dict:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--manifest", type=Path, required=True)
-    ap.add_argument("--only", default="single,single_long,modules,e2e,paper,long_context,multivariate")
+    ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[2] / "goldens")
+    ap.add_argument("--manifest", type=Path, help="default: <out>/MANIFEST.json")
+    ap.add_argument("--only", default="single,single_long,modules,e2e,paths,paper,long_context,multivariate")
     args = ap.parse_args()
+    args.manifest = args.manifest or args.out / "MANIFEST.json"
     torch.manual_seed(0)
     torch.set_num_threads(THREADS)
     args.out.mkdir(parents=True, exist_ok=True)
     m = load_model()
 
-    import t0
+    from importlib.metadata import version
 
     from huggingface_hub import hf_hub_download
 
@@ -486,7 +490,7 @@ def main():
     manifest = json.loads(args.manifest.read_text()) if args.manifest.is_file() else {}
     manifest.update(
         {
-            "reference": {**REFERENCE, "t0_module": t0.__file__},
+            "reference": {**REFERENCE, "tfc_t0_version": version("tfc-t0")},
             "checkpoint": {
                 "repo_id": REPO_ID,
                 "revision": REVISION,

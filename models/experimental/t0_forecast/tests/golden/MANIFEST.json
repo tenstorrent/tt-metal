@@ -8,7 +8,7 @@
     "pins": {
       "rotary-embedding-torch": "0.9.1"
     },
-    "t0_module": "/home/andy/bringup/venvs/t0-gamma/lib/python3.12/site-packages/t0/__init__.py"
+    "tfc_t0_version": "0.6.0"
   },
   "checkpoint": {
     "repo_id": "theforecastingcompany/t0-gamma",

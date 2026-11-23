@@ -97,8 +97,8 @@ def test_time_layer(device, case):
 
 @pytest.mark.parametrize("patches", [256, 512, 768])
 def test_time_layer_masked_long(device, patches):
-    """D4 item 5 / D5 item 2: a PAD-masked time layer at a whole multiple of 256 patches (e.g. 8160 context + 32
-    horizon). SDPA with a user mask must run at chunk 128 (chunk 256 was wrong, jobs 582, 584). Row 1 has its leading
+    """A PAD-masked time layer at a whole multiple of 256 patches (e.g. 8160 context + 32 horizon). SDPA with a user
+    mask must run at chunk 128 (chunk 256 was wrong). Row 1 has its leading
     half PAD (trimmed history), so whole 128- and 256-key blocks are masked. Scored on the attention output alone
     (the device layer output minus its input; inputs are bf16-exact) against the fp32 dataflow, real tokens only.
     With the cap forced to 256 this test still passes: it covers the masked path at these lengths, and the cap stays
@@ -134,7 +134,7 @@ def test_group_layer(device, case):
 
 
 def test_group_layer_g8_masked(device):
-    """F1 (PLAN 9 v1.2): with a user mask and G = 8 keys (not a multiple of 32), the tile-padding keys must stay
+    """With a user mask and G = 8 keys (not a multiple of 32), the tile-padding keys must stay
     masked. Two series of 8 variates; rows 1 and 10 have three all-PAD patches (the group mask path). Device against
     the fp32 dataflow (which matches the reference at 1e-7 on the masked G = 4 golden), real tokens only."""
     g = torch.Generator().manual_seed(8)

@@ -22,7 +22,7 @@ Cases and the paths they take:
     long2           2 x 8192 -> 1024             S = 288 (tile aligned, xPos centre 143), 32 read-out patches
     e2e             64 x 2048 -> 64              leading NaN -> PAD patches (explicit time mask), gaps
                                                  (MISSING), count rows; GIFT-Eval settings (x and -x)
-Accuracy is the shipping precision; the performance precision is retired (D5) and has no suite cases.
+Accuracy is the shipping precision; the performance precision is timing only and has no suite cases.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ def check(
     asinh-space gate metric alone must reject the collapsed output (the realistic bench inputs); otherwise the floors
     together must (smooth coverage inputs, where pcc_normalized alone cannot see a collapse). ``pcc_final`` is never
     required to reject it alone (a collapsed forecast scores near 1 in data space; ``pcc_final_spread`` does).
-    ``exempt``: floored metrics the case cannot compute (D5 item 5); any other missing one fails."""
+    ``exempt``: floored metrics the case cannot compute; any other missing one fails."""
     got = quantile_metrics(head_ref, normalized)
     bad = quantile_metrics(head_ref, collapsed(head_ref))
     if raw_ref is not None:
@@ -102,7 +102,7 @@ CASES = {
     "multivariate": ("bench_multivariate.pt", 4, "accuracy", "accuracy", None),
     "long2": ("bench_long_context.pt", 2, "accuracy", "accuracy", None),
 }
-# Floored metrics a case cannot compute (D5 item 5): the eviction case runs the device forward only, no raw21.
+# Floored metrics a case cannot compute: the eviction case runs the device forward only, no raw21.
 NO_FINAL = ("pcc_final", "pcc_final_spread")
 
 
@@ -164,10 +164,10 @@ def test_rope_cache_eviction(device):
 @pytest.mark.parametrize("levels", ["gift9", "gift21"])
 def test_e2e_gift_settings(device, levels):
     """GIFT-Eval settings: trim (PAD patches -> masked time attention), symmetric averaging (a second forward on
-    the negated series), clip and snap, at the 9 GIFT levels and the 21 trained levels. Scored (D4) on both forwards'
+    the negated series), clip and snap, at the 9 GIFT levels and the 21 trained levels. Scored on both forwards'
     head read-outs against ``gift_head_readouts`` and on the final quantiles (``pcc_final``, ``pcc_final_spread``)
     with the coverage floors; the collapsed output must fail them, and so must the reference with only its inactive
-    rows collapsed (D5 item 4)."""
+    rows collapsed."""
     import torch
 
     from models.experimental.t0_forecast.tt import host
@@ -203,7 +203,7 @@ def test_e2e_gift_settings(device, levels):
 def test_branch_paths(device):
     """Context 2000 (a partial PAD patch), horizon 40 (two patches, 40 steps kept); 4 series x 3 variates with an
     explicit PAD row (group mask: real and all-PAD rows in one series) and trimmed series (time mask); the same
-    series at the GIFT-Eval settings, scored like ``test_e2e_gift_settings`` (D5 item 3)."""
+    series at the GIFT-Eval settings, scored like ``test_e2e_gift_settings``."""
     import torch
 
     from models.experimental.t0_forecast.tt import host

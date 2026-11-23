@@ -3,9 +3,9 @@
 
 """CPU checks of the host pipeline and the dataflow re-implementation against the pinned reference (fp32).
 
-Runs in the reference venv (it imports the upstream ``t0`` package), from the worktree root:
+Runs in the reference venv (it imports the upstream ``t0`` package; README.md), from the tt-metal root:
 
-    env -u VIRTUAL_ENV HF_HUB_OFFLINE=1 PYTHONPATH=$PWD /home/andy/bringup/venvs/t0-gamma/bin/python -m pytest \
+    env -u VIRTUAL_ENV PYTHONPATH=$PWD <reference venv>/bin/python -m pytest \
         -p no:cacheprovider -c /dev/null models/experimental/t0_forecast/tests/golden/test_dataflow.py
 
 Tolerances: the host scaler at rtol 1e-5 per element; network tensors at 1e-5 relative (Frobenius norm of the

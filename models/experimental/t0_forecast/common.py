@@ -15,9 +15,8 @@ REFERENCE_REPO = "https://github.com/theforecastingcompany/tfc-t0"
 REFERENCE_TAG = "v0.6.0"
 REFERENCE_COMMIT = "4871c643c37d9bd8e7ade2500b9c3a5ba8519903"
 
-# Goldens live outside git; MANIFEST.json (tests/golden/) carries their sha256.
-GOLDEN_DIR = Path(os.environ.get("T0_GOLDEN_DIR", "/home/andy/bringup/goldens/t0-gamma"))
-MANIFEST_PATH = Path(__file__).resolve().parent / "tests" / "golden" / "MANIFEST.json"
+# CPU fp32 goldens from tests/golden/make_goldens.py, kept out of git (README.md). T0_GOLDEN_DIR overrides the default.
+GOLDEN_DIR = Path(os.environ.get("T0_GOLDEN_DIR", Path(__file__).resolve().parent / "goldens"))
 
 
 def checkpoint_dir() -> Path:
@@ -29,7 +28,6 @@ def checkpoint_dir() -> Path:
     if not (path / "model.safetensors").is_file():
         raise FileNotFoundError(
             f"{path}/model.safetensors missing; download it with "
-            f"`ttq run --model t0-gamma --kind download -- hf download {REPO_ID} --revision {REVISION} "
-            f"--include model.safetensors config.json README.md`"
+            f"`hf download {REPO_ID} --revision {REVISION} --include model.safetensors config.json`"
         )
     return path

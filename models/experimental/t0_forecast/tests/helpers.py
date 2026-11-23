@@ -20,7 +20,7 @@ from models.experimental.t0_forecast.tt.weights import T0Weights
 def golden(name: str) -> dict:
     path = GOLDEN_DIR / name
     if not path.is_file():
-        pytest.fail(f"golden {path} missing; run tests/golden/make_goldens.py")
+        pytest.fail(f"golden {path} missing; generate the goldens (see the t0_forecast README) or set T0_GOLDEN_DIR")
     return torch.load(path, weights_only=False)
 
 
@@ -53,7 +53,7 @@ def quantile_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
     ``*_active``        the same over the active rows: golden row std >= 5 % of the golden's global std (the set comes
                         from the golden only; ``rows_excluded`` is fixed per golden)
     ``spread_ratio_inactive_p01`` / ``_p99``, ``pcc_spread_inactive``  the same band checks over the inactive rows
-                        (NaN when the golden has none; D5 floors on the coverage classes, p99 reported only)
+                        (NaN when the golden has none; floored on the coverage classes, p99 reported only)
     ``spread_ratio_p01`` / ``_p50`` / ``_p99`` / ``_min``  per active row, ``|h_dev - mean_q| / |h_ref - mean_q|`` (band amplitude; 0 for a
                         collapsed output)
     """
@@ -80,7 +80,7 @@ def quantile_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
         "spread_ratio_p50": q(ratio, 0.5),
         "spread_ratio_p99": q(ratio, 0.99),
         "spread_ratio_min": float(ratio.min()) if ratio.numel() else float("nan"),
-        # D4 item 2 / D5 item 4: the inactive rows' band, which the floors above never see.
+        # The inactive rows' band, which the floors above never see.
         "spread_ratio_inactive_p01": q(ratio_inactive, 0.01),
         "spread_ratio_inactive_p99": q(ratio_inactive, 0.99),
         "pcc_spread_inactive": pcc(ce[~active], cg[~active]) if ratio_inactive.numel() else float("nan"),
@@ -95,7 +95,7 @@ def final_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
 
 # Gate floors per case class, shared by the PCC suite (tests/pcc/test_model.py) and the bench records' ``floor_ok``
 # (tests/perf/test_forward_perf.py). A number is a lower bound; ``(lo, hi)`` an inclusive range.
-_BAND_ACCURACY = {  # D4: the bench shapes at accuracy
+_BAND_ACCURACY = {  # the bench shapes at accuracy
     "pcc_final_spread": 0.998,
     "spread_ratio_p01": 0.95,
     "spread_ratio_p50": (0.97, 1.03),
@@ -115,11 +115,11 @@ _BAND_COVERAGE = {  # e2e, paths and the GIFT-settings cases; spread_ratio_min r
     "spread_ratio_p01": 0.90,
     "spread_ratio_p50": (0.95, 1.05),
     "spread_ratio_p99": (0.0, 1.5),
-    # D5 item 4: floor only (no drift); NaN (a golden without inactive rows) means not applicable.
+    # Floor only; NaN (a golden without inactive rows) means not applicable.
     "spread_ratio_inactive_p01": 0.80,
     "pcc_spread_inactive": 0.95,
 }
-# Metrics whose NaN means "not applicable" rather than a miss (D5 item 4).
+# Metrics whose NaN means "not applicable" rather than a miss.
 NAN_NOT_APPLICABLE = frozenset({"spread_ratio_inactive_p01", "pcc_spread_inactive"})
 FLOORS = {
     "accuracy": {
@@ -130,7 +130,7 @@ FLOORS = {
         "pcc_final": 0.99,
         **_BAND_ACCURACY,
     },
-    # Retired with the performance precision (D5): only the bench records' informational ``floor_ok`` reads it.
+    # The performance precision is timing only (tt/common.py): only the bench records' informational ``floor_ok`` reads it.
     "performance": {
         "pcc_normalized": 0.995,
         "pcc_spread": 0.99,
@@ -159,7 +159,7 @@ def below(value: float, floor) -> bool:
 
 def misses(metrics: dict, floors: dict, exempt=()) -> list[str]:
     """The floors ``metrics`` misses, as ``"<metric> <value> outside <floor>"``. A floored metric the record lacks
-    misses (D5 item 5) unless it is in ``exempt``; NaN in ``NAN_NOT_APPLICABLE`` passes."""
+    misses unless it is in ``exempt``; NaN in ``NAN_NOT_APPLICABLE`` passes."""
     out = []
     for k, f in floors.items():
         if k not in metrics:

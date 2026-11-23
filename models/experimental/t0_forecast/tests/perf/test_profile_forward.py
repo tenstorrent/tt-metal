@@ -16,10 +16,10 @@ and weights. Signposts (``tt-perf-report --start-signpost / --end-signpost``):
     last_start / last_end                     layer 23 on the read-out rows (x 1)
     head_start / head_end                     out_norm, decoder, monotone head
 
-``layer_counts.json`` goes to ``$MODEL_PROFILE_OUT``. Run under ``python -m tracy -r -p -m pytest`` (``perf_iteration.sh``).
+``layer_counts.json`` goes to ``$MODEL_PROFILE_OUT``. Run under ``python -m tracy -r -p -m pytest``.
 
     T0_PROFILE_SHAPE      paper (default) | long_context | multivariate
-    T0_PROFILE_PRECISION  accuracy (default) | experimental_performance (retired, D5)
+    T0_PROFILE_PRECISION  accuracy (default) | experimental_performance (timing only)
 """
 
 from __future__ import annotations

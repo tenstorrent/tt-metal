@@ -3,8 +3,8 @@
 
 """Benchmark: one TTNN t0-gamma forward (``_single_pass``) against the fp32 CPU reference, on one chip.
 
-Cases are ``<shape>-<precision>``; the contract's target is ``paper-accuracy``, its guards ``long_context-accuracy``
-and ``multivariate-accuracy``. The ``experimental_performance`` records are timing only (the class is retired, D5):
+Cases are ``<shape>-<precision>``; the target is ``paper-accuracy``, the guards ``long_context-accuracy`` and
+``multivariate-accuracy``. The ``experimental_performance`` records are timing only (see ``TtT0Precision``):
     paper         1024 univariate series x 2048 -> 64      66 patches (64 context + 2 withheld), 2 read out
     long_context  32 x 8192 -> 1024                        288 patches, 32 read out
     multivariate  128 series x 8 variates x 2048 -> 64     group attention over 8 rows
@@ -16,7 +16,7 @@ Timing: ``cold_s`` is the first end-to-end call (compile); ``steady_s`` the medi
 calls (prepare, upload, forward, postprocess); the host / device split is the median of 5 runs of each stage,
 with a 0.3 s idle before each timed ``forward_device`` (device time depends on the duty cycle).
 
-``MODEL_PERF_JSON=<path>`` appends one record per case to a JSON list (``model_bringup_optim`` contract).
+``MODEL_PERF_JSON=<path>`` appends one record per case to a JSON list.
 """
 
 from __future__ import annotations
@@ -211,7 +211,7 @@ GIFT_LEVELS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("precision_name", ["accuracy", "experimental_performance"])
 def test_e2e_gift_perf(device, precision_name):
-    """D4 item 1: end-to-end time of ``predict`` at the GIFT-Eval settings (trim, symmetric averaging = two forwards,
+    """End-to-end time of ``predict`` at the GIFT-Eval settings (trim, symmetric averaging = two forwards,
     clip, snap; the 9 GIFT levels) on the paper input. Timing only: the accuracy of these settings is gated by
     tests/pcc/test_model.py::test_e2e_gift_settings."""
     file, series, variates, context_len, horizon = SHAPES["paper"]
