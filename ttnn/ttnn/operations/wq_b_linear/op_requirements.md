@@ -37,7 +37,7 @@
 - **Blocking**: `block_m_tiles = 5` (whole M), `block_k_tiles = 8` (`num_k_blocks = 6`), x resident on workers via handshake-free Counter multicast, W slice resident (`w_depth_blocks = num_k_blocks`)
 - **Golden baseline**: 2 / 2 registry cells passing (cartesian + perf loose case), regression test passing; 0 supported_fail / xpass_drift / xfail_wrong_mode
 
-### [ ] Refinement 1 — Speed up x delivery on the perf-flagged profile
+### [x] Refinement 1 — Speed up x delivery on the perf-flagged profile
 
 **Type**: perf
 
@@ -77,6 +77,16 @@ The other part of the cost is per-round: each Counter-mode round pays a write ba
 - PCC ≥ 0.9998 still holds, and the golden suite (2 cells + regression bit-identity) is green.
 - The precision baseline passes.
 - No regression on the guard set. The op has one kernel path × one layout × one placement, so the guard set is the flagged shape itself under both call patterns: default config and explicit `ComputeConfigDescriptor`.
+
+**Outcome**:
+- Device span 26.6 µs → **22.55 µs** (−15%, 1.61× SOL). Shipped: trid-windowed x read (2 rounds in flight), linked per-round multicast, round published by an ordered count write instead of barrier + atomic (~1.1 µs/round removed), `block_k_tiles` 8 → 4. PCC 0.999957.
+- Built and measured, parked as live knobs:
+  - 2 senders (`NUM_X_SENDERS`): one NoC1 sender wins.
+  - Lagged atomic signal (`X_SIGNAL_LAG`).
+  - W gated on x round 0 (`W_WAIT_X0`): slower.
+- x is no longer binding after round 0. Stubbing the W reads leaves the span unchanged (21.9 µs).
+- The critical path is: x round 0 at ~2.5 µs, then the worker matmul at ~15 µs for kb 4 (11.4 µs ideal), then the ~2 µs output-store tail. The span is set by the slowest worker, whose W bank share ends ~2.5 µs after the median.
+- Next: Refinement 2's tail and W-balance knobs (store overlap / NoC split, `bank_stagger`, column map), then the matmul's own efficiency (subblock 5×1 at kb 4). Not done here because they are outside x delivery and queued as Refinement 2.
 
 ### [ ] Refinement 2 — Trim the tail and the W side on the perf-flagged profile
 

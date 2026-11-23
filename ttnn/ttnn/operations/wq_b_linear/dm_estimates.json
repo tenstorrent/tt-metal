@@ -1260,7 +1260,30 @@
     "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
    },
    "calculator": "5c96a38e1499653a",
-   "measurements": []
+   "measurements": [
+    {
+     "group": "x_mcast",
+     "measured_ns": 17652.0,
+     "measured_at": "2026-11-23T01:17:21.848203+00:00",
+     "recorded_utc": "2026-11-23T01:17:21.848216+00:00",
+     "estimate_ns": 15345.0,
+     "error_pct": -13.069340584636302,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": "multicast alone (x and W DRAM reads stubbed), unlinked bursts, counter per 80 KB round with lag; sender BRISC end"
+    },
+    {
+     "group": "x_read",
+     "measured_ns": 9626.0,
+     "measured_at": "2026-11-23T00:55:30+00:00",
+     "recorded_utc": "2026-11-23T01:17:25.048459+00:00",
+     "estimate_ns": 8373.333333333334,
+     "error_pct": -13.013366576632723,
+     "frozen_first": false,
+     "verdict": "post-hoc: the estimate was made after the measurement",
+     "note": "Phase 0 x-reader alone (W reads stubbed): sender NCRISC end. Measured before the estimate was recorded."
+    }
+   ]
   },
   {
    "id": "7715aacb",
@@ -1430,7 +1453,19 @@
     "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
    },
    "calculator": "5c96a38e1499653a",
-   "measurements": []
+   "measurements": [
+    {
+     "group": "x_mcast",
+     "measured_ns": 12887.0,
+     "measured_at": "2026-11-23T01:17:21.920923+00:00",
+     "recorded_utc": "2026-11-23T01:17:21.920936+00:00",
+     "estimate_ns": 13835.277777777777,
+     "error_pct": 7.358405973289184,
+     "frozen_first": true,
+     "verdict": "recorded: estimates rank schedules only; compare the measured candidates' order with the estimated order",
+     "note": "same, linked bursts per round (estimate tool has no linked option; closest candidate)"
+    }
+   ]
   }
  ]
 }

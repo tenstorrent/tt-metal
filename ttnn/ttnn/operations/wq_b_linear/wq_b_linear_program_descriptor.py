@@ -4,9 +4,10 @@
 """ProgramDescriptor for wq_b_linear (N-split, x multicast resident, W streamed per worker).
 
 Cores:
-  * 1 x-sender (outside the receiver rectangle): its NCRISC reads x from DRAM (NoC0) one round
-    (block_m_tiles x block_k_tiles tiles) at a time into cb_x_resident; its BRISC multicasts each
-    round to the same address on every worker (NoC1, Counter data-ready, no handshake).
+  * NUM_X_SENDERS x-senders (outside the receiver rectangle): each NCRISC reads its x rounds
+    (block_m_tiles x block_k_tiles tiles each, X_READ_TRIDS rounds in flight) from DRAM into
+    cb_x_resident; its BRISC multicasts each round (linked) to the same address on every worker and
+    publishes it on the channel's Counter (ordered count write, no handshake).
   * num_workers workers (one rectangle): reader streams the worker's W columns per K-step,
     writer waits for each x round and pushes it to compute, compute runs one matmul_block over
     all K-steps, writer stores the 5 x block_n_tiles output block into the L1-interleaved y.
@@ -26,15 +27,32 @@ BLOCK_N_TILES = 2  # output columns per worker; num_workers = tensor_n_tiles / B
 # DEST rounding drifts the output scale upward with that length (measured slope 1.0002 @2, 1.007 @8,
 # 1.013 @16, 1.018 @24; PCC 0.99996 / 0.99993 / 0.99986 / 0.99979). Keep block_k_tiles <= 16 so the
 # 0.9998 PCC gate holds (verification_report.md, precision baseline).
-BLOCK_K_TILES = 8
+# Refinement 1 measured 8 -> 4: the last K-step's compute after the final W block halves, and with the
+# ordered x signal a round costs no fixed ~1 us any more (kb 2: more, smaller rounds, measured slower).
+BLOCK_K_TILES = 4
 W_DEPTH_BLOCKS = None  # cb_w_block depth in K-steps; None = num_k_blocks (whole W slice resident)
 OUT_DEPTH_BLOCKS = 1  # one output block per core
 MCAST_RECT_WIDTH_MAX = 8
-# ---- x-delivery knobs (Refinement 1; see changelog). 1 / False / False = the Phase 0 schedule. ----
-X_READ_TRIDS = 4  # x rounds whose DRAM reads stay in flight on the sender (trid window, 1..15)
+
+# ---- x-delivery knobs (Refinement 1; numbers in changelog.md). The Phase 0 schedule is
+# X_READ_TRIDS = 1, X_MCAST_LINKED = False, X_ORDERED_SIGNAL = False, X_SIGNAL_LAG = False,
+# NUM_X_SENDERS = 1, W_WAIT_X0 = False. ----
+X_READ_TRIDS = 2  # x rounds whose DRAM reads stay in flight on a sender (trid window, 1..15)
 X_MCAST_LINKED = True  # one linked path reservation per x round instead of one per 16 KB burst
-X_MCAST_NOC = ttnn.NOC.NOC_1  # sender BRISC's NoC (WriterConfigDescriptor default)
-X_SIGNAL_LAG = True  # publish round r-1's counter after issuing round r's payload (rounds overlap)
+# Publish each round by multicasting its count into the receivers' Counter cell right behind the
+# payload (ordered on the same path) instead of write barrier + atomic increment + atomic barrier.
+X_ORDERED_SIGNAL = True
+X_SIGNAL_LAG = True  # atomic signal only: publish round r-1 after issuing round r's payload
+# x senders: each owns every NUM_X_SENDERS-th x round on its own Mcast channel (its own Counter).
+# X_SENDER_NOCS[s] is sender s's multicast NoC (its BRISC); its x-reader (NCRISC) uses the other NoC.
+# Sender 0 sits at the grid's bottom-right corner; a NoC1 sender 1 sits just above it, a NoC0
+# sender 1 at the rectangle's top-left diagonal (NoC0 multicasts low -> high). 1..2 senders.
+# Measured: with the ordered signal one NoC1 sender wins (a NoC0 sender slows the W reads that share
+# NoC0; two NoC1 trees collide).
+NUM_X_SENDERS = 1
+X_SENDER_NOCS = (ttnn.NOC.NOC_1, ttnn.NOC.NOC_0)
+X_MCAST_PREFIXES = ("x_mcast", "x_mcast_b")  # worker channel names, one per sender slot
+W_WAIT_X0 = False  # hold each worker's W stream until x round 0 lands (measured slower; kept as a knob)
 
 
 def _dest_tile_limit(fp32_dest_acc_en):
@@ -98,8 +116,12 @@ def _worker_geometry(device, num_workers):
     workers = [(x, y) for y in range(y0, y0 + rect_h) for x in range(x0, x0 + rect_w)]  # row-major
     rect_lo, rect_hi = ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x0 + rect_w - 1, grid.y - 1)
     rect = ttnn.CoreRangeSet([ttnn.CoreRange(rect_lo, rect_hi)])
-    sender = (grid.x - 1, grid.y - 1)
-    return workers, rect, (rect_lo, rect_hi), sender
+    senders = [(grid.x - 1, grid.y - 1)]
+    if NUM_X_SENDERS > 1:
+        senders.append((grid.x - 1, grid.y - 2) if X_SENDER_NOCS[1] == ttnn.NOC.NOC_1 else (x0 - 1, y0 - 1))
+    for sx, sy in senders:
+        assert 0 <= sx < grid.x and 0 <= sy < grid.y and not (x0 <= sx < x0 + rect_w and sy >= y0)
+    return workers, rect, (rect_lo, rect_hi), senders
 
 
 def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor:
@@ -125,10 +147,10 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
     in0_num_subblocks = block_m_tiles // sb_h
     in1_num_subblocks = block_n_tiles // sb_w
 
-    workers, rect, (rect_lo, rect_hi), sender = _worker_geometry(device, num_workers)
+    assert 1 <= NUM_X_SENDERS <= len(X_MCAST_PREFIXES), "NUM_X_SENDERS out of range"
+    workers, rect, (rect_lo, rect_hi), senders = _worker_geometry(device, num_workers)
     worker_crs = _crs(workers)
-    sender_crs = _crs([sender])
-    all_crs = _crs(workers + [sender])
+    all_crs = _crs(workers + senders)  # cb_x_resident: one address on every sender and worker
 
     num_banks = device.dram_grid_size().x
     cols = _bank_spread_columns(tensor_n_tiles, block_n_tiles, num_workers, num_banks)
@@ -171,37 +193,51 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         ],
     )
 
-    # ---- Sender core: x-reader (NCRISC / NoC0) -> cb_x_resident -> multicaster (BRISC / NoC1) ----
+    # ---- x senders: x-reader (DRAM, one NoC) -> cb_x_resident -> multicaster (the other NoC) ----
     x_read_trids = min(X_READ_TRIDS, num_k_blocks)
-    x_reader_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks, tensor_k_tiles, x_read_trids]
-    x_reader_ct.extend(ttnn.TensorAccessorArgs(x).get_compile_time_args())
-    x_reader_rt = ttnn.RuntimeArgs()
-    x_reader_rt[sender[0]][sender[1]] = [x.buffer_address()]
-    x_reader_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "wq_b_linear_x_reader.cpp"),
-        core_ranges=sender_crs,
-        compile_time_args=x_reader_ct,
-        runtime_args=x_reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    sender_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks, int(X_MCAST_LINKED), int(X_SIGNAL_LAG)]
-    # Receiver rectangle in NoC coordinates, in routing order for the multicast NoC (NoC1 runs
-    # high -> low, so its start is the high corner).
     mc_lo = device.worker_core_from_logical_core(rect_lo)
     mc_hi = device.worker_core_from_logical_core(rect_hi)
-    mc_start, mc_end = (mc_hi, mc_lo) if X_MCAST_NOC == ttnn.NOC.NOC_1 else (mc_lo, mc_hi)
-    sender_rt = ttnn.RuntimeArgs()
-    sender_rt[sender[0]][sender[1]] = [mc_start.x, mc_start.y, mc_end.x, mc_end.y, num_workers]
-    sender_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "wq_b_linear_sender.cpp"),
-        core_ranges=sender_crs,
-        compile_time_args=sender_ct,
-        runtime_args=sender_rt,
-        config=ttnn.WriterConfigDescriptor(),
-    )
+    sender_kernels, x_reader_kernels = [], []
+    for s_idx, (scx, scy) in enumerate(senders):
+        mcast_noc = X_SENDER_NOCS[s_idx]
+        read_noc = ttnn.NOC.NOC_0 if mcast_noc == ttnn.NOC.NOC_1 else ttnn.NOC.NOC_1
+        round_sel = [s_idx, len(senders)]  # first_round, round_stride
+        x_reader_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks, tensor_k_tiles, x_read_trids]
+        x_reader_ct.extend(round_sel)
+        x_reader_ct.extend(ttnn.TensorAccessorArgs(x).get_compile_time_args())
+        x_reader_rt = ttnn.RuntimeArgs()
+        x_reader_rt[scx][scy] = [x.buffer_address()]
+        x_reader_kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "wq_b_linear_x_reader.cpp"),
+                core_ranges=_crs([(scx, scy)]),
+                compile_time_args=x_reader_ct,
+                runtime_args=x_reader_rt,
+                config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=read_noc),
+            )
+        )
+        sender_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks, int(X_MCAST_LINKED), int(X_SIGNAL_LAG)]
+        sender_ct.extend(round_sel)
+        # Channel s's Counter cell id: each no-handshake Counter channel takes one semaphore, allocated
+        # in sender order from id 0 (asserted against the helper's allocation below).
+        sender_ct.extend([int(X_ORDERED_SIGNAL), s_idx])
+        # Receiver rectangle in NoC coordinates, in routing order for the multicast NoC (NoC1 runs
+        # high -> low, so its start is the high corner).
+        mc_start, mc_end = (mc_hi, mc_lo) if mcast_noc == ttnn.NOC.NOC_1 else (mc_lo, mc_hi)
+        sender_rt = ttnn.RuntimeArgs()
+        sender_rt[scx][scy] = [mc_start.x, mc_start.y, mc_end.x, mc_end.y, num_workers]
+        sender_kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "wq_b_linear_sender.cpp"),
+                core_ranges=_crs([(scx, scy)]),
+                compile_time_args=sender_ct,
+                runtime_args=sender_rt,
+                config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=mcast_noc),
+            )
+        )
 
     # ---- Worker reader (W columns per K-step), NCRISC / NoC0 ----
-    reader_ct = [CB_W_BLOCK, block_k_tiles, block_n_tiles, num_k_blocks, tensor_n_tiles]
+    reader_ct = [CB_W_BLOCK, block_k_tiles, block_n_tiles, num_k_blocks, tensor_n_tiles, int(W_WAIT_X0)]
     reader_ct.extend(ttnn.TensorAccessorArgs(w).get_compile_time_args())
     reader_rt = ttnn.RuntimeArgs()
     for j, (cx, cy) in enumerate(workers):
@@ -253,16 +289,28 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         ),
     )
 
-    # ---- x multicast channel: rect receivers, explicit sender outside the rect, no handshake ----
-    mcast = ttnn.Mcast(
-        device,
-        ttnn.McastConfig(noc=X_MCAST_NOC, handshake=False, data_ready=ttnn.McastDataReady.Counter),
-        rect,
-        num_workers,
-        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*sender)]),
-    )
-
+    # ---- x multicast channels: one per sender, rect receivers, sender outside the rect, no handshake.
+    # Channel s is attached as X_MCAST_PREFIXES[s] to sender s's kernel and to the worker writer; the
+    # other prefixes are attached absent (each sender kernel uses its one active slot).
     descriptor = ttnn.ProgramDescriptor(cbs=[cb_x_resident, cb_w_block, cb_interm_acc, cb_out_block])
-    mcast.attach(descriptor, "x_mcast", [sender_kernel, writer_kernel], 0)
-    descriptor.kernels = [x_reader_kernel, sender_kernel, reader_kernel, writer_kernel, compute_kernel]
+    next_sem = 0
+    for s_idx, (scx, scy) in enumerate(senders):
+        mcast = ttnn.Mcast(
+            device,
+            ttnn.McastConfig(noc=X_SENDER_NOCS[s_idx], handshake=False, data_ready=ttnn.McastDataReady.Counter),
+            rect,
+            num_workers,
+            ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(scx, scy)]),
+        )
+        targets = [sender_kernels[s_idx], writer_kernel] + ([reader_kernel] if s_idx == 0 else [])
+        mcast.attach(descriptor, X_MCAST_PREFIXES[s_idx], targets, next_sem)
+        assert next_sem == s_idx and mcast.next_semaphore_id() == s_idx + 1, "x channel semaphore ids drifted"
+        next_sem = mcast.next_semaphore_id()
+    for s_idx, prefix in enumerate(X_MCAST_PREFIXES):
+        for k_idx, kernel in enumerate(sender_kernels):
+            if k_idx != s_idx:
+                ttnn.attach_absent_mcast(kernel, prefix)
+        if s_idx >= len(senders):
+            ttnn.attach_absent_mcast(writer_kernel, prefix)
+    descriptor.kernels = [*x_reader_kernels, *sender_kernels, reader_kernel, writer_kernel, compute_kernel]
     return descriptor

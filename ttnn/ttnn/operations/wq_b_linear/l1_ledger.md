@@ -1,6 +1,6 @@
 # L1 Ledger: wq_b_linear
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes: `m` (`block_m_tiles` = 5), `k` (`block_k_tiles` = 8, `num_k_blocks` = 6 — implementer turned the knob from the design's 4/12, see Implementation notes), `n` (`block_n_tiles` = 2). `fp32_dest_acc_en = False` (16-bit DEST).
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes: `m` (`block_m_tiles` = 5), `k` (`block_k_tiles` = 4, `num_k_blocks` = 12 — Phase 0 shipped 8/6; Refinement 1 turned it back to the design's 4/12 once the per-round x cost was removed, see changelog), `n` (`block_n_tiles` = 2). `fp32_dest_acc_en = False` (16-bit DEST).
 
 ## Worker cores (64)
 
@@ -11,11 +11,11 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes: 
 | `cb_interm_acc` | `block_m_tiles · block_n_tiles` → 10 × 2048 B = 20,480 B | 10 (the whole output block's partial sum, accumulated in place) | `{m: spans → block_m_tiles, k: streams (accumulated), n: spans → block_n_tiles}` | Float16_b — equals 16-bit DEST width; packing DEST to it is lossless | compute | compute | K-steps 0..num_k_blocks−1 | Could alias `cb_out_block` (helper permits a shared region for SubblockMajor, `matmul_block_helpers.hpp:250-251`; TileRowMajor requires its OWN region, `:252`). This design uses TileRowMajor, so it cannot share. |
 | `cb_out_block` | `block_m_tiles · block_n_tiles · out_depth_blocks`, `out_depth_blocks = 1` → 10 × 2048 B = 20,480 B | 10 | `{m: spans → block_m_tiles, k: streams (written once after the last K-step), n: spans → block_n_tiles}` | Float16_b (output dtype bf16 = DEST width) | compute | writer | last K-step → store | Not shared with `cb_interm_acc` (TileRowMajor, above). Not packed straight into the output tensor: y is L1-interleaved across all cores' banks, not this core's L1. |
 
-## Sender core (1)
+## Sender core(s) (`NUM_X_SENDERS`, 1 as shipped; up to 2)
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_x_resident` (same descriptor as on workers, so the address matches) | 240 × 2048 B = 491,520 B | 240: each round's slot is the multicast source and is never rewritten | `{m: spans → block_m_tiles, k: spans → tensor_k_tiles, n: —}` | Float16_b | x-reader kernel (NCRISC / NoC0, DRAM reads, push per round) | multicast kernel (BRISC / NoC1, wait/pop per round; the slot is the multicast source) | whole program | Not shared: it is the only buffer on the sender core. A 2-slot ring would need the consumer handshake (rejected regime). |
+| `cb_x_resident` (same descriptor as on workers, so the address matches) | 240 × 2048 B = 491,520 B | 240: each round's slot is the multicast source and is never rewritten | `{m: spans → block_m_tiles, k: spans → tensor_k_tiles, n: —}` | Float16_b | x-reader kernel (NCRISC, DRAM reads with `X_READ_TRIDS` rounds in flight, push per round; with 2 senders only its own rounds) | multicast kernel (BRISC, wait/pop per round; the slot `base + r·round_bytes` is the multicast source) | whole program | Not shared: it is the only buffer on the sender core. A 2-slot ring would need the consumer handshake (rejected regime). |
 
 ## Symbol table
 
@@ -24,7 +24,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes: 
 | `tensor_m_tiles` | = 5 | `validate()`: `x.shape == [1,1,160,1536]` |
 | `tensor_k_tiles` | = 48 | same + `W.shape == [1536,4096]` |
 | `tensor_n_tiles` | = 128 | `W.shape == [1536,4096]` |
-| `num_k_blocks` | = `tensor_k_tiles / block_k_tiles` = 6 (at `block_k_tiles` = 8) | host assert `tensor_k_tiles % block_k_tiles == 0` |
+| `num_k_blocks` | = `tensor_k_tiles / block_k_tiles` = 12 (at `block_k_tiles` = 4) | host assert `tensor_k_tiles % block_k_tiles == 0` |
 | `x_depth_rounds`, `w_depth_blocks` | = `num_k_blocks` | scheme (resident x, stall-shadow W) |
 | `out_depth_blocks` | = 1 | one output block per core |
 
@@ -36,7 +36,7 @@ Worker: `2048·block_m_tiles·block_k_tiles·num_k_blocks` (x, = 2048·tensor_m_
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| x (491,520 B) | 1 | read once by the single sender core; workers receive it by multicast and keep it resident | one multicast tree, `num_k_blocks` = 6 rounds × 81,920 B to 64 receivers (31.5 MB delivered, 491,520 B injected) + 6 Counter increments |
+| x (491,520 B) | 1 | read once by the sender core(s) (each round by exactly one sender); workers receive it by multicast and keep it resident | one multicast tree per sender (1 as shipped), `num_k_blocks` = 12 rounds × 40,960 B to 64 receivers (31.5 MB delivered, 491,520 B injected) + 12 ordered 4-byte count writes (Refinement 1; was 6 Counter atomic increments) |
 | W (6,684,672 B) | 1 | each worker reads only its `block_n_tiles` columns; no M bands, so no re-read | none |
 | y (1,310,720 B) | 0 | output is L1 interleaved | 640 tile writes core → L1 bank over the NoC |
 
@@ -79,3 +79,7 @@ Phase 0 choices from the sweeps: W reader batch 8 (one K-step per barrier) on No
 - Capacity vs live set: `cb_x_resident` and `cb_w_block` are resident by scheme (bounded by the single-shape `validate()` predicate) — sanctioned, not collapsed. `cb_w_block` at full depth is measured-irrelevant today (W reader finishes at ~9 µs of a 26.6 µs span); the depth-3/4 lamp folds into perf Refinement 2.
 - Page format vs DEST: all 16-bit pages with `fp32_dest_acc_en = False` — consistent.
 - Disjoint lifetimes: `cb_interm_acc` / `cb_out_block` justified (TileRowMajor needs its own region).
+
+### Refinement 1 (x delivery)
+
+No CB added, resized or removed. `block_k_tiles` 8 → 4 changes page counts per round, not totals (both resident CBs scale with `tensor_k_tiles`). The x Counter cell is the Mcast helper's semaphore; with `X_ORDERED_SIGNAL` the sender's own copy of that cell is the source of the count write (no new L1). With `NUM_X_SENDERS = 2` the second sender core joins `cb_x_resident`'s core-range union (same address everywhere) and holds the full 491,520 B CB, of which it fills only its own rounds.

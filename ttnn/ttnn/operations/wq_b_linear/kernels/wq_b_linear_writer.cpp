@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // wq_b_linear worker writer (BRISC / NoC1).
-// 1. x arrival: for each round r, wait until the sender's multicast of round r has landed in
-//    cb_x_resident (Counter >= r+1), then push the round's tiles to compute.
+// 1. x arrival: for each round r, wait until its sender's multicast of round r has landed in
+//    cb_x_resident, then push the round's tiles to compute. With two x senders round r comes on
+//    channel r % 2 ("x_mcast" / "x_mcast_b", each its own Counter: local round r / 2); with one
+//    sender "x_mcast_b" is attached absent and every round comes on "x_mcast".
 // 2. store: wait for the block_m_tiles x block_n_tiles output block (TileRowMajor) and write it
 //    to the L1-interleaved y, one barrier.
 
@@ -30,6 +32,10 @@ void kernel_main() {
     constexpr auto mc = McastArgs<
         get_named_compile_time_arg_val("x_mcast_ct_offset"),
         get_named_compile_time_arg_val("x_mcast_rt_offset")>();
+    constexpr auto mc_b = McastArgs<
+        get_named_compile_time_arg_val("x_mcast_b_ct_offset"),
+        get_named_compile_time_arg_val("x_mcast_b_rt_offset")>();
+    constexpr uint32_t num_x_senders = mc_b.active ? 2 : 1;
 
     constexpr uint32_t round_tiles = block_m_tiles * block_k_tiles;
     constexpr uint32_t out_block_tiles = block_m_tiles * block_n_tiles;
@@ -43,9 +49,14 @@ void kernel_main() {
     // ---- receive_x_rounds ----
     Noc noc;
     auto pipe = mc.receiver(noc);
+    auto pipe_b = mc_b.optional_receiver(noc);
     for (uint32_t r = 0; r < num_k_blocks; ++r) {
         cb_reserve_back(cb_x_resident, round_tiles);  // never blocks: x is fully resident
-        pipe.receive(r);
+        if (num_x_senders == 1 || (r % num_x_senders) == 0) {
+            pipe.receive(r / num_x_senders);
+        } else {
+            pipe_b->receive(r / num_x_senders);
+        }
         cb_push_back(cb_x_resident, round_tiles);
     }
 
