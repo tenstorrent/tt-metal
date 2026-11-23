@@ -1811,3 +1811,13 @@ speed-of-light ep4_targets.py.
   bh-lb-19 11.4); M 0 6.80-6.87 ms = 21.1 GB/s a link direction (bh-lb-19 at 400G: 8.39, NoC-bound at chips 3 / 4 / 7).
   WL5_WHY at M 0: every chip's groups wait 2.4-4.3 ms on mux space (credits 0.1-2.1 ms), not two bottleneck chips:
   the 200G links (25 GB/s raw) drain the muxes, ~84% of raw. A different box, so its ethernet-core sides differ too.
+- Fabric reference on the same box: high_bw_all_gather on all 8 chips as a 1 x 8 mesh with FABRIC_1D_RING
+  (tests/test_hbag_ring8.py; 2 links, both directions, 14 KB payload; a link direction carries 1.75 shards, so
+  link-direction rate = receive rate / 4):
+| rows a chip | bf16 rows (shard MB): ms, GB/s a link direction | bfp8 tiles: ms, GB/s a link direction |
+|---|---|---|
+| 8192 | 9.4: 0.732, 22.6 | 0.410, 21.4 |
+| 14400 | 16.6: 1.252, 23.2 | 0.692, 22.3 |
+| 65536 | 75.5: 5.537, 23.9 (96% of 25 GB/s) | 2.961, 23.7 |
+  At 400G (bh-lb-19, the same snake via cluster_axis None) it reached 36.7 of 50 (73%); at 200G the CCL runs the
+  links near their rate. The lanes on this box: 17.7 (G 2 bidirectional) / 21.1 (G 4 one-way) GB/s a link direction.
