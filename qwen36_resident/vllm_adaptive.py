@@ -16,15 +16,23 @@ Every live request owns a plain row (the rows adapter's SlotMap; its KV pages ar
 a spec user index is extra (spec_of[plain row]). Prefill: in SPEC mode while the spec build has room and the live
 count stays <= 8, through SpecRowsSession.start_many; otherwise through the rows adapter (the plain build). A verify
 call carrying rows of plain-geometry users (no drafts: column 0 only) runs a plain launch for them as well (mixed
-steps, right after an arrival that ends SPEC). Greedy only (phase 2a); a token history per request (prompt + every
-committed token) feeds the drafter refill.
+steps, right after an arrival that ends SPEC). A token history per request (prompt + every committed token) feeds the
+drafter refill.
+
+Sampling (phase 2b): only greedy requests speculate. A request is non-speculable when a decode call's sampling_params
+show temperature != 0 or a penalty (the runner's own test): from then on the server is in PLAIN while it is live (no
+drafts: ordinary calls, sampled on device or on the host by the runner as the batch profile does). A verify the runner
+still sends (drafts proposed before it was seen, or a multi-token commit to resolve) commits column 0 for its rows: a
+plain launch with the row's sampling parameters in the hub answers it (a sampled token where the contract names an
+argmax; a spec user found sampled moves to the plain build first). Gap: a host-sampled verify step carries no sampling
+parameters, so such a row gets the argmax there (temperature with top_k above max_device_top_k, penalties, min_p, in
+the one transition step). The plugin refuses logprobs / structured output / logit_bias on a speculating launch.
 """
 import os
 
 import torch
 from loguru import logger
 
-from qwen36_resident import greedy_only
 from qwen36_resident import weights as Q
 from qwen36_resident.model import TOP_K
 from qwen36_resident.vllm_rows import CHUNK_UNIT, ResidentRowsAdapter, RowsEngine, expand_blocks
@@ -34,6 +42,7 @@ SPEC_K = 3
 SPEC_BACK = int(os.environ.get("RESIDENT_ADAPTIVE_SPEC_BACK", "6"))  # back to SPEC at <= this many live users ...
 PLAIN_HOLD = int(os.environ.get("RESIDENT_ADAPTIVE_PLAIN_HOLD", "32"))  # ... for this many propose calls in a row
 PLAIN_ROWS = 32
+TIMING = os.environ.get("RESIDENT_ADAPTIVE_TIMING", "0") == "1"  # (log the per-step host / call times every 64 steps)
 
 
 class _PlainRowsEngine(RowsEngine):
@@ -42,7 +51,6 @@ class _PlainRowsEngine(RowsEngine):
 
 
 class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
-    greedy_only = True
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
@@ -89,7 +97,6 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         return int(max_model_len) * int(max_num_seqs or 1)
 
     def __init__(self, mesh, ck, max_seq_len, max_batch, mrope):
-        greedy_only.install()
         self.mesh, self.ck = mesh, ck
         super().__init__(None, ck.config["vocab_size"], max_seq_len, PLAIN_ROWS, CHUNK_UNIT, mrope, rows=PLAIN_ROWS)
         self.ae = self.sess = None
@@ -97,6 +104,23 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         self.history = {}  # resident slot -> every token so far (prompt + committed); [-1] is the next to run
         self.last_acc = {}  # resident slot -> tokens its last spec step committed (its next verify applies them)
         self.mode, self.low_calls = "SPEC", 0
+        self.sampled = set()  # resident slots of non-speculable requests (temperature != 0 or a penalty)
+        self._t = {}  # (TIMING) name -> [total seconds, calls]
+
+    def _lap(self, name, t0):
+        import time
+
+        if TIMING:
+            acc = self._t.setdefault(name, [0.0, 0])
+            acc[0] += time.perf_counter() - t0
+            acc[1] += 1
+            if name == "propose" and acc[1] % 64 == 0:
+                logger.info(
+                    "adaptive timing (mean ms): "
+                    + ", ".join(f"{k} {v[0] / max(1, v[1]) * 1000:.2f}" for k, v in sorted(self._t.items()))
+                    + f" (mode {self.mode})"
+                )
+                self._t = {}
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         from qwen36_resident.adaptive import AdaptiveEngine
@@ -147,6 +171,21 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self.ae.move_to_spec(r, u, self.tables[r], self.history[r])
             self.spec_of[r], self.last_acc[r] = u, 1
 
+    @staticmethod
+    def _non_speculable(sp, i):
+        """the runner's test (TTModelRunner._request_is_speculable): temperature != 0 or a penalty"""
+        val = lambda name, default: (
+            getattr(sp, name, default)
+            if not isinstance(getattr(sp, name, default), (list, tuple))
+            else getattr(sp, name)[i]
+        )  # noqa: E731
+        return (
+            float(val("temperature", 0.0) or 0.0) != 0.0
+            or float(val("presence_penalty", 0.0) or 0.0) != 0.0
+            or float(val("frequency_penalty", 0.0) or 0.0) != 0.0
+            or float(val("repetition_penalty", 1.0) or 1.0) != 1.0
+        )
+
     def _plain_tokens(self, feed):
         """one plain launch of the slots in feed {slot: (token, position)} (the others held): their device greedy"""
         sitting = {s for s in self.live if s not in feed}
@@ -180,9 +219,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 self.history[r] = list(ids)
                 items.append((u, ids, None))
             for j, lg in enumerate(self.sess.start_many(items)):
-                masked = torch.full_like(lg, float("-inf"))
-                masked[int(lg.argmax())] = 0.0  # (greedy: the runner samples the argmax)
-                out[j, 0] = masked
+                out[j, 0] = lg  # (the runner samples the first token on the host, with the request's parameters)
                 self.live.add(self.slots.res_of[int(empty_slots[j])])
             self._write_tables()
         else:
@@ -209,6 +246,12 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         slot_remap=None,
         **kwargs,
     ):
+        import time
+
+        t0 = time.perf_counter()
+        if TIMING and getattr(self, "_last_dec", None) is not None:
+            self._lap("period", self._last_dec)  # (decode call to decode call: the step as the plugin runs it)
+        self._last_dec = t0
         res_of = self.slots.remapped(slot_remap) if slot_remap is not None else dict(self.slots.res_of)
         B = int(tokens.shape[0])
         W = int(tokens.shape[1]) if tokens.dim() > 1 else 1
@@ -217,6 +260,19 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         tok0 = tokens.reshape(B, -1)[:, 0].tolist()
         for i, r in rows.items():
             self._note(r, int(pos[i, 0]), tok0[i])
+        sp = kwargs.get("sampling_params")
+        if sp is not None:
+            for i, r in rows.items():
+                if self._non_speculable(sp, i):
+                    self.sampled.add(r)
+        if (self.sampled & self.live or (sp is None and rows)) and self.mode == "SPEC":
+            # (sampling_params absent: the runner fell back to host sampling for this step, which a live row needs —
+            # penalties, a top_k past max_device_top_k: treat it as non-speculable traffic)
+            logger.info("adaptive: a non-speculable request is live -> PLAIN")
+            self.mode, self.low_calls = "PLAIN", 0
+            self._host_steps = True
+        elif sp is not None:
+            self._host_steps = False
         # (the spec users' tables here; the plain rows' the rows adapter keeps — every row's 4,096-entry table converted
         # and compared each call cost several ms a step at 32 users)
         if page_table is not None and (spec_mode is not None or self.spec_of):
@@ -232,14 +288,22 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             if changed:
                 self._write_tables()
         if spec_mode is None:
-            if self.mode == "PLAIN" and self.spec_of:
+            # (PLAIN, or a host-sampled step — it wants logits, which the rows adapter returns: everyone to plain)
+            if self.spec_of and (self.mode == "PLAIN" or sp is None):
+                self.mode = "PLAIN"
                 self._to_plain_all()
             if not self.spec_of:  # (every user plain: the rows adapter's own path)
-                return super().decode_forward(tokens, start_pos, page_table, *args, slot_remap=slot_remap, **kwargs)
+                self._lap("decode_host", t0)
+                t1 = time.perf_counter()
+                out = super().decode_forward(tokens, start_pos, page_table, *args, slot_remap=slot_remap, **kwargs)
+                self._lap("decode_plain", t1)
+                return out
             out = self._spec_row0(rows, tokens.reshape(B, -1)[:, 0], pos[:, 0], B)
             self._commit_remap(slot_remap, res_of)
             return out
-        return self._verify(tokens, pos, rows, B, W, num_valid_drafts, accepted_counts, spec_mode, slot_remap, res_of)
+        return self._verify(
+            tokens, pos, rows, B, W, num_valid_drafts, accepted_counts, spec_mode, slot_remap, res_of, sp
+        )
 
     def _commit_remap(self, slot_remap, res_of):
         if slot_remap is not None:
@@ -272,7 +336,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                     res[i, 0] = got[r]
         return res
 
-    def _verify(self, tokens, pos, rows, B, W, num_valid_drafts, accepted_counts, spec_mode, slot_remap, res_of):
+    def _verify(
+        self, tokens, pos, rows, B, W, num_valid_drafts, accepted_counts, spec_mode, slot_remap, res_of, sp=None
+    ):
         from vllm_tt_plugin.spec_decode import VerifyOutput
 
         U, R = SPEC_USERS, 4
@@ -281,6 +347,11 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         nvd = {i: int(num_valid_drafts[i]) for i in rows} if num_valid_drafts is not None else {}
         if self.mode == "PLAIN" and self.spec_of and not any(nvd.values()):
             self._to_plain_all(acc_of)  # (a resolving verify: the spec users' commits, then the plain build)
+        for i, r in rows.items():  # (a spec user found non-speculable: to the plain build, it carries no drafts)
+            if r in self.spec_of and r in self.sampled:
+                assert nvd.get(i, 0) == 0, "drafts for a non-speculable request"
+                self.ae.move_to_plain(self.spec_of.pop(r), r, self.tables[r], acc_of.get(r, 1))
+                self.last_acc[r] = 1
         out = torch.zeros(B, W, dtype=torch.int32)
         toks, upos, act, of_u, feed = [[0] * R for _ in range(U)], [0] * U, [False] * U, {}, {}
         for i, r in rows.items():
@@ -297,6 +368,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             for i, u in of_u.items():
                 out[i] = torch.tensor(g[u][:W], dtype=torch.int32)
         if feed:
+            if sp is not None:  # (column 0 of a plain row: sampled with its parameters in the hub, greedy ones argmax)
+                plain_rows = [i for i, r in rows.items() if r in feed]
+                self._set_sampling(sp, plain_rows, [rows[i] for i in plain_rows])
             got = self._plain_tokens(feed)
             for i, r in rows.items():
                 if r in got:
@@ -306,6 +380,14 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
 
     # ------------------------------------------------------------------ propose
     def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
+        import time
+
+        t0 = time.perf_counter()
+        out = self._propose(num_drafts, committed_tokens, committed_positions, accepted_counts)
+        self._lap("propose", t0)
+        return out
+
+    def _propose(self, num_drafts, committed_tokens, committed_positions, accepted_counts):
         from vllm_tt_plugin.spec_decode import DraftOutput
 
         B, K = int(committed_tokens.shape[0]), int(num_drafts)
@@ -323,7 +405,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self.last_acc[r] = a
         live = len(self.live)
         # ---- the mode for the next step
-        if live > SPEC_USERS:
+        if self.sampled & self.live or getattr(self, "_host_steps", False):  # (non-speculable traffic: no drafts)
+            self.mode, self.low_calls = "PLAIN", 0
+        elif live > SPEC_USERS:
             if self.mode == "SPEC":
                 logger.info(f"adaptive: {live} live users -> PLAIN")
             self.mode, self.low_calls = "PLAIN", 0
@@ -358,3 +442,4 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 self.ae._set_spec_table(u, [0])
             self.history.pop(r, None)
             self.last_acc.pop(r, None)
+            self.sampled.discard(r)

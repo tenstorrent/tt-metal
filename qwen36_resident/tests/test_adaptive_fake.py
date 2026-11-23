@@ -116,6 +116,7 @@ def make(monkeypatch):
     m.sess = m.ae.sess
     m.ae.plain_tables = m.tables
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
+    m.sampled, m._t = set(), {}
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
 
@@ -133,6 +134,14 @@ class Runner:
         for row in self.req:
             t[row] = torch.tensor(self.table(row))
         return t
+
+    def sp(self, rows):
+        """the device-sampling parameters per wire row (a sampled request: temperature 0.8, its seed)"""
+        temp, seed = [0.0] * B, [None] * B
+        for r in rows:
+            if self.req[r].get("seed") is not None:
+                temp[r], seed[r] = 0.8, self.req[r]["seed"]
+        return SimpleNamespace(temperature=temp, top_k=[20] * B, top_p=[0.95] * B, seed=seed)
 
     def arrive(self, rows, prompts):
         n, T = len(rows), max(len(p) for p in prompts)
@@ -166,7 +175,13 @@ class Runner:
                     tok[r, 1 + k], pos[r, 1 + k] = d, p + 1 + k
                 nvd[r], acc[r] = len(q["drafts"]), q["acc"]
             out = self.m.decode_forward(
-                tok, pos, self.pt(), num_valid_drafts=nvd, accepted_counts=acc, spec_mode="argmax_ids"
+                tok,
+                pos,
+                self.pt(),
+                num_valid_drafts=nvd,
+                accepted_counts=acc,
+                spec_mode="argmax_ids",
+                sampling_params=self.sp(rows),
             )
             assert isinstance(out, VerifyOutput)
             committed = {}
@@ -182,7 +197,7 @@ class Runner:
             pos = torch.full((B,), -1, dtype=torch.int32)
             for r in rows:
                 tok[r, 0], pos[r] = self.req[r]["tokens"][-1], len(self.req[r]["tokens"]) - 1
-            sp = SimpleNamespace(temperature=[0.0] * B, top_k=[1] * B, top_p=[1.0] * B, seed=[None] * B)
+            sp = self.sp(rows)
             res = self.m.decode_forward(
                 tok,
                 pos,
@@ -215,9 +230,11 @@ class Runner:
 
     def check(self):
         for r, q in self.req.items():
-            s = list(q["prompt"])
-            for t in q["tokens"][len(q["prompt"]) :]:
-                assert t == ref_next(s), f"row {r}: token {len(s) - len(q['prompt'])} is {t}, want {ref_next(s)}"
+            s, seed = list(q["prompt"]), q.get("seed")
+            for k, t in enumerate(q["tokens"][len(q["prompt"]) :]):
+                # (a sampled request: its first token is the runner's host sample of the prefill logits; then the hub's)
+                want = ref_next(s, (seed, len(s) - 1) if seed is not None else None) if (seed is None or k > 0) else t
+                assert t == want, f"row {r}: token {k} is {t}, want {want}"
                 s.append(t)
 
 
@@ -249,3 +266,27 @@ def test_adaptive_ramp(monkeypatch):
     kinds_moves = [mv[0] for mv in m.ae.moves]
     assert kinds_moves.count("to_plain") == 4 and kinds_moves.count("to_spec") == 3, m.ae.moves
     assert sum(len(q["tokens"]) - len(q["prompt"]) for q in run.req.values()) > 3 * 20
+
+
+def test_sampled_request_joins_spec(monkeypatch):
+    """a sampled request arrives while 3 greedy users speculate: PLAIN from its first decode call, its tokens the hub's
+    samples (never the argmax), the greedy users' tokens their greedy chains; when it leaves, back to SPEC"""
+    monkeypatch.setattr(A, "PLAIN_HOLD", 3)
+    m, pf = make(monkeypatch)
+    run = Runner(m)
+    prompts = {r: [(r * 23 + i * 7) % V for i in range(28 + 2 * r)] for r in range(4)}
+    run.arrive(range(3), [prompts[r] for r in range(3)])
+    for _ in range(5):
+        run.step()
+    run.arrive([3], [prompts[3]])
+    run.req[3]["seed"] = 1234  # (the runner sampled its first token on the host; from here the device samples)
+    assert 3 in m.spec_of.values() or m.spec_of, "it started in the spec build (its temperature unknown at prefill)"
+    for _ in range(6):
+        run.step()
+    run.check()
+    assert m.mode == "PLAIN" and not m.spec_of and m.slots.res_of[3] in m.sampled
+    run.finish(3)
+    for _ in range(6):
+        run.step()
+    run.check()
+    assert m.mode == "SPEC" and len(m.spec_of) == 3, (m.mode, m.spec_of)
