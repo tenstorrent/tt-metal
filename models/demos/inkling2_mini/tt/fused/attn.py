@@ -153,8 +153,10 @@ class AttnPrep:
         self.v_cores, self.b_cores = cores[2 * N_KV : 3 * N_KV], cores[3 * N_KV :]
         self.cache = {}
 
-    def _head_group(self, cores, proj, kind, mode_rows, tau, state, positions):
-        """kind: q / k / v. Returns (kernels, cbs) for one group of 8 cores."""
+    def _head_group(self, cores, proj, kind, mode_rows, tau, state, positions, rows=None):
+        """kind: q / k / v. Returns (kernels, cbs) for one group of 8 cores. rows = (t, RowsOut): token t of a
+        multi-token verify pass (local layers): q into batch t * 8 + g of rows.q, k / v into row t of rows.pending
+        instead of the ring."""
         q = kind == "q"
         nitems, nlag = (GROUPS, 1) if q else (1, TAPS)
         dyn = int(self.dyn and not q)
@@ -169,6 +171,9 @@ class AttnPrep:
                 for i in range(GROUPS):
                     h = g * GROUPS + i
                     r += [h * HEAD_DIM // 32, mode_rows["q"], h]
+                    if rows is not None:
+                        w += [rows[1].q.buffer_address(), 0, 0, 0, (rows[0] * N_KV + g) * (HEAD_DIM // 32), i]
+                        continue
                     w += [self.q.buffer_address(), 0, 0, 0, 0, h]
                     if self.dyn:
                         w += [self.q_grp.buffer_address(), 0, 0, 0, g * (HEAD_DIM // 32), i]
@@ -180,6 +185,10 @@ class AttnPrep:
                     r += [self.kv0 + 2 * N_KV * HEAD_DIM + (0 if kind == "k" else N_KV * TAPS) + g * TAPS]
                 ring = state.k_ring if kind == "k" else state.v_ring
                 w = [g, ring.buffer_address(), WINDOW // 32, HEAD_DIM // 32, 0, positions.ring.buffer_address()]
+                if rows is not None:  # pending [2, 8, 32, 128]: K rows at batch g, V rows at batch 8 + g, row t
+                    t, ro = rows
+                    w = [g + (0 if kind == "k" else N_KV), ro.pending.buffer_address(), 1, HEAD_DIM // 32, 0]
+                    w += [ro.slot[t].buffer_address()]
                 if self.dyn:
                     full = state.kv_full
                     seq = full.padded_shape[-2] // 32
@@ -235,7 +244,7 @@ class AttnPrep:
         ]
         return kernels, cbs
 
-    def _bias_group(self, proj, positions, tau):
+    def _bias_group(self, proj, positions, tau, rows=None):
         cores = self.b_cores
         has_tau = int(self.dyn)
         named = dict(nj=NJ, has_tau=has_tau, rel_tile=6144 // 32, proj_dram=_is_dram(proj))
@@ -254,11 +263,16 @@ class AttnPrep:
                 ]
             )
             blk = self.sink_blk.buffer_address() if self.dyn else 0
+            if rows is not None:  # mask / sink of token t at batch t * 8 + g of rows.mask / rows.sink
+                t, ro = rows
+                w_rt.append([ro.mask.buffer_address(), i * NJ, proj.buffer_address(), ro.sink.buffer_address(), 0, t])
+                continue
             w_rt.append([self.mask.buffer_address(), i * NJ, proj.buffer_address(), self.sink.buffer_address(), blk])
         crs = _crs(cores)
         sink_core, rest = cores[:1], cores[1:]
         w_named = dict(nj=NJ, sink_tile=6528 // 32, sink_blk=int(self.dyn), neg=f32_bits(NEG), grp=int(self.dyn),
                        proj_dram=_is_dram(proj))  # fmt: skip
+        w_named["rows"] = int(rows is not None)
         kernels = [
             _kernel("attn_bias_reader.cpp", cores, named, r_rt, ttnn.ReaderConfigDescriptor()),
             _kernel(
@@ -292,20 +306,23 @@ class AttnPrep:
         ]
         return kernels, cbs
 
-    def __call__(self, proj, positions, mode_rows, state):
+    def __call__(self, proj, positions, mode_rows, state, rows=None):
         """proj: [1, 1, 32, N] bf16 TILE DRAM (conv window projection). Writes this step's k / v rows into the
         state's caches (ring slot, and the far cache at pos on global layers). Returns (q, mask, sink): local
         layers the sdpa mask [1, 1, 24, 1024] and sink tile [24, 32]; global layers AttnNear's inputs (with q_grp:
-        mask in kv-group layout [1, 8, 32, 1024], sink block [1, 8, 3, 32] fp32)."""
+        mask in kv-group layout [1, 8, 32, 1024], sink block [1, 8, 3, 32] fp32).
+        rows = (t, RowsOut), local layers: token t of a multi-token verify pass; writes rows.q / mask / sink at batch
+        t * 8 + g and its k / v rows into rows.pending (the ring is not written). Returns None."""
+        assert rows is None or not self.dyn, "rows: local layers only"
         F.check_row_input(proj, l1_ok=True)  # readers take proj_dram
         assert proj.dtype == ttnn.bfloat16
         tau = positions.tau
         kernels, cbs = [], []
         for cores, kind in ((self.q_cores, "q"), (self.k_cores, "k"), (self.v_cores, "v")):
-            k, c = self._head_group(cores, proj, kind, mode_rows, tau, state, positions)
+            k, c = self._head_group(cores, proj, kind, mode_rows, tau, state, positions, rows)
             kernels += k
             cbs += c
-        k, c = self._bias_group(proj, positions, tau)
+        k, c = self._bias_group(proj, positions, tau, rows)
         kernels += k
         cbs += c
         io = [proj, self.q_taps, self.kv_taps["k"], self.kv_taps["v"], self.scaler, tau, self.rel_scale, self.g]
@@ -314,7 +331,11 @@ class AttnPrep:
             [state.kv_full, self.sink_blk, self.q_grp, self.q_far] if self.dyn else []
         )
         io += [self.q]
+        if rows is not None:
+            io += rows[1].tensors(rows[0])
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
+        if rows is not None:
+            return None
         return self.q, self.mask, self.sink_blk if self.dyn else self.sink
 
 
@@ -330,7 +351,7 @@ class AttnOut:
         self.act = _shared_l1(device, "o_in", N_HEADS * HEAD_DIM, act_mem)
         self.cores = [ttnn.CoreCoord(i, 0) for i in range(N_KV)]  # act_mem grid: CoreGrid(x=8, y=1)
 
-    def __call__(self, attn, proj, merge=None):
+    def __call__(self, attn, proj, merge=None, row=None):
         """attn: [1, 1, 24, 128] bf16 TILE DRAM, or with merge = (o_near [1, 8, 3, 128] fp32, r [1, 8, 3, 1] fp32,
         far_valid [1, 1, 1, 1] fp32) the far partial [1, 1, 24, 160] or per kv group [1, 8, 3, 160] bf16. proj as
         AttnPrep. Returns self.act."""
@@ -340,6 +361,9 @@ class AttnOut:
         crs = _crs(self.cores)
         nh = N_HEADS // len(self.cores)
         rt = [[attn.buffer_address(), proj.buffer_address(), i * nh] for i in range(len(self.cores))]
+        if row is not None:  # multi-token verify, local: attn [1, 8R, 3, 128], token `row` -> act row `row`
+            assert merge is None and row < 16, row
+            rt = [a + [row] for a in rt]
         io = [attn, proj]
         if merge is not None:
             for t in merge:
@@ -356,7 +380,14 @@ class AttnOut:
             _kernel(
                 "attn_out_reader.cpp",
                 self.cores,
-                dict(nh=nh, gate_tile=self.GATE_COL // 32, merge=flag, far_grp=far_grp, proj_dram=_is_dram(proj)),
+                dict(
+                    nh=nh,
+                    gate_tile=self.GATE_COL // 32,
+                    merge=flag,
+                    far_grp=far_grp,
+                    proj_dram=_is_dram(proj),
+                    rows=int(row is not None),
+                ),
                 rt,
                 ttnn.ReaderConfigDescriptor(),
             ),
@@ -364,7 +395,7 @@ class AttnOut:
                 "attn_out_writer.cpp",
                 self.cores,
                 dict(nh=nh),
-                [[self.act.buffer_address()]] * len(self.cores),
+                [[self.act.buffer_address(), row or 0]] * len(self.cores),
                 ttnn.WriterConfigDescriptor(),
             ),
             _kernel(
@@ -521,3 +552,57 @@ class AttnNear:
         outs = [self.r, self.sink, self.out]
         ttnn.generic_op(parts + outs, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         return self.out, self.r, self.sink
+
+
+class RowsOut:
+    """Outputs of a multi-token verify pass (local layers, R <= 3 tokens), in the layout of sdpa_decode's pending-row
+    mode: q [1, 8R, 3, 128], mask [8R, 1, 3, 1024], sink [8R x 32, 32] (batch t * 8 + g = token t, kv group g), and
+    pending [2, 8, 32, 128] in the ring dtype (row t of batch g / 8 + g = token t's packed k / v row). slot[t]: the
+    int32 slot index t the kv writer puts token t's rows at."""
+
+    def __init__(self, device, R, ring_dtype):
+        assert 1 <= R <= 3, "pending-row sdpa: at most 3 tokens (8R batches x 4 cores)"
+        self.R = R
+
+        def zeros(shape, dt=ttnn.bfloat16):
+            return ttnn.from_torch(
+                torch.zeros(shape),
+                dtype=dt,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        self.q = zeros([1, N_KV * R, GROUPS, HEAD_DIM])
+        self.mask = zeros([N_KV * R, 1, GROUPS, WINDOW])
+        self.sink = zeros([N_KV * R * 32, 32])
+        self.pending = zeros([2, N_KV, 32, HEAD_DIM], ring_dtype)
+        self.slot = [
+            ttnn.from_torch(torch.tensor([t], dtype=torch.int32), dtype=ttnn.int32, device=device) for t in range(R)
+        ]
+
+    def tensors(self, t):
+        return [self.q, self.mask, self.sink, self.pending, self.slot[t]]
+
+
+class KvCommit:
+    """After a verify pass: write tokens 0 .. n - 1 of RowsOut.pending into the ring slots (pos0 + t) % 1024 (the rows
+    plain decode would have written), one program on 8 cores (one kv group each). kernels/kv_commit.cpp."""
+
+    def __init__(self, device):
+        self.cores = [ttnn.CoreCoord(i, 0) for i in range(N_KV)]
+
+    def __call__(self, rows, k_ring, v_ring, pos0, n):
+        """pos0: int32 device tensor [1] (position of token 0); n: accepted tokens (host int, 1 .. R)."""
+        assert k_ring.dtype == v_ring.dtype == rows.pending.dtype and 1 <= n <= rows.R
+        tb = 1088 if k_ring.dtype == ttnn.bfloat8_b else 2048
+        rt = [
+            [rows.pending.buffer_address(), k_ring.buffer_address(), v_ring.buffer_address(), pos0.buffer_address(), g]
+            for g in range(N_KV)
+        ]
+        named = dict(n=n, tile_bytes=tb, seq_tiles=WINDOW // 32, width=HEAD_DIM // 32)
+        kernels = [_kernel("kv_commit.cpp", self.cores, named, rt, ttnn.ReaderConfigDescriptor())]
+        cbs = [_stage(24, _crs(self.cores), 2 * tb * (HEAD_DIM // 32) + 2 * tb + 128)]
+        ttnn.generic_op(
+            [rows.pending, pos0, k_ring, v_ring], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[])
+        )

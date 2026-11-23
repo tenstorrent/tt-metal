@@ -6,6 +6,8 @@
 // has_sink: also the sdpa sink tile [24, 32] bf16, row h = sink logit h (projection row 0, 24 columns), and
 // with sink_blk (global layers) the sink logit block [1, 8, 3, 32] fp32 of the near softmax: col 0 = sink logit,
 // cols 1..31 = neg (rows 3..31 of each tile stay as allocated, zero).
+// rows (multi-token verify, token t = runtime arg 5): the mask in kv-group layout at batch t * 8 + g of
+// [8R, 1, 3, 1024], and the sdpa sink per batch: rows 0..2 of page t * 8 + g of [8R x 32, 32] (rest zero).
 #include "attn_io.hpp"
 
 constexpr bool proj_dram = get_named_compile_time_arg_val("proj_dram");  // projection output in DRAM (else L1)
@@ -17,6 +19,7 @@ void kernel_main() {
     constexpr uint32_t sink_blk = get_named_compile_time_arg_val("sink_blk");
     constexpr uint32_t neg = get_named_compile_time_arg_val("neg");  // fp32 bits
     constexpr uint32_t grp = get_named_compile_time_arg_val("grp");  // mask in kv-group layout (global layers)
+    constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
     constexpr uint32_t cb_mask = 21, cb_sink = 6, cb_blk = 7, cb_stage = 25;
 
     const uint32_t mask = get_arg_val<uint32_t>(0);
@@ -24,6 +27,7 @@ void kernel_main() {
     const uint32_t proj = get_arg_val<uint32_t>(2);
     const uint32_t sink = get_arg_val<uint32_t>(3);
     const uint32_t blk = get_arg_val<uint32_t>(4);
+    const uint32_t tok = rows ? get_arg_val<uint32_t>(5) : 0;  // rows: batch base tok * 8
 
     if constexpr (has_sink) {
         const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), attnio::ALIGN);
@@ -32,18 +36,32 @@ void kernel_main() {
         attnio::zero_l1(w, 2048);
         attnio::gather_row<proj_dram>(proj, 2048, 2, sink_tile, 1, 0, stage + 256, stage);  // barriers (zeros too)
         volatile tt_l1_ptr uint16_t* v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + 256);
-        for (uint32_t h = 0; h < 24; ++h) {
+        const InterleavedAddrGen<true> dst = {.bank_base_address = sink, .page_size = 2048};
+        // tile row r (r < 24) = sink logit h, broadcast over the 32 columns
+        auto fill_row = [&](uint32_t r, uint32_t h) {
             const uint32_t word = static_cast<uint32_t>(v[h]) * 0x10001u;
-            const uint32_t face = h < 16 ? 0 : 2;
+            const uint32_t face = r < 16 ? 0 : 2;
             volatile tt_l1_ptr uint32_t* row =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w + (face * 256 + (h & 15) * 16) * 2);
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w + (face * 256 + (r & 15) * 16) * 2);
             for (uint32_t k = 0; k < 8; ++k) {
                 row[k] = word;        // face (cols 0..15)
                 row[128 + k] = word;  // face + 1 (cols 16..31)
             }
+        };
+        if constexpr (rows) {  // one tile per kv group: rows 0..2 (rows 3..31 stay zero)
+            for (uint32_t g = 0; g < 8; ++g) {
+                for (uint32_t k = 0; k < 3; ++k) {
+                    fill_row(k, 3 * g + k);
+                }
+                noc_async_write(w, dst.get_noc_addr(tok * 8 + g), 2048);
+                noc_async_write_barrier();
+            }
+        } else {
+            for (uint32_t h = 0; h < 24; ++h) {
+                fill_row(h, h);
+            }
+            noc_async_write(w, dst.get_noc_addr(0), 2048);
         }
-        const InterleavedAddrGen<true> dst = {.bank_base_address = sink, .page_size = 2048};
-        noc_async_write(w, dst.get_noc_addr(0), 2048);
         if constexpr (sink_blk) {
             cb_reserve_back(cb_blk, 1);
             const uint32_t b = get_write_ptr(cb_blk);  // 24 rows x (face 0 chunk, face 1 chunk), 64 B each
@@ -65,13 +83,13 @@ void kernel_main() {
     for (uint32_t j = 0; j < nj; ++j) {
         cb_wait_front(cb_mask, 1);
         const uint32_t src = get_read_ptr(cb_mask);
-        if constexpr (grp) {  // [1, 8, 32, 1024]: head h -> row h % 3 of kv group h / 3 (other rows stay zero)
+        if constexpr (grp || rows) {  // [1, 8, 32, 1024]: head h -> row h % 3 of kv group h / 3 (other rows zero)
             for (uint32_t h = 0; h < 24; ++h) {
                 const uint32_t g = h / 3, k = h % 3, f0 = (h >> 4) * 2, r = h & 15;
                 for (uint32_t f = 0; f < 2; ++f) {
                     noc_async_write(
                         src + ((f0 + f) * 256 + r * 16) * 2,
-                        dst.get_noc_addr(g * 32 + j0 + j, (f * 256 + k * 16) * 2),
+                        dst.get_noc_addr((tok * 8 + g) * 32 + j0 + j, (f * 256 + k * 16) * 2),
                         32);
                 }
             }

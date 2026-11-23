@@ -53,7 +53,7 @@ from models.demos.inkling2_mini.tt.attention import (
     _DramShardedLinear,
 )
 from models.demos.inkling2_mini.tt.fused import common as F
-from models.demos.inkling2_mini.tt.fused.attn import AttnNear, AttnOut, AttnPrep, AttnWindow
+from models.demos.inkling2_mini.tt.fused.attn import AttnNear, AttnOut, AttnPrep, AttnWindow, KvCommit, RowsOut
 from models.demos.inkling2_mini.tt.fused.attn_wo import AttnWo
 
 V_WIDTH = 160  # v(128) + mass column block
@@ -128,6 +128,9 @@ class FastAttentionState(AttentionState):
 
     def __init__(self, device, is_global, max_ctx, cache_dtype):
         super().__init__(device, False, max_ctx, cache_dtype)  # ring + conv histories
+        # the rings as [8, 1, 1024, 128] (same buffers): sdpa with the kv groups as the batch (multi-token verify)
+        self.k_grp, self.v_grp = (ttnn.reshape(r, [N_KV, 1, WINDOW, HEAD_DIM]) for r in (self.k_ring, self.v_ring))
+        assert self.k_grp.buffer_address() == self.k_ring.buffer_address()
         self.kv_full = self.kv_grp = None
         if is_global:
             self.kv_full = ttnn.zeros(
@@ -198,6 +201,9 @@ class Inkling2AttentionFast(Inkling2Attention):
         lg = ttnn.CoreCoord(*LOCAL_GRID) if LOCAL_GRID is not None else grid
         self.local_cfg = sdpa_cfg(LOCAL_CHUNK, LOCAL_CORES_PER_HEAD, g=lg)
         self.local_cores = {(x, y) for x in range(lg.x) for y in range(lg.y)}
+        # multi-token verify (decode_rows): sdpa_decode with pending rows, (token, kv group) batches x 4 cores
+        self.rows_cfg = sdpa_cfg(LOCAL_CHUNK, LOCAL_CORES_PER_HEAD, exact_exp_half_tile=True)
+        self.commit = KvCommit(self.device) if not self.is_global else None
         # k and v ring writes in one paged_fused_update_cache program: k's row on core (0, 0), v's on (0, 1)
         self.kv_shard_v = ttnn.create_sharded_memory_config(
             shape=(32, HEAD_DIM),
@@ -409,6 +415,51 @@ class Inkling2AttentionFast(Inkling2Attention):
             **({"extra_kernels": extra} if extra is not None else {}),  # builds without R9 lack the argument
         )
         return self._out_proj(self.out(attn, proj), post)
+
+    def rows_out(self, R, state):
+        """Scratch of a multi-token verify pass (decode_rows) for R tokens, R <= 3."""
+        return RowsOut(self.device, R, state.k_ring.dtype)
+
+    def decode_rows(self, xs, state, positions, rows):
+        """Multi-token verify, local layers: R = len(xs) <= 3 tokens at consecutive positions; xs[t] the token's input
+        row (xq = xk = xv), positions[t] its prepared DecodePositionsFast, rows a rows_out(R). Each token's window /
+        projection / prep runs in order (its k / v rows go to rows.pending, the ring is not written), then one
+        sdpa_decode over the ring with the pending rows, then each token's output gate into o-projection input row t.
+        Returns that input (self.out.act, rows 0 .. R-1): row t is bit-equal to row 0 after plain decode of token t.
+        Call commit_rows after the accept to write the accepted rows into the ring.
+        shortcut: local layers only; global layers (near / far) still need the per-token path."""
+        assert not self.is_global and self.FUSED and len(xs) == rows.R
+        projs = []
+        for t, (x, pos) in enumerate(zip(xs, positions)):
+            if self.window is None:
+                proj, mode = self._window(state, x, x, x)
+            else:
+                mode = "single"
+                proj = self.w_all(self.window(state.x_hist, [x]), ttnn.bfloat16, self.mm_cfg)
+            r = ROWS[mode]
+            self.prep(proj, pos, {"q": 0, "k": r["k"], "v": r["v"]}, state, rows=(t, rows))
+            projs.append(proj)
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            rows.q,
+            state.k_grp,
+            state.v_grp,
+            is_causal=False,
+            attn_mask=rows.mask,
+            attention_sink=rows.sink,
+            scale=1.0,
+            program_config=self.rows_cfg,
+            compute_kernel_config=self.hifi4,
+            pending_kv=rows.pending,
+            pending_pos=positions[0].pos,
+        )
+        for t, proj in enumerate(projs):
+            self.out(attn, proj, row=t)
+        return self.out.act
+
+    def commit_rows(self, state, rows, positions0, n):
+        """After the accept of a decode_rows pass: tokens 0 .. n - 1's k / v rows into the ring, as plain decode would
+        have written them. positions0: token 0's DecodePositionsFast."""
+        self.commit(rows, state.k_ring, state.v_ring, positions0.pos, n)
 
     @staticmethod
     def _post(a, post):

@@ -27,6 +27,9 @@ void kernel_main() {
     constexpr uint32_t gate_tile = get_named_compile_time_arg_val("gate_tile");  // projection tile of gate col 0
     constexpr uint32_t merge = get_named_compile_time_arg_val("merge");
     constexpr uint32_t far_grp = get_named_compile_time_arg_val("far_grp");
+    // rows (multi-token verify, local layers): the attention output is [1, 8R, 3, 128], token t of runtime arg 3 at
+    // batch t * 8 + g (rows 0..2 of tile row t * 8 + g)
+    constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
     constexpr uint32_t cb_a = 0, cb_g = 1, cb_m = 2, cb_r = 3, cb_o = 4, cb_stage = 24;
 
     const uint32_t attn = get_arg_val<uint32_t>(0);
@@ -34,7 +37,8 @@ void kernel_main() {
     const uint32_t h0 = get_arg_val<uint32_t>(2);
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), attnio::ALIGN);
     // attention output rows: r0 + k of the tile row starting at page t0
-    const uint32_t t0 = far_grp ? (h0 / nh) * 5 : 0, r0 = far_grp ? 0 : h0;
+    const uint32_t t0 = far_grp ? (h0 / nh) * 5 : (rows ? (get_arg_val<uint32_t>(3) * 8 + h0 / nh) * 4 : 0);
+    const uint32_t r0 = (far_grp || rows) ? 0 : h0;
 
     // stage: [0, 128 nh*4) gate blocks; attn rows k at st_a + 512 k; merge: valid at st_v, o_near rows at
     // st_o + 512 k, r blocks at st_r + 64 k, a blocks at st_m + 64 k
