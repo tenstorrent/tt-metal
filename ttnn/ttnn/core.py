@@ -127,7 +127,7 @@ def create_sharded_memory_config(
         Currently sharding only supports L1 tensors.
 
     Example:
-        >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
+        >>> memory_config = ttnn.create_sharded_memory_config((1, 1, 64, 64), ttnn.CoreGrid(y=2, x=2), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
 
     """
 
@@ -240,7 +240,7 @@ def create_sharded_memory_config_(
     tile_layout: bool = False,
 ) -> MemoryConfig:
     """
-    create_sharded_memory_config(shape: Union[ttnn.Shape, Tuple[int, ...], List[int]], core_grid: Union[ttnn.CoreGrid, ttnn.CoreRangeSet], strategy: ShardStrategy, orientation: Optional[ShardOrientation] = None, use_height_and_width_as_shard_shape: bool = False) -> MemoryConfig
+    create_sharded_memory_config_(shape: Union[ttnn.Shape, Tuple[int, ...], List[int]], core_grid: Union[ttnn.CoreGrid, ttnn.CoreRangeSet], strategy: Union[ShardStrategy, TensorMemoryLayout], orientation: ShardOrientation, use_height_and_width_as_shard_shape: bool = False, tile_layout: bool = False) -> MemoryConfig
 
     Creates a MemoryConfig object with a sharding spec, required for sharded ops.
     Currently sharding only supports L1 tensors.
@@ -249,13 +249,13 @@ def create_sharded_memory_config_(
         * :attr:`shape`: the shape of the tensor
         * :attr:`core_grid`: the core_grid on which to distribute the sharded tensor on (writes to the cores L1s)
         * :attr:`strategy`: the sharding strategy of either height, width or block
-        * :attr:`orientation`: the order in which to traverse the cores when reading/writing shards. Defaults to ttnn.ShardOrientation.ROW_MAJOR
+        * :attr:`orientation`: the order in which to traverse the cores when reading/writing shards. Required: ttnn.ShardOrientation.ROW_MAJOR or ttnn.ShardOrientation.COL_MAJOR
         * :attr:`use_height_and_width_as_shard_shape`: if True, the height and width of the tensor will be used as the shard shape. Defaults to False. If is False, the shard shape will be calculated based on the core_grid and the tensor shape where tensor shape is seen as [math.prod(dims), width]
         * :attr:`tile_layout`: if set to True, shard height will be set to multiple of 32. Last shard may be height padded.
 
 
     Example::
-        >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
+        >>> memory_config = ttnn.create_sharded_memory_config_((1, 1, 64, 64), ttnn.CoreGrid(y=2, x=2), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
     """
 
     if not isinstance(shape, (list, tuple, ttnn.Shape)):
