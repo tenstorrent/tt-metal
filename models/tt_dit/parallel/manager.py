@@ -11,6 +11,17 @@ import ttnn
 from ..utils.tensor import local_device_to_torch
 
 
+def _deallocate_entry(entry):
+    # A flat [ping, pong] pair, or [[intermediate, output], ...] pairs where either half may be None.
+    if entry is None:
+        return
+    if isinstance(entry, (list, tuple)):
+        for item in entry:
+            _deallocate_entry(item)
+    else:
+        ttnn.deallocate(entry)
+
+
 class CCLManager:
     """
     Manages parallelization of DiT model.
@@ -37,6 +48,7 @@ class CCLManager:
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
+        self._used_ping_pong_keys = set()
 
         # Ping-pong pool of persistent stats buffers for the fused distributed-norm op,
         # keyed by the caller's shape/config key. See get_fused_norm_stats_buffer.
@@ -223,7 +235,7 @@ class CCLManager:
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 
-        return self._ping_pong_buffer_cache[cache_key][current_idx]
+        return self._ping_pong_entry(cache_key)[current_idx]
 
     def get_ag_ping_pong_buffer(
         self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True, capacity=None, rows=None
@@ -291,7 +303,7 @@ class CCLManager:
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 
-        return self._ping_pong_buffer_cache[cache_key][current_idx]
+        return self._ping_pong_entry(cache_key)[current_idx]
 
     @contextmanager
     def transient_ping_pong_buffers(self):
@@ -305,24 +317,31 @@ class CCLManager:
         a buffer a live capture references corrupts its replays.
         """
 
-        # The cache is shared by several getters whose entries differ in nesting: a flat
-        # [ping, pong] pair, or [[intermediate, output], ...] pairs where either half may be None.
-        def deallocate_entry(entry):
-            if entry is None:
-                return
-            if isinstance(entry, (list, tuple)):
-                for item in entry:
-                    deallocate_entry(item)
-            else:
-                ttnn.deallocate(entry)
-
         before = set(self._ping_pong_buffer_cache)
         try:
             yield
         finally:
-            for key in [k for k in self._ping_pong_buffer_cache if k not in before]:
-                deallocate_entry(self._ping_pong_buffer_cache.pop(key))
-                self._ping_pong_buffer_indices.pop(key, None)
+            self.free_ping_pong_buffers([k for k in self._ping_pong_buffer_cache if k not in before])
+
+    def _ping_pong_entry(self, key):
+        self._used_ping_pong_keys.add(key)
+        return self._ping_pong_buffer_cache[key]
+
+    def ping_pong_keys(self) -> set:
+        return set(self._ping_pong_buffer_cache)
+
+    def take_used_ping_pong_keys(self) -> set:
+        """The keys of the ping-pong pairs the getters returned since the last call."""
+        used, self._used_ping_pong_keys = self._used_ping_pong_keys, set()
+        return used
+
+    def free_ping_pong_buffers(self, keys):
+        """Free the ping-pong pairs of `keys` (one already freed is skipped); the next getter call for one allocates it
+        again. Untraced only."""
+        for key in keys:
+            _deallocate_entry(self._ping_pong_buffer_cache.pop(key, None))
+            self._ping_pong_buffer_indices.pop(key, None)
+            self._used_ping_pong_keys.discard(key)
 
     def get_rs_ping_pong_semaphore(self, mesh_axis):
         """
@@ -595,7 +614,7 @@ class CCLManager:
 
         cur = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - cur
-        return self._ping_pong_buffer_cache[cache_key][cur]
+        return self._ping_pong_entry(cache_key)[cur]
 
     def neighbor_pad_halo_only(
         self,
@@ -781,7 +800,7 @@ class CCLManager:
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 
-        return self._ping_pong_buffer_cache[cache_key][current_idx]
+        return self._ping_pong_entry(cache_key)[current_idx]
 
     def neighbor_pad_persistent_buffer(
         self,

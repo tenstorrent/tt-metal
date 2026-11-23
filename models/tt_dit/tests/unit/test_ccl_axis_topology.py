@@ -90,6 +90,7 @@ def test_reduce_scatter_intermediate_holds_two_slices_on_a_line_axis(
 ) -> None:
     manager = _manager(mesh_shape, ttnn.Topology.Ring, axis_topologies)
     manager._ping_pong_buffer_cache, manager._ping_pong_buffer_indices = {}, {}
+    manager._used_ping_pong_keys = set()
     shapes = []
     monkeypatch.setattr(ttnn, "allocate_tensor_on_device", lambda shape, *args: shapes.append(list(shape)))
     manager.get_rs_ping_pong_buffer([1, 1, 64, 128], 3, mesh_axis, device_synchronize=False)
