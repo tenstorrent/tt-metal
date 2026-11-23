@@ -742,6 +742,13 @@ def hostmem_env(log: Path, cmds: list[str], f=None) -> dict:
     return env
 
 
+def cpu_task_env(task: dict) -> dict:
+    """F301: a task marked ``device: false`` opens no device, so the F284 reserve (MemAvailable minus a model's host
+    load must leave 40 GiB; it guards device opens) is off for its gate; the FIX.30 floor check stays. Without this a
+    CPU-only design test was refused on a node with leaked driver memory (DeepSeek-V4.1 PS.1, 2026-11-23)."""
+    return {hostmem.RESERVE_ENV: "0"} if task.get("device") is False else {}
+
+
 def under_test_paths(task: dict, tasks: dict | None = None) -> list[str]:
     """F169: the paths the task may change, and for a fix job those of the gate tasks its units run (their code)."""
     tasks = tasks or {}
@@ -1419,6 +1426,7 @@ def run_gate(
         ledger.update(tid, status="RUNNING", started=now())
     log = log_dir(spec, ledger) / (f"{tid}.log" if record else f"{tid}.check.log")
     env = gate_env(spec, ledger, tid)
+    env.update(cpu_task_env(task))  # F301
     env.update(extra_env or {})
     env[M.RESULTS_ENV] = str(results_dir)  # F172
     cmd = gate_command(task, tasks)
