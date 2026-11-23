@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // HAL port of tt_llk_blackhole/llk_lib/llk_unpack_common.h (+ the unpack helpers of common/inc/cunpack_common.h
-// reached by eltwise_binary_test). Same instruction sequence and access kinds as production, expressed through the HAL.
+// it calls). Same instruction sequence and access kinds as production, expressed through the HAL.
 
 #pragma once
 
@@ -24,6 +24,35 @@
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+// If `x` is the result of loading from memory, placing `consume_discard(x)` somewhere
+// will ensure that code after `consume_discard(x)` doesn't start until the load is complete.
+#define consume_discard(x) __asm volatile("andi x0, %0, 0" : : "r"((x)) : "memory")
+
+// Reconfig behaviour for dim and stride
+enum class p_dim_stride_target
+{
+    IGNORE,        // Do not modify dim/stride
+    FACE_ROW_MAJOR // Set dim/stride for unpacking face in row major format
+};
+
+/**
+ * @brief Store a value to memory then read it back, fencing subsequent code on the store.
+ *
+ * The dependent load cannot retire until the store completes, so any instruction consuming the
+ * returned value observes the store as finished. Used to serialize against pending memory writes.
+ *
+ * @param addr: Memory location to store to and load back from.
+ * @param to_store: Value written to addr.
+ * @return The value read back from addr after the store.
+ */
+inline __attribute__((always_inline)) std::uint32_t store_then_load(volatile std::uint32_t *addr, std::uint32_t to_store)
+{
+    // RISC-only memory fence, no Tensix instruction or CFG access: kept as in production.
+    std::uint32_t result;
+    __asm volatile("sw %2, %1; lw %0, %1" : "=r"(result) : "m"(*addr), "r"(to_store));
+    return result;
+}
 
 namespace hal_port
 {
@@ -379,6 +408,280 @@ inline void _llk_unpack_configure_stoch_rnd_()
 }
 
 /**
+ * @brief Reprogram only the SrcA unpacker tile size and face geometry, leaving the data format untouched.
+ *
+ * Updates the SrcA tile-size GPR and programs the per-context X-dim (face width) and Z-dim (num_faces).
+ * This is the shape half of @ref _llk_unpack_reconfig_data_format_srca_impl_, split out so a caller that
+ * changes only the tile shape (not the format) can reprogram it without the THCON format writes or the
+ * int8/unsigned RMW. The ch1 Z/Y strides are format-derived and are NOT touched here (they are owned by the
+ * format reconfig); a shape-only change does not alter them.
+ *
+ * @tparam issue_stall: Issue the STALL_CFG/UNPACK0 drain before the config writes. Leave true for standalone
+ *                      callers; @ref _llk_unpack_reconfig_data_format_srca_impl_ passes false because it has
+ *                      already stalled for its format writes.
+ * @param tile_size: New tile size (bytes) of operand A, stored to the tile-size GPR (tracks the shape).
+ * @param unpack_face_r_dim: Rows per face.
+ * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ * @note A face_r_dim change also needs the op init re-run: the unpacker ADC X-end is programmed by the op
+ *       init (config_unpacker_x_end / SETADCXX), not here. A num_faces-only change is fully handled here.
+ */
+template <bool issue_stall = true>
+inline void _llk_unpack_reconfig_tile_shape_srca_(
+    const std::uint32_t tile_size, const std::uint32_t unpack_face_r_dim = FACE_R_DIM, const std::uint32_t unpack_num_faces = 4)
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+    LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
+
+    if constexpr (issue_stall)
+    {
+        sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::Unpacker0Idle>();
+    }
+
+    // Tile size (bytes) tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcA L1 base.
+    hal::scalar::set_low(hal::gpr<p_gpr_unpack::TILE_SIZE_A>(), LOWER_HALFWORD(tile_size));
+
+    // Program unpacker0 per context x_dim (face size in l1)
+    // Overrides value set by tile descriptor when thread override bit is set in unpack instruction
+    constexpr auto R5 = cfg::Thcon[cfg::Reg5];
+    static_assert(R5.Tile_x_dim_cntx0.addr32(cfg::Sec::S0) == THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, "Tile_x_dim word");
+    const std::uint32_t face_dim = unpack_face_r_dim * FACE_C_DIM;
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<R5.Tile_x_dim_cntx0, cfg::Sec::S0>(face_dim), cfg::set<R5.Tile_x_dim_cntx1, cfg::Sec::S0>(face_dim));
+
+    // Set Z-dim to number of faces
+    constexpr auto TileDsc = cfg::Thcon[cfg::Reg0].TileDescriptor;
+    static_assert(TileDsc.ZDim.addr32(cfg::Sec::S0) == THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, "Z-dim word");
+    cfg::write<cfg::Access::TensixCfgUnit, TileDsc.ZDim, cfg::Sec::S0>(unpack_num_faces);
+}
+
+/**
+ * @brief Reprogram only the SrcB unpacker tile size and face geometry, leaving the data format untouched.
+ *
+ * Updates the SrcB tile-size GPR and programs the tile-descriptor X-dim (face width) and Z-dim (num_faces).
+ * Shape half of @ref _llk_unpack_reconfig_data_format_srcb_impl_, split out so a caller that changes only the
+ * tile shape can reprogram it without the THCON format writes or the int8/unsigned RMW. The ch1 Z-stride is
+ * format-derived and is NOT touched here (owned by the format reconfig).
+ *
+ * @tparam issue_stall: Issue the STALL_CFG/UNPACK1 drain before the config writes. Leave true for standalone
+ *                      callers; @ref _llk_unpack_reconfig_data_format_srcb_impl_ passes false because it has
+ *                      already stalled for its format writes.
+ * @param tile_size: New tile size (bytes) of operand B, stored to the tile-size GPR (tracks the shape).
+ * @param unpack_face_r_dim: Rows per face.
+ * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ * @note See @ref _llk_unpack_reconfig_tile_shape_srca_: a face_r_dim change also needs the op init re-run.
+ */
+template <bool issue_stall = true>
+inline void _llk_unpack_reconfig_tile_shape_srcb_(
+    const std::uint32_t tile_size, const std::uint32_t unpack_face_r_dim = FACE_R_DIM, const std::uint32_t unpack_num_faces = 4)
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+    LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
+
+    if constexpr (issue_stall)
+    {
+        sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::Unpacker1Idle>();
+    }
+
+    // Tile size (bytes) tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcB L1 base.
+    hal::scalar::set_low(hal::gpr<p_gpr_unpack::TILE_SIZE_B>(), LOWER_HALFWORD(tile_size));
+
+    constexpr auto TileDsc = cfg::Thcon[cfg::Reg0].TileDescriptor;
+    static_assert(TileDsc.XDim.addr32(cfg::Sec::S1) == THCON_SEC1_REG0_TileDescriptor_ADDR32, "SrcB X-dim word");
+
+    // Set X-dim to face_r_dim * FACE_C_DIM
+    cfg::write<cfg::Access::TensixCfgUnit, TileDsc.XDim, cfg::Sec::S1>(unpack_face_r_dim * FACE_C_DIM);
+
+    // Set Z-dim to number of faces
+    cfg::write<cfg::Access::TensixCfgUnit, TileDsc.ZDim, cfg::Sec::S1>(unpack_num_faces);
+}
+
+/**
+ * @brief Reconfigure the operand A (SrcA) data format at runtime.
+ *
+ * Updates the SrcA tile-descriptor source format, FP8 exponent mode, destination format and
+ * tile-size GPR; optionally reprograms dim/stride registers for face-row-major unpacking.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
+ * @tparam dim_stride_target: Whether to reprogram dim/stride, values = <IGNORE/FACE_ROW_MAJOR>
+ * @tparam skip_int8: Skip re-deriving the SrcA signedness bit from the new format. Leave false (the default)
+ *                    unless the caller guarantees the reconfig never crosses an Int8/UInt8/Int32 boundary and
+ *                    wants to avoid the extra RMW; skipping it can leave a stale SrcAUnsigned bit (tt-metal#34499).
+ * @param unpack_src_format: New source data format of operand A in L1.
+ * @param unpack_dst_format: New destination data format operand A is converted to.
+ * @param tile_size: New tile size of operand A stored to the tile-size GPR.
+ * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
+ * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ * @note The SrcA-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcAUnsigned), and the math-side INT8 math-enable in
+ *       @ref _llk_math_reconfig_data_format_srca_, are re-derived from the new format by default, so a reconfig
+ *       that transitions to OR from an 8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float) is handled
+ *       automatically. Set skip_int8 = true only when the caller guarantees no such boundary is crossed;
+ *       skipping leaves the previous unsigned/INT8 state, which the next op would then misinterpret.
+ */
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
+inline void _llk_unpack_reconfig_data_format_srca_impl_(
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t unpack_face_r_dim = FACE_R_DIM,
+    const std::uint32_t unpack_num_faces  = 4)
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+    LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
+
+    LLK_ASSERT(
+        is_unpacker_format_conversion_supported_fp32_acc(
+            static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), is_fp32_dest_acc_en),
+        "Unsupported unpacker to register conversion.");
+
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::Unpacker0Idle>();
+    if constexpr (!skip_int8)
+    {
+        // Always re-derive SrcAUnsigned from the new format so a reconfig cannot leave a stale signedness bit
+        // (tt-metal#34499). For non-int8 formats this simply writes 0, which is exactly what a reconfig away
+        // from UInt8 needs. FP32 dest is required only when the new register (dst) format drives int8/int32 math,
+        // so key the assertion on unpack_dst_format (matching math-side reconfig), not the L1 source: a supported
+        // dequant like Int8->Float16_b needs no FP32 dest.
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || !is_int8_or_int32_format(unpack_dst_format),
+            "Reconfiguring unpack to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::AluFormatSpecReg0::SrcAUnsigned, cfg::Sec::S0>(
+            (unpack_src_format == to_underlying(DataFormat::UInt8)) ? 1 : 0);
+    }
+
+    // The 4-bit format fields take the format's low 4 bits: production RMWs the unmasked format under the same
+    // byte mask (the RMWCIB mask drops the upper bits); the HAL asserts the value fits the field, so mask it here.
+    constexpr auto TileDsc = cfg::Thcon[cfg::Reg0].TileDescriptor;
+    cfg::write<cfg::Access::TensixCfgUnit, TileDsc.InDataFormat, cfg::Sec::S0>(masked_data_format(unpack_src_format));
+
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg1].Unp_LF8_4b_exp, cfg::Sec::S0>(
+        ((unpack_src_format & 0x1F) == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) ? 1 : 0);
+
+    static_assert(cfg::Thcon[cfg::Reg2].Out_data_format.addr32(cfg::Sec::S0) == THCON_SEC0_REG2_Out_data_format_ADDR32, "Out_data_format word");
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Out_data_format, cfg::Sec::S0>(masked_data_format(unpack_dst_format));
+    hal::scalar::set_low(hal::gpr<p_gpr_unpack::TILE_SIZE_A>(), LOWER_HALFWORD(tile_size)); // update gpr which holds tile size A
+
+    // The ch1 (register-side) Z/Y strides are format-derived (datum size), so re-commit them on EVERY format
+    // change, independent of dim_stride_target. They drive partial-face unpack addressing (e.g. partial-face
+    // matmul, which reads them without setting them), so leaving them stale across a datum-size change (e.g.
+    // fp16 -> fp32) mislands faces (tt-llk#1161 follow-up). Per-op brackets (unpack-to-dest, bcastA_B) restore
+    // to this same canonical baseline, so re-committing it here is what keeps those restores correct.
+    constexpr auto Unp0Ch1 = cfg::Unpacker[0].AddrCtrl[cfg::UnpackerReg::Reg1];
+    static_assert(Unp0Ch1.Zstride.addr32(cfg::Sec::S0) == UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32, "Unp0 ch1 Z-stride word");
+    cfg::write<cfg::Access::TensixCfgUnit, Unp0Ch1.Zstride, cfg::Sec::S0>(canonical_unpA_z_stride(unpack_dst_format));
+    cfg::write<cfg::Access::TensixCfgUnit, Unp0Ch1.Ystride, cfg::Sec::S0>(canonical_unpA_y_stride(unpack_dst_format));
+
+    if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
+    {
+        // Reprogram tile size + face geometry. issue_stall=false: the STALL_CFG/UNPACK0 above already drained.
+        // (tile_size is re-written here; it is the same value stored just above -- a harmless duplicate.)
+        _llk_unpack_reconfig_tile_shape_srca_<false /*issue_stall*/>(tile_size, unpack_face_r_dim, unpack_num_faces);
+    }
+}
+
+/**
+ * @brief Reconfigure the operand B (SrcB) data format at runtime.
+ *
+ * Updates the SrcB tile-descriptor source format, FP8 exponent mode, destination format and
+ * tile-size GPR; optionally reprograms dim/stride registers for face-row-major unpacking.
+ *
+ * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
+ * @tparam dim_stride_target: Whether to reprogram dim/stride, values = <IGNORE/FACE_ROW_MAJOR>
+ * @tparam skip_int8: Skip re-deriving the SrcB signedness bit from the new format. Leave false (the default)
+ *                    unless the caller guarantees the reconfig never crosses an Int8/UInt8/Int32 boundary and
+ *                    wants to avoid the extra RMW; skipping it can leave a stale SrcBUnsigned bit (tt-metal#34499).
+ * @param unpack_src_format: New source data format of operand B in L1.
+ * @param unpack_dst_format: New destination data format operand B is converted to.
+ * @param tile_size: New tile size of operand B stored to the tile-size GPR.
+ * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
+ * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
+ * @note The SrcB-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcBUnsigned), and the math-side INT8 math-enable in
+ *       @ref _llk_math_reconfig_data_format_srcb_, are re-derived from the new format by default, so a reconfig
+ *       that transitions to OR from an 8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float) is handled
+ *       automatically. Set skip_int8 = true only when the caller guarantees no such boundary is crossed;
+ *       skipping leaves the previous unsigned/INT8 state, which the next op would then misinterpret.
+ */
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
+inline void _llk_unpack_reconfig_data_format_srcb_impl_(
+    const std::uint32_t unpack_src_format,
+    const std::uint32_t unpack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t unpack_face_r_dim = FACE_R_DIM,
+    const std::uint32_t unpack_num_faces  = 4)
+{
+    namespace cfg  = hal::cfg;
+    namespace sync = hal::sync;
+    LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
+
+    LLK_ASSERT(
+        is_unpacker_format_conversion_supported_fp32_acc(
+            static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), is_fp32_dest_acc_en),
+        "Unsupported unpacker to register conversion.");
+
+    sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::Unpacker1Idle>();
+    if constexpr (!skip_int8)
+    {
+        // Always re-derive SrcBUnsigned from the new format so a reconfig cannot leave a stale signedness bit
+        // (tt-metal#34499). For non-int8 formats this simply writes 0, which is exactly what a reconfig away
+        // from UInt8 needs. FP32 dest is required only when the new register (dst) format drives int8/int32 math,
+        // so key the assertion on unpack_dst_format (matching math-side reconfig), not the L1 source: a supported
+        // dequant like Int8->Float16_b needs no FP32 dest.
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || !is_int8_or_int32_format(unpack_dst_format),
+            "Reconfiguring unpack to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::AluFormatSpecReg0::SrcBUnsigned, cfg::Sec::S0>(
+            (unpack_src_format == to_underlying(DataFormat::UInt8)) ? 1 : 0);
+    }
+
+    // 4-bit format fields: see the srcA impl for the masking.
+    constexpr auto TileDsc = cfg::Thcon[cfg::Reg0].TileDescriptor;
+    static_assert(TileDsc.InDataFormat.addr32(cfg::Sec::S1) == THCON_SEC1_REG0_TileDescriptor_ADDR32, "SrcB tile descriptor word");
+    cfg::write<cfg::Access::TensixCfgUnit, TileDsc.InDataFormat, cfg::Sec::S1>(masked_data_format(unpack_src_format));
+
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg1].Unp_LF8_4b_exp, cfg::Sec::S1>(
+        ((unpack_src_format & 0x1F) == static_cast<std::uint32_t>(DataFormat::Fp8_e4m3)) ? 1 : 0);
+
+    static_assert(cfg::Thcon[cfg::Reg2].Out_data_format.addr32(cfg::Sec::S1) == THCON_SEC1_REG2_Out_data_format_ADDR32, "Out_data_format word");
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Out_data_format, cfg::Sec::S1>(masked_data_format(unpack_dst_format));
+    hal::scalar::set_low(hal::gpr<p_gpr_unpack::TILE_SIZE_B>(), LOWER_HALFWORD(tile_size)); // update gpr which holds tile size B
+
+    // Re-commit the format-derived srcB ch1 Z-stride on every format change (see the srcA impl for why).
+    constexpr auto Unp1Ch1 = cfg::Unpacker[1].AddrCtrl[cfg::UnpackerReg::Reg1];
+    static_assert(Unp1Ch1.Zstride.addr32(cfg::Sec::S0) == UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32, "Unp1 ch1 Z-stride word");
+    cfg::write<cfg::Access::TensixCfgUnit, Unp1Ch1.Zstride, cfg::Sec::S0>(datum_size_in_bytes(unpack_dst_format) * FACE_C_DIM * FACE_R_DIM);
+
+    if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
+    {
+        // Reprogram tile size + face geometry. issue_stall=false: the STALL_CFG/UNPACK1 above already drained.
+        _llk_unpack_reconfig_tile_shape_srcb_<false /*issue_stall*/>(tile_size, unpack_face_r_dim, unpack_num_faces);
+    }
+}
+
+/**
+ * @brief Mark SrcA and SrcB as data-valid without unpacking real data.
+ *
+ * Issues zero-source UNPACR NOPs that set the data-valid flag on both source registers, e.g. to
+ * unblock the math thread when an operand is not actually fed from L1.
+ *
+ * @ref _llk_math_transpose_dest_ on the math thread relies on this to mark SrcB valid for its MOVD2B/MOVB2D sequence.
+ */
+inline void _llk_unpack_set_srcb_dummy_valid_()
+{
+    namespace sync = hal::sync;
+    sync::wait::stall<sync::StallTarget::Unpack, sync::StallCondition::Unpacker0Idle | sync::StallCondition::Unpacker1Idle>();
+    // Stall_Clr_Cntrl=1: each publication waits on Unpackers[i].SrcBank -- the bank it
+    // actually clears -- rather than MatrixUnit.Src?Bank, a different bank once
+    // double-buffering reaches steady state. Carried by the instruction itself, so it
+    // cannot go stale the way a separate preceding stall can once SET_DVALID flips the
+    // bank pointer. Wormhole uses a preceding stall only because it has no such operand.
+    // HAL-GAP: hal::nop encodes only the pure-delay UNPACR_NOP; the zero-source + set-data-valid flavor
+    // (UNP_ZEROSRC, SET_DVALID, Stall_Clr_Cntrl) has no HAL descriptor, so the production encoding is kept.
+    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+}
+
+/**
  * @brief Validates L1 addresses and configures unpack base addresses in the configuration registers
  *
  * This helper function validates that both address_a and address_b are within the valid L1 memory region,
@@ -410,4 +713,36 @@ inline void _llk_unpack_configure_addresses_(
         reinterpret_cast<volatile std::uint32_t tt_reg_ptr *>(reinterpret_cast<std::uintptr_t>(cfg) + context * sizeof(std::uint32_t));
     cfg_context[BaseA.addr32(hcfg::Sec::S0)] = address_a;
     cfg_context[BaseB.addr32(hcfg::Sec::S0)] = address_b;
+}
+
+/**
+ * @brief Validates L1 address and configures unpack base address for a single unpacker
+ *
+ * This helper function validates that the address is within the valid L1 memory region,
+ * then configures the appropriate THCON_SEC0 base address register based on the unpack configuration context.
+ *
+ * @param address: Address for unpacker A (THCON_SEC0).
+ * @param cfg: Pointer to configuration registers.
+ */
+inline void _llk_unpack_configure_single_address_(const std::uint32_t address, volatile std::uint32_t tt_reg_ptr *cfg)
+{
+    namespace hcfg = hal::cfg;
+    LLK_ASSERT(is_valid_L1_address(address), "L1 base_address must be in valid L1 memory region");
+
+    // Whole-word MMIO stores into the state-CFG bank `cfg` (the bank get_cfg_pointer() selected), as production.
+    constexpr auto BaseCntx0 = hcfg::Unpacker[0].Cntx[0].Base;
+    constexpr auto BaseCntx1 = hcfg::Unpacker[0].Cntx[1].Base;
+    static_assert(BaseCntx0.shamt(hcfg::Sec::S0) == 0 && BaseCntx0.width == 32, "context-0 base is a whole word");
+    static_assert(BaseCntx1.shamt(hcfg::Sec::S0) == 0 && BaseCntx1.width == 32, "context-1 base is a whole word");
+    static_assert(BaseCntx0.addr32(hcfg::Sec::S0) == THCON_SEC0_REG3_Base_address_ADDR32, "context-0 base A word");
+    static_assert(BaseCntx1.addr32(hcfg::Sec::S0) == THCON_SEC0_REG3_Base_cntx1_address_ADDR32, "context-1 base A word");
+
+    if (0 == unp_cfg_context)
+    {
+        cfg[BaseCntx0.addr32(hcfg::Sec::S0)] = address;
+    }
+    else
+    {
+        cfg[BaseCntx1.addr32(hcfg::Sec::S0)] = address;
+    }
 }
