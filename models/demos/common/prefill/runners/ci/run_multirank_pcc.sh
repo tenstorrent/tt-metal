@@ -215,7 +215,7 @@ case "${MODEL}" in
           # The D2H layer-ack service cannot run on a mesh two hosts share; acks go through the completion router.
           # Packed traced forwards report through D2H layer acks (each stage's leader host, on its own chips); one chunk
           # per forward reports through the completion router.
-          if [ "${VARIANT}" = _packed ]; then
+          if [ "${VARIANT}" = _packed ] || [ "${VARIANT}" = _packed4 ]; then
             RUNNER_ENV+=" export PREFILL_LAYER_ACK_D2H=1;"
           else
             RUNNER_ENV+=" export PREFILL_LAYER_ACK_D2H=0;"
