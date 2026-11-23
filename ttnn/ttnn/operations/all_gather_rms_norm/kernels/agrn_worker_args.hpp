@@ -47,9 +47,19 @@ constexpr uint32_t last_crt = get_compile_time_arg_val(29);  // tile-rows of the
 // cb_out_block is backed on the own slice of this core's output shard (HEIGHT, one tile-row per shard): normalize
 // packs the pages into their final place, there is no own write
 constexpr bool out_in_place = get_compile_time_arg_val(30) != 0;
-constexpr uint32_t WORKER_CT_ARGS = 31;  // TensorAccessorArgs follow (reader / writer)
+// WIDTH_SHARDED row-owner pre-combine: member m owns tile-rows [m * rows_per_owner, ...); the k members' partials of
+// a row are combined on its owner into ONE record per (row, stat) before the fabric round, the owner combines the G
+// chips' records after it and returns the final per-row stats to every member
+constexpr bool pre_combine = get_compile_time_arg_val(31) != 0;
+constexpr uint32_t row_chunk = get_compile_time_arg_val(32);       // tile-rows per pass of the per-row CBs
+constexpr uint32_t rows_per_owner = get_compile_time_arg_val(33);  // pre_combine only
+constexpr uint32_t WORKER_CT_ARGS = 34;                            // TensorAccessorArgs follow (reader / writer)
 
-constexpr uint32_t P = G * K;  // stats partitions per row
+constexpr uint32_t KT = pre_combine ? 1 : K;  // members per (slot, row) in the stats table
+constexpr uint32_t P = G * KT;                // stats partitions per row of the cross-chip combine
+constexpr uint32_t gt_pc = (K + 31) / 32;     // gather tiles of the on-chip pre-combine (P = K)
+constexpr uint32_t n_owners = pre_combine ? (R + rows_per_owner - 1) / rows_per_owner : 0;
+constexpr uint32_t nfinal = is_ln ? 2 : 1;  // final stats per row returned by the owners (inv | mean, rstd)
 constexpr uint32_t TILE = 32;
 constexpr uint32_t FACE = 16;
 
@@ -68,7 +78,10 @@ constexpr uint32_t CRT_BWD_HUB = 10;
 constexpr uint32_t CRT_PORTS = 11;                      // n_ports linear logical indices
 constexpr uint32_t CRT_PORT_NOC = CRT_PORTS + n_ports;  // n_ports NoC coords (x | y << 16)
 constexpr uint32_t CRT_INV_N = CRT_PORT_NOC + n_ports;  // K x fp32 bits of 1 / (valid columns of member m)
-constexpr uint32_t CRT_WORKER_MAP = CRT_INV_N + K;      // sharded: byte [lin] = worker index (0xFF: none), 4 per word
+constexpr uint32_t CRT_INV_WL = CRT_INV_N + K;          // fp32 bits of 1 / W_local (pre-combined slice mean)
+constexpr uint32_t CRT_MEMBER_NOC = CRT_INV_WL + 1;     // pre_combine: K member NoC coords (x | y << 16)
+constexpr uint32_t CRT_WORKER_MAP = CRT_MEMBER_NOC + (pre_combine ? K : 0);  // sharded: byte [lin] = worker index
+                                                                             // (0xFF: none), 4 per word
 
 inline WorkerId my_worker_id() {
     uint32_t ports[n_ports];
@@ -91,6 +104,14 @@ inline WorkerId my_worker_id() {
     }
     return worker_from_idx(idx, K, n_groups, rows_hi, big, cw_nom, Wlt, last_crt);
 }
+
+// pre_combine: the tile-rows [first, first + count) member m owns (count 0: not an owner).
+inline uint32_t owner_rows(uint32_t m) {
+    const uint32_t first = m * rows_per_owner;
+    return first >= R ? 0u : ((R - first) < rows_per_owner ? R - first : rows_per_owner);
+}
+
+inline uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
 // Valid columns of the member's last tile (the slice's W tail sits in the last member's last tile).
 inline uint32_t member_owns_tail(const WorkerId& w) { return (w_valid_last < TILE) && (w.w_start + w.cw == Wlt); }

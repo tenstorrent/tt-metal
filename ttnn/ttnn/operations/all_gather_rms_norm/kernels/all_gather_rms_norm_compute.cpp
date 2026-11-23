@@ -164,11 +164,12 @@ ALWI void transpose_gathered(uint32_t n) {
 }
 
 // ---- RMS pass 1: per tile-row sum_j x[r][j]^2 accumulated in DEST (base op sum_squares_block) ----
+template <uint32_t cbx = cb_x>
 ALWI void sum_squares_block(uint32_t rows, uint32_t cw) {
     constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
-    reconfig_data_format(cb_x, cb_x);
+    reconfig_data_format(cbx, cbx);
     pack_reconfig_data_format(cb_sumsq);
-    mul_init(cb_x, cb_x, true);
+    mul_init(cbx, cbx, true);
     for (uint32_t r0 = 0; r0 < rows; r0 += batch) {
         const uint32_t n = (rows - r0) < batch ? (rows - r0) : batch;
         cb_reserve_back(cb_sumsq, n);
@@ -176,7 +177,7 @@ ALWI void sum_squares_block(uint32_t rows, uint32_t cw) {
         for (uint32_t i = 0; i < n; ++i) {
             const uint32_t base = (r0 + i) * cw;
             for (uint32_t j = 0; j < cw; ++j) {
-                mul_tiles(cb_x, cb_x, base + j, base + j, i);
+                mul_tiles(cbx, cbx, base + j, base + j, i);
             }
         }
         tile_regs_commit();
@@ -222,17 +223,16 @@ ALWI void masked_block_row_sum(uint32_t crt, uint32_t cw, Post post) {
         ReduceInputBlockShape::of(crt, cw), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, post);
 }
 
-ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize, bool tail) {
-    const uint32_t crt = w.crt, cw = w.cw;
-    cb_wait_front(cb_x, crt * cw);
-    // local_stats_block
+// RMS local_stats_block over `crt` tile-rows at the front of cbx (waited by the caller, not popped) -> cb_partial.
+template <uint32_t cbx>
+ALWI void rms_local_stats(uint32_t crt, uint32_t cw, bool tail) {
     if constexpr (masked_tail_path) {
         if (tail) {
             // masked x^2 tiles of the block (padding lanes of the tail tile x 0), then the row sums
             cb_wait_front(cb_mask, cw);
             eltwise_chain(
                 IterationShape::grid(crt, cw),
-                CopyTile<input(cb_x, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
+                CopyTile<input(cbx, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
                 Square<Dst::D0>{},
                 TimesMask{},
                 PackTile<output(cb_ln_sq)>{});
@@ -240,7 +240,7 @@ ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize, bool tail) {
         }
     }
     if (!masked_tail_path || !tail) {
-        sum_squares_block(crt, cw);
+        sum_squares_block<cbx>(crt, cw);
         // Partial sums stay fp32 when summed (prompt precision contract): with fp32 DEST, cb_sumsq is a Float32
         // UnpackToDestFp32 CB and the Accurate (SFPU) reduce copies it into DEST exactly; the FPU path would truncate
         // every per-tile-row sum to tf32 before the collapse.
@@ -255,26 +255,29 @@ ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize, bool tail) {
             partial_sum_fp32_mode,
             ReduceAlgorithm::ReduceTile>(ReduceInputBlockShape::of(crt, 1));
     }
-    // combine_stats_block (waits for the reader's gather tiles)
-    transpose_gathered(crt * gather_tiles);
-    // The P = G*k gathered partials are summed in fp32 (SFPU, exact copies from the UnpackToDestFp32 cb_gathered):
-    // AccumulateViaAdd / the FPU reduce would read them through srcA as tf32.
+}
+
+// Sum of the gathered partition columns (gt gather tiles per row, n rows) -> cb_partial / cb_inv, fp32 (SFPU, exact
+// copies from the UnpackToDestFp32 cb_gathered): AccumulateViaAdd / the FPU reduce would read them as tf32.
+template <uint32_t gt, uint32_t cb_out, typename Post>
+ALWI void rms_combine(uint32_t n, Post post) {
+    transpose_gathered(n * gt);
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
         cb_gathered,
         cb_scaler,
-        cb_inv,
+        cb_out,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
         partial_sum_fp32_mode,
         ReduceAlgorithm::ReduceTile>(
-        ReduceInputBlockShape::of(crt, gather_tiles),
-        ReduceInputMemoryLayout::contiguous(),
-        NoAccumulation{},
-        finalize);
-    // normalize_block
-    cb_wait_front(cb_inv, crt);
+        ReduceInputBlockShape::of(n, gt), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, post);
+}
+
+// x * inv (bcast col) [* gamma] over grid(n, cw) at the front of cb_x -> cb_out_block (gamma waited by the caller).
+template <uint32_t cb_inv_src>
+ALWI void rms_normalize(uint32_t n, uint32_t cw) {
     constexpr auto x_in = input(
         cb_x,
         WaitPolicy::None,
@@ -282,17 +285,68 @@ ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize, bool tail) {
         InputTileMapping::Block,
         DataFormatReconfig::Enabled,
         TileAddressing::Direct);
-    constexpr auto inv_in = input(cb_inv, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    constexpr auto inv_in =
+        input(cb_inv_src, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
     using XTimesInv = BinaryFpu<BinaryFpuOp::Mul, x_in, inv_in>;
     if constexpr (has_gamma) {
-        cb_wait_front(cb_gamma, cw);
-        eltwise_chain(IterationShape::grid(crt, cw), XTimesInv{}, TimesGamma{}, PackTile<output(cb_out_block)>{});
-        cb_pop_front(cb_gamma, cw);
+        eltwise_chain(IterationShape::grid(n, cw), XTimesInv{}, TimesGamma{}, PackTile<output(cb_out_block)>{});
     } else {
-        eltwise_chain(IterationShape::grid(crt, cw), XTimesInv{}, PackTile<output(cb_out_block)>{});
+        eltwise_chain(IterationShape::grid(n, cw), XTimesInv{}, PackTile<output(cb_out_block)>{});
+    }
+}
+
+ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize, bool tail) {
+    const uint32_t crt = w.crt, cw = w.cw;
+    cb_wait_front(cb_x, crt * cw);
+    // local_stats_block
+    rms_local_stats<cb_x>(crt, cw, tail);
+    // combine_stats_block (waits for the reader's gather tiles)
+    rms_combine<gather_tiles, cb_inv>(crt, finalize);
+    // normalize_block
+    cb_wait_front(cb_inv, crt);
+    if constexpr (has_gamma) {
+        cb_wait_front(cb_gamma, cw);
+    }
+    rms_normalize<cb_inv>(crt, cw);
+    if constexpr (has_gamma) {
+        cb_pop_front(cb_gamma, cw);
     }
     cb_pop_front(cb_inv, crt);
     cb_pop_front(cb_x, crt * cw);
+}
+
+// WIDTH_SHARDED row-owner pre-combine (RMS): per row chunk local sums -> the owners; the owner sums the K members'
+// partials of its rows (one record per row -> the hubs), then the G chips' records (finalize -> inv -> the members);
+// every member normalizes its block with the returned inv, one row chunk at a time.
+ALWI void rms_block_pc(const WorkerId& w, FinalizeInvRms finalize, bool tail) {
+    const uint32_t cw = w.cw;
+    for (uint32_t r0 = 0; r0 < w.crt; r0 += row_chunk) {
+        const uint32_t n = min_u32(row_chunk, w.crt - r0);
+        cb_wait_front(cb_x_stats, n * cw);
+        rms_local_stats<cb_x_stats>(n, cw, tail);
+        cb_pop_front(cb_x_stats, n * cw);
+    }
+    const uint32_t orows = owner_rows(w.m);
+    for (uint32_t r0 = 0; r0 < orows; r0 += row_chunk) {
+        rms_combine<gt_pc, cb_partial>(min_u32(row_chunk, orows - r0), NoOp{});  // raw sum of the K members
+    }
+    for (uint32_t r0 = 0; r0 < orows; r0 += row_chunk) {
+        rms_combine<gather_tiles, cb_partial>(min_u32(row_chunk, orows - r0), finalize);  // G chips -> inv
+    }
+    if constexpr (has_gamma) {
+        cb_wait_front(cb_gamma, cw);
+    }
+    for (uint32_t r0 = 0; r0 < w.crt; r0 += row_chunk) {
+        const uint32_t n = min_u32(row_chunk, w.crt - r0);
+        cb_wait_front(cb_x, n * cw);
+        cb_wait_front(cb_final_inv, n);
+        rms_normalize<cb_final_inv>(n, cw);
+        cb_pop_front(cb_final_inv, n);
+        cb_pop_front(cb_x, n * cw);
+    }
+    if constexpr (has_gamma) {
+        cb_pop_front(cb_gamma, cw);
+    }
 }
 
 // The x block the LN paths read: fp32 DEST -> a Float32 block (UnpackToDestFp32: exact in DEST); 16-bit DEST -> cb_x
@@ -303,11 +357,11 @@ constexpr uint32_t cb_xs = ln_x_copy ? cb_x32 : cb_x;
 constexpr ReduceFp32Mode ln_exact_mode = DST_ACCUM_MODE ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
 // Row sums of the resident x block with the W-tail tile masked (sharded input: the caller's shard keeps its padding).
-template <uint32_t cb_dst>
+template <uint32_t cbx, uint32_t cb_dst>
 ALWI void masked_row_sum(uint32_t crt, uint32_t cw, MulScalarPost post) {
     eltwise_chain(
         IterationShape::grid(crt, cw),
-        CopyTile<input(cb_xs, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
+        CopyTile<input(cbx, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
         TimesMask{},
         PackTile<output(cb_ln_sq)>{});
     masked_block_row_sum<cb_dst>(crt, cw, post);
@@ -316,39 +370,33 @@ ALWI void masked_row_sum(uint32_t crt, uint32_t cw, MulScalarPost post) {
 // LN combine over the gather tiles of a row: one gather tile -> AccumulateViaAdd's in-tile collapse (Phase 0 path);
 // several -> the exact ReduceTile path the RMS combine uses (AccumulateViaAdd's cross-tile add_tiles would read the
 // UnpackToDestFp32-tagged cb_ln_tmp through srcA).
+// pre_combine always takes the exact ReduceTile path (row chunks of several tile-rows).
+template <uint32_t gt>
+constexpr bool ln_comb_exact = gt > 1 || pre_combine;
+template <uint32_t gt>
 constexpr ReduceAlgorithm ln_comb_alg =
-    gather_tiles > 1 ? ReduceAlgorithm::ReduceTile : ReduceAlgorithm::AccumulateViaAdd;
-constexpr ReduceFp32Mode ln_comb_mode = gather_tiles > 1 ? ln_exact_mode : ReduceFp32Mode::Fast;
+    ln_comb_exact<gt> ? ReduceAlgorithm::ReduceTile : ReduceAlgorithm::AccumulateViaAdd;
+template <uint32_t gt>
+constexpr ReduceFp32Mode ln_comb_mode = ln_comb_exact<gt> ? ln_exact_mode : ReduceFp32Mode::Fast;
 
-ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bits, uint32_t inv_w_bits, bool tail) {
-    const uint32_t crt = w.crt, cw = w.cw;
-    cb_wait_front(cb_x, crt * cw);
-    if constexpr (ln_x_copy) {
-        eltwise_chain(
-            IterationShape::grid(crt, cw),
-            CopyTile<input(cb_x, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block)>{},
-            PackTile<output(cb_x32)>{});
-        cb_pop_front(cb_x, crt * cw);
-        cb_wait_front(cb_x32, crt * cw);
-    }
-    {
-        AGRN_ZONE("c_local_start");
-    }
-    // ---- local_stats_block ----
+// ---- LN local_stats_block over `crt` tile-rows at the front of cbx (waited by the caller, not popped) ----
+// -> cb_partial [m][T][K] (stat-major); leaves K broadcast in cb_ln_shift (crt tiles, waited, not popped).
+template <uint32_t cbx>
+ALWI void ln_local_stats(uint32_t crt, uint32_t cw, uint32_t inv_n_bits, bool tail) {
     // m (stat 0), then a second copy of m for the shift broadcast
     if constexpr (masked_tail_path) {
         if (tail) {
             // sharded input, tail member: S1 over the valid columns only (the shard is not zeroed)
             cb_wait_front(cb_mask, cw);
-            masked_row_sum<cb_partial>(crt, cw, MulScalarPost{inv_n_bits});
-            masked_row_sum<cb_ln_m>(crt, cw, MulScalarPost{inv_n_bits});
+            masked_row_sum<cbx, cb_partial>(crt, cw, MulScalarPost{inv_n_bits});
+            masked_row_sum<cbx, cb_ln_m>(crt, cw, MulScalarPost{inv_n_bits});
         }
     }
     if (!masked_tail_path || !tail) {
         reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_xs,
+            cbx,
             cb_scaler,
             cb_partial,
             ReduceInputPolicy::NoWaitNoPop,
@@ -362,7 +410,7 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
-            cb_xs,
+            cbx,
             cb_scaler,
             cb_ln_m,
             ReduceInputPolicy::NoWaitNoPop,
@@ -378,7 +426,7 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
     unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_ln_shift)>(IterationShape::tiles(crt));
     cb_wait_front(cb_ln_shift, crt);
     // T = sum (x - K)^2 (padding columns masked in the reduce; sharded tail: by the mask block in the chain)
-    constexpr auto xs_blk = input(cb_xs, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block);
+    constexpr auto xs_blk = input(cbx, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block);
     constexpr auto shift_col = input(cb_ln_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
     if constexpr (masked_tail_path) {
         if (tail) {
@@ -422,36 +470,30 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         IterationShape::tiles(crt),
         CopyTile<input(cb_ln_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block)>{},
         PackTile<output(cb_partial)>{});
-    // cb_ln_shift (K in every column, exact) stays: it is the centering shift of the normalize
+}
 
-    {
-        AGRN_ZONE("c_combine_start");
-    }
-    // ---- combine_stats_block ----
-    // gathered per row: [m, T, K] x gather_tiles (partition j -> column j % 32 of gather tile j / 32), all
-    // UnpackToDestFp32 under fp32 DEST (exact copies). Padding columns j >= P carry n_j = 0 and contribute 0.
-    {
-        AGRN_ZONE("c_gather_in");
-    }
-    transpose_gathered(crt * nstats * gather_tiles);
-    {
-        AGRN_ZONE("c_transposed");
-    }
-    cb_wait_front(cb_gathered, crt * nstats * gather_tiles);
-    cb_wait_front(cb_stat_consts, 1);
-    constexpr auto g_m = input(
-        cb_gathered,
-        WaitPolicy::None,
-        PopPolicy::None,
-        InputTileMapping::Block,
-        DataFormatReconfig::Enabled,
-        TileAddressing::Strided);
-    constexpr auto g_n =
-        input(cb_stat_consts, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row);  // n_j of gather tile c
+// Gathered tiles of one row chunk ([m, T, K] x gt per row, partition j -> column j % 32 of gather tile j / 32, all
+// UnpackToDestFp32 under fp32 DEST: exact copies; padding columns carry n_j = 0 and contribute 0).
+template <uint32_t gt>
+constexpr auto g_m = input(
+    cb_gathered,
+    WaitPolicy::None,
+    PopPolicy::None,
+    InputTileMapping::Block,
+    DataFormatReconfig::Enabled,
+    TileAddressing::Strided);
+template <uint32_t cb_n>
+constexpr auto g_n = input(cb_n, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row);  // n_j of gather tile c
+constexpr auto shift_in = input(cb_ln_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+constexpr auto mean_b_in = input(cb_mean_b, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+
+// mean = sum_j n_j m_j * inv -> cb_mean_col (column 0, n tiles, pushed)
+template <uint32_t gt, uint32_t cb_n>
+ALWI void ln_combine_mean(uint32_t n, uint32_t inv_bits) {
     eltwise_chain(
-        IterationShape::grid(crt, gather_tiles),
-        CopyTile<g_m, Dst::D0>{StridedTileRange{0 * gather_tiles, nstats * gather_tiles}},
-        CopyTile<g_n, Dst::D1>{},
+        IterationShape::grid(n, gt),
+        CopyTile<g_m<gt>, Dst::D0>{StridedTileRange{0 * gt, nstats * gt}},
+        CopyTile<g_n<cb_n>, Dst::D1>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
         PackTile<output(cb_ln_tmp)>{});
     reduce<
@@ -462,79 +504,85 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         cb_mean_col,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ln_comb_mode,
-        ln_comb_alg>(
-        ReduceInputBlockShape::of(crt, gather_tiles),
+        ln_comb_mode<gt>,
+        ln_comb_alg<gt>>(
+        ReduceInputBlockShape::of(n, gt),
         ReduceInputMemoryLayout::contiguous(),
         NoAccumulation{},
-        MulScalarPost{inv_w_bits});
-    {
-        AGRN_ZONE("c_mean_done");
-    }
-    // d = mean - K (exact in fp32 SFPU), then broadcast: x - mean = (x - K) - d with both K (tf32-exact) and the small
-    // d (its tf32 truncation is ~1e-3 of d, i.e. of the partition-mean scatter, not of the mean) safe to broadcast
-    // on the FPU — no exact fp32 broadcast of the mean is needed (op_design.md Key Risks: LN precision).
-    constexpr auto shift_in = input(cb_ln_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
-    cb_wait_front(cb_mean_col, crt);
+        MulScalarPost{inv_bits});
+}
+
+// d = mean - K (exact in fp32 SFPU), then broadcast -> cb_mean_b (n tiles, waited): x - mean = (x - K) - d with both
+// K (tf32-exact) and the small d (its tf32 truncation is ~1e-3 of d, i.e. of the partition-mean scatter, not of the
+// mean) safe to broadcast on the FPU — no exact fp32 broadcast of the mean is needed (op_design.md Key Risks).
+template <uint32_t cb_mean_src>
+ALWI void ln_mean_minus_shift(uint32_t n) {
     eltwise_chain(
-        IterationShape::grid(crt, 1),
-        CopyTile<input(cb_mean_col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col), Dst::D0>{},
+        IterationShape::grid(n, 1),
+        CopyTile<input(cb_mean_src, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col), Dst::D0>{},
         CopyTile<shift_in, Dst::D1>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
         PackTile<output(cb_ln_m)>{});
-    cb_pop_front(cb_mean_col, crt);
-    unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_mean_b)>(IterationShape::tiles(crt));
-    cb_wait_front(cb_mean_b, crt);
-    {
-        AGRN_ZONE("c_meanb_in");
-    }
-    constexpr auto mean_b_in = input(cb_mean_b, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_mean_b)>(IterationShape::tiles(n));
+    cb_wait_front(cb_mean_b, n);
+}
+
+// pre_combine: the centering shift from the row mean itself — K = tf32(mean) broadcast (exact, cb_ln_shift) and
+// d = mean - K (cb_mean_b); the mean (column 0, tagged: exact) is read through an untagged Float32 copy for the FPU
+// broadcast. cb_mean_src stays (not popped).
+template <uint32_t cb_mean_src>
+ALWI void ln_shift_from_mean(uint32_t n) {
     eltwise_chain(
-        IterationShape::grid(crt, gather_tiles),
-        CopyTile<g_m, Dst::D0>{StridedTileRange{0 * gather_tiles, nstats * gather_tiles}},
-        CopyTile<g_m, Dst::D1>{StridedTileRange{2 * gather_tiles, nstats * gather_tiles}},  // K
+        IterationShape::tiles(n),
+        CopyTile<input(cb_mean_src, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block)>{},
+        PackTile<output(cb_ln_m)>{});
+    unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_ln_shift)>(IterationShape::tiles(n));
+    cb_wait_front(cb_ln_shift, n);
+    ln_mean_minus_shift<cb_mean_src>(n);
+}
+
+// M2 = sum_j [T_j - n_j (m_j - K_j)^2 + n_j (m_j - mean)^2] -> reduce (post) -> cb_out; pops the gathered tiles.
+template <uint32_t gt, uint32_t cb_n, uint32_t cb_out, typename Post>
+ALWI void ln_combine_m2(uint32_t n, Post post) {
+    eltwise_chain(
+        IterationShape::grid(n, gt),
+        CopyTile<g_m<gt>, Dst::D0>{StridedTileRange{0 * gt, nstats * gt}},
+        CopyTile<g_m<gt>, Dst::D1>{StridedTileRange{2 * gt, nstats * gt}},  // K
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
         Square<Dst::D0>{},
-        CopyTile<g_n, Dst::D1>{},
-        MulBinary<Dst::D0, Dst::D1, Dst::D0>{},                                             // n (m - K)^2
-        CopyTile<g_m, Dst::D1>{StridedTileRange{1 * gather_tiles, nstats * gather_tiles}},  // T
-        SubBinary<Dst::D1, Dst::D0, Dst::D1>{},  // T - n (m - K)^2 = sum (x - m)^2
-        CopyTile<g_m, Dst::D0>{StridedTileRange{0 * gather_tiles, nstats * gather_tiles}},
+        CopyTile<g_n<cb_n>, Dst::D1>{},
+        MulBinary<Dst::D0, Dst::D1, Dst::D0>{},                             // n (m - K)^2
+        CopyTile<g_m<gt>, Dst::D1>{StridedTileRange{1 * gt, nstats * gt}},  // T
+        SubBinary<Dst::D1, Dst::D0, Dst::D1>{},                             // T - n (m - K)^2 = sum (x - m)^2
+        CopyTile<g_m<gt>, Dst::D0>{StridedTileRange{0 * gt, nstats * gt}},
         CopyTile<shift_in, Dst::D2>{},
         SubBinary<Dst::D0, Dst::D2, Dst::D0>{},  // m - K
         CopyTile<mean_b_in, Dst::D2>{},
         SubBinary<Dst::D0, Dst::D2, Dst::D0>{},  // m - mean = (m - K) - d
         Square<Dst::D0>{},
-        CopyTile<g_n, Dst::D2>{},
+        CopyTile<g_n<cb_n>, Dst::D2>{},
         MulBinary<Dst::D0, Dst::D2, Dst::D0>{},  // n (m - mean)^2
         AddBinary<Dst::D1, Dst::D0, Dst::D1>{},
         PackTile<output(cb_ln_tmp), Dst::D1>{});
-    {
-        AGRN_ZONE("c_m2_done");
-    }
-    cb_pop_front(cb_gathered, crt * nstats * gather_tiles);
+    cb_pop_front(cb_gathered, n * nstats * gt);
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
         cb_ln_tmp,
         cb_scaler,
-        cb_inv,
+        cb_out,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ln_comb_mode,
-        ln_comb_alg>(
-        ReduceInputBlockShape::of(crt, gather_tiles),
-        ReduceInputMemoryLayout::contiguous(),
-        NoAccumulation{},
-        finalize);
-    unary_bcast<BroadcastDim::Col, input(cb_inv), output(cb_rstd_b)>(IterationShape::tiles(crt));
-    cb_wait_front(cb_rstd_b, crt);
+        ln_comb_mode<gt>,
+        ln_comb_alg<gt>>(
+        ReduceInputBlockShape::of(n, gt), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, post);
+}
 
-    {
-        AGRN_ZONE("c_rstd_done");
-    }
-    // ---- normalize_block ----
-    constexpr auto xs_in = input(cb_xs, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block);
+// normalize_block: (x - K) - d, * rstd [* gamma] [+ beta] over grid(n, cw) at the front of cbx -> cb_out_block
+// (gamma / beta waited by the caller).
+template <uint32_t cbx>
+ALWI void ln_normalize(uint32_t n, uint32_t cw) {
+    constexpr auto xs_in = input(cbx, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block);
     constexpr auto rstd_in = input(cb_rstd_b, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
     using LoadX = CopyTile<xs_in, Dst::D0>;
     using LoadShift = CopyTile<shift_in, Dst::D1>;
@@ -543,10 +591,8 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
     using Center = SubBinary<Dst::D0, Dst::D1, Dst::D0>;
     using Scale = MulBinary<Dst::D0, Dst::D1, Dst::D0>;
     if constexpr (has_gamma && has_beta) {
-        cb_wait_front(cb_gamma, cw);
-        cb_wait_front(cb_beta, cw);
         eltwise_chain(
-            IterationShape::grid(crt, cw),
+            IterationShape::grid(n, cw),
             LoadX{},
             LoadShift{},
             Center{},
@@ -557,12 +603,9 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
             TimesGamma{},
             PlusBeta{},
             PackTile<output(cb_out_block)>{});
-        cb_pop_front(cb_gamma, cw);
-        cb_pop_front(cb_beta, cw);
     } else if constexpr (has_gamma) {
-        cb_wait_front(cb_gamma, cw);
         eltwise_chain(
-            IterationShape::grid(crt, cw),
+            IterationShape::grid(n, cw),
             LoadX{},
             LoadShift{},
             Center{},
@@ -572,10 +615,9 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
             Scale{},
             TimesGamma{},
             PackTile<output(cb_out_block)>{});
-        cb_pop_front(cb_gamma, cw);
     } else {
         eltwise_chain(
-            IterationShape::grid(crt, cw),
+            IterationShape::grid(n, cw),
             LoadX{},
             LoadShift{},
             Center{},
@@ -585,6 +627,81 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
             Scale{},
             PackTile<output(cb_out_block)>{});
     }
+}
+
+ALWI void wait_affine(uint32_t cw) {
+    if constexpr (has_gamma) {
+        cb_wait_front(cb_gamma, cw);
+    }
+    if constexpr (has_beta) {
+        cb_wait_front(cb_beta, cw);
+    }
+}
+
+ALWI void pop_affine(uint32_t cw) {
+    if constexpr (has_gamma) {
+        cb_pop_front(cb_gamma, cw);
+    }
+    if constexpr (has_beta) {
+        cb_pop_front(cb_beta, cw);
+    }
+}
+
+ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bits, uint32_t inv_w_bits, bool tail) {
+    const uint32_t crt = w.crt, cw = w.cw;
+    cb_wait_front(cb_x, crt * cw);
+    if constexpr (ln_x_copy) {
+        eltwise_chain(
+            IterationShape::grid(crt, cw),
+            CopyTile<input(cb_x, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block)>{},
+            PackTile<output(cb_x32)>{});
+        cb_pop_front(cb_x, crt * cw);
+        cb_wait_front(cb_x32, crt * cw);
+    }
+    {
+        AGRN_ZONE("c_local_start");
+    }
+    // ---- local_stats_block ----
+    ln_local_stats<cb_xs>(crt, cw, inv_n_bits, tail);
+    // cb_ln_shift (K in every column, exact) stays: it is the centering shift of the normalize
+
+    {
+        AGRN_ZONE("c_combine_start");
+    }
+    // ---- combine_stats_block ----
+    {
+        AGRN_ZONE("c_gather_in");
+    }
+    transpose_gathered(crt * nstats * gather_tiles);
+    {
+        AGRN_ZONE("c_transposed");
+    }
+    cb_wait_front(cb_gathered, crt * nstats * gather_tiles);
+    cb_wait_front(cb_stat_consts, 1);
+    ln_combine_mean<gather_tiles, cb_stat_consts>(crt, inv_w_bits);
+    {
+        AGRN_ZONE("c_mean_done");
+    }
+    cb_wait_front(cb_mean_col, crt);
+    ln_mean_minus_shift<cb_mean_col>(crt);
+    cb_pop_front(cb_mean_col, crt);
+    {
+        AGRN_ZONE("c_meanb_in");
+    }
+    ln_combine_m2<gather_tiles, cb_stat_consts, cb_inv>(crt, finalize);
+    {
+        AGRN_ZONE("c_m2_done");
+    }
+    unary_bcast<BroadcastDim::Col, input(cb_inv), output(cb_rstd_b)>(IterationShape::tiles(crt));
+    cb_wait_front(cb_rstd_b, crt);
+
+    {
+        AGRN_ZONE("c_rstd_done");
+    }
+    // ---- normalize_block ----
+    wait_affine(cw);
+    ln_normalize<cb_xs>(crt, cw);
+    pop_affine(cw);
     {
         AGRN_ZONE("c_norm_done");
     }
@@ -592,6 +709,81 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
     cb_pop_front(cb_mean_b, crt);
     cb_pop_front(cb_ln_shift, crt);
     cb_pop_front(cb_xs, crt * cw);
+}
+
+// Copy n column-0 tiles of cb_mean_col (exact, tagged) into cb_partial (one stat of a record set).
+ALWI void mean_to_partial(uint32_t n) {
+    eltwise_chain(
+        IterationShape::tiles(n),
+        CopyTile<input(cb_mean_col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block)>{},
+        PackTile<output(cb_partial)>{});
+}
+
+// WIDTH_SHARDED row-owner pre-combine (LN). Per row chunk: local (m, T, K) -> the owners. The owner combines the K
+// members' records of its rows into ONE exact record per row, (mean, M2, mean) (K = mean: the (m - K)^2 term of the
+// cross-chip combine vanishes), then the G chips' records -> (mean, rstd) -> the members. The centering shift of
+// both combines and of the normalize is K = tf32(mean) of the row itself (the member's own local K is never needed
+// after its records are out). Every member normalizes its block with the returned (mean, rstd), one chunk at a time.
+ALWI void ln_block_pc(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bits, uint32_t inv_w_bits, bool tail) {
+    const uint32_t cw = w.cw;
+    for (uint32_t r0 = 0; r0 < w.crt; r0 += row_chunk) {
+        const uint32_t n = min_u32(row_chunk, w.crt - r0);
+        cb_wait_front(cb_x_stats, n * cw);
+        ln_local_stats<cb_x_stats>(n, cw, inv_n_bits, tail);
+        cb_pop_front(cb_ln_shift, n);
+        cb_pop_front(cb_x_stats, n * cw);
+    }
+    const uint32_t orows = owner_rows(w.m);
+    if (orows > 0) {
+        const uint32_t inv_wl_bits = get_common_arg_val<uint32_t>(CRT_INV_WL);
+        cb_wait_front(cb_stat_consts, gt_pc);
+        for (uint32_t r0 = 0; r0 < orows; r0 += row_chunk) {
+            const uint32_t n = min_u32(row_chunk, orows - r0);
+            transpose_gathered(n * nstats * gt_pc);
+            cb_wait_front(cb_gathered, n * nstats * gt_pc);
+            ln_combine_mean<gt_pc, cb_stat_consts>(n, inv_wl_bits);
+            cb_wait_front(cb_mean_col, n);
+            ln_shift_from_mean<cb_mean_col>(n);
+            mean_to_partial(n);                                           // stat 0: mean
+            ln_combine_m2<gt_pc, cb_stat_consts, cb_partial>(n, NoOp{});  // stat 1: M2 (raw)
+            mean_to_partial(n);                                           // stat 2: K = mean
+            cb_pop_front(cb_mean_col, n);
+            cb_pop_front(cb_mean_b, n);
+            cb_pop_front(cb_ln_shift, n);
+        }
+        cb_wait_front(cb_stat_consts_x, gather_tiles);
+        for (uint32_t r0 = 0; r0 < orows; r0 += row_chunk) {
+            const uint32_t n = min_u32(row_chunk, orows - r0);
+            transpose_gathered(n * nstats * gather_tiles);
+            cb_wait_front(cb_gathered, n * nstats * gather_tiles);
+            ln_combine_mean<gather_tiles, cb_stat_consts_x>(n, inv_w_bits);
+            cb_wait_front(cb_mean_col, n);
+            ln_shift_from_mean<cb_mean_col>(n);
+            mean_to_partial(n);                                                      // final 0: mean
+            ln_combine_m2<gather_tiles, cb_stat_consts_x, cb_partial>(n, finalize);  // final 1: rstd
+            // pad the set to nstats stats: every cb_partial block is row_chunk * nstats tiles (contiguous in its ring)
+            mean_to_partial(n);
+            cb_pop_front(cb_mean_col, n);
+            cb_pop_front(cb_mean_b, n);
+            cb_pop_front(cb_ln_shift, n);
+        }
+    }
+    wait_affine(cw);
+    for (uint32_t r0 = 0; r0 < w.crt; r0 += row_chunk) {
+        const uint32_t n = min_u32(row_chunk, w.crt - r0);
+        cb_wait_front(cb_final_mean, n);
+        ln_shift_from_mean<cb_final_mean>(n);
+        cb_pop_front(cb_final_mean, n);
+        unary_bcast<BroadcastDim::Col, input(cb_final_inv), output(cb_rstd_b)>(IterationShape::tiles(n));
+        cb_wait_front(cb_rstd_b, n);
+        cb_wait_front(cb_x, n * cw);
+        ln_normalize<cb_x>(n, cw);
+        cb_pop_front(cb_rstd_b, n);
+        cb_pop_front(cb_mean_b, n);
+        cb_pop_front(cb_ln_shift, n);
+        cb_pop_front(cb_x, n * cw);
+    }
+    pop_affine(cw);
 }
 
 void kernel_main() {
@@ -603,14 +795,19 @@ void kernel_main() {
         get_common_arg_val<uint32_t>(CRT_INV_W_BITS), get_common_arg_val<uint32_t>(CRT_EPS_BITS)};
     if constexpr (is_ln) {
         compute_kernel_hw_startup(cb_xs, cb_scaler, cb_partial);
-        ln_block(
-            w,
-            finalize,
-            get_common_arg_val<uint32_t>(CRT_INV_N + w.m),
-            get_common_arg_val<uint32_t>(CRT_INV_W_BITS),
-            member_owns_tail(w));
+        const uint32_t inv_n_bits = get_common_arg_val<uint32_t>(CRT_INV_N + w.m);
+        const uint32_t inv_w_bits = get_common_arg_val<uint32_t>(CRT_INV_W_BITS);
+        if constexpr (pre_combine) {
+            ln_block_pc(w, finalize, inv_n_bits, inv_w_bits, member_owns_tail(w));
+        } else {
+            ln_block(w, finalize, inv_n_bits, inv_w_bits, member_owns_tail(w));
+        }
     } else {
         compute_kernel_hw_startup(cb_x, cb_x, cb_sumsq);
-        rms_block(w, finalize, member_owns_tail(w));
+        if constexpr (pre_combine) {
+            rms_block_pc(w, finalize, member_owns_tail(w));
+        } else {
+            rms_block(w, finalize, member_owns_tail(w));
+        }
     }
 }

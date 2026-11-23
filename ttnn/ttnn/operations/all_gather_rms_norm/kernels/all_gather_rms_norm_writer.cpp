@@ -64,49 +64,134 @@ void kernel_main() {
     const uint32_t table = get_write_ptr(cb_stats_table);  // same address on every core of every chip
     const uint32_t fwd_hub = get_common_arg_val<uint32_t>(CRT_FWD_HUB);
     const uint32_t bwd_hub = get_common_arg_val<uint32_t>(CRT_BWD_HUB);
-    constexpr uint32_t slot_bytes = R * K * nstats * RECORD_BYTES;
+    constexpr uint32_t slot_bytes = R * KT * nstats * RECORD_BYTES;
     constexpr uint32_t f32_tile_bytes = TILE * TILE * 4;
+    const uint32_t staging = get_write_ptr(cb_record_staging);
 
-    // ---- publish_records_block ----
-    {
+    // Column 0 of tile t of cb_partial (front) -> the 128 B record at staging slot t (face 0 rows 0..15, face 2
+    // rows 16..31); returns the record's L1 address.
+    auto extract_record = [&](uint32_t t) {
+        const uint32_t src_base = get_read_ptr(cb_partial);
+        asm volatile("" ::: "memory");
+        const uint32_t* tile = reinterpret_cast<const uint32_t*>(src_base + t * f32_tile_bytes);
+        const uint32_t rec_addr = staging + t * RECORD_BYTES;
+        uint32_t* rec = reinterpret_cast<uint32_t*>(rec_addr);
+#pragma GCC unroll 16
+        for (uint32_t i = 0; i < FACE; ++i) {
+            rec[i] = tile[i * FACE];
+            rec[FACE + i] = tile[512 + i * FACE];
+        }
+        asm volatile("" ::: "memory");
+        return rec_addr;
+    };
+    // One (row, stat) record into BOTH hubs' tables, half-split: [values 0..15 of members 0..KT-1][values 16..31 of
+    // members 0..KT-1], 64 B each — a gathering worker lands a slot's members as consecutive tile rows with one
+    // contiguous read per half (see the reader).
+    auto publish_to_hubs = [&](uint32_t rec_addr, uint32_t tr, uint32_t s, uint32_t m) {
+        const uint32_t blk = table + p * slot_bytes + (tr * nstats + s) * KT * RECORD_BYTES;
+        for (uint32_t h = 0; h < 2; ++h) {
+            const uint32_t off = blk + (h * KT + m) * (RECORD_BYTES / 2);
+            const uint32_t src = rec_addr + h * (RECORD_BYTES / 2);
+            noc_async_write(src, get_noc_addr(fwd_hub & 0xFFFF, fwd_hub >> 16, off), RECORD_BYTES / 2);
+            noc_async_write(src, get_noc_addr(bwd_hub & 0xFFFF, bwd_hub >> 16, off), RECORD_BYTES / 2);
+        }
+    };
+    auto inc_hubs_records = [&]() {
+        const uint32_t sem = get_semaphore(sem_records_local);
+        noc_semaphore_inc(get_noc_addr(fwd_hub & 0xFFFF, fwd_hub >> 16, sem), 1);
+        noc_semaphore_inc(get_noc_addr(bwd_hub & 0xFFFF, bwd_hub >> 16, sem), 1);
+    };
+
+    if constexpr (!pre_combine) {
+        // ---- publish_records_block ----
         const uint32_t n = w.crt * nstats;
         {
             AGRN_ZONE("wr_wait_partial");
             cb_wait_front(cb_partial, n);
         }
         AGRN_ZONE("wr_records");
-        const uint32_t src_base = get_read_ptr(cb_partial);
-        const uint32_t staging = get_write_ptr(cb_record_staging);
         for (uint32_t s = 0; s < nstats; ++s) {
             for (uint32_t r = 0; r < w.crt; ++r) {
-                const uint32_t t = s * w.crt + r;  // cb_partial is pushed stat-major: [stat][row]
-                asm volatile("" ::: "memory");
-                const uint32_t* tile = reinterpret_cast<const uint32_t*>(src_base + t * f32_tile_bytes);
-                const uint32_t rec_addr = staging + t * RECORD_BYTES;
-                uint32_t* rec = reinterpret_cast<uint32_t*>(rec_addr);
-#pragma GCC unroll 16
-                for (uint32_t i = 0; i < FACE; ++i) {  // column 0: face 0 rows 0..15, face 2 rows 16..31
-                    rec[i] = tile[i * FACE];
-                    rec[FACE + i] = tile[512 + i * FACE];
-                }
-                asm volatile("" ::: "memory");
-                // Table layout per (slot, tile-row, stat): [values 0..15 of members 0..K-1][values 16..31 of members
-                // 0..K-1], 64 B each — a gathering worker lands a slot's members as consecutive tile rows with one
-                // contiguous read per half (see the reader).
-                const uint32_t blk = table + p * slot_bytes + ((w.row_start + r) * nstats + s) * K * RECORD_BYTES;
-                for (uint32_t h = 0; h < 2; ++h) {
-                    const uint32_t off = blk + (h * K + w.m) * (RECORD_BYTES / 2);
-                    const uint32_t src = rec_addr + h * (RECORD_BYTES / 2);
-                    noc_async_write(src, get_noc_addr(fwd_hub & 0xFFFF, fwd_hub >> 16, off), RECORD_BYTES / 2);
-                    noc_async_write(src, get_noc_addr(bwd_hub & 0xFFFF, bwd_hub >> 16, off), RECORD_BYTES / 2);
-                }
+                // cb_partial is pushed stat-major: [stat][row]
+                publish_to_hubs(extract_record(s * w.crt + r), w.row_start + r, s, w.m);
             }
         }
         noc_async_write_barrier();
-        const uint32_t sem = get_semaphore(sem_records_local);
-        noc_semaphore_inc(get_noc_addr(fwd_hub & 0xFFFF, fwd_hub >> 16, sem), 1);
-        noc_semaphore_inc(get_noc_addr(bwd_hub & 0xFFFF, bwd_hub >> 16, sem), 1);
+        inc_hubs_records();
         cb_pop_front(cb_partial, n);
+    } else {
+        auto member_xy = [](uint32_t i) { return get_common_arg_val<uint32_t>(CRT_MEMBER_NOC + i); };
+        // ---- local records -> the row owners' pre tables ([row][stat][half][member], 64 B), one row chunk at a
+        // time (the staging records are rewritten per chunk: barrier first) ----
+        const uint32_t pre_table = get_write_ptr(cb_pre_table);  // same address on every core
+        for (uint32_t r0 = 0; r0 < w.crt; r0 += row_chunk) {
+            const uint32_t n = min_u32(row_chunk, w.crt - r0);
+            cb_wait_front(cb_partial, n * nstats);
+            for (uint32_t s = 0; s < nstats; ++s) {
+                for (uint32_t r = 0; r < n; ++r) {
+                    const uint32_t rec = extract_record(s * n + r);
+                    const uint32_t tr = r0 + r;
+                    const uint32_t o = tr / rows_per_owner;
+                    const uint32_t xy = member_xy(o);
+                    const uint32_t blk = pre_table + ((tr - o * rows_per_owner) * nstats + s) * K * RECORD_BYTES;
+                    for (uint32_t h = 0; h < 2; ++h) {
+                        noc_async_write(
+                            rec + h * (RECORD_BYTES / 2),
+                            get_noc_addr(xy & 0xFFFF, xy >> 16, blk + (h * K + w.m) * (RECORD_BYTES / 2)),
+                            RECORD_BYTES / 2);
+                    }
+                }
+            }
+            noc_async_write_barrier();
+            cb_pop_front(cb_partial, n * nstats);
+        }
+        {
+            const uint32_t sem = get_semaphore(sem_pre);
+            for (uint32_t o = 0; o < n_owners; ++o) {
+                const uint32_t xy = member_xy(o);
+                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, sem), 1);
+            }
+        }
+        const uint32_t orows = owner_rows(w.m);
+        const uint32_t orow0 = w.m * rows_per_owner;
+        if (orows > 0) {
+            // ---- row owner: pre-combined records (one per row and stat) -> both hubs ----
+            for (uint32_t r0 = 0; r0 < orows; r0 += row_chunk) {
+                const uint32_t n = min_u32(row_chunk, orows - r0);
+                cb_wait_front(cb_partial, n * nstats);
+                for (uint32_t s = 0; s < nstats; ++s) {
+                    for (uint32_t r = 0; r < n; ++r) {
+                        publish_to_hubs(extract_record(s * n + r), orow0 + r0 + r, s, 0);
+                    }
+                }
+                noc_async_write_barrier();
+                cb_pop_front(cb_partial, n * nstats);
+            }
+            inc_hubs_records();
+            // ---- row owner: final per-row stats -> every member's final table ([row][stat], 128 B) ----
+            const uint32_t final_table = get_write_ptr(cb_final_table);
+            for (uint32_t r0 = 0; r0 < orows; r0 += row_chunk) {
+                const uint32_t n = min_u32(row_chunk, orows - r0);
+                cb_wait_front(cb_partial, n * nstats);  // nfinal stats, padded to nstats (one block size per CB)
+                for (uint32_t s = 0; s < nfinal; ++s) {
+                    for (uint32_t r = 0; r < n; ++r) {
+                        const uint32_t rec = extract_record(s * n + r);
+                        const uint32_t dst = final_table + ((orow0 + r0 + r) * nfinal + s) * RECORD_BYTES;
+                        for (uint32_t i = 0; i < K; ++i) {
+                            const uint32_t xy = member_xy(i);
+                            noc_async_write(rec, get_noc_addr(xy & 0xFFFF, xy >> 16, dst), RECORD_BYTES);
+                        }
+                    }
+                }
+                noc_async_write_barrier();
+                cb_pop_front(cb_partial, n * nstats);
+            }
+            const uint32_t sem = get_semaphore(sem_final);
+            for (uint32_t i = 0; i < K; ++i) {
+                const uint32_t xy = member_xy(i);
+                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, sem), 1);
+            }
+        }
     }
 
     // ---- store_own_block ----

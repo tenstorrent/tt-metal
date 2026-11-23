@@ -129,6 +129,65 @@ inline void load_affine_slice(const Acc& acc, uint32_t p, const WorkerId& w) {
     cb_push_back(cb, w.cw);
 }
 
+// Fill gather tiles [0, n_tiles) of `cb` (Float32, zeroed) with n_j for partitions j < n_parts (all 32 rows).
+template <typename WidthFn>
+inline void fill_partition_widths(const Noc& noc, uint32_t cb, uint32_t n_tiles, uint32_t n_parts, WidthFn width) {
+    CircularBuffer cb_consts(cb);
+    cb_reserve_back(cb, n_tiles);
+    for (uint32_t t = 0; t < n_tiles; ++t) {
+        noc.async_write_zeros(cb_consts, TILE * TILE * 4, {.offset_bytes = t * TILE * TILE * 4});
+    }
+    noc.write_zeros_l1_barrier();
+    volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb));
+    for (uint32_t j = 0; j < n_parts; ++j) {
+        const uint32_t bits = u32_to_f32_bits(width(j));
+        for (uint32_t r = 0; r < TILE; ++r) {
+            t[(j / TILE) * TILE * TILE + f32_tile_word(r, j % TILE)] = bits;
+        }
+    }
+    cb_push_back(cb, n_tiles);
+}
+
+// Valid columns of member m's slice (member widths; the slice's W tail sits in the last member).
+inline uint32_t member_valid_cols(uint32_t m) {
+    const uint32_t ws = m * cw_nom;
+    const uint32_t wtiles = (Wlt - ws) < cw_nom ? (Wlt - ws) : cw_nom;
+    uint32_t n = wtiles * TILE;
+    if (ws + wtiles == Wlt) {
+        n -= TILE - w_valid_last;
+    }
+    return n;
+}
+
+// Place M records (one half h of one (row, stat) block: M consecutive 64 B half-records at L1 `src`) as ROWS
+// j0 .. j0 + M - 1 of the gather tiles at `gtiles` (row j -> tile j / 32, face (j % 32) / 16 * 2 + h, row j % 16):
+// one local NoC copy per run that stays inside a 16-row face.
+inline void place_records(uint32_t src, uint32_t gtiles, uint32_t j0, uint32_t M, uint32_t h) {
+    constexpr uint32_t f32_tile_bytes = TILE * TILE * 4;
+    uint32_t m0 = 0;
+    while (m0 < M) {
+        const uint32_t j = j0 + m0;
+        const uint32_t jr = j & 31;
+        const uint32_t room = FACE - (jr & 15);
+        const uint32_t n = (M - m0) < room ? (M - m0) : room;
+        const uint32_t dst = gtiles + (j >> 5) * f32_tile_bytes + ((jr >> 4) * 512 + (jr & 15) * FACE + h * 256) * 4;
+        noc_async_read(get_noc_addr(src + m0 * (RECORD_BYTES / 2)), dst, n * (RECORD_BYTES / 2));
+        m0 += n;
+    }
+}
+
+// Reserve and zero n Float32 gather tiles of cb_gather_rows (rows >= P must read 0); returns their base.
+inline uint32_t reserve_zeroed_gather_tiles(const Noc& noc, uint32_t n) {
+    constexpr uint32_t f32_tile_bytes = TILE * TILE * 4;
+    CircularBuffer cb_g(cb_gather_rows);
+    cb_reserve_back(cb_gather_rows, n);
+    for (uint32_t t = 0; t < n; ++t) {
+        noc.async_write_zeros(cb_g, f32_tile_bytes, {.offset_bytes = t * f32_tile_bytes});
+    }
+    noc.write_zeros_l1_barrier();
+    return get_write_ptr(cb_gather_rows);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -152,6 +211,10 @@ void kernel_main() {
         // W tail of the caller's shard is not zeroed: compute masks it (cb_mask, below).
         cb_reserve_back(cb_x, w.crt * w.cw);
         cb_push_back(cb_x, w.crt * w.cw);
+        if constexpr (pre_combine) {
+            cb_reserve_back(cb_x_stats, w.crt * w.cw);  // the same shard, the local-stats pass's own view
+            cb_push_back(cb_x_stats, w.crt * w.cw);
+        }
     } else {
         AGRN_ZONE("rd_x");
         const auto x_acc = TensorAccessor(x_args, get_common_arg_val<uint32_t>(CRT_X_ADDR), x_page_bytes);
@@ -190,41 +253,25 @@ void kernel_main() {
         }
     }
     if constexpr (is_ln) {
-        // n_j: valid columns of partition j = q*K + m (member m's width; every chip has the same W_local).
-        CircularBuffer cb_consts(cb_stat_consts);
-        cb_reserve_back(cb_stat_consts, gather_tiles);
-        for (uint32_t t = 0; t < gather_tiles; ++t) {
-            noc.async_write_zeros(cb_consts, TILE * TILE * 4, {.offset_bytes = t * TILE * TILE * 4});
+        if constexpr (pre_combine) {
+            // on-chip pre-combine: partition j = member j; cross-chip: partition q = chip q (every chip: W_local)
+            fill_partition_widths(noc, cb_stat_consts, gt_pc, K, [](uint32_t j) { return member_valid_cols(j); });
+            fill_partition_widths(noc, cb_stat_consts_x, gather_tiles, P, [](uint32_t) { return W_local; });
+        } else {
+            // n_j: valid columns of partition j = q*K + m (member m's width; every chip has the same W_local)
+            fill_partition_widths(
+                noc, cb_stat_consts, gather_tiles, P, [](uint32_t j) { return member_valid_cols(j % K); });
         }
-        noc.write_zeros_l1_barrier();
-        volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_stat_consts));
-        for (uint32_t j = 0; j < P; ++j) {
-            const uint32_t m = j % K;
-            const uint32_t ws = m * cw_nom;
-            const uint32_t wtiles = (Wlt - ws) < cw_nom ? (Wlt - ws) : cw_nom;
-            uint32_t n = wtiles * TILE;
-            if (ws + wtiles == Wlt) {
-                n -= TILE - w_valid_last;
-            }
-            const uint32_t bits = u32_to_f32_bits(n);
-            for (uint32_t r = 0; r < TILE; ++r) {
-                t[(j / TILE) * TILE * TILE + f32_tile_word(r, j % TILE)] = bits;
-            }
-        }
-        cb_push_back(cb_stat_consts, gather_tiles);
     }
 
-    // ---- zero the gather tiles once, off the critical path (rows >= P must read 0) ----
-    CircularBuffer cb_g(cb_gather_rows);
     constexpr uint32_t f32_tile_bytes = TILE * TILE * 4;
-    const uint32_t n_gather_tiles = w.crt * nstats * gather_tiles;
-    cb_reserve_back(cb_gather_rows, n_gather_tiles);
-    const uint32_t gather_base = get_write_ptr(cb_gather_rows);
     const uint32_t landing = get_write_ptr(cb_record_landing);
-    for (uint32_t t = 0; t < n_gather_tiles; ++t) {
-        noc.async_write_zeros(cb_g, f32_tile_bytes, {.offset_bytes = t * f32_tile_bytes});
+    // ---- zero the gather tiles once, off the critical path (rows >= P must read 0) ----
+    // (pre_combine: the gather CB holds one row chunk and is reused, so each chunk zeroes its own tiles)
+    uint32_t gather_base = 0;
+    if constexpr (!pre_combine) {
+        gather_base = reserve_zeroed_gather_tiles(noc, w.crt * nstats * gather_tiles);
     }
-    noc.write_zeros_l1_barrier();
 
     // ---- load_gamma_beta_slice ----
     {
@@ -241,34 +288,24 @@ void kernel_main() {
         }
     }
 
-    // ---- gather_partials_block ----
-    {
-        volatile tt_l1_ptr uint32_t* ready =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready));
-        AGRN_ZONE("rd_wait_stats");
-        volatile tt_l1_ptr uint32_t* ready_bwd =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready_bwd));
-        noc_semaphore_wait_min(ready, 1);  // both hubs: own slot + every remote slot of the table landed
-        noc_semaphore_wait_min(ready_bwd, 1);
-    }
     const uint32_t table = get_write_ptr(cb_stats_table);  // same address on every core of every chip
     const uint32_t hub_mask = get_common_arg_val<uint32_t>(CRT_HUB_MASK);
     const uint32_t fwd_hub = get_common_arg_val<uint32_t>(CRT_FWD_HUB);
     const uint32_t bwd_hub = get_common_arg_val<uint32_t>(CRT_BWD_HUB);
-    constexpr uint32_t row_rec_bytes = K * nstats * RECORD_BYTES;  // one tile-row of one slot
+    constexpr uint32_t row_rec_bytes = KT * nstats * RECORD_BYTES;  // one tile-row of one slot
     constexpr uint32_t slot_bytes = R * row_rec_bytes;
-    {
-        // Each 128 B record (32 per-row values of one partition j = q * K + m and one stat s) becomes ROW j of gather
-        // tile (s, j / 32): values 0..15 -> face (j%32)/16*2, row j%16; values 16..31 -> the next face. The writers
-        // store a slot's members half-split ([values 0..15 of m = 0..K-1][values 16..31 ...]), so the K rows of one
-        // slot land with one contiguous NoC read per half (split only where they cross a 16-row face boundary): no
-        // RISC-V copy, few large requests to the hubs. Compute transposes the tiles (exact, in DEST).
-        AGRN_ZONE("rd_gather");
-        for (uint32_t r = 0; r < w.crt; ++r) {
-            const uint32_t tr = w.row_start + r;
-            const uint32_t gbase = gather_base + r * nstats * gather_tiles * f32_tile_bytes;
-            // one contiguous read per slot (its K members x nstats records of this tile-row) into the landing
-            // buffer: G requests per tile-row at the hubs (they serve every active worker)
+    // Each 128 B record (32 per-row values of one partition j = q * KT + m and one stat s) becomes ROW j of gather
+    // tile (s, j / 32): values 0..15 -> face (j%32)/16*2, row j%16; values 16..31 -> the next face. The writers store
+    // a slot's members half-split ([values 0..15 of m = 0..KT-1][values 16..31 ...]), so the KT rows of one slot land
+    // with one contiguous NoC read per half (split only where they cross a 16-row face boundary): no RISC-V copy, few
+    // large requests to the hubs. Compute transposes the tiles (exact, in DEST).
+    // gather_partials (rows [tr0, tr0 + n) into the gather tiles at gbase0): one contiguous read per slot (its KT
+    // members x nstats records of the tile-row) into the landing buffer — G requests per tile-row at the hubs — then
+    // the local placement copies.
+    auto gather_partials = [&](uint32_t tr0, uint32_t n, uint32_t gbase0) {
+        for (uint32_t r = 0; r < n; ++r) {
+            const uint32_t tr = tr0 + r;
+            const uint32_t gbase = gbase0 + r * nstats * gather_tiles * f32_tile_bytes;
             for (uint32_t q = 0; q < G; ++q) {
                 const uint32_t hub = ((hub_mask >> q) & 1u) ? bwd_hub : fwd_hub;
                 noc_async_read(
@@ -277,27 +314,100 @@ void kernel_main() {
                     row_rec_bytes);
             }
             noc_async_read_barrier();
-            // place each (slot, stat, half) run of K consecutive tile rows with a local (own-L1) NoC copy
             for (uint32_t q = 0; q < G; ++q) {
                 for (uint32_t s = 0; s < nstats; ++s) {
                     for (uint32_t h = 0; h < 2; ++h) {
-                        const uint32_t src = landing + q * row_rec_bytes + ((s * 2 + h) * K) * (RECORD_BYTES / 2);
-                        uint32_t m0 = 0;
-                        while (m0 < K) {
-                            const uint32_t j = q * K + m0;
-                            const uint32_t jr = j & 31;
-                            const uint32_t room = FACE - (jr & 15);
-                            const uint32_t n = (K - m0) < room ? (K - m0) : room;
-                            const uint32_t dst = gbase + (s * gather_tiles + (j >> 5)) * f32_tile_bytes +
-                                                 ((jr >> 4) * 512 + (jr & 15) * FACE + h * 256) * 4;
-                            noc_async_read(get_noc_addr(src + m0 * (RECORD_BYTES / 2)), dst, n * (RECORD_BYTES / 2));
-                            m0 += n;
-                        }
+                        place_records(
+                            landing + q * row_rec_bytes + ((s * 2 + h) * KT) * (RECORD_BYTES / 2),
+                            gbase + s * gather_tiles * f32_tile_bytes,
+                            q * KT,
+                            KT,
+                            h);
                     }
                 }
             }
             noc_async_read_barrier();
+        }
+    };
+    auto wait_stats_ready = [&]() {
+        volatile tt_l1_ptr uint32_t* ready =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready));
+        AGRN_ZONE("rd_wait_stats");
+        volatile tt_l1_ptr uint32_t* ready_bwd =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready_bwd));
+        noc_semaphore_wait_min(ready, 1);  // both hubs: own slot + every remote slot of the table landed
+        noc_semaphore_wait_min(ready_bwd, 1);
+    };
+
+    if constexpr (!pre_combine) {
+        // ---- gather_partials_block ----
+        wait_stats_ready();
+        AGRN_ZONE("rd_gather");
+        for (uint32_t r = 0; r < w.crt; ++r) {
+            gather_partials(w.row_start + r, 1, gather_base + r * nstats * gather_tiles * f32_tile_bytes);
             cb_push_back(cb_gather_rows, nstats * gather_tiles);
+        }
+    } else {
+        // ---- row owner: pre-combine gather, then the cross-chip gather of its rows ----
+        const uint32_t orows = owner_rows(w.m);
+        const uint32_t orow0 = w.m * rows_per_owner;
+        if (orows > 0) {
+            volatile tt_l1_ptr uint32_t* pre = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_pre));
+            noc_semaphore_wait_min(pre, K);  // every member's records of my rows landed in my pre table
+            const uint32_t pre_table = get_write_ptr(cb_pre_table);
+            for (uint32_t r0 = 0; r0 < orows; r0 += row_chunk) {
+                const uint32_t n = min_u32(row_chunk, orows - r0);
+                const uint32_t gbase0 = reserve_zeroed_gather_tiles(noc, n * nstats * gt_pc);
+                for (uint32_t r = 0; r < n; ++r) {
+                    const uint32_t gbase = gbase0 + r * nstats * gt_pc * f32_tile_bytes;
+                    for (uint32_t s = 0; s < nstats; ++s) {
+                        for (uint32_t h = 0; h < 2; ++h) {
+                            place_records(
+                                pre_table + (((r0 + r) * nstats + s) * 2 + h) * K * (RECORD_BYTES / 2),
+                                gbase + s * gt_pc * f32_tile_bytes,
+                                0,
+                                K,
+                                h);
+                        }
+                    }
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_gather_rows, n * nstats * gt_pc);
+            }
+            wait_stats_ready();
+            for (uint32_t r0 = 0; r0 < orows; r0 += row_chunk) {
+                const uint32_t n = min_u32(row_chunk, orows - r0);
+                const uint32_t gbase0 = reserve_zeroed_gather_tiles(noc, n * nstats * gather_tiles);
+                gather_partials(orow0 + r0, n, gbase0);
+                cb_push_back(cb_gather_rows, n * nstats * gather_tiles);
+            }
+        }
+        // ---- every member: the final per-row stats of all its rows, one row chunk at a time (column 0) ----
+        volatile tt_l1_ptr uint32_t* fin = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_final));
+        noc_semaphore_wait_min(fin, n_owners);
+        const uint32_t final_table = get_write_ptr(cb_final_table);
+        auto to_col0 = [&](uint32_t cb, uint32_t tr0, uint32_t n, uint32_t s) {
+            cb_reserve_back(cb, n);
+            const uint32_t base = get_write_ptr(cb);
+            for (uint32_t r = 0; r < n; ++r) {
+                volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    final_table + ((tr0 + r) * nfinal + s) * RECORD_BYTES);
+                volatile tt_l1_ptr uint32_t* t =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + r * f32_tile_bytes);
+                for (uint32_t i = 0; i < TILE; ++i) {
+                    t[f32_tile_word(i, 0)] = rec[i];
+                }
+            }
+            cb_push_back(cb, n);
+        };
+        for (uint32_t r0 = 0; r0 < w.crt; r0 += row_chunk) {
+            const uint32_t n = min_u32(row_chunk, w.crt - r0);
+            if constexpr (is_ln) {
+                to_col0(cb_final_mean, r0, n, 0);
+                to_col0(cb_final_inv, r0, n, 1);
+            } else {
+                to_col0(cb_final_inv, r0, n, 0);
+            }
         }
     }
 }

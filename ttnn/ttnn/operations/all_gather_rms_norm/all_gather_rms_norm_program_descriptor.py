@@ -71,6 +71,13 @@ CB_X32 = 22
 CB_GAMMA_ROWS = 23
 CB_GATHER_ROWS = 24
 CB_STATS_TABLE = 25  # hubs: per-call stats table (program-scoped, see agrn_common.hpp)
+# WIDTH_SHARDED row-owner pre-combine (pre_combine, Refinement 1b)
+CB_X_STATS = 26  # second zero-copy view of the input shard: the local-stats pass pops it per row chunk
+CB_PRE_TABLE = 27  # row owner: the k members' records of its rows
+CB_FINAL_TABLE = 28  # every member: the final per-row stats records (inv | mean, rstd) of all R rows
+CB_FINAL_INV = 29  # reader -> compute: RMS inv / LN rstd (col 0) of one row chunk
+CB_FINAL_MEAN = 30  # reader -> compute: LN mean (col 0) of one row chunk
+CB_STAT_CONSTS_X = 31  # LN: n_q of the cross-chip partitions (one per chip)
 
 # ---- program-local semaphores (declared before the fabric connections take theirs) ----
 SEM_RECORDS_LOCAL = 0
@@ -79,6 +86,8 @@ SEM_OWN_READY = 2
 SEM_LANDED = 3
 SEM_STATS_READY_BWD = 4
 SEM_STATS_DONE = 5
+SEM_PRE = 6  # row owner: one inc per member (its records of my rows landed in my pre table)
+SEM_FINAL = 7  # member: one inc per row owner (its final records landed in my final table)
 
 RECORD_BYTES = 128
 TILE = 32
@@ -87,6 +96,7 @@ TILE = 32
 P_CAP = 128  # stats partitions per row (G * k), <= 4 gather tiles
 COMB_TILE_COST_FUSED = 1  # select_split cost model: one gather-tile reduce per row-tile
 STATS_TABLE_CAP = 256 * 1024  # bytes of the stats table on each hub
+ROW_CHUNK_L1_BUDGET = 320 * 1024  # pre_combine: bytes of the row-chunked per-row CBs (sets row_chunk)
 
 
 def _knob(name, default):
@@ -200,12 +210,13 @@ def shard_cores(tensor):
     return set(_ordered_shard_cores(mc.shard_spec.grid, True))
 
 
-def select_sharded_split(geo: Geometry, input_tensor, G, k_cap_fn):
+def select_sharded_split(geo: Geometry, input_tensor):
     """HEIGHT / WIDTH_SHARDED input: the shard spec IS the work split, block = the resident shard (zero-copy cb_x).
 
     HEIGHT: k = 1, one row-group per shard (ragged last shard -> last_crt). WIDTH: one group (all R tile-rows),
-    k = number of W shards — the k members' partials meet in the stats table (P = G * k). Returns (Split, worker
-    cores in worker-index order g * k + m)."""
+    k = number of W shards — the k members' partials are pre-combined on the chip by row owners (pre_combine), so
+    the stats table holds one record per (chip, row, stat) whatever k is. Returns (Split, worker cores in
+    worker-index order g * k + m)."""
     mc = input_tensor.memory_config()
     ss = mc.shard_spec
     sh, sw = int(ss.shape[0]), int(ss.shape[1])
@@ -230,11 +241,6 @@ def select_sharded_split(geo: Geometry, input_tensor, G, k_cap_fn):
             raise RuntimeError(f"all_gather_rms_norm: ragged WIDTH shards ({geo.Wlt} tiles / {unit_w}) over R > 1")
         if len(order) < k:
             raise RuntimeError(f"all_gather_rms_norm: {k} W shards but only {len(order)} shard-grid cores")
-        if k > k_cap_fn():
-            raise RuntimeError(
-                f"all_gather_rms_norm: WIDTH_SHARDED k = {k} shards exceeds the stats-partition cap {k_cap_fn()} "
-                f"(STATS_TABLE_CAP at R = {geo.R}); the on-chip pre-combine of the k members is not built (Refinement 1b)"
-            )
         return Split(k, 1, geo.R, 1, unit_w, geo.R), order[:k]
     raise RuntimeError(f"all_gather_rms_norm: memory layout {mc.memory_layout} is not built")
 
@@ -523,21 +529,27 @@ def create_mesh_program_descriptor(
     k_cap = max(1, min(k_cap, stats_k_cap(geo.R, G, nstats)))
     x_sharded = input_tensor.memory_config().is_sharded()
     if x_sharded:
-        # k is fixed by the shard count: only the stats-table cap binds (the combine takes any number of gather
-        # tiles; P_CAP / the LN one-gather-tile rule are the interleaved split's cost choices, not limits)
-        def _cap():
-            return stats_k_cap(geo.R, G, nstats)
-
-        split, shard_order = select_sharded_split(geo, input_tensor, G, _cap)
+        # k is fixed by the shard count (WIDTH: pre-combined on the chip, so no stats-table cap on k)
+        split, shard_order = select_sharded_split(geo, input_tensor)
     else:
         split = select_split(geo.R, geo.Wlt, Nw, G, k_cap)
         shard_order = None
     k = split.k
-    P = G * k
-    gather_tiles = -(-P // 32)
+    # WIDTH_SHARDED: row-owner pre-combine (op_design.md Refinement 1b). Member m owns tile-rows [m*rpo, ...): it sums
+    # the k members' partials of its rows into ONE record per (row, stat) before the fabric round (table: kt = 1
+    # member per row), combines the G chips' records after it, and returns final per-row stats to all k members.
+    pre_combine = x_sharded and input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    kt = 1 if pre_combine else k  # members per (slot, row) in the stats table
+    P = G * kt
+    gather_tiles = -(-P // 32)  # gather tiles of the cross-chip combine
+    gt_pc = -(-k // 32) if pre_combine else 0  # gather tiles of the on-chip pre-combine (P = k)
+    gt_max = max(gather_tiles, gt_pc)
+    rpo = -(-geo.R // k) if pre_combine else 0  # tile-rows per row owner
+    n_owners = -(-geo.R // rpo) if pre_combine else 0
+    nfinal = 2 if is_ln else 1  # final per-row stats returned to the members (inv | mean, rstd)
     crt_max = split.rows_hi
     cw_max = split.cw_nom
-    slot_bytes = geo.R * k * nstats * RECORD_BYTES
+    slot_bytes = geo.R * kt * nstats * RECORD_BYTES
     table_bytes = G * slot_bytes
     if table_bytes > STATS_TABLE_CAP:
         raise RuntimeError(
@@ -564,6 +576,22 @@ def create_mesh_program_descriptor(
     x_is_f32 = x_dtype == ttnn.float32
     # sharded input with a W tail: the padding of the caller's shard is never zeroed — masked in compute instead
     mask_tail = input_tensor.memory_config().is_sharded() and not geo.aligned
+    # pre_combine: the per-row Float32 CBs hold one row CHUNK (row_chunk tile-rows), never crt = R rows; the chunk is
+    # the largest that keeps them within ROW_CHUNK_L1_BUDGET. Elsewhere the chunk is the whole block (one pass).
+    if pre_combine:
+        if is_ln:
+            per_row = (nstats * (1 + 2 * gt_max) + 6 + gt_max + 2) * T32 + cw_max * T_acc
+        else:
+            per_row = (1 + 2 * gt_max + 2) * T32 + (cw_max * T_acc if mask_tail else 0)
+        cap = max(1, min(geo.R, _knob("ROW_CHUNK_L1_BUDGET", ROW_CHUNK_L1_BUDGET) // per_row))
+        # Every block pushed into a per-row CB must stay contiguous in its ring: all chunks have exactly row_chunk
+        # rows (a divisor of R) and every owner a multiple of them (rpo rounded up to row_chunk; the last owner's
+        # R - (n_owners - 1) * rpo rows is then a multiple too).
+        row_chunk = max(d for d in range(1, cap + 1) if geo.R % d == 0)
+        rpo = -(-rpo // row_chunk) * row_chunk
+        n_owners = -(-geo.R // rpo)
+    else:
+        row_chunk = crt_max
 
     # destination of the slices: final output pages (aligned) or the slot-contiguous staging scratch (R_U)
     staging = staging_buffer(mesh_device, geo, out_dtype) if is_ru else None
@@ -651,6 +679,9 @@ def create_mesh_program_descriptor(
         int(x_sharded),  # worker identity from the shard map (common args), zero-copy cb_x, masked W tail
         split.last_rows,
         int(out_in_place),
+        int(pre_combine),
+        row_chunk,
+        rpo,
     ]
     # Sharded: the local shard is consumed in place, never through an accessor -> empty accessor args.
     acc_ct = list(
@@ -667,6 +698,7 @@ def create_mesh_program_descriptor(
         w_tiles = split.member_width(m, geo.Wlt)
         n = w_tiles * TILE - ((TILE - geo.w_valid_last) if m * split.cw_nom + w_tiles == geo.Wlt else 0)
         inv_n.append(_f32_bits(1.0 / max(1, n)))
+    inv_wl = _f32_bits(1.0 / geo.W_local)  # pre_combine: the row owner's slice mean
 
     # ---- port compile-time args (agrn_port_common.hpp) ----
     port_ct = [
@@ -706,10 +738,14 @@ def create_mesh_program_descriptor(
         tagged = [CB_GATHER_ROWS]  # exact fp32 copy into DEST for the transpose
         if is_ln:
             tagged += [CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_COL]
+            if pre_combine:
+                tagged += [CB_STAT_CONSTS_X, CB_FINAL_MEAN]
             if not mask_tail and (x_is_f32 or not x_sharded):
                 # exact x in DEST (the Float32 x block); a sharded W tail's masked sums read x through srcA (DestReuse
                 # mask multiply), which a tagged CB cannot feed — fp32 x is truncated to tf32 there
                 tagged.append(CB_X if x_is_f32 else CB_X32)
+                if pre_combine and x_is_f32:
+                    tagged.append(CB_X_STATS)
         else:
             # RMS: the local collapse and the cross-chip combine sum the partials in fp32 (Accurate SFPU reduce
             # reading these CBs exactly): "per-row partial sums MUST stay fp32 on the wire and when summed" (prompt)
@@ -777,6 +813,8 @@ def create_mesh_program_descriptor(
                 SEM_LANDED,
                 SEM_STATS_READY_BWD,
                 SEM_STATS_DONE,
+                SEM_PRE,
+                SEM_FINAL,
             )
         ]
 
@@ -789,12 +827,13 @@ def create_mesh_program_descriptor(
         cbs = [
             cb_x_desc,
             _cb(CB_SCALER, 1, ttnn.tile_size(ttnn.bfloat16), ttnn.bfloat16, full),
-            _cb(CB_PARTIAL, crt_max * nstats, T32, ttnn.float32, full),
-            _cb(CB_RECORD_STAGING, crt_max * nstats, RECORD_BYTES, ttnn.float32, full),
-            _cb(CB_GATHER_ROWS, crt_max * nstats * gather_tiles, T32, ttnn.float32, full),
-            _cb(CB_RECORD_LANDING, G * k * nstats, RECORD_BYTES, ttnn.float32, full),
-            _cb(CB_GATHERED, crt_max * nstats * gather_tiles, T32, ttnn.float32, full),
-            _cb(CB_INV, crt_max, T_acc, acc_dtype, full),
+            # per-row CBs hold one row chunk (row_chunk = the whole block unless pre_combine)
+            _cb(CB_PARTIAL, row_chunk * nstats, T32, ttnn.float32, full),
+            _cb(CB_RECORD_STAGING, row_chunk * nstats, RECORD_BYTES, ttnn.float32, full),
+            _cb(CB_GATHER_ROWS, row_chunk * nstats * gt_max, T32, ttnn.float32, full),
+            _cb(CB_RECORD_LANDING, G * kt * nstats, RECORD_BYTES, ttnn.float32, full),
+            _cb(CB_GATHERED, row_chunk * nstats * gt_max, T32, ttnn.float32, full),
+            _cb(CB_INV, row_chunk, T_acc, acc_dtype, full),
             (
                 ttnn.cb_descriptor_from_sharded_tensor(
                     CB_OUT_BLOCK, output_tensor, p * geo.Wlt * out_page, geo.Wlt * out_page, full
@@ -818,25 +857,39 @@ def create_mesh_program_descriptor(
             sq_dtype = ttnn.bfloat16 if (is_ln and x_sharded and not x_is_f32) else acc_dtype
             cbs += [
                 _cb(CB_MASK, cw_max if mask_tail else 1, T_acc, acc_dtype, full),  # sharded tail: the mask block
-                _cb(CB_LN_SQ, crt_max * cw_max, ttnn.tile_size(sq_dtype), sq_dtype, full),
+                _cb(CB_LN_SQ, row_chunk * cw_max, ttnn.tile_size(sq_dtype), sq_dtype, full),
             ]
         if is_ln:
             cbs += [
-                _cb(CB_LN_M, crt_max, T32, ttnn.float32, full),
-                _cb(CB_LN_SHIFT, crt_max, T32, ttnn.float32, full),
-                _cb(CB_STAT_CONSTS, gather_tiles, T32, ttnn.float32, full),
-                _cb(CB_MEAN_COL, crt_max, T32, ttnn.float32, full),
-                _cb(CB_MEAN_B, crt_max, T32, ttnn.float32, full),
-                _cb(CB_RSTD_B, crt_max, T_acc, acc_dtype, full),
-                _cb(CB_LN_TMP, crt_max * gather_tiles, T32, ttnn.float32, full),
+                _cb(CB_LN_M, row_chunk, T32, ttnn.float32, full),
+                _cb(CB_LN_SHIFT, row_chunk, T32, ttnn.float32, full),
+                _cb(CB_STAT_CONSTS, gt_pc if pre_combine else gather_tiles, T32, ttnn.float32, full),
+                _cb(CB_MEAN_COL, row_chunk, T32, ttnn.float32, full),
+                _cb(CB_MEAN_B, row_chunk, T32, ttnn.float32, full),
+                _cb(CB_RSTD_B, row_chunk, T_acc, acc_dtype, full),
+                _cb(CB_LN_TMP, row_chunk * gt_max, T32, ttnn.float32, full),
             ]
+            if pre_combine:
+                cbs += [
+                    _cb(CB_STAT_CONSTS_X, gather_tiles, T32, ttnn.float32, full),
+                    _cb(CB_FINAL_MEAN, row_chunk, T32, ttnn.float32, full),
+                ]
             # 16-bit DEST / sharded input: the LN paths read cb_x itself (bf16 / bf8b lands in DEST exactly anyway)
             if not x_is_f32 and fp32_dest and not x_sharded:
                 cbs.append(_cb(CB_X32, crt_max * cw_max, T32, ttnn.float32, full))
         else:
-            cbs.append(_cb(CB_SUMSQ, crt_max, T_acc, acc_dtype, full))
+            cbs.append(_cb(CB_SUMSQ, row_chunk, T_acc, acc_dtype, full))
         if is_ru:
             cbs.append(_cb(CB_ASSEMBLE, src_max + 1, out_page, out_dtype, full))
+        if pre_combine:
+            x_stats_desc = ttnn.cb_descriptor_from_sharded_tensor(CB_X_STATS, input_tensor)  # zero-copy, 2nd view
+            x_stats_desc.core_ranges = full
+            cbs += [
+                x_stats_desc,
+                _cb(CB_PRE_TABLE, rpo * k * nstats, RECORD_BYTES, ttnn.float32, full),
+                _cb(CB_FINAL_TABLE, geo.R * nfinal, RECORD_BYTES, ttnn.float32, full),
+                _cb(CB_FINAL_INV, row_chunk, T32, ttnn.float32, full),
+            ]
         program.cbs = cbs
 
         # ---- worker kernels (common runtime args only) ----
@@ -857,6 +910,9 @@ def create_mesh_program_descriptor(
         common += [c.y * gx + c.x for c in port_list]
         common += [pack(virt((c.x, c.y))) for c in port_list]
         common += inv_n
+        common += [inv_wl]
+        if pre_combine:
+            common += active_noc  # member NoC coords: row owners and the final-stats fan-out
         if x_sharded:
             # worker identity: byte [y * gx + x] = worker index (shard order), 0xFF = not a worker; 4 per word
             wmap = [0xFF] * (gx * gy)
@@ -950,7 +1006,7 @@ def create_mesh_program_descriptor(
                     slot_bytes,
                     stats_addr,
                     st_expect,
-                    split.n_active,
+                    n_owners if pre_combine else split.n_active,  # record writers per hub table
                     len(st_sends),
                 ]
                 s_args += st_sends
