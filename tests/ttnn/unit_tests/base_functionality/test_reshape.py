@@ -1371,3 +1371,49 @@ def test_reshape_uint8_interleaved_to_sharded(device, pad_value):
         in_padding = torch.ones(padded.shape[-2:], dtype=torch.bool)
         in_padding[:h, :w] = False
         assert (padded[:, in_padding] == pad_value).all(), f"expected tile padding to equal {pad_value}"
+
+
+# Repro from #61727: a tiled reshape whose program-cache miss falls between end_trace_capture and
+# execute_trace lands its op-owned mapping tensor on an address the trace later overwrites, which
+# hangs the next cache-hit reshape. `warmup_first` compiles reshape before begin_trace_capture;
+# `trace_first` skips that warmup. Timeout turns the hang into a failure instead of stalling CI.
+@pytest.mark.timeout(60)
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [((1, 1), {"trace_region_size": 50_000_000})],
+    indirect=True,
+)
+@pytest.mark.parametrize("order", ["warmup_first", "trace_first"])
+def test_reshape_tile_trace_warmup_hazard(mesh_device, order, expect_error):
+    def _reshape_once():
+        x = ttnn.from_torch(torch.randn(64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        ttnn.reshape(x, (32, 128))
+        ttnn.synchronize_device(mesh_device)
+
+    if order == "warmup_first":
+        _reshape_once()
+
+    x = ttnn.from_torch(torch.randn(4096, 4096), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    ttnn.add(x, x)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    ttnn.add(x, x)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    if order == "trace_first":
+        if _fail_on_unsafe_trace_alloc_set():
+            # Flag on: the hazardous cache-miss alloc here must raise, not silently corrupt memory.
+            with expect_error(RuntimeError, r"Unsafe device allocation.*#61727"):
+                _reshape_once()
+            ttnn.release_trace(mesh_device, trace_id)
+            return
+        _reshape_once()
+
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    _reshape_once()
+    ttnn.release_trace(mesh_device, trace_id)
+
+
+def _fail_on_unsafe_trace_alloc_set():
+    import os
+
+    return os.environ.get("TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC", "").lower() in ("1", "true", "yes", "on")

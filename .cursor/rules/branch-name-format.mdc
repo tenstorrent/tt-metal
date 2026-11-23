@@ -1,0 +1,61 @@
+---
+description: Branch names stay short and scoped to the author; the issue number lives in the commit subject and PR title, not in the branch.
+alwaysApply: true
+---
+
+# Branch Name Format
+
+Keep the branch name short and human-readable. The linked GitHub issue number is already carried, canonically, by the **commit subject** (`commit-message-one-line.mdc`) and the **PR title** (`pr-title-format.mdc`). Repeating it in the branch name is noise — branches get renamed, abandoned, and relanded, while issue→commit→PR is the stable thread.
+
+## Rule
+
+```
+<owner>/<short-kebab-slug>
+```
+
+- `<owner>` is your GitHub login (or the team prefix the repo already uses).
+- `<short-kebab-slug>` is 2–6 lowercase hyphen-separated words in imperative voice, describing the change. Aim for ≤ 50 characters total including the owner.
+
+## Good vs bad
+
+```
+✅ mouliraj/document-trace-warmup
+✅ tivince82/reshape-l1-small-opt-in
+✅ friedrich/tilize-block-factory-l1-budget
+✅ mouliraj/reject-int-float-datacopy
+
+❌ mouliraj/61727-document-trace-warmup-and-fail-on-unsafe-alloc (issue number duplicated; already in commit + PR title)
+❌ fix-61727-reshape-trace-mapping-collision (missing <owner>/, and issue number embedded)
+❌ mouliraj/fix_reshape_trace_bug (underscores — not kebab)
+❌ mouliraj/FixReshapeTraceBug (camelCase — not kebab)
+❌ mouliraj/really-long-branch-name-that-reads-like-a-sentence-and-describes-everything-about-the-fix (too long; move detail to the commit / PR body)
+```
+
+## Why the issue number lives elsewhere
+
+- `pr-title-format.mdc` requires `#<issue-number>: <imperative sentence>` in the PR title.
+- `commit-message-one-line.mdc` requires the same `#<issue-number>:` prefix on the commit subject.
+- `pipeline-compare.mdc` locates runs by `head_sha`, not by branch name, so putting the issue in the branch doesn't help the audit either.
+
+Issue → commit → PR title → CI run already form the stable key. The branch is just a working-copy label.
+
+## Exception
+
+Throwaway local work that will **never** become a PR may use any prefix:
+
+- `scratch/*`, `wip/*`, `experiment/*`.
+
+If a scratch branch gets promoted to a real PR, rename it to the canonical shape:
+
+```bash
+git branch -m <owner>/<short-slug>
+git push origin -u <owner>/<short-slug>
+# Let the stranded scratch branch expire or delete it on the remote.
+```
+
+## Never
+
+- Don't embed the issue number — it's already in the commit subject and PR title.
+- Don't use the PR number either (PRs can be superseded by relands).
+- Don't use underscores or camelCase — kebab only.
+- Don't write a sentence-length slug — if the change needs that much context, the PR description is the place for it.

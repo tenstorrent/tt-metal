@@ -55,6 +55,8 @@ bool trace_allocation_skip_program_cache_enabled() {
     return llrt::RunTimeOptions::get_trace_allocation_skip_program_cache_enabled();
 }
 
+bool fail_on_unsafe_trace_alloc_enabled() { return llrt::RunTimeOptions::get_fail_on_unsafe_trace_alloc_enabled(); }
+
 void push_allocation_context(std::string_view ctx) { allocation_context_stack.emplace_back(ctx); }
 
 void pop_allocation_context() {

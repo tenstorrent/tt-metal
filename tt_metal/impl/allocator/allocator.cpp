@@ -131,14 +131,26 @@ void AllocatorImpl::verify_safe_allocation() const {
         return;
     }
 
-    // Emit at most once per host thread for the process lifetime, shared across all allocator instances.
+    // Context is non-empty only when TT_METAL_TRACE_ALLOC_TRACKING=1; otherwise the message is generic.
+    const auto& ctx = current_allocation_context();
+
+    // Opt-in via TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC turns the silent hang in #61727 into a named failure.
+    if (fail_on_unsafe_trace_alloc_enabled()) {
+        TT_THROW(
+            "Unsafe device allocation while a trace is active (#61727). Warm up this op before begin_trace_capture, "
+            "or unset TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC. Context: {}",
+            ctx.empty() ? std::string_view{"<unknown; set TT_METAL_TRACE_ALLOC_TRACKING=1 for op name>"}
+                        : std::string_view{ctx});
+    }
+
     thread_local static bool warning_generated = false;
     if (!warning_generated) {
         log_warning(
             tt::LogMetal,
             "Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers "
-            "may be corrupted once a trace is executed if they are not released before then. Use the trace allocation "
-            "tracker to verify.");
+            "may be corrupted once a trace is executed if they are not released before then. Set "
+            "TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC=1 to fail instead, or TT_METAL_TRACE_ALLOC_TRACKING=1 for per-op "
+            "attribution (#61727).");
         warning_generated = true;
     }
 }

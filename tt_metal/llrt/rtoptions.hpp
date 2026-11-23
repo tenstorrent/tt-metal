@@ -480,6 +480,8 @@ class RunTimeOptions {
         bool tracking_enabled = false;
         bool diagnostics_enabled = false;
         bool skip_program_cache = false;
+        // Independent of tracking_enabled so users can turn the hang into a fatal without paying the tracker cost.
+        bool fail_on_unsafe_alloc = false;
     };
 
     static const TraceAllocationOptions& get_trace_allocation_options();
@@ -583,6 +585,7 @@ public:
     static bool get_trace_allocation_tracking_enabled();
     static bool get_trace_allocation_diagnostics_enabled();
     static bool get_trace_allocation_skip_program_cache_enabled();
+    static bool get_fail_on_unsafe_trace_alloc_enabled();
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }

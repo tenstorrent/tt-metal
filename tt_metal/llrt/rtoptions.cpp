@@ -280,6 +280,7 @@ enum class EnvVarID {
     TT_METAL_TRACE_ALLOC_TRACKING,            // Enable per-trace unsafe allocation accounting
     TT_METAL_TRACE_ALLOC_TRACEBACKS,          // Capture diagnostics for unsafe trace allocations
     TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE,  // Exclude program-cache buffers from trace accounting
+    TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC,      // Convert the unsafe-alloc warning into a fatal (#61727)
 
     // ========================================
     // SHM TRACKING
@@ -441,6 +442,7 @@ const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocati
             .diagnostics_enabled = tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS")),
             .skip_program_cache =
                 tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE")),
+            .fail_on_unsafe_alloc = is_env_enabled(std::getenv("TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC")),
         };
     }();
     return options;
@@ -454,6 +456,10 @@ bool RunTimeOptions::get_trace_allocation_diagnostics_enabled() {
 
 bool RunTimeOptions::get_trace_allocation_skip_program_cache_enabled() {
     return get_trace_allocation_options().skip_program_cache;
+}
+
+bool RunTimeOptions::get_fail_on_unsafe_trace_alloc_enabled() {
+    return get_trace_allocation_options().fail_on_unsafe_alloc;
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
@@ -2072,7 +2078,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // initialized before this instance exists and is explicitly touched at the start of the constructor.
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACKING:
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
-        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE: break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE:
+        case EnvVarID::TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC: break;
 
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.

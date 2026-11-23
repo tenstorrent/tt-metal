@@ -19,6 +19,8 @@ namespace tt::tt_metal {
 bool trace_allocation_tracking_enabled();
 bool trace_allocation_diagnostics_enabled();
 bool trace_allocation_skip_program_cache_enabled();
+// Set via TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC; turns the unsafe-allocation warning into a fatal (#61727).
+bool fail_on_unsafe_trace_alloc_enabled();
 
 // Allocation contexts with this prefix identify program-cache-owned buffers, which
 // TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE excludes from unsafe-allocation accounting.
