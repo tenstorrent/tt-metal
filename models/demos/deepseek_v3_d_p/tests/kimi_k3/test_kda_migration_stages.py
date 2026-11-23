@@ -382,9 +382,10 @@ def test_producer_scores_the_k31_index_cache_against_the_trace(tmp_path, monkeyp
 
     def read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
         reads.append((config_id, layer))
-        return device[config_id, layer][start:read_len]
+        rows = device[config_id, layer][start:read_len]
+        return rows, torch.ones(rows.shape[0], dtype=torch.bool)
 
-    monkeypatch.setattr(prefill_producer, "_read_kv_slice", read_kv_slice)
+    monkeypatch.setattr(prefill_producer, "_read_kv_slice_masked", read_kv_slice)
     device_map = {(0, chip): chip for chip in range(_MESH[0] * _MESH[1])}
     mins = prefill_producer._read_slot_kv_and_check_pcc(table, device_map, 0, real_len, trace)
 

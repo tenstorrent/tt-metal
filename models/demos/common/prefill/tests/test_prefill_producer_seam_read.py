@@ -67,23 +67,37 @@ def test_read_chunks_propagates_a_failing_local_read(monkeypatch, expect_error):
         prefill_producer._read_chunks(_FakeTable([LOCAL]), {(0, 0): 10}, 0, 0, 0, [0], local_host=LOCAL)
 
 
-def test_visible_rows_drop_the_other_hosts_rows(monkeypatch):
-    monkeypatch.setattr(prefill_producer, "_MULTI_HOST_STAGES", True)
+def test_visible_rows_drop_the_other_hosts_rows():
     rows = torch.tensor([[1.0, 2.0], [float("nan")] * 2, [3.0, 4.0]])
+    available = torch.tensor([True, False, True])
     golden = torch.arange(6.0).reshape(3, 2)
-    kept, kept_golden = prefill_producer._visible_rows(rows, golden, "test")
+    kept, kept_golden = prefill_producer._visible_rows(rows, available, golden, "test")
     assert kept.tolist() == [[1.0, 2.0], [3.0, 4.0]]
     assert kept_golden.tolist() == [[0.0, 1.0], [4.0, 5.0]]
 
 
-def test_visible_rows_raise_when_this_host_scored_nothing(monkeypatch, expect_error):
-    monkeypatch.setattr(prefill_producer, "_MULTI_HOST_STAGES", True)
+def test_visible_rows_raise_when_this_host_scored_nothing(expect_error):
     with expect_error(RuntimeError, "nothing to score"):
-        prefill_producer._visible_rows(torch.full((2, 2), float("nan")), torch.zeros(2, 2), "test")
+        prefill_producer._visible_rows(
+            torch.full((2, 2), float("nan")), torch.zeros(2, dtype=torch.bool), torch.zeros(2, 2), "test"
+        )
 
 
-def test_visible_rows_keep_device_nans_on_a_single_host_stage(monkeypatch):
-    monkeypatch.setattr(prefill_producer, "_MULTI_HOST_STAGES", False)
-    rows = torch.tensor([[1.0, 2.0], [float("nan")] * 2])
-    kept, _ = prefill_producer._visible_rows(rows, torch.zeros(2, 2), "test")
-    assert not torch.isfinite(kept).all()
+def test_visible_rows_reject_a_nan_in_a_row_that_was_read(expect_error):
+    rows = torch.tensor([[1.0, 2.0], [float("nan"), 1.0], [float("nan")] * 2])
+    available = torch.tensor([True, True, False])
+    with expect_error(RuntimeError, "1 of the 2 rows read from the device are NaN"):
+        prefill_producer._visible_rows(rows, available, torch.zeros(3, 2), "test")
+
+
+def test_read_kv_slice_masked_marks_the_other_hosts_rows_unavailable(monkeypatch):
+    from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK as BANK
+
+    monkeypatch.setattr(prefill_producer, "_local_host_name", lambda multi_host: LOCAL)
+    monkeypatch.setattr(prefill_producer, "_read_chunks", lambda *args, **kwargs: [b"a", None, b"c"])
+    decode = lambda raw, head_dim: torch.full((BANK, head_dim), float("nan") if raw == b"c" else 1.0)
+    rows, available = prefill_producer._read_kv_slice_masked(None, None, 0, 0, 0, 3 * BANK, 2, decode)
+    assert rows.shape == (3 * BANK, 2)
+    assert available.tolist() == [True] * BANK + [False] * BANK + [True] * BANK
+    # A NaN decoded from a chunk that was read stays available, so the mask check rejects it.
+    assert torch.isnan(rows[available]).any()
