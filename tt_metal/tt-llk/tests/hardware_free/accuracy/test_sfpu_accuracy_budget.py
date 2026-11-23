@@ -1118,9 +1118,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
     ),
     (MathOperation.Rpow, None, None, None, None): (
         "2**x for |x| above ~8e31: 1 where the answer is inf on a 16-bit Dest, whose "
-        "power body has no overflow guard (#52675), and inf where it is 0 on a 32-bit "
-        "Dest, whose Veltkamp split overflows (#55129, parked on Blackhole's table only); "
-        "NaN on a Float16 output is the store's inf (#57215)"
+        "power body has no overflow guard (#52675)"
     ),
 }
 
@@ -1196,9 +1194,8 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
 # (ulp_sweep.fp16_dest_unusable), which drops the Exp/ExpWithBase/Expm1Cw/Polygamma
 # Float16 cells; I1 parks the same ten cells as on Wormhole, but its in-range figures
 # differ with the approximation mode there, so each parked cell is one row per
-# `approx`; Polygamma also parks five cells on its pole at 0 (see its
-# acknowledgement); and Rpow's six 32-bit-Dest cells are still parked there, where
-# the Wormhole table no longer parks them.
+# `approx`; and Polygamma also parks five cells on its pole at 0 (see its
+# acknowledgement).
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON = {
     ChipArchitecture.BLACKHOLE: {
         (
@@ -1232,7 +1229,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON = {
         (MathOperation.Expm1Cw, None, None, None, None): 13,
         (MathOperation.I1, None, None, None, None): 16,
         (MathOperation.Polygamma, None, None, None, None): 12,
-        (MathOperation.Rpow, None, None, None, None): 10,
     },
 }
 
