@@ -80,6 +80,16 @@ LOCAL_GRID = (8, 4)
 # it while staging is installed); cores = the (x, y) set the sdpa call uses.
 SDPA_HOST = None
 W_ALL_OUT_MEM = ttnn.L1_MEMORY_CONFIG
+_OUT = {}
+
+
+def _shared_out(device, cols, dtype, mem):
+    """A persistent [1, 1, 32, cols] output tensor shared by every layer with that width."""
+    key = (id(device), cols, dtype, str(mem))  # the entry keeps `device` alive, so its id is not reused
+    if key not in _OUT or not _OUT[key][1].is_allocated():
+        shape = ttnn.Shape([1, 1, 32, cols])
+        _OUT[key] = (device, ttnn.allocate_tensor_on_device(shape, dtype, ttnn.TILE_LAYOUT, device, mem))
+    return _OUT[key][1]
 
 
 class DecodePositionsFast(DecodePositions):
@@ -258,8 +268,12 @@ class Inkling2AttentionFast(Inkling2Attention):
         if self.window is not None and self.w_all.bank is not None:
             self.w_all.bank.x_rows = 9
             # its output (550 KB of tiles, read by the prep and AttnOut programs right after) lives in L1: the prep's
-            # row reads no longer go to DRAM (same bytes)
-            self.w_all.bank.out_mem = W_ALL_OUT_MEM
+            # row reads no longer go to DRAM (same bytes). One persistent buffer per shape for all layers (each app's
+            # consumers are done before the next app's w_all writes it): no L1 allocation per call, which made the
+            # eager path ~40 ms per step slower.
+            b = self.w_all.bank
+            b.out_mem = W_ALL_OUT_MEM
+            b.out_buf = _shared_out(self.device, b.out_cols, b.out_dtype, W_ALL_OUT_MEM)
 
     def new_state(self, max_ctx, cache_dtype=ttnn.bfloat16):
         if self.is_global and max_ctx % FAR_CHUNK:

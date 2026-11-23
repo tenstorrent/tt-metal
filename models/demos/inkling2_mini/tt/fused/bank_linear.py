@@ -121,8 +121,10 @@ class BankLinear:
         self.out_dtype = out_dtype
         # x_rows > 0: the caller guarantees only the first x_rows rows of every x are non-zero (x_rows.hpp)
         self.x_rows = 0
-        # tile output memory (decode consumers that read it right away may take it in L1)
+        # tile output memory (decode consumers that read it right away may take it in L1); out_buf: a persistent
+        # output tensor reused by every call (its consumers must be done with it before the next call)
         self.out_mem = ttnn.DRAM_MEMORY_CONFIG
+        self.out_buf = None
         cfg = compute_kernel_config
         self.compute = ttnn.ComputeConfigDescriptor(
             math_fidelity=cfg.math_fidelity, fp32_dest_acc_en=True, dst_full_sync_en=True,
@@ -136,7 +138,10 @@ class BankLinear:
         a dense fp32 ROW_MAJOR [1,1,1,W] row (W >= out_cols) receiving row 0 only (tt/fused/head.py's raw row)."""
         tb = ttnn.Tile([TILE, TILE]).get_tile_size(self.dtype)
         tiles_out = out is None
-        if tiles_out:
+        if tiles_out and self.out_buf is not None:
+            out = self.out_buf
+            assert tuple(out.shape) == (1, 1, x.shape[-2], self.out_cols), (out.shape, x.shape)
+        elif tiles_out:
             shape = ttnn.Shape([1, 1, x.shape[-2], self.out_cols])
             out = ttnn.allocate_tensor_on_device(shape, self.out_dtype, ttnn.TILE_LAYOUT, self.device,
                                                  self.out_mem)  # fmt: skip

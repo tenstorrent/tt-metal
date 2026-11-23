@@ -197,7 +197,9 @@ class StagedBankLinear:
         staged = self.staged if staged is None else staged
         tb = self.tb
         tiles_out = out is None
-        if tiles_out:
+        if tiles_out and getattr(bl, "out_buf", None) is not None:
+            out = bl.out_buf
+        elif tiles_out:
             shape = ttnn.Shape([1, 1, x.shape[-2], bl.out_cols])
             out = ttnn.allocate_tensor_on_device(
                 shape, bl.out_dtype, ttnn.TILE_LAYOUT, bl.device, getattr(bl, "out_mem", ttnn.DRAM_MEMORY_CONFIG)
