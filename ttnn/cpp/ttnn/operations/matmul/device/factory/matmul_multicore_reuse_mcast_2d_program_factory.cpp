@@ -339,7 +339,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0},
     uint32_t in0_row_tiles = 0,
-    uint32_t in0_column_offset_tiles = 0) {
+    uint32_t in0_column_offset_tiles = 0,
+    const std::optional<operations::matmul::utilities::BatchBroadcast>& batch_broadcast = std::nullopt) {
     using namespace tt;
 
     using tt::tt_metal::TensorMemoryLayout;
@@ -716,8 +717,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // UnpackToDest, while the bias add keeps reading intermed0 via SrcA. The alias is handed to the
     // compute kernel through the MM_PARTIALS_RELOAD_ALIAS define, which selects the alias reload path
     // there. Without bias the reload reads intermed0 and the flag is set on it.
+    //
+    // An FP32 row-broadcast bias on FP32 partials is added on the SFPU instead (FUSE_BIAS_SFPU): the FPU add
+    // would truncate the bias to TF32 in SrcB. Both buffers then unpack to DEST, so no alias is needed.
+    const bool bias_add_sfpu = bias_tensor.has_value() && fp32_dest_acc_en &&
+                               interm0_data_format == tt::DataFormat::Float32 &&
+                               bias_data_format == tt::DataFormat::Float32 && row_broadcast_bias && !untilize_out &&
+                               bias_tile == tt::tt_metal::Tile() && device.arch() != tt::ARCH::QUASAR;
+    if (bias_add_sfpu) {
+        mm_kernel_defines["FUSE_BIAS_SFPU"] = "1";
+    }
     const bool bias_reload_alias =
-        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value() && !bias_add_sfpu;
     if (bias_reload_alias) {
         mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
     }
@@ -1213,6 +1224,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                 .accessor_name = "in0",
             });
         }
+        if (batch_broadcast.has_value()) {
+            operations::matmul::utilities::add_batch_broadcast_args(
+                in0_sender, *batch_broadcast, M * in0_row_tiles, std::nullopt);
+        }
         kernels.push_back(std::move(in0_sender));
     }
 
@@ -1331,6 +1346,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             }
         }
         in1_sender_writer.runtime_arg_schema.runtime_arg_names = std::move(in1_sender_rtas);
+        if (batch_broadcast.has_value()) {
+            operations::matmul::utilities::add_batch_broadcast_args(
+                in1_sender_writer, *batch_broadcast, std::nullopt, K * N);
+        }
         kernels.push_back(std::move(in1_sender_writer));
     }
 
@@ -1496,7 +1515,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             add_if_float32(INTERMED0_RELOAD_ALIAS_DFB, interm0_data_format);
         }
         if (bias_mesh.has_value()) {
-            add_if_float32(BIAS_DFB, bias_data_format);
+            if (bias_add_sfpu) {
+                unpack_modes_table.insert({BIAS_DFB, UnpackMode::UnpackToDest});
+            } else {
+                add_if_float32(BIAS_DFB, bias_data_format);
+            }
         }
     }
     if (!unpack_modes_table.empty()) {
@@ -1837,7 +1860,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
     // carries them all; packer_l1_acc has no Metal 2.0 counterpart and is consumed on the host.
     auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
-    const auto B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
+    // Broadcast batch dims are read in place, so the senders loop over the output's batches.
+    const auto batch_broadcast =
+        fuse_batch ? std::nullopt : operations::matmul::utilities::get_batch_broadcast(a_shape_padded, b_shape_padded);
+    const auto B = fuse_batch ? 1 : get_output_batch_size(a_shape_padded, b_shape_padded);
     const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);
     const auto Mt_per_batch = get_M_dim(a_shape_padded, in0_tile, false);
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
@@ -1896,7 +1922,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
         fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core,
         in0_row_tiles,
-        in0_column_offset_tiles);
+        in0_column_offset_tiles,
+        batch_broadcast);
 }
 
 }  // namespace ttnn::prim

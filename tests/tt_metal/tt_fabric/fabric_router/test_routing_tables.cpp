@@ -391,7 +391,7 @@ TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigRejectsDivergentConfig
     });
 }
 
-// Negative: every FabricConfigDescriptor field other than fabric_config, mesh_id and host_rank must be identical on
+// Negative: every FabricSettings field other than fabric_config, mesh_id and host_rank must be identical on
 // every rank. Here all ranks agree on fabric_config (FABRIC_2D) but one rank uses a different reliability_mode, and
 // validate_fabric_config_compatibility() must reject it. reliability_mode stands in for all such uniform fields.
 TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigRejectsDivergentReliabilityMode) {

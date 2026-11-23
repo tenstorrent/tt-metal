@@ -13,7 +13,7 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "impl/kernels/kernel.hpp"
@@ -132,7 +132,7 @@ inline ProgramSpec MakeBorrowedDFBProgramSpecForRunArgs(
 }
 
 // Helper: read the patched tensor binding address out of a kernel's CRTA buffer.
-// Mirrors the offset arithmetic UpdateTensorArgs uses internally, so a regression in either
+// Mirrors the offset arithmetic Program::update_tensor_args uses internally, so a regression in either
 // site shows up as a test failure.
 inline uint32_t ReadBindingAddressFromCRTA(
     const Program& program, const std::string& kernel_name, const std::string& tensor_parameter_name) {

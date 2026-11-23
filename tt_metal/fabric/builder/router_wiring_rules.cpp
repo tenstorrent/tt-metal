@@ -67,6 +67,8 @@ TurnRole turn_role(RoutingDirection dir, EdgeCapability cap, ExpressAxis express
     return TurnRole::UNRESTRICTED;  // Y cardinal, any capability
 }
 
+}  // namespace
+
 // Emit flat-index prefix sums and enforce capacity ceilings at the common construction site.
 // Express with VC2 reaches the sender ceiling exactly (5+4+1).
 void finalize_vc_shape_bases(RouterVcShape& shape) {
@@ -89,6 +91,8 @@ void finalize_vc_shape_bases(RouterVcShape& shape) {
         receiver_base,
         builder_config::num_max_receiver_channels);
 }
+
+namespace {
 
 // This router's own edge, read off the chip it sits on. A router exists because discovery
 // classified a neighbor in its facing direction, so an absent entry is a caller error rather than
@@ -485,6 +489,19 @@ RouterArchetype router_archetype(
     return RouterArchetype{
         router_vc_shape(topology, facing, chip_capabilities, express_axis, vc_config),
         turn_set_for_router(topology, facing, chip_capabilities, express_axis, vc_config)};
+}
+
+void check_vc_shape(const RouterVcShape& shape) {
+    TT_FATAL(
+        shape.num_vcs <= builder_config::MAX_NUM_VCS,
+        "Router shape has {} VCs, over the {}-VC limit",
+        shape.num_vcs,
+        builder_config::MAX_NUM_VCS);
+    auto expected = shape;
+    finalize_vc_shape_bases(expected);  // checks the channel ceilings
+    TT_FATAL(
+        expected.sender_flat_base == shape.sender_flat_base && expected.receiver_flat_base == shape.receiver_flat_base,
+        "Router shape bases aren't prefix sums of its channel counts");
 }
 
 }  // namespace tt::tt_fabric

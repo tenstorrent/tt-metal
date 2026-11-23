@@ -82,6 +82,7 @@ bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used)
 bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+uint32_t tensor_prefetcher_signal_noc_xy[NUM_DRAM_BANKS] __attribute__((used));
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
@@ -377,6 +378,7 @@ extern "C" uint32_t _start1() {
     } else {  // This is DM0
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+        tensor_prefetcher_signal_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
 
         // Initialize wait for trisc FW

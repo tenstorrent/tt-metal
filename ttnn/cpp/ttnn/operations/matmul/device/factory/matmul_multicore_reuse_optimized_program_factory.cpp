@@ -94,7 +94,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 
-    uint32_t B = get_batch_size(ashape);
+    // Broadcast batch dims are read in place, so the work is split over the output's batches.
+    const auto batch_broadcast = operations::matmul::utilities::get_batch_broadcast(ashape, bshape);
+    uint32_t B = operations::matmul::utilities::get_output_batch_size(ashape, bshape);
     uint32_t Mt = operations::matmul::utilities::get_M_dim(ashape, in0_tile, false);
     uint32_t Kt = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
     uint32_t Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
@@ -586,6 +588,13 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         });
         reader_writer.runtime_arg_schema.runtime_arg_names.push_back("in3_tensor_start_tile_id");
     }
+    if (batch_broadcast.has_value()) {
+        // The readers place each core's start batch themselves, so they take its index.
+        operations::matmul::utilities::add_batch_broadcast_args(reader, *batch_broadcast, M * K, std::nullopt);
+        reader.runtime_arg_schema.runtime_arg_names.push_back("start_batch");
+        operations::matmul::utilities::add_batch_broadcast_args(reader_writer, *batch_broadcast, std::nullopt, K * N);
+        reader_writer.runtime_arg_schema.runtime_arg_names.push_back("start_batch");
+    }
 
     // Compute kernel. Two specs of one source, one per work-split core group, differing only in the
     // per-group block count; they cover disjoint node sets, so each node still sees exactly one.
@@ -743,9 +752,15 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
         uint32_t start_m_block = block_within_batch / n_blocks_per_batch;
         uint32_t start_n_block = block_within_batch % n_blocks_per_batch;
 
-        uint32_t in0_start_tile_id = (start_batch * in0_batch_stride) + (start_m_block * in0_m_block_stride);
+        uint32_t in0_start_tile_id =
+            (batch_broadcast.has_value() ? 0 : (start_batch * in0_batch_stride)) + (start_m_block * in0_m_block_stride);
         uint32_t in1_start_tile_id =
-            (bcast_batch ? 0 : (start_batch * in1_batch_stride)) + (start_n_block * in1_n_block_stride);
+            (bcast_batch || batch_broadcast.has_value() ? 0 : (start_batch * in1_batch_stride)) +
+            (start_n_block * in1_n_block_stride);
+        if (batch_broadcast.has_value()) {
+            AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"start_batch", start_batch}});
+            AddRuntimeArgsForNode(reader_writer_run_args.runtime_arg_values, core, {{"start_batch", start_batch}});
+        }
 
         AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,

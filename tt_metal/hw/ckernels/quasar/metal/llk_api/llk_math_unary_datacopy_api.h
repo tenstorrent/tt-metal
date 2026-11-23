@@ -50,7 +50,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
             srcA_format != DataFormat::Int16,
             "Quasar FPU cannot datacopy Int16 into a 32-bit Dest; unpack this operand to Dest");
     }
-    _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
+    _configure_alu_cfg_<AluCfgType::DEFAULT, EN_32BIT_DEST>(srcA_format, srcB_format);
 
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.

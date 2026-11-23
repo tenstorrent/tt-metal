@@ -12,6 +12,9 @@ import torch
 import ttnn
 
 from ...layers.module import Module, Parameter
+from ...parallel.manager import CCLManager
+from ...utils.tensor import to_torch
+from ...utils.test import mesh_device_config_to_string
 
 
 class TinyLinear(Module):
@@ -83,3 +86,126 @@ def test_save_and_load(mesh_device: ttnn.MeshDevice) -> None:
     y2 = ttnn.to_torch(model2.forward(x))
 
     assert torch.equal(y1, y2)
+
+
+class ShardableModule(Module):
+    def __init__(self, *, device: ttnn.MeshDevice) -> None:
+        super().__init__()
+
+        self.replicated = Parameter(total_shape=[512, 256], device=device)
+        self.tensor_parallel = Parameter(total_shape=[512, 256], mesh_axes=[None, 0], device=device)
+        self.small = Parameter(total_shape=[32, 32], device=device)
+
+    def forward(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        (shape, {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True})
+        for shape in [(2, 2), (2, 4), (4, 8)]
+    ],
+    ids=mesh_device_config_to_string,
+    indirect=True,
+)
+def test_shard_and_gather(mesh_device: ttnn.MeshDevice, expect_error) -> None:
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    model = ShardableModule(device=mesh_device)
+    state = {name: torch.randn([512, 256], dtype=torch.bfloat16) for name in ("replicated", "tensor_parallel")}
+    state["small"] = torch.randn([32, 32], dtype=torch.bfloat16)
+    model.load_torch_state_dict(state)
+    params = dict(model.named_parameters())
+
+    def assert_layout_matches_data() -> None:
+        for name, p in params.items():
+            assert tuple(p._data.shape) == p.local_shape, name
+            assert torch.equal(to_torch(p._data, mesh_axes=p.mesh_axes), state[name]), name
+
+    # Axis 0 is in `tensor_parallel`'s durable layout: the call refuses and changes nothing.
+    with expect_error(ValueError, "durable layout"):
+        model.shard(0)
+    assert model.is_loaded() and not model.is_transiently_sharded()
+
+    model.shard(1)
+    assert not model.is_loaded() and model.is_transiently_sharded()
+    assert params["replicated"].mesh_axes == (1, None)
+    assert params["tensor_parallel"].mesh_axes == (1, 0)
+    assert params["tensor_parallel"].durable_mesh_axes == (None, 0)
+    assert not params["small"].is_transiently_sharded()  # no dim splits into whole tiles
+    with expect_error(ValueError, "cannot be split"):
+        params["small"].shard(1, defer_free=[])  # sharded directly, it raises instead of staying whole
+    assert_layout_matches_data()
+    with expect_error(RuntimeError, "gather it first"):
+        params["replicated"].data
+    with expect_error(RuntimeError, "ShardableModule has weights with a transient split"):
+        model()
+
+    # While sharded, sharding again refuses over any axis and changes nothing.
+    for axis in (0, 1):
+        with expect_error(ValueError, "already has a transient split"):
+            model.shard(axis)
+    assert params["replicated"].mesh_axes == (1, None)
+
+    model.gather(ccl_manager)
+    assert model.is_loaded() and not model.is_transiently_sharded()
+    model()
+    for name, p in params.items():
+        assert p.mesh_axes == p.durable_mesh_axes, name
+    for name in ("replicated", "small"):
+        for device_tensor in ttnn.get_device_tensors(params[name].data):
+            assert torch.equal(ttnn.to_torch(device_tensor), state[name]), name
+    assert_layout_matches_data()
+
+    # A parameter is sharded over one mesh axis at a time, even one with no durable split.
+    replicated = params["replicated"]
+    defer_free: list[ttnn.Tensor] = []
+    replicated.shard(1, defer_free=defer_free)
+    with expect_error(ValueError, "already has a transient split"):
+        replicated.shard(0, defer_free=defer_free)
+    assert replicated.mesh_axes == (1, None) and len(defer_free) == 1
+    assert_layout_matches_data()
+    with expect_error(RuntimeError, "ShardableModule has weights with a transient split"):
+        model()  # Parameter.shard alone, without Module.shard, is enough for the call to refuse
+    replicated.gather(ccl_manager, defer_free=defer_free)
+    assert replicated.mesh_axes == (None, None) and len(defer_free) == 2
+    for t in defer_free:
+        ttnn.deallocate(t)
+    assert_layout_matches_data()
+
+    replicated.shard(1, defer_free=[])
+    replicated.deallocate()
+    assert replicated.mesh_axes == (None, None) and not replicated.is_transiently_sharded()
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_shard_without_a_split_keeps_the_module_loaded(mesh_device: ttnn.MeshDevice, expect_error) -> None:
+    model = ShardableModule(device=mesh_device)
+    model.load_torch_state_dict(
+        {
+            "replicated": torch.randn([512, 256], dtype=torch.bfloat16),
+            "tensor_parallel": torch.randn([512, 256], dtype=torch.bfloat16),
+            "small": torch.randn([32, 32], dtype=torch.bfloat16),
+        }
+    )
+    evictions = []
+    model.register_eviction_hook(lambda: evictions.append(True))
+
+    model.shard(1)  # one device on the axis: nothing splits
+
+    assert model.is_loaded() and not model.is_transiently_sharded() and not evictions
+    model()
+    with expect_error(ValueError, "cannot be split"):
+        model.replicated.shard(1, defer_free=[])
+
+
+class FreesExtraState(ShardableModule):
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_shard_refuses_a_deallocate_weights_override(mesh_device: ttnn.MeshDevice, expect_error) -> None:
+    model = FreesExtraState(device=mesh_device)
+    with expect_error(TypeError, "FreesExtraState overrides deallocate_weights"):
+        model.shard(1)

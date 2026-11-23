@@ -27,6 +27,8 @@ struct QkvCausalConv1dSiluParams {
     std::optional<uint32_t> page_channels;
     // Fabric history exchange only: L1 addresses of its global semaphores, entry, predecessor arrival, carry arrival.
     std::array<uint32_t, 3> exchange_semaphore_addresses{};
+    uint32_t slab_index_scale = 1;
+    uint32_t slab_index_offset = 0;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -46,6 +48,8 @@ struct QkvCausalConv1dSiluInputs {
     std::optional<Tensor> predecessor_carry;
     std::optional<Tensor> exchange_buffer;
     std::optional<Tensor> actual_end;
+    // Exchange only: history is a slab whose entry is read (zeros at actual_start == 0) and replaced in place.
+    std::optional<Tensor> slab_index;
 };
 
 }  // namespace ttnn::experimental::prim

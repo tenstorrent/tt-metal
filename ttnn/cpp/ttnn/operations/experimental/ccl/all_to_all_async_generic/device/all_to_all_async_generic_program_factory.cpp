@@ -343,7 +343,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const uint32_t cluster_axis = operation_attributes.cluster_axis.value_or(0);
     const auto sender_device_fabric_node_id = tensor_args.input_tensor.device()->get_fabric_node_id(mesh_coordinate);
 
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*tensor_args.input_tensor.device());
     const bool is_fabric_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
     // FABRIC_2D_TORUS_X/Y wraps only one mesh axis even though get_fabric_topology() reports Torus for both.
     // Resolve wrapping for the collective's axis so a Ring on the other axis cannot open a nonexistent hop.
@@ -674,7 +674,6 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     std::vector<uint32_t> sender_reader_compile_args = {
         tt::CB::c_in0,                              // cb0_id
         page_size,                                  // tensor0_page_size
-        device_index,                               // device_index
         operation_attributes.num_devices,           // num_devices
         input_shape[operation_attributes.out_dim],  // split_dim_size
         src_in_dims,                                // inner_dims_size
@@ -1028,27 +1027,24 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     sender_writer_kernel_ids.reserve(num_senders_per_link);
     for (size_t stream = 0; stream < num_senders_per_link; ++stream) {
         std::vector<uint32_t> sender_writer_compile_args = {
-            tt::CB::c_in0,                               // cb0_id
-            device_index,                                // device_index
-            operation_attributes.num_devices,            // num_devices
-            output_shape[operation_attributes.in_dim],   // concat_dim_size
-            dst_in_dims,                                 // inner_dims_size
-            writer_has_extra_half_tile,                  // has_writer_tail
-            page_size,                                   // intermediate_page_size
-            reserved_packet_header_CB_index,             // reserved_packet_header_cb_id
-            semaphore_sent,                              // semaphore_expected_value
-            concat_num_tiles,                            // concat_num_tiles
-            (concat_num_half_tiles * device_index) / 2,  // full_block_offset
-            static_cast<uint32_t>(effective_topology),   // topology
-            cluster_axis,                                // replicate_axis
-            sender_device_fabric_node_id.chip_id,        // source_chip_id
-            *sender_device_fabric_node_id.mesh_id,       // source_mesh_id
-            is_fabric_2d,                                // is_fabric_2d
-            sender_stream_direction_masks[stream],       // fabric_direction_mask
-            number_pages_per_packet,                     // max_pages_per_packet
-            use_multicast_initialization,                // use_multicast_initialization
-            mcast_positive_direction,                    // mcast_positive_direction (physical slot)
-            mcast_negative_direction,                    // mcast_negative_direction (physical slot)
+            tt::CB::c_in0,                              // cb0_id
+            operation_attributes.num_devices,           // num_devices
+            output_shape[operation_attributes.in_dim],  // concat_dim_size
+            dst_in_dims,                                // inner_dims_size
+            writer_has_extra_half_tile,                 // has_writer_tail
+            page_size,                                  // intermediate_page_size
+            reserved_packet_header_CB_index,            // reserved_packet_header_cb_id
+            semaphore_sent,                             // semaphore_expected_value
+            concat_num_tiles,                           // concat_num_tiles
+            static_cast<uint32_t>(effective_topology),  // topology
+            cluster_axis,                               // replicate_axis
+            *sender_device_fabric_node_id.mesh_id,      // source_mesh_id
+            is_fabric_2d,                               // is_fabric_2d
+            sender_stream_direction_masks[stream],      // fabric_direction_mask
+            number_pages_per_packet,                    // max_pages_per_packet
+            use_multicast_initialization,               // use_multicast_initialization
+            mcast_positive_direction,                   // mcast_positive_direction (physical slot)
+            mcast_negative_direction,                   // mcast_negative_direction (physical slot)
         };
 
         tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(sender_writer_compile_args);
@@ -1074,6 +1070,9 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     {
         tt::tt_metal::KernelDescriptor::RTArgList reader_common_args;
         reader_common_args.push_back(tensor_args.input_tensor.buffer());
+        // This chip's values are runtime args, so the programs of all chips differ only in runtime-arg values (one
+        // program per range, see merge_per_device_programs).
+        reader_common_args.push_back(device_index);
         desc.kernels[sender_reader_kernel_id].emplace_common_runtime_args(reader_common_args);
     }
     for (const auto kernel_id : sender_writer_kernel_ids) {
@@ -1083,6 +1082,9 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         writer_common_args.push_back(static_cast<uint32_t>(init_barrier_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
         writer_common_args.push_back(static_cast<uint32_t>(final_barrier_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
         // clang-format on
+        writer_common_args.push_back(device_index);
+        writer_common_args.push_back((concat_num_half_tiles * device_index) / 2);  // full_block_offset
+        writer_common_args.push_back(static_cast<uint32_t>(sender_device_fabric_node_id.chip_id));
         desc.kernels[kernel_id].emplace_common_runtime_args(writer_common_args);
     }
 
@@ -1297,7 +1299,7 @@ tt::tt_metal::WorkloadDescriptor AllToAllAsyncGenericProgram::create_workload_de
     const uint32_t num_links = args.num_links.has_value()
                                    ? *args.num_links
                                    : ttnn::operations::ccl::common::get_num_links(*mesh_device, args.cluster_axis);
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     const uint32_t axis = args.cluster_axis.value_or(0);
     const ResolvedRouting routing{
         .num_links = num_links,

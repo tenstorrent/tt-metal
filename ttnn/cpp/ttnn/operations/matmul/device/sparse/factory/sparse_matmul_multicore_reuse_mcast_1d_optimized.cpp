@@ -37,6 +37,9 @@ using tt::tt_metal::KernelSpec;
 using tt::tt_metal::KernelSpecName;
 using tt::tt_metal::ProgramRunArgs;
 using tt::tt_metal::ProgramSpec;
+using tt::tt_metal::ScratchpadBinding;
+using tt::tt_metal::ScratchpadSpec;
+using tt::tt_metal::ScratchpadSpecName;
 using tt::tt_metal::TensorBinding;
 using tt::tt_metal::TensorParameter;
 using tt::tt_metal::TensorParamName;
@@ -136,6 +139,12 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const auto output_data_format = tt_metal::datatype_to_dataformat_converter(out_mesh_tensor.dtype());
 
     auto* const device = a.device();
+    const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
+    // With get_batch_from_reader, the in0 kernel on each node (the sender or a receiver) tells the
+    // compute kernel on that node, batch by batch, whether to skip the batch. WH/BH do that through the
+    // BRISC mailbox. Quasar has no mailbox from data movement cores to compute, so there the flags go
+    // through the batch_valid dataflow buffer.
+    const bool use_batch_valid_dfb = is_quasar && get_batch_from_reader;
 
     const auto in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     const auto in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -148,7 +157,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
 
-    // The in1 sender/writer's own "sparsity" slot (its tensor binding, page size and dataflow buffer)
+    // The in1 sender/writer's own "sparsity" slot (its tensor binding, page size and scratchpad)
     // carries the active-group id list in indexed/gather mode -- that kernel never reads the sparsity
     // mask there, so reusing the slot avoids adding an operand to a kernel shared with the dense
     // matmul factories. The in0 sender ignores its own slot entirely in this mode, so it keeps
@@ -239,12 +248,23 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // interm0 entry size follows interm0_data_format, not the output dtype.
     const auto interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
+    // Whether the cross-block reload of Float32 partials unpacks straight to DEST (see the unpack_modes
+    // setup of the compute kernel below).
+    //
+    // Not on Quasar: there unpack-to-dest is a mode of the whole compute kernel (UnpackToDestEn), not
+    // of one buffer. In that mode DEST is not cleared after each pack, and matmul_block adds into DEST,
+    // so each result would add onto the previous one. On Quasar the partials are reloaded through SrcA
+    // instead.
+    const bool reload_partials_to_dest =
+        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && !is_quasar;
+
     // The fused bias add reads the partials buffer as an FPU operand (SrcA), so UnpackToDest cannot be
-    // set on it directly when bias is present. In that case the cross-block FP32 reload instead copies
-    // through a second buffer aliasing the same SRAM that does carry UnpackToDest, while the bias add
-    // keeps reading the partials buffer via SrcA. The alias reaches the compute kernel as the
-    // MM_PARTIALS_RELOAD_ALIAS define plus its own binding.
-    const bool bias_reload_alias = use_bias && fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32;
+    // set on it directly when bias is present. When the reload also unpacks to DEST
+    // (reload_partials_to_dest), the cross-block FP32 reload therefore copies through a second buffer
+    // aliasing the same SRAM that does carry UnpackToDest, while the bias add keeps reading the
+    // partials buffer via SrcA. The alias reaches the compute kernel as the MM_PARTIALS_RELOAD_ALIAS
+    // define plus its own binding.
+    const bool bias_reload_alias = use_bias && reload_partials_to_dest;
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -375,12 +395,14 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
 
     const DFBSpecName IN0_DFB{"in0"};
     const DFBSpecName IN1_DFB{"in1"};
-    const DFBSpecName SPARSITY_DFB{"sparsity"};
-    const DFBSpecName IN1_SPARSITY_DFB{"in1_sparsity"};
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName INTERM0_DFB{"intermed0"};
     const DFBSpecName INTERM0_ALIAS_DFB{"intermed0_reload_alias"};
     const DFBSpecName BIAS_DFB{"bias"};
+    const DFBSpecName BATCH_VALID_DFB{"batch_valid"};
+
+    const ScratchpadSpecName SPARSITY_SCRATCH{"sparsity"};
+    const ScratchpadSpecName IN1_SPARSITY_SCRATCH{"in1_sparsity"};
 
     const TensorParamName IN0{"in0"};
     const TensorParamName IN1{"in1"};
@@ -442,23 +464,6 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             .data_format_metadata = in1_data_format,
             .tile_format_metadata = in1_tile,
         },
-        // One page of the sparsity mask, staged by the in0 sender and read back by it through a raw
-        // pointer. Legacy carried no tile descriptor here: the page is a run of bf16 validity flags,
-        // not tiles.
-        DataflowBufferSpec{
-            .unique_id = SPARSITY_DFB,
-            .entry_size = sparsity_pagesize,
-            .num_entries = 1,
-            .data_format_metadata = tt::tt_metal::datatype_to_dataformat_converter(sparsity_mesh_tensor.dtype()),
-        },
-        // The in1 sender/writer's own slot; in indexed/gather mode it holds the active-group id list
-        // instead of a sparsity page, so it is sized and typed from whichever tensor that kernel reads.
-        DataflowBufferSpec{
-            .unique_id = IN1_SPARSITY_DFB,
-            .entry_size = in1_sparsity_pagesize,
-            .num_entries = 1,
-            .data_format_metadata = tt::tt_metal::datatype_to_dataformat_converter(in1_sparsity_mesh_tensor.dtype()),
-        },
         DataflowBufferSpec{
             .unique_id = OUT_DFB,
             .entry_size = output_single_tile_size,
@@ -497,6 +502,40 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             .tile_format_metadata = bias_tile,
         });
     }
+    if (use_batch_valid_dfb) {
+        // Each entry holds one 16-bit flag, nonzero when the batch is valid. Compute reads it with
+        // read_tile_value and never unpacks it, so the format only labels the bytes; Quasar supports
+        // RawUInt16 but not UInt16. Compute pops each flag before it works on that batch, so two entries
+        // let an in0 kernel run up to two batches ahead of compute, for example past a skipped batch.
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = BATCH_VALID_DFB,
+            .entry_size = tt::tt_metal::hal::get_l1_alignment(),
+            .num_entries = 2,
+            .data_format_metadata = tt::DataFormat::RawUInt16,
+        });
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Scratchpads
+    ////////////////////////////////////////////////////////////////////////////
+    // The in0 sender and the in1 sender/writer each stage one sparsity page by NoC read and read it
+    // back themselves. No kernel exchanges FIFO credits on such a page, so each page is a
+    // kernel-private scratchpad. (A data movement kernel bound as both PRODUCER and CONSUMER of one
+    // DFB is a self-loop, which Gen2 (Quasar) rejects.) A page is a run of bf16 validity flags or
+    // uint16 group ids, not tiles, so it carries no format metadata.
+    Group<ScratchpadSpec> scratchpads = {
+        // One page of the sparsity mask, read by the in0 sender.
+        ScratchpadSpec{
+            .unique_id = SPARSITY_SCRATCH,
+            .size_per_node = sparsity_pagesize,
+        },
+        // The in1 sender/writer's own page; in indexed/gather mode it holds the active-group id list
+        // instead of a sparsity page, so it is sized from whichever tensor that kernel reads.
+        ScratchpadSpec{
+            .unique_id = IN1_SPARSITY_SCRATCH,
+            .size_per_node = in1_sparsity_pagesize,
+        },
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Defines
@@ -533,13 +572,20 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
     }
 
-    // Both readers take the sparsity operand, and each one's dataflow buffer and tensor accessor are
-    // bound only because this define is set: a binding the host does not declare produces no dfb::/
+    // Both readers take the sparsity operand, and each one's scratchpad and tensor accessor are bound
+    // only because this define is set: a binding the host does not declare produces no scratch::/
     // tensor:: token at all, so the kernel's references must not reach C++ name lookup. The sparsity
     // operand is mandatory for this op and batchB >= 1 always, so the condition is constant here --
     // but the define is still required, because the shared kernels default to sparsity-off.
     mm_kernel_in0_sender_writer_defines["SPARSITY"] = "1";
     mm_kernel_in1_sender_writer_defines["SPARSITY"] = "1";
+
+    // A buffer that is not bound has no dfb:: token, so a define hides the references to dfb::batch_valid
+    // in the kernels. The in0 receiver gets the define next to its binding below.
+    if (use_batch_valid_dfb) {
+        mm_kernel_in0_sender_writer_defines["BATCH_VALID_DFB"] = "1";
+        mm_kernel_defines["BATCH_VALID_DFB"] = "1";
+    }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -553,11 +599,21 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     // factory. The two triples happen to coincide with the writer and reader defaults respectively,
     // but the arch-parameterised noc expressions are kept so the values cannot drift from the legacy
     // ones if a future arch changes the preferred NOCs.
+    // config_2xx applies on Quasar only. The in0 and in1 kernels manage DFB credits explicitly
+    // (reserve_back/push_back on the data movement side, pop on the compute side). With implicit sync
+    // left on, the firmware flush at kernel exit (dfb_dm0_flush_side) credits each tile counter with the
+    // tiles that implicit sync has not credited. The explicit calls have already counted those tiles, so
+    // the counter then holds more tiles than the DFB. So every bound DFB opts out of implicit sync, as in
+    // the dense matmul factories.
     const auto in0_hw_config = DataMovementHardwareConfig{
         .config_1xx =
             DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in0_noc,
+            },
+        .config_2xx =
+            DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true,
             },
     };
     const auto in1_hw_config = DataMovementHardwareConfig{
@@ -566,11 +622,23 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in1_noc,
             },
+        .config_2xx =
+            DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true,
+            },
     };
 
     const bool has_in0_receiver_kernel = in0_mcast_receivers.num_cores() > 0;
 
     Group<KernelSpec> kernels;
+
+    const auto batch_valid_binding = [&](DFBEndpointType endpoint_type) {
+        return DFBBinding{
+            .dfb_spec_name = BATCH_VALID_DFB,
+            .accessor_name = "batch_valid",
+            .endpoint_type = endpoint_type,
+        };
+    };
 
     // ---- in0 sender ------------------------------------------------------
     kernels.push_back(KernelSpec{
@@ -589,18 +657,11 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                     .accessor_name = "in0",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                // The sparsity page is staged and consumed by this one kernel, so it carries both
-                // endpoints itself.
-                DFBBinding{
-                    .dfb_spec_name = SPARSITY_DFB,
-                    .accessor_name = "sparsity",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = SPARSITY_DFB,
-                    .accessor_name = "sparsity",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
+            },
+        // The sparsity page is staged and read back by this one kernel.
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = SPARSITY_SCRATCH, .accessor_name = "sparsity"},
             },
         .tensor_bindings =
             {
@@ -652,6 +713,9 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             },
         .hw_config = in0_hw_config,
     });
+    if (use_batch_valid_dfb) {
+        kernels.back().dfb_bindings.push_back(batch_valid_binding(DFBEndpointType::PRODUCER));
+    }
 
     // ---- in0 receiver ----------------------------------------------------
     if (has_in0_receiver_kernel) {
@@ -678,6 +742,10 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 },
             .hw_config = in0_hw_config,
         });
+        if (use_batch_valid_dfb) {
+            kernels.back().compiler_options.defines["BATCH_VALID_DFB"] = "1";
+            kernels.back().dfb_bindings.push_back(batch_valid_binding(DFBEndpointType::PRODUCER));
+        }
     }
 
     // ---- in1 sender / output writer --------------------------------------
@@ -703,18 +771,12 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                     .accessor_name = "out",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
-                // This kernel's own sparsity slot -- the active-group id list in indexed/gather mode,
-                // the sparsity mask otherwise. Staged and read back here alone, so both endpoints.
-                DFBBinding{
-                    .dfb_spec_name = IN1_SPARSITY_DFB,
-                    .accessor_name = "sparsity",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = IN1_SPARSITY_DFB,
-                    .accessor_name = "sparsity",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
+            },
+        // This kernel's own sparsity page: the active-group id list in indexed/gather mode, the
+        // sparsity mask otherwise. Staged and read back here alone.
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = IN1_SPARSITY_SCRATCH, .accessor_name = "sparsity"},
             },
         .tensor_bindings =
             {
@@ -816,9 +878,8 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         // UnpackToDest, it is routed through SrcA and rounded to TF32 (10 mantissa bits), so the fp32
         // partial loses precision on every block boundary. The flag goes on the reload alias when the
         // fused bias forces a separate SrcA view of the partials buffer (see bias_reload_alias), else on
-        // the partials buffer itself.
+        // the partials buffer itself. Quasar does not set the flag (see reload_partials_to_dest).
         if (fp32_dest_acc_en) {
-            const bool mark_interm0 = interm0_data_format == tt::DataFormat::Float32;
             const DFBSpecName& marked = bias_reload_alias ? INTERM0_ALIAS_DFB : INTERM0_DFB;
             auto add_if_float32 = [&](const DFBSpecName& name, tt::DataFormat fmt) {
                 if (fmt != tt::DataFormat::Float32) {
@@ -826,8 +887,8 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 }
                 compute_hw.unpack_modes.emplace(
                     name,
-                    (mark_interm0 && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
-                                                     : tt::tt_metal::UnpackMode::UnpackToSrc);
+                    (reload_partials_to_dest && name == marked) ? tt::tt_metal::UnpackMode::UnpackToDest
+                                                                : tt::tt_metal::UnpackMode::UnpackToSrc);
             };
             add_if_float32(IN0_DFB, in0_data_format);
             add_if_float32(IN1_DFB, in1_data_format);
@@ -924,6 +985,9 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
             compute.compile_time_args.insert({"bias_ntiles", in1_per_core_w});
             // Broadcast row 0 of each group's bias over its M rows.
             compute.compile_time_args.insert({"row_broadcast_bias", 1u});
+        }
+        if (use_batch_valid_dfb) {
+            compute.dfb_bindings.push_back(batch_valid_binding(DFBEndpointType::CONSUMER));
         }
         kernels.push_back(std::move(compute));
     }
@@ -1059,6 +1123,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
         .name = "sparse_matmul_multi_core_reuse_mcast_1d",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };
@@ -1067,9 +1132,11 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
     if (has_in0_receiver_kernel) {
         mcast_kernels.push_back(IN0_RECEIVER);
     }
+    // Quasar has a single NoC: the multicast helper accepts only NOC_0 there, and Quasar data movement
+    // kernels are built for NOC_0 (their config_1xx NOC applies to WH/BH only).
     ttnn::kernel_lib::host::Mcast in0_mcast(
         *device,
-        {.noc = in0_noc, .handshake_cores = all_cores},
+        {.noc = is_quasar ? tt_metal::NOC::NOC_0 : in0_noc, .handshake_cores = all_cores},
         CoreRangeSet(in0_mcast_receiver_cores_bounding_box),
         in0_mcast_receiver_num_cores,
         ttnn::kernel_lib::host::McastExplicitFixedSenderConfig{.senders_per_group = {start_core}});

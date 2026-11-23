@@ -351,6 +351,13 @@ Tensor Tensor::to_device(
 
 Tensor Tensor::cpu(bool blocking, std::optional<QueueId> cq_id) const { return ttnn::cpu(*this, blocking, cq_id); }
 
+std::vector<Tensor> Tensor::cpu_shards(
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+    bool blocking,
+    std::optional<QueueId> cq_id) const {
+    return ttnn::cpu_shards(*this, coords, blocking, cq_id);
+}
+
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
     const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();

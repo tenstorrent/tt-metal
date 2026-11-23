@@ -27,7 +27,8 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -308,7 +309,7 @@ PrefetcherPipes make_prefetcher_pipes(const TestInfo& info, MeshDevice& mesh_dev
     }
     // Kernels are nullified, so nothing moves through a ring: the smallest legal ring, one L1-aligned entry, is enough.
     prefetcher_pipes.space = tt_metal::experimental::CreatePrefetcherPipeSpace(
-        mesh_device,
+        mesh_device.mesh_command_queue(0),
         {.sender_cores = senders,
          .receiver_domain = prefetcher_pipes.receivers,
          .ring_size = tt_metal::hal::get_l1_alignment(),
@@ -461,8 +462,8 @@ bool initialize_program(
         total_kg.start_coord.x = total_kg.end_coord.x;
     }
 
-    program = m2::experimental::MakeProgramFromSpec(*mesh_device, spec);
-    m2::experimental::SetProgramRunArgs(program, run_args);
+    program = m2::Program(*mesh_device, spec);
+    program.set_program_run_args(run_args);
     return true;
 }
 

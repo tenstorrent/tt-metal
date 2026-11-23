@@ -18,6 +18,9 @@ table Tile {
     tile_shape_h: uint32;
     tile_shape_w: uint32;
     transpose_tile: bool;
+    // 0 in files written before the face shape was stored; the face shape is then derived from the tile shape.
+    face_shape_h: uint32;
+    face_shape_w: uint32;
 }
 
 enum TensorMemoryLayout: ushort {

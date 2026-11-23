@@ -20,7 +20,12 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.h
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_nomic_embed_text_v2_moe_routed_combine

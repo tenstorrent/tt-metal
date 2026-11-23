@@ -14,7 +14,7 @@
 
 #include "allocator_algorithm.hpp"
 #include "size_class_index.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_metal::allocator {
 // Essentially the same free list algorithm as FreeList with BestFit policy, but with (IMO absurdly) optimized code.

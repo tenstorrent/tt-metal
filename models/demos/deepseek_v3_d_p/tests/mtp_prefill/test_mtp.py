@@ -41,14 +41,11 @@ from models.demos.deepseek_v3_d_p.tests.mtp_prefill.predictor_reference import (
     stored_reference_path,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
-    full_indexer_rank,
-    normalized_hadamard_matrix,
-    num_full_indexer_layers,
-)
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, rotate_index_keys
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload_size
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
     MTPDeviceEmbedSource,
     MTPSplitChipLookahead,
@@ -121,9 +118,11 @@ def _assert_level_pcc(expected, actual, pcc: float, k: int, what: str):
 _MESH_PARAMS = [
     pytest.param(
         (8, 4),
+        # (the MTP layer's MoE is GLM-5.3's, the MoE block - tt/moe_impl.py: a fabric payload of one combine row)
         torus_xy_device_params(
-            fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+            fabric_payload_size=moe_block_fabric_payload_size(GLM53Config, GLM53Config.FABRIC_PAYLOAD_SIZE),
             worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            l1_small_size=GLM53Config.L1_SMALL_SIZE,
         ),
         2,
         0,
@@ -142,6 +141,17 @@ _MESH_PARAMS = [
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="torus-x-4x4-sp1",
+    ),
+    pytest.param(
+        (4, 4),
+        torus_xy_device_params(
+            fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE,
+            worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+        ),
+        2,
+        1,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-xy-4x4-sp1",
     ),
 ]
 
@@ -1064,7 +1074,7 @@ def test_mtp_multiturn_pcc(
             blockcyclic_positions(stripes, CHUNK, index.shape[1]),
             index.shape[1],
         )
-        index_k = raw @ normalized_hadamard_matrix(raw.shape[-1]).float()
+        index_k = rotate_index_keys(config, raw)
         _, msg = assert_with_pcc(ref["index_k"][:total], index_k[:total], INDEX_K_PCC)
         logger.info(f"[mtp multiturn] L1 index-K PCC: {msg}")
         assert torch.count_nonzero(raw[tail:]) == 0, f"the index cache has rows written at or past {tail}"

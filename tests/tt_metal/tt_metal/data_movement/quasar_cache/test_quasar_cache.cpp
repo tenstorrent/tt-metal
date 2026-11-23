@@ -9,7 +9,8 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "context/metal_context.hpp"
 
@@ -73,7 +74,7 @@ bool run_l2_flush_test(distributed::MeshDevice& mesh_device, const L2FlushTestCo
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -82,7 +83,7 @@ bool run_l2_flush_test(distributed::MeshDevice& mesh_device, const L2FlushTestCo
             MakeRuntimeArgsForSingleNode(node, {{"base_addr", base_addr}, {"test_mode", config.test_mode}}),
         .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
     }};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
@@ -155,7 +156,7 @@ bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTest
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -164,7 +165,7 @@ bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTest
             MakeRuntimeArgsForSingleNode(node, {{"base_addr", base_addr}, {"test_mode", config.test_mode}}),
         .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
     }};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());

@@ -14,6 +14,8 @@
 #include "api/core_local_mem.h"
 #include "api/scratchpad.h"
 #include "api/tensor/local_tensor_accessor.h"
+#include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 #ifdef ARCH_QUASAR
@@ -143,6 +145,9 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
     // The resident in0 width shard: only its L1 base address is needed (no FIFO traffic).
     const LocalTensorAccessor<uint32_t> in0_shard(tensor::in0_shard);
+    // The same tensor addressed by shard: the multi-shard gather reads other storage cores' shards through it.
+    const auto in0_accessor = TensorAccessor(tensor::in0_shard);
+    const ShardView in0_shards(in0_accessor);
     Semaphore<> sender_sem(sem::in0_mcast_sender);
     Semaphore<> receiver_sem(sem::in0_mcast_receiver);
 #ifdef IN0_MULTISHARD
@@ -156,26 +161,22 @@ void kernel_main() {
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
 
-    // Raw address needed: the shard sits at the same L1 address on every core, so this core's base is also the
-    // remote read address of the other storage cores' shards; it is a pad_last_ktile / local_l1_copy operand too.
+    // Raw address needed: this core's shard base is a pad_last_ktile / local_l1_copy / multicast source operand.
     uint32_t local_read_addr = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(in0_shard.local_mem()));
-    const uint32_t shard_base = local_read_addr;
 
-    // Gather the shards_per_block shards of this sender's block from the storage cores (this one
-    // included; the shard buffer sits at the same L1 address on every core) into dst_addr. The
-    // reads are issued before the receiver handshake so they overlap it; the caller barriers.
+    // Gather the shards_per_block shards of this sender's block (in0 shards sender_id.., this core's
+    // own included; storage core i holds in0 shard i, see the factory) into dst_addr. A K block within
+    // one shard is strided in M, so each row is its own read. The reads are issued before the receiver
+    // handshake so they overlap it; the caller barriers.
     auto gather_block_shards = [&](uint32_t dst_addr) {
-        const UnicastEndpoint src_core;
         for (uint32_t j = 0; j < shards_per_block; ++j) {
             const uint32_t src_idx = sender_id + j;
             for (uint32_t row = 0; row < in0_block_h; ++row) {
                 noc.async_read(
-                    src_core,
+                    in0_shards,
                     CoreLocalMem<uint32_t>(dst_addr + row * in0_block_row_bytes + j * in0_shard_width_bytes),
                     in0_shard_width_bytes,
-                    {.noc_x = get_vararg(sender_noc_x_base + src_idx),
-                     .noc_y = get_vararg(sender_noc_y_base + src_idx),
-                     .addr = shard_base + row * in0_shard_width_bytes},
+                    {.shard_id = src_idx, .offset_bytes = row * in0_shard_width_bytes},
                     {});
             }
         }

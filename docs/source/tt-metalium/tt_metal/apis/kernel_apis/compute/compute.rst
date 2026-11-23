@@ -46,7 +46,6 @@ Compute (FPU/matrix engine)
   transpose_tile
 
   tilize
-  untilize
 
 .. only:: not html
 
@@ -228,6 +227,7 @@ Data manipulation and processing
   where_tile
   addcmul_tile
   reshuffle_rows_tile
+  copy_dest_rows
   triangle_solve_tile
   typecast_tile
   dropout_tile

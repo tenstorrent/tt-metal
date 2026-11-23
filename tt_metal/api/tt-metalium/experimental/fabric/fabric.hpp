@@ -195,6 +195,11 @@ void SetFabricConfig(
     FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
     FabricRouterConfig router_config = FabricRouterConfig{});
 
+// Returns the fabric configuration in effect in `mesh_device`'s context.
+FabricConfig GetFabricConfig(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+
+// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 FabricConfig GetFabricConfig();
 
 namespace experimental {

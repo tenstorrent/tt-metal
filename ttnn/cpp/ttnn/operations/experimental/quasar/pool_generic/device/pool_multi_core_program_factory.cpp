@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_multi_core_program_factory.hpp"
+#include "ttnn/core.hpp"
 
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
@@ -441,7 +442,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     }
 
     auto* mesh_device = input.device();
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = ttnn::core::current_mesh_command_queue(*mesh_device);
 
     // Reader-indices table: build on host, then upload to an OWNING MeshTensor (parked in
     // op_owned_tensors). The memory config mirrors sliding_window::move_config_tensor_to_device.
@@ -639,7 +640,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         output_tensors[0].dtype(),
         {output_shard_shape[0], output_shard_shape[1]},
         config_tensor_in_dram,
-        reader_indices_actual_page_size);
+        reader_indices_actual_page_size,
+        /*scalar_config_actual_page_size=*/std::nullopt,
+        QUASAR_POOL_PRE_TILIZE_TILE_ROWS);
 
     const auto& input_shape = input.padded_shape();
     const uint32_t shard_width = input.shard_spec()->shape[1];
@@ -846,7 +849,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             cb_sizes.pre_tilize_cb_pagesize,
             cb_sizes.pre_tilize_cb_npages,
             params.data_format,
-            pack_untilize_tile);
+            tt::tt_metal::Tile());  // full 32x32 pack_untilize target (see the pre_tilize sizing above)
         pre.advanced_options.alias_with = {DFB_FAST_TILIZE};
         DataflowBufferSpec fast = local_dfb(
             DFB_FAST_TILIZE, fast_tilize_page_size, pre_tilize_total / fast_tilize_page_size, params.data_format);

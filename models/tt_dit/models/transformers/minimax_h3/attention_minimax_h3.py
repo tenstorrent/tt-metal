@@ -20,7 +20,7 @@ from ....utils.device_constants import BLACKHOLE_COMPUTE_GRID, WORMHOLE_COMPUTE_
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_kwargs, agmm_pins
+from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
 
 # Ring SDPA chunk pair of the dynamic-length path per device compute grid and length class, one program each.
@@ -118,9 +118,11 @@ class MiniMaxH3Attention(Module):
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
+        agmm_mode: AgmmMode | str | None = None,
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
-        length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path."""
+        length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path, and
+        `agmm_mode` picks its all-gather matmul pins (`resolve_agmm_mode`)."""
         super().__init__()
 
         self.kv_gather_capacity = kv_gather_capacity
@@ -210,9 +212,21 @@ class MiniMaxH3Attention(Module):
         self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
 
         # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
+        self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self._qkv_pins = self._out_pins = self._ring_sdpa_configs = None
         if dynamic_length and self.use_fused_agmm:
-            pin_kwargs = dict(full_grid=full_grid, num_links=ccl_manager.num_links)
+            pin_kwargs = dict(
+                full_grid=full_grid,
+                num_links=ccl_manager.num_links,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                mode=agmm_mode,
+            )
             self._qkv_pins = agmm_pins(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
             self._out_pins = agmm_pins(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
         if dynamic_length and self.use_ring:
@@ -226,6 +240,7 @@ class MiniMaxH3Attention(Module):
                     q_chunk_size=chunks[cls.name][0],
                     k_chunk_size=chunks[cls.name][1],
                     exp_approx_mode=False,
+                    min_blocked_pack_tiles=2,
                 )
                 for cls in LENGTH_CLASSES
             }
@@ -254,13 +269,6 @@ class MiniMaxH3Attention(Module):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-        )
-        self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
         )
 
     # ------------------------------------------------------------------ weights
@@ -357,6 +365,7 @@ class MiniMaxH3Attention(Module):
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
                 exp_approx_mode=False,  # NOTE: False is more correct
+                min_blocked_pack_tiles=2,
             )
         return self._sdpa_program_configs[key]
 
@@ -492,6 +501,7 @@ class MiniMaxH3Attention(Module):
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
             exp_approx_mode=False,  # NOTE: False is more correct
+            min_blocked_pack_tiles=2,
         )
 
     # ------------------------------------------------------------------ forward
@@ -555,7 +565,6 @@ class MiniMaxH3Attention(Module):
 
         q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
             spatial_1BND,
-            compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
@@ -677,7 +686,6 @@ class MiniMaxH3Attention(Module):
         fuse_gate = addcmul_residual is not None and self.use_fused_agmm
         out = self.to_out(
             spatial_1BND,
-            compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=matmul_parallel_config,
             force_transpose=False,
             addcmul_a=addcmul_residual if fuse_gate else None,
@@ -691,11 +699,12 @@ class MiniMaxH3Attention(Module):
         return out
 
     def _agmm_kwargs(self, pins: dict | None, k: int, n: int, x: ttnn.Tensor) -> dict:
-        """The fused all-gather matmul's blocking kwargs at `x`'s per-device rows (class pin or swept table);
-        none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
+        """The fused all-gather matmul's blocking and compute kwargs at `x`'s per-device rows (class pin or swept
+        table); only the compute config on the unfused path, whose matmul overruns L1 with the swept blockings at
+        long sequence lengths."""
         if not self.use_fused_agmm:
-            return {}
-        return agmm_kwargs(pins, k, n, x.padded_shape[-2])
+            return {"compute_kernel_config": self.mm_compute_kernel_config}
+        return agmm_kwargs(pins, k, n, x.padded_shape[-2], self.mm_compute_kernel_config)
 
     def _ring_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig:
         """The per-device length's class pin on the dynamic-length path, else the length-keyed table."""
