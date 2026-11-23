@@ -23,7 +23,10 @@ FIRST_LAYER="${2:?first layer (0-indexed)}"
 NUM_LAYERS="${3:?layer count}"
 REQUEST_TOKENS="${4:-1044480}"
 CHUNK_SIZE=5120
-WARMUP_CHUNKS=10
+WARMUP_CHUNKS="${STAGE_PROBE_WARMUP_CHUNKS:-10}"
+# Extra runner exports, e.g. "export PREFILL_USE_TRACE=0;" for a debug run. tt-run does not forward PREFILL_*,
+# so they go into the rank's own shell line.
+RUNNER_EXTRA_ENV="${STAGE_PROBE_RUNNER_ENV:-}"
 
 TT_METAL_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 LOG_DIR="${STAGE_PROBE_LOG_DIR:?set STAGE_PROBE_LOG_DIR}"
@@ -48,6 +51,7 @@ stage "probe ${NAME}: layers [${FIRST_LAYER}, $((FIRST_LAYER + NUM_LAYERS))) req
 cat > "${RUN_DIR}/command.txt" <<EOF
 $0 $*
 TT_METAL_HOME=${TT_METAL_HOME} sha=$(git -C "${TT_METAL_HOME}" rev-parse HEAD) host=$(hostname) start=${STAMP}
+warmup_chunks=${WARMUP_CHUNKS} runner_extra_env=${RUNNER_EXTRA_ENV:-<none>}
 EOF
 
 cd "${TT_METAL_HOME}"
@@ -65,6 +69,27 @@ if [ -f /tmp/tt-device.dirty ]; then
   stage "reset done"
 fi
 touch /tmp/tt-device.dirty
+# Power and clock state, read inside the lock window (tt-smi opens the chips): per-chip tdp_limit and aiclk.
+if timeout 120 tt-smi -s --snapshot_no_tty --offline > "${RUN_DIR}/tt_smi_snapshot.json" 2> "${RUN_DIR}/tt_smi_snapshot.err"; then
+  POWER="$(python3 - "${RUN_DIR}/tt_smi_snapshot.json" <<'PY'
+import collections, json, sys
+text = open(sys.argv[1]).read()
+snap = json.loads(text[text.index("{"):])
+vals = collections.defaultdict(collections.Counter)
+for dev in snap.get("device_info", []):
+    for section in dev.values():
+        if isinstance(section, dict):
+            for key in ("tdp_limit", "aiclk", "aiclk_limit_max"):
+                if key in section and section[key] not in (None, "N/A"):
+                    vals[key][str(section[key]).strip()] += 1
+print(" ".join(f"{k}={dict(c)}" for k, c in sorted(vals.items())) or "no tdp/aiclk fields")
+PY
+)"
+else
+  POWER="tt-smi snapshot failed (see tt_smi_snapshot.err)"
+fi
+echo "power: ${POWER}" >> "${RUN_DIR}/command.txt"
+stage "power: ${POWER}"
 
 RUNNER_PID=""
 CLEAN=0
@@ -115,7 +140,7 @@ stage "launching runner (tt-run, 1 rank, ${BINDING##*/})"
       export PREFILL_MIGRATION_DEVICE_MAP_PATH='${RUN_DIR}/device_map.json'; \
       export PREFILL_H2D_SERVICE_ID='${SERVICE_ID}'; \
       export PREFILL_LAYER_COMPLETION_RING='/${SERVICE_ID}_ring'; \
-      export LOGURU_LEVEL=INFO; \
+      export LOGURU_LEVEL=INFO; ${RUNNER_EXTRA_ENV} \
       exec python3 -m models.demos.common.prefill.runners.prefill_runner"
 ) > "${RUNNER_LOG}" 2>&1 &
 RUNNER_PID=$!

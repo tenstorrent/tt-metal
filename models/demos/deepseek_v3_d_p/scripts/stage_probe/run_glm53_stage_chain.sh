@@ -11,7 +11,7 @@
 # hidden states, into its first layer; its MoE layers then measure ~1.5-2 ms slower than in full78. Those runs
 # are kept only as evidence. (prod_G1 runs from layer 18, the full layer whose top-k layers 19-21 reuse.)
 #
-#   run_glm53_stage_chain.sh [stage_name ...]     (default: all; e.g. "prod_G0" for one)
+#   run_glm53_stage_chain.sh [stage_name ...]     (default: full78; e.g. "prod_G0 prod_G1" for evidence reruns)
 #
 # Holds the shared-device priority marker $TT_DEVICE_PRIORITY_DIR/P0a-glm54-perf across the chain, as
 # ai-workspace instructions/tt-metal/shared-device.md asks; each stage takes the device lock on its own.
@@ -22,7 +22,8 @@ declare -A STAGES=(
   [prod_G0]="0 19" [prod_G1]="18 20" [prod_G2]="38 20" [prod_G3]="58 20"
   [g54_G0]="0 26" [g54_G1]="26 28" [g54_G3]="54 24"
 )
-ORDER=(full78 prod_G0 prod_G1 prod_G2 prod_G3 g54_G0 g54_G1 g54_G3)
+# Default: the reference run only; the stage-alone configurations rerun by name as evidence.
+ORDER=(full78)
 [ $# -gt 0 ] && ORDER=("$@")
 
 MARKER="${TT_DEVICE_PRIORITY_DIR:?set TT_DEVICE_PRIORITY_DIR}/P0a-glm54-perf"

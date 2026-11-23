@@ -1,27 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-"""Stage times and per-layer costs from run_stage_probe.sh runs.
+"""Stage times and per-layer costs from run_stage_probe.sh runs, written as one JSON artifact.
 
-    python stage_probe_summary.py --out <json> --split <split_name> <stage>=<run_dir>[@<from>[-<to>]] [...] [--split ...]
+    python stage_probe_summary.py --out <json>
+        --split <name> <stage>=<run_dir>[@<first>[-<last>]] [...]    (repeatable; a "/" in <name> nests it)
+        [--reference <split>] [--provisional <text>]
+        [--ci <split> <probe>=<tok_s> [...]] [--entry-overhead <split>/<stage> <split>/<stage>]
+        [--note <key>=<text>] [...]
 
-@<from> measures a stage that starts at a later layer than its run (a run that starts one full-indexer layer
-early, so the stage's leading reuse layers get real top-k): ms spans from that layer's ack, and period_ms
-subtracts the earlier layers' ack span. @<from>-<to> slices layers [from, to] out of a longer run (e.g. all 78
-layers on one rank): ms = ack(to) - ack(from); period_ms is the slice span (previous layer ack, or previous chunk
-retire, -> ack(to)), median over chunks d-4..d+4.
+A stage is layers [first, last] of a run (default: all of the run's layers). Every ack time is the producer's
+clock (time.perf_counter in one process) from the CHUNK_RETIRE lines; a chunk retires on its last ack. Per probe
+chunk d (the CI's probe chunks 0, 9, 19, 50, 101, 203 = 5k, 50k, 100k, 255k, 510k, 1020k tokens prefilled through
+that chunk) a stage reports:
+  ms         ack(last) - ack(first) of chunk d: the stage's first to last layer ack (CI's chunk_time definition)
+  period_ms  median over chunks d-4..d+4 of ack(last) minus the event before ack(first): ack(first - 1) of the
+             same chunk, or the previous chunk's last ack when the stage starts at the run's first layer (chunks
+             are queued back to back). That is the stage's full span of num_layers layers, last ack to last ack:
+             its retire period when it runs alone, and the same span when it is cut out of a longer run.
+composed: tok/s = 5120 / the slowest stage's period_ms (and / its ms) per probe.
 
-Per probe chunk (the CI's probe chunks: 0, 9, 19, 50, 101, 203 = 5k, 50k, 100k, 255k, 510k, 1020k tokens
-prefilled through that chunk), a stage reports:
-  ms         the chunk's first layer ack -> last layer ack on the rank (CI's chunk_time definition)
-  period_ms  median retire-to-retire interval over the chunks [d-4, d+4]: the stage's retire period with the
-             next chunk already queued, which also covers the parts before the first ack and after the last
-
-Per layer type: the layer-completion ack fires after a layer's KV write, inside its attention half, and a full
-layer's indexer runs before that write. So ack(i+1) - ack(i) = post(i) + pre(i+1): layer i's work after its KV
-write (rest of attention, FFN) plus layer i+1's work up to its own KV write (norm, projections, the indexer on a
-full layer). The fit delta(i) = P[ffn(i)] + Q[attn(i+1)] (least squares over a stage's layers and a chunk window)
-gives each layer type's cost P[ffn] + Q[attn], which does not depend on how a layer splits around its ack.
-All times are the producer's clock (time.perf_counter in one process), from the CHUNK_RETIRE lines.
+Per layer type: the layer ack is sent after layer i's attention half (indexer, KV write, sparse attention,
+output projection), so ack(i+1) - ack(i) = FFN(i) + attention(i+1). The least-squares fit
+delta(i) = P[ffn(i)] + Q[attn(i+1)] over a stage's layers and a chunk window gives each layer type's cost
+P[ffn] + Q[attn], which is the same for any split of a layer around its ack.
 """
 
 import argparse
@@ -34,6 +35,7 @@ import numpy as np
 
 CHUNK = 5120
 PROBES = {"5k": 0, "50k": 9, "100k": 19, "255k": 50, "510k": 101, "1020k": 203}
+WINDOWS = {"short (chunks 0-2, <=15k)": range(0, 3), "~1M (chunks 195-203, ~1.0M)": range(195, 204)}
 _RETIRE = re.compile(
     r"CHUNK_RETIRE slot=(\d+) start=(\d+) end=(\d+) first=([\d.]+) retire=([\d.]+) warmup=([01]) acks=(\d+) layers=(\S*)"
 )
@@ -43,164 +45,186 @@ _LAYER = re.compile(r"(\d+)-(\d+)@([\d.]+)")
 FULL = {0, 1, 2} | set(range(6, 78, 4))
 
 
-def layer_type(layer: int) -> str:
-    ffn = "dense" if layer < 3 else "moe"
-    attn = "indexer" if layer in FULL else "reuse"
-    return f"{ffn}+{attn}"
-
-
 def read_run(run_dir: Path) -> dict:
-    cmd = (run_dir / "command.txt").read_text().split()
-    first_layer = int(cmd[2])
+    cmd_text = (run_dir / "command.txt").read_text()
     chunks = []
     for line in (run_dir / "producer.log").read_text(errors="replace").splitlines():
         m = _RETIRE.search(line)
         if not m or m.group(6) != "0":
             continue
-        acks = [(int(a), float(t)) for a, _b, t in _LAYER.findall(m.group(8))]
-        chunks.append(
-            {
-                "start": int(m.group(2)),
-                "first": float(m.group(4)),
-                "retire": float(m.group(5)),
-                "acks": [t for _, t in sorted(acks)],
-            }
-        )
+        acks = sorted((int(a), float(t)) for a, _b, t in _LAYER.findall(m.group(8)))
+        # Absolute ms on the producer clock: first is the chunk's first ack, the layers are ms after it.
+        first_ms = float(m.group(4)) * 1000.0
+        chunks.append({"start": int(m.group(2)), "acks": [first_ms + t for _, t in acks]})
     chunks.sort(key=lambda c: c["start"])
     assert chunks and all(c["start"] == i * CHUNK for i, c in enumerate(chunks)), f"{run_dir}: chunk gaps"
-    sha = re.search(r"sha=(\w+)", (run_dir / "command.txt").read_text()).group(1)
-    return {"dir": run_dir, "first_layer": first_layer, "chunks": chunks, "sha": sha}
+    power = re.search(r"^power: (.*)$", cmd_text, re.M)
+    return {
+        "dir": run_dir,
+        "first_layer": int(cmd_text.split()[2]),
+        "chunks": chunks,
+        "sha": re.search(r"sha=(\w+)", cmd_text).group(1),
+        "start": re.search(r"start=(\S+)", cmd_text).group(1),
+        "power": power.group(1) if power else "not recorded (run predates the launcher's tt-smi read)",
+        "command": cmd_text.splitlines()[0],
+    }
 
 
-def stage_probes(run: dict, from_layer: int, to_layer: int, sliced: bool) -> dict:
+def stage_probes(run: dict, first: int, last: int) -> dict:
     ch = run["chunks"]
-    skip = from_layer - run["first_layer"]
-    last = to_layer - run["first_layer"]
-    n_acks = len(ch[0]["acks"])
-    assert 0 <= skip <= last < n_acks, f"layers [{from_layer}, {to_layer}] outside the run's {n_acks} acks"
+    a, b = first - run["first_layer"], last - run["first_layer"]
+    assert 0 <= a <= b < len(ch[0]["acks"]), f"layers [{first}, {last}] outside {run['dir'].name}"
+
+    def span(i):
+        before = ch[i]["acks"][a - 1] if a else ch[i - 1]["acks"][-1]
+        return ch[i]["acks"][b] - before
+
     out = {}
     for label, d in PROBES.items():
         if d >= len(ch):
             continue
-        acks = ch[d]["acks"]
-        rec = {"ms": round(acks[last] - acks[skip], 2) if sliced else None}
-        if not sliced:
-            # lead: ms from the chunk's first ack to the stage's first ack (0 without a skip).
-            rec["ms"] = round((ch[d]["retire"] - ch[d]["first"]) * 1000.0 - acks[skip], 2)
-            lo, hi = max(1, d - 4), min(len(ch) - 1, d + 4)
-            periods = [
-                (ch[i]["retire"] - ch[i - 1]["retire"]) * 1000.0 - ch[i]["acks"][skip] for i in range(lo, hi + 1)
-            ]
-            rec["period_ms"] = round(statistics.median(periods), 2)
-        else:
-            # A slice's pace: from the event before the stage's first ack (the previous layer's ack, or the
-            # previous chunk's retire when the slice starts at the run's first layer; chunks are queued back to
-            # back) to the stage's last ack, i.e. exactly num_layers layer spans.
-            def span(i):
-                a = ch[i]["acks"]
-                prev = a[skip - 1] if skip else (ch[i - 1]["retire"] - ch[i]["first"]) * 1000.0
-                return a[last] - prev
-
-            lo, hi = max(1, d - 4), min(len(ch) - 1, d + 4)
-            rec["period_ms"] = round(statistics.median(span(i) for i in range(lo, hi + 1)), 2)
-            rec[
-                "period_kind"
-            ] = "slice span: previous layer ack (or previous chunk retire) -> last ack, median d-4..d+4"
-        rec["chunk"] = d
-        what = (
-            f", ack({to_layer}) - ack({from_layer}) of a {n_acks}-layer run"
-            if sliced
-            else (f", from layer {from_layer}'s ack" if skip else "")
-        )
-        rec[
-            "source"
-        ] = f"run_stage_probe.sh {run['dir'].name} (tt-metal {run['sha'][:11]}), bh-glx-120-b06u02, chunk {d}{what}"
-        out[label] = rec
+        lo, hi = max(1, d - 4), min(len(ch) - 1, d + 4)
+        out[label] = {
+            "ms": round(ch[d]["acks"][b] - ch[d]["acks"][a], 2),
+            "period_ms": round(statistics.median(span(i) for i in range(lo, hi + 1)), 2),
+            "chunk": d,
+            "source": f"{run['dir'].name} layers {first}-{last} (tt-metal {run['sha'][:11]}, bh-glx-120-b06u02)",
+        }
     return out
 
 
-def fit_layer_types(run: dict, from_layer: int, to_layer: int, chunk_ids) -> dict:
-    """Per layer type cost P[ffn] + Q[attn] (ms) from the ack deltas of layers [from_layer, to_layer]."""
-    cols = ["P_dense", "P_moe", "Q_indexer", "Q_reuse"]
+def composed(stages: dict) -> dict:
+    out = {}
+    for label in PROBES:
+        vals = {s: v[label] for s, v in stages.items() if label in v}
+        if len(vals) != len(stages):
+            continue
+        slow_p = max(vals, key=lambda s: vals[s]["period_ms"])
+        slow_ms = max(vals, key=lambda s: vals[s]["ms"])
+        out[label] = {
+            "slowest_stage_by_period": slow_p,
+            "slowest_period_ms": vals[slow_p]["period_ms"],
+            "tok_s_from_period": round(CHUNK / (vals[slow_p]["period_ms"] / 1000.0)),
+            "slowest_stage_by_ms": slow_ms,
+            "tok_s_from_ms": round(CHUNK / (vals[slow_ms]["ms"] / 1000.0)),
+        }
+    return out
+
+
+def fit_layer_types(run: dict, first: int, last: int, chunk_ids) -> dict:
+    """Per layer type cost P[ffn] + Q[attn] (ms) from the ack deltas of layers [first, last]."""
     rows, ys = [], []
     for c in (run["chunks"][i] for i in chunk_ids if i < len(run["chunks"])):
-        acks = c["acks"]
-        for layer in range(from_layer, to_layer):
+        for layer in range(first, last):
             i = layer - run["first_layer"]
-            row = [0.0] * 4
+            row = [0.0] * 4  # P_dense, P_moe, Q_indexer, Q_reuse
             row[0 if layer < 3 else 1] = 1.0
             row[2 if layer + 1 in FULL else 3] = 1.0
             rows.append(row)
-            ys.append(acks[i + 1] - acks[i])
+            ys.append(c["acks"][i + 1] - c["acks"][i])
     a, y = np.array(rows), np.array(ys)
     x, *_ = np.linalg.lstsq(a, y, rcond=None)
-    resid = float(np.sqrt(np.mean((a @ x - y) ** 2)))
-    present = {
-        "dense+indexer": any(l < 3 for l in range(from_layer, to_layer + 1)),
-        "moe+indexer": any(l >= 3 and l in FULL for l in range(from_layer, to_layer)),
-        "moe+reuse": any(l >= 3 and l not in FULL for l in range(from_layer, to_layer)),
-    }
+    layers = range(first, last + 1)
     cost = {
-        "dense+indexer": x[0] + x[2],
-        "moe+indexer": x[1] + x[2],
-        "moe+reuse": x[1] + x[3],
+        "dense+indexer": (x[0] + x[2], any(l < 3 for l in layers)),
+        "moe+indexer": (x[1] + x[2], any(l >= 3 and l in FULL for l in layers)),
+        "moe+reuse": (x[1] + x[3], any(l >= 3 and l not in FULL for l in layers)),
     }
-    out = {t: round(float(v), 3) for t, v in cost.items() if present[t]}
-    out["fit_rms_ms"] = round(resid, 3)
+    out = {t: round(float(v), 3) for t, (v, present) in cost.items() if present}
+    out["fit_rms_ms"] = round(float(np.sqrt(np.mean((a @ x - y) ** 2))), 3)
     out["n_deltas"] = len(ys)
     return out
+
+
+def nested(root: dict, path: str) -> dict:
+    node = root
+    for part in path.split("/"):
+        node = node.setdefault(part, {})
+    return node
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
-    ap.add_argument("--split", action="append", nargs="+", metavar="NAME_OR_STAGE", required=True)
+    ap.add_argument("--split", action="append", nargs="+", required=True, metavar="NAME_OR_STAGE")
+    ap.add_argument("--reference", help="split whose slowest-stage period_ms is the reference")
+    ap.add_argument("--provisional", help="why the reference is provisional (omit when it is final)")
+    ap.add_argument("--ci", nargs="+", metavar="SPLIT_OR_PROBE", help="<split> <probe>=<tok_s> ...")
+    ap.add_argument("--entry-overhead", nargs=2, metavar=("ALONE", "SLICE"))
+    ap.add_argument("--note", action="append", default=[], metavar="KEY=TEXT")
     args = ap.parse_args()
 
-    result, per_layer_runs = {}, []
+    result, fits, runs, stage_index = {}, [], {}, {}
     for spec in args.split:
-        name, stages = spec[0], spec[1:]
-        result[name] = {}
-        for item in stages:
+        name, stage_specs = spec[0], spec[1:]
+        stages = {}
+        for item in stage_specs:
             stage, run_spec = item.split("=", 1)
             run_dir, _, layer_spec = run_spec.partition("@")
             run = read_run(Path(run_dir))
-            run_last = run["first_layer"] + len(run["chunks"][0]["acks"]) - 1
+            runs[run["dir"].name] = {k: run[k] for k in ("sha", "start", "power", "command")}
             lo, _, hi = layer_spec.partition("-")
-            from_layer = int(lo) if lo else run["first_layer"]
-            to_layer = int(hi) if hi else run_last
-            result[name][stage] = stage_probes(run, from_layer, to_layer, sliced=bool(hi))
-            per_layer_runs.append((name, stage, run, from_layer, to_layer))
-        # Composed pipeline rate: one chunk per slowest-stage period (and per slowest first->last ack span).
-        comp = {}
-        for label in PROBES:
-            vals = {s: v[label] for s, v in result[name].items() if label in v}
-            if len(vals) != len(stages):
-                continue
-            slow_ms = max(vals, key=lambda s: vals[s]["ms"])
-            comp[label] = {
-                "slowest_stage_by_ms": slow_ms,
-                "tok_s_from_ms": round(CHUNK / (vals[slow_ms]["ms"] / 1000.0)),
-            }
-            if all(v["period_ms"] is not None for v in vals.values()):
-                slow_p = max(vals, key=lambda s: vals[s]["period_ms"])
-                comp[label]["slowest_stage_by_period"] = slow_p
-                comp[label]["tok_s_from_period"] = round(CHUNK / (vals[slow_p]["period_ms"] / 1000.0))
-        result[name]["composed"] = comp
+            first = int(lo) if lo else run["first_layer"]
+            last = int(hi) if hi else run["first_layer"] + len(run["chunks"][0]["acks"]) - 1
+            stages[stage] = stage_probes(run, first, last)
+            fits.append((f"{name}/{stage}", run, first, last))
+            stage_index[f"{name}/{stage}"] = stages[stage]
+        node = nested(result, name)
+        node.update(stages)
+        node["layers"] = {s: f"{fits[-len(stages) + k][2]}-{fits[-len(stages) + k][3]}" for k, s in enumerate(stages)}
+        node["composed"] = composed(stages)
 
-    windows = {"short (chunks 0-2, <=15k)": range(0, 3), "~1M (chunks 195-203, ~1.0M)": range(195, 204)}
+    if args.reference:
+        comp = nested(result, args.reference)["composed"]
+        result["reference"] = {
+            "split": args.reference,
+            "metric": "slowest stage period_ms per probe (last ack to last ack, median over chunks d-4..d+4)",
+            "slowest_stage_period_ms": {p: c["slowest_period_ms"] for p, c in comp.items()},
+            "slowest_stage": {p: c["slowest_stage_by_period"] for p, c in comp.items()},
+            "tok_s": {p: c["tok_s_from_period"] for p, c in comp.items()},
+            "compare_with": "a GLM-5.4 stage's period_ms on the same definition (per-stage last-ack-to-last-ack "
+            "period, median over chunks d-4..d+4, same probe chunks); met if GLM-5.4 slowest <= 1.54x this",
+            "status": f"PROVISIONAL: {args.provisional}" if args.provisional else "final",
+        }
+    if args.ci:
+        comp = nested(result, args.ci[0])["composed"]
+        ci = {k: int(v) for k, v in (x.split("=") for x in args.ci[1:])}
+        result["ci_comparison"] = {
+            p: {
+                "ci_tok_s": t,
+                "composed_tok_s_from_period": comp[p]["tok_s_from_period"],
+                "ratio_to_ci": round(comp[p]["tok_s_from_period"] / t, 3),
+            }
+            for p, t in ci.items()
+            if p in comp
+        }
+    if args.entry_overhead:
+        alone, sliced = (stage_index[k] for k in args.entry_overhead)
+        result["entry_overhead_ms"] = {
+            "definition": f"period_ms of {args.entry_overhead[0]} minus {args.entry_overhead[1]}: same layers and "
+            "inputs; a non-first stage cut out of a longer run does not include it, a stage run alone does "
+            "(cause not attributed)",
+            **{
+                p: round(alone[p]["period_ms"] - sliced[p]["period_ms"], 2)
+                for p in PROBES
+                if p in alone and p in sliced
+            },
+        }
     result["per_layer_type_ms"] = {
-        wname: {f"{name}/{stage}": fit_layer_types(run, lo, hi, ids) for name, stage, run, lo, hi in per_layer_runs}
-        for wname, ids in windows.items()
+        w: {key: fit_layer_types(run, lo, hi, ids) for key, run, lo, hi in fits} for w, ids in WINDOWS.items()
     }
     result["per_layer_note"] = (
         "Per layer type cost = P[ffn] + Q[attn] from a least-squares fit of ack(i+1)-ack(i) = P[ffn(i)] + "
-        "Q[attn(i+1)] over each stage's layers (the ack fires after a layer's KV write; a full layer's indexer "
-        "runs before it). Producer clock, traced, one user; acks are quantized at ~1.07 ms, so means over many "
-        "deltas."
+        "Q[attn(i+1)] over each stage's layers: the ack follows layer i's attention half (indexer, KV write, sparse "
+        "attention), so a delta is FFN(i) + attention(i+1). Producer clock, traced, one user; acks are quantized at "
+        "~1.07 ms, so the fit averages many deltas."
     )
+    for note in args.note:
+        key, text = note.split("=", 1)
+        result[key] = text
+    result["runs"] = runs
     Path(args.out).write_text(json.dumps(result, indent=1) + "\n")
-    print(json.dumps(result, indent=1))
+    print(json.dumps({k: result[k] for k in ("reference", "ci_comparison") if k in result}, indent=1))
 
 
 if __name__ == "__main__":
