@@ -125,7 +125,8 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
 
 /**
  * @brief Releases the current Dest section after the packer has finished reading it.
- * Decrements MATH_PACK so math can use the section again. The regular path also clears the used Dest banks.
+ * Clears the used Dest banks, then decrements MATH_PACK so math can use the section again. Unpack-to-dest takes the
+ * same path: UNPACK writes Dest only under a loan from a section owner, which comes after this release.
  *
  * @tparam EN_32BIT_DEST True if the math destination uses 32 bits per value, false if it uses 16 bits.
  *
@@ -135,19 +136,7 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  */
 template <bool EN_32BIT_DEST>
 inline void llk_pack_dest_section_done() {
-    if constexpr (UnpackToDestEn) {
-        _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
-        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            // Same bank switch as the regular path: PACR reads DEST at THCON_PACKER0_REG0_SRC_ADDR_OFFSET plus its tile
-            // counter. A DEST_TARGET_REG_CFG_MATH_SEC2 write does not move it (emulator, 2026-10-05). Reprogram the
-            // offset only once the packer has drained the section it just read.
-            _update_dest_register_offset_<EN_32BIT_DEST>();
-            _llk_stall_cfg_on_<p_stall::PACK0>();
-            _set_packer_dest_registers_<p_pacr::PACK0, DST_SYNC_MODE>();
-        }
-    } else {
-        _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, EN_32BIT_DEST>();
-    }
+    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, EN_32BIT_DEST>();
 }
 
 /**
