@@ -265,9 +265,9 @@ def test_pair_layout_matches_the_firmware_header():
     if not path.is_file():
         pytest.skip("not inside a tt-metal checkout")
     text = path.read_text()
-    # put_ts_data takes the high payload word before the low one; each reads the counter of its index.
-    high = re.search(r"const \w+ hi = read_counter\(2 \* k( \+ 1)?\)", text)
-    low = re.search(r"const \w+ lo = read_counter\(2 \* k( \+ 1)?\)", text)
+    # put_ts_data takes the high payload word before the low one; each takes the captured value of its index.
+    high = re.search(r"const \w+ hi = noc_counters_values\[2 \* k( \+ 1)?\]", text)
+    low = re.search(r"const \w+ lo = noc_counters_values\[2 \* k( \+ 1)?\]", text)
     assert high and low
     assert re.search(
         r"put_ts_data\(w, stamp, NOC_COUNTERS_PAIR_PROFILER_ID_BASE \+ k, hi, lo\)",
