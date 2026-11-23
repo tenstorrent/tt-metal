@@ -433,9 +433,27 @@ class Inkling2AttentionFast(Inkling2Attention):
         )
         return self._out_proj(self.out(attn, proj), post)
 
+    def _rows_proj(self, xs, state, rows):
+        """One conv window + projection for all tokens of a verify pass: token t's rows at 4 t .. 4 t + 3 (the window
+        state is written by commit_rows). Returns (proj, row of token t)."""
+        assert self.window is not None, "decode_rows needs the fused window (not the prefetcher projection)"
+        act = self.window.rows(state.x_hist, xs, rows.win)
+        bank = getattr(self.w_all, "bank", None)
+        x_rows = bank.x_rows if bank is not None else None
+        if bank is not None:
+            bank.x_rows = 0  # every row of the activation tiles
+        try:
+            proj = self.w_all(act, ttnn.bfloat16, self.mm_cfg)
+        finally:
+            if bank is not None:
+                bank.x_rows = x_rows
+        return proj
+
     def rows_out(self, R, state):
         """Scratch of a multi-token verify pass (decode_rows) for R tokens, R <= 3."""
-        return RowsOut(self.device, R, state.k_ring.dtype, is_global=self.is_global)
+        rows = RowsOut(self.device, R, state.k_ring.dtype, is_global=self.is_global)
+        rows.win = ttnn.zeros_like(state.x_hist)
+        return rows
 
     def decode_rows(self, xs, state, positions, rows, p0=None):
         """Multi-token verify, local layers: R = len(xs) <= 3 tokens at consecutive positions; xs[t] the token's input
@@ -459,16 +477,11 @@ class Inkling2AttentionFast(Inkling2Attention):
                 and p0 >= WINDOW
                 and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
             )
-            projs = []
+            proj = self._rows_proj(xs, state, rows)
             for t, (x, pos) in enumerate(zip(xs, positions)):
-                if self.window is None:
-                    proj, mode = self._window(state, x, x, x)
-                else:
-                    mode = "single"
-                    proj = self.w_all(self.window(state.x_hist, [x]), ttnn.bfloat16, self.mm_cfg)
-                r = ROWS[mode]
+                pr = 4 * t
                 prep_rows = (t, rows) if shared else (t, _NoFar(rows))
-                _, mask, sink_t = self.prep(proj, pos, {"q": 0, "k": r["k"], "v": r["v"]}, state, rows=prep_rows)
+                _, mask, sink_t = self.prep(proj, pos, {"q": pr, "k": pr, "v": pr}, state, rows=prep_rows)
                 outs = (rows.o_near[t], rows.r[t], rows.sink_far if shared else self.near.sink, t if shared else 0)
                 self.near(
                     self.prep.q_grp,
@@ -480,7 +493,6 @@ class Inkling2AttentionFast(Inkling2Attention):
                     outs=outs,
                 )
                 if shared:
-                    projs.append(proj)
                     continue
                 far_pos, valid = pos.far_grp
                 far = ttnn.transformer.flash_multi_latent_attention_decode(
@@ -494,7 +506,7 @@ class Inkling2AttentionFast(Inkling2Attention):
                     program_config=self.far_grp_cfg,
                     compute_kernel_config=self.hifi4,
                 )
-                self.out(far, proj, (rows.o_near[t], rows.r[t], valid), row=t)
+                self.out(far, proj, (rows.o_near[t], rows.r[t], valid), row=t, proj_row=pr)
             if shared:
                 far = ttnn.transformer.flash_multi_latent_attention_decode(
                     rows.q_far,
@@ -507,19 +519,19 @@ class Inkling2AttentionFast(Inkling2Attention):
                     program_config=self.far_rows_cfg,
                     compute_kernel_config=self.hifi4,
                 )
-                for t, proj in enumerate(projs):
-                    self.out(far, proj, (rows.o_near[t], rows.r[t], positions[t].far_grp[1]), row=t, far_row=GROUPS * t)
+                for t in range(R):
+                    self.out(
+                        far,
+                        proj,
+                        (rows.o_near[t], rows.r[t], positions[t].far_grp[1]),
+                        row=t,
+                        far_row=GROUPS * t,
+                        proj_row=4 * t,
+                    )
             return self.out.act
-        projs = []
-        for t, (x, pos) in enumerate(zip(xs, positions)):
-            if self.window is None:
-                proj, mode = self._window(state, x, x, x)
-            else:
-                mode = "single"
-                proj = self.w_all(self.window(state.x_hist, [x]), ttnn.bfloat16, self.mm_cfg)
-            r = ROWS[mode]
-            self.prep(proj, pos, {"q": 0, "k": r["k"], "v": r["v"]}, state, rows=(t, rows))
-            projs.append(proj)
+        proj = self._rows_proj(xs, state, rows)
+        for t, pos in enumerate(positions):
+            self.prep(proj, pos, {"q": 4 * t, "k": 4 * t, "v": 4 * t}, state, rows=(t, rows))
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
             rows.q,
             state.k_grp,
@@ -533,14 +545,15 @@ class Inkling2AttentionFast(Inkling2Attention):
             pending_kv=rows.pending,
             pending_pos=positions[0].pos,
         )
-        for t, proj in enumerate(projs):
-            self.out(attn, proj, row=t)
+        for t in range(rows.R):
+            self.out(attn, proj, row=t, proj_row=4 * t)
         return self.out.act
 
     def commit_rows(self, state, rows, positions0, n):
         """After the accept of a decode_rows pass: tokens 0 .. n - 1's k / v rows into the ring, as plain decode would
         have written them. positions0: token 0's DecodePositionsFast."""
         self.commit(rows, state.k_ring, state.v_ring, positions0.pos, n)
+        self.window.commit(state.x_hist, rows.win, n)
 
     @staticmethod
     def _post(a, post):

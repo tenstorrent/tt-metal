@@ -61,16 +61,18 @@ def _one(attn, x, state, pos):
 @pytest.mark.parametrize("p", [9000, 1023 + 9 * 1024])
 @pytest.mark.parametrize("R", [2, 3])
 @pytest.mark.parametrize("is_global", [False, True], ids=["local", "global"])
-def test_decode_rows(device, p, R, is_global):
+@pytest.mark.parametrize("n_acc", ["all", 1], ids=["accept_all", "accept_1"])
+def test_decode_rows(device, p, R, is_global, n_acc):
+    n_acc = R if n_acc == "all" else n_acc
     sd = ta.random_state_dict(is_global, seed=11 if is_global else 7)
     attn = Inkling2AttentionFast(device, T.host_weights_from_hf(sd, is_global), is_global)
     pk, pv = T.seeded_prefix(p, seed=p + 1)
     states = []
-    for _ in range(2):
+    for _ in range(3):
         st = attn.new_state(T.MAX_CTX, ttnn.bfloat8_b)
         st.fill(pk, pv)
         states.append(st)
-    ref_st, st = states
+    ref_st, st, ref_n = states
     k0 = ttnn.to_torch(st.k_ring).float()
     g = torch.Generator().manual_seed(p + R)
     xs_host = [torch.randn(T.HIDDEN, generator=g) for _ in range(R)]
@@ -82,6 +84,10 @@ def test_decode_rows(device, p, R, is_global):
         pos.update(p + t)
         pos.prepare()
         ref.append(_one(attn, xs[t], ref_st, pos))
+    for t in range(n_acc):  # the state plain decode leaves after the accepted tokens only
+        pos.update(p + t)
+        pos.prepare()
+        _one(attn, xs[t], ref_n, pos)
 
     positions = []
     for t in range(R):
@@ -96,12 +102,14 @@ def test_decode_rows(device, p, R, is_global):
         assert torch.equal(act[t], ref[t]), t
     assert not act[R:].any(), "rows past R stay zero"
     assert torch.equal(ttnn.to_torch(st.k_ring).float(), k0), "the pass must not write the ring"
-    attn.commit_rows(st, rows, positions[0], R)
+    attn.commit_rows(st, rows, positions[0], n_acc)
     assert not torch.equal(ttnn.to_torch(st.k_ring).float(), k0), "commit writes the ring"
+    # rings and window: the state plain decode leaves after the accepted tokens; the far cache: after all R (rows
+    # of rejected tokens are rewritten before any far range reaches them)
     pairs = {
-        "k_ring": (st.k_ring, ref_st.k_ring),
-        "v_ring": (st.v_ring, ref_st.v_ring),
-        "x_hist": (st.x_hist, ref_st.x_hist),
+        "k_ring": (st.k_ring, ref_n.k_ring),
+        "v_ring": (st.v_ring, ref_n.v_ring),
+        "x_hist": (st.x_hist, ref_n.x_hist),
     }
     if is_global:
         pairs["kv_full"] = (st.kv_full, ref_st.kv_full)

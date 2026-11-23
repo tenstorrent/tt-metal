@@ -248,10 +248,10 @@ class AttnPrep:
         ]
         return kernels, cbs
 
-    def _bias_group(self, proj, positions, tau, rows=None):
+    def _bias_group(self, proj, positions, tau, rows=None, prow=0):
         cores = self.b_cores
         has_tau = int(self.dyn)
-        named = dict(nj=NJ, has_tau=has_tau, rel_tile=6144 // 32, proj_dram=_is_dram(proj))
+        named = dict(nj=NJ, has_tau=has_tau, rel_tile=6144 // 32, proj_dram=_is_dram(proj), prow=prow)
         r_rt, w_rt = [], []
         for i, _ in enumerate(cores):
             r_rt.append(
@@ -277,6 +277,7 @@ class AttnPrep:
         w_named = dict(nj=NJ, sink_tile=6528 // 32, sink_blk=int(self.dyn), neg=f32_bits(NEG), grp=int(self.dyn),
                        proj_dram=_is_dram(proj))  # fmt: skip
         w_named["rows"] = int(rows is not None and not self.dyn)
+        w_named["prow"] = prow
         kernels = [
             _kernel("attn_bias_reader.cpp", cores, named, r_rt, ttnn.ReaderConfigDescriptor()),
             _kernel(
@@ -326,7 +327,7 @@ class AttnPrep:
             k, c = self._head_group(cores, proj, kind, mode_rows, tau, state, positions, rows)
             kernels += k
             cbs += c
-        k, c = self._bias_group(proj, positions, tau, rows)
+        k, c = self._bias_group(proj, positions, tau, rows, prow=mode_rows["q"])
         kernels += k
         cbs += c
         io = [proj, self.q_taps, self.kv_taps["k"], self.kv_taps["v"], self.scaler, tau, self.rel_scale, self.g]
@@ -355,7 +356,7 @@ class AttnOut:
         self.act = _shared_l1(device, "o_in", N_HEADS * HEAD_DIM, act_mem)
         self.cores = [ttnn.CoreCoord(i, 0) for i in range(N_KV)]  # act_mem grid: CoreGrid(x=8, y=1)
 
-    def __call__(self, attn, proj, merge=None, row=None, far_row=0):
+    def __call__(self, attn, proj, merge=None, row=None, far_row=0, proj_row=0):
         """attn: [1, 1, 24, 128] bf16 TILE DRAM, or with merge = (o_near [1, 8, 3, 128] fp32, r [1, 8, 3, 1] fp32,
         far_valid [1, 1, 1, 1] fp32) the far partial [1, 1, 24, 160] or per kv group [1, 8, 3, 160] bf16. proj as
         AttnPrep. Returns self.act."""
@@ -393,6 +394,7 @@ class AttnOut:
                     far_grp=far_grp,
                     proj_dram=_is_dram(proj),
                     rows=int(row is not None and not flag),
+                    prow=proj_row,
                 ),
                 rt,
                 ttnn.ReaderConfigDescriptor(),
@@ -446,6 +448,32 @@ class AttnWindow:
         cbs = [_cb(0, ttnn.bfloat16, n, crs), _cb(1, ttnn.bfloat16, n, crs), _stage(24, crs, n * 384 + 128)]
         ttnn.generic_op([hist, *xs, self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
         return self.act
+
+    def rows(self, hist, xs, scratch):
+        """Multi-token verify (single-input mode): token t's lag group at rows 4 t .. 4 t + 3 of the projection input
+        (attn_window_rows.cpp), also into scratch [1, 1, 32, C] (for commit); hist is not written. Returns self.act."""
+        R = len(xs)
+        assert 1 <= R <= 4
+        n = self.ntiles
+        rt = [
+            [hist.buffer_address(), self.act.buffer_address(), i * n, scratch.buffer_address()]
+            for i in range(len(self.cores))
+        ]
+        rt = [r + [x.buffer_address() for x in xs] for r in rt]
+        crs = _crs(self.cores)
+        kernels = [_kernel("attn_window_rows.cpp", self.cores, dict(ntiles=n, R=R), rt, ttnn.ReaderConfigDescriptor())]
+        cbs = [_cb(0, ttnn.bfloat16, n, crs), _cb(1, ttnn.bfloat16, n, crs), _stage(24, crs, n * 128 * R + 128)]
+        ttnn.generic_op([hist, scratch, *xs, self.act], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
+        return self.act
+
+    def commit(self, hist, scratch, n_acc):
+        """The window state after n_acc accepted tokens of a rows() pass (win_commit.cpp)."""
+        n = self.ntiles
+        rt = [[hist.buffer_address(), scratch.buffer_address(), i * n, n_acc] for i in range(len(self.cores))]
+        crs = _crs(self.cores)
+        kernels = [_kernel("win_commit.cpp", self.cores, dict(ntiles=n), rt, ttnn.ReaderConfigDescriptor())]
+        cbs = [_cb(0, ttnn.bfloat16, n, crs), _cb(1, ttnn.bfloat16, n, crs)]
+        ttnn.generic_op([hist, scratch], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 
 
 class AttnNear:
@@ -602,6 +630,7 @@ class RowsOut:
         self.slot = [
             ttnn.from_torch(torch.tensor([t], dtype=torch.int32), dtype=ttnn.int32, device=device) for t in range(R)
         ]
+        self.win = None  # conv window scratch of the pass (AttnWindow.rows), set by the layer
         if is_global:
             self.q_far = zeros([1, N_KV, GROUPS * R, 288])
             self.o_near = [zeros([1, N_KV, GROUPS, HEAD_DIM], ttnn.float32) for _ in range(R)]
@@ -625,10 +654,17 @@ class KvCommit:
         assert k_ring.dtype == v_ring.dtype == rows.pending.dtype and 1 <= n <= rows.R
         tb = 1088 if k_ring.dtype == ttnn.bfloat8_b else 2048
         rt = [
-            [rows.pending.buffer_address(), k_ring.buffer_address(), v_ring.buffer_address(), pos0.buffer_address(), g]
+            [
+                rows.pending.buffer_address(),
+                k_ring.buffer_address(),
+                v_ring.buffer_address(),
+                pos0.buffer_address(),
+                g,
+                n,
+            ]
             for g in range(N_KV)
         ]
-        named = dict(n=n, tile_bytes=tb, seq_tiles=WINDOW // 32, width=HEAD_DIM // 32)
+        named = dict(tile_bytes=tb, seq_tiles=WINDOW // 32, width=HEAD_DIM // 32)
         kernels = [_kernel("kv_commit.cpp", self.cores, named, rt, ttnn.ReaderConfigDescriptor())]
         cbs = [_stage(24, _crs(self.cores), 2 * tb * (HEAD_DIM // 32) + 2 * tb + 128)]
         ttnn.generic_op(

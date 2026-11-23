@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 // SPDX-License-Identifier: Apache-2.0
 //
-// Multi-token verify commit (kv group g = arg 4): rows 0 .. n - 1 of the pending K / V tiles (pending [2, 8, 32, 128]:
-// batch g = K, batch 8 + g = V, row t = token t) -> row (pos0 + t) % S of the ring tiles [1, 8, S, 128] (TILE, DRAM).
-// Read-modify-write of whole tiles: bf16 face-row words, or bfp8 exponent byte + 16 mantissa bytes per face row.
+// Multi-token verify commit (kv group g = arg 4, n = arg 5): rows 0 .. n - 1 of the pending K / V tiles (pending [2, 8,
+// 32, 128]: batch g = K, batch 8 + g = V, row t = token t) -> row (pos0 + t) % S of the ring tiles [1, 8, S, 128]
+// (TILE, DRAM). Read-modify-write of whole tiles: bf16 face-row words, or bfp8 exponent byte + 16 mantissa bytes per
+// face row.
 #include "attn_io.hpp"
 
 void kernel_main() {
-    constexpr uint32_t n = get_named_compile_time_arg_val("n");
     constexpr uint32_t tb = get_named_compile_time_arg_val("tile_bytes");
     constexpr uint32_t seq_tiles = get_named_compile_time_arg_val("seq_tiles");
     constexpr uint32_t width = get_named_compile_time_arg_val("width");
@@ -15,6 +15,7 @@ void kernel_main() {
     const uint32_t ring[2] = {get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(2)};
     const uint32_t pos_addr = get_arg_val<uint32_t>(3);
     const uint32_t g = get_arg_val<uint32_t>(4);
+    const uint32_t n = get_arg_val<uint32_t>(5);  // accepted tokens
     const uint32_t stage = align_power_of_2(get_write_ptr(24), attnio::ALIGN);
     const uint32_t pend_l1 = stage, tile_l1 = stage + 2 * width * tb, pos_l1 = tile_l1 + 2 * tb;
 

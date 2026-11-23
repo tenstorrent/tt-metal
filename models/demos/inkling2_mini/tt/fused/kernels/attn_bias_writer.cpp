@@ -20,6 +20,7 @@ void kernel_main() {
     constexpr uint32_t neg = get_named_compile_time_arg_val("neg");  // fp32 bits
     constexpr uint32_t grp = get_named_compile_time_arg_val("grp");  // mask in kv-group layout (global layers)
     constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
+    constexpr uint32_t prow = get_named_compile_time_arg_val("prow");  // projection row (4 t: shared window)
     constexpr uint32_t cb_mask = 21, cb_sink = 6, cb_blk = 7, cb_stage = 25;
 
     const uint32_t mask = get_arg_val<uint32_t>(0);
@@ -34,7 +35,7 @@ void kernel_main() {
         cb_reserve_back(cb_sink, 1);
         const uint32_t w = get_write_ptr(cb_sink);
         attnio::zero_l1(w, 2048);
-        attnio::gather_row<proj_dram>(proj, 2048, 2, sink_tile, 1, 0, stage + 256, stage);  // barriers (zeros too)
+        attnio::gather_row<proj_dram>(proj, 2048, 2, sink_tile, 1, prow, stage + 256, stage);  // barriers (zeros too)
         volatile tt_l1_ptr uint16_t* v = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + 256);
         const InterleavedAddrGen<true> dst = {.bank_base_address = sink, .page_size = 2048};
         // tile row r (r < 24) = sink logit h, broadcast over the 32 columns

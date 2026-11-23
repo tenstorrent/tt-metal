@@ -15,6 +15,7 @@ void kernel_main() {
     constexpr uint32_t nj = get_named_compile_time_arg_val("nj");
     constexpr uint32_t has_tau = get_named_compile_time_arg_val("has_tau");
     constexpr uint32_t rel_tile = get_named_compile_time_arg_val("rel_tile");  // projection tile of rel column 0
+    constexpr uint32_t prow = get_named_compile_time_arg_val("prow");          // projection row (4 t: shared window)
     constexpr uint32_t cb_rel = 0, cb_rs = 1, cb_g = 2, cb_tau = 3, cb_p = 4, cb_near = 5, cb_stage = 24;
 
     uint32_t a = 0;
@@ -42,7 +43,7 @@ void kernel_main() {
     attnio::read_pages(near, 4096, j0, nj, get_write_ptr(cb_near));
     attnio::zero_l1(pw, nj * 2048);
     attnio::zero_l1(rw, 2048);
-    attnio::stage_row<proj_dram>(proj, 2048, 2, rel_tile, 12, 0, stage);
+    attnio::stage_row<proj_dram>(proj, 2048, 2, rel_tile, 12, prow, stage);
     const InterleavedAddrGen<true> ring_a = {.bank_base_address = ring, .page_size = 4};
     noc_async_read(ring_a.get_noc_addr(0, 0), stage + st_ring, 64);
     if constexpr (has_tau) {

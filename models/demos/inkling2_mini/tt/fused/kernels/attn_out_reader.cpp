@@ -30,6 +30,8 @@ void kernel_main() {
     // rows (multi-token verify, local layers): the attention output is [1, 8R, 3, 128], token t of runtime arg 3 at
     // batch t * 8 + g (rows 0..2 of tile row t * 8 + g)
     constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
+    constexpr uint32_t prow =
+        get_named_compile_time_arg_val("prow");  // projection row of the gate (4 t: shared window)
     constexpr uint32_t cb_a = 0, cb_g = 1, cb_m = 2, cb_r = 3, cb_o = 4, cb_stage = 24;
 
     const uint32_t attn = get_arg_val<uint32_t>(0);
@@ -52,7 +54,7 @@ void kernel_main() {
     // wave 1: zeros and every staged block - one read barrier
     attnio::zero_l1(aw + nh * 256, 2048 - nh * 256);
     attnio::zero_l1(gw + nh * 256, 2048 - nh * 256);
-    attnio::stage_row<proj_dram>(proj, 2048, 2, gate_tile + h0 * 4, nh * 4, 0, stage);
+    attnio::stage_row<proj_dram>(proj, 2048, 2, gate_tile + h0 * 4, nh * 4, prow, stage);
     for (uint32_t k = 0; k < nh; ++k) {
         attnio::stage_row(attn, 2048, 2, t0, 4, r0 + k, stage + st_a + 512 * k);
     }
@@ -79,7 +81,7 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     // wave 2: chunks into the pages, fills
-    attnio::unstage_row(2, nh * 4, 0, gw, stage);
+    attnio::unstage_row(2, nh * 4, prow, gw, stage);
     const bool valid = !merge || *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + st_v) != 0;
     for (uint32_t k = 0; k < nh; ++k) {
         if (valid) {
