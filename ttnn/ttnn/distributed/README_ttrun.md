@@ -229,6 +229,22 @@ Both modes support:
 
 Run `tt-run --help` for the full list.
 
+## Per-rank CPU binding
+
+tt-metal pins each device worker thread to one CPU the process may run on, taking the lowest ones first. Ranks that
+share a host with the same CPU mask therefore pin their workers onto the same cores: four ranks of eight devices each
+put 32 slow-dispatch write threads on CPUs 0-7.
+
+By default (`--rank-cpu-binding auto`), when MPI leaves ranks unbound, each rank starts through
+`rank_cpu_binding.py`. It splits the host's CPUs into whole physical cores, gives each local rank a contiguous,
+disjoint run of them, and runs the program pinned there. It does nothing on a host with one rank, or when the ranks
+would get fewer than two cores each, as in oversubscribed CPU-only runs. When `--mpi-args` already binds ranks
+(`--bind-to core`, rankfile slots), tt-run leaves MPI's binding alone.
+
+- `--rank-cpu-exclude 1,2` keeps every rank off the listed CPUs and their hyperthread siblings, for example cores a
+  storage client keeps busy. Takes a Linux CPU list (`1,2`, `0-3`).
+- `--rank-cpu-binding none` leaves ranks unbound.
+
 ## Launcher Selection and Exit Codes
 
 tt-run looks for `mpirun-ulfm` on `PATH` to find the ULFM-capable Open MPI installation that tt-metal links against, but it launches with that installation's plain `mpirun` (the sibling of the resolved `mpirun-ulfm`). Older Docker images shipped `mpirun-ulfm` as a wrapper that injects `--with-ft ulfm`; under that mode a rank killed by a signal is treated as recoverable and `mpirun` can exit 0 even though ranks crashed. Bypassing the wrapper makes any rank that exits non-zero or dies from a signal abort the whole job, so tt-run exits non-zero. Programs that recover from rank failures themselves can opt in with `--mpi-args "--with-ft ulfm"`.

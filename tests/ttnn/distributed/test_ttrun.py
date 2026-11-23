@@ -542,6 +542,82 @@ class TestMPICommandBuilding:
         assert ("--bind-to", "none") not in pairs
 
 
+def _rank_tails(cmd, length):
+    """The last ``length`` arguments of each rank's segment; a rank's program ends its segment."""
+    segments, current = [], []
+    for arg in cmd:
+        if arg == ":":
+            segments.append(current)
+            current = []
+        else:
+            current.append(arg)
+    segments.append(current)
+    return [segment[-length:] for segment in segments]
+
+
+class TestRankCpuBinding:
+    """tt-run starts each rank through rank_cpu_binding.py unless MPI binds the ranks or the user opts out."""
+
+    def _wrapped(self, *exclude):
+        return [sys.executable, str(ttrun_module.RANK_CPU_BINDING_SCRIPT), *exclude, "--", "echo", "hello"]
+
+    def test_unbound_ranks_start_through_the_binding_script(self, sample_rank_binding_yaml):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(config, ["echo", "hello"], rankfile_syntax=RankfileSyntax.RANKFILE)
+        assert _rank_tails(cmd, 5) == [self._wrapped(), self._wrapped()]
+
+    def test_explicit_bind_to_none_still_binds_rank_cpus(self, sample_rank_binding_yaml):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(
+            config, ["echo", "hello"], ["--bind-to", "none"], rankfile_syntax=RankfileSyntax.RANKFILE
+        )
+        assert _rank_tails(cmd, 5) == [self._wrapped(), self._wrapped()]
+
+    def test_exclude_reaches_every_rank(self, sample_rank_binding_yaml):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(
+            config, ["echo", "hello"], rankfile_syntax=RankfileSyntax.RANKFILE, rank_cpu_exclude="1,2"
+        )
+        assert _rank_tails(cmd, 7) == [self._wrapped("--exclude", "1,2")] * 2
+
+    @pytest.mark.parametrize(
+        "mpi_args, binding",
+        [(None, "none"), (["--bind-to", "core"], "auto"), (["--bind-to=socket"], "auto")],
+        ids=["opted_out", "mpi_binds_cores", "mpi_binds_sockets"],
+    )
+    def test_no_binding_script_when_off_or_mpi_binds(self, sample_rank_binding_yaml, mpi_args, binding):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(
+            config, ["echo", "hello"], mpi_args, rankfile_syntax=RankfileSyntax.RANKFILE, rank_cpu_binding=binding
+        )
+        assert _rank_tails(cmd, 2) == [["echo", "hello"], ["echo", "hello"]]
+        assert str(ttrun_module.RANK_CPU_BINDING_SCRIPT) not in cmd
+
+    def test_rankfile_placement_keeps_mpi_binding(self, sample_rank_binding_yaml, temp_dir):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        rankfile = temp_dir / "rf"
+        rankfile.write_text("rank 0=h slot=0\nrank 1=h slot=1\n")
+        cmd = build_mpi_command(
+            config, ["echo", "hello"], ["--rankfile", str(rankfile)], rankfile_syntax=RankfileSyntax.RANKFILE
+        )
+        assert str(ttrun_module.RANK_CPU_BINDING_SCRIPT) not in cmd
+
+    def test_binding_script_wraps_gdbserver(self, sample_rank_binding_yaml):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(
+            config, ["echo", "hello"], rankfile_syntax=RankfileSyntax.RANKFILE, debug_gdbserver=True
+        )
+        first = _rank_tails(cmd, 6)[0]
+        assert first[:5] == [sys.executable, str(ttrun_module.RANK_CPU_BINDING_SCRIPT), "--", "bash", "-c"]
+
+    def test_invalid_exclude_is_rejected(self, runner, sample_rank_binding_yaml):
+        result = runner.invoke(
+            main, ["--rank-binding", str(sample_rank_binding_yaml), "--rank-cpu-exclude", "1-x", "--dry-run", "echo"]
+        )
+        assert result.exit_code != 0
+        assert "invalid CPU list" in result.output
+
+
 class TestLegacyFlow:
     """Test legacy flow function - minimal smoke tests."""
 
