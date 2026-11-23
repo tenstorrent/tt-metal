@@ -1,0 +1,13 @@
+harness output language (logs/SUMMARY.txt header): English
+logs/SUMMARY.txt: harness output in English; Serbian words left: 0
+logs/run_meta.txt: harness output in English; Serbian words left: 0
+logs/raw_check.txt: harness output in English; Serbian words left: 0
+logs/forbidden_access.txt: harness output in English; Serbian words left: 0
+logs/mcp_calls.txt: harness output in English; Serbian words left: 0
+logs/probe_check.txt: harness output in English; Serbian words left: 0
+logs/metrics.md: harness output in English; Serbian words left: 0
+logs/metrics.md has the same numbers as the rendering of logs/metrics.json by the harness metrics.py
+logs/codesize_test_eltwise_binary.md: harness output in English; Serbian words left: 0
+logs/elfray_tt_tti_test_eltwise_binary.md: harness output in English; Serbian words left: 0
+logs/codestats.md: harness output in English; Serbian words left: 0
+report_en_8d.md: Serbian words left: 0

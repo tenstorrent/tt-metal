@@ -1,0 +1,17 @@
+82419a22aa1a05647e642b755c807edb VERSIONS.md
+da040eeee328f0d4d0ede0232d947b3c api-hal.md
+c709d9238b89a6f03c7f63a57f943e91 codesize.py
+32f5e692083d230068f483ade7ed4d41 codestats.py
+2eac3311ff12d60ad5673038d2f50c1d elfray_tt_tti.py
+8f0d3a00c6ad6b6be2aa6da35348b849 hal-settings-B.json
+6d1221281850981367fcadda59cdcd68 make_spec.py
+7537af1db2986c154e869f75d156d100 metrics.py
+023df838629eef3bb4a5787f902e130a metrics.py.v1
+8a0d34dea97d20715201aef716937b34 probe_check.py
+b0831bef9fd265b48de1560917f6ebac prompt-base.md
+3dbea124246f22cae0a3ce1d444d19b7 prompt-run6b-cfgcost.md
+411819d28e8e8e5766d81caad6b95b15 prompt-run6b.md
+62dfc64163d2f2608eec6b0c3a439d35 run_hal_gen.sh
+e995bb9ef7141c2a8654bc765ff2f623 run_hal_gen_7a-8a.sh
+250e82d1b7100405972bba4bd74bf134 test_metrics_synth.py
+2534b1461cfbfcef1dc53dddd98494e4 ws-claude-settings.json

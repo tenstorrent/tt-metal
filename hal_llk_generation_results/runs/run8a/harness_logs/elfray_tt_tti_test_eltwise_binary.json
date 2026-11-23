@@ -1,0 +1,171 @@
+{
+  "label": "20261119_163437_B_c0e38f1f_claude-opus-5-5 / test_eltwise_binary",
+  "results": {
+    "original": {
+      "variants": 10,
+      "unpack": {
+        "elfs": 10,
+        "insns_avg": 808.8,
+        "tti_avg": 21.0,
+        "tt_avg": 11.0,
+        "tt_estimate_avg": 11.0,
+        "tti_by_mnemonic_avg": {
+          "ttsetadcxx": 6.0,
+          "ttsetc16": 4.0,
+          "ttsetadczw": 2.0,
+          "ttstallwait": 2.0,
+          "ttmop": 2.0,
+          "ttsemget": 2.0,
+          "ttsetadcxy": 1.0,
+          "ttatgetm": 1.0,
+          "ttatrelm": 1.0
+        },
+        "tt_by_opcode_avg": {
+          "RMWCIB2": 4.0,
+          "RMWCIB0": 2.0,
+          "RMWCIB1": 2.0,
+          "SETDMAREG": 2.0,
+          "RMWCIB3": 1.0
+        }
+      },
+      "math": {
+        "elfs": 10,
+        "insns_avg": 536.6,
+        "tti_avg": 36.0,
+        "tt_avg": 8.0,
+        "tt_estimate_avg": 8.8,
+        "tti_by_mnemonic_avg": {
+          "ttsetc16": 16.6,
+          "ttstallwait": 5.6,
+          "ttsetrwc": 4.8,
+          "ttmop": 2.8,
+          "ttsemwait": 2.2,
+          "ttsempost": 2.2,
+          "ttseminit": 1.0,
+          "ttmovd2b": 0.4,
+          "ttmovd2a": 0.4
+        },
+        "tt_by_opcode_avg": {
+          "RMWCIB0": 3.0,
+          "RMWCIB3": 3.0,
+          "RMWCIB1": 1.0,
+          "SETC16": 1.0
+        }
+      },
+      "pack": {
+        "elfs": 10,
+        "insns_avg": 670.6,
+        "tti_avg": 30.0,
+        "tt_avg": 14.0,
+        "tt_estimate_avg": 20.0,
+        "tti_by_mnemonic_avg": {
+          "ttstallwait": 6.0,
+          "ttdmanop": 5.0,
+          "ttwrcfg": 3.0,
+          "ttsetc16": 3.0,
+          "ttnop": 2.0,
+          "ttsetdmareg": 2.0,
+          "ttsetadczw": 2.0,
+          "ttatgetm": 1.0,
+          "ttatrelm": 1.0,
+          "ttsetadcxx": 1.0,
+          "ttsetadcxy": 1.0,
+          "ttsemwait": 1.0,
+          "ttmop": 1.0,
+          "ttsemget": 1.0
+        },
+        "tt_by_opcode_avg": {
+          "SETDMAREG": 4.0,
+          "RMWCIB2": 4.0,
+          "RMWCIB3": 2.0,
+          "RMWCIB1": 2.0,
+          "RMWCIB0": 1.0,
+          "WRCFG": 1.0
+        }
+      }
+    },
+    "hal": {
+      "variants": 10,
+      "unpack": {
+        "elfs": 10,
+        "insns_avg": 504.0,
+        "tti_avg": 66.0,
+        "tt_avg": 29.0,
+        "tt_estimate_avg": 33.0,
+        "tti_by_mnemonic_avg": {
+          "ttrmwcib1": 18.0,
+          "ttrmwcib0": 15.0,
+          "ttrmwcib2": 13.0,
+          "ttrmwcib3": 7.0,
+          "ttsetc16": 3.0,
+          "ttstallwait": 2.0,
+          "ttsetadc": 2.0,
+          "ttmop": 2.0,
+          "ttsemget": 2.0,
+          "ttsetadcxy": 1.0,
+          "ttsetadczw": 1.0
+        },
+        "tt_by_opcode_avg": {
+          "RMWCIB3": 9.0,
+          "RMWCIB0": 8.0,
+          "RMWCIB2": 7.0,
+          "RMWCIB1": 4.0,
+          "SETADC": 1.0
+        }
+      },
+      "math": {
+        "elfs": 10,
+        "insns_avg": 225.6,
+        "tti_avg": 30.0,
+        "tt_avg": 3.0,
+        "tt_estimate_avg": 5.2,
+        "tti_by_mnemonic_avg": {
+          "ttsetc16": 20.4,
+          "ttstallwait": 3.2,
+          "ttsetrwc": 1.4,
+          "ttmop": 1.2,
+          "ttseminit": 1.0,
+          "ttsemwait": 1.0,
+          "ttsempost": 1.0,
+          "ttmovd2a": 0.4,
+          "ttmovd2b": 0.4
+        },
+        "tt_by_opcode_avg": {
+          "SETC16": 1.0,
+          "RMWCIB3": 1.0,
+          "RMWCIB0": 1.0
+        }
+      },
+      "pack": {
+        "elfs": 10,
+        "insns_avg": 346.2,
+        "tti_avg": 70.0,
+        "tt_avg": 12.4,
+        "tt_estimate_avg": 17.0,
+        "tti_by_mnemonic_avg": {
+          "ttsetdmareg": 16.0,
+          "ttrmwcib0": 9.0,
+          "ttrmwcib1": 9.0,
+          "ttrmwcib2": 8.0,
+          "ttrmwcib3": 7.0,
+          "ttstallwait": 4.0,
+          "ttwrcfg": 4.0,
+          "ttsetc16": 3.0,
+          "ttsetadc": 2.0,
+          "ttzeroacc": 2.0,
+          "ttsemget": 2.0,
+          "ttsetadcxy": 1.0,
+          "ttsetadczw": 1.0,
+          "ttsemwait": 1.0,
+          "ttmop": 1.0
+        },
+        "tt_by_opcode_avg": {
+          "RMWCIB0": 3.4,
+          "RMWCIB2": 3.0,
+          "RMWCIB3": 3.0,
+          "RMWCIB1": 3.0
+        }
+      }
+    }
+  }
+}

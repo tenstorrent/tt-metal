@@ -1,0 +1,14 @@
+harness output language (logs/SUMMARY.txt header): Serbian
+SUMMARY_en.txt: numbers identical to logs/SUMMARY.txt: yes; Serbian words left: 0
+run_meta_en.txt: numbers identical to logs/run_meta.txt: yes; Serbian words left: 0
+raw_check_en.txt: numbers identical to logs/raw_check.txt: yes; Serbian words left: 0
+forbidden_access_en.txt: numbers identical to logs/forbidden_access.txt: yes; Serbian words left: 0
+mcp_calls_en.txt: numbers identical to logs/mcp_calls.txt: yes; Serbian words left: 0
+probe_check_en.txt: numbers identical to logs/probe_check.txt: yes; Serbian words left: 0
+metrics_en.md: numbers identical to the harness rendering of the same metrics.json: yes; Serbian words left: 0
+logs/metrics.md has the same numbers as the rendering of logs/metrics.json by the harness metrics.py
+codesize_test_eltwise_binary_en.md: numbers identical to logs/codesize_test_eltwise_binary.md: yes; Serbian words left: 0
+elfray_tt_tti_test_eltwise_binary_en.md: numbers identical to logs/elfray_tt_tti_test_eltwise_binary.md: yes; Serbian words left: 0
+codestats_en.md: numbers identical to logs/codestats.md: yes; Serbian words left: 0
+report_en_8a.md: Serbian words left: 0
+harness_20261119_163436_B.log: numbers outside the summary identical: yes; Serbian words left: 0 []

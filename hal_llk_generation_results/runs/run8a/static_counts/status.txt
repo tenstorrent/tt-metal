@@ -1,0 +1,3 @@
+8a assert_on: compile exit 0, 83 s, ================= 3320 passed, 40 skipped in 65.99s (0:01:05) ==================
+8a assert_off: compile exit 0, 84 s, ================= 3320 passed, 40 skipped in 67.83s (0:01:07) ==================
+8a DONE 2026-11-21T22:59:46Z

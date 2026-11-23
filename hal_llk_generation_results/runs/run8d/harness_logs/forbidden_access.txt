@@ -1,0 +1,3 @@
+Bash: {"command": "sfpi/compiler/bin/riscv-tt-elf-g++ -mcpu=tt-bh-tensix -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -fno-exceptions -fno-rtti -DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD -DENABLE_LLK_ASSERT -DARCH_BLACKHOLE -DLLK_BOOT_MODE_BRISC -DCOMPILE_FOR_TRISC=0 -DLLK_
+
+# total attempts: 1

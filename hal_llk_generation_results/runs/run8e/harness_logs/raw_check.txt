@@ -1,0 +1,5 @@
+# Raw TT instructions in the generated code (ideally empty, except NOT_IN_HAL parts)
+(none)
+
+# NOT_IN_HAL marks
+tt_metal/tt-llk/tests/hal_llk/llk_unpack_AB.h:200:    // NOT_IN_HAL: hal::sync has no stall condition for "TRISC CFG writes landed" (p_stall::TRISC_CFG), so the RISC

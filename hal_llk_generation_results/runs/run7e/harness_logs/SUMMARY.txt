@@ -1,0 +1,26 @@
+
+==================== SUMMARY ====================
+Run:              /proj_sw/user_dev/ctr-sbratic/hal-runs/20261106_095649_B_c0e38f1f_claude-opus-5-5
+Mode:             B
+BASE / HAL:       c0e38f1f / b9e522d3
+Model:            claude-opus-5-5
+Claude duration:  105 min (exit 0)
+Tests:            1 (test_eltwise_binary:add)
+HAL tests:        ALL PASSED (each after tt-smi -r)
+  test_eltwise_binary              ======== 1660 passed, 20 skipped, 2800 deselected in 148.07s (0:02:28) ========= | original: ======== 1660 passed, 20 skipped, 2800 deselected in 150.17s (0:02:30) =========
+                                   dirty state (original right after, no reset): ======== 1660 passed, 20 skipped, 2800 deselected in 143.31s (0:02:23) =========
+Code (LOC / hex / shifts / raw / hal::): 1249 / 22 / 0 / 0 / 220
+First full pass:  test_eltwise_binary_hal iter 80 (95.09 min)
+Raw instr.:       0 lines (logs/raw_check.txt)
+Forbidden access: total attempts: 1 (logs/forbidden_access.txt)
+HAL probing:      0 traces (has_include 0, static_assert 0, undocumented headers 0, undocumented names 0); filter hid in 0 outputs (logs/probe_check.txt)
+Tokens/cost:      in 99,913,901 (cache 0.987), out 335,403, $33.56
+Pytest runs:      88 {'collect': 1, 'compile_error': 3, 'denied': 3, 'hang': 16, 'other': 9, 'fail': 42, 'error': 1, 'pass': 12, 'compile_only': 1}
+Confluence (MCP): total MCP calls: 0 (logs/mcp_calls.txt)
+Code size (text, original -> HAL, mean per variant): 
+  test_eltwise_binary              unpack 3463.2->2394.4B, math 2374.4->1152B, pack 2910.4->1720.8B
+Metrics:          /proj_sw/user_dev/ctr-sbratic/hal-runs/20261106_095649_B_c0e38f1f_claude-opus-5-5/logs/metrics.md, /proj_sw/user_dev/ctr-sbratic/hal-runs/20261106_095649_B_c0e38f1f_claude-opus-5-5/logs/codesize_<test>.md, /proj_sw/user_dev/ctr-sbratic/hal-runs/20261106_095649_B_c0e38f1f_claude-opus-5-5/logs/elfray_tt_tti_<test>.md
+Agent report:     /proj_sw/user_dev/ctr-sbratic/hal-runs/20261106_095649_B_c0e38f1f_claude-opus-5-5/logs/final_report.md
+Code:             /proj_sw/user_dev/ctr-sbratic/hal-runs/20261106_095649_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests/hal_llk
+Archive (permanent): /proj_sw/user_dev/ctr-sbratic/hal-results/20261106_095649_B_c0e38f1f_claude-opus-5-5.tar.gz
+================================================

@@ -1,0 +1,6 @@
+[94m Starting reset on devices at PCI indices: 0 [0m
+[94m Waiting for 2 seconds for potential hotplug removal. [0m
+[94m Waiting for devices to reappear on pci bus... [0m
+[92m Reset successfully completed for device at PCI index 0. [0m
+[94m Finishing reset on devices at PCI indices: 0 [0m
+[95m Re-initializing boards after reset.... [0m

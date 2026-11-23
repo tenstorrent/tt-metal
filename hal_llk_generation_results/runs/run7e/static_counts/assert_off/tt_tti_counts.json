@@ -1,0 +1,3521 @@
+{
+ "runs": [
+  {
+   "run_dir": "/proj_sw/user_dev/ctr-sbratic/tools/asserts_off/out/7e/assert_off",
+   "label": "assert_off",
+   "objdump": "/proj_sw/user_dev/ctr-sbratic/tools/asserts_off/ws/7e/tt_metal/tt-llk/tests/sfpi/compiler/bin/riscv-tt-elf-objdump",
+   "tests": {
+    "original": "eltwise_binary_test.cpp",
+    "hal": "eltwise_binary_hal_test.cpp"
+   },
+   "varying_parameters": [
+    "BROADCAST_TYPE",
+    "EN_DEST_REUSE",
+    "REUSE_DEST_TYPE",
+    "is_fp32_dest_acc_en"
+   ],
+   "opcode_names": {
+    "0x01": "MOP",
+    "0x02": "NOP",
+    "0x03": "MOPCFG",
+    "0x04": "REPLAY",
+    "0x05": "RESOURCEDECL",
+    "0x08": "MOVD2A",
+    "0x09": "MOVDBGA2D",
+    "0x0a": "MOVD2B",
+    "0x0b": "MOVB2A",
+    "0x0c": "MOVDBGB2D",
+    "0x10": "ZEROACC",
+    "0x11": "ZEROSRC",
+    "0x12": "MOVA2D",
+    "0x13": "MOVB2D",
+    "0x15": "RAREB",
+    "0x16": "TRNSPSRCB",
+    "0x17": "SHIFTXA",
+    "0x18": "SHIFTXB",
+    "0x1a": "SETASHRMH0",
+    "0x1b": "SETASHRMH1",
+    "0x1c": "SETASHRMV",
+    "0x1d": "SETPKEDGOF",
+    "0x1e": "SETASHRMH",
+    "0x21": "CLREXPHIST",
+    "0x22": "CONV3S1",
+    "0x23": "CONV3S2",
+    "0x24": "MPOOL3S1",
+    "0x25": "APOOL3S1",
+    "0x26": "MVMUL",
+    "0x27": "ELWMUL",
+    "0x28": "ELWADD",
+    "0x29": "DOTPV",
+    "0x30": "ELWSUB",
+    "0x31": "MPOOL3S2",
+    "0x32": "APOOL3S2",
+    "0x33": "GMPOOL",
+    "0x34": "GAPOOL",
+    "0x35": "GATESRCRST",
+    "0x36": "CLEARDVALID",
+    "0x37": "SETRWC",
+    "0x38": "INCRWC",
+    "0x39": "SETIBRWC",
+    "0x3a": "MFCONV3S1",
+    "0x40": "XMOV",
+    "0x41": "PACR",
+    "0x42": "UNPACR",
+    "0x43": "UNPACR_NOP",
+    "0x44": "RSTDMA",
+    "0x45": "SETDMAREG",
+    "0x46": "FLUSHDMA",
+    "0x48": "REG2FLOP",
+    "0x49": "LOADIND",
+    "0x4a": "PACRSETREG",
+    "0x4b": "TBUFCMD",
+    "0x50": "SETADC",
+    "0x51": "SETADCXY",
+    "0x52": "INCADCXY",
+    "0x53": "ADDRCRXY",
+    "0x54": "SETADCZW",
+    "0x55": "INCADCZW",
+    "0x56": "ADDRCRZW",
+    "0x57": "SETDVALID",
+    "0x58": "ADDDMAREG",
+    "0x59": "SUBDMAREG",
+    "0x5a": "MULDMAREG",
+    "0x5b": "BITWOPDMAREG",
+    "0x5c": "SHIFTDMAREG",
+    "0x5d": "CMPDMAREG",
+    "0x5e": "SETADCXX",
+    "0x60": "DMANOP",
+    "0x61": "ATINCGET",
+    "0x62": "ATINCGETPTR",
+    "0x63": "ATSWAP",
+    "0x64": "ATCAS",
+    "0x66": "STOREIND",
+    "0x67": "STOREREG",
+    "0x68": "LOADREG",
+    "0xa0": "ATGETM",
+    "0xa1": "ATRELM",
+    "0xa2": "STALLWAIT",
+    "0xa3": "SEMINIT",
+    "0xa4": "SEMPOST",
+    "0xa5": "SEMGET",
+    "0xa6": "SEMWAIT",
+    "0xa7": "STREAMWAIT",
+    "0xb0": "WRCFG",
+    "0xb1": "RDCFG",
+    "0xb2": "SETC16",
+    "0xb3": "RMWCIB0",
+    "0xb4": "RMWCIB1",
+    "0xb5": "RMWCIB2",
+    "0xb6": "RMWCIB3",
+    "0xb7": "STREAMWRCFG",
+    "0xb8": "CFGSHIFTMASK"
+   },
+   "sides": {
+    "original": {
+     "test": "eltwise_binary_test.cpp",
+     "builds": [
+      {
+       "variant": "1074b1db653be101d9c462189f3b68715fc1106568c71598ef2e9f7b8293a466",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "true",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "NONE",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=NONE; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=true; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2392,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 11,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 598,
+          "marks_any_line": 11,
+          "stores": 106,
+          "tt_op_proven": 11
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "MOP": 2,
+          "SEMGET": 2,
+          "SETADCXX": 5,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "load_md5": "7c98077c7db513f7cee8e24953590070",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 976,
+         "init_bytes": 228,
+         "tti": 23,
+         "tt_elfray": 7,
+         "tt_linear": 9,
+         "tt_all_paths": 9,
+         "unresolved": 3,
+         "detail": {
+          "insns": 244,
+          "marks_any_line": 7,
+          "stores": 57,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 8
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 14,
+          "SETRWC": 2,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3
+         },
+         "load_md5": "780285c33e99df40a29a395487404daf",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 2352,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 15,
+         "tt_linear": 20,
+         "tt_all_paths": 20,
+         "unresolved": 2,
+         "detail": {
+          "insns": 588,
+          "marks_any_line": 15,
+          "stores": 93,
+          "tt_op_assumed": 4,
+          "tt_op_proven": 16
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "DMANOP": 5,
+          "MOP": 1,
+          "NOP": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 1,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 3,
+          "SETDMAREG": 2,
+          "STALLWAIT": 6,
+          "WRCFG": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 7,
+          "WRCFG": 2,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 4,
+          "WRCFG": 1
+         },
+         "load_md5": "24995f381ac869ba3a0c78cdf9a63d26",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "2b6d5972200a8461ed1f321843ba78626db16b68c1af53746eae8997768c69fd",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "SCALAR",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=SCALAR; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=SCALAR EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2280,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 11,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 570,
+          "marks_any_line": 11,
+          "stores": 97,
+          "tt_op_proven": 11
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "MOP": 2,
+          "SEMGET": 2,
+          "SETADCXX": 5,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "load_md5": "b60a1dc03274881e22a8f054cc4711b8",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 980,
+         "init_bytes": 228,
+         "tti": 24,
+         "tt_elfray": 7,
+         "tt_linear": 9,
+         "tt_all_paths": 9,
+         "unresolved": 3,
+         "detail": {
+          "insns": 245,
+          "marks_any_line": 7,
+          "stores": 57,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 8
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 14,
+          "SETRWC": 3,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3
+         },
+         "load_md5": "a15fc5e130c1a4cb1bbe7f6c352b05ea",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 2356,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 15,
+         "tt_linear": 20,
+         "tt_all_paths": 20,
+         "unresolved": 2,
+         "detail": {
+          "insns": 589,
+          "marks_any_line": 15,
+          "stores": 93,
+          "tt_op_assumed": 4,
+          "tt_op_proven": 16
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "DMANOP": 5,
+          "MOP": 1,
+          "NOP": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 1,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 3,
+          "SETDMAREG": 2,
+          "STALLWAIT": 6,
+          "WRCFG": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 7,
+          "WRCFG": 2,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 4,
+          "WRCFG": 1
+         },
+         "load_md5": "15c2ce151af62e46591907e13087f0a0",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "44d374ddf4cd0adf25d2d0cd47d27e24b8af9d843da0d10ee6878e5fb011b750",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "true",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "COL",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=COL; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=true; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=COL EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2416,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 11,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 604,
+          "marks_any_line": 11,
+          "stores": 100,
+          "tt_op_proven": 11
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "MOP": 2,
+          "SEMGET": 2,
+          "SETADCXX": 5,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "load_md5": "69c43399e88839155ddd15af3d7f35cd",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 1048,
+         "init_bytes": 228,
+         "tti": 25,
+         "tt_elfray": 7,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 262,
+          "marks_any_line": 7,
+          "stores": 61,
+          "tt_op_assumed": 2,
+          "tt_op_proven": 9
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 14,
+          "SETRWC": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3
+         },
+         "load_md5": "75e5ea61f1ed5b453283057b73c5043f",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 2352,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 15,
+         "tt_linear": 20,
+         "tt_all_paths": 20,
+         "unresolved": 2,
+         "detail": {
+          "insns": 588,
+          "marks_any_line": 15,
+          "stores": 93,
+          "tt_op_assumed": 4,
+          "tt_op_proven": 16
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "DMANOP": 5,
+          "MOP": 1,
+          "NOP": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 1,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 3,
+          "SETDMAREG": 2,
+          "STALLWAIT": 6,
+          "WRCFG": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 7,
+          "WRCFG": 2,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 4,
+          "WRCFG": 1
+         },
+         "load_md5": "24995f381ac869ba3a0c78cdf9a63d26",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "4fd5d47920748442a55ff6ba7bdd8ac9a76ae321d5a0aa73660cb3602b041c2b",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "NONE",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf",
+        "EN_DEST_REUSE": "",
+        "REUSE_DEST_TYPE": "DEST_TO_SRCB"
+       },
+       "key": "BROADCAST_TYPE=NONE; ELTWISE_BINARY_OP=ELWADD; EN_DEST_REUSE=; MATH_FIDELITY=LoFi; REUSE_DEST_TYPE=DEST_TO_SRCB; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE= REUSE_DEST_TYPE=DEST_TO_SRCB is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2392,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 11,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 598,
+          "marks_any_line": 11,
+          "stores": 106,
+          "tt_op_proven": 11
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "MOP": 2,
+          "SEMGET": 2,
+          "SETADCXX": 5,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "load_md5": "98c4e587b052c79d6b4709cb6ee59e76",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 1396,
+         "init_bytes": 228,
+         "tti": 45,
+         "tt_elfray": 10,
+         "tt_linear": 12,
+         "tt_all_paths": 12,
+         "unresolved": 3,
+         "detail": {
+          "insns": 349,
+          "marks_any_line": 10,
+          "stores": 79,
+          "tt_op_assumed": 3,
+          "tt_op_proven": 9
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "MOVD2B": 4,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 27,
+          "SETRWC": 5,
+          "STALLWAIT": 4
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 5
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 3
+         },
+         "load_md5": "5361116f3f688477f73e319bed75752d",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 2356,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 15,
+         "tt_linear": 20,
+         "tt_all_paths": 20,
+         "unresolved": 2,
+         "detail": {
+          "insns": 589,
+          "marks_any_line": 15,
+          "stores": 93,
+          "tt_op_assumed": 4,
+          "tt_op_proven": 16
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "DMANOP": 5,
+          "MOP": 1,
+          "NOP": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 1,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 3,
+          "SETDMAREG": 2,
+          "STALLWAIT": 6,
+          "WRCFG": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 7,
+          "WRCFG": 2,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 4,
+          "WRCFG": 1
+         },
+         "load_md5": "26e1631c28bc32f4fb8a52213b7f0975",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "81a9c30f13e1e317a3187ab50f274bdc19470f7c11e89fc42017c8b4896d292e",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "ROW",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=ROW; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=ROW EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2376,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 11,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 594,
+          "marks_any_line": 11,
+          "stores": 100,
+          "tt_op_proven": 11
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "MOP": 2,
+          "SEMGET": 2,
+          "SETADCXX": 5,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "load_md5": "8de0075d29663658c855978c6c50fe7a",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 976,
+         "init_bytes": 228,
+         "tti": 23,
+         "tt_elfray": 7,
+         "tt_linear": 9,
+         "tt_all_paths": 9,
+         "unresolved": 3,
+         "detail": {
+          "insns": 244,
+          "marks_any_line": 7,
+          "stores": 57,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 8
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 14,
+          "SETRWC": 2,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3
+         },
+         "load_md5": "143e58a1361799830fa8051b39499c88",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 2356,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 15,
+         "tt_linear": 20,
+         "tt_all_paths": 20,
+         "unresolved": 2,
+         "detail": {
+          "insns": 589,
+          "marks_any_line": 15,
+          "stores": 93,
+          "tt_op_assumed": 4,
+          "tt_op_proven": 16
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "DMANOP": 5,
+          "MOP": 1,
+          "NOP": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 1,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 3,
+          "SETDMAREG": 2,
+          "STALLWAIT": 6,
+          "WRCFG": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 7,
+          "WRCFG": 2,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 4,
+          "WRCFG": 1
+         },
+         "load_md5": "15c2ce151af62e46591907e13087f0a0",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "9e07982a78280f445f9e2bc9bb481b846053737e0db96ef41bcbb307e2f8847f",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "COL",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=COL; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=COL EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2416,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 11,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 604,
+          "marks_any_line": 11,
+          "stores": 100,
+          "tt_op_proven": 11
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "MOP": 2,
+          "SEMGET": 2,
+          "SETADCXX": 5,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "load_md5": "69c43399e88839155ddd15af3d7f35cd",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 1048,
+         "init_bytes": 228,
+         "tti": 25,
+         "tt_elfray": 7,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 262,
+          "marks_any_line": 7,
+          "stores": 61,
+          "tt_op_assumed": 2,
+          "tt_op_proven": 9
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 14,
+          "SETRWC": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3
+         },
+         "load_md5": "b245c19136a4ae9f5d941d675f387c10",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 2356,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 15,
+         "tt_linear": 20,
+         "tt_all_paths": 20,
+         "unresolved": 2,
+         "detail": {
+          "insns": 589,
+          "marks_any_line": 15,
+          "stores": 93,
+          "tt_op_assumed": 4,
+          "tt_op_proven": 16
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "DMANOP": 5,
+          "MOP": 1,
+          "NOP": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 1,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 3,
+          "SETDMAREG": 2,
+          "STALLWAIT": 6,
+          "WRCFG": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 7,
+          "WRCFG": 2,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 4,
+          "WRCFG": 1
+         },
+         "load_md5": "15c2ce151af62e46591907e13087f0a0",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "b1506941e7019bf0953fbe4c2c054f1d6e59de3d5ead853b5a13b6289076a618",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "NONE",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf",
+        "EN_DEST_REUSE": "",
+        "REUSE_DEST_TYPE": "DEST_TO_SRCA"
+       },
+       "key": "BROADCAST_TYPE=NONE; ELTWISE_BINARY_OP=ELWADD; EN_DEST_REUSE=; MATH_FIDELITY=LoFi; REUSE_DEST_TYPE=DEST_TO_SRCA; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE= REUSE_DEST_TYPE=DEST_TO_SRCA is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2392,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 11,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 598,
+          "marks_any_line": 11,
+          "stores": 106,
+          "tt_op_proven": 11
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "MOP": 2,
+          "SEMGET": 2,
+          "SETADCXX": 5,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "load_md5": "98c4e587b052c79d6b4709cb6ee59e76",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 1396,
+         "init_bytes": 228,
+         "tti": 45,
+         "tt_elfray": 10,
+         "tt_linear": 12,
+         "tt_all_paths": 12,
+         "unresolved": 3,
+         "detail": {
+          "insns": 349,
+          "marks_any_line": 10,
+          "stores": 79,
+          "tt_op_assumed": 3,
+          "tt_op_proven": 9
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "MOVD2A": 4,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 27,
+          "SETRWC": 5,
+          "STALLWAIT": 4
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 5
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 3
+         },
+         "load_md5": "360300f2138370541585c5845336a494",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 2356,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 15,
+         "tt_linear": 20,
+         "tt_all_paths": 20,
+         "unresolved": 2,
+         "detail": {
+          "insns": 589,
+          "marks_any_line": 15,
+          "stores": 93,
+          "tt_op_assumed": 4,
+          "tt_op_proven": 16
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "DMANOP": 5,
+          "MOP": 1,
+          "NOP": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 1,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 3,
+          "SETDMAREG": 2,
+          "STALLWAIT": 6,
+          "WRCFG": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 7,
+          "WRCFG": 2,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 4,
+          "WRCFG": 1
+         },
+         "load_md5": "26e1631c28bc32f4fb8a52213b7f0975",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "e26aa3cfa1bdfdf3299a4bb0347b5b062582d1c038833f0fea5b5d606edf57a8",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "NONE",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=NONE; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2392,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 11,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 598,
+          "marks_any_line": 11,
+          "stores": 106,
+          "tt_op_proven": 11
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "MOP": 2,
+          "SEMGET": 2,
+          "SETADCXX": 5,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "load_md5": "7c98077c7db513f7cee8e24953590070",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 976,
+         "init_bytes": 228,
+         "tti": 23,
+         "tt_elfray": 7,
+         "tt_linear": 9,
+         "tt_all_paths": 9,
+         "unresolved": 3,
+         "detail": {
+          "insns": 244,
+          "marks_any_line": 7,
+          "stores": 57,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 8
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 14,
+          "SETRWC": 2,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3
+         },
+         "load_md5": "b35cf1a104286e1c9090eeac071682e7",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 2356,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 15,
+         "tt_linear": 20,
+         "tt_all_paths": 20,
+         "unresolved": 2,
+         "detail": {
+          "insns": 589,
+          "marks_any_line": 15,
+          "stores": 93,
+          "tt_op_assumed": 4,
+          "tt_op_proven": 16
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "DMANOP": 5,
+          "MOP": 1,
+          "NOP": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 1,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 3,
+          "SETDMAREG": 2,
+          "STALLWAIT": 6,
+          "WRCFG": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 7,
+          "WRCFG": 2,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 4,
+          "WRCFG": 1
+         },
+         "load_md5": "15c2ce151af62e46591907e13087f0a0",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "e5f7c70179b2c1a0fbf3e51d19a8f320b9290e7c78a739ff8b808878b823fcb1",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "true",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "SCALAR",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=SCALAR; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=true; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=SCALAR EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2280,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 11,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 570,
+          "marks_any_line": 11,
+          "stores": 97,
+          "tt_op_proven": 11
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "MOP": 2,
+          "SEMGET": 2,
+          "SETADCXX": 5,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "load_md5": "b60a1dc03274881e22a8f054cc4711b8",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 980,
+         "init_bytes": 228,
+         "tti": 24,
+         "tt_elfray": 7,
+         "tt_linear": 9,
+         "tt_all_paths": 9,
+         "unresolved": 3,
+         "detail": {
+          "insns": 245,
+          "marks_any_line": 7,
+          "stores": 57,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 8
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 14,
+          "SETRWC": 3,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3
+         },
+         "load_md5": "00d0103ddb329825c967eea97c038a60",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 2352,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 15,
+         "tt_linear": 20,
+         "tt_all_paths": 20,
+         "unresolved": 2,
+         "detail": {
+          "insns": 588,
+          "marks_any_line": 15,
+          "stores": 93,
+          "tt_op_assumed": 4,
+          "tt_op_proven": 16
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "DMANOP": 5,
+          "MOP": 1,
+          "NOP": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 1,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 3,
+          "SETDMAREG": 2,
+          "STALLWAIT": 6,
+          "WRCFG": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 7,
+          "WRCFG": 2,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 4,
+          "WRCFG": 1
+         },
+         "load_md5": "24995f381ac869ba3a0c78cdf9a63d26",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "f86b1bd5b50b963f7d7fe9a480693ff7a7a0c96d4c29b105e8caeecbbfc8f85b",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "true",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "ROW",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=ROW; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=true; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=ROW EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2376,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 11,
+         "tt_linear": 11,
+         "tt_all_paths": 11,
+         "unresolved": 2,
+         "detail": {
+          "insns": 594,
+          "marks_any_line": 11,
+          "stores": 100,
+          "tt_op_proven": 11
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "MOP": 2,
+          "SEMGET": 2,
+          "SETADCXX": 5,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 2,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 1,
+          "SETDMAREG": 2
+         },
+         "load_md5": "8de0075d29663658c855978c6c50fe7a",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 976,
+         "init_bytes": 228,
+         "tti": 23,
+         "tt_elfray": 7,
+         "tt_linear": 9,
+         "tt_all_paths": 9,
+         "unresolved": 3,
+         "detail": {
+          "insns": 244,
+          "marks_any_line": 7,
+          "stores": 57,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 8
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 14,
+          "SETRWC": 2,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3,
+          "SETC16": 2
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 3,
+          "RMWCIB1": 1,
+          "RMWCIB3": 3
+         },
+         "load_md5": "e065ef1745f6dae796da23b7c10ab955",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 2352,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 15,
+         "tt_linear": 20,
+         "tt_all_paths": 20,
+         "unresolved": 2,
+         "detail": {
+          "insns": 588,
+          "marks_any_line": 15,
+          "stores": 93,
+          "tt_op_assumed": 4,
+          "tt_op_proven": 16
+         },
+         "tti_by_opcode": {
+          "ATGETM": 1,
+          "ATRELM": 1,
+          "DMANOP": 5,
+          "MOP": 1,
+          "NOP": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 1,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 3,
+          "SETDMAREG": 2,
+          "STALLWAIT": 6,
+          "WRCFG": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 7,
+          "WRCFG": 2,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 1,
+          "RMWCIB1": 2,
+          "RMWCIB2": 4,
+          "RMWCIB3": 2,
+          "SETADC": 1,
+          "SETDMAREG": 4,
+          "WRCFG": 1
+         },
+         "load_md5": "24995f381ac869ba3a0c78cdf9a63d26",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      }
+     ]
+    },
+    "hal": {
+     "test": "eltwise_binary_hal_test.cpp",
+     "builds": [
+      {
+       "variant": "2a6ac3b9f3708c0bf22fa1b5d1b9e686206c8f826df3c51a2595c23333926de6",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "true",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "NONE",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=NONE; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=true; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2068,
+         "init_bytes": 228,
+         "tti": 44,
+         "tt_elfray": 34,
+         "tt_linear": 51,
+         "tt_all_paths": 51,
+         "unresolved": 2,
+         "detail": {
+          "insns": 517,
+          "marks_any_line": 34,
+          "stores": 100,
+          "tt_op_assumed": 19,
+          "tt_op_proven": 32
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "RMWCIB0": 7,
+          "RMWCIB1": 11,
+          "RMWCIB2": 7,
+          "RMWCIB3": 5,
+          "SEMGET": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 12,
+          "RMWCIB1": 10,
+          "RMWCIB2": 13,
+          "RMWCIB3": 12,
+          "SETADCXX": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 4,
+          "RMWCIB2": 7,
+          "RMWCIB3": 11,
+          "SETADCXX": 4
+         },
+         "load_md5": "f26f2476091767127236f13de6b4019c",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 748,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 3,
+         "tt_linear": 5,
+         "tt_all_paths": 5,
+         "unresolved": 2,
+         "detail": {
+          "insns": 187,
+          "marks_any_line": 3,
+          "stores": 39,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 4
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 11,
+          "SETRWC": 2,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 2
+         },
+         "load_md5": "0d4d52815243d5f8a9bac9cfca20e6e7",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 1488,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 25,
+         "tt_linear": 38,
+         "tt_all_paths": 38,
+         "unresolved": 2,
+         "detail": {
+          "insns": 372,
+          "marks_any_line": 25,
+          "stores": 86,
+          "tt_op_assumed": 9,
+          "tt_op_proven": 29
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 4,
+          "RMWCIB1": 4,
+          "RMWCIB2": 3,
+          "RMWCIB3": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 1,
+          "SETC16": 3,
+          "STALLWAIT": 7
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 13,
+          "RMWCIB1": 12,
+          "RMWCIB2": 6,
+          "RMWCIB3": 5,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 7,
+          "RMWCIB2": 4,
+          "RMWCIB3": 4,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "load_md5": "b8912148f83fcf08a66d78e6b24ba820",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "2f48c3b3e8b1b55ebd9b6947dd1c76c6e949e63cfb757bc7b96ff33ca17d2d7d",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "NONE",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=NONE; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2060,
+         "init_bytes": 228,
+         "tti": 44,
+         "tt_elfray": 34,
+         "tt_linear": 51,
+         "tt_all_paths": 51,
+         "unresolved": 2,
+         "detail": {
+          "insns": 515,
+          "marks_any_line": 34,
+          "stores": 100,
+          "tt_op_assumed": 20,
+          "tt_op_proven": 31
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "RMWCIB0": 7,
+          "RMWCIB1": 11,
+          "RMWCIB2": 7,
+          "RMWCIB3": 5,
+          "SEMGET": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 12,
+          "RMWCIB1": 10,
+          "RMWCIB2": 13,
+          "RMWCIB3": 12,
+          "SETADCXX": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 4,
+          "RMWCIB2": 7,
+          "RMWCIB3": 11,
+          "SETADCXX": 4
+         },
+         "load_md5": "d216e636453fd16435b1f67bd423a3cb",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 740,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 3,
+         "tt_linear": 5,
+         "tt_all_paths": 5,
+         "unresolved": 2,
+         "detail": {
+          "insns": 185,
+          "marks_any_line": 3,
+          "stores": 39,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 4
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 11,
+          "SETRWC": 2,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 2
+         },
+         "load_md5": "b3b6bd48528088021e802d19e0b45bea",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 1456,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 24,
+         "tt_linear": 38,
+         "tt_all_paths": 38,
+         "unresolved": 2,
+         "detail": {
+          "insns": 364,
+          "marks_any_line": 24,
+          "stores": 86,
+          "tt_op_assumed": 9,
+          "tt_op_proven": 29
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 4,
+          "RMWCIB1": 4,
+          "RMWCIB2": 3,
+          "RMWCIB3": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 1,
+          "SETC16": 3,
+          "STALLWAIT": 7
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 13,
+          "RMWCIB1": 12,
+          "RMWCIB2": 6,
+          "RMWCIB3": 5,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 7,
+          "RMWCIB1": 7,
+          "RMWCIB2": 4,
+          "RMWCIB3": 4,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "load_md5": "de9e2f2989d74aa1589c657413e289f9",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "3b2f6d555285e16a98bc2793a323fa8572f1bedaf1cb7bb83b9901106a41c6e0",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "true",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "ROW",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=ROW; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=true; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=ROW EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2068,
+         "init_bytes": 228,
+         "tti": 44,
+         "tt_elfray": 34,
+         "tt_linear": 51,
+         "tt_all_paths": 51,
+         "unresolved": 2,
+         "detail": {
+          "insns": 517,
+          "marks_any_line": 34,
+          "stores": 100,
+          "tt_op_assumed": 19,
+          "tt_op_proven": 32
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "RMWCIB0": 7,
+          "RMWCIB1": 11,
+          "RMWCIB2": 7,
+          "RMWCIB3": 5,
+          "SEMGET": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 12,
+          "RMWCIB1": 10,
+          "RMWCIB2": 13,
+          "RMWCIB3": 12,
+          "SETADCXX": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 4,
+          "RMWCIB2": 7,
+          "RMWCIB3": 11,
+          "SETADCXX": 4
+         },
+         "load_md5": "ede46c349501ea49c8d5a8d4726bb6d2",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 748,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 3,
+         "tt_linear": 5,
+         "tt_all_paths": 5,
+         "unresolved": 2,
+         "detail": {
+          "insns": 187,
+          "marks_any_line": 3,
+          "stores": 39,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 4
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 11,
+          "SETRWC": 2,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 2
+         },
+         "load_md5": "4a9f83b184e3be0d6926e5e6f1e62dfc",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 1488,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 25,
+         "tt_linear": 38,
+         "tt_all_paths": 38,
+         "unresolved": 2,
+         "detail": {
+          "insns": 372,
+          "marks_any_line": 25,
+          "stores": 86,
+          "tt_op_assumed": 9,
+          "tt_op_proven": 29
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 4,
+          "RMWCIB1": 4,
+          "RMWCIB2": 3,
+          "RMWCIB3": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 1,
+          "SETC16": 3,
+          "STALLWAIT": 7
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 13,
+          "RMWCIB1": 12,
+          "RMWCIB2": 6,
+          "RMWCIB3": 5,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 7,
+          "RMWCIB2": 4,
+          "RMWCIB3": 4,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "load_md5": "b8912148f83fcf08a66d78e6b24ba820",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "462a3dc5d8d5044a6cd60d53177ffcca38e3058cf911e125087f06d8686f98e9",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "SCALAR",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=SCALAR; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=SCALAR EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 1980,
+         "init_bytes": 228,
+         "tti": 44,
+         "tt_elfray": 33,
+         "tt_linear": 51,
+         "tt_all_paths": 51,
+         "unresolved": 2,
+         "detail": {
+          "insns": 495,
+          "marks_any_line": 33,
+          "stores": 101,
+          "tt_op_assumed": 20,
+          "tt_op_proven": 31
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "RMWCIB0": 7,
+          "RMWCIB1": 11,
+          "RMWCIB2": 7,
+          "RMWCIB3": 5,
+          "SEMGET": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 12,
+          "RMWCIB1": 10,
+          "RMWCIB2": 13,
+          "RMWCIB3": 12,
+          "SETADCXX": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 4,
+          "RMWCIB2": 8,
+          "RMWCIB3": 9,
+          "SETADCXX": 4
+         },
+         "load_md5": "b4505b364d3c882a4c1dae17595c57ce",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 724,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 3,
+         "tt_linear": 5,
+         "tt_all_paths": 5,
+         "unresolved": 2,
+         "detail": {
+          "insns": 181,
+          "marks_any_line": 3,
+          "stores": 39,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 4
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 11,
+          "SETRWC": 2,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 2
+         },
+         "load_md5": "5ed7068977e382eff4aad8c5eb61ce66",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 1456,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 24,
+         "tt_linear": 38,
+         "tt_all_paths": 38,
+         "unresolved": 2,
+         "detail": {
+          "insns": 364,
+          "marks_any_line": 24,
+          "stores": 86,
+          "tt_op_assumed": 9,
+          "tt_op_proven": 29
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 4,
+          "RMWCIB1": 4,
+          "RMWCIB2": 3,
+          "RMWCIB3": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 1,
+          "SETC16": 3,
+          "STALLWAIT": 7
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 13,
+          "RMWCIB1": 12,
+          "RMWCIB2": 6,
+          "RMWCIB3": 5,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 7,
+          "RMWCIB1": 7,
+          "RMWCIB2": 4,
+          "RMWCIB3": 4,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "load_md5": "de9e2f2989d74aa1589c657413e289f9",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "5fe1dad6295868a8a8cc8f73a0fa9706b9fb9033337e22683885cfd5ecb44199",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "true",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "SCALAR",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=SCALAR; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=true; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=SCALAR EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 1988,
+         "init_bytes": 228,
+         "tti": 44,
+         "tt_elfray": 33,
+         "tt_linear": 51,
+         "tt_all_paths": 51,
+         "unresolved": 2,
+         "detail": {
+          "insns": 497,
+          "marks_any_line": 33,
+          "stores": 101,
+          "tt_op_assumed": 19,
+          "tt_op_proven": 32
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "RMWCIB0": 7,
+          "RMWCIB1": 11,
+          "RMWCIB2": 7,
+          "RMWCIB3": 5,
+          "SEMGET": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 12,
+          "RMWCIB1": 10,
+          "RMWCIB2": 13,
+          "RMWCIB3": 12,
+          "SETADCXX": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 4,
+          "RMWCIB2": 8,
+          "RMWCIB3": 9,
+          "SETADCXX": 4
+         },
+         "load_md5": "23915cbcffc4dda3ae707767d6b5577a",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 732,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 3,
+         "tt_linear": 5,
+         "tt_all_paths": 5,
+         "unresolved": 2,
+         "detail": {
+          "insns": 183,
+          "marks_any_line": 3,
+          "stores": 39,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 4
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 11,
+          "SETRWC": 2,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 2
+         },
+         "load_md5": "ee7178a500d90213edfd257615e84285",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 1488,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 25,
+         "tt_linear": 38,
+         "tt_all_paths": 38,
+         "unresolved": 2,
+         "detail": {
+          "insns": 372,
+          "marks_any_line": 25,
+          "stores": 86,
+          "tt_op_assumed": 9,
+          "tt_op_proven": 29
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 4,
+          "RMWCIB1": 4,
+          "RMWCIB2": 3,
+          "RMWCIB3": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 1,
+          "SETC16": 3,
+          "STALLWAIT": 7
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 13,
+          "RMWCIB1": 12,
+          "RMWCIB2": 6,
+          "RMWCIB3": 5,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 7,
+          "RMWCIB2": 4,
+          "RMWCIB3": 4,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "load_md5": "b8912148f83fcf08a66d78e6b24ba820",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "6dc33cc98f59caf76a9d87e66a6daca8c20b94a8486c4990c3f6d25c14971764",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "NONE",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf",
+        "EN_DEST_REUSE": "",
+        "REUSE_DEST_TYPE": "DEST_TO_SRCA"
+       },
+       "key": "BROADCAST_TYPE=NONE; ELTWISE_BINARY_OP=ELWADD; EN_DEST_REUSE=; MATH_FIDELITY=LoFi; REUSE_DEST_TYPE=DEST_TO_SRCA; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE= REUSE_DEST_TYPE=DEST_TO_SRCA is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2060,
+         "init_bytes": 228,
+         "tti": 44,
+         "tt_elfray": 34,
+         "tt_linear": 51,
+         "tt_all_paths": 51,
+         "unresolved": 2,
+         "detail": {
+          "insns": 515,
+          "marks_any_line": 34,
+          "stores": 100,
+          "tt_op_assumed": 20,
+          "tt_op_proven": 31
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "RMWCIB0": 7,
+          "RMWCIB1": 11,
+          "RMWCIB2": 7,
+          "RMWCIB3": 5,
+          "SEMGET": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 12,
+          "RMWCIB1": 10,
+          "RMWCIB2": 13,
+          "RMWCIB3": 12,
+          "SETADCXX": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 4,
+          "RMWCIB2": 7,
+          "RMWCIB3": 11,
+          "SETADCXX": 4
+         },
+         "load_md5": "2c21180b280d8b689d9483dafdb1f251",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 1096,
+         "init_bytes": 228,
+         "tti": 40,
+         "tt_elfray": 2,
+         "tt_linear": 8,
+         "tt_all_paths": 8,
+         "unresolved": 2,
+         "detail": {
+          "insns": 274,
+          "marks_any_line": 2,
+          "stores": 64,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 7
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "MOVD2A": 4,
+          "RMWCIB0": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 22,
+          "SETRWC": 5,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 7
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 1
+         },
+         "load_md5": "c45eac9dbc1028da88b7b28a59084a37",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 1456,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 24,
+         "tt_linear": 38,
+         "tt_all_paths": 38,
+         "unresolved": 2,
+         "detail": {
+          "insns": 364,
+          "marks_any_line": 24,
+          "stores": 86,
+          "tt_op_assumed": 9,
+          "tt_op_proven": 29
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 4,
+          "RMWCIB1": 4,
+          "RMWCIB2": 3,
+          "RMWCIB3": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 1,
+          "SETC16": 3,
+          "STALLWAIT": 7
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 13,
+          "RMWCIB1": 12,
+          "RMWCIB2": 6,
+          "RMWCIB3": 5,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 7,
+          "RMWCIB1": 7,
+          "RMWCIB2": 4,
+          "RMWCIB3": 4,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "load_md5": "cad42410dc18a6cee73613d8e55bc5d4",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "72b30c912e52eb8797d442124a4a827c6c38564b7f95af6b6c4a550adcb76872",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "true",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "COL",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=COL; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=true; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=COL EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2084,
+         "init_bytes": 228,
+         "tti": 44,
+         "tt_elfray": 34,
+         "tt_linear": 51,
+         "tt_all_paths": 51,
+         "unresolved": 2,
+         "detail": {
+          "insns": 521,
+          "marks_any_line": 34,
+          "stores": 100,
+          "tt_op_assumed": 19,
+          "tt_op_proven": 32
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "RMWCIB0": 7,
+          "RMWCIB1": 11,
+          "RMWCIB2": 7,
+          "RMWCIB3": 5,
+          "SEMGET": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 12,
+          "RMWCIB1": 10,
+          "RMWCIB2": 13,
+          "RMWCIB3": 12,
+          "SETADCXX": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 4,
+          "RMWCIB2": 7,
+          "RMWCIB3": 11,
+          "SETADCXX": 4
+         },
+         "load_md5": "f594f9b83fd7ea30a16dc31bf1f9e631",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 756,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 3,
+         "tt_linear": 5,
+         "tt_all_paths": 5,
+         "unresolved": 2,
+         "detail": {
+          "insns": 189,
+          "marks_any_line": 3,
+          "stores": 39,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 4
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 11,
+          "SETRWC": 2,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 2
+         },
+         "load_md5": "b7f850a02c34d200a6e4246297ae7141",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 1488,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 25,
+         "tt_linear": 38,
+         "tt_all_paths": 38,
+         "unresolved": 2,
+         "detail": {
+          "insns": 372,
+          "marks_any_line": 25,
+          "stores": 86,
+          "tt_op_assumed": 9,
+          "tt_op_proven": 29
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 4,
+          "RMWCIB1": 4,
+          "RMWCIB2": 3,
+          "RMWCIB3": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 1,
+          "SETC16": 3,
+          "STALLWAIT": 7
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 13,
+          "RMWCIB1": 12,
+          "RMWCIB2": 6,
+          "RMWCIB3": 5,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 7,
+          "RMWCIB2": 4,
+          "RMWCIB3": 4,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "load_md5": "b8912148f83fcf08a66d78e6b24ba820",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "a99a0d75c2a7d98ba895a15425a78099331cf86df6160435955edee3cbe1d460",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "COL",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=COL; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=COL EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2076,
+         "init_bytes": 228,
+         "tti": 44,
+         "tt_elfray": 34,
+         "tt_linear": 51,
+         "tt_all_paths": 51,
+         "unresolved": 2,
+         "detail": {
+          "insns": 519,
+          "marks_any_line": 34,
+          "stores": 100,
+          "tt_op_assumed": 20,
+          "tt_op_proven": 31
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "RMWCIB0": 7,
+          "RMWCIB1": 11,
+          "RMWCIB2": 7,
+          "RMWCIB3": 5,
+          "SEMGET": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 12,
+          "RMWCIB1": 10,
+          "RMWCIB2": 13,
+          "RMWCIB3": 12,
+          "SETADCXX": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 4,
+          "RMWCIB2": 7,
+          "RMWCIB3": 11,
+          "SETADCXX": 4
+         },
+         "load_md5": "2cab3ea87692b8937440ff687696480a",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 748,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 3,
+         "tt_linear": 5,
+         "tt_all_paths": 5,
+         "unresolved": 2,
+         "detail": {
+          "insns": 187,
+          "marks_any_line": 3,
+          "stores": 39,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 4
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 11,
+          "SETRWC": 2,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 2
+         },
+         "load_md5": "6fa100beb7ac6bada39941a5ccd58b46",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 1456,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 24,
+         "tt_linear": 38,
+         "tt_all_paths": 38,
+         "unresolved": 2,
+         "detail": {
+          "insns": 364,
+          "marks_any_line": 24,
+          "stores": 86,
+          "tt_op_assumed": 9,
+          "tt_op_proven": 29
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 4,
+          "RMWCIB1": 4,
+          "RMWCIB2": 3,
+          "RMWCIB3": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 1,
+          "SETC16": 3,
+          "STALLWAIT": 7
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 13,
+          "RMWCIB1": 12,
+          "RMWCIB2": 6,
+          "RMWCIB3": 5,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 7,
+          "RMWCIB1": 7,
+          "RMWCIB2": 4,
+          "RMWCIB3": 4,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "load_md5": "de9e2f2989d74aa1589c657413e289f9",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "aa26734539e93d99e0ce86aa05730d20341cd6d3cc6d37c84ec5d9d961181cd6",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "ROW",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf"
+       },
+       "key": "BROADCAST_TYPE=ROW; ELTWISE_BINARY_OP=ELWADD; MATH_FIDELITY=LoFi; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=ROW EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2060,
+         "init_bytes": 228,
+         "tti": 44,
+         "tt_elfray": 34,
+         "tt_linear": 51,
+         "tt_all_paths": 51,
+         "unresolved": 2,
+         "detail": {
+          "insns": 515,
+          "marks_any_line": 34,
+          "stores": 100,
+          "tt_op_assumed": 20,
+          "tt_op_proven": 31
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "RMWCIB0": 7,
+          "RMWCIB1": 11,
+          "RMWCIB2": 7,
+          "RMWCIB3": 5,
+          "SEMGET": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 12,
+          "RMWCIB1": 10,
+          "RMWCIB2": 13,
+          "RMWCIB3": 12,
+          "SETADCXX": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 4,
+          "RMWCIB2": 7,
+          "RMWCIB3": 11,
+          "SETADCXX": 4
+         },
+         "load_md5": "b617aef7c4245f2d01f76151e136ca60",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 740,
+         "init_bytes": 228,
+         "tti": 20,
+         "tt_elfray": 3,
+         "tt_linear": 5,
+         "tt_all_paths": 5,
+         "unresolved": 2,
+         "detail": {
+          "insns": 185,
+          "marks_any_line": 3,
+          "stores": 39,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 4
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 11,
+          "SETRWC": 2,
+          "STALLWAIT": 2
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 2
+         },
+         "load_md5": "10e968199f59c945ce4000ade2ed00ef",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 1456,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 24,
+         "tt_linear": 38,
+         "tt_all_paths": 38,
+         "unresolved": 2,
+         "detail": {
+          "insns": 364,
+          "marks_any_line": 24,
+          "stores": 86,
+          "tt_op_assumed": 9,
+          "tt_op_proven": 29
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 4,
+          "RMWCIB1": 4,
+          "RMWCIB2": 3,
+          "RMWCIB3": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 1,
+          "SETC16": 3,
+          "STALLWAIT": 7
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 13,
+          "RMWCIB1": 12,
+          "RMWCIB2": 6,
+          "RMWCIB3": 5,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 7,
+          "RMWCIB1": 7,
+          "RMWCIB2": 4,
+          "RMWCIB3": 4,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "load_md5": "de9e2f2989d74aa1589c657413e289f9",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      },
+      {
+       "variant": "f18dd740dbcc1904211d32e0b831ed0f7b919f29f9aaeef89039d66acf4f7311",
+       "params": {
+        "l1_acc_en": "0",
+        "unpack_to_dest": "false",
+        "is_fp32_dest_acc_en": "false",
+        "MATH_FIDELITY": "LoFi",
+        "BROADCAST_TYPE": "NONE",
+        "ELTWISE_BINARY_OP": "ELWADD",
+        "dest_sync": "SyncHalf",
+        "EN_DEST_REUSE": "",
+        "REUSE_DEST_TYPE": "DEST_TO_SRCB"
+       },
+       "key": "BROADCAST_TYPE=NONE; ELTWISE_BINARY_OP=ELWADD; EN_DEST_REUSE=; MATH_FIDELITY=LoFi; REUSE_DEST_TYPE=DEST_TO_SRCB; dest_sync=SyncHalf; is_fp32_dest_acc_en=false; l1_acc_en=0; unpack_to_dest=false",
+       "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE= REUSE_DEST_TYPE=DEST_TO_SRCB is_fp32_dest_acc_en=false",
+       "kernels": {
+        "unpack": {
+         "text_bytes": 2060,
+         "init_bytes": 228,
+         "tti": 44,
+         "tt_elfray": 34,
+         "tt_linear": 51,
+         "tt_all_paths": 51,
+         "unresolved": 2,
+         "detail": {
+          "insns": 515,
+          "marks_any_line": 34,
+          "stores": 100,
+          "tt_op_assumed": 20,
+          "tt_op_proven": 31
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "RMWCIB0": 7,
+          "RMWCIB1": 11,
+          "RMWCIB2": 7,
+          "RMWCIB3": 5,
+          "SEMGET": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 2,
+          "SETC16": 4,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 12,
+          "RMWCIB1": 10,
+          "RMWCIB2": 13,
+          "RMWCIB3": 12,
+          "SETADCXX": 4
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 8,
+          "RMWCIB1": 4,
+          "RMWCIB2": 7,
+          "RMWCIB3": 11,
+          "SETADCXX": 4
+         },
+         "load_md5": "2c21180b280d8b689d9483dafdb1f251",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "math": {
+         "text_bytes": 1096,
+         "init_bytes": 228,
+         "tti": 40,
+         "tt_elfray": 2,
+         "tt_linear": 8,
+         "tt_all_paths": 8,
+         "unresolved": 2,
+         "detail": {
+          "insns": 274,
+          "marks_any_line": 2,
+          "stores": 64,
+          "tt_op_assumed": 1,
+          "tt_op_proven": 7
+         },
+         "tti_by_opcode": {
+          "MOP": 2,
+          "MOVD2B": 4,
+          "RMWCIB0": 1,
+          "SEMINIT": 1,
+          "SEMPOST": 1,
+          "SEMWAIT": 1,
+          "SETC16": 22,
+          "SETRWC": 5,
+          "STALLWAIT": 3
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 7
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB3": 1,
+          "SETC16": 1
+         },
+         "load_md5": "e9fe982a9d7e3da14563aa7d54622089",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        },
+        "pack": {
+         "text_bytes": 1456,
+         "init_bytes": 228,
+         "tti": 30,
+         "tt_elfray": 24,
+         "tt_linear": 38,
+         "tt_all_paths": 38,
+         "unresolved": 2,
+         "detail": {
+          "insns": 364,
+          "marks_any_line": 24,
+          "stores": 86,
+          "tt_op_assumed": 9,
+          "tt_op_proven": 29
+         },
+         "tti_by_opcode": {
+          "MOP": 1,
+          "RMWCIB0": 4,
+          "RMWCIB1": 4,
+          "RMWCIB2": 3,
+          "RMWCIB3": 2,
+          "SEMGET": 1,
+          "SEMWAIT": 1,
+          "SETADCXX": 2,
+          "SETADCXY": 1,
+          "SETADCZW": 1,
+          "SETC16": 3,
+          "STALLWAIT": 7
+         },
+         "tt_all_paths_by_opcode": {
+          "RMWCIB0": 13,
+          "RMWCIB1": 12,
+          "RMWCIB2": 6,
+          "RMWCIB3": 5,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "tt_elfray_by_opcode": {
+          "RMWCIB0": 7,
+          "RMWCIB1": 7,
+          "RMWCIB2": 4,
+          "RMWCIB3": 4,
+          "SETADC": 1,
+          "ZEROACC": 1
+         },
+         "load_md5": "cad42410dc18a6cee73613d8e55bc5d4",
+         "analysis": {
+          "unmodelled": [],
+          "gp": 4289726464,
+          "data_words_trusted": 9
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "pairs": [
+    {
+     "original": "1074b1db653be101d9c462189f3b68715fc1106568c71598ef2e9f7b8293a466",
+     "hal": "2a6ac3b9f3708c0bf22fa1b5d1b9e686206c8f826df3c51a2595c23333926de6",
+     "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true"
+    },
+    {
+     "original": "2b6d5972200a8461ed1f321843ba78626db16b68c1af53746eae8997768c69fd",
+     "hal": "462a3dc5d8d5044a6cd60d53177ffcca38e3058cf911e125087f06d8686f98e9",
+     "label": "BROADCAST_TYPE=SCALAR EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false"
+    },
+    {
+     "original": "44d374ddf4cd0adf25d2d0cd47d27e24b8af9d843da0d10ee6878e5fb011b750",
+     "hal": "72b30c912e52eb8797d442124a4a827c6c38564b7f95af6b6c4a550adcb76872",
+     "label": "BROADCAST_TYPE=COL EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true"
+    },
+    {
+     "original": "4fd5d47920748442a55ff6ba7bdd8ac9a76ae321d5a0aa73660cb3602b041c2b",
+     "hal": "f18dd740dbcc1904211d32e0b831ed0f7b919f29f9aaeef89039d66acf4f7311",
+     "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE= REUSE_DEST_TYPE=DEST_TO_SRCB is_fp32_dest_acc_en=false"
+    },
+    {
+     "original": "81a9c30f13e1e317a3187ab50f274bdc19470f7c11e89fc42017c8b4896d292e",
+     "hal": "aa26734539e93d99e0ce86aa05730d20341cd6d3cc6d37c84ec5d9d961181cd6",
+     "label": "BROADCAST_TYPE=ROW EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false"
+    },
+    {
+     "original": "9e07982a78280f445f9e2bc9bb481b846053737e0db96ef41bcbb307e2f8847f",
+     "hal": "a99a0d75c2a7d98ba895a15425a78099331cf86df6160435955edee3cbe1d460",
+     "label": "BROADCAST_TYPE=COL EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false"
+    },
+    {
+     "original": "b1506941e7019bf0953fbe4c2c054f1d6e59de3d5ead853b5a13b6289076a618",
+     "hal": "6dc33cc98f59caf76a9d87e66a6daca8c20b94a8486c4990c3f6d25c14971764",
+     "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE= REUSE_DEST_TYPE=DEST_TO_SRCA is_fp32_dest_acc_en=false"
+    },
+    {
+     "original": "e26aa3cfa1bdfdf3299a4bb0347b5b062582d1c038833f0fea5b5d606edf57a8",
+     "hal": "2f48c3b3e8b1b55ebd9b6947dd1c76c6e949e63cfb757bc7b96ff33ca17d2d7d",
+     "label": "BROADCAST_TYPE=NONE EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=false"
+    },
+    {
+     "original": "e5f7c70179b2c1a0fbf3e51d19a8f320b9290e7c78a739ff8b808878b823fcb1",
+     "hal": "5fe1dad6295868a8a8cc8f73a0fa9706b9fb9033337e22683885cfd5ecb44199",
+     "label": "BROADCAST_TYPE=SCALAR EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true"
+    },
+    {
+     "original": "f86b1bd5b50b963f7d7fe9a480693ff7a7a0c96d4c29b105e8caeecbbfc8f85b",
+     "hal": "3b2f6d555285e16a98bc2793a323fa8572f1bedaf1cb7bb83b9901106a41c6e0",
+     "label": "BROADCAST_TYPE=ROW EN_DEST_REUSE=- REUSE_DEST_TYPE=- is_fp32_dest_acc_en=true"
+    }
+   ],
+   "summary": {
+    "original": {
+     "unpack": {
+      "builds": 10,
+      "avg": {
+       "text_bytes": 2371.2,
+       "tti": 20.0,
+       "tt_elfray": 11.0,
+       "tt_linear": 11.0,
+       "tt_all_paths": 11.0,
+       "unresolved": 2.0
+      },
+      "total": {
+       "text_bytes": 23712,
+       "tti": 200,
+       "tt_elfray": 110,
+       "tt_linear": 110,
+       "tt_all_paths": 110,
+       "unresolved": 20
+      }
+     },
+     "math": {
+      "builds": 10,
+      "avg": {
+       "text_bytes": 1075.2,
+       "tti": 28.0,
+       "tt_elfray": 7.6,
+       "tt_linear": 10.0,
+       "tt_all_paths": 10.0,
+       "unresolved": 2.8
+      },
+      "total": {
+       "text_bytes": 10752,
+       "tti": 280,
+       "tt_elfray": 76,
+       "tt_linear": 100,
+       "tt_all_paths": 100,
+       "unresolved": 28
+      }
+     },
+     "pack": {
+      "builds": 10,
+      "avg": {
+       "text_bytes": 2354.4,
+       "tti": 30.0,
+       "tt_elfray": 15.0,
+       "tt_linear": 20.0,
+       "tt_all_paths": 20.0,
+       "unresolved": 2.0
+      },
+      "total": {
+       "text_bytes": 23544,
+       "tti": 300,
+       "tt_elfray": 150,
+       "tt_linear": 200,
+       "tt_all_paths": 200,
+       "unresolved": 20
+      }
+     },
+     "sum": {
+      "builds": 10,
+      "avg": {
+       "text_bytes": 5800.8,
+       "tti": 78.0,
+       "tt_elfray": 33.6,
+       "tt_linear": 41.0,
+       "tt_all_paths": 41.0,
+       "unresolved": 6.8
+      },
+      "total": {
+       "text_bytes": 58008,
+       "tti": 780,
+       "tt_elfray": 336,
+       "tt_linear": 410,
+       "tt_all_paths": 410,
+       "unresolved": 68
+      }
+     }
+    },
+    "hal": {
+     "unpack": {
+      "builds": 10,
+      "avg": {
+       "text_bytes": 2050.4,
+       "tti": 44.0,
+       "tt_elfray": 33.8,
+       "tt_linear": 51.0,
+       "tt_all_paths": 51.0,
+       "unresolved": 2.0
+      },
+      "total": {
+       "text_bytes": 20504,
+       "tti": 440,
+       "tt_elfray": 338,
+       "tt_linear": 510,
+       "tt_all_paths": 510,
+       "unresolved": 20
+      }
+     },
+     "math": {
+      "builds": 10,
+      "avg": {
+       "text_bytes": 812.8,
+       "tti": 24.0,
+       "tt_elfray": 2.8,
+       "tt_linear": 5.6,
+       "tt_all_paths": 5.6,
+       "unresolved": 2.0
+      },
+      "total": {
+       "text_bytes": 8128,
+       "tti": 240,
+       "tt_elfray": 28,
+       "tt_linear": 56,
+       "tt_all_paths": 56,
+       "unresolved": 20
+      }
+     },
+     "pack": {
+      "builds": 10,
+      "avg": {
+       "text_bytes": 1468.8,
+       "tti": 30.0,
+       "tt_elfray": 24.4,
+       "tt_linear": 38.0,
+       "tt_all_paths": 38.0,
+       "unresolved": 2.0
+      },
+      "total": {
+       "text_bytes": 14688,
+       "tti": 300,
+       "tt_elfray": 244,
+       "tt_linear": 380,
+       "tt_all_paths": 380,
+       "unresolved": 20
+      }
+     },
+     "sum": {
+      "builds": 10,
+      "avg": {
+       "text_bytes": 4332.0,
+       "tti": 98.0,
+       "tt_elfray": 61.0,
+       "tt_linear": 94.6,
+       "tt_all_paths": 94.6,
+       "unresolved": 6.0
+      },
+      "total": {
+       "text_bytes": 43320,
+       "tti": 980,
+       "tt_elfray": 610,
+       "tt_linear": 946,
+       "tt_all_paths": 946,
+       "unresolved": 60
+      }
+     }
+    }
+   }
+  }
+ ]
+}

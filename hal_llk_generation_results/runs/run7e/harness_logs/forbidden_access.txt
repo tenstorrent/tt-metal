@@ -1,0 +1,3 @@
+Bash: {"command": "echo '#include \"sources/eltwise_binary_hal_test.cpp\"' | sfpi/compiler/bin/riscv-tt-elf-g++ -mcpu=tt-bh-tensix -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -ffast-math -fno-exceptions -fno-rtti -I. -Ihelpers/src -I/proj_sw/user_dev/ctr-sbratic/hal-runs/2026110
+
+# total attempts: 1

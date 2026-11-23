@@ -1,0 +1,9 @@
+== 1. tt-smi -r, HAL test
+check1_hal_after_reset.txt: exit 0, ======== 1660 passed, 20 skipped, 2800 deselected in 142.89s (0:02:22) =========
+== 2. no reset, original test
+check2_original_noreset.txt: exit 0, ======== 1660 passed, 20 skipped, 2800 deselected in 141.87s (0:02:21) =========
+== 3. no reset, HAL test
+check3_hal_noreset.txt: exit 0, ======== 1660 passed, 20 skipped, 2800 deselected in 140.11s (0:02:20) =========
+== 4. tt-smi -r, HAL test
+check4_hal_after_reset.txt: exit 0, ======== 1660 passed, 20 skipped, 2800 deselected in 140.70s (0:02:20) =========
+POSTCHECK DONE 2026-11-04T23:12:16Z

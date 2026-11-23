@@ -1,0 +1,7 @@
+name=8b
+run_dir=/proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5
+hal_llk_files=llk_hal_common.h llk_lib_pack_wrappers.h llk_math_common.h llk_math_eltwise_binary.h llk_memory_checks.h llk_pack.h llk_pack_common.h llk_unpack_AB.h llk_unpack_common.h 
+hal_llk_md5_equal_to_run=yes
+hal_test_cpp_equal_to_run=yes
+hal_test_py_equal_to_run=yes
+original_test_cpp_py_equal_to_run=yes

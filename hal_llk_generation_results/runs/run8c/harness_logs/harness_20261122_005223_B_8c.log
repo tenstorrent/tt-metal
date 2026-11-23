@@ -1,0 +1,58 @@
+
+[harness 00:52:25] Run: /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5 (mode B)
+
+[harness 00:52:25] 1/9 Export of BASE commit c0e38f1f
+
+[harness 00:54:42] 2/9 HAL from b9e522d3, documentation
+[harness] documentation: 25 files, marked invalid: 4, removed: 0
+
+[harness 00:54:43] 3/9 Spec (signatures only) for mode B
+[spec] 30 headers: /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -> /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/llk_spec/tt_llk_blackhole/llk_lib
+[spec] 18 headers: /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tt_llk_blackhole/common/inc -> /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/llk_spec/tt_llk_blackhole/common/inc
+
+[harness 00:54:44] 4/9 Python tests for the HAL versions (1)
+  test_eltwise_binary: eltwise_binary_test.cpp -> eltwise_binary_hal_test.cpp
+
+[harness 00:54:44] 5/9 Permissions
+[harness] 134 deny rules
+
+[harness 01:01:44] 6/9 setup_testing_env.sh
+
+[harness 01:02:11] 7/9 Original tests (1)
+  test_eltwise_binary: ======== 1660 passed, 20 skipped, 2800 deselected in 191.60s (0:03:11) =========
+  test_eltwise_binary:add: 1660 passed, as frozen (EXPECT_PASSED)
+
+[harness 01:06:10] 8/9 Claude generates (mode B, model claude-opus-5-5, timeout 4h, tests 1)
+
+[harness 03:48:36] 9/9 Independent HAL tests (each after tt-smi -r) and checks
+  test_eltwise_binary: exit 0, ======== 1660 passed, 20 skipped, 2800 deselected in 201.47s (0:03:21) =========
+    original right after (without reset): exit 0, ======== 1660 passed, 20 skipped, 2800 deselected in 161.71s (0:02:41) =========
+
+[harness 03:55:56] Code size: compiling the originals and HAL versions in one session (without the card)
+
+==================== SUMMARY ====================
+Run:              /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5
+Mode:             B
+BASE / HAL:       c0e38f1f / b9e522d3
+Model:            claude-opus-5-5
+Claude duration:  162 min (exit 0)
+Tests:            1 (test_eltwise_binary:add)
+HAL tests:        ALL PASSED (each after tt-smi -r)
+  test_eltwise_binary              ======== 1660 passed, 20 skipped, 2800 deselected in 201.47s (0:03:21) ========= | original: ======== 1660 passed, 20 skipped, 2800 deselected in 191.60s (0:03:11) =========
+                                   dirty state (original right after, without reset): ======== 1660 passed, 20 skipped, 2800 deselected in 161.71s (0:02:41) =========
+Code (LOC / hex / shifts / raw / hal::): 1396 / 14 / 1 / 0 / 225
+First full pass:   test_eltwise_binary_hal iter 79 (139.52 min)
+Raw instr.:       0 lines (logs/raw_check.txt)
+Forbidden access: # total attempts: 1 (logs/forbidden_access.txt)
+HAL probing:      HAL probing: 0 traces (has_include 0, static_assert 0, undoc. headers 0, undoc. names 0); filter hid output in 0 results (logs/probe_check.txt)
+Tokens/cost:      in 115,880,488 (cache 0.99), out 408,272, $39.6
+Pytest runs:      98 {'denied': 3, 'collect': 4, 'compile_only': 12, 'compile_error': 7, 'hang': 12, 'fail': 35, 'pass': 26, 'other': 5}
+Confluence (MCP): total MCP calls: 0 (logs/mcp_calls.txt)
+Code size (text, original -> HAL, mean per variant):
+  test_eltwise_binary              unpack 3463.2->2002.4B, math 2374.4->1174B, pack 2910.4->1768.8B
+Metrics:          /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5/logs/metrics.md, /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5/logs/codesize_<test>.md, /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5/logs/elfray_tt_tti_<test>.md
+Report:           /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5/logs/final_report.md
+Code:             /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests/hal_llk
+Archive (permanent): /proj_sw/user_dev/ctr-sbratic/results/hal-results/20261122_005225_B_c0e38f1f_claude-opus-5-5.tar.gz
+================================================
+Results saved: /proj_sw/user_dev/ctr-sbratic/results/hal-results/20261122_005225_B_c0e38f1f_claude-opus-5-5.tar.gz

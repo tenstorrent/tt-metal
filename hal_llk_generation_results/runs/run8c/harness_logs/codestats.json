@@ -1,0 +1,94 @@
+{
+  "total": {
+    "loc": 1396,
+    "hex_literals": 14,
+    "decimal_literals_ge16": 2,
+    "numeric_shifts": 1,
+    "raw_instructions": 0,
+    "hal_uses": 225,
+    "not_in_hal_marks": 2
+  },
+  "per_file": {
+    "tt_metal/tt-llk/tests/hal_llk/hal_llk_common.h": {
+      "loc": 41,
+      "hex_literals": 5,
+      "decimal_literals_ge16": 1,
+      "numeric_shifts": 0,
+      "raw_instructions": 0,
+      "hal_uses": 4,
+      "not_in_hal_marks": 0
+    },
+    "tt_metal/tt-llk/tests/hal_llk/llk_lib_pack_wrappers.h": {
+      "loc": 36,
+      "hex_literals": 0,
+      "decimal_literals_ge16": 0,
+      "numeric_shifts": 0,
+      "raw_instructions": 0,
+      "hal_uses": 0,
+      "not_in_hal_marks": 0
+    },
+    "tt_metal/tt-llk/tests/hal_llk/llk_math_common.h": {
+      "loc": 97,
+      "hex_literals": 0,
+      "decimal_literals_ge16": 0,
+      "numeric_shifts": 0,
+      "raw_instructions": 0,
+      "hal_uses": 9,
+      "not_in_hal_marks": 0
+    },
+    "tt_metal/tt-llk/tests/hal_llk/llk_math_eltwise_binary.h": {
+      "loc": 389,
+      "hex_literals": 0,
+      "decimal_literals_ge16": 0,
+      "numeric_shifts": 0,
+      "raw_instructions": 0,
+      "hal_uses": 83,
+      "not_in_hal_marks": 0
+    },
+    "tt_metal/tt-llk/tests/hal_llk/llk_pack.h": {
+      "loc": 268,
+      "hex_literals": 4,
+      "decimal_literals_ge16": 0,
+      "numeric_shifts": 0,
+      "raw_instructions": 0,
+      "hal_uses": 44,
+      "not_in_hal_marks": 0
+    },
+    "tt_metal/tt-llk/tests/hal_llk/llk_pack_common.h": {
+      "loc": 113,
+      "hex_literals": 2,
+      "decimal_literals_ge16": 1,
+      "numeric_shifts": 1,
+      "raw_instructions": 0,
+      "hal_uses": 25,
+      "not_in_hal_marks": 1
+    },
+    "tt_metal/tt-llk/tests/hal_llk/llk_unpack_AB.h": {
+      "loc": 151,
+      "hex_literals": 0,
+      "decimal_literals_ge16": 0,
+      "numeric_shifts": 0,
+      "raw_instructions": 0,
+      "hal_uses": 39,
+      "not_in_hal_marks": 1
+    },
+    "tt_metal/tt-llk/tests/hal_llk/llk_unpack_common.h": {
+      "loc": 173,
+      "hex_literals": 3,
+      "decimal_literals_ge16": 0,
+      "numeric_shifts": 0,
+      "raw_instructions": 0,
+      "hal_uses": 21,
+      "not_in_hal_marks": 0
+    },
+    "tt_metal/tt-llk/tests/sources/eltwise_binary_hal_test.cpp": {
+      "loc": 128,
+      "hex_literals": 0,
+      "decimal_literals_ge16": 0,
+      "numeric_shifts": 0,
+      "raw_instructions": 0,
+      "hal_uses": 0,
+      "not_in_hal_marks": 0
+    }
+  }
+}

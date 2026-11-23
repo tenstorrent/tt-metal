@@ -1,0 +1,6 @@
+hidden_outputs=0
+has_include=0
+static_assert_probe=1
+undocumented_include=0
+undocumented_names=0
+# HAL probing: 1 traces (has_include 0, static_assert 1, undoc. headers 0, undoc. names 0); filter hid output in 0 results

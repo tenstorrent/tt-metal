@@ -1,0 +1,4 @@
+Bash: {"command": "cat python_tests/helpers/tile_constants.py | head -80; ls ../tt_llk_blackhole/ 2>&1 | head; ls ../tt_llk_blackhole/llk_lib/hal 2>&1 | head -40"}
+Bash: {"command": "./sfpi/compiler/bin/riscv-tt-elf-g++ -mcpu=tt-bh-tensix -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD -DENABLE_LLK_ASSERT -DARCH_BLACKHOLE -DCOMPILE_FOR_TRISC -Isfpi/include -I../tt_llk_blackhole/llk_lib -I../tt_l
+
+# total attempts: 2

@@ -1,0 +1,5 @@
+Bash: {"command": "cd ../llk_spec/tt_llk_blackhole && find . -type f | sort; ls ../../tt_llk_blackhole/ ../../tt_llk_blackhole/llk_lib 2>&1 | head -50", "description": "List spec files and blackhole dir"}
+Bash: {"command": "ls /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests/helpers/src /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc"}
+Bash: {"command": "ls /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc"}
+
+# total attempts: 3

@@ -1,0 +1,3 @@
+Bash: {"command": "sfpi/compiler/bin/riscv-tt-elf-g++ -mcpu=tt-bh-tensix -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -ffast-math -fno-exceptions -fno-rtti -I. -Ihelpers/src -I/proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261122_005225_B_c0e38f1f_claude-opus-5-5/tmp/tt-llk-bui
+
+# total attempts: 1

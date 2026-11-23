@@ -1,0 +1,3 @@
+7c assert_on: compile exit 0, 80 s, ================= 3320 passed, 40 skipped in 64.16s (0:01:04) ==================
+7c assert_off: compile exit 0, 80 s, ================= 3320 passed, 40 skipped in 63.34s (0:01:03) ==================
+7c DONE 2026-11-21T22:42:15Z

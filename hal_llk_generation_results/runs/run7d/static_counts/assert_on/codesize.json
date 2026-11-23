@@ -1,0 +1,348 @@
+{
+  "mode": "not paired (different variant_id) - the aggregate of all variants is compared",
+  "variants_orig": 10,
+  "variants_hal": 10,
+  "measured_orig": 10,
+  "measured_hal": 10,
+  "tensix_re": "^(tt[a-z0-9_]*|\\.insn|\\.word)$",
+  "per_component": {
+    "unpack": {
+      "orig": {
+        "text": {
+          "mean": 3463.2,
+          "median": 3412.0,
+          "min": 3340,
+          "max": 3672,
+          "n": 10
+        },
+        "instr_total": {
+          "mean": 865.8,
+          "median": 853.0,
+          "min": 835,
+          "max": 918,
+          "n": 10
+        },
+        "instr_tensix": {
+          "mean": 21,
+          "median": 21.0,
+          "min": 21,
+          "max": 21,
+          "n": 10
+        },
+        "instr_riscv": {
+          "mean": 844.8,
+          "median": 832.0,
+          "min": 814,
+          "max": 897,
+          "n": 10
+        }
+      },
+      "hal": {
+        "text": {
+          "mean": 2318.8,
+          "median": 2316.0,
+          "min": 2304,
+          "max": 2332,
+          "n": 10
+        },
+        "instr_total": {
+          "mean": 579.7,
+          "median": 579.0,
+          "min": 576,
+          "max": 583,
+          "n": 10
+        },
+        "instr_tensix": {
+          "mean": 47,
+          "median": 47.0,
+          "min": 47,
+          "max": 47,
+          "n": 10
+        },
+        "instr_riscv": {
+          "mean": 532.7,
+          "median": 532.0,
+          "min": 529,
+          "max": 536,
+          "n": 10
+        }
+      }
+    },
+    "math": {
+      "orig": {
+        "text": {
+          "mean": 2374.4,
+          "median": 2292.0,
+          "min": 1888,
+          "max": 3096,
+          "n": 10
+        },
+        "instr_total": {
+          "mean": 593.6,
+          "median": 573.0,
+          "min": 472,
+          "max": 774,
+          "n": 10
+        },
+        "instr_tensix": {
+          "mean": 36,
+          "median": 35.0,
+          "min": 24,
+          "max": 48,
+          "n": 10
+        },
+        "instr_riscv": {
+          "mean": 557.6,
+          "median": 538.0,
+          "min": 448,
+          "max": 726,
+          "n": 10
+        }
+      },
+      "hal": {
+        "text": {
+          "mean": 1278.4,
+          "median": 1192.0,
+          "min": 1192,
+          "max": 1624,
+          "n": 10
+        },
+        "instr_total": {
+          "mean": 319.6,
+          "median": 298.0,
+          "min": 298,
+          "max": 406,
+          "n": 10
+        },
+        "instr_tensix": {
+          "mean": 31.2,
+          "median": 27.0,
+          "min": 27,
+          "max": 48,
+          "n": 10
+        },
+        "instr_riscv": {
+          "mean": 288.4,
+          "median": 271.0,
+          "min": 271,
+          "max": 358,
+          "n": 10
+        }
+      }
+    },
+    "pack": {
+      "orig": {
+        "text": {
+          "mean": 2910.4,
+          "median": 2912.0,
+          "min": 2908,
+          "max": 2912,
+          "n": 10
+        },
+        "instr_total": {
+          "mean": 727.6,
+          "median": 728.0,
+          "min": 727,
+          "max": 728,
+          "n": 10
+        },
+        "instr_tensix": {
+          "mean": 30,
+          "median": 30.0,
+          "min": 30,
+          "max": 30,
+          "n": 10
+        },
+        "instr_riscv": {
+          "mean": 697.6,
+          "median": 698.0,
+          "min": 697,
+          "max": 698,
+          "n": 10
+        }
+      },
+      "hal": {
+        "text": {
+          "mean": 1907.2,
+          "median": 1936.0,
+          "min": 1864,
+          "max": 1936,
+          "n": 10
+        },
+        "instr_total": {
+          "mean": 476.8,
+          "median": 484.0,
+          "min": 466,
+          "max": 484,
+          "n": 10
+        },
+        "instr_tensix": {
+          "mean": 63,
+          "median": 63.0,
+          "min": 63,
+          "max": 63,
+          "n": 10
+        },
+        "instr_riscv": {
+          "mean": 413.8,
+          "median": 421.0,
+          "min": 403,
+          "max": 421,
+          "n": 10
+        }
+      }
+    }
+  },
+  "mnemonic_diff_top": [
+    {
+      "mnemonic": "li",
+      "orig_per_variant": 205.4,
+      "hal_per_variant": 63.1
+    },
+    {
+      "mnemonic": "lw",
+      "orig_per_variant": 198.6,
+      "hal_per_variant": 87.0
+    },
+    {
+      "mnemonic": "beq",
+      "orig_per_variant": 108.0,
+      "hal_per_variant": 12.0
+    },
+    {
+      "mnemonic": "bne",
+      "orig_per_variant": 111.0,
+      "hal_per_variant": 34.0
+    },
+    {
+      "mnemonic": "sw",
+      "orig_per_variant": 287.2,
+      "hal_per_variant": 215.6
+    },
+    {
+      "mnemonic": "add",
+      "orig_per_variant": 35.8,
+      "hal_per_variant": 83.2
+    },
+    {
+      "mnemonic": "seqz",
+      "orig_per_variant": 50.6,
+      "hal_per_variant": 4.0
+    },
+    {
+      "mnemonic": "j",
+      "orig_per_variant": 70.4,
+      "hal_per_variant": 24.0
+    },
+    {
+      "mnemonic": "ret",
+      "orig_per_variant": 60.0,
+      "hal_per_variant": 15.0
+    },
+    {
+      "mnemonic": "addi",
+      "orig_per_variant": 280.2,
+      "hal_per_variant": 236.5
+    },
+    {
+      "mnemonic": "mv",
+      "orig_per_variant": 76.2,
+      "hal_per_variant": 38.0
+    },
+    {
+      "mnemonic": "bltu",
+      "orig_per_variant": 38.8,
+      "hal_per_variant": 6.6
+    },
+    {
+      "mnemonic": "lui",
+      "orig_per_variant": 159.8,
+      "hal_per_variant": 129.8
+    },
+    {
+      "mnemonic": "ebreak",
+      "orig_per_variant": 31.6,
+      "hal_per_variant": 3.8
+    },
+    {
+      "mnemonic": "zext.b",
+      "orig_per_variant": 37.4,
+      "hal_per_variant": 11.2
+    },
+    {
+      "mnemonic": "ttrmwcib2",
+      "orig_per_variant": 0.0,
+      "hal_per_variant": 24.0
+    },
+    {
+      "mnemonic": "zext.h",
+      "orig_per_variant": 2.0,
+      "hal_per_variant": 22.6
+    },
+    {
+      "mnemonic": "andi",
+      "orig_per_variant": 46.0,
+      "hal_per_variant": 25.6
+    },
+    {
+      "mnemonic": "jal",
+      "orig_per_variant": 26.4,
+      "hal_per_variant": 6.0
+    },
+    {
+      "mnemonic": "ttrmwcib1",
+      "orig_per_variant": 0.0,
+      "hal_per_variant": 20.0
+    },
+    {
+      "mnemonic": "slli",
+      "orig_per_variant": 29.0,
+      "hal_per_variant": 48.4
+    },
+    {
+      "mnemonic": "ttrmwcib0",
+      "orig_per_variant": 0.0,
+      "hal_per_variant": 17.0
+    },
+    {
+      "mnemonic": "beqz",
+      "orig_per_variant": 30.8,
+      "hal_per_variant": 14.6
+    },
+    {
+      "mnemonic": "bgeu",
+      "orig_per_variant": 27.6,
+      "hal_per_variant": 13.0
+    },
+    {
+      "mnemonic": "bnez",
+      "orig_per_variant": 18.0,
+      "hal_per_variant": 4.0
+    },
+    {
+      "mnemonic": "srli",
+      "orig_per_variant": 9.2,
+      "hal_per_variant": 23.0
+    },
+    {
+      "mnemonic": "ttrmwcib3",
+      "orig_per_variant": 0.0,
+      "hal_per_variant": 13.0
+    },
+    {
+      "mnemonic": "and",
+      "orig_per_variant": 23.6,
+      "hal_per_variant": 14.0
+    },
+    {
+      "mnemonic": "ttsetc16",
+      "orig_per_variant": 23.6,
+      "hal_per_variant": 32.4
+    },
+    {
+      "mnemonic": "sub",
+      "orig_per_variant": 16.2,
+      "hal_per_variant": 8.9
+    }
+  ]
+}

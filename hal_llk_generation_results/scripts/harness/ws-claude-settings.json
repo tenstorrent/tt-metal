@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(//proj_sw/user_dev/ctr-sbratic/**/llk_lib/hal/**)",
+      "Read(//localdev/ctr-sbratic/**/llk_lib/hal/**)",
+      "Bash(git show *)",
+      "Bash(git diff *)",
+      "Bash(git grep *)",
+      "Bash(git log -p*)"
+    ]
+  }
+}

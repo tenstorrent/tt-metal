@@ -1,0 +1,292 @@
+{
+ "orig": [
+  "p8e_orig_r1",
+  "p8e_orig_r2",
+  "p8e_orig_r3"
+ ],
+ "new": [
+  "8e_r1",
+  "8e_r2",
+  "8e_r3"
+ ],
+ "summary": {
+  "TILE_LOOP/L1_TO_L1": {
+   "orig": 32.796875,
+   "new": 47.703125,
+   "ratio_median": 1.4494997617913292,
+   "ratio_min": 1.4070898980537534,
+   "ratio_max": 1.5862509583439817,
+   "orig_spread_max_pct": 0.04764173415912339,
+   "new_spread_max_pct": 0.0,
+   "n_variants": 16
+  },
+  "TILE_LOOP/UNPACK_ISOLATE": {
+   "orig": 27.4296875,
+   "new": 45.8828125,
+   "ratio_median": 1.6723621708927814,
+   "ratio_min": 1.6706518645032735,
+   "ratio_max": 1.6736962097463666,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.0,
+   "n_variants": 16
+  },
+  "TILE_LOOP/MATH_ISOLATE": {
+   "orig": 16.640625,
+   "new": 16.4375,
+   "ratio_median": 0.9877934272300469,
+   "ratio_min": 0.9767549976754998,
+   "ratio_max": 0.9915373765867419,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.3319108582266477,
+   "n_variants": 16
+  },
+  "TILE_LOOP/PACK_ISOLATE": {
+   "orig": 25.84765625,
+   "new": 37.8828125,
+   "ratio_median": 1.4581187583461,
+   "ratio_min": 1.4172921044731313,
+   "ratio_max": 1.571342200725514,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.04018485031143259,
+   "n_variants": 16
+  },
+  "TILE_LOOP/L1_CONGESTION[UNPACK]": {
+   "orig": 27.421875,
+   "new": 45.9296875,
+   "ratio_median": 1.6751674367661828,
+   "ratio_min": 1.670179436058103,
+   "ratio_max": 1.6761606379948732,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.10212765957446808,
+   "n_variants": 16
+  },
+  "TILE_LOOP/L1_CONGESTION[PACK]": {
+   "orig": 25.890625,
+   "new": 38.9453125,
+   "ratio_median": 1.5006016436075127,
+   "ratio_min": 1.42745569240012,
+   "ratio_max": 1.6691639196883428,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.14002800560112022,
+   "n_variants": 16
+  },
+  "KERNEL/L1_TO_L1": {
+   "orig": 4739.5,
+   "new": 6642.0,
+   "ratio_median": 1.3988818431847059,
+   "ratio_min": 1.3617283950617285,
+   "ratio_max": 1.5191833071572807,
+   "orig_spread_max_pct": 0.08410428931875526,
+   "new_spread_max_pct": 0.0,
+   "n_variants": 16
+  },
+  "KERNEL/UNPACK_ISOLATE": {
+   "orig": 4050.0,
+   "new": 6429.0,
+   "ratio_median": 1.5840315426318383,
+   "ratio_min": 1.5690757128810227,
+   "ratio_max": 1.5911451892159287,
+   "orig_spread_max_pct": 0.024721878862793572,
+   "new_spread_max_pct": 0.0,
+   "n_variants": 16
+  },
+  "KERNEL/MATH_ISOLATE": {
+   "orig": 2698.0,
+   "new": 2670.0,
+   "ratio_median": 0.9896219421793921,
+   "ratio_min": 0.971830985915493,
+   "ratio_max": 0.9966405375139977,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.03813882532418002,
+   "n_variants": 16
+  },
+  "KERNEL/PACK_ISOLATE": {
+   "orig": 3857.5,
+   "new": 5421.0,
+   "ratio_median": 1.4019903751106053,
+   "ratio_min": 1.3542694004671685,
+   "ratio_max": 1.50109409190372,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.10808863267879662,
+   "n_variants": 16
+  },
+  "KERNEL/L1_CONGESTION[UNPACK]": {
+   "orig": 4048.5,
+   "new": 6434.0,
+   "ratio_median": 1.5869726128793487,
+   "ratio_min": 1.5730807086614174,
+   "ratio_max": 1.592088998763906,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.15654351909830932,
+   "n_variants": 16
+  },
+  "KERNEL/L1_CONGESTION[PACK]": {
+   "orig": 3868.0,
+   "new": 5533.0,
+   "ratio_median": 1.430259835285077,
+   "ratio_min": 1.370618556701031,
+   "ratio_max": 1.5713548387096774,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.21559468199784404,
+   "n_variants": 16
+  },
+  "INIT/L1_TO_L1": {
+   "orig": 287.0,
+   "new": 212.0,
+   "ratio_median": 0.7157190635451505,
+   "ratio_min": 0.6689895470383276,
+   "ratio_max": 0.7561837455830389,
+   "orig_spread_max_pct": 0.33444816053511706,
+   "new_spread_max_pct": 0.0,
+   "n_variants": 16
+  },
+  "INIT/UNPACK_ISOLATE": {
+   "orig": 272.0,
+   "new": 304.0,
+   "ratio_median": 1.1176470588235294,
+   "ratio_min": 1.0940170940170941,
+   "ratio_max": 1.1286764705882353,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.0,
+   "n_variants": 16
+  },
+  "INIT/MATH_ISOLATE": {
+   "orig": 189.0,
+   "new": 131.0,
+   "ratio_median": 0.6898395721925134,
+   "ratio_min": 0.6894736842105263,
+   "ratio_max": 0.6931216931216931,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.7633587786259542,
+   "n_variants": 16
+  },
+  "INIT/PACK_ISOLATE": {
+   "orig": 296.0,
+   "new": 218.0,
+   "ratio_median": 0.7311685814545978,
+   "ratio_min": 0.6644736842105263,
+   "ratio_max": 0.7892976588628763,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 2.272727272727273,
+   "n_variants": 16
+  },
+  "INIT/L1_CONGESTION[UNPACK]": {
+   "orig": 272.0,
+   "new": 303.0,
+   "ratio_median": 1.1139705882352942,
+   "ratio_min": 1.0897435897435896,
+   "ratio_max": 1.1286764705882353,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 0.9771986970684039,
+   "n_variants": 16
+  },
+  "INIT/L1_CONGESTION[PACK]": {
+   "orig": 296.0,
+   "new": 220.0,
+   "ratio_median": 0.7384603524751536,
+   "ratio_min": 0.6912751677852349,
+   "ratio_max": 0.782608695652174,
+   "orig_spread_max_pct": 0.0,
+   "new_spread_max_pct": 2.727272727272727,
+   "n_variants": 16
+  }
+ },
+ "per_variant": [
+  {
+   "variant": "Bfp8_b | Bfp8_b | Bfp8_b | DestAccumulation.No | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 31.1171875,
+   "new": 48.75,
+   "ratio": 1.5666582977655035
+  },
+  {
+   "variant": "Bfp8_b | Bfp8_b | Bfp8_b | DestAccumulation.Yes | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 33.734375,
+   "new": 47.640625,
+   "ratio": 1.412227883279296
+  },
+  {
+   "variant": "Bfp8_b | Bfp8_b | Float16 | DestAccumulation.Yes | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 32.7890625,
+   "new": 47.703125,
+   "ratio": 1.454848701453419
+  },
+  {
+   "variant": "Bfp8_b | Bfp8_b | Float16_b | DestAccumulation.No | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 43.71875,
+   "new": 61.6875,
+   "ratio": 1.4110078627591136
+  },
+  {
+   "variant": "Bfp8_b | Bfp8_b | Float16_b | DestAccumulation.Yes | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 32.796875,
+   "new": 47.703125,
+   "ratio": 1.4545021438780372
+  },
+  {
+   "variant": "Float16 | Float16 | Bfp8_b | DestAccumulation.No | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 31.0859375,
+   "new": 48.8046875,
+   "ratio": 1.5699924604171902
+  },
+  {
+   "variant": "Float16 | Float16 | Bfp8_b | DestAccumulation.Yes | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 33.71875,
+   "new": 47.4453125,
+   "ratio": 1.4070898980537534
+  },
+  {
+   "variant": "Float16 | Float16 | Float16 | DestAccumulation.No | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 30.578125,
+   "new": 48.4921875,
+   "ratio": 1.5858456821665814
+  },
+  {
+   "variant": "Float16 | Float16 | Float16 | DestAccumulation.Yes | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 32.8046875,
+   "new": 47.375,
+   "ratio": 1.4441533698499642
+  },
+  {
+   "variant": "Float16 | Float16 | Float16_b | DestAccumulation.No | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 30.8125,
+   "new": 48.640625,
+   "ratio": 1.578600405679513
+  },
+  {
+   "variant": "Float16 | Float16 | Float16_b | DestAccumulation.Yes | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 32.796875,
+   "new": 47.375,
+   "ratio": 1.4444973797046212
+  },
+  {
+   "variant": "Float16_b | Float16_b | Bfp8_b | DestAccumulation.No | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 31.09375,
+   "new": 48.7890625,
+   "ratio": 1.5690954773869348
+  },
+  {
+   "variant": "Float16_b | Float16_b | Bfp8_b | DestAccumulation.Yes | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 33.71875,
+   "new": 47.4453125,
+   "ratio": 1.4070898980537534
+  },
+  {
+   "variant": "Float16_b | Float16_b | Float16 | DestAccumulation.Yes | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 32.8046875,
+   "new": 47.375,
+   "ratio": 1.4441533698499642
+  },
+  {
+   "variant": "Float16_b | Float16_b | Float16_b | DestAccumulation.No | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 30.5703125,
+   "new": 48.4921875,
+   "ratio": 1.5862509583439817
+  },
+  {
+   "variant": "Float16_b | Float16_b | Float16_b | DestAccumulation.Yes | MathOperation.Elwadd | MathFidelity.LoFi",
+   "orig": 32.796875,
+   "new": 47.375,
+   "ratio": 1.4444973797046212
+  }
+ ]
+}

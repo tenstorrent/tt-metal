@@ -1,0 +1,24 @@
+
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Bfp8_b->Bfp8_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:No] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Bfp8_b->Bfp8_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:Yes] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Bfp8_b->Float16-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:Yes] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Bfp8_b->Float16_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:No] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Bfp8_b->Float16_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:Yes] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16->Bfp8_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:No] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16->Bfp8_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:Yes] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16->Float16-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:No] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16->Float16-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:Yes] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16->Float16_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:No] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16->Float16_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:Yes] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16_b->Bfp8_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:No] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16_b->Bfp8_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:Yes] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16_b->Float16-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:Yes] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16_b->Float16_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:No] PASSED
+python_tests/perf_eltwise_binary.py::test_perf_eltwise_binary[formats:Float16_b->Float16_b-mathop:Elwadd-tile_count:16-math_fidelity:LoFi-dest_acc:Yes] PASSED
+---------------------------- live log sessionfinish ----------------------------
+2026-11-22 03:39:06 | INFO     | helpers.perf.core:combine_perf_reports:634 - Raw appending: /proj_sw/user_dev/ctr-sbratic/tools/perf_cycles/tmp/p8e_orig_r3/tt-llk-build/temp_perf_data/perf_eltwise_binary.master.csv
+2026-11-22 03:39:06 | INFO     | helpers.perf.core:combine_perf_reports:660 - Post appending: /proj_sw/user_dev/ctr-sbratic/tools/perf_cycles/tmp/p8e_orig_r3/tt-llk-build/temp_perf_data/perf_eltwise_binary.master.post.csv
+2026-11-22 03:39:07 | INFO     | helpers.perf.core:_write_run_parquet:575 - Wrote run Parquet batch: /proj_sw/user_dev/ctr-sbratic/tools/perf_cycles/ws/8e/tt_metal/tt-llk/perf_data/runs/p8e_orig_r3/p8e_orig_r3.parquet
+
+
+====================== 16 passed, 70 deselected in 46.03s ======================

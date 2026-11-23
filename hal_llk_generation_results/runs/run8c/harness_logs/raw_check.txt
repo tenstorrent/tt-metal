@@ -1,0 +1,6 @@
+# Raw TT instructions in the generated code (ideally empty, except NOT_IN_HAL parts)
+(none)
+
+# NOT_IN_HAL marks
+tt_metal/tt-llk/tests/hal_llk/llk_unpack_AB.h:211:    // NOT_IN_HAL: hal::sync::StallCondition has no documented name for the "TRISC config writes done" condition;
+tt_metal/tt-llk/tests/hal_llk/llk_pack_common.h:66:        // NOT_IN_HAL: the template parameter is a raw p_stall mask (spec signature); it is forwarded as a HAL condition.

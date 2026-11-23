@@ -1,0 +1,4615 @@
+{
+  "metrics_version": 2,
+  "model": "claude-opus-5-5",
+  "duration_min": 223.2,
+  "duration_api_min": 74.4,
+  "num_turns": 447,
+  "finished": true,
+  "cost_usd": 48.44,
+  "tokens": {
+    "input_tokens": 538,
+    "output_tokens": 460131,
+    "cache_creation_input_tokens": 1245738,
+    "cache_read_input_tokens": 151324472
+  },
+  "tokens_total_input": 152570748,
+  "cache_hit_ratio": 0.992,
+  "tokens_per_model": {
+    "claude-opus-5-5": {
+      "input_tokens": 538,
+      "output_tokens": 460131,
+      "cache_read_input_tokens": 151324472,
+      "cache_creation_input_tokens": 1245738,
+      "cost_usd": 48.4399034
+    }
+  },
+  "pytest_runs_total": 160,
+  "pytest_invocations_total": 201,
+  "pytest_runs_by_kind": {
+    "denied": 5,
+    "collect": 3,
+    "compile_error": 4,
+    "hang": 35,
+    "other": 26,
+    "fail": 46,
+    "help": 3,
+    "pass": 78,
+    "empty": 1
+  },
+  "pytest_runs_by_test": {
+    "(unknown)": {
+      "denied": 2,
+      "help": 3
+    },
+    "test_eltwise_binary_hal": {
+      "collect": 3,
+      "denied": 3,
+      "compile_error": 4,
+      "hang": 34,
+      "other": 26,
+      "fail": 45,
+      "pass": 38,
+      "empty": 1
+    },
+    "test_eltwise_binary": {
+      "pass": 55,
+      "hang": 2,
+      "fail": 1
+    }
+  },
+  "process": {
+    "iterations": 147,
+    "first_full_pass": {
+      "test_eltwise_binary_hal": {
+        "iteration": 140,
+        "test_iteration": 140,
+        "pytest_command": 151,
+        "elapsed_min": 186.89,
+        "baseline_passed": 1660,
+        "passed": 1660,
+        "tokens": {
+          "input_tokens": 512,
+          "output_tokens": 2157,
+          "cache_creation_input_tokens": 1236905,
+          "cache_read_input_tokens": 139358957
+        },
+        "tokens_input_total": 140596374
+      }
+    },
+    "final_code_first_full_pass": {
+      "test_eltwise_binary_hal": {
+        "iteration": 144,
+        "test_iteration": 144,
+        "pytest_command": 156,
+        "elapsed_min": 209.01,
+        "baseline_passed": 1660,
+        "passed": 1660,
+        "tokens": {
+          "input_tokens": 522,
+          "output_tokens": 2280,
+          "cache_creation_input_tokens": 1239633,
+          "cache_read_input_tokens": 143943252
+        },
+        "tokens_input_total": 145183407
+      }
+    },
+    "code_changes": 200,
+    "success_at_k": {
+      "test_eltwise_binary_hal": {
+        "5": false,
+        "10": false,
+        "15": false,
+        "20": false,
+        "25": false,
+        "50": false
+      }
+    },
+    "all_tests_full_pass_at_iteration": 140,
+    "cost_by_outcome": {
+      "compile_error": {
+        "iterations": 4,
+        "minutes": 23.51,
+        "tokens_input_total": 18429146
+      },
+      "hang": {
+        "iterations": 34,
+        "minutes": 46.43,
+        "tokens_input_total": 30051667
+      },
+      "other": {
+        "iterations": 26,
+        "minutes": 24.89,
+        "tokens_input_total": 20379418
+      },
+      "fail": {
+        "iterations": 45,
+        "minutes": 57.51,
+        "tokens_input_total": 45504532
+      },
+      "pass": {
+        "iterations": 38,
+        "minutes": 69.9,
+        "tokens_input_total": 34509621
+      }
+    },
+    "baselines": {
+      "test_eltwise_binary": 1660
+    },
+    "ambiguous_commands": 18
+  },
+  "reference_reads": {
+    "hal_docs": {
+      "calls": 39,
+      "distinct": 20,
+      "rereads": 19,
+      "share_of_tool_calls": 0.083
+    },
+    "raw_ref": {
+      "calls": 0,
+      "distinct": 0,
+      "rereads": 0,
+      "share_of_tool_calls": 0.0
+    },
+    "spec": {
+      "calls": 19,
+      "distinct": 19,
+      "rereads": 0,
+      "share_of_tool_calls": 0.041
+    },
+    "tests": {
+      "calls": 11,
+      "distinct": 11,
+      "rereads": 0,
+      "share_of_tool_calls": 0.023
+    },
+    "own_code": {
+      "calls": 7,
+      "distinct": 3,
+      "rereads": 4,
+      "share_of_tool_calls": 0.015
+    }
+  },
+  "device_test_runs": 185,
+  "first_full_pass_at_run": 36,
+  "counts": {
+    "tool_calls": 469,
+    "denied": 29,
+    "edits": 188,
+    "writes": 12,
+    "reads": 66,
+    "bash": 202,
+    "tt_smi_reset": 48,
+    "subagents": 1,
+    "mcp_calls": 0
+  },
+  "pytest_timeline": [
+    {
+      "n": 1,
+      "elapsed_min": 0.44,
+      "cum_tokens": {
+        "input_tokens": 16,
+        "output_tokens": 117,
+        "cache_creation_input_tokens": 50599,
+        "cache_read_input_tokens": 258483
+      },
+      "cmd": "cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && which pytest; echo $CHIP_ARCH; ls -a",
+      "seg": 1,
+      "kind": "denied",
+      "tests": [],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 2,
+      "elapsed_min": 0.73,
+      "cum_tokens": {
+        "input_tokens": 18,
+        "output_tokens": 133,
+        "cache_creation_input_tokens": 50906,
+        "cache_read_input_tokens": 319897
+      },
+      "cmd": "cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && pytest python_tests/test_eltwise_binary",
+      "seg": 1,
+      "kind": "collect",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 3,
+      "elapsed_min": 20.38,
+      "cum_tokens": {
+        "input_tokens": 150,
+        "output_tokens": 700,
+        "cache_creation_input_tokens": 780528,
+        "cache_read_input_tokens": 14659643
+      },
+      "cmd": "pytest python_tests/test_eltwise_binary_hal.py -k 'add' --collect-only -q 2>&1 | grep 'test_eltwise_binary\\[' | grep 'None_' | grep 'transpose_srca:No' | grep '",
+      "seg": 1,
+      "kind": "denied",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 4,
+      "elapsed_min": 20.74,
+      "cum_tokens": {
+        "input_tokens": 152,
+        "output_tokens": 704,
+        "cache_creation_input_tokens": 781021,
+        "cache_read_input_tokens": 15119097
+      },
+      "cmd": "pytest python_tests/test_eltwise_binary_hal.py -k 'add and None_ and not bfp4 and not reuse and not int8 and not Bfp and not Float32 and not 16]' --collect-only",
+      "seg": 1,
+      "kind": "collect",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add and None_ and not bfp4 and not reuse and not int8 and not Bfp and not Float32 and not 16]",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 5,
+      "elapsed_min": 21.17,
+      "cum_tokens": {
+        "input_tokens": 154,
+        "output_tokens": 711,
+        "cache_creation_input_tokens": 782452,
+        "cache_read_input_tokens": 15579044
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "compile_error",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 6,
+      "elapsed_min": 22.2,
+      "cum_tokens": {
+        "input_tokens": 164,
+        "output_tokens": 798,
+        "cache_creation_input_tokens": 793324,
+        "cache_read_input_tokens": 17919888
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 7,
+      "elapsed_min": 22.76,
+      "cum_tokens": {
+        "input_tokens": 166,
+        "output_tokens": 806,
+        "cache_creation_input_tokens": 797820,
+        "cache_read_input_tokens": 18392138
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 8,
+      "elapsed_min": 23.19,
+      "cum_tokens": {
+        "input_tokens": 168,
+        "output_tokens": 809,
+        "cache_creation_input_tokens": 799299,
+        "cache_read_input_tokens": 18868884
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 9,
+      "elapsed_min": 23.96,
+      "cum_tokens": {
+        "input_tokens": 170,
+        "output_tokens": 817,
+        "cache_creation_input_tokens": 799732,
+        "cache_read_input_tokens": 19347109
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "compile_error",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 10,
+      "elapsed_min": 24.66,
+      "cum_tokens": {
+        "input_tokens": 172,
+        "output_tokens": 825,
+        "cache_creation_input_tokens": 805118,
+        "cache_read_input_tokens": 19825767
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 11,
+      "elapsed_min": 25.78,
+      "cum_tokens": {
+        "input_tokens": 178,
+        "output_tokens": 847,
+        "cache_creation_input_tokens": 810238,
+        "cache_read_input_tokens": 21286440
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 12,
+      "elapsed_min": 27.42,
+      "cum_tokens": {
+        "input_tokens": 186,
+        "output_tokens": 887,
+        "cache_creation_input_tokens": 818615,
+        "cache_read_input_tokens": 23259739
+      },
+      "cmd": "timeout 600 pytest -x --logging-level=debug 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 13,
+      "elapsed_min": 28.77,
+      "cum_tokens": {
+        "input_tokens": 188,
+        "output_tokens": 890,
+        "cache_creation_input_tokens": 823580,
+        "cache_read_input_tokens": 23757280
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 14,
+      "elapsed_min": 30.05,
+      "cum_tokens": {
+        "input_tokens": 190,
+        "output_tokens": 898,
+        "cache_creation_input_tokens": 829101,
+        "cache_read_input_tokens": 24259786
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 15,
+      "elapsed_min": 31.72,
+      "cum_tokens": {
+        "input_tokens": 192,
+        "output_tokens": 902,
+        "cache_creation_input_tokens": 831941,
+        "cache_read_input_tokens": 24767813
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 16,
+      "elapsed_min": 33.16,
+      "cum_tokens": {
+        "input_tokens": 194,
+        "output_tokens": 910,
+        "cache_creation_input_tokens": 837263,
+        "cache_read_input_tokens": 25278680
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 17,
+      "elapsed_min": 34.53,
+      "cum_tokens": {
+        "input_tokens": 196,
+        "output_tokens": 914,
+        "cache_creation_input_tokens": 841626,
+        "cache_read_input_tokens": 25794869
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 18,
+      "elapsed_min": 35.93,
+      "cum_tokens": {
+        "input_tokens": 198,
+        "output_tokens": 917,
+        "cache_creation_input_tokens": 845351,
+        "cache_read_input_tokens": 26315421
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 19,
+      "elapsed_min": 37.45,
+      "cum_tokens": {
+        "input_tokens": 204,
+        "output_tokens": 971,
+        "cache_creation_input_tokens": 852679,
+        "cache_read_input_tokens": 27897840
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 20,
+      "elapsed_min": 38.68,
+      "cum_tokens": {
+        "input_tokens": 206,
+        "output_tokens": 978,
+        "cache_creation_input_tokens": 855827,
+        "cache_read_input_tokens": 28429445
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 21,
+      "elapsed_min": 39.8,
+      "cum_tokens": {
+        "input_tokens": 208,
+        "output_tokens": 985,
+        "cache_creation_input_tokens": 858219,
+        "cache_read_input_tokens": 28964198
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 22,
+      "elapsed_min": 40.97,
+      "cum_tokens": {
+        "input_tokens": 210,
+        "output_tokens": 993,
+        "cache_creation_input_tokens": 860471,
+        "cache_read_input_tokens": 29501343
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 23,
+      "elapsed_min": 42.08,
+      "cum_tokens": {
+        "input_tokens": 212,
+        "output_tokens": 998,
+        "cache_creation_input_tokens": 862631,
+        "cache_read_input_tokens": 30040740
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 24,
+      "elapsed_min": 43.19,
+      "cum_tokens": {
+        "input_tokens": 214,
+        "output_tokens": 1003,
+        "cache_creation_input_tokens": 864145,
+        "cache_read_input_tokens": 30582297
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 25,
+      "elapsed_min": 44.45,
+      "cum_tokens": {
+        "input_tokens": 216,
+        "output_tokens": 1011,
+        "cache_creation_input_tokens": 865577,
+        "cache_read_input_tokens": 31125368
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 26,
+      "elapsed_min": 45.45,
+      "cum_tokens": {
+        "input_tokens": 218,
+        "output_tokens": 1019,
+        "cache_creation_input_tokens": 868131,
+        "cache_read_input_tokens": 31669871
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 27,
+      "elapsed_min": 46.57,
+      "cum_tokens": {
+        "input_tokens": 220,
+        "output_tokens": 1027,
+        "cache_creation_input_tokens": 868674,
+        "cache_read_input_tokens": 32216928
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 28,
+      "elapsed_min": 47.96,
+      "cum_tokens": {
+        "input_tokens": 222,
+        "output_tokens": 1031,
+        "cache_creation_input_tokens": 870082,
+        "cache_read_input_tokens": 32764528
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 29,
+      "elapsed_min": 49.42,
+      "cum_tokens": {
+        "input_tokens": 226,
+        "output_tokens": 1046,
+        "cache_creation_input_tokens": 876844,
+        "cache_read_input_tokens": 33865655
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 30,
+      "elapsed_min": 50.86,
+      "cum_tokens": {
+        "input_tokens": 228,
+        "output_tokens": 1054,
+        "cache_creation_input_tokens": 878950,
+        "cache_read_input_tokens": 34421425
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 31,
+      "elapsed_min": 51.74,
+      "cum_tokens": {
+        "input_tokens": 234,
+        "output_tokens": 1074,
+        "cache_creation_input_tokens": 891694,
+        "cache_read_input_tokens": 36107086
+      },
+      "cmd": "pytest python_tests --help 2>&1 | tail -90 | head -70",
+      "seg": 1,
+      "kind": "help",
+      "tests": [],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 32,
+      "elapsed_min": 52.93,
+      "cum_tokens": {
+        "input_tokens": 236,
+        "output_tokens": 1078,
+        "cache_creation_input_tokens": 893370,
+        "cache_read_input_tokens": 36677706
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 33,
+      "elapsed_min": 54.09,
+      "cum_tokens": {
+        "input_tokens": 238,
+        "output_tokens": 1086,
+        "cache_creation_input_tokens": 895382,
+        "cache_read_input_tokens": 37250002
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 34,
+      "elapsed_min": 55.39,
+      "cum_tokens": {
+        "input_tokens": 240,
+        "output_tokens": 1094,
+        "cache_creation_input_tokens": 897175,
+        "cache_read_input_tokens": 37824310
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 35,
+      "elapsed_min": 56.52,
+      "cum_tokens": {
+        "input_tokens": 242,
+        "output_tokens": 1101,
+        "cache_creation_input_tokens": 899775,
+        "cache_read_input_tokens": 38400411
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 36,
+      "elapsed_min": 57.56,
+      "cum_tokens": {
+        "input_tokens": 244,
+        "output_tokens": 1106,
+        "cache_creation_input_tokens": 901371,
+        "cache_read_input_tokens": 38979112
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 37,
+      "elapsed_min": 58.27,
+      "cum_tokens": {
+        "input_tokens": 246,
+        "output_tokens": 1113,
+        "cache_creation_input_tokens": 902451,
+        "cache_read_input_tokens": 39559409
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 38,
+      "elapsed_min": 60.72,
+      "cum_tokens": {
+        "input_tokens": 256,
+        "output_tokens": 1209,
+        "cache_creation_input_tokens": 918368,
+        "cache_read_input_tokens": 42496244
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 38,
+      "elapsed_min": 60.72,
+      "cum_tokens": {
+        "input_tokens": 256,
+        "output_tokens": 1209,
+        "cache_creation_input_tokens": 918368,
+        "cache_read_input_tokens": 42496244
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 2,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 39,
+      "elapsed_min": 63.39,
+      "cum_tokens": {
+        "input_tokens": 260,
+        "output_tokens": 1228,
+        "cache_creation_input_tokens": 925785,
+        "cache_read_input_tokens": 43692243
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; cd /proj_sw/user_dev/ctr-sbratic/results/hal-runs/20261121_205834_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 p",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 40,
+      "elapsed_min": 65.24,
+      "cum_tokens": {
+        "input_tokens": 262,
+        "output_tokens": 1231,
+        "cache_creation_input_tokens": 929168,
+        "cache_read_input_tokens": 44296954
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 40,
+      "elapsed_min": 65.24,
+      "cum_tokens": {
+        "input_tokens": 262,
+        "output_tokens": 1231,
+        "cache_creation_input_tokens": 929168,
+        "cache_read_input_tokens": 44296954
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 2,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 41,
+      "elapsed_min": 66.76,
+      "cum_tokens": {
+        "input_tokens": 264,
+        "output_tokens": 1236,
+        "cache_creation_input_tokens": 933081,
+        "cache_read_input_tokens": 44905048
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 41,
+      "elapsed_min": 66.76,
+      "cum_tokens": {
+        "input_tokens": 264,
+        "output_tokens": 1236,
+        "cache_creation_input_tokens": 933081,
+        "cache_read_input_tokens": 44905048
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 2,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 42,
+      "elapsed_min": 68.31,
+      "cum_tokens": {
+        "input_tokens": 266,
+        "output_tokens": 1241,
+        "cache_creation_input_tokens": 934634,
+        "cache_read_input_tokens": 45517055
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 42,
+      "elapsed_min": 68.31,
+      "cum_tokens": {
+        "input_tokens": 266,
+        "output_tokens": 1241,
+        "cache_creation_input_tokens": 934634,
+        "cache_read_input_tokens": 45517055
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 2,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 43,
+      "elapsed_min": 69.82,
+      "cum_tokens": {
+        "input_tokens": 268,
+        "output_tokens": 1245,
+        "cache_creation_input_tokens": 936015,
+        "cache_read_input_tokens": 46130615
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 43,
+      "elapsed_min": 69.82,
+      "cum_tokens": {
+        "input_tokens": 268,
+        "output_tokens": 1245,
+        "cache_creation_input_tokens": 936015,
+        "cache_read_input_tokens": 46130615
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 2,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 44,
+      "elapsed_min": 71.45,
+      "cum_tokens": {
+        "input_tokens": 270,
+        "output_tokens": 1252,
+        "cache_creation_input_tokens": 937660,
+        "cache_read_input_tokens": 46745556
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 44,
+      "elapsed_min": 71.45,
+      "cum_tokens": {
+        "input_tokens": 270,
+        "output_tokens": 1252,
+        "cache_creation_input_tokens": 937660,
+        "cache_read_input_tokens": 46745556
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 45,
+      "elapsed_min": 72.87,
+      "cum_tokens": {
+        "input_tokens": 272,
+        "output_tokens": 1260,
+        "cache_creation_input_tokens": 939799,
+        "cache_read_input_tokens": 47362142
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 45,
+      "elapsed_min": 72.87,
+      "cum_tokens": {
+        "input_tokens": 272,
+        "output_tokens": 1260,
+        "cache_creation_input_tokens": 939799,
+        "cache_read_input_tokens": 47362142
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 2,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 46,
+      "elapsed_min": 74.39,
+      "cum_tokens": {
+        "input_tokens": 274,
+        "output_tokens": 1267,
+        "cache_creation_input_tokens": 940623,
+        "cache_read_input_tokens": 47980867
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 46,
+      "elapsed_min": 74.39,
+      "cum_tokens": {
+        "input_tokens": 274,
+        "output_tokens": 1267,
+        "cache_creation_input_tokens": 940623,
+        "cache_read_input_tokens": 47980867
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 2,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 47,
+      "elapsed_min": 75.93,
+      "cum_tokens": {
+        "input_tokens": 276,
+        "output_tokens": 1275,
+        "cache_creation_input_tokens": 942114,
+        "cache_read_input_tokens": 48600416
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 47,
+      "elapsed_min": 75.93,
+      "cum_tokens": {
+        "input_tokens": 276,
+        "output_tokens": 1275,
+        "cache_creation_input_tokens": 942114,
+        "cache_read_input_tokens": 48600416
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 2,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 48,
+      "elapsed_min": 77.37,
+      "cum_tokens": {
+        "input_tokens": 280,
+        "output_tokens": 1285,
+        "cache_creation_input_tokens": 945672,
+        "cache_read_input_tokens": 49844157
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 49,
+      "elapsed_min": 78.62,
+      "cum_tokens": {
+        "input_tokens": 282,
+        "output_tokens": 1289,
+        "cache_creation_input_tokens": 947470,
+        "cache_read_input_tokens": 50468755
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 50,
+      "elapsed_min": 79.9,
+      "cum_tokens": {
+        "input_tokens": 284,
+        "output_tokens": 1292,
+        "cache_creation_input_tokens": 949735,
+        "cache_read_input_tokens": 51095151
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 51,
+      "elapsed_min": 81.12,
+      "cum_tokens": {
+        "input_tokens": 286,
+        "output_tokens": 1294,
+        "cache_creation_input_tokens": 951710,
+        "cache_read_input_tokens": 51723812
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 52,
+      "elapsed_min": 82.93,
+      "cum_tokens": {
+        "input_tokens": 292,
+        "output_tokens": 1359,
+        "cache_creation_input_tokens": 958967,
+        "cache_read_input_tokens": 53621965
+      },
+      "cmd": "rm ../tests/hal_llk/debug_dump.h; tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-form",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 53,
+      "elapsed_min": 83.03,
+      "cum_tokens": {
+        "input_tokens": 294,
+        "output_tokens": 1364,
+        "cache_creation_input_tokens": 961584,
+        "cache_read_input_tokens": 54259858
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "denied",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 54,
+      "elapsed_min": 83.1,
+      "cum_tokens": {
+        "input_tokens": 296,
+        "output_tokens": 1380,
+        "cache_creation_input_tokens": 962170,
+        "cache_read_input_tokens": 54900368
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "denied",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 55,
+      "elapsed_min": 83.63,
+      "cum_tokens": {
+        "input_tokens": 298,
+        "output_tokens": 1396,
+        "cache_creation_input_tokens": 962620,
+        "cache_read_input_tokens": 55541464
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 56,
+      "elapsed_min": 84.27,
+      "cum_tokens": {
+        "input_tokens": 300,
+        "output_tokens": 1399,
+        "cache_creation_input_tokens": 970854,
+        "cache_read_input_tokens": 56183010
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 57,
+      "elapsed_min": 85.09,
+      "cum_tokens": {
+        "input_tokens": 302,
+        "output_tokens": 1407,
+        "cache_creation_input_tokens": 977742,
+        "cache_read_input_tokens": 56832790
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 58,
+      "elapsed_min": 86.53,
+      "cum_tokens": {
+        "input_tokens": 304,
+        "output_tokens": 1415,
+        "cache_creation_input_tokens": 980340,
+        "cache_read_input_tokens": 57489458
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 58,
+      "elapsed_min": 86.53,
+      "cum_tokens": {
+        "input_tokens": 304,
+        "output_tokens": 1415,
+        "cache_creation_input_tokens": 980340,
+        "cache_read_input_tokens": 57489458
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 59,
+      "elapsed_min": 87.89,
+      "cum_tokens": {
+        "input_tokens": 306,
+        "output_tokens": 1423,
+        "cache_creation_input_tokens": 982256,
+        "cache_read_input_tokens": 58148724
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 59,
+      "elapsed_min": 87.89,
+      "cum_tokens": {
+        "input_tokens": 306,
+        "output_tokens": 1423,
+        "cache_creation_input_tokens": 982256,
+        "cache_read_input_tokens": 58148724
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 60,
+      "elapsed_min": 88.3,
+      "cum_tokens": {
+        "input_tokens": 308,
+        "output_tokens": 1427,
+        "cache_creation_input_tokens": 983457,
+        "cache_read_input_tokens": 58809906
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; for t in test_eltwise_binary test_eltwise_binary_hal test_eltwise_binary; do timeout 600 pytest -x \"python_tests/$t.py::test_eltwise_b",
+      "seg": 1,
+      "kind": "denied",
+      "tests": [],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 61,
+      "elapsed_min": 90.13,
+      "cum_tokens": {
+        "input_tokens": 310,
+        "output_tokens": 1443,
+        "cache_creation_input_tokens": 986103,
+        "cache_read_input_tokens": 59472289
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 61,
+      "elapsed_min": 90.13,
+      "cum_tokens": {
+        "input_tokens": 310,
+        "output_tokens": 1443,
+        "cache_creation_input_tokens": 986103,
+        "cache_read_input_tokens": 59472289
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 61,
+      "elapsed_min": 90.13,
+      "cum_tokens": {
+        "input_tokens": 310,
+        "output_tokens": 1443,
+        "cache_creation_input_tokens": 986103,
+        "cache_read_input_tokens": 59472289
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 3,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 62,
+      "elapsed_min": 90.83,
+      "cum_tokens": {
+        "input_tokens": 312,
+        "output_tokens": 1451,
+        "cache_creation_input_tokens": 986852,
+        "cache_read_input_tokens": 60137318
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 63,
+      "elapsed_min": 91.63,
+      "cum_tokens": {
+        "input_tokens": 314,
+        "output_tokens": 1459,
+        "cache_creation_input_tokens": 988401,
+        "cache_read_input_tokens": 60803096
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 64,
+      "elapsed_min": 93.2,
+      "cum_tokens": {
+        "input_tokens": 316,
+        "output_tokens": 1463,
+        "cache_creation_input_tokens": 995506,
+        "cache_read_input_tokens": 61470423
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 65,
+      "elapsed_min": 95.03,
+      "cum_tokens": {
+        "input_tokens": 318,
+        "output_tokens": 1467,
+        "cache_creation_input_tokens": 998731,
+        "cache_read_input_tokens": 62144855
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 65,
+      "elapsed_min": 95.03,
+      "cum_tokens": {
+        "input_tokens": 318,
+        "output_tokens": 1467,
+        "cache_creation_input_tokens": 998731,
+        "cache_read_input_tokens": 62144855
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 65,
+      "elapsed_min": 95.03,
+      "cum_tokens": {
+        "input_tokens": 318,
+        "output_tokens": 1467,
+        "cache_creation_input_tokens": 998731,
+        "cache_read_input_tokens": 62144855
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 3,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 66,
+      "elapsed_min": 96.13,
+      "cum_tokens": {
+        "input_tokens": 320,
+        "output_tokens": 1475,
+        "cache_creation_input_tokens": 1002660,
+        "cache_read_input_tokens": 62822512
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 66,
+      "elapsed_min": 96.13,
+      "cum_tokens": {
+        "input_tokens": 320,
+        "output_tokens": 1475,
+        "cache_creation_input_tokens": 1002660,
+        "cache_read_input_tokens": 62822512
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 67,
+      "elapsed_min": 97.26,
+      "cum_tokens": {
+        "input_tokens": 322,
+        "output_tokens": 1478,
+        "cache_creation_input_tokens": 1004511,
+        "cache_read_input_tokens": 63504098
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 67,
+      "elapsed_min": 97.26,
+      "cum_tokens": {
+        "input_tokens": 322,
+        "output_tokens": 1478,
+        "cache_creation_input_tokens": 1004511,
+        "cache_read_input_tokens": 63504098
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 68,
+      "elapsed_min": 99.02,
+      "cum_tokens": {
+        "input_tokens": 324,
+        "output_tokens": 1486,
+        "cache_creation_input_tokens": 1005619,
+        "cache_read_input_tokens": 64187535
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 68,
+      "elapsed_min": 99.02,
+      "cum_tokens": {
+        "input_tokens": 324,
+        "output_tokens": 1486,
+        "cache_creation_input_tokens": 1005619,
+        "cache_read_input_tokens": 64187535
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 69,
+      "elapsed_min": 100.12,
+      "cum_tokens": {
+        "input_tokens": 328,
+        "output_tokens": 1494,
+        "cache_creation_input_tokens": 1012662,
+        "cache_read_input_tokens": 65561476
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 70,
+      "elapsed_min": 100.67,
+      "cum_tokens": {
+        "input_tokens": 330,
+        "output_tokens": 1502,
+        "cache_creation_input_tokens": 1014813,
+        "cache_read_input_tokens": 66253064
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 71,
+      "elapsed_min": 101.78,
+      "cum_tokens": {
+        "input_tokens": 332,
+        "output_tokens": 1508,
+        "cache_creation_input_tokens": 1016193,
+        "cache_read_input_tokens": 66946803
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 72,
+      "elapsed_min": 102.56,
+      "cum_tokens": {
+        "input_tokens": 334,
+        "output_tokens": 1516,
+        "cache_creation_input_tokens": 1020292,
+        "cache_read_input_tokens": 67641922
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 73,
+      "elapsed_min": 103.62,
+      "cum_tokens": {
+        "input_tokens": 336,
+        "output_tokens": 1524,
+        "cache_creation_input_tokens": 1022355,
+        "cache_read_input_tokens": 68341140
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "compile_error",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 74,
+      "elapsed_min": 104.26,
+      "cum_tokens": {
+        "input_tokens": 338,
+        "output_tokens": 1532,
+        "cache_creation_input_tokens": 1025614,
+        "cache_read_input_tokens": 69042421
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 75,
+      "elapsed_min": 105.22,
+      "cum_tokens": {
+        "input_tokens": 340,
+        "output_tokens": 1534,
+        "cache_creation_input_tokens": 1028651,
+        "cache_read_input_tokens": 69746961
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 76,
+      "elapsed_min": 105.96,
+      "cum_tokens": {
+        "input_tokens": 342,
+        "output_tokens": 1542,
+        "cache_creation_input_tokens": 1031204,
+        "cache_read_input_tokens": 70454538
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 77,
+      "elapsed_min": 106.77,
+      "cum_tokens": {
+        "input_tokens": 344,
+        "output_tokens": 1550,
+        "cache_creation_input_tokens": 1033220,
+        "cache_read_input_tokens": 71164668
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 78,
+      "elapsed_min": 107.39,
+      "cum_tokens": {
+        "input_tokens": 346,
+        "output_tokens": 1554,
+        "cache_creation_input_tokens": 1035470,
+        "cache_read_input_tokens": 71876814
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 79,
+      "elapsed_min": 108.17,
+      "cum_tokens": {
+        "input_tokens": 348,
+        "output_tokens": 1562,
+        "cache_creation_input_tokens": 1036648,
+        "cache_read_input_tokens": 72591210
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 80,
+      "elapsed_min": 108.91,
+      "cum_tokens": {
+        "input_tokens": 350,
+        "output_tokens": 1565,
+        "cache_creation_input_tokens": 1038530,
+        "cache_read_input_tokens": 73306784
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 81,
+      "elapsed_min": 109.6,
+      "cum_tokens": {
+        "input_tokens": 352,
+        "output_tokens": 1581,
+        "cache_creation_input_tokens": 1039524,
+        "cache_read_input_tokens": 74024240
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 82,
+      "elapsed_min": 110.76,
+      "cum_tokens": {
+        "input_tokens": 354,
+        "output_tokens": 1589,
+        "cache_creation_input_tokens": 1040691,
+        "cache_read_input_tokens": 74742690
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 83,
+      "elapsed_min": 111.87,
+      "cum_tokens": {
+        "input_tokens": 356,
+        "output_tokens": 1597,
+        "cache_creation_input_tokens": 1041465,
+        "cache_read_input_tokens": 75462307
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1; timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 84,
+      "elapsed_min": 113.57,
+      "cum_tokens": {
+        "input_tokens": 358,
+        "output_tokens": 1599,
+        "cache_creation_input_tokens": 1042843,
+        "cache_read_input_tokens": 76182698
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 85,
+      "elapsed_min": 114.32,
+      "cum_tokens": {
+        "input_tokens": 360,
+        "output_tokens": 1603,
+        "cache_creation_input_tokens": 1048654,
+        "cache_read_input_tokens": 76904467
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 86,
+      "elapsed_min": 115.22,
+      "cum_tokens": {
+        "input_tokens": 362,
+        "output_tokens": 1611,
+        "cache_creation_input_tokens": 1050912,
+        "cache_read_input_tokens": 77632047
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 87,
+      "elapsed_min": 116.0,
+      "cum_tokens": {
+        "input_tokens": 364,
+        "output_tokens": 1619,
+        "cache_creation_input_tokens": 1054386,
+        "cache_read_input_tokens": 78361885
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 88,
+      "elapsed_min": 117.03,
+      "cum_tokens": {
+        "input_tokens": 366,
+        "output_tokens": 1626,
+        "cache_creation_input_tokens": 1059589,
+        "cache_read_input_tokens": 79095197
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 88,
+      "elapsed_min": 117.03,
+      "cum_tokens": {
+        "input_tokens": 366,
+        "output_tokens": 1626,
+        "cache_creation_input_tokens": 1059589,
+        "cache_read_input_tokens": 79095197
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-mat",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 89,
+      "elapsed_min": 118.07,
+      "cum_tokens": {
+        "input_tokens": 368,
+        "output_tokens": 1634,
+        "cache_creation_input_tokens": 1061383,
+        "cache_read_input_tokens": 79833712
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 90,
+      "elapsed_min": 119.43,
+      "cum_tokens": {
+        "input_tokens": 370,
+        "output_tokens": 1642,
+        "cache_creation_input_tokens": 1063191,
+        "cache_read_input_tokens": 80574021
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 90,
+      "elapsed_min": 119.43,
+      "cum_tokens": {
+        "input_tokens": 370,
+        "output_tokens": 1642,
+        "cache_creation_input_tokens": 1063191,
+        "cache_read_input_tokens": 80574021
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 91,
+      "elapsed_min": 120.46,
+      "cum_tokens": {
+        "input_tokens": 372,
+        "output_tokens": 1646,
+        "cache_creation_input_tokens": 1066717,
+        "cache_read_input_tokens": 81316138
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 91,
+      "elapsed_min": 120.46,
+      "cum_tokens": {
+        "input_tokens": 372,
+        "output_tokens": 1646,
+        "cache_creation_input_tokens": 1066717,
+        "cache_read_input_tokens": 81316138
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 92,
+      "elapsed_min": 121.62,
+      "cum_tokens": {
+        "input_tokens": 374,
+        "output_tokens": 1649,
+        "cache_creation_input_tokens": 1068202,
+        "cache_read_input_tokens": 82061781
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 92,
+      "elapsed_min": 121.62,
+      "cum_tokens": {
+        "input_tokens": 374,
+        "output_tokens": 1649,
+        "cache_creation_input_tokens": 1068202,
+        "cache_read_input_tokens": 82061781
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 93,
+      "elapsed_min": 122.59,
+      "cum_tokens": {
+        "input_tokens": 376,
+        "output_tokens": 1656,
+        "cache_creation_input_tokens": 1070284,
+        "cache_read_input_tokens": 82808909
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 93,
+      "elapsed_min": 122.59,
+      "cum_tokens": {
+        "input_tokens": 376,
+        "output_tokens": 1656,
+        "cache_creation_input_tokens": 1070284,
+        "cache_read_input_tokens": 82808909
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 94,
+      "elapsed_min": 125.66,
+      "cum_tokens": {
+        "input_tokens": 386,
+        "output_tokens": 1689,
+        "cache_creation_input_tokens": 1086347,
+        "cache_read_input_tokens": 86584647
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 94,
+      "elapsed_min": 125.66,
+      "cum_tokens": {
+        "input_tokens": 386,
+        "output_tokens": 1689,
+        "cache_creation_input_tokens": 1086347,
+        "cache_read_input_tokens": 86584647
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 95,
+      "elapsed_min": 126.53,
+      "cum_tokens": {
+        "input_tokens": 388,
+        "output_tokens": 1705,
+        "cache_creation_input_tokens": 1087941,
+        "cache_read_input_tokens": 87349920
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 96,
+      "elapsed_min": 127.58,
+      "cum_tokens": {
+        "input_tokens": 390,
+        "output_tokens": 1713,
+        "cache_creation_input_tokens": 1088728,
+        "cache_read_input_tokens": 88116787
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 96,
+      "elapsed_min": 127.58,
+      "cum_tokens": {
+        "input_tokens": 390,
+        "output_tokens": 1713,
+        "cache_creation_input_tokens": 1088728,
+        "cache_read_input_tokens": 88116787
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 97,
+      "elapsed_min": 128.6,
+      "cum_tokens": {
+        "input_tokens": 392,
+        "output_tokens": 1717,
+        "cache_creation_input_tokens": 1090410,
+        "cache_read_input_tokens": 88884441
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 98,
+      "elapsed_min": 129.87,
+      "cum_tokens": {
+        "input_tokens": 394,
+        "output_tokens": 1725,
+        "cache_creation_input_tokens": 1092042,
+        "cache_read_input_tokens": 89653777
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 98,
+      "elapsed_min": 129.87,
+      "cum_tokens": {
+        "input_tokens": 394,
+        "output_tokens": 1725,
+        "cache_creation_input_tokens": 1092042,
+        "cache_read_input_tokens": 89653777
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 99,
+      "elapsed_min": 130.83,
+      "cum_tokens": {
+        "input_tokens": 396,
+        "output_tokens": 1733,
+        "cache_creation_input_tokens": 1095182,
+        "cache_read_input_tokens": 90424745
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 100,
+      "elapsed_min": 131.96,
+      "cum_tokens": {
+        "input_tokens": 398,
+        "output_tokens": 1741,
+        "cache_creation_input_tokens": 1096740,
+        "cache_read_input_tokens": 91198853
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 101,
+      "elapsed_min": 133.1,
+      "cum_tokens": {
+        "input_tokens": 400,
+        "output_tokens": 1749,
+        "cache_creation_input_tokens": 1099104,
+        "cache_read_input_tokens": 91974519
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 102,
+      "elapsed_min": 134.44,
+      "cum_tokens": {
+        "input_tokens": 402,
+        "output_tokens": 1751,
+        "cache_creation_input_tokens": 1101729,
+        "cache_read_input_tokens": 92752549
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 103,
+      "elapsed_min": 135.42,
+      "cum_tokens": {
+        "input_tokens": 404,
+        "output_tokens": 1759,
+        "cache_creation_input_tokens": 1105131,
+        "cache_read_input_tokens": 93533204
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 103,
+      "elapsed_min": 135.42,
+      "cum_tokens": {
+        "input_tokens": 404,
+        "output_tokens": 1759,
+        "cache_creation_input_tokens": 1105131,
+        "cache_read_input_tokens": 93533204
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 104,
+      "elapsed_min": 136.32,
+      "cum_tokens": {
+        "input_tokens": 406,
+        "output_tokens": 1775,
+        "cache_creation_input_tokens": 1106550,
+        "cache_read_input_tokens": 94317261
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 105,
+      "elapsed_min": 138.04,
+      "cum_tokens": {
+        "input_tokens": 408,
+        "output_tokens": 1783,
+        "cache_creation_input_tokens": 1111085,
+        "cache_read_input_tokens": 95102737
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 106,
+      "elapsed_min": 138.56,
+      "cum_tokens": {
+        "input_tokens": 410,
+        "output_tokens": 1786,
+        "cache_creation_input_tokens": 1117161,
+        "cache_read_input_tokens": 95892748
+      },
+      "cmd": "pytest python_tests/test_eltwise_binary_hal.py -k 'bfp4 and add and None_ and Float16_b and dest_acc:No and 32, 32] and not 64' --collect-only -q 2>&1 | head -8",
+      "seg": 1,
+      "kind": "collect",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "bfp4 and add and None_ and Float16_b and dest_acc:No and 32, 32] and not 64",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 107,
+      "elapsed_min": 139.09,
+      "cum_tokens": {
+        "input_tokens": 412,
+        "output_tokens": 1788,
+        "cache_creation_input_tokens": 1119457,
+        "cache_read_input_tokens": 96688835
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary_bfp4_b[dest_acc:No-formats:Bfp4_b->Float16_b-broadcast_type:None_-math_fidel",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 108,
+      "elapsed_min": 139.59,
+      "cum_tokens": {
+        "input_tokens": 414,
+        "output_tokens": 1792,
+        "cache_creation_input_tokens": 1120659,
+        "cache_read_input_tokens": 97487218
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary_bfp4_b[dest_acc:No-formats:Bfp4_b->Float16_b-broadcast_type:None_-math_fidel",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 109,
+      "elapsed_min": 140.52,
+      "cum_tokens": {
+        "input_tokens": 416,
+        "output_tokens": 1800,
+        "cache_creation_input_tokens": 1121226,
+        "cache_read_input_tokens": 98286803
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary_bfp4_b[dest_acc:No-formats:Bfp4_b->Float16_b-broadcast_type:None_-math_fidel",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 109,
+      "elapsed_min": 140.52,
+      "cum_tokens": {
+        "input_tokens": 416,
+        "output_tokens": 1800,
+        "cache_creation_input_tokens": 1121226,
+        "cache_read_input_tokens": 98286803
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary_bfp4_b[dest_acc:No-formats:Bfp4_b->Float16_b-broadcast_type:None_-math_fidel",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 110,
+      "elapsed_min": 141.61,
+      "cum_tokens": {
+        "input_tokens": 418,
+        "output_tokens": 1802,
+        "cache_creation_input_tokens": 1121966,
+        "cache_read_input_tokens": 99086955
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Bfp8_b->Float16_b-broadcast_type:None_-math_op:Elwadd-ma",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 110,
+      "elapsed_min": 141.61,
+      "cum_tokens": {
+        "input_tokens": 418,
+        "output_tokens": 1802,
+        "cache_creation_input_tokens": 1121966,
+        "cache_read_input_tokens": 99086955
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Bfp8_b->Float16_b-broadcast_type:None_-math_op:Elwadd-ma",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 111,
+      "elapsed_min": 142.58,
+      "cum_tokens": {
+        "input_tokens": 420,
+        "output_tokens": 1810,
+        "cache_creation_input_tokens": 1123747,
+        "cache_read_input_tokens": 99887847
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 111,
+      "elapsed_min": 142.58,
+      "cum_tokens": {
+        "input_tokens": 420,
+        "output_tokens": 1810,
+        "cache_creation_input_tokens": 1123747,
+        "cache_read_input_tokens": 99887847
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 112,
+      "elapsed_min": 143.25,
+      "cum_tokens": {
+        "input_tokens": 426,
+        "output_tokens": 1842,
+        "cache_creation_input_tokens": 1126439,
+        "cache_read_input_tokens": 102298947
+      },
+      "cmd": "pytest python_tests --help 2>&1 | tr -s ' ' | head -230 | tail -90",
+      "seg": 1,
+      "kind": "help",
+      "tests": [],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 113,
+      "elapsed_min": 143.6,
+      "cum_tokens": {
+        "input_tokens": 428,
+        "output_tokens": 1858,
+        "cache_creation_input_tokens": 1128370,
+        "cache_read_input_tokens": 103104312
+      },
+      "cmd": "pytest python_tests --help 2>&1 | tr -s ' ' | head -330 | tail -100",
+      "seg": 1,
+      "kind": "help",
+      "tests": [],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 114,
+      "elapsed_min": 144.27,
+      "cum_tokens": {
+        "input_tokens": 430,
+        "output_tokens": 1861,
+        "cache_creation_input_tokens": 1130212,
+        "cache_read_input_tokens": 103911608
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 115,
+      "elapsed_min": 144.78,
+      "cum_tokens": {
+        "input_tokens": 432,
+        "output_tokens": 1877,
+        "cache_creation_input_tokens": 1131427,
+        "cache_read_input_tokens": 104720746
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 116,
+      "elapsed_min": 145.65,
+      "cum_tokens": {
+        "input_tokens": 434,
+        "output_tokens": 1880,
+        "cache_creation_input_tokens": 1131956,
+        "cache_read_input_tokens": 105531099
+      },
+      "cmd": "timeout 1500 pytest python_tests/test_eltwise_binary_hal.py -k 'test_eltwise_binary[ and Elwadd and None_ and transpose_srca:No and 32, 32]]' 2>&1 | tr -d '\\033",
+      "seg": 1,
+      "kind": "empty",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 0,
+      "k": "test_eltwise_binary[ and Elwadd and None_ and transpose_srca:No and 32, 32]]",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 117,
+      "elapsed_min": 146.4,
+      "cum_tokens": {
+        "input_tokens": 436,
+        "output_tokens": 1884,
+        "cache_creation_input_tokens": 1135738,
+        "cache_read_input_tokens": 106341981
+      },
+      "cmd": "timeout 1500 pytest python_tests/test_eltwise_binary_hal.py -k 'Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b' -q 2",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 5,
+      "failed": 19,
+      "k": "Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 118,
+      "elapsed_min": 147.06,
+      "cum_tokens": {
+        "input_tokens": 438,
+        "output_tokens": 1890,
+        "cache_creation_input_tokens": 1142055,
+        "cache_read_input_tokens": 107156645
+      },
+      "cmd": "timeout 1500 pytest python_tests/test_eltwise_binary_hal.py -k 'Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b' -q -",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 5,
+      "failed": 19,
+      "k": "Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 119,
+      "elapsed_min": 147.74,
+      "cum_tokens": {
+        "input_tokens": 440,
+        "output_tokens": 1893,
+        "cache_creation_input_tokens": 1146816,
+        "cache_read_input_tokens": 107977626
+      },
+      "cmd": "timeout 1500 pytest python_tests/test_eltwise_binary_hal.py -k 'Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b' -q -",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 5,
+      "failed": 19,
+      "k": "Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 120,
+      "elapsed_min": 148.41,
+      "cum_tokens": {
+        "input_tokens": 442,
+        "output_tokens": 1909,
+        "cache_creation_input_tokens": 1147474,
+        "cache_read_input_tokens": 108803368
+      },
+      "cmd": "timeout 1500 pytest python_tests/test_eltwise_binary_hal.py -k 'Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b' -v -",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 121,
+      "elapsed_min": 149.53,
+      "cum_tokens": {
+        "input_tokens": 444,
+        "output_tokens": 1917,
+        "cache_creation_input_tokens": 1150218,
+        "cache_read_input_tokens": 109629768
+      },
+      "cmd": "timeout 1500 pytest python_tests/test_eltwise_binary_hal.py -k 'Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b' -q -",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 5,
+      "failed": 19,
+      "k": "Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 122,
+      "elapsed_min": 151.22,
+      "cum_tokens": {
+        "input_tokens": 448,
+        "output_tokens": 1926,
+        "cache_creation_input_tokens": 1159283,
+        "cache_read_input_tokens": 111291688
+      },
+      "cmd": "timeout 1500 pytest python_tests/test_eltwise_binary_hal.py -k 'Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b' -q -",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 2,
+      "failed": 22,
+      "k": "Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 123,
+      "elapsed_min": 152.63,
+      "cum_tokens": {
+        "input_tokens": 450,
+        "output_tokens": 1934,
+        "cache_creation_input_tokens": 1161099,
+        "cache_read_input_tokens": 112129897
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 124,
+      "elapsed_min": 153.96,
+      "cum_tokens": {
+        "input_tokens": 452,
+        "output_tokens": 1941,
+        "cache_creation_input_tokens": 1167437,
+        "cache_read_input_tokens": 112969922
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 125,
+      "elapsed_min": 155.1,
+      "cum_tokens": {
+        "input_tokens": 454,
+        "output_tokens": 1949,
+        "cache_creation_input_tokens": 1169899,
+        "cache_read_input_tokens": 113816285
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 126,
+      "elapsed_min": 156.41,
+      "cum_tokens": {
+        "input_tokens": 456,
+        "output_tokens": 1953,
+        "cache_creation_input_tokens": 1171856,
+        "cache_read_input_tokens": 114665110
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 126,
+      "elapsed_min": 156.41,
+      "cum_tokens": {
+        "input_tokens": 456,
+        "output_tokens": 1953,
+        "cache_creation_input_tokens": 1171856,
+        "cache_read_input_tokens": 114665110
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 127,
+      "elapsed_min": 157.0,
+      "cum_tokens": {
+        "input_tokens": 458,
+        "output_tokens": 1969,
+        "cache_creation_input_tokens": 1174862,
+        "cache_read_input_tokens": 115515892
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 128,
+      "elapsed_min": 157.93,
+      "cum_tokens": {
+        "input_tokens": 460,
+        "output_tokens": 1977,
+        "cache_creation_input_tokens": 1175420,
+        "cache_read_input_tokens": 116369680
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 129,
+      "elapsed_min": 158.81,
+      "cum_tokens": {
+        "input_tokens": 462,
+        "output_tokens": 1983,
+        "cache_creation_input_tokens": 1176636,
+        "cache_read_input_tokens": 117224026
+      },
+      "cmd": "timeout 600 pytest -x --logging-level=debug 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 130,
+      "elapsed_min": 159.33,
+      "cum_tokens": {
+        "input_tokens": 464,
+        "output_tokens": 1988,
+        "cache_creation_input_tokens": 1180078,
+        "cache_read_input_tokens": 118079588
+      },
+      "cmd": "timeout 600 pytest -x --logging-level=debug 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_typ",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 131,
+      "elapsed_min": 160.57,
+      "cum_tokens": {
+        "input_tokens": 466,
+        "output_tokens": 1992,
+        "cache_creation_input_tokens": 1181943,
+        "cache_read_input_tokens": 118938592
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 132,
+      "elapsed_min": 161.54,
+      "cum_tokens": {
+        "input_tokens": 468,
+        "output_tokens": 2000,
+        "cache_creation_input_tokens": 1185010,
+        "cache_read_input_tokens": 119799461
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": true
+    },
+    {
+      "n": 133,
+      "elapsed_min": 162.64,
+      "cum_tokens": {
+        "input_tokens": 470,
+        "output_tokens": 2004,
+        "cache_creation_input_tokens": 1186546,
+        "cache_read_input_tokens": 120663397
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 133,
+      "elapsed_min": 162.64,
+      "cum_tokens": {
+        "input_tokens": 470,
+        "output_tokens": 2004,
+        "cache_creation_input_tokens": 1186546,
+        "cache_read_input_tokens": 120663397
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 134,
+      "elapsed_min": 164.09,
+      "cum_tokens": {
+        "input_tokens": 472,
+        "output_tokens": 2012,
+        "cache_creation_input_tokens": 1188908,
+        "cache_read_input_tokens": 121528869
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 134,
+      "elapsed_min": 164.09,
+      "cum_tokens": {
+        "input_tokens": 472,
+        "output_tokens": 2012,
+        "cache_creation_input_tokens": 1188908,
+        "cache_read_input_tokens": 121528869
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 135,
+      "elapsed_min": 165.82,
+      "cum_tokens": {
+        "input_tokens": 476,
+        "output_tokens": 2028,
+        "cache_creation_input_tokens": 1198951,
+        "cache_read_input_tokens": 123269289
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 135,
+      "elapsed_min": 165.82,
+      "cum_tokens": {
+        "input_tokens": 476,
+        "output_tokens": 2028,
+        "cache_creation_input_tokens": 1198951,
+        "cache_read_input_tokens": 123269289
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 136,
+      "elapsed_min": 166.87,
+      "cum_tokens": {
+        "input_tokens": 478,
+        "output_tokens": 2033,
+        "cache_creation_input_tokens": 1199978,
+        "cache_read_input_tokens": 124147166
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 136,
+      "elapsed_min": 166.87,
+      "cum_tokens": {
+        "input_tokens": 478,
+        "output_tokens": 2033,
+        "cache_creation_input_tokens": 1199978,
+        "cache_read_input_tokens": 124147166
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 137,
+      "elapsed_min": 168.14,
+      "cum_tokens": {
+        "input_tokens": 480,
+        "output_tokens": 2039,
+        "cache_creation_input_tokens": 1201782,
+        "cache_read_input_tokens": 125026070
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 137,
+      "elapsed_min": 168.14,
+      "cum_tokens": {
+        "input_tokens": 480,
+        "output_tokens": 2039,
+        "cache_creation_input_tokens": 1201782,
+        "cache_read_input_tokens": 125026070
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 138,
+      "elapsed_min": 170.22,
+      "cum_tokens": {
+        "input_tokens": 482,
+        "output_tokens": 2049,
+        "cache_creation_input_tokens": 1205283,
+        "cache_read_input_tokens": 125906778
+      },
+      "cmd": "timeout 1500 pytest python_tests/test_eltwise_binary_hal.py -k 'Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b' -v -",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes and formats:Float16_b",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 139,
+      "elapsed_min": 170.73,
+      "cum_tokens": {
+        "input_tokens": 484,
+        "output_tokens": 2051,
+        "cache_creation_input_tokens": 1207975,
+        "cache_read_input_tokens": 126790987
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 140,
+      "elapsed_min": 171.24,
+      "cum_tokens": {
+        "input_tokens": 486,
+        "output_tokens": 2067,
+        "cache_creation_input_tokens": 1208625,
+        "cache_read_input_tokens": 127677888
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd",
+      "seg": 1,
+      "kind": "compile_error",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 141,
+      "elapsed_min": 172.2,
+      "cum_tokens": {
+        "input_tokens": 488,
+        "output_tokens": 2075,
+        "cache_creation_input_tokens": 1210125,
+        "cache_read_input_tokens": 128565439
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 141,
+      "elapsed_min": 172.2,
+      "cum_tokens": {
+        "input_tokens": 488,
+        "output_tokens": 2075,
+        "cache_creation_input_tokens": 1210125,
+        "cache_read_input_tokens": 128565439
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 142,
+      "elapsed_min": 173.17,
+      "cum_tokens": {
+        "input_tokens": 490,
+        "output_tokens": 2081,
+        "cache_creation_input_tokens": 1211594,
+        "cache_read_input_tokens": 129454490
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 142,
+      "elapsed_min": 173.17,
+      "cum_tokens": {
+        "input_tokens": 490,
+        "output_tokens": 2081,
+        "cache_creation_input_tokens": 1211594,
+        "cache_read_input_tokens": 129454490
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 143,
+      "elapsed_min": 174.21,
+      "cum_tokens": {
+        "input_tokens": 492,
+        "output_tokens": 2089,
+        "cache_creation_input_tokens": 1213416,
+        "cache_read_input_tokens": 130345010
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 143,
+      "elapsed_min": 174.21,
+      "cum_tokens": {
+        "input_tokens": 492,
+        "output_tokens": 2089,
+        "cache_creation_input_tokens": 1213416,
+        "cache_read_input_tokens": 130345010
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwsub-mat",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 144,
+      "elapsed_min": 175.02,
+      "cum_tokens": {
+        "input_tokens": 496,
+        "output_tokens": 2095,
+        "cache_creation_input_tokens": 1217169,
+        "cache_read_input_tokens": 132131824
+      },
+      "cmd": "timeout 3000 pytest python_tests/test_eltwise_binary_hal.py -k 'Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes' -q --tb=no --show-capture=",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 72,
+      "failed": 0,
+      "k": "Elwadd and None_ and not bfp4 and not reuse and not int8 and not Yes",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 145,
+      "elapsed_min": 178.35,
+      "cum_tokens": {
+        "input_tokens": 498,
+        "output_tokens": 2103,
+        "cache_creation_input_tokens": 1218790,
+        "cache_read_input_tokens": 133027919
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add' -q --tb=no --show-capture=no -o log_cli=false -rf 2>&1 | tr -d '\\033' | tail -40 | cut -c 1",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1596,
+      "failed": 64,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 146,
+      "elapsed_min": 179.58,
+      "cum_tokens": {
+        "input_tokens": 500,
+        "output_tokens": 2111,
+        "cache_creation_input_tokens": 1219530,
+        "cache_read_input_tokens": 133925635
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add' -q --tb=no --show-capture=no -o log_cli=false -rf --lf 2>&1 | tr -d '\\033' | tail -66 | cut",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add",
+      "selection": "subset:--lf",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 147,
+      "elapsed_min": 180.72,
+      "cum_tokens": {
+        "input_tokens": 502,
+        "output_tokens": 2127,
+        "cache_creation_input_tokens": 1220021,
+        "cache_read_input_tokens": 134824091
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add' --tb=no --show-capture=no -o log_cli=false --lf -v 2>&1 | tr -d '\\033' | tail -68 | cut -c ",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add",
+      "selection": "subset:--lf",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 148,
+      "elapsed_min": 181.66,
+      "cum_tokens": {
+        "input_tokens": 504,
+        "output_tokens": 2131,
+        "cache_creation_input_tokens": 1226955,
+        "cache_read_input_tokens": 135723038
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add and not reuse' --lf -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\033' | tail",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 40,
+      "failed": 0,
+      "k": "add and not reuse",
+      "selection": "subset:--lf",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 149,
+      "elapsed_min": 182.2,
+      "cum_tokens": {
+        "input_tokens": 506,
+        "output_tokens": 2139,
+        "cache_creation_input_tokens": 1229311,
+        "cache_read_input_tokens": 136628919
+      },
+      "cmd": "timeout 600 pytest -x 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary_dest_reuse[reuse_dest_type:DEST_TO_SRCB-math_op:Elwadd-formats:Float16_b->Fl",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 150,
+      "elapsed_min": 182.86,
+      "cum_tokens": {
+        "input_tokens": 508,
+        "output_tokens": 2145,
+        "cache_creation_input_tokens": 1230522,
+        "cache_read_input_tokens": 137537156
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add and reuse' -v --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\033' | tail -26 | cu",
+      "seg": 1,
+      "kind": "other",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add and reuse",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 151,
+      "elapsed_min": 186.89,
+      "cum_tokens": {
+        "input_tokens": 512,
+        "output_tokens": 2157,
+        "cache_creation_input_tokens": 1236905,
+        "cache_read_input_tokens": 139358957
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1 && timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\03",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 152,
+      "elapsed_min": 189.88,
+      "cum_tokens": {
+        "input_tokens": 514,
+        "output_tokens": 2210,
+        "cache_creation_input_tokens": 1237656,
+        "cache_read_input_tokens": 140274788
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary.py -k 'add' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\033' | tail -1",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 153,
+      "elapsed_min": 193.02,
+      "cum_tokens": {
+        "input_tokens": 516,
+        "output_tokens": 2242,
+        "cache_creation_input_tokens": 1238011,
+        "cache_read_input_tokens": 141191370
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\033' | tail -1",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 154,
+      "elapsed_min": 196.54,
+      "cum_tokens": {
+        "input_tokens": 518,
+        "output_tokens": 2273,
+        "cache_creation_input_tokens": 1238355,
+        "cache_read_input_tokens": 142108307
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1 && timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\03",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 155,
+      "elapsed_min": 202.55,
+      "cum_tokens": {
+        "input_tokens": 520,
+        "output_tokens": 2277,
+        "cache_creation_input_tokens": 1238738,
+        "cache_read_input_tokens": 143025588
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary.py -k 'Elwsub' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\033' | tail -1; timeout 3500 py",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "Elwsub",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 155,
+      "elapsed_min": 202.55,
+      "cum_tokens": {
+        "input_tokens": 520,
+        "output_tokens": 2277,
+        "cache_creation_input_tokens": 1238738,
+        "cache_read_input_tokens": 143025588
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary.py -k 'Elwsub' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\033' | tail -1; timeout 3500 py",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 156,
+      "elapsed_min": 209.01,
+      "cum_tokens": {
+        "input_tokens": 522,
+        "output_tokens": 2280,
+        "cache_creation_input_tokens": 1239633,
+        "cache_read_input_tokens": 143943252
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary.py -k 'Elwsub' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\033' | tail -1; timeout 3500 py",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "Elwsub",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 156,
+      "elapsed_min": 209.01,
+      "cum_tokens": {
+        "input_tokens": 522,
+        "output_tokens": 2280,
+        "cache_creation_input_tokens": 1239633,
+        "cache_read_input_tokens": 143943252
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary.py -k 'Elwsub' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\033' | tail -1; timeout 3500 py",
+      "seg": 2,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 157,
+      "elapsed_min": 212.57,
+      "cum_tokens": {
+        "input_tokens": 524,
+        "output_tokens": 2329,
+        "cache_creation_input_tokens": 1243278,
+        "cache_read_input_tokens": 144861811
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1 && timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\03",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 158,
+      "elapsed_min": 215.57,
+      "cum_tokens": {
+        "input_tokens": 526,
+        "output_tokens": 2345,
+        "cache_creation_input_tokens": 1243673,
+        "cache_read_input_tokens": 145784015
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary.py -k 'add' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\033' | tail -1",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 159,
+      "elapsed_min": 218.59,
+      "cum_tokens": {
+        "input_tokens": 528,
+        "output_tokens": 2361,
+        "cache_creation_input_tokens": 1243993,
+        "cache_read_input_tokens": 146706614
+      },
+      "cmd": "timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\033' | tail -1",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 160,
+      "elapsed_min": 222.24,
+      "cum_tokens": {
+        "input_tokens": 530,
+        "output_tokens": 2377,
+        "cache_creation_input_tokens": 1244321,
+        "cache_read_input_tokens": 147629533
+      },
+      "cmd": "tt-smi -r 2>&1 | tail -1 && timeout 3500 pytest python_tests/test_eltwise_binary_hal.py -k 'add' -q --tb=no --show-capture=no -o log_cli=false 2>&1 | tr -d '\\03",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    }
+  ]
+}

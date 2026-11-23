@@ -1,0 +1,1167 @@
+{
+  "metrics_version": 2,
+  "model": "claude-opus-5-5",
+  "duration_min": 82.9,
+  "duration_api_min": 51.0,
+  "num_turns": 207,
+  "finished": true,
+  "cost_usd": 26.8,
+  "tokens": {
+    "input_tokens": 380,
+    "output_tokens": 350067,
+    "cache_creation_input_tokens": 1375855,
+    "cache_read_input_tokens": 55466833
+  },
+  "tokens_total_input": 56843068,
+  "cache_hit_ratio": 0.976,
+  "tokens_per_model": {
+    "claude-opus-5-5": {
+      "input_tokens": 380,
+      "output_tokens": 350067,
+      "cache_read_input_tokens": 55466833,
+      "cache_creation_input_tokens": 1375855,
+      "cost_usd": 26.8000716
+    }
+  },
+  "pytest_runs_total": 45,
+  "pytest_invocations_total": 45,
+  "pytest_runs_by_kind": {
+    "denied": 3,
+    "collect": 3,
+    "pass": 8,
+    "empty": 1,
+    "compile_error": 3,
+    "hang": 13,
+    "fail": 10,
+    "compile_only": 4
+  },
+  "pytest_runs_by_test": {
+    "test_eltwise_binary_hal": {
+      "denied": 3,
+      "collect": 3,
+      "empty": 1,
+      "compile_error": 3,
+      "hang": 13,
+      "fail": 10,
+      "pass": 6,
+      "compile_only": 4
+    },
+    "test_eltwise_binary": {
+      "pass": 2,
+      "compile_only": 1
+    }
+  },
+  "process": {
+    "iterations": 32,
+    "first_full_pass": {
+      "test_eltwise_binary_hal": {
+        "iteration": 29,
+        "test_iteration": 29,
+        "pytest_command": 40,
+        "elapsed_min": 71.07,
+        "baseline_passed": 1660,
+        "passed": 1660,
+        "tokens": {
+          "input_tokens": 356,
+          "output_tokens": 1788,
+          "cache_creation_input_tokens": 1368878,
+          "cache_read_input_tokens": 48078524
+        },
+        "tokens_input_total": 49447758
+      }
+    },
+    "final_code_first_full_pass": {
+      "test_eltwise_binary_hal": {
+        "iteration": 30,
+        "test_iteration": 30,
+        "pytest_command": 42,
+        "elapsed_min": 75.22,
+        "baseline_passed": 1660,
+        "passed": 1660,
+        "tokens": {
+          "input_tokens": 370,
+          "output_tokens": 1879,
+          "cache_creation_input_tokens": 1373675,
+          "cache_read_input_tokens": 52379162
+        },
+        "tokens_input_total": 53753207
+      }
+    },
+    "code_changes": 77,
+    "success_at_k": {
+      "test_eltwise_binary_hal": {
+        "5": false,
+        "10": false,
+        "15": false,
+        "20": false,
+        "25": false,
+        "50": true
+      }
+    },
+    "all_tests_full_pass_at_iteration": 29,
+    "cost_by_outcome": {
+      "compile_error": {
+        "iterations": 3,
+        "minutes": 22.65,
+        "tokens_input_total": 22004363
+      },
+      "hang": {
+        "iterations": 13,
+        "minutes": 26.17,
+        "tokens_input_total": 11738932
+      },
+      "fail": {
+        "iterations": 10,
+        "minutes": 15.81,
+        "tokens_input_total": 9244085
+      },
+      "pass": {
+        "iterations": 6,
+        "minutes": 17.36,
+        "tokens_input_total": 12618426
+      }
+    },
+    "baselines": {
+      "test_eltwise_binary": 1660
+    },
+    "ambiguous_commands": 0
+  },
+  "reference_reads": {
+    "hal_docs": {
+      "calls": 44,
+      "distinct": 22,
+      "rereads": 22,
+      "share_of_tool_calls": 0.158
+    },
+    "raw_ref": {
+      "calls": 0,
+      "distinct": 0,
+      "rereads": 0,
+      "share_of_tool_calls": 0.0
+    },
+    "spec": {
+      "calls": 18,
+      "distinct": 18,
+      "rereads": 0,
+      "share_of_tool_calls": 0.065
+    },
+    "tests": {
+      "calls": 40,
+      "distinct": 29,
+      "rereads": 11,
+      "share_of_tool_calls": 0.144
+    },
+    "own_code": {
+      "calls": 8,
+      "distinct": 3,
+      "rereads": 5,
+      "share_of_tool_calls": 0.029
+    }
+  },
+  "device_test_runs": 31,
+  "first_full_pass_at_run": 3,
+  "counts": {
+    "tool_calls": 278,
+    "denied": 35,
+    "edits": 67,
+    "writes": 10,
+    "reads": 99,
+    "bash": 94,
+    "tt_smi_reset": 21,
+    "subagents": 5,
+    "mcp_calls": 0
+  },
+  "pytest_timeline": [
+    {
+      "n": 1,
+      "elapsed_min": 0.34,
+      "cum_tokens": {
+        "input_tokens": 14,
+        "output_tokens": 108,
+        "cache_creation_input_tokens": 42481,
+        "cache_read_input_tokens": 200728
+      },
+      "cmd": "cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest python_tests/test_eltwise_bi",
+      "seg": 1,
+      "kind": "denied",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add",
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 2,
+      "elapsed_min": 0.6,
+      "cum_tokens": {
+        "input_tokens": 16,
+        "output_tokens": 124,
+        "cache_creation_input_tokens": 42913,
+        "cache_read_input_tokens": 254024
+      },
+      "cmd": "cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest python_tests/test_eltwise_bi",
+      "seg": 1,
+      "kind": "collect",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 3,
+      "elapsed_min": 4.16,
+      "cum_tokens": {
+        "input_tokens": 140,
+        "output_tokens": 803,
+        "cache_creation_input_tokens": 727271,
+        "cache_read_input_tokens": 6157262
+      },
+      "cmd": "timeout 900 pytest python_tests/test_eltwise_binary.py -k 'add and test_eltwise_binary_int8_format' -x -q 2>&1 | tail -15",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 16,
+      "failed": 0,
+      "k": "add and test_eltwise_binary_int8_format",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 4,
+      "elapsed_min": 20.65,
+      "cum_tokens": {
+        "input_tokens": 240,
+        "output_tokens": 1322,
+        "cache_creation_input_tokens": 1193965,
+        "cache_read_input_tokens": 18078187
+      },
+      "cmd": "timeout 600 pytest python_tests/test_eltwise_binary_hal.py -k 'add and test_eltwise_binary[ and dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_ an",
+      "seg": 1,
+      "kind": "empty",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 0,
+      "k": "add and test_eltwise_binary[ and dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_ and transpose_srca:No and tile_dimensions:[32, 32]",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 5,
+      "elapsed_min": 20.96,
+      "cum_tokens": {
+        "input_tokens": 242,
+        "output_tokens": 1326,
+        "cache_creation_input_tokens": 1194430,
+        "cache_read_input_tokens": 18515302
+      },
+      "cmd": "timeout 600 pytest python_tests/test_eltwise_binary_hal.py --collect-only -q -k 'add and Float16_b and None_ and not bfp4 and not reuse' 2>&1 | head -5",
+      "seg": 1,
+      "kind": "collect",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add and Float16_b and None_ and not bfp4 and not reuse",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 6,
+      "elapsed_min": 21.03,
+      "cum_tokens": {
+        "input_tokens": 244,
+        "output_tokens": 1342,
+        "cache_creation_input_tokens": 1195465,
+        "cache_read_input_tokens": 18952882
+      },
+      "cmd": "timeout 600 pytest 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-ma",
+      "seg": 1,
+      "kind": "denied",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 7,
+      "elapsed_min": 21.47,
+      "cum_tokens": {
+        "input_tokens": 246,
+        "output_tokens": 1351,
+        "cache_creation_input_tokens": 1195874,
+        "cache_read_input_tokens": 19391497
+      },
+      "cmd": "timeout 600 pytest 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-ma",
+      "seg": 1,
+      "kind": "compile_error",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 8,
+      "elapsed_min": 22.04,
+      "cum_tokens": {
+        "input_tokens": 250,
+        "output_tokens": 1364,
+        "cache_creation_input_tokens": 1203180,
+        "cache_read_input_tokens": 20273449
+      },
+      "cmd": "timeout 600 pytest 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-ma",
+      "seg": 1,
+      "kind": "compile_error",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 9,
+      "elapsed_min": 22.52,
+      "cum_tokens": {
+        "input_tokens": 252,
+        "output_tokens": 1372,
+        "cache_creation_input_tokens": 1209223,
+        "cache_read_input_tokens": 20719779
+      },
+      "cmd": "sed -i 's/AddrCtrl\\[cfg::Reg1\\]/AddrCtrl[cfg::UnpackerReg::Reg1]/g' hal_llk/llk_unpack_common.h && timeout 600 pytest 'python_tests/test_eltwise_binary_hal.py::",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 10,
+      "elapsed_min": 24.65,
+      "cum_tokens": {
+        "input_tokens": 260,
+        "output_tokens": 1394,
+        "cache_creation_input_tokens": 1220390,
+        "cache_read_input_tokens": 22546846
+      },
+      "cmd": "timeout 600 pytest 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-ma",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 11,
+      "elapsed_min": 25.84,
+      "cum_tokens": {
+        "input_tokens": 262,
+        "output_tokens": 1399,
+        "cache_creation_input_tokens": 1224884,
+        "cache_read_input_tokens": 23010386
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 12,
+      "elapsed_min": 26.92,
+      "cum_tokens": {
+        "input_tokens": 264,
+        "output_tokens": 1405,
+        "cache_creation_input_tokens": 1227185,
+        "cache_read_input_tokens": 23478420
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 13,
+      "elapsed_min": 28.52,
+      "cum_tokens": {
+        "input_tokens": 270,
+        "output_tokens": 1423,
+        "cache_creation_input_tokens": 1232950,
+        "cache_read_input_tokens": 24895016
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 14,
+      "elapsed_min": 29.55,
+      "cum_tokens": {
+        "input_tokens": 272,
+        "output_tokens": 1426,
+        "cache_creation_input_tokens": 1235430,
+        "cache_read_input_tokens": 25371116
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 15,
+      "elapsed_min": 30.65,
+      "cum_tokens": {
+        "input_tokens": 274,
+        "output_tokens": 1434,
+        "cache_creation_input_tokens": 1236942,
+        "cache_read_input_tokens": 25849696
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 16,
+      "elapsed_min": 32.21,
+      "cum_tokens": {
+        "input_tokens": 276,
+        "output_tokens": 1442,
+        "cache_creation_input_tokens": 1238925,
+        "cache_read_input_tokens": 26329788
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 17,
+      "elapsed_min": 33.28,
+      "cum_tokens": {
+        "input_tokens": 278,
+        "output_tokens": 1449,
+        "cache_creation_input_tokens": 1243575,
+        "cache_read_input_tokens": 26811863
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 18,
+      "elapsed_min": 34.47,
+      "cum_tokens": {
+        "input_tokens": 280,
+        "output_tokens": 1457,
+        "cache_creation_input_tokens": 1245184,
+        "cache_read_input_tokens": 27298588
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 19,
+      "elapsed_min": 35.56,
+      "cum_tokens": {
+        "input_tokens": 282,
+        "output_tokens": 1465,
+        "cache_creation_input_tokens": 1247312,
+        "cache_read_input_tokens": 27786922
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 20,
+      "elapsed_min": 36.87,
+      "cum_tokens": {
+        "input_tokens": 284,
+        "output_tokens": 1473,
+        "cache_creation_input_tokens": 1248854,
+        "cache_read_input_tokens": 28277384
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 21,
+      "elapsed_min": 38.28,
+      "cum_tokens": {
+        "input_tokens": 288,
+        "output_tokens": 1487,
+        "cache_creation_input_tokens": 1254251,
+        "cache_read_input_tokens": 29264347
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 22,
+      "elapsed_min": 39.65,
+      "cum_tokens": {
+        "input_tokens": 290,
+        "output_tokens": 1495,
+        "cache_creation_input_tokens": 1255172,
+        "cache_read_input_tokens": 29761748
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 23,
+      "elapsed_min": 40.81,
+      "cum_tokens": {
+        "input_tokens": 292,
+        "output_tokens": 1499,
+        "cache_creation_input_tokens": 1258263,
+        "cache_read_input_tokens": 30260070
+      },
+      "cmd": "timeout 600 pytest 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-ma",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 24,
+      "elapsed_min": 42.18,
+      "cum_tokens": {
+        "input_tokens": 294,
+        "output_tokens": 1507,
+        "cache_creation_input_tokens": 1264159,
+        "cache_read_input_tokens": 30761483
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 25,
+      "elapsed_min": 43.63,
+      "cum_tokens": {
+        "input_tokens": 298,
+        "output_tokens": 1525,
+        "cache_creation_input_tokens": 1268744,
+        "cache_read_input_tokens": 31779178
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 26,
+      "elapsed_min": 45.04,
+      "cum_tokens": {
+        "input_tokens": 302,
+        "output_tokens": 1549,
+        "cache_creation_input_tokens": 1273897,
+        "cache_read_input_tokens": 32805797
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 27,
+      "elapsed_min": 46.76,
+      "cum_tokens": {
+        "input_tokens": 308,
+        "output_tokens": 1563,
+        "cache_creation_input_tokens": 1281309,
+        "cache_read_input_tokens": 34362142
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 28,
+      "elapsed_min": 47.37,
+      "cum_tokens": {
+        "input_tokens": 310,
+        "output_tokens": 1571,
+        "cache_creation_input_tokens": 1284332,
+        "cache_read_input_tokens": 34886601
+      },
+      "cmd": "timeout 600 pytest 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-ma",
+      "seg": 1,
+      "kind": "compile_error",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 29,
+      "elapsed_min": 47.96,
+      "cum_tokens": {
+        "input_tokens": 312,
+        "output_tokens": 1579,
+        "cache_creation_input_tokens": 1289849,
+        "cache_read_input_tokens": 35414083
+      },
+      "cmd": "timeout 600 pytest 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-ma",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 30,
+      "elapsed_min": 50.28,
+      "cum_tokens": {
+        "input_tokens": 322,
+        "output_tokens": 1631,
+        "cache_creation_input_tokens": 1304774,
+        "cache_read_input_tokens": 38106579
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 600 pytest ",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 0,
+      "failed": 1,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 31,
+      "elapsed_min": 51.49,
+      "cum_tokens": {
+        "input_tokens": 328,
+        "output_tokens": 1656,
+        "cache_creation_input_tokens": 1327883,
+        "cache_read_input_tokens": 39756846
+      },
+      "cmd": "timeout 600 pytest 'python_tests/test_eltwise_binary_hal.py::test_eltwise_binary[dest_acc:No-formats:Float16_b->Float16_b-broadcast_type:None_-math_op:Elwadd-ma",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1,
+      "failed": 0,
+      "k": null,
+      "selection": "subset:nodeids",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 32,
+      "elapsed_min": 52.44,
+      "cum_tokens": {
+        "input_tokens": 330,
+        "output_tokens": 1664,
+        "cache_creation_input_tokens": 1333255,
+        "cache_read_input_tokens": 40327879
+      },
+      "cmd": "timeout 1200 pytest python_tests/test_eltwise_binary_hal.py -k 'add and test_eltwise_binary[ and None_' --compile-producer -n 32 -q > hal_llk/.build.log 2>&1; t",
+      "seg": 1,
+      "kind": "compile_only",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 180,
+      "failed": 0,
+      "k": "add and test_eltwise_binary[ and None_",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 33,
+      "elapsed_min": 52.54,
+      "cum_tokens": {
+        "input_tokens": 332,
+        "output_tokens": 1673,
+        "cache_creation_input_tokens": 1335028,
+        "cache_read_input_tokens": 40904284
+      },
+      "cmd": "timeout 1800 pytest python_tests/test_eltwise_binary_hal.py -k 'add and test_eltwise_binary[ and None_' --compile-consumer -q -p no:randomly > hal_llk/.run.log ",
+      "seg": 1,
+      "kind": "denied",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add and test_eltwise_binary[ and None_",
+      "selection": "subset:-k",
+      "consumer": true,
+      "ambiguous": false
+    },
+    {
+      "n": 34,
+      "elapsed_min": 53.03,
+      "cum_tokens": {
+        "input_tokens": 334,
+        "output_tokens": 1689,
+        "cache_creation_input_tokens": 1335559,
+        "cache_read_input_tokens": 41482462
+      },
+      "cmd": "timeout 1800 pytest python_tests/test_eltwise_binary_hal.py -k 'add and test_eltwise_binary[ and None_' --compile-consumer -q -rf > hal_llk/.run.log 2>&1; tail ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 180,
+      "failed": 0,
+      "k": "add and test_eltwise_binary[ and None_",
+      "selection": "subset:-k",
+      "consumer": true,
+      "ambiguous": false
+    },
+    {
+      "n": 35,
+      "elapsed_min": 53.96,
+      "cum_tokens": {
+        "input_tokens": 336,
+        "output_tokens": 1697,
+        "cache_creation_input_tokens": 1340768,
+        "cache_read_input_tokens": 42061171
+      },
+      "cmd": "timeout 3000 pytest python_tests/test_eltwise_binary_hal.py -k 'add' --compile-producer -n 32 -q > hal_llk/.build.log 2>&1; tail -3 hal_llk/.build.log",
+      "seg": 1,
+      "kind": "compile_only",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 36,
+      "elapsed_min": 56.27,
+      "cum_tokens": {
+        "input_tokens": 338,
+        "output_tokens": 1713,
+        "cache_creation_input_tokens": 1341437,
+        "cache_read_input_tokens": 42645089
+      },
+      "cmd": "timeout 3000 pytest python_tests/test_eltwise_binary_hal.py -k 'add' --compile-consumer -q -rf > hal_llk/.run.log 2>&1; tail -60 hal_llk/.run.log | cut -c1-250",
+      "seg": 1,
+      "kind": "fail",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1608,
+      "failed": 52,
+      "k": "add",
+      "selection": "full",
+      "consumer": true,
+      "ambiguous": false
+    },
+    {
+      "n": 37,
+      "elapsed_min": 56.57,
+      "cum_tokens": {
+        "input_tokens": 340,
+        "output_tokens": 1718,
+        "cache_creation_input_tokens": 1351310,
+        "cache_read_input_tokens": 43229676
+      },
+      "cmd": "timeout 600 pytest python_tests/test_eltwise_binary_hal.py -k add --lf --collect-only -q 2>&1 | cut -c1-230 | head -60",
+      "seg": 1,
+      "kind": "collect",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add",
+      "selection": "subset:--lf",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 38,
+      "elapsed_min": 67.38,
+      "cum_tokens": {
+        "input_tokens": 346,
+        "output_tokens": 1737,
+        "cache_creation_input_tokens": 1364028,
+        "cache_read_input_tokens": 45029686
+      },
+      "cmd": "timeout 1200 pytest python_tests/test_eltwise_binary_hal.py -k add --lf --compile-producer -n 32 -q > hal_llk/.build.log 2>&1; tail -2 hal_llk/.build.log | cut ",
+      "seg": 1,
+      "kind": "hang",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": null,
+      "failed": null,
+      "k": "add",
+      "selection": "subset:--lf",
+      "consumer": true,
+      "ambiguous": false
+    },
+    {
+      "n": 39,
+      "elapsed_min": 69.04,
+      "cum_tokens": {
+        "input_tokens": 354,
+        "output_tokens": 1772,
+        "cache_creation_input_tokens": 1368341,
+        "cache_read_input_tokens": 47467033
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 550 pytest ",
+      "seg": 1,
+      "kind": "compile_only",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 40,
+      "elapsed_min": 71.07,
+      "cum_tokens": {
+        "input_tokens": 356,
+        "output_tokens": 1788,
+        "cache_creation_input_tokens": 1368878,
+        "cache_read_input_tokens": 48078524
+      },
+      "cmd": "timeout 550 pytest python_tests/test_eltwise_binary_hal.py -k 'add' --compile-consumer -q -x > hal_llk/.run.log 2>&1; tail -1 hal_llk/.run.log",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": true,
+      "ambiguous": false
+    },
+    {
+      "n": 41,
+      "elapsed_min": 72.6,
+      "cum_tokens": {
+        "input_tokens": 368,
+        "output_tokens": 1839,
+        "cache_creation_input_tokens": 1373288,
+        "cache_read_input_tokens": 51762724
+      },
+      "cmd": "timeout 580 pytest python_tests/test_eltwise_binary_hal.py python_tests/test_eltwise_binary.py -k 'add' --compile-producer -n 32 -q > hal_llk/.build.log 2>&1; t",
+      "seg": 1,
+      "kind": "compile_only",
+      "tests": [
+        "test_eltwise_binary",
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 3320,
+      "failed": 0,
+      "k": "add",
+      "selection": "subset:-k",
+      "consumer": false,
+      "ambiguous": false
+    },
+    {
+      "n": 42,
+      "elapsed_min": 75.22,
+      "cum_tokens": {
+        "input_tokens": 370,
+        "output_tokens": 1879,
+        "cache_creation_input_tokens": 1373675,
+        "cache_read_input_tokens": 52379162
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 580 pytest ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": true,
+      "ambiguous": false
+    },
+    {
+      "n": 43,
+      "elapsed_min": 77.28,
+      "cum_tokens": {
+        "input_tokens": 372,
+        "output_tokens": 1911,
+        "cache_creation_input_tokens": 1374042,
+        "cache_read_input_tokens": 52995987
+      },
+      "cmd": "timeout 580 pytest python_tests/test_eltwise_binary.py -k 'add' --compile-consumer -q > hal_llk/.run2.log 2>&1; tail -1 hal_llk/.run2.log",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": true,
+      "ambiguous": false
+    },
+    {
+      "n": 44,
+      "elapsed_min": 79.4,
+      "cum_tokens": {
+        "input_tokens": 374,
+        "output_tokens": 1943,
+        "cache_creation_input_tokens": 1374377,
+        "cache_read_input_tokens": 53613179
+      },
+      "cmd": "timeout 580 pytest python_tests/test_eltwise_binary_hal.py -k 'add' --compile-consumer -q > hal_llk/.run3.log 2>&1; tail -1 hal_llk/.run3.log",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": true,
+      "ambiguous": false
+    },
+    {
+      "n": 45,
+      "elapsed_min": 81.99,
+      "cum_tokens": {
+        "input_tokens": 376,
+        "output_tokens": 1999,
+        "cache_creation_input_tokens": 1374724,
+        "cache_read_input_tokens": 54230706
+      },
+      "cmd": "tt-smi -r > /dev/null 2>&1; cd /proj_sw/user_dev/ctr-sbratic/hal-runs/20261104_211905_B_c0e38f1f_claude-opus-5-5/ws/tt_metal/tt-llk/tests && timeout 580 pytest ",
+      "seg": 1,
+      "kind": "pass",
+      "tests": [
+        "test_eltwise_binary_hal"
+      ],
+      "passed": 1660,
+      "failed": 0,
+      "k": "add",
+      "selection": "full",
+      "consumer": true,
+      "ambiguous": false
+    }
+  ]
+}
