@@ -214,3 +214,119 @@ def test_fr_best(mesh_device):
     for bmax in (2, 4):
         run(mesh_device, pay, S=32, NO=4, links=(0,), mode=1, bmax=bmax, tag="best")
         run(mesh_device, pay, S=32, NO=4, links=(0, 1), link_cores=((1, 0), (9, 9)), mode=1, bmax=bmax, tag="best")
+
+
+def launch2(mesh, PB, S, NO, E, lane_cores, links, mode, bmax):
+    """RISC split (fr2_send.cpp on the BRISC, fr2_proc.cpp on the NCRISC), a core a lane: lane_cores[l] = (lane 0 core,
+    lane 1 core); returns per (chip, link, lane): (dt cycles, sends, arrivals, router / credit / idle waits, explicit
+    credits, processor busy)."""
+    ring = snake(tuple(mesh.shape))
+    N = len(ring)
+    W_ = mesh.shape[1]
+    cores = sorted({lane_cores[l][D] for l in links for D in (0, 1)})
+    lay, off = {}, 0
+    for name, size in (
+        ("ring", S * PB),
+        ("own", NO * PB),
+        ("hdr", (S + 1) * HS),
+        ("act", ((4 * S + 15) // 16) * 16),
+        ("w", 32 * 16),
+    ):
+        lay[name] = off
+        off += size
+    mem = sharded_l1(mesh, cores, [off // 16, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    dummy = sharded_l1(mesh, cores, [1, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    A = {k: mem.buffer_address() + v for k, v in lay.items()}
+    xy = lambda c: (lambda q: q[0] | q[1] << 8)(noc(mesh, *c))
+    mpd = ttnn.MeshProgramDescriptor()
+    for i, rc in enumerate(ring):
+        nbr = (ring[(i + 1) % N], ring[(i - 1) % N])
+        lanes = [(l, D) for l in links for D in (0, 1)]
+        trt, prt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for l, D in lanes:
+            x, y = lane_cores[l][D]
+            pc = lane_cores[l][1 - D]
+            trt[x][y] = [int(node(mesh, rc).mesh_id), int(node(mesh, nbr[D]).chip_id), xy((x, y)), i, xy(pc)]
+            prt[x][y] = [xy(pc)]
+        tk = ttnn.KernelDescriptor(
+            kernel_source=kpath("fr2_send.cpp"),
+            core_ranges=crs(cores),
+            compile_time_args=[S, PB, NO, E, N, A["ring"], A["own"], A["hdr"], A["w"], HS, mode, bmax, A["act"]],
+            runtime_args=trt,
+            defines=FAB_DEFS,
+            config=dm(0),
+        )
+        pk = ttnn.KernelDescriptor(
+            kernel_source=kpath("fr2_proc.cpp"),
+            core_ranges=crs(cores),
+            compile_time_args=[S, PB, (N - 1) * E, A["ring"], A["w"], A["act"]],
+            runtime_args=prt,
+            config=dm(1),
+        )
+        p = ttnn.ProgramDescriptor(kernels=[tk, pk], semaphores=[], cbs=[])
+        for l, D in lanes:
+            x, y = lane_cores[l][D]
+            p.kernels[0].runtime_args[x][y].extend(
+                ttnn.setup_fabric_connection(
+                    mesh_device=mesh,
+                    src_fabric_node_id=node(mesh, rc),
+                    dst_fabric_node_id=node(mesh, nbr[D]),
+                    link_idx=l,
+                    program_descriptor=p,
+                    worker_core=ttnn.CoreCoord(x, y),
+                )
+            )
+        mc = ttnn.MeshCoordinate(*rc)
+        mpd[ttnn.MeshCoordinateRange(mc, mc)] = p
+    ttnn.synchronize_device(mesh)
+    ttnn.generic_op([dummy, mem], mpd)
+    ttnn.synchronize_device(mesh)
+    out = []
+    sts = ttnn.get_device_tensors(mem)
+    wi = lay["w"] // 4
+    for i, rc in enumerate(ring):
+        t = (ttnn.to_torch(sts[rc[0] * W_ + rc[1]]).to(torch.int64) & 0xFFFFFFFF).reshape(len(cores), -1)
+        for l in links:
+            for D in (0, 1):
+                ci = cores.index(lane_cores[l][D])
+                st = [int(t[ci, wi + 4 * (10 + q)]) for q in range(8)]
+                sp = [int(t[ci, wi + 4 * (18 + q)]) for q in range(3)]
+                out.append(((st[1] - st[0]) & 0xFFFFFFFF, st[2], st[3], st[4], st[5], st[6], st[7], sp[0]))
+    del mem, dummy, sts
+    return out, N
+
+
+def run2(mesh, PB, S=32, NO=4, links=(0,), lane_cores=(((1, 0), (2, 0)), ((9, 9), (10, 9))), mode=1, bmax=4, tag=""):
+    E = max(8, BYTES // (7 * PB))
+    clk = aiclk_mhz(0)
+    meas = []
+    for it in range(WARM + MEAS):
+        out, N = launch2(mesh, PB, S, NO, E, lane_cores, links, mode, bmax)
+        tot = (N - 1) * E
+        assert all(o[1] == tot and o[2] == tot for o in out), f"sends / arrivals {[(o[1], o[2]) for o in out]}"
+        if it >= WARM:
+            meas.append([tot * PB / (o[0] / clk * 1e3) for o in out])
+            last = out
+    flat = [v for m in meas for v in m]
+    worst = statistics.median(min(m) for m in meas)
+    md = lambda q: round(statistics.median(o[q] for o in last) / clk)
+    logger.info(
+        f"FR2 {tag} PB {PB} S {S} NO {NO} mode {mode} bmax {bmax} links {links} cores {[lane_cores[l] for l in links]}: "
+        f"GB/s a link direction median {statistics.median(flat):.1f} (min {min(flat):.1f}, max {max(flat):.1f}), slowest "
+        f"lane a launch {worst:.1f}; sender us router / credit / idle waits [{md(3)}, {md(4)}, {md(5)}] of {md(0)}, "
+        f"explicit credits {statistics.median(o[6] for o in last)}, processor busy us {md(7)}"
+    )
+    return worst
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [dev_params(p) for p in (8704, 15232)], ids=["pay8704", "pay15232"], indirect=True
+)
+def test_fr2(mesh_device):
+    """RISC split: one link, then two links (lane cores apart)."""
+    pay = ttnn.get_tt_fabric_max_payload_size_bytes()
+    for bmax in (2, 4, 8):
+        run2(mesh_device, pay, bmax=bmax, tag="split risc")
+    run2(mesh_device, pay, links=(0, 1), tag="split risc")
+    run2(mesh_device, pay, links=(0, 1), lane_cores=(((1, 0), (1, 9)), ((10, 0), (10, 9))), tag="split risc")

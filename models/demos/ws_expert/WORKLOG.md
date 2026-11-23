@@ -1877,3 +1877,16 @@ free slot, inject 2). Sends and arrivals counted exactly on every lane; 2 + 3 la
   than S packets (freed counts corrupted); split lanes sent the explicit credit to the downstream same-lane core
   instead of its other-lane core (hang, chips reset by the runner); the stateful send path keeps state in the command
   buffer that noc_inline_dw_write uses, so it is re-armed after any other write from that RISC.
+- RISC split (kernels fr2_send.cpp / fr2_proc.cpp / fr2_words.hpp, test_fr2): a core a lane; the NCRISC examines the
+  landed packets (forward / retire, decrement the forwards left), publishes them (act[] + READY), carries the credits
+  and done flags to the partner core (all other-core writes there, so the sender's stateful command buffers stay
+  armed); the BRISC only sends (forwards, own packets, an explicit credit when idle) and frees slots by the NoC's
+  sent counter. S 32, 3 + 2 launches:
+| | 8704 B (router 8704) | 15232 B (router 15232) |
+|---|---|---|
+| one link, 2 / 4 / 8 arrivals a pass | 38.6 / 38.7 / 38.1 | 39.0 / 39.0 / 38.8 |
+| two links, lane cores (1,0) (2,0) / (9,9) (10,9) | 38.0 (min 37.0) | 38.5 (min 37.7) |
+| two links, lane cores (1,0) (1,9) / (10,0) (10,9) | 37.5 (min 35.3) | 38.2 (min 37.1) |
+  Two links went 32 -> 38.5 a link direction: above high_bw_all_gather on the same ring (37.7) and ~96% of the
+  four-flows-a-chip fabric figure (40). 8704: the sender is still busy (waits ~0.1 of 1.74 ms); 15232: router-space
+  waits 0.44-0.63 ms, the router / link is the limit (one link both directions alone: 42.4). Processor busy 0.2-0.44 ms.
