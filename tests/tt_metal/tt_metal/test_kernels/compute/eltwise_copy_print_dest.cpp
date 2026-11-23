@@ -45,8 +45,21 @@ void kernel_main() {
     cb_reserve_back(out_id, per_core_tile_cnt);
 #endif
 
+#ifdef ARCH_QUASAR
+    if constexpr (UnpackToDestEn) {
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
+    }
+#endif
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         copy_tile(in_id, b, b);
+    }
+#ifdef ARCH_QUASAR
+    if constexpr (UnpackToDestEn) {
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
+    }
+#endif
+
+    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
 #ifdef ARCH_QUASAR
         // Quasar's config-read wrappers are unwired, so the host tells the kernel the dest format.
         dprint_tensix_dest_reg(static_cast<DataFormat>(get_arg(args::dest_data_format)), b);
