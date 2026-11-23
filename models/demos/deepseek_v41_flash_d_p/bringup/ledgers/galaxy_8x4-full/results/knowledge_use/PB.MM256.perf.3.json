@@ -1,0 +1,30 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [],
+ "cited_only": [
+  "DS41-311",
+  "DS41-314",
+  "DS41-390"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.MM256",
+  "role": "perf",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-11-23T14:30:32",
+  "head": "2c78e0f1b56",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MM256.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_mm256_offon.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

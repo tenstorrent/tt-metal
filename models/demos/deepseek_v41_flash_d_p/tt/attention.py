@@ -2279,7 +2279,7 @@ class TtWindowAttention:
         ydt = gemm_dtype() if (self.glue and bf16_activations()) else ttnn.float32
         out = host_alloc.mm_out(self.mesh, "attn.wo_a", oa, self.wo_a, ydt)
         grid = max_grid()
-        bw = settings.get("WO_A_GMM_BLOCK_W")
+        bw, depth, rt = mm.gmm_knobs(oa.shape, self.wo_a.shape)  # (PB.MM256: GMM256 under MM_TUNED256=on)
         if settings.get("ATTN_ROOFLINE") and gmm_supported(
             tuple(oa.shape), tuple(self.wo_a.shape), oa.dtype, self.wo_a.dtype, ydt, self.mesh, grid, bw
         ):
@@ -2292,7 +2292,8 @@ class TtWindowAttention:
                 output_tensor=out,
                 max_grid=grid,
                 block_w=bw,
-                depth=settings.get("WO_A_GMM_DEPTH"),
+                depth=depth,
+                rt=rt,
             )
         else:
             y = mm.matmul(

@@ -1616,3 +1616,45 @@
   one path: the walls unit with LADDER_CASES=4x1792s LADDER_POS=<histories>.
 - `orchestrator measure --task PB.LAD` (devjob lad_measure): rc 0, failed []; determinism 0.0; quick min layer PCC
   0.7321 (L39, = PB.9G / PB.FX), host_transfers_per_layer 0, chunk wall 216.5 ms (single-request quick chunk, 40 layers).
+
+## PB.MM256 perf (attempt 3): the 8192 chunk's matmuls re-swept on the 8x4 (MM_TUNED256 off | on, call-time)
+
+- Expected saving per chunk (perf_guide read: matmuls at 256 rows a chip are weight-DRAM bound, DS41-191; a config
+  only reorders the same reads, so expect a few % per call, not more): device ~0.7 ms (PS.2's two entries: wq_b
+  0.2519 -> 0.2411, wo_b 0.1812 -> 0.1590 ms, x 20 attention layers) + up to ~1 ms from the rest of the inventory;
+  host 0 (a config per shape, cached; the site memo keys on the switch).
+- Attempt 2's tree kept (switch MM_TUNED256 in settings / hooks batch_call_settings + batch_call_apply, GALAXY256 /
+  GMM256 in tt/mm_configs.py, attention wo_a knobs via mm.gmm_knobs); default changed to off (the brief: "default off
+  until accepted").
+- Load reason (capture): needs the perf model (layers 0-20) because the inventory is every matmul call of a REAL 8192
+  chunk (single + 4x2k) with the model's own L1 view; one load, reused by the gate's perf units later.
+
+## PB.MM256 perf (attempt 4): order-changing winners included (OV-75, OWNER rule 3)
+
+- Expected saving per chunk (pass-1 sweep times x calls a chunk, single 8192): q_a 0.61 + wo_b 0.50 + wq_b 0.28 +
+  wo_a 0.09 + engram_kv 0.05 + indexer/hc/compressor 0.04 = ~1.56 ms device (of ~86 ms, ~1.8 %; matmuls at 256 rows a
+  chip are weight-DRAM bound, DS41-191, so a config buys a few % a call); host 0 (configs cached a shape; the site
+  memo keys on the switch).
+- Kept from attempt 3: switch MM_TUNED256 (settings, hooks batch_call_settings / batch_call_apply), GALAXY256, attention
+  wo_a via mm.gmm_knobs. Reverted attempt 3's edit of the GALAXY engram_kv entry (640 -> 1024 rows) so the 5120 path
+  and the off side are today's bytes (the brief: 5120 unchanged).
+- Added (OV-75: bit-identity / summation order not a criterion): GALAXY256 wq_b minimal M2 K8 N16 sb1x4 (250.1 -> 236.3
+  us; "minimal auto" 230.8 us takes the card's 12 x 10: refused, FIX.15) and GMM256 wo_a (block_w 2, depth 2, rt 1:
+  154.2 -> 149.6 us). Source: attempt 2's sweep, generated/ds41_mm256/pass1/sweep.json (12 shards on single cards).
+- No re-sweep: pass 1 accepted every deterministic candidate bit-identical on random inputs; for bfp8 inputs that
+  rejected none (DS41-390: random bfp8 sums are exact), only the fp32-output compressor calls had rejects (~0.3 ms a
+  chunk in total). The moe_block fork's matmuls (routed_experts_combine 23.5 ms, moe_head 7.1 ms a chunk) take their
+  blocking from the load-time flat layout and the fork's planner: no call-time knob, not swept (would need a reload).
+- test_mm256_offon now gates the on side's repeat (off in slots 0-3, on in 4-7, on again in 0-3: on vs on bitwise over
+  every layer output and served record) and records off vs on rel L2 a layer (diagnostic).
+- Per-chunk values touched (rule 20): none. A config is chosen by the call's shapes / dtypes (load-time constants of
+  the chunk size) and the switch; no position, slot or segment value enters a config.
+- test_mm256_offon gotcha: a chunk re-run in place in a slot already past H is NOT a repeat (the slot keeps its engram
+  host tail and compressor state; start 0 resets them, tt/model.py new_tail): the first version diverged from layer 0.
+  Now: off (slots 0-3), on (4-7) for both cases, slots 0-3 re-prefilled to H, on again in them, then compare.
+- Results (switch on): test_chunk8192_reference PASS (final hidden 0.140 / 0.259, top5 1.0); repeat diffs 0 (single,
+  4x2k, confirm); orchestrator measure: test_mm256_offon / skip_positions / packed_walls / no_rebuild rc 0. Device ms
+  a chunk off -> on (one load): single 87.29 -> 85.19, 4x2k 95.98 -> 95.08. Off vs on: single bit-identical L0-16,
+  rel L2 1.5e-3 at L19; 4x2k bit-identical. Report: results/PB.MM256_ladder.md.
+- Re-run: `gate PB.MM256 --check --unit PB.MM256#test_mm256_offon` (resident runner, perf load);
+  `orchestrator measure --task PB.MM256`.

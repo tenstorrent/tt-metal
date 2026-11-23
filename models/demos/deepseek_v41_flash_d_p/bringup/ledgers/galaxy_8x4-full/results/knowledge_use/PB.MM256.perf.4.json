@@ -1,0 +1,81 @@
+{
+ "used": [
+  {
+   "id": "DS41-390",
+   "how": "order-changing winners (wq_b minimal, wo_a block_w 2) kept under OWNER rule 3; test_mm256_offon gates the on side's repeats, off vs on only a rel-L2 diagnostic",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-311",
+   "how": "test_mm256_offon sets RECORD in every live mm_configs module object the resident runner holds (_mm_globals)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-314",
+   "how": "MM_TUNED256 flipped through packed_common.switch, which writes the held model's frozen settings snapshot as well as the env",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-191",
+   "how": "expected saving sized as a few % a call: 256-row matmuls are weight-DRAM bound",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-390",
+   "evidence": "its Fix ('keep the order', P23_ASSOC) is superseded by OWNER rule 3 (OV-75, 2026-11-23); entry rewritten in known_issues.md",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "moe_block fork matmuls (routed_experts_combine, moe_head) expose no call-time program-config knobs: blocking is load-time (flat layout), so a call-time matmul switch cannot reach ~30 ms a chunk of matmul work"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work; configs only change blocking of the same shapes"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; no stop for owner decisions"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "test_mm256_offon is BATCH_SHARED, BATCH_LAYERS=executed, BATCH_MAX_SEQ=155648 unchanged; switch is call-time, no load-time env"
+  },
+  {
+   "id": "OV-75",
+   "answer": "done",
+   "evidence": "GALAXY256 += wq_b minimal M2 K8 N16 sb1x4 (250.1 -> 236.3 us), GMM256 wo_a (2, 2, 1) (154.2 -> 149.6 us); test gates repeats, not off vs on bytes; test_chunk8192_reference PASS with the switch on (final hidden 0.140 / limit 0.259, top5 1.0)"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.MM256",
+  "role": "perf",
+  "attempt": 4,
+  "agent": "bringup-engineer",
+  "t": "2026-11-23T15:13:14",
+  "head": "52fa4bded83",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MM256.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MM256_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.MM256.perf.4.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_mm256_offon.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

@@ -507,6 +507,178 @@ GALAXY: dict = {
     ),
 }
 
+# MM_TUNED256=on (PB.MM256, OWNER 2026-11-23, call-time): the 8x4 re-sweep of every dense matmul an 8192 chunk runs (256
+# rows a chip; single 8192 and chip-aligned 4x2k make the same 12 calls a layer stack: results/PB.MM256_ladder.md),
+# keyed as GALAXY. Swept in parallel on single cards (tests/perf/test_matmul_sweep.py::test_sweep_card, P23_EXACT=1,
+# P23_SHARD=i/12 over tests/test_mm256_offon.py's capture of a real chunk at 139264), every candidate held to the
+# 11 x 10 matmul grid (FIX.15: <= 110 cores; "minimal auto" takes the card's 12 x 10: refused) and the model's L1 (1399
+# KiB free for CBs at every call); fidelity, dtypes, accumulation the call's own. Kept (OWNER rule 3, 2026-11-23):
+# deterministic (every chip equal, 2 repeats), within the call's accuracy, > 1 % faster. Bit-identity with today's
+# config or its summation order is NOT a criterion: wq_b's minimal and wo_a's block_w 2 change the fp32 summation order
+# over K (DS41-390), judged end to end by test_chunk8192_reference with the switch on. PS.2's two entries (3f9b309b676)
+# were candidates: wq_b minimal (M2 K8 N16 kept below), wo_b 1d bw16 (= the winner below). Looked up before GALAXY /
+# the rule; a 5120 chunk (160 rows a chip) makes none of these keys.
+GALAXY256: dict = {
+    # attn.wo_b x20 a chunk: 0.1809 -> 0.1560 ms (1d in0 pm8 pn2 bw16 sb4x1)
+    ((1, 1, 256, 8192), (1, 1, 8192, 5120), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "1d",
+        {
+            "grid": (11, 10),
+            "in0_block_w": 16,
+            "out_subblock_h": 4,
+            "out_subblock_w": 1,
+            "out_block_h": 8,
+            "out_block_w": 2,
+            "per_core_M": 8,
+            "per_core_N": 2,
+            "mcast_in0": True,
+        },
+    ),
+    # attn.wq_b x20 a chunk: 0.2501 -> 0.2363 ms (minimal M2 K8 N16 sb1x4; today 1d in0 bw8: the K order changes)
+    ((1, 1, 256, 1280), (1, 1, 1280, 32768), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "minimal",
+        {"grid": (11, 10), "M_block_size": 2, "K_block_size": 8, "N_block_size": 16, "subblock_h": 1, "subblock_w": 4},
+    ),
+    # compressor x1 a chunk: 0.0106 -> 0.0089 ms (1d in1 pm1 pn4 bw16 sb1x1)
+    ((1, 1, 1024, 512), (1, 1, 512, 128), "BFLOAT16", "BFLOAT16", "BFLOAT16", True, 11, 10): (
+        "1d",
+        {
+            "grid": (11, 10),
+            "in0_block_w": 16,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 1,
+            "out_block_w": 4,
+            "per_core_M": 1,
+            "per_core_N": 4,
+            "mcast_in0": False,
+        },
+    ),
+    # compressor x3 a chunk: 0.0429 -> 0.0422 ms (2d 11x8 pm1 pn3 ob1x3 bw32 sb1x3)
+    ((1, 1, 256, 5120), (1, 1, 5120, 1024), "BFLOAT16", "BFLOAT16", "FLOAT32", True, 11, 10): (
+        "2d",
+        {
+            "grid": (11, 8),
+            "in0_block_w": 32,
+            "out_subblock_h": 1,
+            "out_subblock_w": 3,
+            "out_block_h": 1,
+            "out_block_w": 3,
+            "per_core_M": 1,
+            "per_core_N": 3,
+            "transpose_mcast": False,
+            "fuse_batch": True,
+        },
+    ),
+    # compressor x1 a chunk: 0.0290 -> 0.0277 ms (2d 8x8 pm1 pn2 ob1x2 bw32 sb1x2)
+    ((1, 1, 256, 5120), (1, 1, 5120, 512), "BFLOAT16", "BFLOAT16", "FLOAT32", True, 11, 10): (
+        "2d",
+        {
+            "grid": (8, 8),
+            "in0_block_w": 32,
+            "out_subblock_h": 1,
+            "out_subblock_w": 2,
+            "out_block_h": 1,
+            "out_block_w": 2,
+            "per_core_M": 1,
+            "per_core_N": 2,
+            "transpose_mcast": False,
+            "fuse_batch": True,
+        },
+    ),
+    # engram_kv x2 a chunk: 0.4209 -> 0.3937 ms (minimal M4 K8 N4 sb4x1)
+    ((1, 1, 1024, 6144), (1, 1, 6144, 6400), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "minimal",
+        {"grid": (11, 10), "M_block_size": 4, "K_block_size": 8, "N_block_size": 4, "subblock_h": 4, "subblock_w": 1},
+    ),
+    # hc.fn x1 a chunk: 0.0932 -> 0.0819 ms (2d 1x4 pm2 pn1 ob2x1 bw32 sb2x1)
+    ((1, 1, 256, 20480), (1, 1, 20480, 32), "BFLOAT16", "FLOAT32", "FLOAT32", True, 11, 10): (
+        "2d",
+        {
+            "grid": (1, 4),
+            "in0_block_w": 32,
+            "out_subblock_h": 2,
+            "out_subblock_w": 1,
+            "out_block_h": 2,
+            "out_block_w": 1,
+            "per_core_M": 2,
+            "per_core_N": 1,
+            "transpose_mcast": False,
+            "fuse_batch": True,
+        },
+    ),
+    # indexer.weights_proj x3 a chunk: 0.0168 -> 0.0156 ms (2d 1x8 pm1 pn1 ob1x1 bw32 sb1x1)
+    ((1, 1, 256, 5120), (1, 1, 5120, 32), "BFLOAT16", "BFLOAT16", "BFLOAT16", True, 11, 10): (
+        "2d",
+        {
+            "grid": (1, 8),
+            "in0_block_w": 32,
+            "out_subblock_h": 1,
+            "out_subblock_w": 1,
+            "out_block_h": 1,
+            "out_block_w": 1,
+            "per_core_M": 1,
+            "per_core_N": 1,
+            "transpose_mcast": False,
+            "fuse_batch": True,
+        },
+    ),
+    # indexer.wq_b x3 a chunk: 0.0387 -> 0.0337 ms (2d 11x8 pm1 pn12 ob1x12 bw8 sb1x4)
+    ((1, 1, 256, 1280), (1, 1, 1280, 4096), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "2d",
+        {
+            "grid": (11, 8),
+            "in0_block_w": 8,
+            "out_subblock_h": 1,
+            "out_subblock_w": 4,
+            "out_block_h": 1,
+            "out_block_w": 12,
+            "per_core_M": 1,
+            "per_core_N": 12,
+            "transpose_mcast": False,
+            "fuse_batch": True,
+        },
+    ),
+    # q_a x20 a chunk: 0.0794 -> 0.0490 ms (2d 10x8 pm1 pn6 ob1x6 bw32 sb1x3)
+    ((1, 1, 256, 5120), (1, 1, 5120, 1792), "BFLOAT8_B", "BFLOAT8_B", "BFLOAT16", True, 11, 10): (
+        "2d",
+        {
+            "grid": (10, 8),
+            "in0_block_w": 32,
+            "out_subblock_h": 1,
+            "out_subblock_w": 3,
+            "out_block_h": 1,
+            "out_block_w": 6,
+            "per_core_M": 1,
+            "per_core_N": 6,
+            "transpose_mcast": False,
+            "fuse_batch": True,
+        },
+    ),
+}
+# MM_TUNED256=on: ttnn.bringup.grouped_matmul knobs (block_w, depth, rt) of the attention's wo_a by (x shape, weight
+# shape) (WO_A_GMM_BLOCK_W / WO_A_GMM_DEPTH, rt 1 otherwise); the same sweep (tests/perf/test_matmul_sweep._sweep_gmm)
+GMM256: dict = {
+    # attn.wo_a x20 a chunk: 0.1542 -> 0.1496 ms (block_w 4 -> 2: the K order changes, DS41-390; depth 4 -> 2)
+    ((1, 8, 256, 4096), (1, 8, 4096, 1024)): (2, 2, 1),
+}
+
+
+def tuned256() -> bool:
+    """MM_TUNED256=on (call-time, PB.MM256): GALAXY256 / GMM256 entries first."""
+    return settings.get("MM_TUNED256") == "on"
+
+
+def gmm_knobs(x_shape, w_shape) -> tuple:
+    """(block_w, depth, rt) of the attention's grouped wo_a: the GMM256 entry under MM_TUNED256=on, else the
+    settings (rt 1, the op's default)."""
+    if mode() == "galaxy" and tuned256():
+        e = GMM256.get((tuple(x_shape), tuple(w_shape)))
+        if e is not None:
+            return tuple(e)
+    return settings.get("WO_A_GMM_BLOCK_W"), settings.get("WO_A_GMM_DEPTH"), 1
+
+
 # minimal_matmul blocking (tiles): the sweep's best within 1-2 % on every bf16-output projection of this run
 MIN_BLOCK_M, MIN_BLOCK_K, MIN_BLOCK_N = 4, 4, 8
 # at most this many row tiles: a wide-N bf16 projection on 1D multicast (P.9: the 160-row projections of ATTN_SP32_PROJ)
@@ -629,7 +801,8 @@ def _mcast_1d(Mt, Kt, Nt, a_dt, w_dt, o_dt, fp32, grid, l1_budget):
 def program_config(x, w, dtype, ckc, batched: bool = False):
     """The tuned (kind, config) of one call, or None (auto); cached by (M, K, N, batch, dtypes, fp32 DEST, grid).
     A batched call (attention wo_a) under WO_A_CONFIG=auto: None (P.24's switch; the path before it).
-    MATMUL_CONFIG=galaxy: the GALAXY entry of the same key when there is one, else the rule."""
+    MATMUL_CONFIG=galaxy: the GALAXY entry of the same key when there is one (under MM_TUNED256=on the GALAXY256
+    entry first), else the rule."""
     shape, wshape = tuple(x.shape), tuple(w.shape)
     if batched and math.prod(wshape[:-2]) > 1 and settings.get("WO_A_CONFIG") == "auto":
         return None
@@ -637,11 +810,15 @@ def program_config(x, w, dtype, ckc, batched: bool = False):
     grid = worker_grid(dev)  # FIX.15: the grid under MAX_WORKER_CORES (11 x 10 on a Galaxy), the whole grid elsewhere
     fp32 = _ckc_fp32(ckc)
     galaxy = mode() == "galaxy"
-    key = (shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y, galaxy)
+    t256 = galaxy and tuned256()
+    key = (shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y, galaxy, t256)
     if key in _cache:
         return _cache[key]
     if galaxy:
-        spec = GALAXY.get(table_key(shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y))
+        tk = table_key(shape, wshape, x.dtype, w.dtype, dtype, fp32, grid.x, grid.y)
+        spec = GALAXY256.get(tk) if t256 else None
+        if spec is None:
+            spec = GALAXY.get(tk)
         if spec is not None:
             _cache[key] = pc = build(spec)
             return pc
@@ -689,7 +866,7 @@ def _site_config(x, w, dtype, ckc, batched: bool = False, rule: bool = True):
         _SITE_MEMO[0] = snap
         _SITE_MEMO[1] = {}
     memo = _SITE_MEMO[1]
-    key = (id(w), id(ckc), dtype, x.dtype, batched, rule)
+    key = (id(w), id(ckc), dtype, x.dtype, batched, rule, snap.get("MM_TUNED256"))
     shape = x.shape
     hit = memo.get(key)
     if hit is not None and hit[0] is w and hit[1] is ckc and hit[2] == shape:

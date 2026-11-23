@@ -41,6 +41,18 @@ TABLE = {
         "DEST, grid), tuned's rule for any call not in it. Dtypes, compute kernel configs, memory configs and the op "
         "sequence are the same either way",
     ),
+    "MM_TUNED256": Setting(
+        "on",
+        ("on", "off"),
+        "PB.MM256 (OWNER 2026-11-23), read per call (CALL-TIME, bringup/hooks.py batch_call_settings / "
+        "batch_call_apply). on = the dense matmuls of an 8192 chunk (256 rows a chip on the 8x4, and the 512 / 1024 "
+        "rows some of them pass) take the 8x4 re-sweep's configs (tt/mm_configs.GALAXY256; GMM256 for the grouped "
+        "wo_a's knobs): each faster, deterministic and within the accuracy limits; wq_b (minimal) and wo_a (block_w "
+        "2) change the fp32 summation order (DS41-390; OWNER rule 3: not a criterion) (results/PB.MM256_ladder.md); "
+        "off = the path before (GALAXY / the rule; wo_a "
+        "WO_A_GMM_*). A 5120 chunk (160 rows a chip) makes none of these keys: unchanged either way. Default off "
+        "until the owner accepts (brief)",
+    ),
     "WO_A_CONFIG": Setting(
         "tuned",
         ("tuned", "auto"),

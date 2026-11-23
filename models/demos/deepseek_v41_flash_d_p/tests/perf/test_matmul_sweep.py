@@ -54,7 +54,15 @@ from models.demos.common.bringup.testing.profile import PositionGolden, position
 from models.demos.deepseek_v41_flash_d_p.tt import mm_configs as mm
 from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
-OUT = pathlib.Path("generated/ds41_p23")
+OUT = pathlib.Path(os.environ.get("P23_OUT", "generated/ds41_p23"))  # PB.MM256: generated/ds41_mm256 (diagnostic)
+# PB.MM256 (P23_EXACT=1, diagnostic): keep only candidates whose output is BIT-IDENTICAL to the current config's (the
+# GALAXY entry, else the rule: what MATMUL_CONFIG=galaxy gives the call with MM_TUNED256=off), on top of the checks
+EXACT = os.environ.get("P23_EXACT") == "1"
+# PB.MM256 (P23_ASSOC=1, diagnostic, with P23_EXACT): only candidates that keep the current config's fp32 summation order
+# over K (DS41-390): the ttnn reuse matmuls (1D / 2D: partials reloaded into DEST, any grid / block / subblock) for a
+# ttnn current config; minimal_matmul at the current K block (its K blocks are summed by the packer's L1 accumulation)
+# for a minimal one; grouped_matmul at the current block_w (likewise)
+ASSOC = os.environ.get("P23_ASSOC") == "1"
 ITERS = int(os.environ.get("P23_ITERS", "20"))
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 DT = {
@@ -213,18 +221,25 @@ def candidates(call: dict, grid, budget: int) -> list[tuple[str, str, object]]:
         # keeps fp32 partials between K blocks), M = one batch's rows; in0 blocks up to 32 tiles of K
         out += _cands_2d(kind, grid, Mt, Kt, Nt, a, b, o, fp32, dst, budget, (1, 2, 4, 8, 16, 32), fuse_batch=False)
         return out
-    out += _cands_2d(kind, grid, Mt, Kt, Nt, a, b, o, fp32, dst, budget, (2, 4, 8, 16), fuse_batch=True)
+    bws2 = (2, 4, 8, 16, 32) if EXACT else (2, 4, 8, 16)  # PB.MM256: + 32 tiles of K
+    out += _cands_2d(kind, grid, Mt, Kt, Nt, a, b, o, fp32, dst, budget, bws2, fuse_batch=True)
     # 1D multicast: in0 (N over the cores, all M a core) or in1 (M over the cores, all N a core)
     cores = grid.x * grid.y
+    shapes1d = []
     for mcast_in0 in (True, False):
         if mcast_in0:
             pm, pn = Mt, math.ceil(Nt / cores)
+            # PB.MM256: also wider per-core N (fewer cores, each more columns) up to twice the minimum
+            pns = range(pn, 2 * pn + 1) if EXACT else (pn,)
+            shapes1d += [(True, pm, q) for q in pns if q == pn or math.ceil(Nt / q) < math.ceil(Nt / (q - 1))]
         else:
             pm, pn = math.ceil(Mt / cores), Nt
-        for bw in (1, 2, 4, 8, 16):
+            shapes1d.append((False, pm, pn))
+    for mcast_in0, pm, pn in shapes1d:
+        for bw in (1, 2, 4, 8, 16, 32) if EXACT else (1, 2, 4, 8, 16):
             if Kt % bw or _l1_2d(pm, pn, bw, a, b, o, fp32) > budget:
                 continue
-            for sh, sw in _subblocks(pm, pn, dst)[:1]:
+            for sh, sw in _subblocks(pm, pn, dst)[: 3 if EXACT else 1]:
                 out.append(
                     (
                         f"1d {'in0' if mcast_in0 else 'in1'} pm{pm} pn{pn} bw{bw} sb{sh}x{sw}",
@@ -247,7 +262,8 @@ def candidates(call: dict, grid, budget: int) -> list[tuple[str, str, object]]:
                 )
     # minimal_matmul (its own reader / writer; bf16 and fp32 outputs both tried, judged by the error vs auto)
     out.append(("minimal auto", "minimal", ("minimal", None)))
-    for mb, kb, nb in itertools.product((4, 8, 16), (4, 8, 16), (4, 8, 16)):
+    blk = ((2, 4, 8, 16), (2, 4, 8, 16, 32), (2, 4, 8, 16)) if EXACT else ((4, 8, 16), (4, 8, 16), (4, 8, 16))
+    for mb, kb, nb in itertools.product(*blk):
         if mb > Mt or nb > Nt or Kt % kb:
             continue
         for sh, sw in _all_subblocks(mb, nb, dst):  # P.24: every subblock (P.23 kept only the first that fit)
@@ -452,6 +468,8 @@ def _sweep(mesh, cap_grid):
     free_all = min(e["free_min"] for e in calls.values())
     si, sn = _shard()
     keys = sorted(calls, key=repr)[si::sn]
+    # PB.MM256: the smallest calls first (a hang or a timeout costs the least)
+    keys.sort(key=lambda k: math.prod(calls[k]["a"]) * calls[k]["b"][-1])
     calls = {k: calls[k] for k in keys}
     print(
         f"[p23] device grid {dev_grid.x}x{dev_grid.y}, candidates on {grid.x}x{grid.y}; shard {si}/{sn}: "
@@ -478,7 +496,7 @@ def _sweep(mesh, cap_grid):
         per_chunk = prof_ms.get((site, shape_key))
         if sel is None and per_chunk is not None and per_chunk < min_ms:
             continue
-        res = _sweep_one(mesh, grid, call, budget)
+        res = (_sweep_gmm if call["op"] == "grouped_matmul" else _sweep_one)(mesh, grid, call, budget)
         res["profile_ms_per_chunk"] = per_chunk
         res["device_grid"] = [dev_grid.x, dev_grid.y]
         results.append(res)
@@ -512,16 +530,24 @@ def _summary(results: list) -> None:
         print(
             f"[p23]  {r['site']:20s} x{r['count']:<3d} {r['shape']} -> {r['out_dtype'][9:]}: auto {b['ms']:.4f} | "
             f"current {c['ms']:.4f} ({c['tag']}) | galaxy {g['ms']:.4f} ({g['tag']}, vs auto max "
-            f"{g['max_vs_auto']:.1e}) | chunk {c['ms'] * r['count']:.3f} -> {g['ms'] * r['count']:.3f} ms"
+            f"{g.get('max_vs_auto', 0.0):.1e}) | chunk {c['ms'] * r['count']:.3f} -> {g['ms'] * r['count']:.3f} ms"
         )
     print(f"[p23]  total over the swept calls: {tot_c:.3f} -> {tot_g:.3f} ms a chunk")
 
 
 def _write_table(results: list) -> None:
     """generated/ds41_p23/galaxy_table.py: the GALAXY entries (paste into tt/mm_configs.py)."""
-    lines = ["GALAXY: dict = {"]
+    lines = ["GALAXY256: dict = {" if EXACT else "GALAXY: dict = {"]
+    gmm = ["GMM256: dict = {"]
     for r in results:
         g = r["galaxy"]
+        if EXACT and g["tag"] == r["current"]["tag"]:
+            continue  # PB.MM256: only the winners (today's config stays where nothing beat it)
+        if r.get("op") == "grouped_matmul":
+            k = r["key"]
+            gmm.append(f"    # {r['site']} x{r['count']}: {r['current']['ms']:.4f} -> {g['ms']:.4f} ms ({g['tag']})")
+            gmm.append(f"    {(tuple(k[0]), tuple(k[1]))!r}: {tuple(g['spec'][1])!r},")
+            continue
         lines.append(
             f"    # {r['site']} x{r['count']} a chunk: {r['current']['ms']:.4f} -> {g['ms']:.4f} ms ({g['tag']})"
         )
@@ -531,6 +557,9 @@ def _write_table(results: list) -> None:
         params = None if params is None else {n: (tuple(v) if isinstance(v, list) else v) for n, v in params.items()}
         lines.append(f"    {key!r}: {(kind, params)!r},")
     lines.append("}")
+    gmm.append("}")
+    if EXACT:
+        lines += gmm
     (OUT / "galaxy_table.py").write_text("\n".join(lines) + "\n")
     print(f"[p23] wrote {OUT / 'galaxy_table.py'} ({len(results)} entries)")
 
@@ -587,10 +616,15 @@ def _bf16_ulp(t: torch.Tensor) -> torch.Tensor:
 
 
 def _current(call, grid, x, w, odt, ckc):
-    """The config MATMUL_CONFIG=tuned gives this call (the rule; rope.pairs: none, as before P.19)."""
+    """The config MATMUL_CONFIG=tuned gives this call (the rule; rope.pairs: none, as before P.19). PB.MM256
+    (P23_EXACT=1): the GALAXY entry of the call's key first (MATMUL_CONFIG=galaxy, MM_TUNED256=off: today's config)."""
+    shape, wshape = tuple(x.shape), tuple(w.shape)
+    if EXACT:
+        tk = mm.table_key(shape, wshape, x.dtype, w.dtype, odt, mm._ckc_fp32(ckc), grid.x, grid.y)
+        if tk in mm.GALAXY:
+            return mm.build(mm.GALAXY[tk])
     if call["site"] == "rope.pairs":
         return None
-    shape, wshape = tuple(x.shape), tuple(w.shape)
     B = math.prod(wshape[:-2])
     M = math.prod(shape[:-1]) if B == 1 else shape[-2]
     return mm.rule(M, shape[-1], wshape[-1], x.dtype, w.dtype, odt, mm._ckc_fp32(ckc), grid, B)
@@ -672,7 +706,21 @@ def _sweep_one(mesh, grid, call, budget) -> dict:
     if cur_pc is not None:
         cands.append(("current", "minimal" if cur_pc[0] == "minimal" else call["op"], cur_spec))
     cands += candidates(call, grid, budget)
+    if ASSOC:  # PB.MM256: the current config's summation order only
+        cur_kind = "auto" if cur_pc is None else cur_pc[0]
+        if cur_kind == "minimal":
+            kb = cur_spec[1]["K_block_size"]
+            cands = [
+                c
+                for c in cands
+                if c[0] in ("auto", "current")
+                or (c[2][0] == "minimal" and c[2][1] is not None and c[2][1]["K_block_size"] == kb)
+            ]
+        else:
+            cands = [c for c in cands if c[2][0] != "minimal"]
+        print(f"[p23]    P23_ASSOC: {len(cands)} candidates keep the current ({cur_kind}) summation order")
     ok = []
+    cur_h = [None]  # PB.MM256 (P23_EXACT): the current config's output (auto's when the rule gives none)
     for tag, kind, spec in cands:
         try:
             fn = fn_of(kind, spec)
@@ -688,6 +736,9 @@ def _sweep_one(mesh, grid, call, budget) -> dict:
             continue
         det = bool(torch.equal(h1, h2)) and all(torch.equal(c, chips[0]) for c in chips)
         same_shape = h1.shape == ref_h.shape
+        if tag == "current" or (tag == "auto" and cur_pc is None):
+            cur_h[0] = h1
+        exact_cur = cur_h[0] is not None and h1.shape == cur_h[0].shape and bool(torch.equal(h1, cur_h[0]))
         d = (h1 - ref_h).abs() if same_shape else None
         ok.append(
             {
@@ -701,6 +752,7 @@ def _sweep_one(mesh, grid, call, budget) -> dict:
                 "within_bf16": bool(same_shape and (d <= _bf16_ulp(torch.maximum(h1.abs(), ref_h.abs()))).all()),
                 "rel_vs_fp64": _rel(h1, truth) if same_shape else float("inf"),
                 "deterministic": det,
+                "exact_vs_current": exact_cur,
             }
         )
     # device time: one profiled pass, a section per candidate
@@ -724,7 +776,14 @@ def _sweep_one(mesh, grid, call, budget) -> dict:
     # than the current config (+ 1 %); the L1 fit is the filler's (a config that clashes fails above)
     lim = cur["rel_vs_fp64"] * 1.01 + 1e-7
 
+    if cur_pc is not None and cur_h[0] is not None:  # (auto ran before the current config: its exactness now)
+        base["exact_vs_current"] = bool(ref_h.shape == cur_h[0].shape and torch.equal(ref_h, cur_h[0]))
+
     def accepted(c):
+        if EXACT:  # PB.MM256: bit-identical to today's config, deterministic, timed; never "minimal auto" (no
+            # config: the op's own grid, the whole 12 x 10 of a card, above the Galaxy's 110-core matmul cap, FIX.15)
+            ok_grid = c["spec"] != ("minimal", None)
+            return ok_grid and c["deterministic"] and c["exact_vs_current"] and c["ms"] == c["ms"]
         return c["deterministic"] and c["within_bf16"] and c["rel_vs_fp64"] <= lim and c["ms"] == c["ms"]
 
     good = sorted((c for c in ok if accepted(c)), key=lambda c: c["ms"])
@@ -740,7 +799,7 @@ def _sweep_one(mesh, grid, call, budget) -> dict:
         print(
             f"[p23]    {c['ms']:.4f} ms x{base['ms'] / c['ms']:.2f}  vs auto {c['rel_vs_auto']:.2e} "
             f"(max {c['max_vs_auto']:.2e}, bf16 {int(c['within_bf16'])})  vs fp64 {c['rel_vs_fp64']:.3e}  "
-            f"det {int(c['deterministic'])}  {c['tag']}"
+            f"det {int(c['deterministic'])}  exact {int(c.get('exact_vs_current', False))}  {c['tag']}"
         )
     print(f"[p23]    galaxy: {galaxy['tag']} {galaxy['ms']:.4f} ms (current {cur['tag']} {cur['ms']:.4f})")
     bad = [c for c in ok if not accepted(c)]
@@ -767,6 +826,121 @@ def _sweep_one(mesh, grid, call, budget) -> dict:
         "best": best,
         "rejected": [c["tag"] for c in bad],
         "configs": keep,
+    }
+
+
+def _sweep_gmm(mesh, grid, call, budget) -> dict:
+    """PB.MM256: ttnn.bringup.grouped_matmul (the attention's wo_a, x [1, G, M, K] @ w [1, G, K, N]): its knobs block_w
+    (K tiles a block), depth (K blocks buffered) and rt (row tiles a DST block) on the call's own grid cap, vs today's
+    (WO_A_GMM_BLOCK_W / WO_A_GMM_DEPTH, rt 1). Kept: deterministic, every chip equal, bit-identical to today's output;
+    the fastest (> 1 % over today) is the GMM256 entry."""
+    from ttnn.bringup.grouped_matmul_ttnn import supported
+
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _s
+
+    a_shape, b_shape = call["a"], call["b"]
+    adt, bdt, odt = DT[call["a_dtype"]], DT[call["b_dtype"]], DT[call["out_dtype"]]
+    ckc = ttnn.init_device_compute_kernel_config(
+        mesh.arch(),
+        math_fidelity=FID[call["fidelity"]],
+        math_approx_mode=call["math_approx_mode"],
+        fp32_dest_acc_en=call["fp32_dest_acc_en"],
+        packer_l1_acc=call["packer_l1_acc"],
+    )
+    K = a_shape[-1]
+    x = _rep(mesh, torch.randn(*a_shape), adt)
+    x2 = _rep(mesh, torch.randn(*a_shape), adt)
+    w = _rep(mesh, torch.randn(*b_shape) / K**0.5, bdt)
+    Mt = a_shape[-2] // 32
+    nt = b_shape[-1] // 32
+    pn_max = -(-nt // min(grid.x, nt))  # (column tiles of the widest core: rt x pn_max tiles in DEST, at most 8)
+    cur_knobs = (int(_s.get("WO_A_GMM_BLOCK_W")), int(_s.get("WO_A_GMM_DEPTH")), 1)
+    knobs = [cur_knobs]
+    for bw in (cur_knobs[0],) if ASSOC else (1, 2, 4, 8, 16, 32):  # (block_w sets the L1-acc summation order)
+        if (K // 32) % bw or not supported(tuple(a_shape), tuple(b_shape), adt, bdt, odt, mesh, grid, bw):
+            continue
+        for depth in (2, 3, 4, 6, 8):
+            for rt in [r for r in _divisors(Mt, 8) if r * pn_max <= 8]:
+                if (bw, depth, rt) not in knobs:
+                    knobs.append((bw, depth, rt))
+
+    def fn_of(k, t=None):
+        bw, depth, rt = k
+        return lambda t=x: ttnn.bringup.grouped_matmul(
+            t, w, dtype=odt, compute_kernel_config=ckc, max_grid=grid, block_w=bw, depth=depth, rt=rt
+        )
+
+    ok, cur_h = [], None
+    for k in knobs:
+        tag = f"gmm bw{k[0]} depth{k[1]} rt{k[2]}"
+        try:
+            fn = fn_of(k)
+            ttnn.deallocate(fn_of(cur_knobs)(x2))  # (other inputs first: stale L1 shows as their result)
+            o1, o2 = fn(), fn()
+            h1, h2 = _chip0(o1), _chip0(o2)
+            chips = [ttnn.to_torch(t).double() for t in ttnn.get_device_tensors(o1)]
+            ttnn.deallocate(o1)
+            ttnn.deallocate(o2)
+        except Exception as ex:  # noqa: BLE001 (a knob set the op refuses: L1)
+            print(f"[p23]    {tag}: FAILED {str(ex).splitlines()[0][:100]}")
+            continue
+        if k == cur_knobs:
+            cur_h = h1
+        det = bool(torch.equal(h1, h2)) and all(torch.equal(c, chips[0]) for c in chips)
+        exact = cur_h is not None and bool(torch.equal(h1, cur_h))
+        ok.append(
+            {
+                "tag": tag,
+                "kind": "gmm",
+                "spec": ("gmm", list(k)),
+                "fn": fn,
+                "deterministic": det,
+                "exact_vs_current": exact,
+            }
+        )
+    profiler.enable(mesh, rt=True)
+    try:
+        for c in ok:
+            profiler.signpost(c["tag"])
+            for _ in range(ITERS):
+                ttnn.deallocate(c["fn"]())
+        profiler.signpost("end")
+        profiler.finish_rt()
+        prof = profiler.result()
+    finally:
+        profiler.disable()
+    for c in ok:
+        c["ms"] = prof["kernel_ns"].get(c["tag"], float("nan")) / ITERS / 1e6
+        del c["fn"]
+    cur = ok[0]
+    good = sorted(
+        (c for c in ok if c["deterministic"] and c["exact_vs_current"] and c["ms"] == c["ms"]), key=lambda c: c["ms"]
+    )
+    best = good[0] if good else cur
+    galaxy = best if best["ms"] < cur["ms"] * 0.99 else cur
+    print(f"[p23] == {call['site']} gmm {_shape_str(call)} x{call['count']}: {len(ok)} knob sets ran")
+    for c in good[:8] + ([cur] if cur not in good[:8] else []):
+        print(
+            f"[p23]    {c['ms']:.4f} ms  det {int(c['deterministic'])} exact {int(c['exact_vs_current'])}  {c['tag']}"
+        )
+    print(f"[p23]    galaxy: {galaxy['tag']} {galaxy['ms']:.4f} ms (current {cur['tag']} {cur['ms']:.4f})")
+    for t in (x, x2, w):
+        ttnn.deallocate(t)
+    return {
+        "site": call["site"],
+        "shape": _shape_str(call),
+        "out_dtype": call["out_dtype"],
+        "fidelity": call["fidelity"],
+        "fp32": call["fp32_dest_acc_en"],
+        "key": [list(a_shape), list(b_shape)],
+        "op": "grouped_matmul",
+        "count": call["count"],
+        "auto": cur,
+        "current": cur,
+        "galaxy": galaxy,
+        "best": best,
+        "rejected": [c["tag"] for c in ok if c not in good],
+        "configs": good[:8] + ([cur] if cur not in good[:8] else []),
     }
 
 

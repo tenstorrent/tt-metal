@@ -1388,3 +1388,13 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   every faster config; accuracy by test_chunk8192_reference.py with the switch on (reference limits) + the framework's
   fresh-process determinism + on-repeats exact (mm256_repeat_max_abs_diff == 0) + ladder + cold no-rebuild; off vs on
   rel L2 a diagnostic. MB.9's text fixed the same way (accuracy by test_ladder last rung). Resumed.
+- 14:51 heartbeat: PB.MM256 attempt 4 active (transcript live). Runner requests at 14:37 (732 s) and 14:42 (324 s), rc 0. A device process now holds 201 GB RSS (a full model load in progress, likely the accuracy / determinism check); host used 250 GB, avail 310, unaccounted (leaked) 12 GB.
+- 15:13 PB.MM256 agent done (attempt 4); DS41-390 rewritten by the agent to follow owner rule 3 (expected). Orchestrator A/B running: off side in one process (offon, skip_positions, packed_walls, no_rebuild).
+- 15:35 PB.MM256 A/B: every gate unit PASS on; repeats exact; no-rebuild PASS (0 builds) on every case. Device (139264,
+  slowest chip, off -> on): single q_a 2.44 -> 1.83, attention 27.11 -> 26.38, attn_residual 5.63 -> 4.82; 4x2k q_a
+  2.06 -> 1.54, attention 26.06 -> 25.60 (~1.2-2 ms a chunk; sweep estimate 1.56). Tuned: q_a, wo_b, wq_b (minimal, order
+  change, owner rule 3), wo_a gmm bw2, engram_kv, indexer, hc.fn, compressor. Walls mostly +0.2..1.4k tok/s (noise level).
+  MoE block fork matmuls (~30.6 ms a chunk) not swept: blocking fixed at load, no call-time knob. Cost: 6 runner restarts,
+  9 model loads. ACCEPTED (owner rule: device win + gate PASS); the accept gate judges accuracy (test_chunk8192_reference,
+  fresh full model, switch on) + determinism. Resumed.
+- 15:51 PB.MM256 accept gate: determinism 0.0 (3 runs, 4 chunks, fresh process), test_chunk8192_reference with MM_TUNED256=on: err_final_hidden 0.1345 (limit 0.2422) last / 0.1400 (0.2586) from0, top-5 1.0, worst layer 0.63 of its limit (L07); units 5-6 (packed walls, no-rebuild) finishing.
