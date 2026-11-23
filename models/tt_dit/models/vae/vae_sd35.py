@@ -319,7 +319,9 @@ class Attention(Module):
         k = self.reorder_for_attention(k, b, self.num_heads, head_dim)
         v = self.reorder_for_attention(v, b, self.num_heads, head_dim)
 
-        x = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False)
+        x = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, precision=ttnn.SDPAPrecision.STANDARD
+        )
         x = ttnn.reshape(ttnn.permute(x, (0, 2, 1, 3)), (b, h, w, inner_dim))
 
         for to_out in self.to_out:

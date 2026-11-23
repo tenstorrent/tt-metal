@@ -31,10 +31,10 @@ if TYPE_CHECKING:
 # (to a tile multiple below it) so only a handful of distinct shapes ever reach the device,
 # minimizing JIT recompiles while bounding padding waste. This is purely that bucketing
 # tradeoff — SDPA pads+masks a partial last chunk internally, so nothing needs to be aligned
-# to it. (Also reused as the flash-SDPA q/k chunk size, an independent perf-tiling knob.)
+# to it.
 SEQ_BUCKET_SIZE = 128
-# Largest SP shard whose fp32-accumulate ring SDPA program fits Wormhole's kernel-config buffer;
-# see `Qwen3VlAttention._ring_compute_kernel_config`. This was the largest power of 2 that was
+# Largest SP shard whose fp32-accumulate ring SDPA program fit Wormhole's kernel-config buffer;
+# see `Qwen3VlAttention._ring_precision`. This was the largest power of 2 that was
 # empirically observed to be okay with fp32_accumulate = True, but may change in the future.
 _RING_FP32_ACC_MAX_LOCAL_ROWS_WH = 512
 
@@ -610,12 +610,11 @@ class Qwen3VlAttention(Module):
         self._qkv_config = _pinned_matmul_config(ctx, hidden_size, self.qkv_proj.out_features // tp_factor)
         self._o_config = _pinned_matmul_config(ctx, padded_heads * head_dim, hidden_size // tp_factor)
 
-        self._sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            # packer_l1_acc=True,
-        )
+        # The op chooses the SDPA chunk sizes on these grids; the last column of the ring grid runs the CCL workers.
+        full_grid = ctx.device.compute_with_storage_grid_size()
+        self._sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=full_grid)
+        self._ring_worker_grid = (full_grid.x - 1, full_grid.y)
+        self._ring_sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self._ring_worker_grid)
 
         self._head_dim = head_dim
         self._group_count = group_count
@@ -728,8 +727,7 @@ class Qwen3VlAttention(Module):
                 v,
                 attn_mask=attention_bias,
                 is_causal=attention_bias is None,
-                program_config=self._sdpa_program_config(q.shape[2]),
-                compute_kernel_config=self._sdpa_compute_kernel_config,
+                program_config=self._sdpa_program_config,
                 precision=ttnn.SDPAPrecision.ACCURATE,
             )
 
@@ -749,52 +747,13 @@ class Qwen3VlAttention(Module):
 
         return x
 
-    def _sdpa_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
-        grid_size = self._device.compute_with_storage_grid_size()
-
-        seq_len = -(-seq_len // 32) * 32
-        chunk_size = min(seq_len, SEQ_BUCKET_SIZE)  # flash q/k tiling; SDPA handles a partial last chunk
-
-        return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            q_chunk_size=chunk_size,
-            k_chunk_size=min(seq_len, 512),
-            exp_approx_mode=False,
-        )
-
-    def _ring_program_config(self, local_seq_len: int) -> tuple[ttnn.SDPAProgramConfig, tuple[int, int]]:
-        """Ring SDPA config sized from the local shard; reserves the last core column for CCL workers."""
-        full_grid = self._device.compute_with_storage_grid_size()
-        worker_grid = (full_grid.x - 1, full_grid.y)
-        chunk = min(-(-local_seq_len // 32) * 32, SEQ_BUCKET_SIZE)
-        cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=worker_grid,
-            q_chunk_size=chunk,
-            k_chunk_size=min(-(-local_seq_len // 32) * 32, 512),
-            exp_approx_mode=False,
-        )
-        return cfg, worker_grid
-
-    def _ring_compute_kernel_config(self, local_seq_len: int):
-        """This helper turns off fp32_dest_acc_en from the kernel config when it wouldn't fit
-        on the kernel config buffer.
-
-        By default we set `fp32_dest_acc_en=True` but that selects the ring joint SDPA's
-        legacy compute path, whose kernels are larger than the streaming path's. Some ring
-        SDPA configs on Wormhole are too big to fit on the kernel config buffer, so
-        we set it to false in that case so it can fit. TODO: Consider maybe not making
-        this a silent change/fallback for an edge case but require it at the beginning for WH.
-
-        Only tested for wormhole, TODO: unify for both wormhole and blackhole.
-        """
+    def _ring_precision(self, local_seq_len: int) -> ttnn.SDPAPrecision:
+        """ACCURATE (it ran FP32 DEST), except STANDARD for long local shards on Wormhole, which ran without FP32
+        DEST so the legacy ring kernels fit the kernel config buffer."""
         rows = -(-local_seq_len // 32) * 32
         if self._device.arch() == ttnn.device.Arch.WORMHOLE_B0 and rows > _RING_FP32_ACC_MAX_LOCAL_ROWS_WH:
-            return ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-            )
-        return self._sdpa_compute_kernel_config
+            return ttnn.SDPAPrecision.STANDARD
+        return ttnn.SDPAPrecision.ACCURATE
 
     def _empty_joint_tensors(self) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         empty_q = tensor.bf16_tensor(torch.zeros(1, self._num_local_heads, 0, self._head_dim), device=self._device)
@@ -809,10 +768,8 @@ class Qwen3VlAttention(Module):
         local_seq_len = q.shape[2]
         if self._dynamic_length and logical_n is None:
             raise ValueError("dynamic_length needs logical_n")
-        # With the length as a runtime argument the chunks follow the rows up to one bucket only, then stay fixed.
+        # With the length as a runtime argument the recipe follows the rows up to one bucket only, then stays fixed.
         config_rows = min(local_seq_len, SEQ_BUCKET_SIZE) if self._dynamic_length else local_seq_len
-        pc, worker_grid = self._ring_program_config(config_rows)
-        compute_kernel_config = self._ring_compute_kernel_config(config_rows)
         empty_q, empty_kv = self._empty_joint
         attn, _joint, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q,
@@ -829,10 +786,8 @@ class Qwen3VlAttention(Module):
             ),
             joint_strategy="rear",
             logical_n=logical_n if self._dynamic_length else local_seq_len * self._sp_factor,
-            program_config=pc,
-            compute_kernel_config=compute_kernel_config,
-            # Ring joint SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
-            precision=ttnn.SDPAPrecision.ACCURATE if compute_kernel_config.fp32_dest_acc_en else None,
+            program_config=self._ring_sdpa_program_config,
+            precision=self._ring_precision(config_rows),
             dim=2,
             scale=self._head_dim**-0.5,
             multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(sp_axis),
@@ -841,7 +796,7 @@ class Qwen3VlAttention(Module):
             mesh_device=self._device,
             topology=ccl.topology,
             subdevice_id=ccl.ccl_sub_device_id,
-            ccl_core_grid_offset=(worker_grid[0], 0),
+            ccl_core_grid_offset=(self._ring_worker_grid[0], 0),
             use_column_major_ccl=True,
             is_causal=True,
             is_balanced=False,

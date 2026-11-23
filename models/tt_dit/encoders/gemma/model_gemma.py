@@ -192,11 +192,9 @@ class GemmaAttention(Module):
         self.q_norm = GemmaRMSNorm(config, mesh_device, dim=self.head_dim)
         self.k_norm = GemmaRMSNorm(config, mesh_device, dim=self.head_dim)
 
+        # The op chooses the SDPA chunk sizes on this grid.
         self.sdpa_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=128,
-            k_chunk_size=128,
-            exp_approx_mode=False,
+            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size()
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -278,7 +276,6 @@ class GemmaAttention(Module):
             attn_mask=attn_mask,
             scale=1.0 / math.sqrt(self.head_dim),
             program_config=self.sdpa_config,
-            compute_kernel_config=self.compute_config,
             precision=ttnn.SDPAPrecision.ACCURATE,
         )
 

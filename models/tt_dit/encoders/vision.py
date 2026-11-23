@@ -377,44 +377,18 @@ class VisionAttention(Module):
 
         self._rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
-        # Match the decoder attention's SDPA precision (`model_qwen3vl.py::Qwen3VlAttention`):
-        # HiFi4 with fp32 accumulation. The default is lower precision, and while a single block still
-        # scores ~99.99% either way, 27 of them compound -- the tower is deep enough that the
-        # difference is visible in the merged output where one block hides it.
-        self._sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        # SDPA runs ACCURATE, as the decoder attention (`model_qwen3vl.py::Qwen3VlAttention`) does: a single block
+        # scores ~99.99% at lower precision too, but 27 of them compound. RoPE runs HiFi4 with fp32 accumulation.
+        self._rope_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-
-    def _ring_program_config(self, local_seq_len: int) -> ttnn.SDPAProgramConfig:
-        """Flash tiling for the ring, sized from the LOCAL shard.
-
-        Built per call rather than in `__init__` like the replicated path's config, because the shard
-        length is a property of the request (patch count / sp_factor) and a chunk larger than the shard
-        over-reads it. Mirrors the decoder's `_sdpa_program_config` clamp.
-        """
-        chunk = min(-(-local_seq_len // _TILE) * _TILE, 128)
-        return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self._sdpa_worker_grid,
-            q_chunk_size=chunk,
-            k_chunk_size=chunk,
-            exp_approx_mode=False,  # False is the more accurate softmax
+        # The op chooses the SDPA chunk sizes on these grids.
+        self._sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size()
         )
-
-    def _windowed_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
-        """Flash tiling for windowed (block-diagonal) attention.
-
-        Large K chunk is a fidelity choice (fewer streaming-softmax rescales); (64, 960) is the largest
-        that fits the pipeline's L1.
-        """
-        tiles = -(-seq_len // _TILE) * _TILE
-        return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=min(tiles, 64),
-            k_chunk_size=min(tiles, 960),
-            exp_approx_mode=False,
-        )
+        self._ring_sdpa_program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=self._sdpa_worker_grid)
 
     def _rope_interleave_qk(self, parts: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
         """Permute only the q and k thirds of a `[q|k|v]` pack SPLIT->INTERLEAVED; leave v as is."""
@@ -469,7 +443,7 @@ class VisionAttention(Module):
             sin,
             self._rope_trans_mat,
             is_decode_mode=False,
-            compute_kernel_config=self._sdpa_compute_kernel_config,
+            compute_kernel_config=self._rope_compute_kernel_config,
         )
         k = ttnn.experimental.rotary_embedding_llama(
             k,
@@ -477,7 +451,7 @@ class VisionAttention(Module):
             sin,
             self._rope_trans_mat,
             is_decode_mode=False,
-            compute_kernel_config=self._sdpa_compute_kernel_config,
+            compute_kernel_config=self._rope_compute_kernel_config,
         )
 
         single_block = cu_seqlens is None or len(cu_seqlens) <= 2
@@ -502,8 +476,7 @@ class VisionAttention(Module):
                 v,
                 is_causal=False,
                 scale=self.scale,
-                program_config=self._windowed_program_config(seq_len),
-                compute_kernel_config=self._sdpa_compute_kernel_config,
+                program_config=self._sdpa_program_config,
                 precision=ttnn.SDPAPrecision.ACCURATE,
             )
         else:
@@ -522,8 +495,7 @@ class VisionAttention(Module):
                 v,
                 is_causal=False,
                 scale=self.scale,
-                program_config=self._windowed_program_config(seq_len),
-                compute_kernel_config=self._sdpa_compute_kernel_config,
+                program_config=self._sdpa_program_config,
                 precision=ttnn.SDPAPrecision.ACCURATE,
                 cu_window_seqlens=cu_window,
             )
@@ -558,9 +530,7 @@ class VisionAttention(Module):
             ),
             joint_strategy="rear",
             logical_n=local_seq_len * self._p.sp_factor,
-            program_config=self._ring_program_config(local_seq_len),
-            compute_kernel_config=self._sdpa_compute_kernel_config,
-            # Ring joint SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+            program_config=self._ring_sdpa_program_config,
             precision=ttnn.SDPAPrecision.ACCURATE,
             dim=2,
             scale=self.scale,
@@ -609,8 +579,7 @@ class VisionAttention(Module):
             v,
             is_causal=False,
             scale=self.scale,
-            program_config=self._windowed_program_config(local_seq_len),
-            compute_kernel_config=self._sdpa_compute_kernel_config,
+            program_config=self._sdpa_program_config,
             precision=ttnn.SDPAPrecision.ACCURATE,
             cu_window_seqlens=cu_window,
             windowed_q_token_offset_tensor=q_offsets,

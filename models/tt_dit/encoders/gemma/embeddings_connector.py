@@ -192,19 +192,13 @@ class ConnectorBlock(Module):
             )
 
         grid = self.mesh_device.compute_with_storage_grid_size()
-        sdpa_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid,
-            q_chunk_size=256,
-            k_chunk_size=256,
-            exp_approx_mode=False,
-        )
+        sdpa_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid)  # the op chooses the chunks
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             is_causal=False,
             program_config=sdpa_config,
-            compute_kernel_config=self.compute_config,
             precision=ttnn.SDPAPrecision.ACCURATE,
         )  # (B, n_local_heads, T, D)
 

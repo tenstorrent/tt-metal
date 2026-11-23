@@ -12,7 +12,6 @@ from diffusers import BriaFiboTransformer2DModel
 from diffusers.configuration_utils import FrozenDict
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.tt_dit.blocks.transformer_block import TransformerBlock, _chunk_time3d
 from models.tt_dit.layers.embeddings import TimestepEmbedding, Timesteps
 from models.tt_dit.layers.linear import ColParallelLinear, Linear
@@ -98,14 +97,6 @@ class FiboCaptionProjection(Module):
 
 
 class FiboTransformer(Module):
-    sdpa_chunk_size_map = {
-        (False, 2, 4): (128, 512),
-        (False, 8, 4): (128, 256),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (64, 512),
-    }
-    default_sdpa_chunk_size = (128, 512)
-
     def __init__(
         self,
         *,
@@ -133,15 +124,6 @@ class FiboTransformer(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
-        q_chunk_size, k_chunk_size = self.sdpa_chunk_size_map.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
-        )
-
         self.time_embed = FiboTimestepEmbedding(embedding_dim=inner_dim, mesh_device=mesh_device)
 
         self.context_embedder = ColParallelLinear(
@@ -168,9 +150,6 @@ class FiboTransformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=mesh_device,
-                attention_k_chunk_size=k_chunk_size,
-                attention_q_chunk_size=q_chunk_size,
-                attention_exp_approx_mode=True,
             )
             for _ in range(num_layers)
         )
@@ -184,9 +163,6 @@ class FiboTransformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=mesh_device,
-                attention_k_chunk_size=k_chunk_size,
-                attention_q_chunk_size=q_chunk_size,
-                attention_exp_approx_mode=True,
             )
             for _ in range(num_single_layers)
         )

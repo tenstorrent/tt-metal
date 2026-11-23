@@ -132,13 +132,8 @@ class TimeTextProjection(Module):
 class MotifTransformer(Module):
     ENCODED_TEXT_DIM = 4096
     LATENT_CHANNELS = 16
-    K_CHUNK_SIZE_BASE = 1024
-    Q_CHUNK_SIZE = 128
-    # Approximate softmax exponential in joint SDPA. The sp > 1 (ring-joint streaming) path always uses
-    # it, and the sp == 1 path did too until #57180 made the joint kernel honour exp_approx_mode=False:
-    # on Wormhole the accurate bf16-dest exponential added ~0.1 s per denoising step on T3K (+24 %),
-    # while the attention PCC gate (0.996) passes either way (0.99973 approx vs 0.99983 accurate).
-    SDPA_EXP_APPROX_MODE = True
+    # The padded spatial sequence is a multiple of SEQUENCE_PADDING_BASE tokens.
+    SEQUENCE_PADDING_BASE = 1024
 
     def __init__(
         self,
@@ -178,7 +173,7 @@ class MotifTransformer(Module):
 
         self.spatial_sequence_length = raw_spatial_sequence_length + config.register_token_num
         self.spatial_sequence_padding = Attention.spatial_sequence_padding_length(
-            length=self.spatial_sequence_length, sp_factor=sp_factor, k_chunk_size=self.get_k_chunk_size(sp_factor)
+            length=self.spatial_sequence_length, sp_factor=sp_factor, multiple=self.sequence_padding_multiple(sp_factor)
         )
         self.padded_spatial_sequence_length = self.spatial_sequence_length + self.spatial_sequence_padding
 
@@ -223,9 +218,6 @@ class MotifTransformer(Module):
                 parallel_config=parallel_config,
                 padding_config=padding_config,
                 mesh_device=mesh_device,
-                attention_k_chunk_size=self.get_k_chunk_size(sp_factor),
-                attention_q_chunk_size=self.Q_CHUNK_SIZE,
-                attention_exp_approx_mode=self.SDPA_EXP_APPROX_MODE,
             )
             for i in range(config.num_layers)
         )
@@ -263,11 +255,9 @@ class MotifTransformer(Module):
         )
 
     @classmethod
-    def get_k_chunk_size(cls, sp_factor: int) -> int:
-        """
-        Get the k chunk size for the attention block based on the sequence parallelism factor for the transformer.
-        """
-        return cls.K_CHUNK_SIZE_BASE // sp_factor
+    def sequence_padding_multiple(cls, sp_factor: int) -> int:
+        """Per-device padding multiple of the spatial sequence."""
+        return cls.SEQUENCE_PADDING_BASE // sp_factor
 
     # We do not shard the last dimension of spatial, because its dimension is less than the tile
     # size for a device count of four and more. This requires padding, which is not currently
