@@ -58,27 +58,29 @@ MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
 # process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox, Galaxy and Galaxy 4x4: CI
-# hosts. Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
+# hosts; Galaxy and Galaxy 4x4 then scaled by the q-in-L1 change's measured speedup (3 interleaved runs each of main and
+# the change on one Galaxy; ratios under 1% left unapplied), LoudBox by Galaxy's (same 160 q rows per chip, not
+# measured). Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled Galaxy (3 runs), unscaled.
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (3.05, 2.73, 6.68, 6.37),
-        "glm_5_3": (3.01, 2.52, 6.46, 6.01),
-        "glm_5_3-no_indexer": (2.34, 2.03, 2.39, 2.09),
+        "kimi_k3_1": (2.88, 2.54, 6.47, 6.18),
+        "glm_5_3": (2.91, 2.44, 6.46, 6.01),
+        "glm_5_3-no_indexer": (2.34, 2.00, 2.39, 2.07),
     },
     "Galaxy 4x4": {
-        "kimi_k3_1": (3.45, 3.16, 7.45, 7.18),
-        "glm_5_3": (3.00, 2.78, 6.89, 6.62),
-        "glm_5_3-no_indexer": (2.35, 2.32, 4.72, 4.63),
+        "kimi_k3_1": (3.25, 3.00, 7.21, 6.98),
+        "glm_5_3": (2.91, 2.69, 6.81, 6.53),
+        "glm_5_3-no_indexer": (2.29, 2.23, 4.72, 4.56),
     },
     "Galaxy 4x4 subtorus": {
-        "kimi_k3_1": (3.48, 3.14, 7.32, 6.93),
-        "glm_5_3": (3.18, 2.76, 6.85, 6.42),
-        "glm_5_3-no_indexer": (2.40, 2.11, 2.48, 2.20),
+        "kimi_k3_1": (2.97, 2.80, 6.62, 6.37),
+        "glm_5_3": (2.78, 2.52, 6.43, 6.15),
+        "glm_5_3-no_indexer": (2.14, 1.98, 2.22, 2.08),
     },
     "LoudBox": {
-        "kimi_k3_1": (2.72, 2.57, 3.94, 3.82),
-        "glm_5_3": (2.44, 2.27, 3.62, 3.46),
-        "glm_5_3-no_indexer": (1.97, 1.95, 2.71, 2.70),
+        "kimi_k3_1": (2.57, 2.38, 3.82, 3.71),
+        "glm_5_3": (2.36, 2.20, 3.62, 3.46),
+        "glm_5_3-no_indexer": (1.97, 1.92, 2.71, 2.67),
     },
 }
 PERF_TARGETS_MS = {
