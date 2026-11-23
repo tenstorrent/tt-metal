@@ -191,6 +191,8 @@ private:
     // Overlap mode (TT_METAL_TRACE_ALLOC_OVERLAP): each trace keeps the address ranges its capture allocated.
     void begin_trace_footprint(const distributed::MeshTraceId& trace_id);
     void record_trace_footprint(const Buffer* buffer, DeviceAddr address);
+    // Static circular buffers of a program enqueued during a capture are rewritten by replay but are not buffers.
+    void record_trace_l1_region(DeviceAddr region_end);
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ranges(
         SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
     void record_deallocation(size_t buffer_unique_id);
@@ -249,6 +251,8 @@ private:
     // Overlap mode only. A footprint holds sorted, disjoint [begin, end) per-bank address ranges per buffer type.
     struct TraceFootprint {
         std::unordered_map<BufferType, std::vector<std::pair<DeviceAddr, DeviceAddr>>> ranges;
+        // Highest end of the static CB/DFB regions of the programs captured; covers L1 [0, end).
+        DeviceAddr static_l1_region_end = 0;
         void add(BufferType type, DeviceAddr begin, DeviceAddr end);
         void coalesce();
         bool overlaps(BufferType type, DeviceAddr begin, DeviceAddr end) const;

@@ -293,6 +293,15 @@ std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators() const {
     return this->trace_allocators(sub_device_manager_tracker_->get_active_sub_device_manager_id());
 }
 
+void MeshDeviceImpl::record_trace_l1_region(DeviceAddr region_end) {
+    if (region_end == 0) {
+        return;
+    }
+    for (auto* allocator : this->trace_allocators()) {
+        allocator->record_trace_l1_region(region_end);
+    }
+}
+
 std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators(SubDeviceManagerId manager_id) const {
     this->validate_sub_device_manager_tracker();
     const auto* default_manager = sub_device_manager_tracker_->get_default_sub_device_manager();

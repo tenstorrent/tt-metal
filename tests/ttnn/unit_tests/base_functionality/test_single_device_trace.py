@@ -424,6 +424,59 @@ def test_trace_allocation_overlap_reports_only_overlapping_buffers(device, memor
 
 
 @skip_for_slow_dispatch()
+@pytest.mark.skipif(
+    not trace_allocation_tracker.TRACE_ALLOC_OVERLAP, reason="requires TT_METAL_TRACE_ALLOC_OVERLAP=1 at startup"
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_trace_allocation_overlap_reports_l1_in_traced_circular_buffers(device, expect_error):
+    # Every buffer the capture allocates is in DRAM; in L1 the trace only uses its programs' circular buffers.
+    shape = ttnn.Shape((1, 1, 32, 32))
+    trace_input = ttnn.allocate_tensor_on_device(
+        shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn.neg(trace_input, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    trace_output = ttnn.neg(trace_input, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    # Fill L1 so that the lowest buffers reach down into the circular-buffer region.
+    l1_tensors = []
+    try:
+        while len(l1_tensors) < 4096:
+            l1_tensors.append(
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape((1, 1, 128, 1024)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
+                )
+            )
+    except RuntimeError as error:
+        assert "Out of Memory" in str(error)
+    try:
+        by_id = {tensor.buffer_unique_id(): tensor for tensor in l1_tensors}
+        unsafe = ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+        assert unsafe and set(unsafe) <= set(by_id)
+        ranges = ttnn._ttnn.operations.trace.get_unsafe_tracked_ranges(device, trace_id)
+        assert all(ranges[buffer_id].startswith("L1 [") for buffer_id in unsafe)
+        # Only the lowest L1 buffers count: each reported buffer sits below every buffer that is not reported.
+        reported = [by_id[buffer_id].buffer_address() for buffer_id in unsafe]
+        others = [tensor.buffer_address() for buffer_id, tensor in by_id.items() if buffer_id not in unsafe]
+        assert others and max(reported) < min(others)
+
+        with expect_error(RuntimeError, rf"before replay of trace {int(trace_id)} in memory its capture used") as error:
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert "L1 [" in str(error.value)
+
+        for buffer_id in unsafe:
+            by_id[buffer_id].deallocate()
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert trace_output.is_allocated()
+    finally:
+        ttnn.release_trace(device, trace_id)
+        for tensor in l1_tensors:
+            if tensor.is_allocated():
+                tensor.deallocate()
+
+
+@skip_for_slow_dispatch()
 @pytest.mark.skipif(trace_allocation_tracker.TRACE_ALLOC_TRACKING, reason="checks the default, untracked mode")
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
 def test_trace_allocation_overlap_check_is_off_by_default(device):

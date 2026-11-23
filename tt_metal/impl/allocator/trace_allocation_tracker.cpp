@@ -117,6 +117,7 @@ void AllocatorImpl::TraceFootprint::add(BufferType type, DeviceAddr begin, Devic
 }
 
 void AllocatorImpl::TraceFootprint::coalesce() {
+    add(BufferType::L1, 0, static_l1_region_end);
     for (auto& [type, type_ranges] : ranges) {
         std::sort(type_ranges.begin(), type_ranges.end());
         std::vector<std::pair<DeviceAddr, DeviceAddr>> merged;
@@ -161,6 +162,13 @@ void AllocatorImpl::record_trace_footprint(const Buffer* buffer, DeviceAddr addr
     const DeviceAddr end = address + buffer->aligned_size_per_bank();
     for (auto& [trace_id, footprint] : capturing_footprints_) {
         footprint.add(buffer->buffer_type(), address, end);
+    }
+}
+
+void AllocatorImpl::record_trace_l1_region(DeviceAddr region_end) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& [trace_id, footprint] : capturing_footprints_) {
+        footprint.static_l1_region_end = std::max(footprint.static_l1_region_end, region_end);
     }
 }
 
