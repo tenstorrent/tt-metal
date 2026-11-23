@@ -142,12 +142,11 @@ DataCollector::ProgramMetadataStore& DataCollector::program_metadata_store() {
 void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
     // The real-time profiler currently narrows the runtime ID to 16 bits, so we do the same here.
     uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
-    uint64_t program_id = program.get_id();
-    auto& store = program_metadata_store();
-    std::lock_guard<std::mutex> lock(store.mutex);
-    auto [it, inserted] = store.program_id_to_metadata.try_emplace(program_id);
-    if (inserted) {
-        auto& kernel_sources = it->second.kernel_sources;
+    const ProgramMetadata* metadata = program.metadata();
+    if (metadata == nullptr) {
+        auto& store = program_metadata_store();
+        std::lock_guard<std::mutex> lock(store.mutex);
+        std::vector<std::string_view> kernel_sources;
         const auto& hal = env_.get_hal();
         for (uint32_t i = 0; i < hal.get_programmable_core_type_count(); i++) {
             for (const auto& [handle, kernel] : program.get_kernels(i)) {
@@ -158,8 +157,10 @@ void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
                 kernel_sources.emplace_back(stored_path);
             }
         }
+        metadata = &*store.metadata.insert(ProgramMetadata{std::move(kernel_sources)}).first;
+        program.set_metadata(metadata);
     }
-    runtime_id_to_metadata_[runtime_id].store(&it->second, std::memory_order_release);
+    runtime_id_to_metadata_[runtime_id].store(metadata, std::memory_order_release);
 }
 
 void DataCollector::RecordProgramSubDevice(

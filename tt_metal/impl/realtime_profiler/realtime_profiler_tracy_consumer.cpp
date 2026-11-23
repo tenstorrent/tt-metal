@@ -176,7 +176,6 @@ void RealtimeProfilerTracyConsumer::apply_add(const Event& event) {
 }
 
 void RealtimeProfilerTracyConsumer::apply_remove(const Event& event) {
-    srcloc_of_sources_.clear();
     Chip& chip = chips_[event.chip_id];
     flush_stall_message(event.chip_id, chip);
     TracyTTDestroy(chip.ctx);
@@ -226,39 +225,31 @@ void RealtimeProfilerTracyConsumer::handle_record(const experimental::ProgramRea
 
 const tracy::SourceLocationData* RealtimeProfilerTracyConsumer::program_srcloc(
     const experimental::ProgramRealtimeRecord& record) {
-    const auto known = srcloc_of_sources_.find(record.kernel_sources.data());
-    if (known != srcloc_of_sources_.end()) {
-        return known->second;
-    }
-    std::string sources_text;
-    for (const std::string_view source : record.kernel_sources) {
-        if (!sources_text.empty()) {
-            sources_text += ",\n";
-        }
-        sources_text += source;
-    }
-    if (sources_text.empty()) {
-        sources_text = "realtime_profiler";
-    }
-    const auto [it, fresh] = programs_.try_emplace(std::move(sources_text));
+    const auto [it, fresh] = programs_.try_emplace(record.kernel_sources.data());
     Program& program = it->second;
     if (fresh) {
         // The zone is named after the program's first kernel, with a count of its other kernels. A program can build
         // several kernels from one file; that name counts once.
         std::vector<std::string> names;
         for (const std::string_view source : record.kernel_sources) {
+            if (!program.sources.empty()) {
+                program.sources += ",\n";
+            }
+            program.sources += source;
             std::string name = kernel_name(source);
             if (std::ranges::find(names, name) == names.end()) {
                 names.push_back(std::move(name));
             }
         }
+        if (program.sources.empty()) {
+            program.sources = "realtime_profiler";
+        }
         program.name = names.empty() ? "Program" : names.front();
         if (names.size() > 1) {
             program.name += fmt::format(" +{}", names.size() - 1);
         }
-        program.srcloc = {program.name.c_str(), "realtime_profiler", it->first.c_str(), 0, 0};
+        program.srcloc = {program.name.c_str(), "realtime_profiler", program.sources.c_str(), 0, 0};
     }
-    srcloc_of_sources_.emplace(record.kernel_sources.data(), &program.srcloc);
     return &program.srcloc;
 }
 
