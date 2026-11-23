@@ -56,6 +56,11 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                 size_t service_cores = 0;
                 size_t total_cores = 0;
                 for (const auto& coord : device_range) {
+                    // On a mesh several hosts share, a range spans the co-owners' chips, which get_device
+                    // refuses; this process classifies (and dispatches) only its own.
+                    if (!mesh_cq.device()->impl().is_local(coord)) {
+                        continue;
+                    }
                     auto* device = mesh_cq.device()->impl().get_device(coord);
                     if (device == nullptr) {
                         continue;
