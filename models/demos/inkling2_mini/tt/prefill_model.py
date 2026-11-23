@@ -426,7 +426,7 @@ class Inkling2Prefill:
         experts: "unified" (all experts in one deepseek_prefill.unified_routed_expert_moe program, precise mode:
         fp32 DEST; needs a build with stacked expert weights and, for fidelities above LoFi, the op's
         math_fidelity attribute), "sparse" (grouped sparse_matmul), "auto" (default): unified when the build runs it
-        at expert_fidelity, else sparse. expert_fidelity: default HiFi2 (the sparse path's); LoFi is opt-in only.
+        at HiFi2, else at LoFi, else sparse. expert_fidelity: pin the unified op's fidelity.
         profile: synchronized per-section times in self.times. debug: print each application."""
         self.m = model
         self.device = dev = model.device
@@ -449,11 +449,17 @@ class Inkling2Prefill:
         self.hifi4 = model.hifi4
         self.mm_cfg = model.mm_cfg
         self.layers = [_LayerPF(self, lay, root) for lay in model.layers]
-        # the expert fidelity of the exact path (HiFi2, as the sparse matmuls); LoFi only when asked for
-        self.expert_fidelity = expert_fidelity or ttnn.MathFidelity.HiFi2
+        # unified experts at HiFi2 when the build takes it, else at LoFi (fp32 DEST: more accurate than the sparse
+        # path, forced PCC 0.999911 vs 0.999900), else sparse; expert_fidelity pins one fidelity
         self.unified_kw = {}  # extra unified_routed_expert_moe keywords this build takes
+        fids = [expert_fidelity] if expert_fidelity else [ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.LoFi]
+        self.expert_fidelity = fids[0]
         if experts in ("auto", "unified"):
-            kw = _has_unified(dev, self.layers[0].w_gate_up, self.layers[0].w_down, self.expert_fidelity)
+            for fid in fids:
+                kw = _has_unified(dev, self.layers[0].w_gate_up, self.layers[0].w_down, fid)
+                if kw is not None:
+                    self.expert_fidelity = fid
+                    break
             if experts == "auto":
                 experts = "unified" if kw is not None else "sparse"
             self.unified_kw = kw or {}
