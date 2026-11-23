@@ -1971,9 +1971,10 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_unpack_transpose": "perf_unpack_transpose"},
     },
     "perf_custom_mm": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "c_dimm",
+            "clear_src",
             "dest_acc",
             "dest_layout",
             "dest_sync",
@@ -2114,9 +2115,10 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_compressed_custom_mm": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "c_dimm",
+            "clear_src",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
