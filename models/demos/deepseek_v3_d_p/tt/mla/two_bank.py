@@ -178,16 +178,10 @@ class TwoBankIndex:
         source[..., -1] = -1  # 0xFFFFFFFF through int32
         self._source = per_chip(source, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
 
-    def ring_writes(self, start: int, end: int) -> list[tuple[int, int]]:
-        """Host form of the ring writes of the chunk [start, end): (virtual start, virtual end) per copy, the second
-        clipped at the ring end."""
-        first = self.ring_base + start % self.period
-        ring_end = self.ring_base + 2 * self.period
-        return [(v, min(v + end - start, ring_end)) for v in (first, first + self.period)]
-
     def ring_write_metadata(self, metadata) -> list[list[ttnn.Tensor]]:
-        """Device form of ``ring_writes`` from the chunk metadata (slot, start, end): one metadata triple per copy,
-        whose start and end are the copy's virtual ones. New tensors."""
+        """The ring writes of the chunk (slot, start, end) in ``metadata``: one metadata triple per copy, whose start and
+        end are the copy's virtual ones (``ring_base + start mod P``, then P further and clipped at the ring end; see
+        the module docstring). New tensors."""
         start = _scalar_f32(metadata[1])
         length = ttnn.subtract(_scalar_f32(metadata[2]), start)
         first = ttnn.add(ttnn.subtract(start, _floor_mul(start, self.period, 16.0)), float(self.ring_base))

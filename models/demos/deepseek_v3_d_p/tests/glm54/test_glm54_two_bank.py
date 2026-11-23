@@ -62,6 +62,9 @@ RING_BASE = MAX_POSITIONS
 LOOP_LAYERS = (1, 2)
 NUM_SLOTS = 2
 OUTPUT_PCC = 0.99
+# The first W rows of a chunk read the carried window: device >= 0.9989; a zeroed or misplaced carry <= 0.989
+# (test_window_check_catches_a_wrong_carry). The acceptance bar OUTPUT_PCC stays for the whole chunk.
+CARRY_WINDOW_PCC = 0.995
 WINDOW_PCC = 0.998
 SENTINEL = 0xFFFFFFFF
 
@@ -69,7 +72,8 @@ SENTINEL = 0xFFFFFFFF
 SCHEDULES = {
     # Slot 0: full chunks then a partial one (boundaries at 5120 and 10240; positions past the ring period 10240).
     # Slot 1: a 96-token chunk, then chunks starting mid-slab (rotated layout, partial carry at 96).
-    "two_slots": [(0, 0, 5120), (1, 0, 96), (0, 5120, 10240), (1, 96, 5216), (0, 10240, 12000), (1, 5216, 9000)],
+    # Slot 1's last chunk (5216, 10336) starts at 5216 mod P and is a full chunk: its second ring copy is clipped.
+    "two_slots": [(0, 0, 5120), (1, 0, 96), (0, 5120, 10240), (1, 96, 5216), (0, 10240, 12000), (1, 5216, 10336)],
     "short": [(0, 0, 100), (1, 0, 1500)],  # < W and < index_topk: every row's window or top-k is short
 }
 FORMATS = list(WINDOW_FORMATS)
@@ -114,6 +118,16 @@ def test_pass1_index_set_maps_loop_layers_to_groups(expect_error):
         pass1_index_set(c, 25)
 
 
+def ring_writes_model(start: int, end: int, ring_base: int = 0) -> list[tuple[int, int]]:
+    """The ring-write contract (two_bank's module docstring), as the host oracle the simulations run: the chunk's
+    [virtual start, virtual end) per copy, at ring_base + start mod P and P further, the second clipped at the ring end
+    ring_base + 2P. The device computes the same writes (TwoBankIndex.ring_write_metadata); the device tests check
+    their effect: ring rows vs the reference."""
+    period = 2 * CHUNK
+    first = ring_base + start % period
+    return [(first, first + end - start), (first + period, min(first + period + end - start, ring_base + 2 * period))]
+
+
 RING_SCHEDULES = {
     "aligned": [(0, 5120), (5120, 10240), (10240, 15360), (15360, 17000)],
     "start96": [(0, 96), (96, 5216), (5216, 9000), (9000, 14120), (14120, 19240)],
@@ -127,11 +141,10 @@ def test_ring_canonical_rows_hold_every_window_position(schedule):
     """Simulate a slot's ring writes (two copies per chunk): before each chunk's attention, the canonical row of every
     window position p - W + 1 .. p it reads holds that position, written by this or an earlier chunk; no write leaves
     the ring."""
-    index = TwoBankIndex.__new__(TwoBankIndex)  # host math only: ring_writes needs ring_base and period
-    index.ring_base, index.period, W = 0, 2 * CHUNK, 128
+    W = 128
     held = {}
     for start, end in RING_SCHEDULES[schedule]:
-        for v, ve in index.ring_writes(start, end):
+        for v, ve in ring_writes_model(start, end):
             assert ve <= ring_rows(CHUNK), f"chunk {start}: write [{v}, {ve}) leaves the ring"
             for k in range(ve - v):
                 held[v + k] = start + k
@@ -145,8 +158,7 @@ def test_ring_survives_random_requests_and_slot_reuse():
     """Random request mixes on one slot (32-aligned partial chunks, ragged ends, a new request reusing the slot over
     the previous one's ring rows): every window position a chunk reads is at its canonical row and was written for
     this request, and no write leaves the 4-chunk ring."""
-    index = TwoBankIndex.__new__(TwoBankIndex)  # host math only
-    index.ring_base, index.period, W = 0, 2 * CHUNK, 128
+    W = 128
     rnd = random.Random(1)
     for _ in range(100):
         held = {}
@@ -154,7 +166,7 @@ def test_ring_survives_random_requests_and_slot_reuse():
             start, total = 0, 32 * rnd.randint(1, 4 * CHUNK // 32) + rnd.randint(0, 31)
             while start < total:
                 end = start + min(rnd.choice([32 * rnd.randint(1, CHUNK // 32), CHUNK, CHUNK]), total - start)
-                for v, ve in index.ring_writes(start, end):
+                for v, ve in ring_writes_model(start, end):
                     assert v < ve <= ring_rows(CHUNK), f"write [{v}, {ve}) of chunk [{start}, {end})"
                     for k in range(ve - v):
                         held[v + k] = (request, start + k)
@@ -466,11 +478,16 @@ def window_pccs(got: torch.Tensor, exp: torch.Tensor, window: int) -> list[float
 
 
 def _window_failures(got, exp, window) -> list[str]:
-    return [
-        f"{'the chunk start' if k == 0 else f'SP shard {k}'}: first {window} rows PCC {p:.5f} < {OUTPUT_PCC}"
-        for k, p in enumerate(window_pccs(got, exp, window))
-        if p < OUTPUT_PCC
-    ]
+    """Windows under their bar: the chunk start's (the carry readers) at CARRY_WINDOW_PCC, SP shard starts' at
+    OUTPUT_PCC."""
+    failures = []
+    for k, p in enumerate(window_pccs(got, exp, window)):
+        bar = CARRY_WINDOW_PCC if k == 0 else OUTPUT_PCC
+        if p < bar:
+            failures.append(
+                f"{'the chunk start' if k == 0 else f'SP shard {k}'}: first {window} rows PCC {p:.5f} < {bar}"
+            )
+    return failures
 
 
 def _check_vs_single_shot(config, case, layer, slot, chunks, *, out, ring, bank_a, indices):
