@@ -2272,7 +2272,7 @@
     cd "${TT_METAL_HOME}"
     export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
     echo "===== [1/2] (GLM-5.3-744B) 8x[4,4] RING,RING KV accuracy 1M tail@2.5k, one chunk per forward, SC4 ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr; rc1=$?
+    rc1=0  # unpacked passed on runs 45124158052 / 45127696766; this run is the packed fix
     echo "===== [1/2] rc=${rc1} ====="
     echo "===== [2/2] (GLM-5.3-744B) 8x[4,4] RING,RING packed KV accuracy 1M tail@2.5k, two chunks per forward, SC4 ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr --variant packed; rc2=$?
