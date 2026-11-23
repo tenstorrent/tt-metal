@@ -457,6 +457,48 @@ def test_promotion_gate_blocks_moves(monkeypatch):
     assert not m.spec_of and not m.ae.moves
 
 
+def _with_swap(monkeypatch, m, pf):
+    """the class's plain engine with the snapshot calls and a swap store (Strata S3)"""
+    from qwen36_resident.prefix_cache import SwapStore
+
+    old = m.engine
+    m.engine = A._PlainRowsEngine(
+        F.Contract(pf, F.SWAP_API + ("launch_rows",)), old.pp, torch.eye(V), V, V, B, CHUNK_UNIT, None
+    )
+    m.engine.swap = SwapStore(1 << 40)
+    return m.engine.swap
+
+
+@pytest.mark.parametrize("while_spec", [True, False], ids=["spec-user", "plain-user"])
+def test_preempted_user_swaps_and_resumes(monkeypatch, while_spec):
+    """Strata S3 on batch-dflash2's class: a preempted greedy user (in the spec build, or plain) keeps its state in the
+    swap store keyed by the class's exact history (the runner's record lags), and its replay restores it into a plain
+    row — no prefill; its tokens stay the reference's (the fakes check the restored history and KV)"""
+    m, pf = make(monkeypatch)
+    sw = _with_swap(monkeypatch, m, pf)
+    run = Runner(m)
+    run.arrive([0, 1], [[3, 1, 4, 1, 5, 9, 2, 6], [2, 7, 1, 8, 2, 8]])
+    for _ in range(6):
+        run.step()
+    if not while_spec:
+        m.mode = "PLAIN"
+        run.step()
+        run.step()
+    assert (0 in m.spec_of) is while_spec, (m.spec_of, m.mode)
+    tokens = list(run.req[0]["tokens"])
+    run.req.pop(0)
+    m.preempt_request(0, token_ids=tokens[:-2])  # (the runner's record two draws behind)
+    assert sw.stats["inserts"] == 1 and 0 not in m.spec_of
+    restores = pf.restores
+    lg = m.prefill_forward(torch.tensor([tokens]), torch.tensor([run.table(0)]), None, [len(tokens)], empty_slots=[0])
+    assert sw.stats["hits"] == 1 and pf.restores == restores + 1, sw.stats
+    run.req[0] = dict(prompt=list(tokens), tokens=tokens + [int(lg[0, 0].argmax())], drafts=[], acc=1)
+    for _ in range(4):
+        run.step()
+    run.req[0]["prompt"] = run.req[0]["prompt"][:8]  # (the reference from the original prompt)
+    run.check()
+
+
 def test_no_promotion_with_a_step_in_flight(monkeypatch):
     """async scheduling submits ordinary step N + 1 before step N's propose: the plain build is a token ahead of the
     history there, so a promotion (which moves the plain state with the history) waits for a propose with no step in

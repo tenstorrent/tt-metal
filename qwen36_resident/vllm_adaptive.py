@@ -212,7 +212,16 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self.ae.move_to_plain(u, r, self.tables[r], acc)
             self.last_acc[r] = 1
             self._plain_stale = True
+            self._moved_plain(r)
         self.spec_of.clear()
+
+    def _moved_plain(self, r):
+        """(Strata S3) the rows adapter's position tracking of a user just moved into its plain row: its state there
+        consumed history[:-1] (verify steps do not update the tracking)"""
+        h = self.history.get(r)
+        if h:
+            self.pos_of[r], self.dev_tok[r] = len(h) - 2, False
+            self.seen.pop(r, None)
 
     @staticmethod
     def _new_pay():
@@ -345,7 +354,15 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         if sitting:  # (live rows outside this launch: their fed inputs are not this step's)
             self._plain_stale = True
         self._fed_launches = [0] if self.engine.device_sampling else None
-        return dict(zip(feed, self.engine.tokens_from(self.engine.read_tokens(list(feed), False))))
+        got = dict(zip(feed, self.engine.tokens_from(self.engine.read_tokens(list(feed), False))))
+        for r, (_, p) in feed.items():  # (Strata S3: the rows adapter's position tracking and the device's draws)
+            self.pos_of[r], self.dev_tok[r] = int(p), bool(self.engine.device_sampling)
+            if getattr(self.engine, "swap", None) is not None:
+                tail = self.seen.setdefault(r, {})
+                tail[int(p) + 1] = got[r]
+                for old in [k for k in tail if k < int(p) - 3]:
+                    del tail[old]
+        return got
 
     # ------------------------------------------------------------------ prefill
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, start_pos=None, empty_slots=None, **kwargs):
@@ -508,6 +525,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 assert nvd.get(i, 0) == 0, "drafts for a non-speculable request"
                 self.ae.move_to_plain(self.spec_of.pop(r), r, self.tables[r], acc_of.get(r, 1))
                 self.last_acc[r] = 1
+                self._moved_plain(r)
         out = torch.zeros(B, W, dtype=torch.int32)
         toks, upos, act, of_u, feed = [[0] * R for _ in range(U)], [0] * U, [False] * U, {}, {}
         for i, r in rows.items():
@@ -598,9 +616,22 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
 
     # ------------------------------------------------------------------ lifecycle
     def preempt_request(self, vslot, token_ids=None):
-        """(Strata S3) not here yet: a spec user's state lives in the spec build and verify steps do not update the rows
-        adapter's position tracking, so a preempted request is released (its resume prefills again, as vLLM plans)"""
-        self.release_request(vslot)
+        """(Strata S3) a preempted request's state to the swap store (ResidentRowsAdapter.preempt_request), keyed by this
+        class's history (exact: every committed token, ahead of the runner's record): a spec user is moved back to its
+        plain row first (its state there consumed history[:-1]; verify steps do not update the rows adapter's position
+        tracking, so it is set here); its resume restores into a plain row (a later promotion may move it again)"""
+        r = self.slots.res_of.get(int(vslot))
+        h = self.history.get(r) if r is not None else None
+        if r is not None and h and getattr(self.engine, "swap", None) is not None:
+            if r in self.spec_of:
+                u = self.spec_of.pop(r)
+                self.ae.move_to_plain(u, r, self.tables[r], self.last_acc.get(r, 1))
+                self.ae._set_spec_table(u, [0])
+                self.last_acc[r], self._plain_stale = 1, True
+                self._moved_plain(r)
+            if token_ids is None or len(h) > len(token_ids):
+                token_ids = list(h)
+        super().preempt_request(vslot, token_ids)
 
     def release_request(self, vslot):
         r = self.slots.res_of.get(int(vslot))
