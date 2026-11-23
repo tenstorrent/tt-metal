@@ -23,8 +23,9 @@ products stays with each producer, whose file layouts differ.
   lists), ``shape`` without the row axis.
 
 Goldens are shared: CI users other than the producer read them. Every file in a golden is mode ``GOLDEN_FILE_MODE``
-(0664) and every directory from the root down is ``GOLDEN_DIR_MODE`` (2775), whatever the producer's umask;
-``make_golden_dir`` and ``publish`` set them, and producers write through them.
+(0664) and every directory the writers create (the golden, the registry root and any missing ancestor) is
+``GOLDEN_DIR_MODE`` (2775), whatever the producer's umask; ``make_golden_dir`` and ``publish`` set them, and
+producers write through them. An existing directory keeps its mode.
 """
 
 from __future__ import annotations
@@ -73,11 +74,12 @@ def token_ids_sha256(token_ids: Sequence[int] | torch.Tensor) -> str:
 
 
 def make_golden_dir(directory: Path) -> None:
-    """Create the golden directory (and the registry root above it if missing) with ``GOLDEN_DIR_MODE``."""
+    """Create the golden directory and every missing ancestor (such as a new registry root), each with
+    ``GOLDEN_DIR_MODE``; existing directories keep their mode."""
     directory = Path(directory)
-    for path in (directory.parent, directory):
+    for path in reversed((directory, *directory.parents)):
         if not path.is_dir():
-            path.mkdir(parents=True, exist_ok=True)
+            path.mkdir(exist_ok=True)
             path.chmod(GOLDEN_DIR_MODE)
 
 

@@ -61,23 +61,30 @@ def test_open_golden_serves_a_complete_golden(tmp_path: Path) -> None:
 
 def test_writers_make_a_golden_readable_by_other_users_whatever_the_umask(tmp_path: Path) -> None:
     """CI reads goldens as users other than their producer, so a producer under umask 077 must still publish
-    world-readable files and a traversable root and golden directory."""
+    world-readable files and a traversable golden directory, root and every directory it creates above them (here
+    ``new``); an existing directory (``tmp_path``) keeps its mode."""
+    existing = stat.S_IMODE(tmp_path.stat().st_mode)
     previous = os.umask(0o077)
     try:
-        golden = tmp_path / "root" / "tiny"
+        golden = tmp_path / "new" / "root" / "tiny"
         make_golden_dir(golden)
         write_token_ids(golden, TOKENS)
         write_manifest(golden, {"golden_id": "tiny"})
         write_manifest(golden, {"golden_id": "tiny", "rewritten": True})  # replacing keeps the mode
     finally:
         os.umask(previous)
-    modes = {path.name: stat.S_IMODE(path.stat().st_mode) for path in (golden.parent, golden, *golden.iterdir())}
+    modes = {
+        path.name: stat.S_IMODE(path.stat().st_mode)
+        for path in (golden.parent.parent, golden.parent, golden, *golden.iterdir())
+    }
     assert modes == {
+        "new": GOLDEN_DIR_MODE,
         "root": GOLDEN_DIR_MODE,
         "tiny": GOLDEN_DIR_MODE,
         MANIFEST: GOLDEN_FILE_MODE,
         TOKEN_IDS: GOLDEN_FILE_MODE,
     }  # no temporary file is left behind either
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == existing
     assert (GOLDEN_FILE_MODE, GOLDEN_DIR_MODE) == (0o664, 0o2775)
 
 
