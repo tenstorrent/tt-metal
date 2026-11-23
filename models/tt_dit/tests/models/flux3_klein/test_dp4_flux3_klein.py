@@ -19,7 +19,12 @@ from ....models.transformers.flux3_klein.transformer_block_flux3_klein import (
 from ....models.transformers.flux3_klein.transformer_flux3_klein import DP4_MLP_ROWS, Flux3KleinSequenceLayout
 from ....parallel.manager import CCLManager
 from ....pipelines.flux3_klein.packing import TEXT_BUCKETS, TEXT_BUCKETS_BY_LAYOUT
-from ....pipelines.flux3_klein.pipeline_flux3_klein import REFERENCE_TOKEN_BUCKETS, SIZES, Flux3KleinPipeline
+from ....pipelines.flux3_klein.pipeline_flux3_klein import (
+    PAIR_FREEING_FROM_SIZE,
+    REFERENCE_TOKEN_BUCKETS,
+    SIZES,
+    Flux3KleinPipeline,
+)
 from ....utils import matmul
 
 SP = 4
@@ -154,3 +159,7 @@ def test_claim_pairs_frees_only_pairs_other_largest_size_layouts_used(monkeypatc
     render(r1, "vae", "r1 ring")  # from here on only the layout's own pairs churn; the shared pair stays
     assert sorted(freed) == sorted(["vae", "r0 ring", "r1 ring", "r0 ring"])
     assert ccl.live == {"small ring", "vae", "r1 ring"}
+
+
+def test_pairs_are_freed_from_4096_on_dp4_and_from_2048_on_dp8() -> None:
+    assert PAIR_FREEING_FROM_SIZE == {(4, 2): max(SIZES), (2, 2): 2048}

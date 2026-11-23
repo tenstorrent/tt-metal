@@ -27,7 +27,13 @@
 #include <thread>
 
 namespace tt::tt_metal::detail {
-inline static const size_t EXECUTOR_NTHREADS = std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
+// TT_METAL_EXECUTOR_THREADS caps the pool, e.g. for several device processes on one host (each compiles on it).
+inline static const size_t EXECUTOR_NTHREADS = [] {
+    if (const char* threads = std::getenv("TT_METAL_EXECUTOR_THREADS"); threads != nullptr && std::atoi(threads) > 0) {
+        return static_cast<size_t>(std::atoi(threads));
+    }
+    return std::thread::hardware_concurrency() ? static_cast<size_t>(std::thread::hardware_concurrency()) : size_t{1};
+}();
 
 using Executor = tf::Executor;
 using ExecTask = tf::Task;
