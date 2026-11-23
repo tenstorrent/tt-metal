@@ -40,7 +40,9 @@ Read before you start:
    (`$PWD` = your worktree's `tt_metal/tt-llk`). `run` prints one result line (verdict, counts, log path) and exits
    0 only on PASS. Submit several jobs with `submit` and collect them with `wait <id>` to keep all chips busy.
    Every test that includes one of your headers must pass with `--impl hal`, with the same pass/skip counts as
-   `--impl tt`. Known flaky/hanging-on-production tests are listed in the plan; check against `--impl tt` before
+   `--impl tt`. While other threads are still being ported elsewhere, validate your thread alone with a thread view:
+   `bash .claude/skills/hal-port/scripts/thread_view.sh <unpack|math|pack> /tmp/bh-port/val/<your-wp>` and pass
+   that directory as `--impl` (your thread's headers from tests/hal_llk, the other threads' from production). Known flaky/hanging-on-production tests are listed in the plan; check against `--impl tt` before
    blaming the port.
 5. **Measure** (only when asked to optimise, or for the final report): run each affected `perf_*.py` with
    `--perf --impl tt` and `--perf --impl hal --tag <unique>`, then compare the two reports with
