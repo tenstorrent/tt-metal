@@ -1370,3 +1370,10 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   bit-identical winners only, behind DS41_MM_TUNED256; same gate. QUEUED for model_bringup after it: MB.9 (the same at
   5120, switch DS41_MM_TUNED160, wq_b 197.8 -> 185.0 first, fix DS41-306), task text in
   /data/dnijemcevic/bringup/handoff_20261123/MB9_task.yaml (appended at the branch switch). Resumed --until PB.MM256.
+- 14:10 OWNER: the config sweep must run in PARALLEL ACROSS CHIPS (as the owner's earlier tuning did). Found it: P.19 /
+  OV-27's tests/perf/test_matmul_sweep.py (capture with mm_configs.RECORD, then test_sweep_card in N parallel single-card
+  processes, P23_SHARD=i/N --device auto, merge_shards). The OWNER's word counts as the yes the skill requires for
+  single-card jobs on a Galaxy (2026-11-23). Paused, aborted PB.MM256 attempt 2 (~10 min; its edits to hooks / attention /
+  mm_configs / settings stay in the tree); brief step (3) rewritten: reuse P.19's per-card sweep, resident runner
+  stopped first, bounded timeouts, grid 11 x 10 (FIX.15; the test's 12 x 10 note predates it), winners confirmed on the
+  whole mesh once. MB.9's text (handoff_20261123/MB9_task.yaml) updated the same way. Resumed.

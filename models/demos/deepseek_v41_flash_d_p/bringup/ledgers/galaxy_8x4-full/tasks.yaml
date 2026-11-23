@@ -7126,11 +7126,16 @@ tasks:
       with its shape, dtypes, fidelity, current config and where it comes from (mm_configs key or the generic rule); table
       in the report with each one''s device us a chunk from the real-time profile, largest first. (2) Bring the two tuned
       entries from 3f9b309b676 (git show 3f9b309b676 -- models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py) and the probe''s
-      sweep machinery (tests/projsplit/test_projsplit_probe.py, path-limited). (3) Sweep each shape, largest device time
-      first, op level on the resident runner with no model load, deterministic: program configs (1D / 2D / minimal_matmul
-      / DRAM-sharded where it applies, grid within 110 cores (FIX.15), in0_block_w, per_core M / N, out_subblock; the fork
-      matmuls'' exposed knobs); fidelity, dtypes and accumulation unchanged; keep only configs whose output is bit-identical
-      to today''s and faster. (4) Put every winner behind the CALL-TIME switch DS41_MM_TUNED256 (off | on; default off until
+      sweep machinery (tests/projsplit/test_projsplit_probe.py, path-limited). (3) Sweep IN PARALLEL ACROSS CHIPS (owner 2026-11-23, binding; P.19 did it this way and the owner OKs single-card
+      processes on this Galaxy): reuse tests/perf/test_matmul_sweep.py (P.19 / OV-27): -k capture with tt/mm_configs.RECORD
+      at the 8192 chunk (single and 4x2k) = the inventory; then N parallel single-card processes, one card each (P23_SHARD=i/N
+      P23_CALLS=<capture> scripts/run_safe_pytest.sh --device auto ... -k test_sweep_card, N up to 32), then merge_shards.
+      Stop the resident runner first (resident stop, not yield); bounded per-process timeouts (P23_TIMEOUT_S), smallest
+      shapes first; candidates held to the 110-core grid 11 x 10 (FIX.15; the test''s 12 x 10 note predates it) and the
+      model''s L1 view; program configs (1D / 2D / minimal_matmul / DRAM-sharded where it applies, in0_block_w, per_core
+      M / N, out_subblock; the fork matmuls'' exposed knobs); fidelity, dtypes and accumulation unchanged; keep only configs
+      bit-identical to today''s and faster; confirm every winner''s time on the whole mesh once (one run, every chip). Extend
+      the sweep where the 8192 shapes or the fork matmuls need it; reuse 3f9b309b676''s two entries as candidates. (4) Put every winner behind the CALL-TIME switch DS41_MM_TUNED256 (off | on; default off until
       accepted; tt/settings.py, bringup/hooks.py batch_call_settings) so both sides run in one load; the 5120 path (160 rows)
       unchanged and bit-identical. (5) Test models/demos/deepseek_v41_flash_d_p/tests/test_mm256_offon.py (BATCH_SHARED, resident
       runner, one load, layers 0-20): a real 8192 chunk single AND a packed 4x2k chunk at a long history, off vs on, every
