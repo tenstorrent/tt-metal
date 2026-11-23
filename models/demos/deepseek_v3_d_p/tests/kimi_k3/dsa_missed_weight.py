@@ -44,8 +44,14 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.dsa import error_split, selecti
 from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import quantile, row_nrmse, row_sums
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as dsa
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import DSA_LAYER, load_products, load_sampled, open_chain
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import checkpoint_tensors, chunk_path
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import (
+    DSA_LAYER,
+    load_layer,
+    load_products,
+    load_sampled,
+    open_chain,
+)
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import chunk_path
 
 ROW_METRICS = (
     "missed",
@@ -112,17 +118,21 @@ def pearson(a: torch.Tensor, b: torch.Tensor) -> float:
 
 def summarize(rows: dict[str, torch.Tensor], window: int, count: int, topk: int) -> dict:
     """Per ``window`` of context positions, median / p90 / max of each row metric over rows past ``topk`` (rows below
-    it select every causal key on both sides), and over all such rows the correlations with the device's NRMSE."""
+    it select every causal key on both sides), and over all such rows the correlations with the device's NRMSE. A
+    window without such a row has only its ``rows`` count (0), no statistics.
+
+    Windowed by hand, not by ``windowed.RowSeries``: the study holds sampled rows only, so there is no per-row column
+    that spans the window, and ``rows`` here counts the sampled rows in a window."""
     past = rows["row"] >= topk
     windows = []
     for lo in range(0, count, window):
         inside = past & (rows["row"] >= lo) & (rows["row"] < lo + window)
         entry = {"start": lo, "end": min(lo + window, count), "rows": int(inside.sum())}
-        for m in ROW_METRICS:
+        for m in ROW_METRICS if inside.any() else ():
             v = rows[m][inside].double()
             entry[f"{m}_median"] = quantile(v, 0.5)
             entry[f"{m}_p90"] = quantile(v, 0.9)
-            entry[f"{m}_max"] = float(v.max()) if v.numel() else float("nan")
+            entry[f"{m}_max"] = float(v.max())
         windows.append(entry)
     dev = rows["device_nrmse"][past]
     correlation = {
@@ -160,14 +170,16 @@ def run(*, device: Path, out: Path, window: int, log) -> dict:
     golden, count, chunk = open_chain(input_manifest["chain"]), manifest["count"], manifest["chunk"]
     chain, chain_manifest = golden.path, golden.manifest
     checkpoint = Path(chain_manifest["identity"]["checkpoint"])
+    # layer 3 as the chain loaded it, so its digest is the one the chain recorded
+    L, digests = load_layer(checkpoint, DSA_LAYER, kda=False, dense=False, moe=False, dsa_attn=True, threads=1, log=log)
+    open_chain(chain, weights=digests)
     dims = dsa.Dims(**chain_manifest["model"]["dsa_dims"])
     score = json.loads((device / "metrics.json").read_text())
     floor = score["attn_nrmse_floor"]
     device_rows = torch.load(device / "rows.pt", weights_only=True)
     device_nrmse = dict(zip(device_rows["attn_rows"].tolist(), device_rows["attn_nrmse"].tolist()))
 
-    w = dsa.layer_weights(checkpoint, DSA_LAYER)
-    norm = checkpoint_tensors(checkpoint, DSA_LAYER, ["input_layernorm.weight"])["input_layernorm.weight"].double()
+    w, norm = L["dsa"], L["input_layernorm"]
     sampled = load_sampled(chain)
     keep = sampled["sampled_rows"] < count
     sampled_rows, stored = sampled["sampled_rows"][keep].tolist(), sampled["attn_output_3"][keep]

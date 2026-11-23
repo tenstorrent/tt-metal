@@ -700,11 +700,12 @@ def conform_manifest(old: dict, golden_id: str, products: dict) -> dict:
     return new
 
 
-def open_chain(recorded: str | Path) -> Golden:
+def open_chain(recorded: str | Path, weights: dict[str, str] | None = None) -> Golden:
     """The registered chain golden a run or a derived artifact names, by id or by the path it recorded (the id is
-    its directory name), checked to be this producer's current version."""
+    its directory name), checked to be this producer's current version. ``weights``: digests of weights the caller
+    loaded itself (``ChainModel.weights_sha256``, ``load_layer``'s); each must be one the chain was built from."""
     golden = open_golden(Path(recorded).name)
-    golden.require(producer=PRODUCER, producer_version=PRODUCER_VERSION)
+    golden.require(producer=PRODUCER, producer_version=PRODUCER_VERSION, weights_sha256=weights)
     return golden
 
 

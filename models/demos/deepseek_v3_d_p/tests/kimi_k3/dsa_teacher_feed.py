@@ -41,6 +41,7 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
     SUM_YY,
     Bar,
     GrowthBar,
+    RowSeries,
     check,
     errors,
     quantile,
@@ -270,10 +271,6 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
     attn = torch.cat(attn)
     floor = golden_floor(attn[:, SUM_YY].sqrt())
-    per_row_nrmse, attn_rows = row_nrmse(attn, floor), torch.cat(attn_rows)
-    recall = torch.cat(recall)
-    gpu_recall = torch.cat(gpu_recall) if gpu_recall else None
-    misses = {k: torch.cat([m[k] for m in misses]) for k in misses[0]}
     caches = torch.load(out / "caches.pt", weights_only=True)
     if chain is None:
         lora = KimiK3Config.KV_LORA_RANK
@@ -283,49 +280,56 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         k = load_products(chain_path, ["latent", "kpe", "index_key"], 0, count)
         lora, kv_ref, key_ref = k["latent"].shape[1], torch.cat([k["latent"], k["kpe"]], -1), k["index_key"]
     topk = want.shape[1]  # the reference's selection size (2048)
-    nan = float("nan")
-    keys = {
-        "kv_latent": row_sums(kv_ref[:, :lora], caches["kvpe"][:, :lora]),
-        "kv_rope": row_sums(kv_ref[:, lora:], caches["kvpe"][:, lora:]),
-        "index_key": row_sums(key_ref, caches["index"]),
-    }
+    series = RowSeries()  # per row: recall and the caches' row sums; the scored attention rows and misses as events
+    series.append(
+        0,
+        recall=torch.cat(recall)[:count],
+        kv_latent=row_sums(kv_ref[:, :lora], caches["kvpe"][:count, :lora]),
+        kv_rope=row_sums(kv_ref[:, lora:], caches["kvpe"][:count, lora:]),
+        index_key=row_sums(key_ref, caches["index"][:count]),
+        **({"gpu_recall": torch.cat(gpu_recall)[:count]} if gpu_recall else {}),
+    )
+    series.add_events("attn", row=torch.cat(attn_rows), sums=attn, nrmse=row_nrmse(attn, floor))
+    for m in misses:
+        series.add_events("misses", **m)
 
-    def key_errors(lo: int, hi: int) -> dict:
-        return {k: v for name, sums in keys.items() for k, v in errors(sums[lo:hi], f"{name}_").items()}
+    def common(w) -> dict:
+        """What windows and the whole run report alike; a quantity the window does not define is None."""
+        nr, rank = w["attn"]["nrmse"], w["misses"]["rank"]
+        gated = slice(max(w.start, topk) - w.start, None)  # rows < top-k select every causal key on both sides
+        return {
+            "attn_rows": int(nr.numel()),
+            "attn_nrmse_median": float(nr.median()) if nr.numel() else None,
+            **(errors(w["attn"]["sums"], "attn_") if nr.numel() else {}),
+            **{k: v for name in ("kv_latent", "kv_rope", "index_key") for k, v in errors(w[name], f"{name}_").items()},
+            "recall_mean": float(w["recall"][gated].mean()) if w.end > topk else None,
+            "recall_gpu_vs_reference_mean": (
+                float(w["gpu_recall"][gated].mean()) if w.end > topk and "gpu_recall" in w else None
+            ),
+            "misses": int(rank.numel()),
+            # no miss: no miss in the top half, not undefined
+            "miss_top_half_fraction": (
+                float((2 * rank < w["misses"]["selected"]).float().mean()) if rank.numel() else 0.0
+            ),
+        }
 
-    windows = []
-    for lo in range(0, count, window):
-        hi = min(lo + window, count)
-        inside = (misses["row"] >= lo) & (misses["row"] < hi)
-        rank, selected, share = (misses[k][inside] for k in ("rank", "selected", "spread_share"))
-        gated = recall[max(lo, topk) : hi]  # rows < top-k select every causal key on both sides
-        in_window = (attn_rows >= lo) & (attn_rows < hi)
-        nr = per_row_nrmse[in_window]
-        w = {"start": lo, "end": hi, "attn_rows": int(nr.numel())}
-        if nr.numel():
-            w.update(
-                attn_nrmse_median=float(nr.median()),
-                attn_nrmse_p99=quantile(nr, 0.99),
-                attn_nrmse_max=float(nr.max()),
-                **errors(attn[in_window], "attn_"),
-            )
-        w.update(key_errors(lo, hi))
-        if gated.numel():
-            w.update(recall_mean=float(gated.mean()), recall_p05=quantile(gated, 0.05))
-            if gpu_recall is not None:
-                w["recall_gpu_vs_reference_mean"] = float(gpu_recall[max(lo, topk) : hi].mean())
-        if lo < topk:
-            w["recall_min_below_topk"] = float(recall[lo : min(hi, topk)].min())
-        w.update(
-            misses=int(rank.numel()),
-            miss_rank_p10=quantile(rank, 0.1),
-            miss_rank_median=quantile(rank, 0.5),
-            miss_rank_min=int(rank.min()) if rank.numel() else -1,
-            miss_top_half_fraction=float((2 * rank < selected).float().mean()) if rank.numel() else 0.0,
-            miss_spread_share_median=quantile(share, 0.5),
-            miss_spread_share_p90=quantile(share, 0.9),
-        )
-        windows.append(w)
+    def per_window(w) -> dict:
+        nr, rank, share = w["attn"]["nrmse"], w["misses"]["rank"], w["misses"]["spread_share"]
+        gated = w["recall"][max(w.start, topk) - w.start :]
+        return {
+            **common(w),
+            "attn_nrmse_p99": quantile(nr, 0.99) if nr.numel() else None,
+            "attn_nrmse_max": float(nr.max()) if nr.numel() else None,
+            "recall_p05": quantile(gated, 0.05) if gated.numel() else None,
+            "recall_min_below_topk": float(w["recall"][: topk - w.start].min()) if w.start < topk else None,
+            "miss_rank_p10": quantile(rank, 0.1) if rank.numel() else None,
+            "miss_rank_median": quantile(rank, 0.5) if rank.numel() else None,
+            "miss_rank_min": int(rank.min()) if rank.numel() else None,
+            "miss_spread_share_median": quantile(share, 0.5) if rank.numel() else None,
+            "miss_spread_share_p90": quantile(share, 0.9) if rank.numel() else None,
+        }
+
+    windows = series.windows(window, per_window)
     result = {
         "layer": layer,
         "count": count,
@@ -334,24 +338,15 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         "reference": chain or "trace",
         "run": manifest,
         "attn_nrmse_floor": floor,
-        "overall": {
-            "attn_rows": int(per_row_nrmse.numel()),
-            "attn_nrmse_median": float(per_row_nrmse.median()),
-            **errors(attn, "attn_"),
-            **key_errors(0, count),
-            "recall_mean": float(recall[topk:].mean()) if count > topk else nan,
-            "recall_gpu_vs_reference_mean": (
-                float(gpu_recall[topk:].mean()) if gpu_recall is not None and count > topk else nan
-            ),
-            "misses": int(misses["rank"].numel()),
-            "miss_top_half_fraction": (
-                float((2 * misses["rank"] < misses["selected"]).float().mean()) if misses["rank"].numel() else 0.0
-            ),
-        },
+        "overall": series.whole(common),
         "windows": windows,
     }
     result["bar_failures"] = check(windows, BARS)
-    result["rows"] = {"attn_rows": attn_rows, "attn_nrmse": per_row_nrmse.float(), "recall": recall.float()}
+    result["rows"] = {
+        "attn_rows": torch.cat(attn_rows),
+        "attn_nrmse": row_nrmse(attn, floor).float(),
+        "recall": series.column("recall").float(),
+    }
     return result
 
 

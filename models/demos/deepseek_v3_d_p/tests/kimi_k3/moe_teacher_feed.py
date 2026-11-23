@@ -45,6 +45,7 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
     SUM_YY,
     Bar,
     GrowthBar,
+    RowSeries,
     check,
     errors,
     quantile,
@@ -53,7 +54,7 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
 )
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import load_products, open_chain
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import KDA_LAYERS, load_layer, load_products, open_chain
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     EPS,
     FFN,
@@ -243,11 +244,6 @@ def owner_positions(
 # --- scoring -------------------------------------------------------------------------------------------------
 
 
-def _mean(t) -> float:
-    t = torch.cat(t) if isinstance(t, list) else t
-    return float(t.float().mean()) if t.numel() else float("nan")
-
-
 def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: torch.Tensor) -> dict:
     """Score a complete device run in ``out`` per context position against its reference; returns the metrics with
     the per-row values under ``rows`` (``write_score`` stores them in the run directory). The reference is the run's input's source: the trace (MoE output
@@ -263,14 +259,12 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
     chain_path = open_chain(chain).path if chain is not None else None
     gate = gate.float()
     num_chunks = -(-count // chunk)
-    sums = []
-    keys = ("recall", "dropped", "weight_err", "recall_reference_vs_fp32", "recall_device_vs_fp32")
-    per_row = {k: [] for k in keys + ("recall_gpu_vs_reference",)}
-    misses = []
+    series = RowSeries()  # per row: the output's row sums and the routing measures; misses as events
     for c in range(num_chunks):
         payload = torch.load(chunk_path(out, c), weights_only=True)
         lo, hi = payload["start"], payload["end"]
         got, got_w = payload["expert_ids"].long(), payload["expert_weights"]
+        gpu = {}
         if chain is None:
             expected = trace.rows(f"decoder_output_layer_{layer}", lo, hi)
             want = trace.rows(f"expert_ids_layer_{layer}", lo, hi).long()
@@ -284,54 +278,60 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
             want_score = choice.gather(1, want)
         else:
             want_score = -torch.arange(want.shape[1], dtype=torch.float32).expand(want.shape)  # FP64 order
-            per_row["recall_gpu_vs_reference"].append(
-                topk_recall(trace.rows(f"expert_ids_layer_{layer}", lo, hi).long(), want)
-            )
-        sums.append(row_sums(expected, payload["moe_out"]))
+            gpu["recall_gpu_vs_reference"] = topk_recall(trace.rows(f"expert_ids_layer_{layer}", lo, hi).long(), want)
         r = routing_rows(got, got_w, want, want_w, want_score)
-        for k in ("recall", "dropped", "weight_err"):
-            per_row[k].append(r[k])
-        per_row["recall_reference_vs_fp32"].append(topk_recall(host_ids, want))
-        per_row["recall_device_vs_fp32"].append(topk_recall(got, host_ids))
-        r["misses"]["row"] = r["misses"]["row"] + lo
-        misses.append(r["misses"])
-        print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
-    sums = torch.cat(sums)
-    floor = golden_floor(sums[:, SUM_YY].sqrt())
-    per_row_nrmse = row_nrmse(sums, floor)
-    per_row = {k: torch.cat(v) if v else torch.zeros(0) for k, v in per_row.items()}
-    misses = {k: torch.cat([m[k] for m in misses]) for k in misses[0]}
-    windows = []
-    for lo in range(0, count, window):
-        hi = min(lo + window, count)
-        inside = (misses["row"] >= lo) & (misses["row"] < hi)
-        rank, selected = misses["rank"][inside], misses["selected"][inside]
-        recall = per_row["recall"][lo:hi]
-        windows.append(
-            {
-                "start": lo,
-                "end": hi,
-                **errors(sums[lo:hi], "moe_"),
-                "moe_nrmse_median": float(per_row_nrmse[lo:hi].median()),
-                "moe_nrmse_p99": quantile(per_row_nrmse[lo:hi], 0.99),
-                "moe_nrmse_max": float(per_row_nrmse[lo:hi].max()),
-                "recall_vs_reference_mean": float(recall.mean()),
-                "set_equal_vs_reference": float((recall == 1).float().mean()),
-                "recall_reference_vs_fp32_mean": float(per_row["recall_reference_vs_fp32"][lo:hi].mean()),
-                "recall_device_vs_fp32_mean": float(per_row["recall_device_vs_fp32"][lo:hi].mean()),
-                "misses": int(rank.numel()),
-                "miss_rank_median": quantile(rank, 0.5),
-                "miss_rank_min": int(rank.min()) if rank.numel() else -1,
-                # no miss in the window: no miss in the top half (as "overall" reports it), not undefined
-                "miss_top_half_fraction": float((2 * rank < selected).float().mean()) if rank.numel() else 0.0,
-                "dropped_reference_weight_mean": float(per_row["dropped"][lo:hi].mean()),
-                "dropped_reference_weight_p99": quantile(per_row["dropped"][lo:hi], 0.99),
-                "recall_gpu_vs_reference_mean": _mean(per_row["recall_gpu_vs_reference"][lo:hi]),
-                "weight_err_median": float(per_row["weight_err"][lo:hi].median()),
-                "weight_err_p99": quantile(per_row["weight_err"][lo:hi], 0.99),
-            }
+        series.append(
+            lo,
+            sums=row_sums(expected, payload["moe_out"]),
+            recall=r["recall"],
+            dropped=r["dropped"],
+            weight_err=r["weight_err"],
+            recall_reference_vs_fp32=topk_recall(host_ids, want),
+            recall_device_vs_fp32=topk_recall(got, host_ids),
+            **gpu,
         )
-    rank = misses["rank"]
+        series.add_events("misses", **{**r["misses"], "row": r["misses"]["row"] + lo})
+        print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
+    floor = golden_floor(series.column("sums")[:, SUM_YY].sqrt())
+
+    def common(w) -> dict:
+        """What windows and the whole run report alike; a quantity the window does not define is None."""
+        nr, recall, rank = row_nrmse(w["sums"], floor), w["recall"], w["misses"]["rank"]
+        return {
+            **errors(w["sums"], "moe_"),
+            "moe_nrmse_median": float(nr.median()),
+            "recall_vs_reference_mean": float(recall.mean()),
+            "set_equal_vs_reference": float((recall == 1).float().mean()),
+            "recall_reference_vs_fp32_mean": float(w["recall_reference_vs_fp32"].mean()),
+            "recall_device_vs_fp32_mean": float(w["recall_device_vs_fp32"].mean()),
+            "recall_gpu_vs_reference_mean": (
+                float(w["recall_gpu_vs_reference"].mean()) if "recall_gpu_vs_reference" in w else None
+            ),
+            "misses": int(rank.numel()),
+            # no miss: no miss in the top half, not undefined
+            "miss_top_half_fraction": (
+                float((2 * rank < w["misses"]["selected"]).float().mean()) if rank.numel() else 0.0
+            ),
+            "dropped_reference_weight_mean": float(w["dropped"].mean()),
+            "weight_err_median": float(w["weight_err"].median()),
+        }
+
+    def per_window(w) -> dict:
+        nr, rank = row_nrmse(w["sums"], floor), w["misses"]["rank"]
+        return {
+            **common(w),
+            "moe_nrmse_p99": quantile(nr, 0.99),
+            "moe_nrmse_max": float(nr.max()),
+            "miss_rank_median": quantile(rank, 0.5) if rank.numel() else None,
+            "miss_rank_min": int(rank.min()) if rank.numel() else None,
+            "dropped_reference_weight_p99": quantile(w["dropped"], 0.99),
+            "weight_err_p99": quantile(w["weight_err"], 0.99),
+        }
+
+    def overall(w) -> dict:
+        return {**common(w), "miss_rank_histogram": torch.bincount(w["misses"]["rank"], minlength=TOP_K).tolist()}
+
+    windows = series.windows(window, per_window)
     result = {
         "layer": layer,
         "count": count,
@@ -340,24 +340,18 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
         "reference": chain or "trace",
         "run": manifest,
         "moe_nrmse_floor": floor,
-        "overall": {
-            **errors(sums, "moe_"),
-            "moe_nrmse_median": float(per_row_nrmse.median()),
-            "recall_vs_reference_mean": float(per_row["recall"].mean()),
-            "set_equal_vs_reference": float((per_row["recall"] == 1).float().mean()),
-            "recall_gpu_vs_reference_mean": _mean(per_row["recall_gpu_vs_reference"]),
-            "recall_reference_vs_fp32_mean": float(per_row["recall_reference_vs_fp32"].mean()),
-            "recall_device_vs_fp32_mean": float(per_row["recall_device_vs_fp32"].mean()),
-            "misses": int(rank.numel()),
-            "miss_top_half_fraction": float((2 * rank < misses["selected"]).float().mean()) if rank.numel() else 0.0,
-            "miss_rank_histogram": torch.bincount(rank, minlength=TOP_K).tolist(),
-            "dropped_reference_weight_mean": float(per_row["dropped"].mean()),
-            "weight_err_median": float(per_row["weight_err"].median()),
-        },
+        "overall": series.whole(overall),
         "windows": windows,
     }
     result["bar_failures"] = check(windows, BARS)
-    result["rows"] = {"moe_nrmse": per_row_nrmse.float(), **{k: v.float() for k, v in per_row.items()}}
+    names = ("recall", "dropped", "weight_err", "recall_reference_vs_fp32", "recall_device_vs_fp32")
+    result["rows"] = {
+        "moe_nrmse": row_nrmse(series.column("sums"), floor).float(),
+        **{k: series.column(k).float() for k in names},
+        "recall_gpu_vs_reference": (
+            series.column("recall_gpu_vs_reference").float() if chain is not None else torch.zeros(0)
+        ),
+    }
     return result
 
 
@@ -556,8 +550,24 @@ def main() -> None:
             input_normed=args.input_normed,
         )
     elif args.command == "score":
-        w = layer_weights(args.checkpoint, complete_run(args.out)["layer"])
-        gate, bias = w["block_sparse_moe.gate.weight"], w["block_sparse_moe.gate.e_score_correction_bias"]
+        run = complete_run(args.out)
+        chain = json.loads((Path(run["input"]) / MANIFEST).read_text()).get("chain")
+        if chain is None:
+            w = layer_weights(args.checkpoint, run["layer"])
+            gate, bias = w["block_sparse_moe.gate.weight"], w["block_sparse_moe.gate.e_score_correction_bias"]
+        else:  # the layer as the chain loaded it (its KDA too, no routed experts), so its digest is the chain's
+            L, digests = load_layer(
+                args.checkpoint,
+                run["layer"],
+                kda=run["layer"] in KDA_LAYERS,
+                dense=False,
+                moe=True,
+                dsa_attn=False,
+                threads=1,
+                routed_experts=False,
+            )
+            open_chain(chain, weights=digests)
+            gate, bias = L["gate"], L["gate_bias"]
         result = score(trace=trace, out=args.out, window=args.window, gate=gate, bias=bias)
         write_score(args.out, result)
         print(json.dumps(result["overall"], indent=1))

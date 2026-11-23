@@ -7,6 +7,7 @@ golden (`dsa_fp64_golden.py`) against independent references and through its res
 from __future__ import annotations
 
 import json
+import math
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.model import Indexe
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import HfStream
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_k3_mla import KimiMLAAttention, KimiRMSNorm
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import GoldenMismatch
 from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import Bar, check
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, segment_path
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as golden
@@ -348,6 +350,12 @@ def test_moe_score_places_rows_and_misses_by_context_position(tmp_path: Path):
     assert [w["recall_vs_reference_mean"] for w in windows] == pytest.approx([1.0, 1.0, 15 / 16])
     assert [w["dropped_reference_weight_mean"] for w in windows] == pytest.approx([0.0, 0.0, 1 / 16])
     assert result["count"] == count and result["overall"]["misses"] == 1
+    # a quantity a window does not define is left out, never NaN: no miss in windows 0-1, no GPU routing reference
+    # when the trace itself is the reference
+    assert "miss_rank_median" not in windows[0] and windows[2]["miss_rank_median"] == windows[2]["miss_rank_min"]
+    assert not any("recall_gpu_vs_reference_mean" in w for w in [*windows, result["overall"]])
+    values = [v for w in [*windows, result["overall"]] for v in w.values() if isinstance(v, float)]
+    assert values and all(math.isfinite(v) for v in values)
 
 
 # --- FP64 golden (dsa_fp64_golden.py) ---------------------------------------------------------------------------
@@ -958,7 +966,7 @@ def _reference_walk(model, refs, token_ids: torch.Tensor, monkeypatch) -> dict:
     return got
 
 
-def test_fp64_chain_segments_match_a_one_shot_reference_walk_and_resume(tmp_path: Path, fp64_references):
+def test_fp64_chain_segments_match_a_one_shot_reference_walk_and_resume(tmp_path: Path, fp64_references, expect_error):
     """The segmented chain (10 rows in segments 4 / 4 / 2: KDA state and DSA keys carried across, a last segment
     shorter than the others) equals a one-shot walk of independent forms in FP64 (vendored AttnRes read and seal
     schedule, reference norm / FFN / MoE modules, whole-sequence KDA, row-wise DSA golden) to <= 1e-12 relative on
@@ -1038,6 +1046,9 @@ def test_fp64_chain_segments_match_a_one_shot_reference_walk_and_resume(tmp_path
         products=["moe_output_1", "latent", "attn_output_3", "kda.2.recurrent"],
     )
     assert torch.equal(registered.token_ids(), token_ids.long()) and registered.rows == 10
+    fp64_chain.open_chain(out.name, weights=dict(list(model.weights_sha256().items())[:2]))  # a subset passes
+    with expect_error(GoldenMismatch, "weights layers.0 are 000000000000..."):  # foreign weights are refused
+        fp64_chain.open_chain(out.name, weights={"layers.0": "0" * 64})
     assert registered.manifest["products"]["attn_output_3"]["kind"] == "sampled_row"
     assert registered.manifest["products"]["kda.0.recurrent"]["kind"] == "segment_end"
     assert fp64_chain.conform_manifest(_old_chain_manifest(manifest), out.name, manifest["products"]) == manifest

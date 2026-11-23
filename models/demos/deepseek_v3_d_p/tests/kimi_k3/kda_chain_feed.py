@@ -49,6 +49,7 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
     COUNT,
     SUM_EE,
     SUM_YY,
+    RowSeries,
     errors,
     quantile,
     row_nrmse,
@@ -164,10 +165,7 @@ def rebuild(
         "segment_rows": [[s["start"], s["end"]] for s in manifest["segments"]],
         "gpu_calibration": trace is not None,
     }
-    want = open_chain(chain).identity["weights_sha256"]
-    differ = [k for k, v in model.weights_sha256().items() if want.get(k) != v]
-    if differ:
-        raise ValueError(f"weights {differ} differ from the chain's {chain}")
+    open_chain(chain, weights=model.weights_sha256())  # the model must be the one the chain was built from
     out.mkdir(parents=True, exist_ok=True)
     path = out / MANIFEST
     if path.is_file():
@@ -254,7 +252,7 @@ def score(*, rebuilt: Path, run: Path, trace: Trace, model: ChainModel, window: 
     rb = rebuilt_manifest(rebuilt, count)
     seg_rows = rb["segment_rows"]
     segment = seg_rows[0][1] - seg_rows[0][0]
-    chain = open_chain(rb["chain"]["chain"]).path
+    chain = open_chain(rb["chain"]["chain"], weights=model.weights_sha256()).path
     L = model.layers[layer]
     eps = model.eps
     sums, nrmse_rows, recall_dev, recall_gpu, recall_ref = [], [], [], [], []
@@ -298,29 +296,30 @@ def score(*, rebuilt: Path, run: Path, trace: Trace, model: ChainModel, window: 
         got = torch.load(run / entry["file"], weights_only=True)
         states.append({"row": row, **state_errors(got, want)})
 
-    def measures(lo: int, hi: int) -> dict:
+    series = RowSeries()
+    series.append(0, sums=sums, nrmse=nrmse_rows, recall_dev=recall_dev, recall_gpu=recall_gpu, recall_ref=recall_ref)
+
+    def measures(w) -> dict:
         return {
-            "start": lo,
-            "end": hi,
-            **errors(sums[lo:hi], "kda_"),
-            "kda_row_nrmse_median": float(nrmse_rows[lo:hi].median()),
-            "kda_row_nrmse_p99": quantile(nrmse_rows[lo:hi], 0.99),
-            "routing_recall_device": float(recall_dev[lo:hi].mean()),
-            "routing_set_equal_device": float((recall_dev[lo:hi] == 1).float().mean()),
-            "routing_recall_gpu": float(recall_gpu[lo:hi].mean()),
+            **errors(w["sums"], "kda_"),
+            "kda_row_nrmse_median": float(w["nrmse"].median()),
+            "kda_row_nrmse_p99": quantile(w["nrmse"], 0.99),
+            "routing_recall_device": float(w["recall_dev"].mean()),
+            "routing_set_equal_device": float((w["recall_dev"] == 1).float().mean()),
+            "routing_recall_gpu": float(w["recall_gpu"].mean()),
             # the stored FP64 output (fp32) routed the same way: the routing's sensitivity to that storage alone
-            "routing_recall_reference": float(recall_ref[lo:hi].mean()),
-            "routing_set_equal_gpu": float((recall_gpu[lo:hi] == 1).float().mean()),
+            "routing_recall_reference": float(w["recall_ref"].mean()),
+            "routing_set_equal_gpu": float((w["recall_gpu"] == 1).float().mean()),
         }
 
-    windows = [measures(lo, min(lo + window, count)) for lo in range(0, count, window)]
+    windows = series.windows(window, measures)
     result = {
         "layer": layer,
         "count": count,
         "window": window,
         "reference": rb["chain"],
         "run": str(run),
-        "overall": measures(0, count),
+        "overall": series.whole(measures),
         "windows": windows,
         "states": states,
     }
