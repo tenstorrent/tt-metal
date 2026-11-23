@@ -40,17 +40,7 @@ if _SUITE_DIR not in sys.path:
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.aer import AerWindow  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
-from diag.busbar import (  # noqa: E402
-    DEFAULT_MODE,
-    LOAD_TESTS,
-    MODES,
-    OVERRIDES,
-    SELECTABLE,
-    STEPS,
-    parse_steps,
-    plan as busbar_plan,
-    run_busbar,
-)
+from diag.busbar import LOAD_TESTS, OVERRIDES, plan as busbar_plan, run_busbar  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
@@ -78,7 +68,9 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--tier", choices=[*TIERS, *DEPRECATED_TIER_ALIASES], required=True)
     ap.add_argument("--dry-run", action="store_true", help="Print intended subprocess calls; skip destructive steps.")
     ap.add_argument("--skip-reset", action="store_true", help="Skip phase 3 (reset loop) entirely.")
-    ap.add_argument("--skip-tests", action="store_true", help="Skip phase 4 (gtest deployment binary) entirely.")
+    ap.add_argument(
+        "--skip-tests", action="store_true", help="Skip the tests phase entirely: gtests, pytests and the galaxy load."
+    )
     ap.add_argument(
         "--skip-triage",
         action="store_true",
@@ -163,21 +155,10 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         default=default_tt_metal_path(),
         help="tt-metal repo root (contains build/test/tt_metal/unit_tests_deployment).",
     )
-    ap.add_argument(
-        "--mode",
-        choices=MODES,
-        default=None,
-        help=f"The length of the galaxy load (the bus-bar and links tests of the full tier). Default: {DEFAULT_MODE}.",
-    )
-    ap.add_argument("--plan", action="store_true", help="Print the galaxy load's bus-bar steps for --mode and exit.")
-    ap.add_argument(
-        "--steps",
-        default=None,
-        help=f"Run only these parts of the galaxy load, comma-separated (any of {', '.join(SELECTABLE)}): the bus-bar "
-        "steps and the links test. Not given: all of them.",
-    )
     for key, (flag, typ, what) in OVERRIDES.items():
-        ap.add_argument(flag, dest=key, type=typ, default=None, help=f"Galaxy load: {what}. Not given: the plan's own.")
+        ap.add_argument(
+            flag, dest=key, type=typ, default=None, help=f"Galaxy load: {what}. Not given: the tier's plan."
+        )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
     return ap
@@ -224,19 +205,17 @@ def _run_galaxy_load(
     phase: Phase,
     out: Path,
     mode: str,
-    steps: str | None,
     overrides: dict,
     dry_run: bool,
     sweep_reset: Callable[[], str],
 ) -> None:
-    """The LOAD_TESTS among *tests* into *phase*, only the parts --steps names: the bus-bar steps, then the links
-    test, which sweeps after a fault in either. One that raises is its own FAIL and does not stop the other."""
-    want = parse_steps(steps) if steps is not None else SELECTABLE
+    """The LOAD_TESTS among *tests* into *phase* at *mode*'s length: the bus-bar steps, then the links test, which
+    sweeps after a fault in either. One that raises is its own FAIL and does not stop the other."""
     held = len(phase.checks)
-    if "busbar" in tests and any(w in STEPS for w in want):
-        _guarded(phase, "busbar", FAIL, lambda: run_busbar(phase, out, mode, dry_run, steps, **overrides))
+    if "busbar" in tests:
+        _guarded(phase, "busbar", FAIL, lambda: run_busbar(phase, out, mode, dry_run, **overrides))
     fault = any(c.status == FAIL for c in phase.checks[held:])
-    if "links" in tests and "links" in want:
+    if "links" in tests:
         _guarded(phase, "links", FAIL, lambda: run_links(phase, out, fault, sweep_reset, dry_run))
 
 
@@ -330,8 +309,6 @@ def run_diag(
     bmc_password: str | None = None,
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
-    mode: str | None = None,
-    steps: str | None = None,
     overrides: dict | None = None,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
@@ -431,7 +408,7 @@ def run_diag(
 
     # Phase 3: the tests, in the tier's order: gtests and pytests, then the
     # galaxy load (the bus-bar steps, then the pair link test, its sweep on a
-    # fault and the fabric open/close) at --mode's length. Inside the AER window.
+    # fault and the fabric open/close) at the tier's load_mode. Inside the AER window.
     test_phase = Phase(name="tests")
 
     def sweep_reset() -> str:
@@ -463,8 +440,7 @@ def run_diag(
                 plan.tests,
                 test_phase,
                 logs_dir / "galaxy",
-                mode or DEFAULT_MODE,
-                steps,
+                plan.load_mode,
                 overrides or {},
                 dry_run,
                 sweep_reset,
@@ -630,20 +606,15 @@ def main() -> int:
     ap = build_diag_arg_parser()
     args = ap.parse_args()
     overrides = {k: getattr(args, k) for k in OVERRIDES}
-    try:
-        steps = busbar_plan(args.mode or DEFAULT_MODE, args.steps, **overrides)
-    except ValueError as e:
-        ap.error(str(e))
-    load_args = args.mode or args.plan or args.steps is not None or any(v is not None for v in overrides.values())
-    if load_args and not TIERS[DEPRECATED_TIER_ALIASES.get(args.tier, args.tier)].galaxy_load:
-        ap.error(
-            f"--mode, --plan, --steps and the bus-bar overrides set the galaxy load, which tier {args.tier} does not "
-            "run; use --tier full"
-        )
-    if args.plan:
-        for step in steps:
-            print(step.line())
-        return 0
+    tier = TIERS[DEPRECATED_TIER_ALIASES.get(args.tier, args.tier)]
+    if any(v is not None for v in overrides.values()) and not tier.galaxy_load:
+        loaded = ", ".join(n for n, t in TIERS.items() if t.galaxy_load)
+        ap.error(f"the bus-bar overrides set the galaxy load, which tier {args.tier} does not run (tiers: {loaded})")
+    if tier.galaxy_load:
+        try:
+            busbar_plan(tier.load_mode, **overrides)
+        except ValueError as e:
+            ap.error(str(e))
     rc, _report = run_diag(
         tier=args.tier,
         dry_run=args.dry_run,
@@ -667,8 +638,6 @@ def main() -> int:
         bmc_password=args.bmc_password,
         output=args.output,
         snapshot_out=args.snapshot_out,
-        mode=args.mode,
-        steps=args.steps,
         overrides=overrides,
     )
     return rc

@@ -3,10 +3,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The full tier's galaxy load without hardware: the bus-bar plan per mode, every planned flag exists in its
-program, --plan prints it, a step is judged by its exit, its FAIL lines and its hang, the pair rounds never put a
-chip in two pairs, the UMD index follows the sorted BDFs of a fake sysfs, and the load runs in the tests phase
-after the device tests."""
+"""The galaxy load without hardware: the bus-bar plan per mode, every planned flag exists in its program, a step
+is judged by its exit, its FAIL lines and its hang, the pair rounds never put a chip in two pairs, the UMD index
+follows the sorted BDFs of a fake sysfs, and daily, weekly and full run it in the tests phase after the device
+tests, each at its own length."""
 
 from __future__ import annotations
 
@@ -74,22 +74,6 @@ class TestPlan(unittest.TestCase):
                 src = (busbar.GALAXY_DIR / step.argv[0]).read_text()
                 for flag in (a for a in step.argv[1:] if a.startswith("--")):
                     self.assertIn(f'"{flag}"', src, f"{step.name}: {step.argv[0]} has no {flag}")
-
-    def test_steps_subset_keeps_plan_order(self):
-        for mode in busbar.MODES:
-            self.assertEqual([s.name for s in busbar.plan(mode, "heavy, qb")], ["qb", "heavy"])
-            self.assertEqual([s.name for s in busbar.plan(mode, "code")], ["code"])
-            self.assertEqual(busbar.plan(mode, "qb,mix,step,heavy,code"), busbar.plan(mode))
-
-    def test_steps_keep_their_own_argv(self):
-        for mode in busbar.MODES:
-            for s in busbar.plan(mode, "step,mix"):
-                self.assertEqual(s, _steps(mode)[s.name])
-
-    def test_unknown_step_is_loud(self):
-        for bad in ("qb,nope", "", "heavy,"):
-            with self.assertRaisesRegex(ValueError, "--steps: unknown"):
-                busbar.plan("plain", bad)
 
     def test_no_override_changes_nothing(self):
         for mode in busbar.MODES:
@@ -173,40 +157,31 @@ class TestPlan(unittest.TestCase):
             for flag in (a for a in step.argv[1:] if a.startswith("--")):
                 self.assertIn(f'"{flag}"', src, f"{step.name}: {step.argv[0]} has no {flag}")
 
-    def _plan_cli(self, *args, tier="full"):
+    def _cli(self, tier, *args):
         return subprocess.run(
             [sys.executable, str(SUITE_DIR / "diag_runner.py"), "--tier", tier, *args],
             capture_output=True,
             text=True,
         )
 
-    def test_plan_cli_steps_and_overrides(self):
-        r = self._plan_cli("--mode", "plain", "--plan", "--steps", "heavy", "--heavy-s", "40")
-        self.assertEqual((r.returncode, [ln.split()[0] for ln in r.stdout.splitlines()]), (0, ["heavy"]))
-        self.assertIn(" 50 s ", r.stdout)
-
-    def test_cli_unknown_step_and_bad_override_exit_2(self):
-        for args in (("--steps", "qb,nope"), ("--mm-throttle", "9"), ("--trays", "7"), ("--heavy-n", "x")):
-            r = self._plan_cli("--mode", "plain", "--plan", *args)
-            self.assertEqual(r.returncode, 2, args)
-            self.assertTrue(r.stderr.strip(), args)
-
-    def test_cli_load_flags_on_a_tier_without_the_load_are_an_error(self):
-        for args in (("--mode", "plain"), ("--plan",), ("--steps", "qb"), ("--heavy-s", "40")):
-            for tier in ("weekly", "deploy"):
-                r = self._plan_cli(*args, tier=tier)
+    def test_cli_bad_override_exits_2_before_the_run(self):
+        for tier in ("daily", "weekly", "full"):
+            for args in (("--mm-throttle", "9"), ("--trays", "7"), ("--heavy-n", "x"), ("--heavy-ops", "a;b")):
+                r = self._cli(tier, *args)
                 self.assertEqual(r.returncode, 2, (tier, args))
-                self.assertIn("use --tier full", r.stderr, (tier, args))
+                self.assertTrue(r.stderr.strip(), (tier, args))
 
-    def test_plan_cli(self):
-        r = self._plan_cli("--mode", "smoke", "--plan")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual([ln.split()[0] for ln in r.stdout.splitlines()], ["qb", "mix", "step", "heavy", "code"])
+    def test_cli_overrides_on_a_tier_without_the_load_are_an_error(self):
+        for tier in ("flash", "pre_bmc_reboot", "pre_reboot"):
+            r = self._cli(tier, "--heavy-s", "40")
+            self.assertEqual(r.returncode, 2, tier)
+            self.assertIn("does not run (tiers: daily, weekly, full)", r.stderr, tier)
 
-    def test_plan_cli_defaults_to_plain(self):
-        r = self._plan_cli("--plan")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout.splitlines(), [s.line() for s in busbar.plan(busbar.DEFAULT_MODE)])
+    def test_cli_has_no_mode_plan_or_steps(self):
+        for args in (("--mode", "plain"), ("--plan",), ("--steps", "qb")):
+            r = self._cli("full", *args)
+            self.assertEqual(r.returncode, 2, args)
+            self.assertIn("unrecognized arguments", r.stderr, args)
 
 
 class TestRunStep(unittest.TestCase):
@@ -255,17 +230,6 @@ class TestRunStep(unittest.TestCase):
     def test_dry_run_shows_the_env(self):
         c = busbar.run_step(busbar.plan("smoke", mm_throttle=2)[0], Path("/nonexistent"), dry_run=True)
         self.assertEqual(c.data["env"], {"TT_MM_THROTTLE_PERF": "2"})
-
-    def test_run_busbar_runs_only_the_chosen_steps(self):
-        calls = []
-
-        def fake(step, out, dry_run):
-            calls.append(step.name)
-            return busbar.Check(name=step.name, status=PASS)
-
-        with mock.patch.object(busbar, "run_step", fake):
-            self.assertFalse(busbar.run_busbar(Phase(name="busbar"), Path("/tmp"), "smoke", steps="code,qb", gap_ms=1))
-        self.assertEqual(calls, ["qb", "code"])
 
     def test_dry_run(self):
         c = busbar.run_step(busbar.plan("smoke")[0], Path("/nonexistent"), dry_run=True)
@@ -341,24 +305,25 @@ class TestLinks(unittest.TestCase):
         self.assertEqual([(c.status, c.details) for c in sweep], [(SKIP, "no reset (--skip-reset)")])
 
     def _sweep_reset(self, reset_fails=False, skip_reset=False):
-        return self._run_load(reset_fails, skip_reset)["why"]
+        return self._run_load(reset_fails=reset_fails, skip_reset=skip_reset)["why"]
 
-    def _run_load(self, reset_fails=False, skip_reset=False, steps=None, busbar_fails=True, skip_tests=False):
-        """run_diag's full tier with its device tests, bus-bar and links tests stubbed: ``order`` is what ran, in
-        order, ``device`` the names run_tests got, ``fault`` whether the links test was told of a bus-bar fault,
-        ``why`` what its reset callback said after a failed pair test (the real run_post_test_reset over a
-        glx_reset that fails or not) and ``report`` the run's report."""
+    def _run_load(self, tier="full", reset_fails=False, skip_reset=False, busbar_fails=True, skip_tests=False):
+        """run_diag on *tier* with its device tests, bus-bar and links tests stubbed: ``order`` is what ran, in
+        order, ``device`` the names run_tests got, ``mode`` the length the bus-bar test was given, ``fault`` whether
+        the links test was told of a bus-bar fault, ``why`` what its reset callback said after a failed pair test
+        (the real run_post_test_reset over a glx_reset that fails or not) and ``report`` the run's report."""
         import diag_runner
         from diag import resets
 
-        got = {"order": [], "device": None, "fault": None, "why": None}
+        got = {"order": [], "device": None, "mode": None, "fault": None, "why": None}
 
         def fake_tests(tt_metal, names, phase, dry_run, logs_dir):
             got["order"].append("device")
             got["device"] = list(names)
 
-        def fake_busbar(phase, *args, **kw):
+        def fake_busbar(phase, out, mode, dry_run, **over):
             got["order"].append("busbar")
+            got["mode"] = mode
             phase.add(Check(name="busbar_qb", status=FAIL if busbar_fails else PASS))
             return busbar_fails
 
@@ -387,8 +352,7 @@ class TestLinks(unittest.TestCase):
         ):
             d = Path(tmp)
             _rc, got["report"] = diag_runner.run_diag(
-                "full",
-                mode="smoke",
+                tier,
                 dry_run=True,
                 input_snapshot=d / "missing.json",
                 skip_tests=skip_tests,
@@ -399,23 +363,33 @@ class TestLinks(unittest.TestCase):
                 output=d / "report.json",
                 snapshot_out=d / "snapshot.json",
                 skip_reset=skip_reset,
-                steps=steps,
             )
         return got
 
     def test_load_runs_in_the_tests_phase_after_the_device_tests(self):
-        got = self._run_load()
-        self.assertEqual(got["order"], ["device", "busbar", "links"])
-        self.assertEqual(got["device"], [t for t in tiers.TIERS["full"].tests if t not in busbar.LOAD_TESTS])
-        names = [c["name"] for c in got["report"]["phases"]["tests"]["checks"]]
-        self.assertIn("busbar_qb", names)
-        self.assertIn("links_pair", names)
-        self.assertFalse({"busbar", "links"} & set(got["report"]["phases"]))
+        for tier in ("daily", "weekly", "full"):
+            with self.subTest(tier=tier):
+                got = self._run_load(tier)
+                self.assertEqual(got["order"], ["device", "busbar", "links"])
+                self.assertEqual(got["device"], [t for t in tiers.TIERS[tier].tests if t not in busbar.LOAD_TESTS])
+                names = [c["name"] for c in got["report"]["phases"]["tests"]["checks"]]
+                self.assertIn("busbar_qb", names)
+                self.assertIn("links_pair", names)
+                self.assertFalse({"busbar", "links"} & set(got["report"]["phases"]))
+
+    def test_each_tier_runs_the_load_at_its_own_length(self):
+        for tier, mode in (("daily", "smoke"), ("light", "smoke"), ("weekly", "plain"), ("full", "full")):
+            with self.subTest(tier=tier):
+                self.assertEqual(self._run_load(tier)["mode"], mode)
+
+    def test_a_tier_without_the_load_runs_none_of_it(self):
+        for tier in ("flash", "pre_bmc_reboot", "post_bmc_reboot"):
+            with self.subTest(tier=tier):
+                self.assertEqual(self._run_load(tier)["order"], [])
 
     def test_a_bus_bar_fault_makes_the_links_test_sweep(self):
         self.assertTrue(self._run_load(busbar_fails=True)["fault"])
         self.assertFalse(self._run_load(busbar_fails=False)["fault"])
-        self.assertFalse(self._run_load(steps="links")["fault"])
 
     def test_skip_tests_skips_the_load(self):
         got = self._run_load(skip_tests=True)
@@ -437,22 +411,6 @@ class TestLinks(unittest.TestCase):
                 }
             ],
         )
-
-    def test_steps_pick_the_load_tests(self):
-        for steps, ran in (
-            (None, ["device", "busbar", "links"]),
-            ("heavy", ["device", "busbar"]),
-            ("qb,links", ["device", "busbar", "links"]),
-            ("links", ["device", "links"]),
-        ):
-            with self.subTest(steps=steps):
-                self.assertEqual(self._run_load(steps=steps)["order"], ran)
-
-    def test_steps_accept_links_but_the_plan_stays_bus_bar(self):
-        self.assertEqual(busbar.parse_steps("links, qb"), ("qb", "links"))
-        self.assertEqual(busbar.plan("plain", "links"), [])
-        with self.assertRaisesRegex(ValueError, "--steps: unknown 'link'"):
-            busbar.parse_steps("link")
 
     def test_eth_status_links_name_their_ends(self):
         from diag.eth_status import EthLink, judge_eth_status
@@ -595,31 +553,40 @@ class TestLinks(unittest.TestCase):
 
 
 class TestTierAndAer(unittest.TestCase):
-    def test_full_is_weekly_plus_the_galaxy_load(self):
-        full, weekly = tiers.TIERS["full"], tiers.TIERS["weekly"]
-        self.assertEqual(full.tests, (*weekly.tests, *busbar.LOAD_TESTS))
-        self.assertEqual(
-            (full.resets, full.post_test_resets, full.triage), (weekly.resets, weekly.post_test_resets, weekly.triage)
-        )
-        self.assertTrue(full.aer_diff and full.eth_status and full.sys_triage)
+    def test_daily_weekly_and_full_end_with_the_load_at_their_own_length(self):
+        for name, mode in (("daily", "smoke"), ("weekly", "plain"), ("full", "full")):
+            t = tiers.TIERS[name]
+            self.assertEqual(t.tests[-len(busbar.LOAD_TESTS) :], busbar.LOAD_TESTS, name)
+            self.assertEqual(t.load_mode, mode, name)
+        self.assertEqual([n for n, t in tiers.TIERS.items() if t.galaxy_load], ["daily", "weekly", "full"])
 
-    def test_only_full_runs_the_load(self):
-        self.assertEqual([n for n, t in tiers.TIERS.items() if t.galaxy_load], ["full"])
+    def test_full_is_weekly_with_the_full_load_aer_eth_status_and_sys_triage(self):
+        full, weekly = tiers.TIERS["full"], tiers.TIERS["weekly"]
+        self.assertEqual(replace(full, load_mode="plain", aer_diff=False, eth_status=False, sys_triage=False), weekly)
+        self.assertTrue(full.aer_diff and full.eth_status and full.sys_triage)
         self.assertEqual([n for n, t in tiers.TIERS.items() if t.aer_diff], ["full"])
 
+    def _validate_with(self, **changes):
+        changed = {**tiers.TIERS, "full": replace(tiers.TIERS["full"], **changes)}
+        with mock.patch.object(tiers, "TIERS", changed):
+            tiers._validate()
+
     def test_the_load_runs_last_in_its_own_order(self):
-        weekly = tiers.TIERS["weekly"].tests
-        for tests in ((*busbar.LOAD_TESTS, *weekly), (*weekly, "links", "busbar"), ("busbar", "gddr_full", "links")):
+        device = tuple(t for t in tiers.TIERS["full"].tests if t not in busbar.LOAD_TESTS)
+        for tests in ((*busbar.LOAD_TESTS, *device), (*device, "links", "busbar"), ("busbar", "gddr_full", "links")):
             with self.subTest(tests=tests):
-                broken = {**tiers.TIERS, "full": replace(tiers.TIERS["full"], tests=tests)}
-                with mock.patch.object(tiers, "TIERS", broken):
-                    with self.assertRaisesRegex(ValueError, "the galaxy load runs last"):
-                        tiers._validate()
-        for tests in ((*weekly, "links"), ("busbar",)):
+                with self.assertRaisesRegex(ValueError, "the galaxy load runs last"):
+                    self._validate_with(tests=tests)
+        for tests in ((*device, "links"), ("busbar",)):
             with self.subTest(tests=tests):
-                ok = {**tiers.TIERS, "full": replace(tiers.TIERS["full"], tests=tests)}
-                with mock.patch.object(tiers, "TIERS", ok):
-                    tiers._validate()
+                self._validate_with(tests=tests)
+
+    def test_load_mode_goes_with_the_load(self):
+        for mode in (None, "long"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "the galaxy load needs a load_mode"):
+                self._validate_with(load_mode=mode)
+        with self.assertRaisesRegex(ValueError, "load_mode without the galaxy load"):
+            self._validate_with(tests=("gddr_full",))
 
     def test_aer_data_holds_only_the_diff(self):
         c = aer_check(aer_new({"0000:01:00.0": {"corr": 0}}, {"0000:01:00.0": {"corr": 1}}), 1.0)

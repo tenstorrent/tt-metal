@@ -12,16 +12,18 @@
 #   flash           quick ETH link health, the unit read as found: snapshot validate
 #                   + two tt-triage check_eth_status reads 30 s apart. No resets, no tests
 #   daily           snapshot validate + 2 resets (-r, -glx_reset) + GDDR fast-pattern stress
-#                   + eth link_up + eth bandwidth
+#                   + eth link_up + eth bandwidth + the galaxy load at smoke length (bus-bar steps,
+#                   then the pair link test with a sweep on a fault and a fabric open/close)
+#                   + tray HSC input-voltage and chip recount around the tests
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #   weekly          3 resets (1x -r then 2x -glx_reset) + full GDDR patterns + eth link_up
 #                   + eth bandwidth + didt matmul stress (bf16 and bf8) + fabric all-gather under matmul (pytest, galaxy mesh)
+#                   + the galaxy load at plain length
 #                   + tray HSC input-voltage and chip recount around the tests
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
-#   full            weekly + the galaxy load after the tests (bus-bar steps, then the pair link
-#                   test with a sweep on a fault and a fabric open/close; --mode sets its length)
+#   full            weekly with the galaxy load at full length
 #                   + AER errors over the run + ETH status read
 #                   + sys-triage bundle, if the host has the package and BMC credentials:
 #                   everything, for the logs on a DIIM ticket
@@ -48,14 +50,15 @@ Tiers:
   flash           Quick ETH link health, the unit read as found: snapshot validate + two
                   tt-triage check_eth_status reads 30 s apart. No resets, no tests.
   daily           2 resets + GDDR fast-pattern stress + eth link_up + eth bandwidth
+                  + the galaxy load at smoke length (bus-bar steps, pair link test, sweep
+                  on a fault, fabric open/close) + HSC and chip recount around the tests
                   + post-test reset + triage + QSFP tests
   weekly          3 resets + full GDDR pattern set + eth link_up + eth bandwidth
                   + didt matmul stress + fabric all-gather under matmul (pytest)
+                  + the galaxy load at plain length
                   + HSC and chip recount around the tests + post-test reset + triage + QSFP tests
-  full            weekly + the galaxy load (bus-bar steps, pair link test, sweep on a
-                  fault, fabric open/close; --mode {plain,full,smoke}, plain by default,
-                  --plan lists the steps) + AER errors over the run + ETH status
-                  + sys-triage: everything, for the logs on a DIIM ticket
+  full            weekly with the galaxy load at full length + AER errors over the run
+                  + ETH status + sys-triage: everything, for the logs on a DIIM ticket
   pre_bmc_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
                   + sys-triage. No resets, no tests.
   post_bmc_reboot The same as pre_bmc_reboot for now, run after the BMC reboot.
@@ -86,15 +89,12 @@ Forwarded options (see diag_runner.py --help for details):
   --tt-metal-path PATH   Override tt-metal repo root (for unit_tests_deployment binary)
   --output PATH          Write JSON report to PATH (default: ./diag_report.json)
   --triage-dir PATH      Triage scripts dir (default: \$HC_TRIAGE_DIR, else tools/scaleout/kmd_triage)
-  --mode MODE            full tier: the galaxy load's length (plain, full, smoke; default plain)
-  --plan                 full tier: print the galaxy load's bus-bar steps for --mode and exit
-  --steps LIST           full tier: run only these parts of the galaxy load (qb, mix, step, heavy, code, links;
-                         comma-separated): the bus-bar steps and the links test. Not given: all of them
   --heavy-s N, --heavy-ops OPS, --heavy-x-s N, --heavy-x-ops OPS
-                         full tier: the heavy step's seconds, DIDT ops, seconds of extra ops and extra ops
+                         Galaxy load (daily, weekly, full): the heavy step's seconds, DIDT ops, seconds
+                         of extra ops and extra ops
   --heavy-n N, --burst-gap-ms N, --trays LIST, --mm-throttle 1-5
-                         full tier: heavy ops per launch, pause after each burst, load only these trays,
-                         matmul di/dt throttle. Not given: the plan's own values (--plan lists them)
+                         Galaxy load: heavy ops per launch, pause after each burst, load only these trays,
+                         matmul di/dt throttle. Not given: the tier's plan
   --skip-triage          Skip the post-test reset and the triage phase
   --triage-gating        Let triage FAILs gate the run (default: held at WARN)
   --skip-eth-status      Skip the ETH status read

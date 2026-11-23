@@ -112,7 +112,8 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
       --dry-run              Print intended subprocess calls without executing
                              destructive steps
       --skip-reset           Skip the reset loop phase entirely
-      --skip-tests           Skip the gtest phase entirely
+      --skip-tests           Skip the tests phase entirely: gtests, pytests and
+                             the galaxy load
       --skip-triage          Skip the post-test reset and the triage phase
       --triage-gating        Let triage FAILs gate the run (default: held at WARN)
       --triage-dir PATH      Host triage scripts dir; mounted read-only
@@ -132,7 +133,7 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
                              (default: <output-dir>/diag_snapshot.json)
 
   Anything after \`--\` is passed to run_diag.sh untouched: the galaxy load's
-  flags, for one (\`full -- --mode smoke\`).
+  overrides, for one (\`weekly -- --heavy-s 40\`).
 
   --output is not forwardable: it is the bind mount this script manages. Note
   that it also wants a *file* path, not a directory — \`--output output/\` is

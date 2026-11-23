@@ -34,7 +34,7 @@ QSFP_COLLECT_ARGS = ["collect", "--parallelize"]
 
 # A backstop, not the expected duration: the cage sweep self-bounds at the
 # tool's own 600 s --qsfp-budget and a full run measures ~7 min. It has to stay
-# well inside run_health_check.py's whole-run --timeout-minutes (60 by default, 120 on full),
+# well inside run_health_check.py's whole-run --timeout-minutes (60 to 180 by tier),
 # because that one kills the process group and takes the report with it, while
 # overrunning this one only costs this phase.
 QSFP_TIMEOUT_S = 1200

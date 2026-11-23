@@ -84,6 +84,23 @@ class TestShellWrappersAgree(unittest.TestCase):
         self.assertEqual(set(kwargs["choices"]), ACCEPTED)
         self.assertIn(kwargs["default"], TIERS)
 
+    def test_run_health_check_times_out_each_load_tier_on_its_own(self):
+        # The galaxy load adds tens of minutes; a load tier left on the default
+        # timeout is killed mid-run and loses its report.
+        tree = ast.parse((SUITE_DIR / "test_infrastructure" / "run_health_check.py").read_text())
+        (node,) = [
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "TIER_TIMEOUT_MINUTES" for t in n.targets)
+        ]
+        timeouts = ast.literal_eval(node.value)
+        load = {n for n, t in TIERS.items() if t.galaxy_load}
+        load |= {old for old, new in DEPRECATED_TIER_ALIASES.items() if new in load}
+        self.assertEqual(set(timeouts), load)
+        for old, new in DEPRECATED_TIER_ALIASES.items():
+            if new in load:
+                self.assertEqual(timeouts[old], timeouts[new], old)
+
 
 class TestDiagRunnerCli(unittest.TestCase):
     def test_tier_choices_follow_tiers(self):

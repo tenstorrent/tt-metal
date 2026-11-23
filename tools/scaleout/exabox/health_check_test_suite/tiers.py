@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from diag.busbar import LOAD_TESTS
+from diag.busbar import LOAD_TESTS, MODES
 from diag.device_tests import PYTESTS, TESTS
 from diag.resets import RESET_FLAGS
 from diag.triage import TRIAGE_TOOLS
@@ -50,9 +50,12 @@ class Tier:
     resets: tuple[str, ...] = ()
 
     # Device tests, in order: names from TESTS / PYTESTS, then the galaxy load
-    # (LOAD_TESTS: the bus-bar steps, then the links test), which runs last at
-    # --mode's length.
+    # (LOAD_TESTS: the bus-bar steps, then the links test), which runs last.
     tests: tuple[str, ...] = ()
+
+    # The galaxy load's length, one of busbar.MODES: smoke, plain or full. Set
+    # exactly when the tests include the galaxy load.
+    load_mode: str | None = None
 
     # Reset run between the tests and the triage phase. Two reasons it sits
     # there: the triage probes open every chip read-write, so they must not
@@ -94,7 +97,7 @@ class Tier:
 
     @property
     def galaxy_load(self) -> bool:
-        """Whether the tests include the galaxy load, the only tests --mode, --steps and the bus-bar overrides set."""
+        """Whether the tests include the galaxy load, the only tests the bus-bar overrides set."""
         return any(t in LOAD_TESTS for t in self.tests)
 
 
@@ -106,7 +109,9 @@ _WEEKLY = Tier(
         "eth_bandwidth",
         "didt_matmul_galaxy",
         "fabric_all_gather_matmul_galaxy",
+        *LOAD_TESTS,
     ),
+    load_mode="plain",
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
     qsfp_tests=True,
@@ -122,23 +127,25 @@ TIERS: dict[str, Tier] = {
         eth_status=True,
         eth_summary=True,
     ),
-    # The scheduled run.
+    # The scheduled run. The galaxy load at smoke length: every bus-bar step,
+    # each cut to a few seconds, and the links test.
     "daily": Tier(
         resets=("-r", "-glx_reset"),
-        tests=("gddr_fast", "eth_link_up", "eth_bandwidth"),
+        tests=("gddr_fast", "eth_link_up", "eth_bandwidth", *LOAD_TESTS),
+        load_mode="smoke",
         post_test_resets=("-glx_reset",),
         triage=("host_side", "device_side"),
         qsfp_tests=True,
     ),
-    # daily, with every test and the full GDDR pattern set.
+    # daily, with every test, the full GDDR pattern set and the galaxy load at
+    # plain length.
     "weekly": _WEEKLY,
-    # weekly plus the galaxy load (the bus-bar steps and the links test), the
-    # AER errors over the run, the ETH status read and the sys-triage bundle:
-    # everything, for a unit with an issue, so the run's logs can go straight
-    # on its DIIM ticket.
+    # weekly with the galaxy load at full length, plus the AER errors over the
+    # run, the ETH status read and the sys-triage bundle: everything, for a
+    # unit with an issue, so the run's logs can go straight on its DIIM ticket.
     "full": replace(
         _WEEKLY,
-        tests=(*_WEEKLY.tests, *LOAD_TESTS),
+        load_mode="full",
         aer_diff=True,
         eth_status=True,
         sys_triage=True,
@@ -187,6 +194,10 @@ def _validate() -> None:
         load = tuple(t for t in tier.tests if t in LOAD_TESTS)
         if load and (tier.tests[-len(load) :] != load or load != tuple(t for t in LOAD_TESTS if t in load)):
             problems.append(f"{name}: the galaxy load runs last, in the order {', '.join(LOAD_TESTS)}")
+        if load and tier.load_mode not in MODES:
+            problems.append(f"{name}: the galaxy load needs a load_mode, one of {', '.join(MODES)}")
+        if not load and tier.load_mode is not None:
+            problems.append(f"{name}: load_mode without the galaxy load")
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
         if tier.eth_summary and not tier.eth_status:
             problems.append(f"{name}: eth_summary needs eth_status")

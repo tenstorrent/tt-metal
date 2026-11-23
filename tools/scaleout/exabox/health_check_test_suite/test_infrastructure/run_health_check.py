@@ -75,10 +75,12 @@ log = logging.getLogger(__name__)
 # key is loaded — dispatch on this. Default preserves the Slurm behavior.
 LAUNCH_MODES = ("slurm", "orchestration")
 
-# Whole-run timeout when --timeout-minutes is not given. full runs weekly's
-# tests and then the galaxy load (about 30 min at its default length) on top.
+# Whole-run timeout when --timeout-minutes is not given. daily, weekly and full
+# end their tests with the galaxy load at smoke, plain and full length, and a
+# fault in it adds the links sweep (300 s per round of pairs) on top. The
+# deprecated names map to daily (light, medium) and weekly (deploy).
 DEFAULT_TIMEOUT_MINUTES = 60
-TIER_TIMEOUT_MINUTES = {"full": 120}
+TIER_TIMEOUT_MINUTES = {"daily": 90, "light": 90, "medium": 90, "weekly": 120, "deploy": 120, "full": 180}
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +141,10 @@ def parse_args() -> argparse.Namespace:
         "--timeout-minutes",
         type=int,
         default=None,
-        help=f"Timeout for the diag run. Default: {DEFAULT_TIMEOUT_MINUTES}, or {TIER_TIMEOUT_MINUTES['full']} for full.",
+        help=(
+            f"Timeout for the diag run. Default: daily {TIER_TIMEOUT_MINUTES['daily']}, weekly "
+            f"{TIER_TIMEOUT_MINUTES['weekly']}, full {TIER_TIMEOUT_MINUTES['full']}, else {DEFAULT_TIMEOUT_MINUTES}."
+        ),
     )
     p.add_argument(
         "--telemetry-port",

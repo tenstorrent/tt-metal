@@ -12,11 +12,9 @@ step   10 s quiet + 90 s burst, numeric readback after it
 heavy  the DIDT ops back to back, each output checked bit-exact and voted across chips (90 s; full 750 s)
 code   code readback: each core's firmware and kernel code in L1, voted across chips (exalens, no load)
 
---mode smoke keeps every part and cuts each length to min(SMOKE_S, plain's). A part that fails does not end the
-test: the next parts still run and are judged on the chips that are left.
-
---steps runs only the parts named (still in the order above). OVERRIDES set one value of the parts that have it,
-whatever the mode says.
+Each tier that runs the load names its length, one of MODES (tiers.py load_mode). smoke keeps every part and cuts
+each length to min(SMOKE_S, plain's). A part that fails does not end the test: the next parts still run and are
+judged on the chips that are left. OVERRIDES set one value of the parts that have it, whatever the mode says.
 """
 from __future__ import annotations
 
@@ -36,10 +34,8 @@ GALAXY_DIR = Path(__file__).resolve().parent.parent / "galaxy"
 # What a tier lists under tests for the galaxy load, after its other tests: this bus-bar test, then the links test
 # (diag/links.py), which sweeps the links after a bus-bar fault.
 LOAD_TESTS = ("busbar", "links")
-MODES = ("plain", "full", "smoke")
-DEFAULT_MODE = "plain"
+MODES = ("smoke", "plain", "full")
 STEPS = ("qb", "mix", "step", "heavy", "code")
-SELECTABLE = (*STEPS, "links")  # what --steps names: the bus-bar steps, and the links test
 # plan() keyword -> (diag_runner flag, type, what it sets). Unset by default: the plan is then unchanged.
 OVERRIDES = {
     "heavy_s": ("--heavy-s", int, "heavy: seconds of DIDT ops"),
@@ -120,16 +116,6 @@ def _overrides(over: dict) -> dict:
     return ov
 
 
-def parse_steps(steps: str) -> tuple[str, ...]:
-    """The parts named in the comma-separated *steps*, in plan order, the links test last."""
-    names = steps.replace(" ", "").split(",")
-    if bad := [n for n in names if n not in SELECTABLE]:
-        raise ValueError(
-            f"--steps: unknown {', '.join(map(repr, bad))}; expected one or more of: {', '.join(SELECTABLE)}"
-        )
-    return tuple(n for n in SELECTABLE if n in names)
-
-
 @dataclass(frozen=True)
 class Step:
     name: str
@@ -142,11 +128,10 @@ class Step:
         return f"{self.name:<7} {self.seconds:>5} s  {self.what}"
 
 
-def plan(mode: str = "plain", steps: str | None = None, **over: int | str | None) -> list[Step]:
-    """The bus-bar steps for *mode*; only those in the comma-separated *steps* when given; *over* is OVERRIDES."""
+def plan(mode: str = "plain", **over: int | str | None) -> list[Step]:
+    """The bus-bar steps for *mode*, in order; *over* is OVERRIDES."""
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r}; expected one of: {', '.join(MODES)}")
-    want = parse_steps(steps) if steps is not None else STEPS
     ov = _overrides(over)
     full = mode == "full"
 
@@ -278,7 +263,7 @@ def plan(mode: str = "plain", steps: str | None = None, **over: int | str | None
             code + 25,
         ),
     ]
-    return [st for st in parts if st.name in want]
+    return parts
 
 
 def run_step(step: Step, out: Path, dry_run: bool = False, test: str = "busbar") -> Check:
@@ -341,10 +326,10 @@ def run_step(step: Step, out: Path, dry_run: bool = False, test: str = "busbar")
     )
 
 
-def run_busbar(phase: Phase, out: Path, mode: str, dry_run: bool = False, steps: str | None = None, **over) -> bool:
+def run_busbar(phase: Phase, out: Path, mode: str, dry_run: bool = False, **over) -> bool:
     """The bus-bar steps (see plan), in order, into *phase*. True when one hung or failed (the links test then sweeps)."""
     fault = False
-    for step in plan(mode, steps, **over):
+    for step in plan(mode, **over):
         log(f"busbar {step.line()}")
         c = run_step(step, out / "busbar", dry_run)
         phase.add(c)
