@@ -19,7 +19,7 @@ from models.demos.vision.generative.stable_diffusion.wormhole.sd_helper_funcs im
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,

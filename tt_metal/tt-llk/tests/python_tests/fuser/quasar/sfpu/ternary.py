@@ -22,12 +22,16 @@ class TernarySfpu(BaseTernarySfpu):
 
     def calculate(self, operation, config, compute_unit, block):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
+        dst_tile_shape = operation.tile_shape.dst_tile_shape
+        vector_mode = self._vector_mode(operation)
         return (
             f"test_utils::call_ternary_sfpu_operation_quasar<{op}, "
             f"{operation.dest_sync.cpp_enum_value}, "
             f"{config.dest_acc.cpp_enum_value} /*is_fp32_dest_acc_en*/, "
             f"{self.approx_mode.cpp_enum_value} /*APPROX*/, "
-            f"{self.iterations} /*ITERATIONS*/>("
+            f"{self.iterations} /*ITERATIONS*/, "
+            f"{dst_tile_shape} /*TILE_SHAPE*/, "
+            f"{vector_mode} /*vector_mode*/>("
             f"{block.dest_src0} /*src0_tile*/, "
             f"{block.dest_src1} /*src1_tile*/, "
             f"{block.dest_src2} /*src2_tile*/, "

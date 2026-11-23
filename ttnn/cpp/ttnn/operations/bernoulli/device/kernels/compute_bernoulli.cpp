@@ -11,6 +11,7 @@ void kernel_main() {
     using namespace compute_kernel_lib;
 
     constexpr uint32_t intermed_dfb_id = get_compile_time_arg_val(0);
+    DataflowBuffer intermed_dfb(intermed_dfb_id);
 
     compute_kernel_hw_startup(intermed_dfb_id, intermed_dfb_id);
 
@@ -27,5 +28,6 @@ void kernel_main() {
     eltwise_chain(
         IterationShape::tiles(num_tiles),
         RandTile<Dst::D0>{rand_from, rand_scale, seed, start_id},
-        PackTile<output(intermed_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
+        PackTile<output(intermed_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
+            intermed_dfb});
 }

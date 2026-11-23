@@ -4,7 +4,7 @@
 
 #include "conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <optional>

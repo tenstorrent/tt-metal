@@ -14,9 +14,11 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
     "model_weights",
     [
         "Qwen/Qwen2.5-VL-3B-Instruct",
+        "allenai/olmOCR-2-7B-1025",
     ],
     ids=[
         "qwen25_vl-3B",
+        "olmOCR-2-7B",
     ],
 )
 def test_ci_dispatch(model_weights):

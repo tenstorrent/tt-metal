@@ -17,6 +17,7 @@
 #include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <internal/mesh_device.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -54,7 +55,15 @@ inline ttnn::Tensor make_zero_host_tensor(const tt::tt_metal::TensorSpec& spec) 
             return ttnn::Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
-            // Block-float formats pack a shared exponent per group of datums, so the
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2:
+            // Block-float and MX formats pack a shared exponent per group of datums, so the
             // packed byte count is NOT element_count * sizeof. from_vector requires a
             // buffer of exactly logical-volume elements and (per its contract) `float`
             // for block formats; it tilizes + quantizes internally.
@@ -159,10 +168,10 @@ inline std::map<distributed::MeshCoordinate, CoreCoord> claim_service_cores(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::vector<distributed::MeshCoordinate>& coords,
     const char* side) {
-    auto& svc = internal::service_core_manager();
+    auto& svc = internal::service_core_manager(*mesh);
     std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
     for (const auto& coord : coords) {
-        auto* d = mesh->get_device(coord);
+        auto* d = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto claimable = svc.get_claimable_cores(d);
         const auto already_claimed = svc.claimed_cores(d->id());
         std::optional<CoreCoord> chosen;

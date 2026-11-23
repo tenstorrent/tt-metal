@@ -9,11 +9,11 @@ user_invocable: true
 ## Goal
 
 Spend variants where they change hardware behavior. A Quasar sweep that
-multiplies out every dimension, format and fidelity adds build time to the
-`llk-build-quasar` CI job but tests no more of the pipeline. It also routinely
+multiplies out every dimension, format and fidelity adds runtime to the
+Quasar ttsim PR-gate and sanity shards but tests no more of the pipeline. It also routinely
 misses dest bank switching entirely. Variant count is not coverage.
 
-Three rules. Apply all three to any new or edited `tests/python_tests/quasar/test_[op]_quasar.py`. Perf tests have their own sweep rules: use `quasar-perf-test` instead.
+Three rules. Apply all three to any new or edited `tests/python_tests/quasar/test_[op]_quasar.py`. The perf module reuses this sweep, multiplied by the run types, so every variant here also costs perf builds. Perf narrows it only through the documented perf generators (`perf-test`, `references/quasar.md`); check the result with `perf-coverage`.
 
 ## 1. Input dimensions
 
@@ -168,7 +168,7 @@ of two modes skips device init in `pytest_configure`:
 - **Simulator mode** — needs both the `--run-simulator` flag and
   `TT_METAL_SIMULATOR`; without the variable, `pytest_configure` exits with an
   error. For an emulator path, `pytest_configure` only constructs the
-  `ExalensServer` and never starts or connects to it, so the path only has to
+  `SimulationServer` and never starts or connects to it, so the path only has to
   be set, not exist, and no device or running emulator is needed:
 
   ```bash
@@ -185,6 +185,7 @@ State the before/after counts in the PR description.
 
 ## Checklist
 
+- [ ] Axis names follow `perf-test`, "Canonical axis names"
 - [ ] A few representative shapes, at least one of which overflows dest
 - [ ] Kernel loops `NUM_BLOCKS`, releasing the dest section at the block boundary
 - [ ] MX spot-tested rather than swept, unless this is the pack or unpack test

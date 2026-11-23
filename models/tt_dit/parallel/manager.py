@@ -15,7 +15,7 @@ class CCLManager:
     """
     Manages parallelization of DiT model.
 
-        - stores mesh device, num links, topology
+        - stores mesh device, num links, topology (`reduce_scatter_topology` sets the reduce-scatters' own)
         - caches ping pong buffers and semaphores
         - sets up one SubDevice spanning all compute cores
     """
@@ -25,10 +25,12 @@ class CCLManager:
         mesh_device,
         num_links=1,
         topology=None,
+        reduce_scatter_topology=None,
     ):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        self.reduce_scatter_topology = reduce_scatter_topology or topology
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
@@ -180,7 +182,7 @@ class CCLManager:
             # an intermediate that is neither the tiled spec nor the contiguous staging buffer.
             # TODO: Switch over to using reduce_scatter_minimal_async_create_intermediate_buffer.
             intermediate_buffer_shape = list(shape)
-            if self.topology == ttnn.Topology.Linear:
+            if self.reduce_scatter_topology == ttnn.Topology.Linear:
                 intermediate_buffer_shape[0] *= 2
             for _ in range(2):
                 # Device-native, uninitialized allocation: these scratch ping-pong
@@ -222,7 +224,7 @@ class CCLManager:
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
     def get_ag_ping_pong_buffer(
-        self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True, capacity=None
+        self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True, capacity=None, rows=None
     ):
         """
         Get or create ping pong buffers for all gather operations.
@@ -234,6 +236,8 @@ class CCLManager:
             mesh_axis: Mesh axis for parallelization
             capacity: Rows to allocate along `dim` instead of the gathered size, so varying
                 gathered lengths up to it share one pair.
+            rows: Rows to allocate along the row dim (-2) instead of `shape`'s, so varying row
+                counts up to it share one pair; the consumer must read only `shape`'s rows.
 
         Returns:
             Current ping pong buffer (alternates between two buffers)
@@ -242,6 +246,11 @@ class CCLManager:
         dim = self.get_dim(dim, shape)
         output_buffer_shape = list(shape)
         output_buffer_shape[dim] = capacity or shape[dim] * self.mesh_device.shape[mesh_axis]
+        if rows is not None:
+            row_dim = len(output_buffer_shape) - 2
+            assert dim != row_dim, f"rows={rows} sizes the row dim, which is the gather dim {dim} of {tuple(shape)}"
+            assert shape[row_dim] <= rows, f"{tuple(shape)} has more rows than the pair's capacity {rows}"
+            output_buffer_shape[row_dim] = rows
         cache_key = ("ag", tuple(output_buffer_shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached
@@ -254,13 +263,21 @@ class CCLManager:
             for _ in range(2):
                 # Device-native, uninitialized allocation: the all-gather fully
                 # overwrites this buffer, so no zero-init is needed.
-                output_buffer = ttnn.allocate_tensor_on_device(
-                    ttnn.Shape(output_buffer_shape),
-                    dtype,
-                    ttnn.TILE_LAYOUT,
-                    self.mesh_device,
-                    ttnn.DRAM_MEMORY_CONFIG,
-                )
+                try:
+                    output_buffer = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(output_buffer_shape),
+                        dtype,
+                        ttnn.TILE_LAYOUT,
+                        self.mesh_device,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                except RuntimeError:
+                    # The caller's live tensors are still on device here, so this is the exact
+                    # picture at the failure (no-op unless MINIMAX_H3_DRAM_PROBE=1).
+                    from ..utils import dram_probe
+
+                    dram_probe.report(f"OOM allocating ag ping-pong {cache_key} ({len(buffers)} of 2 done)")
+                    raise
                 buffers.append(output_buffer)
 
             self._ping_pong_buffer_cache[cache_key] = buffers
@@ -882,7 +899,12 @@ class CCLManager:
         mesh_axis: int | None,
         use_hyperparams: bool,
         use_persistent_buffer: bool = False,
+        num_workers_per_link: int | None = None,
+        hyperparam_rows: int | None = None,
     ) -> ttnn.Tensor:
+        """`num_workers_per_link` pins the op's worker count (else it is picked from the output byte count).
+        `hyperparam_rows` picks the hyperparameters for that row count instead of the tensor's, so every length
+        up to it runs one program."""
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
 
@@ -896,7 +918,9 @@ class CCLManager:
             tensor = ttnn.reshape(tensor, shape)
             dim += 4 - rank
 
-        params = self.get_ag_hyperparams(tensor.shape) if use_hyperparams else {}
+        params = self.get_ag_hyperparams(tensor.shape, rows=hyperparam_rows) if use_hyperparams else {}
+        if num_workers_per_link is not None:
+            params["num_workers_per_link"] = num_workers_per_link
 
         tensor = ttnn.experimental.all_gather_async(
             tensor,
@@ -956,7 +980,7 @@ class CCLManager:
             multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            topology=self.topology,
+            topology=self.reduce_scatter_topology,
             cluster_axis=mesh_axis,
             **self.get_rs_hyperparams(tensor.shape),
         )
@@ -967,8 +991,8 @@ class CCLManager:
 
         return tensor
 
-    def get_ag_hyperparams(self, shape):
-        if shape[2] > 512:
+    def get_ag_hyperparams(self, shape, rows=None):
+        if (shape[2] if rows is None else rows) > 512:
             return {
                 "chunks_per_sync": 16,
                 "num_workers_per_link": 3,

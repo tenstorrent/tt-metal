@@ -153,6 +153,7 @@ def test_pipeline_one_stage(
                 topology=topology,
                 output_path=output_filename,
                 prompt=prompt,
+                report_model="ltx-2.3-pro-t2v",
             )
         else:
             logger.info(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")

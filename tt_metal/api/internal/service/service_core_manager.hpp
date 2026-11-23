@@ -11,13 +11,16 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
 class MetalContext;
 class MetalEnvImpl;
 using DeviceAddr = uint64_t;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::internal {
@@ -36,7 +39,7 @@ class ServiceCoreManagerImpl;
 // disjoint worker spaces, no overlap.
 //
 // Lives on MetalContext (one instance per context, keyed internally by ChipId). Obtain it via
-// MetalContext::instance().get_service_core_manager(); do not construct it directly.
+// service_core_manager(mesh_device); do not construct it directly.
 //
 // This is the thin, user-facing surface. Internal dispatch routing / placement-validation
 // methods live on ServiceCoreManagerImpl, reachable only through impl() by translation units
@@ -63,7 +66,7 @@ class ServiceCoreManagerImpl;
 //   // 1. Launch App in FD
 //
 //   // 2. Claim service cores (must be done while FD is active)
-//   auto& svc = MetalContext::instance().get_service_core_manager();
+//   auto& svc = service_core_manager(*mesh_device);
 //   auto claimable = svc.get_claimable_cores(device);
 //   svc.claim(device, claimable);
 //
@@ -156,6 +159,7 @@ private:
     std::unique_ptr<ServiceCoreManagerImpl> pimpl_;
 };
 
-ServiceCoreManager& service_core_manager();
+// Returns the ServiceCoreManager owned by the MetalContext that `mesh_device` belongs to.
+ServiceCoreManager& service_core_manager(distributed::MeshDevice& mesh_device);
 
 }  // namespace tt::tt_metal::internal

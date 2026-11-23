@@ -14,6 +14,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/pool/upsample/upsample.hpp"
 
 #include "repeat_interleave_force.hpp"
@@ -125,9 +126,9 @@ Tensor repeat_interleave_native(
     const auto& input_a_shape = input_a.logical_shape();
     uint32_t input_rank = input_a_shape.rank();
     uint32_t normalized_dim = input_a_shape.get_normalized_index(dim);
+    const bool typecast = is_block_float(input_a.dtype()) || input_a.dtype() == DataType::UINT8;
     if (normalized_dim == input_rank - 1) {
         ttnn::Tensor transpose_input = input_a;
-        bool typecast = input_a.dtype() == DataType::UINT8;
         if (typecast) {
             transpose_input = ttnn::typecast(transpose_input, DataType::BFLOAT16, mem_config);
         }
@@ -146,10 +147,6 @@ Tensor repeat_interleave_native(
     // numerically lossless for these formats. A pure TILE-preserving path works for BFLOAT16/BFLOAT8_B but fails
     // for BFLOAT4_B (tensor_spec TILE constraint) and UINT8 (reshape), so the typecast path is kept for them.
     ttnn::Tensor rm_input = input_a;
-    bool typecast =
-        input_a.dtype() == DataType::BFLOAT8_B ||
-        input_a.dtype() == DataType::BFLOAT4_B ||
-        input_a.dtype() == DataType::UINT8;
     if (typecast) {
         rm_input = ttnn::typecast(rm_input, DataType::BFLOAT16, mem_config);
     }
@@ -275,9 +272,11 @@ ttnn::Tensor repeat_interleave_force_codegen(
     TT_FATAL(
         repeat_interleave_codegen::supported_by_codegen(input_a, repeats, dim, output_mem_config),
         "repeat_interleave_force_codegen invoked for a case the codegen path does not support "
-        "(requires a device-resident, unsharded rank-2..4 bfloat16/float32/int32 input, an "
-        "interleaved output, repeats > 1, and a repeated dim outside the pages the layout "
-        "subdivides -- TILE defers the two sub-tile dims and requires the default 32x32 tile, "
+        "(requires a device-resident, unsharded rank-2..4 input of bfloat16/float32/int32, or of "
+        "bfloat8_b in TILE layout, an interleaved output, repeats > 1, and a repeated dim outside "
+        "the pages the layout "
+        "subdivides -- TILE defers the two sub-tile dims and requires the default 32x32 tile and "
+        "a padded shape that is the logical shape rounded up to whole tiles, "
         "ROW_MAJOR defers the within-stick last dim and needs a stick narrow enough for two CB "
         "slots in one core's L1). This entry never "
         "falls back to native, because a forced leg that quietly served native would make any "
@@ -295,7 +294,8 @@ Tensor repeat_interleave(
     namespace detail = operations::data_movement::detail;
     namespace repeat_interleave_codegen = operations::data_movement::repeat_interleave_codegen;
 
-    if (repeat_interleave_codegen::supported_by_codegen(input_a, repeats, dim, output_mem_config) &&
+    if (operations::data_movement::codegen_supported_on_arch(input_a) &&
+        repeat_interleave_codegen::supported_by_codegen(input_a, repeats, dim, output_mem_config) &&
         !repeat_interleave_codegen::is_demoted(input_a, repeats, dim, output_mem_config)) {
         return detail::repeat_interleave_via_codegen(input_a, repeats, dim, output_mem_config);
     }

@@ -19,10 +19,13 @@ struct WorkUnitSpec {
     //   - Gen1: at most 1 across compute kernels, at most 2 across data-movement kernels.
     //   - Gen2: at most 4 across compute kernels, at most 6 across data-movement kernels.
     // - Gen1: the data-movement kernels use distinct config_1xx->processor values and the same
-    //   config_1xx->noc_mode. Those in DM_DEDICATED_NOC mode also use distinct config_1xx->noc values.
+    //   config_1xx->noc_mode. Those in DM_DEDICATED_NOC mode also use distinct config_1xx->noc values,
+    //   unless both set config_1xx->dedicated_noc_sharing to SHARED_DISJOINT_TRAFFIC.
     // - For each DataflowBufferSpec these kernels bind, exactly one of them binds it as PRODUCER and
     //   exactly one binds it as CONSUMER. (The producer and consumer may be the same kernel.)
-    // - For each ScratchpadSpec, at most one of these kernels binds it.
+    // - For each ScratchpadSpec, at most one of these kernels binds it,
+    //   unless its advanced_options.allow_instance_multi_binding is enabled. On Gen2,
+    //   all kernels sharing a scratchpad on a node must be DM kernels.
     // - These kernels bind at most 32 distinct DataflowBufferSpecs on Wormhole, 64 on Blackhole, or 32 on
     //   Quasar. Subject to additional constraints during build.
     Group<KernelSpecName> kernels;
@@ -33,7 +36,7 @@ struct WorkUnitSpec {
 };
 
 struct ProgramSpec {
-    // Object invariants (excluding advanced options):
+    // Object invariants (excluding most advanced options):
     //
     // Every name resolves:
     // - Each KernelSpec::DFBBinding::dfb_spec_name names a spec in dataflow_buffers.
@@ -42,12 +45,15 @@ struct ProgramSpec {
     // - Each KernelSpec::TensorBinding::tensor_parameter_name names a parameter in tensor_parameters.
     // - Each name in WorkUnitSpec::kernels names a spec in kernels.
     // - Each DataflowBufferSpec::borrowed_from, when set, names a parameter in tensor_parameters.
+    // - Each DFB or scratchpad advanced_options.allocation_override, when set, names an arena
+    //   parameter in ProgramAdvancedOptions::sram_arena_parameters.
     //
     // Every declaration is used:
     // - Each kernel is listed by at least one WorkUnitSpec.
     // - Each dataflow buffer is bound by at least one kernel.
     // - Each scratchpad is bound by at least one kernel.
     // - Each tensor parameter is bound by a kernel, or by a dataflow buffer's borrowed_from.
+    // - Each SRAM arena parameter is used by a DFB or scratchpad allocation override.
     // - (Semaphores are exempt here)
     //
     // Data-movement core assignment:
@@ -84,10 +90,6 @@ struct ProgramSpec {
     // Invariant:
     // - Must not have repeated DataflowBufferSpec::unique_id.
     Group<DataflowBufferSpec> dataflow_buffers;
-
-    // Invariant:
-    // - Must be empty (Not yet implemented).
-    Group<CrossNodeDataflowBufferSpec> cross_node_dataflow_buffers;
 
     // Invariant:
     // - Must not have repeated SemaphoreSpec::unique_id.

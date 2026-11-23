@@ -8,7 +8,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 from tests.ttnn.unit_tests.operations.matmul.test_ring_matmul import GRID
 
 qsr = ttnn._ttnn.operations.experimental.quasar

@@ -15,7 +15,7 @@ from models.demos.falcon7b_common.tests.test_utils import (
 )
 from models.demos.falcon7b_common.tt.falcon_model import TtFalconModel
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 
 class PytorchFalconModel(torch.nn.Module):

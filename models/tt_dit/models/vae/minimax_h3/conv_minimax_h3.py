@@ -34,7 +34,7 @@ from loguru import logger
 
 import ttnn
 
-from ....layers.module import Module, Parameter
+from ....layers.module import Module, Parameter, release_device_cache
 from ....utils.conv3d import _FP32_BLOCKINGS, _ntuple, aligned_channels, get_conv3d_config, register_conv3d_configs
 from ....utils.tensor import local_device_to_torch
 
@@ -132,8 +132,8 @@ class MiniMaxH3CausalConv3d(Module):
         self.ccl_manager = ccl_manager
         self.height_factor = 1 if parallel_config is None else parallel_config.height_parallel.factor
         self.width_factor = 1 if parallel_config is None else parallel_config.width_parallel.factor
-        self.is_sharded = self.height_factor > 1 or self.width_factor > 1
-        if self.is_sharded and ccl_manager is None:
+        self.is_spatially_sharded = self.height_factor > 1 or self.width_factor > 1
+        if self.is_spatially_sharded and ccl_manager is None:
             raise ValueError("a sharded parallel_config needs a ccl_manager for the halo exchange")
 
         kernel = list(_ntuple(kernel_size, 3))
@@ -187,7 +187,7 @@ class MiniMaxH3CausalConv3d(Module):
         self.local_pad_w = (0, 0) if self.width_factor > 1 else (pad_before, pad_after)
 
         self._edge_masks: dict[int, tuple] = {}
-        if self.is_sharded and pad_after > 0:
+        if self.is_spatially_sharded and pad_after > 0:
             if self.height_factor > 1:
                 self._edge_masks[2] = edge_mask_pair(
                     mesh_device, self.height_factor, parallel_config.height_parallel.mesh_axis, dtype
@@ -206,6 +206,20 @@ class MiniMaxH3CausalConv3d(Module):
             h_factor=self.height_factor,
             w_factor=self.width_factor,
         )
+
+        # Blocking tables are tuned at one temporal tap, but CBs scale with input T, so multi-tap
+        # (ref2va encoder) overflows L1; shrink H_out_block by the tap count to compensate.
+        if temporal_taps > 1 and self.conv_config.H_out_block > 1:
+            self.conv_config = ttnn.Conv3dConfig(
+                weights_dtype=self.conv_config.weights_dtype,
+                output_layout=self.conv_config.output_layout,
+                T_out_block=self.conv_config.T_out_block,
+                W_out_block=self.conv_config.W_out_block,
+                H_out_block=max(1, self.conv_config.H_out_block // temporal_taps),
+                C_out_block=self.conv_config.C_out_block,
+                C_in_block=self.conv_config.C_in_block,
+                compute_with_storage_grid_size=self.conv_config.compute_with_storage_grid_size,
+            )
 
         from models.common.utility_functions import is_blackhole
 
@@ -311,6 +325,11 @@ class MiniMaxH3CausalConv3d(Module):
         for dim, before, after in zip(dims, pad_left, pad_right):
             x_BTHWC = reflect_edge_correction(x_BTHWC, dim, before, after, edge_masks=self._edge_masks.get(dim))
         return x_BTHWC
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._causal_zeros)
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
         """``x_BTHWC``: ``(B, T, H, W, C)`` ROW_MAJOR, C already tile-aligned."""

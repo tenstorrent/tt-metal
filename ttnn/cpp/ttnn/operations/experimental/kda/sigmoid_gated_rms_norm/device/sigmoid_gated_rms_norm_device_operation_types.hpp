@@ -21,6 +21,8 @@ struct SigmoidGatedRmsNormParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Gate columns start at this element offset within each row of the gate tensor.
+    uint32_t gate_column_offset = 0;
 };
 
 struct SigmoidGatedRmsNormInputs {

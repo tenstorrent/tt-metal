@@ -12,8 +12,8 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -50,17 +50,19 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidLocalAccessorNameFails) {
         ProgramSpec spec;
         spec.name = "test_program";
 
-        auto kernel = MakeMinimalGen2DMKernel("kernel");
+        auto producer = MakeMinimalGen2DMKernel("producer");
+        auto consumer = MakeMinimalGen2DMKernel("consumer");
         auto dfb = MakeMinimalDFB("dfb");
 
-        kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, bad_name));
+        producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, bad_name));
+        consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
-        spec.kernels = {kernel};
+        spec.kernels = {producer, consumer};
         spec.dataflow_buffers = {dfb};
-        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
         EXPECT_THAT(
-            [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+            [&] { Program(*mesh_device_, spec); },
             ::testing::ThrowsMessage<std::runtime_error>(
                 ::testing::HasSubstr("DFB accessor_name '" + bad_name + "' must be a valid C++ identifier")))
             << "Expected rejection for name: '" << bad_name << "'";
@@ -72,14 +74,16 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidLocalAccessorNameFails) {
     ProgramSpec spec;
     spec.name = "test_program";
     auto kernel = MakeMinimalGen2DMKernel("kernel");
+    auto consumer = MakeMinimalGen2DMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, too_long));
-    spec.kernels = {kernel};
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    spec.kernels = {kernel, consumer};
     spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("must be at most " + std::to_string(MAX_ACCESSOR_NAME_LENGTH) + " characters")));
 }
@@ -91,20 +95,26 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedLocalAccessorNameForDifferentDFBsFails) 
     spec.name = "test_program";
 
     auto kernel = MakeMinimalGen2DMKernel("kernel");
+    auto dfb0_consumer = MakeMinimalGen2DMKernel("dfb0_consumer");
+    auto dfb1_producer = MakeMinimalGen2DMKernel("dfb1_producer");
     auto dfb0 = MakeMinimalDFB("dfb_0");
     auto dfb1 = MakeMinimalDFB("dfb_1");
 
     // Bind two *different* DFBs with the same accessor_name — illegal
-    // (self-loop sharing requires the same DFB on both bindings).
+    // (self-loop sharing requires the same DFB on both bindings). The other kernels complete each
+    // DFB's producer/consumer pair so collection's endpoint check does not fire first.
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "same_accessor"));
     kernel.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "same_accessor"));
+    dfb0_consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in0"));
+    dfb1_producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_1"}, "out1"));
 
-    spec.kernels = {kernel};
+    spec.kernels = {kernel, dfb0_consumer, dfb1_producer};
     spec.dataflow_buffers = {dfb0, dfb1};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel", "dfb0_consumer", "dfb1_producer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'kernel' uses accessor_name 'same_accessor' for two different DFBs")));
 }
@@ -130,7 +140,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateProducerBindingForSameLocalAccessorNa
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("duplicate PRODUCER binding for accessor_name 'shared'")));
 }
@@ -159,7 +169,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBBoundTwiceInSameRoleUnderDifferentNamesFail
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("has two CONSUMER bindings to DFB 'dfb' under different accessor names")));
 }
@@ -185,7 +195,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SelfLoopWithSharedLocalAccessorNameSucceeds) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBSelfLoopOnComputeKernelSucceeds) {
@@ -211,7 +221,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBSelfLoopOnComputeKernelSucceeds) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DMKernelSelfLoopOnGen2Fails) {
@@ -239,7 +249,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DMKernelSelfLoopOnGen2Fails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
             ::testing::HasSubstr("self-looped by data-movement kernel 'kernel'"),
             ::testing::HasSubstr("not supported for data-movement kernels on Gen2 architectures"))));
@@ -265,7 +275,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DMKernelSelfLoopOnGen1Succeeds) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBWithComputeEndpointRequiresDataFormat) {
@@ -287,7 +297,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithComputeEndpointRequiresDataFormat) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("DFB 'dfb' is used by a compute kernel, but no data_format_metadata is specified")));
 }
@@ -311,7 +321,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DMOnlyProgramSucceeds) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

@@ -77,7 +77,7 @@ ttnn::Tensor shift_state(
     const ttnn::Tensor& initial_state,
     uint32_t cluster_axis,
     ::ttnn::ccl::Topology topology) {
-    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*local_state.device()))) {
         auto gathered_state = ttnn::all_gather(
             local_state,
             /*dim=*/2,
@@ -162,7 +162,7 @@ ttnn::Tensor propagate_compressor_state(
         return local_state;
     }
 
-    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
+    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*local_state.device()))) {
         auto gathered_state = ttnn::all_gather(local_state, /*dim=*/2, cluster_axis, local_state.memory_config());
         return ttnn::prim::compressor_state_propagate_select(
             gathered_state, local_state, cluster_axis, last_active_rank);

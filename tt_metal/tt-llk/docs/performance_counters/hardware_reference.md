@@ -25,7 +25,7 @@ The host side is the stdlib-only package `tools/python/tt_llk_perf/`: `headers.p
 Consumers:
 
 - **The LLK perf harness.** `counters.h` includes `inventory.h`, `registers.h` and `hw.h` (`-I../tools/include`) and builds `BUILTIN_COUNTER_CONFIG[]` at compile time from `table_for(...)` in the fixed bank order the readout expects (INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, then the single selected L1 mux group, or on Quasar the one l1_client selection); arm, freeze and select go through the `hw.h` primitives. `counters.py` decodes config words with `bank_tables()`, `helpers/metrics.py` and `perf/schema.py` import `tt_llk_perf.metrics`. The pytest plugin puts `tools/python` on `sys.path`.
-- **Metal.** `tt_metal/tools/profiler/perf_counters.hpp` includes the same headers and adds only the profiler policy (record format, `TT_METAL_PROFILE_PERF_COUNTERS` group bits, emission); `tools/tracy/perf_counter_analysis.py` uses `counter_type_names()` and `tt_llk_perf.metrics`.
+- **Metal.** `tt_metal/hw/inc/internal/profiler/perf_counters.hpp` includes the same headers and adds only the profiler policy (record format, `TT_METAL_PROFILE_PERF_COUNTERS` group bits, emission); `tools/tracy/perf_counter_analysis.py` uses `counter_type_names()` and `tt_llk_perf.metrics`.
 
 Only **one** L1 mux group is emitted per build, chosen by `LLK_PERF_L1_MUX_GROUP` (default 0). There are only eight physical L1 counters and `PERF_CNT_MUX_CTRL` routes a group of eight client interfaces into them *while they count*, not when they are read, so a run observes exactly one group. The group is a compile-time constant baked into `brisc.elf`, so a sweep must recompile the producer. The readout checks the group decoded from L1 against the requested one and fails if they disagree.
 
@@ -62,7 +62,7 @@ The following addresses are used (offsets from `RISCV_DEBUG_REGS_START_ADDR = 0x
 | `PERF_CNT_TDMA_UNPACK0..2` | 0x00C, 0x010, 0x014 | Same triplet |
 | `PERF_CNT_FPU0..2` | 0x018, 0x01C, 0x020 | Same triplet |
 | `PERF_CNT_ALL` | 0x024 | Global start/stop for FPU + INSTRN_THREAD |
-| `DBG_FEATURE_DISABLE` | 0x040 | Scrubbed to 0 by `configure_and_arm()` |
+| `DBG_FEATURE_DISABLE` | 0x040 | Scrubbed to 0 by `clear_debug_features()` |
 | `PERF_CNT_TDMA_PACK0..2` | 0x08C, 0x090, 0x094 | Same triplet |
 | `PERF_CNT_OUT_L/H_INSTRN_THREAD` | 0x098, 0x09C | Elapsed cycles, event count |
 | `PERF_CNT_OUT_L/H_TDMA_UNPACK` | 0x0A0, 0x0A4 | Same pair |

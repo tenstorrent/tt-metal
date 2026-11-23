@@ -30,10 +30,11 @@ from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width, conv_unpad_height, count_convs
 from ....utils.golden import load_golden, save_golden
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.tensor import typed_tensor_2dshard
 from ....utils.test import skip_if_unsupported_num_links
 
-VAE_MODEL_NAME = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+VAE_CHECKPOINT_NAME = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 VAE_COMMIT_HASH_PLACEHOLDER = "local"
 
 # Canonical mesh configurations shared across component-level VAE tests.
@@ -314,11 +315,13 @@ def test_autoencoder_kl_wan():
     logger.info("Loading AutoencoderKLWan model for Wan2.2 14B T2V...")
 
     # Load the pretrained AutoencoderKLWan model for Wan2.2 14B T2V
-    model_id = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+    ensure_cached(VAE_CHECKPOINT_NAME)
     torch_dtype = torch.float32
 
     # Load VAE component from the Wan2.2 model
-    vae = AutoencoderKLWan.from_pretrained(model_id, subfolder="vae", torch_dtype=torch_dtype, trust_remote_code=True)
+    vae = AutoencoderKLWan.from_pretrained(
+        VAE_CHECKPOINT_NAME, subfolder="vae", torch_dtype=torch_dtype, trust_remote_code=True
+    )
     vae.eval()
 
     logger.info("Successfully loaded AutoencoderKLWan model")
@@ -332,7 +335,7 @@ def test_autoencoder_kl_wan():
 
     # Print model configuration
     print(f"\nModel Configuration:")
-    print(f"Model ID: {model_id}")
+    print(f"Checkpoint: {VAE_CHECKPOINT_NAME}")
     print(f"Torch dtype: {torch_dtype}")
     print(f"Model type: {type(vae)}")
     print(f"Training mode: {vae.training}")
@@ -1659,13 +1662,14 @@ def test_wan_decoder(
     torch.manual_seed(0)
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
 
-    _, commit_hash = TorchAutoencoderKLWan.load_config(VAE_MODEL_NAME, subfolder="vae", return_commit_hash=True)
-    logger.info(f"Loaded {VAE_MODEL_NAME} (subfolder=vae) at commit: {commit_hash}")
+    ensure_cached(VAE_CHECKPOINT_NAME)
+    _, commit_hash = TorchAutoencoderKLWan.load_config(VAE_CHECKPOINT_NAME, subfolder="vae", return_commit_hash=True)
+    logger.info(f"Loaded {VAE_CHECKPOINT_NAME} (subfolder=vae) at commit: {commit_hash}")
     param_id = request.node.name
     golden = load_golden(commit_hash, "wan_decoder", param_id)
 
     torch_dtype = torch.float32
-    torch_model = TorchAutoencoderKLWan.from_pretrained(VAE_MODEL_NAME, subfolder="vae")
+    torch_model = TorchAutoencoderKLWan.from_pretrained(VAE_CHECKPOINT_NAME, subfolder="vae")
     torch_model.eval()
 
     skip_if_unsupported_num_links(mesh_device, num_links)
@@ -2405,13 +2409,14 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
     torch.manual_seed(0)
-    _, commit_hash = TorchAutoencoderKLWan.load_config(VAE_MODEL_NAME, subfolder="vae", return_commit_hash=True)
-    logger.info(f"Loaded {VAE_MODEL_NAME} (subfolder=vae) at commit: {commit_hash}")
+    ensure_cached(VAE_CHECKPOINT_NAME)
+    _, commit_hash = TorchAutoencoderKLWan.load_config(VAE_CHECKPOINT_NAME, subfolder="vae", return_commit_hash=True)
+    logger.info(f"Loaded {VAE_CHECKPOINT_NAME} (subfolder=vae) at commit: {commit_hash}")
     param_id = request.node.name
     golden = load_golden(commit_hash, "wan_encoder", param_id)
 
     torch_dtype = torch.float32
-    torch_model = TorchAutoencoderKLWan.from_pretrained(VAE_MODEL_NAME, subfolder="vae")
+    torch_model = TorchAutoencoderKLWan.from_pretrained(VAE_CHECKPOINT_NAME, subfolder="vae")
     torch_model.eval()
 
     skip_if_unsupported_num_links(mesh_device, num_links)

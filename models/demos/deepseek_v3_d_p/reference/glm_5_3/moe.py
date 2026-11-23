@@ -51,13 +51,13 @@ def glm_moe_reference(
         use_bitonic_sort=False,
     )
     gate.weight.data = gate_weights["weight"]
-    # Match the device: TtMoEGatePrefill stores e_score_correction_bias as bf16 (even in DEVICE_FP32,
-    # which only makes the *logits* fp32). GLM's real bias is ~34.5 with a ~±0.14 inter-expert spread —
-    # finer than bf16's ~0.125-0.25 resolution near 34.5 — and it dominates top-k selection, so an fp32
-    # reference bias would pick different experts than the device (bf16). Quantize to bf16 here so the
-    # reference routes like the device. (The bf16-bias precision itself is a separate model-accuracy
-    # concern, not what this block test validates.)
-    gate.e_score_correction_bias.data = gate_weights["e_score_correction_bias"].to(torch.bfloat16).float()
+    # Match the device: TtMoEGatePrefill stores e_score_correction_bias as bf16 (even in DEVICE_FP32, which only
+    # makes the *logits* fp32), and for GLM (MOE_GATE_BIAS_CENTERED) it stores bf16(bias - mean(bias)). GLM's real
+    # bias is ~34.5 with a ~±0.14 inter-expert spread, so uncentred bf16 would keep only a handful of values; centred
+    # it keeps ~1e-3 resolution. Top-k is shift-invariant, so centring changes no selection in exact arithmetic --
+    # only the rounding, which is why the reference mirrors the device's centred bf16 values exactly.
+    bias = gate_weights["e_score_correction_bias"].float()
+    gate.e_score_correction_bias.data = (bias - bias.mean()).to(torch.bfloat16).float()
     # MoEGate.forward expects [bsz, seq, hidden] (it unpacks 3 dims); it flattens internally and
     # returns topk_idx / topk_weight as [tokens, top_k].
     topk_idx, topk_weight = gate(hidden_states.float())

@@ -14,6 +14,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.common.utility_functions import is_wormhole_b0, profiler
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
+from models.demos.utils.common_demo_utils import report_generation_rate
 from models.demos.utils.qa_pipeline_compat import QuestionAnsweringPipeline
 from models.demos.wormhole.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
 
@@ -156,6 +157,9 @@ def run_bert_question_and_answering_inference(
     logger.info(f"preprocessing_input: {measurements['preprocessing_input']} s")
     logger.info(f"inference_time: {measurements['inference_time']} s")
     logger.info(f"post_processing : {measurements['post_processing']} s")
+
+    # Report-only perf for the CI dashboard (#58596). No-op outside CI.
+    report_generation_rate("bert-tiny", measurements["inference_time"], batch_size)
 
     return measurements
 

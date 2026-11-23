@@ -43,7 +43,17 @@ jit_telemetry_pattern = re.compile(
 # best-effort below so a change to that list drops the extras rather than failing. The
 # hit rate is intentionally not stored -- it is derivable (hits / lookups) and, unlike a
 # raw count, cannot be summed across process blocks.
-jit_cache_stats_pattern = re.compile(r"JIT cache stats:\s*(?P<hits>\d+)\s*/\s*(?P<lookups>\d+)\s+hits")
+#
+# Anchored on the logger's "BuildKernels |" field so only the line emitted by tt-metal itself
+# matches. Workflows commonly re-print this line in a summary step (e.g. via
+# `grep 'JIT cache stats' | sed 's/.*| //'`); the echoed copy has the logger prefix stripped and
+# must not be counted a second time. Raw CI logs colorize each field, so ANSI SGR sequences are
+# tolerated around the separators, e.g.:
+#   ...| ESC[35m   BuildKernelsESC[0m | ESC[37mJIT cache stats: 106/18250 hits ...
+_ansi = r"(?:\x1b\[[0-9;]*m)*"
+jit_cache_stats_pattern = re.compile(
+    r"BuildKernels" + _ansi + r"\s*\|\s*" + _ansi + r"JIT cache stats:\s*(?P<hits>\d+)\s*/\s*(?P<lookups>\d+)\s+hits"
+)
 
 # metric-name -> pattern for each optional bracketed counter. Kept raw-count only so the
 # same sum-across-blocks aggregation used for JIT telemetry stays correct.
@@ -798,6 +808,11 @@ def deduplicate_tests_by_full_name(tests):
 
             # If found one with elapsed time > 0, use it; otherwise use the first one
             selected_test = test_with_elapsed_time if test_with_elapsed_time else test_list[0]
+            # A hang test report has no duration, so a timed duplicate wins; keep its hang tag on the winner.
+            if any((test.tags or {}).get("failure_type") == "hang" for test in test_list):
+                selected_test = selected_test.model_copy(
+                    update={"tags": {**(selected_test.tags or {}), "failure_type": "hang"}}
+                )
             deduplicated_tests.append(selected_test)
 
     return deduplicated_tests

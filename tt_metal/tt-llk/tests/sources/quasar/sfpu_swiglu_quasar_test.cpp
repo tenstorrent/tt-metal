@@ -12,10 +12,11 @@
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 // Swiglu is a binary SFPU kernel: it requires TWO input tiles (gate, up) in
@@ -24,8 +25,7 @@
 //   buffer_A: 2 concatenated tiles (tile 0 = gate, tile 1 = up)
 //   Dest:     tile 0 = gate, tile 1 = up, tile 2 = output
 //   buffer_Res: 1 output tile (the value of dest tile 2 packed out)
-// We unpack 2 tiles to Dest via the unary operand path (unpacker advances
-// through tiles 0,1 automatically from the init argument).
+// We unpack 2 tiles to Dest as one block (tiles 0,1 land at Dest tiles 0,1).
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -37,7 +37,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A             = params.buffer_A;
 #endif
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
@@ -46,10 +46,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
-    const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+    constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
-    if (is_fp32_dest_acc_en && !unpack_to_dest)
+    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
     {
         // Same workaround as unary tests: MOVA2D for 32-bit dest requires both
         // SrcA/B format configs because the datacopy uses ELWADD internally.
@@ -61,10 +62,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, 2 /*gate + up*/);
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    constexpr std::uint32_t NUM_INPUT_TILES = 2; // gate + up
+    if constexpr (unpack_to_dest)
+    {
+        _llk_unpack_dest_init_();
+        _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+        _llk_unpack_unary_operand_to_dest_block_(0 /*l1_tile_idx*/, 0 /*dst_tile_idx*/, NUM_INPUT_TILES);
+    }
+    else
+    {
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, NUM_INPUT_TILES);
+        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    }
 
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
@@ -100,7 +112,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // gate lives at Dest tile index 0, up at Dest tile index 1,
     // output written to Dest tile index 2. One SFPU "section" covers all
     // three tiles so we just need the SFPU dvalid chain.
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
@@ -111,9 +123,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
 
-    if (!unpack_to_dest)
+    if constexpr (!unpack_to_dest)
     {
         // FPU path: datacopy BOTH input tiles from SrcA to Dest before the
         // SFPU section reads them. Tile 0 = gate at Dest[0], tile 1 = up at
@@ -172,7 +184,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -190,7 +202,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     // Declare the same dvalid client chain that UNPACK/MATH used, seen from
     // PACK's side. The chain must match on all three threads.
-    if (unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
@@ -199,8 +211,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
-    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);

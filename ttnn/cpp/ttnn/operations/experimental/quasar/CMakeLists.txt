@@ -33,7 +33,12 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+        FILES
+            ${kernels}
+            # Headers that kernels include at JIT time but that sit outside */device/kernels*/ or are .h files.
+            deepseek_prefill/chip_position/kernels/chip_position.hpp
+            deepseek_prefill/pack_scaled_fp8_kv_cache/shared_with_host/packed_kv_layout.hpp
+            deepseek_prefill/unified_routed_expert_ffn/device/kernels/compute/fast_silu_glu_sfpu.h
     PRIVATE
         ${TTNN_OP_EXPERIMENTAL_QUASAR_SRCS}
 )

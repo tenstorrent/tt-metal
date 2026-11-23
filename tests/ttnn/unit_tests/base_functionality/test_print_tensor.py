@@ -7,8 +7,15 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, TORCH_INTEGER_DTYPES
+
+
+@pytest.fixture(autouse=True)
+def _restore_print_options():
+    # Print options are process-global; later tests on the same worker expect the defaults.
+    yield
+    ttnn.set_printoptions(profile="short")
 
 
 GOLDEN_TENSOR_STRINGS = {

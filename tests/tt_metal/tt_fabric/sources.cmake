@@ -6,6 +6,7 @@ set(UNIT_TESTS_FABRIC_SRC
     common/mock_psd_builder.cpp
     common/fabric_worker_kernel_helpers.cpp
     common/fabric_command_interface.cpp
+    common/channel_trimming_test_utils.cpp
     fabric_router/test_routing_tables.cpp
     fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
@@ -24,6 +25,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_express_connection_wiring.cpp
     fabric_router/test_protected_domain_effects.cpp
     fabric_router/test_fabric_edge_capability.cpp
+    fabric_router/test_master_router_selection.cpp
     fabric_router/test_direction_slot_bijection.cpp
     fabric_router/test_router_wiring_rules.cpp
     fabric_router/test_router_turn_set.cpp
@@ -32,7 +34,11 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_fabric_topology_helpers.cpp
     fabric_router/test_fabric_opt_level.cpp
     fabric_router/test_channel_trimming_capture.cpp
+    fabric_router/test_channel_trimming_replay.cpp
     fabric_router/test_static_sized_channels_allocator.cpp
+    fabric_router/test_router_channel_layouts.cpp
+    fabric_router/test_router_layouts_mock.cpp
+    fabric_router/test_fabric_slot_and_trid_allocators.cpp
     disaggregation/test_kv_chunk_address_table_protobuf.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp
     fabric_data_movement/test_basic_1d_fabric.cpp
@@ -41,7 +47,15 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_data_movement/test_basic_fabric_mux.cpp
     fabric_data_movement/test_basic_fabric_mux_v2.cpp
     fabric_data_movement/test_fabric_traffic_generator_kernel.cpp
+    fabric_data_movement/test_global_semaphore_fabric.cpp
     fabric_router/test_physical_descriptor_builder.cpp
+    fabric_router/test_control_plane_link_health.cpp
+    fabric_router/test_fsd_host_filter.cpp
+    fabric_router/test_physical_node_id.cpp
+    fabric_router/test_physical_system_descriptor_diff.cpp
+    fabric_router/test_link_health.cpp
+    graph/test_logical_graph_lowering.cpp
+    graph/test_graph_fabric_mock_compile.cpp
 )
 
 set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC physical_discovery/test_physical_system_descriptor.cpp)

@@ -77,7 +77,7 @@ Device initialization and parameter setup are similar to the single core example
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program{};
+    Program program = CreateProgram(*mesh_device);
 
     // Create DRAM buffers for input and output matrices (replicated per device across the mesh)
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
@@ -174,24 +174,15 @@ Creating buffers and circular buffers in Metalium is similar to the single core 
 
     // Allocate DRAM buffers (shared resources on the device). Nothing changes here.
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
-    auto src0_dram_buffer = CreateBuffer({
-        .device = device,
-        .size = single_tile_size * Mt * Kt,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM
-    });
-    auto src1_dram_buffer = CreateBuffer({
-        .device = device,
-        .size = single_tile_size * Nt * Kt,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM
-    });
-    auto dst_dram_buffer = CreateBuffer({
-        .device = device,
-        .size = single_tile_size,
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM
-    });
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config_A{.size = single_tile_size * Mt * Kt};
+    distributed::ReplicatedBufferConfig buffer_config_B{.size = single_tile_size * Nt * Kt};
+    distributed::ReplicatedBufferConfig buffer_config_C{.size = single_tile_size * Mt * Nt};
+
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
 
     // Create circular buffers on all participating cores
     const auto cb_data_format = tt::DataFormat::Float16_b;

@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.common.utility_functions import skip_for_slow_dispatch
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 # H2DStreamService claims FD dispatch-column service cores and DMA-pins host memory; it is only
 # supported on Blackhole Galaxy and requires fast dispatch. Skip the whole module on any other

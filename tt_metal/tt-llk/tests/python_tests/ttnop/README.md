@@ -33,7 +33,7 @@ yourself.
 
 | variable            | default                     | what it does                                                                                                                               |
 | ------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CHIP_ARCH`         | `wormhole`                  | Architecture for build and scanner binary (`wormhole`, `blackhole`, `quasar`). Quasar uses the simulator (`EXALENS_PORT`, default `5556`). |
+| `CHIP_ARCH`         | `wormhole`                  | Architecture for build and scanner binary (`wormhole`, `blackhole`, `quasar`). Quasar uses the simulator. |
 | `TTNOP_SITE_MODE`   | `sync`                      | `sync` = sync/stall sites only. `all` = every safe instruction (slow).                                                                     |
 | `TTNOP_THREADS`     | `unpack,math`               | Comma-separated thread ELFs to scan. Add `pack` if needed.                                                                                 |
 | `TTNOP_SITES`       | empty = all                 | Limit to specific sites, e.g. `unpack:3,math:7`. Index is per thread                                            |
@@ -188,8 +188,8 @@ experiment.
 ## Hangs
 
 `scripts/focus.sh` cannot replace a hung worker or reset the card. After a hang,
-reset with `tt-smi -r` before running more device tests. See FOCUS.md for
-details.
+reset the card with a UMD warm reset before running more device tests. See
+FOCUS.md for the command.
 
 ## Sanity check
 
@@ -213,4 +213,4 @@ make check-hang
 
 The hang check passes `--hang` to the same script. A self-jumping cave filler
 wedges a core and should be classified as `hang`. Run this only when you can
-reset the card afterward. It runs `tt-smi -r` when it finishes.
+reset the card afterward. It runs a UMD warm reset when it finishes.

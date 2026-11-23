@@ -22,6 +22,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig
+from models.demos.gemma4.tt.decode_matmul import DecodeLinear, flag, pipeline_row_for
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -29,18 +30,26 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 # weight → no memory cost). On by default for tp>1; GEMMA4_ATTN_DRAM_SHARD=0
 # falls back to plain interleaved matmuls.
 _DRAM_SHARD_ATTN = os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1") != "0"
+# GEMMA4_ATTN_DECODE_1D=1: explicit 1D-multicast decode configs on the interleaved wqkv / o_proj matmuls (the
+# MoE path), K streamed in 4-tile blocks. Measured on a P150 (26B-A4B TP=4, trace replay): sliding wqkv
+# 53 -> 34 us, global wqkv 65 -> 47 us, o_proj 25 -> 18 us (sliding) / 46 -> 34 us (global), same HiFi2 numerics.
+_ATTN_DECODE_BLOCK_W = int(os.environ.get("GEMMA4_ATTN_DECODE_BLOCK_W", "4"))  # env override for the K-block sweep
 
 
 @dataclass(frozen=True)
 class AttentionWeights:
     """Container for attention weight tensors — immutable after creation."""
 
-    wqkv: Union[ttnn.Tensor, DramShardedLinear]  # Fused Q+K+V, column-parallel
-    o_proj: Union[ttnn.Tensor, DramShardedLinear]  # Row-parallel sharded
+    wqkv: Union[ttnn.Tensor, DramShardedLinear, DecodeLinear]  # Fused Q+K+V, column-parallel
+    o_proj: Union[ttnn.Tensor, DramShardedLinear, DecodeLinear]  # Row-parallel sharded
     q_norm_weight: ttnn.Tensor  # Replicated across devices
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
+    # The q / k norm gammas as TILE [1, 1, 1, head_dim] rows (the form custom_ops/qkv_norm_rope reads), built once
+    # here from the ROW_MAJOR weights above and owned by this container for the model's lifetime.
+    q_norm_tile: ttnn.Tensor = None
+    k_norm_tile: ttnn.Tensor = None
 
 
 def load_attention_weights(
@@ -57,8 +66,6 @@ def load_attention_weights(
     No Meta-format conversion needed — uses HF-style rotary_embedding.
     """
     is_global = config.use_kv_tying
-    q_size = config.num_attention_heads * config.head_dim
-    kv_size = config.num_key_value_heads * config.head_dim
     tp = mesh_config.tp
     fractured = bool(getattr(mesh_config, "weight_fracture", False))
     if fractured and tp != mesh_config.mesh_shape[0]:
@@ -167,7 +174,11 @@ def load_attention_weights(
     # MoE (26B-A4B): sharded QKV/O-proj decode matmuls regress layer-decode PCC
     # on BH 1x4 (~0.93 vs 0.99). Dense models keep the opt.
     is_moe = bool(getattr(config, "enable_moe_block", False))
-    dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe and not fractured
+    # GEMMA4_DRAM_SHARD_TP1=1: the DRAM-sharded decode path on a single chip as well (the layer lab builds one
+    # TP shard of the serving mesh on one chip, tests/unit/test_layer_lab.py).
+    lab_tp1 = os.environ.get("GEMMA4_DRAM_SHARD_TP1", "0") == "1"
+    dram_shard = _DRAM_SHARD_ATTN and (tp > 1 or lab_tp1) and not is_moe and not fractured
+    decode_1d = flag("GEMMA4_ATTN_DECODE_1D")
     qkv_cache = get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}")
     oproj_cache = get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}")
     qkv_cache_ws = (qkv_cache + ".ws") if qkv_cache else None
@@ -175,7 +186,14 @@ def load_attention_weights(
 
     if dram_shard and can_dram_shard(hidden_size, qkv_n, dtype=weight_dtype):
         wqkv = DramShardedLinear(
-            qkv, mesh_device, col_mapper, k=hidden_size, n=qkv_n, dtype=weight_dtype, cache_file_name=qkv_cache_ws
+            qkv,
+            mesh_device,
+            col_mapper,
+            k=hidden_size,
+            n=qkv_n,
+            dtype=weight_dtype,
+            cache_file_name=qkv_cache_ws,
+            pipeline_row=pipeline_row_for(mesh_device, hidden_size, "qkv", tp),
         )
     else:
         wqkv = ttnn.as_tensor(
@@ -187,10 +205,27 @@ def load_attention_weights(
             cache_file_name=qkv_cache,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if decode_1d:
+            # Per-device K / N from the device tensor (the mesh tensor reports its local shape).
+            wqkv = DecodeLinear(
+                wqkv,
+                mesh_device,
+                k=int(wqkv.shape[-2]),
+                n=int(wqkv.shape[-1]),
+                enabled=True,
+                max_block_w=_ATTN_DECODE_BLOCK_W,
+            )
 
     if dram_shard and o_proj_pad_size == 0 and can_dram_shard(oproj_k, oproj_n, dtype=weight_dtype):
         o_proj = DramShardedLinear(
-            o_w, mesh_device, row_mapper, k=oproj_k, n=oproj_n, dtype=weight_dtype, cache_file_name=oproj_cache_ws
+            o_w,
+            mesh_device,
+            row_mapper,
+            k=oproj_k,
+            n=oproj_n,
+            dtype=weight_dtype,
+            cache_file_name=oproj_cache_ws,
+            pipeline_row=pipeline_row_for(mesh_device, hidden_size, "out_proj", tp),
         )
     else:
         o_proj = ttnn.as_tensor(
@@ -202,6 +237,15 @@ def load_attention_weights(
             cache_file_name=oproj_cache,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if decode_1d:
+            o_proj = DecodeLinear(
+                o_proj,
+                mesh_device,
+                k=int(o_proj.shape[-2]),
+                n=int(o_proj.shape[-1]),
+                enabled=True,
+                max_block_w=_ATTN_DECODE_BLOCK_W,
+            )
     q_norm_weight = ttnn.as_tensor(
         q_norm_w,
         device=mesh_device,
@@ -221,6 +265,9 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    def _norm_tile(w):
+        return ttnn.to_layout(ttnn.reshape(w, (1, 1, 1, config.head_dim)), ttnn.TILE_LAYOUT)
+
     return AttentionWeights(
         wqkv=wqkv,
         o_proj=o_proj,
@@ -228,4 +275,6 @@ def load_attention_weights(
         k_norm_weight=k_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
+        q_norm_tile=_norm_tile(q_norm_weight),
+        k_norm_tile=_norm_tile(k_norm_weight),
     )

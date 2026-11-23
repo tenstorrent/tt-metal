@@ -12,14 +12,14 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
 
-#include "impl/metal2_host_api/semaphore_scope.hpp"
+#include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -71,7 +71,7 @@ Program MakeComputeSemaphoreProgram(distributed::MeshDevice& mesh_device, const 
         .semaphores = {sem},
         .work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", kSemNode, {"compute"})},
     };
-    Program program = MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs args;
     args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -79,7 +79,7 @@ Program MakeComputeSemaphoreProgram(distributed::MeshDevice& mesh_device, const 
         .runtime_arg_values =
             MakeRuntimeArgsForSingleNode(kSemNode, {{"num_iters", run.num_iters}, {"report_addr", kSemReportAddr}}),
     }};
-    SetProgramRunArgs(program, args);
+    program.set_program_run_args(args);
     return program;
 }
 

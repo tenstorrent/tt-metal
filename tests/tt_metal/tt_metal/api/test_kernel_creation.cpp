@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/core_coord.hpp>
-#include "context/metal_env_accessor.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <exception>
 #include <set>
 #include <string>
@@ -17,13 +15,11 @@
 #include "base_types.hpp"
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/program.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -37,7 +33,7 @@ TEST_F(MeshDispatchFixture, TensixCreateKernelsOnComputeCores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = CreateProgram();
+        tt_metal::Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
@@ -60,15 +56,13 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = CreateProgram();
+        tt_metal::Program program = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
 
-        const auto& dispatch_core_config =
-            MetalContext::instance(mesh_device->impl().get_context_id()).get_dispatch_core_config();
+        const auto& dispatch_core_config = mesh_device->impl().metal_context().get_dispatch_core_config();
         CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
-        MetalEnvImpl& env_impl =
-            MetalEnvAccessor(MetalContext::instance(mesh_device->impl().get_context_id()).get_env()).impl();
+        auto& env_impl = mesh_device->impl().metal_env();
         std::vector<CoreCoord> dispatch_cores = tt::get_logical_dispatch_cores(
             env_impl, mesh_device->get_device_ids()[0], mesh_device->num_hw_cqs(), dispatch_core_config);
         std::set<CoreRange> dispatch_core_ranges;
@@ -97,7 +91,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDir) {
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     create_kernel(kernel_file);
-    this->program_.impl().compile(&this->device());
+    this->program_->impl().compile(&this->device());
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir) {
@@ -105,7 +99,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderKernelRootDir
     const std::string& new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
     this->setup_kernel_dir(orig_kernel_file, new_kernel_file);
     this->create_kernel(new_kernel_file);
-    this->program_.impl().compile(&this->device());
+    this->program_->impl().compile(&this->device());
     this->cleanup_kernel_dir();
 }
 
@@ -113,7 +107,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirA
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     this->setup_kernel_dir(kernel_file, kernel_file);
     this->create_kernel(kernel_file);
-    this->program_.impl().compile(&this->device());
+    this->program_->impl().compile(&this->device());
     this->cleanup_kernel_dir();
 }
 
@@ -126,7 +120,7 @@ TEST_F(MeshDispatchFixture, TensixKernelMetaSourceCodeShowsInlineSource) {
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp";
     const std::string inline_source = "void kernel_main() {}";
 
-    auto program = CreateProgram();
+    auto program = CreateProgram(*this->devices_[0]);
 
     auto file_kernel_handle = CreateKernel(
         program,
@@ -164,8 +158,8 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
     config_fp32.unpack_to_dest_mode.push_back(UnpackToDestMode::UnpackToDestFp32);  // Change CB 0 to FP32 mode
 
     // Create programs (needed for kernel creation context)
-    auto program_default = CreateProgram();
-    auto program_fp32 = CreateProgram();
+    auto program_default = CreateProgram(this->device());
+    auto program_fp32 = CreateProgram(this->device());
 
     // Create kernel handles for both configurations
     auto kernel_handle_default = CreateKernel(program_default, kernel_file, CoreCoord(0, 0), config_default);

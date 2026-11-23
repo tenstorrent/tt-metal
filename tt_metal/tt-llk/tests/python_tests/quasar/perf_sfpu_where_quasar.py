@@ -5,7 +5,6 @@ import pytest
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
-    ImpliedMathFormat,
 )
 from helpers.param_config import parametrize
 from quasar.test_sfpu_where_quasar import (
@@ -21,8 +20,7 @@ from quasar.test_sfpu_where_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=get_valid_formats_dest_acc(),
-    implied_math_format=[ImpliedMathFormat.Yes],
+    format_variant=get_valid_formats_dest_acc(),
     test_case=PERF_SFPU_WHERE_TEST_CASES,
     vector_mode=PERF_SFPU_WHERE_VECTOR_MODES,
     run_types=PERF_RUN_TYPES_QUASAR,
@@ -31,8 +29,7 @@ from quasar.test_sfpu_where_quasar import (
 )
 def test_perf_sfpu_where_quasar(
     perf_report,
-    formats_dest_acc,
-    implied_math_format,
+    format_variant,
     test_case,
     vector_mode,
     run_types,
@@ -40,8 +37,7 @@ def test_perf_sfpu_where_quasar(
     is_perf,
 ):
     run_sfpu_where_quasar(
-        formats_dest_acc,
-        implied_math_format,
+        format_variant,
         test_case,
         vector_mode,
         run_types=run_types,
