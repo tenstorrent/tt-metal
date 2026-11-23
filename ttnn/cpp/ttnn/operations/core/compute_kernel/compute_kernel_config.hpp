@@ -49,22 +49,6 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level =
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
-// Same as init_device_compute_kernel_config, for the defaults an op picks when the user passes no config. Due to
-// hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometimes produce incorrect results on Wormhole, so a HiFi4
-// default with fp32_dest_acc_en becomes HiFi3 there. A user-supplied config is returned unchanged.
-// ttnn.init_device_compute_kernel_config (Python) keeps the plain function above, so an explicit request is never
-// rewritten.
-DeviceComputeKernelConfig init_default_compute_kernel_config(
-    tt::ARCH arch,
-    const std::optional<const DeviceComputeKernelConfig>& user_compute_kernel_config,
-    tt::tt_metal::MathFidelity default_fidelity,
-    bool default_approx_mode,
-    bool default_fp32_acc,
-    bool default_l1_acc = false,
-    bool default_dst_full_sync_en = false,
-    ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level =
-        ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
-
 void verify_numerical_configuration(
     tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& user_compute_kernel_config);
 

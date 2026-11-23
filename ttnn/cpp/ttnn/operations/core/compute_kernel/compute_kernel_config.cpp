@@ -40,29 +40,6 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
         .throttle_level = default_throttle_level};
 }
 
-DeviceComputeKernelConfig init_default_compute_kernel_config(
-    tt::ARCH arch,
-    const std::optional<const DeviceComputeKernelConfig>& user_compute_kernel_config,
-    tt::tt_metal::MathFidelity default_fidelity,
-    bool default_approx_mode,
-    bool default_fp32_acc,
-    bool default_l1_acc,
-    bool default_dst_full_sync_en,
-    ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level) {
-    if (arch == tt::ARCH::WORMHOLE_B0 && default_fp32_acc && default_fidelity == tt::tt_metal::MathFidelity::HiFi4) {
-        default_fidelity = tt::tt_metal::MathFidelity::HiFi3;
-    }
-    return init_device_compute_kernel_config(
-        arch,
-        user_compute_kernel_config,
-        default_fidelity,
-        default_approx_mode,
-        default_fp32_acc,
-        default_l1_acc,
-        default_dst_full_sync_en,
-        default_throttle_level);
-}
-
 void verify_numerical_configuration(
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
     tt::ARCH arch,
