@@ -10,6 +10,9 @@ namespace ckernel {
 
 namespace sfpu {
 void abs_init();
+void bitwise_and_init();
+void bitwise_or_init();
+void bitwise_xor_init();
 void hardmish_init();
 void i0_init();
 void softcap_init();
@@ -24,6 +27,13 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         // calculate_abs_int32 advances Dest through the ADDR_MOD_6 abs_init programs (ttnn reaches it
         // through abs_tile_init).
         sfpu::abs_init();
+    } else if constexpr (sfpu_op == SfpuType::bitwise_and) {
+        // calculate_sfpu_unary_bitwise advances Dest through the ADDR_MOD_6 these inits program.
+        sfpu::bitwise_and_init();
+    } else if constexpr (sfpu_op == SfpuType::bitwise_or) {
+        sfpu::bitwise_or_init();
+    } else if constexpr (sfpu_op == SfpuType::bitwise_xor) {
+        sfpu::bitwise_xor_init();
     } else if constexpr (sfpu_op == SfpuType::hardmish) {
         // hardmish reads 0.5 from vConstFloatPrgm0 and advances Dest through ADDR_MOD_6, both set here.
         sfpu::hardmish_init();

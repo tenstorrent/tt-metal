@@ -31,9 +31,8 @@ inline Vec compute_unary_bitwise(Vec v, Vec scalar) {
     }
 }
 
-// The store in calculate_sfpu_unary_bitwise advances the destination by one SFPU pass (dest.incr =
-// SFP_ROWS, what dst_reg++ does) through ADDR_MOD_6, so each pass saves a TTINCRWC. Quasar's shared
-// SFPU init only programs ADDR_MOD_7 (incr = 0), so the address mod is programmed here.
+// ADDR_MOD_6 advances Dest by one SFPU pass; the store in calculate_sfpu_unary_bitwise walks Dest
+// through it. Run by the bare unary init for bitwise_and / or / xor (bitwise_*_tile_init).
 inline void bitwise_init() {
     addr_mod_t{
         .srca = {.incr = 0},
@@ -67,8 +66,7 @@ inline void calculate_sfpu_unary_bitwise(const uint value) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vUInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>();
-            // ADDR_MOD_6 (bitwise_init) advances the destination on the store, in place of a separate
-            // dst_reg++.
+            // The store advances Dest to the next pass through ADDR_MOD_6 (bitwise_init).
             sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>(ADDR_MOD_6) = compute_unary_bitwise<BITWISE_OP>(v, scalar);
         }
     } else {
@@ -77,7 +75,7 @@ inline void calculate_sfpu_unary_bitwise(const uint value) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
-            // See the UInt16 branch: the store advances the destination through ADDR_MOD_6.
+            // As above: the store advances Dest through ADDR_MOD_6.
             sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>(ADDR_MOD_6) = compute_unary_bitwise<BITWISE_OP>(v, scalar);
         }
     }

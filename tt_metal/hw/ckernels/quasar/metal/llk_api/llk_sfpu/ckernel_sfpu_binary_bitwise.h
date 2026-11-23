@@ -22,10 +22,8 @@ enum class BinaryBitwiseOp : std::uint8_t {
     XOR = 2,
 };
 
-// Programs ADDR_MOD_6 with dest.incr = SFP_ROWS so the store in calculate_sfpu_binary_bitwise advances
-// the destination by one SFPU pass (what dst_reg++ did), in place of a separate TTINCRWC per pass.
-// Quasar's shared SFPU init only programs ADDR_MOD_7 (incr = 0); this is additive. Called by
-// binary_bitwise_tile_init (and the tt-llk harness init) for the three bitwise ops.
+// ADDR_MOD_6 advances Dest by one SFPU pass; the store in calculate_sfpu_binary_bitwise walks Dest
+// through it. Run by binary_bitwise_tile_init.
 inline void binary_bitwise_init() {
     addr_mod_t{
         .srca = {.incr = 0},
@@ -66,8 +64,7 @@ inline void calculate_sfpu_binary_bitwise(
             result = a ^ b;
         }
 
-        // The store advances the destination by one SFPU pass through ADDR_MOD_6 (dest += SFP_ROWS, what
-        // dst_reg++ does), programmed by binary_bitwise_init; it replaces the separate TTINCRWC per pass.
+        // The store advances Dest to the next pass through ADDR_MOD_6 (binary_bitwise_init).
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>(ADDR_MOD_6) = result;
     }
 }
