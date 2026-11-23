@@ -16,7 +16,7 @@ import models.demos.inkling2_mini.tests.test_attention_fast as T
 import ttnn
 from models.demos.inkling2_mini.tests.test_attention_fast import DEVICE_PARAMS
 from models.demos.inkling2_mini.tt.attention import ROWS
-from models.demos.inkling2_mini.tt.attention_fast import DecodePositionsFast, Inkling2AttentionFast
+from models.demos.inkling2_mini.tt.attention_fast import V_WIDTH, DecodePositionsFast, Inkling2AttentionFast
 
 
 def _one(attn, x, state, pos):
@@ -28,6 +28,21 @@ def _one(attn, x, state, pos):
         proj = attn.w_all(attn.window(state.x_hist, [x]), ttnn.bfloat16, attn.mm_cfg)
     r = ROWS[mode]
     q, mask, sink = attn.prep(proj, pos, {"q": 0, "k": r["k"], "v": r["v"]}, state)
+    if attn.is_global:
+        o_near, rr, sink_far = attn.near(attn.prep.q_grp, mask, sink, state.k_ring, state.v_ring)
+        far_pos, valid = pos.far_grp
+        far = ttnn.transformer.flash_multi_latent_attention_decode(
+            attn.prep.q_far,
+            state.kv_grp,
+            head_dim_v=V_WIDTH,
+            is_causal=True,
+            cur_pos_tensor=far_pos,
+            attention_sink=sink_far,
+            scale=1.0,
+            program_config=attn.far_grp_cfg,
+            compute_kernel_config=attn.hifi4,
+        )
+        return ttnn.to_torch(attn.out(far, proj, (o_near, rr, valid))).float()[0, 0, 0]
     a = ttnn.transformer.scaled_dot_product_attention_decode(
         q,
         state.k_ring,
@@ -45,9 +60,10 @@ def _one(attn, x, state, pos):
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("p", [9000, 1023 + 9 * 1024])
 @pytest.mark.parametrize("R", [2, 3])
-def test_decode_rows(device, p, R):
-    sd = ta.random_state_dict(False, seed=7)
-    attn = Inkling2AttentionFast(device, T.host_weights_from_hf(sd, False), False)
+@pytest.mark.parametrize("is_global", [False, True], ids=["local", "global"])
+def test_decode_rows(device, p, R, is_global):
+    sd = ta.random_state_dict(is_global, seed=11 if is_global else 7)
+    attn = Inkling2AttentionFast(device, T.host_weights_from_hf(sd, is_global), is_global)
     pk, pv = T.seeded_prefix(p, seed=p + 1)
     states = []
     for _ in range(2):
@@ -82,5 +98,13 @@ def test_decode_rows(device, p, R):
     assert torch.equal(ttnn.to_torch(st.k_ring).float(), k0), "the pass must not write the ring"
     attn.commit_rows(st, rows, positions[0], R)
     assert not torch.equal(ttnn.to_torch(st.k_ring).float(), k0), "commit writes the ring"
-    for a, b in ((st.k_ring, ref_st.k_ring), (st.v_ring, ref_st.v_ring), (st.x_hist, ref_st.x_hist)):
-        assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b))
+    pairs = {
+        "k_ring": (st.k_ring, ref_st.k_ring),
+        "v_ring": (st.v_ring, ref_st.v_ring),
+        "x_hist": (st.x_hist, ref_st.x_hist),
+    }
+    if is_global:
+        pairs["kv_full"] = (st.kv_full, ref_st.kv_full)
+    for name, (a, b) in pairs.items():
+        ta_, tb_ = ttnn.to_torch(a).float(), ttnn.to_torch(b).float()
+        assert torch.equal(ta_, tb_), (name, (ta_ != tb_).nonzero()[:6].tolist())

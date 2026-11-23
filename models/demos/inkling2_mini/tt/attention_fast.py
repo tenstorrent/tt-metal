@@ -203,7 +203,7 @@ class Inkling2AttentionFast(Inkling2Attention):
         self.local_cores = {(x, y) for x in range(lg.x) for y in range(lg.y)}
         # multi-token verify (decode_rows): sdpa_decode with pending rows, (token, kv group) batches x 4 cores
         self.rows_cfg = sdpa_cfg(LOCAL_CHUNK, LOCAL_CORES_PER_HEAD, exact_exp_half_tile=True)
-        self.commit = KvCommit(self.device) if not self.is_global else None
+        self.commit = KvCommit(self.device)
         # k and v ring writes in one paged_fused_update_cache program: k's row on core (0, 0), v's on (0, 1)
         self.kv_shard_v = ttnn.create_sharded_memory_config(
             shape=(32, HEAD_DIM),
@@ -427,8 +427,36 @@ class Inkling2AttentionFast(Inkling2Attention):
         sdpa_decode over the ring with the pending rows, then each token's output gate into o-projection input row t.
         Returns that input (self.out.act, rows 0 .. R-1): row t is bit-equal to row 0 after plain decode of token t.
         Call commit_rows after the accept to write the accepted rows into the ring.
-        shortcut: local layers only; global layers (near / far) still need the per-token path."""
-        assert not self.is_global and self.FUSED and len(xs) == rows.R
+        Global layers run each token's prep / near / far / output merge in order (no shared attention call: the far
+        call's core split is per token, see perf/G3c-handoff.md); the near part reads the pending rows the same way."""
+        assert self.FUSED and len(xs) == rows.R
+        if self.is_global:
+            assert FAR_GRP
+            for t, (x, pos) in enumerate(zip(xs, positions)):
+                if self.window is None:
+                    proj, mode = self._window(state, x, x, x)
+                else:
+                    mode = "single"
+                    proj = self.w_all(self.window(state.x_hist, [x]), ttnn.bfloat16, self.mm_cfg)
+                r = ROWS[mode]
+                _, mask, sink_t = self.prep(proj, pos, {"q": 0, "k": r["k"], "v": r["v"]}, state, rows=(t, rows))
+                o_near, rr, sink_far = self.near(
+                    self.prep.q_grp, mask, sink_t, state.k_ring, state.v_ring, pend=(rows, positions[0].pos, t + 1)
+                )
+                far_pos, valid = pos.far_grp
+                far = ttnn.transformer.flash_multi_latent_attention_decode(
+                    self.prep.q_far,
+                    state.kv_grp,
+                    head_dim_v=V_WIDTH,
+                    is_causal=True,
+                    cur_pos_tensor=far_pos,
+                    attention_sink=sink_far,
+                    scale=1.0,
+                    program_config=self.far_grp_cfg,
+                    compute_kernel_config=self.hifi4,
+                )
+                self.out(far, proj, (o_near, rr, valid), row=t)
+            return self.out.act
         projs = []
         for t, (x, pos) in enumerate(zip(xs, positions)):
             if self.window is None:

@@ -17,6 +17,33 @@ namespace attnio {
 
 constexpr uint32_t ALIGN = 64;  // DRAM read alignment
 
+// Row sr of the TILE at L1 src -> row dr of the TILE at L1 dst: bf16 face-row words, or bfp8 (tile_bytes 1088)
+// exponent byte + 16 mantissa bytes per face row.
+FORCE_INLINE void copy_tile_row(uint32_t src, uint32_t sr, uint32_t dst, uint32_t dr, uint32_t tile_bytes) {
+    for (uint32_t h = 0; h < 2; ++h) {
+        const uint32_t fs = (sr >> 4) * 2 + h, rs = sr & 15, fd = (dr >> 4) * 2 + h, rd = dr & 15;
+        if (tile_bytes == 2048) {
+            volatile tt_l1_ptr uint32_t* s =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + (fs * 256 + rs * 16) * 2);
+            volatile tt_l1_ptr uint32_t* d =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + (fd * 256 + rd * 16) * 2);
+            for (uint32_t w = 0; w < 8; ++w) {
+                d[w] = s[w];
+            }
+        } else {
+            reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst)[fd * 16 + rd] =
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src)[fs * 16 + rs];
+            volatile tt_l1_ptr uint32_t* s =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + 64 + fs * 256 + rs * 16);
+            volatile tt_l1_ptr uint32_t* d =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + 64 + fd * 256 + rd * 16);
+            for (uint32_t w = 0; w < 4; ++w) {
+                d[w] = s[w];
+            }
+        }
+    }
+}
+
 FORCE_INLINE uint32_t row_offset(uint32_t r, uint32_t es) { return (r >> 4) * 512 * es + (r & 15) * 16 * es; }
 
 // Zero `bytes` (multiple of 16) of L1 at dst with NOC reads of the hardware zero region.

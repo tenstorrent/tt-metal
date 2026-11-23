@@ -6,33 +6,6 @@
 // Read-modify-write of whole tiles: bf16 face-row words, or bfp8 exponent byte + 16 mantissa bytes per face row.
 #include "attn_io.hpp"
 
-namespace {
-FORCE_INLINE void copy_row(uint32_t src, uint32_t sr, uint32_t dst, uint32_t dr, uint32_t tile_bytes) {
-    for (uint32_t h = 0; h < 2; ++h) {
-        const uint32_t fs = (sr >> 4) * 2 + h, rs = sr & 15, fd = (dr >> 4) * 2 + h, rd = dr & 15;
-        if (tile_bytes == 2048) {
-            volatile tt_l1_ptr uint32_t* s =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + (fs * 256 + rs * 16) * 2);
-            volatile tt_l1_ptr uint32_t* d =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + (fd * 256 + rd * 16) * 2);
-            for (uint32_t w = 0; w < 8; ++w) {
-                d[w] = s[w];
-            }
-        } else {
-            reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst)[fd * 16 + rd] =
-                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src)[fs * 16 + rs];
-            volatile tt_l1_ptr uint32_t* s =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + 64 + fs * 256 + rs * 16);
-            volatile tt_l1_ptr uint32_t* d =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + 64 + fd * 256 + rd * 16);
-            for (uint32_t w = 0; w < 4; ++w) {
-                d[w] = s[w];
-            }
-        }
-    }
-}
-}  // namespace
-
 void kernel_main() {
     constexpr uint32_t n = get_named_compile_time_arg_val("n");
     constexpr uint32_t tb = get_named_compile_time_arg_val("tile_bytes");
@@ -64,7 +37,7 @@ void kernel_main() {
                 const uint32_t page = (g * seq_tiles + (slot >> 5)) * width + c;
                 noc_async_read(ra.get_noc_addr(page), tile_l1, tb);
                 noc_async_read_barrier();
-                copy_row(pend_l1 + (kv * width + c) * tb, t, tile_l1, slot & 31, tb);
+                attnio::copy_tile_row(pend_l1 + (kv * width + c) * tb, t, tile_l1, slot & 31, tb);
                 noc_async_write(tile_l1, ra.get_noc_addr(page), tb);
                 noc_async_write_barrier();
             }

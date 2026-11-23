@@ -171,7 +171,7 @@ class AttnPrep:
                 for i in range(GROUPS):
                     h = g * GROUPS + i
                     r += [h * HEAD_DIM // 32, mode_rows["q"], h]
-                    if rows is not None:
+                    if rows is not None and not self.dyn:
                         w += [rows[1].q.buffer_address(), 0, 0, 0, (rows[0] * N_KV + g) * (HEAD_DIM // 32), i]
                         continue
                     w += [self.q.buffer_address(), 0, 0, 0, 0, h]
@@ -186,9 +186,10 @@ class AttnPrep:
                 ring = state.k_ring if kind == "k" else state.v_ring
                 w = [g, ring.buffer_address(), WINDOW // 32, HEAD_DIM // 32, 0, positions.ring.buffer_address()]
                 if rows is not None:  # pending [2, 8, 32, 128]: K rows at batch g, V rows at batch 8 + g, row t
+                    # (h = g is shared with the far-cache destination, so V's batch offset goes in as tiles, t0)
                     t, ro = rows
-                    w = [g + (0 if kind == "k" else N_KV), ro.pending.buffer_address(), 1, HEAD_DIM // 32, 0]
-                    w += [ro.slot[t].buffer_address()]
+                    v_t0 = 0 if kind == "k" else N_KV * (HEAD_DIM // 32)
+                    w = [g, ro.pending.buffer_address(), 1, HEAD_DIM // 32, v_t0, ro.slot[t].buffer_address()]
                 if self.dyn:
                     full = state.kv_full
                     seq = full.padded_shape[-2] // 32
@@ -263,7 +264,7 @@ class AttnPrep:
                 ]
             )
             blk = self.sink_blk.buffer_address() if self.dyn else 0
-            if rows is not None:  # mask / sink of token t at batch t * 8 + g of rows.mask / rows.sink
+            if rows is not None and not self.dyn:  # local: mask / sink of token t at batch t * 8 + g
                 t, ro = rows
                 w_rt.append([ro.mask.buffer_address(), i * NJ, proj.buffer_address(), ro.sink.buffer_address(), 0, t])
                 continue
@@ -272,7 +273,7 @@ class AttnPrep:
         sink_core, rest = cores[:1], cores[1:]
         w_named = dict(nj=NJ, sink_tile=6528 // 32, sink_blk=int(self.dyn), neg=f32_bits(NEG), grp=int(self.dyn),
                        proj_dram=_is_dram(proj))  # fmt: skip
-        w_named["rows"] = int(rows is not None)
+        w_named["rows"] = int(rows is not None and not self.dyn)
         kernels = [
             _kernel("attn_bias_reader.cpp", cores, named, r_rt, ttnn.ReaderConfigDescriptor()),
             _kernel(
@@ -311,9 +312,9 @@ class AttnPrep:
         state's caches (ring slot, and the far cache at pos on global layers). Returns (q, mask, sink): local
         layers the sdpa mask [1, 1, 24, 1024] and sink tile [24, 32]; global layers AttnNear's inputs (with q_grp:
         mask in kv-group layout [1, 8, 32, 1024], sink block [1, 8, 3, 32] fp32).
-        rows = (t, RowsOut), local layers: token t of a multi-token verify pass; writes rows.q / mask / sink at batch
-        t * 8 + g and its k / v rows into rows.pending (the ring is not written). Returns None."""
-        assert rows is None or not self.dyn, "rows: local layers only"
+        rows = (t, RowsOut): token t of a multi-token verify pass; its k / v rows go into rows.pending (the ring is not
+        written; global layers still write the far cache). Local layers also write rows.q / mask / sink at batch
+        t * 8 + g and return None; global layers return their usual outputs."""
         F.check_row_input(proj, l1_ok=True)  # readers take proj_dram
         assert proj.dtype == ttnn.bfloat16
         tau = positions.tau
@@ -334,7 +335,7 @@ class AttnPrep:
         if rows is not None:
             io += rows[1].tensors(rows[0])
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
-        if rows is not None:
+        if rows is not None and not self.dyn:
             return None
         return self.q, self.mask, self.sink_blk if self.dyn else self.sink
 
@@ -361,9 +362,10 @@ class AttnOut:
         crs = _crs(self.cores)
         nh = N_HEADS // len(self.cores)
         rt = [[attn.buffer_address(), proj.buffer_address(), i * nh] for i in range(len(self.cores))]
-        if row is not None:  # multi-token verify, local: attn [1, 8R, 3, 128], token `row` -> act row `row`
-            assert merge is None and row < 16, row
-            rt = [a + [row] for a in rt]
+        if row is not None:  # multi-token verify: token `row` -> act row `row` (local: attn [1, 8R, 3, 128])
+            assert row < 16, row
+            if merge is None:
+                rt = [a + [row] for a in rt]
         io = [attn, proj]
         if merge is not None:
             for t in merge:
@@ -386,7 +388,7 @@ class AttnOut:
                     merge=flag,
                     far_grp=far_grp,
                     proj_dram=_is_dram(proj),
-                    rows=int(row is not None),
+                    rows=int(row is not None and not flag),
                 ),
                 rt,
                 ttnn.ReaderConfigDescriptor(),
@@ -478,7 +480,8 @@ class AttnNear:
         self.cores, _ = F.core_list(device, p, first_row=1)
         self.comb_cores = [ttnn.CoreCoord(i, 1) for i in range(N_KV)]
 
-    def __call__(self, q_grp, mask_grp, sink_blk, k_ring, v_ring):
+    def __call__(self, q_grp, mask_grp, sink_blk, k_ring, v_ring, pend=None):
+        """pend = (RowsOut, pos0 tensor, ntok): multi-token verify, token ntok - 1 (see attn_near_reader.cpp)."""
         assert k_ring.dtype == v_ring.dtype and k_ring.dtype in (ttnn.bfloat16, ttnn.bfloat8_b), k_ring.dtype
         kv_page = 1088 if k_ring.dtype == ttnn.bfloat8_b else 2048
         f32, bf = ttnn.float32, ttnn.bfloat16
@@ -487,12 +490,19 @@ class AttnNear:
         r_rt, w_rt = [], []
         for p, _ in enumerate(self.cores):
             g, i = divmod(p, ns)
-            r_rt.append([t.buffer_address() for t in ins] + [g, self.ones.buffer_address(), i * nj])
+            r = [t.buffer_address() for t in ins] + [g, self.ones.buffer_address(), i * nj]
+            if pend is not None:
+                r += [pend[0].pending.buffer_address(), pend[1].buffer_address(), pend[2]]
+            r_rt.append(r)
             w_rt.append([self.zp.buffer_address(), self.op.buffer_address(), self.mp.buffer_address(), p])
         n = len(self.cores)
         kernels = [
             _kernel(
-                "attn_near_reader.cpp", self.cores, dict(kv_page=kv_page, nj=nj), r_rt, ttnn.ReaderConfigDescriptor()
+                "attn_near_reader.cpp",
+                self.cores,
+                dict(kv_page=kv_page, nj=nj, pend=int(pend is not None)),
+                r_rt,
+                ttnn.ReaderConfigDescriptor(),
             )
         ]
         for has_sink in (1, 0):  # the first core of each group adds the sink term
@@ -517,7 +527,11 @@ class AttnNear:
             _cb(22, f32, 1, crs),
             _cb(23, f32, 4, crs),
         ]
+        if pend is not None:
+            cbs.append(_cb(10, k_ring.dtype, 1, crs, page=2 * 4 * kv_page + 64))  # pending K / V tiles + position
         io = ins + [self.ones, self.zp, self.mp, self.op]
+        if pend is not None:
+            io += [pend[0].pending, pend[1]]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 
         cc, n = self.comb_cores, len(self.comb_cores)
