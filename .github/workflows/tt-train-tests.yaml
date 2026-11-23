@@ -77,18 +77,24 @@ on:
         type: string
         default: ""
         description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+      hf-oidc:
+        required: false
+        type: boolean
+        default: false
+        description: "Get a Hugging Face token via OIDC for gated models. The caller must grant id-token: write."
     outputs:
       matrix:
         description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
         value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
-permissions:
-  contents: read
-  packages: read
-
+# No workflow-level permissions: the tt-train-tests job inherits the caller's, so only callers
+# that grant id-token: write (L2 nightly) get the Hugging Face OIDC exchange. Callers must
+# restrict their job permissions themselves.
 jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
+    permissions:
+      contents: read
     outputs:
       matrix: ${{ inputs.subcategories != '' && steps.filter-categories.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
@@ -158,12 +164,6 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
-    # id-token: write is for the Hugging Face OIDC exchange (hf-oidc-token). The caller must
-    # grant it too. A job-level block replaces the workflow default, so restate the reads.
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
@@ -241,7 +241,7 @@ jobs:
       # test step so the 60-minute token lifetime starts late.
       - name: 🤗 Get Hugging Face token (OIDC)
         id: hf-oidc
-        if: ${{ inputs.package-artifact-name == '' }}
+        if: ${{ inputs.hf-oidc && inputs.package-artifact-name == '' }}
         timeout-minutes: 5
         uses: ./docker-job/.github/actions/hf-oidc-token
         with:
