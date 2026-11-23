@@ -313,6 +313,22 @@ def test_sparse_sdpa_pcc_multi_chunk(device, nv_fn, nv_id):
     assert p >= 0.99, f"PCC {p:.5f} ({nv_id})"
 
 
+# ---- q may sit in L1; DRAM and L1 q are distinct programs (different q accessor) ----
+@run_for_blackhole()
+def test_sparse_sdpa_q_in_l1(device):
+    H, S, T, TOPK, kc = 32, 64, 256, 64, 32
+    device.clear_program_cache()
+    # Twice each: the second pass hits the cache with fresh buffers (q's address is re-applied per dispatch).
+    for seed in (0, 1):
+        q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: 1 + (s * 3) % 50, seed=seed)
+        for q_memory_config in (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG):
+            out, scale = run_op(q, kv, indices, device, kc, V_DIM, q_memory_config=q_memory_config)
+            p = pcc(out, golden(q, kv, indices, scale, V_DIM))
+            assert p >= 0.99, f"PCC {p:.5f} (q in {q_memory_config.buffer_type}, seed {seed})"
+    n = device.num_program_cache_entries()
+    assert n == 2, f"DRAM and L1 q shared a program: {n} program-cache entries (expected 2)"
+
+
 # ---- the kv (K cache) length T rides on the accessor's runtime args, so changing T must NOT recompile ----
 @run_for_blackhole()
 def test_sparse_sdpa_kv_len_no_recompile(device):
