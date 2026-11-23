@@ -31,6 +31,10 @@ using ChipRecords = std::vector<std::vector<uint32_t>>;
 //
 // Every rank of the mesh must call this with the same arguments in the same order, like any collective.
 //
+// If `local_record` throws (or returns the wrong number of words) on any rank, every rank throws after the collective,
+// so a failure on one host shows up as an error on all of them rather than a hang on the others. Only failures
+// inside `local_record` are covered: an exception a rank raises before calling this still leaves the others waiting.
+//
 // A non-empty `config_key` caches the result per (mesh, config_key): a later call with the same pair returns the
 // cached records without calling `local_record` or the collective. `config_key` must name every input the records
 // depend on.

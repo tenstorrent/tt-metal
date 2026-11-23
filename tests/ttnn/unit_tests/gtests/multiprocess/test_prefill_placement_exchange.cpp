@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <internal/mesh_device.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -134,6 +135,38 @@ TEST_F(RingRing4x4Fixture, ExchangeIsCachedPerConfig) {
     EXPECT_EQ(first, second);
     exchange_chip_records(*mesh_device_, context, 1, compute, "cache-test-other");
     EXPECT_GT(calls, calls_after_first) << "a different config must not hit the cache";
+}
+
+// A failure in `local_record` on one rank must surface on every rank. Without the shared failure flag the healthy
+// rank waits in the all-reduce and the test times out instead of failing.
+TEST_F(RingRing4x4Fixture, LocalRecordFailureOnOneRankThrowsOnEveryRank) {
+    const auto context = mesh_distributed_context(*mesh_device_);
+    const bool is_failing_rank = context == nullptr || *context->rank() == 0;
+    EXPECT_THROW(
+        exchange_chip_records(
+            *mesh_device_,
+            context,
+            1,
+            [is_failing_rank](const MeshCoordinate&) -> std::vector<uint32_t> {
+                TT_FATAL(!is_failing_rank, "injected local_record failure");
+                return {1};
+            }),
+        std::exception);
+}
+
+TEST_F(RingRing4x4Fixture, ExchangeRecoversAfterAFailedExchange) {
+    const auto context = mesh_distributed_context(*mesh_device_);
+    const bool is_failing_rank = context == nullptr || *context->rank() == 0;
+    const auto compute = [&is_failing_rank](const MeshCoordinate&) -> std::vector<uint32_t> {
+        TT_FATAL(!is_failing_rank, "injected local_record failure");
+        return {3};
+    };
+    EXPECT_THROW(exchange_chip_records(*mesh_device_, context, 1, compute, "failed-then-ok"), std::exception);
+    const auto records = exchange_chip_records(
+        *mesh_device_, context, 1, [](const MeshCoordinate&) { return std::vector<uint32_t>{3}; }, "failed-then-ok");
+    for (const auto& record : records) {
+        EXPECT_EQ(record, (std::vector<uint32_t>{3})) << "a failed exchange must not leave a cached result";
+    }
 }
 
 TEST_F(RingRing4x4Fixture, DispatchPlacementAgreesAcrossRanks) {

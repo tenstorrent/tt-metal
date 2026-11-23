@@ -6,7 +6,10 @@
 
 #include <algorithm>
 #include <map>
+#include <exception>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <utility>
 
 #include <tt-metalium/core_coord.hpp>
@@ -60,27 +63,45 @@ ChipRecords exchange_chip_records(
 
     const auto& shape = mesh.shape();
     const std::size_t stride = OWNER_WORDS + words_per_chip;
-    std::vector<uint32_t> mine(shape.mesh_size() * stride, 0);
-    for (const auto& coord : ttnn::MeshCoordinateRange(shape)) {
-        if (!mesh.is_local(coord)) {
-            continue;
+    // The last word counts the ranks whose `local_record` failed, so a failure on one rank reaches all of them
+    // through the collective instead of leaving the others waiting in it.
+    const std::size_t failure_word = shape.mesh_size() * stride;
+    std::vector<uint32_t> mine(failure_word + 1, 0);
+    std::optional<std::string> local_failure;
+    try {
+        for (const auto& coord : ttnn::MeshCoordinateRange(shape)) {
+            if (!mesh.is_local(coord)) {
+                continue;
+            }
+            const auto record = local_record(coord);
+            TT_FATAL(
+                record.size() == words_per_chip,
+                "mesh chip exchange: the record for {} has {} words, expected {}",
+                coord,
+                record.size(),
+                words_per_chip);
+            const std::size_t base = coord.to_linear_index(shape) * stride;
+            mine[base] = 1;
+            std::copy(record.begin(), record.end(), mine.begin() + base + OWNER_WORDS);
         }
-        const auto record = local_record(coord);
-        TT_FATAL(
-            record.size() == words_per_chip,
-            "mesh chip exchange: the record for {} has {} words, expected {}",
-            coord,
-            record.size(),
-            words_per_chip);
-        const std::size_t base = coord.to_linear_index(shape) * stride;
-        mine[base] = 1;
-        std::copy(record.begin(), record.end(), mine.begin() + base + OWNER_WORDS);
+    } catch (const std::exception& error) {
+        local_failure = error.what();
+        mine[failure_word] = 1;
     }
 
     std::vector<uint32_t> all = mine;
     if (context != nullptr) {
         context->all_reduce(
             std::span<uint32_t>(mine), std::span<uint32_t>(all), tt::tt_metal::distributed::multihost::ReduceOp::SUM);
+    }
+
+    if (all[failure_word] != 0) {
+        TT_FATAL(
+            false,
+            "mesh chip exchange: local_record failed on {} rank(s); {}",
+            all[failure_word],
+            local_failure.has_value() ? "this rank's error: " + *local_failure
+                                      : std::string("this rank succeeded, see the failing rank's log"));
     }
 
     ChipRecords records(shape.mesh_size());
