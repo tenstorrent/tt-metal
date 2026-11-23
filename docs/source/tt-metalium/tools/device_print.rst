@@ -103,8 +103,9 @@ Arguments:
 Lines:
 
 - End each line with ``\n``. The host writes a line only when its ``\n`` arrives, so one print can write several
-  lines and several prints can build one line. A RISC's kernel and its firmware build their lines apart. Text after
-  the last ``\n`` of either is lost when the device closes.
+  lines and several prints can build one line. A RISC's kernel and its firmware build their lines apart. Text without
+  a ``\n`` isn't written yet: the RISC's next print continues the same line, even a print from a later kernel, and if
+  none comes, the text is lost when the device closes.
 - ``\r`` ends a line but holds it back. Lines ending in ``\r`` are written together with the next line from the same
   kernel or firmware that ends in ``\n``, so a multi-line block isn't interleaved with other output. In the output
   each ``\r`` becomes a line break, and every line of the block gets the prefix.
