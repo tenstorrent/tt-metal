@@ -160,6 +160,7 @@ import json
 import math
 import os
 import queue
+import re
 import socket
 import sys
 import threading
@@ -292,6 +293,33 @@ def _content_text(content, index: int) -> str:
                 400, f"messages[{index}] carries a {kind!r} content part, but this model takes text only"
             )
     return "".join(text)
+
+
+_TOKENIZE_PIECE_CHARS = 1 << 16
+# A space between two ASCII letters is a boundary of DeepSeek's pre-tokenizer in any context: the letters before it
+# end a run of letters, and the space opens the next " word" pre-token. So text cut there tokenizes, piece by
+# piece, to exactly the ids of the whole -- as long as no added token spans the cut, i.e. none contains a space.
+_TOKENIZE_CUT = re.compile(r"[A-Za-z] [A-Za-z]")
+
+
+def _tokenize(tokenizer, text: str) -> list[int]:
+    """``tokenizer(text, add_special_tokens=False)["input_ids"]``, in pieces of about ``_TOKENIZE_PIECE_CHARS``.
+
+    One call on a long prompt runs on one core and slows per token as it grows (1.3 s at 512K tokens, 3 s at 1M);
+    a batch of pieces runs on all of them (0.16 s and 0.24 s). Pieces are cut only at ``_TOKENIZE_CUT``; a stretch
+    with none (CJK, digits, symbols) stays in one piece.
+    """
+    if len(text) < 2 * _TOKENIZE_PIECE_CHARS or any(" " in token for token in tokenizer.get_added_vocab()):
+        return list(tokenizer(text, add_special_tokens=False)["input_ids"])
+    cuts = [0]
+    while len(text) - cuts[-1] >= 2 * _TOKENIZE_PIECE_CHARS:
+        found = _TOKENIZE_CUT.search(text, cuts[-1] + _TOKENIZE_PIECE_CHARS)
+        if found is None:
+            break
+        cuts.append(found.start() + 1)
+    cuts.append(len(text))
+    pieces = tokenizer([text[a:b] for a, b in zip(cuts, cuts[1:])], add_special_tokens=False)["input_ids"]
+    return [token for piece in pieces for token in piece]
 
 
 _PROMPT_SNIPPET_CHARS = 200
@@ -3404,7 +3432,7 @@ class GenerationServer:
             for i in range(user._next_render, len(user.messages))
             if include_assistant or user.messages[i]["role"] != "assistant"
         )
-        ids = list(engine.tokenizer(rendered, add_special_tokens=False)["input_ids"])
+        ids = _tokenize(engine.tokenizer, rendered)
         if first_turn:
             # The tokenizer does not add BOS (V4.1's add_bos_token is false); encode_messages prepends it.
             ids.insert(0, engine.tokenizer.bos_token_id)
