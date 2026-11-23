@@ -70,7 +70,7 @@ void bind_conv_transpose2d(nb::module_& mod) {
             dtype (DataType, optional): the data type of the output tensor. Default: None (will use the same dtype as input_tensor).
             conv_config (ttnn.Conv2dConfig, optional): configuration for convolution. Default: None
             compute_config (ttnn.DeviceComputeKernelConfig, optional): configuration for compute kernel. Default: None
-            mirror_kernel (bool, optional): Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored. Default: False
+            mirror_kernel (bool, optional): Determines if the op should mirror the kernel internally. Set to False if the kernel has already been mirrored. Default: True
             dram_slice_config (ttnn.Conv2dSliceConfig, optional): Configuration for DRAM slicing. If provided, the operation will use DRAM slicing, else will fall back to L1 version. Default: None
             return_output_dim (bool, optional): If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False
             return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False

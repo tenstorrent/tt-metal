@@ -1078,8 +1078,6 @@ void py_module(nb::module_& mod) {
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User-provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
-            global_cb (ttnn.GlobalCircularBuffer): TBD
-            sub_device_id (ttnn.SubDeviceId): TBD
 
         Returns:
             ttnn.Tensor: output tensor of shape (n, p)
