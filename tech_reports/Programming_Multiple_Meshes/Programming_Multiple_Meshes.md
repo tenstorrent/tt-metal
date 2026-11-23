@@ -671,7 +671,7 @@ if __name__ == "__main__":
 | `RuntimeError: Distributed context not initialized` | Called `get_rank()` or `get_size()` before opening any device | Open a device first, or call `ttnn.init_distributed_context()` manually |
 | Processes hang on socket operations | Ranks are incorrectly specified in socket configuration | Ensure `sender_rank` and `receiver_rank` are correct and match the actual process ranks. Mismatched socket configs will produce an error. |
 | `TT_VISIBLE_DEVICES` not working | Environment variable not set before device opens | Set `TT_VISIBLE_DEVICES` before importing `ttnn`, or use `env_overrides` in rank bindings |
-| Fabric initialization fails | Incorrect MGD, unstable hardware, or missing ethernet links | 1) Use `RELAXED` channel policy to allow fewer links than specified. 2) Verify ethernet links match MGD specification. 3) Run physical validation to ensure cluster is healthy: `python tests/tt_metal/distributed/test_physical_ethernet_link_ping.py` |
+| Fabric initialization fails | Incorrect MGD, unstable hardware, or missing ethernet links | 1) Use `RELAXED` channel policy to allow fewer links than specified. 2) Verify ethernet links match MGD specification. 3) Run physical validation to ensure cluster is healthy: `./build/tools/scaleout/run_cluster_validation --send-traffic` (see [`tools/scaleout/validation/README.md`](../../tools/scaleout/validation/README.md) for flags and multi-host usage) |
 
 ### Debugging Tips
 
