@@ -1890,3 +1890,16 @@ free slot, inject 2). Sends and arrivals counted exactly on every lane; 2 + 3 la
   Two links went 32 -> 38.5 a link direction: above high_bw_all_gather on the same ring (37.7) and ~96% of the
   four-flows-a-chip fabric figure (40). 8704: the sender is still busy (waits ~0.1 of 1.74 ms); 15232: router-space
   waits 0.44-0.63 ms, the router / link is the limit (one link both directions alone: 42.4). Processor busy 0.2-0.44 ms.
+
+### Every link busy (2026-11-23, bh-lb-09 400G; test_fx_bench test_fx_all_links*)
+The LoudBox is a plain 2 x 4 mesh (UMD: 10 chip pairs x 2 links; middle chips 6 links, corners 4; no X wrap). Every
+link both ways at once (40 one-hop flows, each its own sender / receiver core), full-slot 8704 B packets:
+| placement | per flow min / median / max | out / in a chip (GB/s) |
+|---|---|---|
+| cores scattered | 14.8 / 21.8 / 47.7 | 81-193 / 103-176 |
+| sender under its ethernet core, receiver under the receiving chip's | 15.8 / 26.8 / 43.0 | 88-192 / 94-175 |
+| the same, receivers at the bottom row (short NOC1 landing path) | 15.7 / 25.3 / 42.7 | 87-163 / 92-168 |
+- Placement hardly matters. The rate follows the direction: flows to the east or south neighbour run 15.7-21.6 (one
+  29.7), flows to the west or north 27.6-42.7, on the same links, while one link both ways alone is symmetric (45.5 /
+  46.8). A chip can push ~190 GB/s out (the middle ones), so it is not a fixed per-chip cap. Not explained: points at
+  the 2D routers' arbitration / buffering by direction when all of a chip's routers are busy.

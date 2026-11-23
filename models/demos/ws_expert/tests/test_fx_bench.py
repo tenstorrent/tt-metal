@@ -42,7 +42,9 @@ def dm(risc):
 
 
 def launch(mesh, flows, PB, NPKT, mode, risc):
-    cores = sorted({f[3] for f in flows})
+    sc = lambda f: f[3][0] if isinstance(f[3][0], tuple) else f[3]  # (sender core, receiver core) or one core
+    rc_ = lambda f: f[3][1] if isinstance(f[3][0], tuple) else f[3]
+    cores = sorted({sc(f) for f in flows} | {rc_(f) for f in flows})
     words = lambda n: sharded_l1(mesh, cores, [n, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     buf = words(PB // 16)  # source on the sender, landing slot on the receiver (same address)
     cnt = words(1)
@@ -56,14 +58,16 @@ def launch(mesh, flows, PB, NPKT, mode, risc):
         kernels = []
         if sends:
             rt = ttnn.RuntimeArgs()
-            for src, dst, link, (x, y) in sends:
-                xy = noc(mesh, x, y)
+            for f in sends:
+                src, dst, link = f[:3]
+                x, y = sc(f)
+                xy = noc(mesh, *rc_(f))
                 rt[x][y] = [int(node(mesh, src).mesh_id), int(node(mesh, dst).chip_id), xy[0] | xy[1] << 8]
                 rt[x][y].append(st.buffer_address())
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=kpath("fx_send.cpp"),
-                    core_ranges=crs([f[3] for f in sends]),
+                    core_ranges=crs([sc(f) for f in sends]),
                     compile_time_args=[
                         NPKT,
                         PB,
@@ -79,19 +83,22 @@ def launch(mesh, flows, PB, NPKT, mode, risc):
             )
         if recvs:
             rt = ttnn.RuntimeArgs()
-            for *_, (x, y) in recvs:
+            for f in recvs:
+                x, y = rc_(f)
                 rt[x][y] = [st.buffer_address()]
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=kpath("fx_recv.cpp"),
-                    core_ranges=crs([f[3] for f in recvs]),
+                    core_ranges=crs([rc_(f) for f in recvs]),
                     compile_time_args=[want, cnt.buffer_address()],
                     runtime_args=rt,
                     config=dm(0),
                 )
             )
         p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[])
-        for src, dst, link, (x, y) in sends:
+        for f in sends:
+            src, dst, link = f[:3]
+            x, y = sc(f)
             p.kernels[0].runtime_args[x][y].extend(
                 ttnn.setup_fabric_connection(
                     mesh_device=mesh,
@@ -110,10 +117,14 @@ def launch(mesh, flows, PB, NPKT, mode, risc):
     sts = ttnn.get_device_tensors(st)
     W = mesh.shape[1]
     out = []
-    for src, dst, link, (x, y) in flows:
-        i = cores.index((x, y))
-        r = (ttnn.to_torch(sts[dst[0] * W + dst[1]]).to(torch.int64) & 0xFFFFFFFF).reshape(len(cores), 16)[i]
-        s = (ttnn.to_torch(sts[src[0] * W + src[1]]).to(torch.int64) & 0xFFFFFFFF).reshape(len(cores), 16)[i]
+    for f in flows:
+        src, dst, link = f[:3]
+        r = (ttnn.to_torch(sts[dst[0] * W + dst[1]]).to(torch.int64) & 0xFFFFFFFF).reshape(len(cores), 16)[
+            cores.index(rc_(f))
+        ]
+        s = (ttnn.to_torch(sts[src[0] * W + src[1]]).to(torch.int64) & 0xFFFFFFFF).reshape(len(cores), 16)[
+            cores.index(sc(f))
+        ]
         out.append((int(r[3] - r[2]), int(s[1] - s[0])))
     del buf, cnt, st, sts
     return out
@@ -210,3 +221,114 @@ def test_fx_noc(mesh_device):
     SCEN.update(NBR)
     for scen in ("1link_1dir", "2link_1dir", "2nbr_1dir", "2nbr_2link_1dir", "2link_2dir"):
         run(mesh_device, scen, 8704, risc=0, tag="noc0")
+
+
+def all_link_flows(shape, links=(0, 1)):
+    """Every mesh edge, both links, both directions: one flow each, a core of its own (the same logical core on both
+    chips; no core used twice on a chip)."""
+    R, C = shape
+    edges = [((r, c), (r, c + 1)) for r in range(R) for c in range(C - 1)] + [((0, c), (1, c)) for c in range(C)]
+    grid = [(x, y) for y in range(10) for x in range(12)]
+    flows = []
+    for a, b in edges:
+        for l in links:
+            for s, d in ((a, b), (b, a)):
+                flows.append((s, d, l, grid[(len(flows) * 7) % len(grid)]))
+    return flows
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [dev_params(p) for p in (8704, 15232)], ids=["pay8704", "pay15232"], indirect=True
+)
+def test_fx_all_links(mesh_device):
+    """Every link of the mesh busy in both directions at once (middle chips: 6 flows out, 6 in), full-slot packets."""
+    pay = ttnn.get_tt_fabric_max_payload_size_bytes()
+    flows = all_link_flows(tuple(mesh_device.shape))
+    SCEN["all"] = flows
+    per = run(mesh_device, "all", pay, tag="all links")
+    out, inn = {}, {}
+    for (s, d, l, _), v in zip(flows, per):
+        out[s] = out.get(s, 0) + v
+        inn[d] = inn.get(d, 0) + v
+    logger.info(
+        f"FX all links router {pay}: GB/s out / in a chip "
+        f"{ {c: (round(out[c]), round(inn[c])) for c in sorted(out)} }; per flow min {min(per):.1f} max {max(per):.1f}"
+    )
+
+
+def eth_column(x):
+    """Logical Tensix column under (or nearest to) NoC column x on the 12 x 10 grid: x 1-7 -> 0-6, 10-14 -> 7-11."""
+    if x <= 7:
+        return max(0, x - 1)
+    if x <= 9:
+        return 6 if x == 8 else 7
+    return min(11, x - 3)
+
+
+def placed_flows(mesh, links=(0, 1), split_rows=False):
+    """all_link_flows with each flow's sender core under its ethernet core on the sending chip and its receiver core
+    under the receiving chip's ethernet core of the same link (row 0 / 1 / ... first free)."""
+    from models.demos.ws_expert.ws_lane5 import eth_x
+
+    fabric_mux = ttnn.experimental.fabric_mux
+    mcfg = fabric_mux.Config(
+        num_full_size_channels=1,
+        num_header_only_channels=0,
+        num_buffers_per_full_size_channel=2,
+        num_buffers_per_header_only_channel=0,
+        full_size_channel_buffer_size_bytes=fabric_mux.channel_buffer_size_bytes(mesh),
+        base_l1_address=ttnn.get_allocator_base_address(mesh, ttnn.BufferType.L1),
+    )
+    used = {}
+
+    def take(chip, col, bottom=False):
+        for y in range(9, -1, -1) if bottom else range(10):
+            if (col, y) not in used.setdefault(chip, set()):
+                used[chip].add((col, y))
+                return (col, y)
+        raise AssertionError("column full")
+
+    out = []
+    for s_, d_, l, _ in all_link_flows(tuple(mesh.shape), links):
+        sx = eth_column(eth_x(mesh, mcfg, s_, d_, l))
+        rx = eth_column(eth_x(mesh, mcfg, d_, s_, l))
+        out.append((s_, d_, l, (take(s_, sx), take(d_, rx, bottom=split_rows))))
+    return out
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dev_params(8704)], ids=["pay8704"], indirect=True)
+def test_fx_all_links_placed(mesh_device):
+    """Every link busy both ways, cores under their ethernet cores (sender on the sending chip, receiver on the
+    receiving chip); then the scattered placement again for comparison."""
+    for name, flows in (("placed", placed_flows(mesh_device)), ("scattered", all_link_flows(tuple(mesh_device.shape)))):
+        SCEN[name] = flows
+        per = run(mesh_device, name, 8704, tag="all links")
+        out, inn = {}, {}
+        for f, v in zip(flows, per):
+            out[f[0]] = out.get(f[0], 0) + v
+            inn[f[1]] = inn.get(f[1], 0) + v
+        logger.info(
+            f"FX all links {name}: GB/s out / in a chip {[(c, round(out[c]), round(inn[c])) for c in sorted(out)]}; "
+            f"per flow min {min(per):.1f} median {statistics.median(per):.1f} max {max(per):.1f}"
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [dev_params(8704)], ids=["pay8704"], indirect=True)
+def test_fx_all_links_rows(mesh_device):
+    """Every link busy both ways: senders at the top row under their ethernet core (NOC1: one hop north into the
+    ethernet row), receivers at the bottom row of their ethernet core's column (the router's NOC1 landing writes wrap
+    north: two hops instead of the whole column)."""
+    flows = placed_flows(mesh_device, split_rows=True)
+    SCEN["rows"] = flows
+    per = run(mesh_device, "rows", 8704, tag="all links")
+    out, inn = {}, {}
+    for f, v in zip(flows, per):
+        out[f[0]] = out.get(f[0], 0) + v
+        inn[f[1]] = inn.get(f[1], 0) + v
+    logger.info(
+        f"FX all links rows: GB/s out / in a chip {[(c, round(out[c]), round(inn[c])) for c in sorted(out)]}; "
+        f"per flow min {min(per):.1f} median {statistics.median(per):.1f} max {max(per):.1f}; flows {flows}"
+    )
