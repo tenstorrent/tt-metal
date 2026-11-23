@@ -30,13 +30,8 @@ class PfMessages:
                 for _ in range(4)]  # fmt: skip
         wt, rows = c // 32, t // 32
         grid = self.device.compute_with_storage_grid_size()
-        n_cores = grid.x * grid.y
-        split = max(1, -(-4 * n_cores // rows))  # ~4 units per core; each unit spreads its w tile once
-        blk = -(-wt // min(split, wt))
-        units = [(R, j0, min(wt, j0 + blk)) for R in range(rows) for j0 in range(0, wt, blk)]
-        n_cores = min(n_cores, len(units))
-        cores, crs = F.core_list(self.device, n_cores)
-        per = [units[i::n_cores] for i in range(n_cores)]
+        per = F.balanced_runs(rows, wt, grid.x * grid.y)  # units (R, j0, j1), the same tile count per core
+        cores, crs = F.core_list(self.device, len(per))
         r_args, w_args, c_args = {}, {}, {}
         for core, us in zip(cores, per):
             flat = [v for u in us for v in u]

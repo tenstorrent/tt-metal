@@ -8,7 +8,7 @@ as ~2 D1 nq + 3 D1 full passes over [T, C] fp32 tensors: the depth softmax, the 
 sums. Same SFPU ops in the same order as the chain (max, subtract, exp, add, reciprocal, multiply), so the outputs
 are bit-equal to it.
 
-Work unit: (tile row R of the T rows, a group of column tiles); units are spread over the compute grid.
+Work unit: (tile row R of the T rows, a run of column tiles); each core gets the same number of tiles.
 """
 
 
@@ -17,7 +17,6 @@ from models.demos.inkling2_mini.tt.fused import common as F
 
 HIDDEN = 2304
 EPS = 1e-6
-COL_GROUPS = 3  # column tiles per unit = 72 / 3
 
 
 class PfAttnRes:
@@ -78,12 +77,9 @@ class PfAttnRes:
                                            ttnn.DRAM_MEMORY_CONFIG)
             for _ in range(nq)
         ]  # fmt: skip
-        g = wt // COL_GROUPS
-        units = [(r, c * g, (c + 1) * g) for r in range(t_rows // 32) for c in range(COL_GROUPS)]
         grid = self.dev.compute_with_storage_grid_size()
-        n_cores = min(len(units), grid.x * grid.y)
-        cores, crs = F.core_list(self.dev, n_cores)
-        per = [units[i::n_cores] for i in range(n_cores)]
+        per = F.balanced_runs(t_rows // 32, wt, grid.x * grid.y)  # units (R, j0, j1), the same tile count per core
+        cores, crs = F.core_list(self.dev, len(per))
         r_args, w_args, c_args = {}, {}, {}
         for c, us in zip(cores, per):
             flat = [v for unit in us for v in unit]

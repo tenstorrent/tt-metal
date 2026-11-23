@@ -74,13 +74,8 @@ class PfConv:
         out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, t, c]), out_dtype, ttnn.TILE_LAYOUT, self.device, dram)
         wt, rows = c // 32, t // 32
         grid = self.device.compute_with_storage_grid_size()
-        n_cores = grid.x * grid.y
-        split = max(1, -(-n_cores // wt))  # row blocks per column so that units >= cores
-        blk = -(-rows // split)
-        units = [(j, r0, min(rows, r0 + blk)) for j in range(wt) for r0 in range(0, rows, blk)]
-        n_cores = min(n_cores, len(units))
-        cores, crs = F.core_list(self.device, n_cores)
-        per = [units[i::n_cores] for i in range(n_cores)]
+        per = F.balanced_runs(wt, rows, grid.x * grid.y)  # units (j, R0, R1), the same tile count per core
+        cores, crs = F.core_list(self.device, len(per))
         res_addr = resid.buffer_address() if resid is not None else 0
         r_args, w_args, c_args = {}, {}, {}
         page = 4096 if out_dtype == ttnn.float32 else 2048

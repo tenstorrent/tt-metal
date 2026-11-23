@@ -41,13 +41,8 @@ class PfGateTail:
         )
         wt, rows = c // 32, t // 32
         grid = self.device.compute_with_storage_grid_size()
-        n_cores = grid.x * grid.y
-        split = max(1, -(-4 * n_cores // wt))  # ~4 units per core: balance vs the per-unit F / G reads
-        blk = -(-rows // min(split, rows))
-        units = [(j, r0, min(rows, r0 + blk)) for j in range(wt) for r0 in range(0, rows, blk)]
-        n_cores = min(n_cores, len(units))
-        cores, crs = F.core_list(self.device, n_cores)
-        per = [units[i::n_cores] for i in range(n_cores)]
+        per = F.balanced_runs(wt, rows, grid.x * grid.y)  # units (j, R0, R1), the same tile count per core
+        cores, crs = F.core_list(self.device, len(per))
         r_args, w_args, c_args = {}, {}, {}
         for core, us in zip(cores, per):
             flat = [v for u in us for v in u]

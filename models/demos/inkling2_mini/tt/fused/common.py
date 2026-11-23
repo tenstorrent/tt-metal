@@ -128,6 +128,25 @@ def fixed_rt(named, *rts):
     return named
 
 
+def balanced_runs(n_major, n_minor, n_cores):
+    """The n_major x n_minor tiles in major-outer order, cut into min(n_cores, tiles) contiguous pieces of equal
+    size (+-1): per piece a list of (major, lo, hi) runs. For row-parallel ops whose units are such runs; a round
+    robin of equal units leaves some cores with one unit more (up to 2x the mean when units ~ cores)."""
+    total = n_major * n_minor
+    n = min(n_cores, total)
+    per = []
+    for c in range(n):
+        a, b = c * total // n, (c + 1) * total // n
+        runs = []
+        while a < b:
+            m, lo = divmod(a, n_minor)
+            hi = min(n_minor, lo + b - a)
+            runs.append((m, lo, hi))
+            a += hi - lo
+        per.append(runs)
+    return per
+
+
 def core_list(device, n, first_row=0):
     """n worker cores, row-major over the compute grid starting at first_row: (list, CoreRangeSet)."""
     gx = device.compute_with_storage_grid_size().x
