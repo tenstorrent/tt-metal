@@ -6,7 +6,7 @@
 
 Adds to <trunk.json>, in place:
   checks.<run>      every run's trunk_probe_runner lines: the pass-2 push-reuse verdict and the KVPE digests (finite)
-  determinism       whether every run logged the same digest per layer (bit-identical KV across runs)
+  determinism       whether every run logged the same digest per chunk label (bit-identical KV across runs)
   repeat_spread     per stage and probe, the largest minus smallest period_ms over the runs' splits
   verdict           per probe: GLM-5.4 slowest stage period_ms (first run) vs the GLM-5.3 reference's slowest stage
                     period_ms x threshold_factor (1.54, epic APPROVED ACCEPTANCE), met / unmet
@@ -18,16 +18,16 @@ import sys
 from pathlib import Path
 
 THRESHOLD = 1.54
-_REUSE = re.compile(r"TRUNK_ASSERT push_reuse (PASS|FAIL): (.*)$")
-_DIGEST = re.compile(r"TRUNK_KV_DIGEST layer=(\d+) sha256=(\w+) finite=(\w+) nonzero_rows=(\d+) rows=(\d+)")
-_DIGEST_FAIL = re.compile(r"TRUNK_KV_DIGEST layer=(\d+) failed: (.*)$")
+_REUSE = re.compile(r"TRUNK_ASSERT push_reuse (PASS|FAIL): (.*)$", re.M)
+_DIGEST = re.compile(r"TRUNK_KV_DIGEST chunk=(\w+) sha256=(\w+) finite=(\w+) nonzero_rows=(\d+) rows=(\d+)")
+_DIGEST_FAIL = re.compile(r"TRUNK_KV_DIGEST chunk=(\w+) failed: (.*)$", re.M)
 
 
 def run_checks(run_dir: Path) -> dict:
     text = (run_dir / "runner.log").read_text(errors="replace")
     reuse = _REUSE.search(text)
     digests = {
-        int(m.group(1)): {
+        m.group(1): {
             "sha256": m.group(2),
             "finite": m.group(3) == "True",
             "nonzero_rows": int(m.group(4)),
@@ -35,7 +35,7 @@ def run_checks(run_dir: Path) -> dict:
         }
         for m in _DIGEST.finditer(text)
     }
-    failed = {int(m.group(1)): m.group(2).strip() for m in _DIGEST_FAIL.finditer(text)}
+    failed = {m.group(1): m.group(2).strip() for m in _DIGEST_FAIL.finditer(text)}
     return {
         "push_reuse": {"verdict": reuse.group(1), "detail": reuse.group(2).strip()} if reuse else "not logged",
         "kv_digest": digests,
@@ -53,16 +53,16 @@ def main() -> None:
     checks = {d.name: run_checks(d) for d in runs}
     result["checks"] = checks
     per_run = [c["kv_digest"] for c in checks.values()]
-    layers = sorted(set().union(*per_run)) if per_run else []
+    labels = sorted(set().union(*per_run)) if per_run else []
     result["determinism"] = {
         "runs": [d.name for d in runs],
-        "layers": layers,
+        "chunks": labels,
         "bit_identical": len(runs) >= 2
-        and bool(layers)
-        and all(len({tuple(sorted(r.get(l, {}).items())) for r in per_run}) == 1 for l in layers)
-        and all(l in r for r in per_run for l in layers),
-        "definition": "sha256 of user 0's KVPE cache slot (every chip, every row incl. the loop layers' pass-2 "
-        "window ring) after the request, equal across runs that fed the same tokens",
+        and bool(labels)
+        and all(len({tuple(sorted(r.get(c, {}).items())) for r in per_run}) == 1 for c in labels)
+        and all(c in r for r in per_run for c in labels),
+        "definition": "sha256 of user 0's KVPE rows after the request, per probe chunk (all 78 cache layers, every "
+        "chip) and per pass-2 window ring chunk (loop layers 26-53), equal across runs that fed the same tokens",
     }
 
     splits = [k for k in ("at_glm54_ranges", "repeat") if k in result]

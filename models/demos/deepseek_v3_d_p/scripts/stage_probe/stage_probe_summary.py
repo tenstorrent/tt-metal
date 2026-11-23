@@ -156,6 +156,8 @@ def fit_layer_types(run: dict, first: int, last: int, chunk_ids) -> dict:
             row[4 if k_next >= 2 else (2 if nxt in FULL else 3)] = 1.0
             rows.append(row)
             ys.append(delta)
+    if not rows:  # the run has no chunk in this window
+        return {"n_deltas": 0}
     a, y = np.array(rows), np.array(ys)
     x, *_ = np.linalg.lstsq(a, y, rcond=None)
     held = passes[first - run["first_layer"] : last - run["first_layer"] + 1]
