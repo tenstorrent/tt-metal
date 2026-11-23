@@ -28,8 +28,11 @@ BLOCK_N_TILES = 2  # output columns per worker; num_workers = tensor_n_tiles / B
 # 1.013 @16, 1.018 @24; PCC 0.99996 / 0.99993 / 0.99986 / 0.99979). Keep block_k_tiles <= 16 so the
 # 0.9998 PCC gate holds (verification_report.md, precision baseline).
 # Refinement 1 measured 8 -> 4: the last K-step's compute after the final W block halves, and with the
-# ordered x signal a round costs no fixed ~1 us any more (kb 2: more, smaller rounds, measured slower).
-BLOCK_K_TILES = 4
+# ordered x signal a round costs no fixed ~1 us any more (kb 2 then measured slower).
+# Perf 1: 4 -> 2. kb 2's loss came from the old compute's per-K-step interm drain (one exposed pack latency
+# per K-step); with compute L1-accumulating straight into the output CB, kb 2 measured 18.61 / 18.66 us vs
+# kb 4 19.05 / 19.33 us (x round 0 lands ~0.5 us earlier; every worker finishes together).
+BLOCK_K_TILES = 2
 # cb_w_block depth in K-steps (None = num_k_blocks, whole W slice resident). Refinement 2: 4 paces each
 # worker's W stream to its compute, so early-served workers stop crowding the banks; the slowest worker
 # now finishes with the median (measured 20.6 -> 20.2 us; depth 2/3/6 tie or lose). Frees 70 KB L1.
@@ -58,7 +61,7 @@ X_MCAST_PREFIXES = ("x_mcast", "x_mcast_b")  # worker channel names, one per sen
 W_WAIT_X0 = False  # hold each worker's W stream until x round 0 lands (measured slower; kept as a knob)
 
 # ---- Tail / W-side knobs (Refinement 2; numbers in changelog.md). The Refinement 1 schedule is
-# COLUMN_MAP = "bank_spread", W_COALESCE = False, OUT_SUBBLOCK_MAJOR = False, Y_STORE_NOC_SPLIT = False,
+# COLUMN_MAP = "bank_spread", W_COALESCE = False, OUT_SUBBLOCK_MAJOR = False (knob removed in Perf 1), Y_STORE_NOC_SPLIT = False,
 # W_DEPTH_BLOCKS = None. ----
 # Column map: "bank_spread" (worker j: block_n_tiles columns of one bank, residue j % num_banks) or
 # "contiguous" (worker j: columns j*block_n_tiles .. +block_n_tiles-1, one per bank).
@@ -66,8 +69,25 @@ COLUMN_MAP = "bank_spread"
 # One read per W k-row when the worker's columns sit in consecutive slots of one bank (bank_spread with
 # tensor_n_tiles % num_banks == 0); silently off otherwise.
 W_COALESCE = True
-OUT_SUBBLOCK_MAJOR = True  # store each output subblock as compute packs it (overlap with the last K-step)
 Y_STORE_NOC_SPLIT = True  # writer sends every other output tile on NoC0 (idle at the tail)
+
+# ---- Ablation (perf measurement only; output is wrong when any is set). Stub a stage's payload, keep its sync.
+# Members: "w_read" (worker DRAM W reads), "x_read" (sender DRAM x reads), "x_mcast" (x multicast payload; the
+# count signal still goes out), "compute" (matmul LLK, helper SKIP_COMPUTE), "y_store" (y writes). ----
+ABLATE = frozenset()
+
+
+def _ablate_defines(*stages):
+    names = {
+        "w_read": "ABLATE_W_READ",
+        "x_read": "ABLATE_X_READ",
+        "x_mcast": "ABLATE_X_MCAST",
+        "compute": "SKIP_COMPUTE",
+        "y_store": "ABLATE_Y_STORE",
+    }
+    ablate = set(ABLATE.split("+")) - {""} if isinstance(ABLATE, str) else set(ABLATE)  # "a+b" form for WQB_KNOBS
+    assert ablate <= set(names), f"unknown ABLATE stage in {ABLATE}"
+    return [(names[s], "1") for s in stages if s in ablate]
 
 
 def _dest_tile_limit(fp32_dest_acc_en):
@@ -78,8 +98,7 @@ def _dest_tile_limit(fp32_dest_acc_en):
 # ---- CB indices (semantic names) ----
 CB_X_RESIDENT = 0
 CB_W_BLOCK = 1
-CB_INTERM_ACC = 2
-CB_OUT_BLOCK = 3
+CB_OUT_BLOCK = 2  # compute L1-accumulates every K-step straight into it (Perf 1; no separate interm CB)
 
 
 def _crs(cores):
@@ -205,13 +224,6 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
             ttnn.CBFormatDescriptor(buffer_index=CB_W_BLOCK, data_format=w.dtype, page_size=w_tile_bytes)
         ],
     )
-    cb_interm_acc = ttnn.CBDescriptor(
-        total_size=out_block_tiles * y_tile_bytes,
-        core_ranges=worker_crs,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(buffer_index=CB_INTERM_ACC, data_format=y.dtype, page_size=y_tile_bytes)
-        ],
-    )
     cb_out_block = ttnn.CBDescriptor(
         total_size=out_block_tiles * OUT_DEPTH_BLOCKS * y_tile_bytes,
         core_ranges=worker_crs,
@@ -240,6 +252,7 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
                 core_ranges=_crs([(scx, scy)]),
                 compile_time_args=x_reader_ct,
                 runtime_args=x_reader_rt,
+                defines=_ablate_defines("x_read"),
                 config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=read_noc),
             )
         )
@@ -259,6 +272,7 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
                 core_ranges=_crs([(scx, scy)]),
                 compile_time_args=sender_ct,
                 runtime_args=sender_rt,
+                defines=_ablate_defines("x_mcast"),
                 config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=mcast_noc),
             )
         )
@@ -282,12 +296,13 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         core_ranges=worker_crs,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
+        defines=_ablate_defines("w_read"),
         config=ttnn.ReaderConfigDescriptor(),
     )
 
     # ---- Worker writer (x round arrival + output store), BRISC / NoC1 ----
     writer_ct = [CB_X_RESIDENT, CB_OUT_BLOCK, block_m_tiles, block_k_tiles, block_n_tiles, num_k_blocks, tensor_n_tiles]
-    writer_ct.extend([int(OUT_SUBBLOCK_MAJOR), sb_h, sb_w, int(Y_STORE_NOC_SPLIT)])
+    writer_ct.append(int(Y_STORE_NOC_SPLIT))
     writer_ct.extend(ttnn.TensorAccessorArgs(y).get_compile_time_args())
     writer_rt = ttnn.RuntimeArgs()
     for j, (cx, cy) in enumerate(workers):
@@ -297,6 +312,7 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         core_ranges=worker_crs,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
+        defines=_ablate_defines("y_store"),
         config=ttnn.WriterConfigDescriptor(),
     )
 
@@ -304,7 +320,6 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
     compute_ct = [
         CB_X_RESIDENT,
         CB_W_BLOCK,
-        CB_INTERM_ACC,
         CB_OUT_BLOCK,
         in0_num_subblocks,
         in1_num_subblocks,
@@ -312,13 +327,13 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         sb_w,
         block_k_tiles,
         num_k_blocks,
-        int(OUT_SUBBLOCK_MAJOR),
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "wq_b_linear_compute.cpp"),
         core_ranges=worker_crs,
         compile_time_args=compute_ct,
         runtime_args=[],
+        defines=_ablate_defines("compute"),
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_config.math_fidelity,
             fp32_dest_acc_en=fp32_dest_acc_en,
@@ -329,7 +344,7 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
     # ---- x multicast channels: one per sender, rect receivers, sender outside the rect, no handshake.
     # Channel s is attached as X_MCAST_PREFIXES[s] to sender s's kernel and to the worker writer; the
     # other prefixes are attached absent (each sender kernel uses its one active slot).
-    descriptor = ttnn.ProgramDescriptor(cbs=[cb_x_resident, cb_w_block, cb_interm_acc, cb_out_block])
+    descriptor = ttnn.ProgramDescriptor(cbs=[cb_x_resident, cb_w_block, cb_out_block])
     next_sem = 0
     for s_idx, (scx, scy) in enumerate(senders):
         mcast = ttnn.Mcast(

@@ -30,6 +30,10 @@
 #include <stdint.h>
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+// Zones (permanent, ordered-signal path): x_mcast_wait (waiting on the x-reader per round), x_mcast_issue
+// (payload + count multicast issue), x_mcast_barrier (final drain).
+// Ablation: ABLATE_X_MCAST skips the payload multicast; the count signal still goes out.
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
@@ -77,6 +81,9 @@ void kernel_main() {
     const uint32_t base = get_read_ptr(cb_x_resident);
 
     auto issue_payload = [&](uint32_t slot) {
+#ifdef ABLATE_X_MCAST
+        return;
+#endif
         if constexpr (x_ordered_signal) {
             // Every burst linked: the counter write that follows terminates the sequence.
             for (uint32_t off = 0; off < round_bytes; off += NOC_MAX_BURST_SIZE) {
@@ -129,14 +136,23 @@ void kernel_main() {
         const uint64_t cell_mcast = get_noc_multicast_addr(dst_x_start, dst_y_start, dst_x_end, dst_y_end, cell_addr);
         for (uint32_t i = 0; i < my_rounds; ++i) {
             const uint32_t r = first_round + i * round_stride;
-            cb_wait_front(cb_x_resident, round_tiles);
-            issue_payload(base + r * round_bytes);
-            noc_async_writes_flushed();  // the previous count's source read is done before rewriting it
-            *cell = i + 1;
-            noc_async_write_multicast(cell_addr, cell_mcast, sizeof(uint32_t), num_dests, /*linked=*/false);
+            {
+                MaybeDeviceZoneScope("x_mcast_wait");
+                cb_wait_front(cb_x_resident, round_tiles);
+            }
+            {
+                MaybeDeviceZoneScope("x_mcast_issue");
+                issue_payload(base + r * round_bytes);
+                noc_async_writes_flushed();  // the previous count's source read is done before rewriting it
+                *cell = i + 1;
+                noc_async_write_multicast(cell_addr, cell_mcast, sizeof(uint32_t), num_dests, /*linked=*/false);
+            }
             cb_pop_front(cb_x_resident, round_tiles);  // slot is never rewritten (x resident)
         }
-        noc_async_write_barrier();
+        {
+            MaybeDeviceZoneScope("x_mcast_barrier");
+            noc_async_write_barrier();
+        }
         return;
     }
 

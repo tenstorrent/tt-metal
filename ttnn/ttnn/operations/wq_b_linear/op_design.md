@@ -51,6 +51,8 @@
 
 ## Blocking Model
 
+> **Perf 1 (2026-11-23):** compute no longer uses `cb_interm_acc`: the one `matmul_block` call packs every K-step with L1 accumulation straight into `cb_out_block` (`LastBlockTarget::Interm`, `TileRowMajor`, `caller_owns_pack_target`), which removed a per-K-step unpack-side drain. `block_k_tiles` is now 2 (`num_k_blocks` 24). Tables below that mention `cb_interm_acc`, the last-K-step reload, or kb 4 describe the Refinement-2 build; see `changelog.md` Perf 1.
+
 Semantics: `.claude/references/blocking-model.md`. Tile index space is 3-D: `(m, k, n)` with extents `5 × 48 × 128`.
 
 ### Axes

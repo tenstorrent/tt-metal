@@ -101,3 +101,50 @@
 - **Golden test progress**: 3/3 (2 registry cells + regression). Unit tests 14/14 plain, 10/10 `test_wq_b_linear.py` under `--dev`.
 - **Issues encountered**: the bench's first PCC print shows nan during the precompile pass; the real dispatch prints the valid value.
 - **Tests added**: none. `_op_bench.py` gained knob overrides and a PCC print.
+
+## Perf 1
+- Date: 2026-11-23. Board: Blackhole p150b, 11×10 workers, 8 DRAM banks (512 GB/s), 1.35 GHz. Whole-op SOL on this board 14.0 µs (the feature spec's `sol_ns_blackhole` 16,018 is for the 7-bank p100a). Focus case = the op's only cell: x [1,1,160,1536] bf16, W [1536,4096] bf8_b, y L1, HiFi2, fp32_dest_acc_en=False. SUPPORTED unchanged.
+- **Instrumentation (permanent)**: `MaybeDeviceZoneScope` zones in every kernel — x-reader `x_read_issue/x_read_drain`; sender `x_mcast_wait/x_mcast_issue/x_mcast_barrier`; worker reader `w_reserve/w_issue/w_barrier` per K-step; writer `x_wait_r0/x_wait_rest/y_wait/y_issue/y_barrier`; compute `compute_wait_x0` (hoisted wait for x round 0 + W block 0) and `compute_matmul`. Max 146 markers per RISC (cap 250). The kernel_lib header `perf_instrumentation.hpp` did not exist in this tree; added a minimal one (`DeviceZoneScopedN` alias). Ablation knob `ABLATE` in the descriptor (`"w_read+compute"` form, maps to `ABLATE_*` defines and the helper's `SKIP_COMPUTE`); `verify/stages.py` summarises zones.
+
+### Measured breakdown (before; device span, median of 5 dispatches)
+| Run (cumulative peel) | Span ns | Note |
+|---|---|---|
+| full | 19,727 | x round 0 lands 2.77 µs; compute 2.8 → 18.3 µs; y done 19.4 µs |
+| compute stubbed | 17,114 | DM alone: W end max 15.8 µs, x delivered 13.1 µs |
+| + W stubbed | 14,316 | |
+| + x multicast stubbed | 10,827 | |
+| + x read, y store stubbed (floor; unpack/pack/L1-acc still run) | 6,047 | |
+| DM stubbed (compute alone) | 16,587 | matmul zone 15.3 µs |
+
+| Part | Alone ns | Part SOL ns | Measured / SOL |
+|---|---|---|---|
+| compute (480 tile-matmuls/core, 64 cores, 32 cyc HiFi2) | 15,339 (zone) | 11,378 | 1.35 |
+| W read (6.68 MB DRAM) | 14,251 (last W read) | 13,060 | 1.09 |
+| x read + multicast (one 64-receiver tree) | 12,599 (delivered) | 5,690 (sender egress) | 2.2 — at the schedule estimate (13,835) |
+| x read (1 core) | 8,638 | 5,690 (one core's NoC ingress) | 1.5 |
+
+- Overlap loss = 19,727 − 17,114 = 2.6 µs (fill: x round 0 at 2.77 µs; tail ~1.1 µs).
+- **Ranked bottleneck**: compute (3.9 µs above its SOL, balanced with DM), then fill/tail, then x delivery pacing; W near SOL.
+- Paper search (`/perf-calculator`): x multicast sweep `be65a47c` (phase "Perf 1"): the current schedule is rank 1 (13.84 µs); nothing beats it by more than the 10% band. Two disjoint half-rect trees (`b23920c8`) 12.21 µs: a tie, not fanned out. Op model `--designs`: current 65 cores kb 4 17.39 µs vs best 73 cores 17.22 µs (tie); ksplit 2 on 110 cores 19.04 µs. No split beats the current one by 15%, so no split idea was fanned out. The op model's compute bound (12.1 µs) is below the measured 15.3 µs.
+- `estimate.py report`, Perf 1: sweep be65a47c, 25 evaluated, 4 shortlisted, 1 built and measured. The predicted best (`current_x_mcast`) measured rank 1, 0% selection slowdown. The measurement is 12,599 ns against 13,835 estimated, and it is marked post-hoc because the sweep ran after the ablation.
+
+### Portfolio and verdicts (whole-op span ns; PCC gate 0.9998)
+| Idea | Verdict | Before → after | PCC | Domain |
+|---|---|---|---|---|
+| `compute_dest_window`: DEST window 8–16 k-tiles, decoupled from the 4-k-tile x round | **NULL / REGRESSION** for the idea: windows > 4 k-tiles cost +0.5 to +7.5 µs whole-op. Found the real cause instead (next row) | 19,703 → 19,576…27,247 | 0.99992–0.99996 | measured-regression for windows > 1 K-step |
+| `compute_llk_inner`: inner-loop efficiency | **WIN** — the helper's `LastBlockTarget::Out` + L1-acc path drained `cb_interm_acc` on the unpack thread after every K-step (12 exposed pack latencies) and reloaded on the last. Packing every K-step with L1-acc straight into `cb_out_block` gives compute alone 16,581 → 13,464 (matmul 15.3 → 12.2 µs, 1.07× SOL, ~34 cyc/tile ≈ LLK issue floor) | helper `caller_owns` 19,667 → 18,970; raw 18,846 / 18,804 | 0.999972 | everywhere (kb 2/4/8 and block_n 4 also faster) |
+| `x_round0_fill`: sender BRISC reads round 0 on NoC1 | WIN at kb 4 (x0 2.78 → 2.14 µs; 19,690 → 19,293, −2%), **flat at the graduated kb 2** (18.70–18.74 without vs 18.73 with) → not graduated | — | 0.99996 | — |
+| `tail_store`: per-tile last K-step + per-tile push (raw) | WIN on the old compute (19,690 → 19,141). Half of it, removing the last-K-step reload, is already in the graduated compute. The per-tile overlap was not re-measured on the new compute → not graduated; carried to Perf 2 | — | 0.999972 | inexpressible under TileRowMajor (needs a per-tile output order) |
+
+### Graduated
+- **Compute** (`kernels/wq_b_linear_compute.cpp`): still one kernel_lib `matmul_block`, now `LastBlockTarget::Interm` + `TileRowMajor` + `caller_owns_pack_target`, with the pack target = `cb_out_block`, reserved once and pushed once. It is the only compute path. Deleted: `cb_interm_acc`, the `OUT_SUBBLOCK_MAJOR` knob and the writer's per-subblock store path (the writer stores the whole TileRowMajor block). **No raw LLK.** The raw variant (keeps the per-column store overlap) measured 18,348 / 18,397 vs the helper's 18,700 / 18,742 at kb 2 (−1.9%, within noise), so the helper path ships.
+- **`BLOCK_K_TILES` 4 → 2**: kb 2 had lost only because of the per-K-step drain. With the new compute, interleaved runs gave kb 2 18,613 / 18,659 vs kb 4 19,053 / 19,333 (every kb 2 dispatch below every kb 4 dispatch). x round 0 lands 1.69 µs instead of 2.2 µs and all workers finish together. On its own this is at the edge of noise (−2.9%). It ships as part of the combination, which is −5.5% end to end.
+- No carve-outs (one cell; nothing incorrect or slower).
+- **Whole op: 19,727 → 18,613 / 18,659 / 18,793 ns (3 runs, −5.5%)**, 1.33× the 14.0 µs SOL. PCC 0.9999734 (was 0.9999583). Compute alone 16,587 → 13,688 ns. DM alone (compute stubbed) 17,619 ns.
+- Bottleneck now: x delivery. 24 rounds of 20 KB on one 64-receiver tree end at 16.5 µs, and compute ends right behind the last round (16.8 µs). After that comes the whole-block y store tail (~1.5 µs: pack 0.36, write issue 0.77, barrier 0.34). Candidates for Perf 2: a faster x delivery (more trees or both NoCs, now on the critical path), per-tile output overlap (`perf_experiments/tail_store`), and the raw compute's per-column store (−1.9%).
+- Guard set = the single supported cell (one kernel path × TILE × DRAM-in/L1-out): golden 3/3 passed (registry cells + regression bit-identity), unit tests 14/14, `test_wq_b_linear.py` 10/10 under `--dev`. No regression.
+- Options not taken (none trade precision): raw compute (−1.9%, noise), x round-0 BRISC read (flat at kb 2), W depth 3/6/whole at kb 4 (18.7–19.2, noise), kb 6/8 on the old compute (20,844 / 21,786, slower).
+- Experiment dirs (uncommitted by the subagents, committed here): `perf_experiments/{compute_dest_window,compute_llk_inner,x_round0_fill,tail_store}/`.
+
+### Helper bypasses — none
+The graduated compute stays on `compute_kernel_lib::matmul_block`. Feedback for the helper library from this round, not a bypass: with `LastBlockTarget::Out` + `packer_l1_acc`, the helper drains `cb_interm_acc` on the unpack thread after every K-step and reloads the partials into DEST on the last K-step. This cost 3.1 µs of 15.3 µs here. The `caller_owns_pack_target` + `Interm` configuration avoids both, but the header does not say that the default L1-acc path serializes unpack behind pack.

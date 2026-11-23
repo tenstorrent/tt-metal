@@ -16,6 +16,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+// Zones (permanent): x_read_issue (whole issue loop incl. in-loop trid retires), x_read_drain.
+// Ablation: ABLATE_X_READ skips the DRAM reads (trid set/barrier + pushes kept).
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 
 void kernel_main() {
@@ -45,6 +48,9 @@ void kernel_main() {
     const uint32_t base = get_write_ptr(cb_x_resident);
 
     auto issue_round = [&](uint32_t r) {
+#ifdef ABLATE_X_READ
+        return;
+#endif
         uint32_t dst = base + r * round_bytes;
         for (uint32_t m = 0; m < block_m_tiles; ++m) {
             const uint32_t row_page = m * tensor_k_tiles + r * block_k_tiles;
@@ -55,16 +61,20 @@ void kernel_main() {
         }
     };
 
-    for (uint32_t i = 0; i < my_rounds; ++i) {
-        const uint32_t trid = (i % x_read_trids) + 1;
-        if (i >= x_read_trids) {
-            // Local round i - x_read_trids carries this id: retire it (in order) before reusing the id.
-            dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid);
-            cb_push_back(cb_x_resident, round_tiles);
+    {
+        MaybeDeviceZoneScope("x_read_issue");
+        for (uint32_t i = 0; i < my_rounds; ++i) {
+            const uint32_t trid = (i % x_read_trids) + 1;
+            if (i >= x_read_trids) {
+                // Local round i - x_read_trids carries this id: retire it (in order) before reusing the id.
+                dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid);
+                cb_push_back(cb_x_resident, round_tiles);
+            }
+            dataflow_kernel_lib::set_read_trid(noc, trid);
+            issue_round(first_round + i * round_stride);
         }
-        dataflow_kernel_lib::set_read_trid(noc, trid);
-        issue_round(first_round + i * round_stride);
     }
+    MaybeDeviceZoneScope("x_read_drain");
     constexpr uint32_t to_drain = my_rounds < x_read_trids ? my_rounds : x_read_trids;
     for (uint32_t d = 0; d < to_drain; ++d) {
         dataflow_kernel_lib::async_read_barrier_with_trid(noc, ((my_rounds - to_drain + d) % x_read_trids) + 1);

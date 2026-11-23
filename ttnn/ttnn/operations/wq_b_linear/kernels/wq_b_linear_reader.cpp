@@ -12,6 +12,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+// Zones (permanent): w_reserve (back-pressure from compute), w_issue, w_barrier, per K-step.
+// Ablation: ABLATE_W_READ skips the DRAM reads, keeps reserve/barrier/push and the trip counts.
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
@@ -50,21 +53,32 @@ void kernel_main() {
         mc.receiver(noc).receive(0);  // Counter wait only; the writer's own receive(0) is unaffected
     }
     for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-        cb_reserve_back(cb_w_block, w_block_tiles);
+        {
+            MaybeDeviceZoneScope("w_reserve");
+            cb_reserve_back(cb_w_block, w_block_tiles);
+        }
         uint32_t dst = get_write_ptr(cb_w_block);
-        for (uint32_t kk = 0; kk < block_k_tiles; ++kk) {
-            const uint32_t row_page = (kb * block_k_tiles + kk) * tensor_n_tiles;
-            if constexpr (w_coalesce) {
-                noc_async_read(w_acc.get_noc_addr(row_page + cols[0]), dst, block_n_tiles * w_tile_bytes);
-                dst += block_n_tiles * w_tile_bytes;
-            } else {
-                for (uint32_t nn = 0; nn < block_n_tiles; ++nn) {
-                    noc_async_read_tile(row_page + cols[nn], w_acc, dst);
-                    dst += w_tile_bytes;
+#ifndef ABLATE_W_READ
+        {
+            MaybeDeviceZoneScope("w_issue");
+            for (uint32_t kk = 0; kk < block_k_tiles; ++kk) {
+                const uint32_t row_page = (kb * block_k_tiles + kk) * tensor_n_tiles;
+                if constexpr (w_coalesce) {
+                    noc_async_read(w_acc.get_noc_addr(row_page + cols[0]), dst, block_n_tiles * w_tile_bytes);
+                    dst += block_n_tiles * w_tile_bytes;
+                } else {
+                    for (uint32_t nn = 0; nn < block_n_tiles; ++nn) {
+                        noc_async_read_tile(row_page + cols[nn], w_acc, dst);
+                        dst += w_tile_bytes;
+                    }
                 }
             }
         }
-        noc_async_read_barrier();
+#endif
+        {
+            MaybeDeviceZoneScope("w_barrier");
+            noc_async_read_barrier();
+        }
         cb_push_back(cb_w_block, w_block_tiles);
     }
 }
