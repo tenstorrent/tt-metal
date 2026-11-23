@@ -298,11 +298,15 @@ class _Gate:
         self.ckc = ckc
         self.tail = PfGateTail(dev) if fused else None
 
-    def __call__(self, h, m):
+    def norm(self, h):
+        """bf16 rms norm of a gate input (typecast of the fp32 norm, in the op where that is bit-equal). Callers
+        whose gates share h (q / k / v of a local loop layer) pass it to each call as nh."""
+        return rms_norm_bf16(_f32(h), epsilon=EPS, compute_kernel_config=self.ckc)
+
+    def __call__(self, h, m, nh=None):
         h, m = _f32(h), _f32(m)
-        nh = ttnn.rms_norm(h, epsilon=EPS, compute_kernel_config=self.ckc)
-        nm = ttnn.rms_norm(m, epsilon=EPS, compute_kernel_config=self.ckc)
-        x = ttnn.typecast(ttnn.concat([nh, nm], dim=-1), ttnn.bfloat16)
+        # typecast(concat(fp32 norms)) == concat(bf16 norms): the typecast is per element; half the bytes moved
+        x = ttnn.concat([self.norm(h) if nh is None else nh, self.norm(m)], dim=-1)
         if self.tail is not None:  # typecast z .. addcmul in one program
             zb = ttnn.matmul(x, self.down, dtype=ttnn.bfloat16, compute_kernel_config=self.ckc)
             return self.tail(zb, self.forget, self.gain, h, m)
@@ -1260,9 +1264,11 @@ class Inkling2Prefill:
         else:
             xs = lp.attn_res(normed, h)  # 1 or 3 fp32
         if msgs is not None:
-            if len(xs) == 1:
-                xs = xs * 3
-            xs = [lp.gates[g](xs[i], msgs[i]) for i, g in enumerate(("q", "k", "v"))]
+            if len(xs) == 1:  # one input for the 3 gates: its norm once
+                nh = lp.gates["q"].norm(xs[0])
+                xs = [lp.gates[g](xs[0], msgs[i], nh) for i, g in enumerate(("q", "k", "v"))]
+            else:
+                xs = [lp.gates[g](xs[i], msgs[i]) for i, g in enumerate(("q", "k", "v"))]
         if lay.is_global:
             qn, kn, vn = (self._rms(xs[i], w) for i, w in enumerate(lp.norms))
         elif len(xs) == 1:
