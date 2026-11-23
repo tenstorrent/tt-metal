@@ -54,6 +54,8 @@ class Trainer(ABC):
         self.epoch = 0
         # Sum of the scaled losses of the current accumulation window, as `_accumulate_loss` keeps it.
         self.step_loss: Any = None
+        # A run trains once: `train` leaves the weights, the optimizer and the logger spent for another.
+        self._trained = False
 
     def setup(self, config: TrainerConfig) -> None:
         """Validate ``config`` and build what a run needs: data, device, model and optimizer.
@@ -104,6 +106,9 @@ class Trainer(ABC):
     def train(self) -> None:
         if self.config is None:
             raise RuntimeError("Trainer.setup(config) must be called before train()")
+        if self._trained:
+            raise RuntimeError("train() runs once per setup(); call setup(config) again")
+        self._trained = True
 
         accumulation_steps = self.config.gradient_accumulation_steps
         total_batches = self._total_batches()

@@ -221,6 +221,23 @@ def test_metrics_log_the_summed_loss_from_callback_state():
         trainer.cleanup()
 
 
+def test_train_runs_once_per_setup(expect_error):
+    calls = []
+    trainer = _StubTrainer([_Recorder("first", calls)], fail_in=None)
+    trainer.setup(_config())
+    try:
+        trainer.train()
+        with expect_error(RuntimeError, "runs once per setup"):
+            trainer.train()
+        # Refused before any callback.
+        assert calls == [("first", "on_train_start")]
+        trainer.setup(_config())
+        trainer.train()
+    finally:
+        trainer.cleanup()
+    assert calls == [("first", "on_train_start")] * 2
+
+
 def test_best_rotation_by_a_train_metric_needs_no_validation(tmp_path):
     trainer = _StubTrainer([MetricsCallback(), CheckpointCallback()], fail_in=None, batches=(3.0, 1.0, 2.0, 4.0))
     trainer.setup(_best_rotation_config(tmp_path, "train/loss"))
