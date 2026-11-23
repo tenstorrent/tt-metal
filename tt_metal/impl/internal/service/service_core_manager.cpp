@@ -105,8 +105,9 @@ void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoor
         return;
     }
     std::erase_if(capped_meshes_, [&](const std::weak_ptr<distributed::MeshDevice>& weak_mesh) {
+        // A closed mesh has no sub-device state left to refresh, even if something still holds it.
         const auto mesh_device = weak_mesh.lock();
-        if (!mesh_device) {
+        if (!mesh_device || !mesh_device->is_initialized()) {
             return true;
         }
         const auto mesh_device_ids = mesh_device->get_device_ids();

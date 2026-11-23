@@ -1712,4 +1712,34 @@ TEST_F(DispatchContextFixture, SDFDTransitionServiceClaimOnOneChip) {
     expect_mesh_grid(sd_grid, "SD after the service core is released");
 }
 
+// WHAT: FD session on a 1x1 submesh ends with a service core still claimed, then the submesh is closed
+//       while the test still holds it, then the claim is released.
+// WHY:  terminate tracks the submesh so release can refresh its grid. A closed submesh has no sub-device
+//       state left, so refreshing it would throw.
+// EXPECT: release skips the closed submesh and does not throw.
+TEST_F(DispatchContextFixture, SDFDTransitionServiceReleaseAfterSubmeshClosed) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    auto submesh = mesh->create_submesh(MeshShape(1, 1));
+    IDevice* claimed_device = submesh->get_devices()[0];
+
+    experimental::DispatchContext::get().initialize_fast_dispatch(submesh.get());
+    auto& service_cores = MetalContext::instance().get_service_core_manager();
+    if (MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(claimed_device->id()).empty()) {
+        experimental::DispatchContext::get().terminate_fast_dispatch(submesh.get());
+        GTEST_SKIP() << "Fast dispatch leaves no dispatch-column core free to claim on this grid.";
+    }
+    const std::vector<CoreCoord> claimed = {service_cores.get_claimable_cores(claimed_device).front()};
+    service_cores.claim(claimed_device, claimed);
+    experimental::DispatchContext::get().terminate_fast_dispatch(submesh.get());
+
+    submesh->close();
+    ASSERT_FALSE(submesh->is_initialized());
+    EXPECT_NO_THROW(service_cores.release(claimed_device, claimed));
+}
+
 }  // namespace tt::tt_metal::distributed::test
