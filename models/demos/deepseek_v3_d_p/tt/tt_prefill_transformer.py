@@ -23,7 +23,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.glm_5_4.loop import LoopStep, loop_schedule
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import LoopStep, loop_schedule
 from models.demos.deepseek_v3_d_p.tt.glm54.damp_gate import TtDampGate
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -675,6 +675,13 @@ class TtPrefillTransformer(LightweightModule):
         assert d2h_service is None or on_layer_complete is None, (
             "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
             "d2h_service and would silently drop on_layer_complete"
+        )
+        # While pass 2 runs the GLM-5.3 attention stand-in it rewrites the pass-1 KV slot and would ack the same
+        # layer id twice, so a loop model takes no layer acks until two-bank pass 2 (q171.2.5) and the stage ack
+        # identities (q171.2.8) exist.
+        assert not self.loop_gates or (d2h_service is None and on_layer_complete is None), (
+            "a GLM-5.4 loop model takes no layer acks (d2h_service / on_layer_complete) while pass 2 runs the "
+            "GLM-5.3 attention stand-in"
         )
         if chunks is not None:
             assert (

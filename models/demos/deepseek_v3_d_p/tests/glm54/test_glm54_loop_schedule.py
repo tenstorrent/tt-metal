@@ -54,3 +54,12 @@ def test_glm54_loop_needs_one_gate_per_pass(expect_error):
 def test_glm54_kv_only_last_layer_cannot_be_a_loop_layer(expect_error):
     with expect_error(ValueError, "kv-only last layer"):
         _schedule(glm_5_4_hf_config(), 0, 54, kv_only_last_layer=True)
+
+
+@pytest.mark.parametrize("ack", ["d2h_service", "on_layer_complete"])
+def test_glm54_loop_model_takes_no_layer_acks(ack, expect_error):
+    """While pass 2 runs the GLM-5.3 attention stand-in it would ack each loop layer id twice (q171.2.5 / .8)."""
+    t = TtPrefillTransformer.__new__(TtPrefillTransformer)
+    t.loop_gates = [object()]
+    with expect_error(AssertionError, "takes no layer acks"):
+        t.forward(object(), object(), 0, **{ack: object()})
