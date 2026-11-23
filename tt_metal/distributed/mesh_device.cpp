@@ -1796,11 +1796,12 @@ MeshTraceId MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id) {
 
 void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     TracyTTMetalBeginMeshTrace(*this, this->get_device_ids(), *trace_id);
-    // Trace buffers and their DRAM accounting are per mesh; sharing them with the parent is not supported yet.
+    // A shared-allocator submesh keeps its trace buffers in the parent's trace region, so they never overlap the
+    // parent's. Dynamic trace buffers (trace_region_size 0) are placed against this mesh's own live traces only.
     TT_FATAL(
-        !shares_parent_allocator_,
-        "Traces are not supported on shared-allocator submesh {}. Create the submesh without share_allocator to "
-        "capture traces on it.",
+        !shares_parent_allocator_ || this->allocator_impl()->get_config().trace_region_size > 0,
+        "Traces on shared-allocator submesh {} need a trace region: open the parent mesh with a non-zero "
+        "trace_region_size.",
         id());
     TT_FATAL(
         !this->mesh_command_queues_[cq_id]->trace_id().has_value(),
@@ -1896,8 +1897,17 @@ void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_i
     mesh_command_queues_[cq_id]->enqueue_trace(trace_id, blocking);
 }
 
-uint32_t MeshDeviceImpl::get_trace_buffers_size() const { return trace_buffers_size_; }
-void MeshDeviceImpl::set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
+// A shared-allocator submesh spends its parent's trace region, so it reports and updates the parent's budget.
+uint32_t MeshDeviceImpl::get_trace_buffers_size() const {
+    return shares_parent_allocator_ ? parent_mesh_->impl().get_trace_buffers_size() : trace_buffers_size_;
+}
+void MeshDeviceImpl::set_trace_buffers_size(uint32_t size) {
+    if (shares_parent_allocator_) {
+        parent_mesh_->impl().set_trace_buffers_size(size);
+        return;
+    }
+    trace_buffers_size_ = size;
+}
 
 bool MeshDeviceImpl::initialize(
     const uint8_t /*num_hw_cqs*/,

@@ -217,6 +217,7 @@ TEST_F(SharedAllocatorSubmeshTest, SharedSubmeshRejectsTracesAndSubDeviceManager
         GTEST_SKIP() << "Requires a 2D mesh of at least 2 devices";
     }
     auto submesh = last_device_submesh(*mesh_device_, /*share_allocator=*/true);
+    // The fixture opens the parent without a trace region, and a sharing submesh only traces into one.
     EXPECT_THROW(submesh->begin_mesh_trace(submesh->mesh_command_queue()), std::runtime_error);
     const auto grid = submesh->compute_with_storage_grid_size();
     SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}))});

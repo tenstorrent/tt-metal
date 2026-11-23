@@ -146,9 +146,68 @@ def test_switch_without_quiesce_raises(mesh_device, expect_error):
     mesh_device.quiesce_devices()
 
 
-def test_shared_submesh_rejects_traces(mesh_device, expect_error):
+def host_tensor(torch_tensor, mesh):
+    return ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh),
+    )
+
+
+def capture(mesh, run, trace_input):
+    run(trace_input)  # compile before capture
+    trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+    trace_output = run(trace_input)
+    ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+    return trace_id, trace_output
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_traces_on_parent_and_shared_submesh(mesh_device):
     submesh = last_device_submesh(mesh_device, share_allocator=True)
-    with expect_error(RuntimeError, "Traces are not supported"):
+
+    def parent_run(x):
+        return ttnn.neg(ttnn.add(x, x))
+
+    def submesh_run(x):
+        return ttnn.mul(ttnn.add(x, x), x)
+
+    parent_input = to_device(torch.zeros(SHAPE, dtype=torch.bfloat16), mesh_device)
+    parent_trace, parent_output = capture(mesh_device, parent_run, parent_input)
+    mesh_device.quiesce_devices()
+    submesh_input = to_device(torch.zeros(SHAPE, dtype=torch.bfloat16), submesh)
+    submesh_trace, submesh_output = capture(submesh, submesh_run, submesh_input)
+    mesh_device.quiesce_devices()
+    assert_disjoint([parent_input, parent_output, submesh_input, submesh_output])
+
+    try:
+        # The two traces take turns on the shared device; each replay must leave the other mesh's tensors intact.
+        for round_index in range(4):
+            x = torch.rand(SHAPE, dtype=torch.bfloat16) + round_index
+            ttnn.copy_host_to_device_tensor(host_tensor(x, mesh_device), parent_input)
+            ttnn.execute_trace(mesh_device, parent_trace, cq_id=0, blocking=True)
+            for shard in per_device(parent_output, mesh_device):
+                torch.testing.assert_close(shard, -(x + x), rtol=1e-2, atol=1e-2)
+            mesh_device.quiesce_devices()
+
+            y = torch.rand(SHAPE, dtype=torch.bfloat16) - round_index
+            ttnn.copy_host_to_device_tensor(host_tensor(y, submesh), submesh_input)
+            ttnn.execute_trace(submesh, submesh_trace, cq_id=0, blocking=True)
+            torch.testing.assert_close(per_device(submesh_output, submesh)[0], (y + y) * y, rtol=2e-2, atol=2e-2)
+            mesh_device.quiesce_devices()
+
+            for shard in per_device(parent_output, mesh_device):
+                torch.testing.assert_close(shard, -(x + x), rtol=1e-2, atol=1e-2)
+            mesh_device.quiesce_devices()
+    finally:
+        ttnn.release_trace(submesh, submesh_trace)
+        ttnn.release_trace(mesh_device, parent_trace)
+
+
+def test_shared_submesh_traces_need_a_trace_region(mesh_device, expect_error):
+    submesh = last_device_submesh(mesh_device, share_allocator=True)
+    with expect_error(RuntimeError, "need a trace region"):
         ttnn.begin_trace_capture(submesh, cq_id=0)
 
 

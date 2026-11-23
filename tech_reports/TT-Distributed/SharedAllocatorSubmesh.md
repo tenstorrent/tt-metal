@@ -49,8 +49,10 @@ submeshes created without it.
 
 - No concurrency. Overlapping meshes still run one after another, with a `quiesce_devices()` between phases. Only
   disjoint submeshes run at the same time.
-- No traces on a sharing submesh in v1: `begin_mesh_trace` raises. Trace buffers and their DRAM accounting are per
-  mesh, and sharing them with the parent is follow-up work. The parent can still capture and replay traces.
+- Traces on a sharing submesh need a trace region: open the parent with a non-zero `trace_region_size`. The submesh's
+  trace buffers then come from the parent's trace region (and count against its budget), so they never overlap the
+  parent's. With `trace_region_size=0` (trace buffers placed dynamically in DRAM) `begin_mesh_trace` on the submesh
+  raises, because the dynamic placement only checks the capturing mesh's own live traces.
 - No sub-device managers or command lists on a sharing submesh (they would need their own allocators).
 - No HYBRID allocator mode, no remote-only parents.
 - The overlap check runs only under fast dispatch. It assumes that one thread drives the overlapping meshes, and that
@@ -87,5 +89,5 @@ under 1%.
 2. Load both models. Their weights and caches cannot overlap.
 3. Run in phases: a decode step (or a batch of steps) of the parent model, `quiesce_devices()`, a step of the submesh
    model, `quiesce_devices()`, and so on. The scheduler decides how many steps each phase gets.
-4. Capture traces only for the parent model in v1. The submesh model runs untraced until traces are supported on
-   sharing submeshes.
+4. Open the parent with a `trace_region_size` large enough for both models' traces; each model captures its traces on
+   its own mesh, and a replay is one step of a phase like any other.
