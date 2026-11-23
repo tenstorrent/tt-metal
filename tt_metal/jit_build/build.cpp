@@ -306,6 +306,11 @@ void JitBuildEnv::init(
         "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
         // Ban dynamic initializations, via a check we've added
         "-ftt-no-dyninit "
+        // CI EXPERIMENT BRANCH ONLY (not for the PR): this tree is built with the unofficial 0b10-ivan-rebuild
+        // compiler (tt_metal/sfpi-version). Two of its passes are switched off: dead-config-exit removes a kernel's
+        // last config writes, which the next program's tilize kernel relies on; rvtt_version crashes on some
+        // SDPA kernels. The stock compiler does not know these flags.
+        "-mno-tt-tensix-dead-config-exit -fdisable-tree-rvtt_version "
         // Rely on Link Time Optimization (removes globally unreachable code).
         // Partitioning and job count are pinned rather than left to -flto=auto: the JIT
         // scheduler already builds ~30 kernels at once, and with no make jobserver to
