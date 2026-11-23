@@ -1,0 +1,11 @@
+# Reference environment for tests/golden/make_goldens.py (the fp32 CPU goldens), the pins the goldens were made
+# with. Use a separate venv, not tt-metal's python_env: tirex-2 needs Python >= 3.11 and torch >= 2.8.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
+tirex-2==0.4.0
+flashrnn==1.0.8
+mlstm-kernels==2.0.6
+numpy==2.5.4
+safetensors==0.8.0
+huggingface-hub==2.3.0
+einops==0.8.2
