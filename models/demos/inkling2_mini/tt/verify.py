@@ -26,8 +26,10 @@ import torch
 
 import ttnn
 from models.demos.inkling2_mini.convert import cache as wcache
+from models.demos.inkling2_mini.tt.attention import WINDOW
 from models.demos.inkling2_mini.tt.attention_fast import DecodePositionsFast
 from models.demos.inkling2_mini.tt.fused import common as F
+from models.demos.inkling2_mini.tt.fused.attn import HEAD_DIM, N_KV
 from models.demos.inkling2_mini.tt.fused.conv import FusedShortConv
 from models.demos.inkling2_mini.tt.fused.conv import commit as conv_commit
 from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVGate
@@ -44,6 +46,35 @@ def _gate_weights(root, L):
         if e["layer"] == L and e["name"].startswith("msg_gate."):
             out[e["name"]] = ttnn.load_tensor(root / e["file"])
     return out
+
+
+def commit_attn(device, apps, pos0, n, n_cores=96):
+    """Inkling2AttentionFast.commit_rows of every app in one program (fused/kernels/verify_commit.cpp): apps =
+    [(attn, state, rows)]; pos0: token 0's position tensor; n: accepted tokens. Same per-core work as KvCommit
+    (one job per kv group) and AttnWindow.commit (one job per window shard), spread over n_cores."""
+    kv, win, io = [], [], [pos0]
+    tb, ntiles = None, apps[0][0].window.ntiles
+    for attn, st, rows in apps:
+        assert st.k_ring.dtype == st.v_ring.dtype == rows.pending.dtype and attn.window.ntiles == ntiles
+        tb_a = 1088 if st.k_ring.dtype == ttnn.bfloat8_b else 2048
+        assert tb in (None, tb_a)
+        tb = tb_a
+        kv += [[rows.pending.buffer_address(), st.k_ring.buffer_address(), st.v_ring.buffer_address(), g]
+               for g in range(N_KV)]  # fmt: skip
+        nw = len(attn.window.cores)
+        win += [[st.x_hist.buffer_address(), rows.win.buffer_address(), i * ntiles, rows.win_g] for i in range(nw)]
+        io += [rows.pending, st.k_ring, st.v_ring, st.x_hist, rows.win]
+    cores, crs = F.core_list(device, n_cores)
+    jobs = {c: ([], []) for c in cores}
+    for i, j in enumerate(kv):
+        jobs[cores[i % n_cores]][0].append(j)
+    for i, j in enumerate(win):
+        jobs[cores[(len(kv) + i) % n_cores]][1].append(j)
+    rt = {c: [pos0.buffer_address(), n, len(k), len(w)] + [v for j in k + w for v in j] for c, (k, w) in jobs.items()}
+    named = F.fixed_rt(dict(tile_bytes=tb, seq_tiles=WINDOW // 32, width=HEAD_DIM // 32, ntiles=ntiles), rt)
+    size = max(2 * (HEAD_DIM // 32) * tb + 2 * tb + 128, 2 * ntiles * 2048) + 64
+    k = F.kernel("verify_commit.cpp", ttnn.ReaderConfigDescriptor(), named, rt, crs)
+    F.run(io, [k], [F.cb(24, ttnn.bfloat16, 1, size, cores=crs)])
 
 
 class VerifyStep:
@@ -212,15 +243,16 @@ class VerifyStep:
         as n plain steps would have left it."""
         m, R = self.m, self.R
         assert 1 <= n <= R
-        pairs = []
+        pairs, apps = [], []
         for L, p in APPS:
             c = cache_index(L, p)
             lay = m.layers[L]
             attn_st, conv_a, conv_m = m.states[c]
-            lay.attn.commit_rows(attn_st, self.rows[c], self.positions[0], n)  # rings + window state
+            apps.append((lay.attn, attn_st, self.rows[c]))
             for conv, ring in ((lay.conv_attn, conv_a), (lay.conv_mlp, conv_m)):
                 pairs += [
                     (conv.pending_slot(ring, r), ring[(self.phase + r) % FusedShortConv.PHASES]) for r in range(n)
                 ]
+        commit_attn(self.device, apps, self.positions[0].pos, n)  # rings + window states (commit_rows), one program
         conv_commit(self.device, pairs, F.pages(HIDDEN))
         ttnn.copy(ttnn.slice(self.d.f_rnn_rows, [0, 0, n - 1, 0], [1, 1, n, HIDDEN]), self.d.f_rnn)
