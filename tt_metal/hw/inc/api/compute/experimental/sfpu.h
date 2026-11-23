@@ -3,17 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Quasar SFPU op types: SfpuOp<OP, REG, SOURCES...> names one op on one register file; its functions run it.
-// The tiles' SFPLOAD/SFPSTORE format is never passed: it comes from the sources at compile time.
+// The tiles' SFPLOAD/SFPSTORE format is never passed: it comes from the sources at compile time. There is no
+// init call: the op initializes itself.
 //
 //   using ExpDest = SfpuOp<op::Exp<>, SfpuReg::Dest, dfb_id>;     // Dest tiles copied or unpacked from dfb_id
-//   ExpDest::init();                                              // once, before the first tile
 //   ExpDest::tile(idst);                                          // in place, MATH thread
 //
 //   using ExpFpu = SfpuOp<op::Exp<>, SfpuReg::Dest, srca_id, srcb_id>;  // Dest tiles left by an FPU op
 //
 //   using ExpSrcs = SfpuOp<op::Exp<>, SfpuReg::SrcS, srcs_fmt>;   // SrcS register format
-//   ExpSrcs::init(in_addr, in_fmt, out_addr, out_fmt);
-//   ExpSrcs::tiles(n);                                            // L1 -> SrcS -> op -> L1, TRISC3
+//   ExpSrcs::tiles(in_addr, in_fmt, out_addr, out_fmt, n);        // L1 -> SrcS -> op -> L1, TRISC3
 
 #pragma once
 
@@ -72,6 +71,21 @@ constexpr sfpi::DataLayout sfpu_dest_layout_of() {
         static_cast<DataFormat>(unpack_dst_format[SRCB_DFB_ID]),
         DST_ACCUM_MODE>();
 }
+
+// The Dest op whose init ran last on this thread, as the address of its key; null at kernel start.
+template <typename OP_TYPE>
+inline constexpr char sfpu_op_key = 0;
+inline thread_local const char* sfpu_dest_op_ready = nullptr;
+
+// Runs the init of OP_TYPE unless it was the last Dest op initialized on this thread. Ops share the SFPU
+// configuration and constant registers, so switching ops initializes again.
+template <typename OP_TYPE>
+ALWI void sfpu_dest_op_init_once() {
+    if (sfpu_dest_op_ready != &sfpu_op_key<OP_TYPE>) {
+        OP_TYPE::init();
+        sfpu_dest_op_ready = &sfpu_op_key<OP_TYPE>;
+    }
+}
 #endif
 
 }  // namespace detail
@@ -105,7 +119,8 @@ struct SfpuOp {
  * | DFB_ID             | Were copied or unpacked to Dest from this DFB (copy_tile)                     |
  * | SRCA_DFB, SRCB_DFB | Were left by an FPU op that read these DFBs into SrcA and SrcB, in that order |
  *
- * An op that does not take tiles of the resulting format is a compile error.
+ * An op that does not take tiles of the resulting format is a compile error. The op initializes itself on its
+ * first tile(), and again when another SfpuOp ran on Dest in between.
  */
 // clang-format on
 template <typename OP, auto... DFB_IDS>
@@ -114,16 +129,6 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
         sizeof...(DFB_IDS) == 1 || sizeof...(DFB_IDS) == 2,
         "Dest takes the DFB the tiles were copied from, or the SrcA and SrcB DFBs of the FPU op that left them");
     static_assert((std::is_integral_v<decltype(DFB_IDS)> && ...), "Dest sources are DFB ids");
-
-    // clang-format off
-    /**
-     * Initialize the op. Call once before the first tile() of this op, and again after any other SFPU init,
-     * since ops share the programmable constant registers.
-     *
-     * Return value: None
-     */
-    // clang-format on
-    ALWI static void init() { MATH((Op::init())); }
 
     // clang-format off
     /**
@@ -142,6 +147,7 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
 #ifdef TRISC_MATH
         static_assert(inputs == 1, "this op takes two Dest tiles: tile(idst0, idst1, odst)");
 #endif
+        MATH((detail::sfpu_dest_op_init_once<Op>()));
         MATH((Op::run(idst, vector_mode)));
     }
 
@@ -165,6 +171,7 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
 #ifdef TRISC_MATH
         static_assert(inputs == 2, "this op takes one Dest tile: tile(idst)");
 #endif
+        MATH((detail::sfpu_dest_op_init_once<Op>()));
         MATH((Op::run(idst0, idst1, odst, vector_mode)));
     }
 
@@ -190,14 +197,14 @@ private:
  * An op that does not take tiles of that format is a compile error.
  */
 // clang-format on
-// TODO: once SrcS is fed from DFBs, SOURCES becomes the DFB ids, as on Dest. The layout then comes from each
-// DFB's L1 format (unpack_src_format), not from unpack_dst_format, which describes SrcA/SrcB.
+// TODO: once SrcS is fed from DFBs, SOURCES becomes the DFB ids, as on Dest, and tiles() takes only the count. The
+// layout then comes from each DFB's L1 format (unpack_src_format), not from unpack_dst_format (SrcA/SrcB).
 template <typename OP, DataFormat SRCS_FMT>
 struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT> {
     // clang-format off
     /**
-     * Initialize a one-input op: the unpacker-2 and packer-1 descriptors for one input and one output ring in
-     * L1, and the op's own init. Call once before tiles().
+     * Run a one-input op on num_tiles consecutive tiles: per tile, unpack L1 -> SrcS, the op over the tile's
+     * slices, pack SrcS -> L1. Programs the unpacker-2 and packer-1 descriptors and initializes the op first.
      *
      * Return value: None
      *
@@ -207,19 +214,25 @@ struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT> {
      * | l1_in_format    | Input format in L1                    | DataFormat |             | True     |
      * | l1_out_addr_16B | Output ring base in L1, 16-byte units | uint32_t   |             | True     |
      * | l1_out_format   | Output format in L1                   | DataFormat |             | True     |
+     * | num_tiles       | Tiles to process                      | uint32_t   |             | True     |
      */
     // clang-format on
-    ALWI static void init(
-        uint32_t l1_in_addr_16B, DataFormat l1_in_format, uint32_t l1_out_addr_16B, DataFormat l1_out_format) {
+    ALWI static void tiles(
+        uint32_t l1_in_addr_16B,
+        DataFormat l1_in_format,
+        uint32_t l1_out_addr_16B,
+        DataFormat l1_out_format,
+        uint32_t num_tiles) {
 #ifdef TRISC_ISOLATE_SFPU
-        static_assert(inputs == 1, "this op takes two inputs: init(in0_addr, in1_addr, in_fmt, out_addr, out_fmt)");
+        static_assert(inputs == 1, "this op takes two inputs: tiles(in0_addr, in1_addr, in_fmt, out_addr, out_fmt, n)");
 #endif
         SFPU_SRCS((Op::init(l1_in_addr_16B, l1_in_format, l1_out_addr_16B, l1_out_format)));
+        SFPU_SRCS((Op::run(num_tiles)));
     }
 
     // clang-format off
     /**
-     * Initialize a two-input op: two input rings (same L1 format) and one output ring.
+     * Run a two-input op on num_tiles consecutive tiles: two input rings (same L1 format) and one output ring.
      *
      * Return value: None
      *
@@ -230,33 +243,22 @@ struct SfpuOp<OP, SfpuReg::SrcS, SRCS_FMT> {
      * | l1_in_format     | Input format in L1, both inputs             | DataFormat |             | True     |
      * | l1_out_addr_16B  | Output ring base in L1, 16-byte units       | uint32_t   |             | True     |
      * | l1_out_format    | Output format in L1                         | DataFormat |             | True     |
+     * | num_tiles        | Tiles to process                            | uint32_t   |             | True     |
      */
     // clang-format on
-    ALWI static void init(
+    ALWI static void tiles(
         uint32_t l1_in0_addr_16B,
         uint32_t l1_in1_addr_16B,
         DataFormat l1_in_format,
         uint32_t l1_out_addr_16B,
-        DataFormat l1_out_format) {
+        DataFormat l1_out_format,
+        uint32_t num_tiles) {
 #ifdef TRISC_ISOLATE_SFPU
-        static_assert(inputs == 2, "this op takes one input: init(in_addr, in_fmt, out_addr, out_fmt)");
+        static_assert(inputs == 2, "this op takes one input: tiles(in_addr, in_fmt, out_addr, out_fmt, n)");
 #endif
         SFPU_SRCS((Op::init(l1_in0_addr_16B, l1_in1_addr_16B, l1_in_format, l1_out_addr_16B, l1_out_format)));
+        SFPU_SRCS((Op::run(num_tiles)));
     }
-
-    // clang-format off
-    /**
-     * Run the op on num_tiles consecutive tiles from the rings given to init(): per tile, unpack L1 -> SrcS, the
-     * op over the tile's slices, pack SrcS -> L1.
-     *
-     * Return value: None
-     *
-     * | Argument  | Description      | Type     | Valid Range | Required |
-     * |-----------|------------------|----------|-------------|----------|
-     * | num_tiles | Tiles to process | uint32_t |             | True     |
-     */
-    // clang-format on
-    ALWI static void tiles(uint32_t num_tiles) { SFPU_SRCS((Op::run(num_tiles))); }
 
 #ifdef TRISC_ISOLATE_SFPU
 

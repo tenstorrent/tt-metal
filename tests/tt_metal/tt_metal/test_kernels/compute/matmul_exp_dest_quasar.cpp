@@ -32,7 +32,6 @@ void kernel_main() {
     matmul_init(in0_id, in1_id);
     // The Dest tiles are matmul results, so their format follows the FPU sources: SrcA is in1, SrcB is in0.
     using ExpOp = SfpuOp<op::Exp<>, SfpuReg::Dest, in1_id, in0_id>;
-    ExpOp::init();
 
     for (std::uint32_t t = 0; t < num_out_tiles; ++t) {
         tile_regs_acquire();

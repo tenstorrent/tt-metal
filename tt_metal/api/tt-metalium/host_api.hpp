@@ -102,12 +102,15 @@ ChipId GetPCIeDeviceID(ChipId device_id);
 /**
  * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
  *
- * The Program is bound to the default MetalContext, so this overload cannot be used with a MeshDevice that belongs to a
- * different MetalEnv. Prefer the overload that takes a MeshDevice.
+ * Deprecated: the Program is bound to the default MetalContext, so it cannot be used with a MeshDevice that belongs to a
+ * different MetalEnv. Use CreateProgram(distributed::MeshDevice&) instead.
  *
  * Return value: Program
  */
 // clang-format on
+[[deprecated(
+    "Use CreateProgram(distributed::MeshDevice&) instead, which binds the Program to the MetalEnv of the mesh "
+    "device. This API will be removed after 2026-12-31.")]]
 Program CreateProgram();
 
 // clang-format off
