@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """pk-ctx matmul + SFPU tail sweep on pack_mmsweep_test.cpp (pure matmul mmK, math-thread tails xm<op>K, pack-thread tails xp<op>K): llk_pack_block's forms behind matmul math, the pack side of pack_ctx_test.cpp.
 
 Per cell (context, input, output, DEST width, sync, tiles per block) the arms of the states the cell's mask groups take W or the block in (CELLS), and pk-limit5's

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Context sweep (pk-limit3, ad hoc): llk_pack_block's forms behind the other unpack/math contexts of the Blackhole LLK API (see pack_ctx_test.cpp).
 
 Contexts: eltwise add, eltwise mul (LoFi, HiFi4), unpack tilize, reduce row (LoFi, HiFi4), reduce col (HiFi4), unpack transpose, datacopy + unary SFPU (abs).

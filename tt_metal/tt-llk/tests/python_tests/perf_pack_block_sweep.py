@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Crossover sweep (ad hoc): the closed block against the per-tile pack for every block float output, tiles 2 to 8, SyncHalf and SyncFull, alternating outputs and a single output.
 
 Forms through pack_api_shim.h (helpers/pack_sweep.py): h the block form of A, m its per-tile pack (B per tile in both), M main's per-tile loop for both outputs.
