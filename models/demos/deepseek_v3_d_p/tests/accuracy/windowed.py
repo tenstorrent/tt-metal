@@ -18,21 +18,36 @@ from typing import Literal
 
 import torch
 
-# Columns of ``row_sums``: with x the device (actual) and y the golden (expected) values of one row.
-SUM_Y, SUM_X, SUM_YY, SUM_XX, SUM_XY, SUM_EE, COUNT = range(7)
+# Columns of ``row_sums``, with x the device (actual) and y the golden (expected) values of one row: the row's means,
+# its centred moments (PCC from these stays exact on data with a large mean, where raw Σx², Σxy cancel), and the raw
+# sums NRMSE needs.
+MEAN_Y, MEAN_X, M2_Y, M2_X, C_XY, SUM_YY, SUM_EE, COUNT = range(8)
 
 
 def row_sums(expected: torch.Tensor, actual: torch.Tensor) -> torch.Tensor:
-    """Per row ``[rows, 7]`` FP64: Σy, Σx, Σy², Σx², Σxy, Σ(x − y)², element count, for ``[rows, ...]`` tensors."""
+    """Per row ``[rows, 8]`` FP64: ȳ, x̄, Σ(y − ȳ)², Σ(x − x̄)², Σ(x − x̄)(y − ȳ), Σy², Σ(x − y)², element count, for
+    ``[rows, ...]`` tensors."""
     if expected.shape != actual.shape or expected.ndim < 1:
         raise ValueError(
             f"expected matching [rows, ...] tensors, got {tuple(expected.shape)} and {tuple(actual.shape)}"
         )
     y = expected.reshape(expected.shape[0], -1).double()
     x = actual.reshape(actual.shape[0], -1).double()
+    mean_y, mean_x = y.mean(1, keepdim=True), x.mean(1, keepdim=True)
+    dy, dx = y - mean_y, x - mean_x
     count = torch.full((y.shape[0],), float(y.shape[1]), dtype=torch.float64)
     return torch.stack(
-        [y.sum(1), x.sum(1), (y * y).sum(1), (x * x).sum(1), (x * y).sum(1), (x - y).square().sum(1), count], 1
+        [
+            mean_y[:, 0],
+            mean_x[:, 0],
+            dy.square().sum(1),
+            dx.square().sum(1),
+            (dx * dy).sum(1),
+            y.square().sum(1),
+            (x - y).square().sum(1),
+            count,
+        ],
+        1,
     )
 
 
@@ -46,10 +61,18 @@ def nrmse(sums: torch.Tensor) -> float:
 
 
 def pcc(sums: torch.Tensor) -> float:
-    """Pearson correlation of all elements of the rows of ``sums``; NaN when either side is constant."""
-    sy, sx, syy, sxx, sxy, _, n = sums.sum(0).tolist()
-    variance = (sxx - sx * sx / n) * (syy - sy * sy / n)
-    return (sxy - sx * sy / n) / math.sqrt(variance) if variance > 0 else math.nan
+    """Pearson correlation of all elements of the rows of ``sums``; NaN when either side is constant.
+
+    Rows are merged by their centred moments (Chan et al.): each row's moments about its own mean plus the spread of
+    the row means about the overall mean, so no large raw sums cancel."""
+    n = sums[:, COUNT]
+    total = n.sum()
+    mean_y, mean_x = (n * sums[:, MEAN_Y]).sum() / total, (n * sums[:, MEAN_X]).sum() / total
+    shift_y, shift_x = sums[:, MEAN_Y] - mean_y, sums[:, MEAN_X] - mean_x
+    m2_y = float(sums[:, M2_Y].sum() + (n * shift_y * shift_y).sum())
+    m2_x = float(sums[:, M2_X].sum() + (n * shift_x * shift_x).sum())
+    c_xy = float(sums[:, C_XY].sum() + (n * shift_x * shift_y).sum())
+    return c_xy / math.sqrt(m2_x * m2_y) if m2_x > 0 and m2_y > 0 else math.nan
 
 
 def row_nrmse(sums: torch.Tensor, floor: float) -> torch.Tensor:

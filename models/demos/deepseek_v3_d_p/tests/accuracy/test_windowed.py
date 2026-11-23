@@ -27,8 +27,8 @@ ACTUAL = torch.tensor([[3.0, 4.0], [3.0, 5.0], [0.0, 0.0], [3.0, 5.0]])
 def test_row_sums_and_metrics_match_hand_values() -> None:
     sums = row_sums(EXPECTED, ACTUAL)
     assert sums.dtype == torch.float64
-    # Row 1: Σy 7, Σx 8, Σy² 25, Σx² 34, Σxy 29, Σe² 1, n 2.
-    assert sums[1].tolist() == [7.0, 8.0, 25.0, 34.0, 29.0, 1.0, 2.0]
+    # Row 1 (y 3, 4; x 3, 5): ȳ 3.5, x̄ 4, Σ(y − ȳ)² 0.5, Σ(x − x̄)² 2, Σ(x − x̄)(y − ȳ) 1, Σy² 25, Σe² 1, n 2.
+    assert sums[1].tolist() == [3.5, 4.0, 0.5, 2.0, 1.0, 25.0, 1.0, 2.0]
     assert nrmse(sums) == pytest.approx(math.sqrt(2 / 75))  # Σe² 2 over Σy² 75
     assert nrmse(sums[:1]) == 0.0 and nrmse(sums[2:3]) == 0.0  # exact, also on the all-zero row
     assert nrmse(row_sums(torch.zeros(1, 2), torch.ones(1, 2))) == math.inf
@@ -37,6 +37,16 @@ def test_row_sums_and_metrics_match_hand_values() -> None:
     # Per row: 0, 1/5, 0 (exact zero row), 1/5; a floor of 10 caps the denominator from below.
     assert row_nrmse(sums, floor=0.5).tolist() == pytest.approx([0.0, 0.2, 0.0, 0.2])
     assert row_nrmse(sums, floor=10.0).tolist() == pytest.approx([0.0, 0.1, 0.0, 0.1])
+
+
+@pytest.mark.parametrize("offset", [0.0, 1e8])
+def test_pcc_is_exact_on_data_with_a_large_mean(offset: float) -> None:
+    """y = c + (1, 2, 3, 4), x = c + (1, 2, 3, 5): about their means 2.5 and 2.75, Σdy² 5, Σdx² 8.75 and Σdxdy 6.5,
+    so PCC = 6.5 / √43.75 = 13 / (5√7) for any offset c. Split over two rows, so the row merge is exercised too.
+    At c = 1e8 raw sums are ~4e16 and an uncentred formula cancels to noise."""
+    expected = offset + torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
+    actual = offset + torch.tensor([[1.0, 2.0], [3.0, 5.0]], dtype=torch.float64)
+    assert pcc(row_sums(expected, actual)) == pytest.approx(13 / (5 * math.sqrt(7)), rel=1e-12)
 
 
 def test_row_sums_flatten_trailing_dims_and_reject_mismatched_shapes(expect_error) -> None:
