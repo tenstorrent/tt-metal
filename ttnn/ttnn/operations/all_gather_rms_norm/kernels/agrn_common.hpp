@@ -34,7 +34,7 @@ constexpr uint32_t cb_ln_shift = 7;         // LN: K = tf32(m) broadcast to ever
 constexpr uint32_t cb_ln_sq = 8;            // LN: (x - K)^2 tiles of the block
 constexpr uint32_t cb_partial = 9;          // per-row stats (col 0), Float32 wire contract: [stat][row]
 constexpr uint32_t cb_record_staging = 10;  // writer scratch: 128 B records
-constexpr uint32_t cb_record_landing = 11;  // reader scratch: one tile-row's G*k*nstats records
+constexpr uint32_t cb_record_landing = 11;  // reader scratch: one tile-row's G slot blocks (K * nstats records each)
 constexpr uint32_t cb_gathered = 12;        // Float32 gather tiles: per row [stat][gather tile], col j = partition j
 constexpr uint32_t cb_stat_consts = 13;     // LN: n_j per partition column (Float32)
 constexpr uint32_t cb_inv = 14;             // RMS inv_rms / LN rstd (col 0)
@@ -47,12 +47,16 @@ constexpr uint32_t cb_assemble = 20;        // R_U writer scratch: source tiles 
 constexpr uint32_t cb_port_chunks = 21;     // port: 2 x batch_chunks packets
 constexpr uint32_t cb_x32 = 22;             // LN, non-Float32 x: exact Float32 copy of the x block
 constexpr uint32_t cb_gamma_rows = 23;      // reader scratch: raw gamma / beta source rows (128 B stride)
+constexpr uint32_t cb_gather_rows = 24;     // Float32 gather tiles in ROW form (row j = partition j), read straight
+                                            // from the hub tables; compute transposes them into cb_gathered
 
 // ---- program-local semaphores ----
 constexpr uint32_t sem_records_local = 0;  // hubs: one inc per active worker (records written into my table)
 constexpr uint32_t sem_stats_ready = 1;    // workers: one inc per hub (all slots of the stats table landed)
 constexpr uint32_t sem_own_ready = 2;      // ports: one inc per active worker (own block written + resident)
 constexpr uint32_t sem_landed = 3;         // workers (R_U): one inc per port (its arrivals landed)
+constexpr uint32_t sem_stats_ready_bwd = 4;  // workers: set to 1 by the bwd hub's multicast (fwd hub: sem_stats_ready)
+constexpr uint32_t sem_stats_done = 5;       // hubs: the sender tells its own reader the table is complete
 
 constexpr uint32_t RECORD_BYTES = 128;  // 32 fp32 values: column 0 of one stat tile (one value per row)
 

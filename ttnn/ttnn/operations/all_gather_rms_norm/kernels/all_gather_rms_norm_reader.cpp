@@ -196,12 +196,13 @@ void kernel_main() {
         cb_push_back(cb_stat_consts, 1);
     }
 
-    // ---- zero the gather tiles once, off the critical path (columns >= P must read 0) ----
-    CircularBuffer cb_g(cb_gathered);
+    // ---- zero the gather tiles once, off the critical path (rows >= P must read 0) ----
+    CircularBuffer cb_g(cb_gather_rows);
     constexpr uint32_t f32_tile_bytes = TILE * TILE * 4;
     const uint32_t n_gather_tiles = w.crt * nstats * gather_tiles;
-    cb_reserve_back(cb_gathered, n_gather_tiles);
-    const uint32_t gather_base = get_write_ptr(cb_gathered);
+    cb_reserve_back(cb_gather_rows, n_gather_tiles);
+    const uint32_t gather_base = get_write_ptr(cb_gather_rows);
+    const uint32_t landing = get_write_ptr(cb_record_landing);
     for (uint32_t t = 0; t < n_gather_tiles; ++t) {
         noc.async_write_zeros(cb_g, f32_tile_bytes, {.offset_bytes = t * f32_tile_bytes});
     }
@@ -227,7 +228,10 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* ready =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready));
         AGRN_ZONE("rd_wait_stats");
-        noc_semaphore_wait_min(ready, 2);  // both hubs: own slot + every remote slot of the table landed
+        volatile tt_l1_ptr uint32_t* ready_bwd =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready_bwd));
+        noc_semaphore_wait_min(ready, 1);  // both hubs: own slot + every remote slot of the table landed
+        noc_semaphore_wait_min(ready_bwd, 1);
     }
     const uint32_t table = get_common_arg_val<uint32_t>(CRT_TABLE_ADDR);
     const uint32_t hub_mask = get_common_arg_val<uint32_t>(CRT_HUB_MASK);
@@ -235,35 +239,47 @@ void kernel_main() {
     const uint32_t bwd_hub = get_common_arg_val<uint32_t>(CRT_BWD_HUB);
     constexpr uint32_t row_rec_bytes = K * nstats * RECORD_BYTES;  // one tile-row of one slot
     constexpr uint32_t slot_bytes = R * row_rec_bytes;
-    const uint32_t landing = get_write_ptr(cb_record_landing);
     {
+        // Each 128 B record (32 per-row values of one partition j = q * K + m and one stat s) becomes ROW j of gather
+        // tile (s, j / 32): values 0..15 -> face (j%32)/16*2, row j%16; values 16..31 -> the next face. The writers
+        // store a slot's members half-split ([values 0..15 of m = 0..K-1][values 16..31 ...]), so the K rows of one
+        // slot land with one contiguous NoC read per half (split only where they cross a 16-row face boundary): no
+        // RISC-V copy, few large requests to the hubs. Compute transposes the tiles (exact, in DEST).
         AGRN_ZONE("rd_gather");
         for (uint32_t r = 0; r < w.crt; ++r) {
             const uint32_t tr = w.row_start + r;
+            const uint32_t gbase = gather_base + r * nstats * gather_tiles * f32_tile_bytes;
+            // one contiguous read per slot (its K members x nstats records of this tile-row) into the landing
+            // buffer: G requests per tile-row at the hubs (they serve every active worker)
             for (uint32_t q = 0; q < G; ++q) {
                 const uint32_t hub = ((hub_mask >> q) & 1u) ? bwd_hub : fwd_hub;
-                const uint64_t src = get_noc_addr(hub & 0xFFFF, hub >> 16, table + q * slot_bytes + tr * row_rec_bytes);
-                noc_async_read(src, landing + q * row_rec_bytes, row_rec_bytes);
+                noc_async_read(
+                    get_noc_addr(hub & 0xFFFF, hub >> 16, table + q * slot_bytes + tr * row_rec_bytes),
+                    landing + q * row_rec_bytes,
+                    row_rec_bytes);
             }
             noc_async_read_barrier();
-            asm volatile("" ::: "memory");
-            const uint32_t gbase = gather_base + r * nstats * gather_tiles * f32_tile_bytes;
-            const uint32_t* rec = reinterpret_cast<const uint32_t*>(landing);
-            for (uint32_t j = 0; j < P; ++j) {  // j = q * K + m: the slot's records are [m][s]
-                for (uint32_t s = 0; s < nstats; ++s, rec += TILE) {
-                    // column c of the gather tile: rows 0..15 in face 0 / 1, rows 16..31 in face 2 / 3
-                    uint32_t* col =
-                        reinterpret_cast<uint32_t*>(gbase + (s * gather_tiles + (j >> 5)) * f32_tile_bytes) +
-                        ((j & 31) >> 4) * 256 + (j & 15);
-#pragma GCC unroll 16
-                    for (uint32_t i = 0; i < FACE; ++i) {
-                        col[i * FACE] = rec[i];
-                        col[512 + i * FACE] = rec[FACE + i];
+            // place each (slot, stat, half) run of K consecutive tile rows with a local (own-L1) NoC copy
+            for (uint32_t q = 0; q < G; ++q) {
+                for (uint32_t s = 0; s < nstats; ++s) {
+                    for (uint32_t h = 0; h < 2; ++h) {
+                        const uint32_t src = landing + q * row_rec_bytes + ((s * 2 + h) * K) * (RECORD_BYTES / 2);
+                        uint32_t m0 = 0;
+                        while (m0 < K) {
+                            const uint32_t j = q * K + m0;
+                            const uint32_t jr = j & 31;
+                            const uint32_t room = FACE - (jr & 15);
+                            const uint32_t n = (K - m0) < room ? (K - m0) : room;
+                            const uint32_t dst = gbase + (s * gather_tiles + (j >> 5)) * f32_tile_bytes +
+                                                 ((jr >> 4) * 512 + (jr & 15) * FACE + h * 256) * 4;
+                            noc_async_read(get_noc_addr(src + m0 * (RECORD_BYTES / 2)), dst, n * (RECORD_BYTES / 2));
+                            m0 += n;
+                        }
                     }
                 }
             }
-            asm volatile("" ::: "memory");
-            cb_push_back(cb_gathered, nstats * gather_tiles);
+            noc_async_read_barrier();
+            cb_push_back(cb_gather_rows, nstats * gather_tiles);
         }
     }
 

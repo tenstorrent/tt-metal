@@ -35,6 +35,11 @@ void kernel_main() {
     const uint32_t entries_idx = a;
     a += 3 * n_entries;
     const uint32_t workers_idx = a;  // n_active worker NoC coords (x | y << 16), ordered worker index
+    a += n_active;
+    const uint32_t hub_sem = get_arg_val<uint32_t>(a++);   // 0: not a hub; else 1 + the stats-ready semaphore id
+    const uint32_t mc_start = get_arg_val<uint32_t>(a++);  // program grid rectangle (NoC0 coords x | y << 16)
+    const uint32_t mc_end = get_arg_val<uint32_t>(a++);
+    const uint32_t mc_dests = get_arg_val<uint32_t>(a++);  // cores in the rectangle, excluding this one
 
     const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
@@ -44,6 +49,21 @@ void kernel_main() {
     const uint32_t out_block_base = get_write_ptr(agrn::cb_out_block);
 
     constexpr uint32_t rows_lo_div = rows_hi > 1 ? rows_hi - 1 : 1;
+    // announce_stats_ready (OVERLAP): once the sender saw the table complete, ONE multicast semaphore set over the
+    // whole program grid (this core included in the rectangle, not written: non-loopback) replaces a unicast per worker
+    if (hub_sem > 0) {
+        AGRN_ZONE("pr_stats_mcast");
+        volatile tt_l1_ptr uint32_t* done =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_stats_done));
+        noc_semaphore_wait_min(done, 1);
+        const uint32_t sem = get_semaphore(hub_sem - 1);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem) = 1;
+        noc_semaphore_set_multicast(
+            sem,
+            get_noc_multicast_addr(mc_start & 0xFFFF, mc_start >> 16, mc_end & 0xFFFF, mc_end >> 16, sem),
+            mc_dests);
+        noc_async_write_barrier();
+    }
     uint32_t batch = 0, need = 0, pos = 0, wptr = 0;
     for (uint32_t k = 0; k < n_entries; ++k) {
         const uint32_t e = get_arg_val<uint32_t>(entries_idx + 3 * k);
@@ -54,7 +74,9 @@ void kernel_main() {
             AGRN_ZONE("pr_wait_own");
             noc_semaphore_wait_min(own_ready, n_active);
         }
-        AGRN_ZONE("pr_entry");
+        if (k == 0) {
+            AGRN_ZONE("pr_own_first");  // marker: own entry starts
+        }
         uint32_t c = 0;
         for_each_packet(q, part, first_bank, bank_stride, [&](const Packet& pk) {
             if (batch == 0) {

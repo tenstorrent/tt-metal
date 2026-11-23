@@ -69,12 +69,15 @@ CB_ASSEMBLE = 20
 CB_PORT_CHUNKS = 21
 CB_X32 = 22
 CB_GAMMA_ROWS = 23
+CB_GATHER_ROWS = 24
 
 # ---- program-local semaphores (declared before the fabric connections take theirs) ----
 SEM_RECORDS_LOCAL = 0
 SEM_STATS_READY = 1
 SEM_OWN_READY = 2
 SEM_LANDED = 3
+SEM_STATS_READY_BWD = 4
+SEM_STATS_DONE = 5
 
 RECORD_BYTES = 128
 TILE = 32
@@ -83,6 +86,13 @@ TILE = 32
 P_CAP = 128  # stats partitions per row (G * k), <= 4 gather tiles
 COMB_TILE_COST_FUSED = 1  # select_split cost model: one gather-tile reduce per row-tile
 STATS_TABLE_CAP = 256 * 1024  # bytes of the stats table on each hub
+
+
+def _knob(name, default):
+    """A block knob: its single host value, overridable by env AGRN_<NAME> for perf sweeps."""
+    return int(os.environ.get(f"AGRN_{name}", default))
+
+
 BATCH_CHUNKS = 4  # port CB batch (TRANSPORT; catalog fabric_all_gather: 4 per batch best or within 5-16%)
 INC_EVERY = 8  # arrival increment every N packets (+ each entry's last)
 BALANCE_MIN_TILES = 64  # balance an even ring's far slot from this many tiles per slot (catalog)
@@ -466,12 +476,15 @@ def create_mesh_program_descriptor(
     dram = mesh_device.dram_grid_size()
     nb = dram.x * dram.y
     run_pages = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // out_page)
+    batch_chunks = _knob("BATCH_CHUNKS", BATCH_CHUNKS)
+    inc_every = _knob("INC_EVERY", INC_EVERY)
+    scatter_runs = _knob("SCATTER_RUNS", SCATTER_RUNS)
     payload_bytes = run_pages * out_page
     stats_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
     if is_ru:
-        walk = Walk(nb, 1, geo.R * geo.Wlt, geo.R * geo.Wlt, geo.R * geo.Wlt, run_pages, SCATTER_RUNS)
+        walk = Walk(nb, 1, geo.R * geo.Wlt, geo.R * geo.Wlt, geo.R * geo.Wlt, run_pages, scatter_runs)
     else:
-        walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, SCATTER_RUNS)
+        walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, scatter_runs)
     balance = ring and G % 2 == 0 and G >= 4 and geo.R * geo.Wlt >= BALANCE_MIN_TILES
 
     # R_U assembly: max distinct source tiles per output tile
@@ -540,8 +553,8 @@ def create_mesh_program_descriptor(
         CB_PORT_CHUNKS,
         out_page,
         run_pages,
-        BATCH_CHUNKS,
-        INC_EVERY,
+        batch_chunks,
+        inc_every,
         nb,
         walk.rows_eff,
         walk.cols_eff,
@@ -555,7 +568,7 @@ def create_mesh_program_descriptor(
         split.big,
         split.cw_nom,
         stats_payload,
-        SCATTER_RUNS,
+        scatter_runs,
     ] + list(ttnn.TensorAccessorArgs(dst_tensor).get_compile_time_args())
 
     # ---- compute config ----
@@ -563,11 +576,13 @@ def create_mesh_program_descriptor(
     cfg.math_fidelity = compute_kernel_config.math_fidelity
     cfg.fp32_dest_acc_en = fp32_dest
     cfg.math_approx_mode = compute_kernel_config.math_approx_mode
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    tagged = [CB_GATHER_ROWS]  # exact fp32 copy into DEST for the transpose
     if is_ln:
-        modes = [ttnn.UnpackToDestMode.Default] * 64
-        for cb in (CB_X if x_is_f32 else CB_X32, CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_B):
-            modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
-        cfg.unpack_to_dest_mode = modes
+        tagged += [CB_X if x_is_f32 else CB_X32, CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_B]
+    for cb in tagged:
+        modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    cfg.unpack_to_dest_mode = modes
 
     full = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
     # per-stage profiler zones (perf probes only; the harness needs them off)
@@ -590,6 +605,7 @@ def create_mesh_program_descriptor(
         pack = lambda v: (v.x & 0xFFFF) | (v.y << 16)
         active_noc = [pack(virt(c)) for c in active]
         hub = {d: virt((ports[(d, 0)].x, ports[(d, 0)].y)) for d in ("fwd", "bwd")}
+        mc0, mc1 = virt((0, 0)), virt((gx - 1, gy - 1))  # program grid rectangle (NoC0 order)
 
         stats_sched = {}
         bulk_sched = {}
@@ -614,7 +630,14 @@ def create_mesh_program_descriptor(
         program = ttnn.ProgramDescriptor()
         program.semaphores = [
             ttnn.SemaphoreDescriptor(id=sid, core_ranges=full, initial_value=0)
-            for sid in (SEM_RECORDS_LOCAL, SEM_STATS_READY, SEM_OWN_READY, SEM_LANDED)
+            for sid in (
+                SEM_RECORDS_LOCAL,
+                SEM_STATS_READY,
+                SEM_OWN_READY,
+                SEM_LANDED,
+                SEM_STATS_READY_BWD,
+                SEM_STATS_DONE,
+            )
         ]
 
         # ---- CBs (all on the full program range: identical addresses on every core of the chip) ----
@@ -623,11 +646,12 @@ def create_mesh_program_descriptor(
             _cb(CB_SCALER, 1, ttnn.tile_size(ttnn.bfloat16), ttnn.bfloat16, full),
             _cb(CB_PARTIAL, crt_max * nstats, T32, ttnn.float32, full),
             _cb(CB_RECORD_STAGING, crt_max * nstats, RECORD_BYTES, ttnn.float32, full),
+            _cb(CB_GATHER_ROWS, crt_max * nstats * gather_tiles, T32, ttnn.float32, full),
             _cb(CB_RECORD_LANDING, G * k * nstats, RECORD_BYTES, ttnn.float32, full),
             _cb(CB_GATHERED, crt_max * nstats * gather_tiles, T32, ttnn.float32, full),
             _cb(CB_INV, crt_max, T32, ttnn.float32, full),
             _cb(CB_OUT_BLOCK, crt_max * cw_max, out_page, out_dtype, full),
-            _cb(CB_PORT_CHUNKS, 2 * BATCH_CHUNKS * run_pages, out_page, out_dtype, full),
+            _cb(CB_PORT_CHUNKS, 2 * batch_chunks * run_pages, out_page, out_dtype, full),
         ]
         if has_gamma:
             cbs.append(_cb(CB_GAMMA, cw_max, gamma_page, g_dtype, full))
@@ -712,7 +736,7 @@ def create_mesh_program_descriptor(
                 sends = bulk_sched[coord][d] if peer is not None else []
                 up_sends = bulk_sched[up][d] if up is not None else []
                 up_counts = [walk.chunks(q, part, l, L) for q, part in up_sends]
-                S0, I0, expect_in = _inc_sim(up_counts, INC_EVERY)
+                S0, I0, expect_in = _inc_sim(up_counts, inc_every)
                 entries = []
                 for kk, (q, part) in enumerate(sends):
                     if kk == 0:
@@ -722,9 +746,11 @@ def create_mesh_program_descriptor(
                     assert uq == q and (upart == part or upart == 0), (uq, q, upart, part)
                     off = walk.chunks(q, 1, l, L) if (part == 2 and upart == 0) else 0
                     e = kk - 1
-                    entries += [q | (part << 16), I0[e] - S0[e] // INC_EVERY + 1, S0[e] + off]
+                    entries += [q | (part << 16), I0[e] - S0[e] // inc_every + 1, S0[e] + off]
                 r_args = [dst_addr, l, L, bulk_addr, expect_in, split.n_active, int(is_ru), len(sends)]
                 r_args += entries + active_noc
+                hub_sem = (SEM_STATS_READY if d == "fwd" else SEM_STATS_READY_BWD) + 1 if l == 0 else 0
+                r_args += [hub_sem, pack(mc0), pack(mc1), gx * gy - 1]
                 reader_rt[core.x][core.y] = r_args
 
                 is_hub = l == 0
@@ -764,8 +790,6 @@ def create_mesh_program_descriptor(
                 s_args += [len(sends)]
                 for q, part in sends:
                     s_args += [q | (part << 16), walk.chunks(q, part, l, L)]
-                if is_hub:
-                    s_args += active_noc
                 sig.append((d, l, core.x, core.y, tuple(r_args[1:3] + r_args[4:]), tuple(s_args[1:3] + s_args[5:])))
                 if peer is not None:
                     s_args += list(

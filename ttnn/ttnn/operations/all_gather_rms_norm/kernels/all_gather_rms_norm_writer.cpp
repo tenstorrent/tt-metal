@@ -90,10 +90,16 @@ void kernel_main() {
                     rec[FACE + i] = tile[512 + i * FACE];
                 }
                 asm volatile("" ::: "memory");
-                const uint32_t off =
-                    table + p * slot_bytes + (((w.row_start + r) * K + w.m) * nstats + s) * RECORD_BYTES;
-                noc_async_write(rec_addr, get_noc_addr(fwd_hub & 0xFFFF, fwd_hub >> 16, off), RECORD_BYTES);
-                noc_async_write(rec_addr, get_noc_addr(bwd_hub & 0xFFFF, bwd_hub >> 16, off), RECORD_BYTES);
+                // Table layout per (slot, tile-row, stat): [values 0..15 of members 0..K-1][values 16..31 of members
+                // 0..K-1], 64 B each — a gathering worker lands a slot's members as consecutive tile rows with one
+                // contiguous read per half (see the reader).
+                const uint32_t blk = table + p * slot_bytes + ((w.row_start + r) * nstats + s) * K * RECORD_BYTES;
+                for (uint32_t h = 0; h < 2; ++h) {
+                    const uint32_t off = blk + (h * K + w.m) * (RECORD_BYTES / 2);
+                    const uint32_t src = rec_addr + h * (RECORD_BYTES / 2);
+                    noc_async_write(src, get_noc_addr(fwd_hub & 0xFFFF, fwd_hub >> 16, off), RECORD_BYTES / 2);
+                    noc_async_write(src, get_noc_addr(bwd_hub & 0xFFFF, bwd_hub >> 16, off), RECORD_BYTES / 2);
+                }
             }
         }
         noc_async_write_barrier();

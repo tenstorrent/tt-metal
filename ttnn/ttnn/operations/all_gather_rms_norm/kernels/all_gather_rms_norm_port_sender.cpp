@@ -73,9 +73,6 @@ void kernel_main() {
     const uint32_t n_entries = get_arg_val<uint32_t>(a++);
     const uint32_t entries_idx = a;  // per entry: slot | part << 16, chunks
     a += 2 * n_entries;
-    const uint32_t n_notify = is_hub ? n_active : 0;
-    const uint32_t workers_idx = a;
-    a += n_notify;
 
     const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
     volatile tt_l1_ptr uint32_t* stats_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_arrived_addr);
@@ -141,11 +138,8 @@ void kernel_main() {
                 AGRN_ZONE("ps_stats_wait");
                 noc_semaphore_wait_min(stats_arrived, stats_expect_in);
             }
-            const uint32_t sem = get_semaphore(agrn::sem_stats_ready);
-            for (uint32_t i = 0; i < n_notify; ++i) {
-                const uint32_t xy = get_arg_val<uint32_t>(workers_idx + i);
-                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, sem), 1);
-            }
+            // the hub's reader multicasts stats-ready over the program grid (NoC0, see the port reader)
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_stats_done)) = 1;
             if (stats_expect_in > 0) {
                 noc_semaphore_inc(get_noc_addr(stats_arrived_addr), 0u - stats_expect_in);
             }
@@ -176,6 +170,9 @@ void kernel_main() {
             const uint32_t e = get_arg_val<uint32_t>(entries_idx + 2 * k);
             const uint32_t entry_total = get_arg_val<uint32_t>(entries_idx + 2 * k + 1);
             uint32_t entry_sent = 0;
+            if (k == 1) {
+                AGRN_ZONE("ps_relay_start");  // marker
+            }
             for_each_packet(e & 0xFFFF, e >> 16, first_bank, bank_stride, [&](const Packet& pk) {
                 cb_wait_front(cb_chunks, run_pages * (unflushed + 1));
                 const uint32_t src = get_read_ptr(cb_chunks) + unflushed * chunk_bytes;
@@ -231,13 +228,12 @@ void kernel_main() {
         noc_async_writes_flushed();
         conn.close();
     } else if (is_hub) {
-        // receive-only hub (an end of a line): still announces its table complete
+        // receive-only hub (an end of a line): its table is complete once the own records and every expected slot
+        // landed; its reader announces it
+        noc_semaphore_wait_min(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_records_local)), n_active);
         noc_semaphore_wait_min(stats_arrived, stats_expect_in);
-        const uint32_t sem = get_semaphore(agrn::sem_stats_ready);
-        for (uint32_t i = 0; i < n_notify; ++i) {
-            const uint32_t xy = get_arg_val<uint32_t>(workers_idx + i);
-            noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, sem), 1);
-        }
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_stats_done)) = 1;
         if (stats_expect_in > 0) {
             noc_semaphore_inc(get_noc_addr(stats_arrived_addr), 0u - stats_expect_in);
         }

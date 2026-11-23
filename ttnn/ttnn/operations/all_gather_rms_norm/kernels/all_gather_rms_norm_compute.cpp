@@ -40,6 +40,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose_dest.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -137,6 +139,30 @@ constexpr auto beta_in = input(
 using TimesGamma = DestReuseRowBcast<gamma_in, EltwiseBinaryType::ELWMUL, BinaryFpuOp::Mul>;
 using PlusBeta = DestReuseRowBcast<beta_in, EltwiseBinaryType::ELWADD, BinaryFpuOp::Add>;
 
+// ---- transpose_gathered: row-form gather tiles (row j = partition j) -> column form (column j) ----
+// Raw compute API (documented helper bypass): no kernel_lib helper transposes a tile in DEST. copy_tile from the
+// UnpackToDestFp32-tagged cb_gather_rows and transpose_dest keep every fp32 bit (an unpacker / FPU transpose would
+// round the partial sums to tf32 — the LN mean records must stay exact). Base op mechanism (transpose_dest).
+ALWI void transpose_gathered(uint32_t n) {
+    cb_wait_front(cb_gather_rows, n);
+    cb_reserve_back(cb_gathered, n);
+    reconfig_data_format_srca(cb_gather_rows);
+    pack_reconfig_data_format(cb_gathered);
+    for (uint32_t t = 0; t < n; ++t) {
+        tile_regs_acquire();
+        copy_tile_to_dst_init_short(cb_gather_rows);
+        copy_tile(cb_gather_rows, t, 0);
+        transpose_dest_init<DST_ACCUM_MODE>();
+        transpose_dest<DST_ACCUM_MODE>(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_gathered);
+        tile_regs_release();
+    }
+    cb_push_back(cb_gathered, n);
+    cb_pop_front(cb_gather_rows, n);
+}
+
 // ---- RMS pass 1: per tile-row sum_j x[r][j]^2 accumulated in DEST (base op sum_squares_block) ----
 ALWI void sum_squares_block(uint32_t rows, uint32_t cw) {
     constexpr uint32_t batch = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -179,6 +205,7 @@ ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize) {
         ReduceFp32Mode::Fast,
         ReduceAlgorithm::ReduceTile>(ReduceInputBlockShape::of(crt, 1));
     // combine_stats_block (waits for the reader's gather tiles)
+    transpose_gathered(crt * gather_tiles);
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
@@ -295,6 +322,7 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
 
     // ---- combine_stats_block ----
     // gathered per row: [m, T, K] (gather_tiles == 1 for LN), all UnpackToDestFp32 (exact copies)
+    transpose_gathered(crt * nstats);
     cb_wait_front(cb_gathered, crt * nstats);
     cb_wait_front(cb_stat_consts, 1);
     constexpr auto g_m = input(
