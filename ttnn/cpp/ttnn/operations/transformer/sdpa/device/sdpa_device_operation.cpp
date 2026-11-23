@@ -704,19 +704,9 @@ namespace ttnn::prim {
 namespace {
 // LLK 2.0 demo switch: TT_SDPA_LLK2=1 (unset or 0 = the 1.0 kernel). Read at launch so the value lands in SDPAParams
 // and therefore in the program cache key.
-//
-// CI EXPERIMENT BRANCH ONLY (not for the PR): unset means ON here, so a stock model job that cannot set the variable
-// runs every plain SDPA call on the LLK 2.0 kernel; TT_SDPA_LLK2=0 still selects the 1.0 kernel. The choice is logged
-// once per process so the job log shows which kernel ran.
 bool sdpa_llk2_from_env() {
     const char* value = std::getenv("TT_SDPA_LLK2");
-    const bool on = value == nullptr || std::strtoul(value, nullptr, 10) != 0;
-    static const bool logged = [](const bool llk2) {
-        log_warning(tt::LogOp, "SDPA compute kernel for this process: {}", llk2 ? "LLK 2.0 (sdpa.cpp)" : "LLK 1.0");
-        return true;
-    }(on);
-    (void)logged;
-    return on;
+    return value != nullptr && std::strtoul(value, nullptr, 10) != 0;
 }
 }  // namespace
 
