@@ -119,6 +119,18 @@ sfpi_inline void ln_comb_terms_body() {
         sfpi::dst_reg++;
     }
 }
+// normalize: D0 = x, D1 = K, D2 = d, D3 = rstd  ->  D0 = ((x - K) - d) * rstd (one SFPU pass, every face)
+sfpi_inline void ln_center_scale_body() {
+#pragma GCC unroll 0
+    for (int i = 0; i < 8; i++) {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        const sfpi::vFloat k = sfpi::dst_reg[SFPI_TILE];
+        const sfpi::vFloat d = sfpi::dst_reg[2 * SFPI_TILE];
+        const sfpi::vFloat r = sfpi::dst_reg[3 * SFPI_TILE];
+        sfpi::dst_reg[0] = ((x - k) - d) * r;
+        sfpi::dst_reg++;
+    }
+}
 // column 0 of D0 = sum A, D1 = sum B  ->  D0 = d = sum A / W, D1 = rstd = rsqrt(max(sum B / W - d^2, 0) + eps)
 sfpi_inline void ln_comb_finalize_body(const uint32_t inv_w_bits, const uint32_t eps_bits) {
 #pragma GCC unroll 0
@@ -146,6 +158,12 @@ struct LnCombTerms : TernaryOp<LnCombTerms, Dst::D0, Dst::D1, Dst::D3, Dst::D0> 
     static ALWI void init() { square_tile_init(); }
     static ALWI void exec_impl(uint32_t off) {
         MATH((_llk_math_eltwise_unary_sfpu_params_(ln_comb_terms_body, to_u32(Dst::D0) + off, ln_comb_vmode)));
+    }
+};
+struct LnCenterScale : TernaryOp<LnCenterScale, Dst::D0, Dst::D1, Dst::D3, Dst::D0> {
+    static ALWI void init() { square_tile_init(); }
+    static ALWI void exec_impl(uint32_t off) {
+        MATH((_llk_math_eltwise_unary_sfpu_params_(ln_center_scale_body, to_u32(Dst::D0) + off, VectorMode::RC)));
     }
 };
 // In-tile row collapse (column 0 = sum over the 32 columns), exact fp32 SFPU — the reduce helper's
@@ -735,27 +753,31 @@ ALWI void ln_combine_m2(uint32_t n, Post post) {
 }
 
 // normalize_block: (x - K) - d, * rstd [* gamma] [+ beta] over grid(n, cw) at the front of cbx -> cb_out_block
-// (gamma / beta waited by the caller).
-template <uint32_t cbx>
+// (gamma / beta waited by the caller). bcast_in_chain: d / rstd are column-0 tiles (cb_ln_m / cb_inv, the fused
+// combine) broadcast inside the chain (UnaryBcast: the same FPU column broadcast unary_bcast would materialize in
+// cb_mean_b / cb_rstd_b, without the extra pack + unpack per tile); otherwise the materialized broadcasts are read.
+template <uint32_t cbx, bool bcast_in_chain = false>
 ALWI void ln_normalize(uint32_t n, uint32_t cw) {
     constexpr auto xs_in = x_input<cbx>;
     constexpr auto rstd_in = input(cb_rstd_b, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    constexpr auto d_col_in = input(cb_ln_m, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    constexpr auto rstd_col_in = input(cb_inv, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
     using LoadX = CopyTile<xs_in, Dst::D0>;
     using LoadShift = CopyTile<shift_in, Dst::D1>;
-    using LoadMean = CopyTile<mean_b_in, Dst::D1>;  // d = mean - K
-    using LoadRstd = CopyTile<rstd_in, Dst::D1>;
-    using Center = SubBinary<Dst::D0, Dst::D1, Dst::D0>;
-    using Scale = MulBinary<Dst::D0, Dst::D1, Dst::D0>;
+    using LoadMean = std::conditional_t<
+        bcast_in_chain,
+        UnaryBcast<BroadcastDim::Col, d_col_in, Dst::D2>,
+        CopyTile<mean_b_in, Dst::D2>>;  // d = mean - K
+    using LoadRstd = std::
+        conditional_t<bcast_in_chain, UnaryBcast<BroadcastDim::Col, rstd_col_in, Dst::D3>, CopyTile<rstd_in, Dst::D3>>;
     if constexpr (has_gamma && has_beta) {
         eltwise_chain(
             IterationShape::grid(n, cw),
             x_elem<LoadX>(),
             LoadShift{},
-            Center{},
             LoadMean{},
-            Center{},
             LoadRstd{},
-            Scale{},
+            LnCenterScale{},
             TimesGamma{},
             PlusBeta{},
             PackTile<output(cb_out_block)>{});
@@ -764,11 +786,9 @@ ALWI void ln_normalize(uint32_t n, uint32_t cw) {
             IterationShape::grid(n, cw),
             x_elem<LoadX>(),
             LoadShift{},
-            Center{},
             LoadMean{},
-            Center{},
             LoadRstd{},
-            Scale{},
+            LnCenterScale{},
             TimesGamma{},
             PackTile<output(cb_out_block)>{});
     } else {
@@ -776,11 +796,9 @@ ALWI void ln_normalize(uint32_t n, uint32_t cw) {
             IterationShape::grid(n, cw),
             x_elem<LoadX>(),
             LoadShift{},
-            Center{},
             LoadMean{},
-            Center{},
             LoadRstd{},
-            Scale{},
+            LnCenterScale{},
             PackTile<output(cb_out_block)>{});
     }
 }
@@ -804,8 +822,8 @@ ALWI void pop_affine(uint32_t cw) {
 }
 
 // Fused LN combine (gt == 1, fp32 DEST): per tile-row of the transposed gather tiles -> d (col 0) in cb_ln_m and
-// rstd (col 0) in cb_inv, then their column broadcasts cb_mean_b / cb_rstd_b (n tiles each, waited). Pops the
-// gathered tiles. Replaces ln_combine_mean + ln_mean_minus_shift + ln_combine_m2 (three chains, two reduces).
+// rstd (col 0) in cb_inv (n tiles each, waited; the normalize broadcasts them in its chain). Pops the gathered tiles.
+// Replaces ln_combine_mean + ln_mean_minus_shift + ln_combine_m2 (three chains, two reduces).
 constexpr bool ln_fused_comb = DST_ACCUM_MODE && gather_tiles == 1;
 template <bool Enabled = ln_fused_comb>
 ALWI void ln_combine_fused(uint32_t n, uint32_t inv_w_bits, uint32_t eps_bits) {
@@ -824,10 +842,8 @@ ALWI void ln_combine_fused(uint32_t n, uint32_t inv_w_bits, uint32_t eps_bits) {
         PackTile<output(cb_ln_m), Dst::D0>{},
         PackTile<output(cb_inv), Dst::D1>{});
     cb_pop_front(cb_gathered, n * nstats);
-    unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_mean_b)>(IterationShape::tiles(n));
-    unary_bcast<BroadcastDim::Col, input(cb_inv), output(cb_rstd_b)>(IterationShape::tiles(n));
-    cb_wait_front(cb_mean_b, n);
-    cb_wait_front(cb_rstd_b, n);
+    cb_wait_front(cb_ln_m, n);
+    cb_wait_front(cb_inv, n);
 }
 
 ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bits, uint32_t inv_w_bits, bool tail) {
@@ -887,13 +903,18 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
     }
     // ---- normalize_block ----
     wait_affine(cw);
-    ln_normalize<cb_xs>(crt, cw);
+    ln_normalize<cb_xs, ln_fused_comb>(crt, cw);
     pop_affine(cw);
     {
         AGRN_ZONE("c_norm_done");
     }
-    cb_pop_front(cb_rstd_b, crt);
-    cb_pop_front(cb_mean_b, crt);
+    if constexpr (ln_fused_comb) {
+        cb_pop_front(cb_inv, crt);
+        cb_pop_front(cb_ln_m, crt);
+    } else {
+        cb_pop_front(cb_rstd_b, crt);
+        cb_pop_front(cb_mean_b, crt);
+    }
     cb_pop_front(cb_ln_shift, crt);
     cb_pop_front(cb_xs, crt * cw);
 }
