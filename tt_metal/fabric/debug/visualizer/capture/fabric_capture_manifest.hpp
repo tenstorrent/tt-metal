@@ -1,0 +1,123 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include <tt-umd/types/arch.hpp>
+
+#include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_utils.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
+
+namespace tt::tt_fabric::capture {
+
+// The manifest file a capture reads, read into the manifest's model.
+struct ManifestFile {
+    // Path to manifest file
+    std::filesystem::path path;
+    // Hash of manifest file's bytes
+    std::string blake3;
+    // The manifest, as parse_manifest_json reads it.
+    manifest::ManifestFacts facts;
+};
+
+// Reads a manifest file, hashing and parsing the same bytes.
+ManifestFile read_manifest_file(const std::filesystem::path& path);
+
+// Which run a manifest is from: what a capture records about the manifest it read, and names its files by.
+struct ManifestIdentity {
+    std::filesystem::path path;
+    std::string blake3;
+    // The fabric run the manifest is from. It names the run's folder, which the capture's own folder sits in.
+    std::string run_id;
+    // The rank in the whole job that wrote the manifest, and the job's number of ranks.
+    uint32_t mpi_rank = 0;
+    uint32_t world_size = 1;
+    std::string host_name;
+    std::string git_sha;
+
+    bool operator==(const ManifestIdentity&) const = default;
+};
+
+// Collects which run a manifest is from.
+ManifestIdentity collect_manifest_identity(const ManifestFile& manifest_file);
+
+// A register every router core has, such as the wall clock.
+struct CoreRegister {
+    std::string name;
+    uint64_t address = 0;
+
+    bool operator==(const CoreRegister&) const = default;
+};
+
+// Where a region's bytes are, which says how capture reads them.
+enum class RegionKind : uint8_t {
+    // In the core's L1, read with DeviceReader::read_l1.
+    L1,
+    // A 32-bit register, read with DeviceReader::read_register.
+    REGISTER,
+};
+
+// A region the manifest marks multi_sampled, which capture reads in every round as well as in its full read:
+// size_bytes bytes at address. An L1 region's size is its num_elements * element_size; a register is one word.
+struct MultiSampledRegion {
+    RegionKind kind = RegionKind::L1;
+    uint64_t address = 0;
+    uint32_t size_bytes = 0;
+
+    bool operator==(const MultiSampledRegion&) const = default;
+};
+
+// PlannedChip and PlannedRouter are the chips and routers that we get from the manifest. They are "planned" because we
+// need to validate that they exist in the physical cluster we are on, which we do by checking against ClusterFacts.
+
+// A router on a chip this rank owns.
+struct PlannedRouter {
+    // The router's path, such as "M0/C7/E0".
+    std::string path;
+    uint32_t eth_chan = 0;
+    CoreXY virtual_core;
+    // Every stream register the manifest names for the router, by address: ascending, each once.
+    std::vector<uint64_t> stream_register_addresses;
+    // The router's own regions the manifest marks multi_sampled, by address: ascending, each once.
+    std::vector<MultiSampledRegion> multi_sampled_regions;
+
+    bool operator==(const PlannedRouter&) const = default;
+};
+
+// A chip this rank owns. Contains its routers.
+struct PlannedChip {
+    // The chip's path, such as "M0/C7".
+    std::string path;
+    uint64_t asic_id = 0;
+    std::vector<PlannedRouter> routers;
+
+    bool operator==(const PlannedChip&) const = default;
+};
+
+// What a capture reads, from one rank's manifest: which cores, and where to read from in each core.
+struct CapturePlan {
+    // The architecture the addresses below are for. A chip of another architecture isn't read.
+    tt::ARCH arch = tt::ARCH::Invalid;
+    // The L1 of the Ethernet core a router runs on: l1_size_bytes bytes from l1_address.
+    uint64_t l1_address = 0;
+    uint32_t l1_size_bytes = 0;
+    // The arch areas the manifest marks multi_sampled, the same on every router core, in the manifest's order.
+    std::vector<MultiSampledRegion> multi_sampled_arch_areas;
+    // In the order they're read (manifest::k_core_registers): the low wall clock word latches the high one.
+    std::vector<CoreRegister> core_registers;
+    // The chips this rank owns, in the manifest's order. Other ranks' chips are left out.
+    std::vector<PlannedChip> chips;
+
+    bool operator==(const CapturePlan&) const = default;
+};
+
+// Collects what a capture needs to read from hardware from a manifest's model.
+CapturePlan collect_capture_plan(const manifest::ManifestFacts& facts);
+
+}  // namespace tt::tt_fabric::capture
