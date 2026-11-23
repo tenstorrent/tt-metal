@@ -5,8 +5,9 @@
 // Single-device tests for the online-softmax merge that ring attention runs after every ring
 // step (ttml::ops::distributed::detail::online_softmax_merge), against a float64 host reference.
 // Covers the "no contribution" lse of -inf on either side, lse values large enough that a naive
-// log(exp(a) + exp(b)) overflows FP32, large gaps between the two lse values, and a full ring of
-// merges compared with the direct softmax-weighted combination.
+// log(exp(a) + exp(b)) overflows FP32, large gaps between the two lse values, outputs of opposite
+// sign whose difference overflows FP32, and a full ring of merges compared with the direct
+// softmax-weighted combination.
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
@@ -231,6 +232,24 @@ double accum_error_over_bound(const xt::xarray<float>& actual, const MergeResult
     return worst;
 }
 
+// "No contribution" rows must be passed through untouched, bit for bit.
+void expect_skipped_rows_unchanged(
+    const xt::xarray<float>& accum, const xt::xarray<float>& lse, const MergeInputs& in) {
+    const auto& shape = accum.shape();
+    const size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3];
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t h = 0; h < H; ++h) {
+            for (size_t s = kSkippedStep; s < S; s += kRowKindCycle) {
+                ASSERT_EQ(lse(b, h, s, 0), in.running_lse(b, h, s, 0)) << "b " << b << " h " << h << " s " << s;
+                for (size_t d = 0; d < D; ++d) {
+                    ASSERT_EQ(accum(b, h, s, d), in.accum(b, h, s, d))
+                        << "b " << b << " h " << h << " s " << s << " d " << d;
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 // Merge shapes. kTwoCoreGroups stands for S = two_core_group_seq_len(0): each core then holds
@@ -296,19 +315,42 @@ TEST_P(RingAttentionMergeTest, SingleMergeMatchesReference) {
     // lse up to ~200 here: both errors are measured relative to its magnitude.
     EXPECT_LE(accum_over_bound, 1.0);
     EXPECT_LT(lse_err.max_rel, 1.0e-6);
+    expect_skipped_rows_unchanged(accum, lse, in);
+}
 
-    // "No contribution" rows must be passed through untouched, bit for bit.
-    for (uint32_t b = 0; b < B; ++b) {
-        for (uint32_t h = 0; h < H; ++h) {
-            for (uint32_t s = kSkippedStep; s < S; s += kRowKindCycle) {
-                ASSERT_EQ(lse(b, h, s, 0), in.running_lse(b, h, s, 0)) << "b " << b << " h " << h << " s " << s;
-                for (uint32_t d = 0; d < D; ++d) {
-                    ASSERT_EQ(accum(b, h, s, d), in.accum(b, h, s, d))
-                        << "b " << b << " h " << h << " s " << s << " d " << d;
-                }
-            }
+// Accumulator and step output of opposite sign, both above 2^127 in magnitude: O_i - O overflows
+// FP32, while every exact merged value stays finite.
+TEST_P(RingAttentionMergeTest, LargeOppositeSignOutputsStayFinite) {
+    const auto [B, H, S_param, D] = GetParam();
+    const uint32_t S = resolve_seq_len(S_param);
+    MergeInputs in = make_inputs(B, H, S, D, /*seed=*/11U);
+    const float big = std::ldexp(1.0F, 127);
+    for (size_t i = 0; i < in.accum.size(); ++i) {
+        const float sign = i % 2U == 0U ? 1.0F : -1.0F;
+        if (in.accum.flat(i) != 0.0F) {
+            in.accum.flat(i) = sign * big * (1.0F + 0.5F * std::abs(in.accum.flat(i)));
         }
+        in.step_output.flat(i) = -sign * big * (1.0F + 0.5F * std::abs(in.step_output.flat(i)));
     }
+    DeviceMergeInputs dev = upload(in);
+    const MergeResult ref = reference_merge(in);
+
+    ttml::ops::distributed::detail::online_softmax_merge(
+        dev.accum, dev.running_lse, dev.step_output, dev.intermediates);
+
+    const auto accum = ttml::core::to_xtensor<float>(dev.accum);
+    const auto lse = ttml::core::to_xtensor<float>(dev.running_lse);
+    MergeResult scaled_ref = ref;
+    scaled_ref.accum /= big;
+    const xt::xarray<float> scaled_accum = accum / big;
+    const ErrorStats accum_err = compare(scaled_accum, scaled_ref.accum);
+    const double accum_over_bound = accum_error_over_bound(scaled_accum, scaled_ref);
+    fmt::print(
+        "[merge, |O| > 2^127] accum / 2^127 max_abs {:.3e} (error/bound {:.2f})\n",
+        accum_err.max_abs,
+        accum_over_bound);
+    EXPECT_LE(accum_over_bound, 1.0);
+    expect_skipped_rows_unchanged(accum, lse, in);
 }
 
 // A full ring of merges starting from (O = 0, L = -inf), some steps skipped, against the direct
