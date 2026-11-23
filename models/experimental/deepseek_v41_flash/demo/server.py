@@ -272,6 +272,7 @@ from models.experimental.deepseek_v4_flash.demo.server import (
     _Scheduler,
     _SlotPool,
     _text_content,
+    _timed,
     _Turn,
     build_parser,
     check_args,
@@ -1639,7 +1640,7 @@ class _EngramPrefetch:
         if found is None:
             return None
         # The rows were gathered against a copy. Extend the live session the way the lookup would have.
-        self.lookup.hash_session(self.slot, chunk_ids.reshape(1, -1), int(start))
+        self.lookup.extend_history(self.slot, chunk_ids.reshape(1, -1), int(start))
         return found
 
     def run(
@@ -1757,14 +1758,18 @@ class _PrefillFirst(_Scheduler):
     """
 
     def _admit(self, turn: _Turn) -> None:
+        t0 = time.perf_counter()
+        times = turn.admit_times
         if isinstance(self.server.prefiller, _RemotePrefiller):
             # Admission may reset or evict the slot of a push whose turn ended: let its writes land first.
-            self.server.prefiller.reap(block=True)
+            with _timed(times, "reap"):
+                self.server.prefiller.reap(block=True)
         super()._admit(turn)
         if turn in self._active:
             if self.server.prefiller is not None and getattr(self.server, "prefix_cache", None) is not None:
                 user = self.engine.users[turn.slot]
-                self._remember_prefix(user, turn)
+                with _timed(times, "remember_prefix"):
+                    self._remember_prefix(user, turn)
                 # For disaggregated prefill, if there is an uncached shared history prefix just below
                 # device_prefill (leaving a short tail <= 1024 tokens), trim device_prefill to the aligned
                 # boundary before it so the first request populates prefix_cache for subsequent requests.
@@ -1784,8 +1789,15 @@ class _PrefillFirst(_Scheduler):
                             max_trim_tail = 2048 if getattr(self.engine.model, "verify_rows", 1) > 1 else 1024
                             if full_len - (user.pos + aligned_h) <= max_trim_tail:
                                 turn.device_prefill = aligned_h
-            self._send_ahead(turn)
-            self._prefetch_engram(turn)
+            with _timed(times, "send"):
+                self._send_ahead(turn)
+            with _timed(times, "engram_prefetch"):
+                self._prefetch_engram(turn)
+            logger.info(
+                f"user {turn.user_key!r}: {len(turn.ids)}-token prompt admitted in "
+                f"{1e3 * (time.perf_counter() - t0):.1f} ms: "
+                + ", ".join(f"{stage} {1e3 * seconds:.1f}" for stage, seconds in times.items())
+            )
 
     def _send_ahead(self, turn: _Turn) -> None:
         """Send the prompt a remote prefill takes to the prefill server now, from a thread of its own
@@ -1807,7 +1819,9 @@ class _PrefillFirst(_Scheduler):
             if turn.cancelled.is_set():
                 raise _PromptStopped()
 
-        turn.remote_fetch = prefiller.start(user, turn.ids[: turn.device_prefill], progress, self._wake)
+        turn.remote_fetch = prefiller.start(
+            user, turn.ids[: turn.device_prefill], progress, self._wake, times=turn.admit_times
+        )
 
     @staticmethod
     def _fetching(turn: _Turn) -> bool:
@@ -3833,26 +3847,38 @@ class _RemotePrefiller:
             )
         return list(user.tokens[: user.pos]) + list(ids), user.pos
 
-    def start(self, user: UserSession, ids: list[int], on_progress=None, wake: threading.Condition | None = None):
+    def start(
+        self,
+        user: UserSession,
+        ids: list[int],
+        on_progress=None,
+        wake: threading.Condition | None = None,
+        times: dict[str, float] | None = None,
+    ):
         """Send ``ids`` (``user``'s prompt from its position on) now, from a thread of its own; :meth:`run` for the
         same user and ids loads the reply. Replaces (aborts) a prompt of ``user``'s still in flight.
 
         In push mode this runs on the scheduler thread: it reserves ``user``'s pages (a fresh prompt rewinds the
         session first) before sending. None when they cannot be reserved: :meth:`run` then pushes synchronously
-        and reports the error to the turn."""
+        and reports the error to the turn. ``times`` gets the seconds of those steps (``send.*``)."""
+        times = {} if times is None else times
         whole, have = self._whole(user, ids)
         with self._lock:
             old = self._fetches.pop(user.index, None)
         if old is not None:
-            self.forget(user, old)
+            with _timed(times, "send.forget"):
+                self.forget(user, old)
         targets = None
         if self.push:
-            self.reap(block=True)
+            with _timed(times, "send.reap"):
+                self.reap(block=True)
             model = self.engine.model
             try:
                 if not have:
-                    model.reset_session(user.sid)
-                targets = model.remote_commit_targets(user.sid, len(whole), self.ring_layers, start=have)
+                    with _timed(times, "send.reset"):
+                        model.reset_session(user.sid)
+                with _timed(times, "send.targets"):
+                    targets = model.remote_commit_targets(user.sid, len(whole), self.ring_layers, start=have)
             except Exception as exc:  # noqa: BLE001 - run() retries and reports it to the turn
                 logger.warning(f"user {user.index}: not pushed ahead ({type(exc).__name__}: {exc})")
                 return None
@@ -3991,9 +4017,10 @@ class _RemotePrefiller:
         # The reply starts at base: have, or 0 when the server refused have and sent every entry.
         base = states["base"]
         t_commit = time.perf_counter()
+        load_times: dict[str, float] = {}
         try:
             if self.push:
-                committed = model.finish_remote_commit(user.sid, ids=whole)
+                committed = model.finish_remote_commit(user.sid, ids=whole, times=load_times)
             else:
                 if not base:
                     model.reset_session(user.sid)
@@ -4024,7 +4051,9 @@ class _RemotePrefiller:
             f"queued {states['queued']:.2f}s, "
             f"transfer {states['bytes'] / 1e6:.1f} MB ({net_seconds:.2f}s RTT, "
             f"{'sent ahead, ' if job is not None else ''}{wait_seconds:.2f}s blocking the scheduler), "
-            f"KV load {1e3 * commit_seconds:.1f} ms, "
+            f"KV load {1e3 * commit_seconds:.1f} ms"
+            + (f" ({', '.join(f'{k} {1e3 * v:.1f}' for k, v in load_times.items())})" if load_times else "")
+            + ", "
             f"drain {1e3 * drain_seconds:.1f} ms ({drained} step(s)), seat {1e3 * seat_seconds:.1f} ms"
         )
         return None

@@ -441,6 +441,18 @@ class EngramHostLookup:
         with self._lock:
             self._histories[slot][:, : history.shape[1]] = history
 
+    def _compressed(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """``input_ids`` ``[B, L]`` as the history holds them: through the compressed token map, image-span ids dead."""
+        text = input_ids < self.vocab_size
+        return torch.where(text, self.hash.token_map[torch.where(text, input_ids, 0)], self.hash.DEAD)
+
+    def extend_history(self, slot: int, input_ids: torch.Tensor, start_pos: int) -> None:
+        """Leave session slot ``slot``'s history as :meth:`hash_session` would, without computing the hashes: a
+        prefill commit only needs the history the next decode step hashes against."""
+        compressed = self._compressed(input_ids)
+        with self._lock:
+            self._histories[slot][:, start_pos : start_pos + input_ids.shape[1]] = compressed
+
     def _hash(self, input_ids: torch.Tensor, start_pos: int) -> torch.Tensor:
         """``self.hash`` with image-span tokens (ids past the vocabulary, see :mod:`.vision`) cached as dead, so no
         n-gram spans them -- the reference's ``token_mask``. Call with ``_lock`` held."""

@@ -3229,11 +3229,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
         if ids is not None and self._engram_lookup is not None:
-            id_list = list(ids)
-            engram_chunk = 16384
-            for offset in range(start, total, engram_chunk):
-                piece = id_list[offset : offset + engram_chunk]
-                self._engram_lookup.hash_session(slot, torch.tensor([piece], dtype=torch.long), offset)
+            self._engram_lookup.extend_history(slot, torch.tensor([list(ids)[start:total]], dtype=torch.long), start)
         note("host prefill state committed")
         return total
 
@@ -3377,12 +3373,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
         session_id: int,
         ids: Optional[Sequence[int]] = None,
         progress: Optional[Callable[[str], None]] = None,
+        times: Optional[dict] = None,
     ) -> int:
         """Complete a commit whose pages a remote prefill server wrote (:meth:`remote_commit_targets`), once its
         writes have landed: zero the rings it did not write, move the session to the prefilled length, fill its
         slot of ``dense_kv`` and (``ids``: the prompt's ids) extend the Engram history, leaving the session as
-        :meth:`commit_host_prefill_state` would. Returns the prefilled length."""
+        :meth:`commit_host_prefill_state` would. Returns the prefilled length. ``times`` gets the seconds of
+        each of those steps (``rings``, ``dense``, ``sync``, ``engram``)."""
         note = progress or (lambda message: None)
+        times = {} if times is None else times
+        t0 = time.perf_counter()
         if session_id not in self._remote_commits:
             raise KeyError(f"session {session_id} has no remote commit in flight")
         start, total, ring_layers = self._remote_commits.pop(session_id)
@@ -3411,17 +3411,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ttnn.fill_cache(kv, zero_rings[dh], 0, update_idx=slot * w)
             for zeros in zero_rings.values():
                 ttnn.deallocate(zeros)
+        t1 = time.perf_counter()
 
         self._session_pos[session_id] = total
         self._sync_dense_entries(session_id)
+        t2 = time.perf_counter()
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
+        t3 = time.perf_counter()
         if ids is not None and self._engram_lookup is not None:
-            id_list = list(ids)
-            engram_chunk = 16384
-            for offset in range(start, total, engram_chunk):
-                piece = id_list[offset : offset + engram_chunk]
-                self._engram_lookup.hash_session(slot, torch.tensor([piece], dtype=torch.long), offset)
+            self._engram_lookup.extend_history(slot, torch.tensor([list(ids)[start:total]], dtype=torch.long), start)
+        t4 = time.perf_counter()
+        times.update({"rings": t1 - t0, "dense": t2 - t1, "sync": t3 - t2, "engram": t4 - t3})
         note("remote prefill state committed")
         return total
 

@@ -1340,6 +1340,16 @@ class _Prefiller:
         return row
 
 
+@contextlib.contextmanager
+def _timed(times: dict[str, float], stage: str):
+    """Add the seconds the ``with`` body takes to ``times[stage]``."""
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        times[stage] = times.get(stage, 0.0) + time.perf_counter() - t0
+
+
 class _Turn:
     """One in-flight chat turn: the request's decode state plus its output channel.
 
@@ -1407,6 +1417,7 @@ class _Turn:
         self.capture_at: int | None = None  # snapshot the session once it is idle at this position
         self.rebuilt = False  # a continued conversation rewound and re-prefilled whole, since that was faster
         self.t_replay = 0.0  # when this turn's prompt tokens started going through decode
+        self.admit_times: dict[str, float] = {}  # seconds of each admission stage (see _timed)
         self.next_id: int | None = None  # produced but not yet fed back
         self.t_read = 0.0  # when this turn's latest output came off the socket
         self.t_prefill_out = 0.0  # when its traced prefill's logits came back, until its first decode output does
@@ -1955,34 +1966,41 @@ class _Scheduler:
         try:
             # Before the request's options touch the slot: what it holds is the previous conversation's.
             new_conversation = not cut_short and not _continues(turn.body["messages"], user.messages)
+            times = turn.admit_times
             if new_conversation:
-                self._offload(turn.slot, turn.previous_owner)
+                with _timed(times, "offload"):
+                    self._offload(turn.slot, turn.previous_owner)
             if turn.restore is not None:
-                if self._restore(user, turn):
-                    cut_short = new_conversation = False
+                with _timed(times, "restore"):
+                    if self._restore(user, turn):
+                        cut_short = new_conversation = False
             if new_conversation:
                 user.thinking_mode = self.server.thinking_mode
                 user.reasoning_effort = self.server.reasoning_effort
             self.server._apply_options(user, turn.body)
             if cut_short and not self._resume(user, turn):
                 user.reset()
-            if not turn.resumed_from and (
-                cut_short or _continues(turn.body["messages"], user.messages) or not self._resume(user, turn)
-            ):
-                continuing = self.server._sync_messages(user, turn.body["messages"])
-                if continuing:
-                    user.messages.append(turn.message)
-                    turn.ids = self.server._render_ids(user, include_assistant=False)
-                else:
-                    user.messages = user.messages + [turn.message]
-                    user._next_render = 0
-                    turn.ids = self.server._render_ids(user, include_assistant=True)
-            if continuing or not self._share_prefix(user, turn):
-                self._choose_feed(user, turn, continuing)
-            if self.server.prefiller is None:
-                self._remember_prefix(user, turn)
-            self._make_room(len(turn.ids), turn.slot)
-            self._check_capacity(user, turn.ids)
+            with _timed(times, "render"):
+                if not turn.resumed_from and (
+                    cut_short or _continues(turn.body["messages"], user.messages) or not self._resume(user, turn)
+                ):
+                    continuing = self.server._sync_messages(user, turn.body["messages"])
+                    if continuing:
+                        user.messages.append(turn.message)
+                        turn.ids = self.server._render_ids(user, include_assistant=False)
+                    else:
+                        user.messages = user.messages + [turn.message]
+                        user._next_render = 0
+                        turn.ids = self.server._render_ids(user, include_assistant=True)
+            with _timed(times, "prefix"):
+                if continuing or not self._share_prefix(user, turn):
+                    self._choose_feed(user, turn, continuing)
+                if self.server.prefiller is None:
+                    self._remember_prefix(user, turn)
+            with _timed(times, "make_room"):
+                self._make_room(len(turn.ids), turn.slot)
+            with _timed(times, "capacity"):
+                self._check_capacity(user, turn.ids)
         except Exception as e:  # noqa: BLE001 - reported to the client, the server stays up
             if cut_short:
                 self._cut_short.add(turn.slot)
