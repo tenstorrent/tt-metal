@@ -71,8 +71,12 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
                 }
             }
             tile_regs_commit();
-            // Waits for the math thread like tile_regs_wait.
-            apply_activation_from_pack<KernelActivation::SILU>(group);
+            // Waits for the math thread like tile_regs_wait. q, k and v are bf16, so SiLU runs BF16-grade.
+            pack_sfpu_begin();
+            for (uint32_t i = 0; i < group; ++i) {
+                silu_tile_pack</*is_fp32_dest_acc_en=*/false>(i);
+            }
+            pack_sfpu_end();
             for (uint32_t i = 0; i < group; ++i) {
                 pack_tile(i, dfb::output);
             }

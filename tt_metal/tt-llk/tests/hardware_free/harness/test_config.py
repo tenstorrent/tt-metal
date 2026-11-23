@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import pytest
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import COMPRESSED_META
+from helpers.test_variant_parameters import COMPRESSED_META, LOOP_FACTOR, TILE_COUNT
 
 SEARCH_DIR_STATE = (
     "EXTRA_INCLUDE_PREPEND",
@@ -92,6 +92,26 @@ def test_compressed_metadata_words_change_the_variant_id():
     assert compressed_variant_id(bytes.fromhex("0100000002000000")) != (
         compressed_variant_id(bytes.fromhex("0300000004000000"))
     )
+
+
+def test_runtime_parameter_order_changes_the_variant_id():
+    """build.h compiles the RuntimeParams layout in, and the host packs values in that order.
+
+    Same runtimes in another order is another ELF: sharing one makes the kernel read each
+    field from its neighbour's slot (test_hadamard read TILE_CNT=8 as LOOP_FACTOR).
+    """
+
+    def runtime_variant_id(runtimes):
+        configuration = TestConfig(DRIVER, runtimes=runtimes, skip_build_header=True)
+        configuration.generate_variant_hash()
+        return configuration.variant_id
+
+    assert runtime_variant_id([LOOP_FACTOR(1), TILE_COUNT(8)]) != runtime_variant_id(
+        [TILE_COUNT(8), LOOP_FACTOR(1)]
+    )
+    assert runtime_variant_id([TILE_COUNT(8), LOOP_FACTOR(1)]) == runtime_variant_id(
+        [TILE_COUNT(1), LOOP_FACTOR(4)]
+    ), "runtime values alone must keep sharing one ELF"
 
 
 # Stand-ins for the in-tree ``-I`` flags ``setup_compilation_options`` installs.
