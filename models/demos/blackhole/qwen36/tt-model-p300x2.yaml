@@ -140,7 +140,7 @@ serve_profiles:
         prefill_gang_tokens: 2048        # prefill gangs; 0 = the interleaved (TTFT-first) policy
         sample_on_device_mode: decode_only   # the rows-mode hub feed
   - name: batch-dflash2
-    description: 1-32 concurrent requests on the resident engine with DFlash2 speculative decoding while at most 8 greedy requests are live (its tokens equal greedy decoding except at near-ties) (8 users x 4 verify rows, 3 drafts per verify), and the 32-row batch decode otherwise (more users, or any sampled / penalized request), up to 256K context each, one shared KV pool. Logprobs and structured output are not available on this profile (use batch).
+    description: 1-32 concurrent requests on the resident engine with DFlash2 speculative decoding for up to 8 greedy requests when it pays (8 users x 4 verify rows, 3 drafts per verify; greedy output as batch's except at bf16 near-ties), and the 32-row batch decode otherwise (more users, any sampled / penalized request, low acceptance), up to 256K context each, one shared KV pool, prefix caching as batch. Logprobs and structured output are not available on this profile (use batch).
     max_num_seqs: 32
     env:
       TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=qwen36_resident.vllm_adaptive:Qwen36ResidentAdaptiveForCausalLM"
@@ -171,28 +171,34 @@ card:
   description: >-
     [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) on a P300x2 (4 Blackhole chips) with vLLM, on the
     resident decode engine: one persistent program per chip per decode step. Profiles: 1 to 32 users in one decode
-    launch with a shared KV pool and prefix caching in host memory (the default), and one user with lossless
-    [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding (up to 256K context).
+    launch with a shared KV pool and prefix caching in host memory (the default); the same with
+    [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding for up to 8 greedy users; and
+    one user with lossless DFlash2 speculative decoding (up to 256K context).
   quickstart: |
     ### At a glance
     - Weights: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) @ `1d4bf0f`; drafter
       [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) @ `dedf8df`
     - Hardware: P300x2 (QuietBox 2), one (1, 4) Blackhole mesh
-    - Profiles: `batch` (default, 1-32 users), `single-user`
+    - Profiles: `batch` (default, 1-32 users), `batch-dflash2` (1-32 users, DFlash2 while at most 8 greedy users are
+      live), `single-user`
     - `single-user` is **greedy only**: every request is decoded greedily (the server logs one warning for a request with
       temperature > 0). Speculation is lossless against the model's own greedy output; tokens can differ from plain
       decoding at bf16 near-ties.
     - DFlash2 helps most on short and medium prompts. On long, hard-to-predict text the gain shrinks to about 1.3x over
       plain decoding; it stayed faster at every length measured (32K to 250K).
-    - New in this release (2026-11-22): `batch` runs 1 to 32 users on the resident engine in one decode launch,
-      replacing the 16-user `multi-user` profile and the previous ttnn-path `batch`.
+    - New in this release (2026-11-23): the `batch-dflash2` profile (below); `batch`'s prefix cache no longer slows
+      down a burst of new prompts (the 2026-11-22 release stored each one's prefix on its own: 2K-prompt c32 TTFT
+      20.4 s, now 8.0 s).
 
     ### Which profile
     - One user, greedy (temperature 0): `single-user`.
     - Sampling, or 2 to 32 users: `batch` (one user on it gets about 60 t/s/u).
+    - Mostly greedy requests, a few at a time (1-4), without logprobs or structured output: `batch-dflash2` (one user
+      on natural text gets about 92 t/s/u vs 61 on `batch`, four about 66 vs 56; sampled requests and more users run
+      as on `batch`).
     - If the time to the first token matters more than decode speed: `batch` with the TTFT-first option below.
 
-    ### Get the drafter (`single-user`)
+    ### Get the drafter (`single-user`, `batch-dflash2`)
     ```bash
     hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4
     ```
@@ -200,6 +206,7 @@ card:
     ### Serve
     ```bash
     tt-model serve changh95/qwen3.8-27b-p300x2                                 # default profile: batch
+    tt-model serve changh95/qwen3.8-27b-p300x2 --profile batch-dflash2
     tt-model serve changh95/qwen3.8-27b-p300x2 --profile single-user
     tt-model profiles changh95/qwen3.8-27b-p300x2
     ```
@@ -236,6 +243,27 @@ card:
     | 16 | 36 / 578 | 30 / 485 | 22 / 349 |
     | 32 | 22 / 706 | 18 / 575 | 12 / 393 |
 
+    ### `batch-dflash2`: speculative decoding for a few greedy users
+    The `batch` engine plus a second, speculating build of the same model in the same process (shared weights and KV
+    pool of 1,376,000 tokens): 8 users x 4 verify rows, 3 DFlash2 drafts per verify. Every prompt prefills as on
+    `batch` (same chunks, prefill gangs and prefix cache). A greedy request (temperature 0, no penalties) moves into
+    the speculating build after its first decode step, when that pays: the move re-runs the drafter's 2,048-token
+    window while every live user waits, so it is skipped when too few tokens are expected to be left (an estimate
+    from finished requests' lengths) or too many users would wait. The server then measures both kinds of step and
+    goes back to plain steps for everyone when speculation stops paying (more than 8 users, any sampled or penalized
+    request, or low draft acceptance). Greedy output can differ from `batch`'s at bf16 near-ties: in the check
+    below, 3 of 8 256-token answers matched `batch` exactly and the others took an equally fluent different word after
+    50-230 tokens.
+
+    Served, natural-text prompts, greedy, 256 tokens (2026-11-23):
+
+    | users | `batch-dflash2` t/s/u | `batch` t/s/u |
+    |---|---|---|
+    | 1 | 92 | 61 |
+    | 2 | 82 | 59 |
+    | 4 | 66 | 56 |
+    | 8 | 46 | 51 |
+
     ### Prefill and decode on `batch`, and the TTFT-first option
     A step on this engine either prefills or decodes, never both, so prefill time that runs while a user decodes is a
     pause in that user's tokens. `batch` prefills the prompts that are waiting together, in one pipelined pass, before
@@ -254,14 +282,23 @@ card:
     | `single-user` | 1 | 128 / 128 | 124.0 | 142.1 | 0.14 s |
     | `single-user` | 1 | 8192 / 128 | 73.5 | 175.2 | 1.02 s |
     | `single-user` | 1 | 32768 / 128 | 29.8 | 209.0 | 3.69 s |
-    | `batch` | 1 | 128 / 128 | 55.0 | 60.0 | 0.21 s |
-    | `batch` | 8 | 128 / 128 | 317.3 | 49.7 | 0.67 s |
-    | `batch` | 16 | 128 / 128 | 448.2 | 35.9 | 1.03 s |
-    | `batch` | 32 | 128 / 128 | 542.7 | 21.9 | 1.75 s |
-    | `batch` | 32 | 128 / 1024 | 661.7 | 21.4 | 1.78 s |
-    | `batch` | 32 | 2048 / 128 | 298.2 | 20.9 | 7.67 s |
-    | `batch` | 32 | 8192 / 1024 | 401.1 | 17.7 | 23.94 s |
-    | `batch` | 1 | 32768 / 128 | 21.8 | 57.0 | 3.64 s |
+    | `batch` | 1 | 128 / 128 | 55.4 | 60.6 | 0.21 s |
+    | `batch` | 8 | 128 / 128 | 319.2 | 50.2 | 0.68 s |
+    | `batch` | 16 | 128 / 128 | 449.0 | 36.1 | 1.04 s |
+    | `batch` | 32 | 128 / 128 | 541.8 | 21.9 | 1.76 s |
+    | `batch` | 32 | 128 / 1024 | 662.8 | 21.5 | 1.77 s |
+    | `batch` | 32 | 2048 / 128 | 291.1 | 20.9 | 7.99 s |
+    | `batch` | 32 | 8192 / 1024 | 399.0 | 17.8 | 24.56 s |
+    | `batch` | 1 | 32768 / 128 | 18.9 | 57.6 | 4.58 s |
+    | `batch-dflash2`, greedy | 1 | 128 / 128 | 63.1 | 69.7 | 0.21 s |
+    | `batch-dflash2`, greedy | 2 | 128 / 128 | 105.9 | 65.5 | 0.37 s |
+    | `batch-dflash2`, greedy | 4 | 128 / 128 | 163.0 | 50.6 | 0.46 s |
+    | `batch-dflash2`, greedy | 8 | 128 / 128 | 255.0 | 38.1 | 0.52 s |
+    | `batch-dflash2`, greedy | 8 | 2048 / 128 | 197.1 | 48.5 | 2.57 s |
+    | `batch-dflash2`, greedy | 1 | 32768 / 128 | 17.1 | 44.2 | 4.62 s |
+
+    `batch-dflash2` with the default sampling runs as `batch` (within 2% in every row above). Its greedy rows use
+    random-token prompts, on which drafts are accepted less than on natural text (see the table above).
 
   performance: |
     | profile | ISL | OSL | concurrency | N | TTFT (ms) | prefill tok/s/u | decode tok/s/u | E2EL (s) |
@@ -270,34 +307,56 @@ card:
     | `single-user` | 8,192 | 128 | 1 | 2 | 1,015 | 8,070 | 175.2 | 1.7 |
     | `single-user` | 32,768 | 128 | 1 | 1 | 3,685 | 8,891 | 209.0 | 4.3 |
     | `single-user` | 131,072 | 128 | 1 | 1 | 21,710 | 6,037 | 93.9 | 23.1 |
-    | `batch` | 128 | 128 | 1 | 4 | 210 | 611 | 60.0 | 2.3 |
-    | `batch` | 128 | 128 | 8 | 32 | 672 | 190 | 49.7 | 3.2 |
-    | `batch` | 128 | 128 | 16 | 64 | 1,029 | 124 | 35.9 | 4.6 |
-    | `batch` | 128 | 128 | 32 | 128 | 1,749 | 73 | 21.9 | 7.5 |
-    | `batch` | 128 | 1,024 | 32 | 64 | 1,779 | 72 | 21.4 | 49.5 |
-    | `batch` | 8,192 | 1,024 | 32 | 64 | 23,940 | 342 | 17.7 | 81.7 |
-    | `batch` | 32,768 | 128 | 1 | 1 | 3,641 | 9,000 | 57.0 | 5.9 |
+    | `batch` | 128 | 128 | 1 | 4 | 213 | 602 | 60.6 | 2.3 |
+    | `batch` | 128 | 128 | 8 | 32 | 675 | 190 | 50.2 | 3.2 |
+    | `batch` | 128 | 128 | 16 | 64 | 1,040 | 123 | 36.1 | 4.6 |
+    | `batch` | 128 | 128 | 32 | 128 | 1,764 | 73 | 21.9 | 7.6 |
+    | `batch` | 128 | 1,024 | 32 | 64 | 1,767 | 72 | 21.5 | 49.4 |
+    | `batch` | 2,048 | 128 | 32 | 64 | 7,988 | 256 | 20.9 | 14.1 |
+    | `batch` | 8,192 | 1,024 | 32 | 64 | 24,555 | 334 | 17.8 | 82.1 |
+    | `batch` | 32,768 | 128 | 1 | 1 | 4,578 | 7,157 | 57.6 | 6.8 |
+    | `batch-dflash2` | 128 | 128 | 1 | 4 | 200 | 640 | 60.5 | 2.3 |
+    | `batch-dflash2` | 128 | 128 | 8 | 32 | 688 | 186 | 50.1 | 3.2 |
+    | `batch-dflash2` | 128 | 128 | 32 | 128 | 1,765 | 73 | 21.9 | 7.6 |
+    | `batch-dflash2` | 2,048 | 128 | 32 | 64 | 8,051 | 254 | 20.9 | 14.1 |
+    | `batch-dflash2` | 8,192 | 1,024 | 32 | 64 | 24,724 | 331 | 17.8 | 82.2 |
+    | `batch-dflash2`, greedy | 128 | 128 | 1 | 4 | 208 | 615 | 69.7 | 2.0 |
+    | `batch-dflash2`, greedy | 128 | 128 | 4 | 16 | 458 | 279 | 50.6 | 3.0 |
+    | `batch-dflash2`, greedy | 128 | 128 | 8 | 32 | 521 | 246 | 38.1 | 3.9 |
+    | `batch-dflash2`, greedy | 2,048 | 128 | 8 | 16 | 2,575 | 795 | 48.5 | 5.2 |
 
-    Means of `vllm bench serve` runs (random prompts, ignore_eos, the model's default sampling; `single-user`
-    greedy) on a P300x2 with chip clocks logged: `single-user` 2026-11-20 (median 1350 MHz), `batch` 2026-11-22
-    (median 1343 MHz, at most 61 °C). `single-user` decode speed follows how predictable the text is (DFlash2
-    acceptance), so it varies by prompt. Accuracy: teacher-forced on natural text, the `batch` engine's next-token
-    NLL / top-1 matched the previous release's within noise (1.5269 / 0.6548 vs 1.5278 / 0.6562 at 128-384 tokens).
+    Means of `vllm bench serve` runs (random prompts, ignore_eos, the model's default sampling; `single-user` greedy) on
+    a P300x2 with chip clocks logged: `single-user` 2026-11-20 (median 1350 MHz), `batch` and `batch-dflash2` 2026-11-23
+    (median 1350 MHz, at most 61 °C; prefix cache on, a different random prompt per row). `single-user` decode speed
+    follows how predictable the text is (DFlash2 acceptance), so it varies by prompt. Accuracy: teacher-forced on
+    natural text, the `batch` engine's next-token NLL / top-1 matched the previous release's within noise (1.5269 /
+    0.6548 vs 1.5278 / 0.6562 at 128-384 tokens).
 
-    Prefix caching (`batch`, on by default: `RESIDENT_PREFIX_CACHE_GB`, 32 GB of host RAM, 0 turns it off): a prompt's
-    state at its last 1,024-token boundary is kept in host memory, and a later prompt that starts with it restores it
-    instead of prefilling it. A 3-turn chat over a 12,021-token document (greedy, served, 2026-11-22): TTFT 1.97 / 0.68 /
-    0.70 s with the cache vs 1.42 / 1.38 / 1.37 s without; the answers are identical.
+    Prefix caching (`batch` and `batch-dflash2`, on by default: `RESIDENT_PREFIX_CACHE_GB`, 32 GB of host RAM, 0 turns
+    it off): a prompt's state at its last 1,024-token boundary is kept in host memory, and a later prompt that starts
+    with it restores it instead of prefilling it. A 3-turn chat over a 12,021-token document (greedy, served,
+    2026-11-23): TTFT 1.95 / 0.68 / 0.67 s on `batch` (1.99 / 0.71 / 0.72 s on `batch-dflash2`) vs 1.42 / 1.38 / 1.37 s
+    without the cache (2026-11-22); the answers are identical. Storing a long prompt that misses the cache costs its
+    first request about +0.9 s at 32K tokens (the 32K TTFT above).
   limitations: |
     - `single-user` decodes every request greedily (temperature and sampling parameters are ignored, with one
       logged warning).
-    - `batch` has no speculative decoding yet (DFlash2 for several users is planned).
+    - `batch` has no speculative decoding; `batch-dflash2` speculates for at most 8 greedy users at a time, and only
+      while every live request is greedy without penalties.
+    - `batch-dflash2` refuses requests with logprobs or structured output (guided decoding, response_format), and
+      logit_bias, bad_words, allowed_token_ids or min_tokens (use `batch` for those).
+    - `batch-dflash2`: a greedy request's move into speculation re-runs the drafter's 2,048-token window (up to ~0.3 s
+      a user, every live user waits): a short answer on a long context can finish later than on `batch` (turn 2 of
+      the chat above: 1.29 vs 0.83 s). On hard-to-predict text with 4-8 greedy users the first steps of speculation can
+      cost more than they return (random-token prompts, 8 users: 38 vs 50 t/s/u); the server then decodes plainly.
     - `batch`: a request with presence / frequency / repetition penalties or logprobs sends the whole decode step to
       host sampling for every user in it: a 16-user step goes from 27.9 to about 62 ms (one penalized request) or 68 ms
       (one logprobs request).
-    - `batch` fits the users' contexts in a 1,408,000-token KV pool; requests that do not fit wait.
-    - Prefix caching is `batch` only, at 1,024-token boundaries, and the first prompt that stores a prefix pays for it
-      (about +0.5 s at 12K tokens); `single-user` prefills a repeated long prompt again (131,072 tokens: about 21 s).
+    - `batch` fits the users' contexts in a 1,408,000-token KV pool (`batch-dflash2` 1,376,000); requests that do not
+      fit wait.
+    - Prefix caching is on `batch` and `batch-dflash2`, at 1,024-token boundaries, and the first prompt that stores a
+      prefix pays for it (about +0.5 s at 12K tokens, +0.9 s at 32K); `single-user` prefills a repeated long prompt
+      again (131,072 tokens: about 21 s).
     - On an earlier test machine with a failed fan, one card dropped off PCIe under heavy 32-request prefill;
       `tt-smi -r` or a reboot brings it back.
 
