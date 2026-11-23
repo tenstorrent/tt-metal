@@ -40,19 +40,6 @@ pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentatio
 
 ## To run the test of torch vs ground truth, please follow the following commands:
 
-**Vanilla Unet (480x640):**
-
-**_Single-Device (BS-1):_**<br>
-
-```sh
-pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet[res0-device_params0-1-torch_model]
-```
-
-**_Multi-Device (DP-2,N300):_**<br>
-```sh
-pytest models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet_dp[wormhole_b0-res0-device_params0-1-torch_model]
-```
-
 **VGG Unet (256x256):**
 
 **_Single-Device (BS-1):_**<br>

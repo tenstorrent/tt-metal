@@ -685,7 +685,7 @@ either an explicit YAML entry or the dynamic-allocation fallback (`0`). Run
 locally (without hardware):
 
 ```bash
-pytest models/tt_transformers/tests/test_trace_region_sizes.py --noconftest -v
+pytest models/ttt_compat/tests/test_trace_region_sizes.py --noconftest -v
 ```
 
 ---

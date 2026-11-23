@@ -106,7 +106,7 @@ pytest models/demos/gpt_oss/tests/unit/ -v
 
 # Run specific test files
 pytest models/demos/gpt_oss/tests/unit/test_modules.py -v     # Core components
-pytest models/demos/gpt_oss/tests/unit/test_model.py -v       # Full model accuracy
+pytest models/demos/gpt_oss/tests/accuracy/test_model.py -v       # Full model accuracy
 ```
 
 ### Test Files Overview
