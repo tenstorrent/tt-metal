@@ -40,6 +40,11 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
+#if __has_include( \
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/ure_variant_gen.h")
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/ure_variant_gen.h"
+#endif
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/ure_prof.hpp"
 #include "../weight_runs.hpp"
 
 constexpr uint32_t TILE_HEIGHT = 32;
@@ -267,6 +272,7 @@ void kernel_main() {
     // cores, feed its `up` weights) into the shared output buffer at the
     // expert's region offset. The chunk-loop body below is unchanged from the
     // single-expert kernel — only the per-expert bindings differ.
+    URE_T0(15);
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
         const auto up_acc =
             TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
@@ -300,6 +306,7 @@ void kernel_main() {
         const uint32_t row_offset_tiles = start_ptr[global_expert_id] / TILE_HEIGHT;
 
         for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+            URE_EV_SEL(local_expert_id, chunk);
             // ---- Phase 1/2 weight feed: writer reads `up` on NoC 1 (UP_SPLIT) ----
             // Streams `up` from DRAM concurrent with the reader's NoC-0 `gate` read.
             // Runs before the cb_out drain.
@@ -319,7 +326,9 @@ void kernel_main() {
                     const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                         ++up_seq;
-                        up_go_sem.wait_min(up_seq);
+                        URE_T(0, up_go_sem.wait_min(up_seq));
+                        URE_T0(1);
+                        URE_EV(21, kb);
                         const uint32_t up_slot_offset = ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
                         uint32_t l1_w_up = cb_in1_up_buf.get_write_ptr() + up_slot_offset;
                         // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
@@ -341,6 +350,8 @@ void kernel_main() {
                         }
                         noc_up.async_read_barrier();
                         up_done_sem.set(up_seq);
+                        URE_T1(1);
+                        URE_EV(22, kb);
 
                         // IN1_WRITER_MCAST: wait for the reader's gate read (mcast_go), then
                         // for the receivers to free their slots (in1_ready), multicast
@@ -350,8 +361,11 @@ void kernel_main() {
                         // read overlaps this multicast -- which is the whole point.
                         if constexpr (writer_mcasts_in1) {
                             ++mc_seq;
-                            mcast_go_sem.wait_min(mc_seq);
-                            in1_ready_sem.wait(in1_num_receivers);
+                            URE_T(2, mcast_go_sem.wait_min(mc_seq));
+                            URE_EV(23, kb);
+                            URE_T(3, in1_ready_sem.wait(in1_num_receivers));
+                            URE_T0(4);
+                            URE_EV(24, kb);
                             in1_ready_sem.set(0);
                             CircularBuffer cb_in1_gate_buf(cb_in1_gate);
                             const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
@@ -394,6 +408,8 @@ void kernel_main() {
                                 in1_mc_ny_end,
                                 in1_num_receivers);
                             mcast_done_sem.set(mc_seq);
+                            URE_T1(4);
+                            URE_EV(25, kb);
                         }
                     }
                 }
@@ -424,7 +440,10 @@ void kernel_main() {
                     const uint32_t down_slot_bytes = d_in1_block_num_tiles * down_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
                         ++down_seq;
-                        down_go_sem.wait_min(down_seq);
+                        URE_T(5, down_go_sem.wait_min(down_seq));
+                        URE_T0(6);
+                        URE_EV(26, kb);
+                        [[maybe_unused]] const uint32_t down_slot_offset = (down_blk % kDownNumSlots) * down_slot_bytes;
                         uint32_t l1_w = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes +
                                         down_split_k * per_core_N_d * down_tile_bytes;
                         ++down_blk;
@@ -450,6 +469,43 @@ void kernel_main() {
                         }
                         noc_up.async_read_barrier();
                         down_done_sem.set(down_seq);
+                        URE_T1(6);
+                        URE_EV(27, kb);
+                        // The down multicast runs here too, on NoC 1, as the gate / up one does: the reader's
+                        // NoC 0 then carries only the M-row activated multicasts in the down phase, so the row
+                        // and the column multicasts no longer hold each other up where they cross. Same
+                        // go / done counter as the gate / up blocks (both kernels count every block, in order).
+                        if constexpr (writer_mcasts_in1) {
+                            ++mc_seq;
+                            URE_T(2, mcast_go_sem.wait_min(mc_seq));  // the reader's rows have landed
+                            URE_T(3, in1_ready_sem.wait(in1_num_receivers));
+                            in1_ready_sem.set(0);
+                            URE_T0(4);
+                            noc_up.async_write_multicast(
+                                CoreLocalMem<uint32_t>(down_cb_base + down_slot_offset),
+                                cb_in1_down_buf,
+                                down_slot_bytes,
+                                in1_num_receivers,
+                                {.offset_bytes = 0},
+                                {.noc_x_start = in1_mc_nx_start,
+                                 .noc_y_start = in1_mc_ny_start,
+                                 .noc_x_end = in1_mc_nx_end,
+                                 .noc_y_end = in1_mc_ny_end,
+                                 .offset_bytes = down_slot_offset},
+                                /*linked=*/true);
+                            noc_up.async_writes_flushed();
+                            in1_valid_sem.set(1);
+                            in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
+                                noc_up,
+                                in1_mc_nx_start,
+                                in1_mc_ny_start,
+                                in1_mc_nx_end,
+                                in1_mc_ny_end,
+                                in1_num_receivers);
+                            mcast_done_sem.set(mc_seq);
+                            URE_T1(4);
+                            URE_EV(25, kb);
+                        }
                     }
                 }
             }
@@ -472,7 +528,9 @@ void kernel_main() {
                 // the column guard becomes the segment width: this core's real columns only.
                 const uint32_t seg_bytes = (down_col_end > down_col0 ? down_col_end - down_col0 : 0) * RM_COL_BYTES;
                 for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
-                    cb_out_buf.wait_front(per_core_N_d);
+                    URE_T(7, cb_out_buf.wait_front(per_core_N_d));
+                    URE_T0(8);
+                    URE_EV(28, sb_m);
                     const uint32_t row = row0 + sb_m;
                     const uint32_t dst_row = row_offset_tiles + row;
                     if (sb_m < per_core_M && seg_bytes > 0 && row < M_tiles_full && row < count_tiles) {
@@ -495,6 +553,8 @@ void kernel_main() {
                     }
                     noc.async_writes_flushed();
                     cb_out_buf.pop_front(per_core_N_d);
+                    URE_T1(8);
+                    URE_EV(29, sb_m);
                 }
                 continue;
             }
@@ -568,6 +628,8 @@ void kernel_main() {
     }  // end per-local-expert loop
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).
+    URE_T1(15);
+    URE_EMIT();
     noc.async_write_barrier();
     if constexpr (has_zero_row) {
         if (zeroes_row) {

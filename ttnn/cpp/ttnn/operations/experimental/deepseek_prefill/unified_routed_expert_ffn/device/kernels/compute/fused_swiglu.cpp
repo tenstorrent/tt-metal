@@ -66,6 +66,11 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
+#if __has_include( \
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/ure_variant_gen.h")
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/ure_variant_gen.h"
+#endif
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/ure_prof.hpp"
 
 #ifdef FUSE_BIAS
 // Row-broadcast bias add (gpt-oss). Bias is a (1, N) tensor tiled to one
@@ -231,8 +236,15 @@ FORCE_INLINE void matmul_phase(
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // The reader pushes the FULL compile-time-max activated block (filling only
         // its first per_core_M tile-rows), so this wait/pop stays compile-time sized.
-        in0_cb.wait_front(in0_block_num_tiles);
-        in1_cb.wait_front(in1_block_num_tiles);
+        if (block == 0) {
+            URE_T(12, in0_cb.wait_front(in0_block_num_tiles));
+            URE_T(13, in1_cb.wait_front(in1_block_num_tiles));
+        }
+        URE_T(4, in0_cb.wait_front(in0_block_num_tiles));
+        URE_EV(36, block);
+        URE_T(9, in1_cb.wait_front(in1_block_num_tiles));
+        URE_EV(37, block);
+        URE_T0(5);
 
         // Reduce only the REAL K-tiles this block covers. Neither operand is
         // zero-filled past real_k_tiles — the down weights hold stale L1 and the
@@ -295,6 +307,8 @@ FORCE_INLINE void matmul_phase(
             }
         }
 
+        URE_T1(5);
+        URE_EV(38, block);
 #ifdef PACKER_L1_ACC
         // After block 0 finishes, flip L1_ACC on so blocks 1..N-1 accumulate.
         if (block == 0) {
@@ -312,6 +326,7 @@ FORCE_INLINE void matmul_phase(
     }
     // Make the accumulated partials visible to the second-pass copy below.
     partials_cb.push_back(out_block_num_tiles);
+    URE_T0(6);
 
     // After the K-loop: partials_cb_id has EFF_OUT tiles holding the final
     // accumulated sum. Move them through dst into final_cb_id, applying silu on
@@ -403,6 +418,8 @@ FORCE_INLINE void matmul_phase(
     if constexpr (untilize_final) {
         pack_untilize_uninit(final_cb_id);
     }
+    URE_T1(6);
+    URE_EV(39, 0);
 
     // Pointer-only drain of the partials tail: slots [EFF_OUT, out_block_num_tiles)
     // were never packed this chunk. Popping them keeps the single-buffered partials
@@ -582,7 +599,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
         // Blocks below the lookahead have no earlier matmul to hide behind.
         for (uint32_t b = 0; b < kAhead; ++b) {
             if (owns_x(b)) {
-                tilize_owned_block(/*mm_block=*/0);
+                URE_T(2, tilize_owned_block(/*mm_block=*/0));
             }
         }
     }
@@ -590,13 +607,19 @@ FORCE_INLINE void matmul_phase_fused_gu(
     for (uint32_t block = 0; block < num_blocks; ++block) {
         if constexpr (tilize_x) {
             if (owns_x(block + kAhead)) {
-                tilize_owned_block(/*mm_block=*/block);
+                URE_T(2, tilize_owned_block(/*mm_block=*/block));
             }
         }
-        x_cb.wait_front(X_BLOCK_TILES_MAX);
-        gate_cb.wait_front(in1_block_num_tiles);
-        up_cb.wait_front(in1_block_num_tiles);
+        if (block == 0) {
+            URE_T(10, x_cb.wait_front(X_BLOCK_TILES_MAX));
+            URE_T(11, gate_cb.wait_front(in1_block_num_tiles); up_cb.wait_front(in1_block_num_tiles));
+        }
+        URE_T(0, x_cb.wait_front(X_BLOCK_TILES_MAX));
+        URE_EV(31, block);
+        URE_T(8, gate_cb.wait_front(in1_block_num_tiles); up_cb.wait_front(in1_block_num_tiles));
+        URE_EV(32, block);
 
+        URE_T0(1);
         int in0_index_subblock_offset = 0;
         uint32_t partials_slot_idx = 0;
         for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
@@ -668,6 +691,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
             }
             in0_index_subblock_offset += in0_subblock_num_tiles;
         }
+        URE_T1(1);
+        URE_EV(33, block);
 
 #ifdef PACKER_L1_ACC
         if (block == 0) {
@@ -1107,6 +1132,7 @@ void kernel_main() {
 
     // ======================= per-local-expert loop =======================
     // Run the full gate/up/down FFN for every local expert in this program.
+    URE_T0(7);
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
         // This expert's token count via the UNPACK→{MATH,PACK} mailbox (MATH/PACK
         // cannot read the counts/idx L1 via the CB interface).
@@ -1158,6 +1184,7 @@ void kernel_main() {
             // per_core_N_gu (g_in1_num_subblocks * gu_out_subblock_num_tiles ==
             // per_core_N_gu since gu_out_subblock_h == 1).
             const uint32_t re_m_valid = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
+            URE_EV_SEL(local_expert_id, chunk);
             const uint32_t re_eff_out_gu = re_m_valid * g_in1_num_subblocks * gu_out_subblock_num_tiles;
             //
             // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
@@ -1211,8 +1238,12 @@ void kernel_main() {
             // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
             // cb_in1_up is the unpacker's last SrcA operand, passed so the partials reconfig
             // (weights df -> Float16_b) actually fires.
-            binary_activation_phase<gu_out_block_num_tiles, g_in1_per_core_w>(
-                cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated, re_eff_out_gu, cb_gate_bias, cb_up_bias);
+            URE_EV(34, 0);
+            URE_T(
+                3,
+                binary_activation_phase<gu_out_block_num_tiles, g_in1_per_core_w>(
+                    cb_in1_up, cb_partials_gu, cb_partials_up, cb_activated, re_eff_out_gu, cb_gate_bias, cb_up_bias));
+            URE_EV(35, 0);
             (void)cb_gate_intermed;
             (void)cb_up_intermed;
 #else
@@ -1277,4 +1308,6 @@ void kernel_main() {
         CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);
 #endif
     }  // end per-local-expert loop
+    URE_T1(7);
+    URE_EMIT();
 }
