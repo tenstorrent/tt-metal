@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -105,6 +106,7 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = sender_ct_args});
     append_routing_plane_connection_manager_rt_args(
+        *sender_device,
         src_fabric_node_id,
         dest_fabric_node_ids,
         {},

@@ -25,6 +25,9 @@ from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     TP,
     FakeContract,
     FakeTensor,
+    PlacementReplicate,
+    PlacementShard,
+    TensorTopology,
     bits_equal,
     copy,
     make_qsa_ttnn,
@@ -41,6 +44,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn import model as model_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     MAX_LANES,
+    Qwen38MeshContract,
     Qwen38TTNNDevicePosition,
     Qwen38TTNNDevicePositionRow,
 )
@@ -525,3 +529,52 @@ def test_lane_body_is_the_decode_walk_on_the_lane_layout_and_the_other_bodies_ar
         "raw_key_ring",
         "kv_scratch_rows",  # the MTP lane verify's redirect region past the last lane (0 for the plain lanes)
     )
+
+
+# --------------------------------------------------------------------------- zero allocation topology
+
+
+class _ContractMesh:
+    shape = (1, TP)
+
+    def get_num_devices(self):
+        return TP
+
+    def get_device_ids(self):
+        return (0, 1, 2, 3)
+
+
+def _canonicalize_on_contract_mesh(tensor) -> None:
+    mesh = _ContractMesh()
+    tensor.device = lambda: mesh
+    qsa_module._canonicalize_zero_allocation_topology(tensor, Qwen38MeshContract((0, 1, 2, 3)))
+
+
+@pytest.mark.parametrize(
+    ("shape", "layout", "distribution"),
+    (
+        ((1, 1, CACHE_WRITE_ROWS, 2 * HEAD_DIM), ROW_MAJOR, (TP,)),  # the host fill's flat form, retagged
+        ((1, 1, BLOCKS, INDEX_HEAD_DIM), TILE, (1, TP)),  # the device fill's 2-D form, kept
+    ),
+)
+def test_zero_allocation_admits_the_host_and_the_device_fill_topologies(
+    monkeypatch, shape, layout, distribution
+) -> None:
+    fake = make_qsa_ttnn()
+    patch_ttnn(monkeypatch, fake, qsa_module)
+    tensor = fake.zeros(shape, dtype=BF16, layout=layout, device="mesh", memory_config="DRAM")
+    assert tuple(tensor.tensor_topology().distribution_shape()) == distribution
+    _canonicalize_on_contract_mesh(tensor)
+    topology = tensor.tensor_topology()
+    assert tuple(topology.distribution_shape()) == (1, TP)
+    assert [type(item).__name__ for item in topology.placements()] == ["PlacementReplicate"] * 2
+
+
+@pytest.mark.parametrize("distribution", ((TP,), (1, TP)))
+def test_zero_allocation_refuses_a_sharded_topology(expect_error, monkeypatch, distribution) -> None:
+    patch_ttnn(monkeypatch, make_qsa_ttnn(), qsa_module)
+    tensor = FakeTensor([torch.zeros(1, 1, 32, 128, dtype=torch.bfloat16) for _ in range(TP)], BF16)
+    placements = [PlacementReplicate(), PlacementShard(3)][-len(distribution) :]
+    tensor.topology = TensorTopology(distribution, placements, [(0, column) for column in range(TP)])
+    with expect_error(RuntimeError):  # allow-pytest.raises: neither zero-fill form
+        _canonicalize_on_contract_mesh(tensor)

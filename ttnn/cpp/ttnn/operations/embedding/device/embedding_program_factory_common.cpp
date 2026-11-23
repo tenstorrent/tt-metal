@@ -4,7 +4,13 @@
 
 #include "embedding_program_factory_common.hpp"
 
+#include <tt-metalium/math.hpp>
+
 namespace ttnn::prim {
+
+uint32_t weight_cache_row_bytes(tt::tt_metal::distributed::MeshDevice* device, const uint32_t weight_page_size) {
+    return tt::round_up(weight_page_size, device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM));
+}
 
 CoreSplitResult split_work_to_cores_aligned(
     const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment) {

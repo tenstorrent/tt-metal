@@ -54,3 +54,45 @@ def test_moreh_arange_provided_output(device):
 
     passing, output_pcc = comp_allclose_and_pcc(expected, actual, rtol=0.1, atol=0.1)
     assert passing, output_pcc
+
+
+@pytest.mark.parametrize(
+    "start, end, step",
+    [
+        (16777184, 16777248, 1),
+        (16777216, 16777280, 1),
+        (33554433, 33554497, 1),
+        (-33554497, -33554433, 1),
+        (-16777250, 16777250, 1),
+        (16777217, 16777217 + 3 * 100, 3),
+        (33554433, 33554433 - 2 * 70, -2),
+        (2147483000, 2147483000 + 600, 1),
+    ],
+    ids=[
+        "below_2p24",
+        "at_2p24",
+        "above_2p25",
+        "negative_large",
+        "crosses_2p24_both_signs",
+        "step_3",
+        "negative_step",
+        "near_int32_max",
+    ],
+)
+@pytest.mark.parametrize("tilized", [True, False], ids=["tile", "row_major"])
+def test_moreh_arange_int32_large_values(start, end, step, tilized, device):
+    expected = torch.arange(start, end, step, dtype=torch.int32)
+    L = expected.shape[0]
+
+    output = ttnn.moreh_arange(
+        start,
+        end,
+        step,
+        device,
+        untilize_out=not tilized,
+        dtype=ttnn.int32,
+    )
+    actual = ttnn.to_torch(output).reshape([L]).to(torch.int32)
+
+    assert actual.shape == expected.shape
+    assert torch.equal(actual, expected), f"{int((actual != expected).sum())} of {L} values differ"

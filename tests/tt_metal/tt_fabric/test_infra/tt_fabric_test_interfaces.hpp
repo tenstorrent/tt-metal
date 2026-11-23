@@ -52,6 +52,9 @@ public:
     virtual uint32_t get_l1_unreserved_size() const = 0;
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
+    // A mesh device of the context the test runs in. Fabric host APIs use it to select the context, so any of the
+    // fixture's devices will do.
+    virtual const tt::tt_metal::distributed::MeshDevice& get_mesh_device() const = 0;
     virtual size_t get_channel_buffer_size_bytes() const = 0;
     virtual tt::tt_fabric::Topology get_fabric_topology() const = 0;
     virtual bool is_2D_routing_enabled() const = 0;

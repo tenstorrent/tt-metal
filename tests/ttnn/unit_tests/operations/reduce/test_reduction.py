@@ -13,7 +13,7 @@ from tt_py_test_utils_common.utility_functions import (
     torch_random,
 )
 
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 
 TEST_PADDING_VALUE = -42
 
@@ -217,9 +217,16 @@ def test_var_std_reject_off_default_tile(device, reduce_op, tile_shape, expect_e
 # element nor flipping its sign should change the answer. The scalar is applied after the
 # reduction as var(s*x) = s^2 * var(x).
 # The test covers all three reduction kernels (H, W, HW).
-@pytest.mark.parametrize("scalar", [1.0, 0, -1.0])
-@pytest.mark.parametrize("offset", [0.0, 1e6])
-@pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dim": [-1, -2, (-2, -1)],
+            "offset": [0.0, 1e6],
+            "scalar": [1.0, 0, -1.0],
+        },
+        keep=lambda dim, offset, scalar: scalar == 1.0 or (offset == 1e6 and scalar == -1.0),
+    )
+)
 def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     correction = True
     # The input is read at full FP32 and reduced unscaled; scalar is applied afterwards
@@ -272,6 +279,7 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
 # the W-reduction kernel:
 #   - N=33  -> Wt = ceil(33/32)  = 2   (smallest multi-tile case; original regression target)
 #   - N=129 -> Wt = ceil(129/32) = 5   (deeper inner loop)
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("scalar", [2.0, -2.0, 0.5, 4.0])
 @pytest.mark.parametrize("N", [33, 129], ids=["Wt2", "Wt5"])
 def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
@@ -1100,6 +1108,7 @@ def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
     run_reduce_sum_h(device, 1, 32, 32, -2)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     argnames="tensor_shape, keepdim, dim, op, error_msg",
     argvalues=[
@@ -1197,3 +1206,39 @@ def test_reduce_int32_identity_scalar_is_not_lossy(device):
     tt_out = ttnn.to_torch(ttnn.sum(tt_a, dim=-1, keepdim=True, scalar=1.0))
 
     assert torch.all(tt_out == 2**25 + 1)
+
+
+# A BFLOAT8_B tile shares one exponent per 16-lane block of a row. The -inf / +inf Max / Min padding must not zero the
+# real lanes that share a block with it: at widths that are not a multiple of 16, and (for Min over W) in a partial tile
+# row. N / C reductions carry the same padding into their output. [32, 48] and [32, 64] have no tile padding and are
+# the controls.
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (2, 37, 1),
+        (2, 37, 31),
+        (2, 37, 33),
+        (2, 37, 40),
+        (2, 37, 50),
+        (2, 37, 63),
+        (2, 37, 48),
+        (2, 37, 64),
+        (2, 32, 48),
+        (2, 32, 64),
+    ],
+    ids=lambda s: "x".join(map(str, s)),
+)
+@pytest.mark.parametrize("dim", [-1, -2, 0])
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_reduce_max_min_bfloat8_b_tile_padding(device, op, dim, shape):
+    torch.manual_seed(0)
+    magnitude = torch.empty(shape).uniform_(1.0, 4.0)
+    torch_input = -magnitude if op == "max" else magnitude
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.to_torch(getattr(ttnn, op)(input_tensor, dim=dim)).float()
+    expected = getattr(torch, op)(ttnn.to_torch(input_tensor).float(), dim=dim).values
+
+    assert result.shape == expected.shape
+    assert (result != 0).all(), f"{(result == 0).sum()} of {result.numel()} reduced values came back as 0"
+    torch.testing.assert_close(result, expected, atol=0.039, rtol=0.032)

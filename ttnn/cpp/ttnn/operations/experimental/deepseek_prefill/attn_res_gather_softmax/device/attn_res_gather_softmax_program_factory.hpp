@@ -28,7 +28,6 @@ struct AttnResGatherSoftmaxSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
     tt::tt_metal::KernelHandle gather_kernel_id{};
-    std::vector<tt::tt_metal::CoreCoord> fold_cores;
     tt::tt_metal::CoreCoord gather_core;
 };
 
@@ -51,9 +50,10 @@ struct AttnResGatherSoftmaxMeshWorkloadFactory {
 private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    // Per mesh coordinate rather than once for the mesh: a chip's rank on the
-    // tensor-parallel axis decides which slot of the statistics tensor it fills and
-    // which way each peer lies on the fabric.
+    // Per mesh coordinate: a chip's rank on the tensor-parallel axis decides which slot of
+    // the statistics tensor it fills and which way each peer lies on the fabric. Those are
+    // runtime args, so create_mesh_workload runs a range's chips as one program with them
+    // as per-device runtime args.
     static cached_program_t create_at(
         const AttnResGatherSoftmaxParams& operation_attributes,
         const ttnn::MeshCoordinate& mesh_coordinate,

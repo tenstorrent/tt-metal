@@ -14,8 +14,8 @@ inputs:
   sku:
     description: |
       Matrix-entry SKU. Must be a sim_* SKU carrying a ttsim_lib field in
-      .github/sku_config.yaml; that field selects the simulator binary and its
-      wh/bh prefix selects the soc descriptor.
+      .github/sku_config.yaml; that field selects the simulator binary, and a
+      qsr prefix also installs the Quasar ttsim soc descriptor.
     required: true
   root:
     description: |
@@ -64,16 +64,16 @@ runs:
           exit 1
         fi
 
-        # The binary's arch prefix picks the soc descriptor, so the SKU name needs no
-        # arch parsing of its own.
+        # Wormhole and Blackhole images need no soc descriptor: UMD reads their arch from the
+        # image's PCI device id and uses its built-in descriptor. Quasar has no built-in one.
+        soc=""
         case "$asset" in
-          libttsim_wh*) soc=wormhole_b0_80_arch.yaml ;;
-          libttsim_bh*) soc=blackhole_140_arch.yaml ;;
+          libttsim_wh*|libttsim_bh*) ;;
           libttsim_qsr*) soc=quasar_32_arch_ttsim.yaml ;;
           *) echo "::error::Cannot derive an arch from ttsim_lib '$asset' for SKU '${{ inputs.sku }}'."; exit 1 ;;
         esac
 
-        echo "Resolved ${{ inputs.sku }} -> $asset ($soc)"
+        echo "Resolved ${{ inputs.sku }} -> $asset (${soc:-built-in soc descriptor})"
         echo "asset_name=$asset" >> "$GITHUB_OUTPUT"
         echo "soc_desc=$soc" >> "$GITHUB_OUTPUT"
         # fetch-ttsim publishes one artifact per library under this name, so the SKU's lib
@@ -108,4 +108,6 @@ runs:
         fi
         mkdir -p "${{ inputs.root }}/sim"
         mv "$asset" "${{ inputs.root }}/sim/libttsim.so"
-        cp "${{ inputs.root }}/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }}" "${{ inputs.root }}/sim/soc_descriptor.yaml"
+        if [[ -n "${{ steps.ttsim-info.outputs.soc_desc }}" ]]; then
+          cp "${{ inputs.root }}/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }}" "${{ inputs.root }}/sim/soc_descriptor.yaml"
+        fi

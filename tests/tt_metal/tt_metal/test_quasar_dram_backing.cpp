@@ -6,6 +6,7 @@
 #include "context/metal_context.hpp"
 #include "llrt/hal/tt-2xx/quasar/qa_emulator_models.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <numeric>

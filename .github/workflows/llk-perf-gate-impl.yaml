@@ -86,13 +86,6 @@ on:
         required: false
         default: true
         type: boolean
-      fail_without_baseline:
-        description: >-
-          Fail the job when no baseline is found, because the gate then compares nothing.
-          False skips the gate with a warning.
-        required: false
-        default: false
-        type: boolean
       slack:
         description: "Post the verdict to the LLK regressions channel"
         required: false
@@ -155,6 +148,7 @@ jobs:
           sparse-checkout: |
             .github/scripts
             tt_metal/tt-llk/perf
+            tt_metal/tt-llk/tests/python_tests/helpers/perf
           filter: blob:none
 
       - name: Set up Python
@@ -255,6 +249,8 @@ jobs:
           LLK_PERF_WAREHOUSE_TABLE: >-
             ${{ inputs.warehouse_table || vars.LLK_PERF_WAREHOUSE_TABLE }}
         run: |
+          # Gate verdict says why there is no verdict.
+          [ -n "$SNOWFLAKE_PRIVATE_KEY" ] || exit 0
           COMMITS_ARG=()
           if [ -n "$MATCH_REF" ]; then
             # Commits and trees only: enough for the merge base and the 200 commits before it.
@@ -584,6 +580,7 @@ jobs:
           WAIT_MINUTES: ${{ inputs.baseline_wait_minutes }}
           SLACK_ON_PASS: ${{ inputs.slack_on_pass }}
           THRESHOLD: ${{ inputs.threshold }}
+          MIN_CYCLES: ${{ inputs.min_cycles }}
           MODULE_THRESHOLDS: ${{ inputs.module_thresholds }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -646,6 +643,7 @@ jobs:
             --note "$NOTE" \
             --post-pass "$SLACK_ON_PASS" \
             --threshold "$THRESHOLD" \
+            --min-cycles "$MIN_CYCLES" \
             --module-thresholds "$MODULE_THRESHOLDS" \
             --part-out slack_part.json \
             --out slack_payload.json && exit 0
@@ -697,7 +695,7 @@ jobs:
           ARCH: ${{ inputs.arch }}
           MEASURE_REASON: ${{ steps.measured.outputs.reason }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
-          FAIL_WITHOUT_BASELINE: ${{ inputs.fail_without_baseline }}
+          HAVE_WAREHOUSE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY != '' }}
         run: |
           # The exit code and what kind of verdict it is: pass, regression, incomplete or no-compare.
           KIND=no-compare
@@ -718,18 +716,16 @@ jobs:
           fi
 
           if [ ! -f have_baseline.txt ]; then
+            if [ "$HAVE_WAREHOUSE_KEY" != "true" ]; then
+              echo "::warning::SWEEPS_SNOWFLAKE_KEY is empty, so the gate cannot read the baseline. No verdict; the job does not fail."
+              exit 0
+            fi
             echo "::error::The baseline read did not finish, so the gate has no verdict."
             echo "This is an infrastructure fault, not a performance result."
             exit 1
           fi
           if [ "$HAVE_BASELINE" != "true" ]; then
-            if [ "$FAIL_WITHOUT_BASELINE" = "true" ]; then
-              echo "::error::No baseline found, so the gate compared nothing."
-              echo "This is a missing baseline in the warehouse, not a performance result."
-              exit 1
-            fi
-            KIND=pass
-            echo "⚠️  No baseline found; gate skipped (first run or data missing)"
+            echo "::warning::No baseline found, so the gate compared nothing. No verdict; the job does not fail."
             exit 0
           fi
 

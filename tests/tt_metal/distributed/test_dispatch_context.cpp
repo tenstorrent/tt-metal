@@ -1271,6 +1271,38 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
     }
 }
 
+// A submesh created during the session gets its own FD queues. Ending the session from the root while that submesh
+// is capturing a trace must refuse, and must succeed once the capture ends.
+TEST_F(DispatchContextFixture, TerminateRefusedWhileSubmeshCaptures) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "This test requires real hardware.";
+    }
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh =
+        MeshDevice::create(MeshDeviceConfig(system_shape), DEFAULT_L1_SMALL_SIZE, /*trace_region_size=*/1 << 20);
+    auto& dispatch_context = experimental::DispatchContext::get();
+    dispatch_context.initialize_fast_dispatch(mesh.get());
+
+    auto submesh = mesh->create_submesh(MeshShape(1, 1));
+    auto& cq = submesh->mesh_command_queue();
+    const MeshTraceId trace_id = submesh->begin_mesh_trace(cq);
+    EXPECT_THROW(dispatch_context.terminate_fast_dispatch(mesh.get()), std::runtime_error);
+
+    submesh->end_mesh_trace(cq, trace_id);
+    submesh->release_mesh_trace(trace_id);
+    submesh.reset();  // its FD queues drain on destruction, which needs dispatch running
+    EXPECT_NO_THROW(dispatch_context.terminate_fast_dispatch(mesh.get()));
+}
+
 // Regression test for https://github.com/tenstorrent/tt-metal/issues/50634:
 // A SD->FD->SD toggle must be a safe no-op on mock/emulated devices. These targets never create
 // hardware command queues, so the FD teardown previously dereferenced an empty command-queue vector

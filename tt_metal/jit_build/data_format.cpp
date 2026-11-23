@@ -6,12 +6,8 @@
 
 #include <tt_stl/assert.hpp>  // for tt_throw, TT_FATAL
 #include <base_types.hpp>     // for tt::tt_metal::UnpackToDestMode
-#include <circular_buffer_constants.h>
-#include <functional>
-#include <iostream>       // for basic_ostream
 #include <set>            // for set
 #include <unordered_map>  // for unordered_map
-#include <utility>
 
 namespace tt {
 
@@ -68,10 +64,9 @@ ExpPrecision get_exp_precision(DataFormat data_format) {
 DataFormat check_consistent_format_across_buffers(std::span<const DataFormat> data_format) {
     DataFormat last_valid_format = DataFormat::Invalid;
     for (const auto& format : data_format) {
-        // Special case where Float32 can pair with any exponent precision, skip checking
-        if ((format == DataFormat::Float32) || (format == DataFormat::RawUInt32) || (format == DataFormat::UInt32) ||
-            (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8) || (format == DataFormat::UInt16) ||
-            (format == DataFormat::Int16) || (format == DataFormat::UInt8) || (format == DataFormat::Int32)) {
+        // Float32 and the integer formats carry no exponent constraint, so they pair with either
+        // precision
+        if (format == DataFormat::Float32 || tt::is_integer_format(format)) {
             continue;
         }
 
@@ -162,9 +157,10 @@ DataFormat get_single_unpack_dst_format(
         // MX formats unpack-expand to Float16_b in src regs — the op-agnostic default. The 2x-packed
         // MxFp4_2x_B src-register format is NOT decided here (this table can't see which op consumes
         // the operand): matmul and column-reduce select it kernel-side in their LLK op init by
-        // overriding the unpacker OUT_DATA_FORMAT and the ALU src-format, then restore this default
-        // on exit via mm_uninit / reduce_uninit. Keeping Float16_b here means plain MxFp4 consumed by
-        // any other op (datacopy/SFPU/eltwise/pack) still gets the correct bf16 expansion.
+        // overriding the unpacker OUT_DATA_FORMAT and the ALU src-format. Only the unpacker override
+        // is restored on exit (via mm_uninit / reduce_uninit); the ALU needs no restore because every FPU
+        // math init programs its own src formats. Keeping Float16_b here means plain MxFp4 consumed
+        // by any other op (datacopy/SFPU/eltwise/pack) still gets the correct bf16 expansion.
         dst_format = DataFormat::Float16_b;
     }
 
@@ -294,6 +290,10 @@ DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::UInt8;
         } else if (data_format == DataFormat::Int8) {
             pack_src_format = DataFormat::Int8;
+        } else if (arch == tt::ARCH::QUASAR && data_format == DataFormat::Int16) {
+            // Quasar pack source only; Wormhole/Blackhole still throw. This walks every CB,
+            // so ProgramSpec rejects a consumed Int16 input unless it unpacks to Dest.
+            pack_src_format = DataFormat::Int16;
         } else {
             TT_THROW("No valid conversion from fp32 dest to output format = {}", data_format);
         }

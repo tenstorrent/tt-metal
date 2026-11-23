@@ -93,32 +93,52 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 #endif
 }
 
+// Waits until two command buffers are ready, reading both before testing either so the reads overlap. A used read of
+// a buffer's ready state orders later NIU status reads after the commands issued on it: a transaction ID's counters
+// include a command only once the NIU has processed it, and a status read can otherwise overtake it (#59623).
+FORCE_INLINE void wait_cmd_bufs_ready(uint8_t noc_a, uint8_t cmd_buf_a, uint8_t noc_b, uint8_t cmd_buf_b) {
+    const bool ready_a = noc_cmd_buf_ready(noc_a, cmd_buf_a);
+    const bool ready_b = noc_cmd_buf_ready(noc_b, cmd_buf_b);
+    if (!(ready_a & ready_b)) {
+        while (!noc_cmd_buf_ready(noc_a, cmd_buf_a));
+        while (!noc_cmd_buf_ready(noc_b, cmd_buf_b));
+    }
+}
+
+// Waits until the receiver channel's earlier non-posted writes (local writes and forwards) are acknowledged, so that a
+// flushed atomic increment issued next is seen after them. Earlier atomics are not waited on.
+//
+// all_writes_counted: the caller counts every non-posted write it issues in the NoC's software counters (the API's
+// update_counter). On Blackhole, where local writes and forwards go out on this RISC's NoC (noc_index), one counter
+// check (ncrisc_noc_nonposted_writes_flushed) then covers every earlier write, instead of a check per transaction ID.
+// It waits for every channel's writes, not only this one's: never earlier than the per-ID wait. With or without
+// deadlock avoidance: a forward's write lands in a downstream slot its credit already reserved, so its acknowledgement
+// does not wait on the fabric.
+template <bool all_writes_counted = false>
 FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
-    if constexpr (enable_deadlock_avoidance) {
-        auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
-        auto end_trid = start_trid + NUM_TRANSACTION_IDS;
-        for (int i = start_trid; i < end_trid; i++) {
-            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            } else {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            }
-        }
-    } else {
-        for (size_t i = 0; i < NUM_TRANSACTION_IDS; i++) {
-            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            } else {
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
-                while (
-                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
-            }
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (
+        all_writes_counted && tt::tt_fabric::local_chip_noc_equals_downstream_noc &&
+        tt::tt_fabric::edm_to_local_chip_noc == noc_index) {
+        while (!ncrisc_noc_nonposted_writes_flushed(tt::tt_fabric::edm_to_local_chip_noc));
+        return;
+    }
+#endif
+    // The channel's own transaction IDs (its range from the host), with or without deadlock avoidance; read after the
+    // channel's last local write and forward reach the NIU (wait_cmd_bufs_ready).
+    wait_cmd_bufs_ready(
+        tt::tt_fabric::edm_to_local_chip_noc,
+        tt::tt_fabric::local_chip_data_cmd_buf,
+        tt::tt_fabric::edm_to_downstream_noc,
+        receiver_channel_forwarding_data_cmd_buf_ids[rx_channel_id]);
+    const uint32_t start_trid = RX_CH_TRID_STARTS[rx_channel_id];
+    const uint32_t end_trid = start_trid + RX_CH_NUM_TRIDS[rx_channel_id];
+    for (uint32_t i = start_trid; i < end_trid; i++) {
+        if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+        } else {
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
         }
     }
 }

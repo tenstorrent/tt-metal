@@ -12,6 +12,7 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_rms_norm_pre_all_gather,
     ttnn_rms_norm_post_all_gather,
 )
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 # Module-scoped device: every test here shares one device configuration
 pytestmark = pytest.mark.use_module_device
@@ -161,3 +162,73 @@ def test_rmsnorm_post_2d_core_grid_multi_row(device, seq_len, hidden_dim_total, 
         pcc_threshold=0.999,
     )
     assert passing, f"PCC check failed: {pcc_msg}"
+
+
+@pytest.mark.parametrize("hidden_per_device", [8, 40, 72])
+@pytest.mark.parametrize("num_simulated_devices", [2, 4])
+@pytest.mark.parametrize("has_weight", [False, True], ids=["no_weight", "weight"])
+def test_rmsnorm_non_tile_aligned_width_single_device(device, hidden_per_device, num_simulated_devices, has_weight):
+    """Each simulated device's width is not a multiple of the tile width and its tile padding holds
+    garbage; the result must still match torch."""
+    torch.manual_seed(1234)
+    eps = 1e-5
+    hidden_dim_total = hidden_per_device * num_simulated_devices
+
+    torch_input = torch.randn((1, 1, 64, hidden_dim_total), dtype=torch.bfloat16)
+    torch_weight = torch.randn(hidden_dim_total, dtype=torch.bfloat16) if has_weight else None
+    torch_output = torch.nn.functional.rms_norm(
+        torch_input.float(),
+        normalized_shape=[hidden_dim_total],
+        weight=torch_weight.float() if has_weight else None,
+        eps=eps,
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    tt_inputs = []
+    for chunk in torch.chunk(torch_input, num_simulated_devices, dim=-1):
+        tt_input = ttnn.from_torch(
+            chunk, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_inputs.append(ttnn.fill_implicit_tile_padding(tt_input, 1e10))
+    tt_weights = [None] * num_simulated_devices
+    if has_weight:
+        tt_weights = [
+            ttnn.from_torch(
+                w.reshape(1, 1, 1, hidden_per_device),
+                dtype=ttnn.bfloat16,
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for w in torch.chunk(torch_weight, num_simulated_devices)
+        ]
+
+    tt_stats = ttnn.concat(
+        [
+            ttnn_rms_norm_pre_all_gather(t, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+            for t in tt_inputs
+        ],
+        dim=3,
+    )
+    tt_output = torch.cat(
+        [
+            ttnn.to_torch(
+                ttnn_rms_norm_post_all_gather(
+                    t, tt_stats, epsilon=eps, weight=w, compute_kernel_config=compute_kernel_config
+                )
+            )
+            for t, w in zip(tt_inputs, tt_weights)
+        ],
+        dim=-1,
+    )
+
+    # A wrong divisor only scales the output, which PCC alone cannot detect.
+    assert_numeric_metrics(
+        torch_output, tt_output.float(), rtol=0.02, atol=0.05, frobenius_threshold=0.02, pcc_threshold=0.9999
+    )

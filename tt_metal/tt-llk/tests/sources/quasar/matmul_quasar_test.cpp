@@ -22,7 +22,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_unpack_matmul.h"
 #include "params.h"
 
@@ -46,20 +46,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr ckernel::TensorShape tensor_shape_A = ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
     constexpr ckernel::TensorShape tensor_shape_B = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 #endif
+    // An output taller than one Dest section runs as blocks of rt_block rows, one section each.
+    const std::uint32_t rt_block   = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
+    const std::uint32_t num_blocks = RT_DIM / rt_block;
 
     {
         START_PERF_MEASURE("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
         // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
         // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
-        const auto bfd_a =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        const auto bfd_b =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_B, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP1;
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_B, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP0;
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
-        _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM, tensor_shape_A, tensor_shape_B);
+        _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, rt_block, KT_DIM, tensor_shape_A, tensor_shape_B);
         PROFILER_SYNC();
     }
     {
@@ -69,15 +72,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            _perf_unpack_matmul_mock<PERF_RUN_TYPE>(LOOP_FACTOR * num_blocks, rt_block, KT_DIM, CT_DIM);
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t j = 0; j < KT_DIM; j++)
+                // Each block is the next rt_block rows of A; B is shared by every block.
+                for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM, tensor_shape_A, tensor_shape_B);
+                    for (std::uint32_t j = 0; j < KT_DIM; j++)
+                    {
+                        _llk_unpack_matmul_(CT_DIM, rt_block, KT_DIM, block * rt_block * KT_DIM + j, j * CT_DIM, tensor_shape_A, tensor_shape_B);
+                    }
                 }
             }
         }
@@ -111,6 +118,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr ckernel::TensorShape tensor_shape_A = ckernel::make_tensor_shape(in0_face_r_dim, in0_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_A);
     constexpr ckernel::TensorShape tensor_shape_B = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 #endif
+    // An output taller than one Dest section runs as blocks of rt_block rows, one section each.
+    const std::uint32_t rt_block   = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
+    const std::uint32_t num_blocks = RT_DIM / rt_block;
     {
         START_PERF_MEASURE("INIT")
         // Only end-to-end and math-isolate runs use the FPU→PACK dest-dvalid
@@ -129,7 +139,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // ENABLE_DIRECT_INDEXING selects the DI variant (MVMULDI with explicit indices) vs
         // the auto-increment-addr_mod MVMUL variant.
         _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
-            static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), CT_DIM, RT_DIM, tensor_shape_A, tensor_shape_B);
+            static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), CT_DIM, rt_block, tensor_shape_A, tensor_shape_B);
         PROFILER_SYNC();
     }
     {
@@ -137,27 +147,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM);
+            _perf_math_matmul_mock<PERF_RUN_TYPE>(LOOP_FACTOR * num_blocks, rt_block, KT_DIM, CT_DIM);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR * num_blocks; loop++)
             {
                 for (std::uint32_t i = 0; i < KT_DIM; i++)
                 {
-                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                    _llk_math_matmul_block_(CT_DIM, rt_block);
                 }
             }
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            // One Dest section per block of rt_block x CT_DIM output tiles.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR * num_blocks; loop++)
             {
                 for (std::uint32_t i = 0; i < KT_DIM; i++)
                 {
-                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                    _llk_math_matmul_block_(CT_DIM, rt_block);
                 }
                 _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
             }
@@ -170,7 +181,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_matmul.h"
 #include "params.h"
@@ -190,11 +201,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr ckernel::TensorShape output_shape = ckernel::make_tensor_shape(in0_face_r_dim, in1_face_c_dim, num_faces_r_dim_A, num_faces_c_dim_B);
 #endif
+    // An output taller than one Dest section runs as blocks of rt_block rows, one section each.
+    const std::uint32_t rt_block   = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
+    const std::uint32_t num_blocks = RT_DIM / rt_block;
     {
         START_PERF_MEASURE("INIT")
-        // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
+        // PACK_ISOLATE packs without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
@@ -203,10 +217,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        const auto bfd_pack =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/, output_shape);
+        _llk_pack_matmul_init_(bfd_pack, rt_block, CT_DIM, 1 /*num_subblocks_c_dim*/, output_shape);
         PROFILER_SYNC();
     }
     {
@@ -214,20 +228,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, output_shape);
+                for (std::uint32_t block = 0; block < num_blocks; block++)
+                {
+                    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/, output_shape);
+                }
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, output_shape);
-                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                for (std::uint32_t block = 0; block < num_blocks; block++)
+                {
+                    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/, output_shape);
+                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
             }
         }
         PROFILER_SYNC();

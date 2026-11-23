@@ -753,8 +753,9 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
         std::vector<uint32_t> ct_args = {/*my_chip_id=*/0xFFFF, reserved_packet_header_CB_index};
         std::ranges::copy(
             std::array<uint32_t, 4>{
-                static_cast<uint32_t>(tensor.buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
-                static_cast<uint32_t>(tensor.buffer()->buffer_type()),
+                // TODO: refactor out to generate_tensor_ct_args
+                static_cast<uint32_t>(tensor.mesh_buffer().device_local_config().sharding_args.buffer_layout()),
+                static_cast<uint32_t>(tensor.memory_config().buffer_type()),
                 static_cast<uint32_t>(tensor.layout()),
                 static_cast<uint32_t>(0)},
             std::back_inserter(ct_args));
@@ -940,7 +941,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
 
     std::vector<uint32_t> rt_args;
     rt_args.reserve(200);
-    rt_args.push_back(tensor.buffer()->address());
+    rt_args.push_back(tensor.mesh_buffer().address());
     rt_args.push_back(ccl_command_stream.size());  // in0_read_command_slices
     const size_t command_stream_start_arg_index = rt_args.size();
     rt_args.push_back(0);  // in0_command_start_offset

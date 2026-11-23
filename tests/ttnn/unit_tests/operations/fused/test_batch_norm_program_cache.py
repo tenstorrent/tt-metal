@@ -124,6 +124,7 @@ def isolate_program_cache(device):
     device.disable_and_clear_program_cache()
 
 
+@pytest.mark.merge_gate
 def test_bn_cache_reuse_same_config(device, isolate_program_cache):
     """Identical config across calls must reuse cached programs: the second run adds no entries."""
     _run_bn_training(device, BASE_SHAPE, momentum=0.1, seed=0)
@@ -132,6 +133,7 @@ def test_bn_cache_reuse_same_config(device, isolate_program_cache):
     assert device.cache_entries_counter.total == n_after_first  # reuse: no growth
 
 
+@pytest.mark.merge_gate
 def test_bn_cache_miss_different_channels(device, isolate_program_cache):
     """Changing the channel count changes the RunningStatistics per-channel tensor specs, which
     must key a distinct program (new entries). H/W alone would not re-key RunningStatistics."""
@@ -141,6 +143,7 @@ def test_bn_cache_miss_different_channels(device, isolate_program_cache):
     assert device.cache_entries_counter.total > n_after_first
 
 
+@pytest.mark.merge_gate
 def test_bn_cache_miss_different_momentum(device, isolate_program_cache):
     """momentum is a hashed RunningStatistics attribute, so changing it must key a distinct program."""
     _run_bn_training(device, BASE_SHAPE, momentum=0.1)
@@ -149,6 +152,7 @@ def test_bn_cache_miss_different_momentum(device, isolate_program_cache):
     assert device.cache_entries_counter.total > n_after_first
 
 
+@pytest.mark.merge_gate
 def test_bn_cache_miss_different_dtype(device, isolate_program_cache):
     """dtype drives the RunningStatistics compile-time `any_float32` path, which selects a different
     compute kernel (sfpu vs non-sfpu). A bfloat16 run and a float32 run must therefore key distinct
@@ -163,6 +167,7 @@ def test_bn_cache_miss_different_dtype(device, isolate_program_cache):
     assert device.cache_entries_counter.total == n_fp32  # same dtype -> reuse
 
 
+@pytest.mark.merge_gate
 def test_bn_cache_optional_stat_presence(device, isolate_program_cache):
     """running_mean/running_var presence is baked into the RunningStatistics program.  Three
     presence combinations dispatch RunningStatistics (both, mean-only, var-only) and each must
