@@ -80,6 +80,7 @@ def test_kimi_k3_layer0_long_context_accuracy(
     manifest, run_dir, checkpoint = registered.manifest, registered.path, kimi_k3_checkpoint_dir
     assert tokens <= registered.rows, f"golden {K3_LAYER0_GOLDEN} has {registered.rows} rows, fewer than {tokens}"
     thresholds = _THRESHOLDS[tokens]
+    floor = manifest["token_floor"]  # read before device time: a golden without it fails here, not after the run
 
     config = kimi_k3_kda_config()
     weights = load_kda_layer_state_dict(checkpoint, 0, config)
@@ -122,7 +123,6 @@ def test_kimi_k3_layer0_long_context_accuracy(
         )
         series.append(start, row_sums(golden, output))
 
-    floor = manifest["token_floor"]
     whole = series.windows(
         tokens, {"output_nrmse": nrmse, "token_nrmse_max": lambda s: float(row_nrmse(s, floor).max())}
     )
