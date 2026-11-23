@@ -15,6 +15,7 @@ add_subdirectory(hybrid_routed_expert_ffn)
 add_subdirectory(fused_experts_prefill)
 add_subdirectory(inbound_socket_service_sync)
 add_subdirectory(insert)
+add_subdirectory(kv_fabric_push)
 add_subdirectory(masked_bincount)
 add_subdirectory(mhc_split_sinkhorn)
 add_subdirectory(moe_fused_swiglu)
@@ -55,6 +56,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
         TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
+        TTNN::Ops::Experimental::DeepSeekPrefill::KvFabricPush
         TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
         TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu
@@ -102,6 +104,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Insert>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::KvFabricPush>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeFusedSwiGlu>
