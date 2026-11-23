@@ -137,10 +137,23 @@ def test_leaving_a_scope_closes_the_scopes_left_open_inside_it():
         core.push_current_sub_device_id_for_thread(ttnn.SubDeviceId(1))
     assert core.get_current_sub_device_id_for_thread() is None
 
+    # A scope left open with the same id is closed too.
+    with ttnn.experimental.sub_device(0):
+        core.push_current_sub_device_id_for_thread(ttnn.SubDeviceId(0))
+    assert core.get_current_sub_device_id_for_thread() is None
+
     # Leaving a scope that some code already closed does not raise.
     with ttnn.experimental.sub_device(0):
         core.pop_current_sub_device_id_for_thread()
     assert core.get_current_sub_device_id_for_thread() is None
+
+    # It does not close the scope around it either.
+    with ttnn.experimental.sub_device(0):
+        with ttnn.experimental.sub_device(1):
+            core.pop_current_sub_device_id_for_thread()
+        assert core.get_current_sub_device_id_for_thread() == ttnn.SubDeviceId(0)
+    assert core.get_current_sub_device_id_for_thread() is None
+    assert core.get_sub_device_scope_depth_for_thread() == 0
 
 
 @skip_for_slow_dispatch()
@@ -273,8 +286,11 @@ def test_a_trace_captured_inside_a_scope_replays(device):
             write(torch.randn(shape, dtype=torch.bfloat16))
             ttnn.softmax(a, dim=-1)
             trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-            output = ttnn.softmax(a, dim=-1)
-            ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            try:
+                output = ttnn.softmax(a, dim=-1)
+            finally:
+                # A capture left open would make the cleanup below fail and hide the real error.
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
         try:
             # The trace remembers where its programs run, so it can be replayed after the scope is closed.
             for _ in range(2):

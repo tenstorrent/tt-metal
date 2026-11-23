@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <optional>
 
 #include <tt-metalium/sub_device_types.hpp>
@@ -29,16 +30,22 @@ namespace tt::tt_metal::experimental {
 void PushCurrentSubDeviceIdForThread(SubDeviceId sub_device_id);
 void PopCurrentSubDeviceIdForThread();
 std::optional<SubDeviceId> GetCurrentSubDeviceIdForThread();
+// The number of scopes open on this thread, including scopes that Metal has suspended.
+std::size_t GetSubDeviceScopeDepthForThread();
 
-// Opens a scope when constructed and closes it when destroyed.
+// Opens a scope when constructed. When destroyed, it closes the scopes opened inside it that are still open, then its
+// own. If other code already closed its scope, it closes nothing.
 class [[nodiscard]] SubDeviceScope {
 public:
-    explicit SubDeviceScope(SubDeviceId sub_device_id) { PushCurrentSubDeviceIdForThread(sub_device_id); }
-    ~SubDeviceScope() { PopCurrentSubDeviceIdForThread(); }
+    explicit SubDeviceScope(SubDeviceId sub_device_id);
+    ~SubDeviceScope();
     SubDeviceScope(const SubDeviceScope&) = delete;
     SubDeviceScope& operator=(const SubDeviceScope&) = delete;
     SubDeviceScope(SubDeviceScope&&) = delete;
     SubDeviceScope& operator=(SubDeviceScope&&) = delete;
+
+private:
+    std::size_t depth_before_;
 };
 
 }  // namespace tt::tt_metal::experimental

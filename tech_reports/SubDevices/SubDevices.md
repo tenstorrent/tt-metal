@@ -127,7 +127,7 @@ The following are some examples of the different python level APIs that take in 
 
 ### 1.5 Sub-Device Scope (experimental)
 
-A sub-device scope makes the TTNN operations you launch run on one sub-device, without changing the operations themselves.
+A sub-device scope makes the TTNN operations you launch run on one sub-device, without changing the operations themselves. **Most operations only run on a sub-device that is a rectangle starting at (0, 0).** On any other sub-device, the operations known to run are unary, binary, ternary and the collectives. The rest, matmul among them, are rejected at launch (limitation 2 below).
 
 ```python
 with ttnn.experimental.sub_device(0):
@@ -136,7 +136,7 @@ with ttnn.experimental.sub_device(0):
 
 In C++, create a `tt::tt_metal::experimental::SubDeviceScope scope(SubDeviceId{0});` from `tt-metalium/experimental/sub_device_scope.hpp`.
 
-**This is a best-effort helper, not a guarantee about where operations run.** It lets two sub-devices run different work at the same time without changing every operation. It may change or be removed.
+**This is a best-effort helper, not a guarantee about where operations run.** It is enough to run compute on sub-device 0 and collectives on another sub-device at the same time. It may change or be removed.
 
 #### How it works
 
@@ -162,6 +162,7 @@ Fixing these is out of scope for this helper.
 5. **Nothing is ordered between sub-devices.** Work on one sub-device does not wait for work on another. If one sub-device reads what another wrote, or reuses memory another one freed, you have to synchronize them yourself.
 6. **A scope only covers operations launched from its own thread.** Other threads are not affected. A trace or command list that was recorded outside the scope runs where it was recorded, even when replayed inside it. Workloads on service cores are not checked.
 7. **Inside a scope, the compute grid only describes your sub-device.** Anything you size from it will be too small for the whole device. For example, a global semaphore that every worker core needs must be created before the scope is opened. A device report captured inside a scope will also show the smaller grid.
+8. **Programs built inside a scope are cached apart from those built outside it.** Running an operation outside a scope does not put its program in the cache for use inside one. A trace captured inside a scope needs its operations run inside the scope first.
 
 ## 2. Global Semaphores
 

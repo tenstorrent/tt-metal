@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <string_view>
 #include <utility>
@@ -94,6 +95,10 @@ void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_vie
 // `key` unchanged when the thread is not in a scope or no sub-device manager is loaded.
 tt::tt_metal::program_cache::detail::ProgramCacheKey cache_key_with_scoped_cores(
     tt::tt_metal::program_cache::detail::ProgramCacheKey key, const tt::tt_metal::distributed::MeshDevice& mesh_device);
+
+// Combines `hash` with the cores of the current sub-device scope, as cache_key_with_scoped_cores does with the key's
+// hash. The op profiler identifies programs by this hash, so a program built inside a scope gets its own entry.
+std::uint64_t hash_with_scoped_cores(std::uint64_t hash, const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 // True while a ttnn::experimental::CommandListBuilder records on the calling thread (ttnn/command_list.hpp).
 bool is_recording_command_list();

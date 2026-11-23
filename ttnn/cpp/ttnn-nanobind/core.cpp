@@ -216,6 +216,7 @@ void py_module(nb::module_& mod) {
         nb::arg("sub_device_id"));
     mod.def("pop_current_sub_device_id_for_thread", &tt::tt_metal::experimental::PopCurrentSubDeviceIdForThread);
     mod.def("get_current_sub_device_id_for_thread", &tt::tt_metal::experimental::GetCurrentSubDeviceIdForThread);
+    mod.def("get_sub_device_scope_depth_for_thread", &tt::tt_metal::experimental::GetSubDeviceScopeDepthForThread);
 }
 
 }  // namespace ttnn::core

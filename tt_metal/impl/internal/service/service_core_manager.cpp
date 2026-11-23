@@ -17,6 +17,7 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/sub_device/sub_device_scope.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "distributed/mesh_device_impl.hpp"
@@ -59,6 +60,8 @@ void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>
     // Capture FD Grid snapshot. Useful to create truly disjoint-worker-sets if we switch to SD
     // later.
     if (state.cores.empty()) {
+        // `device` may be a MeshDevice, whose grid inside a sub-device scope covers only the scoped sub-device.
+        const SuspendSubDeviceScope whole_device;
         state.fd_compute_grid = device->compute_with_storage_grid_size();
     }
 

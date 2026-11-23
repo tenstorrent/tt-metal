@@ -28,6 +28,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/type_name.hpp>
+#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 // Forward declarations — avoid pulling in heavy headers for 1000+ TU include chain.
@@ -337,7 +338,8 @@ inline std::string op_meta_data_serialized_json(
         return {};
     }
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
-    auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
+    auto program_hash = ttnn::device_operation::detail::hash_with_scoped_cores(
+        compute_program_hash<device_operation_t>(operation_attributes, tensor_args), mesh_device);
 
     if (!useCachedOps || (cached_ops.find(device_id) == cached_ops.end()) ||
         (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {

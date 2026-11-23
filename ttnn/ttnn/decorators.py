@@ -301,7 +301,7 @@ get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_qu
 
 push_current_sub_device_id_for_thread = ttnn._ttnn.core.push_current_sub_device_id_for_thread
 pop_current_sub_device_id_for_thread = ttnn._ttnn.core.pop_current_sub_device_id_for_thread
-get_current_sub_device_id_for_thread = ttnn._ttnn.core.get_current_sub_device_id_for_thread
+get_sub_device_scope_depth_for_thread = ttnn._ttnn.core.get_sub_device_scope_depth_for_thread
 
 
 @contextmanager
@@ -369,11 +369,16 @@ def sub_device(sub_device_id):
     ``compute_with_storage_grid_size()`` returns a grid only large enough to cover that sub-device's cores, and the
     device lists it as its only sub-device.
 
-    Most operations use one of those to decide which cores to run on, so they end up on your sub-device without any
-    changes. An operation that picks its cores some other way is not affected by the context.
+    Most operations fill that grid from (0, 0), so they only run on a sub-device that is a rectangle starting at
+    (0, 0). On any other sub-device, the operations known to run are unary, binary, ternary and the collectives, which
+    use the cores of the device's only sub-device. An operation that picks its cores some other way is not affected by
+    the context.
 
     There is no list of operations that work. If an operation would put a kernel, semaphore, circular buffer or
     dataflow buffer on another sub-device, it raises when it is launched. Tensors are not checked.
+
+    Programs built inside the context are cached apart from those built outside it, so running an operation outside
+    it first does not put its program in the cache for use inside it.
 
     This is a best-effort helper, not a guarantee. Read the known limitations in
     ``tech_reports/SubDevices/SubDevices.md`` (section 1.5) before using it.
@@ -388,21 +393,22 @@ def sub_device(sub_device_id):
     """
     if isinstance(sub_device_id, int):
         sub_device_id = ttnn.SubDeviceId(sub_device_id)
+    # Scopes are matched by their position on the thread's stack, not by id: every scope above this one was opened
+    # inside it, and a scope below it belongs to the code around it.
+    depth = get_sub_device_scope_depth_for_thread()
     push_current_sub_device_id_for_thread(sub_device_id)
     try:
         yield
     finally:
-        current = get_current_sub_device_id_for_thread()
-        while current is not None and current != sub_device_id:
-            logger.warning(
-                f"Leaving sub_device({sub_device_id}), but the innermost open scope is {current}. "
-                f"Some code opened that scope inside this one and never closed it, so it is being closed now."
-            )
-            pop_current_sub_device_id_for_thread()
-            current = get_current_sub_device_id_for_thread()
-        if current is None:
+        left_open = get_sub_device_scope_depth_for_thread() - depth - 1
+        if left_open < 0:
             logger.warning(f"Leaving sub_device({sub_device_id}), but some code already closed it.")
-        else:
+        elif left_open > 0:
+            logger.warning(
+                f"Leaving sub_device({sub_device_id}), but {left_open} scope(s) opened inside it are still open, "
+                f"so they are being closed now."
+            )
+        for _ in range(left_open + 1):
             pop_current_sub_device_id_for_thread()
 
 

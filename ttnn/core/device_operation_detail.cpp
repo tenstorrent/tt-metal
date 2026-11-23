@@ -259,25 +259,28 @@ void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_vie
         tensor.memory_config());
 }
 
-tt::tt_metal::program_cache::detail::ProgramCacheKey cache_key_with_scoped_cores(
-    tt::tt_metal::program_cache::detail::ProgramCacheKey key,
-    const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+namespace {
+
+struct ScopedCores {
+    ttsl::hash::hash_t hash;
+    std::string canonical;
+};
+
+// The scoped sub-device's Tensix cores, hashed and in canonical form, or null when the thread is not in a scope or no
+// sub-device manager is loaded.
+const ScopedCores* scoped_cores_for_thread(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
     if (!tt::tt_metal::experimental::GetCurrentSubDeviceIdForThread().has_value()) [[likely]] {
-        return key;
+        return nullptr;
     }
     const auto manager_id = mesh_device.get_active_sub_device_manager_id();
     if (manager_id == mesh_device.get_default_sub_device_manager_id()) {
         // With no manager loaded, the only sub-device is the whole grid, so the key does not need to change.
-        return key;
+        return nullptr;
     }
     // Going through get_sub_device_ids() gives a clear error if the scoped sub-device does not exist.
     const auto scoped = mesh_device.get_sub_device_ids().front();
     // Hashing the cores on every launch would be wasteful, so remember the result for each sub-device of the loaded
     // manager. A manager's id is never reused and its sub-devices never change, so the cached values stay valid.
-    struct ScopedCores {
-        ttsl::hash::hash_t hash;
-        std::string canonical;
-    };
     struct Cache {
         tt::tt_metal::SubDeviceManagerId manager_id;
         std::vector<std::optional<ScopedCores>> by_sub_device;
@@ -291,9 +294,26 @@ tt::tt_metal::program_cache::detail::ProgramCacheKey cache_key_with_scoped_cores
         const auto cores = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, scoped);
         scoped_cores = ScopedCores{ttsl::hash::hash_objects_with_default_seed(cores), ttsl::hash::canonical_key(cores)};
     }
-    key.hash = ttsl::hash::hash_objects(key.hash, scoped_cores->hash);
-    key.canonical += scoped_cores->canonical;
+    return &*scoped_cores;
+}
+
+}  // namespace
+
+tt::tt_metal::program_cache::detail::ProgramCacheKey cache_key_with_scoped_cores(
+    tt::tt_metal::program_cache::detail::ProgramCacheKey key,
+    const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    if (const auto* scoped_cores = scoped_cores_for_thread(mesh_device)) {
+        key.hash = ttsl::hash::hash_objects(key.hash, scoped_cores->hash);
+        key.canonical += scoped_cores->canonical;
+    }
     return key;
+}
+
+std::uint64_t hash_with_scoped_cores(std::uint64_t hash, const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    if (const auto* scoped_cores = scoped_cores_for_thread(mesh_device)) {
+        return ttsl::hash::hash_objects(hash, scoped_cores->hash);
+    }
+    return hash;
 }
 
 }  // namespace ttnn::device_operation::detail

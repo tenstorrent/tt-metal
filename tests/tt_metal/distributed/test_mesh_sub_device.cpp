@@ -479,6 +479,27 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceScopeDescribesTheScopedSubDevice) {
     EXPECT_ANY_THROW(experimental::PopCurrentSubDeviceIdForThread());
 }
 
+// A SubDeviceScope closes scopes by their position on the thread's stack, not by their id.
+TEST(SubDeviceScope, ClosesTheScopesOpenedInsideItButNotTheOnesAroundIt) {
+    {
+        // A scope left open inside it is closed with it, even when it has the same id.
+        experimental::SubDeviceScope scope(SubDeviceId{0});
+        experimental::PushCurrentSubDeviceIdForThread(SubDeviceId{0});
+    }
+    EXPECT_EQ(experimental::GetSubDeviceScopeDepthForThread(), 0u);
+    {
+        experimental::SubDeviceScope outer(SubDeviceId{0});
+        {
+            // Some code closes the inner scope early. Destroying it must not close the outer one, or throw.
+            experimental::SubDeviceScope inner(SubDeviceId{1});
+            experimental::PopCurrentSubDeviceIdForThread();
+        }
+        EXPECT_EQ(experimental::GetCurrentSubDeviceIdForThread(), SubDeviceId{0});
+    }
+    EXPECT_EQ(experimental::GetCurrentSubDeviceIdForThread(), std::nullopt);
+    EXPECT_EQ(experimental::GetSubDeviceScopeDepthForThread(), 0u);
+}
+
 TEST_F(MeshSubDeviceTestSuite, SubDeviceScopeRefusesAProgramOnAnotherSubDevice) {
     const CoreRangeSet first_cores(CoreRange({0, 0}, {2, 2}));
     const CoreRangeSet second_cores(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})});
