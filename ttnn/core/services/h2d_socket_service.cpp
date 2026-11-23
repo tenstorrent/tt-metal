@@ -474,7 +474,17 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
 
     // Each device may resolve a different free service core; record it per coord.
     auto& svc = tt::tt_metal::internal::service_core_manager(*mesh_device_);
-    const auto& coords = topology.mesh_coords();
+    // A mesh that several hosts share: each host serves only the chips it owns (get_device would TT_FATAL on a
+    // remote coordinate). Every host builds its own service over its own coordinates; the producer attached to
+    // that host pushes those chips' shards.
+    std::vector<distributed::MeshCoordinate> local_coords;
+    for (const auto& coord : topology.mesh_coords()) {
+        if (mesh_device_->is_local(coord)) {
+            local_coords.push_back(coord);
+        }
+    }
+    TT_FATAL(!local_coords.empty(), "H2DStreamService: this host owns no chip of the mesh");
+    const auto& coords = local_coords;
     for (const auto& coord : coords) {
         auto* d = tt::tt_metal::internal::get_device(*mesh_device_, coord);
         auto claimable = svc.get_claimable_cores(d);
