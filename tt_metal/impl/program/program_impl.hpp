@@ -250,7 +250,7 @@ public:
     void set_runtime_id(ProgramId id);
     ProgramId get_runtime_id() const;
     ProgramId get_id() const;
-    // The data collector's metadata for this program; null until the program is first recorded.
+    // Null until the program is first dispatched.
     const ProgramMetadata* metadata() const { return metadata_; }
     void set_metadata(const ProgramMetadata* metadata) { metadata_ = metadata; }
     std::size_t num_kernels() const;
