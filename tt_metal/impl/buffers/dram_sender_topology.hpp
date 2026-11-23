@@ -77,8 +77,8 @@ CoreCoord pick_unused_dram_logical_core(const metal_SocDescriptor& soc_desc, uin
 
 // The two DRISC sender cores of DRAM view `bank_id`, as logical DRAM coords: element 0 is the free
 // non-endpoint subchannel (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
-// subchannel. Throws when the bank has no free subchannel, the NOC1 endpoint cannot be resolved, or the two
-// roles do not sit at logical y = 1 and above it. `device_id` only names the device in errors.
+// subchannel. Throws when `bank_id` is out of range, the bank has no free subchannel, the NOC1 endpoint cannot be
+// resolved, or the two roles do not sit at logical y = 1 and above it. `device_id` only names the device in errors.
 std::vector<CoreCoord> dram_sender_logical_cores(
     const metal_SocDescriptor& soc_desc, uint32_t bank_id, ChipId device_id);
 
