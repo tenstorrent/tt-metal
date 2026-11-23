@@ -110,3 +110,48 @@ job's turns, at most 100 µs of draining per turn, and the counters cover every 
 case went from about 9.5 ms to 0.24-0.25 ms, no hold exceeded 22 µs, and full-grid runs at delays 100 and 50 stayed
 lossless. Closing (from "workload done" to the capture summary) took about 30 ms idle, 341 ms at delay 50 and about
 525 ms at delay 100; there is no figure from the single-hold finish on bh-17 to compare.
+
+## Results on bh-17 (Gen5), 2026-11-23
+
+One p150-class card at PCIe Gen5 x16 with 7 DRAM banks (so 14 drain jobs), KMD 2.9.0 with `dma_address_bits=58`, a
+6-core Ryzen 5 7600X host, fast dispatch, 128 MB spool per bank and 128 MB host FIFO per drainer. bh-17's AICLK runs
+slower than bh-38's (a 200 ms target takes about 250 ms), so delays here mean less load per second than on bh-38.
+Copies alone run at 195.7 GB/s local (probe median 8.7 µs) and 54.5 GB/s d2h (probe median 21.4 µs).
+
+### Profiler only
+
+| Delay | Baseline: main at 121306e3d78, 8 relays | Drain jobs (N = 16) |
+|---|---|---|
+| 10 | 2 / 13 / 5 | 383 / 251 / 227 |
+| 15 | 0 / 1 / 0 | 0 / 0 / 0 |
+| 20 to 100 | 0 in every rep | 0 in every rep |
+| Knee | 20 | 15 |
+| Workload at delay 100 | 248 ms | 268-281 ms |
+
+With no stalls at all, the workload still runs about 10% longer with the drain jobs, at every delay; the cause is not
+known yet. bh-38 showed no such difference (198 ms in both).
+
+### With copies
+
+| Copies | Knee, N = 1 | Copy rate there | Knee, N = 16 | Copy rate there |
+|---|---|---|---|---|
+| local | 25 or lower | 70-84 GB/s | 35 | 181 GB/s |
+| d2h | 50 | 40-42 GB/s | 300 | about 52 GB/s |
+
+At delay 50:
+
+| N, M | local: stalls, copy rate | d2h: stalls, copy rate, workload |
+|---|---|---|
+| 1, 1 | 0, 79-86 GB/s | 0, 40-43 GB/s |
+| 4, 1 | 0, 149-154 GB/s | about 220, 45-46 GB/s |
+| 16, 1 | 0, 185 GB/s | 661k, 41 GB/s, 590 ms |
+| 64, 1 | 850k, 190 GB/s | 934k, 45 GB/s, 1.78 s |
+| 1, 4 | 0, 28-36 GB/s | 0, 24-27 GB/s |
+| 16, 4 | 0, 164 GB/s | 331k, 46 GB/s |
+
+An idle profiler costs d2h copies nothing at N = 1 or 16 (54 GB/s), and local copies nothing at N = 16 (42% at N = 1).
+No hold exceeded 1 ms in any run (longest 613 µs, d2h at N = 64).
+
+N = 16 suits local copies, but with d2h copies it gives them enough of the PCIe link that the drain jobs fall behind
+until delay 300; N = 4 is close to balanced for both. The best N depends on the kind of copy.
+

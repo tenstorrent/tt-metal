@@ -2420,7 +2420,8 @@ TEST_F(DriscService, SteadyLoad) {
         for (uint32_t noc = 0; noc < 2; noc++) {
             SeatClient& seat = client->seat(bank, noc);
             BenchLane& lane = lanes.emplace_back(BenchLane{&seat, {}});
-            const uint64_t host_slice = host_size / (2 * banks);
+            // Whole MiB per seat, so every address stays 64 B aligned whatever the bank count (7 on a harvested part).
+            const uint64_t host_slice = (host_size / (2 * banks)) & ~uint64_t{size - 1};
             for (uint32_t i = 0; i < batch; i++) {
                 const uint64_t a = dram_base + noc * dram_span + uint64_t{i} * size;
                 if (d2h) {
