@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Distributed prefill RMSNorm: all mesh shards and repeated shared-resource reuse."""
 
+import os
+import statistics
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     assert_requested_tp_wrap_was_realized,
@@ -14,6 +18,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import clear_tt_ccl_cache
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi fused prefill targets Blackhole")
@@ -186,3 +192,78 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, seq_len, emb_d
             ttnn.deallocate(bad_x)
     finally:
         clear_tt_ccl_cache()
+
+
+# GLM-5.3's two fused norms on the [RING, RING] 4x4 stage, one 2,560-token chunk (640 rows a SP chip on mesh axis 1, the
+# hidden width over the TP ring on axis 0): the attention norm writes L1, the FFN norm DRAM. Device time of one call
+# (every program's slowest chip, summed). Ceilings in us: the slowest median over the calibration runs on 14 kW Galaxies
+# plus 10%; provisional until recalibrated on CI's runners. Override with TT_METAL_RMSNORM_RING_RING_4X4_MAX_US
+# (every case).
+RMSNORM_PERF_SAMPLES = 7
+RMSNORM_RING_RING_4X4_CEILING_US = {"attn-norm-l1": None, "ffn-norm-dram": None}
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4")
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (4, 4),
+            dict(torus_xy_device_params(fabric_payload_size=6144, l1_small_size=768), trace_region_size=4194304),
+            id="torus-xy-4x4-tp0",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "case, output_memcfg",
+    [("attn-norm-l1", ttnn.L1_MEMORY_CONFIG), ("ffn-norm-dram", ttnn.DRAM_MEMORY_CONFIG)],
+)
+def test_fused_rmsnorm_ring_ring_4x4_perf(mesh_device, device_params, case, output_memcfg):
+    require_high_power("[RING, RING] 4x4 fused RMSNorm perf")
+    require_realtime_profiler("fused RMSNorm perf")
+    clear_tt_ccl_cache()
+    seq_len, emb_dim = 2560, 6144
+    torch.manual_seed(50932)
+    x = ttnn.from_torch(
+        torch.randn(1, 1, seq_len, emb_dim).to(torch.bfloat16),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(4, 4), dims=(3, 2)),
+    )
+    norm = TtDistributedRmsNorm(
+        mesh_device,
+        emb_dim=emb_dim,
+        epsilon=1e-5,
+        torch_weight=(torch.randn(emb_dim) * 0.2 + 1).to(torch.bfloat16),
+        cluster_axis=0,
+        num_links=2,
+        topology=ttnn.Topology.Ring,
+        use_fused=True,
+        output_memcfg=output_memcfg,
+    )
+
+    def run():
+        ttnn.deallocate(norm(x))
+
+    run()
+    run()
+    ttnn.synchronize_device(mesh_device)
+    samples = []
+    for _ in range(RMSNORM_PERF_SAMPLES):
+        _, per_program = profile_realtime_program_merged(mesh_device, run)
+        samples.append(sum(entry["duration_ns"] for entry in per_program.values()))
+    median_us = statistics.median(samples) / 1e3
+    print(
+        f"RMSNORM_PERF case={case} mesh={tuple(mesh_device.shape)} median={median_us:.1f}us min={min(samples) / 1e3:.1f}us "
+        f"max={max(samples) / 1e3:.1f}us samples_us={[round(v / 1e3, 1) for v in samples]}"
+    )
+    ceiling_us = float(
+        os.environ.get("TT_METAL_RMSNORM_RING_RING_4X4_MAX_US", RMSNORM_RING_RING_4X4_CEILING_US[case] or 0)
+    )
+    assert ceiling_us > 0, f"no ceiling yet; measured median {median_us:.1f} us"
+    assert_perf_gate(median_us <= ceiling_us, f"{case} median {median_us:.1f} us over its ceiling {ceiling_us} us")

@@ -9,12 +9,16 @@ Compares TorchExpert (reference) against TtFFN (multi-chip TTNN)
 to verify correctness with DeepSeek 671B FFN dimensions.
 """
 
+import os
+import statistics
+
 import pytest
 import torch
 from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
@@ -33,7 +37,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import EMB_DIM, HIDDEN_DIM, TtFfn
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.tt_transformers.tt.ccl import get_num_links
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
@@ -378,3 +384,77 @@ def test_ffn_fused_rows_position_invariant(mesh_device, device_params, num_links
                 f"device {device}: {int((diff != 0).sum())} elements differ after moving rows by one chunk "
                 f"(max |diff| {diff.max().item():.3e}): the fused FFN's result depends on a row's position"
             )
+
+
+# GLM-5.3's dense layers on the [RING, RING] 4x4 stage, one 2,560-token chunk (640 rows a SP chip), the fused TP collectives
+# (all_gather_minimal_matmul_async for gate/up, matmul_reduce_scatter_prefill for down): the forward's device time, each
+# program's slowest chip summed. Ceiling in us: the slowest median over the calibration runs on 14 kW Galaxies plus 10%;
+# provisional until recalibrated on CI's runners. Override with TT_METAL_FFN_RING_RING_4X4_MAX_US.
+FFN_PERF_SAMPLES = 7
+FFN_RING_RING_4X4_CEILING_US = None
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-tp0",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_ffn_ring_ring_4x4_perf(mesh_device, device_params):
+    require_high_power("[RING, RING] 4x4 dense FFN perf")
+    require_realtime_profiler("dense FFN perf")
+    tp_axis, rows = 0, PREFILL_CHUNK_TOKENS_PER_CHIP
+    emb_dim, hidden_dim = GLM53Config.EMB_SIZE, GLM53Config.INTERMEDIATE_SIZE
+    torch.manual_seed(0)
+    tt_model = TtFfn(
+        mesh_device=mesh_device,
+        torch_weights={
+            "gate_proj": torch.randn(hidden_dim, emb_dim) * emb_dim**-0.5,
+            "up_proj": torch.randn(hidden_dim, emb_dim) * emb_dim**-0.5,
+            "down_proj": torch.randn(emb_dim, hidden_dim) * hidden_dim**-0.5,
+        },
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        num_links=2,
+        topology=per_axis_topology(device_params["fabric_config"])[tp_axis],
+        activations_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
+        activation=ACTIVATION_SILU,
+        tp_axis=tp_axis,
+        fuse_tp_collectives=True,
+    )
+    assert tt_model.fuses_tp_collectives, "the fused path was not taken on this mesh"
+    tt_input = ttnn.from_torch(
+        torch.randn(rows, emb_dim),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(-1, None)),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+    )
+
+    def run():
+        ttnn.deallocate(tt_model(tt_input))
+
+    run()
+    run()
+    ttnn.synchronize_device(mesh_device)
+    samples = []
+    for _ in range(FFN_PERF_SAMPLES):
+        _, per_program = profile_realtime_program_merged(mesh_device, run)
+        samples.append(sum(entry["duration_ns"] for entry in per_program.values()))
+    median_us = statistics.median(samples) / 1e3
+    print(
+        f"FFN_PERF mesh={tuple(mesh_device.shape)} rows={rows} median={median_us:.1f}us "
+        f"min={min(samples) / 1e3:.1f}us max={max(samples) / 1e3:.1f}us samples_us={[round(v / 1e3, 1) for v in samples]}"
+    )
+    ceiling_us = float(os.environ.get("TT_METAL_FFN_RING_RING_4X4_MAX_US", FFN_RING_RING_4X4_CEILING_US or 0))
+    assert ceiling_us > 0, f"no ceiling yet; measured median {median_us:.1f} us"
+    assert_perf_gate(median_us <= ceiling_us, f"dense FFN forward median {median_us:.1f} us over its ceiling {ceiling_us} us")

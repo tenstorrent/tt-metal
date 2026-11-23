@@ -51,7 +51,7 @@ echo "4x4 stage, $HALF half: TT_VISIBLE_DEVICES=$TT_VISIBLE_DEVICES"
 T=models/demos/deepseek_v3_d_p/tests
 # The [RING, RING] carve's rows (ROWS_SELECTOR of run_subtorus_4x4_tests.sh) request a TorusXY fabric, which this
 # [LINE, RING] tray half cannot bring up, so the default suite leaves them out.
-RING_RING_ROWS="torus-xy-4x4 or 4x4-torus-xy or SP4xTP4-torus-xy or torusxy-mesh-4x4 or -xy4 or xy4- or _xy4 or ring_ring_4x4"
+RING_RING_ROWS="torus-xy-4x4 or 4x4-torus-xy or SP4xTP4-torus-xy or torusxy-mesh-4x4 or -xy4 or xy4- or _xy4 or ring_ring_4x4 or 4x4-subtorus"
 # Test paths given after -- replace the default suite; bare options (-rA, -x, ...) add to it. pytest keeps
 # only the last -k, so a user's -k is pulled out and put back last: as given with test paths, and merged
 # with the 4x4 filter for the default suite.
