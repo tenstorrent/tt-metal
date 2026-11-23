@@ -84,7 +84,7 @@ inline void llk_sfpu_srcs_unary_init(
  *
  * Like llk_sfpu_srcs_unary_init, for ops with two inputs sharing formats. Both inputs use the
  * single UNP_S engine (two BFD table rows). The unpack auto-loop cannot alternate descriptors
- * (tt-llk #1635), so ids are baked into a two-instruction MOP that SfpuSrcsBinaryOp::run issues
+ * (tt-llk #1635), so ids are baked into a two-instruction MOP that SfpuSrcsOpBase<Op, 2>::run issues
  * per slice.
  *
  * @tparam INSTRN_COUNT: Pack instructions per SrcS auto-loop (see llk_srcs.h).
@@ -183,7 +183,7 @@ namespace ckernel::sfpu {
 // Op::init_op() runs after the SFPU init so its state (e.g. the LoadMacro replay) is not reset.
 template <typename Op>
 template <std::uint8_t INSTRN_COUNT>
-inline void SfpuSrcsUnaryOp<Op>::init(
+inline void SfpuSrcsOpBase<Op, 1>::init(
     const std::uint32_t l1_in_addr_16B,
     const DataFormat l1_in_format,
     const std::uint32_t l1_out_addr_16B,
@@ -196,14 +196,14 @@ inline void SfpuSrcsUnaryOp<Op>::init(
 
 template <typename Op>
 template <std::uint8_t INSTRN_COUNT>
-inline void SfpuSrcsUnaryOp<Op>::run(const std::uint32_t num_tiles) {
+inline void SfpuSrcsOpBase<Op, 1>::run(const std::uint32_t num_tiles) {
     llk_sfpu_srcs_unary_impl<INSTRN_COUNT, !Op::hw_clears_valids>(
         num_tiles, Op::Layout::format, [] { Op::calculate(); });
 }
 
 template <typename Op>
 template <std::uint8_t INSTRN_COUNT>
-inline void SfpuSrcsBinaryOp<Op>::init(
+inline void SfpuSrcsOpBase<Op, 2>::init(
     const std::uint32_t l1_in0_addr_16B,
     const std::uint32_t l1_in1_addr_16B,
     const DataFormat l1_in_format,
@@ -217,7 +217,7 @@ inline void SfpuSrcsBinaryOp<Op>::init(
 
 template <typename Op>
 template <std::uint8_t INSTRN_COUNT>
-inline void SfpuSrcsBinaryOp<Op>::run(const std::uint32_t num_tiles) {
+inline void SfpuSrcsOpBase<Op, 2>::run(const std::uint32_t num_tiles) {
     llk_sfpu_srcs_binary_impl<INSTRN_COUNT, !Op::hw_clears_valids>(
         num_tiles, Op::Layout::format, [] { Op::calculate(); });
 }

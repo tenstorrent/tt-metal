@@ -317,25 +317,15 @@ struct ExpFp32Accurate {
     sfpi_inline static sfpi::vFloat apply(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_(x); }
 };
 
+// The fp32-accurate path runs only for a 32-bit result without APPROXIMATION_MODE; everything else is the LUT.
 template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
-/**
- * @brief Dest EXP op type; the fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE.
- *
- * @tparam IMPL: Sfpi only today; a LoadMacro version is a DestUnary specialization next to the SrcS one.
- */
-template <
-    bool APPROXIMATION_MODE,
-    bool EN_32BIT_DEST,
-    sfpi::DataLayout LAYOUT,
-    int ITERATIONS = SFPU_ITERATIONS,
-    SfpuImpl IMPL = SfpuImpl::Sfpi>
-using ExpDest = DestUnary<
-    ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>,
-    LAYOUT,
-    ITERATIONS,
-    resolve_sfpu_impl<IMPL, false /*HAS_LOADMACRO*/>()>;
+/** @brief Math of op::Exp on Dest and SrcS: a 32-bit result is an F32 layout. */
+template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
+struct math_for<op::Exp<APPROXIMATION_MODE>, LAYOUT> {
+    using type = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
+};
 
 /** @brief EXP over a Dest span; macro-path entry, HW-implied layout. */
 template <
@@ -350,7 +340,11 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     LLK_ASSERT(
         exp_base_scale_factor == p_sfpu::kCONST_1_FP16B,
         "Scaling is not supported in the current version of exp on Quasar.");
-    ExpDest<APPROXIMATION_MODE, EN_32BIT_DEST, sfpi::DataLayout::Default, ITERATIONS>::calculate();
+    SfpuDestOp<
+        ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>,
+        sfpi::DataLayout::Default,
+        sfpi::DataLayout::Default,
+        ITERATIONS>::calculate();
 }
 
 template <
@@ -421,8 +415,8 @@ inline void _exp_init_loadmacro_(
  * @note Owns EXP_LOADMACRO_REPLAY_SLOT and macro sequence 0.
  */
 template <sfpi::DataLayout LAYOUT>
-struct SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>
-    : SfpuSrcsUnaryOp<SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>> {
+struct SfpuSrcsOp<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>
+    : SfpuSrcsOpBase<SfpuSrcsOp<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>, 1 /*ARITY*/> {
     using Layout = SrcsLayout<LAYOUT>;
     static_assert(Layout::ops <= 4, "Replay cycles LREG0-3 (d & 3); >4 in-flight macros would reuse a live LREG");
 
@@ -430,11 +424,11 @@ struct SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>
     static constexpr bool hw_clears_valids = true;
 
     static void init_op() {
-        // The folded store lands in the out slot: STORE_OFFSET is the in0 -> out distance in rows.
+        // The folded store lands in the out slot: STORE_OFFSET is the input -> out distance in rows.
         constexpr std::uint32_t store_offset =
-            static_cast<std::uint32_t>((Layout::out - Layout::in0) * ckernel::math::SFP_ROWS);
+            static_cast<std::uint32_t>((Layout::out - Layout::input(0)) * ckernel::math::SFP_ROWS);
         _exp_init_loadmacro_<store_offset>(
-            ckernel::math::SFPU_SRCS_BASE_ADDR + Layout::in0 * ckernel::math::SFP_ROWS,
+            ckernel::math::SFPU_SRCS_BASE_ADDR + Layout::input(0) * ckernel::math::SFP_ROWS,
             Layout::ops,
             Layout::sfpmem,
             Layout::sfpmem);
@@ -453,19 +447,10 @@ struct SrcsUnary<ExpHwLut, LAYOUT, SfpuImpl::LoadMacro>
 
 #endif
 
-template <sfpi::DataLayout LAYOUT, bool APPROXIMATION_MODE>
-using ExpSrcsAlgo = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
-
-/**
- * @brief SrcS EXP op type.
- *
- * @tparam IMPL: Sfpi or LoadMacro; LoadMacro needs the LUT path (APPROXIMATION_MODE or a 16-bit layout).
- */
-template <sfpi::DataLayout LAYOUT, bool APPROXIMATION_MODE, SfpuImpl IMPL = SfpuImpl::Sfpi>
-using ExpSrcs = SrcsUnary<
-    ExpSrcsAlgo<LAYOUT, APPROXIMATION_MODE>,
-    LAYOUT,
-    resolve_sfpu_impl<IMPL, std::is_same_v<ExpSrcsAlgo<LAYOUT, APPROXIMATION_MODE>, ExpHwLut>>()>;
+// The LUT is the only exp math with a LoadMacro version: requesting LoadMacro needs APPROXIMATION_MODE or a
+// 16-bit layout. Declared outside the guard so a request still compiles to Sfpi under DISABLE_SFPLOADMACRO.
+template <>
+inline constexpr bool srcs_has_loadmacro<ExpHwLut> = true;
 
 }  // namespace sfpu
 }  // namespace ckernel

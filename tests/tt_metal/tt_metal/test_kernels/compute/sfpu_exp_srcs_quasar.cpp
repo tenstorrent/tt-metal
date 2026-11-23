@@ -26,6 +26,7 @@ void kernel_main() {
     constexpr DataFormat srcs_format = static_cast<DataFormat>(get_compile_time_arg_val(4));
 
     // SFPU thread only; nothing on UNPACK, MATH and PACK.
-    sfpu_init<op::Exp<>, SfpuReg::SrcS, srcs_format>(in_addr_16B, l1_format, out_addr_16B, l1_format);
-    sfpu_tiles<op::Exp<>, SfpuReg::SrcS, srcs_format>(num_tiles);  // unpack -> exp -> pack, per tile
+    using ExpOp = SfpuOp<op::Exp<>, SfpuReg::SrcS, srcs_format>;
+    ExpOp::init(in_addr_16B, l1_format, out_addr_16B, l1_format);
+    ExpOp::tiles(num_tiles);  // unpack -> exp -> pack, per tile
 }

@@ -180,9 +180,6 @@ constexpr SfpuImpl EXP_IMPL = SFPU_IMPL_LOADMACRO ? SfpuImpl::LoadMacro : SfpuIm
 static_assert(!SFPU_IMPL_LOADMACRO, "SFPLOADMACRO is disabled; only the Sfpi variant can be built");
 #endif
 
-template <sfpi::DataLayout LAYOUT>
-using ExpOp = ExpSrcs<LAYOUT, APPROX_MODE, EXP_IMPL>;
-
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -201,7 +198,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         // The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
-        dispatch_sfpu_srcs_op<ExpOp>(
+        dispatch_sfpu_srcs_op<op::Exp<APPROX_MODE>, EXP_IMPL>(
             unpack_S_dst,
             pack_S_src,
             [&](auto op)
@@ -219,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
             // UNP_S -> SFPU exp -> PACK1; the op type decides Sfpi or LoadMacro and who clears the SrcS valids.
-            dispatch_sfpu_srcs_op<ExpOp>(
+            dispatch_sfpu_srcs_op<op::Exp<APPROX_MODE>, EXP_IMPL>(
                 unpack_S_dst,
                 pack_S_src,
                 [&](auto op)

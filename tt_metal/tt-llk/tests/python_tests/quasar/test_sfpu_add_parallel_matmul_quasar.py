@@ -337,7 +337,7 @@ def test_sfpu_add_parallel_matmul_quasar(
             DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(Transpose.No),
             MATH_OP(mathop=MathOperation.SfpuElwadd),
-            # AddSrcs is plain SFPI; there is no SFPLOADMACRO variant of this kernel.
+            # The SrcS add op type is plain SFPI; there is no SFPLOADMACRO variant of this kernel.
             SFPU_IMPL(SfpuImpl.Sfpi),
         ],
         "runtimes": [

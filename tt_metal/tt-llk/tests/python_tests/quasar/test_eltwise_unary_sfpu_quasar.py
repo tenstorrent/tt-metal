@@ -1564,7 +1564,7 @@ def test_eltwise_unary_sfpu_quasar(
 
 
 # exp_tile reaches the kernel through calculate_exponential, which takes the HW-implied Dest format. The
-# sweeps above run exp through the ExpDest op type with an explicit layout, so this keeps that entry covered.
+# sweeps above run exp through the Dest op type (SfpuDestOp) with an explicit layout, so this keeps that entry covered.
 _EXP_COMPUTE_API_FORMATS = [
     InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     InputOutputFormat(DataFormat.Float32, DataFormat.Float32),

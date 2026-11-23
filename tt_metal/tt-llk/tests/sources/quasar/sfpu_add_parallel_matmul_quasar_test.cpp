@@ -197,7 +197,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // FormatConfig has no unpack_T_* fields, so T is unpacked with S's format. Callers must keep
         // stimuli_T_format == stimuli_S_format or T will be read with the wrong format.
         // The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
-        dispatch_sfpu_srcs_op<AddSrcs>(
+        dispatch_sfpu_srcs_op<op::Add<>>(
             unpack_S_dst,
             pack_S_src,
             [&](auto op)
@@ -215,7 +215,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
-            dispatch_sfpu_srcs_op<AddSrcs>(
+            dispatch_sfpu_srcs_op<op::Add<>>(
                 unpack_S_dst,
                 pack_S_src,
                 [&](auto op)

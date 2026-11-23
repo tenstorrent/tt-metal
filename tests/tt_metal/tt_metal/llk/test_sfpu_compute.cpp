@@ -4945,8 +4945,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
 }
 
 // The op-type compute API (api/compute/experimental/sfpu.h): the exp pipeline of QuasarSfpuUnpackToDest16b and the
-// fp32 driver above, with sfpu_exp_dest_quasar.cpp in place of eltwise_sfpu_2_0.cpp. Covers sfpu_init / sfpu_tile on
-// Dest with the tile format taken from the DFB, on a 16-bit and a 32-bit Dest.
+// fp32 driver above, with sfpu_exp_dest_quasar.cpp in place of eltwise_sfpu_2_0.cpp. Covers SfpuOp init() / tile()
+// on Dest with the tile format taken from the DFB, on a 16-bit and a 32-bit Dest.
 void run_quasar_sfpu_op_type_exp_dest(
     distributed::MeshDevice& dev, size_t num_tiles, bool en_32bit_dest, bool dst_full_sync_en) {
     CoreRange core_range({0, 0}, {0, 0});

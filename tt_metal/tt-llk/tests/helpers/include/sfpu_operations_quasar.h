@@ -834,8 +834,7 @@ void call_unary_sfpu_operation_quasar(
             // sfpu_format is the Dest family; pick the explicit SFPLOAD/SFPSTORE layout for it.
             dispatch_dest_float_layout<is_fp32_dest_acc_en>(
                 sfpu_format,
-                [&](auto l)
-                { ckernel::sfpu::ExpDest<APPROX, is_fp32_dest_acc_en, decltype(l)::value, ITERATIONS>::template run<TILE_SHAPE>(dst_index, vector_mode); });
+                [&](auto l) { ckernel::sfpu::dest_op_t<ckernel::op::Exp<APPROX>, decltype(l)::value, ITERATIONS, TILE_SHAPE>::run(dst_index, vector_mode); });
         }
     }
     else if constexpr (OPERATION == SfpuType::gelu)
@@ -905,7 +904,8 @@ void call_unary_sfpu_operation_quasar(
     {
         ::ckernel::_sfpu_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode);
         dispatch_dest_float_layout<is_fp32_dest_acc_en>(
-            sfpu_format, [&](auto l) { ckernel::sfpu::SquareDest<decltype(l)::value, ITERATIONS>::template run<TILE_SHAPE>(dst_index, vector_mode); });
+            sfpu_format,
+            [&](auto l) { ckernel::sfpu::dest_op_t<ckernel::op::Square, decltype(l)::value, ITERATIONS, TILE_SHAPE>::run(dst_index, vector_mode); });
     }
     else if constexpr (is_trig_op(OPERATION))
     {
@@ -1797,7 +1797,8 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         if (math_format == DataFormat::Int32)
         {
             ::ckernel::_sfpu_binary_check_<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(src0_tile, src1_tile, dst_tile, vector_mode);
-            ckernel::sfpu::AddIntDest<SIGN_MAGNITUDE_FORMAT, ITERATIONS, TILE_SHAPE>::run(src0_tile, src1_tile, dst_tile, vector_mode);
+            ckernel::sfpu::SfpuDestOp<ckernel::sfpu::AddIntMath<SIGN_MAGNITUDE_FORMAT>, sfpi::DataLayout::I32, sfpi::DataLayout::I32, ITERATIONS, TILE_SHAPE>::
+                run(src0_tile, src1_tile, dst_tile, vector_mode);
         }
         else if constexpr (kComputeApiKernels)
         {
@@ -1819,8 +1820,14 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 math_format,
                 [&](auto l)
                 {
-                    ckernel::sfpu::AddDest<is_fp32_dest_acc_en, dst_rounding_mode, decltype(l)::value, ITERATIONS, TILE_SHAPE>::run(
-                        src0_tile, src1_tile, dst_tile, vector_mode);
+                    constexpr sfpi::DataLayout layout = decltype(l)::value;
+                    // The op tag picks the math from an explicit layout. The HW-implied layout names no register width, so
+                    // its bf16 rounding is spelled out here.
+                    using Math = std::conditional_t<
+                        layout == sfpi::DataLayout::Default,
+                        ckernel::sfpu::AddFloatMath<!is_fp32_dest_acc_en && dst_rounding_mode == ckernel::DstRoundingMode::NearestEven>,
+                        ckernel::sfpu::math_for_t<ckernel::op::Add<dst_rounding_mode>, layout>>;
+                    ckernel::sfpu::SfpuDestOp<Math, layout, layout, ITERATIONS, TILE_SHAPE>::run(src0_tile, src1_tile, dst_tile, vector_mode);
                 });
         }
     }
