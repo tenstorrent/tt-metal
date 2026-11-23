@@ -259,11 +259,11 @@ namespace {
 // with Ht=64 kept on the TILE path by the same measurement, and sticks past 32768 elements were
 // never measured to win untilized -- the chunked RM plan itself would admit far wider ones.
 constexpr uint32_t kRowMajorRerouteMaxHt = 32;
+constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
 // Operand bytes (input, index and src together) at or below which a ROW_MAJOR scatter off the last
 // axis stays native (is_demoted): the measured cases at 10 and 40 KiB tie native on device and lose
 // host wall clock. The index counts because it, not the input, can carry the work.
 constexpr uint64_t kRowMajorDispatchBoundOperandBytes = 48 * 1024;
-constexpr uint32_t kRowMajorRerouteMaxStickElems = 32768;
 // The untilized stick's raw byte width must be a multiple of this: the routing term the detour was
 // measured with, kept so it serves exactly those cases. Not a transport requirement -- the
 // ROW_MAJOR factory serves any stick width for direct ROW_MAJOR callers through the same
@@ -442,7 +442,8 @@ bool is_demoted(
     int32_t dim,
     const Tensor& index_tensor,
     const Tensor& src_tensor,
-    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     // supported_by_codegen() has already rejected an out-of-range dim, so the axis is in range here.
     // The check below works on the normalized axis, so `dim=3` and `dim=-1` on a rank-4 tensor are
     // the same case.
@@ -465,7 +466,8 @@ bool is_demoted(
     // decides that (prefers_row_major_strategy), on the same working shapes and output placement the
     // dispatch scatters, so a unit row the detour declines -- including one whose output placement
     // the detour cannot write -- is demoted rather than sent through the TILE factories.
-    if (input_tensor.dtype() == DataType::BFLOAT16 && input_tensor.layout() == Layout::TILE) {
+    // supported_by_codegen() has already pinned the dtype to bfloat16; only the layout varies here.
+    if (input_tensor.layout() == Layout::TILE) {
         const ttnn::Shape working_input = codegen_working_shape(input_tensor.logical_shape(), axis);
         const ttnn::Shape working_index = codegen_working_shape(index_tensor.logical_shape(), axis);
         const auto detour_declines = [&]() {
@@ -491,7 +493,6 @@ bool is_demoted(
         const uint64_t Ht = working_tile_rows(working_input, tile.get_height());
         const uint32_t Wt_output = tt::div_up(working_input[-1], tile.get_width());
         const uint32_t Wt_index = tt::div_up(working_index[-1], tile.get_width());
-        const auto grid = input_tensor.device()->compute_with_storage_grid_size();
         const bool row_split_fits = ttnn::prim::scatter_interleaved_fits_l1(
             ttnn::prim::scatter_static_l1(input_tensor),
             Wt_output,
@@ -501,7 +502,10 @@ bool is_demoted(
             src_tensor.buffer()->aligned_page_size());
         if (!row_split_fits &&
             !ttnn::prim::scatter_prefers_column_split(
-                static_cast<uint32_t>(Ht), Wt_output, Wt_index, static_cast<uint32_t>(grid.x * grid.y)) &&
+                static_cast<uint32_t>(Ht),
+                Wt_output,
+                Wt_index,
+                ttnn::prim::scatter_candidate_cores(input_tensor, sub_core_grids)) &&
             detour_declines()) {
             return true;
         }

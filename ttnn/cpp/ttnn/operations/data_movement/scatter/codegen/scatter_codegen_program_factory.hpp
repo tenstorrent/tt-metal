@@ -82,8 +82,14 @@ uint64_t scatter_rm_aligned_stick_bytes(const Tensor& tensor, uint32_t stick_ele
 // The STATIC per-core CB budget: the allocator's L1 bank, ignoring what is live in it, so a buffer
 // allocated between two evaluations cannot change the answer. What supported_by_codegen() plans
 // against, because it is evaluated at the router and again in the prim's validate with this call's
-// own create_output_tensors() in between; the forced entry and direct prim callers see nothing else.
+// own create_output_tensors() in between. The live frontier is read by the routing gates and by the
+// detour decision every dispatch takes on its transformed operands (prefers_row_major_strategy).
 uint64_t scatter_static_l1(const Tensor& input_tensor);
+
+// The cores a program may use: the sub-core grid when the caller gave one, else the device's compute
+// grid. Read by select_program_factory() and by is_demoted()'s column-split costing, so both cost the
+// same grid.
+uint32_t scatter_candidate_cores(const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids);
 
 // The per-core CB ceiling the next program will actually find: get_max_l1_space(), the bank less
 // whatever is live in L1 right now. Read by the routing gates that deduct this call's own pending
@@ -106,8 +112,9 @@ bool scatter_interleaved_fits_l1(
     uint64_t index_page_bytes,
     uint64_t src_page_bytes);
 
-// The TILE streaming plan's footprint: two output and two input tile pages, one index and one src,
-// whatever the row width. The least a TILE call needs, and what the live-L1 routing gate asks for;
+// The TILE streaming plan's footprint: one output, one input, one index and one src tile page,
+// whatever the row width; the writer hands the reader one tile and waits for its output, so deeper
+// CBs would sit idle. The least a TILE call needs, and what the live-L1 routing gate asks for;
 // the interleaved plan is only an upgrade select_program_factory() takes when its row-resident
 // footprint fits what is free then.
 uint64_t scatter_tile_streaming_bytes(

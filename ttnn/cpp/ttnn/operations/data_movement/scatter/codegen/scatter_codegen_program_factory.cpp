@@ -28,7 +28,9 @@ namespace ttnn::prim {
 using namespace tt::tt_metal;
 
 // Unity-build target: gather's factory defines helpers of the same names in its own unnamed
-// namespace, which collide in a shared batch unless each file's are also uniquely scoped.
+// namespace, which collide in a shared batch unless each file's are uniquely scoped. The
+// using-directive below re-exposes them for lookup within this file, the pattern tosa_scatter.cpp
+// follows; it does not make the names unique across files, which prefixing would.
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -70,9 +72,11 @@ constexpr uint32_t kFp32Bytes = sizeof(float);
 constexpr uint32_t kBf16Bytes = sizeof(uint16_t);
 
 // TILE streaming CB depths: none scales with the row width, so their sum is the least L1 a TILE
-// call needs, and what the live-L1 routing gate asks for.
-constexpr uint32_t kStreamingOutputPages = 2;
-constexpr uint32_t kStreamingInputPages = 2;
+// call needs, and what the live-L1 routing gate asks for. One page each: the writer pushes one input
+// tile and then waits for the reader's output tile, so the two alternate and a second page would
+// never be filled.
+constexpr uint32_t kStreamingOutputPages = 1;
+constexpr uint32_t kStreamingInputPages = 1;
 constexpr uint32_t kStreamingIndexPages = 1;
 constexpr uint32_t kStreamingSrcPages = 1;
 
@@ -286,6 +290,14 @@ uint64_t scatter_static_l1(const Tensor& input_tensor) {
     // device may be opened with, which sits at the top of the span and which the occupancy query
     // behind scatter_usable_l1() never reports; CBs planned past the bank would overlap it silently.
     return input_tensor.device()->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+}
+
+uint32_t scatter_candidate_cores(const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (sub_core_grids.has_value()) {
+        return static_cast<uint32_t>(sub_core_grids->num_cores());
+    }
+    const auto grid = input_tensor.device()->compute_with_storage_grid_size();
+    return static_cast<uint32_t>(grid.x * grid.y);
 }
 
 uint64_t scatter_usable_l1(const Tensor& input_tensor) {

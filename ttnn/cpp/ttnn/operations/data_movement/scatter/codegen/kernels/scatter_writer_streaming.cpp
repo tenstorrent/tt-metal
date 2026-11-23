@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Scatter writer – streaming mode (BRISC).
-// Dual-RISC: loads input tiles into cb_input, writes output tiles to DRAM.
+// Loads input tiles into cb_input and writes output tiles to DRAM. It hands the
+// reader one input tile, then waits for that tile's output, so the two RISCs
+// alternate per tile and each CB holds one page.
 //
 // Work is split by Wt_output across cores. Each core handles its assigned
 // output columns across ALL Ht rows.

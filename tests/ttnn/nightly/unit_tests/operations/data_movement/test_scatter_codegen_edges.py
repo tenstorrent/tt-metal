@@ -100,6 +100,48 @@ def test_scatter_codegen_row_axis_small_shapes_route_to_codegen(device, shape, i
     assert added > 0, "auto fell back to native; expected codegen to serve this call"
 
 
+@pytest.mark.parametrize("reduce", [None, "add"], ids=["plain", "bf16_reduce"])
+def test_scatter_codegen_row_major_l1_operands_match_native(device, reduce):
+    # Every operand in L1 with an 80 B stick, which no DRAM-alignment rounding makes a multiple of 64:
+    # both ROW_MAJOR factories address such a page through the accessors' aligned page size, and the
+    # forced legs must agree bit for bit (adding a few bf16 values is exact in FP32).
+    shape, index_shape = [1, 1, 32, 40], [1, 1, 32, 20]
+    index = _unique_index(index_shape, 3, 40) if reduce is None else torch.randint(0, 8, index_shape, dtype=torch.int32)
+    in_l1 = lambda t, dtype: ttnn.from_torch(
+        t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    xt = in_l1(torch.rand(shape, dtype=torch.bfloat16), ttnn.bfloat16)
+    it = in_l1(index, ttnn.int32)
+    st = in_l1(torch.rand(index_shape, dtype=torch.bfloat16), ttnn.bfloat16)
+    kwargs = {} if reduce is None else {"reduce": reduce}
+    assert xt.memory_config().buffer_type == ttnn.BufferType.L1
+    assert_equal(
+        ttnn.to_torch(_force_native(xt, -1, it, st, **kwargs)), ttnn.to_torch(_force_codegen(xt, -1, it, st, **kwargs))
+    )
+
+
+def test_scatter_codegen_forced_entry_refuses_what_the_gate_declines(device, expect_error):
+    # The forced entry never falls back: a reduce the codegen factories do not serve and a ROW_MAJOR
+    # stick past the static L1 bank are both refused with the scope message rather than run native.
+    xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.ROW_MAJOR_LAYOUT, device)
+    with expect_error(RuntimeError, "scatter_force_codegen invoked for a case the codegen path does not support"):
+        _force_codegen(xt, -1, it, st, reduce="amax")
+    bank = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
+    wide = (bank // 2) // 32 * 32  # one bf16 stick of half the bank: input and output sticks cannot both be resident
+    xw, iw, sw = _make_case([1, wide], [1, 32], -1, ttnn.ROW_MAJOR_LAYOUT, device)
+    with expect_error(RuntimeError, "scatter_force_codegen invoked for a case the codegen path does not support"):
+        _force_codegen(xw, -1, iw, sw)
+
+
+def test_scatter_codegen_detour_serves_a_rank_three_call(device):
+    # The detour reads the working shape, which pads the rank to 4: a rank-3 TILE call with two tile
+    # rows and a 128 B stick takes it like its rank-4 twin, adding the untilizes and the ROW_MAJOR
+    # factory beyond native's programs.
+    xt, it, st = _make_case([2, 32, 64], [2, 32, 32], -1, ttnn.TILE_LAYOUT, device)
+    _, added = _run_auto_against_native(device, xt, it, st, -1)
+    assert added > 1, "expected the row-major detour's untilizes and ROW_MAJOR factory beyond native's"
+
+
 def test_scatter_codegen_tile_dram_input_l1_output_runs_tile_factory(device):
     # Ht == 1 qualifies for the row-major detour on shape alone, but the detour's ROW_MAJOR factories
     # cannot write an output whose buffer type differs from the input's; the call must take the TILE
@@ -162,8 +204,8 @@ def _error_of(fn):
 def test_scatter_codegen_empty_operands_stay_native(device, layout, expect_error):
     # A zero extent is a divisor in the codegen host arithmetic (CB page size, page map), which dies
     # with SIGFPE rather than an exception, so empties must never reach the codegen factories: auto
-    # must behave exactly as native does on them (native raises on a zero leading extent; a zero
-    # scatter axis, e.g. [0] or [32, 0], crashes native itself and is not probed here), and the
+    # must do exactly what native does on them, return or raise, with no codegen program built (a
+    # zero scatter axis, e.g. [0] or [32, 0], crashes native itself and is not probed here), and the
     # forced entry refuses. test_scatter_zero_volume drives the auto route over the other empties.
     xt, it, st = _make_case([2, 0, 32], [2, 0, 16], -1, layout, device)
     device.clear_program_cache()
@@ -326,14 +368,17 @@ def test_scatter_codegen_streaming_rows_without_index_coverage(device):
 
 @pytest.mark.parametrize(
     "shape,index_shape",
-    [([1, 1, 1056, 64], [1, 1, 1056, 32]), ([1, 1, 32, 32800], [1, 1, 32, 256])],
+    [([1, 1, 1056, 64], [1, 1, 1056, 32]), ([1, 1, 32, 32800], [1, 1, 32, 32])],
     ids=["ht_33", "stick_32800"],
 )
 def test_scatter_codegen_detour_bounds_keep_the_tile_factory(device, shape, index_shape):
     # Just past each detour bound (32 tile rows, 32768-element sticks) with sticks that are 32 B
     # aligned, so only the bound declines the detour: the TILE factory's one program beyond native's,
     # where the detour would add its untilizes and the ROW_MAJOR factory. The stick bound is crossed
-    # by the input alone: 256 is the widest scatter row the entry contract admits an int32 TILE index.
+    # by the input alone. The wide row does not fit the row split, so the column split must be the
+    # cheaper plan on every grid or the wide-row rule demotes the call: with one index tile per row it
+    # is cheaper on 56, 64 and 110 cores alike, while an eight-tile index would flip to native on the
+    # Wormhole grids (the gtest pins that threshold).
     xt, it, st = _make_case(shape, index_shape, -1, ttnn.TILE_LAYOUT, device)
     _, added = _run_auto_against_native(device, xt, it, st, -1)
     assert added == 1, "expected the codegen TILE factory's one program beyond native's"
@@ -473,18 +518,18 @@ def test_scatter_codegen_out_of_scope_cases_stay_native(device, input_dtype, lay
     assert added == 0, "auto routed an out-of-scope case to codegen; expected native"
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
 @pytest.mark.parametrize(
     "shape,index_shape,dim",
     [([1, 1, 32, 64], [1, 1, 32, 32], 10), ([1, 1, 32, 64], [1, 1, 32, 32], -10), ([2] * 9 + [64], [2] * 9 + [32], -1)],
     ids=["dim=10", "dim=-10", "rank-10"],
 )
-def test_scatter_codegen_out_of_range_dim_and_deep_rank_follow_native(device, shape, index_shape, dim):
+def test_scatter_codegen_out_of_range_dim_and_deep_rank_follow_native(device, shape, index_shape, dim, layout):
     # The uint16 rows of test_scatter_failing_cases never reach these clauses because the index dtype
     # rejects them first. With an int32 index the dim clause and the page-rank clause are what keep
     # the call off codegen: auto must raise or answer exactly as native, with no codegen entry built.
-    xt, it, st = _make_case(
-        shape, index_shape, dim if -len(shape) <= dim < len(shape) else -1, ttnn.TILE_LAYOUT, device
-    )
+    # Both layouts, because the dim clause is what keeps a ROW_MAJOR call from indexing the axis.
+    xt, it, st = _make_case(shape, index_shape, dim if -len(shape) <= dim < len(shape) else -1, layout, device)
     device.clear_program_cache()
     native_error = _error_of(lambda: _force_native(xt, dim, it, st))
     entries_before = device.num_program_cache_entries()

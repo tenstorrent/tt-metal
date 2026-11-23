@@ -27,15 +27,18 @@ namespace ttnn::operations::data_movement {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// The reduce strings the codegen factories serve. codegen_can_serve() routes any other string
-// native, where validate_inputs() raises the one error for it; widen together with
-// scatter_reduction_mode() below.
+// The reduce strings native accepts (validate_inputs()).
 constexpr std::string_view ALLOWED_REDUCTIONS[] = {"add", "multiply"};
+// The reduce strings the codegen factories serve: a subset of native's, kept apart so widening
+// native (amax, amin) does not route a string to codegen that scatter_reduction_mode() cannot map.
+// codegen_can_serve() routes any other string native, where validate_inputs() raises the one error
+// for it; widen together with scatter_reduction_mode() below.
+constexpr std::string_view CODEGEN_REDUCTIONS[] = {"add", "multiply"};
 
 bool codegen_serves_reduction(const std::optional<std::string>& opt_reduction_string) {
     return !opt_reduction_string.has_value() ||
-           std::find(std::begin(ALLOWED_REDUCTIONS), std::end(ALLOWED_REDUCTIONS), *opt_reduction_string) !=
-               std::end(ALLOWED_REDUCTIONS);
+           std::find(std::begin(CODEGEN_REDUCTIONS), std::end(CODEGEN_REDUCTIONS), *opt_reduction_string) !=
+               std::end(CODEGEN_REDUCTIONS);
 }
 
 // validate dimension constraints before sending down to device operation working on the last dimension
@@ -301,7 +304,7 @@ bool codegen_can_serve(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::string>& opt_reduction_string) {
     const auto output_mem_config = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
-    // A reduce string outside ALLOWED_REDUCTIONS routes native, which raises the one error for it on
+    // A reduce string outside CODEGEN_REDUCTIONS routes native, which raises the one error for it on
     // every architecture.
     if (!codegen_serves_reduction(opt_reduction_string)) {
         return false;
@@ -443,6 +446,20 @@ Tensor scatter_codegen_dispatch(
         /*force_row_major=*/false,
         index_tensor.logical_shape());
 
+    // The routing gates costed this call on codegen_working_shape(); the detour decision below runs
+    // on the transformed tensors, so the two must describe the same shapes or the gates and the
+    // dispatch can disagree silently.
+    TT_FATAL(
+        transformed_input_tensor.logical_shape() ==
+                scatter_ns::codegen_working_shape(input_tensor.logical_shape(), normalized_dim) &&
+            transformed_index_tensor.logical_shape() ==
+                scatter_ns::codegen_working_shape(index_tensor.logical_shape(), normalized_dim) &&
+            transformed_source_tensor.logical_shape() == transformed_index_tensor.logical_shape(),
+        "scatter: the transformed operands ({}, {}, {}) do not match the working shapes the routing gates costed",
+        transformed_input_tensor.logical_shape(),
+        transformed_index_tensor.logical_shape(),
+        transformed_source_tensor.logical_shape());
+
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
     const uint32_t reduction_mode = scatter_reduction_mode(opt_reduction_string);
@@ -508,10 +525,11 @@ Tensor scatter_force_codegen(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     TT_FATAL(
         codegen_can_serve(input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string),
-        "scatter_force_codegen invoked for a case the codegen path does not support (requires a single shared "
-        "layout -- TILE or ROW_MAJOR -- across bfloat16 input/src and an int32/uint32 index, all non-sharded and "
-        "non-empty, an untransposed default tile when that layout is TILE, no reduction other than add/multiply (and "
-        "only on ROW_MAJOR), an unsharded output placement that on ROW_MAJOR shares the input's buffer type, and "
+        "scatter_force_codegen invoked for a case the codegen path does not support (requires Wormhole or Blackhole, "
+        "a single shared layout -- TILE or ROW_MAJOR -- across bfloat16 input/src and an int32/uint32 index, all "
+        "non-sharded, non-empty, standard-padded and allocated on the device, at most eight page dimensions, a dim "
+        "within the rank, an untransposed default tile when that layout is TILE, no reduction other than add/multiply "
+        "(and only on ROW_MAJOR), an unsharded output placement that on ROW_MAJOR shares the input's buffer type, and "
         "enough per-core L1 for the codegen plan; see supported_by_codegen() and supported_execution_controls()). "
         "This entry never "
         "falls back to native, because a forced leg that quietly served native would make any comparison against "
@@ -543,7 +561,10 @@ Tensor scatter(
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
-    // Where a call lands, first match wins:
+    // Where a call lands, first match wins. The scope rung is codegen_can_serve() (supported_by_codegen
+    // and supported_execution_controls), the demoted rungs are is_demoted(), the live-L1 rungs are
+    // codegen_plan_fits_live_l1(), and the detour rung is prefers_row_major_strategy(), which the
+    // gates consult on the working shapes and the dispatch decides on the transformed tensors:
     //   - not Wormhole/Blackhole, outside the codegen scope (dtype, layout, tile, padding, sharding,
     //     reduce, page rank, empty operand, dim range, host or deallocated operand, ROW_MAJOR sticks
     //     past the static L1 bank), or an output placement its factories cannot write
@@ -571,9 +592,10 @@ Tensor scatter(
     const bool use_codegen =
         detail::codegen_can_serve(
             input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string) &&
-        !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor, final_memory_config) &&
-        // Live L1 is asked last and only here: the forced entry and the prim's validate consult
-        // the static scope alone.
+        !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor, final_memory_config, sub_core_grid) &&
+        // codegen_plan_fits_live_l1 is the gate only this router applies: the forced entry and
+        // the prim's validate consult the static scope, though the detour decision every dispatch
+        // takes (prefers_row_major_strategy) reads the live frontier too.
         scatter_ns::codegen_plan_fits_live_l1(
             input_tensor,
             dim,

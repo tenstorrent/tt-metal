@@ -6,8 +6,9 @@
 // 1) Reads full input data row (Wt_output tiles) from the input buffer into cb_input.
 // 2) Writes completed output tiles from cb_output to the output buffer.
 //
-// This runs on BRISC while the reader (NCRISC) reads index/src tiles and does
-// the element-level scatter. Both RISCs move data concurrently.
+// This runs on BRISC; the reader (NCRISC) reads index/src tiles and does the
+// element-level scatter. The writer loads a batch of input tiles, then waits for
+// the reader's output of that batch, so the two alternate per batch.
 //
 // Multicore: strided row assignment, same as reader.
 //

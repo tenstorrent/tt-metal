@@ -320,7 +320,7 @@ def test_scatter_partial(
         ([2, 3, 4, 5, 6, 7], 0, [2, 3, 2, 5, 6, 7], [2, 3, 2, 5, 6, 7]),  # rank 6, transposed
         ([2, 3, 2, 3, 2, 3, 2, 3], 3, [2, 2, 2, 2, 2, 2, 2, 3], [2, 2, 2, 2, 2, 2, 2, 3]),  # rank 8, transposed
         # Past the 48 KiB operand bound under which is_demoted() keeps small off-axis ROW_MAJOR calls
-        # native, so this row reaches the codegen kernels on Wormhole and Blackhole (46 KiB input, 75 KiB index).
+        # native, so this row reaches the codegen kernels on Wormhole and Blackhole (45 KiB input, 75 KiB index).
         ([4, 6, 8, 10, 12], 2, [4, 5, 8, 10, 12], [4, 5, 8, 10, 12]),
         # Interior leading dim of 1 on the index side: broadcast-looking but not broadcast.
         ([2, 3, 4, 5, 6], -1, [2, 1, 4, 5, 6], [2, 1, 4, 5, 6]),
@@ -436,7 +436,7 @@ def test_scatter_reduction_high_rank_unequal_leading_dims(
     # Deliberately randint rather than rand_scatter_index, unlike every non-reduction test in this
     # file. Duplicate indices are the whole point here: they are what makes the reduce path combine
     # anything at all. Unique indices write each output slot exactly once, which turns add and
-    # multiply into plain assignment - measured over these four cases, randint reduces 125, 128,
+    # multiply into plain assignment - measured over the first four cases, randint reduces 125, 128,
     # 678 and 883 slots respectively while unique indices reduce zero. Duplicates are safe to keep
     # because add and multiply are order-independent, so there is no unspecified winner to depend
     # on the way a plain scatter would have.

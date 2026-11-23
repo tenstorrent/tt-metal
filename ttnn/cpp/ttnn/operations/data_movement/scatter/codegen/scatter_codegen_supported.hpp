@@ -11,6 +11,13 @@
 
 namespace ttnn::operations::data_movement::scatter {
 
+// Names used across the codegen scatter sources:
+//   row split, "interleaved" factory: TILE, each core owns whole tile rows, the row resident in L1;
+//   column split, "streaming" factory: TILE, each core owns output tile columns, pages streamed;
+//   detour: a TILE call untilized and served by the ROW_MAJOR factory, then tilized back;
+//   chunk: the slice of an index/src stick the ROW_MAJOR readers hold in L1 at a time;
+//   working shape: the caller's logical shape with the scatter axis last and the rank padded to 4.
+
 // The codegen kernels' reduction_mode numbering (kernels/scatter_reader_bf16_reduce_rm.cpp's
 // reduce_fp32; the other readers static_assert kReductionNone), restricted to the modes the codegen
 // factories serve. scatter.cpp's codegen_can_serve() routes any other reduce string native, and
@@ -24,7 +31,7 @@ constexpr uint32_t kReductionMultiply = 2;
 // routing, by scatter_force_codegen(), and by the codegen prim's own validation step.
 //
 // `dim` is the (possibly negative) scatter axis in the tensors' OWN rank -- the router and
-// scatter_force_codegen() call this ahead of the transpose-to-last-dim / 4D-fold normalization, with
+// scatter_force_codegen() call this ahead of the transpose-to-last-dim and rank-padding normalization, with
 // the caller's raw dim, so an out-of-range dim falls through to native's error instead of indexing
 // out of bounds here. The codegen prim's validate calls this on the already-normalized tensors it
 // actually holds, where the scatter axis is always the last dim; it passes -1 to say so.
@@ -70,7 +77,8 @@ uint64_t pending_operand_copies_bytes(
 // the TILE factory. The TILE row split leaves most of the grid idle at a low tile-row count, and the
 // column split rescans every index tile per output tile; at or below kRowMajorRerouteMaxHt the RM
 // factory's per-stick split reaches far more cores at linear cost, provided the untilized stick is
-// bounded, NOC-aligned and fits the L1 left once this call's own allocations land. `working_input`/`working_index` are
+// bounded, a multiple of kRowMajorRerouteWidthMultiple bytes wide and fits the L1 left once this call's own
+// allocations land. `working_input`/`working_index` are
 // the operands' codegen_working_shape()s; the tensors supply dtype, element size, device and placement, none of which
 // the transpose changes. `output_mem_config` is the placement the call will write to: the detour lands on the ROW_MAJOR
 // factories, which supported_execution_controls() only admits when the output shares the input's
@@ -100,13 +108,15 @@ bool prefers_row_major_strategy(
 // (pre-normalization) scatter axis, matching supported_by_codegen()'s convention; it is normalized
 // once inside, so the same axis spelled positive or negative demotes identically. `output_mem_config`
 // is the placement the call will write to (the caller's memory_config, else the input's own), which
-// decides whether the row-major detour can serve the call.
+// decides whether the row-major detour can serve the call. `sub_core_grids` is the caller's core
+// restriction, so the wide-row rule costs the column split on the grid the factory would run on.
 bool is_demoted(
     const Tensor& input_tensor,
     int32_t dim,
     const Tensor& index_tensor,
     const Tensor& src_tensor,
-    const tt::tt_metal::MemoryConfig& output_mem_config);
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 // Live-L1 gate consulted only by ttnn::scatter()'s routing, after the gates above: whether the plan
 // the codegen factory will build fits the L1 that is free right now, with the buffers this call

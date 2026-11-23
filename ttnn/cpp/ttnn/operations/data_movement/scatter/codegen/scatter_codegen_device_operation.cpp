@@ -48,14 +48,11 @@ ScatterCodegenDeviceOperation::program_factory_t ScatterCodegenDeviceOperation::
     const bool interleaved_fits = scatter_interleaved_fits_l1(
         scatter_usable_l1(input_tensor), attributes.Wt_output, output_page, input_page, index_page, src_page);
 
-    auto* device = input_tensor.device();
-    const auto grid = device->compute_with_storage_grid_size();
-    const uint32_t device_cores = static_cast<uint32_t>(grid.x * grid.y);
-    const uint32_t candidate_cores = attributes.sub_core_grids.has_value()
-                                         ? static_cast<uint32_t>(attributes.sub_core_grids->num_cores())
-                                         : device_cores;
-    const bool use_column_parallel =
-        scatter_prefers_column_split(attributes.Ht, attributes.Wt_output, attributes.Wt_index, candidate_cores);
+    const bool use_column_parallel = scatter_prefers_column_split(
+        attributes.Ht,
+        attributes.Wt_output,
+        attributes.Wt_index,
+        scatter_candidate_cores(input_tensor, attributes.sub_core_grids));
 
     if (interleaved_fits && !use_column_parallel) {
         return ScatterCodegenProgramFactoryInterleaved{};
@@ -208,11 +205,12 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         ttnn::operations::data_movement::scatter::supported_by_codegen(
             input_tensor, /*dim=*/-1, index_tensor, src_tensor, attributes.reduction_mode),
-        "scatter_codegen: operands are outside the codegen scope (see supported_by_codegen(): bfloat16 input/src "
-        "with an int32/uint32 index in one shared TILE or ROW_MAJOR layout, all non-sharded, non-empty and on the "
-        "device, default untransposed 32x32 tiles and standard padding, add/multiply reduction only on ROW_MAJOR, "
-        "at most {} page dimensions, and for ROW_MAJOR resident input/output sticks plus the smallest index/src "
-        "chunk fitting the device's static per-core L1 bank).",
+        "scatter_codegen: operands are outside the codegen scope (see supported_by_codegen(): Wormhole or "
+        "Blackhole, bfloat16 input/src with an int32/uint32 index in one shared TILE or ROW_MAJOR layout, all "
+        "non-sharded, non-empty, standard-padded and allocated on a local device, a dim within the rank, default "
+        "untransposed 32x32 tiles, add/multiply reduction only on ROW_MAJOR, at most {} page dimensions, and for "
+        "ROW_MAJOR resident input/output sticks plus the smallest index/src chunk fitting the device's static "
+        "per-core L1 bank).",
         kScatterMaxPageRank);
 
     // The descriptor launches on input_tensor.device() while embedding index/src's raw buffer

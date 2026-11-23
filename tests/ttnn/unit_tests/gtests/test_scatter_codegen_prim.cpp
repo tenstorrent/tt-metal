@@ -201,6 +201,13 @@ TEST(ScatterCodegenFactorySelection, ColumnSplitCostFollowsTheRescans) {
     EXPECT_FALSE(scatter_prefers_column_split(2, 7, 1, 110));
     EXPECT_FALSE(scatter_prefers_column_split(40, 100, 8, 110));
     EXPECT_FALSE(scatter_prefers_column_split(40, 100, 1, 110));
+    // One tile row too wide for the row split with eight index tiles: the column split is cheaper
+    // on a 110-core grid and dearer on the 56- and 64-core Wormhole grids, so the wide-row demotion
+    // depends on the grid there; with one index tile it is cheaper everywhere.
+    EXPECT_TRUE(scatter_prefers_column_split(1, 1025, 8, 110));
+    EXPECT_FALSE(scatter_prefers_column_split(1, 1025, 8, 64));
+    EXPECT_FALSE(scatter_prefers_column_split(1, 1025, 8, 56));
+    EXPECT_TRUE(scatter_prefers_column_split(1, 1025, 1, 56));
     EXPECT_FALSE(scatter_prefers_column_split(1, 1, 1, 110));
     EXPECT_FALSE(scatter_prefers_column_split(1, 64, 1, 1));
     EXPECT_FALSE(scatter_prefers_column_split(0, 64, 1, 110));

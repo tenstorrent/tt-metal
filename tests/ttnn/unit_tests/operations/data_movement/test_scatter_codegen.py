@@ -47,6 +47,8 @@ _FACTORY_CASES = [
         [1, 1, 64, 200], [1, 1, 64, 100], ttnn.TILE_LAYOUT, {"sub_core_grids": _TWO_CORES}, None, id="tile_interleaved"
     ),
     pytest.param([1, 1, 32, 200], [1, 1, 32, 32], ttnn.TILE_LAYOUT, {}, None, id="tile_streaming"),
+    # One tile row with a 128 B stick: untilized, scattered by the ROW_MAJOR factory, tilized back.
+    pytest.param([1, 1, 32, 64], [1, 1, 32, 32], ttnn.TILE_LAYOUT, {}, None, id="tile_detour"),
     pytest.param([1, 1, 32, 64], [1, 1, 32, 32], ttnn.ROW_MAJOR_LAYOUT, {}, None, id="row_major"),
     pytest.param(
         [1, 1, 32, 64], [1, 1, 32, 32], ttnn.ROW_MAJOR_LAYOUT, {"reduce": "add"}, 8, id="row_major_bf16_reduce"
@@ -54,28 +56,33 @@ _FACTORY_CASES = [
 ]
 
 
-def _case(device, shape, index_shape, layout, index_max):
+def _case(device, shape, index_shape, layout, index_max, with_torch=False):
     axis_len = shape[-1]
     if index_max is None:
         # Unique per row: a duplicate's winner is whichever update lands last, which no route promises.
         index = torch.argsort(torch.rand(index_shape[:-1] + [axis_len]), dim=-1)[..., : index_shape[-1]]
     else:
         index = torch.randint(0, index_max, index_shape)
-    xt = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    src = torch.rand(index_shape, dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device)
     it = ttnn.from_torch(index.to(torch.int32).contiguous(), dtype=ttnn.int32, layout=layout, device=device)
-    st = ttnn.from_torch(
-        torch.rand(index_shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device
-    )
+    st = ttnn.from_torch(src, dtype=ttnn.bfloat16, layout=layout, device=device)
+    if with_torch:
+        return xt, it, st, (x, index, src)
     return xt, it, st
 
 
 @pytest.mark.parametrize("shape, index_shape, layout, kwargs, index_max", _FACTORY_CASES)
 def test_scatter_codegen(device, shape, index_shape, layout, kwargs, index_max):
     torch.manual_seed(42)
-    xt, it, st = _case(device, shape, index_shape, layout, index_max)
+    xt, it, st, (x, index, src) = _case(device, shape, index_shape, layout, index_max, with_torch=True)
 
     golden = _force_native(xt, -1, it, st, **kwargs)
     output = _force_codegen(xt, -1, it, st, **kwargs)
+    if not kwargs:
+        # Native is not the only oracle: an overwrite with a unique index has one answer, torch's.
+        assert_equal(torch.scatter(x, -1, index, src), ttnn.to_torch(output))
 
     assert output.shape == golden.shape, f"Output shape {output.shape} does not match native shape {golden.shape}"
     assert_equal(ttnn.to_torch(golden), ttnn.to_torch(output))
