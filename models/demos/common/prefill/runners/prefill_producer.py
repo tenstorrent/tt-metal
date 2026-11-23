@@ -1571,14 +1571,14 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 position0=first_pos + skip_rows,
             )
             dev_ik = rotate_index_keys(hf_config, dev_ik.float()).to(torch.bfloat16)  # the golden's natural basis
-            dev_ik, golden_ik = _visible_rows(dev_ik, golden_ik, f"layer {layer} index")
+            visible = _visible_mask(dev_ik, f"layer {layer} index")
+            dev_ik, golden_ik = dev_ik[visible], golden_ik[visible]
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             if is_mtp_row:
                 mtp_index_pcc = pcc_index
                 if mtp_index_layout != "interleaved":
-                    _, pcc_stored = comp_pcc(
-                        _load_golden_index_k(golden_dir, layer, cmp_len, start=golden_offset), dev_ik
-                    )
+                    stored_ik = _load_golden_index_k(golden_dir, layer, cmp_len, start=golden_offset)
+                    _, pcc_stored = comp_pcc(stored_ik[visible], dev_ik)
                     logger.info(
                         f"[producer]   mtp_index golden as-stored ({mtp_index_layout}) {pcc_stored:.6f} -> "
                         f"re-based onto the device's rope pairing {pcc_index:.6f}"
