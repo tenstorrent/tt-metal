@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """KDA accuracy against a reference: the carried state at a segment end, absolute and relative.
 
-The KDA output is a continuous product, scored by ``windowed.error_metrics``. The state is scored here, once per
+The KDA output is a continuous product, scored by ``windowed.errors``. The state is scored here, once per
 segment end, since it carries the context: its error growth is the stateful family's growth signal.
 """
 

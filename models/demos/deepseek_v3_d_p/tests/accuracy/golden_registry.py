@@ -194,9 +194,17 @@ class Golden:
         return self.manifest["identity"]
 
     def require(
-        self, *, producer: str, producer_version: int, identity: dict | None = None, products: Iterable[str] = ()
+        self,
+        *,
+        producer: str,
+        producer_version: int,
+        identity: dict | None = None,
+        weights_sha256: dict[str, str] | None = None,
+        products: Iterable[str] = (),
     ) -> None:
-        """Raise ``GoldenMismatch`` naming every field that differs from what the consumer was calibrated on."""
+        """Raise ``GoldenMismatch`` naming every field that differs from what the consumer was calibrated on.
+        ``weights_sha256``: digests of the weights the consumer loaded itself; each must be one the golden was built
+        from (a subset check: a consumer loads only the layers it needs)."""
         mismatched = []
         for key, want in (("producer", producer), ("producer_version", producer_version)):
             if self.manifest[key] != want:
@@ -204,6 +212,13 @@ class Golden:
         for key, want in (identity or {}).items():
             if self.identity.get(key) != want:
                 mismatched.append(f"identity.{key} is {self.identity.get(key)!r}, expected {want!r}")
+        built_from = self.identity.get("weights_sha256")
+        built_from = built_from if isinstance(built_from, dict) else {}  # (per-tensor-group digests to check against)
+        mismatched += [
+            f"weights {key} are {digest[:12]}..., the golden's {str(built_from.get(key))[:12]}..."
+            for key, digest in sorted((weights_sha256 or {}).items())
+            if built_from.get(key) != digest
+        ]
         mismatched += [f"no product {name!r}" for name in products if name not in self.manifest["products"]]
         if mismatched:
             raise GoldenMismatch(f"golden {self.golden_id} at {self.path}: " + "; ".join(mismatched))

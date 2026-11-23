@@ -28,9 +28,8 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
     Bar,
     RowSeries,
     check,
-    error_metrics,
+    errors,
     nrmse,
-    of,
     row_nrmse,
     row_sums,
 )
@@ -132,28 +131,29 @@ def test_kimi_k3_layer0_long_context_accuracy(
         )
         series.append(start, sums=row_sums(golden, output))
 
-    whole = series.windows(
-        tokens,
-        {**error_metrics("output"), "token_nrmse_max": of("sums", lambda s: float(row_nrmse(s, floor).max()))},
+    whole = series.whole(
+        lambda w: {**errors(w["sums"], "output_"), "token_nrmse_max": float(row_nrmse(w["sums"], floor).max())}
     )
-    windows = series.windows(_WINDOW, {"window_nrmse": of("sums", nrmse), **error_metrics("window")})
+    windows = series.windows(_WINDOW, lambda w: errors(w["sums"], "window_"))
     per_token = row_nrmse(series.column("sums"), floor)
     golden_state = torch.load(run_dir / f"segment_{tokens // manifest['segment'] - 1:06d}.pt", weights_only=True)
     recurrent = reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tensor_parallel_axis, sp_size - 1)
     result = {
         "golden_id": K3_LAYER0_GOLDEN,
         "tokens": tokens,
-        "output_nrmse": whole[0]["output_nrmse"],
-        "output_rms_err": whole[0]["output_rms_err"],
-        "output_rms_ref": whole[0]["output_rms_ref"],
-        "call_nrmse_max": max(w["call_nrmse"] for w in series.windows(_CALL, {"call_nrmse": of("sums", nrmse)})),
+        "output_nrmse": whole["output_nrmse"],
+        "output_rms_err": whole["output_rms_err"],
+        "output_rms_ref": whole["output_rms_ref"],
+        "call_nrmse_max": max(
+            w["call_nrmse"] for w in series.windows(_CALL, lambda w: {"call_nrmse": nrmse(w["sums"])})
+        ),
         "window_nrmse_max": max(w["window_nrmse"] for w in windows),
         "window_nrmse_last": windows[-1]["window_nrmse"],
         # absolute error next to the relative: RMS over elements of the first and last window, and the golden's RMS
         "window_rms_err_first_last": [windows[0]["window_rms_err"], windows[-1]["window_rms_err"]],
         "window_rms_ref_first_last": [windows[0]["window_rms_ref"], windows[-1]["window_rms_ref"]],
         "token_nrmse_median": float(per_token.median()),
-        "token_nrmse_max": whole[0]["token_nrmse_max"],
+        "token_nrmse_max": whole["token_nrmse_max"],
         "token_nrmse_argmax": int(per_token.argmax()),
         "state_head_nrmse_max": float(
             slice_nrmse(golden_state["state"]["recurrent"][0], recurrent[0].double(), (0,)).max()
@@ -170,6 +170,6 @@ def test_kimi_k3_layer0_long_context_accuracy(
         pcc_keep_dims=(0,),
     )
     failures = check(
-        whole, [Bar("output_nrmse", "max", thresholds["output"]), Bar("token_nrmse_max", "max", thresholds["token"])]
+        [whole], [Bar("output_nrmse", "max", thresholds["output"]), Bar("token_nrmse_max", "max", thresholds["token"])]
     ) + check(windows, [Bar("window_nrmse", "max", thresholds["window"])])
     assert not failures, failures
