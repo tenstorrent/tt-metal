@@ -307,11 +307,11 @@ class Inkling2AttentionFast(Inkling2Attention):
             # (window rows 1..8), q / gate / rel / sink at row 0 and k at rows 1..4 (rows 0..7); the global layers' dynamic
             # taps at the k / v lag-0 rows 1 and 5 (either window). Single mode: rows 0..3.
             q1, v0, v1 = KV0 // 32, (KV0 + N_KV * HEAD_DIM) // 32, (KV0 + 2 * N_KV * HEAD_DIM) // 32
-            mode = self._w_all_mode = ["single"]
+            win = self.window  # the input mode of the window the projection reads: its last call (decode or not)
 
             def x_base(part):
                 cols = [g0 + t for ncq, g0 in part for t in range(ncq)]
-                if mode[0] != "triple" or not any(v0 <= c < v1 for c in cols):
+                if not getattr(win, "triple", False) or not any(v0 <= c < v1 for c in cols):
                     return 0
                 assert min(cols) >= q1, "a core with q columns (row 0) and v columns (rows 5..8)"
                 return 1
@@ -409,8 +409,6 @@ class Inkling2AttentionFast(Inkling2Attention):
         else:
             mode = "single" if (xk is xq and xv is xq) else "triple"
             act = self.window(state.x_hist, [xq] if mode == "single" else [xq, xk, xv])
-            if hasattr(self, "_w_all_mode"):
-                self._w_all_mode[0] = mode
             proj = self.w_all(act, ttnn.bfloat16, self.mm_cfg)
         F.RIDE = None
         rows = ROWS[mode]

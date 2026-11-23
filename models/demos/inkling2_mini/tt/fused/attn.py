@@ -584,6 +584,7 @@ class AttnWindow:
             F.check_row_input(t)
             assert t.dtype == ttnn.bfloat16, t.dtype
         xq, xk, xv = xs if len(xs) == 3 else xs * 3
+        self.triple = len(xs) == 3  # the input mode of the window just written (the projection's x_base reads it)
         n = self.ntiles
         rt = [[hist.buffer_address(), self.act.buffer_address(), i * n] for i in range(len(self.cores))]
         rt = [r + [xq.buffer_address(), xk.buffer_address(), xv.buffer_address()] for r in rt]
