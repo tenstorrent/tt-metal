@@ -25,8 +25,6 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
             ((((std::uint32_t)unpack_dst_format[unpA_operand_id] >> 2) & 0x1) ? (std::uint32_t)DataFormat::Float16_b
                                                                               : (std::uint32_t)DataFormat::Float16);
 
-    // DEFAULT_TENSOR_SHAPE keeps main's fixed 32x32 scaler path; the LLK derives the MOP
-    // length from the total face count if a caller ever passes real operand geometry.
     _llk_unpack_reduce_init_<type, dim>(
         unpB_src_format, unpB_dst_format, within_face_16x16_transpose, ckernel::DEFAULT_TENSOR_SHAPE);
 }
