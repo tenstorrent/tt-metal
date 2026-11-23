@@ -132,6 +132,16 @@ void kernel_main() {
     // accessor follows the CB-id block, its address is runtime arg SDPA_REL_WRITER_ARG.
     constexpr auto rel_args = TensorAccessorArgs<cb_arg_offset + 8>();
     const auto rel_reader = TensorAccessor(rel_args, get_arg_val<uint32_t>(SDPA_REL_WRITER_ARG));
+#ifdef SDPA_REL_STAGE_CB
+    // Staged bias rows (rel_stage_issue): two buffers of a group each, the next group (also the next Q chunk's
+    // first) in flight while the current one is copied out. Read transaction ids 1 / 2 for the two buffers, 3 for
+    // the block copies, so each barrier waits for its own reads only.
+    constexpr uint32_t rel_G = SDPA_REL_STAGE_G;
+    constexpr uint32_t rel_buf_bytes = Sq_chunk_t * 32 * rel_G * Sk_chunk_t * 32 * 2;
+    const uint32_t rel_stage = get_write_ptr(SDPA_REL_STAGE_CB);  // never reserved / pushed: plain L1
+    constexpr uint32_t rel_none = 0xFFFFFFFFu;
+    uint32_t rel_pend_key = rel_none, rel_pend_buf = 0;
+#endif
 #endif
 
     // Packed, the output is [B, 1, gqa_pack_sqt, NQH*gqa_pack*vDH], and a Q chunk may run into the next query head of
@@ -262,6 +272,67 @@ void kernel_main() {
                 k_hi = k_hi > k_num_chunks ? k_num_chunks : k_hi;
                 const uint32_t page0 = (nb * NQH + nq) * valid_Sqt * tt::constants::TILE_HEIGHT;
                 CircularBuffer cb_rel_rm(SDPA_REL_RM_CB);
+#ifdef SDPA_REL_STAGE_CB
+                (void)k_lo;
+                const RelRange rg = rel_range<Sq_chunk_t, Sk_chunk_t, window>(q_chunk, k_num_chunks);
+                const uint32_t ng = rg.k_hi > rg.k_near ? (rg.k_hi - rg.k_near + rel_G - 1) / rel_G : 0;
+                const uint32_t q_tiles = use_padded_mask ? valid_Sqt : 0xFFFFFFFFu;
+                for (uint32_t g = 0; g < ng; ++g) {
+                    const uint32_t kg = rg.k_near + g * rel_G;
+                    const uint32_t key = (global_q_iter << 8) | g;
+                    if (rel_pend_key != key) {  // not prefetched (the first group of the core)
+                        noc_async_read_set_trid(1 + rel_pend_buf);
+                        rel_stage_issue<Sq_chunk_t, Sk_chunk_t, rel_G>(
+                            rel_reader, page0, q_chunk, kg, q_tiles, rel_stage + rel_pend_buf * rel_buf_bytes);
+                    }
+                    const uint32_t buf = rel_pend_buf;
+                    // prefetch the next group: this Q chunk's next, else the next Q chunk's first
+                    rel_pend_key = rel_none;
+                    if (g + 1 < ng) {
+                        rel_pend_key = key + 1;
+                        rel_pend_buf = 1 - buf;
+                        noc_async_read_set_trid(1 + rel_pend_buf);
+                        rel_stage_issue<Sq_chunk_t, Sk_chunk_t, rel_G>(
+                            rel_reader, page0, q_chunk, kg + rel_G, q_tiles, rel_stage + rel_pend_buf * rel_buf_bytes);
+                    } else if (global_q_iter + 1 < global_q_count) {
+                        const auto nxt = decompose_global_q_index(
+                            global_q_start + global_q_iter + 1, q_num_chunks, NQH, use_zigzag_balancing);
+                        const RelRange nrg = rel_range<Sq_chunk_t, Sk_chunk_t, window>(nxt.q_chunk, k_num_chunks);
+                        if (nrg.k_hi > nrg.k_near) {
+                            rel_pend_key = (global_q_iter + 1) << 8;
+                            rel_pend_buf = 1 - buf;
+                            noc_async_read_set_trid(1 + rel_pend_buf);
+                            rel_stage_issue<Sq_chunk_t, Sk_chunk_t, rel_G>(
+                                rel_reader,
+                                (nxt.nb * NQH + nxt.nq) * valid_Sqt * tt::constants::TILE_HEIGHT,
+                                nxt.q_chunk,
+                                nrg.k_near,
+                                q_tiles,
+                                rel_stage + rel_pend_buf * rel_buf_bytes);
+                        }
+                    }
+                    noc_async_read_barrier_with_trid(1 + buf);
+                    const uint32_t k_end = kg + rel_G < rg.k_hi ? kg + rel_G : rg.k_hi;
+                    for (uint32_t k_chunk = kg; k_chunk < k_end; ++k_chunk) {
+                        for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+                            const uint32_t q_tile = q_chunk * Sq_chunk_t + row;
+                            const bool q_valid = !use_padded_mask || q_tile < valid_Sqt;
+                            cb_rel_rm.reserve_back(Sk_chunk_t);
+                            const uint32_t blk = cb_rel_rm.get_write_ptr();
+                            if (q_valid) {
+                                noc_async_read_set_trid(3);
+                                rel_stage_block<Sq_chunk_t, Sk_chunk_t, rel_G>(
+                                    rel_stage + buf * rel_buf_bytes, q_chunk, row, kg, k_chunk, blk);
+                                noc_async_read_barrier_with_trid(3);
+                            }
+                            rel_rm_fill<kc, window>(
+                                q_tile, k_chunk * kc, SDPA_REL_VALID_SKT * tt::constants::TILE_HEIGHT, q_valid, blk);
+                            cb_rel_rm.push_back(Sk_chunk_t);
+                        }
+                    }
+                }
+                noc_async_read_set_trid(0);
+#else
                 for (uint32_t k_chunk = k_lo; k_chunk < k_hi; ++k_chunk) {
                     const int32_t far_d = static_cast<int32_t>(p0) - static_cast<int32_t>((k_chunk + 1) * kc - 1);
                     if (far_d >= static_cast<int32_t>(kRelW)) {
@@ -282,6 +353,7 @@ void kernel_main() {
                         cb_rel_rm.push_back(Sk_chunk_t);
                     }
                 }
+#endif
             }
 #endif
 

@@ -1883,6 +1883,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             cb_ids.windowed_k_range = allocate_cb(16, 2, tt::DataFormat::Int32);
         }
     }
+    // Skewed bias built by the writer: an L1 staging area for the bias rows of a group of rel_stage_group K chunks
+    // (two groups: one in flight while the other is copied out), so each row is read once per group, not per chunk.
+    constexpr uint32_t rel_stage_group = 4;
+    uint32_t rel_stage_cb = sdpa_cb::CBIds::inactive;
+    if (use_rel_bias && operation_attributes.rel_skewed && !is_chunked) {
+        rel_stage_cb = allocate_cb(
+            rel_stage_group * Sk_chunk_t * TILE_WIDTH * 2, 2 * Sq_chunk_t * TILE_HEIGHT, tt::DataFormat::Float16_b);
+    }
     // Windowed rel_logits, block-float K / V: an L1 cache of whole K + V chunks for the reader. A core's consecutive
     // Q chunks see K ranges that overlap in all but one chunk, so most chunks come from L1 instead of DRAM (same
     // bytes). Slots: the most K chunks one Q chunk's range can touch, plus one.
@@ -2085,6 +2093,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         writer_desc.defines.emplace_back("SDPA_REL_RM_CB", std::to_string(cb_ids.rel_scratch));
         writer_desc.defines.emplace_back("SDPA_REL_VALID_SKT", std::to_string(valid_Skt));
         writer_desc.defines.emplace_back("SDPA_REL_WINDOW", std::to_string(sliding_window_size.value_or(0)));
+        writer_desc.defines.emplace_back("SDPA_REL_STAGE_CB", std::to_string(rel_stage_cb));
+        writer_desc.defines.emplace_back("SDPA_REL_STAGE_G", std::to_string(rel_stage_group));
         reader_desc.defines.emplace_back("SDPA_REL_WRITER", "1");
     }
     writer_desc.config = WriterConfigDescriptor{};
