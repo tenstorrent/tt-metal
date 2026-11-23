@@ -47,7 +47,13 @@ ttnn::Tensor slice_small_vector_wrapper(
 
 void bind_slice(nb::module_& mod) {
     const auto* doc = R"doc(
-        Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
+        Returns a sliced tensor (Quasar-native).
+
+        One data-movement kernel of up to 6 threads runs on every cluster that gets work; it moves whole
+        rows (``ROW_MAJOR``) or tiles (``TILE``) from the input to the output, gathers elements in L1 when
+        the last dim of a row is strided or a ``TILE`` slice does not fall on tile boundaries, and uses no
+        compute unit. Inputs and outputs may be interleaved or sharded; a ``ROW_MAJOR`` block / width
+        sharded tensor is unsharded / sharded around the slice.
 
         Args:
             input_tensor (ttnn.Tensor): Input tensor.
@@ -63,6 +69,7 @@ void bind_slice(nb::module_& mod) {
 
         Note:
             Strided slicing (``slice_step != 1``) is not supported for ``bfloat8_b`` tensors.
+            The environment variable ``TTNN_QSR_SLICE_THREADS`` (1..6) overrides the thread count.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -137,7 +144,8 @@ void bind_slice_descriptor(nb::module_& mod) {
         .def_rw("slice_end", &ttnn::prim::qsr::SliceParams::slice_end)
         .def_rw("step", &ttnn::prim::qsr::SliceParams::step)
         .def_rw("output_mem_config", &ttnn::prim::qsr::SliceParams::output_mem_config)
-        .def_rw("sub_core_grids", &ttnn::prim::qsr::SliceParams::sub_core_grids);
+        .def_rw("sub_core_grids", &ttnn::prim::qsr::SliceParams::sub_core_grids)
+        .def_rw("num_threads", &ttnn::prim::qsr::SliceParams::num_threads);
 
     nb::class_<ttnn::prim::qsr::SliceInputs>(mod, "SliceInputs")
         .def(

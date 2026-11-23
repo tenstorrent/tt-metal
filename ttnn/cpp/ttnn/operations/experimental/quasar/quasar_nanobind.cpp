@@ -31,6 +31,7 @@
 #include "ttnn/operations/experimental/quasar/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/softmax/softmax_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/permute/permute_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/batch_norm/batch_norm_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/transformer/transformer_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/adaptive_pool/adaptive_pools_nanobind.hpp"
@@ -92,6 +93,7 @@ void bind_quasar(nb::module_& mod) {
     detail::bind_slice(m_quasar);
     detail::bind_slice_descriptor(m_quasar);
     detail::bind_transpose(m_quasar);
+    detail::bind_permute(m_quasar);
     detail::bind_reshard(m_quasar);
 
     // conv2d.

@@ -40,6 +40,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     common/thread_plan.hpp
     softmax/softmax.hpp
     batch_norm/batch_norm.hpp
+    permute/permute.hpp
     # transformer
     transformer/sdpa_decode/sdpa_decode.hpp
     transformer/sdpa/sdpa.hpp
@@ -138,12 +139,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.cpp
     untilize_with_unpadding/device/factories/untilize_with_unpadding_multi_core_sharded_program_factory.cpp
     untilize_with_unpadding/device/factories/untilize_with_unpadding_single_core_program_factory.cpp
-    # slice
+    # slice (Quasar-native: one multi-threaded DM kernel per cluster, no DFB)
     slice/slice.cpp
     slice/device/slice_device_operation.cpp
-    slice/device/slice_program_factory_rm.cpp
-    slice/device/slice_program_factory_rm_sharded.cpp
-    slice/device/slice_program_factory_rm_stride.cpp
+    slice/device/slice_program_factory.cpp
     # padded_slice (RM Metal-2 port; used by conv2d DRAM slicing on Quasar)
     padded_slice/padded_slice.cpp
     padded_slice/device/padded_slice_device_operation.cpp
@@ -159,8 +158,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     # op_slicing (quasar fork of the conv2d DRAM output-height-slicing driver; routes per-slice
     # padded_slice / slice_write unconditionally through the quasar Metal-2 ops)
     op_slicing/op_slicing.cpp
-    slice/device/slice_program_factory_tile.cpp
-    slice/device/slice_program_factory_tile_tensor_args.cpp
     # transpose
     transpose/transpose.cpp
     transpose/device/transpose_device_operation.cpp
@@ -241,10 +238,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     reshape_view/reshape.cpp
     reshape_view/reshape_common.cpp
     reshape_view/device/reshape_device_operation.cpp
-    reshape_view/device/reshape_rm_program_factory.cpp
-    reshape_view/device/reshape_rm_metal2_program_factory.cpp
-    reshape_view/device/reshape_tiled_program_factory.cpp
-    reshape_view/device/reshape_tiled_metal2_program_factory.cpp
+    reshape_view/device/reshape_program_factory.cpp
     # untilize
     untilize/untilize.cpp
     untilize/device/untilize_device_operation.cpp
@@ -294,6 +288,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     batch_norm/batch_norm.cpp
     batch_norm/device/batch_norm_device_operation.cpp
     batch_norm/device/batch_norm_program_factory.cpp
+    # permute (Quasar-native, six DM threads per cluster, no compute kernel)
+    permute/permute.cpp
+    permute/device/permute_device_operation.cpp
+    permute/device/permute_program_factory.cpp
     # transformer (Metal 2.0 fork of operations/transformer/sdpa_decode; isolated in ttnn::prim::qsr)
     transformer/sdpa_decode/sdpa_decode.cpp
     transformer/sdpa_decode/device/sdpa_decode_device_operation.cpp
@@ -527,6 +525,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
     softmax/softmax_nanobind.cpp
     batch_norm/batch_norm_nanobind.cpp
+    permute/permute_nanobind.cpp
     # transformer (nested ttnn.experimental.quasar.transformer submodule)
     transformer/transformer_nanobind.cpp
     transformer/sdpa_decode/sdpa_decode_nanobind.cpp
