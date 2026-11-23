@@ -104,13 +104,13 @@ The synchronize apis such as `Synchronize`, `EnqueueRecordEvent`, and the ttnn l
 
 The following are some examples of the different python level APIs that take in sub-devices for synchronizing.
 
-* `ttnn.set_sub_device_stall_group(sub_device_ids=[sub_device_id_0, sub_device_id_1])`
+* `device.set_sub_device_stall_group(sub_device_ids=[sub_device_id_0, sub_device_id_1])`
 
   Set the SubDevice IDs that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing.
   Stalling here refers to the Fast Dispatch cores waiting for programs to complete execution on the specified SubDevices before proceeding with the specified instruction.
   The default SubDevice IDs to stall on are set to all SubDevice IDs, and whenever a new SubDevice Manager is loaded.
 
-* `ttnn.reset_sub_device_stall_group()`
+* `device.reset_sub_device_stall_group()`
 
   Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing back to all SubDevice IDs.
 
