@@ -16,7 +16,6 @@ namespace ttnn::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_program_artifacts(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {

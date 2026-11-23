@@ -18,7 +18,6 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     using namespace tt;
     using namespace tt::constants;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;

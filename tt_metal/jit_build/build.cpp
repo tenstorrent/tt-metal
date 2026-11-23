@@ -41,8 +41,8 @@
 #include <tt_stl/assert.hpp>
 #include "common/executor.hpp"
 #include "common/stable_hash.hpp"
-#include "env_lib.hpp"
-#include "hal_types.hpp"
+#include "common/env_lib.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "llrt/hal.hpp"
 #include "hostdev/profiler_common.h"
 #include "llrt/rtoptions.hpp"
@@ -52,7 +52,7 @@
 #include "jit_build_utils.hpp"
 #include "pch.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_paths.hpp"
+#include "impl/profiler/profiler_paths.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include <tt-umd/types/arch.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"

@@ -40,6 +40,7 @@ from ttnn.operations.ccl import Topology
 from ttnn.operations.transformer_golden import torch_sdpa_reference
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM
@@ -5467,6 +5468,103 @@ def test_ring_joint_attention_logical_tensor_accuracy(is_causal, is_balanced):
     )
 
 
+# (tile rows per chip, k_chunk_size, pad rows, fp32 accumulation, logical_n as a device tensor, balanced); q_chunk 128.
+# In the first six a Q chunk's causal cut ends before the length-boundary tile of its K chunk; the rest are controls.
+CAUSAL_PARTIAL_TILE_CASES = [
+    (5, 512, 20, False, True, False),
+    (5, 512, 20, False, False, False),
+    (5, 160, 31, False, True, False),
+    (5, 96, 20, False, True, False),
+    (9, 512, 1, False, True, False),
+    (8, 512, 20, False, True, True),
+    (9, 128, 20, False, True, False),
+    (5, 512, 40, False, True, False),
+    (9, 512, 20, True, True, False),
+]
+# Per-row relative squared error against the CPU reference: correct rows measure up to 0.01, rows that lost keys 1.0.
+CAUSAL_PARTIAL_TILE_ROW_ERROR_BOUND = 0.1
+
+
+@pytest.mark.timeout(600)
+def test_ring_joint_attention_causal_logical_n_inside_tile():
+    """Causal attention with logical_n ending inside a tile: every real row ahead of the masked keys must equal the
+    run of the same data with no pad rows, and every real row must stay within the per-row error bound of the CPU
+    reference without those keys. PCC does not see a few rows."""
+    mesh_config = _h3_dynamic_mesh_config()
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        heads_per_chip, head_dim, sp = 4, 128, mesh_config.sp_size
+        failures = []
+        for case in CAUSAL_PARTIAL_TILE_CASES:
+            tile_rows, k_chunk_size, pad_rows, fp32_dest_acc_en, logical_as_tensor, is_balanced = case
+            sq = tile_rows * 32 * sp
+            logical_n = sq - pad_rows
+            torch.manual_seed(1234)
+            # K = Q: every row attends mostly to itself, so a row that loses its newest keys is far from the reference.
+            q, v = (
+                torch.randn(1, heads_per_chip * mesh_config.tp_size, sq, head_dim, dtype=torch.bfloat16)
+                for _ in range(2)
+            )
+            # The device takes balanced input in zigzag chunk order, and logical_n masks the tail of the device order.
+            order = create_balanced_chunk_order(sp) if is_balanced else list(range(2 * sp))
+            masked = reverse_reorder_tensor_chunks((torch.arange(sq) >= logical_n).view(1, 1, sq, 1), order).flatten()
+            device_q, device_v = (reorder_tensor_chunks(t, order) for t in (q, v))
+            gather_k, gather_v = _h3_dynamic_gather_buffers(
+                runtime, mesh_config, head_dim, heads_per_chip=heads_per_chip, capacity_tiles=tile_rows
+            )
+            outputs = []
+            for n in (sq, logical_n):
+                tt_q, tt_k, tt_v, n_tensor = _h3_dynamic_device_inputs(runtime, device_q, device_q, device_v, n)
+                tt_out = call_sdpa(
+                    tt_q,
+                    tt_k,
+                    tt_v,
+                    n_tensor if logical_as_tensor else n,
+                    is_causal=True,
+                    is_balanced=is_balanced,
+                    p_buf_k=gather_k,
+                    p_buf_v=gather_v,
+                    program_config=ttnn.SDPAProgramConfig(
+                        compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+                        q_chunk_size=128,
+                        k_chunk_size=k_chunk_size,
+                        exp_approx_mode=False,
+                    ),
+                    compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                        runtime.mesh_device.arch(),
+                        math_fidelity=ttnn.MathFidelity.HiFi2,
+                        math_approx_mode=False,
+                        fp32_dest_acc_en=fp32_dest_acc_en,
+                    ),
+                    ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                    num_links=runtime.num_links,
+                    sp_axis=runtime.sp_axis,
+                    mesh_device=runtime.mesh_device,
+                    topology=runtime.topology,
+                    worker_sub_device_id=runtime.worker_sub_device_id,
+                    ccl_column=runtime.ccl_column,
+                )
+                outputs.append(reverse_reorder_tensor_chunks(_h3_dynamic_to_torch(runtime, tt_out), order)[0].float())
+            unpadded, padded = outputs
+            first_masked = int(masked.nonzero()[0])
+            changed = torch.nonzero((padded[:, :first_masked] != unpadded[:, :first_masked]).any(-1).any(0)).flatten()
+            real_q, real_v = (t[:, :, ~masked].float() for t in (q, v))
+            ref = torch_sdpa_reference(real_q, real_q, real_v, is_causal=True)[0]
+            row_error = (((padded[:, ~masked] - ref) ** 2).sum(-1) / (ref**2).sum(-1)).amax(0)
+            result = (
+                f"tiles={tile_rows} k_chunk={k_chunk_size} pad={pad_rows} fp32={fp32_dest_acc_en} "
+                f"tensor={logical_as_tensor} balanced={is_balanced}: {changed.numel()} rows ahead of the masked keys "
+                f"differ from the run with no pad rows, first and last "
+                f"{changed[[0, -1]].tolist() if changed.numel() else None}; max row error {float(row_error.max()):.5f}"
+            )
+            logger.info(result)
+            if changed.numel() or not row_error.max() < CAUSAL_PARTIAL_TILE_ROW_ERROR_BOUND:
+                failures.append(result)
+        assert not failures, "\n".join(failures)
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize(
     "b,sq,nhq,nhk,nhv,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_causal,is_balanced,q_dtype,kv_dtype",
@@ -5986,9 +6084,12 @@ def test_ring_joint_attention_perf_check(
         f"profiler_records={len(perf_records)}"
     )
 
-    assert lower <= utilization <= upper, (
-        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+    assert_perf_gate(
+        lower <= utilization <= upper,
+        (
+            f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+            f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+        ),
     )
 
 
@@ -8402,9 +8503,12 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
         f"profiler_records={len(perf_records)}"
     )
 
-    assert lower <= utilization <= upper, (
-        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+    assert_perf_gate(
+        lower <= utilization <= upper,
+        (
+            f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+            f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+        ),
     )
 
 
@@ -8686,9 +8790,12 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(perf_config):
         f"profiler_records={len(perf_records)}, effective_cores={effective_cores}, "
         f"matmul_math_fidelity={model.matmul_math_fidelity}"
     )
-    assert lower <= utilization <= upper, (
-        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+    assert_perf_gate(
+        lower <= utilization <= upper,
+        (
+            f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+            f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+        ),
     )
 
 
@@ -9360,19 +9467,22 @@ def test_ring_joint_attention_dynamic_local_n_chain_lengths(order):
 
 
 @pytest.mark.timeout(1800)
-def test_ring_joint_attention_dynamic_local_n_rejects_single_head(expect_error):
-    """One K head per chip selects the shared-K batch chain, which is host-built per length and never rewritten
-    on a cache hit: validation must reject it before any program is built."""
+@pytest.mark.parametrize("q_heads_per_chip", [1, 8], ids=["mha", "gqa"])
+def test_ring_joint_attention_dynamic_local_n_rejects_single_head(expect_error, q_heads_per_chip):
+    """One K head per chip is refused before any program is built: for MHA it selects the shared-K batch chain,
+    host-built per length and never rewritten on a cache hit; one-head GQA builds no chain but is untested."""
     mesh_config = _h3_dynamic_mesh_config()
     runtime = open_ring_joint_sdpa_runtime(mesh_config)
     try:
         mesh = runtime.mesh_device
         sp, tp = mesh_config.sp_size, mesh_config.tp_size
-        heads = 1 * tp
         gather_k, gather_v = _h3_dynamic_gather_buffers(runtime, mesh_config, H3_DYNAMIC_HEAD_DIM, heads_per_chip=1)
         sq = 148 * 32 * sp
         torch.manual_seed(7)
-        q, k, v = (torch.randn(1, heads, sq, H3_DYNAMIC_HEAD_DIM, dtype=torch.bfloat16) for _ in range(3))
+        q, k, v = (
+            torch.randn(1, heads * tp, sq, H3_DYNAMIC_HEAD_DIM, dtype=torch.bfloat16)
+            for heads in (q_heads_per_chip, 1, 1)
+        )
         tt_q, tt_k, tt_v, logical_n_tensor = _h3_dynamic_device_inputs(runtime, q, k, v, sq - 100)
         mesh.disable_and_clear_program_cache()
         mesh.enable_program_cache()
@@ -9496,11 +9606,98 @@ def test_ring_joint_attention_dynamic_local_n_rehashes_on_width_change():
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
+# Causal dynamic_local_n. The gqa variants are the MiniMax-H3 prompt encoder's call on the 4x8: 16 Q / 2 K / 2 V
+# heads per chip, 1..20 tile rows per chip. Per variant: (Q heads, K/V heads) per chip, (q_chunk, k_chunk).
+H3_CAUSAL_DYNAMIC_VARIANTS = {
+    "gqa_k128": ((16, 2), (128, 128)),
+    "gqa_k512": ((16, 2), (128, 512)),
+    "mha_k512": ((4, 4), (128, 512)),
+}
+H3_CAUSAL_DYNAMIC_CAPACITY_TILES = 20
+# Every per-chip tile-row count, long and short alternating from the capacity warm point, then both ends again.
+H3_CAUSAL_DYNAMIC_TILE_ROWS = [t for pair in zip(range(20, 10, -1), range(1, 11)) for t in pair] + [20, 1]
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
+@pytest.mark.parametrize("variant", list(H3_CAUSAL_DYNAMIC_VARIANTS))
+@pytest.mark.parametrize("topology", [Topology.Ring, Topology.Linear], ids=["ring", "line"])
+def test_ring_joint_attention_dynamic_local_n_causal_flat_cache(topology, variant, fp32_dest_acc_en):
+    """Unbalanced causal attention, MHA and grouped GQA, on both compute paths and both fabrics: one cached program
+    serves every per-chip length in either direction, with a pinned chunk pair wider than the short shards. A hang
+    fails the test through its timeout. Causal is checked at the padded total only, which is the encoder's call."""
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    (q_heads_per_chip, kv_heads_per_chip), qk_chunks = H3_CAUSAL_DYNAMIC_VARIANTS[variant]
+    mesh_config = _h3_dynamic_mesh_config()
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, topology=topology)
+    try:
+        mesh = runtime.mesh_device
+        runtime.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+        )
+        sp, tp = mesh_config.sp_size, mesh_config.tp_size
+        q_heads, kv_heads = q_heads_per_chip * tp, kv_heads_per_chip * tp
+        group = q_heads // kv_heads
+        capacity = H3_CAUSAL_DYNAMIC_CAPACITY_TILES * 32 * sp
+        torch.manual_seed(1234)
+        q_cap = torch.randn(1, q_heads, capacity, H3_DYNAMIC_HEAD_DIM, dtype=torch.bfloat16)
+        k_cap, v_cap = (torch.randn(1, kv_heads, capacity, H3_DYNAMIC_HEAD_DIM, dtype=torch.bfloat16) for _ in range(2))
+        gather_k, gather_v = _h3_dynamic_gather_buffers(
+            runtime,
+            mesh_config,
+            H3_DYNAMIC_HEAD_DIM,
+            heads_per_chip=kv_heads_per_chip,
+            capacity_tiles=H3_CAUSAL_DYNAMIC_CAPACITY_TILES,
+        )
+        # First and last Q head of every K/V head.
+        checked_heads = sorted({h for kv in range(kv_heads) for h in (kv * group, (kv + 1) * group - 1)})
+        pcc_threshold = DEFAULT_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else DEFAULT_PCC_THRESHOLD
+
+        def run(tile_rows):
+            rows = tile_rows * 32
+            sq = rows * sp
+            q, k, v = (t[:, :, :sq].clone() for t in (q_cap, k_cap, v_cap))
+            tt_q, tt_k, tt_v, logical_n_tensor = _h3_dynamic_device_inputs(runtime, q, k, v, sq)
+            out = _h3_dynamic_op(
+                runtime,
+                tt_q,
+                tt_k,
+                tt_v,
+                logical_n_tensor,
+                gather_k,
+                gather_v,
+                runtime.ccl_semaphore_handles,
+                qk_chunks=qk_chunks,
+                is_causal=True,
+            )
+            got = _h3_dynamic_to_torch(runtime, out).float()
+            assert torch.isfinite(got).all(), f"{tile_rows} tile rows: non-finite output"
+            ref = torch_sdpa_reference(q.float(), k.float(), v.float(), is_causal=True)
+            worst = 1.0
+            for h in checked_heads:
+                # Per chip shard: one chip's wrong mask would be diluted over the whole sequence.
+                for chip in range(sp):
+                    shard = slice(chip * rows, (chip + 1) * rows)
+                    pcc, _ = compute_pcc_rmse(ref[0, h, shard], got[0, h, shard])
+                    worst = min(worst, pcc)
+                    assert pcc >= pcc_threshold, f"{tile_rows} tile rows, head {h}, chip {chip}: PCC {pcc}"
+            logger.info(f"{variant} {tile_rows} tile rows: min PCC={worst:.6f}")
+
+        assert_program_cache_flat(mesh, run, H3_CAUSAL_DYNAMIC_TILE_ROWS)
+        assert mesh.num_program_cache_entries() == 1
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
 @pytest.mark.timeout(1800)
 def test_ring_joint_attention_dynamic_local_n_rejects_unsupported_features(expect_error):
-    """With the dynamic program cached, a call adding a feature the path does not serve (causal attention, an
-    attention sink) or Q/K/V padded beyond their logical rows must raise from validation, never dispatch the
-    cached program or add one."""
+    """With the dynamic program cached, a call adding a feature the path does not serve (balanced causal or cross
+    attention, an attention sink) or Q/K/V padded beyond their logical rows must raise from validation, never
+    dispatch the cached program or add one."""
     mesh_config = _h3_dynamic_mesh_config()
     runtime = open_ring_joint_sdpa_runtime(mesh_config)
     try:
@@ -9539,7 +9736,7 @@ def test_ring_joint_attention_dynamic_local_n_rejects_unsupported_features(expec
         out = call()
         _h3_dynamic_check(q, k, v, _h3_dynamic_to_torch(runtime, out), sq - 100, [0, heads - 1], "warm")
         entries = mesh.num_program_cache_entries()
-        for overrides in ({"is_causal": True}, {"attention_sink": sink}):
+        for overrides in ({"is_causal": True, "is_balanced": True}, {"is_cross": True}, {"attention_sink": sink}):
             with expect_error(RuntimeError, "dynamic_local_n"):
                 call(**overrides)
         # The same buffers viewed one tile row shorter: the padded rows would be computed and written past the

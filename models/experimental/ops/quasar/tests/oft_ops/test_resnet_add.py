@@ -46,6 +46,10 @@ def _upload(x, mesh, spec, dt):
 
 
 def _run(mesh, shape, a_dt, b_dt, a_mem, b_mem, out_mem):
+    if "bfp8" in (a_dt, b_dt):
+        # The Quasar binary_ng gate refuses mixed a/b dtypes (math/pack reconfig is a no-op, so the operand
+        # switch is unvalidated) and block-float formats (Quasar's format set is MX; the validator rejects bf8_b).
+        U.xfail_on_quasar("Quasar binary add: mixed bf16 + bfloat8_b operands unsupported (QUASAR_PARITY_GAPS.md §1)")
     a = U.torch_rand(shape)
     b = U.torch_rand(shape)
     tt_a = _upload(a, mesh, a_mem, a_dt)

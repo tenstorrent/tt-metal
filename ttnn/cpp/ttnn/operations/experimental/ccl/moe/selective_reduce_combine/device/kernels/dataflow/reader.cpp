@@ -46,17 +46,20 @@ void get_token_activation_offsets(
         }
 
         const auto token_split_offset = token_split_offsets[e];
-        auto* expert_token_activations_ptr = token_activations_ptr + token_split_offset * ActivationStride;
         const auto st_start = dense_token_maps_ptr[(e * (GlobalNumTokens + 1) + token_split_offset) * MapStride];
 
-        for (uint32_t t = token_split_offset; t < GlobalNumTokens; ++t) {
-            if (expert_token_activations_ptr[0] == st_start) {
-                token_activation_offsets[e] = t;
-                break;
-            }
-            expert_token_activations_ptr += ActivationStride;
-            ASSERT(t != GlobalNumTokens - 1);
+        // Rows are in e_t order, so st_start's row is at or after the split offset unless a token names the expert at
+        // several k (one e_t entry per k but one row), in which case it can lie before it.
+        uint32_t row = token_split_offset;
+        while (row < GlobalNumTokens && token_activations_ptr[row * ActivationStride] != st_start) {
+            ++row;
         }
+        if (row == GlobalNumTokens) {
+            for (row = 0; token_activations_ptr[row * ActivationStride] != st_start; ++row) {
+                ASSERT(row < token_split_offset);
+            }
+        }
+        token_activation_offsets[e] = row;
     }
 }
 

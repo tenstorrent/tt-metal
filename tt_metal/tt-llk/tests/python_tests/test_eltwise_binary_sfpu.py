@@ -11,6 +11,7 @@ from typing import Dict
 import numpy as np
 import pytest
 import torch
+from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
@@ -224,6 +225,7 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuEqInt,
         MathOperation.SfpuFmodInt32,
         MathOperation.SfpuGcd,
+        MathOperation.SfpuGegluTanh,
         MathOperation.SfpuIsclose,
         MathOperation.SfpuIscloseEqualNan,
         MathOperation.SfpuLcm,
@@ -1121,6 +1123,28 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwa
     )
 
 
+# -0.0 dividends, the extended sweep only feeds remainder positive values
+_REMAINDER_SIGNED_ZERO_PAIRS = [
+    (a, b) for a in (-0.0, 0.0) for b in (2.0, 3.0, 0.5, 7.25, -2.0, -3.0, -0.5)
+] + [(a, b) for a in (5.5, -5.5) for b in (2.0, -2.0)]
+
+
+# Float32 with a 32-bit Dest is the pipeline that delivers -0.0 to the SFPU intact.
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32]),
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_remainder_signed_zero(formats, dest_acc):
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuBinaryRemainder,
+        src_A_override=_build_paired_tile_override(
+            _REMAINDER_SIGNED_ZERO_PAIRS, torch.float32
+        ),
+    )
+
+
 @parametrize(**MASK_SWEEP)
 def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0
@@ -1883,6 +1907,29 @@ INT_SWEEP = dict(
     ],
     dest_acc=[DestAccumulation.Yes],
 )
+
+
+GEGLU_TANH_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.SfpuGegluTanh],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**GEGLU_TANH_SWEEP)
+def test_eltwise_binary_sfpu_geglu_tanh(formats, dest_acc, mathop, **run_kwargs):
+    # geglu_tanh(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
+    # Both signs, past each clamp and below where the logistic factor underflows.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-13.0, high=16.0),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+        **run_kwargs,
+    )
 
 
 @parametrize(**INT_SWEEP)

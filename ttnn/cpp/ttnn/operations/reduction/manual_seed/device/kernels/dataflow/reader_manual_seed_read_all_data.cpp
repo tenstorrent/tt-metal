@@ -38,13 +38,13 @@ void kernel_main() {
     user_ids_dfb.reserve_back(one_tile);
     const uint32_t l1_write_addr_index = user_ids_dfb.get_write_ptr();
     noc.async_read(
-        user_ids_tensor_dram, user_ids_dfb, user_ids_dfb.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+        user_ids_tensor_dram, user_ids_dfb, number_of_ids * sizeof(uint32_t), {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
 
     // Read seeds from dataflow buffer
     seeds_dfb.reserve_back(one_tile);
     const uint32_t seeds_l1_write_addr_index = seeds_dfb.get_write_ptr();
-    noc.async_read(seeds_tensor_dram, seeds_dfb, seeds_dfb.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(seeds_tensor_dram, seeds_dfb, number_of_ids * sizeof(uint32_t), {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
 
     // Process user_ids

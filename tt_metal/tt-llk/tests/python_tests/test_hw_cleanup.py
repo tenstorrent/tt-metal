@@ -8,7 +8,7 @@ llk_{unpack,math,pack}_hw_cleanup.h + shared llk_hw_cleanup.h).
 
 hw_cleanup is a TEARDOWN family with NO numeric output of its own. It drains the
 three TRISCs, rendezvouses T0/T1/T2 through hardware mailboxes, and reprograms
-both cfg banks to a canonical Float16_b 32x32 / four-face / 2048B geometry,
+cfg bank 0 to a canonical Float16_b 32x32 / four-face / 2048B geometry,
 leaving cfg bank 0 selected (see the header docstrings).
 
 Because cleanup emits no data, the only observable is that it compiles and runs
