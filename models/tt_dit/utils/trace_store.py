@@ -94,8 +94,12 @@ def _build() -> str:
             head = subprocess.run(
                 ["git", "-C", str(pkg), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10
             ).stdout.strip()
+            # Edits not yet committed are part of the tree too: the same HEAD with other code must miss.
+            dirty = subprocess.run(
+                ["git", "-C", str(pkg), "diff", "HEAD"], capture_output=True, text=True, timeout=30
+            ).stdout
         except (OSError, subprocess.SubprocessError):
-            head = ""
+            head, dirty = "", ""
         env = sorted(
             (k, v)
             for k, v in os.environ.items()
@@ -106,9 +110,9 @@ def _build() -> str:
             # are per start: TT_METAL_KERNEL_PREWARM_STOP_FILE is <dir>/<pid>-<time>.
             and not v.startswith("/")
         )
-        _build_id = json.dumps({"head": head, "libs": parts, "env": env})
+        _build_id = json.dumps({"head": head, "dirty": _digest(dirty), "libs": parts, "env": env})
         # Per-part digests for key.json: a build mismatch between two starts names its variable.
-        _build_parts.update({"head": head[:12], "libs": _digest(parts)[:16]})
+        _build_parts.update({"head": head[:12], "dirty": _digest(dirty)[:12], "libs": _digest(parts)[:16]})
         _build_parts.update({f"env:{k}": _digest(v)[:12] for k, v in env})
     return _build_id
 
@@ -203,6 +207,9 @@ def key_for(tracer: Any, device: ttnn.MeshDevice, cq_id: int, pre: list[tuple[in
     _key_parts[key] = (
         {k: _digest(v)[:16] for k, v in parts.items()}
         | {"fn_name": name, "npre": len(pre), "build_parts": dict(_build_parts)}
+        # The hashed values themselves (pre is in manifest.json): two entries that should have shared a
+        # key are diffed value by value, not digest by digest.
+        | {"raw": {k: json.loads(v) if k == "build" else v for k, v in parts.items() if k != "pre"}}
     )
     return key
 
@@ -277,7 +284,7 @@ def dump(tracer: Any, device: ttnn.MeshDevice, trace_id: Any, key: str, pre: lis
             "structure": _structure(outputs),
         }
         (tmp / "manifest.json").write_text(json.dumps(manifest))
-        (tmp / "key.json").write_text(json.dumps(_key_parts.get(key, {}), sort_keys=True))
+        (tmp / "key.json").write_text(json.dumps(_key_parts.get(key, {}), sort_keys=True, default=str))
         tmp.rename(entry)
     except Exception as e:  # noqa: BLE001 - a trace that cannot be stored is captured every start
         shutil.rmtree(tmp, ignore_errors=True)
