@@ -4,7 +4,6 @@
 
 #include "pch.hpp"
 
-#include <algorithm>
 #include <filesystem>
 #include <mutex>
 #include <string>

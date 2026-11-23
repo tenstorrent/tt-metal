@@ -7,7 +7,7 @@
 #include <atomic>
 #include <memory>
 #include <optional>
-#include <stddef.h>
+#include <cstddef>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>

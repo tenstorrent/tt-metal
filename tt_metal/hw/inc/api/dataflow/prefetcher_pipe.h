@@ -72,6 +72,12 @@ namespace experimental {
 // commit() / dtor store ptr back when the epoch (word[2] fifo_start, word[5]
 // applied_entry_size) matches the iface.
 //
+// A kernel binding a pipe may also run on nodes that are not the pipe's sender or receivers
+// (PrefetcherPipeBinding::extra_nodes). The pipe token there does not describe a pipe endpoint:
+// don't construct a PrefetcherPipe on those nodes, and don't construct its relay DataflowBuffer
+// in any kernel (the relay's compute consumers run on the extra nodes too). Doing so can corrupt
+// another pipe's state. Use a runtime argument to tell extra nodes apart.
+//
 // Same push/pop/write API as CrossNodeDFB. Mid-flight page-size changes use
 // set_entry_size / set_receiver_entry_size after that endpoint's E1 operations.
 // The sender may switch to E2 and prefetch while a live receiver still consumes E1.
@@ -427,6 +433,23 @@ public:
         WAYPOINT("GSRD");
     }
 
+    // Whether a SINGLE receiver (receiver_idx) has space for num_entries entries right now: what
+    // reserve_back_for_receiver waits for, without waiting. Lets one sender serving several receivers
+    // move on to another receiver instead of stalling behind a slow one. Single credit lane only.
+    // Multi-DM: this hart must own receiver_idx. The writes and credits that would follow are no-ops
+    // for a receiver it does not own, so a true answer there would count a block that was never sent.
+    FORCE_INLINE bool receiver_has_space(uint32_t receiver_idx, uint32_t num_entries) {
+        ASSERT(num_credit_lanes() == 1);
+        ASSERT(owns_receiver(receiver_idx));
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
+        assert_contiguous_write(iface, wr_offset, num_entries);
+        const uint32_t num_units = fifo_size() / L1_ALIGNMENT;
+        const uint32_t used_units =
+            *local_sent_ptr(iface, receiver_idx) - load_remote_l1_credit(local_acked_ptr(iface, receiver_idx));
+        return num_units - used_units >= units_for_write(iface, wr_offset, num_entries);
+    }
+
 #if !defined(COMPILE_FOR_TRISC)
 
     // ------------------------------------------------------------------
@@ -457,8 +480,7 @@ public:
         const uint32_t bytes_per_recv = num_rows * row_bytes_per_recv;
         const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
 
-        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
-        uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
+        uint32_t src_addr = local_src_addr(noc, src, src_args);
         for (uint32_t i = 0; i < num_recv; ++i, src_addr += row_bytes_per_recv) {
             if (!owns_receiver(i)) {
                 continue;
@@ -467,13 +489,20 @@ public:
 
             uint32_t current_src_addr = src_addr;
             destination_offset_bytes_ = 0;
-            // Non-posted: flush_writes waits for completion before pages_sent (posted can reorder).
             noc.set_async_write_state(*this, coalesced_page_size, {.receiver_idx = i});
+            const auto write_page = [&](uint32_t page_src_addr, uint32_t page_bytes) {
+                noc.async_write_with_state(
+                    CoreLocalMem<uint32_t>(page_src_addr), *this, page_bytes, {}, {.receiver_idx = i});
+            };
             for (uint32_t h = 0; h < num_rows; ++h) {
                 const uint32_t row_src_start = current_src_addr;
                 for (uint32_t w = 0; w < coalesced_num_pages_per_row; ++w) {
-                    noc.async_write_with_state(
-                        CoreLocalMem<uint32_t>(current_src_addr), *this, coalesced_page_size, {}, {.receiver_idx = i});
+                    if (h + 1 == num_rows && w + 1 == coalesced_num_pages_per_row) {
+                        // The receiver's last page orders its rows ahead of the credit.
+                        write_flush_tagged(current_src_addr, coalesced_page_size, write_page);
+                    } else {
+                        write_page(current_src_addr, coalesced_page_size);
+                    }
                     current_src_addr += coalesced_page_size;
                     destination_offset_bytes_ += coalesced_page_size;
                 }
@@ -528,27 +557,14 @@ public:
         uint32_t num_entries,
         const typename noc_traits_t<Src>::src_args_type& src_args = {}) {
         CrossNodeSenderDFBInterface& iface = interface_.sender;
-        const uint32_t entry_size = iface.fifo_page_size;
-        ASSERT(entry_size != 0);
-        const uint32_t len_bytes = num_entries * entry_size;
-        ASSERT(len_bytes != 0 || num_entries == 0);
+        ASSERT(iface.fifo_page_size != 0);
+        ASSERT(num_entries * iface.fifo_page_size != 0 || num_entries == 0);
         if (num_entries == 0) {
             return;
         }
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
-
-        destination_offset_bytes_ = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
-            if (!owns_receiver(i)) {
-                continue;
-            }
-            const uint32_t wr_offset = sender_wr_offset(iface, i);
-            assert_contiguous_write(iface, wr_offset, num_entries);
-#ifdef ARCH_QUASAR
-            noc.async_write(src, *this, len_bytes, src_args, {.receiver_idx = i});
-#else
-            noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = i});
-#endif
+            write_to_receiver(noc, i, src, num_entries, src_args);
         }
     }
 
@@ -557,13 +573,19 @@ public:
     // (collective credit after all per-receiver writes) or push_back_to_receiver()
     // (per-receiver credit) as appropriate.
     // Multi-DM: no-op when this hart does not own receiver_idx.
-    template <typename Src>
+    // Quasar: NocOptions::TXN_ID tags the write with noc_opts.trid, so flush_writes with the same id waits on
+    // this sender's writes alone rather than on every write from the core.
+    template <NocOptions opts = NocOptions::DEFAULT, typename Src>
     FORCE_INLINE void write_to_receiver(
         const Noc& noc,
         uint32_t receiver_idx,
         const Src& src,
         uint32_t num_entries,
-        const typename noc_traits_t<Src>::src_args_type& src_args = {}) {
+        const typename noc_traits_t<Src>::src_args_type& src_args = {},
+        const NocOptVals& noc_opts = {}) {
+        static_assert(
+            !has_flag(opts, NocOptions::CUSTOM_VC),
+            "A payload must go on NOC_UNICAST_WRITE_VC, the credit's VC, to reach its receiver ahead of the credit");
         if (!owns_receiver(receiver_idx)) {
             return;
         }
@@ -574,21 +596,34 @@ public:
         assert_contiguous_write(iface, wr_offset, num_entries);
         destination_offset_bytes_ = 0;
 #ifdef ARCH_QUASAR
-        noc.async_write(src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx});
+        write_flush_tagged(
+            local_src_addr(noc, src, src_args), len_bytes, [&](uint32_t part_src_addr, uint32_t part_bytes) {
+                noc.async_write<opts>(
+                    CoreLocalMem<uint32_t>(part_src_addr),
+                    *this,
+                    part_bytes,
+                    {},
+                    {.receiver_idx = receiver_idx},
+                    noc_opts);
+            });
 #else
-        noc.async_write<NocOptions::POSTED>(src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx});
+        static_assert(!has_flag(opts, NocOptions::TXN_ID), "flush_writes cannot wait on a transaction id here");
+        noc.async_write<opts | NocOptions::POSTED>(
+            src, *this, len_bytes, src_args, {.receiver_idx = receiver_idx}, noc_opts);
 #endif
     }
 
-    // Flush payload writes from this core before publishing pages_sent.
-    // WH/BH: posted flush (depart queue). Quasar: write barrier so destination TL1 is
-    // complete before pages_sent — posted payload + credit can otherwise reorder for
-    // interleaved STRIDED relay consumers under same-program backpressure.
-    FORCE_INLINE void flush_writes(const Noc& noc = Noc{}) {
+    // Waits until this core's payload writes have left its L1, so their source may be reused. It does not wait
+    // for them to land: the payload and the credit that follows both go on NOC_UNICAST_WRITE_VC, which reaches
+    // a receiver in issue order, and on Quasar each payload's last packet also carries the flush tag
+    // (write_flush_tagged) so the receiver commits it first. With NocOptions::TXN_ID (Quasar only) it waits
+    // only on writes tagged noc_opts.trid.
+    template <NocOptions opts = NocOptions::DEFAULT>
+    FORCE_INLINE void flush_writes(const Noc& noc = Noc{}, const NocOptVals& noc_opts = {}) {
 #ifdef ARCH_QUASAR
-        noc.async_write_barrier();
+        noc.async_writes_flushed<opts>(noc_opts);
 #else
-        noc.async_writes_flushed<NocOptions::POSTED>();
+        noc.async_writes_flushed<opts | NocOptions::POSTED>();
 #endif
     }
 
@@ -661,6 +696,20 @@ public:
         }
         free_units_floor_ = fifo_size() / L1_ALIGNMENT;  // every owned ring is empty
         WAYPOINT("CNBD");
+    }
+
+    // Whether receiver_idx has acked every entry sent to it on every lane: barrier()'s condition for one
+    // receiver, without waiting. Lets a sender that must also watch for something else (a termination
+    // request) wait for a drain in its own loop.
+    FORCE_INLINE bool receiver_drained(uint32_t receiver_idx) {
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        for (uint32_t lane = 0; lane < num_credit_lanes(); ++lane) {
+            if (load_remote_l1_credit(local_acked_ptr(iface, receiver_idx, lane)) !=
+                *local_sent_ptr(iface, receiver_idx, lane)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // -----------------------------------------------------------------------
@@ -914,6 +963,38 @@ private:
 #endif
     }
 
+    // The local L1 address a write reads its source from, noting the read for op-to-op R/W inference
+    // (api/dataflow/buf_rw_note.h).
+    template <typename Src>
+    static FORCE_INLINE uint32_t
+    local_src_addr(const Noc& noc, const Src& src, const typename noc_traits_t<Src>::src_args_type& src_args) {
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();
+        return noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
+    }
+
+#ifdef ARCH_QUASAR
+    // Writes len_bytes from src_addr at destination_offset_bytes_ through issue(src_addr, len_bytes), with the
+    // NoC flush tag on the last packet. Quasar delivers one VC's packets to a receiver in order but may commit
+    // them to its L1 out of order; the receiver commits every packet before a flush-tagged one ahead of
+    // anything after it, so the credit atomic that follows on NOC_UNICAST_WRITE_VC cannot land before the
+    // payload. Only the last packet carries the tag, as each tagged packet holds the receiver's later
+    // commits. The overlay cuts a transfer into NOC_OVERLAY_MAX_BYTES_IN_PACKET packets from its start, so
+    // the last packet is what is left after the whole ones, sent as its own transfer.
+    template <typename Issue>
+    FORCE_INLINE void write_flush_tagged(uint32_t src_addr, uint32_t len_bytes, Issue&& issue) {
+        const uint32_t head_bytes =
+            len_bytes == 0 ? 0 : (len_bytes - 1) / NOC_OVERLAY_MAX_BYTES_IN_PACKET * NOC_OVERLAY_MAX_BYTES_IN_PACKET;
+        if (head_bytes != 0) {
+            issue(src_addr, head_bytes);
+        }
+        destination_offset_bytes_ += head_bytes;
+        noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/true);
+        issue(src_addr + head_bytes, len_bytes - head_bytes);
+        noc_set_packet_tags<write_cmd_buf>(/*snoop=*/false, /*flush=*/false);
+        destination_offset_bytes_ -= head_bytes;
+    }
+#endif
+
     // [base, base + size) of the credit words this core writes through the cached view: the
     // whole SENT block on the sender, this receiver's ACKED slots (all lanes) on a receiver.
     // lane_offset_bytes is tid * L1_ALIGNMENT once bind_receiver_credit_lane has run, else 0.
@@ -1056,8 +1137,7 @@ private:
         const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
         const uint8_t noc_id = noc.get_noc_id();
 
-        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
-        uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
+        uint32_t src_addr = local_src_addr(noc, src, src_args);
         uint32_t max_units = 0;
         for (uint32_t i = 0; i < num_recv; ++i, src_addr += row_bytes_per_recv) {
             if (!owns_receiver(i)) {

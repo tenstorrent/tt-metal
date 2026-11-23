@@ -6,8 +6,8 @@
 #include "rotary_embedding_llama_metal2_common.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
@@ -15,7 +15,6 @@ namespace ttnn::experimental::prim {
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace ttnn::experimental::prim::rope_metal2;
 
 ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_program_artifacts(
@@ -102,7 +101,10 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCore::create_p
     const uint32_t num_sin_cos_rows_per_core = (seq_len_t + seq_parallel_factor - 1) / seq_parallel_factor;
     const uint32_t num_rows_per_core = num_sin_cos_rows_per_core * heads_per_core;
 
-    uint32_t num_cos_sin_tiles = 2 * head_dim_t * num_sin_cos_rows_per_core;
+    // The reader writes each batch's cos/sin rows contiguously from the write pointer with no wrap check, so the
+    // buffer must be a whole number of those per-batch blocks; only rotary_seq_len_t rows are read per batch.
+    uint32_t num_cos_sin_tiles =
+        2 * head_dim_t * std::max<uint32_t>(1, std::min(num_sin_cos_rows_per_core, rotary_seq_len_t));
 
     uint32_t input_cb_num_tiles = num_sin_cos_rows_per_core * num_input_tiles;
 

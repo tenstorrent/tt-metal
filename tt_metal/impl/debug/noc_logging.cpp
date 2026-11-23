@@ -12,13 +12,11 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "debug_helpers.hpp"
 #include "llrt.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-umd/soc_descriptor.hpp>
-#include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 
 using namespace tt::tt_metal;

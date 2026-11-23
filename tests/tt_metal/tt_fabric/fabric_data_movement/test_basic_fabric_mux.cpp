@@ -7,7 +7,6 @@
 #include <tt_stl/reflection.hpp>
 #include <cstdint>
 #include <vector>
-#include <algorithm>
 #include <numeric>
 #include <unordered_map>
 #include <string_view>
@@ -23,6 +22,7 @@
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
@@ -281,7 +281,7 @@ void create_mux_kernel(
 
     std::vector<uint32_t> mux_ct_args = mux_kernel_config.get_fabric_mux_compile_time_args();
     std::vector<uint32_t> mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-        src_node_id, dst_node_id, available_links[0], program_handle, {mux_logical_core});
+        *device, src_node_id, dst_node_id, available_links[0], program_handle, {mux_logical_core});
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {};
     create_kernel(
@@ -533,6 +533,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
         auto num_header_only_channels = device_receivers_map[devices[i]].size();
 
         auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+            *devices[i],
             num_full_size_channels,
             num_header_only_channels,
             test_config.num_buffers_full_size_channel,

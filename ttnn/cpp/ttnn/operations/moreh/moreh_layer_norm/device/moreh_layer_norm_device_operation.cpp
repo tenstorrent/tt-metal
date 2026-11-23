@@ -50,6 +50,26 @@ ttnn::Shape compute_expected_stats_shape(const Tensor& input, uint32_t normalize
     }
     return canonicalize_shape_for_validation(ttnn::Shape(std::move(dims)));
 }
+
+// gamma and beta must hold the input's last normalized_dims sizes; any extra leading dims must be 1.
+void check_affine_shape(const Tensor& input, const Tensor& affine, uint32_t normalized_dims, const char* name) {
+    const auto& input_shape = input.logical_shape();
+    const auto& affine_shape = affine.logical_shape();
+    bool matches = affine_shape.rank() >= normalized_dims;
+    for (uint32_t i = 1; matches && i <= normalized_dims; ++i) {
+        matches = affine_shape[-static_cast<int>(i)] == input_shape[-static_cast<int>(i)];
+    }
+    for (uint32_t i = normalized_dims + 1; matches && i <= affine_shape.rank(); ++i) {
+        matches = affine_shape[-static_cast<int>(i)] == 1;
+    }
+    TT_FATAL(
+        matches,
+        "moreh_layer_norm: {} shape {} must match the last {} dims of input shape {}",
+        name,
+        affine_shape,
+        normalized_dims,
+        input_shape);
+}
 }  // namespace
 
 void MorehLayerNormOperation::validate_inputs(
@@ -73,11 +93,13 @@ void MorehLayerNormOperation::validate_inputs(
     if (gamma.has_value()) {
         check_tensor(gamma.value(), "moreh_layer_norm");
         TT_FATAL(input.device() == gamma.value().device(), "input and gamma should be on the same device.");
+        check_affine_shape(input, gamma.value(), normalized_dims, "gamma");
     }
 
     if (beta.has_value()) {
         check_tensor(beta.value(), "moreh_layer_norm");
         TT_FATAL(input.device() == beta.value().device(), "input and beta should be on the same device");
+        check_affine_shape(input, beta.value(), normalized_dims, "beta");
     }
 
     const auto& mean = tensor_args.mean;
@@ -104,6 +126,21 @@ void MorehLayerNormOperation::validate_inputs(
             rstd->logical_shape());
     }
 
+    const auto& output = tensor_args.output;
+    if (output.has_value()) {
+        // Every buffer, the output one included, takes the input's format, so the output must match it.
+        TT_FATAL(
+            output->dtype() == input.dtype(),
+            "output dtype {} must match the input dtype {}",
+            output->dtype(),
+            input.dtype());
+        TT_FATAL(output->layout() == Layout::TILE, "output must be tilized");
+        TT_FATAL(
+            output->logical_shape() == input.logical_shape(),
+            "output shape {} must match the input shape {}",
+            output->logical_shape(),
+            input.logical_shape());
+    }
 }
 
 void MorehLayerNormOperation::validate_on_program_cache_miss(

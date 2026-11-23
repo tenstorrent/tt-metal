@@ -306,7 +306,7 @@ file(WRITE "${_coord_root}/tt_metal/soc_descriptors/blackhole_140_arch.yaml" "${
 
 file(
     READ
-    "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_P300_both_mmio.yaml"
+    "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/descriptors/cluster_descriptor_examples/blackhole_P300_both_mmio.yaml"
     _cluster
 )
 set(_disagree "${_cluster}")

@@ -37,7 +37,7 @@ int main() {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     // A Program contains kernels that perform computations or data movement.
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
     // cores we can specify the core coordinates as (0, 0).
     constexpr CoreCoord core = {0, 0};

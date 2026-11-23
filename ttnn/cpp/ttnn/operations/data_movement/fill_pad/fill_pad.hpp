@@ -12,5 +12,6 @@ namespace ttnn {
 Tensor fill_implicit_tile_padding(
     const Tensor& input_tensor,
     ttnn::PadValue fill_value,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn

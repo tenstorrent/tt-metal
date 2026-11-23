@@ -5,6 +5,7 @@
 #include "optimizers/adamw.hpp"
 
 #include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -25,7 +26,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "optimizers/adamw_composite.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/muon_composite.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
@@ -733,6 +733,30 @@ TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
         /* weight_decay */ 0.0f));
 }
 
+TEST_F(AdamWValidationTest, RejectsTilesOtherThan32x32) {
+    // In 16x32 tiles a 32x32 param is 2 tiles, where the compute kernels' count, in 32x32 tiles, is 1.
+    const auto in_16x32_tiles = [] {
+        return ttml::test_utils::filled_on_device_in_tiles({1, 1, 32, 32}, 0.5F, {16, 32});
+    };
+    EXPECT_THAT(
+        [&] {
+            ttml::metal::adamw(
+                in_16x32_tiles(),
+                in_16x32_tiles(),
+                in_16x32_tiles(),
+                in_16x32_tiles(),
+                /* max_exp_avg_sq */ std::nullopt,
+                /* lr */ 1e-3f,
+                /* beta1 */ 0.9f,
+                /* beta2 */ 0.999f,
+                /* beta1_pow */ 0.9f,
+                /* beta2_pow */ 0.999f,
+                /* epsilon */ 1e-8f,
+                /* weight_decay */ 0.0f);
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("tiles must be 32x32, got 16x32")));
+}
+
 // ====================================================================
 // AMSGrad Tests
 // Test AdamW with AMSGrad variant enabled
@@ -980,8 +1004,7 @@ TEST(ParamGroupDefaultsTest, FloatFieldsArePerGroupOptions) {
         return names;
     };
     const std::vector<std::string> adamw_keys = {"beta1", "beta2", "epsilon", "lr", "weight_decay"};
-    EXPECT_EQ(keys(param_group_defaults(AdamWConfig{})), adamw_keys);  // not amsgrad / stochastic_rounding
-    EXPECT_EQ(keys(param_group_defaults(AdamWFullPrecisionConfig{})), adamw_keys);
+    EXPECT_EQ(keys(param_group_defaults(AdamWConfig{})), adamw_keys);           // not amsgrad / stochastic_rounding
     EXPECT_EQ(keys(param_group_defaults(AdamWCompositeConfig{})), adamw_keys);  // not kahan_summation
     const std::vector<std::string> sgd_keys = {"dampening", "lr", "momentum", "weight_decay"};
     EXPECT_EQ(keys(param_group_defaults(SGDConfig{})), sgd_keys);  // not nesterov
@@ -994,6 +1017,24 @@ TEST(ParamGroupDefaultsTest, FloatFieldsArePerGroupOptions) {
     const auto defaults = param_group_defaults(config);
     EXPECT_FLOAT_EQ(defaults.at("lr"), 0.123F);
     EXPECT_FLOAT_EQ(defaults.at("weight_decay"), 0.5F);
+}
+
+// A restored step count continues the bias correction bit for bit: reset() to t steps gives the powers t calls to
+// advance() give, so the next step matches an uninterrupted run. std::pow would round differently (0.9^3 is
+// 0.7289999 as a float product, 0.729 from pow), which fp32 parameters keep.
+TEST(BetaPowersTest, ResetContinuesTheRunningProduct) {
+    using namespace ttml::optimizers;
+    const std::vector<ParamGroup> groups{{.params = {}, .options = {{"beta1", 0.9F}, {"beta2", 0.999F}}}};
+    BetaPowers running;
+    running.reset(groups, 0);
+    for (size_t steps = 1; steps <= 1000; ++steps) {
+        (void)running.advance(0, 0.9F, 0.999F);
+        BetaPowers restored;
+        restored.reset(groups, steps);
+        BetaPowers continued = running;
+        ASSERT_EQ(restored.advance(0, 0.9F, 0.999F), continued.advance(0, 0.9F, 0.999F))
+            << "after " << steps << " steps";
+    }
 }
 
 // ====================================================================

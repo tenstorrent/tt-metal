@@ -253,6 +253,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
             std::vector<uint32_t> fabric_connection_rt_args;
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                *socket_mesh_device,
                 receiver_fabric_node_id,
                 sender_fabric_node_id,
                 selected_link_index,
@@ -361,6 +362,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
 
             std::vector<uint32_t> fabric_connection_rt_args;
             tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                *socket_mesh_device,
                 receiver_fabric_node_id,
                 sender_fabric_node_id,
                 selected_link_index,
@@ -412,7 +414,7 @@ void RecvAsyncProgramFactory::override_runtime_arguments(
     tt::tt_metal::IDevice* target_device =
         ttnn::send_recv_utils::resolve_target_device(output_tensor, mesh_dispatch_coordinate, "recv_async");
 
-    auto* output_buffer = output_tensor.buffer();
+    const auto* output_buffer = &output_tensor.mesh_buffer();
     TT_FATAL(output_buffer != nullptr, "recv_async: output tensor buffer is null");
 
     // Everything else in the runtime args (page counts, offsets, bank ids, fabric connection

@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -31,9 +32,15 @@ namespace rcg = ttnn::operations::data_movement::reshape_codegen;
 
 namespace {
 
+constexpr const char* kCommonKernelDir = "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen";
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/reshape_view/codegen/kernels";
 constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbMid = tt::CBIndex::c_1;
+constexpr uint32_t kCbOut = tt::CBIndex::c_16;
+constexpr uint32_t kSeqIdentity = 0;  // mirrors common/kernels/codegen/sequencers.h SEQ_IDENTITY
+// The LCM reader pushes one tile per barrier. A larger batch must divide chunk_tiles so a read never crosses the CB
+// wrap.
+constexpr uint32_t kLcmReadBatch = 1;
 constexpr uint32_t kCbPlan = tt::CBIndex::c_0;
 constexpr uint32_t kCbStaged = tt::CBIndex::c_1;
 constexpr uint32_t kCbRing = tt::CBIndex::c_2;
@@ -42,6 +49,7 @@ constexpr uint32_t kCbMap = tt::CBIndex::c_0;
 constexpr uint32_t kCbMappedInput = tt::CBIndex::c_1;
 constexpr uint32_t kCbScratch = tt::CBIndex::c_2;
 
+std::string common_kernel(const char* name) { return std::string(kCommonKernelDir) + "/" + name; }
 std::string op_kernel(const char* name) { return std::string(kKernelDir) + "/" + name; }
 
 CBDescriptor make_cb(
@@ -256,6 +264,84 @@ ProgramDescriptor build_rm_arbitrary(
     return desc;
 }
 
+ProgramDescriptor build_lcm(const rcg::LcmPlan& p, const Tensor& input, Tensor& output, const rcg::WorkSplit& split) {
+    ProgramDescriptor desc;
+    const CoreRangeSet& all_cores = split.all_cores;
+    // 16-bit data runs as UInt16 through a 16-bit DEST: unpack, MOVA2D and pack then copy the bits, where as bf16 or
+    // through fp32 DEST they would convert them. UInt16 also keeps both phases off their fast paths.
+    const bool is_16bit = input.element_size() == 2;
+    const auto fmt = is_16bit ? tt::DataFormat::UInt16 : datatype_to_dataformat_converter(input.dtype());
+    Buffer* in_buf = input.buffer();
+    Buffer* out_buf = output.buffer();
+    TT_FATAL(
+        rcg::lcm_bit_exact(input.dtype()),
+        "ReshapeCodegen: the LCM program takes only bfloat16, uint16, float32, int32 and uint32");
+
+    desc.cbs.push_back(make_cb(kCbIn, fmt, p.tile_bytes, p.chunk_tiles, all_cores));
+    desc.cbs.push_back(make_cb(kCbMid, fmt, p.tile_bytes, p.chunk_tiles, all_cores));
+    desc.cbs.push_back(make_cb(kCbOut, fmt, p.tile_bytes, p.out_cb_depth, all_cores));
+
+    KernelDescriptor reader;
+    reader.kernel_source = common_kernel("reader_tile_interleaved_unified.cpp");
+    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader.core_ranges = all_cores;
+    TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
+    reader.named_compile_time_args = {
+        {"seq_id", kSeqIdentity},
+        {"cb_id", kCbIn},
+        {"batch", kLcmReadBatch},
+        {"src_page_pitch", 0},  // 0: use the accessor's own page size
+    };
+    reader.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer;
+    writer.kernel_source = common_kernel("writer_interleaved.cpp");
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = all_cores;
+    writer.compile_time_args = {/*cb_out*/ kCbOut, /*write_size*/ p.tile_bytes, /*batch*/ p.write_batch};
+    TensorAccessorArgs(*out_buf).append_to(writer.compile_time_args);
+    writer.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute;
+    compute.kernel_source = op_kernel("compute_reshape_lcm.cpp");
+    compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute.core_ranges = all_cores;
+    compute.named_compile_time_args = {
+        {"cb_in", kCbIn},
+        {"cb_mid", kCbMid},
+        {"cb_out", kCbOut},
+        {"wt_in", p.wt_in},
+        {"wt_out", p.wt_out},
+        {"in_tile_rows", p.in_tile_rows},
+        {"out_tile_rows", p.out_tile_rows},
+    };
+    ComputeConfigDescriptor compute_config{.fp32_dest_acc_en = !is_16bit};
+    // Untilize reads cb_in and tilize reads cb_mid; both must unpack 32-bit data straight to DEST. On Wormhole UInt16
+    // through fp32 DEST with UnpackToDestFp32 comes back as zeros, so 16-bit keeps the default.
+    compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (!is_16bit) {
+        compute_config.unpack_to_dest_mode[kCbIn] = UnpackToDestMode::UnpackToDestFp32;
+        compute_config.unpack_to_dest_mode[kCbMid] = UnpackToDestMode::UnpackToDestFp32;
+    }
+    compute.config = compute_config;
+
+    const auto cores = corerange_to_cores(split.all_cores, split.num_cores, false);
+    uint32_t tile_offset = 0;
+    for (const auto& core : cores) {
+        const uint32_t n_chunks = split.group1.contains(core) ? split.units_group1 : split.units_group2;
+        const uint32_t n_tiles = n_chunks * p.chunk_tiles;
+        reader.emplace_runtime_args(core, {in_buf, n_tiles, tile_offset});
+        writer.emplace_runtime_args(core, {out_buf, n_tiles, tile_offset});
+        compute.emplace_runtime_args(core, {n_chunks});
+        tile_offset += n_tiles;
+    }
+
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    desc.kernels.push_back(std::move(compute));
+    return desc;
+}
+
 ProgramDescriptor build_tile_rows(
     const rcg::TileRowsLayout& layout,
     uint32_t staged_batches,
@@ -435,6 +521,7 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenRMProgramFactory::create_descripto
     const Tensor& input = tensor_args.input;
     const auto& plan = operation_attributes.plan;
     const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
+    TT_ASSERT(input.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(tensor_return_value.buffer()->aligned_page_size() == plan.out_aligned_page);
 
     const auto chosen = rcg::live_rm_choice(
@@ -453,6 +540,24 @@ tt::tt_metal::ProgramDescriptor ReshapeCodegenRMProgramFactory::create_descripto
     }
     const auto& slab = std::get<rcg::RmArbitraryPlan>(*chosen);
     return build_rm_arbitrary(slab, input, tensor_return_value, rcg::split_units(grid, slab.split.units));
+}
+
+tt::tt_metal::ProgramDescriptor ReshapeCodegenLcmProgramFactory::create_descriptor(
+    const ReshapeCodegenParams& operation_attributes,
+    const ReshapeCodegenInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    const Tensor& input = tensor_args.input;
+    const auto grid = rcg::reshape_core_grid(input, operation_attributes.sub_core_grids);
+    // Selection sends a call here unless the segment map is the live choice, so a call nothing fits reaches the error.
+    const auto chosen = rcg::live_tile_choice(
+        input, operation_attributes.logical_output_shape, grid.num_cores(), operation_attributes.plan);
+    const auto* lcm = chosen.has_value() ? std::get_if<rcg::LcmPlan>(&*chosen) : nullptr;
+    TT_FATAL(
+        lcm != nullptr,
+        "ReshapeCodegen: neither the LCM tile plan nor the segment map fits the {} B of L1 free per core below the "
+        "lowest L1 allocation; free L1 tensors or use the native reshape",
+        ttnn::operations::data_movement::get_max_l1_space(input));
+    return build_lcm(*lcm, input, tensor_return_value, rcg::split_units(grid, lcm->split.units));
 }
 
 tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_workload_descriptor(
@@ -476,7 +581,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
         ttnn::operations::data_movement::get_max_l1_space(input));
     auto plan = rcg::build_tile_rows_plan(in_shape, out_shape, *chosen);
     const rcg::TileRowsLayout layout = plan.layout;
-    TT_ASSERT(tensor_return_value.buffer()->num_pages() == layout.num_output_pages);
+    TT_ASSERT(tensor_return_value.mesh_buffer().num_pages() == layout.num_output_pages);
 
     const auto plan_owner = upload_table(std::move(plan.table), layout.num_batches, layout.page_words, input);
     return table_workload(
@@ -497,7 +602,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileMappedProgramFactory::create_
     const uint32_t tile_bytes =
         input.tensor_spec().tile().get_tile_size(datatype_to_dataformat_converter(input.dtype()));
 
-    // Serves the segment-map route and the fallback for tile-rows plans that do not fit live L1.
+    // Serves the segment-map route and the fallback for tile-rows and LCM plans that do not fit live L1.
     const auto chosen =
         rcg::live_tile_choice(input, operation_attributes.logical_output_shape, num_cores, operation_attributes.plan);
     const auto* mapped = chosen.has_value() ? std::get_if<rcg::TileMappedChoice>(&*chosen) : nullptr;
@@ -507,7 +612,7 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileMappedProgramFactory::create_
         "tensors or use the native reshape",
         ttnn::operations::data_movement::get_max_l1_space(input));
     const rcg::TileMappedLayout& layout = mapped->layout;
-    TT_ASSERT(tensor_return_value.buffer()->num_pages() == layout.num_output_pages);
+    TT_ASSERT(tensor_return_value.mesh_buffer().num_pages() == layout.num_output_pages);
 
     auto plan = rcg::build_tile_mapped_plan(
         input.logical_shape(),

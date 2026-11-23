@@ -201,13 +201,68 @@ jobs:
       wheel-ref: ${{ inputs.dry-run && github.sha || format('refs/tags/{0}', needs.create-tag.outputs.version) }}
       use-system-sfpi: false
 
+  # ===========================================================================
+  # Team: blaze -- test list owned by tenstorrent/tt-blaze (its ci.yaml)
+  # ===========================================================================
+  # Runs tt-blaze's full merge gate against this release build
+
+  blaze-merge-gate:
+    needs: [build-artifact-profiler]
+    # Disabled blaze merge gate until TT_BLAZE_PAT token is restored: https://tenstorrent.atlassian.net/browse/RELEASE-134
+    if: ${{ false && !cancelled() && github.ref != 'refs/heads/stable' && needs.build-artifact-profiler.result == 'success' }}
+    permissions:
+      contents: read
+    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
+    secrets:
+      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
+    uses: ./.github/workflows/blaze-merge-gate.yaml
+    with:
+      # Artifacts belong to the TOP-LEVEL run, which is this workflow.
+      metal-run-id: ${{ github.run_id }}
+      # tt-blaze checks its tt-metal submodule out here so its JIT-compiled kernels
+      # match the libraries it links against.
+      metal-ref: ${{ github.sha }}
+      # Commit-scoped, not tracy-scoped: the same image the plain build resolves.
+      dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      # Run tt-blaze's full merge gate from its main branch.
+      blaze-ref: main
+
+  # Hands a build that passed tt-blaze's merge gate to tt-blaze's nightly tt-metal uplift,
+  # which pins it on a trial branch and validates it there. Only a scheduled run on main,
+  # or a re-run of one (a re-run keeps its event), launches it. It launches the run and
+  # does not wait: the uplift reports in its own run and draft PR.
+  launch-blaze-uplift:
+    needs: [blaze-merge-gate]
+    if: >-
+      ${{ !cancelled()
+          && needs.blaze-merge-gate.result == 'success'
+          && github.event_name == 'schedule'
+          && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Launch tt-blaze's nightly tt-metal uplift
+        env:
+          # The default GITHUB_TOKEN cannot dispatch another repo.
+          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          METAL_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # metal-sha makes the uplift adopt this run's profiler build, the one the gate
+          # just passed, instead of building it again; metal-ref is the branch it is on.
+          gh workflow run nightly-metal-uplift.yaml --repo tenstorrent/tt-blaze --ref main \
+            -f metal-ref=main -f metal-sha="$METAL_SHA" -f validate=true
+          echo "Launched tt-blaze nightly-metal-uplift.yaml for tt-metal ${METAL_SHA}" >> "$GITHUB_STEP_SUMMARY"
+
   publish-to-pypi:
-    needs: [build-test-publish, create-tag]
+    needs: [build-test-publish, create-tag, blaze-merge-gate]
     runs-on: ubuntu-latest
     if: >-
       ${{ !cancelled()
           && needs.build-test-publish.result == 'success'
           && needs.create-tag.result == 'success'
+          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped')
           && (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
     environment:
       name: pypi
@@ -722,7 +777,9 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: package-and-release.yaml
-          token: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          # github.token is enough: this workflow grants actions: write, and
+          # workflow_dispatch is one of the two events the built-in token may raise.
+          token: ${{ github.token }}
           ref: stable
           inputs: |
             {
@@ -737,14 +794,15 @@ jobs:
           echo "No new commits found since latest release. No RC release needed."
 
   trigger-prod-after-rc-success:
-    needs: [build-test-publish, release-precheck, create-tag]
+    needs: [build-test-publish, release-precheck, create-tag, blaze-merge-gate]
     runs-on: ubuntu-slim
     if: >-
       ${{ !cancelled()
           && needs.release-precheck.outputs.tag-type == 'rc'
           && needs.release-precheck.result == 'success'
           && needs.build-test-publish.result == 'success'
-          && needs.create-tag.result == 'success' }}
+          && needs.create-tag.result == 'success'
+          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped') }}
     steps:
       - name: Wait for RC workflow completion
         run: |
@@ -755,7 +813,9 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: package-and-release.yaml
-          token: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          # github.token is enough: this workflow grants actions: write, and
+          # workflow_dispatch is one of the two events the built-in token may raise.
+          token: ${{ github.token }}
           ref: ${{ needs.create-tag.outputs.version }}
           inputs: |
             {

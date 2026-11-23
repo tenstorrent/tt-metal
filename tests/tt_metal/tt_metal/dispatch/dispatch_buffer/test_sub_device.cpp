@@ -126,7 +126,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     mesh_device->load_sub_device_manager(sub_device_manager_1);
 
     auto buffer_1 = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
-    EXPECT_TRUE(buffer_1->address() <= max_addr - buffer_1->get_backing_buffer()->aligned_page_size());
+    EXPECT_TRUE(buffer_1->address() <= max_addr - buffer_1->aligned_page_size());
     distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buffer_1, input_1, false);
     std::vector<uint32_t> output_1;
     distributed::ReadShard(mesh_device->mesh_command_queue(), output_1, buffer_1, zero_coord_, true);
@@ -151,7 +151,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     mesh_device->load_sub_device_manager(sub_device_manager_2);
 
     auto buffer_3 = distributed::MeshBuffer::create(replicated_config_2, local_config_2, mesh_device.get());
-    EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->get_backing_buffer()->aligned_page_size());
+    EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->aligned_page_size());
     distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buffer_3, input_2, false);
     std::vector<uint32_t> output_2;
     distributed::ReadShard(mesh_device->mesh_command_queue(), output_2, buffer_3, zero_coord_, true);
@@ -165,7 +165,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     }
     local_config_1.sub_device_id = SubDeviceId{0};
     auto buffer_4 = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
-    EXPECT_TRUE(buffer_4->address() <= max_addr - buffer_4->get_backing_buffer()->aligned_page_size());
+    EXPECT_TRUE(buffer_4->address() <= max_addr - buffer_4->aligned_page_size());
     local_config_3.sub_device_id = SubDeviceId{0};
     EXPECT_THROW(
         distributed::MeshBuffer::create(replicated_config_3, local_config_3, mesh_device.get()), std::exception);
@@ -178,7 +178,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePers
     auto mesh_device = devices_[0];
 
     // Persistent pipe L1 on (0,0)-(1,0): the space reserves it, the pipe claims it.
-    auto space = experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config());
+    auto space = experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), make_pipe_space_config());
     auto pipe = space.create_pipe(CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})));
     const DeviceAddr persistent_end = pipe.config_address() + pipe.config_page_size();
 
@@ -228,10 +228,13 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceManagerSealsPersistentL1U
     SubDevice sub_device(std::array{cores});
     const auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
 
-    EXPECT_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config()), std::exception);
+    EXPECT_THROW(
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), make_pipe_space_config()),
+        std::exception);
 
     mesh_device->remove_sub_device_manager(manager);
-    EXPECT_NO_THROW(experimental::CreatePrefetcherPipeSpace(*mesh_device, make_pipe_space_config()));
+    EXPECT_NO_THROW(
+        experimental::CreatePrefetcherPipeSpace(mesh_device->mesh_command_queue(0), make_pipe_space_config()));
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBankIds) {
@@ -278,7 +281,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
     distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
 
     auto tracked = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
-    auto tracked_id = tracked->get_backing_buffer()->unique_id();
+    auto tracked_id = tracked->unique_id().value();
     EXPECT_TRUE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                     .contains(tracked_id));
     EXPECT_TRUE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(tracked_id));
@@ -287,14 +290,14 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
     auto acknowledged = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
     distributed::trace_allocation_tracker::pop_corruptible_allocation_scope(mesh_device.get());
     EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
-                     .contains(acknowledged->get_backing_buffer()->unique_id()));
+                     .contains(acknowledged->unique_id().value()));
 
     std::shared_ptr<distributed::MeshBuffer> program_cache_allocation;
     {
         AllocationContextGuard guard("program_cache:test");
         program_cache_allocation = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
     }
-    auto program_cache_allocation_id = program_cache_allocation->get_backing_buffer()->unique_id();
+    auto program_cache_allocation_id = program_cache_allocation->unique_id().value();
     EXPECT_EQ(
         distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
             .contains(program_cache_allocation_id),
@@ -314,7 +317,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
     }
 
     auto cross_thread = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
-    const auto cross_thread_id = cross_thread->get_backing_buffer()->unique_id();
+    const auto cross_thread_id = cross_thread->unique_id().value();
     std::thread deallocator([cross_thread]() { cross_thread->deallocate(); });
     deallocator.join();
     if (trace_allocation_diagnostics_enabled()) {
@@ -349,7 +352,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerRegistrationIsIdempote
     distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
 
     auto tracked = distributed::MeshBuffer::create(replicated_config, global_config, mesh_device.get());
-    const auto tracked_id = tracked->get_backing_buffer()->unique_id();
+    const auto tracked_id = tracked->unique_id().value();
     EXPECT_TRUE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                     .contains(tracked_id));
 
@@ -430,7 +433,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerLifecycleToleratesImba
     if (trace_allocation_tracking_enabled()) {
         EXPECT_TRUE(mesh_device->impl()
                         .get_unsafe_tracked_ids(manager_a, shared_trace_id)
-                        .contains(tracked->get_backing_buffer()->unique_id()));
+                        .contains(tracked->unique_id().value()));
     }
 
     distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
@@ -476,8 +479,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerRoutesGlobalAndManager
     distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), shared_trace_id);
     auto local_b = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
     auto global = distributed::MeshBuffer::create(replicated_config, global_config, mesh_device.get());
-    const auto local_b_id = local_b->get_backing_buffer()->unique_id();
-    const auto global_id = global->get_backing_buffer()->unique_id();
+    const auto local_b_id = local_b->unique_id().value();
+    const auto global_id = global->unique_id().value();
 
     auto unsafe_for_a = mesh_device->impl().get_unsafe_tracked_ids(manager_a, shared_trace_id);
     auto unsafe_for_b = mesh_device->impl().get_unsafe_tracked_ids(manager_b, shared_trace_id);
@@ -490,7 +493,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerRoutesGlobalAndManager
     mesh_device->clear_loaded_sub_device_manager();
     mesh_device->load_sub_device_manager(manager_a);
     auto local_a = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
-    const auto local_a_id = local_a->get_backing_buffer()->unique_id();
+    const auto local_a_id = local_a->unique_id().value();
 
     unsafe_for_a = mesh_device->impl().get_unsafe_tracked_ids(manager_a, shared_trace_id);
     unsafe_for_b = mesh_device->impl().get_unsafe_tracked_ids(manager_b, shared_trace_id);

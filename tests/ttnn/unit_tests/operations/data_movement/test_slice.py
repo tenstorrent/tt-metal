@@ -2,12 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import pytest
 
 import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 from tests.ttnn.unit_tests.operations.data_movement.test_slice_write import offset_increment_tensor
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
@@ -1740,6 +1749,101 @@ def test_issue_38841_regression(device):
     assert_equal(torch_expected, tt_output_torch)
 
 
+def _legacy_sharded_mc(layout, x1, y1, shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x1, y1))})
+    return ttnn.MemoryConfig(
+        layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, list(shape), ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+@pytest.mark.parametrize(
+    "layout, input_shape, in_grid, in_shard, out_grid, out_shard, begins, ends, step, use_output_tensor",
+    [
+        # BLOCK_SHARDED, non-tile-aligned width begin: core corruption case.
+        ("B", (1, 1, 32, 32), (0, 0), (32, 32), (0, 0), (32, 32), [0, 0, 1, 16], [1, 1, 32, 32], [1, 1, 1, 1], False),
+        # BLOCK_SHARDED, strided on asymmetric 3x2 grid with preallocated output_tensor.
+        ("B", (1, 1, 33, 65), (2, 1), (32, 32), (0, 0), (32, 32), [0, 0, 0, 0], [1, 1, 32, 32], [1, 1, 1, 2], True),
+        # WIDTH_SHARDED strided slice.
+        ("W", (1, 1, 32, 128), (0, 3), (32, 32), (0, 0), (32, 32), [0, 0, 0, 0], [1, 1, 32, 64], [1, 1, 1, 2], False),
+        # HEIGHT_SHARDED non-tile-aligned H begin: shard_w == tensor_w → native path, no composite.
+        ("H", (1, 1, 32, 32), (0, 0), (32, 32), (0, 0), (32, 32), [0, 0, 1, 0], [1, 1, 32, 32], [1, 1, 1, 1], False),
+    ],
+)
+def test_tile_sharded_rm_only_slice_correctness(
+    layout, input_shape, in_grid, in_shard, out_grid, out_shard, begins, ends, step, use_output_tensor, device
+):
+    """TILE sharded strided / non-tile-begin slices must round-trip bit-exactly."""
+    torch.manual_seed(2026)
+    mem_layout = {
+        "B": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        "W": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        "H": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    }[layout]
+    in_mc = _legacy_sharded_mc(mem_layout, *in_grid, in_shard)
+    out_mc = _legacy_sharded_mc(mem_layout, *out_grid, out_shard)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    want = torch_input[
+        begins[0] : ends[0] : step[0],
+        begins[1] : ends[1] : step[1],
+        begins[2] : ends[2] : step[2],
+        begins[3] : ends[3] : step[3],
+    ]
+
+    if use_output_tensor:
+        out_buf = ttnn.from_torch(
+            torch.full(tuple(want.shape), 7.0, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=out_mc,
+        )
+        tt_output = ttnn.slice(tt_input, begins, ends, step, output_tensor=out_buf)
+    else:
+        tt_output = ttnn.slice(tt_input, begins, ends, step, memory_config=out_mc)
+
+    assert_equal(want, ttnn.to_torch(tt_output).reshape(want.shape))
+
+
+def test_tile_sharded_dram_interleaved_input_skips_staging(device):
+    """DRAM-interleaved TILE input + BLOCK_SHARDED output must not pre-stage to L1."""
+    torch.manual_seed(2026)
+    out_mc = _legacy_sharded_mc(ttnn.TensorMemoryLayout.BLOCK_SHARDED, 0, 0, (32, 32))
+
+    torch_input = torch.randn((1, 1, 32, 32), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_output = ttnn.slice(tt_input, [0, 0, 1, 16], [1, 1, 32, 32], [1, 1, 1, 1], memory_config=out_mc)
+    assert_equal(torch_input[:, :, 1:32, 16:32], ttnn.to_torch(tt_output).reshape((1, 1, 31, 16)))
+
+
+def test_tile_sharded_inherited_shard_spec_tile_aligned(device):
+    """No explicit memory_config: composite must tile-align the rescaled inherited shard spec."""
+    torch.manual_seed(2026)
+    in_mc = _legacy_sharded_mc(ttnn.TensorMemoryLayout.BLOCK_SHARDED, 1, 1, (32, 32))
+
+    torch_input = torch.randn((1, 1, 64, 64), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+
+    # Strided W: without tile-align the inherited rescaled shard would be {32, 16}.
+    tt_output = ttnn.slice(tt_input, [0, 0, 0, 1], [1, 1, 64, 64], [1, 1, 1, 2])
+    assert_equal(torch_input[:, :, :, 1:64:2], ttnn.to_torch(tt_output).reshape((1, 1, 64, 32)))
+
+
+def test_tile_sharded_zero_size_slice(device):
+    """Zero-size output must bypass the composite and fall to the empty branch."""
+    in_mc = _legacy_sharded_mc(ttnn.TensorMemoryLayout.BLOCK_SHARDED, 0, 0, (32, 32))
+    tt_input = ttnn.from_torch(
+        torch.zeros((1, 1, 32, 32), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in_mc,
+    )
+    tt_output = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, 32, 0], [1, 1, 1, 1])
+    assert list(tt_output.shape) == [1, 1, 32, 0]
+
+
 @pytest.mark.parametrize(
     "input_shape, begins, ends, step",
     [
@@ -2290,10 +2394,10 @@ def test_slice_nd_sharded_explicit_config_that_does_not_fit_rejected(device, exp
 
 def test_slice_nd_sharded_rescale_rank1(device):
     # Rank-1 ND sharding is valid and must also be rescaled: [256] / [64] on 4 cores sliced to [128]
-    # gives shard [32] (4 shards), not the stale [64] (2 shards for 4 cores). Data is not checked here
-    # because of issue #58370 (see test_slice_nd_sharded_rank1_input_data).
+    # gives shard [32] (4 shards), not the stale [64] (2 shards for 4 cores).
+    torch_input = torch.rand((256,), dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(
-        torch.rand((256,), dtype=torch.bfloat16),
+        torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -2305,15 +2409,136 @@ def test_slice_nd_sharded_rescale_rank1(device):
     out_mem_config = sliced.memory_config()
     assert out_mem_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
     assert list(out_mem_config.nd_shard_spec.shard_shape) == [32]
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[:128])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Issue #58370: SliceRmProgramFactory reads a rank-1 ND-sharded input with more than two shards "
-    "incorrectly, independent of the output memory config.",
+@pytest.mark.parametrize(
+    "length, shard, num_cores",
+    [
+        (256, 64, 4),  # issue #58370
+        pytest.param(256, 32, 8, marks=pytest.mark.requires_grid_size((1, 8))),
+        (256, 128, 2),
+        (4096, 1024, 4),
+    ],
 )
-def test_slice_nd_sharded_rank1_input_data(device):
-    torch_input = torch.rand((256,), dtype=torch.bfloat16)
+@pytest.mark.parametrize("begin_end", [(0, 0.5), (0.25, 0.75), (0.5, 1.0)])
+@pytest.mark.parametrize("out_cores", [None, 1, 2])  # None: L1 interleaved output
+def test_slice_nd_sharded_rank1_input_data(device, length, shard, num_cores, begin_end, out_cores):
+    begin, end = int(length * begin_end[0]), int(length * begin_end[1])
+    torch_input = torch.arange(length, dtype=torch.float32).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1([shard], num_cores=num_cores),
+    )
+
+    out_len = end - begin
+    if out_cores is None:
+        memory_config = ttnn.L1_MEMORY_CONFIG
+    else:
+        memory_config = _contiguous_1d_l1([-(-out_len // out_cores)], num_cores=out_cores)
+    sliced = ttnn.slice(tt_input, [begin], [end], [1], memory_config=memory_config)
+
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[begin:end])
+
+
+def test_slice_nd_sharded_rank1_sub_aligned_input(device):
+    # [36] bf16 shards are 72 bytes, padded to an aligned page; the split path would read the padding as data,
+    # so slice moves such an input to interleaved memory first. (Issue #58370, #58402 item 17)
+    torch_input = torch.arange(144, dtype=torch.float32).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1([36], num_cores=4),
+    )
+
+    sliced = ttnn.slice(tt_input, [0], [72], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[0:72])
+
+
+def test_slice_nd_sharded_rank1_sub_aligned_input_second_shard(device):
+    # [36:72] stays inside shard 1, but the helper addresses the row by bytes against the 80-byte aligned page, so
+    # the read would start in padding and drop elements 68..71; the input goes through interleaved memory instead.
+    torch_input = torch.arange(144, dtype=torch.float32).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1([36], num_cores=4),
+    )
+
+    sliced = ttnn.slice(tt_input, [36], [72], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[36:72])
+
+
+def test_slice_nd_sharded_rank1_sub_aligned_input_into_padding(device):
+    # [0:40] ends at byte 80, inside the first 80-byte aligned page but past its 72-byte payload, so a single read
+    # would return the shard's padding as elements 36..39; the input goes through interleaved memory instead.
+    torch_input = torch.arange(144, dtype=torch.float32).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1([36], num_cores=4),
+    )
+
+    sliced = ttnn.slice(tt_input, [0], [40], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[0:40])
+
+
+def test_slice_nd_sharded_row_wide_sub_aligned_shard_rank4(device):
+    # A rank-1 [36] shard on [1, 1, 4, 36] is one whole row per page; every per-row transfer stays inside its page,
+    # so this works and must not be rejected by the sub-aligned rank-1 guard. A HEIGHT_SHARDED output with a spec
+    # and no step keeps the slice on the native path (otherwise the non-tile W stages it to interleaved first).
+    torch_input = torch.arange(4 * 36, dtype=torch.float32).reshape(1, 1, 4, 36).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1([36], num_cores=4),
+    )
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    out_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [1, 20], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    sliced = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, 4, 20], [1, 1, 1, 1], memory_config=out_mem_config)
+
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[..., :20])
+
+
+def test_slice_nd_sharded_rank1_sub_aligned_input_within_one_page(device):
+    # A range that stays inside one [36] shard is moved by a single transfer and is exact, so it is not rejected.
+    torch_input = torch.arange(144, dtype=torch.float32).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_contiguous_1d_l1([36], num_cores=4),
+    )
+
+    sliced = ttnn.slice(tt_input, [0], [8], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[:8])
+
+
+def test_slice_nd_sharded_rank1_sub_aligned_output_from_nd_input(device):
+    # [256] in [64]/4 cores sliced [0:72] into [36]/2 cores: the split path would write 144 bytes into a 72-byte
+    # payload, so slice writes the output interleaved and copies it into the ND layout.
+    torch_input = torch.arange(256, dtype=torch.float32).to(torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
@@ -2322,9 +2547,27 @@ def test_slice_nd_sharded_rank1_input_data(device):
         memory_config=_contiguous_1d_l1([64], num_cores=4),
     )
 
-    sliced = ttnn.slice(tt_input, [0], [128], [1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    sliced = ttnn.slice(tt_input, [0], [72], [1], memory_config=_contiguous_1d_l1([36], num_cores=2))
 
-    assert torch.equal(ttnn.to_torch(sliced), torch_input[:128])
+    assert list(sliced.memory_config().nd_shard_spec.shard_shape) == [36]
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[0:72])
+
+
+def test_slice_nd_sharded_rank1_sub_aligned_output_data(device):
+    # A sub-aligned ND output is produced by slicing to interleaved and copying into the ND layout, so the
+    # rank-1 split path never sees it and the data must still be exact.
+    torch_input = torch.arange(144, dtype=torch.float32).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    sliced = ttnn.slice(tt_input, [0], [72], [1], memory_config=_contiguous_1d_l1([36], num_cores=2))
+
+    assert torch.equal(ttnn.to_torch(sliced), torch_input[:72])
 
 
 def test_slice_nd_sharded_empty_row_major_output(device):
@@ -2365,3 +2608,218 @@ def test_slice_nd_sharded_tensor_args_inherited_vs_explicit(device):
     explicit = ttnn.slice(tt_input, start, end, slice_dim=2, num_devices=2, memory_config=mem_config)
     assert list(explicit.memory_config().nd_shard_spec.shard_shape) == [1, 1, 64, 64]
     assert torch.equal(ttnn.to_torch(explicit), torch_expected)
+
+
+def test_slice_tensor_args_rejects_zero_num_devices(device, expect_error):
+    # The tensor-args path splits slice_dim by num_devices.
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    starts = ttnn.from_torch(torch.tensor([0, 0, 0, 0]), device=device)
+    ends = ttnn.from_torch(torch.tensor([1, 1, 32, 64]), device=device)
+    with expect_error(RuntimeError, "num_devices must be greater than 0"):
+        ttnn.slice(x, starts, ends, slice_dim=2, num_devices=0)
+
+
+def test_slice_rm_wide_row_after_l1_fills(device):
+    # The RM factory double-buffers a whole row when it fits the L1 free at program creation and
+    # splits it into 8 KiB chunks when it does not. Slice once with L1 empty, then pin an L1 tensor
+    # that leaves room for the chunked plan only: the second slice must rebuild, not replay the
+    # whole-row program over the pinned tensor.
+    torch.manual_seed(0)
+    width = 128256  # Llama 3 vocabulary
+    row_bytes = width * 2
+    double_buffered_row_bytes = 2 * row_bytes
+    chunked_bytes = 4 * 8192
+    info = ttnn._ttnn.reports.get_device_info(device)
+    if info.cb_limit < double_buffered_row_bytes:
+        pytest.skip(f"needs {double_buffered_row_bytes} B of L1 for a whole-row plan, device offers {info.cb_limit} B")
+
+    torch_input = torch.rand((1, 1, 32, width), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    torch_expected = torch_input[:, :, :8, :]
+
+    warmup = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, 8, width])
+    assert torch.equal(ttnn.to_torch(warmup), torch_expected)
+    ttnn.deallocate(warmup)
+
+    tile_bytes = 2048
+    tiles_per_bank = (info.cb_limit - (double_buffered_row_bytes - 64 * 1024)) // tile_bytes
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    )
+    try:
+        headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        assert chunked_bytes <= headroom < double_buffered_row_bytes, (
+            f"pinned L1 tensor left {headroom} B above the DFB base, "
+            f"needs [{chunked_bytes}, {double_buffered_row_bytes})"
+        )
+
+        output = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, 8, width])
+        assert torch.equal(ttnn.to_torch(output), torch_expected)
+    finally:
+        ttnn.deallocate(resident)
+
+
+def _docstring_unit_step_dtypes():
+    """Dtypes the ttnn.slice docstring says need a ``slice_step`` of 1."""
+    names = re.findall(r"``(\w+)``\s+tensors\s+need\s+a\s+``slice_step``\s+of\s+1", ttnn.slice.__doc__)
+    return {getattr(ttnn.DataType, name) for name in names}
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.slice))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.slice))
+def test_slice_docstring_supported_inputs(dtype, layout, buffer_type, device, expect_error):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.slice docstring lists.
+
+    Each one also takes a slice with negative indices and a strided slice. A strided slice must raise for the
+    dtypes the docstring says need a ``slice_step`` of 1, and work for the rest.
+    """
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input((1, 1, 64, 64), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    expected = ttnn.to_torch(input_tensor)
+
+    # Both slices keep the first row, which holds full_range_input's special values.
+    output = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 32, 64], memory_config=memory_config)
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    assert_exact(expected[:, :, :32, :], ttnn.to_torch(output))
+
+    output = ttnn.slice(input_tensor, [0, 0, -64, 0], [1, 1, -32, 64], memory_config=memory_config)
+    assert_exact(expected[:, :, -64:-32, :], ttnn.to_torch(output))
+
+    if dtype in _docstring_unit_step_dtypes():
+        with expect_error(RuntimeError, "Strided slice is not supported"):
+            ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 64], [1, 1, 2, 1], memory_config=memory_config)
+    else:
+        # A strided TILE slice runs a compute kernel that holds BFLOAT16 zeros by value: a BFLOAT16 input leaves out
+        # NaN, as the docstring requires, and its zeros are compared by value.
+        bfloat16_tile = dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT
+        if bfloat16_tile:
+            input_tensor = ttnn.from_torch(
+                full_range_input((1, 1, 64, 64), dtype, nan=False),
+                dtype=dtype,
+                layout=layout,
+                device=device,
+                memory_config=memory_config,
+            )
+            expected = ttnn.to_torch(input_tensor)
+        output = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 64], [1, 1, 2, 1], memory_config=memory_config)
+        assert output.dtype == dtype
+        assert output.layout == layout
+        assert_exact(expected[:, :, ::2, :], ttnn.to_torch(output), signed_zeros=not bfloat16_tile)
+
+
+# ttnn.slice already rejects step <= 0 at its entry; these cases guard that and
+# cover quasar slice, whose host path used to cast a negative step to a huge uint32 (silent empty tensor)
+# and divide by a zero step (SIGFPE). The moved device-op check is not reachable from here.
+@pytest.mark.parametrize("slice_fn", [ttnn.slice, ttnn.experimental.quasar.slice], ids=["slice", "quasar_slice"])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "shape, ends, step",
+    [
+        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 1, -1)),
+        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 1, -2)),
+        ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 1, 0)),
+        ((1, 1, 2, 32), (1, 1, 2, 32), (1, 1, -2, 1)),
+    ],
+    ids=["step_neg1", "step_neg2", "step_zero", "extent_le_abs_step"],
+)
+def test_slice_non_positive_step_raises(device, expect_error, slice_fn, layout, shape, ends, step):
+    tt_input = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=layout, device=device)
+    with expect_error(RuntimeError, "Slice step must be greater than 0"):
+        slice_fn(tt_input, [0, 0, 0, 0], list(ends), list(step))
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "step, message",
+    [(-1, "step must be greater than zero"), (-2, "step must be greater than zero"), (0, "slice step cannot be zero")],
+    ids=["step_neg1", "step_neg2", "step_zero"],
+)
+def test_getitem_non_positive_step_raises(device, expect_error, layout, step, message):
+    tt_input = ttnn.from_torch(torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=layout, device=device)
+    with expect_error(ValueError, message):
+        tt_input[..., ::step]
+
+
+# Row-major tensors whose rows span several shards, with a shard row that is not a multiple of the buffer alignment.
+# The sharded reads and writes cannot split such rows, so slice stages these tensors through interleaved memory.
+def _ramp_bf16(shape):
+    # Multiples of 1/8 in [-6, 6], exact in bfloat16, with a period that does not divide the row lengths used here.
+    return ((torch.arange(torch.Size(shape).numel()) % 97 - 48) / 8).reshape(shape).to(torch.bfloat16)
+
+
+def _core_grid(*ranges):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*a), ttnn.CoreCoord(*b)) for a, b in ranges})
+
+
+def _width_shards(num_shards, shard_shape):
+    # L1 shards in rows of 8 cores.
+    cores = (
+        _core_grid(((0, 0), (7, num_shards // 8 - 1))) if num_shards > 8 else _core_grid(((0, 0), (num_shards - 1, 0)))
+    )
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def _nd_shards(shard_shape, cores):
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape(shard_shape), cores, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
+
+
+def test_slice_rm_nd_sharded_subaligned_output_rows(device):
+    # The output slice derives from the [1, 1, 5, 64] input shards has shard rows that are not 16-byte aligned.
+    x = _ramp_bf16([1, 1, 32, 224])
+    config = _nd_shards([1, 1, 5, 64], _core_grid(((0, 0), (7, 2)), ((0, 3), (3, 3))))
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config)
+
+    output = ttnn.slice(t, [0, 0, 16, 0], [1, 1, 32, 32], [1, 1, 2, 2])
+
+    nd_spec = output.memory_config().nd_shard_spec
+    assert nd_spec is not None and (nd_spec.shard_shape[-1] * 2) % 16 != 0, output.memory_config()
+    assert_equal(x[:, :, 16:32:2, 0:32:2], ttnn.to_torch(output))
+
+
+def test_slice_rm_into_preallocated_nd_sharded_subaligned_rows(device):
+    # The preallocated output has 8-byte ND shard rows: slice writes it interleaved, then copies it in.
+    x = _ramp_bf16([1, 1, 32, 64])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 16, 32, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_nd_shards([1, 1, 16, 4], _core_grid(((0, 0), (7, 0)))),
+    )
+
+    ttnn.slice(t, [0, 0, 8, 16], [1, 1, 24, 48], [1, 1, 1, 1], output_tensor=out)
+
+    assert_equal(x[:, :, 8:24, 16:48], ttnn.to_torch(out))
+
+
+def test_slice_rm_width_sharded_subaligned_input_into_preallocated(device):
+    # Only the input's 8-byte shard rows are sub-aligned: it moves to interleaved memory, and slice writes straight
+    # into the preallocated output, whose 32-byte shard rows are aligned.
+    x = _ramp_bf16([1, 1, 64, 64])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(16, [64, 4]))
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_width_shards(4, [32, 16]),
+    )
+
+    ttnn.slice(t, [0, 0, 16, 0], [1, 1, 48, 64], [1, 1, 1, 1], output_tensor=out)
+
+    assert_equal(x[:, :, 16:48, :], ttnn.to_torch(out))

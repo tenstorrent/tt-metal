@@ -284,7 +284,7 @@ MeshWorkload build_producer_workload(
         const CoreCoord service_phys = device->worker_core_from_logical_core(service_logical);
         const uint32_t write_ack_counter_addr = static_cast<uint32_t>(service.get_write_ack_counter_addr(coord));
 
-        auto program = tt::tt_metal::CreateProgram();
+        auto program = tt::tt_metal::CreateProgram(*mesh_device);
 
         auto producer_kernel = tt::tt_metal::CreateKernel(
             program,
