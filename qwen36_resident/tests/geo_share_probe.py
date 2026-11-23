@@ -62,6 +62,8 @@ def main():
     ap.add_argument("--prompt-len", type=int, default=64)
     ap.add_argument("--new", type=int, default=32)
     ap.add_argument("--steps", type=int, default=20)
+    ap.add_argument("--table-blocks", type=int, default=0, help="blocks per user's table (default: max_pos's)")
+    ap.add_argument("--l1-dump", action="store_true")
     a = ap.parse_args()
     ids = torch.load(CORPUS)["ids"]
     mesh = open_mesh()
@@ -72,7 +74,7 @@ def main():
         layers, interval = cfg["num_hidden_layers"], cfg["full_attention_interval"]
         d = Dims(mesh.get_num_devices(), mesh.dram_grid_size().x, vocab=cfg["vocab_size"])
         n_attn = sum(is_attn(l, interval) for l in range(layers))
-        bpu = -(-(a.max_pos + 2 * 4 + 64) // 64) + 2
+        bpu = a.table_blocks or -(-(a.max_pos + 2 * 4 + 64) // 64) + 2
         blocks = 40 * bpu + 8  # (8 vrows users + 32 plain rows, each its own blocks)
         users, R, P = 8, 4, a.prompt_len
         out = {}
@@ -127,6 +129,17 @@ def main():
             print(f"plain build{' (shared)' if share else ''} in {time.time() - t0:.0f} s", flush=True)
             out["plain_ring"] = plain.ring_bytes
         sync()
+        if a.l1_dump:  # (every allocated L1 block: address, size; and which model registered it)
+            view = ttnn.get_memory_view(mesh, ttnn.BufferType.L1).block_table
+            owners = {}
+            for name, mdl in (("vrows", eng.m if eng else None), ("plain", plain)):
+                for ad in mdl.l1_addrs if mdl is not None else []:
+                    owners.setdefault(int(ad), []).append(name)
+            rows = sorted((int(b["address"]), int(b["size"])) for b in view if b["allocated"] == "yes")
+            total = sum(sz for _, sz in rows)
+            print(f"L1 allocated blocks: {len(rows)}, {total} B in all", flush=True)
+            for ad, sz in rows:
+                print(f"  L1 {ad:8d} size {sz:7d} {owners.get(ad, ['(other: PP / drafter / semaphores)'])}", flush=True)
         out["free_gb"] = round(free_dram(mesh) / 2**30, 2)
         emb = Q.embedding(ck).float()
         # ---- vrows: greedy of 8 users through the PP + its traced step time

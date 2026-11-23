@@ -110,6 +110,22 @@ GDN_TS = os.environ.get("RESIDENT_GDN_TS", "0") == "1"
 RING_AUTO = os.environ.get("RESIDENT_RING_AUTO", "1") == "1"
 RING_MARGIN = 64 * 1024  # L1 left free below the lowest L1 buffer (later small allocations, e.g. global semaphores)
 RING_MIN = 96 * 1024  # a smaller weight ring is refused (row groups), not run slowly
+# single-core persistent L1 scratch (the attention leader's row-max slots, the hub's candidate slots) placed inside the
+# logits buffer's address range on their cores, which hold no logits (L1 buffers take the same range on every core):
+# the weight rings get that L1 back (DB3 phase 2 found the shared build's ring 30 KB short of the batch build's)
+L1_ALIAS = os.environ.get("RESIDENT_L1_ALIAS", "1") == "1"
+
+
+class _L1Alias:
+    """a persistent L1 scratch living in another L1 buffer's address range on cores that buffer leaves unused"""
+
+    def __init__(self, host, offset=0):
+        self.host, self.offset = host, offset
+
+    def buffer_address(self):
+        return self.host.buffer_address() + self.offset
+
+
 HUB_MC_NOCS = int(os.environ.get("RESIDENT_HUB_MC_NOCS", "2"))  # NOCs the hub multicasts x over (mlp_hub.cpp mc_nocs)
 DM_OS_KERNELS = ("streamer_reader.cpp", "streamer_writer.cpp")  # (verify rows: -Os, see kernel())
 SNAP_COPY_CORES = int(os.environ.get("RESIDENT_SNAP_COPY_CORES", "8"))  # (slot snapshots: page-copy cores per chip)
@@ -902,6 +918,16 @@ class ResidentModel:
         self.logits_t = (
             l1(torch.zeros(S * LR, nv_max * TILE), grid, [LR, nv_max * TILE], key="logits") if lm_head else None
         )
+        streamer_xy = {(c.x, c.y) for c in cores}
+        logits_core_bytes = LR * nv_max * TILE * 2
+
+        def alias_into_logits(core, nbytes):
+            """(L1_ALIAS) a scratch of nbytes on `core` inside the logits buffer's range, when the core holds no
+            logits and it fits; else None"""
+            if not (L1_ALIAS and self.logits_t is not None) or (core.x, core.y) in streamer_xy:
+                return None
+            return _L1Alias(self.logits_t) if nbytes <= logits_core_bytes else None
+
         blk = blk_tiles * TILE * B
         # conv taps per (streamer, GDN copy): [tap][32 x 1x32 tiles], only the core's q|k|v columns
         self._S, self._gdn_copies, self._attn_copies = S, gdn_copies, attn_copies
@@ -965,7 +991,7 @@ class ResidentModel:
         slot_words = 512 if packed and self.attn_group * d.h > 16 else 128  # a worker's row-max slot (bf16)
         # (l1_union: the shared scratch sized for the other geometry too; the kernels index their own slot_words)
         sw_alloc = max(slot_words, int(self._l1_union.get("slot_words", 0)))
-        m_slots_t = l1(
+        m_slots_t = alias_into_logits(leader, WORKERS * sw_alloc * 2) or l1(
             torch.zeros(1, WORKERS * sw_alloc),
             lead_grid,
             [1, WORKERS * sw_alloc],
@@ -1101,7 +1127,7 @@ class ResidentModel:
             fed_rows = LR if rows else 2 if verify else 1  # tokens per launch (mlp_hub.cpp kCandWords)
             self._cand_words = 2 * TOP_K * fed_rows if self.sample else max(4, 2 * fed_rows)  # per chip
             cand_words = max(n * self._cand_words, int(self._l1_union.get("cand_words", 0)))
-            self.cand_t = l1(
+            self.cand_t = alias_into_logits(hub, cand_words * 4) or l1(
                 torch.zeros(1, cand_words, dtype=torch.int32),
                 hub_grid,
                 [1, cand_words],
@@ -1928,6 +1954,8 @@ class ResidentModel:
             if timeline:
                 io += [self.ts_t, self.hub_ts_t]
             io += [t for _, t in self.taps]
+            # (an aliased scratch is the logits buffer's range: the program holds that tensor)
+            io = [x.host if isinstance(x, _L1Alias) else x for x in io]
             return mesh_pd, io
 
         built = [build(sub) for sub in subs]
