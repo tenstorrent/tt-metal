@@ -11,6 +11,7 @@
 #include <array>
 #include <map>
 #include <set>
+#include <tuple>
 #include <fmt/format.h>
 #include <tt-metalium/host_api.hpp>
 #include "tt_fabric_test_common.hpp"
@@ -908,21 +909,69 @@ public:
         }
     }
 
-    // The links on which each device has two or more senders (devices without any are left out). Those senders' flows
-    // share a (direction, link), so they reach the fabric through a mux there, which every other client of that link
-    // must also go through.
-    static std::map<FabricNodeId, std::set<uint32_t>> find_links_shared_by_senders(const TestConfig& config) {
-        std::map<std::pair<FabricNodeId, uint32_t>, uint32_t> senders_per_device_and_link;
+    // The links on which some router channel (direction, link, VC) of a device has two or more sender cores (devices
+    // without any are left out). The connection manager gives those senders a mux on that channel, which every other
+    // client of the channel must also go through.
+    static std::map<FabricNodeId, std::set<uint32_t>> find_links_shared_by_senders(
+        const TestConfig& config, const IRouteManager& route_manager, const IDeviceInfoProvider& device_info_provider) {
+        using RouterChannel = std::tuple<FabricNodeId, RoutingDirection, uint32_t /* link */, uint8_t /* vc */>;
+        std::map<RouterChannel, /* num sender cores */ uint32_t> sender_cores_per_router_channel;
         for (const auto& sender : config.senders) {
-            senders_per_device_and_link[{sender.device, sender.link_id}]++;
+            const uint8_t vc_id = sender.vc_id.value_or(default_worker_vc_id);
+            // A sender core is one client of each channel, however many of its configs use it
+            std::set<RoutingDirection> directions;
+            for (const auto& pattern : sender.patterns) {
+                for (const auto direction : get_pattern_outgoing_directions(
+                         sender.device, pattern, config.fabric_setup.topology, route_manager, device_info_provider)) {
+                    directions.insert(direction);
+                }
+            }
+            for (const auto direction : directions) {
+                sender_cores_per_router_channel[{sender.device, direction, sender.link_id, vc_id}]++;
+            }
         }
         std::map<FabricNodeId, std::set<uint32_t>> shared_links;
-        for (const auto& [device_and_link, num_senders] : senders_per_device_and_link) {
-            if (num_senders > 1) {
-                shared_links[device_and_link.first].insert(device_and_link.second);
+        for (const auto& [router_channel, num_sender_cores] : sender_cores_per_router_channel) {
+            if (num_sender_cores > 1) {
+                shared_links[/* device id*/std::get<0>(router_channel)].insert(/* link id */ std::get<2>(router_channel));
             }
         }
         return shared_links;
+    }
+
+    // The directions in which a sender's packets for one pattern leave its chip. The pattern's hops and first
+    // destination are resolved as TestContext::add_traffic_config resolves them for the sender.
+    static std::vector<RoutingDirection> get_pattern_outgoing_directions(
+        const FabricNodeId& src_node_id,
+        const TrafficPatternConfig& pattern,
+        tt::tt_fabric::Topology topology,
+        const IRouteManager& route_manager,
+        const IDeviceInfoProvider& device_info_provider) {
+        const auto& dest = pattern.destination.value();
+        std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
+        FabricNodeId dst_node_id = src_node_id;
+
+        // Get the hops for the pattern + the destination node id
+        if (dest.hops.has_value()) { // multicast case: keep the hops + first landing destination
+            hops = dest.hops;
+            auto hops_copy = dest.hops.value();
+            dst_node_id = route_manager.get_dst_node_ids_from_hops(src_node_id, hops_copy, pattern.ftype.value())[0];
+        } else {
+            dst_node_id = dest.device.value();
+            if (src_node_id.mesh_id == dst_node_id.mesh_id) {
+                hops = route_manager.get_hops_to_chip(src_node_id, dst_node_id);
+            }
+        }
+
+        // Find the actual directions in which the pattern's packets leave the source device
+        return get_sender_outgoing_directions(
+            route_manager,
+            src_node_id,
+            hops,
+            dst_node_id,
+            pattern.ftype.value(),
+            device_info_provider.is_2D_routing_enabled(),
+            topology);
     }
 
 private:
@@ -1066,14 +1115,15 @@ private:
 
         // 2. Determine num_links and where muxes go. With flow control every device has a mux per direction on every
         // link (receivers return credits over the senders' links). Otherwise a device has them only on the links where
-        // two or more of its senders share the link (e.g. the pieces of a split sender).
+        // two or more of its senders send in the same direction (e.g. the pieces of a split sender).
         uint32_t max_link_id = 0;
         for (const auto& sender : config.senders) {
             max_link_id = std::max(max_link_id, sender.link_id);
         }
         const uint32_t num_links = max_link_id + 1;  // link_id is 0-indexed
         const uint32_t mux_cores_per_link = device_info_provider_.get_max_connections_per_device();
-        const auto links_shared_by_senders = find_links_shared_by_senders(config);
+        const auto links_shared_by_senders =
+            find_links_shared_by_senders(config, route_manager_, device_info_provider_);
         const auto count_mux_cores_on_device = [&](const FabricNodeId& device_id) -> uint32_t {
             if (config.enable_flow_control) {
                 return mux_cores_per_link * num_links;

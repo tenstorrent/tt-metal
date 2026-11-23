@@ -718,7 +718,8 @@ void TestContext::process_traffic_config(TestConfig& config) {
     // The other devices keep separate managers, which avoid the mux overhead.
     if (config.global_sync) {
         const auto links_shared_by_senders =
-            tt::tt_fabric::fabric_tests::DynamicPolicyManager::find_links_shared_by_senders(config);
+            tt::tt_fabric::fabric_tests::DynamicPolicyManager::find_links_shared_by_senders(
+                config, *this->fixture_, *this->fixture_);
         for (auto& [_, device] : test_devices_) {
             if (config.enable_flow_control || links_shared_by_senders.contains(device.get_node_id())) {
                 device.set_use_unified_connection_manager(true);

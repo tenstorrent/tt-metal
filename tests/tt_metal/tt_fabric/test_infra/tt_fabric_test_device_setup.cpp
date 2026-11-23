@@ -198,6 +198,30 @@ std::vector<RoutingDirection> mcast_outgoing_directions(
 
 }  // namespace
 
+std::vector<RoutingDirection> get_sender_outgoing_directions(
+    const IRouteManager& route_manager,
+    const FabricNodeId& src_node_id,
+    const std::optional<std::unordered_map<RoutingDirection, uint32_t>>& hops,
+    const FabricNodeId& dst_node_id,
+    ChipSendType chip_send_type,
+    bool is_2D_routing_enabled,
+    tt::tt_fabric::Topology topology) {
+    if (hops.has_value() && chip_send_type == ChipSendType::CHIP_MULTICAST && is_2D_routing_enabled) {
+        return mcast_outgoing_directions(src_node_id, hops.value());
+    }
+
+    // Special handling: For torus 2D unicast, we have bugs where we try to follow the input hop count
+    // but the routing tables cause packets to fail to reach the destination properly in some cases,
+    // due to torus links. In this case, we use node IDs instead of hops.
+    const bool is_torus_2d_unicast = topology == tt::tt_fabric::Topology::Torus && is_2D_routing_enabled &&
+                                     chip_send_type == ChipSendType::CHIP_UNICAST;
+    const bool has_z_hop = hops.has_value() && hops->contains(RoutingDirection::Z) && hops->at(RoutingDirection::Z) > 0;
+    if (hops.has_value() && (!is_torus_2d_unicast || has_z_hop)) {
+        return {route_manager.get_forwarding_direction(hops.value())};
+    }
+    return {route_manager.get_forwarding_direction(src_node_id, dst_node_id)};
+}
+
 // ====================================
 // FabricConnectionManager Implementation
 // ====================================
@@ -643,29 +667,14 @@ TestSender::TestSender(
 }
 
 void TestSender::add_config(TestTrafficSenderConfig config) {
-    // Determine direction for fabric connection
-    const auto dst_node_id = config.dst_node_ids[0];
-
-    // Special handling: For torus 2D unicast, we have bugs where we try to follow the input hop count
-    // but the routing tables cause packets to fail to reach the destination properly in some cases,
-    // due to torus links. In this case, we use node IDs instead of hops.
-    const bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
-                                     (config.parameters.is_2D_routing_enabled) &&
-                                     (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
-
-    const bool has_z_hop = config.hops.has_value() && config.hops->contains(RoutingDirection::Z) &&
-                           config.hops->at(RoutingDirection::Z) > 0;
-
-    std::vector<RoutingDirection> outgoing_directions;
-    if (config.hops.has_value() && config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST &&
-        config.parameters.is_2D_routing_enabled) {
-        outgoing_directions = mcast_outgoing_directions(this->test_device_ptr_->get_node_id(), config.hops.value());
-    } else if (config.hops.has_value() && (!is_torus_2d_unicast || has_z_hop)) {
-        outgoing_directions.push_back(this->test_device_ptr_->get_forwarding_direction(config.hops.value()));
-    } else {
-        outgoing_directions.push_back(
-            this->test_device_ptr_->get_forwarding_direction(this->test_device_ptr_->get_node_id(), dst_node_id));
-    }
+    const std::vector<RoutingDirection> outgoing_directions = get_sender_outgoing_directions(
+        *this->test_device_ptr_->route_manager_,
+        this->test_device_ptr_->get_node_id(),
+        config.hops,
+        config.dst_node_ids[0],
+        config.parameters.chip_send_type,
+        config.parameters.is_2D_routing_enabled,
+        config.parameters.topology);
 
     std::vector<ConnectionKey> fabric_connection_keys;
     fabric_connection_keys.reserve(outgoing_directions.size());
