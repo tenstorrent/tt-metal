@@ -14,10 +14,17 @@
 // 4. down columns through an 8-slot cache (cb_wd, pushed once): before row r, the experts of row r not in a slot
 //    are read into slots row r does not use, after compute finished row r - 1 (cb_done); then one token in cb_tok.
 // Runtime args: as moe_bank_reader.cpp (no PF_RING / IDS_FROM_SEM). PF_LAYOUT: as moe_bank_reader.cpp (the extra
-// pair and down's last columns from two more tensors, runtime args 10, 11).
+// pair and down's last columns from two more tensors, runtime args 10, 11). PF_RING (with PF_LAYOUT): as
+// moe_bank_reader.cpp (runtime args 12..17): ring workers read the union experts the guess mask marks from the
+// prefetcher ring, pop every marked slab, and count on the collector's sem_pf once their down entries were popped
+// (after the last row: a later row may still load a marked expert's down column from the ring).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#ifdef PF_RING
+#include <new>
+#include "api/dataflow/prefetcher_pipe.h"
+#endif
 
 constexpr uint32_t cb_x = get_named_compile_time_arg_val("cb_x");
 constexpr uint32_t cb_w = get_named_compile_time_arg_val("cb_w");
@@ -79,6 +86,24 @@ void kernel_main() {
     const auto gux = TensorAccessor(gux_args, get_arg_val<uint32_t>(a++));
     const auto dnx = TensorAccessor(dnx_args, get_arg_val<uint32_t>(a++));
     const uint32_t m = bank + nb * dslot;  // ring position
+#endif
+#ifdef PF_RING
+    constexpr uint32_t RING = get_named_compile_time_arg_val("ring_bytes");
+    constexpr uint32_t BLK_GU = get_named_compile_time_arg_val("blk_gu");
+    constexpr uint32_t BLK_DN = get_named_compile_time_arg_val("blk_dn");
+    constexpr uint32_t n_groups = get_named_compile_time_arg_val("n_groups");
+    constexpr uint32_t half_gu = kt_gu / 2;  // tiles per gate_up entry
+    const bool on_ring = get_arg_val<uint32_t>(a++);
+    const uint32_t cfg = get_arg_val<uint32_t>(a++);
+    const uint32_t ring = get_arg_val<uint32_t>(a++);
+    constexpr auto g_args = TensorAccessorArgs<dnx_args.next_compile_time_args_offset()>();
+    const auto guess = TensorAccessor(g_args, get_arg_val<uint32_t>(a++));
+    const uint32_t coll_x = get_arg_val<uint32_t>(a++);
+    const uint32_t coll_y = get_arg_val<uint32_t>(a++);
+    constexpr uint32_t sem_pf_id = get_named_compile_time_arg_val("sem_pf");
+    alignas(experimental::PrefetcherPipe) uint8_t pipe_mem[sizeof(experimental::PrefetcherPipe)];
+    experimental::PrefetcherPipe* pipe = nullptr;
+    uint32_t r_off = 0, r_lim = 0;  // ring offset of this call's first entry; entries wrap at r_lim
 #endif
 
     // ids rows (row r: face 0 row r, 8 uint16 = 16 B at byte r * 32) and routing weights rows (bf16, same layout)
@@ -178,6 +203,48 @@ void kernel_main() {
         }
     }
     cb_push_back(cb_plan, 1);
+#ifdef PF_RING
+    // rank[u]: position of union expert u among the marked experts (ascending ids), or -1
+    int32_t rank[rows * topk];
+    uint32_t nsel = 0;
+    if (on_ring) {
+        cb_reserve_back(cb_w, kt_gu);
+        const uint32_t tmp = get_write_ptr(cb_w);  // free until the first column is read
+        noc_async_read(guess.get_noc_addr(0), tmp, (n_groups * 2 + 63) / 64 * 64);
+        noc_async_read_barrier();
+        volatile tt_l1_ptr uint16_t* mk = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tmp);
+        for (uint32_t u = 0; u < U; ++u) {
+            rank[u] = -1;
+        }
+        for (uint32_t g = 0; g < n_groups; ++g) {
+            if (mk[g] != 0) {
+                for (uint32_t u = 0; u < U; ++u) {
+                    if (uid[u] == g) {
+                        rank[u] = nsel;
+                    }
+                }
+                ++nsel;
+            }
+        }
+    }
+    auto open_pipe = [&](uint32_t entry) {
+        pipe = new (pipe_mem) experimental::PrefetcherPipe(experimental::ReceiverConfigPage{cfg}, entry);
+        r_off = pipe->get_read_ptr() - ring;
+        r_lim = RING - RING % entry;
+    };
+    auto close_pipe = [&](uint32_t n_entries) {  // hand every entry of this call back, used or not
+        if (n_entries) {
+            pipe->wait_front(n_entries);
+            pipe->pop_front(n_entries);
+        }
+        pipe->~PrefetcherPipe();
+        pipe = nullptr;
+    };
+    auto entry_addr = [&](uint32_t q, uint32_t entry) {  // L1 NOC address of this call's entry q, once it landed
+        pipe->wait_front(q + 1);
+        return get_noc_addr(ring + (r_off + q * entry) % r_lim);
+    };
+#endif
 
     // routing weights per row (gate cores), the 1-row step's tile layout, one page per row
     if (flags & F_GATE) {
@@ -201,6 +268,11 @@ void kernel_main() {
         const uint32_t tb = get_tile_size(cb_wd);
         cb_reserve_back(cb_wd, topk * kt_dn);
         const uint32_t wd = get_write_ptr(cb_wd);
+#ifdef PF_RING
+        if (on_ring) {
+            open_pipe(BLK_DN);
+        }
+#endif
         for (uint32_t r = 0; r < rows; ++r) {
             if (r > 0) {  // compute is done with row r - 1's slots
                 cb_wait_front(cb_done, 1);
@@ -210,8 +282,13 @@ void kernel_main() {
                 if (loads[r] & (1u << s)) {
                     const uint32_t id = uid[load_u[r][s]];
 #ifdef PF_LAYOUT
-                    const uint64_t src =
+                    uint64_t src =
                         m < n_pf ? dn.get_noc_addr(id * kt_dn * n_pf + m) : dnx.get_noc_addr(id * kt_dn * nb + bank);
+#ifdef PF_RING
+                    if (on_ring && rank[load_u[r][s]] >= 0) {
+                        src = entry_addr(rank[load_u[r][s]], BLK_DN);
+                    }
+#endif
 #else
                     const uint64_t src = dn.get_noc_addr(((id * dn_slots + dslot) * kt_dn) * nb + bank);
 #endif
@@ -225,6 +302,13 @@ void kernel_main() {
             cb_reserve_back(cb_tok, 1);
             cb_push_back(cb_tok, 1);
         }
+#ifdef PF_RING
+        if (on_ring) {
+            close_pipe(nsel);  // waits for every down entry: the prefetcher is past this call's mask
+            noc_semaphore_inc(get_noc_addr(coll_x, coll_y, get_semaphore(sem_pf_id)), 1);
+            noc_async_atomic_barrier();
+        }
+#endif
     };
 
     if (!(flags & F_GU)) {
@@ -237,9 +321,24 @@ void kernel_main() {
     // gate_up: each union expert's column whole (the pair = gate column then up column, contiguous in this bank);
     // the next column's read is in flight while compute works on this one (cb_w holds two)
     const uint32_t tbw = get_tile_size(cb_w);
+#ifdef PF_RING
+    if (on_ring) {
+        open_pipe(BLK_GU);
+    }
+#endif
     for (uint32_t u = 0; u < U; ++u) {
         const bool active = !(flags & F_EXTRA) || extra_bank(uid[u]) == bank;
         cb_reserve_back(cb_w, kt_gu);
+#ifdef PF_RING
+        if (on_ring && rank[u] >= 0) {  // entry 2 * rank holds the first half of the column, the next the rest
+            const uint32_t wp = get_write_ptr(cb_w);
+            noc_async_read(entry_addr(2 * rank[u], BLK_GU), wp, half_gu * tbw);
+            noc_async_read(entry_addr(2 * rank[u] + 1, BLK_GU), wp + half_gu * tbw, half_gu * tbw);
+            noc_async_read_barrier();
+            cb_push_back(cb_w, kt_gu);
+            continue;
+        }
+#endif
         if (active) {  // not this expert's extra bank: stale tiles, the writer drops the results
 #ifdef PF_LAYOUT
             const uint64_t src = (flags & F_EXTRA)
@@ -253,6 +352,11 @@ void kernel_main() {
         }
         cb_push_back(cb_w, kt_gu);
     }
+#ifdef PF_RING
+    if (on_ring) {
+        close_pipe(2 * nsel);
+    }
+#endif
     if (flags & F_DN) {
         read_down_rows();
     }

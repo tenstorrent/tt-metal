@@ -83,3 +83,71 @@ def _case(device, op, R, overlap, tag):
         if not torch.equal(got[r].view(torch.int16), ref.view(torch.int16)):
             bad.append((tag, r, float((got[r].float() - ref.float()).abs().max())))
     return bad
+
+
+def test_moe_rows_ring(device):
+    """PF layout with the prefetcher ring (tt/mk/expert_pipe.py): the multi-row step reads the marked union experts
+    from the ring, pops every slab and writes the next guess (row 0's top experts); rows bit-equal to 1-row DRAM
+    calls. Masks: hits in row 0 only, in a later row only, a miss, hits + a miss."""
+    from models.demos.inkling2_mini.tt.mk.expert_pipe import ExpertPipe
+
+    experts = _experts(device)
+    ops = {dt: experts[(dt, "pf")] for dt in DT}
+    refs = {dt: BankMoeExperts(device, (v.w_gate_up, v.gu_x), (v.w_down, v.dn_x)) for dt, v in ops.items()}
+    ep = ExpertPipe(device, list(ops.values()), 240 << 10)
+    ep.start()
+    bad = []
+
+    def mask_t(sel):
+        m = torch.zeros(1, 1, 1, N, dtype=torch.int32)
+        m[..., list(sel)] = 1
+        return ttnn.from_torch(
+            m, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    try:
+        mout = mask_t([])
+        g = torch.Generator().manual_seed(9)
+        for dt, op in ops.items():
+            for R in (2, 3):
+                ids = [torch.randperm(N, generator=g)[:K].tolist()]
+                for _ in range(R - 1):
+                    rest = [e for e in torch.randperm(N, generator=g).tolist() if e not in ids[-1]][: K - 3]
+                    ids.append(rest + ids[-1][:3])
+                union = {e for row in ids for e in row}
+                miss = [e for e in range(N) if e not in union]
+                w = torch.rand(R, K, generator=g) + 0.5
+                x = torch.randn(R, H, generator=g)
+                xt = _put(device, x.reshape(1, 1, R, H), ttnn.bfloat16)
+                wt = _put(device, w.reshape(1, 1, R, K), ttnn.bfloat16)
+                it = _put(device, torch.tensor(ids, dtype=torch.int32).reshape(1, 1, R, K), ttnn.uint16)
+                ref = []
+                for r in range(R):
+                    y1 = refs[dt](
+                        _put(device, x[r].reshape(1, 1, 1, H), ttnn.bfloat16),
+                        _put(device, w[r].reshape(1, 1, 1, K), ttnn.bfloat16),
+                        _put(device, torch.tensor(ids[r], dtype=torch.int32).reshape(1, 1, 1, K), ttnn.uint16),
+                    )
+                    ref.append(ttnn.to_torch(y1).reshape(-1, H)[0])
+                want = sorted(
+                    torch.tensor(ids[0])[torch.argsort(w[0].bfloat16().float(), descending=True)[:2]].tolist()
+                )
+                late = [e for e in ids[-1] if e not in ids[0]]
+                cases = {"row0": ids[0][3:5], "late": late[:2], "miss": miss[:1], "mix": [ids[0][5], miss[1]]}
+                for cn, sel in cases.items():
+                    mt = mask_t(sel)
+                    ttnn.synchronize_device(device)
+                    ep.request(op, mt)
+                    y = op(xt, wt, it, guess=mt, guess_out=mout, n_guess=2, signal=ep.signal)
+                    ep.stepped()
+                    got = ttnn.to_torch(y).reshape(R, H)
+                    for r in range(R):
+                        if not torch.equal(got[r].view(torch.int16), ref[r].view(torch.int16)):
+                            bad.append((dt, R, cn, r))
+                    m = sorted(torch.nonzero(ttnn.to_torch(mout).reshape(-1).int()).reshape(-1).tolist())
+                    if m != want:
+                        bad.append((dt, R, cn, "mask", m, want))
+    finally:
+        ep.close()
+        ep.stop()
+    assert not bad, bad
