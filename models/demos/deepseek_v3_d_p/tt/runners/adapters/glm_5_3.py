@@ -54,8 +54,10 @@ class GLM53Adapter(MLAPrefillAdapter):
     # 1216: the tp_sharded fallback gather (used wherever the snake ring
     # cannot close) adds two high_bw_all_gather programs at two 16 B/bank semaphores each.
     # 1536: #58681 gave every all_gather multicast program a second (done) semaphore, which pushed the
-    # traced path one 16 B slot past 1216 (Blaze run 37730295536). Keep in sync with GLM_L1_SMALL_SIZE.
-    l1_small_size = 1536
+    # traced path one 16 B slot past 1216 (Blaze run 37730295536).
+    # 1664: the dense FFN's fused TP collectives (#66628) add seven 16 B/bank semaphores: three for its gather and four
+    # for matmul_reduce_scatter_prefill. Keep in sync with GLM_L1_SMALL_SIZE.
+    l1_small_size = 1664
     routing_use_l1_small_for_semaphores = True
 
     supports_mtp = True

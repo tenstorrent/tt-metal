@@ -125,15 +125,8 @@ sfpi_inline void calculate_binary_operands(const Input0& input0, const Input1& i
 }
 
 /**
- * @brief Two rows together: a_output[0] = MATH::apply(a_input0[0], a_input1[0]) and the same for the b operands,
- *        issued as load x4, op x2, store x2.
- *
- * One row at a time is load, load, op, store, and the SFPU stalls on the op -> store dependency of every row.
- * Issuing two rows together lets the second row's op fill that stall. Same instructions on the same operands as
- * two @ref calculate_binary_operands calls, only the issue order differs, so results are bit-identical.
- *
- * @tparam MATH: Math policy whose apply() is one SFPU instruction (MATH::single_instruction).
- * @note The output format must be a plain store (FORMAT::plain_store): no software rounding, no address increment.
+ * @brief Two rows per call, issued as load x4, op x2, store x2, so the second row's op fills the op -> store stall.
+ *        Bit-identical to two @ref calculate_binary_operands calls; MATH must be one instruction, the store plain.
  */
 template <typename MATH, typename Input0, typename Input1, typename Output>
 sfpi_inline void calculate_binary_operands_two_rows(

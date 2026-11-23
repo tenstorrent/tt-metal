@@ -23,10 +23,12 @@ from typing import Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
 from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_enabled
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
@@ -67,8 +69,13 @@ class TtKimiK3Block(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
         forward_chunks: int = 1,
+        use_fused_rmsnorm: Optional[bool] = None,
+        moe_impl: Optional[str] = None,  # tt/moe_impl.py: "block" (K3's default) / "ttmoe"
     ):
         super().__init__()
+        # The attention and FFN norms as one fused distributed op (USE_FUSED_PREFILL_RMSNORM), as GLM-5.3 and K2.7.
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole()
         # Packed forward (forward_packed): `forward_chunks` chunks of `seq_len` tokens back to back. The
         # attention runs per chunk at the per-chunk size; the FFN (ffn_norm, MoE / dense FFN) runs once over
         # all forward_chunks * seq_len tokens, so the MoE is sized for them.
@@ -101,6 +108,7 @@ class TtKimiK3Block(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
         if kv_only:
@@ -120,9 +128,24 @@ class TtKimiK3Block(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
-        if self.is_moe:
+        self.moe_block = self.is_moe and moe_block_enabled(model_cfg, moe_impl)
+        if self.moe_block:
+            # (the MoE block's C++ ops: router, shared expert, latent and routed experts in one call -
+            # tt/moe_block/moe_block_ffn.py)
+            from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockFfnOptions, TtMoEBlockFfn
+
+            # (the routed experts from TtMoe's tensorbins in weight_cache_path, laid out for this mesh and SP axis)
+            self.ffn = TtMoEBlockFfn(
+                mesh_device,
+                model_cfg,
+                layer_idx,
+                cache_path=weight_cache_path,
+                options=MoEBlockFfnOptions(sp_axis=sp_axis),
+            )
+        elif self.is_moe:
             # Kimi-K3 runs the device FP32 gate: one expert group, so there is no grouped-topk
             # fallback to prefer, and `KimiK3Adapter.default_gate_mode` names it. Defaulted here
             # rather than left None, which reaches TtMoEGatePrefill as a mode it cannot read.
@@ -395,7 +418,18 @@ class TtKimiK3Block(LightweightModule):
         packed_padding_config=None,
     ) -> ttnn.Tensor:
         """`ctx` is None for a packed forward (``packed``), which passes its MoE padding as ``packed_padding_config``
-        instead of one chunk's bounds."""
+        instead of one chunk's bounds (TtMoe: a PackedPadding; the MoE block: a MoEBlockPacking)."""
+        if self.moe_block:  # ([1, 1, rows/SP, H/TP] in and out; pad rows skipped by the block's own planner)
+            if packed:
+                assert packed_padding_config is not None, "MoE block: a packed forward takes its MoEBlockPacking"
+                return self.ffn(ffn_norm_out, forward_chunks=self.forward_chunks, **packed_padding_config.ffn_kwargs())
+            return self.ffn(
+                ffn_norm_out,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+                actual_start=ctx.actual_start,
+                metadata=ctx.metadata,
+            )
         if self.is_moe:
             # 4D TILE -> 3D -> MoE -> 3D -> 4D, matching TtPrefillBlock._moe_path exactly. `TtMoe`
             # returns `(out, intermediates)`, and the squeezed input is NOT freed here: upstream
