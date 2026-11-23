@@ -253,6 +253,38 @@ def test_slice_write_rm_block_sharded_subaligned_rows(shape, shard_shape, out_me
 
 
 @pytest.mark.parametrize(
+    "out_mem_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG], ids=["out_l1", "out_dram"]
+)
+def test_slice_write_rm_block_sharded_subaligned_partial_slice(out_mem_config, device):
+    in_shape = [1, 2, 4, 8]
+    out_shape = [1, 4, 4, 8]
+    shard_shape = [4, 4]
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    in_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    numel = in_shape[0] * in_shape[1] * in_shape[2] * in_shape[3]
+    torch_src = ((torch.arange(numel) % 200 + 1) / 8).reshape(in_shape).to(torch.bfloat16)
+    torch_out = torch.full(out_shape, -1.0, dtype=torch.bfloat16)
+
+    tt_in = ttnn.from_torch(
+        torch_src, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=in_mem_config
+    )
+    tt_out = ttnn.from_torch(
+        torch_out, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=out_mem_config
+    )
+    begins = [0, 1, 0, 0]
+    ends = [1, 3, 4, 8]
+    ttnn.experimental.slice_write(tt_in, tt_out, begins, ends, [1, 1, 1, 1])
+
+    torch_expected = torch_out.clone()
+    torch_expected[:, 1:3, :, :] = torch_src
+    assert_equal(torch_expected, ttnn.to_torch(tt_out))
+
+
+@pytest.mark.parametrize(
     "first_core, last_core",
     [
         ((0, 0), (1, 3)),
@@ -261,17 +293,27 @@ def test_slice_write_rm_block_sharded_subaligned_rows(shape, shard_shape, out_me
     ],
     ids=["origin_0_0", "offset_0_1", "offset_1_1"],
 )
-def test_slice_write_rm_block_sharded_offset_grid(first_core, last_core, device):
+@pytest.mark.parametrize(
+    "orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+    ids=["row_major", "col_major"],
+)
+def test_slice_write_rm_block_sharded_offset_grid(first_core, last_core, orientation, device):
     core_grid = device.compute_with_storage_grid_size()
     if core_grid.x <= last_core[0] or core_grid.y <= last_core[1]:
         pytest.skip(f"Device grid {core_grid} too small for {last_core}")
-    shape = [1, 1, 64, 96]
-    shard_shape = [16, 48]
+    grid_x = last_core[0] - first_core[0] + 1
+    grid_y = last_core[1] - first_core[1] + 1
+    shape = [1, 1, 64, 128]
+    if orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        shard_shape = [shape[2] // grid_y, shape[3] // grid_x]
+    else:
+        shard_shape = [shape[2] // grid_x, shape[3] // grid_y]
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*first_core), ttnn.CoreCoord(*last_core))})
     in_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(grid, shard_shape, orientation),
     )
     numel = shape[0] * shape[1] * shape[2] * shape[3]
     torch_src = ((torch.arange(numel) % 200 + 1) / 8).reshape(shape).to(torch.bfloat16)
@@ -284,6 +326,54 @@ def test_slice_write_rm_block_sharded_offset_grid(first_core, last_core, device)
         torch_out,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.experimental.slice_write(tt_in, tt_out, [0, 0, 0, 0], list(shape), [1, 1, 1, 1])
+    assert_equal(torch_src, ttnn.to_torch(tt_out))
+
+
+@pytest.mark.parametrize(
+    "first_core, last_core",
+    [
+        ((0, 0), (1, 3)),
+        ((1, 1), (2, 4)),
+    ],
+    ids=["origin_0_0", "offset_1_1"],
+)
+@pytest.mark.parametrize(
+    "orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+    ids=["row_major", "col_major"],
+)
+def test_slice_write_tiled_block_sharded_offset_grid(first_core, last_core, orientation, device):
+    core_grid = device.compute_with_storage_grid_size()
+    if core_grid.x <= last_core[0] or core_grid.y <= last_core[1]:
+        pytest.skip(f"Device grid {core_grid} too small for {last_core}")
+    grid_x = last_core[0] - first_core[0] + 1
+    grid_y = last_core[1] - first_core[1] + 1
+    shape = [1, 1, 128, 128]
+    if orientation == ttnn.ShardOrientation.ROW_MAJOR:
+        shard_shape = [shape[2] // grid_y, shape[3] // grid_x]
+    else:
+        shard_shape = [shape[2] // grid_x, shape[3] // grid_y]
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*first_core), ttnn.CoreCoord(*last_core))})
+    in_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, shard_shape, orientation),
+    )
+    numel = shape[0] * shape[1] * shape[2] * shape[3]
+    torch_src = ((torch.arange(numel) % 200 + 1) / 8).reshape(shape).to(torch.bfloat16)
+    torch_out = torch.full(shape, -1.0, dtype=torch.bfloat16)
+
+    tt_in = ttnn.from_torch(
+        torch_src, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=in_mem_config
+    )
+    tt_out = ttnn.from_torch(
+        torch_out,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
