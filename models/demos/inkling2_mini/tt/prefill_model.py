@@ -426,6 +426,8 @@ class Inkling2Prefill:
         expert_fidelity=ttnn.MathFidelity.LoFi,
         mm_blocked=True,
         proj_fidelity=None,
+        sdpa_fidelity=None,
+        sdpa_approx=False,
         expert_precise=True,
         fused_heads=True,
         profile=False,
@@ -451,6 +453,8 @@ class Inkling2Prefill:
         takes it (the earlier, exact default). mm_blocked: see self.mm_blocked below; False: the earlier default.
         proj_fidelity: opt-in math fidelity of the prefill projections (q|gate|rel|sink, k, v, w_o; not the router), e.g.
         LoFi; None (default): the model's (HiFi2). Changes output; decode keeps its own config.
+        sdpa_fidelity / sdpa_approx: opt-in math fidelity / approximate SFPU math (exp) of the prefill SDPA calls;
+        None / False (default): HiFi4, exact. Changes output.
         expert_precise: False opts the unified expert op out of its precise mode (bf16 DEST, bf8 activations);
         changes output.
         profile: synchronized per-section times in self.times. debug: print each application."""
@@ -547,8 +551,8 @@ class Inkling2Prefill:
         del g
         self.sdpa_ckc = ttnn.init_device_compute_kernel_config(
             dev.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
+            math_fidelity=sdpa_fidelity or ttnn.MathFidelity.HiFi4,
+            math_approx_mode=bool(sdpa_approx),
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
