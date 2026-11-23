@@ -19,6 +19,7 @@ namespace tt::tt_metal {
 bool trace_allocation_tracking_enabled();
 bool trace_allocation_diagnostics_enabled();
 bool trace_allocation_skip_program_cache_enabled();
+bool trace_allocation_overlap_only_enabled();
 
 // Allocation contexts with this prefix identify program-cache-owned buffers, which
 // TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE excludes from unsafe-allocation accounting.

@@ -9,6 +9,9 @@ buffers that would be silently corrupted on trace replay.
 Controlled by environment variables:
   TT_METAL_TRACE_ALLOC_TRACKING=1       Enable accounting and fail when unsafe
                                          buffers survive until execute_trace.
+  TT_METAL_TRACE_ALLOC_OVERLAP=1        Enable accounting, but count only buffers
+                                         that overlap memory the trace's capture
+                                         used; replay itself also checks.
   TT_METAL_TRACE_ALLOC_TRACEBACKS=1     With accounting enabled, capture Python
                                          allocation stacks and analyze referrers.
   TT_METAL_TRACE_ALLOC_REFERRER_DEPTH=N Maximum referrer traversal depth
@@ -31,8 +34,10 @@ from typing import ClassVar
 from ttnn._ttnn.operations.trace import (
     get_all_unsafe_tracked_ids,
     get_unsafe_tracked_ids,
+    get_unsafe_tracked_ranges,
     remove_unsafe_tracked_id,
     trace_allocation_diagnostics_enabled,
+    trace_allocation_overlap_only_enabled,
     trace_allocation_tracking_enabled,
 )
 
@@ -55,6 +60,7 @@ def _env_nonnegative_int(name: str, default: int) -> int:
 # reading the environment independently, so TTNN and Metal cannot disagree. Referrer depth is Python-only.
 TRACE_ALLOC_TRACKING = trace_allocation_tracking_enabled()
 TRACE_ALLOC_DIAGNOSTICS = trace_allocation_diagnostics_enabled()
+TRACE_ALLOC_OVERLAP = trace_allocation_overlap_only_enabled()
 TRACE_ALLOC_REFERRER_DEPTH = (
     _env_nonnegative_int("TT_METAL_TRACE_ALLOC_REFERRER_DEPTH", 10) if TRACE_ALLOC_DIAGNOSTICS else 10
 )
@@ -153,16 +159,25 @@ class TraceAllocationTracker:
             return
 
         live_unsafe = set(live_unsafe_map.keys())
+        # Overlap mode only: buffer type and address range of each buffer, e.g. "L1 [0x1000, 0x1800), 2048 B per bank".
+        live_unsafe_ranges = get_unsafe_tracked_ranges(mesh_device, trace_id) if TRACE_ALLOC_OVERLAP else {}
 
-        parts = [
-            f"Found {len(live_unsafe)} device buffer(s) still alive before "
-            f"trace replay. These will be corrupted on replay.\n"
-        ]
+        if TRACE_ALLOC_OVERLAP:
+            parts = [
+                f"Found {len(live_unsafe)} device buffer(s) still alive before replay of trace {int(trace_id)} "
+                f"in memory its capture used. These will be corrupted on replay.\n"
+            ]
+        else:
+            parts = [
+                f"Found {len(live_unsafe)} device buffer(s) still alive before "
+                f"trace replay. These will be corrupted on replay.\n"
+            ]
 
         for buf_id in sorted(live_unsafe):
             ctx = live_unsafe_map.get(buf_id, "")
             ctx_str = f" [op: {ctx}]" if ctx else ""
-            parts.append(f"Buffer {buf_id}{ctx_str}\n")
+            range_str = f": {live_unsafe_ranges[buf_id]}" if buf_id in live_unsafe_ranges else ""
+            parts.append(f"Buffer {buf_id}{ctx_str}{range_str}\n")
 
             if cls._diagnostics_enabled:
                 tb = cls._tracebacks.get(buf_id)

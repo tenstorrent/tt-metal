@@ -280,6 +280,7 @@ enum class EnvVarID {
     TT_METAL_TRACE_ALLOC_TRACKING,            // Enable per-trace unsafe allocation accounting
     TT_METAL_TRACE_ALLOC_TRACEBACKS,          // Capture diagnostics for unsafe trace allocations
     TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE,  // Exclude program-cache buffers from trace accounting
+    TT_METAL_TRACE_ALLOC_OVERLAP,             // Account only buffers that overlap a live trace's capture memory
 
     // ========================================
     // SHM TRACKING
@@ -435,12 +436,15 @@ const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocati
     // RunTimeOptions instance. Keep their parsing owned by RunTimeOptions, but cache all related values in one
     // process-wide snapshot so TTNN and Metal cannot observe different settings.
     static const TraceAllocationOptions options = [] {
-        const bool tracking_enabled = is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACKING"));
+        // Overlap mode is a refinement of tracking, so it turns tracking on by itself.
+        const bool overlap_only = is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_OVERLAP"));
+        const bool tracking_enabled = overlap_only || is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACKING"));
         return TraceAllocationOptions{
             .tracking_enabled = tracking_enabled,
             .diagnostics_enabled = tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS")),
             .skip_program_cache =
                 tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE")),
+            .overlap_only = overlap_only,
         };
     }();
     return options;
@@ -455,6 +459,8 @@ bool RunTimeOptions::get_trace_allocation_diagnostics_enabled() {
 bool RunTimeOptions::get_trace_allocation_skip_program_cache_enabled() {
     return get_trace_allocation_options().skip_program_cache;
 }
+
+bool RunTimeOptions::get_trace_allocation_overlap_only_enabled() { return get_trace_allocation_options().overlap_only; }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
     std::call_once(g_root_once, [&] { g_root_dir = root_dir; });
@@ -2072,7 +2078,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // initialized before this instance exists and is explicitly touched at the start of the constructor.
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACKING:
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
-        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE: break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE:
+        case EnvVarID::TT_METAL_TRACE_ALLOC_OVERLAP: break;
 
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.

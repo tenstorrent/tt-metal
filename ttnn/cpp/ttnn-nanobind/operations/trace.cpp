@@ -43,6 +43,9 @@ void py_module(nb::module_& mod) {
     mod.def("trace_allocation_tracking_enabled", []() { return tt::tt_metal::trace_allocation_tracking_enabled(); });
     mod.def(
         "trace_allocation_diagnostics_enabled", []() { return tt::tt_metal::trace_allocation_diagnostics_enabled(); });
+    mod.def("trace_allocation_overlap_only_enabled", []() {
+        return tt::tt_metal::trace_allocation_overlap_only_enabled();
+    });
 
     mod.def(
         "begin_trace_capture",
@@ -147,6 +150,11 @@ void py_module(nb::module_& mod) {
     mod.def(
         "get_unsafe_tracked_ids",
         [](MeshDevice* device, MeshTraceId trace_id) { return tracker::get_unsafe_tracked_ids(device, trace_id); },
+        nb::arg("mesh_device"),
+        nb::arg("trace_id"));
+    mod.def(
+        "get_unsafe_tracked_ranges",
+        [](MeshDevice* device, MeshTraceId trace_id) { return tracker::get_unsafe_tracked_ranges(device, trace_id); },
         nb::arg("mesh_device"),
         nb::arg("trace_id"));
     mod.def(

@@ -52,6 +52,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 #include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
@@ -340,6 +341,38 @@ std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(
     }
     return result;
 }
+std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ranges(const MeshTraceId& trace_id) const {
+    validate_sub_device_manager_tracker();
+    const auto manager_id = sub_device_manager_tracker_->get_active_sub_device_manager_id();
+    std::unordered_map<size_t, std::string> result;
+    for (auto* allocator : this->trace_allocators(manager_id)) {
+        result.merge(allocator->get_unsafe_tracked_ranges(manager_id, trace_id));
+    }
+    return result;
+}
+void MeshDeviceImpl::verify_no_trace_overlaps(const MeshTraceId& trace_id) const {
+    const auto unsafe = this->get_unsafe_tracked_ids(trace_id);
+    if (unsafe.empty()) {
+        return;
+    }
+    const auto ranges = this->get_unsafe_tracked_ranges(trace_id);
+    const std::map<size_t, std::string> sorted_unsafe(unsafe.begin(), unsafe.end());
+    std::string lines;
+    for (const auto& [buffer_unique_id, context] : sorted_unsafe) {
+        const auto range_it = ranges.find(buffer_unique_id);
+        lines += fmt::format(
+            "\n  buffer {}{}: {}",
+            buffer_unique_id,
+            context.empty() ? std::string{} : fmt::format(" ({})", context),
+            range_it == ranges.end() ? std::string("address range not tracked") : range_it->second);
+    }
+    TT_THROW(
+        "Replaying trace {} would overwrite {} live buffer(s) allocated after its capture in memory the capture "
+        "used:{}\nFree them before the replay, or allocate them before the first trace capture.",
+        *trace_id,
+        sorted_unsafe.size(),
+        lines);
+}
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
     // Manager-local allocations prevent switching managers while they are live,
@@ -364,6 +397,10 @@ void unregister_active_trace(MeshDevice* device, const MeshTraceId& trace_id) {
 }
 std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshDevice* device, const MeshTraceId& trace_id) {
     return device->impl().get_unsafe_tracked_ids(trace_id);
+}
+std::unordered_map<size_t, std::string> get_unsafe_tracked_ranges(
+    const MeshDevice* device, const MeshTraceId& trace_id) {
+    return device->impl().get_unsafe_tracked_ranges(trace_id);
 }
 void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
     device->impl().remove_unsafe_tracked_id(buffer_unique_id);
@@ -1758,6 +1795,11 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
     if (trace_region_size == 0) {
         this->allocator_impl()->begin_dram_high_water_mark_tracking();
     }
+    if (trace_allocation_overlap_only_enabled()) [[unlikely]] {
+        for (auto* allocator : this->trace_allocators()) {
+            allocator->begin_trace_footprint(trace_id);
+        }
+    }
     this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_desc);
 }
 
@@ -1813,6 +1855,9 @@ void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_i
         *trace_id,
         this->mesh_id_,
         *(active_sub_device_manager->id()));
+    if (trace_allocation_overlap_only_enabled()) [[unlikely]] {
+        this->verify_no_trace_overlaps(trace_id);
+    }
     // Re-send any Tensor prefetcher requests captured during this trace's capture, before
     // dispatching the trace so the host worker can begin filling the pipes as the consuming
     // program is dispatched. No-op (and no manager created) when the prefetcher is unused.

@@ -187,7 +187,12 @@ private:
         SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
     void verify_safe_allocation() const;
-    void record_allocation_if_unsafe(Buffer* buffer);
+    void record_allocation_if_unsafe(Buffer* buffer, DeviceAddr address);
+    // Overlap mode (TT_METAL_TRACE_ALLOC_OVERLAP): each trace keeps the address ranges its capture allocated.
+    void begin_trace_footprint(const distributed::MeshTraceId& trace_id);
+    void record_trace_footprint(const Buffer* buffer, DeviceAddr address);
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ranges(
+        SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
     void record_deallocation(size_t buffer_unique_id);
     void record_all_deallocations();
     void retire_buffer_if_unreferenced(size_t buffer_unique_id);
@@ -235,10 +240,28 @@ private:
     const bool tracking_enabled_;
     const bool traceback_capture_enabled_;
     const bool skip_program_cache_;
+    const bool overlap_only_;
     std::unordered_map<SubDeviceManagerId, std::unordered_set<distributed::MeshTraceId>> active_traces_by_manager_;
     std::unordered_map<SubDeviceManagerId, std::unordered_map<distributed::MeshTraceId, std::unordered_set<size_t>>>
         unsafe_tracked_ids_by_manager_and_trace_;
     std::unordered_map<size_t, std::string> unsafe_allocation_contexts_;
+
+    // Overlap mode only. A footprint holds sorted, disjoint [begin, end) per-bank address ranges per buffer type.
+    struct TraceFootprint {
+        std::unordered_map<BufferType, std::vector<std::pair<DeviceAddr, DeviceAddr>>> ranges;
+        void add(BufferType type, DeviceAddr begin, DeviceAddr end);
+        void coalesce();
+        bool overlaps(BufferType type, DeviceAddr begin, DeviceAddr end) const;
+    };
+    struct UnsafeBufferRange {
+        BufferType type;
+        DeviceAddr begin;
+        DeviceAddr end;
+    };
+    std::unordered_map<distributed::MeshTraceId, TraceFootprint> capturing_footprints_;
+    std::unordered_map<SubDeviceManagerId, std::unordered_map<distributed::MeshTraceId, TraceFootprint>>
+        trace_footprints_by_manager_and_trace_;
+    std::unordered_map<size_t, UnsafeBufferRange> unsafe_allocation_ranges_;
 };
 
 // Process-wide and thread-local implementation state used by the trace allocation diagnostics layer.

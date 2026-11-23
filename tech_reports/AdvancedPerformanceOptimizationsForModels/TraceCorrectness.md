@@ -111,6 +111,7 @@ The checker supports these environment variables:
 | `TT_METAL_TRACE_ALLOC_TRACEBACKS` | Disabled | Set to `1`, together with tracking, to capture Python allocation tracebacks and analyze live Python referrers when validation fails. This has additional runtime and memory cost. |
 | `TT_METAL_TRACE_ALLOC_REFERRER_DEPTH` | `10` | Maximum number of container and object-attribute levels traversed by referrer analysis. It must be a non-negative integer and is used only when diagnostics are enabled. |
 | `TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE` | Disabled | Set to `1`, together with tracking, to exclude buffers allocated for program-cache entries from accounting. |
+| `TT_METAL_TRACE_ALLOC_OVERLAP` | Disabled | Set to `1` to enable tracking in overlap mode: only buffers that overlap memory the trace's capture used are accounted for, and the replay itself also refuses to run. Implies `TT_METAL_TRACE_ALLOC_TRACKING=1`. See [Overlap mode](#overlap-mode). |
 
 The checker will attempt to provide a traceback to the part of the code which allocated the unsafe buffer. It will also perform a scan, attempting to find where a reference to the buffer is being held and keeping it alive.
 
@@ -145,6 +146,21 @@ with trace_allocation_tracker.corruptible_allocation_scope(device):
 ```
 
 Use `corruptible_allocation_scope` sparingly: every device allocation made inside it is excluded, including implicit allocations and program-cache allocations. Neither acknowledgment prevents corruption; it only tells the checker that the program is prepared for it. The program must still overwrite an acknowledged input before use and copy an acknowledged output to safe storage before another trace can overwrite it.
+
+#### Overlap mode
+
+By default the checker is conservative: every buffer allocated after a capture is unsafe for that trace, wherever it landed. That is the right default for a single model, which can allocate everything it keeps before its first capture. It is too coarse when several independent workloads share one device in one process (for example two models served from one process, taking turns): every buffer one of them keeps that was allocated after the other's capture is reported, including its own trace outputs and every program compiled after the other's capture.
+
+`TT_METAL_TRACE_ALLOC_OVERLAP=1` narrows the accounting to buffers that can actually be overwritten. While a trace is captured, the allocator records the per-bank address ranges of every buffer allocated during the capture (the trace's intermediates and outputs, whether freed during the capture or not). After the capture, a new buffer is unsafe for that trace only if its range overlaps those addresses for the same buffer type. The error names the trace, each buffer, its buffer type and its address range:
+
+```
+Found 1 device buffer(s) still alive before replay of trace 0 in memory its capture used. These will be corrupted on replay.
+Buffer 16 [op: ttnn.to_device]: DRAM [0x594680, 0x594e80), 2048 B per bank
+```
+
+In this mode the check also runs inside the replay itself, so C++ callers and code that bypasses `ttnn.execute_trace` get the same error (`Replaying trace 0 would overwrite 1 live buffer(s) ...`). Released traces stop counting, and acknowledgments work as in the default mode.
+
+Overlap mode assumes that buffers which existed before a capture and are used by the trace (its inputs, persistent outputs, weights) stay allocated while the trace is live; freeing one of those and allocating into its memory is not detected. Per-core L1 allocations (`TT_METAL_ALLOCATOR_MODE_HYBRID`) have no single address range: when allocated after a capture they stay unsafe for every trace, as in the default mode, and when allocated during a capture they are not part of its recorded memory.
 
 The checker detects live allocations that could overlap addresses used by a captured trace. It does not validate other trace requirements, such as complete warmup, correct cache keys, stable shapes, or correct selection among multiple captured control-flow paths.
 

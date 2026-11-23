@@ -14,12 +14,14 @@ ENV_NAMES = (
     "TT_METAL_TRACE_ALLOC_TRACEBACKS",
     "TT_METAL_TRACE_ALLOC_REFERRER_DEPTH",
     "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE",
+    "TT_METAL_TRACE_ALLOC_OVERLAP",
 )
 
 READ_CONFIG_SCRIPT = """
 import json
 from ttnn.tools.trace_allocation_tracker import (
     TRACE_ALLOC_DIAGNOSTICS,
+    TRACE_ALLOC_OVERLAP,
     TRACE_ALLOC_REFERRER_DEPTH,
     TRACE_ALLOC_TRACKING,
 )
@@ -27,6 +29,7 @@ print(json.dumps({
     'tracking': TRACE_ALLOC_TRACKING,
     'diagnostics': TRACE_ALLOC_DIAGNOSTICS,
     'depth': TRACE_ALLOC_REFERRER_DEPTH,
+    'overlap': TRACE_ALLOC_OVERLAP,
 }))
 """
 
@@ -45,18 +48,18 @@ def read_config(env_overrides):
 @pytest.mark.parametrize(
     "env, expected",
     [
-        ({}, {"tracking": False, "diagnostics": False, "depth": 10}),
+        ({}, {"tracking": False, "diagnostics": False, "depth": 10, "overlap": False}),
         (
             {"TT_METAL_TRACE_ALLOC_TRACEBACKS": "1"},
-            {"tracking": False, "diagnostics": False, "depth": 10},
+            {"tracking": False, "diagnostics": False, "depth": 10, "overlap": False},
         ),
         (
             {"TT_METAL_TRACE_ALLOC_TRACKING": "1"},
-            {"tracking": True, "diagnostics": False, "depth": 10},
+            {"tracking": True, "diagnostics": False, "depth": 10, "overlap": False},
         ),
         (
             {"TT_METAL_TRACE_ALLOC_TRACKING": "1", "TT_METAL_TRACE_ALLOC_TRACEBACKS": "1"},
-            {"tracking": True, "diagnostics": True, "depth": 10},
+            {"tracking": True, "diagnostics": True, "depth": 10, "overlap": False},
         ),
         (
             {
@@ -64,7 +67,15 @@ def read_config(env_overrides):
                 "TT_METAL_TRACE_ALLOC_TRACEBACKS": "1",
                 "TT_METAL_TRACE_ALLOC_REFERRER_DEPTH": "4",
             },
-            {"tracking": True, "diagnostics": True, "depth": 4},
+            {"tracking": True, "diagnostics": True, "depth": 4, "overlap": False},
+        ),
+        (
+            {"TT_METAL_TRACE_ALLOC_OVERLAP": "1"},
+            {"tracking": True, "diagnostics": False, "depth": 10, "overlap": True},
+        ),
+        (
+            {"TT_METAL_TRACE_ALLOC_TRACKING": "1", "TT_METAL_TRACE_ALLOC_OVERLAP": "0"},
+            {"tracking": True, "diagnostics": False, "depth": 10, "overlap": False},
         ),
     ],
 )

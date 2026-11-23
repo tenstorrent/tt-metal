@@ -480,6 +480,7 @@ class RunTimeOptions {
         bool tracking_enabled = false;
         bool diagnostics_enabled = false;
         bool skip_program_cache = false;
+        bool overlap_only = false;
     };
 
     static const TraceAllocationOptions& get_trace_allocation_options();
@@ -583,6 +584,7 @@ public:
     static bool get_trace_allocation_tracking_enabled();
     static bool get_trace_allocation_diagnostics_enabled();
     static bool get_trace_allocation_skip_program_cache_enabled();
+    static bool get_trace_allocation_overlap_only_enabled();
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }
