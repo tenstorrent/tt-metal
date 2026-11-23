@@ -372,8 +372,8 @@ def sub_device(sub_device_id):
     Most operations use one of those to decide which cores to run on, so they end up on your sub-device without any
     changes. An operation that picks its cores some other way is not affected by the context.
 
-    There is no list of operations that work. If an operation would put a kernel, semaphore or buffer on another
-    sub-device, it raises when it is launched.
+    There is no list of operations that work. If an operation would put a kernel, semaphore, circular buffer or
+    dataflow buffer on another sub-device, it raises when it is launched. Tensors are not checked.
 
     This is a best-effort helper, not a guarantee. Read the known limitations in
     ``tech_reports/SubDevices/SubDevices.md`` (section 1.5) before using it.
@@ -393,12 +393,17 @@ def sub_device(sub_device_id):
         yield
     finally:
         current = get_current_sub_device_id_for_thread()
-        if current != sub_device_id:
+        while current is not None and current != sub_device_id:
             logger.warning(
                 f"Leaving sub_device({sub_device_id}), but the innermost open scope is {current}. "
-                f"Some code opened a scope inside this one and never closed it, so it is being closed now."
+                f"Some code opened that scope inside this one and never closed it, so it is being closed now."
             )
-        pop_current_sub_device_id_for_thread()
+            pop_current_sub_device_id_for_thread()
+            current = get_current_sub_device_id_for_thread()
+        if current is None:
+            logger.warning(f"Leaving sub_device({sub_device_id}), but some code already closed it.")
+        else:
+            pop_current_sub_device_id_for_thread()
 
 
 @contextmanager

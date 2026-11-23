@@ -148,8 +148,8 @@ public:
     std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    // If the calling thread is in a sub-device scope (see experimental/sub_device_scope.hpp), this returns a grid
-    // that covers only that sub-device.
+    // If the calling thread is in a sub-device scope (see experimental/sub_device_scope.hpp), this returns the
+    // smallest grid, starting at (0, 0), that covers that sub-device's Tensix cores.
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;

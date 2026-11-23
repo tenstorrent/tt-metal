@@ -22,7 +22,7 @@ namespace tt::tt_metal::experimental {
 //
 // Nothing lists which operations work inside a scope. The safety net is a check at dispatch: if a program has a
 // kernel, semaphore, circular buffer or dataflow buffer on another sub-device's cores, it is rejected before it is
-// compiled.
+// dispatched.
 //
 // Scopes can be nested, and the innermost one wins. The id is looked up in whichever sub-device manager is loaded at
 // the time, so with no manager loaded a scope for sub-device 0 does nothing.

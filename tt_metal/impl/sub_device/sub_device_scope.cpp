@@ -36,13 +36,20 @@ namespace tt::tt_metal {
 
 namespace {
 
+// The innermost open scope on this thread, or null if there is none.
+constinit thread_local const std::vector<SubDeviceId>* innermost_scope_for_thread = nullptr;
+
+// How many SuspendSubDeviceScope objects are alive on this thread.
+constinit thread_local uint32_t suspensions_for_thread = 0;
+
 // The scopes open on this thread, innermost last. Each one is stored as the single-element list that
 // get_sub_device_ids() returns while it is active. A deque is used because callers may hold a reference to one list
 // while another scope is pushed. If a thread exits with scopes still open, the destructor removes them from the
-// global count.
+// global count and forgets the innermost one, so nothing reads the freed list afterwards.
 struct ScopesForThread {
     std::deque<std::vector<SubDeviceId>> open;
     ~ScopesForThread() {
+        innermost_scope_for_thread = nullptr;
         sub_device_scope::num_open.fetch_sub(static_cast<uint32_t>(open.size()), std::memory_order_relaxed);
     }
 };
@@ -52,34 +59,37 @@ std::deque<std::vector<SubDeviceId>>& scopes_for_thread() {
     return scopes.open;
 }
 
-// The innermost open scope on this thread, or null if there is none.
-constinit thread_local const std::vector<SubDeviceId>* innermost_scope_for_thread = nullptr;
+// The Tensix cores of the scoped sub-device, and those of all the other sub-devices.
+struct ScopedCores {
+    CoreRangeSet own;
+    CoreRangeSet others;
+};
 
-// How many SuspendSubDeviceScope objects are alive on this thread.
-constinit thread_local uint32_t suspensions_for_thread = 0;
-
-// Returns the Tensix cores that belong to every sub-device other than `scoped`. The result is cached per thread for
-// the last manager and sub-device asked about. That is safe because a manager's id is never reused and its
-// sub-devices never change.
-const CoreRangeSet& other_sub_device_cores(const distributed::MeshDevice& mesh_device, SubDeviceId scoped) {
-    struct Answer {
+// Returns the cores for `scoped`, which must exist in the loaded manager. The answers are cached per thread for the
+// loaded manager, one per sub-device, so a thread that switches between scopes does not recompute them. That is safe
+// because a manager's id is never reused and its sub-devices never change.
+const ScopedCores& scoped_cores(const distributed::MeshDevice& mesh_device, SubDeviceId scoped) {
+    struct Cache {
         SubDeviceManagerId manager_id;
-        SubDeviceId scoped;
-        CoreRangeSet cores;
+        std::vector<std::optional<ScopedCores>> by_sub_device;
     };
-    thread_local std::optional<Answer> last;
+    thread_local std::optional<Cache> cache;
     const auto manager_id = mesh_device.get_active_sub_device_manager_id();
-    if (!last.has_value() || last->manager_id != manager_id || last->scoped != scoped) {
-        CoreRangeSet cores;
+    if (!cache.has_value() || cache->manager_id != manager_id) {
+        cache = Cache{manager_id, std::vector<std::optional<ScopedCores>>(mesh_device.num_sub_devices())};
+    }
+    auto& answer = cache->by_sub_device.at(*scoped);
+    if (!answer.has_value()) {
+        ScopedCores cores{.own = mesh_device.worker_cores(HalProgrammableCoreType::TENSIX, scoped)};
         for (uint32_t index = 0; index < mesh_device.num_sub_devices(); ++index) {
             const SubDeviceId other{static_cast<SubDeviceId::value_type>(index)};
             if (other != scoped) {
-                cores = cores.merge(mesh_device.worker_cores(HalProgrammableCoreType::TENSIX, other));
+                cores.others = cores.others.merge(mesh_device.worker_cores(HalProgrammableCoreType::TENSIX, other));
             }
         }
-        last = Answer{manager_id, scoped, std::move(cores)};
+        answer = std::move(cores);
     }
-    return last->cores;
+    return *answer;
 }
 
 // Describes a program for an error message, for example "12 (kernels: reader, writer)".
@@ -93,31 +103,48 @@ std::string describe(detail::ProgramImpl& program, const Hal& hal) {
     return fmt::format("{} (kernels: {})", program.get_id(), fmt::join(kernel_names, ", "));
 }
 
+// Says which sub-devices `cores` belong to, for example "which belong to sub-device(s) 0, 1" or "which belong to
+// sub-device(s) 1 and to no sub-device".
+std::string owners_of(const CoreRangeSet& cores, const distributed::MeshDevice& mesh_device) {
+    std::vector<uint32_t> owners;
+    CoreRangeSet owned;
+    for (uint32_t index = 0; index < mesh_device.num_sub_devices(); ++index) {
+        const CoreRangeSet sub_device_cores = mesh_device.worker_cores(
+            HalProgrammableCoreType::TENSIX, SubDeviceId{static_cast<SubDeviceId::value_type>(index)});
+        if (sub_device_cores.intersects(cores)) {
+            owners.push_back(index);
+            owned = owned.merge(sub_device_cores);
+        }
+    }
+    if (owners.empty()) {
+        return "which belong to no sub-device";
+    }
+    return fmt::format(
+        "which belong to sub-device(s) {}{}",
+        fmt::join(owners, ", "),
+        owned.contains(cores) ? "" : " and to no sub-device");
+}
+
 [[noreturn]] void refuse_kernels_off_the_scoped_sub_device(
     detail::ProgramImpl& program,
     const distributed::MeshDevice& mesh_device,
     SubDeviceId scoped,
-    const std::vector<SubDeviceId>& ran_on) {
+    const CoreRangeSet& allowed) {
     const Hal& hal = mesh_device.impl().metal_env().get_hal();
     CoreRangeSet kernel_cores;
     for (const auto& [handle, kernel] :
          program.get_kernels(hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX))) {
         kernel_cores = kernel_cores.merge(kernel->core_range_set());
     }
-    std::set<uint32_t> sub_device_ids;
-    for (const auto& sub_device_id : ran_on) {
-        sub_device_ids.insert(*sub_device_id);
-    }
     TT_THROW(
-        "Program {} cannot run inside the scope for sub-device {}. Its kernels are on cores {}, which belong to "
-        "sub-device(s) {}, but the scope only allows cores {}. This usually means the operation does not choose its "
-        "cores from the compute grid or the sub-device list, or that sub-device {} is not a rectangle starting at "
-        "(0, 0).",
+        "Program {} cannot run inside the scope for sub-device {}. Its kernels are on cores {}, {}, but the scope "
+        "only allows cores {}. This usually means the operation does not choose its cores from the compute grid or "
+        "the sub-device list, or that sub-device {} is not a rectangle starting at (0, 0).",
         describe(program, hal),
         *scoped,
         kernel_cores.str(),
-        fmt::format("{}", fmt::join(sub_device_ids, ", ")),
-        mesh_device.worker_cores(HalProgrammableCoreType::TENSIX, scoped).str(),
+        owners_of(kernel_cores, mesh_device),
+        allowed.str(),
         *scoped);
 }
 
@@ -127,7 +154,8 @@ std::string describe(detail::ProgramImpl& program, const Hal& hal) {
     SubDeviceId scoped,
     std::string_view object,
     std::string_view written,
-    const CoreRangeSet& object_cores) {
+    const CoreRangeSet& object_cores,
+    const CoreRangeSet& others) {
     TT_THROW(
         "Program {} cannot run inside the scope for sub-device {}. Its {} is placed on cores {}, and {} of those "
         "belong to another sub-device. Dispatch would write the {} to those cores and corrupt whatever is running "
@@ -136,7 +164,7 @@ std::string describe(detail::ProgramImpl& program, const Hal& hal) {
         *scoped,
         object,
         object_cores.str(),
-        object_cores.intersection(other_sub_device_cores(mesh_device, scoped)).str(),
+        object_cores.intersection(others).str(),
         written);
 }
 
@@ -159,10 +187,11 @@ void PopCurrentSubDeviceIdForThread() {
 }
 
 std::optional<SubDeviceId> GetCurrentSubDeviceIdForThread() {
-    if (!sub_device_scope::any_open() || innermost_scope_for_thread == nullptr) {
+    const auto* scoped = scoped_sub_device_ids_for_thread();
+    if (scoped == nullptr) {
         return std::nullopt;
     }
-    return innermost_scope_for_thread->front();
+    return scoped->front();
 }
 
 }  // namespace experimental
@@ -190,67 +219,62 @@ void validate_scoped_sub_device(const IDevice& device, SubDeviceId scoped) {
 }
 
 void sub_device_scope::validate(distributed::MeshWorkloadImpl& workload, distributed::MeshDevice* mesh_device) {
-    if (innermost_scope_for_thread == nullptr) {
+    const auto* scoped_ids = ids_for_thread();
+    if (scoped_ids == nullptr) {
         return;
     }
-    const SubDeviceId scoped = innermost_scope_for_thread->front();
+    const SubDeviceId scoped = scoped_ids->front();
     validate_scoped_sub_device(*mesh_device, scoped);
-    const CoreRangeSet& others = other_sub_device_cores(*mesh_device, scoped);
+    const ScopedCores& cores = scoped_cores(*mesh_device, scoped);
+    const auto tensix = static_cast<uint32_t>(
+        mesh_device->impl().metal_env().get_hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
     for (auto& [device_range, program] : workload.get_programs()) {
         auto& program_impl = program.impl();
-        // The kernels decide which sub-device a program runs on. A program without kernels is never dispatched,
-        // so there is nothing to check.
+        // The kernels decide which sub-device a program runs on. Their Tensix cores are checked here first, because
+        // determine_sub_device_ids fails with a generic error when some of them belong to no sub-device.
+        for (const auto& kernel_group : program_impl.get_kernel_groups(tensix)) {
+            if (!cores.own.contains(kernel_group->core_ranges)) [[unlikely]] {
+                refuse_kernels_off_the_scoped_sub_device(program_impl, *mesh_device, scoped, cores.own);
+            }
+        }
+        // A program without kernels is never dispatched, so there is nothing to check.
         const auto& ran_on = program_impl.determine_sub_device_ids(mesh_device);
         if (ran_on.empty()) {
             continue;
         }
         if (ran_on.size() != 1 || ran_on.front() != scoped) [[unlikely]] {
-            refuse_kernels_off_the_scoped_sub_device(program_impl, *mesh_device, scoped, ran_on);
+            refuse_kernels_off_the_scoped_sub_device(program_impl, *mesh_device, scoped, cores.own);
         }
-        if (others.empty()) {
+        if (cores.others.empty()) {
             continue;
         }
         // Semaphores and buffers matter too. Fast dispatch writes their initial values and configs to every core
         // they are placed on, which would overwrite the state of a program running on another sub-device. Cores
-        // that belong to no sub-device are fine, because nothing runs on them.
-        for (const Semaphore& semaphore : program_impl.semaphores()) {
-            if (semaphore.core_type() != CoreType::WORKER) {
-                continue;  // fast dispatch writes no Ethernet semaphores
-            }
-            const CoreRangeSet semaphore_cores = semaphore.core_range_set();
-            if (others.intersects(semaphore_cores)) [[unlikely]] {
+        // that belong to no sub-device are fine, because nothing runs on them. The object is only named on failure.
+        const auto check = [&](const CoreRangeSet& object_cores, std::string_view written, const auto& name) {
+            if (cores.others.intersects(object_cores)) [[unlikely]] {
                 refuse_object_off_the_scoped_sub_device(
-                    program_impl,
-                    *mesh_device,
-                    scoped,
-                    fmt::format("semaphore {}", semaphore.id()),
-                    "semaphore's initial value",
-                    semaphore_cores);
+                    program_impl, *mesh_device, scoped, name(), written, object_cores, cores.others);
+            }
+        };
+        for (const Semaphore& semaphore : program_impl.semaphores()) {
+            if (semaphore.core_type() == CoreType::WORKER) {  // fast dispatch writes no Ethernet semaphores
+                check(semaphore.core_range_set(), "semaphore's initial value", [&] {
+                    return fmt::format("semaphore {}", semaphore.id());
+                });
             }
         }
         for (const auto& circular_buffer : program_impl.circular_buffers()) {
-            if (others.intersects(circular_buffer->core_ranges())) [[unlikely]] {
+            check(circular_buffer->core_ranges(), "buffer's config", [&] {
                 const std::set<uint32_t> indices(
                     circular_buffer->buffer_indices().begin(), circular_buffer->buffer_indices().end());
-                refuse_object_off_the_scoped_sub_device(
-                    program_impl,
-                    *mesh_device,
-                    scoped,
-                    fmt::format("circular buffer (indices {})", fmt::join(indices, ", ")),
-                    "buffer's config",
-                    circular_buffer->core_ranges());
-            }
+                return fmt::format("circular buffer (indices {})", fmt::join(indices, ", "));
+            });
         }
         for (const auto& dataflow_buffer : program_impl.dataflow_buffers()) {
-            if (others.intersects(dataflow_buffer->core_ranges)) [[unlikely]] {
-                refuse_object_off_the_scoped_sub_device(
-                    program_impl,
-                    *mesh_device,
-                    scoped,
-                    fmt::format("dataflow buffer {}", dataflow_buffer->id),
-                    "buffer's config",
-                    dataflow_buffer->core_ranges);
-            }
+            check(dataflow_buffer->core_ranges, "buffer's config", [&] {
+                return fmt::format("dataflow buffer {}", dataflow_buffer->id);
+            });
         }
     }
 }

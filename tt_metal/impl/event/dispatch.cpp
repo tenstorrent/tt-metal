@@ -22,6 +22,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/sub_device/sub_device_scope.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "sub_device_types.hpp"
@@ -54,6 +55,9 @@ void issue_record_event_commands(
     ttsl::Span<const uint32_t> expected_num_workers_completed,
     bool notify_host,
     bool clear_count) {
+    // `device` is usually the MeshDevice. The packed-write limit below comes from its grid, which has to be the whole
+    // device's, not the caller's sub-device scope.
+    const SuspendSubDeviceScope whole_device;
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = event_id;
 

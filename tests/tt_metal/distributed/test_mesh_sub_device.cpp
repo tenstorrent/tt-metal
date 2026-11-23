@@ -453,7 +453,8 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceScopeDescribesTheScopedSubDevice) {
         const auto& listed = mesh_device_->get_sub_device_ids();
         EXPECT_EQ(listed, first);
         {
-            // Sub-device 1 does not start at (0, 0), so the grid that covers it is bigger than it is.
+            // Sub-device 1 is cores (3, 3) and (4, 4). A compute grid always starts at (0, 0), so the smallest one
+            // that holds them is 5x5, which also takes in sub-device 0 and cores in no sub-device.
             experimental::SubDeviceScope nested(SubDeviceId{1});
             EXPECT_EQ(mesh_device_->compute_with_storage_grid_size(), CoreCoord(5, 5));
             EXPECT_EQ(mesh_device_->get_sub_device_ids(), second);
@@ -499,23 +500,31 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceScopeRefusesAProgramOnAnotherSubDevice) 
     auto on_first = workload_on(first_cores);
     auto on_second = workload_on(second_cores);
     auto on_both = workload_on(first_cores.merge(second_cores));
+    // Core (5, 5) belongs to no sub-device.
+    const CoreRangeSet no_sub_device_cores(CoreRange({5, 5}, {5, 5}));
+    auto on_no_sub_device = workload_on(no_sub_device_cores);
+    auto on_first_and_no_sub_device = workload_on(first_cores.merge(no_sub_device_cores));
     auto& cq = mesh_device_->mesh_command_queue();
-    const auto refused = [](std::string_view scoped, std::string_view ran_on) {
+    const auto refused = [](std::string_view scoped, std::string_view owners) {
         return ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
             ::testing::HasSubstr(fmt::format("cannot run inside the scope for sub-device {}", scoped)),
             ::testing::HasSubstr("(kernels: blank)"),
-            ::testing::HasSubstr(fmt::format("belong to sub-device(s) {},", ran_on))));
+            ::testing::HasSubstr(fmt::format("which belong to {},", owners))));
     };
     {
         experimental::SubDeviceScope scope(SubDeviceId{0});
         EnqueueMeshWorkload(cq, on_first, false);
-        EXPECT_THAT([&] { EnqueueMeshWorkload(cq, on_second, false); }, refused("0", "1"));
-        EXPECT_THAT([&] { EnqueueMeshWorkload(cq, on_both, false); }, refused("0", "0, 1"));
+        EXPECT_THAT([&] { EnqueueMeshWorkload(cq, on_second, false); }, refused("0", "sub-device(s) 1"));
+        EXPECT_THAT([&] { EnqueueMeshWorkload(cq, on_both, false); }, refused("0", "sub-device(s) 0, 1"));
+        EXPECT_THAT([&] { EnqueueMeshWorkload(cq, on_no_sub_device, false); }, refused("0", "no sub-device"));
+        EXPECT_THAT(
+            [&] { EnqueueMeshWorkload(cq, on_first_and_no_sub_device, false); },
+            refused("0", "sub-device(s) 0 and to no sub-device"));
         {
             // The workload rejected above was never compiled, so it can still run here.
             experimental::SubDeviceScope nested(SubDeviceId{1});
             EnqueueMeshWorkload(cq, on_second, false);
-            EXPECT_THAT([&] { EnqueueMeshWorkload(cq, on_first, false); }, refused("1", "0"));
+            EXPECT_THAT([&] { EnqueueMeshWorkload(cq, on_first, false); }, refused("1", "sub-device(s) 0"));
         }
         EnqueueMeshWorkload(cq, on_first, false);
     }

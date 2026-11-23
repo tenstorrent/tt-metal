@@ -1646,12 +1646,8 @@ CoreCoord MeshDeviceImpl::sub_device_tensix_extent(SubDeviceId sub_device_id) co
                             ->cores(HalProgrammableCoreType::TENSIX);
     TT_FATAL(
         !cores.empty(), "A scope cannot be used with sub-device {} because it has no Tensix cores", *sub_device_id);
-    CoreCoord extent{0, 0};
-    for (const auto& range : cores.ranges()) {
-        extent.x = std::max(extent.x, range.end_coord.x + 1);
-        extent.y = std::max(extent.y, range.end_coord.y + 1);
-    }
-    return extent;
+    const CoreCoord end = cores.bounding_box().end_coord;
+    return {end.x + 1, end.y + 1};
 }
 
 // Core and worker management methods (These are OK)
@@ -2217,6 +2213,7 @@ MeshDevice::MeshDevice(std::unique_ptr<MeshDeviceImpl> impl) : pimpl_(std::move(
 }
 
 MeshDevice::~MeshDevice() {
+    const SuspendSubDeviceScope whole_device;
     Inspector::mesh_device_destroyed(this->pimpl_.get());
     pimpl_->close_impl(this);
 }

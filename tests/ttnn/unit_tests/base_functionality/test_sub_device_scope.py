@@ -131,6 +131,18 @@ def test_scope_changes_what_the_device_reports(device, expect_error):
                 grid_of(device)
 
 
+def test_leaving_a_scope_closes_the_scopes_left_open_inside_it():
+    core = ttnn._ttnn.core
+    with ttnn.experimental.sub_device(0):
+        core.push_current_sub_device_id_for_thread(ttnn.SubDeviceId(1))
+    assert core.get_current_sub_device_id_for_thread() is None
+
+    # Leaving a scope that some code already closed does not raise.
+    with ttnn.experimental.sub_device(0):
+        core.pop_current_sub_device_id_for_thread()
+    assert core.get_current_sub_device_id_for_thread() is None
+
+
 @skip_for_slow_dispatch()
 def test_scope_is_per_thread(device):
     x, y = grid_of(device)
@@ -320,5 +332,7 @@ def test_a_device_opens_and_closes_inside_a_scope(request, expect_error):
                 torch_a = torch.randn(1, 1, SIDE, SIDE, dtype=torch.bfloat16)
                 output = ttnn.transpose(to_device(torch_a, device), -2, -1)
                 assert_with_pcc(torch_a.float().transpose(-2, -1), to_torch(output), 0.999)
+            # Synchronizing does not depend on the scope, even now that the loaded manager has no sub-device 1.
+            ttnn.synchronize_device(device)
         finally:
             ttnn.close_device(device)

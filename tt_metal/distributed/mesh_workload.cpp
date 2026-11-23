@@ -16,6 +16,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/sub_device/sub_device_scope.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -993,6 +994,10 @@ void prepare(distributed::MeshDevice& mesh_device, distributed::MeshWorkload& wo
     // Checked before compile(), which finalizes the workload; a finalized workload rejects add_program(), so a later
     // check would leave the caller unable to fix the workload and retry.
     TT_FATAL(!workload.get_programs().empty(), "Cannot prepare a MeshWorkload that has no programs");
+    // As in EnqueueMeshWorkload: check the workload against the thread's sub-device scope, then compile it for the
+    // whole device.
+    validate_sub_device_scope(workload.impl(), &mesh_device);
+    const SuspendSubDeviceScope whole_device;
     workload.impl().compile(&mesh_device);
 }
 

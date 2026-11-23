@@ -149,7 +149,7 @@ While a scope is open, the device pretends to be just the sub-device you picked:
 
 So an operation that uses either call ends up on your sub-device.
 
-There is also a safety net. When a program is enqueued inside a scope, or recorded into a command list, it is checked before it is compiled. If it has a kernel, semaphore, circular buffer or dataflow buffer on another sub-device's cores, it is rejected with an error. This check is the only thing the scope guarantees.
+There is also a safety net. When a program is enqueued inside a scope, or recorded into a command list, it is checked before it is dispatched. If it has a kernel, semaphore, circular buffer or dataflow buffer on another sub-device's cores, it is rejected with an error. This check is the only thing the scope guarantees.
 
 #### Known limitations
 
