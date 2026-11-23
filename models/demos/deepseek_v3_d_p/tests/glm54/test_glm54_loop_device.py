@@ -6,11 +6,10 @@ TtPrefillTransformer on the 8x4 mesh, running
 
     L0 prelude | L1 L2 (pass 1) | gate 1 | L1 L2 again, the same blocks (pass 2) | gate 2 | L3 coda
 
-PASS-2 ATTENTION IS A STAND-IN: until two-bank sparse MLA lands (q171.2.5) a pass-2 block runs its own GLM-5.3
-attention (fresh top-k, writing its KVPE slot over pass 1's for the chunk). So the reference here is the GLM-5.4
-schedule with that same stand-in (``_standin_reference``), not ``glm54_stack_reference``, and the run is one
-chunk. What this test owns is the schedule and the gates: which tensor each step reads, that pass 2 reruns the
-pass-1 weights, and the gate math.
+Pass 2 runs the two-bank attention (q171.2.5/q171.2.6: pass-1 KVPE at the pass-1 group's top-k plus its own
+window); its CPU step is ``glm54_pass2_layer_reference`` on the pass-1 step's KVPE and top-k. The run is one chunk.
+What this test owns is the schedule, the gates and the pass-2 wiring: which tensor each step reads, that pass 2
+reruns the pass-1 weights on pass 1's top-k, and the gate math.
 
 Checks, all on rows < ROWS (below index_topk every causal key is selected and a row depends on nothing after it,
 so the CPU reference needs only those rows):
@@ -41,7 +40,13 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.block import glm_decoder_layer_reference
-from models.demos.deepseek_v3_d_p.reference.glm_5_4 import damp_gate_reference, loop_schedule
+from models.demos.deepseek_v3_d_p.reference.glm_5_4 import (
+    LoopPass2MLAReference,
+    damp_gate_reference,
+    glm54_pass2_layer_reference,
+    loop_schedule,
+    pass1_indices,
+)
 from models.demos.deepseek_v3_d_p.reference.glm_5_4.loop import _ffn_kwargs, _mla_weights_with_indexer
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.glm54_weights import (
@@ -92,15 +97,23 @@ def _step_names(config) -> list[tuple[str, object]]:
 
 
 class _CpuSteps:
-    """CPU steps on ROWS rows. Every layer call gets a fresh MLA reference (one chunk: the stand-in's pass 2 writes
-    and reads only its own KVPE, as on device); shared layers take the preceding full layer's top-k."""
+    """CPU steps on ROWS rows. Every pass-1 layer call gets a fresh MLA reference (one chunk) and records it with the
+    top-k it attended at; a pass-2 call attends that pass-1 KVPE at that top-k plus its own window (A2-A6). Shared
+    layers take the preceding full layer's top-k."""
 
     def __init__(self, config, weights):
         self.config, self.layers, self.gates = config, weights.state_dict["layers"], weights.gates
+        self.pass1 = {}  # layer -> (its pass-1 MLA reference, the top-k it attended at)
 
-    def layer(self, idx: int, x: torch.Tensor, topk=None, *, weights_of: int | None = None):
+    def _mla(self, idx: int):
+        w = self.layers[idx]
+        return SparseMLAReference(self.config, _mla_weights_with_indexer(self.config, w["mla_weights"]), seq_len=ROWS)
+
+    def layer(self, idx: int, x: torch.Tensor, topk=None, *, weights_of: int | None = None, loop_pass: int = 1):
+        if loop_pass >= 2:
+            return self._pass2_layer(idx, x, weights_of=weights_of), topk
         w = self.layers[idx if weights_of is None else weights_of]
-        mla = SparseMLAReference(self.config, _mla_weights_with_indexer(self.config, w["mla_weights"]), seq_len=ROWS)
+        mla = self._mla(idx if weights_of is None else weights_of)
         shared = self.config.indexer_types[idx] == "shared"
         out, _, tk = glm_decoder_layer_reference(
             self.config,
@@ -114,7 +127,32 @@ class _CpuSteps:
             mla_ref=mla,
             **_ffn_kwargs(w),
         )
-        return out[0].float(), (topk if shared else tk)
+        used = topk if shared else tk
+        if weights_of is None:
+            self.pass1[idx] = (mla, used)
+        return out[0].float(), used
+
+    def _pass2_layer(self, idx: int, x: torch.Tensor, *, weights_of: int | None = None) -> torch.Tensor:
+        """Pass 2 of layer idx on pass 1's KVPE and top-k of idx; `weights_of` swaps in another layer's weights."""
+        bank_a, topk = self.pass1[idx]
+        w_idx = idx if weights_of is None else weights_of
+        w = self.layers[w_idx]
+        attention = LoopPass2MLAReference(
+            bank_a if weights_of is None else self._mla(w_idx),
+            window=self.config.loop_window_size,
+            latent_dim=self.config.kv_lora_rank,
+        )
+        res = glm54_pass2_layer_reference(
+            self.config,
+            attention,
+            w["attn_norm_weight"],
+            w["ffn_norm_weight"],
+            x.unsqueeze(0).to(torch.bfloat16),
+            kvpe_a=bank_a.kvpe_cache,
+            indices_a=pass1_indices(topk, 0, self.config.index_topk),
+            **_ffn_kwargs(w),
+        )
+        return res.output[0].float()
 
     def gate(self, k: int, x_prev: torch.Tensor, h: torch.Tensor, *, weights_of: int | None = None):
         g = self.gates[(k if weights_of is None else weights_of) - 1]
@@ -129,8 +167,8 @@ class _CpuSteps:
         return out.to(torch.bfloat16).float(), beta
 
 
-def _standin_reference(cpu: _CpuSteps, names, x: torch.Tensor) -> dict:
-    """Free-running CPU chain of the schedule with the stand-in pass-2 attention, named as the device's steps."""
+def _free_reference(cpu: _CpuSteps, names, x: torch.Tensor) -> dict:
+    """Free-running CPU chain of the schedule, named as the device's steps."""
     out, topk, pass_in = {}, None, None
     for name, s in names:
         if s.kind == "gate":
@@ -139,7 +177,7 @@ def _standin_reference(cpu: _CpuSteps, names, x: torch.Tensor) -> dict:
         else:
             if s.loop_pass and pass_in is None:
                 pass_in = x
-            x, topk = cpu.layer(s.layer, x, topk)
+            x, topk = cpu.layer(s.layer, x, topk, loop_pass=s.loop_pass)
         out[name] = x
     return out
 
@@ -171,7 +209,8 @@ def _layer_check(dev_in, dev_out, ref_out) -> tuple[dict, list]:
     return {"contribution": p}, ([] if p >= LAYER_DELTA_PCC else [f"contribution PCC {p:.5f} < {LAYER_DELTA_PCC}"])
 
 
-def _build(mesh_device, device_params, num_links, config, weights):
+def _build(mesh_device, device_params, num_links, config, weights, num_slots: int = 1, max_seq: int = CHUNK):
+    """The stack and its caches: num_slots user slots of max_seq pass-1 positions (the cache adds the window ring)."""
     sp_axis, tp_axis = 0, 1
     n = config.num_hidden_layers
     transformer = TtPrefillTransformer(
@@ -188,32 +227,33 @@ def _build(mesh_device, device_params, num_links, config, weights):
         tp_axis=tp_axis,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
         is_chunked=True,
-        slot_num=1,
-        max_seq_len=CHUNK,
+        slot_num=num_slots,
+        max_seq_len=max_seq,
         routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
         tp_shard_kv=True,
         sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
     )
+    # Pass 2 keeps its window in a ring past each slot's pass-1 positions: the transformer names the cache length.
     kvpe_cache = init_mla_kv_cache(
         cache_format=MlaKvCacheFormat.BF16_RM,
         hf_config=config,
         mesh_device=mesh_device,
-        seq_len=CHUNK,
+        seq_len=transformer.kv_cache_seq_len,
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_kvpe_cache_layers=n,
-        num_users=1,
+        num_users=num_slots,
     )
     index_kv_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
         mesh_device=mesh_device,
-        seq_len=CHUNK,
+        seq_len=transformer.kv_cache_seq_len,
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_kvpe_cache_layers=full_indexer_rank(config, n),
-        num_users=1,
+        num_users=num_slots,
         dtype=ttnn.bfloat8_b,
     )
     return transformer, kvpe_cache, index_kv_cache
@@ -264,6 +304,7 @@ def test_glm54_loop_on_device(mesh_device, device_params, num_links):
     assert sp == SP
     chunk_local = PREFILL_CHUNK_TOKENS_PER_CHIP
     config = glm54_reduced_config(CHUNK)
+    config.loop_window_format = "bf16"  # the window lives in the KVPE cache, which this test keeps in BF16_RM
     assert ROWS <= config.index_topk
     weights = glm54_tier1_weights(config)
     assert all(g["proj_weight"].shape[0] == 1 for g in weights.gates), "tier 1 uses scalar gates"
@@ -374,16 +415,15 @@ def test_glm54_loop_on_device(mesh_device, device_params, num_links):
         else:
             if s.loop_pass and pass_in is None:
                 pass_in = prev
-            ref_out, topk_out = cpu.layer(s.layer, dev[prev], topk)
+            ref_out, topk_out = cpu.layer(s.layer, dev[prev], topk, loop_pass=s.loop_pass)
             scores, fails = _layer_check(dev[prev], dev[name], ref_out)
             if gate_inputs is not None:
                 # Attribution: the block after a gate must match the CPU step on the gate output better than on
                 # either gate input. The contribution bar alone cannot tell gate 2's output from its pass output
                 # (beta2 ~0.9 makes them close; CPU-measured 0.975 for the fault, above LAYER_DELTA_PCC).
                 for label, alt in gate_inputs.items():
-                    alt_pcc = _layer_check(dev[prev], dev[name], cpu.layer(s.layer, dev[alt], topk)[0])[0][
-                        "contribution"
-                    ]
+                    alt_ref = cpu.layer(s.layer, dev[alt], topk, loop_pass=s.loop_pass)[0]
+                    alt_pcc = _layer_check(dev[prev], dev[name], alt_ref)[0]["contribution"]
                     scores[f"vs {label}"] = alt_pcc
                     if alt_pcc >= scores["contribution"]:
                         fails.append(f"output fits input '{alt}' ({alt_pcc:.5f}) as well as '{prev}'")
@@ -399,7 +439,7 @@ def test_glm54_loop_on_device(mesh_device, device_params, num_links):
     # Negative controls (CPU): each fault must fail the check above that owns it.
     controls = {
         "pass 2 on another layer's weights (L3)": _layer_check(
-            dev["gate1"], dev["layer_1.pass2"], cpu.layer(1, dev["gate1"], weights_of=3)[0]
+            dev["gate1"], dev["layer_1.pass2"], cpu.layer(1, dev["gate1"], weights_of=3, loop_pass=2)[0]
         ),
         "gate 2 with gate 1's weights": _gate_check(
             dev["gate1"],
@@ -426,10 +466,156 @@ def test_glm54_loop_on_device(mesh_device, device_params, num_links):
     _stage("negative controls done", t0)
 
     # Free-running, reported only.
-    free_ref = _standin_reference(cpu, names, dev["embed"])
+    free_ref = _free_reference(cpu, names, dev["embed"])
     logger.info(
-        "free-running device vs stand-in reference PCC: "
+        "free-running device vs reference PCC: "
         + ", ".join(f"{name} {_pcc(dev[name], free_ref[name]):.5f}" for name, _ in names)
     )
     _stage("free-running reference done", t0)
+    assert not failures, failures
+
+
+# (slot, start, end) of a two-slot, multi-chunk request mix: boundaries at 5120 (slot 0) and 96 (slot 1, rotated).
+CHUNKS_SCHEDULE = [(0, 0, CHUNK), (1, 0, 96), (0, CHUNK, 2 * CHUNK), (1, 96, 96 + CHUNK)]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM54ReducedConfig), l1_small_size=GLM53Adapter.l1_small_size
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(0)
+def test_glm54_loop_chunks_on_device(mesh_device, device_params, num_links):
+    """The looped stack with real pass 2 over several chunks of two user slots (CHUNKS_SCHEDULE): every step finite;
+    the schedule run twice eagerly is bit-identical, every step; and one capture on the trace-safe metadata path,
+    replayed chunk by chunk across the boundaries and slots, matches the same metadata forward run eagerly bit for
+    bit on every block output and on the whole KVPE and index caches. Accuracy across chunks (the carried window vs
+    a single-shot reference) is test_glm54_two_bank's."""
+    if not is_blackhole():
+        pytest.skip("GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+    t0 = time.perf_counter()
+    sp = mesh_device.shape[0]
+    chunk_local = PREFILL_CHUNK_TOKENS_PER_CHIP
+    max_seq = 3 * CHUNK
+    config = glm54_reduced_config(max_seq)
+    config.loop_window_format = "bf16"  # the window lives in the KVPE cache, which this test keeps in BF16_RM
+    weights = glm54_tier1_weights(config)
+    _stage("weights generated", t0)
+    transformer, kvpe_cache, index_kv_cache = _build(
+        mesh_device, device_params, num_links, config, weights, num_slots=2, max_seq=max_seq
+    )
+    names = [name for name, _ in _step_names(config)]
+    _stage("transformer built", t0)
+
+    g = torch.Generator().manual_seed(TOKEN_SEED)
+    prompts = {slot: torch.randint(0, config.vocab_size, (2 * CHUNK,), generator=g) for slot in (0, 1)}
+
+    def tokens(slot, start, end):
+        chunk = torch.zeros(CHUNK, dtype=torch.int64)
+        chunk[: end - start] = prompts[slot][start:end]
+        return ttnn.from_torch(
+            torch.tensor(pack_forward_tokens([chunk.tolist()], [start], sp), dtype=torch.int64).reshape(
+                sp, 1, chunk_local
+            ),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=mesh_shard_dims(0, 0)
+            ),
+        )
+
+    def eager_schedule():
+        outs = []
+        for slot, start, end in CHUNKS_SCHEDULE:
+            out = transformer.forward(
+                tokens(slot, start, end),
+                kvpe_cache,
+                actual_isl=end - start,
+                actual_start=start,
+                actual_end=end,
+                cache_user_id=slot,
+                return_intermediates=True,
+                index_kv_cache=index_kv_cache,
+            )
+            ttnn.synchronize_device(mesh_device)
+            outs.append(out)
+        return outs
+
+    failures = []
+    first, second = eager_schedule(), eager_schedule()
+    for k, ((slot, start, end), a, b) in enumerate(zip(CHUNKS_SCHEDULE, first, second)):
+        for name in ["embed"] + names:
+            assert torch.isfinite(a[name]).all(), f"slot {slot} chunk {start}: {name} not finite"
+            if not torch.equal(a[name], b[name]):
+                failures.append(f"slot {slot} chunk {start}: eager {name} differs between two runs")
+    _stage("eager schedule x2 done", t0)
+
+    metadata = ChunkMetadata(*(_scalar(mesh_device, v) for v in CHUNKS_SCHEDULE[0]))
+    p_tokens = tokens(*CHUNKS_SCHEDULE[0])
+    taps: list[ttnn.Tensor] = []
+
+    def set_chunk(slot, start, end):
+        for dst, v in zip(metadata.scalars, (slot, start, end)):
+            ttnn.copy(_scalar(mesh_device, v), dst)
+        ttnn.copy(tokens(slot, start, end), p_tokens)
+
+    def meta_forward():
+        taps.clear()
+        transformer.forward(
+            p_tokens,
+            kvpe_cache,
+            actual_isl=None,
+            actual_start=None,
+            actual_end=None,
+            cache_user_id=0,
+            index_kv_cache=index_kv_cache,
+            metadata=metadata,
+            on_layer_hidden=lambda _layer, x: taps.append(x),
+        )
+        return list(taps)
+
+    def snapshot(blocks):
+        return [_raw_host(t) for t in blocks], [_raw_host(t) for t in _cache_tensors(kvpe_cache, index_kv_cache)]
+
+    # One metadata pass first, so the reference pass and the traced pass start from a state the same path wrote:
+    # rows of chunks later in the schedule are still the previous pass's when a chunk's caches are compared.
+    for chunk in CHUNKS_SCHEDULE:
+        set_chunk(*chunk)
+        meta_forward()
+    meta_eager = []
+    for chunk in CHUNKS_SCHEDULE:
+        set_chunk(*chunk)
+        meta_eager.append(snapshot(meta_forward()))
+    ttnn.synchronize_device(mesh_device)
+    _stage("metadata eager schedule done", t0)
+    set_chunk(*CHUNKS_SCHEDULE[0])
+    with TracedStep(
+        mesh_device,
+        meta_forward,
+        attach=transformer.set_trace_controller,
+        detach=lambda: transformer.set_trace_controller(None),
+    ) as traced:
+        traced.capture()
+        _stage(f"trace captured ({traced.controller.num_segments} segments)", t0)
+        for chunk, expect in zip(CHUNKS_SCHEDULE, meta_eager):
+            set_chunk(*chunk)
+            traced.replay()
+            got = snapshot(traced.output)
+            for kind, a, b in (("block output", got[0], expect[0]), ("cache", got[1], expect[1])):
+                if len(a) != len(b) or not all(all(torch.equal(x, y) for x, y in zip(p, q)) for p, q in zip(a, b)):
+                    failures.append(f"traced replay of slot {chunk[0]} chunk {chunk[1]}: {kind}s differ from eager")
+            logger.info(f"traced replay slot {chunk[0]} chunk {chunk[1]}-{chunk[2]} checked")
+    _stage("traced replays checked", t0)
     assert not failures, failures

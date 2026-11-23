@@ -218,7 +218,7 @@ def test_two_bank_index_list(mesh_device):
     )
     for start in INDEX_STARTS:
         got = ttnn.to_torch(
-            index.index_list(tt_sets, _scalar(mesh_device, start)),
+            index.index_list(tt_sets, _scalar(mesh_device, start), _scalar(mesh_device, start + CHUNK)),
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=(sp, tp)),
         )
         got = got.to(torch.int64) & 0xFFFFFFFF
@@ -500,9 +500,9 @@ def test_two_bank_traced(mesh_device, window_format):
                 ttnn.copy(_scalar(mesh_device, v), dst)
             ttnn.copy(stage.to_device(_chunk_rows(slot, L, 2, start, end), start), p_hidden)
             ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
-            # Real rows only: rows past `end` attend ring rows of positions no chunk has written yet.
-            got = stage.output_to_torch(out, start)[:, : end - start]
-            assert torch.equal(got, eager[k][:, : end - start]), f"traced replay of slot {slot} chunk {start} differs"
+            # Every row, padding included: padding rows read only ring rows their own chunk wrote.
+            got = stage.output_to_torch(out, start)
+            assert torch.equal(got, eager[k]), f"traced replay of slot {slot} chunk {start} differs from eager"
             logger.info(f"[{window_format}] traced replay slot {slot} chunk {start}-{end}: bit-identical to eager")
     finally:
         ttnn.release_trace(mesh_device, tid)

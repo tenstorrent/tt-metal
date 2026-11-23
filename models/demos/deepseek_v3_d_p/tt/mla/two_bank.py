@@ -29,7 +29,9 @@ whole chunks, so the virtual starts rotate the chunk exactly as the pass-1 write
 chunks, per user slot and per layer, is the ring itself: it is part of the slot.
 
 Attention is the GLM-5.3 shared-layer path, the sparse KV push of one natural index list per query row,
-``[window ids | pass-1 top-k]`` (``W + top-k`` wide). The window ids are ``ring_id(p - W + 1 + j)``. ``index_list``
+``[window ids | pass-1 top-k]`` (``W + top-k`` wide). The window ids are ``ring_id(min(p - W + 1 + j, end - 1))``:
+the clamp only touches padding rows (p >= end), which then read rows their own chunk wrote rather than ring rows
+an earlier chunk or request left, so their (unused) outputs do not depend on history. ``index_list``
 computes them on device from the chunk start (metadata[1]), together with each query row's position p in the rotated
 chunk layout (``rotated_chunk_positions``), so one captured trace serves every start. ``sparse_sdpa`` stops a row at
 its first sentinel, so sentinels must be one tail; that holds when every window slot is real (``p >= W - 1``) because
@@ -68,6 +70,21 @@ def window_kv_format(config) -> MlaKvCacheFormat:
 def ring_rows(chunk_global: int) -> int:
     """Cache positions a loop layer's slot holds past bank A for the window ring, at chunks of ``chunk_global``."""
     return RING_CHUNKS * chunk_global
+
+
+def loop_pass2_layers(config) -> range:
+    """The layers that run loop pass 2 (GLM-5.4 loop layers when the loop runs at least twice), else empty."""
+    if getattr(config, "loop_count", 1) < 2:
+        return range(0)
+    return range(config.loop_first_layer, config.loop_last_layer + 1)
+
+
+def pass2_kv_cache_seq_len(max_seq_len: int, chunk_global: int) -> int:
+    """Per-slot length of the KVPE cache of a stage that runs loop pass 2: ``max_seq_len`` pass-1 positions, then the
+    window ring. The one place cache allocators and the model agree on it."""
+    if max_seq_len % chunk_global:
+        raise ValueError(f"max_seq_len {max_seq_len} must be whole chunks of {chunk_global} to hold a window ring")
+    return max_seq_len + ring_rows(chunk_global)
 
 
 def ring_id(position: int, ring_base: int, chunk_global: int) -> int:
@@ -175,17 +192,20 @@ class TwoBankIndex:
             out.append([metadata[0], _scalar_u32(v), _scalar_u32(ttnn.add(v, length))])
         return out
 
-    def index_list(self, topk_indices: ttnn.Tensor, chunk_start: ttnn.Tensor) -> ttnn.Tensor:
+    def index_list(self, topk_indices: ttnn.Tensor, chunk_start: ttnn.Tensor, chunk_end: ttnn.Tensor) -> ttnn.Tensor:
         """This chunk's natural index list ``[1, 1, query_rows, W + top-k]`` uint32: ring ids of each query row's
         window, then its pass-1 top-k, compacted for rows before position W - 1. ``chunk_start`` is the chunk's start
-        as a ``[1, 1, 1, 1]`` uint32 device tensor (metadata[1]); everything derived from it is computed here on
-        device, in float32, exact below 2**24 (floors are taken half a step above an integer quotient). A new tensor.
+        as a ``[1, 1, 1, 1]`` uint32 device tensor (metadata[1]) and ``chunk_end`` its end (metadata[2]); everything
+        derived from them is computed here on device, in float32, exact below 2**24 (floors are taken half a step
+        above an integer quotient). A new tensor.
 
         Per query row (chip s, shard row i) and column c (window slot j = c):
             sigma_s = start mod chunk; S, off = the boundary chip's block base and the start's offset in it
             a = i + off [s's block base == S]  (mod chunk_local)      -- the row's position in its block
             o = (s * chunk_local + a - sigma_s) mod chunk              -- its position p minus start
-            q = start + o - (W - 1) + j                               -- window slot j's position
+            q = min(start + o - (W - 1) + j, end - 1)                 -- window slot j's position; padding rows
+                                                                         (p >= end) read only rows this chunk wrote,
+                                                                         so they do not depend on earlier requests
             id = ring_base + P + (q mod P)                            -- its ring row (q < 0 is compacted away)
             perm = min(c + max(0, W - 1 - start - o), W + top-k)      -- slide rows with p < W - 1 left
         """
@@ -198,6 +218,7 @@ class TwoBankIndex:
         a = _wrap_above(a, L)
         o = _wrap_below(ttnn.subtract(ttnn.add(self._shard_base, a), sigma_s), chunk)
         q = ttnn.add(ttnn.add(start, ttnn.subtract(o, float(W - 1))), self._column)
+        q = ttnn.minimum(q, ttnn.subtract(_scalar_f32(chunk_end), 1.0))
         q = ttnn.relu(q)  # slots before position 0 are compacted away below; keep their arithmetic in range
         ids = ttnn.add(ttnn.subtract(q, _floor_mul(q, self.period, 0.5)), float(self.ring_base + self.period))
         shift = ttnn.relu(ttnn.subtract(ttnn.rsub(o, float(W - 1)), start))

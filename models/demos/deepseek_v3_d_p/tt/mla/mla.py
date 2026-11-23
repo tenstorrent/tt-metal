@@ -2577,18 +2577,21 @@ class ttMLA:
         index = self._two_bank
         if metadata is not None:
             writes = [dict(metadata=m) for m in index.ring_write_metadata(metadata)]
-            chunk_start = metadata[1]
+            chunk_start, chunk_end = metadata[1], metadata[2]
         else:
             start = kv_actual_isl or 0
             end = start + seq_len_local * self.sp_factor if actual_end is None else actual_end
             writes = [dict(kv_actual_isl=v, actual_end=e) for v, e in index.ring_writes(start, end)]
-            chunk_start = ttnn.from_torch(
-                torch.tensor([[[[start]]]], dtype=torch.int32),
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            chunk_start, chunk_end = (
+                ttnn.from_torch(
+                    torch.tensor([[[[value]]]], dtype=torch.int32),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+                for value in (start, end)
             )
         for write in writes:
             self._update_kv_cache(
@@ -2602,9 +2605,10 @@ class ttMLA:
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
             ttnn.deallocate(value)
 
-        joint = index.index_list(indices, chunk_start)
+        joint = index.index_list(indices, chunk_start, chunk_end)
         if metadata is None:
             ttnn.deallocate(chunk_start)
+            ttnn.deallocate(chunk_end)
         # The joint list is a new tensor every call, so a cached plan keyed by its address could be another layer's.
         self._push.invalidate()
         plan = self._sparse_push_plan(joint, kv_actual_isl, metadata)
