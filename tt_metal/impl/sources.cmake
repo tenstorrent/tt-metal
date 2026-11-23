@@ -163,6 +163,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_receiver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_service.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/realtime_profiler/realtime_profiler_tracy_consumer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/streaming_profiler/device_wall_clock.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/ringbuffer_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fd_kernel.cpp
