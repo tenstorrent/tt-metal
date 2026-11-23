@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unpack tilize followed by a plain unary unpack on the same unpacker, with no teardown between them.
-// tilize_uninit() is a no-op on Quasar, so the second op relies only on its own init and execute: tile/face/row
-// counters left nonzero by tilize would corrupt the second half of the result. The tilize L1 source offset and the
-// UNPACK_TILIZE stride config are not covered here: only UNPACR_TILIZE/UNPACR_STRIDE read them, and the tilize init
-// and execute reprogram them before each use. Section 0 of the result holds the tilized input, section 1 the input
-// copied tile by tile.
+// Unpack tilize then unary unpack with no teardown between them (tilize_uninit() is a no-op on Quasar).
+// Catches leftover tile/face/row counters only; the tilize offset and stride config are reprogrammed by their readers.
 
 #include <cstdint>
 
