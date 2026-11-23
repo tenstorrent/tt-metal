@@ -23,8 +23,11 @@ class PfCombine:
                                     device=device)  # fmt: skip
 
     def __call__(self, y, back, wk):
-        """y [rows, C] bf16 ROW_MAJOR; back [1, K T] uint32 (k-major buffer rows); wk [1, K, T, 1] bf16 TILE."""
-        k, t = wk.shape[1], wk.shape[2]
+        """y [rows, C] bf16 ROW_MAJOR; back [1, K T] uint32 (k-major buffer rows); wk [1, K, T, 1] bf16 TILE, or the
+        router's [1, 1, T, K] (K <= 16: the reader builds the K weight tiles, no permute program)."""
+        wt8 = wk.shape[1] == 1 and wk.shape[3] > 1
+        k, t = (wk.shape[3], wk.shape[2]) if wt8 else (wk.shape[1], wk.shape[2])
+        assert not wt8 or (k <= 16 and wk.layout == ttnn.TILE_LAYOUT), wk.shape
         c = y.shape[-1]
         assert y.dtype == ttnn.bfloat16 and y.layout == ttnn.ROW_MAJOR_LAYOUT and c % (32 * self.cw) == 0, y.shape
         assert back.shape[-1] == k * t and t % 32 == 0 and wk.dtype == ttnn.bfloat16, (back.shape, wk.shape)
@@ -43,7 +46,7 @@ class PfCombine:
                             self.zero.buffer_address(), len(us)] + flat  # fmt: skip
             w_args[core] = [out.buffer_address(), len(us)] + flat
             c_args[core] = [len(us)]
-        named = F.fixed_rt(dict(t=t, k=k, cw=self.cw, row=c * 2, ot=ot), r_args, w_args, c_args)
+        named = F.fixed_rt(dict(t=t, k=k, cw=self.cw, row=c * 2, ot=ot, wt8=int(wt8)), r_args, w_args, c_args)
         kernels = [
             F.kernel("pf_combine_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, crs),
             F.kernel("pf_combine_writer.cpp", ttnn.WriterConfigDescriptor(), named, w_args, crs),
@@ -53,6 +56,6 @@ class PfCombine:
         cw = self.cw
         cbs = [F.cb(0, bf, NB * cw, cores=crs), F.cb(1, bf, k, cores=crs), F.cb(2, bf, 1, cores=crs),
                F.cb(3, bf, cw, cores=crs), F.cb(4, bf, k * cw, cores=crs), F.cb(16, bf, 2 * cw, cores=crs),
-               F.cb(5, bf, k * 128 // 2048 + 1, cores=crs)]  # fmt: skip
+               F.cb(5, bf, k * 128 // 2048 + 1, cores=crs), F.cb(6, bf, 1, cores=crs)]  # fmt: skip
         F.run([y, back, wk, self.zero, out], kernels, cbs)
         return out

@@ -1158,6 +1158,10 @@ class Inkling2Prefill:
             **self.unified_kw,
         )
         self._tick("moe.experts")
+        if self._pfcomb is not None and PfHandoff.ok(weights):  # bf16 TILE DRAM
+            out = self._pfcomb(y, b["bi"], weights)  # [1,1,T,8]: the kernel reads column k (no permute)
+            ttnn.deallocate(y)
+            return out
         wk = _bf16(ttnn.permute(weights, (0, 3, 2, 1)))  # [1,8,T,1]
         if self._pfcomb is not None:
             out = self._pfcomb(y, b["bi"], wk)

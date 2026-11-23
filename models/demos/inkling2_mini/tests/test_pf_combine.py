@@ -54,6 +54,8 @@ def test_pf_combine(device, t):
     print(
         f"PF_COMBINE t={t} equal={torch.equal(a, b)} off_exact ops={bad_ops} fused={bad_fused} max_rel_diff={rel:.3g}"
     )
+    w_tk = ttnn.permute(wk, (0, 3, 2, 1))  # the router's layout [1, 1, t, K]: the reader builds the weight tiles
+    assert torch.equal(b, ttnn.to_torch(mod(y, back, w_tk)).float())
     narrow = PfCombine(dev, cw=8)  # same sums, other units: bit-equal
     assert torch.equal(b, ttnn.to_torch(narrow(y, back, wk)).float())
     if t == 8192:
