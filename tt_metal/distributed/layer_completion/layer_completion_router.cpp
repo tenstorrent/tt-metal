@@ -36,6 +36,15 @@ LayerCompletionRouter::LayerCompletionRouter(LayerCompletionRouterConfig cfg) : 
     if (!cfg_.participant_ranks.empty()) {
         const auto& ranks = cfg_.participant_ranks;
         TT_FATAL(
+            std::ranges::all_of(ranks, [world_size = cfg_.world_size](int r) { return r >= 0 && r < world_size; }),
+            "LayerCompletionRouter: participant_ranks must lie in [0, world_size={})",
+            cfg_.world_size);
+        auto sorted_ranks = ranks;
+        std::ranges::sort(sorted_ranks);
+        TT_FATAL(
+            std::ranges::adjacent_find(sorted_ranks) == sorted_ranks.end(),
+            "LayerCompletionRouter: participant_ranks must be unique");
+        TT_FATAL(
             std::ranges::find(ranks, cfg_.rank) != ranks.end(),
             "LayerCompletionRouter: rank {} is not in participant_ranks",
             cfg_.rank);
