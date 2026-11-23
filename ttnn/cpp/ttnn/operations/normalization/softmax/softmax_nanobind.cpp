@@ -245,6 +245,7 @@ void bind_normalization_softmax_inplace_operation(nb::module_& mod) {
 
             Args:
                 input_tensor (ttnn.Tensor): The input tensor to apply softmax to. This tensor is modified in-place.
+                dim (int, optional): The dimension along which to compute softmax. Defaults to `-1` (last dimension).
 
             Keyword Args:
                 program_config (SoftmaxProgramConfig, optional): Program configuration for the operation. Defaults to SoftmaxDefaultProgramConfig().

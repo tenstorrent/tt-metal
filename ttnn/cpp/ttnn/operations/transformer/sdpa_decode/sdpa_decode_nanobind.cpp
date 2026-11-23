@@ -49,6 +49,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             cur_pos (List of int, optional): list of integers of length b. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             cur_pos_tensor (ttnn.Tensor, optional): [b] tensor of integers of length b. Defaults to `None`.
+            attention_sink (ttnn.Tensor, optional): per-head attention sink logits, included in the softmax max and denominator. Defaults to `None`.
             scale (float, optional): Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.

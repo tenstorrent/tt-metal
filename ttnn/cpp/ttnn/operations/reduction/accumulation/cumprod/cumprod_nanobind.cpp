@@ -33,12 +33,13 @@ void bind_reduction_cumprod_operation(nb::module_& mod) {
             dtype (ttnn.DataType, optional): desired output type. If specified then input tensor will be casted to `dtype` before processing.
             reverse_order (bool, optional, default False): whether to perform accumulation from the end to the beginning of accumulation axis.
             out (ttnn.Tensor, optional): preallocated output. If specified, `out` must have same shape as `input`, and must be on the same device.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
         Note:
-            If both `dtype` and `output` are specified then `output.dtype` must match `dtype`.
+            If both `dtype` and `out` are specified then `out.dtype` must match `dtype`.
 
             Supported dtypes, layout, ranks and `dim` values:
 
