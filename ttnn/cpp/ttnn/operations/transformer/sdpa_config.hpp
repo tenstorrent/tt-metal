@@ -46,6 +46,9 @@ struct SDPAProgramConfig {
     // positions (cur_pos = the last token's). Row r's causal bound is cur_pos - (tokens - 1 - r / rows_per_token).
     // Exact when every token's bound lies in the same K chunk as cur_pos (the caller checks); 0 = off.
     uint32_t rows_per_token = 0;
+    // Decode with pending_kv: batch b is token pending_tok0 + b / (K batch) of the verify pass, so it sees pending rows
+    // 0 .. pending_tok0 + b / (K batch). Lets a pass with more tokens than fit in one call run as several calls.
+    uint32_t pending_tok0 = 0;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

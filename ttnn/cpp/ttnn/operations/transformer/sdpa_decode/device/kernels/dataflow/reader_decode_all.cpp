@@ -140,7 +140,11 @@ void kernel_main() {
         noc.async_read_barrier();
         g_pend.k_tiles = base;
         g_pend.v_tiles = base + DHt * ptb;
+#ifdef SDPA_DECODE_PEND_TOK0
+        g_pend.ntok = SDPA_DECODE_PEND_TOK0 + cur_batch / Bkv + 1;  // a later call of a split verify pass
+#else
         g_pend.ntok = cur_batch / Bkv + 1;
+#endif
         g_pend.pos0 = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1);
         g_pend.S = St * 32;
     }

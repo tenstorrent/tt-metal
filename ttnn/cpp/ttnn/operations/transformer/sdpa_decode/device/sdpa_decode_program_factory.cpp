@@ -978,7 +978,13 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     if (use_pending) {
         TT_FATAL(q_heads_parallel_factor == 1 && num_kv_heads == 1, "pending_kv needs the kv groups as the batch");
         reader_desc.defines.emplace_back("SDPA_DECODE_PENDING", "1");
+        if (program_config.has_value() && program_config->pending_tok0 > 0) {
+            reader_desc.defines.emplace_back("SDPA_DECODE_PEND_TOK0", std::to_string(program_config->pending_tok0));
+        }
     }
+    TT_FATAL(
+        use_pending || !program_config.has_value() || program_config->pending_tok0 == 0,
+        "pending_tok0 needs pending_kv");
     // one sink block of PNHt tiles per batch (validate allows [B * padded heads, 32])
     if (use_attention_sink && q_shape[1] > 1 && attention_sink->padded_shape()[0] == q_shape[1] * q_shape[2]) {
         TT_FATAL(q_heads_parallel_factor == 1, "A per-batch attention sink needs q_heads_parallel_factor == 1");
