@@ -147,7 +147,12 @@ void kernel_main() {
 
     Noc noc;
     // ---- load_x_block ----
-    {
+    if constexpr (x_sharded) {
+        // zero-copy: cb_x is backed on the resident shard (crt x cw tiles, row pitch cw); announce it in place. The
+        // W tail of the caller's shard is not zeroed: compute masks it (cb_mask, below).
+        cb_reserve_back(cb_x, w.crt * w.cw);
+        cb_push_back(cb_x, w.crt * w.cw);
+    } else {
         AGRN_ZONE("rd_x");
         const auto x_acc = TensorAccessor(x_args, get_common_arg_val<uint32_t>(CRT_X_ADDR), x_page_bytes);
         CircularBuffer cb(cb_x);
@@ -169,14 +174,28 @@ void kernel_main() {
     // ---- constants ----
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-    if constexpr (is_ln) {
+    if constexpr (x_sharded && w_valid_last < TILE) {
+        // sharded input, tail member: the mask BLOCK (one row-0 mask per tile-column: ones, then the tail tile's
+        // valid columns) every sum over x multiplies by (compute) — the caller's shard keeps its padding
+        if (tail) {
+            for (uint32_t j = 0; j + 1 < w.cw; ++j) {
+                dataflow_kernel_lib::prepare_reduce_mask<cb_mask, ckernel::ReduceDim::REDUCE_ROW>(TILE);
+            }
+            dataflow_kernel_lib::prepare_reduce_mask<cb_mask, ckernel::ReduceDim::REDUCE_ROW>(w_valid_last);
+        }
+    } else if constexpr (is_ln) {
+        // LN T: the 0/1 mask of the W-tail tile (AccumulateViaAdd only_partial)
         if (tail) {
             dataflow_kernel_lib::prepare_reduce_mask<cb_mask, ckernel::ReduceDim::REDUCE_ROW>(w_valid_last);
         }
+    }
+    if constexpr (is_ln) {
         // n_j: valid columns of partition j = q*K + m (member m's width; every chip has the same W_local).
         CircularBuffer cb_consts(cb_stat_consts);
-        cb_reserve_back(cb_stat_consts, 1);
-        noc.async_write_zeros(cb_consts, TILE * TILE * 4, {.offset_bytes = 0});
+        cb_reserve_back(cb_stat_consts, gather_tiles);
+        for (uint32_t t = 0; t < gather_tiles; ++t) {
+            noc.async_write_zeros(cb_consts, TILE * TILE * 4, {.offset_bytes = t * TILE * TILE * 4});
+        }
         noc.write_zeros_l1_barrier();
         volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_stat_consts));
         for (uint32_t j = 0; j < P; ++j) {
@@ -189,10 +208,10 @@ void kernel_main() {
             }
             const uint32_t bits = u32_to_f32_bits(n);
             for (uint32_t r = 0; r < TILE; ++r) {
-                t[f32_tile_word(r, j)] = bits;
+                t[(j / TILE) * TILE * TILE + f32_tile_word(r, j % TILE)] = bits;
             }
         }
-        cb_push_back(cb_stat_consts, 1);
+        cb_push_back(cb_stat_consts, gather_tiles);
     }
 
     // ---- zero the gather tiles once, off the critical path (rows >= P must read 0) ----

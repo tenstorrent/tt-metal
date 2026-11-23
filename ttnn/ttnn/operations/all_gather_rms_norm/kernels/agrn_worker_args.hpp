@@ -40,7 +40,11 @@ constexpr uint32_t n_ports = get_compile_time_arg_val(24);
 constexpr uint32_t assemble_src_max = get_compile_time_arg_val(25);      // R_U: source tiles per output tile (max)
 constexpr uint32_t gamma_page_bytes = get_compile_time_arg_val(26);      // cb_gamma page (2 faces of a gamma tile)
 constexpr uint32_t gamma_src_page_bytes = get_compile_time_arg_val(27);  // gamma DRAM page (stick or tile)
-constexpr uint32_t WORKER_CT_ARGS = 28;                                  // TensorAccessorArgs follow (reader / writer)
+// HEIGHT / WIDTH_SHARDED input: cb_x is backed on the resident shard (zero-copy), worker identity comes from the shard
+// map (common args), and the W tail of the caller's shard is masked in compute (never zeroed in place)
+constexpr bool x_sharded = get_compile_time_arg_val(28) != 0;
+constexpr uint32_t last_crt = get_compile_time_arg_val(29);  // tile-rows of the last row-group
+constexpr uint32_t WORKER_CT_ARGS = 30;                      // TensorAccessorArgs follow (reader / writer)
 
 constexpr uint32_t P = G * K;  // stats partitions per row
 constexpr uint32_t TILE = 32;
@@ -61,6 +65,7 @@ constexpr uint32_t CRT_BWD_HUB = 10;
 constexpr uint32_t CRT_PORTS = 11;                      // n_ports linear logical indices
 constexpr uint32_t CRT_PORT_NOC = CRT_PORTS + n_ports;  // n_ports NoC coords (x | y << 16)
 constexpr uint32_t CRT_INV_N = CRT_PORT_NOC + n_ports;  // K x fp32 bits of 1 / (valid columns of member m)
+constexpr uint32_t CRT_WORKER_MAP = CRT_INV_N + K;      // sharded: byte [lin] = worker index (0xFF: none), 4 per word
 
 inline WorkerId my_worker_id() {
     uint32_t ports[n_ports];
@@ -69,7 +74,19 @@ inline WorkerId my_worker_id() {
     }
     const uint32_t lin =
         static_cast<uint32_t>(get_absolute_logical_y()) * grid_x + static_cast<uint32_t>(get_absolute_logical_x());
-    return derive_worker(lin, ports, n_ports, K, n_groups, rows_hi, big, cw_nom, Wlt);
+    uint32_t idx;
+    if constexpr (x_sharded) {
+        // the shard core order is the worker order (host select_sharded_split)
+        idx = (get_common_arg_val<uint32_t>(CRT_WORKER_MAP + lin / 4) >> (8 * (lin % 4))) & 0xFFu;
+    } else {
+        // row-major logical order with the port cores removed
+        uint32_t before = 0;
+        for (uint32_t i = 0; i < n_ports; ++i) {
+            before += ports[i] < lin ? 1u : 0u;
+        }
+        idx = lin - before;
+    }
+    return worker_from_idx(idx, K, n_groups, rows_hi, big, cw_nom, Wlt, last_crt);
 }
 
 // Valid columns of the member's last tile (the slice's W tail sits in the last member's last tile).

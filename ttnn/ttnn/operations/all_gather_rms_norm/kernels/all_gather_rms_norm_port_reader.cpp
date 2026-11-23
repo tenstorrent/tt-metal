@@ -98,7 +98,7 @@ void kernel_main() {
                 const uint32_t n = pk.n[ri];
                 if (k == 0 && !own_from_dst) {
                     for (uint32_t t = 0; t < n; ++t) {
-                        const uint32_t f = pk.jj[ri] + t * nb;
+                        const uint32_t f = pk.jj[ri] + t * run_stride;
                         const uint32_t r = flat_slot ? f / Wlt : pk.rr[ri];
                         const uint32_t j = flat_slot ? f - r * Wlt : f;
                         uint32_t g, rs;

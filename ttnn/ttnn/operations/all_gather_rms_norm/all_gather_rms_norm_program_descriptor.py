@@ -142,6 +142,13 @@ class Split:
     rows_hi: int
     big: int  # groups with rows_hi tile-rows; the rest rows_hi - 1
     cw_nom: int
+    last_crt: int = 0  # tile-rows of the LAST group (sharded: the ragged last shard); 0 = by rows_hi / big
+
+    @property
+    def last_rows(self):
+        if self.last_crt:
+            return self.last_crt
+        return self.rows_hi if self.big == self.n_groups else self.rows_hi - 1
 
     @property
     def n_active(self):
@@ -173,6 +180,62 @@ def select_split(R, Wlt, Nw, G, k_cap) -> Split:
     rows_hi = -(-R // n_groups)
     big = R - n_groups * (rows_hi - 1)
     return Split(k, n_groups, rows_hi, big, -(-Wlt // k))
+
+
+def _ordered_shard_cores(grid, row_major: bool):
+    """Cores of a shard grid in shard-assignment order (row-major or column-major) — base op mechanism."""
+    cores = set()
+    for r in grid.ranges():
+        for y in range(r.start.y, r.end.y + 1):
+            for x in range(r.start.x, r.end.x + 1):
+                cores.add((x, y))
+    return sorted(cores, key=(lambda c: (c[1], c[0])) if row_major else (lambda c: (c[0], c[1])))
+
+
+def shard_cores(tensor):
+    """All cores of a sharded tensor's shard grid (empty for an interleaved tensor)."""
+    mc = tensor.memory_config()
+    if not mc.is_sharded():
+        return set()
+    return set(_ordered_shard_cores(mc.shard_spec.grid, True))
+
+
+def select_sharded_split(geo: Geometry, input_tensor, G, k_cap_fn):
+    """HEIGHT / WIDTH_SHARDED input: the shard spec IS the work split, block = the resident shard (zero-copy cb_x).
+
+    HEIGHT: k = 1, one row-group per shard (ragged last shard -> last_crt). WIDTH: one group (all R tile-rows),
+    k = number of W shards — the k members' partials meet in the stats table (P = G * k). Returns (Split, worker
+    cores in worker-index order g * k + m)."""
+    mc = input_tensor.memory_config()
+    ss = mc.shard_spec
+    sh, sw = int(ss.shape[0]), int(ss.shape[1])
+    if sh % TILE or sw % TILE:
+        raise RuntimeError(f"all_gather_rms_norm: TILE shard {sh}x{sw} is not a whole number of tiles")
+    unit_h, unit_w = sh // TILE, sw // TILE
+    order = _ordered_shard_cores(ss.grid, ss.orientation == ttnn.ShardOrientation.ROW_MAJOR)
+    if mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        if unit_w != geo.Wlt:
+            raise RuntimeError(f"all_gather_rms_norm: HEIGHT shard width {sw} != the padded slice width")
+        n_h = -(-geo.R // unit_h)
+        if len(order) < n_h:
+            raise RuntimeError(f"all_gather_rms_norm: {n_h} row shards but only {len(order)} shard-grid cores")
+        split = Split(1, n_h, unit_h, n_h, geo.Wlt, geo.R - (n_h - 1) * unit_h)
+        return split, order[:n_h]
+    if mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        if unit_h < geo.R:
+            raise RuntimeError(f"all_gather_rms_norm: WIDTH shard height {sh} does not cover the {geo.R} tile-rows")
+        k = -(-geo.Wlt // unit_w)
+        if geo.Wlt % unit_w:
+            raise RuntimeError(f"all_gather_rms_norm: ragged WIDTH shards ({geo.Wlt} tiles / {unit_w}) are not built")
+        if len(order) < k:
+            raise RuntimeError(f"all_gather_rms_norm: {k} W shards but only {len(order)} shard-grid cores")
+        if k > k_cap_fn():
+            raise RuntimeError(
+                f"all_gather_rms_norm: WIDTH_SHARDED k = {k} shards exceeds the stats-partition cap {k_cap_fn()} "
+                f"(P_CAP / G, LN one gather tile, STATS_TABLE_CAP); a pre-combine of the k members is not built"
+            )
+        return Split(k, 1, geo.R, 1, unit_w, geo.R), order[:k]
+    raise RuntimeError(f"all_gather_rms_norm: memory layout {mc.memory_layout} is not built")
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -210,8 +273,10 @@ def _eth_physical(mesh_device, coord, channel):
     return eth_list[channel]
 
 
-def build_plan(mesh_device, cluster_axis, topology, num_links):
-    key = (id(mesh_device), cluster_axis, int(topology == ttnn.Topology.Ring), num_links)
+def build_plan(mesh_device, cluster_axis, topology, num_links, excluded=frozenset()):
+    """excluded: logical cores the ports may not take (the input shard grid: those cores are the workers)."""
+    excluded = frozenset(excluded)
+    key = (id(mesh_device), cluster_axis, int(topology == ttnn.Topology.Ring), num_links, excluded)
     if key in _PLAN_CACHE:
         return _PLAN_CACHE[key][1]
     mesh_shape = tuple(mesh_device.shape)
@@ -219,7 +284,11 @@ def build_plan(mesh_device, cluster_axis, topology, num_links):
     G = len(groups[0])
     ring = topology == ttnn.Topology.Ring and G > 2  # a 2-chip ring is the line
     grid = mesh_device.compute_with_storage_grid_size()
-    allowed = {(x, y) for x in range(grid.x) for y in range(grid.y)}
+    allowed = {(x, y) for x in range(grid.x) for y in range(grid.y)} - excluded
+    if len(allowed) < 2 * num_links:
+        raise RuntimeError(
+            f"all_gather_rms_norm: {len(allowed)} cores outside the input shard grid, {2 * num_links} port cores needed"
+        )
     chips = {}
     for grp in groups:
         for p, coord in enumerate(grp):
@@ -290,9 +359,12 @@ class Walk:
     slot_stride: int
     run_pages: int
     scatter_runs: int
+    shard_w: int = 0  # > 0: sharded output — lanes are tile-rows, runs split at shard_w-tile column boundaries
 
     def chunks(self, q, part, first_bank, stride):
         """Packets of slot q for one lane / part (host replica of agrn_port_common.hpp for_each_packet)."""
+        if self.shard_w:
+            return self._chunks_sharded(q, part, first_bank, stride)
         if first_bank >= self.nb:
             return 0
         nb = self.nb
@@ -318,6 +390,31 @@ class Walk:
                     nr += 1
                     pages += n
                     jj += n * nb
+        return cnt + (1 if nr else 0)
+
+    def _chunks_sharded(self, q, part, first_row, stride):
+        if first_row >= self.rows_eff:
+            return 0
+        nl = (self.rows_eff - first_row + stride - 1) // stride
+        lo = nl // 2 if part == 2 else 0
+        hi = nl // 2 if part == 1 else nl
+        cnt = nr = pages = 0
+        base = q * self.slot_stride
+        for i in range(lo, hi):
+            if i == nl // 2 and nr:
+                cnt += 1
+                nr = pages = 0
+            jj = 0
+            while jj < self.cols_eff:
+                gc = base + jj
+                seg_end = min(self.cols_eff, (gc // self.shard_w + 1) * self.shard_w - base)
+                n = min(seg_end - jj, self.run_pages)
+                if nr == self.scatter_runs or pages + n > self.run_pages:
+                    cnt += 1
+                    nr = pages = 0
+                nr += 1
+                pages += n
+                jj += n
         return cnt + (1 if nr else 0)
 
 
@@ -423,7 +520,17 @@ def create_mesh_program_descriptor(
     if is_ln:
         k_cap = min(k_cap, 32 // G)  # LN combine: one gather tile per stat (P <= 32)
     k_cap = max(1, min(k_cap, stats_k_cap(geo.R, G, nstats)))
-    split = select_split(geo.R, geo.Wlt, Nw, G, k_cap)
+    x_sharded = input_tensor.memory_config().is_sharded()
+    if x_sharded:
+        # k is fixed by the shard count: only the stats-table cap binds (the combine takes any number of gather
+        # tiles; P_CAP / the LN one-gather-tile rule are the interleaved split's cost choices, not limits)
+        def _cap():
+            return stats_k_cap(geo.R, G, nstats)
+
+        split, shard_order = select_sharded_split(geo, input_tensor, G, _cap)
+    else:
+        split = select_split(geo.R, geo.Wlt, Nw, G, k_cap)
+        shard_order = None
     k = split.k
     P = G * k
     gather_tiles = -(-P // 32)
@@ -454,6 +561,8 @@ def create_mesh_program_descriptor(
     gamma_is_tile = has_gamma and gamma.layout == ttnn.TILE_LAYOUT
     gamma_src_page = (TILE * TILE * g_eb) if gamma_is_tile else TILE * g_eb
     x_is_f32 = x_dtype == ttnn.float32
+    # sharded input with a W tail: the padding of the caller's shard is never zeroed — masked in compute instead
+    mask_tail = input_tensor.memory_config().is_sharded() and not geo.aligned
 
     # destination of the slices: final output pages (aligned) or the slot-contiguous staging scratch (R_U)
     staging = staging_buffer(mesh_device, geo, out_dtype) if is_ru else None
@@ -466,8 +575,14 @@ def create_mesh_program_descriptor(
     scatter_runs = _knob("SCATTER_RUNS", SCATTER_RUNS)
     payload_bytes = run_pages * out_page
     stats_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+    out_sharded = output_tensor.memory_config().is_sharded()
     if is_ru:
         walk = Walk(nb, 1, geo.R * geo.Wlt, geo.R * geo.Wlt, geo.R * geo.Wlt, run_pages, scatter_runs)
+    elif out_sharded:
+        # final pages in L1 shards: a run is a tile-row's columns inside one shard core (HEIGHT: the whole slot row)
+        out_ss = output_tensor.memory_config().shard_spec
+        shard_w = int(out_ss.shape[1]) // TILE
+        walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, scatter_runs, shard_w)
     else:
         walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, scatter_runs)
     balance = ring and G % 2 == 0 and G >= 4 and geo.R * geo.Wlt >= BALANCE_MIN_TILES
@@ -517,8 +632,13 @@ def create_mesh_program_descriptor(
         src_max,
         gamma_page,
         gamma_src_page,
+        int(x_sharded),  # worker identity from the shard map (common args), zero-copy cb_x, masked W tail
+        split.last_rows,
     ]
-    acc_ct = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    # Sharded: the local shard is consumed in place, never through an accessor -> empty accessor args.
+    acc_ct = list(
+        (ttnn.TensorAccessorArgs() if x_sharded else ttnn.TensorAccessorArgs(input_tensor)).get_compile_time_args()
+    )
     acc_ct += list(ttnn.TensorAccessorArgs(dst_tensor).get_compile_time_args())
     acc_ct += list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     acc_ct += list((ttnn.TensorAccessorArgs(gamma) if has_gamma else ttnn.TensorAccessorArgs()).get_compile_time_args())
@@ -552,6 +672,8 @@ def create_mesh_program_descriptor(
         split.cw_nom,
         stats_payload,
         scatter_runs,
+        walk.shard_w,
+        split.last_rows,
     ] + list(ttnn.TensorAccessorArgs(dst_tensor).get_compile_time_args())
 
     # ---- compute config ----
@@ -566,7 +688,11 @@ def create_mesh_program_descriptor(
     if fp32_dest:
         tagged = [CB_GATHER_ROWS]  # exact fp32 copy into DEST for the transpose
         if is_ln:
-            tagged += [CB_X if x_is_f32 else CB_X32, CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_COL]
+            tagged += [CB_GATHERED, CB_STAT_CONSTS, CB_LN_TMP, CB_MEAN_COL]
+            if not mask_tail:
+                # exact x in DEST; the masked S1 of a sharded W tail folds x through srcA (AccumulateViaAdd), which a
+                # tagged CB cannot feed — bf16 / bf8b x is exact in tf32 there, fp32 x is truncated to tf32
+                tagged.append(CB_X if x_is_f32 else CB_X32)
         else:
             # RMS: the local collapse and the cross-chip combine sum the partials in fp32 (Accurate SFPU reduce
             # reading these CBs exactly): "per-row partial sums MUST stay fp32 on the wire and when summed" (prompt)
@@ -592,8 +718,12 @@ def create_mesh_program_descriptor(
         ports = ch["ports"]
         port_list = [ports[(d, l)] for d in ("fwd", "bwd") for l in range(L)]
         port_set = {(c.x, c.y) for c in port_list}
-        workers = [(x, y) for y in range(gy) for x in range(gx) if (x, y) not in port_set]
-        active = workers[: split.n_active]
+        if x_sharded:
+            active = list(shard_order)
+            assert not (set(active) & port_set), "port cores must lie outside the input shard grid"
+        else:
+            workers = [(x, y) for y in range(gy) for x in range(gx) if (x, y) not in port_set]
+            active = workers[: split.n_active]
         virt = lambda c: mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(*c))
         pack = lambda v: (v.x & 0xFFFF) | (v.y << 16)
         active_noc = [pack(virt(c)) for c in active]
@@ -634,8 +764,13 @@ def create_mesh_program_descriptor(
         ]
 
         # ---- CBs (all on the full program range: identical addresses on every core of the chip) ----
+        if x_sharded:
+            cb_x_desc = ttnn.cb_descriptor_from_sharded_tensor(CB_X, input_tensor)  # zero-copy: the shard IS cb_x
+            cb_x_desc.core_ranges = full
+        else:
+            cb_x_desc = _cb(CB_X, crt_max * cw_max, T_in, x_dtype, full)
         cbs = [
-            _cb(CB_X, crt_max * cw_max, T_in, x_dtype, full),
+            cb_x_desc,
             _cb(CB_SCALER, 1, ttnn.tile_size(ttnn.bfloat16), ttnn.bfloat16, full),
             _cb(CB_PARTIAL, crt_max * nstats, T32, ttnn.float32, full),
             _cb(CB_RECORD_STAGING, crt_max * nstats, RECORD_BYTES, ttnn.float32, full),
@@ -653,18 +788,22 @@ def create_mesh_program_descriptor(
             cbs.append(_cb(CB_GAMMA_ROWS, 1, (cw_max + 2) * 128 + 64, ttnn.float32, full))
         if has_beta:
             cbs.append(_cb(CB_BETA, cw_max, gamma_page, g_dtype, full))
+        if is_ln or mask_tail:
+            # T_acc like cb_ln_sq (and the masked S1's x block): the reduce helper's masked fold unpacks the mask as
+            # srcB without a format reconfig
+            cbs += [
+                _cb(CB_MASK, cw_max if mask_tail else 1, T_acc, acc_dtype, full),  # sharded tail: the mask block
+                _cb(CB_LN_SQ, crt_max * cw_max, T_acc, acc_dtype, full),
+            ]
         if is_ln:
             cbs += [
-                # Float32 like cb_ln_sq: the reduce helper's masked fold unpacks the mask as srcB without a format reconfig
-                _cb(CB_MASK, 1, T32, ttnn.float32, full),
                 _cb(CB_LN_M, crt_max, T32, ttnn.float32, full),
                 _cb(CB_LN_SHIFT, crt_max, T32, ttnn.float32, full),
-                _cb(CB_LN_SQ, crt_max * cw_max, T32, ttnn.float32, full),
-                _cb(CB_STAT_CONSTS, 1, T32, ttnn.float32, full),
+                _cb(CB_STAT_CONSTS, gather_tiles, T32, ttnn.float32, full),
                 _cb(CB_MEAN_COL, crt_max, T32, ttnn.float32, full),
                 _cb(CB_MEAN_B, crt_max, T32, ttnn.float32, full),
                 _cb(CB_RSTD_B, crt_max, T_acc, acc_dtype, full),
-                _cb(CB_LN_TMP, crt_max, T32, ttnn.float32, full),
+                _cb(CB_LN_TMP, crt_max * gather_tiles, T32, ttnn.float32, full),
             ]
             if not x_is_f32 and fp32_dest:  # 16-bit DEST: the S1 reduce reads cb_x itself (no exact copy)
                 cbs.append(_cb(CB_X32, crt_max * cw_max, T32, ttnn.float32, full))
@@ -692,6 +831,15 @@ def create_mesh_program_descriptor(
         common += [c.y * gx + c.x for c in port_list]
         common += [pack(virt((c.x, c.y))) for c in port_list]
         common += inv_n
+        if x_sharded:
+            # worker identity: byte [y * gx + x] = worker index (shard order), 0xFF = not a worker; 4 per word
+            wmap = [0xFF] * (gx * gy)
+            for i, (x, y) in enumerate(shard_order):
+                wmap[y * gx + x] = i
+            wmap += [0xFF] * (-len(wmap) % 4)
+            common += [
+                wmap[i] | wmap[i + 1] << 8 | wmap[i + 2] << 16 | wmap[i + 3] << 24 for i in range(0, len(wmap), 4)
+            ]
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_reader.cpp"),

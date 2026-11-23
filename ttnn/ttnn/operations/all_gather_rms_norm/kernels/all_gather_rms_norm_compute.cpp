@@ -192,24 +192,69 @@ ALWI void sum_squares_block(uint32_t rows, uint32_t cw) {
 // Exact fp32 sums of the RMS partials need fp32 DEST (UnpackToDestFp32-tagged Float32 CBs, host side).
 constexpr ReduceFp32Mode partial_sum_fp32_mode = DST_ACCUM_MODE ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
-ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize) {
-    const uint32_t crt = w.crt, cw = w.cw;
-    cb_wait_front(cb_x, crt * cw);
-    // local_stats_block
-    sum_squares_block(crt, cw);
-    // Partial sums stay fp32 when summed (prompt precision contract): with fp32 DEST, cb_sumsq is a Float32
-    // UnpackToDestFp32 CB and the Accurate (SFPU) reduce copies it into DEST exactly; the FPU path would truncate
-    // every per-tile-row sum to tf32 before the collapse.
+// A sharded input's W tail is never zeroed in the caller's shard: on the member that owns the tail, every sum over x
+// multiplies its block by a row-broadcast mask block (cb_mask: cw row-0 masks, ones but the tail tile's valid
+// columns; DestReuse, like gamma) before a plain reduce. (AccumulateViaAdd's masked fold of a lone tail tile — cw == 1
+// — accumulates onto an unseeded DEST when crt > 1, so the mask is applied in the chain instead.)
+constexpr bool masked_tail_path = x_sharded && (w_valid_last < TILE);
+constexpr auto mask_in = input(
+    cb_mask,
+    WaitPolicy::None,
+    PopPolicy::None,
+    InputTileMapping::Row,
+    DataFormatReconfig::Enabled,
+    TileAddressing::Direct);
+using TimesMask = DestReuseRowBcast<mask_in, EltwiseBinaryType::ELWMUL, BinaryFpuOp::Mul>;
+
+// Row sums of the (already masked) cb_ln_sq block -> cb_dst (column 0), consuming it.
+template <uint32_t cb_dst, typename Post>
+ALWI void masked_block_row_sum(uint32_t crt, uint32_t cw, Post post) {
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        cb_sumsq,
+        cb_ln_sq,
         cb_scaler,
-        cb_partial,
+        cb_dst,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        partial_sum_fp32_mode,
-        ReduceAlgorithm::ReduceTile>(ReduceInputBlockShape::of(crt, 1));
+        ReduceFp32Mode::Fast,
+        ReduceAlgorithm::ReduceTile>(
+        ReduceInputBlockShape::of(crt, cw), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, post);
+}
+
+ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize, bool tail) {
+    const uint32_t crt = w.crt, cw = w.cw;
+    cb_wait_front(cb_x, crt * cw);
+    // local_stats_block
+    if constexpr (masked_tail_path) {
+        if (tail) {
+            // masked x^2 tiles of the block (padding lanes of the tail tile x 0), then the row sums
+            cb_wait_front(cb_mask, cw);
+            eltwise_chain(
+                IterationShape::grid(crt, cw),
+                CopyTile<input(cb_x, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
+                Square<Dst::D0>{},
+                TimesMask{},
+                PackTile<output(cb_ln_sq)>{});
+            masked_block_row_sum<cb_partial>(crt, cw, NoOp{});
+        }
+    }
+    if (!masked_tail_path || !tail) {
+        sum_squares_block(crt, cw);
+        // Partial sums stay fp32 when summed (prompt precision contract): with fp32 DEST, cb_sumsq is a Float32
+        // UnpackToDestFp32 CB and the Accurate (SFPU) reduce copies it into DEST exactly; the FPU path would truncate
+        // every per-tile-row sum to tf32 before the collapse.
+        reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_sumsq,
+            cb_scaler,
+            cb_partial,
+            ReduceInputPolicy::BulkWaitBulkPop,
+            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            partial_sum_fp32_mode,
+            ReduceAlgorithm::ReduceTile>(ReduceInputBlockShape::of(crt, 1));
+    }
     // combine_stats_block (waits for the reader's gather tiles)
     transpose_gathered(crt * gather_tiles);
     // The P = G*k gathered partials are summed in fp32 (SFPU, exact copies from the UnpackToDestFp32 cb_gathered):
@@ -257,6 +302,24 @@ constexpr uint32_t cb_xs = ln_x_copy ? cb_x32 : cb_x;
 // Exact (SFPU) fp32 sums need fp32 DEST; under 16-bit DEST the FPU path sums (the caller chose 16-bit accumulation).
 constexpr ReduceFp32Mode ln_exact_mode = DST_ACCUM_MODE ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
+// Row sums of the resident x block with the W-tail tile masked (sharded input: the caller's shard keeps its padding).
+template <uint32_t cb_dst>
+ALWI void masked_row_sum(uint32_t crt, uint32_t cw, MulScalarPost post) {
+    eltwise_chain(
+        IterationShape::grid(crt, cw),
+        CopyTile<input(cb_xs, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
+        TimesMask{},
+        PackTile<output(cb_ln_sq)>{});
+    masked_block_row_sum<cb_dst>(crt, cw, post);
+}
+
+// LN combine over the gather tiles of a row: one gather tile -> AccumulateViaAdd's in-tile collapse (Phase 0 path);
+// several -> the exact ReduceTile path the RMS combine uses (AccumulateViaAdd's cross-tile add_tiles would read the
+// UnpackToDestFp32-tagged cb_ln_tmp through srcA).
+constexpr ReduceAlgorithm ln_comb_alg =
+    gather_tiles > 1 ? ReduceAlgorithm::ReduceTile : ReduceAlgorithm::AccumulateViaAdd;
+constexpr ReduceFp32Mode ln_comb_mode = gather_tiles > 1 ? ln_exact_mode : ReduceFp32Mode::Fast;
+
 ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bits, uint32_t inv_w_bits, bool tail) {
     const uint32_t crt = w.crt, cw = w.cw;
     cb_wait_front(cb_x, crt * cw);
@@ -273,60 +336,87 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
     }
     // ---- local_stats_block ----
     // m (stat 0), then a second copy of m for the shift broadcast
-    reduce<
-        PoolType::SUM,
-        ReduceDim::REDUCE_ROW,
-        cb_xs,
-        cb_scaler,
-        cb_partial,
-        ReduceInputPolicy::NoWaitNoPop,
-        ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ln_exact_mode,
-        ReduceAlgorithm::ReduceTile>(
-        ReduceInputBlockShape::of(crt, cw),
-        ReduceInputMemoryLayout::contiguous(),
-        NoAccumulation{},
-        MulScalarPost{inv_n_bits});
-    reduce<
-        PoolType::SUM,
-        ReduceDim::REDUCE_ROW,
-        cb_xs,
-        cb_scaler,
-        cb_ln_m,
-        ReduceInputPolicy::NoWaitNoPop,
-        ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ln_exact_mode,
-        ReduceAlgorithm::ReduceTile>(
-        ReduceInputBlockShape::of(crt, cw),
-        ReduceInputMemoryLayout::contiguous(),
-        NoAccumulation{},
-        MulScalarPost{inv_n_bits});
+    if constexpr (masked_tail_path) {
+        if (tail) {
+            // sharded input, tail member: S1 over the valid columns only (the shard is not zeroed)
+            cb_wait_front(cb_mask, cw);
+            masked_row_sum<cb_partial>(crt, cw, MulScalarPost{inv_n_bits});
+            masked_row_sum<cb_ln_m>(crt, cw, MulScalarPost{inv_n_bits});
+        }
+    }
+    if (!masked_tail_path || !tail) {
+        reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_xs,
+            cb_scaler,
+            cb_partial,
+            ReduceInputPolicy::NoWaitNoPop,
+            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            ln_exact_mode,
+            ReduceAlgorithm::ReduceTile>(
+            ReduceInputBlockShape::of(crt, cw),
+            ReduceInputMemoryLayout::contiguous(),
+            NoAccumulation{},
+            MulScalarPost{inv_n_bits});
+        reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_xs,
+            cb_scaler,
+            cb_ln_m,
+            ReduceInputPolicy::NoWaitNoPop,
+            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            ln_exact_mode,
+            ReduceAlgorithm::ReduceTile>(
+            ReduceInputBlockShape::of(crt, cw),
+            ReduceInputMemoryLayout::contiguous(),
+            NoAccumulation{},
+            MulScalarPost{inv_n_bits});
+    }
     // K = tf32(m) in every column
     unary_bcast<BroadcastDim::Col, input(cb_ln_m), output(cb_ln_shift)>(IterationShape::tiles(crt));
     cb_wait_front(cb_ln_shift, crt);
-    // T = sum (x - K)^2 (padding columns masked in the reduce)
-    eltwise_chain(
-        IterationShape::grid(crt, cw),
-        CopyTile<input(cb_xs, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
-        CopyTile<input(cb_ln_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col), Dst::D1>{},
-        SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        Square<Dst::D0>{},
-        PackTile<output(cb_ln_sq)>{});
-    reduce<
-        PoolType::SUM,
-        ReduceDim::REDUCE_ROW,
-        cb_ln_sq,
-        cb_mask,
-        cb_partial,
-        ReduceInputPolicy::BulkWaitBulkPop,
-        ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Fast,
-        ReduceAlgorithm::AccumulateViaAdd>(
-        ReduceInputBlockShape::of(crt, cw),
-        ReduceInputMemoryLayout::contiguous(),
-        NoAccumulation{},
-        NoOp{},
-        tail ? ReducePartialScaler::only_partial() : ReducePartialScaler::none());
+    // T = sum (x - K)^2 (padding columns masked in the reduce; sharded tail: by the mask block in the chain)
+    constexpr auto xs_blk = input(cb_xs, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block);
+    constexpr auto shift_col = input(cb_ln_shift, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    if constexpr (masked_tail_path) {
+        if (tail) {
+            eltwise_chain(
+                IterationShape::grid(crt, cw),
+                CopyTile<xs_blk, Dst::D0>{},
+                CopyTile<shift_col, Dst::D1>{},
+                SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
+                Square<Dst::D0>{},
+                TimesMask{},
+                PackTile<output(cb_ln_sq)>{});
+            masked_block_row_sum<cb_partial>(crt, cw, NoOp{});
+        }
+    }
+    if (!masked_tail_path || !tail) {
+        eltwise_chain(
+            IterationShape::grid(crt, cw),
+            CopyTile<xs_blk, Dst::D0>{},
+            CopyTile<shift_col, Dst::D1>{},
+            SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
+            Square<Dst::D0>{},
+            PackTile<output(cb_ln_sq)>{});
+        reduce<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            cb_ln_sq,
+            cb_mask,
+            cb_partial,
+            ReduceInputPolicy::BulkWaitBulkPop,
+            ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            ReduceFp32Mode::Fast,
+            ReduceAlgorithm::AccumulateViaAdd>(
+            ReduceInputBlockShape::of(crt, cw),
+            ReduceInputMemoryLayout::contiguous(),
+            NoAccumulation{},
+            NoOp{},
+            tail ? ReducePartialScaler::only_partial() : ReducePartialScaler::none());
+    }
     // K (stat 2): tf32-exact, so the copy is exact
     eltwise_chain(
         IterationShape::tiles(crt),
@@ -338,27 +428,29 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         AGRN_ZONE("c_combine_start");
     }
     // ---- combine_stats_block ----
-    // gathered per row: [m, T, K] (gather_tiles == 1 for LN), all UnpackToDestFp32 (exact copies)
+    // gathered per row: [m, T, K] x gather_tiles (partition j -> column j % 32 of gather tile j / 32), all
+    // UnpackToDestFp32 under fp32 DEST (exact copies). Padding columns j >= P carry n_j = 0 and contribute 0.
     {
         AGRN_ZONE("c_gather_in");
     }
-    transpose_gathered(crt * nstats);
+    transpose_gathered(crt * nstats * gather_tiles);
     {
         AGRN_ZONE("c_transposed");
     }
-    cb_wait_front(cb_gathered, crt * nstats);
+    cb_wait_front(cb_gathered, crt * nstats * gather_tiles);
     cb_wait_front(cb_stat_consts, 1);
     constexpr auto g_m = input(
         cb_gathered,
         WaitPolicy::None,
         PopPolicy::None,
-        InputTileMapping::Col,
+        InputTileMapping::Block,
         DataFormatReconfig::Enabled,
         TileAddressing::Strided);
-    constexpr auto g_n = input(cb_stat_consts, WaitPolicy::None, PopPolicy::None, InputTileMapping::Scalar);
+    constexpr auto g_n =
+        input(cb_stat_consts, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row);  // n_j of gather tile c
     eltwise_chain(
-        IterationShape::grid(crt, 1),
-        CopyTile<g_m, Dst::D0>{StridedTileRange{0, nstats}},
+        IterationShape::grid(crt, gather_tiles),
+        CopyTile<g_m, Dst::D0>{StridedTileRange{0 * gather_tiles, nstats * gather_tiles}},
         CopyTile<g_n, Dst::D1>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
         PackTile<output(cb_ln_tmp)>{});
@@ -370,10 +462,9 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         cb_mean_col,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Fast,
-        ReduceAlgorithm::AccumulateViaAdd,
-        ReduceWithinTile::Collapse>(
-        ReduceInputBlockShape::of(crt, 1),
+        ln_comb_mode,
+        ln_comb_alg>(
+        ReduceInputBlockShape::of(crt, gather_tiles),
         ReduceInputMemoryLayout::contiguous(),
         NoAccumulation{},
         MulScalarPost{inv_w_bits});
@@ -399,16 +490,16 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
     }
     constexpr auto mean_b_in = input(cb_mean_b, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
     eltwise_chain(
-        IterationShape::grid(crt, 1),
-        CopyTile<g_m, Dst::D0>{StridedTileRange{0, nstats}},
-        CopyTile<g_m, Dst::D1>{StridedTileRange{2, nstats}},  // K
+        IterationShape::grid(crt, gather_tiles),
+        CopyTile<g_m, Dst::D0>{StridedTileRange{0 * gather_tiles, nstats * gather_tiles}},
+        CopyTile<g_m, Dst::D1>{StridedTileRange{2 * gather_tiles, nstats * gather_tiles}},  // K
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
         Square<Dst::D0>{},
         CopyTile<g_n, Dst::D1>{},
-        MulBinary<Dst::D0, Dst::D1, Dst::D0>{},               // n (m - K)^2
-        CopyTile<g_m, Dst::D1>{StridedTileRange{1, nstats}},  // T
-        SubBinary<Dst::D1, Dst::D0, Dst::D1>{},               // T - n (m - K)^2 = sum (x - m)^2
-        CopyTile<g_m, Dst::D0>{StridedTileRange{0, nstats}},
+        MulBinary<Dst::D0, Dst::D1, Dst::D0>{},                                             // n (m - K)^2
+        CopyTile<g_m, Dst::D1>{StridedTileRange{1 * gather_tiles, nstats * gather_tiles}},  // T
+        SubBinary<Dst::D1, Dst::D0, Dst::D1>{},  // T - n (m - K)^2 = sum (x - m)^2
+        CopyTile<g_m, Dst::D0>{StridedTileRange{0 * gather_tiles, nstats * gather_tiles}},
         CopyTile<shift_in, Dst::D2>{},
         SubBinary<Dst::D0, Dst::D2, Dst::D0>{},  // m - K
         CopyTile<mean_b_in, Dst::D2>{},
@@ -421,7 +512,7 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
     {
         AGRN_ZONE("c_m2_done");
     }
-    cb_pop_front(cb_gathered, crt * nstats);
+    cb_pop_front(cb_gathered, crt * nstats * gather_tiles);
     reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
@@ -430,10 +521,12 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
         cb_inv,
         ReduceInputPolicy::BulkWaitBulkPop,
         ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Fast,
-        ReduceAlgorithm::AccumulateViaAdd,
-        ReduceWithinTile::Collapse>(
-        ReduceInputBlockShape::of(crt, 1), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, finalize);
+        ln_comb_mode,
+        ln_comb_alg>(
+        ReduceInputBlockShape::of(crt, gather_tiles),
+        ReduceInputMemoryLayout::contiguous(),
+        NoAccumulation{},
+        finalize);
     unary_bcast<BroadcastDim::Col, input(cb_inv), output(cb_rstd_b)>(IterationShape::tiles(crt));
     cb_wait_front(cb_rstd_b, crt);
 
@@ -518,6 +611,6 @@ void kernel_main() {
             member_owns_tail(w));
     } else {
         compute_kernel_hw_startup(cb_x, cb_x, cb_sumsq);
-        rms_block(w, finalize);
+        rms_block(w, finalize, member_owns_tail(w));
     }
 }

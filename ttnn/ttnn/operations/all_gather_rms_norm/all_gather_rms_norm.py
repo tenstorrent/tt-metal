@@ -24,6 +24,7 @@ from .all_gather_rms_norm_program_descriptor import (
     build_plan,
     create_mesh_program_descriptor,
     derive_geometry,
+    shard_cores,
     usable_links,
 )
 
@@ -92,7 +93,11 @@ SUPPORTED = {
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     "norm_type": ["rms_norm", "layer_norm"],
     "beta_mode": ["beta", "no_beta"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ],
     "cluster_axis": [0, 1],
     "topology": [Topology.Linear, Topology.Ring],
     "num_links": [1, 2],
@@ -213,14 +218,25 @@ def validate(
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"all_gather_rms_norm: unsupported combination (refinement candidate): {exc}")
 
-    # Phase 0 output placement: DRAM interleaved (the final-address landing walks DRAM banks).
+    # Placement: DRAM interleaved, or an L1 HEIGHT / WIDTH shard (consumed in place). The output lands at its final
+    # pages: DRAM interleaved (walks the DRAM banks) or an L1 HEIGHT / WIDTH shard spec of the gathered shape (walks
+    # the shard cores).
+    _sharded = (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED)
+    in_mc = input_tensor.memory_config()
+    if in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        if in_mc.buffer_type != ttnn.BufferType.DRAM:
+            raise UnsupportedAxisValue("all_gather_rms_norm: an interleaved input must be in DRAM")
+    elif in_mc.buffer_type != ttnn.BufferType.L1:
+        raise UnsupportedAxisValue(f"all_gather_rms_norm: a sharded input must be L1-resident, got {in_mc.buffer_type}")
     out_mc = output_tensor.memory_config() if output_tensor is not None else memory_config
-    if out_mc is not None and (
-        out_mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED or out_mc.buffer_type != ttnn.BufferType.DRAM
-    ):
-        raise UnsupportedAxisValue(f"all_gather_rms_norm: output memory config {out_mc} (Phase 0: DRAM interleaved)")
-    if input_tensor.memory_config().buffer_type != ttnn.BufferType.DRAM:
-        raise UnsupportedAxisValue("all_gather_rms_norm: Phase 0 input is DRAM interleaved")
+    if out_mc is not None:
+        if out_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+            if out_mc.buffer_type != ttnn.BufferType.DRAM:
+                raise UnsupportedAxisValue(f"all_gather_rms_norm: interleaved output must be in DRAM, got {out_mc}")
+        elif out_mc.memory_layout not in _sharded or out_mc.buffer_type != ttnn.BufferType.L1:
+            raise UnsupportedAxisValue(f"all_gather_rms_norm: output memory config {out_mc} is not supported")
+        elif out_mc.shard_spec is None:
+            raise UnsupportedAxisValue("all_gather_rms_norm: a sharded output memory config needs a shard spec")
     for name, w in (("gamma", gamma), ("beta", beta)):
         if w is not None and w.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
             raise UnsupportedAxisValue(f"all_gather_rms_norm: {name} must be interleaved")
@@ -286,7 +302,8 @@ def all_gather_rms_norm(
     mesh = input_tensor.device()
     G = tuple(mesh.shape)[cluster_axis]
     geo = derive_geometry(input_tensor.shape, G)
-    plan = build_plan(mesh, cluster_axis, topology, num_links)
+    # sharded input: its shard cores are the workers, the port cores go elsewhere
+    plan = build_plan(mesh, cluster_axis, topology, num_links, shard_cores(input_tensor))
     if output_tensor is None:
         out_shape = [int(s) for s in input_tensor.shape][:-1] + [geo.W]
         output_tensor = ttnn.allocate_tensor_on_device(

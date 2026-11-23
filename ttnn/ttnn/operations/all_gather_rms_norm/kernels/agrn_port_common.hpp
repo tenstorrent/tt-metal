@@ -37,7 +37,13 @@ constexpr uint32_t big = get_compile_time_arg_val(15);
 constexpr uint32_t cw_nom = get_compile_time_arg_val(16);
 constexpr uint32_t payload_bytes = get_compile_time_arg_val(17);  // router max payload (stats packets)
 constexpr uint32_t scatter_runs = get_compile_time_arg_val(18);   // runs per bulk packet (1..4, scatter write)
-constexpr uint32_t PORT_CT_ARGS = 19;                             // TensorAccessorArgs(dst) follow
+// > 0: the destination is an L1-sharded output with shard_w-tile-wide shards. Lanes are then tile-rows (link l owns
+// rows l, l + L, ...) and a run is a slot row's columns inside one shard core (consecutive pages in its L1).
+constexpr uint32_t shard_w = get_compile_time_arg_val(19);
+constexpr uint32_t last_crt = get_compile_time_arg_val(20);  // tile-rows of the last row-group (own-entry pull)
+constexpr uint32_t PORT_CT_ARGS = 21;                        // TensorAccessorArgs(dst) follow
+constexpr uint32_t run_stride = shard_w ? 1 : nb;            // page-id step between the pages of one run
+constexpr uint32_t shard_w_div = shard_w ? shard_w : 1;      // (the interleaved walk never divides by it)
 constexpr uint32_t chunk_bytes = run_pages * page_bytes;
 
 static_assert(scatter_runs >= 1 && scatter_runs <= 4, "NOC_SCATTER_WRITE_MAX_CHUNKS = 4");
@@ -58,10 +64,11 @@ struct Packet {
 // boundary, so the part-1 walk is a prefix of the part-0 walk and part 2 a suffix (balanced-ring relays).
 template <typename F>
 inline void for_each_packet(uint32_t q, uint32_t part, uint32_t first_bank, uint32_t bank_stride, F&& f) {
-    if (first_bank >= nb) {
+    const uint32_t n_lanes = shard_w ? rows_eff : nb;
+    if (first_bank >= n_lanes) {
         return;
     }
-    const uint32_t nl = (nb - first_bank + bank_stride - 1) / bank_stride;
+    const uint32_t nl = (n_lanes - first_bank + bank_stride - 1) / bank_stride;
     const uint32_t lo = part == 2 ? nl / 2 : 0;
     const uint32_t hi = part == 1 ? nl / 2 : nl;
     const uint32_t base = q * slot_stride;
@@ -75,6 +82,35 @@ inline void for_each_packet(uint32_t q, uint32_t part, uint32_t first_bank, uint
             pk.pages = 0;
         }
     };
+    if constexpr (shard_w > 0) {
+        // lane = tile-rows; a run never crosses a shard-column boundary of the destination
+        for (uint32_t i = lo; i < hi; ++i) {
+            if (i == nl / 2) {
+                flush();
+            }
+            const uint32_t rr = first_bank + i * bank_stride;
+            const uint32_t rb = base + rr * row_stride;
+            uint32_t jj = 0;
+            while (jj < cols_eff) {
+                const uint32_t gc = base + jj;
+                uint32_t seg_end = (gc / shard_w_div + 1) * shard_w_div - base;
+                seg_end = seg_end < cols_eff ? seg_end : cols_eff;
+                const uint32_t n = (seg_end - jj) < run_pages ? seg_end - jj : run_pages;
+                if (pk.nr == scatter_runs || pk.pages + n > run_pages) {
+                    flush();
+                }
+                pk.first[pk.nr] = rb + jj;
+                pk.n[pk.nr] = n;
+                pk.rr[pk.nr] = rr;
+                pk.jj[pk.nr] = jj;
+                ++pk.nr;
+                pk.pages += n;
+                jj += n;
+            }
+        }
+        flush();
+        return;
+    }
     for (uint32_t i = lo; i < hi; ++i) {
         if (i == nl / 2) {
             flush();

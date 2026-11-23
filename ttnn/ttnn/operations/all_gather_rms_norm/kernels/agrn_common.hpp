@@ -75,23 +75,18 @@ struct WorkerId {
     uint32_t cw;         // tile-columns of the member
 };
 
-// lin: my linear logical index (y * grid_x + x). ports: linear logical indices of the port cores (any order).
-inline WorkerId derive_worker(
-    uint32_t lin,
-    const uint32_t* ports,
-    uint32_t n_ports,
+// Worker from its index in the ordered worker list. last_crt: tile-rows of the last group (a ragged last shard).
+inline WorkerId worker_from_idx(
+    uint32_t idx,
     uint32_t k,
     uint32_t n_groups,
     uint32_t rows_hi,
     uint32_t big,
     uint32_t cw_nom,
-    uint32_t slice_w_tiles) {
+    uint32_t slice_w_tiles,
+    uint32_t last_crt) {
     WorkerId w{};
-    uint32_t before = 0;
-    for (uint32_t i = 0; i < n_ports; ++i) {
-        before += ports[i] < lin ? 1u : 0u;
-    }
-    w.idx = lin - before;
+    w.idx = idx;
     w.active = w.idx < n_groups * k;
     if (!w.active) {
         return w;
@@ -104,6 +99,9 @@ inline WorkerId derive_worker(
     } else {
         w.row_start = big * rows_hi + (w.g - big) * (rows_hi - 1);
         w.crt = rows_hi - 1;
+    }
+    if (w.g + 1 == n_groups) {
+        w.crt = last_crt;
     }
     w.w_start = w.m * cw_nom;
     w.cw = (slice_w_tiles - w.w_start) < cw_nom ? (slice_w_tiles - w.w_start) : cw_nom;
