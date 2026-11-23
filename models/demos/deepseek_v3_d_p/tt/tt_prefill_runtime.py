@@ -2669,7 +2669,12 @@ class TtPrefillRuntime:
         layer at a time here, with the chunk's fields bound per prefill_chunk() call. Under trace the captured
         callback reads the published `_trace_*` fields instead."""
         assert self.compiled or self.config.use_trace, "Call compile() before set_layer_completion_sink()"
-        if self.config.use_trace and self.config.forward_chunks > 1:
+        if (
+            self.config.use_trace
+            and self.config.forward_chunks > 1
+            # A non-leader host of a multi-host stage reports nothing (its leader's D2H acks cover the stage).
+            and type(sink).__name__ != "NullLayerCompletionSink"
+        ):
             # A replay of a packed forward could only report after it finished, all layers at once, behind a
             # device sync per forward. Traced packed forwards report through D2H layer acks instead.
             raise NotImplementedError(

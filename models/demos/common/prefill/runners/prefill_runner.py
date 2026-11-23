@@ -1712,11 +1712,6 @@ def _serve_request(
             source_desc = "host on_layer_complete callback"
     else:
         # A stage's other hosts run the same model code, so only the leader reports the stage's layers.
-        if use_d2h:
-            raise RuntimeError(
-                f"PREFILL_LAYER_ACK_D2H=1 on rank {rank}, host {layout.host_rank_of(rank)} of a multi-host stage: "
-                "the D2H ack service of a multi-host mesh is not supported; run with PREFILL_LAYER_ACK_D2H=0."
-            )
         if getattr(runtime, "set_layer_completion_sink", None) is not None:
             runtime.set_layer_completion_sink(NullLayerCompletionSink())
         source_desc = "none (non-leader host of a multi-host stage)"

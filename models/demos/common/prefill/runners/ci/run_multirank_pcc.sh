@@ -203,7 +203,13 @@ case "${MODEL}" in
           # Both hosts of a seam stage build matching row-block D2D sockets (see mesh_socket.cpp).
           RUNNER_ENV+=" export TT_METAL_SOCKET_COOWNERS_MIRROR=1;"
           # The D2H layer-ack service cannot run on a mesh two hosts share; acks go through the completion router.
-          RUNNER_ENV+=" export PREFILL_LAYER_ACK_D2H=0;"
+          # Packed traced forwards report through D2H layer acks (each stage's leader host, on its own chips); one chunk
+          # per forward reports through the completion router.
+          if [ "${VARIANT}" = _packed ]; then
+            RUNNER_ENV+=" export PREFILL_LAYER_ACK_D2H=1;"
+          else
+            RUNNER_ENV+=" export PREFILL_LAYER_ACK_D2H=0;"
+          fi
           # dit_fused_distributed_rmsnorm resolves every chip of the mesh, which a seam host cannot; use the unfused norm.
           RUNNER_ENV+=" export PREFILL_FUSED_RMSNORM=0;"
           # The unfused norm's all-gathers put more semaphores in L1_SMALL; packed forwards overflowed 1664 B.
