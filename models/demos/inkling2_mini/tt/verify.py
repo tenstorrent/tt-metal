@@ -46,6 +46,26 @@ from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate, FusedQKVG
 from models.demos.inkling2_mini.tt.model import APPS, HIDDEN, LOOP_END, LOOP_START, cache_index
 
 R_MAX = 3
+WIN_ROWS = 9  # rows of a conv window the projection reads (attention_fast: w_all.bank.x_rows)
+_SHIFT = {}
+
+
+def _shifts(device, back=False):
+    """[1, 1, 32, 32] bf16 0/1 matrices: shift t moves rows 0..8 to 9t..9t+8 (back: 9t.. to 0..)."""
+    key = (id(device), back)
+    if key not in _SHIFT:
+        mats = []
+        for t in range(R_MAX):
+            m = torch.zeros(32, 32)
+            for i in range(WIN_ROWS):
+                if back:
+                    m[i, WIN_ROWS * t + i] = 1.0
+                else:
+                    m[WIN_ROWS * t + i, i] = 1.0
+            mats.append(ttnn.from_torch(m.view(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                                        device=device))  # fmt: skip
+        _SHIFT[key] = (device, mats)
+    return _SHIFT[key][1]
 
 
 def _gate_weights(root, L):
@@ -85,17 +105,35 @@ def attn_rows(attn, xs, state, positions, rows, p0, hists):
     assert attn.FUSED and attn.window is not None and len(xs) == rows.R
     R = rows.R
 
+    # One w_all for all tokens: token t's window (hists[t + 1], rows 0..8 used, = the projection input the
+    # plain step projects) goes to rows 9t.. of one input by an exact 0/1 row-shift matmul, w_all reads 9R rows
+    # (rows ride in the tile: each output row is the 1-row projection's); token t's rows are shifted back to row 0
+    # (exact 0/1 matmul, DRAM) for its prep and output gate.
+    for t in range(R):
+        window_to(attn.window, hists[t], hists[t + 1], xs[t])
+    sh = _shifts(attn.device)
+    act = hists[1] if R == 1 else None
+    for t in range(R):
+        part = ttnn.matmul(sh[t], hists[t + 1], dtype=ttnn.bfloat16, compute_kernel_config=attn.hifi4)
+        act = part if act is None else ttnn.add(act, part, dtype=ttnn.bfloat16)
+    bank = attn.w_all.bank
+    bank.x_rows = WIN_ROWS * R if WIN_ROWS * R <= 16 else 0  # x_rows.hpp reads <= 16 rows; 0 = whole tiles (same bytes)
+    try:
+        proj_all = attn.w_all(act, ttnn.bfloat16, attn.mm_cfg)
+    finally:
+        bank.x_rows = WIN_ROWS
+
     def project(t):
-        x = xs[t]
-        mode = "single" if len(x) == 1 else "triple"
-        proj = attn.w_all(window_to(attn.window, hists[t], hists[t + 1], x), ttnn.bfloat16, attn.mm_cfg)
-        r = ROWS[mode]
-        return proj, {"q": 0, "k": r["k"], "v": r["v"]}
+        """Token t's projection with its rows at 0 (prep and AttnOut read some columns from row 0 only)."""
+        r = ROWS["single" if len(xs[t]) == 1 else "triple"]
+        return keep(proj_all, t), {"q": 0, "k": r["k"], "v": r["v"]}
 
     def keep(proj, t):
-        """w_all writes one persistent L1 buffer for every call (attention_fast._shared_out): a token whose output
-        gate is applied after a later token's projection reads its own DRAM copy (AttnOut takes DRAM proj)."""
-        return proj if t == R - 1 else ttnn.to_memory_config(proj, ttnn.DRAM_MEMORY_CONFIG)
+        """Token t's projection rows at row 0 (DRAM) for AttnOut, which reads the gate from projection row 0."""
+        if t == 0:
+            return proj  # rows 0.. already; proj_all is not rewritten before this app's AttnOut calls
+        return ttnn.matmul(_shifts(attn.device, back=True)[t], proj, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                           compute_kernel_config=attn.hifi4)  # fmt: skip
 
     if attn.is_global:
         assert FAR_GRP
@@ -113,7 +151,7 @@ def attn_rows(attn, xs, state, positions, rows, p0, hists):
             attn.near(attn.prep.q_grp, mask, sink_t, state.k_ring, state.v_ring, pend=(rows, positions[0].pos, t + 1),
                       outs=outs)  # fmt: skip
             if shared:
-                projs.append(keep(proj, t))
+                projs.append(proj)
                 continue
             far_pos, valid = pos.far_grp
             far = ttnn.transformer.flash_multi_latent_attention_decode(
@@ -135,7 +173,7 @@ def attn_rows(attn, xs, state, positions, rows, p0, hists):
     for t, pos in enumerate(positions):
         proj, sel = project(t)
         attn.prep(proj, pos, sel, state, rows=(t, rows))
-        projs.append(keep(proj, t))
+        projs.append(proj)
     a = ttnn.transformer.scaled_dot_product_attention_decode(
         rows.q, state.k_grp, state.v_grp, is_causal=False, attn_mask=rows.mask, attention_sink=rows.sink, scale=1.0,
         program_config=attn.rows_cfg, compute_kernel_config=attn.hifi4, pending_kv=rows.pending,
