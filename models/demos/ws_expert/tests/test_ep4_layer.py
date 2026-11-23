@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """EP-4 with weights on Y on the LoudBox (2 x 4, FABRIC_2D): the layer's phases against the host reference (ep4_ref.py)
-at the Galaxy-equivalent load (EP4_LEN: 302K / 588K / 874K / 1M -> n tokens a chip). Timing: traced replays (WS_WARM +
+at the Galaxy-equivalent load (EP4_LEN: 23K / 39K / 77K / 112K / 302K / 588K / 874K / 1M -> n tokens a chip). Timing: traced replays (WS_WARM +
 WS_MEAS), AICLK of the first chip.
 
 - test_ep4_head (stage 2): the head (ws_router, EP-4 mode) and the group exchange (all-gather of the topk rows on X):

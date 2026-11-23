@@ -52,7 +52,7 @@ LB = Geo(2)
 GLX = Geo(8)
 
 # Galaxy lengths and their per-chip load (n = T / 32); the LoudBox runs T = 8 n
-LENGTHS = {"302K": 302373, "588K": 588369, "874K": 874365, "1M": 1000000}
+LENGTHS = {"23K": 23296, "39K": 38912, "77K": 76800, "112K": 111616, "302K": 302373, "588K": 588369, "874K": 874365, "1M": 1000000}
 
 
 def n_per_chip(name):
