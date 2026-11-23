@@ -622,7 +622,7 @@ constexpr bool matmul_prod_main_section_end = false;
 constexpr bool matmul_prod_no_32bit_cb = !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_A_IN)) &&
                                          !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_B_IN)) &&
                                          !ckernel::matmul_format_is_32bit(static_cast<DataFormat>(PACK_OUT));
-constexpr ckernel::MathFidelity matmul_prod_fidelity = ckernel::matmul_phase_fidelity<
+constexpr ckernel::MathFidelity matmul_prod_elided = ckernel::matmul_phase_fidelity<
     MATH_FIDELITY,
     static_cast<DataFormat>(UNPACK_B_IN),
     static_cast<DataFormat>(UNPACK_A_IN),
@@ -630,6 +630,8 @@ constexpr ckernel::MathFidelity matmul_prod_fidelity = ckernel::matmul_phase_fid
     is_fp32_dest_acc_en,
     THROTTLE_LEVEL,
     true>();
+constexpr ckernel::MathFidelity matmul_prod_fidelity =
+    (matmul_prod_elided == ckernel::MathFidelity::LoFi && MATH_FIDELITY != ckernel::MathFidelity::LoFi) ? ckernel::MathFidelity::HiFi2 : matmul_prod_elided;
 #else
 constexpr ckernel::MathFidelity matmul_prod_fidelity = MATH_FIDELITY;
 #endif

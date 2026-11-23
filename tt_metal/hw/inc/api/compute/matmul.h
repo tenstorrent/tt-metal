@@ -208,7 +208,10 @@ constexpr MathFidelity matmul_elided_fidelity() {
     // an unknown output of a kernel without 32-bit CBs is not Float32, which is all the keep rule asks
     constexpr DataFormat keep_out =
         out_format == DataFormat::Invalid && llk_matmul_kernel_no_32bit_cb() ? DataFormat::Float16_b : out_format;
-    return matmul_phase_fidelity<MATH_FIDELITY, in0_format, in1_format, keep_out, DST_ACCUM_MODE, MM_THROTTLE, true>();
+    constexpr MathFidelity elided =
+        matmul_phase_fidelity<MATH_FIDELITY, in0_format, in1_format, keep_out, DST_ACCUM_MODE, MM_THROTTLE, true>();
+    // a high-fidelity kernel keeps high-fidelity math forms: Bfp4_b x Bfp4_b on the LoFi forms hung bmm with reload
+    return (elided == MathFidelity::LoFi && MATH_FIDELITY != MathFidelity::LoFi) ? MathFidelity::HiFi2 : elided;
 #else
     return MathFidelity::LoFi;  // the pack thread has no MATH_FIDELITY and never reads this
 #endif
