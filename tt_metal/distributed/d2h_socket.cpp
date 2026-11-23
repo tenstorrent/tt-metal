@@ -132,8 +132,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     const NocPinnedBuffer pinned = pin_host_memory_for_noc(
         *mesh_device,
         device_range,
-        host_buffer_,
-        total_buffer_size_words,
+        ttsl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words),
         internal::get_device(*mesh_device, sender_core_.device_coord)->id(),
         "D2H socket");
     pinned_memory_ = pinned.pinned_memory;

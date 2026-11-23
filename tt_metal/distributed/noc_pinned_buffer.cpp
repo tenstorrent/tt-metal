@@ -15,11 +15,10 @@ namespace tt::tt_metal::distributed {
 NocPinnedBuffer pin_host_memory_for_noc(
     MeshDevice& mesh_device,
     const MeshCoordinateRangeSet& device_range,
-    const std::shared_ptr<uint32_t[]>& words,
-    size_t num_words,
+    ttsl::Span<uint32_t> words,
     ChipId chip,
     std::string_view what) {
-    tt::tt_metal::HostBuffer view(ttsl::Span<uint32_t>(words.get(), num_words), tt::tt_metal::MemoryPin(words));
+    tt::tt_metal::HostBuffer view(words, tt::tt_metal::MemoryPin());
     NocPinnedBuffer buffer;
     buffer.pinned_memory =
         tt::tt_metal::experimental::PinnedMemory::Create(mesh_device, device_range, view, /*map_to_noc=*/true);

@@ -103,8 +103,7 @@ H2DSocketImpl::PinnedBufferInfo H2DSocketImpl::init_bytes_acked_buffer(
     const NocPinnedBuffer pinned = pin_host_memory_for_noc(
         *mesh_device,
         device_range,
-        host_buffer_,
-        1,
+        ttsl::Span<uint32_t>(host_buffer_.get(), 1),
         internal::get_device(*mesh_device, recv_core_.device_coord)->id(),
         "H2D socket bytes_acked");
     pinned_memory_ = pinned.pinned_memory;
@@ -138,8 +137,7 @@ H2DSocketImpl::PinnedBufferInfo H2DSocketImpl::init_host_data_buffer(
     const NocPinnedBuffer pinned = pin_host_memory_for_noc(
         *mesh_device,
         device_range,
-        host_buffer_,
-        host_buffer_size_words,
+        ttsl::Span<uint32_t>(host_buffer_.get(), host_buffer_size_words),
         internal::get_device(*mesh_device, recv_core_.device_coord)->id(),
         "H2D socket data");
     pinned_memory_ = pinned.pinned_memory;
