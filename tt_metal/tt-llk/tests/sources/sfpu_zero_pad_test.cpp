@@ -40,6 +40,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const auto& buffer_A            = params.buffer_A;
 #endif
     {
         START_PERF_MEASURE("INIT")
@@ -60,17 +62,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             if constexpr (!unpack_to_dest)
             {
                 _perf_unpack_stream_set_valid<true /* set_a */, true /* set_b */, PERF_RUN_TYPE>(
-                    LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, params.TILE_CNT, TILE_NUM_FACES));
+                    LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, TILE_NUM_FACES));
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                        L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                        L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
                 }
             }
         }
@@ -102,6 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     {
         START_PERF_MEASURE("INIT")
@@ -129,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                 {
-                    for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                     {
                         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                             0 /* dst_index */, formats.math, formats.math);
@@ -139,14 +142,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             else
             {
                 _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(
-                    LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, params.TILE_CNT, TILE_NUM_FACES));
+                    LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, TILE_NUM_FACES));
             }
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
@@ -189,6 +192,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const auto& buffer_Res          = params.buffer_Res;
 #endif
     {
         START_PERF_MEASURE("INIT")
@@ -207,13 +212,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
                     if constexpr (sync_with_math)
                     {
                         _llk_packer_wait_for_math_done_();
                     }
-                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[tile]));
+                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(buffer_Res[tile]));
                     if constexpr (sync_with_math)
                     {
                         _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
