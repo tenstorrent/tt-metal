@@ -40,6 +40,7 @@ from models.demos.common.prefill.runners.layer_completion_ring_reader import (
     wait_for_layer_completions,
 )
 from models.demos.common.prefill.runners.migration import (
+    _host_tag_int,
     is_per_host_storage,
     migration_table_path,
     rank_scoped_device_map_path,
@@ -52,6 +53,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     num_mtp_tokens,
     resolve_trace_dir,
 )
+from models.demos.common.prefill.runners.stage_layout import host_name_of_tag
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 
@@ -837,42 +839,29 @@ def _has_index_config(table) -> bool:
 
 
 # A [RING,RING] seam stage spans two hosts, so each layer's KV lies on chips of both: a validator reads the chunks
-# its host can reach and scores those positions (the other host's validator scores the rest).
-# ASIC unique id -> whether read_dram_umd reaches it from this process (seam stages only, see _read_chunks).
-_UID_VISIBLE: dict = {}
+# on its own host's chips and scores those positions (the other host's validator scores the rest). The table records
+# the host of every chip (``chip_host_tags``, see stage_layout.collapse_to_stages), which says whose chip it is.
 _MULTI_HOST_STAGES = any(int(h) > 1 for h in os.environ.get("PREFILL_STAGE_HOSTS", "").split(",") if h.strip())
 
 
-def _read_chunks(table, device_map, config_id, layer, slot_id, positions, allow_missing=False) -> list:
-    """Raw bytes of the chunk at each position of one layer, from a single batched read. ``allow_missing``: a
-    chunk on a chip this process cannot reach comes back as None instead of failing the read."""
+def _local_host_name(multi_host_stages: bool):
+    """This process's host name as the table records it; None when no stage spans hosts (every chip is local)."""
+    return host_name_of_tag(_host_tag_int()) if multi_host_stages else None
+
+
+def _read_chunks(table, device_map, config_id, layer, slot_id, positions, local_host=None) -> list:
+    """Raw bytes of the chunk at each position of one layer, from a single batched read. ``local_host``: the
+    table's name for this host; a chunk whose chips the table places on another host comes back as None, and
+    every chunk on this host is read (a failing read raises)."""
     locs = [table.lookup(layer, pos, slot_id, config_id) for pos in positions]
     unique_ids = {}
     for loc in locs:
-        if loc.device_group_index not in unique_ids:
-            try:
-                unique_ids[loc.device_group_index] = _resolve_unique_id(
-                    table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
-                )
-            except KeyError:
-                if not allow_missing:
-                    raise
-                unique_ids[loc.device_group_index] = None
-    if allow_missing:
-        # A seam stage's device map lists every chip of its mesh, the other host's too, which read_dram_umd cannot
-        # reach from here: probe each chip once with a one-chunk read and treat the unreachable ones as missing.
-        for loc in locs:
-            uid = unique_ids[loc.device_group_index]
-            if uid is None or uid in _UID_VISIBLE:
-                continue
-            try:
-                ttnn.experimental.disaggregation.read_dram_umd_batch([uid], [loc.noc_addr], [loc.size_bytes])
-                _UID_VISIBLE[uid] = True
-            except RuntimeError:
-                _UID_VISIBLE[uid] = False
-        for group, uid in list(unique_ids.items()):
-            if uid is not None and not _UID_VISIBLE.get(uid, True):
-                unique_ids[group] = None
+        if loc.device_group_index in unique_ids:
+            continue
+        nodes = list(table.get_device_group(loc.device_group_index).fabric_node_ids)
+        if local_host is not None:
+            nodes = [node for node in nodes if table.get_host(node) == local_host]
+        unique_ids[loc.device_group_index] = _resolve_unique_id(nodes, device_map) if nodes else None
     present = [loc for loc in locs if unique_ids[loc.device_group_index] is not None]
     sizes = [loc.size_bytes for loc in present]
     blob = (
@@ -911,7 +900,9 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
     positions = range(start, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
-    raws = _read_chunks(table, device_map, config_id, layer, slot_id, positions, allow_missing=_MULTI_HOST_STAGES)
+    raws = _read_chunks(
+        table, device_map, config_id, layer, slot_id, positions, local_host=_local_host_name(_MULTI_HOST_STAGES)
+    )
     rows = [None if raw is None else decode(raw, head_dim) for raw in raws]
     if any(r is None for r in rows):
         # Positions on the other host's chips: NaN rows, which the PCC callers mask out (_visible_rows).
@@ -922,12 +913,23 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
     return torch.cat(rows, dim=0)[: read_len - start]
 
 
-def _visible_rows(device_rows: torch.Tensor, golden: torch.Tensor, what: str):
-    """Drop the rows a seam-stage validator could not read (NaN, see _read_kv_slice) from both sides."""
+def _visible_mask(device_rows: torch.Tensor, what: str) -> torch.Tensor:
+    """Rows a seam-stage validator read from its own host's chips (the others are NaN, see _read_kv_slice; with no
+    multi-host stage every row counts, so a NaN from the device still fails the finite checks). A host
+    that scores no row has not validated its share, so that raises instead of passing an empty comparison."""
+    if not _MULTI_HOST_STAGES:
+        return torch.ones(device_rows.shape[0], dtype=torch.bool)
     mask = ~torch.isnan(device_rows.float()).any(dim=-1)
-    if bool(mask.all()):
-        return device_rows, golden
-    logger.info(f"[producer]   {what}: scoring the {int(mask.sum())}/{mask.numel()} rows on this host's chips")
+    if not bool(mask.any()):
+        raise RuntimeError(f"{what}: none of the {mask.numel()} rows lie on this host's chips, nothing to score")
+    if not bool(mask.all()):
+        logger.info(f"[producer]   {what}: scoring the {int(mask.sum())}/{mask.numel()} rows on this host's chips")
+    return mask
+
+
+def _visible_rows(device_rows: torch.Tensor, golden: torch.Tensor, what: str):
+    """Drop the rows a seam-stage validator could not read from both sides."""
+    mask = _visible_mask(device_rows, what)
     return device_rows[mask], golden[mask]
 
 
@@ -995,17 +997,20 @@ def _check_mtp_kv_slots(
         kv = _read_kv_slice(
             table, device_map, 0, layer, slot_id, read_end, head_dim, _decode_kv_chunk, start=first_pos
         )[skip_rows : skip_rows + cmp_len]
-        assert torch.isfinite(kv).all(), f"MTP level {k} KV (layer {layer}) has non-finite entries"
-        assert kv.abs().max() > 0, (
+        # A two-host stage: the rows on the other host's chips are NaN here and belong to its validator.
+        local_kv = kv[_visible_mask(kv, f"MTP level {k} KV (layer {layer})")]
+        assert torch.isfinite(local_kv).all(), f"MTP level {k} KV (layer {layer}) has non-finite entries"
+        assert local_kv.abs().max() > 0, (
             f"MTP level {k} KV slot (layer {layer}) is all zeros over {span}: the level never "
             f"wrote it (cache slot never reached, or the level did not run)."
         )
-        logger.info(f"[producer] slot {slot_id} MTP level {k} (layer {layer:>2}) KV max|.|={kv.abs().max():.4f}")
+        logger.info(f"[producer] slot {slot_id} MTP level {k} (layer {layer:>2}) KV max|.|={local_kv.abs().max():.4f}")
         per_level.append((k, kv))
     for i in range(len(per_level)):
         for j in range(i + 1, len(per_level)):
             (a, ka), (b, kb) = per_level[i], per_level[j]
-            assert not torch.equal(ka, kb), (
+            both = _visible_mask(ka, f"MTP level {a}") & _visible_mask(kb, f"MTP level {b}")
+            assert not both.any() or not torch.equal(ka[both], kb[both]), (
                 f"MTP levels {a} and {b} wrote IDENTICAL KV over {span}: they are sharing one "
                 f"cache slot (level k must write slot NUM_LAYERS+k)."
             )
@@ -1022,7 +1027,10 @@ def _check_mtp_kv_slots(
             alias_kv = _read_kv_slice(
                 table, device_map, 0, layer, slot_id, read_end, head_dim, _decode_kv_chunk, start=first_pos
             )[skip_rows : skip_rows + cmp_len]
-            assert torch.equal(alias_kv, level0_kv), (
+            on_host = _visible_mask(level0_kv, "MTP level 0")
+            assert torch.equal(torch.isnan(alias_kv[:, 0]), torch.isnan(level0_kv[:, 0])) and torch.equal(
+                alias_kv[on_host], level0_kv[on_host]
+            ), (
                 f"MTP decode level {k} (layer {layer}) reads back different KV than level 0's row over {span}, "
                 f"though the table gives both the same addresses: something wrote that memory between the reads."
             )
@@ -1052,6 +1060,7 @@ def _check_mtp_kv_slots(
     for k, kv in per_level:
         layer = NUM_LAYERS + k
         golden = _load_golden_kv_post(golden_dir, layer, cmp_len, start=golden_offset)
+        kv, golden = _visible_rows(kv, golden, f"MTP level {k} (layer {layer}) KV")
         pcc_nope, pcc_pe = _kvpe_pcc_vs_golden(golden, kv, kv_lora, pe_layout)
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
         _, pe_rejected = comp_pcc(_golden_pe_as_device(golden[:, kv_lora:], rejected), kv[:, kv_lora:])

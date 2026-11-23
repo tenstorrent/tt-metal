@@ -167,6 +167,11 @@ def chip_host_tag(stage_entry: dict, row: int, col: int) -> int:
     return stage_entry["host_tag"] if tags is None else tags[row][col]
 
 
+def host_name_of_tag(tag: int) -> str:
+    """The host name the KV chunk table records for a ``host_tag`` (the crc32 tag rebuilt as a string)."""
+    return f"host-{tag:08x}"
+
+
 def single_peer(pairs: list, mesh_rows: int, direction: str, rank: int) -> int | None:
     """The one peer rank of a boundary side, None when the rank has no such boundary.
 
