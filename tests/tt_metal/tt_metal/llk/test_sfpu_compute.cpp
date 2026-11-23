@@ -2379,8 +2379,9 @@ bool is_close_packed_sfpu_output(
         return is_close_packed_sfpu_output_f32(vec_a, vec_b, op_name);
     }
     if (is_int8_binary_sfpu_op(op_name) || is_int32_binary_sfpu_op(op_name) || is_exact_float_binary_op(op_name) ||
-        op_name == "binary_max" || op_name == "binary_min" || op_name == "reshuffle_rows" || op_name == "copy_dest" ||
-        op_name == "mask" || op_name == "mask_posinf" || op_name == "isclose" || op_name.starts_with("fill_rows_")) {
+        op_name == "rsub_binary_rne" || op_name == "binary_max" || op_name == "binary_min" ||
+        op_name == "reshuffle_rows" || op_name == "copy_dest" || op_name == "mask" || op_name == "mask_posinf" ||
+        op_name == "isclose" || op_name.starts_with("fill_rows_")) {
         return vec_a == vec_b;
     }
     if (is_exact_unary_sfpu_op(op_name)) {

@@ -834,6 +834,8 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
         binary_op,
         prepare_stimuli=_prepare_float_stimuli,
         dst_rounding_mode=DstRoundingMode.NearestEven,
+        # Bit-exact: the golden rounds to nearest-even, and a tolerance would also pass truncation.
+        max_ulp=0,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
