@@ -122,10 +122,13 @@ class SpecGenerator(Generator):
         super().capture()
         d.capture(compile=False)
         for ph in range(4):
-            for shared, base in ((True, p_shared), (False, p_split)):
-                p = base - base % 4 + ph
-                p += 4 * (self._shared(p, R) != shared)  # keep the far-chunk case while moving to phase ph
-                assert self._shared(p, R) == shared
+            for shared in (True, False):
+                # a position of conv phase ph in this far-chunk case (a chunk-crossing pass exists only at some
+                # phases: R tokens cross a 128-key chunk only from its last R-1 offsets)
+                p = next((q for q in range(4, p_shared + 512) if q % 4 == ph and self._shared(q, R) == shared),
+                         None)  # fmt: skip
+                if p is None:
+                    continue
                 V.set_inputs([0] * R, p)
                 tid = ttnn.begin_trace_capture(self.device, cq_id=0)
                 out = V.step()
