@@ -41,12 +41,23 @@ constexpr uint32_t scatter_runs = get_compile_time_arg_val(18);   // runs per bu
 // rows l, l + L, ...) and a run is a slot row's columns inside one shard core (consecutive pages in its L1).
 constexpr uint32_t shard_w = get_compile_time_arg_val(19);
 constexpr uint32_t last_crt = get_compile_time_arg_val(20);  // tile-rows of the last row-group (own-entry pull)
-constexpr uint32_t PORT_CT_ARGS = 21;                        // TensorAccessorArgs(dst) follow
+// reader pipeline: packets whose reads are in flight at once (one NoC transaction id each, 1..15); each packet is
+// pushed to the sender as soon as its own reads landed
+constexpr uint32_t read_depth = get_compile_time_arg_val(21);
+// own entry source: 0 = pull the pages from the workers' cb_out_block (L1), 1 = read the bank runs back from this
+// chip's own destination pages (one read per run instead of one per page; the workers wrote them before own_ready)
+constexpr uint32_t own_from_dst_ct = get_compile_time_arg_val(22);
+// per chunk slot, the packet's runs (PacketDesc): written by the reader with the slot's reads, read by the sender once
+// the slot is pushed, so only the reader walks the slot (the sender is bound by per-packet work)
+constexpr uint32_t cb_desc = get_compile_time_arg_val(23);
+constexpr uint32_t PORT_CT_ARGS = 24;                        // TensorAccessorArgs(dst) follow
 constexpr uint32_t run_stride = shard_w ? 1 : nb;            // page-id step between the pages of one run
 constexpr uint32_t shard_w_div = shard_w ? shard_w : 1;      // (the interleaved walk never divides by it)
 constexpr uint32_t chunk_bytes = run_pages * page_bytes;
 
 static_assert(scatter_runs >= 1 && scatter_runs <= 4, "NOC_SCATTER_WRITE_MAX_CHUNKS = 4");
+static_assert(
+    read_depth >= 1 && read_depth <= 15 && read_depth <= group, "one trid per packet; the sender pops groups");
 
 // One bulk packet: up to scatter_runs runs (each consecutive in one destination bank), <= run_pages pages in total,
 // packed back to back in the port CB slot. run i = pages first[i], first[i] + nb, ... (n[i] of them).
@@ -58,6 +69,16 @@ struct Packet {
     uint32_t rr[4];
     uint32_t jj[4];
 };
+
+// One packet's runs as handed from the port reader to the sender (one cb_desc page per chunk slot).
+struct PacketDesc {
+    uint32_t nr;
+    uint32_t pages;
+    uint32_t first[4];
+    uint32_t n[4];
+};
+static_assert(sizeof(PacketDesc) <= 64, "cb_desc page");
+constexpr uint32_t DESC_BYTES = 64;
 
 // f(const Packet&): the packets of slot q for the lane (first_bank, bank_stride), part 0 / 1 / 2. Runs are visited
 // bank-major; a packet closes when full (scatter_runs runs or run_pages pages) and always at the half-lane bank

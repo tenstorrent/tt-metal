@@ -78,6 +78,8 @@ CB_FINAL_TABLE = 28  # every member: the final per-row stats records (inv | mean
 CB_FINAL_INV = 29  # reader -> compute: RMS inv / LN rstd (col 0) of one row chunk
 CB_FINAL_MEAN = 30  # reader -> compute: LN mean (col 0) of one row chunk
 CB_STAT_CONSTS_X = 31  # LN: n_q of the cross-chip partitions (one per chip)
+CB_PORT_DESC = 32  # port reader -> sender: one packet descriptor (runs) per port-CB chunk slot
+PORT_DESC_BYTES = 64  # agrn_port_common.hpp DESC_BYTES
 
 # ---- program-local semaphores (declared before the fabric connections take theirs) ----
 SEM_RECORDS_LOCAL = 0
@@ -108,6 +110,10 @@ BATCH_CHUNKS = 4  # port CB batch (TRANSPORT; catalog fabric_all_gather: 4 per b
 INC_EVERY = 8  # arrival increment every N packets (+ each entry's last)
 BALANCE_MIN_TILES = 64  # balance an even ring's far slot from this many tiles per slot (catalog)
 SCATTER_RUNS = 4  # destination runs per bulk packet (fabric scatter write, <= NOC_SCATTER_WRITE_MAX_CHUNKS)
+READ_DEPTH = 4  # port reader: packets with reads in flight (one NoC transaction id each), <= BATCH_CHUNKS (the
+#                sender pops whole groups: deeper would hold the CB space its pop waits for)
+OWN_SRC_DST = 1  # port reader own entry: 1 = read back the own final pages (one read per bank run, measured faster),
+#                 0 = pull page by page from the workers' L1 blocks
 
 NOC_READER = ttnn.NOC.RISCV_0_default  # NoC0 (fabric_all_gather's convention)
 NOC_WRITER = ttnn.NOC.RISCV_1_default  # NoC1
@@ -600,6 +606,8 @@ def create_mesh_program_descriptor(
     batch_chunks = _knob("BATCH_CHUNKS", BATCH_CHUNKS)
     inc_every = _knob("INC_EVERY", INC_EVERY)
     scatter_runs = _knob("SCATTER_RUNS", SCATTER_RUNS)
+    read_depth = max(1, min(_knob("READ_DEPTH", READ_DEPTH), batch_chunks, 15))
+    own_from_dst = _knob("OWN_SRC_DST", OWN_SRC_DST)
     payload_bytes = run_pages * out_page
     stats_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
     out_sharded = output_tensor.memory_config().is_sharded()
@@ -721,6 +729,9 @@ def create_mesh_program_descriptor(
         scatter_runs,
         walk.shard_w,
         split.last_rows,
+        read_depth,
+        own_from_dst,
+        CB_PORT_DESC,
     ] + list(ttnn.TensorAccessorArgs(dst_tensor).get_compile_time_args())
 
     # ---- compute config ----
@@ -848,6 +859,7 @@ def create_mesh_program_descriptor(
                 else _cb(CB_OUT_BLOCK, crt_max * cw_max, out_page, out_dtype, full)
             ),
             _cb(CB_PORT_CHUNKS, 2 * batch_chunks * run_pages, out_page, out_dtype, full),
+            _cb(CB_PORT_DESC, 2 * batch_chunks, PORT_DESC_BYTES, ttnn.float32, full),
             # program-scoped: same address on every core of every chip, no persistent L1 (see agrn_common.hpp)
             _cb(CB_STATS_TABLE, table_bytes // RECORD_BYTES, RECORD_BYTES, ttnn.float32, full),
         ]

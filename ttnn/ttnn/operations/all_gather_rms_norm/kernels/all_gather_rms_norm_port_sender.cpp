@@ -193,6 +193,9 @@ void kernel_main() {
             return hdrs[hk];
         };
         AGRN_ZONE("ps_bulk");
+        constexpr uint32_t n_slots = 2 * group;
+        const uint32_t desc_base = get_read_ptr(cb_desc);
+        uint32_t taken = 0;  // packets taken from the port CB (= the reader's issue index)
         TT_(uint32_t t_cb[2] = {0, 0}; uint32_t t_slot[2] = {0, 0}; uint32_t t_fl[2] = {0, 0};
             uint32_t n_pk[2] = {0, 0};
             uint32_t t_e[2] = {0, 0};
@@ -233,10 +236,24 @@ void kernel_main() {
                 continue;
             }
 #endif
-            for_each_packet(e & 0xFFFF, e >> 16, first_bank, bank_stride, [&](const Packet& pk) {
+            (void)e;
+            for (uint32_t pi = 0; pi < entry_total; ++pi) {
                 TT_(uint32_t t0 = get_timestamp_32b();)
                 cb_wait_front(cb_chunks, run_pages * (unflushed + 1));
                 TT_(t_cb[k > 0] += get_timestamp_32b() - t0;)
+                invalidate_l1_cache();  // the slot's descriptor was written by the reader (NCRISC)
+                Packet pk;
+                {
+                    volatile tt_l1_ptr PacketDesc* dsc =
+                        reinterpret_cast<volatile tt_l1_ptr PacketDesc*>(desc_base + (taken % n_slots) * DESC_BYTES);
+                    pk.nr = dsc->nr;
+                    pk.pages = dsc->pages;
+                    for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+                        pk.first[ri] = dsc->first[ri];
+                        pk.n[ri] = dsc->n[ri];
+                    }
+                }
+                ++taken;
                 const uint32_t src = get_read_ptr(cb_chunks) + unflushed * chunk_bytes;
                 const uint32_t bytes = pk.pages * page_bytes;
                 uint64_t d[4];
@@ -333,7 +350,7 @@ void kernel_main() {
                     cb_pop_front(cb_chunks, run_pages * unflushed);
                     unflushed = 0;
                 }
-            });
+            }
             TT_(t_e[k > 0] += get_timestamp_32b() - te;)
         }
         TT_(DEVICE_PRINT(

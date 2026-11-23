@@ -11,19 +11,26 @@
 //                       from the local destination (output pages / R_U staging), contiguous in one bank.
 //   end                 waits every expected arrival; R_U: announces "landed" to every active worker (after own_ready,
 //                       so the own staging slot is complete too); re-arms the arrival counter (trace-safe).
-// Batches as in the example: a batch ends at a multiple of `group` chunks in the 2-group CB or at an entry end.
+// Reads are pipelined per packet (read_depth packets in flight, one NoC transaction id each) and each packet is pushed
+// as soon as its reads landed; the sender pops on group boundaries of the 2-group CB.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "agrn_port_common.hpp"
+#if defined(AGRN_ABL_TIMING)
+#include "api/debug/device_print.h"
+#define TT_(...) __VA_ARGS__
+#else
+#define TT_(...)
+#endif
 
 using namespace agrn_port;
 
 #if defined(AGRN_OWN_FROM_DST)
-constexpr bool own_from_dst = true;  // perf probe only: own entry re-read from the own destination pages
+constexpr bool own_from_dst = true;  // perf probe override
 #else
-constexpr bool own_from_dst = false;
+constexpr bool own_from_dst = own_from_dst_ct != 0;
 #endif
 
 void kernel_main() {
@@ -70,7 +77,22 @@ void kernel_main() {
             mc_dests);
         noc_async_write_barrier();
     }
-    uint32_t batch = 0, need = 0, pos = 0, wptr = 0;
+    // Pipelined reads: packet i is read into chunk slot (pushed + inflight) of the 2-group CB under NoC transaction id
+    // 1 + i % read_depth; once read_depth packets are in flight the oldest is waited (its trid only) and pushed, so
+    // the sender starts on a packet as soon as its own reads landed and reads of later packets keep the NoC busy.
+    constexpr uint32_t n_slots = 2 * group;
+    const uint32_t chunks_base = get_write_ptr(cb_chunks);  // nothing pushed yet: the CB's first slot
+    const uint32_t desc_base = get_write_ptr(cb_desc);
+    uint32_t pushed = 0, inflight = 0, issued = 0;
+    TT_(uint32_t t_bar = 0, t_res = 0, t_iss = 0, t_tot = 0, t_arr = 0; uint32_t t_start = 0;)
+    auto retire_oldest = [&]() {
+        TT_(uint32_t tb = get_timestamp_32b();)
+        noc_async_read_barrier_with_trid(1 + (issued - inflight) % read_depth);
+        TT_(t_bar += get_timestamp_32b() - tb;)
+        cb_push_back(cb_chunks, run_pages);
+        ++pushed;
+        --inflight;
+    };
     for (uint32_t k = 0; k < n_entries; ++k) {
         const uint32_t e = get_arg_val<uint32_t>(entries_idx + 3 * k);
         const uint32_t A = get_arg_val<uint32_t>(entries_idx + 3 * k + 1);
@@ -83,6 +105,11 @@ void kernel_main() {
         if (k == 0) {
             AGRN_ZONE("pr_own_first");  // marker: own entry starts
         }
+        TT_(
+            if (k == 0) { t_start = get_timestamp_32b(); } if (k == 1) {
+                t_tot = get_timestamp_32b() - t_start;
+                DEVICE_PRINT("AGRN_R own tot={} bar={} res={} iss={} pk={}\n", t_tot, t_bar, t_res, t_iss, issued);
+            })
 #if defined(AGRN_ABL_MINSEND)
         if (k == 0) {
             continue;  // perf ablation only: the sender sends the own entry without a source
@@ -90,15 +117,35 @@ void kernel_main() {
 #endif
         uint32_t c = 0;
         for_each_packet(q, part, first_bank, bank_stride, [&](const Packet& pk) {
-            if (batch == 0) {
-                need = group - pos % group;
-                cb_reserve_back(cb_chunks, run_pages * need);
-                wptr = get_write_ptr(cb_chunks);
+            if (inflight == read_depth) {
+                retire_oldest();
             }
-            uint32_t l1 = wptr + batch * chunk_bytes;
+            TT_(uint32_t tr = get_timestamp_32b();)
+            cb_reserve_back(cb_chunks, run_pages * (inflight + 1));
+            TT_(t_res += get_timestamp_32b() - tr;)
+            uint32_t l1 = chunks_base + ((pushed + inflight) % n_slots) * chunk_bytes;
             if (k > 0) {
-                noc_semaphore_wait_min(arrived, A + (B + c) / inc_every);
+                const uint32_t need_arrivals = A + (B + c) / inc_every;
+                if (*arrived < need_arrivals) {
+                    // hand every packet already read to the sender before blocking: the arrivals this waits for
+                    // may depend on them (the peers' relays of my earlier packets)
+                    while (inflight > 0) {
+                        retire_oldest();
+                    }
+                    noc_semaphore_wait_min(arrived, need_arrivals);
+                }
             }
+            TT_(uint32_t ti = get_timestamp_32b();) {
+                volatile tt_l1_ptr PacketDesc* dsc =
+                    reinterpret_cast<volatile tt_l1_ptr PacketDesc*>(desc_base + (issued % n_slots) * DESC_BYTES);
+                dsc->nr = pk.nr;
+                dsc->pages = pk.pages;
+                for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+                    dsc->first[ri] = pk.first[ri];
+                    dsc->n[ri] = pk.n[ri];
+                }
+            }
+            noc_async_read_set_trid(1 + issued % read_depth);
             for (uint32_t ri = 0; ri < pk.nr; ++ri) {
                 const uint32_t n = pk.n[ri];
 #if defined(AGRN_ABL_NOREAD)
@@ -130,21 +177,16 @@ void kernel_main() {
                 }
                 l1 += n * page_bytes;
             }
+            TT_(t_iss += get_timestamp_32b() - ti;)
+            ++issued;
+            ++inflight;
             ++c;
-            if (++batch == need) {
-                noc_async_read_barrier();
-                cb_push_back(cb_chunks, run_pages * batch);
-                pos += batch;
-                batch = 0;
-            }
         });
-        if (batch > 0) {
-            noc_async_read_barrier();
-            cb_push_back(cb_chunks, run_pages * batch);
-            pos += batch;
-            batch = 0;
-        }
     }
+    while (inflight > 0) {
+        retire_oldest();
+    }
+    noc_async_read_set_trid(0);
 
     if (expect_in > 0) {
         AGRN_ZONE("pr_wait_all");
