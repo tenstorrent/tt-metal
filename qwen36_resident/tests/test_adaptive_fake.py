@@ -445,6 +445,24 @@ def test_promotion_gate_estimates_are_robust(monkeypatch):
     assert not m._promotion_pays([0])[0], "short answers learned: a long context's refill does not pay"
 
 
+def test_a_skipped_first_sample_keeps_the_default(monkeypatch):
+    """a first step-time sample that robust_ema skips (an outlier) leaves no estimate behind — a None stored there
+    crashed the promotion gate served (TypeError, 2026-11-24): the default model stays in use"""
+    import time as _time
+
+    m = _gate_case(monkeypatch, 4, 2048, 1)
+    clock = [100.0]
+    monkeypatch.setattr(_time, "perf_counter", lambda: clock[0])
+    m._pay["last_t"] = clock[0]
+    for kind in ("plain", "verify"):
+        clock[0] += 1.0  # (1,000 ms: over 3 x either default model at 4 users)
+        m._pay["kind"], m._pay["n"] = kind, 4
+        m._measure([2] * 4)
+    assert 4 not in m._pay["plain_ms"] and 4 not in m._pay["spec_ms"], m._pay
+    ok, line = m._promotion_pays(sorted(m.live))  # (the gate still computes)
+    assert isinstance(ok, bool), line
+
+
 def test_promotion_gate_blocks_moves(monkeypatch):
     """a gate that says no: nobody moves, the mode stays SPEC (steps run plain); a measured spec step that saves
     nothing keeps it closed for a single short prompt too"""

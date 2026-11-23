@@ -65,6 +65,13 @@ OUTLIER = 3.0  # (a time sample over this x the estimate, or the default model's
 # first-time trace capture, a prefill's device time an async call left in a step)
 
 
+def _store(d, k, v):
+    """an estimate into its dict unless robust_ema skipped the first sample (None: the default model stays in use — a
+    None stored there crashed the promotion gate served, 2026-11-24)"""
+    if v is not None:
+        d[k] = v
+
+
 def robust_ema(old, x, default, a=0.1):
     """an EMA of times that skips outliers (OUTLIER) — one stray sample must not set the policy's estimates"""
     ref = default if old is None else old
@@ -281,11 +288,11 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         n = max(1, pay["n"])
         if dt_ms is not None and dt_ms < 5000:  # (an idle gap is no step)
             if pay["kind"] == "verify" and spec_accepts:
-                pay["spec_ms"][n] = robust_ema(pay["spec_ms"].get(n), dt_ms, SPEC_MS_DEFAULT(n))
+                _store(pay["spec_ms"], n, robust_ema(pay["spec_ms"].get(n), dt_ms, SPEC_MS_DEFAULT(n)))
                 pay["acc"] = ema(pay["acc"], sum(spec_accepts) / len(spec_accepts))
                 pay["verifies"] += 1
             elif pay["kind"] == "plain":
-                pay["plain_ms"][n] = robust_ema(pay["plain_ms"].get(n), dt_ms, PLAIN_MS_DEFAULT(n))
+                _store(pay["plain_ms"], n, robust_ema(pay["plain_ms"].get(n), dt_ms, PLAIN_MS_DEFAULT(n)))
         if pay["verifies"] < PAY_MIN or pay["acc"] is None or n not in pay["spec_ms"]:
             return True
         plain = pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n))
