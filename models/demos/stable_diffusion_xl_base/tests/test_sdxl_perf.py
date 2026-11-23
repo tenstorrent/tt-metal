@@ -151,15 +151,14 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        # Mean of 3 main CI runs 2026-10-20..22 (19.25M-19.30M). #57208 runs tt_dit Linear inputs of up to 128 rows as
-        # a 1D mcast matmul; previous target 23.75M.
-        "wormhole": 19_270_000,
+        # mean of 3 wh_n150 runs 2026-11-07..11-23 on 3 VMs (18.05M..18.14M)
+        "wormhole": 18_091_000,
         # mean of 8 scheduled bh_p150 runs 2026-11-06..11-23 on 4 VMs (9.00M..9.01M)
         "blackhole": 9_004_000,
     },
     "clip_encoder_2": {
-        # Mean of 3 main CI runs 2026-10-20..22 (63.57M-63.80M) after #57208; previous target 88.53M.
-        "wormhole": 63_681_000,
+        # mean of 3 wh_n150 runs 2026-11-07..11-23 on 3 VMs (60.09M..60.34M)
+        "wormhole": 60_199_000,
         # mean of 7 scheduled bh_p150 runs 2026-11-06..11-23 on 3 VMs (33.75M..33.84M)
         "blackhole": 33_792_000,
     },
