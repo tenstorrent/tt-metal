@@ -16,8 +16,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
     [
         [2, 1280, 8, 8],
         [2, 640, 16, 16],
-        [2, 1280, 8, 8],
-        [2, 1280, 16, 16],
         [2, 1280, 16, 16],
         [2, 1280, 32, 32],
     ],
@@ -59,8 +57,6 @@ def test_mse_loss(device, input_shapes, loss_mode):
     [
         [2, 1280, 8, 8],
         [2, 640, 16, 16],
-        [2, 1280, 8, 8],
-        [2, 1280, 16, 16],
         [2, 1280, 16, 16],
         [2, 1280, 32, 32],
     ],

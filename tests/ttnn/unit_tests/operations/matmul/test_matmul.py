@@ -1893,10 +1893,6 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 @pytest.mark.parametrize("k_size, n_size", [
     (2, 4),
     (4, 2),
-    (2, 4),
-    (4, 2),
-    (2, 4),
-    (4, 2),
     (4, 4),
     ])
 # fmt: on
