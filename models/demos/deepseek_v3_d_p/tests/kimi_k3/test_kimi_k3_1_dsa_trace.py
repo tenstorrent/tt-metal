@@ -9,21 +9,22 @@ read on device from the persistent `metadata` the runtime rewrites before every 
 KVPE and index-key cache writes (slot, start, real-token clamp), the indexer's causal score extent and
 cache slot, the top-k valid count (the scored prefix, ceil32(actual_end) capped at the chunk end), and the
 KVPE prefix gather. Any of them frozen at capture leaves the capture-time chunk exact and every other chunk
-wrong, so the capture is recorded on slot 0 at position 0 (valid count 5120) and replayed on:
+wrong, so the capture is recorded on slot 0 at position 0 (valid count N, the stage's chunk: 5120 on 8x4,
+2560 on 4x4) and replayed on:
 
-  user A (slot 0) at 0, user B (slot 1) at 0, B at 5120, A at 5120, A at 10240 with a partial chunk, then
+  user A (slot 0) at 0, user B (slot 1) at 0, B at N, A at N, A at 2N with a partial chunk, then
   user C starting a new 1000-token request on B's slot 1.
 
 Within each chunk at 0 the causal mask leaves rows below 2048 fewer than top-k keys (the rest sentinel
-indices); the later chunks select from a 10240- and 11264-token prefix of their own slot. User C's whole
+indices); the later chunks select from a 2N- and (2N + 1024)-token prefix of their own slot. User C's whole
 context is below 2048: its valid count, 1024, takes top-k's short search (at most 2048 keys) under a
-capture whose count took the long one. It also reuses a slot without clearing it, and in the KDA window
+capture whose count (N > 2048) took the long one. It also reuses a slot without clearing it, and in the KDA window
 its head must load a zero carry over B's.
 
 Reference: the same model run eagerly from host ints over the same schedule, from the same pristine
 caches. Every replay's output and both caches (every slot, every row) must match eager bit for bit after
 that chunk: a replay that wrote or read the wrong slot or rows leaves a different cache or output.
-Sensitivity, measured with the capture reading a stand-in word fixed at 0 (eager untouched): a pinned
+Sensitivity, measured on 8x4 with the capture reading a stand-in word fixed at 0 (eager untouched): a pinned
 slot fails chunk 1 (slot 1) and a pinned start fails chunk 2 (5120), each at the KVPE cache check.
 
 Windows: two DSA layers (layers 3-7, rank-local KV slots 0 and 1 of both caches) and KDA + DSA (layers
@@ -38,12 +39,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
-    CHUNK,
     build_stack,
     compose,
     hf_config,
     placements,
     release,
+    stage_layout,
     synthetic_state_dict,
     token_ids,
     upload_tokens,
@@ -53,17 +54,22 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 NUM_USERS = 2
-# (request, slot, actual_start, actual_end): requests A (0) and B (1) interleave their chunks, A ends on a
-# partial chunk, then request C (2) starts a short request on B's slot. Each request has its own tokens.
-CHUNKS = [
-    (0, 0, 0, CHUNK),
-    (1, 1, 0, CHUNK),
-    (1, 1, CHUNK, 2 * CHUNK),
-    (0, 0, CHUNK, 2 * CHUNK),
-    (0, 0, 2 * CHUNK, 2 * CHUNK + 1000),
-    (2, 1, 0, 1000),
-]
 NUM_REQUESTS = 3
+
+
+def _schedule(chunk: int) -> list[tuple[int, int, int, int]]:
+    """(request, slot, actual_start, actual_end): requests A (0) and B (1) interleave their chunks, A ends on a
+    partial chunk, then request C (2) starts a short request on B's slot. Each request has its own tokens."""
+    return [
+        (0, 0, 0, chunk),
+        (1, 1, 0, chunk),
+        (1, 1, chunk, 2 * chunk),
+        (0, 0, chunk, 2 * chunk),
+        (0, 0, 2 * chunk, 2 * chunk + 1000),
+        (2, 1, 0, 1000),
+    ]
+
+
 # A few layers' capture fits well inside the runner's 256 MB trace region.
 TRACE_REGION_SIZE = 64 * 1024 * 1024
 # (first_layer_idx, num_layers): two DSA layers (KV slots 0 and 1), and KDA + DSA layers 0-3.
@@ -96,19 +102,21 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
     # Every window is a first rank that embeds its own tokens: a stand-in table would map them all to one row.
     assert stack.embed.vocab_size == hf_config().vocab_size, f"embedding has {stack.embed.vocab_size} rows"
     kvpe, index = caches.kvpe, caches.index
+    chunk = stage_layout(mesh_device).chunk
+    schedule = _schedule(chunk)
     # Fresh caches, restored in place before the traced pass so both passes start from the same state.
     pristine = (kvpe.storage.cpu(), index.cpu())
 
-    streams = [token_ids(3 * CHUNK, seed=7 + request) for request in range(NUM_REQUESTS)]
+    streams = [token_ids(3 * chunk, seed=7 + request) for request in range(NUM_REQUESTS)]
 
     def tokens(request, start):
-        return upload_tokens(mesh_device, streams[request][start : start + CHUNK])
+        return upload_tokens(mesh_device, streams[request][start : start + chunk])
 
     def caches_now():
         return _shards(mesh_device, kvpe.storage).view(torch.uint8), _shards(mesh_device, index)
 
     input_tt = tokens(0, 0)
-    metadata = ChunkMetadata(_scalar(mesh_device, 0), _scalar(mesh_device, 0), _scalar(mesh_device, CHUNK), None)
+    metadata = ChunkMetadata(_scalar(mesh_device, 0), _scalar(mesh_device, 0), _scalar(mesh_device, chunk), None)
 
     def stage(request, slot, start, end):
         """Rewrite the persistent input and metadata in place, as the runtime does before every replay."""
@@ -127,7 +135,7 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
             input_tt,
             kvpe_cache=kvpe,
             index_kv_cache=index,
-            actual_isl=CHUNK,
+            actual_isl=chunk,
             actual_start=None,
             actual_end=None,
             cache_user_id=0,
@@ -139,7 +147,7 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
     traced_out = None
     try:
         eager = []
-        for request, slot, start, end in CHUNKS:
+        for request, slot, start, end in schedule:
             logger.info(f"{window}: eager slot {slot} [{start}, {end})")
             chunk_tokens = tokens(request, start)
             out = stack.forward(
@@ -152,14 +160,14 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
                 cache_user_id=slot,
             )
             ttnn.deallocate(chunk_tokens)
-            eager.append((compose(mesh_device, out, CHUNK), *caches_now()))
+            eager.append((compose(mesh_device, out, chunk), *caches_now()))
             ttnn.deallocate(out)
         for (_, kvpe_a, index_a), (_, kvpe_b, index_b) in zip(eager, eager[1:]):
             assert not torch.equal(kvpe_a, kvpe_b) and not torch.equal(index_a, index_b), "a chunk wrote no cache"
 
         # Capture on slot 0 at position 0, after two warm forwards settle programs and persistent resources.
         stack.set_trace_controller(controller)
-        stage(0, 0, 0, CHUNK)
+        stage(0, 0, 0, chunk)
         for _ in range(2):
             ttnn.deallocate(forward_traced())
         ttnn.synchronize_device(mesh_device)
@@ -172,7 +180,7 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
 
         ttnn.copy_host_to_device_tensor(pristine[0], kvpe.storage)
         ttnn.copy_host_to_device_tensor(pristine[1], index)
-        for i, (request, slot, start, end) in enumerate(CHUNKS):
+        for i, (request, slot, start, end) in enumerate(schedule):
             logger.info(f"{window}: replay slot {slot} [{start}, {end})")
             stage(request, slot, start, end)
             controller.replay()
@@ -181,7 +189,7 @@ def test_k31_dsa_traced_replay_matches_eager(mesh_device, device_params, window)
             label = f"{window} chunk {i} (slot {slot}, [{start}, {end}))"
             assert torch.equal(kvpe_got, kvpe_want), f"{label}: traced KVPE cache differs from eager"
             assert torch.equal(index_got, index_want), f"{label}: traced index cache differs from eager"
-            assert torch.equal(compose(mesh_device, traced_out, CHUNK), out_want), f"{label}: traced output differs"
+            assert torch.equal(compose(mesh_device, traced_out, chunk), out_want), f"{label}: traced output differs"
     finally:
         if captured:
             controller.release()

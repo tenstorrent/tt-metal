@@ -89,7 +89,7 @@ def test_all_gather_subcore_grid(
     num_iters,
     sub_core_grids,
 ):
-    validate_test(num_devices, None, bh_2d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, 0, mesh_device=bh_2d_mesh_device)
 
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
@@ -171,7 +171,7 @@ def test_all_gather_2D_line(
     enable_trace,
     num_iters,
 ):
-    validate_test(num_devices, None, bh_2d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, 0, mesh_device=bh_2d_mesh_device)
 
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
@@ -245,7 +245,7 @@ def test_all_gather_4D_line(
     enable_trace,
     num_iters,
 ):
-    validate_test(num_devices, None, bh_2d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, 0, mesh_device=bh_2d_mesh_device)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_all_gather_impl(
@@ -317,7 +317,7 @@ def test_all_gather_ring(
     num_iters,
 ):
     num_devices = bh_1d_mesh_device.shape[0]
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, 0, mesh_device=bh_1d_mesh_device)
 
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
@@ -389,7 +389,7 @@ def test_all_gather_8D_vertical(
     enable_trace,
     num_iters,
 ):
-    validate_test(num_devices, None, bh_2d_mesh_device.shape, 1)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, 1, mesh_device=bh_2d_mesh_device)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     cluster_axis = 1
     run_all_gather_impl(
@@ -471,7 +471,7 @@ def test_all_gather_failing_shapes(
     enable_trace,
     num_iters,
 ):
-    validate_test(num_devices, None, bh_1d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, 0, mesh_device=bh_1d_mesh_device)
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_all_gather_impl(

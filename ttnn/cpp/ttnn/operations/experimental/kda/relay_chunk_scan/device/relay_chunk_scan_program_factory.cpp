@@ -87,7 +87,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     auto successor = coord;
     successor[axis] = (sp_rank + 1) % sp_size;
     // A ring only where the fabric config wraps the axis and its closing link is wired.
-    const bool ring = ttnn::ccl::get_axis_topology(in.packed, tt::tt_fabric::GetFabricConfig(), axis) ==
+    const bool ring = ttnn::ccl::get_axis_topology(in.packed, tt::tt_fabric::GetFabricConfig(*mesh), axis) ==
                       tt::tt_fabric::Topology::Ring;
     // The successor is the forward neighbor, one hop, except for the last rank of a line that does not wrap, which
     // reaches rank 0 backward, sp_size - 1 hops (as qkv_causal_conv1d_silu's exchange_route).
@@ -96,7 +96,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     // 2D routing addresses the successor itself; 1D routing leaves on the link to the neighbor it heads through.
     auto first_hop = coord;
     first_hop[axis] = successor_forward ? (sp_rank + 1) % sp_size : (sp_rank + sp_size - 1) % sp_size;
-    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh));
     auto predecessor = coord;
     predecessor[axis] = (sp_rank + sp_size - 1) % sp_size;
     const auto source_node = mesh->get_fabric_node_id(coord);

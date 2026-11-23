@@ -81,6 +81,39 @@ def _key(module, sources):
     )
 
 
+@pytest.mark.parametrize("hash_length", [40, 64])
+def test_checkpoint_id_uses_resolved_blob_name(tmp_path, hash_length):
+    blob = tmp_path / "blobs" / ("a" * hash_length)
+    blob.parent.mkdir()
+    blob.write_bytes(b"weights")
+    checkpoint = tmp_path / "model.safetensors"
+    checkpoint.symlink_to(blob)
+
+    assert cache.checkpoint_id(checkpoint) == "a" * 16
+
+
+def test_checkpoint_id_tracks_local_file_changes(checkpoint):
+    before = cache.checkpoint_id(checkpoint)
+    assert cache.checkpoint_id(checkpoint) == before
+
+    checkpoint.write_bytes(b"replacement weights with a different size")
+    assert cache.checkpoint_id(checkpoint) != before
+
+
+def test_checkpoint_id_tracks_each_shard(tmp_path):
+    shards = [tmp_path / f"shard-{index}.safetensors" for index in range(2)]
+    for shard in shards:
+        shard.write_bytes(b"weights")
+    before = cache.checkpoint_id(*shards)
+    assert cache.checkpoint_id(*shards) == before
+    assert cache.checkpoint_id(*reversed(shards)) != before
+    for shard in shards:
+        shard.write_bytes(b"replacement weights with a different size")
+        after = cache.checkpoint_id(*shards)
+        assert after != before
+        before = after
+
+
 def test_key_is_stable_across_runs(checkpoint, monkeypatch, tmp_path):
     """The whole point of a cache: unchanged inputs must land on the same path every process
     start, or every run re-materializes the checkpoint."""

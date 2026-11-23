@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "llk_assert.h"
+#include "utils/validate.h"
 
 namespace hal::misc
 {
@@ -173,44 +173,11 @@ constexpr bool is_valid(const TbufCommand)
     return true;
 }
 
-constexpr void reject_invalid_constant(const bool valid)
-{
-    if (__builtin_is_constant_evaluated() && !valid)
-    {
-        __builtin_trap();
-    }
-}
-
-#ifdef ENABLE_LLK_ASSERT
-inline __attribute__((always_inline)) void assert_valid(const ResourceDeclaration declaration)
-{
-    LLK_ASSERT(declaration.instruction_class < 16u, "RESOURCEDECL instruction class is 4 bits");
-    LLK_ASSERT(declaration.resources < (1u << 9), "RESOURCEDECL resource mask is 9 bits");
-    LLK_ASSERT(declaration.linger_time < (1u << 4), "RESOURCEDECL linger time is 4 bits");
-}
-
-inline __attribute__((always_inline)) void assert_valid(const FlushTdma flush)
-{
-    LLK_ASSERT(is_valid(flush), "TDMA flush selection is 4 bits");
-}
-
-inline __attribute__((always_inline)) void assert_combinable(const FlushScope lhs, const FlushScope rhs)
-{
-    LLK_ASSERT(lhs != FlushScope::All && rhs != FlushScope::All, "FlushScope::All must be used on its own");
-}
-#endif
-
 } // namespace detail
 
 constexpr FlushScope operator|(const FlushScope lhs, const FlushScope rhs)
 {
-    detail::reject_invalid_constant(lhs != FlushScope::All && rhs != FlushScope::All);
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_combinable(lhs, rhs);
-    }
-#endif
+    hal::detail::require(lhs != FlushScope::All && rhs != FlushScope::All, "FlushScope::All must be used on its own");
     return static_cast<FlushScope>(static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs));
 }
 
@@ -222,25 +189,15 @@ constexpr bool is_valid(const ResourceDeclaration declaration)
 
 inline constexpr __attribute__((always_inline)) std::uint32_t ResourceDeclaration::operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this));
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
+    hal::detail::require(instruction_class < 16u, "RESOURCEDECL instruction class is 4 bits");
+    hal::detail::require(resources < (1u << 9), "RESOURCEDECL resource mask is 9 bits");
+    hal::detail::require(linger_time < (1u << 4), "RESOURCEDECL linger time is 4 bits");
     return TT_OP_RESOURCEDECL(linger_time, resources, instruction_class);
 }
 
 inline constexpr __attribute__((always_inline)) std::uint32_t FlushTdma::operation() const
 {
-    detail::reject_invalid_constant(detail::is_valid(*this));
-#ifdef ENABLE_LLK_ASSERT
-    if (!__builtin_is_constant_evaluated())
-    {
-        detail::assert_valid(*this);
-    }
-#endif
+    hal::detail::require(detail::is_valid(*this), "TDMA flush selection is 4 bits");
     return TT_OP_FLUSHDMA(static_cast<std::uint8_t>(scope));
 }
 
