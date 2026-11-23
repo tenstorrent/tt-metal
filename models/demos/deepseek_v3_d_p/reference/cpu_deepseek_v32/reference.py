@@ -253,6 +253,45 @@ class SparseMLAReference:
         return out
 
     @property
+    def softmax_scale(self) -> float:
+        """The MLA softmax scale (qk_head_dim**-0.5, with the YaRN mscale correction when YaRN is active)."""
+        return self._mla.softmax_scale
+
+    def absorbed_query_and_kvpe(
+        self, hidden_states: torch.Tensor, *, actual_start: int = 0
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """This layer's absorbed queries and latent KVPE rows for ``hidden_states``, without touching any cache.
+
+        Runs the same projection front-end as ``forward`` (one code path), at absolute positions
+        ``actual_start .. actual_start + S - 1``. Lets a caller attend over its own key set with this
+        layer's weights (GLM-5.4 loop pass 2 shares the pass-1 layer's weights).
+
+        Returns:
+            q    [1, H, S, kv_lora_rank + qk_rope_head_dim]: absorbed nope query ++ rotated rope query
+                 (the ``sparse_mla`` query layout).
+            kvpe [S, kv_lora_rank + qk_rope_head_dim]: normed latent ++ rotated k_pe (the KVPE cache row layout).
+        """
+        x = hidden_states.to(torch.bfloat16)
+        seqlen = x.shape[-2]
+        end = actual_start + seqlen
+        assert end <= self._seq_len, f"end {end} exceeds seq_len {self._seq_len}"
+        with torch.no_grad():
+            _, q_nope, q_pe, kv, k_pe = self._mla.latent_projections(x, self._freqs[actual_start:end])
+            q = torch.cat([self._mla.absorb_query(q_nope), q_pe], dim=-1)  # [1, S, H, 576]
+        kvpe = torch.cat([kv, k_pe.squeeze(2)], dim=-1)  # [1, S, 576]
+        return q.transpose(1, 2).contiguous(), kvpe[0]
+
+    def latent_attention_output(self, latent_out: torch.Tensor, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Map a latent-space attention output [1, H, S, kv_lora_rank] to the layer output [1, S, dim].
+
+        The tail of ``forward``'s absorbed path: value absorb (wkv_b), output gate if any, then o_proj.
+        ``hidden_states`` is the attention input, read only by a gated (Kimi-K3) layer.
+        """
+        with torch.no_grad():
+            x_latent = latent_out.transpose(1, 2).to(torch.bfloat16)  # [1, S, H, c]
+            return self._mla.output_projection(self._mla.absorb_value(x_latent), hidden_states.to(torch.bfloat16))
+
+    @property
     def indexer_logits(self) -> torch.Tensor:
         """Indexer index-scores from the last forward [1, S, end] (causal region matches the reference)."""
         assert self._last_logits is not None, "call forward() first"

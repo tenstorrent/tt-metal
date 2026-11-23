@@ -396,6 +396,55 @@ class MLACPU(nn.Module):
         kv_deq = (kv_fp8.view(-1, BLOCK_SIZE).float() * kv_scale.view(-1, 1)).to(kv.dtype).view_as(kv)
         return kv_deq
 
+    def latent_projections(self, x: torch.Tensor, freqs_cis: torch.Tensor):
+        """Shared MLA front-end; writes no cache.
+
+        Args:
+            x: input features [B, S, dim]
+            freqs_cis: rotary frequencies for the rows' absolute positions [S, rope/2]
+
+        Returns:
+            qr [B, S, q_lora_rank], q_nope [B, S, H, nope], q_pe [B, S, H, rope] (rotated),
+            kv [B, S, kv_lora_rank] (normed latent, fp8-simulated when enabled), k_pe [B, S, 1, rope] (rotated).
+        """
+        bsz, seqlen, _ = x.size()
+        qr = self.q_norm(self.wq_a(x))  # [B, S, q_lora_rank]
+        q = self.wq_b(qr)  # [B, S, H * qk_head_dim]
+        q = q.view(bsz, seqlen, self.n_heads, self.qk_head_dim)
+        q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        kv = self.wkv_a(x)  # [B, S, kv_lora_rank + rope]
+        kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+        kv = self.kv_norm(kv)  # latent kv [B, S, 512]
+        k_pe = k_pe.unsqueeze(2)  # [B, S, 1, 64]
+        if not self.use_nope:
+            # MLA RoPE is interleaved (the indexer's is not). NoPE leaves q_pe / k_pe unrotated.
+            q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=True)
+            k_pe = apply_rotary_emb(k_pe, freqs_cis, interleaved=True)
+
+        # fp8 KV-cache precision simulation (consistent on every write path).
+        if self.simulate_fp8:
+            kv = self._simulate_fp8_kv(kv)
+        return qr, q_nope, q_pe, kv, k_pe
+
+    def absorb_query(self, q_nope: torch.Tensor) -> torch.Tensor:
+        """Absorb the nope half of wkv_b into the query: [B, S, H, nope] -> [B, S, H, kv_lora_rank]."""
+        wkv_b = self.wkv_b.weight.view(self.n_heads, -1, self.kv_lora_rank)  # [H, nope + v, c]
+        return torch.einsum("bshd,hdc->bshc", q_nope, wkv_b[:, : self.qk_nope_head_dim])
+
+    def absorb_value(self, x_latent: torch.Tensor) -> torch.Tensor:
+        """Absorb the value half of wkv_b: [B, S, H, kv_lora_rank] -> [B, S, H, v_head_dim]."""
+        wkv_b = self.wkv_b.weight.view(self.n_heads, -1, self.kv_lora_rank)
+        return torch.einsum("bshc,hdc->bshd", x_latent, wkv_b[:, -self.v_head_dim :])
+
+    def output_projection(self, x_attn: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Per-head attention output [B, S, H, v] -> [B, S, dim]; ``x`` is the attention input (output gate)."""
+        x_attn = x_attn.flatten(2)  # [B, S, H * v], head-major
+        if self.use_output_gate:
+            # Kimi-K3 output gate, per head before wo. Cannot move before the wkv_b value absorb:
+            # g * (attn @ W_b2) != (g * attn) @ W_b2.
+            x_attn = x_attn * self.g_proj(x).sigmoid()
+        return self.wo(x_attn)  # [B, S, dim]
+
     def forward(
         self,
         x: torch.Tensor,
@@ -419,23 +468,7 @@ class MLACPU(nn.Module):
             f"MLA forward: bsz={bsz}, seqlen={seqlen}, start_pos={start_pos}, mask={'set' if mask is not None else 'None'}"
         )
 
-        # ----- Shared front-end -----
-        qr = self.q_norm(self.wq_a(x))  # [B, S, q_lora_rank]
-        q = self.wq_b(qr)  # [B, S, H * qk_head_dim]
-        q = q.view(bsz, seqlen, self.n_heads, self.qk_head_dim)
-        q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
-        kv = self.wkv_a(x)  # [B, S, kv_lora_rank + rope]
-        kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-        kv = self.kv_norm(kv)  # latent kv [B, S, 512]
-        k_pe = k_pe.unsqueeze(2)  # [B, S, 1, 64]
-        if not self.use_nope:
-            # MLA RoPE is interleaved (the indexer's is not). NoPE leaves q_pe / k_pe unrotated.
-            q_pe = apply_rotary_emb(q_pe, freqs_cis, interleaved=True)
-            k_pe = apply_rotary_emb(k_pe, freqs_cis, interleaved=True)
-
-        # fp8 KV-cache precision simulation (consistent on every write path).
-        if self.simulate_fp8:
-            kv = self._simulate_fp8_kv(kv)
+        qr, q_nope, q_pe, kv, k_pe = self.latent_projections(x, freqs_cis)
 
         # Write current chunk into the latent caches.
         self.kv_cache[:bsz, start_pos:end_pos] = kv
@@ -462,9 +495,8 @@ class MLACPU(nn.Module):
             x_attn = torch.einsum("bsht,bthd->bshd", scores, v)  # [B, S, H, v]
         else:
             # ----- Decode / MQA: absorb wkv_b into Q and output -----
-            wkv_b = self.wkv_b.weight.view(self.n_heads, -1, self.kv_lora_rank)  # [H, 256, c]
             # Absorb the nope half of wkv_b into the query (-> width c).
-            q_nope_abs = torch.einsum("bshd,hdc->bshc", q_nope, wkv_b[:, : self.qk_nope_head_dim])  # [B, S, H, c]
+            q_nope_abs = self.absorb_query(q_nope)  # [B, S, H, c]
             scores = (
                 torch.einsum("bshc,btc->bsht", q_nope_abs, self.kv_cache[:bsz, :end_pos])
                 + torch.einsum("bshr,btr->bsht", q_pe, self.pe_cache[:bsz, :end_pos])
@@ -484,13 +516,8 @@ class MLACPU(nn.Module):
             scores = scores.softmax(dim=-1, dtype=torch.float32).type_as(x)
             x_attn = torch.einsum("bsht,btc->bshc", scores, self.kv_cache[:bsz, :end_pos])  # [B, S, H, c]
             # Absorb the value half of wkv_b at the very end (-> width v).
-            x_attn = torch.einsum("bshc,hdc->bshd", x_attn, wkv_b[:, -self.v_head_dim :])  # [B, S, H, v]
+            x_attn = self.absorb_value(x_attn)  # [B, S, H, v]
 
-        x_attn = x_attn.flatten(2)  # [B, S, H * v], head-major
-        if self.use_output_gate:
-            # Kimi-K3 output gate, per head before wo. Cannot move before the wkv_b value absorb:
-            # g * (attn @ W_b2) != (g * attn) @ W_b2.
-            x_attn = x_attn * self.g_proj(x).sigmoid()
-        out = self.wo(x_attn)  # [B, S, dim]
+        out = self.output_projection(x_attn, x)  # [B, S, dim]
         logger.info(f"MLA output shape: {tuple(out.shape)}")
         return out
