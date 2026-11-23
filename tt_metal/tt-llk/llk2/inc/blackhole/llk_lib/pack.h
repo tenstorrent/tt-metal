@@ -337,9 +337,10 @@ constexpr auto pack_run_mop(const pack_params& params, const std::uint32_t run_t
     constexpr std::uint32_t next_rows_op = pack_pacr(pack_next_rows, hal::pack::TileBoundary::NotLast);
     constexpr std::uint32_t tile_end_op  = pack_pacr(pack_next_rows, hal::pack::TileBoundary::Last);
     constexpr std::uint32_t run_end_op   = pack_pacr(pack_run_end, hal::pack::TileBoundary::Last);
-    return hal::mop::loop(run_tiles, hal::mop::loop(pack_pacrs_per_tile(params), next_rows_op))
-        .patch(hal::mop::last_outer, run_end_op)
-        .patch(hal::mop::last_inner, params.sum_tiles ? tile_end_op : next_rows_op);
+    const auto run_mop = hal::mop::loop(run_tiles, hal::mop::loop(pack_pacrs_per_tile(params), next_rows_op)).patch(hal::mop::last_outer, run_end_op);
+    // The last PACR of every tile but the run's last is the inner loop's own op (next_rows_op) unless the tiles are
+    // summed. A run of one tile issues no such PACR, and the HAL refuses a patch that is never issued.
+    return params.sum_tiles && run_tiles != 1 ? run_mop.patch(hal::mop::last_inner, tile_end_op) : run_mop;
 }
 
 /// MOP template 1 for a run of run_tiles tiles, a run-time count (pack_runtime_mop): execute programs it, where the
