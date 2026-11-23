@@ -1203,7 +1203,18 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));
+    TT_FATAL(desc.kernels.size() == kSdpaDecodeKernels, "sdpa_decode: kernel count changed (extra kernel indices)");
 
+    if (const auto& extra = operation_attributes.extra_kernels.desc) {
+        CoreRangeSet used;
+        for (const auto& k : desc.kernels) {
+            used = used.merge(k.core_ranges);
+        }
+        for (const auto& k : extra->kernels) {
+            TT_FATAL(!used.intersects(k.core_ranges), "sdpa_decode extra_kernels: cores overlap the op's cores");
+            desc.kernels.push_back(k);
+        }
+    }
     return desc;
 }
 

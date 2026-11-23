@@ -59,6 +59,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             spec_pack_heads (int, optional): paged decode only, with `spec_multi_pos_tiles`. `nh` > 0 packs a group's `Tg`
                 candidates x `nh` valid q rows into one q tile (per-row causal mask); the valid output rows are
                 bit-identical to the unpacked call and the padding rows are not written. Defaults to `0`.
+            extra_kernels (ttnn.ProgramDescriptor, optional): caller kernels appended to the program, on cores the op does not use (no CBs or semaphores); only their descriptor hash keys the program cache and their runtime args are re-applied on every call. Defaults to `None`.
 
 
         Returns:
@@ -87,7 +88,8 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("share_cache") = nb::none());
+        nb::arg("share_cache") = nb::none(),
+        nb::arg("extra_kernels") = nb::none());
 
     ttnn::bind_function<"paged_scaled_dot_product_attention_decode", "ttnn.transformer.">(
         mod,

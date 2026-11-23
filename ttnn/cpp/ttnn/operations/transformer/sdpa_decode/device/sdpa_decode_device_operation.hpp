@@ -10,6 +10,7 @@
 #include <optional>
 
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -99,6 +100,13 @@ struct SdpaDecodeDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    // Runtime args of the caller's extra kernels (SdpaExtraKernels), re-applied on every program-cache hit.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
 };
 
 Tensor sdpa_decode(
@@ -124,6 +132,7 @@ Tensor sdpa_decode(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     std::optional<uint32_t> cache_position_modulo = std::nullopt,
     uint32_t spec_multi_pos_tiles = 0,
-    uint32_t spec_pack_heads = 0);
+    uint32_t spec_pack_heads = 0,
+    const std::optional<tt::tt_metal::ProgramDescriptor>& extra_kernels = std::nullopt);
 
 }  // namespace ttnn::prim

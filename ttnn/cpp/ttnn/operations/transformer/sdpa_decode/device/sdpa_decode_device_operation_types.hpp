@@ -4,14 +4,41 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::prim {
+
+// Caller kernels appended to the sdpa program (e.g. data-movement kernels that stage weights into L1 on cores the op
+// leaves idle while it runs). Core ranges must be disjoint from the op's cores; no CBs or semaphores. Only `hash`
+// (the descriptor hash without runtime args) enters the program-cache key; the runtime args are re-applied on every
+// cache hit (get_dynamic_runtime_args).
+struct SdpaExtraKernels {
+    std::shared_ptr<const tt::tt_metal::ProgramDescriptor> desc;
+    std::size_t hash = 0;
+    static constexpr auto attribute_names = std::forward_as_tuple("hash");
+    auto attribute_values() const { return std::forward_as_tuple(hash); }
+    std::size_t to_hash() const { return hash; }
+};
+
+}  // namespace ttnn::prim
+
+// The descriptor is not serializable: op logs / the profiler record the hash only (a full specialization, so the
+// generic attribute and aggregate paths do not compete).
+template <>
+struct ttsl::json::to_json_t<ttnn::prim::SdpaExtraKernels> {
+    nlohmann::json operator()(const ttnn::prim::SdpaExtraKernels& extra) const { return nlohmann::json(extra.hash); }
+};
+
+namespace ttnn::prim {
+
+inline constexpr uint32_t kSdpaDecodeKernels = 3;  // reader, writer, compute; extra kernels follow
 
 struct SdpaDecodeParams {
     bool is_causal = false;
@@ -63,6 +90,7 @@ struct SdpaDecodeParams {
     // rows [0, NH) of each output row-tile are written (the padding rows NH..31 are left as
     // allocated). Requires Tg * S <= 32 and an interleaved output.
     uint32_t spec_pack_heads = 0;
+    SdpaExtraKernels extra_kernels{};
 };
 
 struct SdpaDecodeInputs {
