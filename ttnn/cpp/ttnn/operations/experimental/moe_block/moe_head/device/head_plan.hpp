@@ -31,8 +31,8 @@ inline constexpr int64_t kL1Margin = 8 * 1024;
 inline constexpr int64_t kUnlimited = int64_t(1) << 40;
 // Host-only default fabric packet payload, bytes (a block plans on its fabric's: get_tt_fabric_max_payload_size_bytes):
 // (source not recorded) - it is what the MoE block tests' fabric router config sets, max_packet_payload_size_bytes =
-// (2 H + 32 + 63) / 64 x 64 (a bf16 row of H and 32 B, to 64 B; models/demos/moe_block/tests), at H 4096; not the
-// fabric's default (4352). TODO: confirm its source
+// (2 H + 32 + 63) / 64 x 64 (a bf16 row of H and 32 B, to 64 B; models/demos/deepseek_v3_d_p/tests/moe_block), at
+// H 4096; not the fabric's default (4352). TODO: confirm its source
 inline constexpr uint32_t kHeadPayload = 8256;
 // Fabric packet headers a RISC: Blackhole's packet header pool, NUM_PACKET_HEADERS (6 directions x 2 conventions x 2
 // DM RISCs) over MaxDMProcessorsPerCoreType RISCs (tt_metal/hw/inc/internal/tt-1xx/blackhole/dev_mem_map.h,

@@ -388,11 +388,11 @@ def _assert_certified_torus_profile(request):
     # Collection skipped every wrapped case the descriptor does not certify.
     if certified_torus_fabric(os.environ["TT_MESH_GRAPH_DESC_PATH"]) != requested:
         return
-    request.getfixturevalue("mesh_device")
-    assert ttnn.get_fabric_config() == requested
+    mesh_device = request.getfixturevalue("mesh_device")
+    assert ttnn.get_fabric_config(mesh_device) == requested
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
-    assert per_axis_topology() == expected_topology[requested]
+    assert per_axis_topology(mesh_device=mesh_device) == expected_topology[requested]
 
 
 @pytest.fixture

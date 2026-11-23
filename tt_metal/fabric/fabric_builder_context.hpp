@@ -189,6 +189,9 @@ public:
     const RouterChannelLayout* find_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
         return router_channel_layouts_.find(node, eth_chan);
     }
+    PeerLayout get_peer_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
+        return router_channel_layouts_.peer(node, eth_chan);
+    }
 
     // ============ Diagnostic Buffer Map ============
     /** Returns the diagnostic buffer locations for all routers.

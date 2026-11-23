@@ -64,6 +64,12 @@
 
 #ifdef ENABLE_PREFETCHER_PIPE
 #include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
+#ifdef ARCH_QUASAR
+#error "PrefetcherPipe weight delivery into this matmul has not been brought up on Quasar"
+#endif
+#endif
+#ifdef BATCH_BROADCAST
+#include "ttnn/operations/matmul/device/kernels/dataflow/batch_broadcast_offset.hpp"
 #endif
 
 // Reads one in1 block (BLOCK_H x BLOCK_W tiles, of which the first block_w_to_read per row exist) from an
@@ -339,8 +345,18 @@ void kernel_main() {
     constexpr uint32_t in1_batch_stride_bytes = in1_KtNt_per_batch * in1_single_tile_size_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
+#ifdef BATCH_BROADCAST
+    // Each batch starts at the broadcast offset from this core's batch-0 tile, replacing the KtNt advance.
+    const uint32_t in1_core_start_tile_id = in1_tensor_start_tile_id;
+    constexpr auto batch_dims = get_arg(args::batch_dims);
+    constexpr auto in1_batch_strides = get_arg(args::in1_batch_strides);
+#endif
     for (uint32_t b = 0; b < batch; ++b) {
+#ifdef BATCH_BROADCAST
+        uint32_t in1_batch_tile_id = in1_core_start_tile_id + batch_broadcast_offset(b, batch_dims, in1_batch_strides);
+#else
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
+#endif
 
 #ifdef IN1_DRAM_HEIGHT_SHARDED
         // Compute DRAM bank and offset for this batch

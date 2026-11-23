@@ -57,7 +57,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     // 2D routing addresses the successor itself; 1D routing leaves on the link to the neighbor it heads through.
     auto first_hop = coord;
     first_hop[axis] = successor_forward ? (sp_rank + 1) % sp_size : (sp_rank + sp_size - 1) % sp_size;
-    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh));
 
     const uint32_t batch_heads = in.initial_state.logical_shape()[0];
     const uint32_t kt = in.initial_state.logical_shape()[1] / tt::constants::TILE_HEIGHT;

@@ -908,7 +908,7 @@ RelayPlan make_relay_plan(
     bool is_sender) {
     using tt::tt_fabric::RoutingDirection;
     const auto& shape = mesh.shape();
-    const auto fabric = tt::tt_fabric::GetFabricConfig();
+    const auto fabric = tt::tt_fabric::GetFabricConfig(mesh);
     const auto& local_nodes = is_sender ? sender_nodes : receiver_nodes;
     const auto& peer_nodes = is_sender ? receiver_nodes : sender_nodes;
 
@@ -1091,6 +1091,9 @@ struct D2DStreamServiceSender::Impl {
     // Per-coord service-core L1 words (service cores differ per device).
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> data_ready_counter_addrs;
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    // Built on first use by get_sender_coord_table; shared, so Impl stays movable.
+    std::shared_ptr<tt::tt_metal::StreamSenderCoordTableCache> sender_coord_table_cache =
+        std::make_shared<tt::tt_metal::StreamSenderCoordTableCache>();
     // Fabric-link lease. share_fabric_links mirrors Config; when true the kernel
     // holds no fabric connection until granted a turn. link_grant is a single per-
     // coord service-core L1 word forming a strict host<->kernel ping-pong:
@@ -1354,6 +1357,19 @@ DeviceAddr D2DStreamServiceSender::get_metadata_addr(const tt::tt_metal::distrib
         "D2DStreamServiceSender::get_metadata_addr: no metadata buffer at coord {}",
         coord);
     return it->second;
+}
+
+std::shared_ptr<const tt::tt_metal::StreamSenderCoordTable> D2DStreamServiceSender::get_sender_coord_table() const {
+    const auto& shape = impl_->mesh_device->shape();
+    TT_FATAL(shape.dims() == 2, "D2DStreamServiceSender::get_sender_coord_table: expects a 2D mesh");
+    return impl_->sender_coord_table_cache->get(shape[0], shape[1], [this](uint32_t row, uint32_t col, auto& table) {
+        const tt::tt_metal::distributed::MeshCoordinate coord(row, col);
+        table.data_ready_addrs.push_back(static_cast<uint32_t>(get_data_ready_counter_addr(coord)));
+        table.service_cores.push_back(get_service_core(coord));
+        if (impl_->metadata_size_bytes > 0) {
+            table.metadata_addrs.push_back(static_cast<uint32_t>(get_metadata_addr(coord)));
+        }
+    });
 }
 
 tt::tt_metal::StreamOutputCounters D2DStreamServiceSender::get_output_counters(
@@ -2025,7 +2041,7 @@ std::shared_ptr<RelayLocal> allocate_relay(
         cfg.share_fabric_links, "D2DStreamService relay: needs share_fabric_links (the relays hold links per lease)");
     TT_FATAL(!enabled_stage_gate(cfg), "D2DStreamService relay: stage_gate is not supported");
     TT_FATAL(
-        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh)),
         "D2DStreamService relay: needs a 2D fabric (the relays route by chip id)");
 
     auto relay = std::make_shared<RelayLocal>();
