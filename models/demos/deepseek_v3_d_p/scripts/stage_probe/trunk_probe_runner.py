@@ -22,6 +22,7 @@ Nothing here changes what the runner computes or when; every check only observes
   rows=<n>``. With MTP its K slots (past the trunk's) are digested per chunk as ``chunk=<c>mtp``: nonzero rows show
   MTP wrote its KV there. The cache starts zero-filled and two runs feed identical tokens, so equal digests across
   runs mean bit-identical KV; the last chunk's layer-77 rows depend on every pass of every chunk.
+  ``TRUNK_DIGEST_SLOT_RANGES`` (e.g. ``0-53,54-76,77-77``) adds a digest per stage-slot range (``chunk=<c>s<lo>_<hi>``).
 * MTP wiring (q171.2.10), with MTP on. Every forward records the blocks it runs, the trunk norm's input and output, and
   the tensor MTP is seeded with. ``TRUNK_ASSERT mtp_input PASS|FAIL`` (logged with the checks above) needs, in every
   forward that ran MTP: MTP ran once, after every pass-schedule step of the stage (``model.steps``, in order: 106 on
@@ -179,6 +180,10 @@ def _kv_digest(runtime) -> None:
         f"over slots {ring_slots[:1] + ring_slots[-1:]}"
     )
     reads = [(f"chunk={c}", c * chunk, 0, trunk_slots) for c in chunks]
+    # Optional per-slot-range digests (TRUNK_DIGEST_SLOT_RANGES="0-53,54-76,77-77"): where two runs' KV differ.
+    for spec in filter(None, os.environ.get("TRUNK_DIGEST_SLOT_RANGES", "").split(",")):
+        lo, hi = (int(x) for x in spec.split("-"))
+        reads += [(f"chunk={c}s{lo}_{hi}", c * chunk, lo, hi - lo + 1) for c in chunks]
     if mtp_slots:
         reads += [(f"chunk={c}mtp", c * chunk, trunk_slots, mtp_slots) for c in chunks]
     if ring_slots:
