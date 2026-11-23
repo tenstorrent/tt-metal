@@ -1398,3 +1398,7 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   9 model loads. ACCEPTED (owner rule: device win + gate PASS); the accept gate judges accuracy (test_chunk8192_reference,
   fresh full model, switch on) + determinism. Resumed.
 - 15:51 PB.MM256 accept gate: determinism 0.0 (3 runs, 4 chunks, fresh process), test_chunk8192_reference with MM_TUNED256=on: err_final_hidden 0.1345 (limit 0.2422) last / 0.1400 (0.2586) from0, top-5 1.0, worst layer 0.63 of its limit (L07); units 5-6 (packed walls, no-rebuild) finishing.
+- 15:52 PB.MM256 gate PASS -> d6bc91514d5 (6 units; MM_TUNED256 default now on). 8192 ladder off -> on (device ms, every
+  case and rung -1.0..-1.5 except 3 rungs < 0.7): single 1M 109.4 -> 108.2, 4x2k 1M 121.7 -> 120.4; walls within noise
+  (results/PB.MM256_ladder.md; the table sent to the owner). Not pushed.
+- 15:55 switching to dnijemcevic/model_bringup for MB.9 (owner: re-sweep both branches). Batching dashboards stashed.

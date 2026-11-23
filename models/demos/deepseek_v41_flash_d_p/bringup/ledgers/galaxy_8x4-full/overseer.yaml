@@ -763,6 +763,36 @@ notes:
     (declare it in BATCH_ITEM_VARS; the glued fix task PB.9G, PB.T and PB.9H set it). The gate''s re-run showed glued5x1600
     FAIL too (16 builds on glued4x2k incl. resumed rows) - report both glued paths as FAIL in packed_ladder_20261121.md
     (only the single-request ladder counts today) and name each op that built. Change nothing else.'
+- id: OV-73
+  tasks:
+  - PB.MM256
+  status: closed
+  t: '2026-11-23T13:32:18'
+  text: 'The overseer stopped attempt 1 (perf): OWNER 2026-11-23 widened the scope: re-sweep EVERY matmul the model runs
+    at the 8192 chunk (layers 0-20), not only the attention projections; the brief is being updated. Keep your work in the
+    tree.'
+  closed: '2026-11-23T13:41:13'
+  why_closed: superseded by the updated brief
+- id: OV-74
+  tasks:
+  - PB.MM256
+  status: closed
+  t: '2026-11-23T13:40:54'
+  text: 'The overseer stopped attempt 2 (perf): OWNER 2026-11-23: run the config sweep in PARALLEL ACROSS CHIPS with the
+    existing P.19 machinery (tests/perf/test_matmul_sweep.py: capture, then test_sweep_card per card in N parallel processes,
+    merge_shards); the brief is being updated. Keep your work in the tree.'
+  closed: '2026-11-23T14:31:23'
+  why_closed: superseded by the updated brief
+- id: OV-75
+  tasks:
+  - PB.MM256
+  status: open
+  t: '2026-11-23T14:28:31'
+  text: 'The overseer stopped attempt 3 (perf): OWNER 2026-11-23 (standing rule 3): bit-identity with today''s config (and
+    the same summation order) is NOT a criterion. Keep every config that is faster and passes the accuracy limits (reference,
+    err_* <= limit) with bit-identical REPEATS of its own (determinism) and cold no-rebuild; include the order-changing
+    winners you dropped (wq_b minimal, wo_a block_w 2, family switches). The brief and gate are being updated; your work
+    stays in the tree.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
