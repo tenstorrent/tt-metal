@@ -24,6 +24,7 @@ import hashlib
 import math
 import struct
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 import ttnn
@@ -85,6 +86,7 @@ STATS_TABLE_CAP = 256 * 1024  # bytes of the stats table on each hub
 BATCH_CHUNKS = 4  # port CB batch (TRANSPORT; catalog fabric_all_gather: 4 per batch best or within 5-16%)
 INC_EVERY = 8  # arrival increment every N packets (+ each entry's last)
 BALANCE_MIN_TILES = 64  # balance an even ring's far slot from this many tiles per slot (catalog)
+SCATTER_RUNS = 4  # destination runs per bulk packet (fabric scatter write, <= NOC_SCATTER_WRITE_MAX_CHUNKS)
 
 NOC_READER = ttnn.NOC.RISCV_0_default  # NoC0 (fabric_all_gather's convention)
 NOC_WRITER = ttnn.NOC.RISCV_1_default  # NoC1
@@ -270,8 +272,10 @@ class Walk:
     row_stride: int
     slot_stride: int
     run_pages: int
+    scatter_runs: int
 
     def chunks(self, q, part, first_bank, stride):
+        """Packets of slot q for one lane / part (host replica of agrn_port_common.hpp for_each_packet)."""
         if first_bank >= self.nb:
             return 0
         nb = self.nb
@@ -279,16 +283,25 @@ class Walk:
         lo = nl // 2 if part == 2 else 0
         hi = nl // 2 if part == 1 else nl
         cnt = 0
+        nr = pages = 0
         base = q * self.slot_stride
         for i in range(lo, hi):
+            if i == nl // 2 and nr:
+                cnt += 1
+                nr = pages = 0
             b = first_bank + i * stride
             for rr in range(self.rows_eff):
                 rb = base + rr * self.row_stride
                 jj = (b - rb) % nb
-                if jj < self.cols_eff:
-                    avail = (self.cols_eff - 1 - jj) // nb + 1
-                    cnt += -(-avail // self.run_pages)
-        return cnt
+                while jj < self.cols_eff:
+                    n = min((self.cols_eff - 1 - jj) // nb + 1, self.run_pages)
+                    if nr == self.scatter_runs or pages + n > self.run_pages:
+                        cnt += 1
+                        nr = pages = 0
+                    nr += 1
+                    pages += n
+                    jj += n * nb
+        return cnt + (1 if nr else 0)
 
 
 def _inc_sim(counts, inc_every):
@@ -456,9 +469,9 @@ def create_mesh_program_descriptor(
     payload_bytes = run_pages * out_page
     stats_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
     if is_ru:
-        walk = Walk(nb, 1, geo.R * geo.Wlt, geo.R * geo.Wlt, geo.R * geo.Wlt, run_pages)
+        walk = Walk(nb, 1, geo.R * geo.Wlt, geo.R * geo.Wlt, geo.R * geo.Wlt, run_pages, SCATTER_RUNS)
     else:
-        walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages)
+        walk = Walk(nb, geo.R, geo.Wlt, geo.Wt, geo.Wlt, run_pages, SCATTER_RUNS)
     balance = ring and G % 2 == 0 and G >= 4 and geo.R * geo.Wlt >= BALANCE_MIN_TILES
 
     # R_U assembly: max distinct source tiles per output tile
@@ -542,6 +555,7 @@ def create_mesh_program_descriptor(
         split.big,
         split.cw_nom,
         stats_payload,
+        SCATTER_RUNS,
     ] + list(ttnn.TensorAccessorArgs(dst_tensor).get_compile_time_args())
 
     # ---- compute config ----
@@ -556,6 +570,8 @@ def create_mesh_program_descriptor(
         cfg.unpack_to_dest_mode = modes
 
     full = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
+    # per-stage profiler zones (perf probes only; the harness needs them off)
+    defines = [("AGRN_PROFILE_ZONES", "1")] if os.environ.get("AGRN_PROFILE_ZONES") == "1" else []
     in_addr = int(input_tensor.buffer_address())
     out_addr = int(output_tensor.buffer_address())
     dst_addr = int(dst_tensor.buffer_address())
@@ -663,6 +679,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_reader.cpp"),
                 core_ranges=worker_set,
                 compile_time_args=worker_ct + acc_ct,
+                defines=defines,
                 common_runtime_args=common,
                 config=_dm(ttnn.DataMovementProcessor.RISCV_1, NOC_READER),
             ),
@@ -670,6 +687,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_writer.cpp"),
                 core_ranges=worker_set,
                 compile_time_args=worker_ct + acc_ct,
+                defines=defines,
                 common_runtime_args=common,
                 config=_dm(ttnn.DataMovementProcessor.RISCV_0, NOC_WRITER),
             ),
@@ -677,6 +695,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_compute.cpp"),
                 core_ranges=worker_set,
                 compile_time_args=worker_ct,
+                defines=defines,
                 common_runtime_args=common,
                 config=cfg,
             ),
@@ -759,6 +778,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_reader.cpp"),
                 core_ranges=port_cores,
                 compile_time_args=port_ct,
+                defines=defines,
                 runtime_args=reader_rt,
                 config=_dm(ttnn.DataMovementProcessor.RISCV_1, NOC_READER),
             ),
@@ -766,6 +786,7 @@ def create_mesh_program_descriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_sender.cpp"),
                 core_ranges=port_cores,
                 compile_time_args=port_ct,
+                defines=defines,
                 runtime_args=sender_rt,
                 config=_dm(ttnn.DataMovementProcessor.RISCV_0, NOC_WRITER),
             ),
@@ -791,6 +812,7 @@ def create_mesh_program_descriptor(
                     str(g_dtype),
                     crt_max,
                     cw_max,
+                    tuple(defines),
                 )
             ).encode()
         ).digest()

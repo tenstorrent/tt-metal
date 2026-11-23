@@ -11,6 +11,15 @@
 
 #include <cstdint>
 
+// Per-stage profiler zones, opt-in (host define AGRN_PROFILE_ZONES, env AGRN_PROFILE_ZONES=1): they would otherwise
+// fill the profiler buffers the perf harness reads its per-program times from.
+#if defined(AGRN_PROFILE_ZONES)
+#include "tools/profiler/kernel_profiler.hpp"
+#define AGRN_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define AGRN_ZONE(name)
+#endif
+
 namespace agrn {
 
 // ---- circular buffers ----

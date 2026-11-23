@@ -70,19 +70,26 @@ void kernel_main() {
     // ---- publish_records_block ----
     {
         const uint32_t n = w.crt * nstats;
-        cb_wait_front(cb_partial, n);
+        {
+            AGRN_ZONE("wr_wait_partial");
+            cb_wait_front(cb_partial, n);
+        }
+        AGRN_ZONE("wr_records");
         const uint32_t src_base = get_read_ptr(cb_partial);
         const uint32_t staging = get_write_ptr(cb_record_staging);
         for (uint32_t s = 0; s < nstats; ++s) {
             for (uint32_t r = 0; r < w.crt; ++r) {
                 const uint32_t t = s * w.crt + r;  // cb_partial is pushed stat-major: [stat][row]
-                volatile tt_l1_ptr uint32_t* tile =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_base + t * f32_tile_bytes);
+                asm volatile("" ::: "memory");
+                const uint32_t* tile = reinterpret_cast<const uint32_t*>(src_base + t * f32_tile_bytes);
                 const uint32_t rec_addr = staging + t * RECORD_BYTES;
-                volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rec_addr);
-                for (uint32_t i = 0; i < TILE; ++i) {
-                    rec[i] = tile[f32_tile_word(i, 0)];
+                uint32_t* rec = reinterpret_cast<uint32_t*>(rec_addr);
+#pragma GCC unroll 16
+                for (uint32_t i = 0; i < FACE; ++i) {  // column 0: face 0 rows 0..15, face 2 rows 16..31
+                    rec[i] = tile[i * FACE];
+                    rec[FACE + i] = tile[512 + i * FACE];
                 }
+                asm volatile("" ::: "memory");
                 const uint32_t off =
                     table + p * slot_bytes + (((w.row_start + r) * K + w.m) * nstats + s) * RECORD_BYTES;
                 noc_async_write(rec_addr, get_noc_addr(fwd_hub & 0xFFFF, fwd_hub >> 16, off), RECORD_BYTES);
@@ -98,6 +105,11 @@ void kernel_main() {
 
     // ---- store_own_block ----
     {
+        {
+            AGRN_ZONE("wr_wait_out");
+            cb_wait_front(cb_out_block, 1);
+        }
+        AGRN_ZONE("wr_own");
         const auto dst = TensorAccessor(dst_args, get_common_arg_val<uint32_t>(CRT_DST_ADDR), out_page_bytes);
         for (uint32_t r = 0; r < w.crt; ++r) {
             const uint32_t tr = w.row_start + r;
@@ -121,7 +133,11 @@ void kernel_main() {
     // ---- assemble_block (R_U) ----
     if constexpr (is_ru) {
         volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_landed));
-        noc_semaphore_wait_min(landed, n_ports);
+        {
+            AGRN_ZONE("wr_wait_landed");
+            noc_semaphore_wait_min(landed, n_ports);
+        }
+        AGRN_ZONE("wr_assemble");
         const auto staging = TensorAccessor(dst_args, get_common_arg_val<uint32_t>(CRT_DST_ADDR), out_page_bytes);
         const auto out = TensorAccessor(out_args, get_common_arg_val<uint32_t>(CRT_OUT_ADDR), out_page_bytes);
         constexpr uint32_t W = G * W_local;

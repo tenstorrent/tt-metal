@@ -98,6 +98,7 @@ void kernel_main() {
         }
         if (n_entries > 0 || n_stats > 0) {
             volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
+            AGRN_ZONE("ps_fence_wait");
             noc_semaphore_wait_min(ready, 1);
             noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
             noc_async_atomic_barrier();
@@ -106,7 +107,11 @@ void kernel_main() {
         if (is_hub && n_stats > 0) {
             volatile tt_l1_ptr uint32_t* records =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(agrn::sem_records_local));
-            noc_semaphore_wait_min(records, n_active);
+            {
+                AGRN_ZONE("ps_rec_wait");
+                noc_semaphore_wait_min(records, n_active);
+            }
+            AGRN_ZONE("ps_stats_send");
             const uint64_t peer_stats_arrived = get_noc_addr(peer_xy & 0xFFFF, peer_xy >> 16, stats_arrived_addr);
             for (uint32_t k = 0; k < n_stats; ++k) {
                 if (k > 0) {
@@ -132,7 +137,10 @@ void kernel_main() {
         }
         // ---- announce_stats_ready ----
         if (is_hub) {
-            noc_semaphore_wait_min(stats_arrived, stats_expect_in);
+            {
+                AGRN_ZONE("ps_stats_wait");
+                noc_semaphore_wait_min(stats_arrived, stats_expect_in);
+            }
             const uint32_t sem = get_semaphore(agrn::sem_stats_ready);
             for (uint32_t i = 0; i < n_notify; ++i) {
                 const uint32_t xy = get_arg_val<uint32_t>(workers_idx + i);
@@ -146,40 +154,79 @@ void kernel_main() {
         // ---- gather_normalized_slices ----
         const uint64_t arrival_noc = get_noc_addr(peer_xy & 0xFFFF, peer_xy >> 16, arrival_addr);
         uint32_t sent = 0;
-        uint32_t h = 0, unflushed = 0;
+        uint32_t unflushed = 0;
         uint32_t chunks_left = 0;
         for (uint32_t k = 0; k < n_entries; ++k) {
             chunks_left += get_arg_val<uint32_t>(entries_idx + 2 * k + 1);
         }
+        // A header is rewritten (command fields only; the route stays) once the NoC has read its previous packet.
+        uint32_t h_next = 0, dirty = 0;
+        auto next_header = [&]() {
+            const uint32_t hk = h_next;
+            h_next = (h_next + 1 == num_headers) ? 0 : h_next + 1;
+            if (dirty & (1u << hk)) {
+                noc_async_writes_flushed();
+                dirty = 0;
+            }
+            dirty |= 1u << hk;
+            return hdrs[hk];
+        };
+        AGRN_ZONE("ps_bulk");
         for (uint32_t k = 0; k < n_entries; ++k) {
             const uint32_t e = get_arg_val<uint32_t>(entries_idx + 2 * k);
             const uint32_t entry_total = get_arg_val<uint32_t>(entries_idx + 2 * k + 1);
             uint32_t entry_sent = 0;
-            for_each_chunk(
-                e & 0xFFFF, e >> 16, first_bank, bank_stride, [&](uint32_t page, uint32_t n, uint32_t, uint32_t) {
-                    cb_wait_front(cb_chunks, run_pages * (unflushed + 1));
-                    const uint32_t src = get_read_ptr(cb_chunks) + unflushed * chunk_bytes;
-                    const uint32_t bytes = n * page_bytes;
-                    const uint64_t d = dst.get_noc_addr(page, 0, 0);  // NoC0 coordinates
-                    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
-                    h = (h + 1 == num_headers) ? 0 : h + 1;
-                    ++entry_sent;
-                    if ((++sent % inc_every) == 0 || entry_sent == entry_total) {
+            for_each_packet(e & 0xFFFF, e >> 16, first_bank, bank_stride, [&](const Packet& pk) {
+                cb_wait_front(cb_chunks, run_pages * (unflushed + 1));
+                const uint32_t src = get_read_ptr(cb_chunks) + unflushed * chunk_bytes;
+                const uint32_t bytes = pk.pages * page_bytes;
+                uint64_t d[4];
+                uint16_t sz[4];
+                for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+                    d[ri] = dst.get_noc_addr(pk.first[ri], 0, 0);  // NoC0 coordinates
+                    sz[ri] = static_cast<uint16_t>(pk.n[ri] * page_bytes);
+                }
+                ++entry_sent;
+                // The increment lands only after the packet's writes (flush), stalling the receiving router, so only
+                // every inc_every-th packet and each entry's last carry one (fabric_all_gather).
+                const bool inc = (++sent % inc_every) == 0 || entry_sent == entry_total;
+                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = next_header();
+                bool extra_inc = false;
+                if (pk.nr == 1) {
+                    if (inc) {
                         hdr->to_noc_fused_unicast_write_atomic_inc(
-                            NocUnicastAtomicIncFusedCommandHeader{d, arrival_noc, 1, true}, bytes);
+                            NocUnicastAtomicIncFusedCommandHeader{d[0], arrival_noc, 1, true}, bytes);
                     } else {
-                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{d}, bytes);
+                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{d[0]}, bytes);
                     }
+                } else if (pk.nr == 2 && inc) {
+                    hdr->to_noc_fused_unicast_scatter_write_atomic_inc(
+                        NocUnicastScatterAtomicIncFusedCommandHeader({d[0], d[1]}, arrival_noc, {sz[0]}, 1, true),
+                        bytes);
+                } else {
+                    hdr->to_noc_unicast_scatter_write(
+                        NocUnicastScatterCommandHeader(d, sz, static_cast<uint8_t>(pk.nr)), bytes);
+                    extra_inc = inc;
+                }
+                conn.wait_for_empty_write_slot();
+                conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
+                if (extra_inc) {
+                    // > 2 runs: a header-only increment after the scatter write (flush: lands after the writes)
+                    volatile tt_l1_ptr PACKET_HEADER_TYPE* ih = next_header();
+                    ih->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{arrival_noc, 1, true});
                     conn.wait_for_empty_write_slot();
-                    conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
-                    --chunks_left;
-                    // pops stay on group boundaries of the 2-group CB (the read offset never wraps), plus the last
-                    if (++unflushed == group || chunks_left == 0) {
-                        noc_async_writes_flushed();  // sources + headers of the in-flight chunks have left L1
-                        cb_pop_front(cb_chunks, run_pages * unflushed);
-                        unflushed = 0;
-                    }
-                });
+                    conn.send_payload_flush_blocking_from_address(
+                        reinterpret_cast<uint32_t>(ih), sizeof(PACKET_HEADER_TYPE));
+                }
+                --chunks_left;
+                // pops stay on group boundaries of the 2-group CB (the read offset never wraps), plus the last
+                if (++unflushed == group || chunks_left == 0) {
+                    noc_async_writes_flushed();  // sources + headers of the in-flight packets have left L1
+                    dirty = 0;
+                    cb_pop_front(cb_chunks, run_pages * unflushed);
+                    unflushed = 0;
+                }
+            });
         }
         noc_async_writes_flushed();
         conn.close();

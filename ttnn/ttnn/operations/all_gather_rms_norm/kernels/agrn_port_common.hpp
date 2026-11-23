@@ -36,12 +36,28 @@ constexpr uint32_t rows_hi = get_compile_time_arg_val(14);
 constexpr uint32_t big = get_compile_time_arg_val(15);
 constexpr uint32_t cw_nom = get_compile_time_arg_val(16);
 constexpr uint32_t payload_bytes = get_compile_time_arg_val(17);  // router max payload (stats packets)
-constexpr uint32_t PORT_CT_ARGS = 18;                             // TensorAccessorArgs(dst) follow
+constexpr uint32_t scatter_runs = get_compile_time_arg_val(18);   // runs per bulk packet (1..4, scatter write)
+constexpr uint32_t PORT_CT_ARGS = 19;                             // TensorAccessorArgs(dst) follow
 constexpr uint32_t chunk_bytes = run_pages * page_bytes;
 
-// f(first_page_id, n_pages, rr, jj): chunk of slot q for the lane (first_bank, bank_stride), part 0 / 1 / 2.
+static_assert(scatter_runs >= 1 && scatter_runs <= 4, "NOC_SCATTER_WRITE_MAX_CHUNKS = 4");
+
+// One bulk packet: up to scatter_runs runs (each consecutive in one destination bank), <= run_pages pages in total,
+// packed back to back in the port CB slot. run i = pages first[i], first[i] + nb, ... (n[i] of them).
+struct Packet {
+    uint32_t nr;
+    uint32_t pages;
+    uint32_t first[4];
+    uint32_t n[4];
+    uint32_t rr[4];
+    uint32_t jj[4];
+};
+
+// f(const Packet&): the packets of slot q for the lane (first_bank, bank_stride), part 0 / 1 / 2. Runs are visited
+// bank-major; a packet closes when full (scatter_runs runs or run_pages pages) and always at the half-lane bank
+// boundary, so the part-1 walk is a prefix of the part-0 walk and part 2 a suffix (balanced-ring relays).
 template <typename F>
-inline void for_each_chunk(uint32_t q, uint32_t part, uint32_t first_bank, uint32_t bank_stride, F&& f) {
+inline void for_each_packet(uint32_t q, uint32_t part, uint32_t first_bank, uint32_t bank_stride, F&& f) {
     if (first_bank >= nb) {
         return;
     }
@@ -49,7 +65,20 @@ inline void for_each_chunk(uint32_t q, uint32_t part, uint32_t first_bank, uint3
     const uint32_t lo = part == 2 ? nl / 2 : 0;
     const uint32_t hi = part == 1 ? nl / 2 : nl;
     const uint32_t base = q * slot_stride;
+    Packet pk;
+    pk.nr = 0;
+    pk.pages = 0;
+    auto flush = [&]() {
+        if (pk.nr > 0) {
+            f(pk);
+            pk.nr = 0;
+            pk.pages = 0;
+        }
+    };
     for (uint32_t i = lo; i < hi; ++i) {
+        if (i == nl / 2) {
+            flush();
+        }
         const uint32_t b = first_bank + i * bank_stride;
         for (uint32_t rr = 0; rr < rows_eff; ++rr) {
             const uint32_t rb = base + rr * row_stride;
@@ -57,11 +86,20 @@ inline void for_each_chunk(uint32_t q, uint32_t part, uint32_t first_bank, uint3
             while (jj < cols_eff) {
                 const uint32_t avail = (cols_eff - 1 - jj) / nb + 1;
                 const uint32_t n = avail < run_pages ? avail : run_pages;
-                f(rb + jj, n, rr, jj);
+                if (pk.nr == scatter_runs || pk.pages + n > run_pages) {
+                    flush();
+                }
+                pk.first[pk.nr] = rb + jj;
+                pk.n[pk.nr] = n;
+                pk.rr[pk.nr] = rr;
+                pk.jj[pk.nr] = jj;
+                ++pk.nr;
+                pk.pages += n;
                 jj += n * nb;
             }
         }
     }
+    flush();
 }
 
 }  // namespace agrn_port

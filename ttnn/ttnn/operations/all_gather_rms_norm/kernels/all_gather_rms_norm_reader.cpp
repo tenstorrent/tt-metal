@@ -146,10 +146,30 @@ void kernel_main() {
     const uint32_t p = get_common_arg_val<uint32_t>(CRT_P);
     const bool tail = member_owns_tail(w);
 
+    Noc noc;
+    // ---- load_x_block ----
+    {
+        AGRN_ZONE("rd_x");
+        const auto x_acc = TensorAccessor(x_args, get_common_arg_val<uint32_t>(CRT_X_ADDR), x_page_bytes);
+        CircularBuffer cb(cb_x);
+        for (uint32_t r = 0; r < w.crt; ++r) {
+            cb_reserve_back(cb_x, w.cw);
+            const uint32_t base = get_write_ptr(cb_x);
+            const uint32_t first = (w.row_start + r) * Wlt + w.w_start;
+            for (uint32_t j = 0; j < w.cw; ++j) {
+                noc_async_read(x_acc.get_noc_addr(first + j), base + j * x_page_bytes, x_page_bytes);
+            }
+            noc_async_read_barrier();
+            if (tail) {
+                zero_w_tail_of_tile<x_elem_bytes>(noc, cb, (w.cw - 1) * x_page_bytes, w_valid_last);
+            }
+            cb_push_back(cb_x, w.cw);
+        }
+    }
+
     // ---- constants ----
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-    Noc noc;
     if constexpr (is_ln) {
         if (tail) {
             dataflow_kernel_lib::prepare_reduce_mask<cb_mask, ckernel::ReduceDim::REDUCE_ROW>(w_valid_last);
@@ -176,33 +196,29 @@ void kernel_main() {
         cb_push_back(cb_stat_consts, 1);
     }
 
-    // ---- load_gamma_beta_slice ----
-    if constexpr (has_gamma) {
-        const auto g_acc =
-            TensorAccessor(gamma_args, get_common_arg_val<uint32_t>(CRT_GAMMA_ADDR), gamma_src_page_bytes);
-        load_affine_slice<cb_gamma>(g_acc, p, w);
+    // ---- zero the gather tiles once, off the critical path (columns >= P must read 0) ----
+    CircularBuffer cb_g(cb_gathered);
+    constexpr uint32_t f32_tile_bytes = TILE * TILE * 4;
+    const uint32_t n_gather_tiles = w.crt * nstats * gather_tiles;
+    cb_reserve_back(cb_gathered, n_gather_tiles);
+    const uint32_t gather_base = get_write_ptr(cb_gathered);
+    for (uint32_t t = 0; t < n_gather_tiles; ++t) {
+        noc.async_write_zeros(cb_g, f32_tile_bytes, {.offset_bytes = t * f32_tile_bytes});
     }
-    if constexpr (has_beta) {
-        const auto b_acc = TensorAccessor(beta_args, get_common_arg_val<uint32_t>(CRT_BETA_ADDR), gamma_src_page_bytes);
-        load_affine_slice<cb_beta>(b_acc, p, w);
-    }
+    noc.write_zeros_l1_barrier();
 
-    // ---- load_x_block ----
+    // ---- load_gamma_beta_slice ----
     {
-        const auto x_acc = TensorAccessor(x_args, get_common_arg_val<uint32_t>(CRT_X_ADDR), x_page_bytes);
-        CircularBuffer cb(cb_x);
-        for (uint32_t r = 0; r < w.crt; ++r) {
-            cb_reserve_back(cb_x, w.cw);
-            const uint32_t base = get_write_ptr(cb_x);
-            const uint32_t first = (w.row_start + r) * Wlt + w.w_start;
-            for (uint32_t j = 0; j < w.cw; ++j) {
-                noc_async_read(x_acc.get_noc_addr(first + j), base + j * x_page_bytes, x_page_bytes);
-            }
-            noc_async_read_barrier();
-            if (tail) {
-                zero_w_tail_of_tile<x_elem_bytes>(noc, cb, (w.cw - 1) * x_page_bytes, w_valid_last);
-            }
-            cb_push_back(cb_x, w.cw);
+        AGRN_ZONE("rd_gamma");
+        if constexpr (has_gamma) {
+            const auto g_acc =
+                TensorAccessor(gamma_args, get_common_arg_val<uint32_t>(CRT_GAMMA_ADDR), gamma_src_page_bytes);
+            load_affine_slice<cb_gamma>(g_acc, p, w);
+        }
+        if constexpr (has_beta) {
+            const auto b_acc =
+                TensorAccessor(beta_args, get_common_arg_val<uint32_t>(CRT_BETA_ADDR), gamma_src_page_bytes);
+            load_affine_slice<cb_beta>(b_acc, p, w);
         }
     }
 
@@ -210,6 +226,7 @@ void kernel_main() {
     {
         volatile tt_l1_ptr uint32_t* ready =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_stats_ready));
+        AGRN_ZONE("rd_wait_stats");
         noc_semaphore_wait_min(ready, 2);  // both hubs: own slot + every remote slot of the table landed
     }
     const uint32_t table = get_common_arg_val<uint32_t>(CRT_TABLE_ADDR);
@@ -218,36 +235,36 @@ void kernel_main() {
     const uint32_t bwd_hub = get_common_arg_val<uint32_t>(CRT_BWD_HUB);
     constexpr uint32_t row_rec_bytes = K * nstats * RECORD_BYTES;  // one tile-row of one slot
     constexpr uint32_t slot_bytes = R * row_rec_bytes;
-    constexpr uint32_t f32_tile_bytes = TILE * TILE * 4;
     const uint32_t landing = get_write_ptr(cb_record_landing);
-    CircularBuffer cb_g(cb_gathered);
-    for (uint32_t r = 0; r < w.crt; ++r) {
-        const uint32_t tr = w.row_start + r;
-        cb_reserve_back(cb_gathered, nstats * gather_tiles);
-        const uint32_t gbase = get_write_ptr(cb_gathered);
-        for (uint32_t t = 0; t < nstats * gather_tiles; ++t) {
-            noc.async_write_zeros(cb_g, f32_tile_bytes, {.offset_bytes = t * f32_tile_bytes});
-        }
-        noc.write_zeros_l1_barrier();
-        for (uint32_t q = 0; q < G; ++q) {
-            const uint32_t hub = ((hub_mask >> q) & 1u) ? bwd_hub : fwd_hub;
-            const uint64_t src = get_noc_addr(hub & 0xFFFF, hub >> 16, table + q * slot_bytes + tr * row_rec_bytes);
-            noc_async_read(src, landing + q * row_rec_bytes, row_rec_bytes);
-        }
-        noc_async_read_barrier();
-        for (uint32_t j = 0; j < P; ++j) {  // j = q * K + m: the slot's records are [m][s]
-            for (uint32_t s = 0; s < nstats; ++s) {
-                volatile tt_l1_ptr uint32_t* rec =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(landing + (j * nstats + s) * RECORD_BYTES);
-                volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    gbase + (s * gather_tiles + (j >> 5)) * f32_tile_bytes);
-                const uint32_t c = j & 31;
-                for (uint32_t i = 0; i < TILE; ++i) {
-                    tile[f32_tile_word(i, c)] = rec[i];
+    {
+        AGRN_ZONE("rd_gather");
+        for (uint32_t r = 0; r < w.crt; ++r) {
+            const uint32_t tr = w.row_start + r;
+            for (uint32_t q = 0; q < G; ++q) {
+                const uint32_t hub = ((hub_mask >> q) & 1u) ? bwd_hub : fwd_hub;
+                const uint64_t src = get_noc_addr(hub & 0xFFFF, hub >> 16, table + q * slot_bytes + tr * row_rec_bytes);
+                noc_async_read(src, landing + q * row_rec_bytes, row_rec_bytes);
+            }
+            noc_async_read_barrier();
+            asm volatile("" ::: "memory");
+            const uint32_t gbase = gather_base + r * nstats * gather_tiles * f32_tile_bytes;
+            const uint32_t* rec = reinterpret_cast<const uint32_t*>(landing);
+            for (uint32_t j = 0; j < P; ++j) {  // j = q * K + m: the slot's records are [m][s]
+                for (uint32_t s = 0; s < nstats; ++s, rec += TILE) {
+                    // column c of the gather tile: rows 0..15 in face 0 / 1, rows 16..31 in face 2 / 3
+                    uint32_t* col =
+                        reinterpret_cast<uint32_t*>(gbase + (s * gather_tiles + (j >> 5)) * f32_tile_bytes) +
+                        ((j & 31) >> 4) * 256 + (j & 15);
+#pragma GCC unroll 16
+                    for (uint32_t i = 0; i < FACE; ++i) {
+                        col[i * FACE] = rec[i];
+                        col[512 + i * FACE] = rec[FACE + i];
+                    }
                 }
             }
+            asm volatile("" ::: "memory");
+            cb_push_back(cb_gathered, nstats * gather_tiles);
         }
-        cb_push_back(cb_gathered, nstats * gather_tiles);
     }
 
     // ---- LN: exact broadcast of the combined row mean ----
@@ -255,18 +272,19 @@ void kernel_main() {
         for (uint32_t r = 0; r < w.crt; ++r) {
             cb_wait_front(cb_mean_col, 1);
             cb_reserve_back(cb_mean_b, 1);
-            volatile tt_l1_ptr uint32_t* src =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_mean_col));
-            volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_mean_b));
+            asm volatile("" ::: "memory");
+            const uint32_t* src = reinterpret_cast<const uint32_t*>(get_read_ptr(cb_mean_col));
+            uint32_t* dst = reinterpret_cast<uint32_t*>(get_write_ptr(cb_mean_b));
             for (uint32_t i = 0; i < TILE; ++i) {
                 const uint32_t v = src[f32_tile_word(i, 0)];
-                volatile tt_l1_ptr uint32_t* row0 = dst + f32_tile_word(i, 0);
-                volatile tt_l1_ptr uint32_t* row1 = dst + f32_tile_word(i, FACE);
+                uint32_t* row0 = dst + f32_tile_word(i, 0);
+#pragma GCC unroll 16
                 for (uint32_t c = 0; c < FACE; ++c) {
                     row0[c] = v;
-                    row1[c] = v;
+                    row0[256 + c] = v;  // same row, face 1 / 3
                 }
             }
+            asm volatile("" ::: "memory");
             cb_push_back(cb_mean_b, 1);
             cb_pop_front(cb_mean_col, 1);
         }

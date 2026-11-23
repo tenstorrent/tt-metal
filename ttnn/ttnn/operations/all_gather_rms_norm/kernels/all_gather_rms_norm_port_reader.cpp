@@ -51,39 +51,47 @@ void kernel_main() {
         const uint32_t B = get_arg_val<uint32_t>(entries_idx + 3 * k + 2);
         const uint32_t q = e & 0xFFFF, part = e >> 16;
         if (k == 0) {
+            AGRN_ZONE("pr_wait_own");
             noc_semaphore_wait_min(own_ready, n_active);
         }
+        AGRN_ZONE("pr_entry");
         uint32_t c = 0;
-        for_each_chunk(q, part, first_bank, bank_stride, [&](uint32_t page, uint32_t n, uint32_t rr, uint32_t jj) {
+        for_each_packet(q, part, first_bank, bank_stride, [&](const Packet& pk) {
             if (batch == 0) {
                 need = group - pos % group;
                 cb_reserve_back(cb_chunks, run_pages * need);
                 wptr = get_write_ptr(cb_chunks);
             }
-            const uint32_t l1 = wptr + batch * chunk_bytes;
-            if (k == 0) {
-                for (uint32_t t = 0; t < n; ++t) {
-                    const uint32_t f = jj + t * nb;
-                    const uint32_t r = flat_slot ? f / Wlt : rr;
-                    const uint32_t j = flat_slot ? f - r * Wlt : f;
-                    uint32_t g, rs;
-                    if (r < big * rows_hi) {
-                        g = r / rows_hi;
-                        rs = g * rows_hi;
-                    } else {
-                        g = big + (r - big * rows_hi) / rows_lo_div;
-                        rs = big * rows_hi + (g - big) * (rows_hi - 1);
-                    }
-                    const uint32_t m = j / cw_nom;
-                    const uint32_t ws = m * cw_nom;
-                    const uint32_t wm = (Wlt - ws) < cw_nom ? (Wlt - ws) : cw_nom;
-                    const uint32_t xy = get_arg_val<uint32_t>(workers_idx + g * K + m);
-                    const uint32_t src = out_block_base + ((r - rs) * wm + (j - ws)) * page_bytes;
-                    noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, src), l1 + t * page_bytes, page_bytes);
-                }
-            } else {
+            uint32_t l1 = wptr + batch * chunk_bytes;
+            if (k > 0) {
                 noc_semaphore_wait_min(arrived, A + (B + c) / inc_every);
-                noc_async_read(dst.get_noc_addr(page), l1, n * page_bytes);
+            }
+            for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+                const uint32_t n = pk.n[ri];
+                if (k == 0) {
+                    for (uint32_t t = 0; t < n; ++t) {
+                        const uint32_t f = pk.jj[ri] + t * nb;
+                        const uint32_t r = flat_slot ? f / Wlt : pk.rr[ri];
+                        const uint32_t j = flat_slot ? f - r * Wlt : f;
+                        uint32_t g, rs;
+                        if (r < big * rows_hi) {
+                            g = r / rows_hi;
+                            rs = g * rows_hi;
+                        } else {
+                            g = big + (r - big * rows_hi) / rows_lo_div;
+                            rs = big * rows_hi + (g - big) * (rows_hi - 1);
+                        }
+                        const uint32_t m = j / cw_nom;
+                        const uint32_t ws = m * cw_nom;
+                        const uint32_t wm = (Wlt - ws) < cw_nom ? (Wlt - ws) : cw_nom;
+                        const uint32_t xy = get_arg_val<uint32_t>(workers_idx + g * K + m);
+                        const uint32_t src = out_block_base + ((r - rs) * wm + (j - ws)) * page_bytes;
+                        noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, src), l1 + t * page_bytes, page_bytes);
+                    }
+                } else {
+                    noc_async_read(dst.get_noc_addr(pk.first[ri]), l1, n * page_bytes);
+                }
+                l1 += n * page_bytes;
             }
             ++c;
             if (++batch == need) {
@@ -102,6 +110,7 @@ void kernel_main() {
     }
 
     if (expect_in > 0) {
+        AGRN_ZONE("pr_wait_all");
         noc_semaphore_wait_min(arrived, expect_in);
     }
     if (notify_landed) {
