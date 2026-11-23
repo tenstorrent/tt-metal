@@ -35,13 +35,14 @@ void bind_reduction_cumsum_operation(nb::module_& mod) {
             dtype (ttnn.DataType, optional): desired output type. If specified then input tensor will be cast to `dtype` before processing.
             reverse_order (bool, optional, default False): whether to perform accumulation from the end to the beginning of accumulation axis.
             out (ttnn.Tensor, optional): preallocated output. If specified, `out` must have same shape as `input`, and must be on the same device.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the output tensor. Defaults to `None`.
             disable_compensated_sum (bool, optional, default False): Deprecated (temporary opt-out for internal CI bring-up, slated for removal). fp32 cumsum uses a compensated (Kahan) accumulation to keep the running sum accurate along the scan. Set True to fall back to the plain sequential sum instead. Intended for parity checks and debugging; it has no effect on integer inputs, which accumulate exactly regardless.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
         Note:
-            If both :attr:`dtype` and :attr:`output` are specified then :attr:`output.dtype` must match :attr:`dtype`.
+            If both :attr:`dtype` and :attr:`out` are specified then :attr:`out.dtype` must match :attr:`dtype`.
 
             Supported dtypes, layout, ranks and `dim` values:
 

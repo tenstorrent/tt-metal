@@ -40,12 +40,12 @@ void bind_reduction_prod_operation(nb::module_& mod) {
 
             Keyword Args:
                 dim (int, optional): Dimension to perform prod. Defaults to `None`.
-                dims (List[int], optional): Dimensions to perform prod. Defaults to `None`. Mutually exclusive with `dim`.
+                dims (List[int]): Dimensions to perform prod. Only for the NC overload, where it is required together with :attr:`output_tensor`.
                 keepdim (bool, optional): keep original dimension size. Defaults to `False`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
             Returns:
-                List of ttnn.Tensor: the output tensor.
+                ttnn.Tensor: the output tensor.
 
             Note:
                 The :attr:`input_tensor` supports the following data type and layout:
