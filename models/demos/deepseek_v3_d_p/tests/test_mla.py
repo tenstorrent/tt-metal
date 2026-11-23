@@ -573,7 +573,7 @@ def _run_chunked_prefill(
         pytest.skip("host_times needs reference=None (func) -- accuracy is the cpu/trace path's job")
     tp_axis = 1 - sp_axis
     if topology is None:
-        topology = per_axis_topology()
+        topology = per_axis_topology(mesh_device=mesh_device)
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
     tp = mesh_shape[tp_axis]
@@ -1341,6 +1341,13 @@ _CHUNKED_SCENARIOS = (
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-sp1",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(l1_small_size=1152),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],

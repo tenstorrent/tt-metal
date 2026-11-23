@@ -114,18 +114,57 @@ struct __attribute__((packed)) direction_table_t {
     // For 1024 entries: 1024 * 3 / 8 = 384 bytes
     std::uint8_t packed_directions[ArraySize * BITS_PER_COMPRESSED_ENTRY / BITS_PER_BYTE];
 
+    // Readers, usable on host and device (defined below the struct).
+    inline std::uint8_t get_direction(std::uint16_t index) const;
+    inline std::uint8_t decompress_value(std::uint8_t compressed_value) const;
+    inline std::uint8_t get_original_direction(std::uint16_t index) const;
+
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Host-side methods (declared here, implemented in compressed_direction_table.cpp):
     void set_direction(std::uint16_t index, std::uint8_t direction);
     std::uint8_t compress_value(std::uint8_t original_value) const;
     void set_original_direction(std::uint16_t index, std::uint8_t original_direction);
-#else
-    // Device-side methods (declared here, implemented in fabric_direction_table_interface.h):
-    inline std::uint8_t get_direction(std::uint16_t index) const;
-    inline std::uint8_t decompress_value(std::uint8_t compressed_value) const;
-    inline std::uint8_t get_original_direction(std::uint16_t index) const;
 #endif
 };
+
+template <std::uint32_t ArraySize>
+inline std::uint8_t direction_table_t<ArraySize>::get_direction(std::uint16_t index) const {
+    std::uint32_t bit_index = index * BITS_PER_COMPRESSED_ENTRY;
+    std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
+    std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
+
+    if (bit_offset <= BITS_PER_BYTE - BITS_PER_COMPRESSED_ENTRY) {
+        // All 3 bits are in the same byte
+        return (packed_directions[byte_index] >> bit_offset) & COMPRESSED_ENTRY_MASK;
+    } else {
+        // Bits span across two bytes
+        std::uint8_t low_bits =
+            (packed_directions[byte_index] >> bit_offset) & ((1 << (BITS_PER_BYTE - bit_offset)) - 1);
+        std::uint8_t high_bits = (packed_directions[byte_index + 1] &
+                                  ((1 << (BITS_PER_COMPRESSED_ENTRY - (BITS_PER_BYTE - bit_offset))) - 1))
+                                 << (BITS_PER_BYTE - bit_offset);
+        return low_bits | high_bits;
+    }
+}
+
+template <std::uint32_t ArraySize>
+inline std::uint8_t direction_table_t<ArraySize>::decompress_value(std::uint8_t compressed_value) const {
+    switch (static_cast<compressed_routing_values>(compressed_value)) {
+        case compressed_routing_values::COMPRESSED_EAST: return eth_chan_directions::EAST;
+        case compressed_routing_values::COMPRESSED_WEST: return eth_chan_directions::WEST;
+        case compressed_routing_values::COMPRESSED_NORTH: return eth_chan_directions::NORTH;
+        case compressed_routing_values::COMPRESSED_SOUTH: return eth_chan_directions::SOUTH;
+        case compressed_routing_values::COMPRESSED_Z: return eth_chan_directions::Z;
+        case compressed_routing_values::COMPRESSED_INVALID_DIRECTION: return eth_chan_magic_values::INVALID_DIRECTION;
+        case compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY:
+        default: return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
+    }
+}
+
+template <std::uint32_t ArraySize>
+inline std::uint8_t direction_table_t<ArraySize>::get_original_direction(std::uint16_t index) const {
+    return decompress_value(get_direction(index));
+}
 
 // ============================================================================
 // Dynamic Packet Header Configuration
@@ -425,6 +464,29 @@ struct Routing2DCodec {
                 eth_chan_directions::NORTH,
                 eth_chan_directions::SOUTH};
         }
+    }
+
+    // The live downstreams of a 2D router facing MY_DIR on one VC, as a mask with bit d set for direction d (an
+    // action bit). `entry_count` is the size of its downstream array on that VC (the first entries of fwd_dirs). Every
+    // entry is live except, on an E/W-facing router that does not turn packets, the N and S ones. A router turns
+    // packets when it is an intermesh router (a landing decodes Y first) or an intramesh router on an exit chip (a
+    // packet may leave the mesh in any direction); any other E/W router decodes Y first and never turns one onto N/S.
+    template <eth_chan_directions MY_DIR>
+    static constexpr std::uint32_t live_downstreams(
+        std::size_t entry_count, bool is_intermesh_router, bool is_intramesh_router_on_edge) {
+        const bool turns_packets = is_intermesh_router || is_intramesh_router_on_edge;
+        constexpr bool east_west = MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST;
+        constexpr auto directions = fwd_dirs<MY_DIR>();
+        std::uint32_t live = 0;
+        for (std::size_t entry = 0; entry < entry_count && entry < directions.size(); entry++) {
+            const auto direction = directions[entry];
+            const bool is_north_south =
+                direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
+            if (!(east_west && !turns_packets && is_north_south)) {
+                live |= 1u << static_cast<std::uint32_t>(direction);
+            }
+        }
+        return live;
     }
 
     // This chip is the mesh's exit when the maps say deliver here but the final mesh is elsewhere.
@@ -1214,6 +1276,5 @@ static constexpr uint32_t FABRIC_CONNECTION_OBJECT_SIZE = 128;
 #define FABRIC_COUNTER_BASE MEM_FABRIC_COUNTER_BASE
 #endif
 
-#include "hostdev/fabric_direction_table_interface.h"
 #include "hostdev/fabric_routing_path_interface.h"
 #endif

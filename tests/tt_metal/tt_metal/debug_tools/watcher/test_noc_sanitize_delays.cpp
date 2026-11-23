@@ -15,7 +15,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -69,7 +69,7 @@ void RunDelayTestOnCore(
              make_kernel("delay_write", DataMovementProcessor::RISCV_0, NOC::RISCV_0_default, true)},
         .semaphores = {read_done},
         .work_units = {wu}};
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     auto run_args = [&](uint32_t local_addr, uint32_t remote_addr) {
         return MakeRuntimeArgsForSingleNode(
@@ -85,7 +85,7 @@ void RunDelayTestOnCore(
         ProgramRunArgs::KernelRunArgs{.kernel = reader, .runtime_arg_values = run_args(base + size, base)},
         ProgramRunArgs::KernelRunArgs{
             .kernel = writer, .runtime_arg_values = run_args(base + 2 * size, base + 3 * size)}};
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);

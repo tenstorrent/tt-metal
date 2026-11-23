@@ -54,7 +54,7 @@ If you are building outside the dev container, you need:
 | clang / clang++ | **20** | `apt install clang-20` |
 | clang-tidy | **20** | `apt install clang-tidy-20` |
 | run-clang-tidy | **20** | `apt install clang-tools-20` |
-| cmake | ≥ 3.22 | `apt install cmake` |
+| cmake | ≥ 3.25 | `apt install cmake` |
 | ninja | any | `apt install ninja-build` |
 
 > **Version matters.** `apt install clang-tidy` without a version suffix installs an

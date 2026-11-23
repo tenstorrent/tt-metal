@@ -57,7 +57,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.config import convolution_tail_shape
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import SlabEntry
+from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_scan import SlabEntry
 from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS, KDA_RECURRENT_BAND_WIDTH
 
 KDA_RECURRENT_DTYPE = ttnn.float32
