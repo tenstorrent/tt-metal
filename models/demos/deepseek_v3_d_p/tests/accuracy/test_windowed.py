@@ -13,6 +13,7 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
     RowSeries,
     check,
     error_metrics,
+    errors,
     nrmse,
     of,
     pcc,
@@ -69,6 +70,7 @@ def test_absolute_error_is_the_rms_over_elements_next_to_the_golden_rms() -> Non
     # All four rows: Σe² 2, Σy² 75 over 8 elements; the exact zero row counts in the element total.
     whole = {"sums": row_sums(EXPECTED, ACTUAL)}
     values = {name: f(whole) for name, f in error_metrics("out").items()}
+    assert values == errors(whole["sums"], "out_")
     assert values == pytest.approx(
         {
             "out_nrmse": math.sqrt(2 / 75),
@@ -83,6 +85,9 @@ def test_quantile_interpolates_and_is_nan_when_empty() -> None:
     assert quantile(torch.tensor([1.0, 2.0, 3.0, 4.0]), 0.5) == 2.5
     assert quantile(torch.tensor([[4.0], [1.0]]), 0.0) == 1.0
     assert math.isnan(quantile(torch.zeros(0), 0.5))
+    assert quantile(torch.tensor([1.0, 2.0, 3.0, 4.0]), 0.1) == pytest.approx(1.3)
+    big = torch.arange(2**24 + 1).flip(0)  # more values than torch.quantile accepts
+    assert quantile(big, 0.5) == 2**23
 
 
 def test_windows_align_to_absolute_rows_whatever_the_chunking() -> None:

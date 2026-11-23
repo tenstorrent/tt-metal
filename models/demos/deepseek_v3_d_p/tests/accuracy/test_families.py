@@ -20,6 +20,20 @@ def test_topk_recall_counts_valid_reference_ids_once() -> None:
     assert recall[:2].tolist() == [0.5, 0.5] and math.isnan(recall[2])
 
 
+def test_topk_recall_and_missed_keys_by_hand() -> None:
+    """Row 0: reference keys 5 / 6 / 7 / 8 scored 4 / 3 / 2 / 1, device {5, 7, 9, 8}: recall 3/4, one miss, key 6, at
+    rank 1 of 4 (top half) and (3 - 1) / (4 - 1) = 2/3 of the spread. Row 1: two valid reference keys (and two -1),
+    both found: recall 1, no miss. A device -1 (no key) matches nothing, and duplicates count once."""
+    want = torch.tensor([[5, 6, 7, 8], [1, 0, -1, -1]])
+    got = torch.tensor([[5, 7, 9, 8], [0, 1, -1, -1]])
+    scores = torch.tensor([[4.0, 3.0, 2.0, 1.0], [4.0, 5.0, 0.0, 0.0]])
+    assert topk_recall(got, want).tolist() == pytest.approx([3 / 4, 1.0])
+    misses = missed_keys(got, want, scores)
+    assert misses["row"].tolist() == [0] and misses["rank"].tolist() == [1] and misses["selected"].tolist() == [4]
+    assert misses["spread_share"].tolist() == pytest.approx([2 / 3])
+    assert topk_recall(torch.tensor([[-1, 0, 0]]), torch.tensor([[0, 1, 2]])).tolist() == pytest.approx([1 / 3])
+
+
 def test_missed_keys_rank_in_the_reference_order() -> None:
     want = torch.tensor([[10, 11, 12, 13]])
     scores = torch.tensor([[0.9, 0.5, 0.7, 0.1]])  # order 10, 12, 11, 13: ranks 0, 2, 1, 3
@@ -45,6 +59,23 @@ def test_routing_rows_hand_case() -> None:
     assert same["misses"]["row"].numel() == 0
 
 
+def test_routing_rows_rank_misses_by_the_reference_scores() -> None:
+    """Row 0: reference experts 3 / 5 / 7 / 1 at weights 0.4 / 0.3 / 0.2 / 0.1, scores order 3 > 5 > 7 > 1; the
+    device picks {3, 5, 2, 1} at 0.5 / 0.25 / 0.15 / 0.1: recall 3/4, expert 7 missed at rank 2 of 4, dropped
+    reference weight 0.2, largest weight difference on the shared picks |0.4 - 0.5| = 0.1. Row 1: the same set in
+    another order: recall 1, nothing dropped."""
+    want = torch.tensor([[3, 5, 7, 1], [0, 1, 2, 3]])
+    want_w = torch.tensor([[0.4, 0.3, 0.2, 0.1], [0.25, 0.25, 0.25, 0.25]])
+    got = torch.tensor([[3, 5, 2, 1], [3, 2, 1, 0]])
+    got_w = torch.tensor([[0.5, 0.25, 0.15, 0.1], [0.25, 0.25, 0.25, 0.25]])
+    scores = torch.tensor([[4.0, 3.0, 2.0, 1.0], [4.0, 3.0, 2.0, 1.0]])
+    r = routing_rows(got, got_w, want, want_w, scores)
+    assert r["recall"].tolist() == pytest.approx([0.75, 1.0])
+    assert r["dropped"].tolist() == pytest.approx([0.2, 0.0])
+    assert r["weight_err"].tolist() == pytest.approx([0.1, 0.0])
+    assert r["misses"]["row"].tolist() == [0] and r["misses"]["rank"].tolist() == [2]
+
+
 def test_selection_masses_hand_case() -> None:
     """Reference keys 5, 6, 7 (best first) with weights .6 .3 .1 in one head; the device picks 5, 6, 9 with weights
     .5 .3 .2: key 7 missed (mass .1, the bottom key too), key 9 an intruder (mass .2)."""
@@ -66,6 +97,15 @@ def test_error_split_hand_case() -> None:
     (0, 1) are orthogonal and share the squared error 2 equally."""
     s = error_split(torch.zeros(2), torch.tensor([1.0, 0.0]), torch.tensor([1.0, 1.0]))
     assert s == {"selection_rest_cos": 0.0, "selection_share": 0.5, "rest_share": 0.5}
+    # (3, 0) then (3, 4): orthogonal, shares 9/25 and 16/25; (3, 0) then (6, 0): parallel (cos 1), 9/36 each and the
+    # cross term the other half
+    zero, sel = torch.zeros(2, dtype=torch.float64), torch.tensor([3.0, 0.0], dtype=torch.float64)
+    assert error_split(zero, sel, torch.tensor([3.0, 4.0], dtype=torch.float64)) == pytest.approx(
+        {"selection_rest_cos": 0.0, "selection_share": 9 / 25, "rest_share": 16 / 25}
+    )
+    assert error_split(zero, sel, torch.tensor([6.0, 0.0], dtype=torch.float64)) == pytest.approx(
+        {"selection_rest_cos": 1.0, "selection_share": 0.25, "rest_share": 0.25}
+    )
 
 
 def test_state_errors_hand_case() -> None:
