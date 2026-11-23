@@ -170,6 +170,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_sfpu/ckernel_sfpu_srcs.h"
 #include "llk_sfpu_srcs_api.h"
 #include "params.h"
+#include "sfpu_srcs_test_helpers.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;

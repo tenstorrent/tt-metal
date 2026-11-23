@@ -28,16 +28,13 @@
 #include "ckernel_sfpu_ops.h"
 #include "sfpu_reg.h"
 
-#ifdef TRISC_MATH
+// The ops, on the two threads that run them. Each op header brings both op types.
+#if defined(TRISC_MATH) || defined(TRISC_ISOLATE_SFPU)
 #include "ckernel_sfpu_add.h"
-#include "ckernel_sfpu_dest.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_square.h"
 #endif
 #ifdef TRISC_ISOLATE_SFPU
-#include "ckernel_sfpu_add.h"
-#include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_square.h"
 #include "llk_sfpu_srcs_api.h"
 #endif
 
@@ -72,18 +69,25 @@ constexpr sfpi::DataLayout sfpu_dest_layout_of() {
         DST_ACCUM_MODE>();
 }
 
-// The Dest op whose init ran last on this thread, as the address of its key; null at kernel start.
+// Encoding of I32 Dest tiles, from where they came: tiles copied or unpacked from one DFB keep the two's
+// complement of native Int32; tiles an FPU op left are sign-magnitude. Compile time.
+template <auto... DFB_IDS>
+constexpr sfpu::IntEncoding sfpu_dest_int_encoding_of() {
+    return sizeof...(DFB_IDS) == 1 ? sfpu::IntEncoding::TwosComplement : sfpu::IntEncoding::SignMagnitude;
+}
+
+// One key per Dest op type; its address names the op in sfpu_init_owner.
 template <typename OP_TYPE>
 inline constexpr char sfpu_op_key = 0;
-inline thread_local const char* sfpu_dest_op_ready = nullptr;
 
-// Runs the init of OP_TYPE unless it was the last Dest op initialized on this thread. Ops share the SFPU
-// configuration and constant registers, so switching ops initializes again.
+// Runs the init of OP_TYPE unless it was the last SFPU init on this thread. Ops share the SFPU configuration and
+// constant registers, so every SFPU init clears sfpu_init_owner: another SfpuOp or a *_tile_init() in between
+// makes this op initialize again.
 template <typename OP_TYPE>
 ALWI void sfpu_dest_op_init_once() {
-    if (sfpu_dest_op_ready != &sfpu_op_key<OP_TYPE>) {
+    if (sfpu_init_owner != &sfpu_op_key<OP_TYPE>) {
         OP_TYPE::init();
-        sfpu_dest_op_ready = &sfpu_op_key<OP_TYPE>;
+        sfpu_init_owner = &sfpu_op_key<OP_TYPE>;
     }
 }
 #endif
@@ -119,8 +123,11 @@ struct SfpuOp {
  * | DFB_ID             | Were copied or unpacked to Dest from this DFB (copy_tile)                     |
  * | SRCA_DFB, SRCB_DFB | Were left by an FPU op that read these DFBs into SrcA and SrcB, in that order |
  *
+ * Int32 tiles from one DFB are two's complement (native Int32, copied or unpacked); Int32 tiles an FPU op left
+ * are sign-magnitude. The op picks the matching math.
+ *
  * An op that does not take tiles of the resulting format is a compile error. The op initializes itself on its
- * first tile(), and again when another SfpuOp ran on Dest in between.
+ * first tile(), and again when any other SFPU init (another SfpuOp or a *_tile_init()) ran in between.
  */
 // clang-format on
 template <typename OP, auto... DFB_IDS>
@@ -179,9 +186,10 @@ struct SfpuOp<OP, SfpuReg::Dest, DFB_IDS...> {
 
 private:
     static constexpr sfpi::DataLayout layout = detail::sfpu_dest_layout_of<DFB_IDS...>();
+    static constexpr sfpu::IntEncoding int_encoding = detail::sfpu_dest_int_encoding_of<DFB_IDS...>();
     static_assert(sfpu::op_takes_layout<OP, layout>, "this op does not take tiles of this format");
-    static constexpr int inputs = sfpu::math_arity<sfpu::math_for_t<OP, layout>>;
-    using Op = sfpu::dest_op_t<OP, layout>;
+    static constexpr int inputs = sfpu::math_arity<sfpu::math_for_t<OP, layout, int_encoding>>;
+    using Op = sfpu::dest_op_t<OP, layout, SFPU_ITERATIONS, trisc::DstTileShape::Tile32x32, int_encoding>;
 #endif
 };
 

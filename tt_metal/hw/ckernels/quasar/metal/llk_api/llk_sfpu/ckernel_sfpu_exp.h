@@ -322,8 +322,8 @@ template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
 /** @brief Math of op::Exp on Dest and SrcS: a 32-bit result is an F32 layout. */
-template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT>
-struct math_for<op::Exp<APPROXIMATION_MODE>, LAYOUT> {
+template <bool APPROXIMATION_MODE, sfpi::DataLayout LAYOUT, IntEncoding INT_ENCODING>
+struct math_for<op::Exp<APPROXIMATION_MODE>, LAYOUT, INT_ENCODING> {
     using type = ExpAlgo<APPROXIMATION_MODE, LAYOUT == sfpi::DataLayout::F32>;
 };
 

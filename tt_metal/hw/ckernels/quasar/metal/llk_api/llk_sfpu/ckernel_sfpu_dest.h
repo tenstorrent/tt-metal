@@ -205,9 +205,10 @@ struct DestLoop<1, MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE> {
     static void calculate() {
         using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, layout_value_t<LAYOUT>>>;
         using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<OUT_LAYOUT, layout_value_t<OUT_LAYOUT>>>;
+        const auto setup = math_setup<MATH>();
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            calculate_operands<MATH, 1 /*ITERATIONS*/>(Output{}, Input{});
+            calculate_operands<MATH, 1 /*ITERATIONS*/>(setup, Output{}, Input{});
             sfpi::dst_reg++;
         }
     }
@@ -248,9 +249,11 @@ struct DestLoop<2, MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE> {
                 sfpi::dst_reg += 2;
             }
         } else {
+            const auto setup = math_setup<MATH>();
 #pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
                 calculate_operands<MATH, 1 /*ITERATIONS*/>(
+                    setup,
                     Output{static_cast<int>(dst_index_out * dst_tile_size_sfpi)},
                     Input{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
                     Input{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)});
@@ -311,13 +314,16 @@ struct SfpuDestOp<MATH, LAYOUT, OUT_LAYOUT, ITERATIONS, TILE_SHAPE, SfpuImpl::Sf
  * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the tiles, see @ref dest_layout and @ref fpu_dest_layout.
  * @tparam ITERATIONS: Number of SFPI rows per face.
  * @tparam TILE_SHAPE: Dest tile shape the indices are measured in.
+ * @tparam INT_ENCODING: Encoding of I32 tiles: SignMagnitude when an FPU op computed them, TwosComplement for
+ *         native Int32 tiles copied or unpacked to Dest.
  */
 template <
     typename OP,
     sfpi::DataLayout LAYOUT,
     int ITERATIONS = SFPU_ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
-using dest_op_t = SfpuDestOp<math_for_t<OP, LAYOUT>, LAYOUT, LAYOUT, ITERATIONS, TILE_SHAPE>;
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32,
+    IntEncoding INT_ENCODING = IntEncoding::SignMagnitude>
+using dest_op_t = SfpuDestOp<math_for_t<OP, LAYOUT, INT_ENCODING>, LAYOUT, LAYOUT, ITERATIONS, TILE_SHAPE>;
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -24,8 +24,8 @@ struct SquareMath {
 };
 
 /** @brief Math of op::Square on Dest and SrcS. */
-template <sfpi::DataLayout LAYOUT>
-struct math_for<op::Square, LAYOUT> {
+template <sfpi::DataLayout LAYOUT, IntEncoding INT_ENCODING>
+struct math_for<op::Square, LAYOUT, INT_ENCODING> {
     using type = SquareMath;
 };
 
@@ -58,7 +58,7 @@ inline void calculate_square() {
     using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, sfpi::vFloat, ADDR_MOD_6>>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        calculate_operands<SquareMath, 1 /*ITERATIONS*/>(Output{}, Input{});
+        calculate_operands<SquareMath, 1 /*ITERATIONS*/>(math_setup<SquareMath>(), Output{}, Input{});
     }
 }
 
@@ -74,9 +74,6 @@ struct SfpuDestOp<SquareMath, LAYOUT, LAYOUT, ITERATIONS, TILE_SHAPE, SfpuImpl::
     static void init_op() { init_square(); }
     static void calculate() { calculate_square<ITERATIONS, LAYOUT>(); }
 };
-
-// dispatch_sfpu_srcs_op relies on naming a float op for I32 without instantiating it; keep that true.
-static_assert(!op_takes_layout<op::Square, sfpi::DataLayout::I32>, "float SrcS ops must stay nameable for I32");
 
 }  // namespace sfpu
 }  // namespace ckernel

@@ -2990,8 +2990,9 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     const bool is_relu_family =
         test_config.sfpu_op == "relu" || test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
     TT_FATAL(
-        !is_fp32 || is_relu_family || test_config.sfpu_op == "datacopy" || test_config.sfpu_op == "exp_exact_c",
-        "Float32 SFPU path supports relu / relu_min / relu_max / datacopy / exp_exact_c only in v1");
+        !is_fp32 || is_relu_family || test_config.sfpu_op == "datacopy" || test_config.sfpu_op == "exp_exact_c" ||
+            test_config.sfpu_op == "exponential",
+        "Float32 SFPU path supports relu / relu_min / relu_max / datacopy / exp_exact_c / exponential only in v1");
     const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
     const size_t numel = byte_size / element_size;
     const int seed = sfpu_test_seed;

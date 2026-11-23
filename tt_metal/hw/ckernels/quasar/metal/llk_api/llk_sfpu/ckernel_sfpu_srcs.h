@@ -12,7 +12,6 @@
 #include "ckernel_instr_params.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_assert.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_operand.h"
 #include "sfpu_impl.h"
@@ -85,14 +84,12 @@ struct SfpuSrcsOpBase<Op, 1> {
     static void init_op() {}
 
     // Takes only the L1 formats; the SrcS register format comes from Op::Layout.
-    template <std::uint8_t INSTRN_COUNT = 1>
     static void init(
         const std::uint32_t l1_in_addr_16B,
         const DataFormat l1_in_format,
         const std::uint32_t l1_out_addr_16B,
         const DataFormat l1_out_format);
 
-    template <std::uint8_t INSTRN_COUNT = 1>
     static void run(const std::uint32_t num_tiles);
 };
 
@@ -105,7 +102,6 @@ struct SfpuSrcsOpBase<Op, 2> {
     static void init_op() {}
 
     // Takes only the L1 formats; the SrcS register format comes from Op::Layout.
-    template <std::uint8_t INSTRN_COUNT = 1>
     static void init(
         const std::uint32_t l1_in0_addr_16B,
         const std::uint32_t l1_in1_addr_16B,
@@ -113,7 +109,6 @@ struct SfpuSrcsOpBase<Op, 2> {
         const std::uint32_t l1_out_addr_16B,
         const DataFormat l1_out_format);
 
-    template <std::uint8_t INSTRN_COUNT = 1>
     static void run(const std::uint32_t num_tiles);
 };
 
@@ -148,7 +143,8 @@ private:
     template <std::size_t... INPUT>
     sfpi_inline static void calculate(std::index_sequence<INPUT...>) {
         using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, layout_value_t<LAYOUT>>>;
-        calculate_operands<MATH, Layout::ops>(Operand{Layout::out}, Operand{Layout::input(static_cast<int>(INPUT))}...);
+        calculate_operands<MATH, Layout::ops>(
+            math_setup<MATH>(), Operand{Layout::out}, Operand{Layout::input(static_cast<int>(INPUT))}...);
     }
 };
 
@@ -160,7 +156,7 @@ inline constexpr bool srcs_has_loadmacro = false;
  * @brief The SrcS op type of an op tag on a layout.
  *
  * Requesting LoadMacro for a math without one fails to compile; under DISABLE_SFPLOADMACRO (ttsim) every request
- * resolves to Sfpi.
+ * resolves to Sfpi. I32 slices are sign-magnitude (@ref IntEncoding), which is how SrcS holds Int32.
  *
  * @tparam OP: Op tag (ckernel::op).
  * @tparam LAYOUT: SFPLOAD/SFPSTORE format of the slices, see @ref sfpu_layout.
@@ -169,49 +165,5 @@ inline constexpr bool srcs_has_loadmacro = false;
 template <typename OP, sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
 using srcs_op_t =
     SfpuSrcsOp<math_for_t<OP, LAYOUT>, LAYOUT, resolve_sfpu_impl<IMPL, srcs_has_loadmacro<math_for_t<OP, LAYOUT>>>()>;
-
-/**
- * @brief Call fn(op) with the SrcS op type of the op tag @p OP for the LAYOUT matching the runtime SrcS format,
- *        once outside the tile loop.
- *
- * Only the layouts OP takes are compiled in (@ref op_takes_layout). The SrcS register format is the
- * unpack destination and the pack source; both are passed so a mismatch is caught here.
- *
- * @tparam OP: Op tag (ckernel::op).
- * @tparam IMPL: Sfpi or LoadMacro, for every layout.
- * @param unpack_S_dst_format: SrcS format the unpacker writes.
- * @param pack_S_src_format: SrcS format the packer reads; must equal unpack_S_dst_format.
- * @param fn: Callable taking the op type by value; use decltype(op)::init / run.
- * @note Test-harness helper: formats are runtime values there. Kernels with compile-time formats use
- *       srcs_op_t<OP, LAYOUT> directly.
- */
-template <typename OP, SfpuImpl IMPL = SfpuImpl::Sfpi, typename Fn>
-sfpi_inline void dispatch_sfpu_srcs_op(
-    const DataFormat unpack_S_dst_format, const DataFormat pack_S_src_format, Fn&& fn) {
-    LLK_ASSERT(
-        unpack_S_dst_format == pack_S_src_format,
-        "SrcS ops require matching unpack destination and pack source formats");
-    bool handled = false;
-    const auto try_layout = [&](auto op) {
-        using Op = decltype(op);
-        if (unpack_S_dst_format == Op::Layout::format) {
-            fn(op);
-            handled = true;
-        }
-    };
-    if constexpr (op_takes_layout<OP, sfpi::DataLayout::F16a>) {
-        try_layout(srcs_op_t<OP, sfpi::DataLayout::F16a, IMPL>{});
-    }
-    if constexpr (op_takes_layout<OP, sfpi::DataLayout::F16b>) {
-        try_layout(srcs_op_t<OP, sfpi::DataLayout::F16b, IMPL>{});
-    }
-    if constexpr (op_takes_layout<OP, sfpi::DataLayout::F32>) {
-        try_layout(srcs_op_t<OP, sfpi::DataLayout::F32, IMPL>{});
-    }
-    if constexpr (op_takes_layout<OP, sfpi::DataLayout::I32>) {
-        try_layout(srcs_op_t<OP, sfpi::DataLayout::I32, IMPL>{});
-    }
-    LLK_ASSERT(handled, "SrcS format not supported by this op");
-}
 
 }  // namespace ckernel::sfpu

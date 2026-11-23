@@ -26,13 +26,21 @@ namespace sfpu {
 template <bool ROUND_TO_BF16 = false>
 struct AddFloatMath {
     using value_type = sfpi::vFloat;
-    static constexpr bool single_instruction = !ROUND_TO_BF16;  // one SFPADD, unless the rounding follows it
-    sfpi_inline static sfpi::vFloat apply(sfpi::vFloat a, sfpi::vFloat b) {
-        if constexpr (ROUND_TO_BF16) {
-            return float32_to_bf16_rne(a + b);
-        } else {
-            return a + b;
-        }
+    static constexpr bool single_instruction = true;  // one SFPADD
+    sfpi_inline static sfpi::vFloat apply(sfpi::vFloat a, sfpi::vFloat b) { return a + b; }
+};
+
+/** @brief The rounding variant: its two constants are loaded once per row loop, not on every row. */
+template <>
+struct AddFloatMath<true /*ROUND_TO_BF16*/> {
+    using value_type = sfpi::vFloat;
+    struct Setup {
+        sfpi::vUInt bias;
+        sfpi::vUInt mask;
+    };
+    sfpi_inline static Setup setup() { return Setup{kBf16RneBias, kBf16RneMask}; }
+    sfpi_inline static sfpi::vFloat apply(const Setup& setup, sfpi::vFloat a, sfpi::vFloat b) {
+        return float32_to_bf16_rne(a + b, setup.bias, setup.mask);
     }
 };
 
@@ -82,6 +90,7 @@ inline void calculate_add_int(
     using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::I32, sfpi::vInt>>;
     constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
     calculate_operands<AddIntMath<SIGN_MAGNITUDE_FORMAT>, ITERATIONS>(
+        math_setup<AddIntMath<SIGN_MAGNITUDE_FORMAT>>(),
         Operand{static_cast<int>(dst_index_out * dst_tile_size_sfpi)},
         Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
         Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)});
@@ -120,14 +129,14 @@ struct SfpuDestOp<
 };
 
 /**
- * @brief Math of op::Add on Dest and SrcS: float layouts add floats, I32 adds sign-magnitude Int32, which is how
- *        both registers hold it. NearestEven rounds a float sum to bf16 on a 16-bit layout.
+ * @brief Math of op::Add on Dest and SrcS: float layouts add floats, I32 adds Int32 in the encoding the tiles
+ *        are in. NearestEven rounds a float sum to bf16 on a 16-bit layout.
  */
-template <DstRoundingMode ROUNDING, sfpi::DataLayout LAYOUT>
-struct math_for<op::Add<ROUNDING>, LAYOUT> {
+template <DstRoundingMode ROUNDING, sfpi::DataLayout LAYOUT, IntEncoding INT_ENCODING>
+struct math_for<op::Add<ROUNDING>, LAYOUT, INT_ENCODING> {
     using type = std::conditional_t<
         LAYOUT == sfpi::DataLayout::I32,
-        AddIntMath<true /*SIGN_MAGNITUDE_FORMAT*/>,
+        AddIntMath<INT_ENCODING == IntEncoding::SignMagnitude>,
         AddFloatMath<
             ROUNDING == DstRoundingMode::NearestEven &&
             (LAYOUT == sfpi::DataLayout::F16a || LAYOUT == sfpi::DataLayout::F16b)>>;

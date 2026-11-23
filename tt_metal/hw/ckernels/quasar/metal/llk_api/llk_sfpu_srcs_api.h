@@ -182,27 +182,23 @@ namespace ckernel::sfpu {
 
 // Op::init_op() runs after the SFPU init so its state (e.g. the LoadMacro replay) is not reset.
 template <typename Op>
-template <std::uint8_t INSTRN_COUNT>
 inline void SfpuSrcsOpBase<Op, 1>::init(
     const std::uint32_t l1_in_addr_16B,
     const DataFormat l1_in_format,
     const std::uint32_t l1_out_addr_16B,
     const DataFormat l1_out_format) {
     constexpr DataFormat srcs_format = Op::Layout::format;
-    llk_sfpu_srcs_unary_init<INSTRN_COUNT>(
-        l1_in_addr_16B, l1_in_format, srcs_format, l1_out_addr_16B, srcs_format, l1_out_format);
+    llk_sfpu_srcs_unary_init(l1_in_addr_16B, l1_in_format, srcs_format, l1_out_addr_16B, srcs_format, l1_out_format);
     Op::init_op();
 }
 
 template <typename Op>
-template <std::uint8_t INSTRN_COUNT>
 inline void SfpuSrcsOpBase<Op, 1>::run(const std::uint32_t num_tiles) {
-    llk_sfpu_srcs_unary_impl<INSTRN_COUNT, !Op::hw_clears_valids>(
+    llk_sfpu_srcs_unary_impl<1 /*INSTRN_COUNT*/, !Op::hw_clears_valids>(
         num_tiles, Op::Layout::format, [] { Op::calculate(); });
 }
 
 template <typename Op>
-template <std::uint8_t INSTRN_COUNT>
 inline void SfpuSrcsOpBase<Op, 2>::init(
     const std::uint32_t l1_in0_addr_16B,
     const std::uint32_t l1_in1_addr_16B,
@@ -210,15 +206,14 @@ inline void SfpuSrcsOpBase<Op, 2>::init(
     const std::uint32_t l1_out_addr_16B,
     const DataFormat l1_out_format) {
     constexpr DataFormat srcs_format = Op::Layout::format;
-    llk_sfpu_srcs_binary_init<INSTRN_COUNT>(
+    llk_sfpu_srcs_binary_init(
         l1_in0_addr_16B, l1_in1_addr_16B, l1_in_format, srcs_format, l1_out_addr_16B, srcs_format, l1_out_format);
     Op::init_op();
 }
 
 template <typename Op>
-template <std::uint8_t INSTRN_COUNT>
 inline void SfpuSrcsOpBase<Op, 2>::run(const std::uint32_t num_tiles) {
-    llk_sfpu_srcs_binary_impl<INSTRN_COUNT, !Op::hw_clears_valids>(
+    llk_sfpu_srcs_binary_impl<1 /*INSTRN_COUNT*/, !Op::hw_clears_valids>(
         num_tiles, Op::Layout::format, [] { Op::calculate(); });
 }
 
