@@ -213,13 +213,14 @@ void DevicePrograms::carve_l1() {
     TT_FATAL(spool_mb >= 2, "streaming profiler: the DRISC service drain jobs need a GDDR spool of at least 2 MiB");
     drisc_l1_.spool_addr = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::PROFILER));
     drisc_l1_.spool_bytes = spool_mb << 20;
-    // N (copy turns between holds) and M (drain sweeps per hold). N = 16 keeps local copies near full rate with the
-    // knee where N = 1 has it; d2h copies at N = 16 take more of the PCIe link (drain_job_bench/README.md).
+    // N (copy turns between holds) and M (drain sweeps per hold). N = 4, M = 1 is the setting that stayed near balanced
+    // under both local and d2h copies on bh-17 (drain_job_bench/README.md): a larger N lets d2h copies take the PCIe
+    // link from the drain jobs, a smaller one costs local copies most of their rate, and M > 1 only costs copies.
     const auto env_u32 = [](const char* name, uint32_t fallback) {
         const char* value = std::getenv(name);
         return value != nullptr ? static_cast<uint32_t>(std::strtoul(value, nullptr, 10)) : fallback;
     };
-    drain_hold_turns_ = std::max(env_u32("TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_TURNS", 16u), 1u);
+    drain_hold_turns_ = std::max(env_u32("TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_TURNS", 4u), 1u);
     drain_hold_sweeps_ = std::max(env_u32("TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_SWEEPS", 1u), 1u);
 }
 
