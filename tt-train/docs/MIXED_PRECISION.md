@@ -82,11 +82,12 @@ names the compute dtype. It is applied by `core::apply_precision_config()`
 (`sources/ttml/core/parameter_dtype.{hpp,cpp}`) after the model is built and before the optimizer is created, so the
 optimizer state follows: in Python by `ttml.common.utils.create_optimizer()` when it is given the whole config (as in
 `train.py`), and in C++ by the `nano_gpt` runner and the 3-tier optimizer worker. Runners that pass only the optimizer
-section, such as the SFT and GRPO trainers, don't apply it. Loading has to fit around it: a checkpoint loads after it,
-because checkpoint loading uses `assign()`, which casts into the dtype a tensor is stored in, so an fp32 checkpoint
-loaded into bf16 parameters would be rounded first; loaders that install tensors with `set_value()`, such as the C++
-safetensors loaders, run before it, or they would put bf16 tensors back. `train.py` and the `nano_gpt` runner keep this
-order. 3-tier workers keep bf16 parameters for `RemoteOptimizer`; the optimizer worker holds the fp32 master weights.
+section, such as the SFT and GRPO trainers, don't apply it. The load order is: build the model, convert, load
+weights, create the optimizer, then load a training checkpoint, which restores the optimizer state too. Every loader
+writes the dtype a tensor is stored in, so values loaded after the conversion keep their fp32 bits; loaded before it,
+they are rounded to bf16 first. `train.py` and the `nano_gpt` runner keep this order; `nano_gpt`'s save-and-exit path
+skips the conversion, so it exports the weights in the dtype the model builds.
+3-tier workers keep bf16 parameters for `RemoteOptimizer`; the optimizer worker holds the fp32 master weights.
 The fp32 parameter is the master weight: fused `AdamW` updates it in place with fp32 moments, and forward and backward
 read its bf16 view, which is refreshed into its existing buffer the first time it is read after the step. Parameters
 managed by `ttml.fsdp.fully_shard` are the exception: FSDP swaps the gathered weight and the cached fp32 shard in with
@@ -178,6 +179,9 @@ file.
   fp32 tensor gets the exact values, a bf16 tensor the values rounded with `ml_dtypes`. `ttml.checkpointing` (which
   loads parameters and optimizer state into the live tensors), the safetensors loaders, the SFT trainer's default
   checkpoint loader and `LinearLayer.__setstate__` use it.
+- The C++ GPT-2 and Llama safetensors loaders read the file's values as floats and install each one with
+  `serialization::assign_from_floats()`, which builds the host tensor in the parameter's stored dtype: an fp32
+  parameter gets the file's values exactly, a bf16 one the values rounded on the host.
 - C++ checkpoints are written as stored (`get_value(NATIVE)`), and `read_autograd_tensor` loads parameters and
   optimizer state through `assign()`. A checkpoint from an fp32 run resumes into a bf16 model as bf16, and the other
   way round, and the AdamW moments follow the parameters, as the fused kernel requires.
