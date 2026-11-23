@@ -75,9 +75,8 @@ inline void _llk_unpack_AB_compressed_custom_mm_mop_config_()
  * SrcA tile-size increments (SCRATCH_SEC0-2) and tile descriptors (GPRs PERF_UNPACK_NUM_TILES_1-3) the execute uses.
  *
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
- * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>, default false. Only unpB_face_r_dim
- *                    rows of each SrcB face are unpacked, so zeroing the rest only saves FPU power: the other
- *                    rows feed only DEST rows at or beyond unpB_face_r_dim of each face, which are never packed.
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>, default false. Power only: SrcB rows
+ *                    past unpB_face_r_dim reach only DEST rows that are never packed.
  * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
  * @note Call this before @ref _llk_unpack_AB_compressed_custom_mm_, and again after any other op has run, in
  *       particular one that writes SrcB, SCRATCH_SEC0-2 or those GPRs (a custom_mm execute rewrites SCRATCH_SEC0/1):

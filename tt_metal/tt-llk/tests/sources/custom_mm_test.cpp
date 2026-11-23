@@ -88,6 +88,9 @@ constexpr bool transpose = CUSTOM_MM_TRANSPOSE;
 constexpr bool read_transposed = CUSTOM_MM_READ_TRANSPOSED;
 static_assert(!read_transposed || num_calls == 1, "read_transposed needs a single call");
 
+// CUSTOM_MM_CLEAR_SRC: the init's both-bank SrcB clear (power only). Simulator runs keep it false.
+constexpr bool clear_src = CUSTOM_MM_CLEAR_SRC;
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_custom_mm.h"
@@ -135,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_1, p_unpacr_nop::CLR_SRC);
         }
 
-        _llk_unpack_AB_custom_mm_init_<transpose, false /* clear_src */>(in0_face_r_dim, formats.unpack_B_dst, CT_DIM, num_faces_B);
+        _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(in0_face_r_dim, formats.unpack_B_dst, CT_DIM, num_faces_B);
         PROFILER_SYNC();
     }
     {
