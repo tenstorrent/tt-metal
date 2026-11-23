@@ -24,8 +24,8 @@ adapter, so a GLM-5.4 adapter must keep the ``glm_5_3`` name or override that pa
 full cache there (``weight_categories``), breaking the read-only rule for the GLM-5.3 checkpoint and cache. Reference
 checks load one layer with ``glm54_checkpoint_layer``. Nothing here writes to the checkpoint or the cache.
 
-``tier2_sources`` resolves the checkpoint and cache the way the runner does (``$GLM53_HF_MODEL``, else
-``$PREFILL_HF_MODEL``, else the adapter default; ``$PREFILL_TTNN_CACHE``, else the adapter default), and every tier-2
+``tier2_sources`` resolves the checkpoint and cache the way the runner does (``$PREFILL_HF_MODEL``, else
+``$GLM53_HF_MODEL``, else the adapter default; ``$PREFILL_TTNN_CACHE``, else the adapter default), and every tier-2
 function reads its paths from it, so the recorded provenance is the source actually used.
 
 ``tier1_provenance`` / ``tier2_provenance`` return what a run must record to be reproducible: generator,
@@ -134,8 +134,8 @@ def _sha256(path: Path) -> str:
 
 def tier2_sources() -> tuple[Path, Path]:
     """(checkpoint, TTNN cache root) a tier-2 run reads, resolved as the GLM-5.3 runner resolves them
-    (``GLM53Adapter.moe_block_nonrouted_weights`` / ``MLAPrefillAdapter.weight_cache_path``)."""
-    checkpoint = os.environ.get(GLM53Adapter.env_var) or os.environ.get("PREFILL_HF_MODEL") or GLM53_CHECKPOINT
+    (``MLAPrefillAdapter.build_runtime``'s ``hf_model_path`` / ``MLAPrefillAdapter.weight_cache_path``)."""
+    checkpoint = os.environ.get("PREFILL_HF_MODEL") or os.environ.get(GLM53Adapter.env_var) or GLM53_CHECKPOINT
     cache = os.environ.get("PREFILL_TTNN_CACHE", GLM53_TTNN_CACHE)
     return Path(checkpoint), Path(cache)
 

@@ -179,7 +179,7 @@ def test_tier1_weights_run_the_reference_stack():
 
 def test_tier2_provenance_follows_the_runner_environment(monkeypatch, tmp_path):
     """Provenance records the checkpoint and cache a run actually reads: the runner's env overrides, in its order
-    ($GLM53_HF_MODEL before $PREFILL_HF_MODEL), and as many gates as the config's loop passes."""
+    ($PREFILL_HF_MODEL before $GLM53_HF_MODEL), and as many gates as the config's loop passes."""
 
     def fake_checkpoint(name: str, text: str) -> Path:
         d = tmp_path / name
@@ -202,6 +202,8 @@ def test_tier2_provenance_follows_the_runner_environment(monkeypatch, tmp_path):
     assert p["ttnn_cache"] == str(tmp_path / "cache") and len(p["gates"]["gate_seeds"]) == 1
     own = fake_checkpoint("GLM-5.3-fp8-own2", "b")
     monkeypatch.setenv(GLM53Adapter.env_var, str(own))
+    assert tier2_sources()[0] == prefill  # $PREFILL_HF_MODEL wins, as in the runner's hf_model_path
+    monkeypatch.delenv("PREFILL_HF_MODEL")
     assert tier2_sources()[0] == own
 
 
