@@ -525,6 +525,9 @@ def _groups_of(info: TensorInfo) -> tuple[dict[tuple[int, ...], tuple[Chunk, ...
     return groups, by_coord
 
 
+# Both merges make an object or more per key and per chunk, none in a cycle: the cyclic GC is paused while they run, as
+# it is while an index is built or parsed (``_gc_paused``).
+@_gc_paused()
 def merge_plan_parts(parts: list[PlanPart]) -> Election:
     """The owner election over the ranks' plan parts.
 
@@ -667,11 +670,14 @@ class ResultPart:
             )
 
 
+@_gc_paused()
 def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: str) -> tuple[Index, dict]:
     """Rank 0's merge: one file table, one entry per key with every rank's chunks (exactly one per elected box), the
     world record, and the header (rank 0's user header and the train state stored once, every rank's generators and,
     when the election says so, every rank's dataloader state). The parts are left as they were: the index holds
-    entries of its own."""
+    entries and chunk lists of its own. Rank 0's chunk records, whose file numbers need no shift, are shared rather
+    than copied (nothing changes a chunk record once it is made); the other ranks' are copied with their files
+    renumbered."""
     parts = sorted(parts, key=lambda p: p.record.rank)
     files: list[FileRecord] = []
     entries: dict[str, Entry] = {}
@@ -679,7 +685,10 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
         base = len(files)
         files.extend(part.files)
         for key, entry in part.entries.items():
-            chunks = [dataclasses.replace(c, file=c.file + base) for c in entry.chunks]
+            if base:
+                chunks = [dataclasses.replace(c, file=c.file + base) for c in entry.chunks]
+            else:
+                chunks = list(entry.chunks)
             if key in entries:
                 have = entries[key]
                 if (

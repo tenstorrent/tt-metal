@@ -376,6 +376,8 @@ def test_merge_results_builds_one_index(expect_error):
     assert header["user"] == {"step": 3} and header["train_state"]["scheduler"] == {"m_last_step": 3}
     assert header["train_state"]["rng"]["ranks"] == {"0": {"ttml": "gen0"}, "1": {"ttml": "gen1"}}
     assert [len(p.entries["model/w"].chunks) for p in (r0, r1)] == [2, 2], "the parts are left as they were"
+    assert [c.file for c in r1.entries["model/w"].chunks] == [0, 1], "rank 1's records are renumbered as copies"
+    assert gc.isenabled(), "the cyclic GC, paused for the merge, is back on"
     # Parts travel as bytes without loss.
     assert ResultPart.from_bytes(r1.to_bytes()).to_bytes() == r1.to_bytes()
 
