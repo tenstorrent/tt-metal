@@ -43,6 +43,8 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
             k (ttnn.Tensor): Top-k values for sampling.
             p (ttnn.Tensor): Top-p (nucleus) probabilities for sampling.
             temp (ttnn.Tensor): Temperature tensor for scaling (1/T).
+
+        Keyword Args:
             seed (int, optional): Seed for sampling randomness. Defaults to `0`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Core range set for multicore execution. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.

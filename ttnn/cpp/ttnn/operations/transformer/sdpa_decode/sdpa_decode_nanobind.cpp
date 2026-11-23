@@ -46,7 +46,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                 `min(512, largest power-of-two divisor of s)`. Paged decode uses 32 when `program_config`
                 is omitted; a custom config for paged non-causal attention must set a positive
                 `k_chunk_size`. Only valid with `is_causal=False`. Defaults to `None`.
-            cur_pos (List of int, optional): list of integers of length b. Defaults to `None`.
+            cur_pos (List of int, optional): list of integers of length b. Defaults to an empty list (use cur_pos_tensor instead).
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             cur_pos_tensor (ttnn.Tensor, optional): [b] tensor of integers of length b. Defaults to `None`.
             attention_sink (ttnn.Tensor, optional): per-head attention sink logits, included in the softmax max and denominator. Defaults to `None`.
