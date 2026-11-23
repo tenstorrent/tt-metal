@@ -151,11 +151,10 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
  *
  * @tparam neginf_srcA      Initialize srcA padding with negative infinity (for reduce-max).
  * @tparam reload_srcB      Whether srcB is reloaded each iteration.
- * @tparam zero_srcA        Zero out srcA.
+ * @tparam zero_srcA        Unsupported on Blackhole (asserted false); use zero_srcA_reduce to clear srcA per face.
  * @tparam zero_srcA_reduce Zero out srcA for the reduce path.
  * @param  num_faces        Number of faces per tile (defaults to 4).
  */
-// TODO: add support for all the template parameters
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
     SAN_HOOK(unsupported());
@@ -171,7 +170,7 @@ inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
  *
  * @tparam neginf_srcA      Initialize srcA padding with negative infinity (for reduce-max).
  * @tparam reload_srcB      Whether srcB is reloaded each iteration.
- * @tparam zero_srcA        Zero out srcA.
+ * @tparam zero_srcA        Unsupported on Blackhole (asserted false); use zero_srcA_reduce to clear srcA per face.
  * @tparam zero_srcA_reduce Zero out srcA for the reduce path.
  * @param  operandA         Input operand index for tilize source A.
  * @param  operandB         Input operand index for unpack source B.
@@ -214,7 +213,7 @@ inline void llk_unpack_tilizeA_B_init(
  *
  * @tparam neginf_srcA      Initialize srcA padding with negative infinity (for reduce-max).
  * @tparam reload_srcB      Whether srcB is reloaded each iteration.
- * @tparam zero_srcA        Zero out srcA.
+ * @tparam zero_srcA        Unsupported on Blackhole (asserted false); use zero_srcA_reduce to clear srcA per face.
  * @tparam zero_srcA_reduce Zero out srcA for the reduce path.
  * @param  operandA     Input operand index for tilize source A.
  * @param  operandB     Input operand index for unpack source B.
@@ -275,7 +274,7 @@ inline void llk_unpack_tilizeA_B(
  *
  * @tparam neginf_srcA      Initialize srcA padding with negative infinity (for reduce-max).
  * @tparam reload_srcB      Whether srcB is reloaded each iteration.
- * @tparam zero_srcA        Zero out srcA.
+ * @tparam zero_srcA        Unsupported on Blackhole (asserted false); use zero_srcA_reduce to clear srcA per face.
  * @tparam zero_srcA_reduce Zero out srcA for the reduce path.
  * @param  operandA        Input operand index for tilize source A.
  * @param  operandB        Input operand index for unpack source B.

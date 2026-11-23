@@ -406,14 +406,14 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
  *
  * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
  * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
- * @tparam zero_srcA: Clear SrcA to zero before unpacking.
+ * @tparam zero_srcA: Unsupported on Blackhole (asserted false); use zero_srcA_reduce to clear SrcA per face.
  * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  */
-// TODO: add support for all the template parameters
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
 {
+    static_assert(!zero_srcA, "zero_srcA is not supported on Blackhole; use zero_srcA_reduce to clear SrcA per face.");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t replay_buf_run_len  = 6;
     const std::uint32_t replay_buf_half_len = replay_buf_run_len >> 1;
@@ -462,7 +462,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
  *
  * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
  * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
- * @tparam zero_srcA: Clear SrcA to zero before unpacking.
+ * @tparam zero_srcA: Unsupported on Blackhole (asserted false); use zero_srcA_reduce to clear SrcA per face.
  * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
  * @param unpack_src_format: Source data format of operand A in L1.
  * @param unpack_dst_format: Destination data format operand A is converted to.
@@ -480,6 +480,7 @@ inline void _llk_unpack_tilizeA_B_init_(
     const std::uint32_t num_faces       = 4,
     const std::uint32_t unpB_face_r_dim = FACE_R_DIM)
 {
+    static_assert(!zero_srcA, "zero_srcA is not supported on Blackhole; use zero_srcA_reduce to clear SrcA per face.");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Sets the block_c_dim for unpack to use to increment the L1 address
     const std::uint32_t c_dim_size = SCALE_DATUM_SIZE(unpack_src_format, ct_dim * ((num_faces == 1) ? FACE_C_DIM : TILE_C_DIM)) >> 4;
@@ -514,7 +515,7 @@ inline void _llk_unpack_tilizeA_B_init_(
  *
  * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
  * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
- * @tparam zero_srcA: Clear SrcA to zero before unpacking.
+ * @tparam zero_srcA: Unsupported on Blackhole (asserted false); use zero_srcA_reduce to clear SrcA per face.
  * @tparam zero_srcA_reduce: Clear SrcA to zero before unpacking for a reduce fused with tilize.
  * @param unpA_src_format: Source data format of operand A in L1.
  * @param face_r_dim: Rows per face.
@@ -536,6 +537,7 @@ inline void _llk_unpack_tilizeA_B_(
     std::uint32_t block_ct_dim,
     std::uint32_t num_faces = 4)
 {
+    static_assert(!zero_srcA, "zero_srcA is not supported on Blackhole; use zero_srcA_reduce to clear SrcA per face.");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t offset_address_a = SCALE_DATUM_SIZE(unpA_src_format, tile_index_a) << 1;
     const std::uint32_t address_a        = base_address_a + offset_address_a;
