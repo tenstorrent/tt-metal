@@ -50,8 +50,8 @@ def prepare_conv_transpose2d_weights(*args, **kwargs):
     The following arguments are forwarded to the C++ op as keyword arguments:
         - weight_tensor (ttnn.Tensor): the weight tensor in PyTorch Conv2d format.
         - input_memory_config (ttnn.MemoryConfig): the memory configuration for the input tensor.
-        - input_layout (ttnn.Tensor): the layout of the input tensor.
-        - weights_format (ttnn.Tensor): the format of the weights tensor. Currently only supports IOHW. (in_channels, out_channels, kernel_height, kernel_width)
+        - input_layout (ttnn.Layout): the layout of the input tensor.
+        - weights_format (str): the format of the weights tensor. Currently only supports IOHW. (in_channels, out_channels, kernel_height, kernel_width)
         - in_channels (int): number of input channels.
         - out_channels (int): number of output channels.
         - batch_size (int): batch size.
@@ -64,10 +64,13 @@ def prepare_conv_transpose2d_weights(*args, **kwargs):
         - dilation (tuple[int, int]): spacing between kernel elements.
         - has_bias (bool): whether the convolution has a bias term.
         - groups (int): number of blocked connections from input channels to output channels.
+        - device (ttnn.IDevice): the device to use.
         - input_dtype (ttnn.DataType): the data type of the input tensor.
         - output_dtype (ttnn.DataType, optional): the data type of the output tensor. Default None (uses input_dtype).
         - conv_config (ttnn.Conv2dConfig, optional): configuration for convolution. Default: None.
         - compute_config (ttnn.DeviceComputeKernelConfig, optional): configuration for compute kernel. Default: None.
+        - dram_slice_config (ttnn.Conv2dSliceConfig, optional): configuration for DRAM slicing. Default: None.
+        - mirror_kernel (bool, optional): mirror the kernel during preparation; set to False if it is already mirrored. Default: True.
 
     :return: The preprocessed weight tensor on device
     :rtype: [ttnn.Tensor]: The preprocessed weight tensor on device
@@ -89,7 +92,7 @@ def prepare_conv_transpose2d_bias(*args, **kwargs):
     The following arguments are forwarded to the C++ op as keyword arguments:
         - bias (ttnn.Tensor): the bias tensor in PyTorch Conv2d format.
         - input_memory_config (ttnn.MemoryConfig): the memory configuration for the input tensor.
-        - input_layout (ttnn.Tensor): the layout of the input tensor.
+        - input_layout (ttnn.Layout): the layout of the input tensor.
         - in_channels (int): number of input channels.
         - out_channels (int): number of output channels.
         - batch_size (int): batch size.
@@ -105,6 +108,7 @@ def prepare_conv_transpose2d_bias(*args, **kwargs):
         - groups (int): number of blocked connections from input channels to output channels.
         - conv_config (ttnn.Conv2dConfig, optional): configuration for convolution. This config must have weights_dtype set to the same dtype as the processed weights tensor. Default: None.
         - compute_config (ttnn.DeviceComputeKernelConfig, optional): configuration for compute kernel. Default: None.
+        - dram_slice_config (ttnn.Conv2dSliceConfig, optional): configuration for DRAM slicing. Default: None.
 
     :return: The preprocessed bias tensor on device
     :rtype: [ttnn.Tensor]: The preprocessed bias tensor on device
@@ -127,8 +131,8 @@ def prepare_conv_weights(*args, **kwargs):
     The following arguments are forwarded to the C++ op as keyword arguments:
         - weight_tensor (ttnn.Tensor): the weight tensor in PyTorch Conv2d format.
         - input_memory_config (ttnn.MemoryConfig): the memory configuration for the input tensor.
-        - input_layout (ttnn.Tensor): the layout of the input tensor.
-        - weights_format (ttnn.Tensor): the format of the weights tensor. Currently only supports OIHW. (out_channels, in_channels, kernel_height, kernel_width)
+        - input_layout (ttnn.Layout): the layout of the input tensor.
+        - weights_format (str): the format of the weights tensor. Currently only supports OIHW. (out_channels, in_channels, kernel_height, kernel_width)
         - in_channels (int): number of input channels.
         - out_channels (int): number of output channels.
         - batch_size (int): batch size.
@@ -140,10 +144,12 @@ def prepare_conv_weights(*args, **kwargs):
         - dilation (tuple[int, int]): spacing between kernel elements.
         - has_bias (bool): whether the convolution has a bias term.
         - groups (int): number of blocked connections from input channels to output channels.
+        - device (ttnn.IDevice): the device to use.
         - input_dtype (ttnn.DataType): the data type of the input tensor.
         - output_dtype (ttnn.DataType, optional): the data type of the output tensor. Default None (uses input_dtype).
         - conv_config (ttnn.Conv2dConfig, optional): configuration for convolution. Default: None.
         - compute_config (ttnn.DeviceComputeKernelConfig, optional): configuration for compute kernel. Default: None.
+        - slice_config (ttnn.Conv2dSliceConfig, optional): configuration for DRAM slicing. Default: None.
 
     :return: The preprocessed weight tensor on device
     :rtype: [ttnn.Tensor]: The preprocessed weight tensor on device
@@ -165,7 +171,7 @@ def prepare_conv_bias(*args, **kwargs):
     The following arguments are forwarded to the C++ op as keyword arguments:
         - bias (ttnn.Tensor): the bias tensor in PyTorch Conv2d format.
         - input_memory_config (ttnn.MemoryConfig): the memory configuration for the input tensor.
-        - input_layout (ttnn.Tensor): the layout of the input tensor.
+        - input_layout (ttnn.Layout): the layout of the input tensor.
         - in_channels (int): number of input channels.
         - out_channels (int): number of output channels.
         - batch_size (int): batch size.
@@ -181,6 +187,7 @@ def prepare_conv_bias(*args, **kwargs):
         - groups (int): number of blocked connections from input channels to output channels.
         - conv_config (ttnn.Conv2dConfig, optional): configuration for convolution. This config must have weights_dtype set to the same dtype as the processed weights tensor. Default: None.
         - compute_config (ttnn.DeviceComputeKernelConfig, optional): configuration for compute kernel. Default: None.
+        - slice_config (ttnn.Conv2dSliceConfig, optional): configuration for DRAM slicing. Default: None.
 
     :return: The preprocessed bias tensor on device
     :rtype: [ttnn.Tensor]: The preprocessed bias tensor on device
