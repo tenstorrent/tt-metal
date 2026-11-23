@@ -1821,3 +1821,32 @@ speed-of-light ep4_targets.py.
 | 65536 | 75.5: 5.537, 23.9 (96% of 25 GB/s) | 2.961, 23.7 |
   At 400G (bh-lb-19, the same snake via cluster_axis None) it reached 36.7 of 50 (73%); at 200G the CCL runs the
   links near their rate. The lanes on this box: 17.7 (G 2 bidirectional) / 21.1 (G 4 one-way) GB/s a link direction.
+
+### Fabric link microbench at 400G (2026-11-23, bh-lb-09 reflashed to galaxy-like 400G: 12 x 10, 64 ports at 400G)
+tests/test_fx_bench.py, kernels fx_send.cpp / fx_recv.cpp: one worker core a flow with its own fabric connection (no
+mux), packets from one L1 buffer into one L1 slot on the neighbour, headers routed once, a fused inc on the first and
+last packet (receiver timing), FABRIC_2D, chips (0,0) -> (0,1) unless noted; 48 MB a flow, 3 + 5 launches, AICLK 1350.
+- One flow, GB/s by router max payload (rows) and packet size (columns):
+| router payload | 1088 | 2176 | 4352 | 6528 | 8704 | 10880 | 13056 | 15232 |
+|---|---|---|---|---|---|---|---|---|
+| 4352 (default) | 13.1 | 25.8 | 46.6 | | | | | |
+| 8704 | 8.3 | 16.2 | 29.9 | 41.0 | 47.9 | | | |
+| 15232 (max) | 5.3 | 9.5 | 17.9 | 25.4 | 31.2 | 37.0 | 42.3 | 46.0 |
+  A packet costs about the time of a full router slot: 15232-B slots ~195 ns + ~9 ns a KB (a 4352-B packet 243 ns),
+  4352-B slots ~83-93 ns a packet whatever the size. Only packets that fill the slot reach the link: 46.0-47.9 GB/s
+  (92-96% of 50) with 4352 / 8704 / 15232 slots. The send path does not matter at 15232: plain / stateful / posted /
+  an inc every packet / BRISC or NCRISC all 45.9-46.1.
+- Several flows (full-slot packets; GB/s a flow):
+| flows | router 8704 | router 15232 |
+|---|---|---|
+| 1 link, 1 direction | 47.9 (Y link 47.3) | 46.0 |
+| 1 link, both directions | 45.5 / 46.8 | 42.4 / 42.4 |
+| 2 links, 1 direction | 40.5 / 40.5 (cores far apart 41.4 / 41.6) | 40.7 / 40.7 (far 42.1 / 42.4) |
+| 2 links, both directions | 40.0-40.2 x 4 (far 40.6-42.1) | 40.1-40.3 x 4 |
+| 2 neighbours (X and Y), 1 link each, out of one chip | 40.5 / 40.5 | |
+| 2 neighbours x 2 links out of one chip | 34.6 / 25.8 / 19.5 / 19.5 (99 GB/s) | |
+| the same from the BRISC on NOC0 (2 links / 2 neighbours / 4 flows) | 39.7 x 2 / 40.4 x 2 / 26.2-34.7 (114 GB/s) | |
+  A second flow out of the same chip costs each ~15%, on any link, to any neighbour, from either NoC, wherever the
+  cores sit; not explained yet (the senders share no core, NoC route or router). high_bw_all_gather on the 8-chip
+  ring (four link directions out of each chip): 37.7 GB/s a link direction - the same regime.
+- 200G for comparison: high_bw_all_gather 23.9 of 25 (96%).
