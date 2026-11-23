@@ -52,6 +52,8 @@ NEG = -1.0e9  # masked logit (attention.py)
 # kv group; 8 = whole faces). Same per-element ops on the rows the consumers read.
 COMB_IT = int(os.environ.get("INKLING_COMB_IT", "2"))
 NEAR_IT = int(os.environ.get("INKLING_NEAR_IT", "2"))  # the same for the near partial's SFPU ops
+# AttnOut: SFPU ops on faces 0 and 1 of its page (its 3 heads are elements 0..383) instead of all four
+OUT_FR = os.environ.get("INKLING_OUT_FR", "1") == "1"
 
 
 def f32_bits(x):
@@ -552,7 +554,7 @@ class AttnOut:
             _kernel(
                 "attn_out_compute.cpp",
                 self.cores,
-                dict(merge=flag),
+                dict(merge=flag, fr=int(OUT_FR and nh <= 4)),  # nh heads = elements < 128 nh of the page
                 [[]] * len(self.cores),
                 F.compute_config([2, 3, 4], full_sync=True),
             ),

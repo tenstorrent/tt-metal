@@ -29,6 +29,8 @@ void kernel_main() {
     constexpr uint32_t merge = get_named_compile_time_arg_val("merge");
     constexpr uint32_t cb_a = 0, cb_g = 1, cb_m = 2, cb_r = 3, cb_o = 4, cb_out = 16;
     constexpr uint32_t one = 0x3f800000u, minus_one = 0xbf800000u;
+    // fr: the writer reads elements 0 .. 383 (3 heads) of the page, faces 0 and 1: run the SFPU ops on those only
+    constexpr VectorMode VM = get_named_compile_time_arg_val("fr") ? VectorMode::R : VectorMode::RC;
     compute_kernel_hw_startup(cb_a, cb_out);
     cb_wait_front(cb_a, 1);
     cb_wait_front(cb_g, 1);
@@ -43,25 +45,25 @@ void kernel_main() {
         load(cb_r, 2);
         load(cb_o, 3);
         mul_binary_tile_init();
-        mul_binary_tile(0, 2, 0);  // A r
-        mul_binary_tile(1, 2, 5);  // a r
+        mul_binary_tile(0, 2, 0, VM);  // A r
+        mul_binary_tile(1, 2, 5, VM);  // a r
         binop_with_scalar_tile_init();
-        mul_unary_tile(1, minus_one);
-        add_unary_tile(1, one);  // w = 1 - a
+        mul_unary_tile(1, minus_one, VM);
+        add_unary_tile(1, one, VM);  // w = 1 - a
         mul_binary_tile_init();
-        mul_binary_tile(3, 1, 3);  // o_near w
+        mul_binary_tile(3, 1, 3, VM);  // o_near w
         add_binary_tile_init();
-        add_binary_tile(0, 3, 0);  // num
-        add_binary_tile(5, 1, 5);  // den
+        add_binary_tile(0, 3, 0, VM);  // num
+        add_binary_tile(5, 1, 5, VM);  // den
         recip_tile_init();
-        recip_tile(5);
+        recip_tile(5, VM);
         mul_binary_tile_init();
-        mul_binary_tile(0, 5, 0);
+        mul_binary_tile(0, 5, 0, VM);
     }
     sigmoid_tile_init();
-    sigmoid_tile(4);
+    sigmoid_tile<VM>(4);
     mul_binary_tile_init();
-    mul_binary_tile(0, 4, 0);
+    mul_binary_tile(0, 4, 0, VM);
     tile_regs_commit();
     tile_regs_wait();
     cb_reserve_back(cb_out, 1);
