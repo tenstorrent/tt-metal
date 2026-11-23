@@ -418,6 +418,8 @@ class Inkling2Prefill:
         trace=True,
         experts="auto",
         expert_fidelity=None,
+        proj_fidelity=None,
+        expert_precise=True,
         fused_heads=True,
         profile=False,
         debug=False,
@@ -438,6 +440,10 @@ class Inkling2Prefill:
         fp32 DEST; needs a build with stacked expert weights and, for fidelities above LoFi, the op's
         math_fidelity attribute), "sparse" (grouped sparse_matmul), "auto" (default): unified when the build runs it
         at HiFi2, else at LoFi, else sparse. expert_fidelity: pin the unified op's fidelity.
+        proj_fidelity: opt-in math fidelity of the prefill projections (q|gate|rel|sink, k, v, w_o; not the router), e.g.
+        LoFi; None (default): the model's (HiFi2). Changes output; decode keeps its own config.
+        expert_precise: False opts the unified expert op out of its precise mode (bf16 DEST, bf8 activations);
+        changes output.
         profile: synchronized per-section times in self.times. debug: print each application."""
         self.m = model
         self.device = dev = model.device
@@ -461,6 +467,14 @@ class Inkling2Prefill:
         self.hifi4 = model.hifi4
         probe_rms_bf16(dev, self.hifi4)  # bf16 norm results in the op only where they round as typecast
         self.mm_cfg = model.mm_cfg
+        if proj_fidelity is not None:  # opt-in, output-changing: a prefill-only copy of the projection config
+            self.mm_cfg = ttnn.init_device_compute_kernel_config(
+                dev.arch(),
+                math_fidelity=proj_fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
         self.layers = [_LayerPF(self, lay, root) for lay in model.layers]
         # unified experts at HiFi2 when the build takes it, else at LoFi (fp32 DEST: more accurate than the sparse
         # path, forced PCC 0.999911 vs 0.999900), else sparse; expert_fidelity pins one fidelity
@@ -504,7 +518,7 @@ class Inkling2Prefill:
         self.dev_route = self._pfroute is not None
         # fp32 DEST: the op's precise mode (fp32 partials, bf16 activations; bf8 activations miss the gate)
         self.unified_ckc = ttnn.init_device_compute_kernel_config(
-            dev.arch(), math_fidelity=self.expert_fidelity, math_approx_mode=False, fp32_dest_acc_en=True
+            dev.arch(), math_fidelity=self.expert_fidelity, math_approx_mode=False, fp32_dest_acc_en=expert_precise
         )
         g = _load(root, None, {"final_res_q", "msg_q"})
         self.final_res = (PfAttnRes if self.fused_glue else _AttnRes)(dev, g["final_res_q"], 1, self.ckc)
