@@ -2673,7 +2673,7 @@ class TtPrefillRuntime:
             self.config.use_trace
             and self.config.forward_chunks > 1
             # A non-leader host of a multi-host stage reports nothing (its leader's D2H acks cover the stage).
-            and type(sink).__name__ != "NullLayerCompletionSink"
+            and not isinstance(sink, NullLayerCompletionSink)
         ):
             # A replay of a packed forward could only report after it finished, all layers at once, behind a
             # device sync per forward. Traced packed forwards report through D2H layer acks instead.
