@@ -1728,7 +1728,7 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     static_assert(!(is_quant_byte_binop(BINOP) && SIGN_MAGNITUDE_FORMAT), "The 8-bit quant entry points run with SIGN_MAGNITUDE_FORMAT = false");
     if constexpr (
         BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB ||
-        BINOP == BinaryOp::XLOGY)
+        BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16)
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary init
         // (config reg + counter reset).
@@ -2104,7 +2104,9 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
-    else if constexpr (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::POW)
+    else if constexpr (
+        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::XLOGY || BINOP == BinaryOp::POW ||
+        BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16)
     {
         if constexpr (BINOP == BinaryOp::ADD && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
         {

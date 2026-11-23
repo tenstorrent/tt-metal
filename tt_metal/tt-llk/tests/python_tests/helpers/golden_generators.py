@@ -4317,6 +4317,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             MathOperation.SfpuLeInt,
             MathOperation.SfpuGeInt,
             MathOperation.SfpuXlogy,
+            MathOperation.SfpuNextafter,
+            MathOperation.SfpuNextafterBf16,
             MathOperation.SfpuElwrsub,
             MathOperation.SfpuBinaryMax,
             MathOperation.SfpuBinaryMin,
@@ -4352,6 +4354,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuLeInt: self._le_int,
                 MathOperation.SfpuGeInt: self._ge_int,
                 MathOperation.SfpuXlogy: self._xlogy,
+                MathOperation.SfpuNextafter: self._nextafter,
+                MathOperation.SfpuNextafterBf16: self._nextafter_bf16,
                 MathOperation.SfpuLogaddexp: self._logaddexp,
                 MathOperation.SfpuLogaddexp2: self._logaddexp2,
                 MathOperation.SfpuElwrsub: self._rsub,
@@ -4755,6 +4759,24 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         yf = torch.where(denormal & ~torch.signbit(yf), 0.0, yf)
         res = xf * torch.log(yf)
         return res.to(x.dtype) if isinstance(x, torch.Tensor) else res.item()
+
+    @staticmethod
+    def _flush_subnormal(t):
+        # The SFPU flushes a subnormal result to zero (keeping its sign), so nextafter(0, x)
+        # returns a zero rather than the smallest denormal.
+        tiny = torch.finfo(t.dtype).tiny
+        return torch.where(t.abs() < tiny, t * 0.0, t)
+
+    def _nextafter(self, t1, t2):
+        # One fp32 step of t1 toward t2 (t2 itself when the two are equal).
+        res = torch.nextafter(t1.to(torch.float32), t2.to(torch.float32))
+        return self._flush_subnormal(res).to(t1.dtype)
+
+    def _nextafter_bf16(self, t1, t2):
+        # One bfloat16 step of t1 toward t2, whatever the Dest width: the operands are bfloat16
+        # values and the kernel steps their fp32 pattern by 0x10000.
+        res = torch.nextafter(t1.to(torch.bfloat16), t2.to(torch.bfloat16))
+        return self._flush_subnormal(res).to(t1.dtype)
 
     def _logaddexp(self, t1, t2):
         # logaddexp(a, b) = log(exp(a) + exp(b)), finite for any finite pair. Computed

@@ -1,0 +1,58 @@
+# nextafter_bf16(a, b) on bfloat16 tiles with a 16-bit Dest: one bfloat16 step of a toward b (the
+# entry point is picked by the tile format, not by the Dest width). bfloat16 end to end, so the result
+# is bit-exact and atol/rtol 0 catch a missing or doubled step. The points include 0 (step to a
+# denormal, which the SFPU flushes to zero) and values both operands share, where nextafter returns b.
+#
+# Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
+# dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), and stimuli are finite intervals
+# and points (no inf, NaN, -0 or INT_MIN).
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-1000.0, -1.01]
+        - [-0.99, -0.001]
+        - [0.001, 0.99]
+        - [1.01, 1000.0]
+        - -2.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 2.0
+  - name: "input_B"
+    dims: [32, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-1000.0, -1.01]
+        - [-0.99, -0.001]
+        - [0.001, 0.99]
+        - [1.01, 1000.0]
+        - -2.0
+        - -1.0
+        - 0.0
+        - 1.0
+        - 2.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16_b
+    atol: 0.0
+    rtol: 0.0
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 0}}
+      - {type: "Fpu", in0: "input_B", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 1}}
+      - type: "BinarySfpu"
+        operation: [SfpuNextafterBf16]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 2}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}

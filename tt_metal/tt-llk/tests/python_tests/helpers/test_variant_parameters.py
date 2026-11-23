@@ -188,6 +188,50 @@ class SFPU_BCAST_DIM(TemplateParameter):
 
 
 @dataclass
+class SFPU_BCAST_FORM(TemplateParameter):
+    """Dest-side SFPU broadcast form for ``quasar/sfpu_binary_bcast_forms_quasar_test.cpp``.
+
+    ``sfpu_bcast_form`` is one of :attr:`FORMS` (the C++ ``SfpuBcastForm`` values, in order);
+    ``sfpu_bcast_tiles`` are the Dest operand tiles T0..T3 (their role per form is in the C++
+    header comment). The bands are the ``sfpu_*_bcast_col_band`` arguments; the scalar
+    iterations and vector mode are the ``sfpu_mul_bcast_scalar`` arguments.
+    """
+
+    FORMS = (
+        "ROWS_0_15",
+        "BAND",
+        "MUL_SCALAR",
+        "NORM_COL",
+        "NORM_COL_TWO_TILES",
+        "RESIDUAL_NORM_COL",
+        "NORM_SCALAR",
+    )
+
+    sfpu_bcast_form: str = "ROWS_0_15"
+    sfpu_bcast_tiles: tuple = (0, 1, 2, 3)
+    sfpu_bcast_data_band: int = 0
+    sfpu_bcast_col_band: int = 0
+    sfpu_bcast_scalar_iterations: int = 8
+    sfpu_bcast_vector_mode: VectorMode = VectorMode.RC
+
+    def convert_to_cpp(self) -> str:
+        t0, t1, t2, t3 = self.sfpu_bcast_tiles
+        return "\n".join(
+            [
+                f"constexpr int SFPU_BCAST_FORM = {self.FORMS.index(self.sfpu_bcast_form)};",
+                f"constexpr std::uint32_t SFPU_BCAST_T0 = {t0};",
+                f"constexpr std::uint32_t SFPU_BCAST_T1 = {t1};",
+                f"constexpr std::uint32_t SFPU_BCAST_T2 = {t2};",
+                f"constexpr std::uint32_t SFPU_BCAST_T3 = {t3};",
+                f"constexpr std::uint32_t SFPU_BCAST_DATA_BAND = {self.sfpu_bcast_data_band};",
+                f"constexpr std::uint32_t SFPU_BCAST_COL_BAND = {self.sfpu_bcast_col_band};",
+                f"constexpr int SFPU_BCAST_SCALAR_ITERATIONS = {self.sfpu_bcast_scalar_iterations};",
+                f"constexpr auto SFPU_BCAST_VECTOR_MODE = {self.sfpu_bcast_vector_mode.cpp_enum_value};",
+            ]
+        )
+
+
+@dataclass
 class ACC_TO_DEST(TemplateParameter):
     acc_to_dest: bool
 
