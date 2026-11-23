@@ -372,24 +372,16 @@ tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const tt
 }
 
 void get_max_page_size_and_num_pages(
-    const tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshDevice& /*device*/,
     uint32_t num_tiles,
     uint32_t tile_size,
     uint32_t& page_size,
     uint32_t& num_pages) {
     uint64_t total_size = static_cast<uint64_t>(num_tiles) * tile_size;
 
-    // TODO(#32477): Remove hardcoding when NOC_MAX_BURST_SIZE is available from HAL
-    uint32_t noc_max_page_size;
-    if (device.arch() == tt::ARCH::WORMHOLE_B0) {
-        noc_max_page_size = 8192;
-    } else if (device.arch() == tt::ARCH::BLACKHOLE) {
-        noc_max_page_size = 16384;
-    } else {
-        TT_THROW(
-            "Unsupported architecture for DRAM sharded matmul. Only Wormhole and Blackhole are supported. Got: {}",
-            device.arch());
-    }
+    // NOC_MAX_BURST_SIZE from the architecture's noc_parameters.h, via the HAL:
+    // Wormhole = 8192, Blackhole = 16384, Quasar = 65536.
+    const uint32_t noc_max_page_size = tt::tt_metal::hal::get_noc_max_burst_size_bytes();
 
     page_size = (noc_max_page_size / tile_size) * tile_size;
     while (total_size % page_size != 0 && page_size >= tile_size) {
