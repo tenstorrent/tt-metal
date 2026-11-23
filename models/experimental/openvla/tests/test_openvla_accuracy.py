@@ -11,7 +11,7 @@ Accuracy tests for OpenVLA pieces that the PCC tests with random weights do not 
 4. Language model prefill: logits after the first decoder layers match HF Llama on the checkpoint
    (needs OPENVLA_WEIGHTS)
 5. predict_action: returns only action tokens, decoded to actions; teacher-forced on the HF reference tokens, each
-   TT top-1 is in the reference top-5 (needs OPENVLA_WEIGHTS). One case crosses a KV-cache block during decode.
+   TT top-1 is in the reference top-5 (needs OPENVLA_WEIGHTS). In one case every decode step writes past the prompt's KV blocks.
 6. predict_action on device rejects generation options it cannot honour (host only)
 7. predict_action returns the generated tokens in order, first the prefill's, and rejects non-action tokens (host only)
 8. The language model's forward puts the prefill token first, feeds each token to the next decode step, and gives decode
@@ -319,19 +319,19 @@ REFERENCE_ACTIONS = {
             [31744, 31872, 31745, 31785, 31758],
         ],
     },
-    # 283 positions, so decode writes past the 9 KV-cache blocks the prompt fills
-    "green_ketchup_basket": {
+    # 288 positions: the prompt fills 9 KV-cache blocks exactly, so every decode step writes past them
+    "green_spatula_stove": {
         "rgb": (60, 160, 70),
-        "instruction": "pick up the ketchup and place it in the basket",
-        "tokens": [31872, 31872, 31872, 31884, 31867, 31871, 31872],
+        "instruction": "move the spatula from the left side of the stove to the right side",
+        "tokens": [31858, 31895, 31898, 31878, 31866, 31882, 31744],
         "top5": [
-            [31872, 31849, 31846, 31853, 31851],
-            [31872, 31894, 31901, 31893, 31892],
-            [31872, 31899, 31891, 31875, 31897],
-            [31884, 31863, 31865, 31895, 31898],
-            [31867, 31859, 31878, 31872, 31863],
-            [31871, 31865, 31867, 31868, 31870],
-            [31872, 31744, 31754, 31865, 31753],
+            [31858, 31794, 31838, 31828, 31786],
+            [31895, 31882, 31915, 31999, 31883],
+            [31898, 31894, 31910, 31885, 31900],
+            [31878, 31899, 31834, 31990, 31976],
+            [31866, 31859, 31873, 31862, 31861],
+            [31882, 31884, 31883, 31873, 31863],
+            [31744, 31872, 31875, 31860, 31825],
         ],
     },
 }
@@ -355,7 +355,7 @@ def test_predict_action_tokens(mesh_device, openvla_weights_path, llama2_hf_mode
     """
     For each reference case, greedy predict_action must return action tokens only, decoded to actions. Then, with the
     reference tokens fed back in (teacher forcing), the model's top-1 at every step must be in the reference top-5.
-    The third case is long enough that decode writes past the KV-cache blocks the prompt filled.
+    The third prompt fills its KV-cache blocks exactly, so every decode step writes past them.
     """
     merged_tensors = load_openvla_weights(openvla_weights_path, ("",))
     kwargs = {

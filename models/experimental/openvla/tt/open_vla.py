@@ -51,7 +51,7 @@ from models.tt_transformers.tt.common import (
     sample_host,
 )
 from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.ttt_compat.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,

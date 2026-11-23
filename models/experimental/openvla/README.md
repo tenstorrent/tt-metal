@@ -111,7 +111,7 @@ The `predict_action` test uses action tokens from the HF model in bfloat16 on CP
 | DINOv2 features, checkpoint weights | PCC > 0.97 | 0.981 |
 | SigLIP features, checkpoint weights | PCC > 0.97 | 0.988 |
 | Logits after 2 decoder layers, BOS + 256 patches + prompt | PCC > 0.97, TT top-1 in reference top-5 | 0.996, same top-1 |
-| `predict_action`, three solid-color images (the third prompt makes decode cross a KV-cache block) | all returned tokens are action tokens, actions are their de-normalized bin centers; with the reference tokens fed back in, TT top-1 in the reference top-5 at all 7 steps | |
+| `predict_action`, three solid-color images (the third prompt, 288 positions, makes every decode step write past its KV-cache blocks) | all returned tokens are action tokens, actions are their de-normalized bin centers; with the reference tokens fed back in, TT top-1 in the reference top-5 at all 7 steps | |
 | `predict_action` token order and non-action tokens (host only) | returns the generated tokens in order, the prefill's first; on device an end-of-sequence or other non-action token raises | host only |
 | Language model decode order and page table (host only, device calls stubbed) | prefill token first, each decode step takes the previous token, the decode page table covers every position written and starts with the prefill's blocks | host only |
 
