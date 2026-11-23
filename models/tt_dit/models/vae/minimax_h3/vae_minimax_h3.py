@@ -43,6 +43,7 @@ from loguru import logger
 
 import ttnn
 
+from ....utils import host_buffers
 from ....utils.host_buffers import empty_uint8
 from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
 from ....utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
@@ -405,6 +406,8 @@ class MiniMaxH3Vae:
         # `perf_counter` calls against a multi-second stage, and without it "VAE decode: 6.0 s" is a
         # number with nowhere to go.
         self._profile = self._empty_profile()
+        # Latent (T, H, W) -> the uint8 clip buffer its decode assembled, for `reserve_decode_output`.
+        self._assembled_shapes: dict[tuple[int, int, int], tuple[int, ...]] = {}
         self.last_decode_profile: dict[str, float] = {}
 
         self.decoder = self._make_decoder()
@@ -527,6 +530,7 @@ class MiniMaxH3Vae:
             "unpatchify": 0.0,
             "tiling": 0.0,
             "stitch": 0.0,
+            "blend": 0.0,
             "waves": 0,
             "units": 0,
             # Per-wave readback durations, not just their sum: a mean hides a slow first wave, and
@@ -624,6 +628,7 @@ class MiniMaxH3Vae:
             "tiling",
             "upload",
             "host_prep",
+            "blend",
             "residual",
         ):
             share = 100 * p[name] / total if total else 0.0
@@ -1679,8 +1684,21 @@ class MiniMaxH3Vae:
         finally:
             torch.set_num_threads(previous_threads)
 
+    def reserve_decode_output(self, latent_frames: int, latent_height: int, latent_width: int) -> None:
+        """Map the host buffer the clip assembly of a decode this size will take, in the background.
+
+        A fresh buffer faults in page by page, 0.2-1.9 s for the first clips after a load or length
+        switch on a box full of page cache (blx04, 11-20). The size comes from the last decode of
+        this latent shape (the load's warm-up decodes every served length); unknown sizes wait.
+        """
+        shape = self._assembled_shapes.get((int(latent_frames), int(latent_height), int(latent_width)))
+        if shape is not None:
+            host_buffers.reserve(shape)
+
     def _decode(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
         self._ensure_loaded(self.decoder, self._decoder_subfolder())
+        latent_key = tuple(int(d) for d in z_BCTHW.shape[2:])
+        self.reserve_decode_output(*latent_key)
         self._profile = self._empty_profile()
         decode_started = time.perf_counter()
         config = self.config
@@ -1745,6 +1763,8 @@ class MiniMaxH3Vae:
 
         result = assemble_clip_parts(parts, config.frame_overlap) if parts else concat_clip_frames([])
         self._profile["blend"] = time.perf_counter() - assemble_mark
+        if isinstance(result, np.ndarray) and result.dtype == np.uint8:
+            self._assembled_shapes[latent_key] = result.shape
         self._profile["concat"] = 0.0
         if pad_tokens > 0:
             intra_tail = config.clip_length % temporal_ratio

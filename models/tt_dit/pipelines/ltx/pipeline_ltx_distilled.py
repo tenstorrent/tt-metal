@@ -451,6 +451,8 @@ class LTXDistilledPipeline(LTXPipeline):
     HAS_UPSAMPLER = True
     SUPPORTS_IMAGE_CONDITIONING = True
     DEFERS_ENCODE_TRACE = True
+    # a tail-padded keyframe gen returns its yuv420 frames trimmed by frame (ltx-server asks for yuv only then)
+    TRIMS_YUV_TAIL_PAD = True
 
     @staticmethod
     def _post_process_latent_tt(
@@ -2775,7 +2777,9 @@ class LTXDistilledPipeline(LTXPipeline):
             s2_video, latent_frames, latent_h, latent_w, output_type=decode_type, defer_yuv=defer_yuv
         )
         if num_frames_out != num_frames:  # drop the tail-pad frame(s): (T,H*3/2,W) yuv planes or (B,3,F,H,W) float
-            video_pixels = video_pixels[:num_frames_out] if yuv_export else video_pixels[:, :, :num_frames_out]
+            # by the decode's own type: the frame-return path (output_path None, output_type "yuv") decodes yuv
+            # planes too, and trimming them as float cut the width (a 10 s portrait came back (249,1632,241))
+            video_pixels = video_pixels[:num_frames_out] if decode_type == "yuv" else video_pixels[:, :, :num_frames_out]
         t_vae_decode = time.time() - t0
         _stats("video_pixels", video_pixels)
         timings.append(("VAE decode", t_vae_decode))

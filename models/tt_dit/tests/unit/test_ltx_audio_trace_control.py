@@ -127,6 +127,7 @@ def fixture(*, traced=True, independent=True, env=None):
             functools=functools,
             inspect=inspect,
             weakref=weakref,
+            _TRACED_WRAPPERS=weakref.WeakSet(),
             _kernel_prewarm_capturing=False,
             _OMITTED=object(),
             _MESH_DEVICE_PARAM_NAMES=("mesh_device", "device"),

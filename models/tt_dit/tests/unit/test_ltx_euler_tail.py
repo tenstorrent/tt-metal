@@ -14,6 +14,7 @@ import ast
 import math
 import os
 import unittest
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from typing import overload
@@ -139,6 +140,7 @@ def load(fake):
         ttnn=fake,
         math=math,
         os=os,
+        weakref=weakref,
         overload=overload,
         logger=SimpleNamespace(debug=lambda *a: None, warning=lambda *a: None),
         _kernel_prewarm_capturing=False,
@@ -200,6 +202,7 @@ class EulerTraceContract(unittest.TestCase):
         enabled=True,
         traced=True,
         image_cond=False,
+        needs_video_ts=False,
         captured=True,
         step_sync=False,
     ):
@@ -219,6 +222,7 @@ class EulerTraceContract(unittest.TestCase):
             sigma_next=sigma_next,
             ancestral=False,
             image_cond=image_cond,
+            needs_video_ts=needs_video_ts,
             traced=traced,
             trace_key="stage",
             step_sync=step_sync,
@@ -330,7 +334,13 @@ class EulerTraceContract(unittest.TestCase):
             state._euler_tail.release()
 
     def test_routes_without_real_unconditioned_producer_never_own_tail(self):
-        for change in (dict(enabled=False), dict(traced=False), dict(image_cond=True), dict(captured=False)):
+        for change in (
+            dict(enabled=False),
+            dict(traced=False),
+            dict(image_cond=True),
+            dict(needs_video_ts=True),
+            dict(captured=False),
+        ):
             state = self.state()
             velocity = [Tensor(torch.ones(t.shape), self.fake.device) for t in (state.tt_video_lat, state.tt_audio_lat)]
             self.step(state, velocity, 1.0, 0.5, **change)
