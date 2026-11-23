@@ -1,21 +1,23 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Time of one GLM-5.4 G1->G2 chunk over a D2D socket, measured between two 4x4 halves of one 8x4 Galaxy.
+"""Time of one GLM-5.4 G1->G2 chunk over a D2D socket, measured between two halves of one 8x4 Galaxy.
 
 An intra-Galaxy proxy for the SC4 inter-Galaxy seam: the 8x4 mesh opens whole (sub-mesh fabric opens fail on
-Galaxies) and is split into a sender (rows 0-3) and a receiver (rows 4-7) with ``create_submesh``. Segments
+Galaxies) and is split with ``create_submesh`` into a sender and a receiver half: 4x4 (rows 0-3 -> rows 4-7) or 8x2
+(cols 0-1 -> cols 2-3), which puts twice as many chips, and so relay cables, on the seam. Segments
 and socket settings follow the prefill runner's stage boundary: lease mode (push, grant both sides, drain, wait
 both sides), an 8x8 worker grid, the minimal L1 FIFO, and a 12 B chunk record as metadata.
 
-Payload of one chunk of ``tokens`` rows (5120 = one GLM-5.3 chunk), all segments rows over SP:
+Payload of one chunk of ``tokens`` rows (5120 = one GLM-5.3 chunk), all segments rows over SP; ``full`` sends
+all three on one socket, the others one segment alone:
 
 * activation: bf16 TILE ``[1, 1, tokens, 6144]``, embedding over TP (the runner's D2D mapper);
 * KVPE rows: ``[1, 28, tokens, 176]`` uint32 ROW_MAJOR = 704 B pages for the 28 loop layers, layers over TP
   (GLM TP-dedups its KVPE cache, so each row crosses once);
 * top-k: ``[1, 7, tokens, 2048]`` uint32 ROW_MAJOR, k over TP (the runner's index mapper).
 
-Relay mode is the deployed GLM path (only cable chips cross; here the chips on the rows joining the halves).
+Relay mode is the deployed GLM path (only cable chips cross; here chips directly linked to the other half).
 Each case prints one ``[d2d-cost] {json}`` line with eager and traced per-chunk times and the bytes moved; the
 relay cable plan (exit -> entry chips) is in the C++ log. Every segment is checked bit-exact, eager and traced,
 on a transfer into zeroed destinations outside the timed loop.
@@ -60,13 +62,12 @@ def _mapper(mesh, tp_dim):
 
 def _segments(payload, tokens):
     """(name, global shape, dtype, layout, TP-sharded dim) per segment."""
-    segs = [("activation", [1, 1, tokens, _HIDDEN], ttnn.bfloat16, ttnn.TILE_LAYOUT, 3)]
-    if payload == "full":
-        segs += [
-            ("kvpe", [1, _LOOP_LAYERS, tokens, _KVPE_PAGE_WORDS], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 1),
-            ("topk", [1, _TOPK_SETS, tokens, _TOPK], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 3),
-        ]
-    return segs
+    segs = [
+        ("activation", [1, 1, tokens, _HIDDEN], ttnn.bfloat16, ttnn.TILE_LAYOUT, 3),
+        ("kvpe", [1, _LOOP_LAYERS, tokens, _KVPE_PAGE_WORDS], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 1),
+        ("topk", [1, _TOPK_SETS, tokens, _TOPK], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 3),
+    ]
+    return segs if payload == "full" else [s for s in segs if s[0] == payload]
 
 
 def _nbytes(shape, dtype):
@@ -129,7 +130,8 @@ def _stats(samples):
 
 
 @pytest.mark.parametrize("tokens", [5120, 2560], ids=["t5120", "t2560"])
-@pytest.mark.parametrize("payload", ["activation", "full"])
+@pytest.mark.parametrize("payload", ["activation", "kvpe", "topk", "full"])
+@pytest.mark.parametrize("split", ["rows", "cols"])
 @pytest.mark.parametrize("relay", [True, False], ids=["relay", "direct"])
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -153,14 +155,16 @@ def _stats(samples):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_glm54_d2d_payload_cost(mesh_device, device_params, relay, payload, tokens):
+def test_glm54_d2d_payload_cost(mesh_device, device_params, split, relay, payload, tokens):
     if not is_blackhole():
         pytest.skip("D2DStreamService needs Blackhole service cores")
     rows, cols = mesh_device.shape[0], mesh_device.shape[1]
-    half = rows // 2
     stamp = lambda msg: logger.info(f"[d2d-cost] {time.strftime('%H:%M:%S')} {msg}")
-    sender_mesh = mesh_device.create_submesh(ttnn.MeshShape(half, cols), offset=ttnn.MeshCoordinate(0, 0))
-    receiver_mesh = mesh_device.create_submesh(ttnn.MeshShape(half, cols), offset=ttnn.MeshCoordinate(half, 0))
+    # rows: 4x4 halves (rows 0-3 -> 4-7); cols: 8x2 halves (cols 0-1 -> 2-3), twice the chips facing the seam.
+    shape = (rows // 2, cols) if split == "rows" else (rows, cols // 2)
+    peer = ttnn.MeshCoordinate(rows // 2, 0) if split == "rows" else ttnn.MeshCoordinate(0, cols // 2)
+    sender_mesh = mesh_device.create_submesh(ttnn.MeshShape(*shape), offset=ttnn.MeshCoordinate(0, 0))
+    receiver_mesh = mesh_device.create_submesh(ttnn.MeshShape(*shape), offset=peer)
     sender_mesh.enable_program_cache()
     receiver_mesh.enable_program_cache()
 
@@ -168,7 +172,7 @@ def test_glm54_d2d_payload_cost(mesh_device, device_params, relay, payload, toke
     spec = lambda shape, dtype, layout: ttnn.TensorSpec(
         shape=ttnn.Shape(shape), dtype=dtype, layout=layout, buffer_type=ttnn.BufferType.DRAM
     )
-    stamp(f"create_pair relay={relay} payload={payload} tokens={tokens}")
+    stamp(f"create_pair split={split} relay={relay} payload={payload} tokens={tokens}")
     sender, receiver = ttnn.D2DStreamService.create_pair(
         sender_mesh=sender_mesh,
         receiver_mesh=receiver_mesh,
@@ -266,9 +270,8 @@ def test_glm54_d2d_payload_cost(mesh_device, device_params, relay, payload, toke
             "relay": relay,
             "payload": payload,
             "tokens": tokens,
-            "sender_rows": [0, half - 1],
-            "receiver_rows": [half, rows - 1],
-            "cols": cols,
+            "split": split,
+            "half_shape": list(shape),
             "segment_bytes": seg_bytes,
             "total_bytes": total,
             "eager": _stats(eager),
