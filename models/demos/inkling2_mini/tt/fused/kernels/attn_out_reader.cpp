@@ -38,7 +38,8 @@ void kernel_main() {
     const uint32_t stage = align_power_of_2(get_write_ptr(cb_stage), attnio::ALIGN);
     // attention output rows: r0 + k of the tile row starting at page t0
     const uint32_t t0 = far_grp ? (h0 / nh) * 5 : (rows ? (get_arg_val<uint32_t>(3) * 8 + h0 / nh) * 4 : 0);
-    const uint32_t r0 = (far_grp || rows) ? 0 : h0;
+    // merge with far_grp: the far partial's rows start at runtime arg 7 (3 t for token t of a shared verify far call)
+    const uint32_t r0 = (far_grp && merge) ? get_arg_val<uint32_t>(7) : ((far_grp || rows) ? 0 : h0);
 
     // stage: [0, 128 nh*4) gate blocks; attn rows k at st_a + 512 k; merge: valid at st_v, o_near rows at
     // st_o + 512 k, r blocks at st_r + 64 k, a blocks at st_m + 64 k

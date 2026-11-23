@@ -26,6 +26,8 @@ void kernel_main() {
     const uint32_t r = get_arg_val<uint32_t>(1);
     const uint32_t sink = get_arg_val<uint32_t>(2);
     const uint32_t g = get_arg_val<uint32_t>(3);
+    const uint32_t tok =
+        get_arg_val<uint32_t>(4);  // sink_grp: rows 3 tok .. 3 tok + 2 (multi-token verify, shared far)
 
     const InterleavedAddrGen<true> od = {.bank_base_address = out, .page_size = 4096};
     for (uint32_t t = 0; t < dt; ++t) {
@@ -37,7 +39,7 @@ void kernel_main() {
     {
         cb_wait_front(cb_st, 1);
         const InterleavedAddrGen<true> sd = {.bank_base_address = sink, .page_size = 2048};
-        rows3(get_read_ptr(cb_st), sd, sink_grp ? g : 0, sink_grp ? 0 : g);
+        rows3(get_read_ptr(cb_st), sd, sink_grp ? g : 0, sink_grp ? tok : g);
         cb_wait_front(cb_r, 1);
         const InterleavedAddrGen<true> rd = {.bank_base_address = r, .page_size = 4096};
         noc_async_write(get_read_ptr(cb_r), rd.get_noc_addr(g), 4096);

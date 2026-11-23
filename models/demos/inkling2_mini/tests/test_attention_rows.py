@@ -90,7 +90,7 @@ def test_decode_rows(device, p, R, is_global):
         pt.prepare()
         positions.append(pt)
     rows = attn.rows_out(R, st)
-    act = ttnn.to_torch(attn.decode_rows(xs, st, positions, rows)).float()[0, 0]
+    act = ttnn.to_torch(attn.decode_rows(xs, st, positions, rows, p0=p)).float()[0, 0]
     for t in range(R):
         assert ref[t].abs().max() > 0, t  # a real output row
         assert torch.equal(act[t], ref[t]), t

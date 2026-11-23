@@ -177,7 +177,10 @@ class AttnPrep:
                     w += [self.q.buffer_address(), 0, 0, 0, 0, h]
                     if self.dyn:
                         w += [self.q_grp.buffer_address(), 0, 0, 0, g * (HEAD_DIM // 32), i]
-                        w += [self.q_far.buffer_address(), 0, 0, 0, g * 9 + 5, i]
+                        if rows is not None and rows[1].q_far is not None:  # shared verify far call: rows 3 t + i
+                            w += [rows[1].q_far.buffer_address(), 0, 0, 0, g * 9 + 5, rows[0] * GROUPS + i]
+                        else:
+                            w += [self.q_far.buffer_address(), 0, 0, 0, g * 9 + 5, i]
             else:
                 c0 = self.kv0 + (0 if kind == "k" else N_KV * HEAD_DIM) + g * HEAD_DIM
                 r += [c0 // 32, mode_rows[kind], g * TAPS]
@@ -352,7 +355,7 @@ class AttnOut:
         self.act = _shared_l1(device, "o_in", N_HEADS * HEAD_DIM, act_mem)
         self.cores = [ttnn.CoreCoord(i, 0) for i in range(N_KV)]  # act_mem grid: CoreGrid(x=8, y=1)
 
-    def __call__(self, attn, proj, merge=None, row=None):
+    def __call__(self, attn, proj, merge=None, row=None, far_row=0):
         """attn: [1, 1, 24, 128] bf16 TILE DRAM, or with merge = (o_near [1, 8, 3, 128] fp32, r [1, 8, 3, 1] fp32,
         far_valid [1, 1, 1, 1] fp32) the far partial [1, 1, 24, 160] or per kv group [1, 8, 3, 160] bf16. proj as
         AttnPrep. Returns self.act."""
@@ -373,7 +376,8 @@ class AttnOut:
                 assert t.dtype == ttnn.float32, t.dtype
             o_near, r, valid = merge
             rt = [
-                a + [o_near.buffer_address(), r.buffer_address(), valid.buffer_address(), i] for i, a in enumerate(rt)
+                a + [o_near.buffer_address(), r.buffer_address(), valid.buffer_address(), i, far_row]
+                for i, a in enumerate(rt)
             ]
             io += list(merge)
         flag = int(merge is not None)
@@ -480,8 +484,10 @@ class AttnNear:
         self.cores, _ = F.core_list(device, p, first_row=1)
         self.comb_cores = [ttnn.CoreCoord(i, 1) for i in range(N_KV)]
 
-    def __call__(self, q_grp, mask_grp, sink_blk, k_ring, v_ring, pend=None):
-        """pend = (RowsOut, pos0 tensor, ntok): multi-token verify, token ntok - 1 (see attn_near_reader.cpp)."""
+    def __call__(self, q_grp, mask_grp, sink_blk, k_ring, v_ring, pend=None, outs=None):
+        """pend = (RowsOut, pos0 tensor, ntok): multi-token verify, token ntok - 1 (see attn_near_reader.cpp).
+        outs = (o_near, r, far sink, t): write there instead of this module's tensors, the sink at rows 3 t (a shared
+        verify far call)."""
         assert k_ring.dtype == v_ring.dtype and k_ring.dtype in (ttnn.bfloat16, ttnn.bfloat8_b), k_ring.dtype
         kv_page = 1088 if k_ring.dtype == ttnn.bfloat8_b else 2048
         f32, bf = ttnn.float32, ttnn.bfloat16
@@ -538,7 +544,8 @@ class AttnNear:
         named = dict(nsplit=ns)
         parts = [self.zp, self.op, self.mp]
         r_rt = [[t.buffer_address() for t in parts] + [g] for g in range(n)]
-        w_rt = [[self.out.buffer_address(), self.r.buffer_address(), self.sink.buffer_address(), g] for g in range(n)]
+        o_t, r_t, s_t, tok = outs if outs is not None else (self.out, self.r, self.sink, 0)
+        w_rt = [[o_t.buffer_address(), r_t.buffer_address(), s_t.buffer_address(), g, tok] for g in range(n)]
         kernels = [
             _kernel("attn_comb_reader.cpp", cc, named, r_rt, ttnn.ReaderConfigDescriptor()),
             _kernel(
@@ -563,9 +570,9 @@ class AttnNear:
             _cb(21, f32, 1, crs),
             _cb(22, f32, ns, crs),
         ]
-        outs = [self.r, self.sink, self.out]
-        ttnn.generic_op(parts + outs, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
-        return self.out, self.r, self.sink
+        outs_t = [r_t, s_t, o_t]
+        ttnn.generic_op(parts + outs_t, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
+        return o_t, r_t, s_t
 
 
 class RowsOut:
@@ -574,9 +581,10 @@ class RowsOut:
     pending [2, 8, 32, 128] in the ring dtype (row t of batch g / 8 + g = token t's packed k / v row). slot[t]: the
     int32 slot index t the kv writer puts token t's rows at."""
 
-    def __init__(self, device, R, ring_dtype):
+    def __init__(self, device, R, ring_dtype, is_global=False):
         assert 1 <= R <= 3, "pending-row sdpa: at most 3 tokens (8R batches x 4 cores)"
         self.R = R
+        self.q_far = None  # global layers, shared far call: q_far rows 3 t + i, per-token near outputs, far sink rows
 
         def zeros(shape, dt=ttnn.bfloat16):
             return ttnn.from_torch(
@@ -594,9 +602,15 @@ class RowsOut:
         self.slot = [
             ttnn.from_torch(torch.tensor([t], dtype=torch.int32), dtype=ttnn.int32, device=device) for t in range(R)
         ]
+        if is_global:
+            self.q_far = zeros([1, N_KV, GROUPS * R, 288])
+            self.o_near = [zeros([1, N_KV, GROUPS, HEAD_DIM], ttnn.float32) for _ in range(R)]
+            self.r = [zeros([1, N_KV, GROUPS, 1], ttnn.float32) for _ in range(R)]
+            self.sink_far = zeros([N_KV * 32, 32])
 
     def tensors(self, t):
-        return [self.q, self.mask, self.sink, self.pending, self.slot[t]]
+        extra = [self.q_far] if self.q_far is not None else []
+        return [self.q, self.mask, self.sink, self.pending, self.slot[t]] + extra
 
 
 class KvCommit:

@@ -123,6 +123,17 @@ class DecodePositionsFast(DecodePositions):
         self.far_grp = (inp["far_pos8"], inp["far_valid"])
 
 
+class _NoFar:
+    """RowsOut view without the shared-far tensors (decode_rows' per-token far path)."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.q_far = None
+
+    def __getattr__(self, name):
+        return getattr(self._rows, name)
+
+
 class FastAttentionState(AttentionState):
     """Ring + conv histories as `AttentionState`; global far cache is one `kv_full` (module doc)."""
 
@@ -203,6 +214,12 @@ class Inkling2AttentionFast(Inkling2Attention):
         self.local_cores = {(x, y) for x in range(lg.x) for y in range(lg.y)}
         # multi-token verify (decode_rows): sdpa_decode with pending rows, (token, kv group) batches x 4 cores
         self.rows_cfg = sdpa_cfg(LOCAL_CHUNK, LOCAL_CORES_PER_HEAD, exact_exp_half_tile=True)
+        # shared verify far call: the R tokens' rows in one call, each token's own causal bound (rows_per_token)
+        self.far_rows_cfg = (
+            sdpa_cfg(FAR_CHUNK, **FAR_OPTS, exact_exp_half_tile=True, rows_per_token=GROUPS)
+            if is_global and hasattr(ttnn.SDPAProgramConfig, "rows_per_token")
+            else None
+        )
         self.commit = KvCommit(self.device)
         # k and v ring writes in one paged_fused_update_cache program: k's row on core (0, 0), v's on (0, 1)
         self.kv_shard_v = ttnn.create_sharded_memory_config(
@@ -418,9 +435,9 @@ class Inkling2AttentionFast(Inkling2Attention):
 
     def rows_out(self, R, state):
         """Scratch of a multi-token verify pass (decode_rows) for R tokens, R <= 3."""
-        return RowsOut(self.device, R, state.k_ring.dtype)
+        return RowsOut(self.device, R, state.k_ring.dtype, is_global=self.is_global)
 
-    def decode_rows(self, xs, state, positions, rows):
+    def decode_rows(self, xs, state, positions, rows, p0=None):
         """Multi-token verify, local layers: R = len(xs) <= 3 tokens at consecutive positions; xs[t] the token's input
         row (xq = xk = xv), positions[t] its prepared DecodePositionsFast, rows a rows_out(R). Each token's window /
         projection / prep runs in order (its k / v rows go to rows.pending, the ring is not written), then one
@@ -432,6 +449,17 @@ class Inkling2AttentionFast(Inkling2Attention):
         assert self.FUSED and len(xs) == rows.R
         if self.is_global:
             assert FAR_GRP
+            R = rows.R
+            # one far call for all tokens when their far bounds share a K chunk (exact, sdpa rows_per_token);
+            # p0: token 0's position (host int). Otherwise one far call per token.
+            shared = (
+                self.far_rows_cfg is not None
+                and R > 1
+                and p0 is not None
+                and p0 >= WINDOW
+                and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
+            )
+            projs = []
             for t, (x, pos) in enumerate(zip(xs, positions)):
                 if self.window is None:
                     proj, mode = self._window(state, x, x, x)
@@ -439,10 +467,21 @@ class Inkling2AttentionFast(Inkling2Attention):
                     mode = "single"
                     proj = self.w_all(self.window(state.x_hist, [x]), ttnn.bfloat16, self.mm_cfg)
                 r = ROWS[mode]
-                _, mask, sink_t = self.prep(proj, pos, {"q": 0, "k": r["k"], "v": r["v"]}, state, rows=(t, rows))
-                o_near, rr, sink_far = self.near(
-                    self.prep.q_grp, mask, sink_t, state.k_ring, state.v_ring, pend=(rows, positions[0].pos, t + 1)
+                prep_rows = (t, rows) if shared else (t, _NoFar(rows))
+                _, mask, sink_t = self.prep(proj, pos, {"q": 0, "k": r["k"], "v": r["v"]}, state, rows=prep_rows)
+                outs = (rows.o_near[t], rows.r[t], rows.sink_far if shared else self.near.sink, t if shared else 0)
+                self.near(
+                    self.prep.q_grp,
+                    mask,
+                    sink_t,
+                    state.k_ring,
+                    state.v_ring,
+                    pend=(rows, positions[0].pos, t + 1),
+                    outs=outs,
                 )
+                if shared:
+                    projs.append(proj)
+                    continue
                 far_pos, valid = pos.far_grp
                 far = ttnn.transformer.flash_multi_latent_attention_decode(
                     self.prep.q_far,
@@ -450,12 +489,26 @@ class Inkling2AttentionFast(Inkling2Attention):
                     head_dim_v=V_WIDTH,
                     is_causal=True,
                     cur_pos_tensor=far_pos,
-                    attention_sink=sink_far,
+                    attention_sink=self.near.sink,
                     scale=1.0,
                     program_config=self.far_grp_cfg,
                     compute_kernel_config=self.hifi4,
                 )
-                self.out(far, proj, (o_near, rr, valid), row=t)
+                self.out(far, proj, (rows.o_near[t], rows.r[t], valid), row=t)
+            if shared:
+                far = ttnn.transformer.flash_multi_latent_attention_decode(
+                    rows.q_far,
+                    state.kv_grp,
+                    head_dim_v=V_WIDTH,
+                    is_causal=True,
+                    cur_pos_tensor=positions[R - 1].far_grp[0],
+                    attention_sink=rows.sink_far,
+                    scale=1.0,
+                    program_config=self.far_rows_cfg,
+                    compute_kernel_config=self.hifi4,
+                )
+                for t, proj in enumerate(projs):
+                    self.out(far, proj, (rows.o_near[t], rows.r[t], positions[t].far_grp[1]), row=t, far_row=GROUPS * t)
             return self.out.act
         projs = []
         for t, (x, pos) in enumerate(zip(xs, positions)):
