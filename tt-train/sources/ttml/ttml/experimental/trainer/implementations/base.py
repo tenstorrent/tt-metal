@@ -17,9 +17,12 @@ from typing import Any, ClassVar, Iterable, Iterator, Optional
 import numpy as np
 from tqdm import tqdm
 
+from ttml.experimental.models.utils.checkpoint import check_base_model
+
 from ..callbacks.callback import CallbackHandler
 from ..configs import TrainerConfig
 from ..managers.logging import TrainingLogger
+from ..utils import read_trainer_state, tt_metal_version
 
 
 class Trainer(ABC):
@@ -246,6 +249,17 @@ class Trainer(ABC):
         random.seed(self.config.seed)
         np.random.seed(self.config.seed)
 
+    def _model_source(self) -> str:
+        """Where the pretrained model's files are; ``model.name``, the hub id, unless a subclass knows better."""
+        return self.config.model.name
+
+    def _check_base_model(self, directory: str) -> None:
+        """Raise ``UnsupportedTrainingConfig`` if the checkpoint at ``directory`` was saved by a run of another model.
+        One without ``trainer_state.json``, such as a model from elsewhere, is taken as this model's."""
+        state = read_trainer_state(directory) or {}
+        base = (state.get("base_model") or {}).get("name_or_path")
+        check_base_model(directory, base, self.config.model.name, self._model_source())
+
     @abstractmethod
     def _load_dataloaders(self) -> tuple[Iterable, Optional[Iterable]]:
         """Return ``(train_dataloader, val_dataloader)``; ``val_dataloader`` is ``None`` without validation data.
@@ -338,8 +352,35 @@ class Trainer(ABC):
     def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:
         """Save the model's weights as a directory at ``path``, replacing one that is there.
 
-        ``metadata`` (step, epoch, metrics) is stored alongside.
+        ``metadata`` (step, epoch, metrics) is stored alongside, in ``trainer_state.json`` as ``trainer_state``
+        builds it.
         """
+
+    def trainer_state(self, metadata: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        """What ``trainer_state.json`` records: the format, the run's full config, the tt-metal version
+        (``tt_metal_version()``) and the model the run trains, then the keys of ``metadata``, which may not replace
+        those. For example::
+
+            {
+                "format": {"type": "hf"},
+                "config": {...},
+                "tt_metal_version": "0.64.0",
+                "base_model": {"name_or_path": "meta-llama/Llama-3.2-1B-Instruct"},
+                "step": 100,
+                "epoch": 0,
+                "metrics": {"train/loss": 1.23, "val/loss": 1.31}
+            }
+        """
+        state = {
+            "format": self.config.checkpoint.format.model_dump(),
+            "config": self.config.model_dump(mode="json"),
+            "tt_metal_version": tt_metal_version(),
+            "base_model": {"name_or_path": self.config.model.name},
+        }
+        clashes = sorted(state.keys() & (metadata or {}).keys())
+        if clashes:
+            raise ValueError(f"metadata may not replace the trainer's {clashes}")
+        return {**state, **(metadata or {})}
 
     # ------------------------------------------------------------------ teardown
 

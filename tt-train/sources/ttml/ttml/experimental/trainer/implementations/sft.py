@@ -16,17 +16,9 @@ from ttml.experimental.datasets.provider.sft import get_providers as get_dataset
 from ttml.experimental.datasets.provider.sft import providers as dataset_providers
 from ttml.experimental.errors import UnsupportedTrainingConfig
 from ttml.experimental.models.provider import get_provider as get_model_provider
-from ttml.experimental.models.utils.checkpoint import check_base_model
 from ..configs import SFTTrainerConfig
 from ..managers.device import DeviceManager
-from ..utils import (
-    CombinedOptimizer,
-    assign_parameters,
-    read_trainer_state,
-    staged_directory,
-    tt_metal_version,
-    write_trainer_state,
-)
+from ..utils import CombinedOptimizer, assign_parameters, staged_directory, write_trainer_state
 from .base import Trainer
 
 # Device layout and dtype of each key of a dataset provider's batches.
@@ -64,9 +56,12 @@ class SFTTrainer(Trainer):
         super()._seed()
         ttml.manual_seed(self.config.seed)
 
+    def _model_source(self) -> str:
+        return self.provider.model_source()
+
     def _load_dataloaders(self) -> tuple[DatasetProvider, Optional[DatasetProvider]]:
         """The dataset providers of the train and validation splits; the loop gets its batches from them."""
-        tokenizer = load_tokenizer(self.provider.model_source())
+        tokenizer = load_tokenizer(self._model_source())
         splits = ["train"] if self.config.metrics.validation.frequency == 0 else ["train", "validation"]
         built = get_dataset_providers(self.config, tokenizer, splits)
         return built["train"], built.get("validation")
@@ -186,36 +181,3 @@ class SFTTrainer(Trainer):
         with staged_directory(path) as directory:
             self.provider.export_weights(self.model, directory)
             write_trainer_state(directory, state)
-
-    def trainer_state(self, metadata: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-        """What ``trainer_state.json`` records: the format, the run's full config, the tt-metal version
-        (``tt_metal_version()``) and the model the run trains, then the keys of ``metadata``, which may not replace
-        those. For example::
-
-            {
-                "format": {"type": "hf"},
-                "config": {...},
-                "tt_metal_version": "0.64.0",
-                "base_model": {"name_or_path": "meta-llama/Llama-3.2-1B-Instruct"},
-                "step": 100,
-                "epoch": 0,
-                "metrics": {"train/loss": 1.23, "val/loss": 1.31}
-            }
-        """
-        state = {
-            "format": self.config.checkpoint.format.model_dump(),
-            "config": self.config.model_dump(mode="json"),
-            "tt_metal_version": tt_metal_version(),
-            "base_model": {"name_or_path": self.config.model.name},
-        }
-        clashes = sorted(state.keys() & (metadata or {}).keys())
-        if clashes:
-            raise ValueError(f"metadata may not replace the trainer's {clashes}")
-        return {**state, **(metadata or {})}
-
-    def _check_base_model(self, directory: str) -> None:
-        """Raise ``UnsupportedTrainingConfig`` if the checkpoint at ``directory`` was saved by a run of another model.
-        One without ``trainer_state.json``, such as a model from elsewhere, is taken as this model's."""
-        state = read_trainer_state(directory) or {}
-        base = (state.get("base_model") or {}).get("name_or_path")
-        check_base_model(directory, base, self.config.model.name, self.provider.model_source())

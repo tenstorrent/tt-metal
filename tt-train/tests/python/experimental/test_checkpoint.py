@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import ttml.experimental.trainer.implementations.sft as sft
+import ttml.experimental.trainer.implementations.base as trainer_base
 import ttml.experimental.trainer.managers.checkpoint as checkpoint_manager
 from ttml.experimental.errors import UnsupportedTrainingConfig
 from ttml.experimental.models.provider.base import ModelProvider
@@ -186,7 +186,7 @@ def _trainer(init=None, format_type="hf", lora=None):
 def test_save_checkpoint_has_the_provider_export_the_weights_into_a_staged_directory(
     tmp_path, monkeypatch, format_type, lora
 ):
-    monkeypatch.setattr(sft, "tt_metal_version", lambda: "0.64.0")
+    monkeypatch.setattr(trainer_base, "tt_metal_version", lambda: "0.64.0")
     trainer = _trainer(format_type=format_type, lora=lora)
     trainer.model = object()
     final = tmp_path / "checkpoint"
@@ -207,7 +207,7 @@ def test_save_checkpoint_has_the_provider_export_the_weights_into_a_staged_direc
 
 
 def test_metadata_adds_to_the_run_fields(monkeypatch):
-    monkeypatch.setattr(sft, "tt_metal_version", lambda: None)
+    monkeypatch.setattr(trainer_base, "tt_metal_version", lambda: None)
     state = _trainer().trainer_state({"image": "host"})
     assert state["image"] == "host"
     assert state["tt_metal_version"] is None

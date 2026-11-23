@@ -22,7 +22,7 @@ import pytest
 
 import ttml
 import ttml.experimental
-import ttml.experimental.trainer.implementations.sft as sft
+import ttml.experimental.trainer.implementations.base as trainer_base
 from ttml.experimental.datasets.provider.sft import SST2Provider
 from ttml.experimental.models.provider import LlamaProvider
 from ttml.experimental.models.utils.checkpoint import ADAPTER_CONFIG, ADAPTER_WEIGHTS, read_adapter
@@ -72,7 +72,7 @@ def run_recipe(overrides: list[str]) -> SimpleNamespace:
             patch.setattr(TrainingLogger, "info", record_message)
             patch.setattr(SST2Provider, "_load_raw_dataset", load_head)
             patch.setattr(LlamaProvider, "model_source", lambda self: MODEL_SOURCE)
-            patch.setattr(sft, "tt_metal_version", lambda: TT_METAL_VERSION)
+            patch.setattr(trainer_base, "tt_metal_version", lambda: TT_METAL_VERSION)
             main(["--config", str(RECIPE), *(arg for override in overrides for arg in ("--set", override))])
     finally:
         gc.collect()
