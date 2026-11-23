@@ -1,41 +1,19 @@
-# t0-gamma optimization candidates
+# t0-gamma optimization log
 
-Contract (`/home/andy/avan/fleet/t0-gamma/CONTRACT.md` v1.2):
-- **Target:** `forward` (one `_single_pass`), `paper` shape: 1024 univariate series x context 2048 -> horizon 64
+Every candidate tried while optimizing the TTNN forward, kept or rejected, in order, on one Blackhole p150a chip.
+
+- **Target:** `forward` (one `_single_pass`) at the `paper` shape: 1024 univariate series x context 2048 -> horizon 64
   (66 patches per row, 2 read out), `accuracy` precision (bf16 weights and activations, HiFi2 matmuls with fp32
   accumulation, norms at HiFi4 / fp32). Device time is primary (median of 5 `forward_device` calls, each after a
   0.3 s idle); steady wall time (median of 5 end-to-end calls) is secondary.
-- **Guards** (none may regress by more than 3 %): `long_context-accuracy` (32 x 8192 -> 1024, 288 patches, 32 read
-  out), `multivariate-accuracy` (128 series x 8 variates x 2048 -> 64, group attention over 8 rows).
-  `paper-performance` (bfp8 weights, LoFi) was a guard until D5 retired the performance precision; its rows below
-  are history, and its bench records are now `experimental_performance`, timing only.
-- **Floor:** the full PCC suite passes in one `pcc` job; target `pcc_normalized` >= 0.999 and `pcc_final` >= 0.99;
-  (the `performance` guard's 0.995 / 0.98 is retired, D5); module tests >= 0.999; any candidate within 0.0005 of round 0's target
-  `pcc_normalized` without an X gate.
-- **Gate metrics (D1)**, on the read-out quantiles in asinh space, every bench record and suite case
-  (`tests/helpers.quantile_metrics`): `pcc_normalized`, `pcc_spread` (PCC of `h - mean_q(h)`), `pcc_row_p01` and
-  `pcc_row_min` (per-row PCC), plus `pcc_final`. Every metric scores the collapsed output (each quantile = its mean)
-  below its floor on the realistic bench inputs. Proposed floors (`tests/helpers.FLOORS`, set by the orchestrator at
-  G1): accuracy 0.999 / 0.998 / 0.995 / 0.98 / 0.99; performance 0.995 / 0.99 / 0.97 / 0.90 / 0.98; single
-  0.999 / 0.999 / - / - / 0.99; single_long 0.9975 / 0.998 / - / - / 0.99; coverage cases (e2e, paths) 0.999 /
-  0.998 / reported / reported / 0.99. Proposed drift vs round 0 on the target: normalized 0.0005, spread 0.002,
-  row p01 0.002. **Floors in force:** D3 (the above, set at G1) plus D4 (the band floors `pcc_final_spread`,
-  `spread_ratio` p01 / p50 / p99 / min per class, single and single_long performance floors, coverage at both
-  precisions; drift of the band metrics against the round-2 bench, job 614). All in `tests/helpers.FLOORS` / `DRIFT` /
-  `DRIFT_BAND`, applied by `tests/perf/check_gates.py`. **D5:** the performance precision is retired (its floors
-  gate nothing; check_gates reports its records as INFO); the coverage classes add `spread_ratio_inactive_p01` >= 0.80
-  and `pcc_spread_inactive` >= 0.95 (floor only, NaN = not applicable); a floored metric a record lacks fails.
-- **Precision exceptions (confirmed in D1):** fp32 dest accumulation on every matmul in both precisions (jobs 395,
-  398); the patch encoder at HiFi4 (jobs 414, 417); the decoder output and monotone head in fp32 (job 383). Per-role
-  sweep for the single-series cases: `iter_00/precision_sweep.json` (job 467), `precision_sweep_realistic.json` (job 475).
-- **Gate:** accept at >= 2 % target device time (wall for host-only changes), no guard regressing by > 3 %, every
-  floor holding: `compare_bench.py <cand> <best> --target paper:accuracy --pcc-key pcc_normalized --pcc-floor 0.995`,
-  then the target floor by hand.
-- **Exit:** U4 (it governs over the contract's older rule): a round under 5 % on the target ends optimization. Taken
-  after round 2 (-4.5 %).
-- **Commits:** one per accepted change, unsigned, one lowercase line, model paths only (PLAN.md section 7).
-
-Headline: `forward`, `paper`, `accuracy`. Guards: `long_context-accuracy`, `multivariate-accuracy` (`paper-performance` until D5).
+- **Guards** (none may regress by more than 3 %): `long_context` (32 x 8192 -> 1024, 288 patches, 32 read out) and
+  `multivariate` (128 series x 8 variates x 2048 -> 64, group attention over 8 rows), both at `accuracy`. The `perf`
+  numbers are the `experimental_performance` precision (bfp8 weights, LoFi), which is kept for timing only.
+- **Accept rule:** at least 2 % faster on the target device time (wall time for host-only changes), no guard more than
+  3 % slower, and every PCC floor in `tests/helpers.FLOORS` holding.
+- **Stop rule:** a round whose accepted changes gain under 5 % ends optimization; round 2 gained 4.5 %.
+- Job numbers and the `evidence` column point at bench records and scripts on the bring-up branch (`avan/t0-gamma`),
+  which are not part of this tree; D1 / D2 / G2 name review decisions from that bring-up.
 
 | round | candidate | paper wall ms | paper device ms | vs best | guards (device ms) | PCC (norm / final) | decision | evidence |
 |---|---|---|---|---|---|---|---|---|
