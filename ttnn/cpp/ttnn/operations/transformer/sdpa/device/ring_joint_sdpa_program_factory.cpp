@@ -16,7 +16,6 @@
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_state_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -986,9 +985,6 @@ namespace ttnn::prim {
 
 namespace {
 
-// Where create_mesh_workload puts the state checkpoint buffer after the op's outputs while the programs are built.
-constexpr size_t kStateTensorSlot = RING_JOINT_SDPA_STATS_OUTPUT_IDX + 1;
-
 // ---- Per-core Q work and K/V store-and-forward chains: functions of num_q_chunks, rebuilt on the host
 // when the dynamic-length path sees a new per-chip length (apply_dynamic_local_n_runtime_args).
 struct CoreHeadWork {
@@ -1856,7 +1852,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // so the zigzag asymmetry doesn't apply — gate on kernel_is_causal, not args.is_causal.
     const bool enable_zigzag_balancing = args.is_balanced && kernel_is_causal && (num_q_chunks % 2 == 0);
     // The most Q chunks a core runs (zigzag balancing deals low/high pairs, so a core with work has at least two):
-    // more than one keeps per-chunk state through the writer's checkpoints and double-buffers Q.
+    // more than one double-buffers Q (each Q chunk is one pass over the ring: ring_joint_sdpa.cpp).
     const uint32_t max_q_chunks_per_core =
         enable_zigzag_balancing ? 2 * tt::div_up(all_heads_num_q_chunks / 2, num_cores) : max_q_per_core;
 
@@ -2118,10 +2114,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
-    // The recipe state checkpoints of cores with several Q chunks: the cached program's own buffer, which
-    // create_mesh_workload appends to the outputs while the program is built (kStateTensorSlot).
-    const Tensor& state_tensor = output_tensors.at(kStateTensorSlot);
-    TensorAccessorArgs(state_tensor.buffer()).append_to(writer_compile_time_args);
     if (kv_pad_from_metadata) {
         TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(writer_compile_time_args);
         if (tensor_args.has_kv_valid_end()) {
@@ -2219,8 +2211,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // the mcast_enabled compile-time arg can be determined first.
 
     // Circular buffers: the recipe compute layout (recipe_compute_program, CBs 0-16 and 29-31; kernels/recipe_ring_cbs.hpp),
-    // then the ring's: the checkpoint request / ack (cores with several Q chunks), the sink tile, the reader's derived
-    // lengths. Every CB spans the whole worker grid.
+    // then the ring's: the sink tile and the reader's derived lengths. Every CB spans the whole worker grid.
     const tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     const tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
     const tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
@@ -2263,9 +2254,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // Q double-buffered only when a core runs several Q chunks.
             cb.total_size = Sq_chunk_t * DHt * (max_q_chunks_per_core > 1 ? 2 : 1) * q_tile_size;
         } else if (format.buffer_index == recipe_ring_cb::k) {
-            // K and V double-buffered: the store-and-forward chains forward into a peer's CB at its write pointer, and
-            // the phase alignment (dummy_kv_chunks_for_phase_alignment) assumes two entries; three K entries (and the
-            // alignment's three-entry cycle) with in-place latent V.
+            // K and V double-buffered (three K entries with in-place latent V): the store-and-forward chains forward
+            // into a peer's CB at the sender's write pointer, so the reader pads each pass to a whole K cycle.
             cb.total_size = Sk_chunk_t * DHt * k_cb_entries * k_tile_size;
         } else if (format.buffer_index == recipe_ring_cb::v) {
             cb.total_size = Sk_chunk_t * vDHt * 2 * v_tile_size;
@@ -2285,16 +2275,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 .buffer_index = static_cast<uint8_t>(index), .data_format = format, .page_size = page_size}}},
         });
     };
-    // Checkpoint requests / acks: a few words each (64 B pages); streamed checkpoints keep up to a Q chunk's rows of
-    // them in flight (one per row group saved, one per O row restored).
-    constexpr uint32_t kCheckpointPageBytes = 64;
-    constexpr uint32_t kCheckpointCbBytes = 4096;
-    const bool staged_cores = max_q_chunks_per_core > 1 && ring_size > 1 && !has_sliding_window;
-    if (staged_cores) {
-        for (uint32_t index : {recipe_ring_cb::checkpoint_request, recipe_ring_cb::checkpoint_ack}) {
-            add_cb(index, kCheckpointCbBytes / kCheckpointPageBytes, kCheckpointPageBytes, tt::DataFormat::UInt32);
-        }
-    }
     // The sink tile the reader fetches per Q chunk (compute reads its first value).
     const uint32_t cb_attention_sink = use_attention_sink ? recipe_ring_cb::sink : recipe_ring_cb::q;
     if (use_attention_sink) {
@@ -2372,21 +2352,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         recipes::set_named_arg(compute_recipe_kernel.named_compile_time_args, "recipe_fused", 0);
     }
     const bool recipe_fused = recipes::named_arg(compute_recipe_kernel.named_compile_time_args, "recipe_fused") != 0;
-    // L1 state checkpoint cache: a multi-Q core's first Q blocks keep their checkpoints in L1, copied locally instead of
-    // round-tripping through DRAM (the round trips cost a mla_100k-shaped ring ~1.4 ms of 10, BH Galaxy). Sized from
-    // the L1 left after every other CB.
-    uint32_t state_cache_slots = 0;
-    if (staged_cores) {
-        using State = ::sdpa::streaming::StateTransfer;
-        const uint32_t slot_pages = State::page_count(Sq_chunk_t, vDHt, policy.fp32_destination ? 4096 : 2048) + 1;
-        const uint64_t left = l1_available - recipes::recipe_cb_bytes(desc);
-        state_cache_slots = static_cast<uint32_t>(
-            std::min<uint64_t>(max_q_chunks_per_core, left / (uint64_t{slot_pages} * State::page_bytes)));
-        if (state_cache_slots > 0) {
-            add_cb(recipe_ring_cb::state_cache, state_cache_slots * slot_pages, State::page_bytes, tt::DataFormat::UInt32);
-        }
-    }
-
     const std::vector<uint32_t> reader_cb_compile_time_args = {
         recipe_ring_cb::q,
         recipe_ring_cb::k,
@@ -2788,8 +2753,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         !seg_accum &&
         // Separate-V head chains use static forwarding counts and cannot follow migrated chunks.
         !use_head_chain &&
-        // The recipe compute keeps each Q chunk's state with the core that owns it across the ring (resident in L1,
-        // or checkpointed by that core's writer), so remainder chunks never migrate.
+        // The recipe compute keeps each Q chunk's state resident in L1 on the core that owns it, over its pass of the
+        // ring, so remainder chunks never migrate.
         recipe_compute_migrates_q && (!args.is_balanced || enable_zigzag_balancing) &&
         // Every core needs a complete unit to supply indices for padded reader slots.
         rotated_base_chunks >= 1;
@@ -3031,8 +2996,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         writer_common_args.push_back(out_buf);
         writer_common_args.push_back(joint_out_buf);
         writer_common_args.push_back(stats_buf);
-        // A plain address, not a binding: a hit's outputs do not carry the state buffer, which never moves.
-        writer_common_args.push_back(static_cast<uint32_t>(state_tensor.buffer()->address()));
         TT_FATAL(
             writer_common_args.size == ring_joint::kWriterAddressCommonArgCount,
             "RingJoint writer address common args: kernel expects {}, got {}",
@@ -3066,12 +3029,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"seg_accum", seg_accum ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
     };
-    // The recipe's named arguments (after any L1 fallback above) on every kernel: the writer's state transfer reads them
-    // too. Ring continuation, streamed checkpoints (STANDARD's and FAST's fused chunks overlap a multi-Q core's state save
-    // and restore with compute), and the positional masks (recipe/recipe_config.hpp).
+    // The recipe's named arguments (after any L1 fallback above) on every kernel: ring continuation and the positional
+    // masks (recipe/recipe_config.hpp).
     auto recipe_args = recipes::recipe_named_args(compute_recipe_kernel.named_compile_time_args);
     recipes::set_named_arg(recipe_args, "recipe_ring", 1);
-    recipes::set_named_arg(recipe_args, "recipe_ring_stream_state", recipe_fused && !policy.fp32_destination ? 1 : 0);
+    // No state checkpoints: each Q chunk is one pass over the ring with its state resident (ring_joint_sdpa.cpp).
+    recipes::set_named_arg(recipe_args, "recipe_ring_stream_state", 0);
     recipes::set_named_arg(recipe_args, "recipe_ring_mask", kernel_chunked ? 2 : (kernel_is_causal ? 1 : 0));
     recipes::set_named_arg(recipe_args, "recipe_ring_window", sliding_window_size);
     recipes::set_named_arg(recipe_args, "recipe_ring_rotation", kv_pad_rotation_enabled ? 1 : 0);
@@ -3089,7 +3052,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         kernel->named_compile_time_args.emplace_back("sliding_halo_slot_count", sliding_halo_slot_count);
         kernel->named_compile_time_args.emplace_back("sliding_max_source_ranges", sliding_max_source_ranges);
         kernel->named_compile_time_args.emplace_back("sliding_local_first", sliding_local_first);
-        kernel->named_compile_time_args.emplace_back("state_cache_slots", state_cache_slots);
         kernel->named_compile_time_args.emplace_back("latent_v_in_k", latent_v_in_k ? 1u : 0u);
         kernel->named_compile_time_args.emplace_back("k_cb_entries", k_cb_entries);
         kernel->named_compile_time_args.insert(
@@ -3828,21 +3790,14 @@ RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorklo
     if (route.has_value()) {
         CMAKE_UNIQUE_NAMESPACE::apply_full_mesh_route(args, *route);
     }
-    // The state checkpoints live in a buffer the cached workload owns (allocated once here, not per call); the
-    // descriptor build finds it after the outputs.
-    TT_FATAL(output_tensors.size() == kStateTensorSlot, "RingJointSDPA expects {} outputs", kStateTensorSlot);
-    output_tensors.push_back(create_device_tensor(ring_joint_state_spec(args, tensor_args), tensor_args.input_q.device()));
     auto descriptor_cached =
         descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
-    Tensor state = std::move(output_tensors.back());
-    output_tensors.pop_back();
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (auto& [range, program] : descriptor_cached.workload.get_programs()) {
         auto& shared = shared_variables[range];
         shared.descriptor = std::move(descriptor_cached.shared_variables.at(range));
         shared.semaphore_patch = record_ring_joint_semaphore_arg_patch(program, args, tensor_args, range.start_coord());
         shared.full_mesh_route = route;
-        shared.state = state;
     }
     return {std::move(descriptor_cached.workload), std::move(shared_variables)};
 }

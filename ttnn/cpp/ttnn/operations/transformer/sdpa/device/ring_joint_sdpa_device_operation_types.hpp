@@ -271,8 +271,4 @@ using RingJointSDPAResult = Tensors;
 // RingJointSDPAResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
 using RingJointSDPAResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
-// The recipe state checkpoints of cores with several Q chunks (recipe_state_layout.hpp): a DRAM buffer the cached
-// program owns (allocated on the program-cache miss), not a per-call output.
-tt::tt_metal::TensorSpec ring_joint_state_spec(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
-
 }  // namespace ttnn::prim
