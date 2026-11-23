@@ -20,7 +20,7 @@
 #include "test_utils/mesh_utils.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 
-class LinearRegressionDDPTest : public ttml::test_utils::Mesh1x2Fixture {};
+class Mesh1x2LinearRegressionDDPTest : public ttml::test_utils::Mesh1x2Fixture {};
 
 using ttml::autograd::TensorPtr;
 
@@ -31,7 +31,7 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample>&& samples)>,
     BatchType>;
 
-TEST_F(LinearRegressionDDPTest, Full) {
+TEST_F(Mesh1x2LinearRegressionDDPTest, Full) {
     // Skip with watcher enabled github issue #37193
     SKIP_FOR_WATCHER();
     const size_t training_samples_count = 1000;

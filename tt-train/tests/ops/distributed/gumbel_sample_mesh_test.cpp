@@ -65,7 +65,7 @@ std::vector<std::vector<uint32_t>> ids_per_device(const ttnn::Tensor& sampled) {
 
 }  // namespace
 
-class GumbelSampleMeshTest : public ttml::test_utils::Mesh1x2SuiteFixture {
+class Mesh1x2GumbelSampleTest : public ttml::test_utils::Mesh1x2SuiteFixture {
 protected:
     // Three launches on REPLICATED logits and one program key, with every tensor kept alive: the miss with
     // kFirstSeed; a hit on a fresh tensor holding the SAME logits with kSecondSeed, so every change in a device's
@@ -135,19 +135,19 @@ protected:
     }
 };
 
-TEST_F(GumbelSampleMeshTest, TestSamplingFsdpSeedChangeOnCacheHit) {
+TEST_F(Mesh1x2GumbelSampleTest, TestSamplingFsdpSeedChangeOnCacheHit) {
     // seed_axes {1}: the two devices of the 1x2 mesh are data-parallel (FSDP / DP) ranks and must draw
     // distinct noise, on the miss and on every hit.
     run_seed_change_on_cache_hit({1U}, /* devices_differ */ true);
 }
 
-TEST_F(GumbelSampleMeshTest, TestSamplingTpSeedChangeOnCacheHit) {
+TEST_F(Mesh1x2GumbelSampleTest, TestSamplingTpSeedChangeOnCacheHit) {
     // seed_axes {}: the two devices are tensor-parallel replicas and must draw identical noise, before and
     // after the seed changes on a cache hit.
     run_seed_change_on_cache_hit({}, /* devices_differ */ false);
 }
 
-TEST_F(GumbelSampleMeshTest, TestSamplingFsdpPositionModeTokenCountChangeOnCacheHit) {
+TEST_F(Mesh1x2GumbelSampleTest, TestSamplingFsdpPositionModeTokenCountChangeOnCacheHit) {
     // Position mode with the logits and positions sharded over the batch, as GRPO prefill runs it, and seed_axes
     // {1}. The token count is not hashed in position mode, so the 134-token launch reuses the 70-token workload.
     // Device 1's RNG stream ids (device index * B * Wt + start tile) must stay the build's: a hit that re-derives

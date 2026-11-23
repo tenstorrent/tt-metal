@@ -73,9 +73,9 @@ double share_equal(const xt::xarray<float>& result, const xt::xarray<float>& exp
     return static_cast<double>(equal) / static_cast<double>(expected.size());
 }
 
-class SynchronizeTensorTest : public test_utils::Mesh1x2Fixture {
+class Mesh1x2SynchronizeTensorTest : public test_utils::Mesh1x2Fixture {
 protected:
-    SynchronizeTensorTest() : Mesh1x2Fixture(/*seed=*/42) {
+    Mesh1x2SynchronizeTensorTest() : Mesh1x2Fixture(/*seed=*/42) {
     }
 
     // One [1, 1, height, width] gradient per device: device i holds values[i].
@@ -117,7 +117,7 @@ protected:
 
 }  // namespace
 
-TEST_F(SynchronizeTensorTest, UnsetAndBf16ReduceDtypeSumAsBefore) {
+TEST_F(Mesh1x2SynchronizeTensorTest, UnsetAndBf16ReduceDtypeSumAsBefore) {
     const auto gradients = upload(make_gradients(64, 128, 1));
     const auto before = ttnn::multiply(ttnn_fixed::distributed::all_reduce(gradients, kDdpAxis), 0.5F);
 
@@ -127,7 +127,7 @@ TEST_F(SynchronizeTensorTest, UnsetAndBf16ReduceDtypeSumAsBefore) {
 }
 
 // With two devices and this spread, the fp32 sum gets about 99.5% of the elements exact and the bf16 sum about 86%.
-TEST_F(SynchronizeTensorTest, Fp32SumIsCloserToTheExactMean) {
+TEST_F(Mesh1x2SynchronizeTensorTest, Fp32SumIsCloserToTheExactMean) {
     const auto values = make_gradients(64, 128, 2);
     const auto expected = exact_mean(values);
     const auto gradients = upload(values);
@@ -146,7 +146,7 @@ TEST_F(SynchronizeTensorTest, Fp32SumIsCloserToTheExactMean) {
 
 // 512 x 1024 bf16 values per device is the size from which the reduce-scatter route is used; the result is the fp32
 // all-reduce's either way (which route runs is checked below).
-TEST_F(SynchronizeTensorTest, LargeFp32SumEqualsTheFp32AllReduce) {
+TEST_F(Mesh1x2SynchronizeTensorTest, LargeFp32SumEqualsTheFp32AllReduce) {
     const auto values = make_gradients(512, 1024, 3);
     const auto gradients = upload(values);
 
@@ -157,7 +157,7 @@ TEST_F(SynchronizeTensorTest, LargeFp32SumEqualsTheFp32AllReduce) {
 }
 
 // 544 and 992 are whole tiles but not two whole tiles per device, so neither dim can be split for two devices.
-TEST_F(SynchronizeTensorTest, LargeFp32SumWithoutWholeTileSlicesEqualsTheFp32AllReduce) {
+TEST_F(Mesh1x2SynchronizeTensorTest, LargeFp32SumWithoutWholeTileSlicesEqualsTheFp32AllReduce) {
     const auto gradients = upload(make_gradients(544, 992, 4));
 
     const auto fp32 = core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32);
@@ -165,7 +165,7 @@ TEST_F(SynchronizeTensorTest, LargeFp32SumWithoutWholeTileSlicesEqualsTheFp32All
     expect_same_on_every_device(fp32, fp32_all_reduce_mean(gradients));
 }
 
-TEST_F(SynchronizeTensorTest, AxisWithOneDeviceLeavesTheTensorUnchanged) {
+TEST_F(Mesh1x2SynchronizeTensorTest, AxisWithOneDeviceLeavesTheTensorUnchanged) {
     const auto gradients = upload(make_gradients(32, 64, 5));
 
     const auto result = core::distributed::synchronize_tensor(gradients, {0U}, ttnn::DataType::FLOAT32);
@@ -174,7 +174,7 @@ TEST_F(SynchronizeTensorTest, AxisWithOneDeviceLeavesTheTensorUnchanged) {
     expect_same_on_every_device(result, gradients);
 }
 
-TEST_F(SynchronizeTensorTest, RejectsReduceDtypesOtherThanBf16AndFp32) {
+TEST_F(Mesh1x2SynchronizeTensorTest, RejectsReduceDtypesOtherThanBf16AndFp32) {
     const auto gradients = upload(make_gradients(32, 64, 6));
     EXPECT_THAT(
         [&] { (void)core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::UINT32); },
@@ -182,7 +182,7 @@ TEST_F(SynchronizeTensorTest, RejectsReduceDtypesOtherThanBf16AndFp32) {
 }
 
 // The C++ runners call this overload, which takes the DDP axis from the parallelism context.
-TEST_F(SynchronizeTensorTest, SynchronizeGradientsOverTheDdpAxisUsesTheReduceDtype) {
+TEST_F(Mesh1x2SynchronizeTensorTest, SynchronizeGradientsOverTheDdpAxisUsesTheReduceDtype) {
     autograd::ctx().initialize_parallelism_context({.enable_ddp = true});
     const auto gradients = upload(make_gradients(64, 128, 8));
     const auto fp32 = core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32);
@@ -200,7 +200,7 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsOverTheDdpAxisUsesTheReduceDty
 }
 
 // The runners set the default from precision.reduce_dtype; a dtype the call passes wins over it, both ways.
-TEST_F(SynchronizeTensorTest, SynchronizeGradientsTakesTheConfiguredReduceDtypeUnlessTheCallPassesOne) {
+TEST_F(Mesh1x2SynchronizeTensorTest, SynchronizeGradientsTakesTheConfiguredReduceDtypeUnlessTheCallPassesOne) {
     const auto gradients = upload(make_gradients(64, 128, 9));
     const auto fp32 = core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32);
     const auto bf16 = core::distributed::synchronize_tensor(gradients, {kDdpAxis});
@@ -224,7 +224,7 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsTakesTheConfiguredReduceDtypeU
 // Which route each sum takes: only an fp32 sum of a large bf16 tensor that splits into whole-tile slices takes the
 // reduce-scatter route, scattering its last dim here; an fp32 tensor needs no cast and gains nothing from it, and a sum
 // over two axes keeps one all-reduce per axis.
-TEST_F(SynchronizeTensorTest, OnlyALargeNarrowerTensorTakesTheReduceScatterRoute) {
+TEST_F(Mesh1x2SynchronizeTensorTest, OnlyALargeNarrowerTensorTakesTheReduceScatterRoute) {
     const auto large = upload(make_gradients(512, 1024, 3));
     const auto small = upload(make_gradients(64, 128, 1));
     const auto no_whole_tile_slices = upload(make_gradients(544, 992, 4));
@@ -250,7 +250,7 @@ TEST_F(SynchronizeTensorTest, OnlyALargeNarrowerTensorTakesTheReduceScatterRoute
 // The sync reads each parameter's topology label off the stored tensor. Read through the default bf16 view, an fp32
 // parameter would be cast to a bf16 copy for it, and the copy would stay allocated. So the sync allocates the same for
 // an fp32 parameter as for a bf16 one.
-TEST_F(SynchronizeTensorTest, SynchronizeGradientsMakesNoBf16CopyOfAnFp32Parameter) {
+TEST_F(Mesh1x2SynchronizeTensorTest, SynchronizeGradientsMakesNoBf16CopyOfAnFp32Parameter) {
     const auto gradients = upload(make_gradients(64, 128, 10));
     const auto allocated_by_the_sync = [&](ttnn::DataType value_dtype) {
         auto parameter = autograd::create_tensor(

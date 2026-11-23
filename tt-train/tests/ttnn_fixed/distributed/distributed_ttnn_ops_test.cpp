@@ -17,11 +17,11 @@
 
 namespace {
 
-class TrivialTnnFixedDistributedTest : public ttml::test_utils::Mesh1x2Fixture {};
+class Mesh1x2TrivialTnnFixedTest : public ttml::test_utils::Mesh1x2Fixture {};
 
 }  // namespace
 
-TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim0) {
+TEST_F(Mesh1x2TrivialTnnFixedTest, TestCustomScatterDim0) {
     // Test failing with watcher enabled, github issue #29556
     SKIP_FOR_WATCHER();
 
@@ -50,7 +50,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim0) {
     }
 }
 
-TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim1) {
+TEST_F(Mesh1x2TrivialTnnFixedTest, TestCustomScatterDim1) {
     // Test failing with watcher enabled, github issue #29556
     SKIP_FOR_WATCHER();
 
@@ -79,7 +79,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim1) {
     }
 }
 
-TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim2) {
+TEST_F(Mesh1x2TrivialTnnFixedTest, TestCustomScatterDim2) {
     // Test failing with watcher enabled, github issue #29556
     SKIP_FOR_WATCHER();
 
@@ -108,7 +108,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim2) {
     }
 }
 
-TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim3) {
+TEST_F(Mesh1x2TrivialTnnFixedTest, TestCustomScatterDim3) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     uint32_t size = 64U;

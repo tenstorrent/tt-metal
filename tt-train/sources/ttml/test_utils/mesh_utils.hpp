@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <optional>
+#include <string_view>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
@@ -25,7 +26,23 @@ inline bool system_supports_mesh(const tt::tt_metal::distributed::MeshShape& sha
     return system_mesh_size() >= shape.mesh_size();
 }
 
+// The multi-device CI leg selects suites with --gtest_filter="Mesh*" and the single-device legs skip them, so a mesh
+// suite named otherwise runs nowhere. The mesh fixtures assert this before skipping, so it fails on every runner.
+inline constexpr std::string_view kMeshSuitePrefix = "Mesh";
+
+inline bool current_suite_has_mesh_prefix() {
+    return std::string_view(::testing::UnitTest::GetInstance()->current_test_info()->test_suite_name())
+        .starts_with(kMeshSuitePrefix);
+}
+
 }  // namespace ttml::test_utils
+
+// Like SKIP_UNLESS_MESH_SUPPORTED, this has to be a macro so that the failed ASSERT returns from SetUp().
+#define ASSERT_MESH_SUITE_NAME()                                                                                     \
+    ASSERT_TRUE(ttml::test_utils::current_suite_has_mesh_prefix()) << fmt::format(                                   \
+        "Suite {} uses a mesh fixture, so its name must start with \"{}\" for the multi-device CI leg to select it", \
+        ::testing::UnitTest::GetInstance()->current_test_info()->test_suite_name(),                                  \
+        ttml::test_utils::kMeshSuitePrefix)
 
 // GTEST_SKIP() expands into a return statement, so this also has to be a macro.
 // Simple check to skip if the system does not have enough devices for the mesh.
@@ -53,6 +70,7 @@ protected:
     }
 
     void SetUp() override {
+        ASSERT_MESH_SUITE_NAME();
         SKIP_UNLESS_MESH_SUPPORTED(m_mesh_shape);
 
         ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(m_mesh_shape.mesh_size()));
@@ -100,6 +118,7 @@ protected:
     }
 
     void SetUp() override {
+        ASSERT_MESH_SUITE_NAME();
         SKIP_UNLESS_MESH_SUPPORTED(mesh_shape());
         ttml::autograd::ctx().get_device().clear_program_cache();
     }
