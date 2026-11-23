@@ -15,8 +15,8 @@ using tt::tt_metal::DataType;
 std::span<const DataType> supported_tensor_a_dtypes(BinaryOpType op) {
     using namespace dtype_sets;
     switch (op) {
+        case BinaryOpType::SUB: return arithmetic_fpu_and_int8;
         case BinaryOpType::ADD:
-        case BinaryOpType::SUB:
         case BinaryOpType::MUL:
         case BinaryOpType::RSUB:
         case BinaryOpType::SQUARED_DIFFERENCE:

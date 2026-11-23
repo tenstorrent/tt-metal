@@ -57,7 +57,7 @@ Every option has a default, so a bare \`$(basename "$0")\` runs the daily tier
 into ./test_output_<date>-<time>/.
 
 Wrapper options:
-  -t, --tier {daily|weekly|full|pre_bmc_reboot|post_bmc_reboot}
+  -t, --tier {flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot}
                          Tier to run (default: ${TIER}). Also accepted
                          positionally, like run_diag.sh itself. The old
                          names light, medium, deploy and pre_reboot are
@@ -75,7 +75,7 @@ Wrapper options:
   -h, --help             This text
 
 Syseng package (tt-bh-glx-cluster-debug and sys-triage, needed by the QSFP and
-sys-triage phases):
+sys-triage phases; flash runs neither, so it is never installed for it):
       --gh-token TOKEN   GitHub token with read access to the private release.
                          Forwarded to the container as GH_TOKEN via a 0600
                          --env-file, so it never appears in the process list.
@@ -116,6 +116,7 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
       --skip-triage          Skip the post-test reset and the triage phase
       --triage-gating        Let triage FAILs gate the run (default: held at WARN)
       --triage-dir PATH      Host triage scripts dir; mounted read-only
+      --skip-eth-status      Skip the ETH status read (flash)
       --skip-qsfp-tests      Skip the QSFP tests
       --qsfp-gating          Report QSFP findings at their real severity and let
                              them gate the run
@@ -147,6 +148,9 @@ Examples:
   # Daily tier into a timestamped directory
   $(basename "$0")
 
+  # Quick ETH link health: two triage reads 30 s apart, no resets, no tests
+  $(basename "$0") flash
+
   # Weekly tier with the QSFP phase, results in a named directory
   $(basename "$0") weekly --output-dir /data/hc-run-1 --gh-token "\$GH_TOKEN"
 
@@ -176,12 +180,12 @@ while (( $# )); do
 
         # Old names are passed on as given, not translated: this script is
         # fetched on its own and may drive an image that predates the rename.
-        daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
+        flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) TIER="$1"; shift ;;
         -t|--tier)
             require_value "$1" "${2:-}"
             case "$2" in
-                daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
-                *) die "unknown tier '$2'. Expected: daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" ;;
+                flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
+                *) die "unknown tier '$2'. Expected: flash, daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" ;;
             esac
             TIER="$2"; shift 2 ;;
 
@@ -210,7 +214,7 @@ while (( $# )); do
             SKIP_QSFP=true; FORWARD+=("$1"); shift ;;
         --skip-sys-triage)
             SKIP_SYS_TRIAGE=true; FORWARD+=("$1"); shift ;;
-        --skip-tests|--skip-triage|--triage-gating|--qsfp-gating)
+        --skip-tests|--skip-triage|--triage-gating|--skip-eth-status|--qsfp-gating)
             FORWARD+=("$1"); shift ;;
 
         # Forwarded, in-container value.
@@ -240,6 +244,11 @@ WANT_SYS_TRIAGE=false
 case "${TIER}" in
     full|pre_bmc_reboot|pre_reboot|post_bmc_reboot) ${SKIP_SYS_TRIAGE} || WANT_SYS_TRIAGE=true ;;
 esac
+
+# flash runs no QSFP tests, so it needs neither the syseng package nor the
+# stub and BMC API credentials its collector reads.
+WANT_QSFP=false
+[[ ${TIER} != flash ]] && ! ${SKIP_QSFP} && WANT_QSFP=true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Output directory. Bind-mounted at the same path inside the container so the
@@ -353,7 +362,7 @@ trap cleanup EXIT
 # systemd-detect-virt stub. Best-effort, like the rest of the optional setup: a
 # host that cannot stage it still runs every check that needs no ASIC location.
 # Both lookup paths are covered — PATH and absolute.
-if ! ${SKIP_QSFP}; then
+if ${WANT_QSFP}; then
     if VIRT_STUB="$(mktemp 2>/dev/null)" \
        && printf '#!/bin/sh\nexit 1\n' > "${VIRT_STUB}" \
        && chmod 0755 "${VIRT_STUB}"; then
@@ -438,7 +447,7 @@ DOCKER_ARGS+=(
     -e "HC_DIAG_PKG_REPO=${DIAG_PKG_REPO}"
     -e "HC_DIAG_PKG_VERSION=${DIAG_PKG_VERSION}"
     -e "HC_NEED_LSPCI=${NEED_LSPCI}"
-    -e "HC_SKIP_QSFP=${SKIP_QSFP}"
+    -e "HC_SKIP_QSFP=$(${WANT_QSFP} && echo false || echo true)"
     -e "HC_WANT_SYS_TRIAGE=${WANT_SYS_TRIAGE}"
     -e "HC_VIRT_STUB=$([[ -n ${VIRT_STUB} ]] && echo true || echo false)"
     -e "HC_HOST_UID=$(id -u)"
@@ -628,7 +637,7 @@ if ${WANT_SYS_TRIAGE}; then
 fi
 if [[ -n ${BMC_API_URL_VALUE} && -n ${BMC_API_TOKEN_VALUE} ]]; then
     say "bmc api:    ${BMC_API_URL_VALUE} (token set)"
-elif ! ${SKIP_QSFP}; then
+elif ${WANT_QSFP}; then
     say "bmc api:    (incomplete — the QSFP collector will not read the cages; see --bmc-api-*)"
 fi
 say "forwarded:  ${FORWARD[*]:-(none)}"

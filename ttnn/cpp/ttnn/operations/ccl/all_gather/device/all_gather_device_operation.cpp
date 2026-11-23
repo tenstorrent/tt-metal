@@ -277,12 +277,7 @@ tt::tt_metal::TensorSpec compute_output_specs_helper(
     int32_t gather_dim_from_end,
     uint32_t num_devices,
     const std::optional<MemoryConfig>& memory_config) {
-    auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
-    if (output_mem_config.created_with_nd_shard_spec()) {
-        // Forward only the nd_shard_spec: the legacy 2D spec that TensorSpec back-fills describes the
-        // *input* shape, and its one-shard-per-core rule rejects valid ND configs for the larger output.
-        output_mem_config = MemoryConfig(output_mem_config.buffer_type(), output_mem_config.nd_shard_spec());
-    }
+    const auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
     auto shape = input_tensor.logical_shape();
     shape[gather_dim_from_end] *= num_devices;
     return tt::tt_metal::TensorSpec(
@@ -304,7 +299,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor should be on device for all_gather operation");
     const auto mesh_shape = mesh_device->shape();
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     // Axis 0 is N/S, and axis 1 is E/W.
     // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
     std::array<tt::tt_fabric::Topology, 2> axis_topology{

@@ -7,6 +7,7 @@ set(SOURCES
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
     core/parameter_dtype_test.cpp
+    core/synchronize_tensor_test.cpp
     core/random_tests.cpp
     core/program_utils_test.cpp
     model/linear_regression_ddp_test.cpp

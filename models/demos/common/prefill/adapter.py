@@ -163,6 +163,14 @@ class PrefillModelAdapter(ABC):
     # chunk per KV-writing layer, each chunk's records contiguous). Otherwise the runner refuses those at F > 1.
     supports_packed_forward_trace: bool = False
     supports_packed_forward_d2h_acks: bool = False
+    # With supports_packed_forward and passes_indexer_indices, whether prefill_forward takes a pipeline boundary's
+    # indexer indices for every chunk of the forward (indexer_indices=..., one tensor of indexer_indices_shape(), which
+    # covers all forward_chunks chunks) and leaves its own the same way (outbound_indexer_indices). Otherwise the runner
+    # refuses F > 1 on a split that passes indices.
+    supports_packed_forward_indexer_indices: bool = False
+    # Whether prefill_forward runs MTP over a packed forward (one lookahead block and one provided-levels count per
+    # chunk). Otherwise the runner refuses PREFILL_MTP_LEVELS > 0 at F > 1.
+    supports_packed_forward_mtp: bool = False
     # Whether a pipeline split can hand indexer indices from one rank to the next (cross-layer indexer reuse).
     passes_indexer_indices: bool = False
     # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.
@@ -170,6 +178,25 @@ class PrefillModelAdapter(ABC):
     # Send the D2D traffic between galaxies over the direct cables through relay cores, with the inter-mesh
     # fabric traffic on VC0 (fabric intermesh VC disabled). TT_METAL_FABRIC_DISABLE_INTERMESH_VC overrides.
     d2d_relay_default: bool = False
+    # The MoE the model's prefill blocks build (deepseek_v3_d_p/tt/moe_impl.py): "ttmoe" (TtMoe) or "block" (the MoE
+    # block, ttnn.experimental.moe_block: its dims from model_config's fields, its weights from the two methods below).
+    # $MOE_IMPL and a caller's moe_impl override it.
+    moe_impl: str = "ttmoe"
+    # The MoE block's persistent words' slab a core (bytes, in L1_SMALL: the model's L1_SMALL_SIZE holds it); None:
+    # MoEBlockConfig.words_slab_bytes.
+    moe_block_words_slab: Optional[int] = None
+
+    def moe_block_nonrouted_weights(self, layer_idx: int, hf_config=None) -> dict:
+        """A MoE layer's non-routed weights for the MoE block, from the model's checkpoint, in the checkpoint's expert
+        order: float32 torch tensors router_weight [E, H], router_bias [E], the shared expert's gate / up [I, H] and
+        down [H, I]; a latent MoE also latent_down / latent_up / latent_norm. A model that runs the block on its
+        checkpoint implements it."""
+        raise NotImplementedError(f"{type(self).__name__}: the MoE block's non-routed weights")
+
+    def moe_block_routed_cache(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
+        """The TtMoe tensorbin cache the MoE block reads a layer's routed experts from when its caller gives no
+        cache_path; None: the caller must give it."""
+        return None
 
     def fabric_payload_size(self) -> int:
         """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
@@ -378,6 +405,7 @@ ADAPTER_PATHS = {
 }
 
 _ADAPTER_INSTANCES: dict = {}
+_ADAPTERS_OF_CONFIG: dict = {}
 
 
 def get_adapter(name: str) -> PrefillModelAdapter:
@@ -392,3 +420,27 @@ def get_adapter(name: str) -> PrefillModelAdapter:
         adapter_cls = getattr(importlib.import_module(module_path), cls_name)
         _ADAPTER_INSTANCES[name] = adapter_cls()
     return _ADAPTER_INSTANCES[name]
+
+
+def adapter_of_model_config(model_config) -> Optional[PrefillModelAdapter]:
+    """The registered adapter whose class declares this model_config (not one inheriting it, as GLM52Adapter does
+    GLM53Adapter's), memoized; None when no registered adapter declares it. Adapters in the config's own demo package
+    are looked at first; one that does not import here is skipped."""
+    if not isinstance(model_config, type):  # (a test's stand-in config: no adapter)
+        return None
+    if model_config in _ADAPTERS_OF_CONFIG:
+        return _ADAPTERS_OF_CONFIG[model_config]
+    package = ".".join(getattr(model_config, "__module__", "").split(".")[:3])
+    names = sorted(ADAPTER_PATHS, key=lambda n: not ADAPTER_PATHS[n].startswith(package))
+    found = None
+    for name in names:
+        module_path, cls_name = ADAPTER_PATHS[name].split(":")
+        try:
+            cls = getattr(importlib.import_module(module_path), cls_name)
+        except Exception:  # (an adapter whose module cannot import here declares no config we can use)
+            continue
+        if cls.__dict__.get("model_config") is model_config:
+            found = get_adapter(name)
+            break
+    _ADAPTERS_OF_CONFIG[model_config] = found
+    return found

@@ -29,6 +29,10 @@ struct SDPAProgramConfig {
     // so no bf16 running sum spans the whole prefix. Refused with a K split, a sliding window, or several Q chunks
     // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
+    // sdpa, ring joint and exp ring joint SDPA, streaming compute only (fp32_dest_acc_en off; ignored otherwise): the
+    // narrowest pack, in tiles, that goes out as one block rather than tile by tile. Unset keeps the architecture
+    // default, 8 on Wormhole and 2 on Blackhole.
+    std::optional<uint32_t> min_blocked_pack_tiles;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

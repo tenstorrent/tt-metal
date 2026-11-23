@@ -12,6 +12,7 @@ import fileinput
 import asyncio
 import pprint
 import json
+import sys
 import re
 import os
 
@@ -369,7 +370,9 @@ async def main():
         program = "build/test/tt_metal/unit_tests_deployment"
         args = ["--gtest_filter=*DramDeployment_*"]
 
-        env = os.environ
+        env = os.environ.copy()
+        # testend parsing relies on gtest's "(N ms)" suffix; force it on regardless of the caller's env.
+        env["GTEST_PRINT_TIME"] = "1"
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
 
@@ -391,6 +394,17 @@ async def main():
         print_results(runs, bdfs, logf)
 
     runs_to_jsonf(logfile, runs, sort_keys=True, indent=4)
+
+    # gtest exits 0 on skipped or unmatched tests, so every selected test must have actually passed.
+    if not opts.i:
+        # Skip gtest's "[----------]" / "[==========]" summary lines, which also match testend.
+        statuses = [r.status for r in runs if r.status[:1] not in ("-", "=")]
+        if not statuses or any(s != "OK" for s in statuses):
+            msg = f"DRAM tests did not pass (statuses: {', '.join(statuses) or 'none run'})"
+            print(msg, file=sys.stderr)
+            if logf:
+                print(msg, file=logf)
+            exit_status = exit_status or 1
 
     if logf:
         logf.close()

@@ -264,8 +264,10 @@ from ttml.datasets import sft_collate_fn
 collate = partial(sft_collate_fn, max_seq_len=1024, pad_token_id=tokenizer.pad_token_id)
 ```
 
-Expects each example to be a dict with `"input_ids"` and `"labels"` (prompt positions
-set to `-100`). Handles padding, truncation, and loss mask normalization.
+Expects each example to be a dict with `"input_ids"` and `"labels"` (`-100` at the positions
+whose target is a prompt token, `t < prompt_len - 1`). Handles padding, truncation, and loss mask normalization.
+`labels[t]` is scored against the logits at position `t` with no shift, so it must already
+be the next-token target of `input_ids[t]` (not a copy of `input_ids`).
 
 ---
 

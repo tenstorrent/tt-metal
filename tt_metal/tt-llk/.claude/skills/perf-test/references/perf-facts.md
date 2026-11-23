@@ -70,12 +70,18 @@ comparison.
 - The schema version is `PERF_TEST_SCHEMAS[<module>]["version"]` in
   `helpers/perf/test_schemas.py`, not a CSV column. Bump it once per PR,
   relative to main, when the module's columns change. Rows from different
-  versions are not comparable.
+  versions are not comparable, except across a rename recorded in `aliases` or
+  `test_name_aliases`, which the comparer maps (`perf-test`, "Renames";
+  `perf-regression-check`, "Interpreting results").
 - A `tile_cnt` accounting change makes rows incomparable without a version
   bump. When `tile_cnt` counts both operand tiles of a two-operand kernel,
   per-tile `MATH_ISOLATE` is about half a result tile; that halving is not a
   speedup. Do not shrink `TILE_CNT` to restore an older number: it is also the
   unpack loop bound and the stand-in dvalid count.
+- `tile_cnt` means different counts in different modules. Check what a module
+  counts before renaming an axis to it: the strided column reduce's
+  `max_tiles_per_iter` became `tile_cnt` only because it is exactly the input
+  tile count that `TILE_COUNT(tile_cnt_A)` carries.
 - At 16-bit, `dest_acc=Yes` can double the Dest handshakes relative to
   `dest_acc=No`, so a `dest_acc` delta mixes a datapath change with twice the
   section-done traffic.

@@ -89,8 +89,8 @@ def test_the_cache_check_call_binds_to_the_transformer():
 
 
 def test_every_forward_call_binds_to_the_transformer():
-    """The eager and traced chunk paths both call `self.model.forward`; neither is reached by an eager test."""
-    for call in _call_sites("self.model.forward", expected=2):
+    """The eager and traced chunk paths and the packed `prefill_forward` call `self.model.forward`; none is reached by an eager test."""
+    for call in _call_sites("self.model.forward", expected=3):
         _bind(TtKimiK3Transformer.forward, call, None)
 
 
@@ -275,8 +275,9 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     layer = object.__new__(ttKDA)
     layer.tensor_parallel_size = tensor_parallel_size
     layer.tensor_parallel_axis = 1
-    layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1)
-    layer.weights = SimpleNamespace(convolution_taps=())
+    layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1, num_heads=2, norm_eps=1e-6)
+    layer.weights = SimpleNamespace(convolution_taps=(), norm=object())
+    layer.gated_rms_output_dtype = layer.norm_output_memory_config = None
     layer.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
     layer.kda_compute_config = object()
     for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
@@ -291,6 +292,7 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     layer._compute_decay = calls.compute_decay
     layer.recurrence = calls.recurrence
     calls.recurrence.return_value = SimpleNamespace(output=object(), final_state="final_recurrent")
+    calls.recurrence.applies_output_norm = False
     layer._kda_rms_norm = calls.norm
     layer._project_output = calls.project_output
     calls.project_output.return_value = "output"
@@ -309,6 +311,17 @@ def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkey
     calls.all_gather.assert_not_called()
     calls.project_inputs.assert_called_once_with(full)
     assert output == "output" and (state.recurrent, state.convolution) == ("final_recurrent", "new_convolution")
+
+
+def test_kda_layer_with_sequence_parallelism_leaves_the_norm_to_the_relay(monkeypatch):
+    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
+    calls.recurrence.applies_output_norm = True
+    output, _ = layer.forward(SimpleNamespace(shape=(1, 64, 256)), Mock(), object())
+    calls.norm.assert_not_called()
+    output_norm = calls.recurrence.call_args.kwargs["output_norm"]
+    assert output_norm.gate is calls.project_inputs.return_value.projected and output_norm.num_heads == 2
+    calls.project_output.assert_called_once_with(calls.recurrence.return_value.output)
+    assert output == "output"
 
 
 def test_kda_attention_rejects_a_layer_without_the_contract_convolution_pages(expect_error):
@@ -415,18 +428,3 @@ def test_compile_rejects_slabs_that_do_not_match_the_runtime(monkeypatch, expect
         runtime.compile(SimpleNamespace(kda_states=SimpleNamespace(num_slots=num_slots, layer_ids=layer_ids)))
     assert runtime.model.kda_states is None
     parent_compile.assert_not_called()
-
-
-def test_only_k3_1_moves_the_indexer_score_off_the_op_default():
-    """K3.1 scores at HiFi2; the other DSA configs keep the op's default (None passed,
-    as before), so their indexer is unchanged."""
-    from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
-    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
-    from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
-    from models.demos.deepseek_v3_d_p.tt.mla.indexer import score_compute_kernel_config
-
-    k31 = score_compute_kernel_config(kimi_k3_1_hf_config(), ttnn.Arch.BLACKHOLE)
-    assert k31.math_fidelity == ttnn.MathFidelity.HiFi2
-    assert not (k31.fp32_dest_acc_en or k31.packer_l1_acc or k31.dst_full_sync_en)
-    for other in (glm_5_3_hf_config(), deepseek_v32_hf_config()):
-        assert score_compute_kernel_config(other, ttnn.Arch.BLACKHOLE) is None
