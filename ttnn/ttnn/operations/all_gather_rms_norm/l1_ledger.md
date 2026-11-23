@@ -99,3 +99,26 @@ Total per chip: DRAM ≈ 6S (x 1, own write 1, landed 3, relay read 1) against t
 > multicast route is unmeasured on the ring's wrap hop (`blackhole-ccl-kernels.md` §4: "no wrap handling in the
 > route setter"), while the relay is the measured transport (`fabric_all_gather`). The `fabric_mcast` regime row
 > keeps it reachable: an entry's pages and source are unchanged, only its route header differs.
+
+## As built (implementer, Phase 0) — departures from the inventory above
+
+| CB | Index | As built | Why it differs / shares with |
+|----|-------|----------|------------------------------|
+| `cb_mask` | 4 | **Float32**, 1 tile (LN tail member only) | The reduce helper's AccumulateViaAdd masked fold (`llk_unpack_AB` with the mask as srcB) does not reconfigure srcB to the mask CB's format: a bf16 mask was read as fp32 garbage (LN `w_non_aligned` off by 5 % rel RMS). Same format as `cb_ln_sq` fixes it. |
+| `cb_ln_sq` | 8 | `crt_max · cw_max` Float32 | The masked AccumulateViaAdd reduce is BulkWaitBulkPop over a whole tile-row (no streaming with a partial mask); one chain + one reduce per block. Shares: none (concurrent with `cb_x`/`cb_ln_shift`). |
+| `cb_ln_m` | 6 | `crt_max` Float32 | Holds m (shift source), then — disjoint lifetime — `d = mean − K` (alias, pattern 3: m is consumed by the shift broadcast before d is produced). |
+| `cb_ln_shift` | 7 | `crt_max` Float32 | Kept until the end of normalize: LN centers as `(x − K) − d` (no exact fp32 mean broadcast). |
+| `cb_mean_col` | 15 | `crt_max` Float32, UnpackToDestFp32 | exact mean (combine reduce output), read once by the `d = mean − K` chain |
+| `cb_mean_b` | 16 | `crt_max` Float32 | **d = mean − K** broadcast to every column (FPU UnaryBcast; d is small, its tf32 truncation is ~1e-3 of d). The reader's word-by-word fp32 mean broadcast (~4 µs) is gone. |
+| `cb_ln_scratch` | — | not built | `cb_ln_tmp` (18, `crt_max` Float32, UnpackToDestFp32) carries both combine intermediates (n·m, then M2 terms) in sequence. |
+| `cb_x32` | 22 | `crt_max · cw_max` Float32, UnpackToDestFp32 — **LN with non-Float32 x only** | the exact SFPU LN paths (Accurate reduce, centering) need a Float32 source CB; an exact copy of the bf16 / bfp8 block. Shares: none (concurrent with the whole LN block). For Float32 x, `cb_x` itself is tagged and no copy exists. |
+| `cb_gamma_rows` | 23 | `(cw_max + 2) · 128 + 64` B | reader scratch for the gamma / beta source rows (64 B-aligned), copied element-wise into the compact pages (handles R_U column offsets). |
+| `cb_gather_rows` | 24 | `crt_max · nstats · gather_tiles` Float32, UnpackToDestFp32 | **new**: records land as ROWS (row j = partition j) via local NoC copies from `cb_record_landing`; compute transposes them exactly in DEST (`copy_tile` + `transpose_dest`) into `cb_gathered`. Replaces the RISC-V column scatter (3.6 µs on the focus case). Shares: none (concurrent with `cb_gathered` during the transpose). |
+| `cb_record_landing` | 11 | `G · k · nstats · 128` B | one contiguous hub read per slot per tile-row (the table stores each (slot, row, stat) block half-split), then local copies into `cb_gather_rows`. |
+| `cb_gathered` | 12 | `crt_max · nstats · gather_tiles` Float32 (UnpackToDestFp32 for LN only) | compute → compute (transpose output), as designed otherwise. |
+| `cb_assemble` | 20 | `src_max + 1` pages (R_U) | `src_max` = max distinct staging tiles per output tile (host-computed; 3 for W_local = 50). |
+| `cb_port_chunks` | 21 | `2 · batch_chunks · run_pages` pages | as designed; `run_pages = floor(payload / page)` (7 for bf16 at 14 KiB). |
+
+Data-movement budget: unchanged from the table above (x 1, own write 1, landed 3, relay read 1 per chip; the ports
+pull the own slice from worker L1). Measured probe: re-reading the own slice from the own DRAM output instead is only
+0.7 µs faster on the focus case (34.85 vs 35.54 µs), i.e. the pull is not the transport bottleneck.

@@ -449,3 +449,25 @@ Helpers considered and rejected (raw_api entries):
 | Persistent resources (global semaphores, stats table, staging) under trace | creation needs `synchronize_device` once | create on the first call (outside capture), cached per (mesh, port-core union, sizes). The handles are kept alive in a module cache (generic_op keeps only addresses). |
 | Line ends / G = 2 | receive-only ports; a 2-chip ring is a line | every chip has 2L ports. Ring with G = 2 runs the line schedule. |
 | DISPATCH-BOUND | per-core RT args on ~100 workers | worker kernels take common RT args only; core ranges merged |
+
+
+## Implementation notes (ttnn-implementer, Phase 0)
+
+Built as designed (SF-GN, R_A final-address landing + R_U staging, hubs on the link-0 ports, workers on grid − ports
+with common runtime args, relay ring with arrival counters, balanced far slot, scatter packets). Departures, all in
+the advisory layer (CB set, helper choices, mechanism details); see `l1_ledger.md` "As built" and `changelog.md`:
+
+| Design item | As built | Why |
+|---|---|---|
+| Gather: G reads per tile-row, RISC-V scatter of each record into column j | Writers store each (slot, row, stat) block half-split; one contiguous hub read per slot per row; local NoC copies land the records as ROWS of `cb_gather_rows`; compute transposes exactly in DEST (`copy_tile` from an UnpackToDestFp32 CB + `transpose_dest`, raw API — no helper transposes in DEST) | the RISC-V column scatter cost 3.6 µs (focus); reading each record separately from the hubs put ~1300 requests on each hub (48.8 µs) |
+| `announce_stats_ready`: `noc_semaphore_inc_multicast` | the hub's sender flags its own reader (local semaphore), the reader (NoC0) multicasts a semaphore *set* over the program grid; one semaphore id per hub | the inc multicast forbids a sender inside the rectangle; the hubs are inside the grid |
+| LN split_broadcast (m_hi / m_lo) of the exact mean | centering as `(x − K) − d`, d = mean − K (exact SFPU), K the worker's own exact tf32 shift; the combine's `(m_j − mean)` uses the same identity | no exact fp32 mean broadcast is needed at all (a dataflow broadcast cost ~4 µs) |
+| LN `fp32_mode = Accurate` S1 on x | for non-Float32 x an exact Float32 copy `cb_x32` (UnpackToDestFp32) feeds the Accurate reduce and the SFPU centering | the Accurate (SFPU) reduce path is selected only for a Float32 input CB, and a tagged CB cannot be read through srcA/srcB |
+| LN T reduce mask in the bf16 scaler CB | `cb_mask` is Float32 | the helper's masked fold reads the mask as srcB in the input CB's format (no reconfig) |
+| Port placement by probe program | the Ethernet channel comes from the connection's own runtime args (`setup_fabric_connection(...)[0]`), mapped to the physical Ethernet core; then `fabric_all_gather._worker_nearest_noc1` | no extra dispatch on the first call |
+| LN k | capped at 32 / G (one gather tile per stat) | the exact LN combine copies gathered tiles to DEST (UnpackToDestFp32); add_tiles over several gather tiles would read them through srcA/srcB |
+| num_links None | min(usable links per hop, 2) | SUPPORTED num_links is {1, 2} |
+
+Not landed in Phase 0: HEIGHT / WIDTH sharded input, `fp32_dest_acc_en=False` (see `changelog.md`).
+Measured: forcing an aligned slice through the slot-contiguous staging regime (long fabric runs + tile assembly)
+gave 40.3 µs vs 35.5 µs for final-address landing on the focus case: the R_A choice holds on this box.
