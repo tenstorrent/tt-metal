@@ -206,6 +206,8 @@ case "${MODEL}" in
           RUNNER_ENV+=" export PREFILL_LAYER_ACK_D2H=0;"
           # dit_fused_distributed_rmsnorm resolves every chip of the mesh, which a seam host cannot; use the unfused norm.
           RUNNER_ENV+=" export PREFILL_FUSED_RMSNORM=0;"
+          # The unfused norm's all-gathers put more semaphores in L1_SMALL; packed forwards overflowed 1664 B.
+          RUNNER_ENV+=" export PREFILL_L1_SMALL_SIZE=2048;"
           PRODUCER_ENV+=" export PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2;"
         fi
         # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked

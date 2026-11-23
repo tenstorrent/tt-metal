@@ -57,7 +57,8 @@ class GLM53Adapter(MLAPrefillAdapter):
     # traced path one 16 B slot past 1216 (Blaze run 37730295536).
     # 1664: the dense FFN's fused TP collectives (#66628) add seven 16 B/bank semaphores: three for its gather and four
     # for matmul_reduce_scatter_prefill. Keep in sync with GLM_L1_SMALL_SIZE.
-    l1_small_size = 1664
+    # PREFILL_L1_SMALL_SIZE: a [RING,RING] run on the unfused RMSNorm adds all-gather semaphores (packed: OOM at 1664).
+    l1_small_size = int(os.environ.get("PREFILL_L1_SMALL_SIZE", "1664"))
     routing_use_l1_small_for_semaphores = True
 
     supports_mtp = True
