@@ -341,4 +341,4 @@ def test_moe_routing_remap_negative_zero_weights(mesh_device, dtype):
     tt_outputs = ttnn.get_device_tensors(tt_output)
     assert len(tt_outputs) == len(reference_outputs_torch)
     for test, ref in zip(tt_outputs, reference_outputs_torch):
-        assert_with_pcc(ttnn.to_torch(test), ref)
+        assert_equal(ttnn.to_torch(test).to(ref.dtype), ref)
