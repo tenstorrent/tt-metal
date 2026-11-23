@@ -297,12 +297,7 @@ def test_legacy_packer_l1_acc(device, family):
 
 @pytest.mark.parametrize("family", LEGACY_FAMILIES)
 def test_legacy_fp32_dest_acc(device, family):
-    # Two K blocks: the Float32 partials spill to L1 and reload through SrcA between them.
-    if family == "reuse":
-        pytest.skip(
-            "fp32_dest_acc_en fails host validation on the reuse factory for bf16 too: the compute KernelSpec gives "
-            "no unpack_modes entry for the Float32 partials DFB (hardware_config.cpp dfbs_with_entry)"
-        )
+    # Two K blocks: the Float32 partials accumulate in L1 (packer L1 accumulation) between them.
     _run_legacy(device, family, ttnn.mxint8, ttnn.mxint8, ttnn.mxint8, fp32_dest_acc_en=True)
 
 
@@ -321,8 +316,8 @@ def test_legacy_fused_bias_fp32_dest_acc(device, family):
             1,
             marks=pytest.mark.xfail(
                 strict=True,
-                reason="the mcast factories reload Float32 partials through SrcA (TF32); a lossless reload needs "
-                "UnpackToDest, which deadlocks on Quasar (#62102)",
+                reason="the Float32 partials accumulate in L1 but are read back once through SrcA (TF32) at the last "
+                "K block; a lossless reload needs UnpackToDest, which deadlocks on Quasar (#62102)",
             ),
         ),
     ],
@@ -332,7 +327,8 @@ def test_legacy_fp32_dest_acc_partials_precision(device, family, small_block):
     # Four K blocks (in0_block_w=1). in0 is all ones; in1 makes block 0 sum to 1.0 and adds 2^-12 in one later
     # block, so the exact result is 1 + 2^-12, which Float32 holds and TF32 (10 mantissa bits) rounds to 1.0.
     # small_in_last_block: no partials reload follows the small term, so this checks Dest itself keeps it.
-    # small_in_middle_block: the 1 + 2^-12 partial is reloaded between K blocks; through SrcA (TF32) it is lost.
+    # small_in_middle_block: the 1 + 2^-12 partial accumulates in fp32 in L1, but the read-back through SrcA (TF32)
+    # at the last K block loses the 2^-12.
     grid = device.compute_with_storage_grid_size()
     if grid.x < 4 or grid.y < 2:
         pytest.skip(f"needs a 4x2 grid, device has {grid.x}x{grid.y}")
