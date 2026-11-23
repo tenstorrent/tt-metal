@@ -266,11 +266,13 @@ from models.experimental.deepseek_v4_flash.demo.server import (
     _Lease,
     _normalized_messages,
     _PrefixCache,
+    _PrefixEntry,
     _Prefiller,
     _PromptStopped,
     _Scheduler,
     _SlotPool,
     _text_content,
+    _timed,
     _Turn,
     build_parser,
     check_args,
@@ -325,6 +327,8 @@ _NUM_USERS_PERSISTENT = 8
 # Default --instances with --persistent-moe: one whole TP4 model (and its drafter) on each of mesh rows 4, 3, 2, 1, 0,
 # all sharing the TP12 MoE on rows 5-7 (pmoe.INSTANCE_ROWS).
 _INSTANCES = 5
+# How often a request held by a busy instance (one active slot, serving another turn) asks it again.
+_STICKY_RETRY_SECONDS = 0.5
 # Default --dspark-drafts with several instances, by the users decoding on all of them: 4-row verify rounds (3 drafts)
 # at every load. tests/decode/test_instances_dspark.py (GSM8K, 300 tokens, one user per instance, Nov 17) measured
 # DSpark against one-row steps at 1-5 users decoding at once: 184.0 / 176.0 / 171.9 / 142.6 / 127.0 tok/s/user against
@@ -1025,6 +1029,33 @@ class _DeviceParkedConversation:
     used_at: float
 
 
+class _DevicePrefixCache(_PrefixCache):
+    """The prefixes one instance keeps in its own device RAM (``capture_device_prefix`` snapshots, which share the
+    capturing session's KV blocks), ahead of the host :class:`_PrefixCache` all instances share. Nothing bounds it
+    but the pools: :meth:`_SlotReuse._make_room` moves the least recently used to host RAM when they are full.
+    ``nbytes`` counts only a snapshot's host part, so ``max_bytes`` never evicts."""
+
+    def __init__(self):
+        super().__init__(max_bytes=1 << 62)
+
+    def keep(self, tokens: list[int], snapshot) -> list:
+        """Add ``snapshot`` as the prefix ``tokens``; returns the snapshots it replaces, for the caller to free."""
+        key = tuple(tokens)
+        with self._lock:
+            replaced = [entry.snapshot for entry in self._entries if entry.tokens == key]
+            self._entries = [entry for entry in self._entries if entry.tokens != key]
+            self._entries.append(_PrefixEntry(key, snapshot, time.perf_counter()))
+        return replaced
+
+    def oldest(self) -> _PrefixEntry | None:
+        with self._lock:
+            return min(self._entries, key=lambda entry: entry.used, default=None)
+
+    def remove(self, entry: _PrefixEntry) -> None:
+        with self._lock:
+            self._entries.remove(entry)
+
+
 class _V41SlotPool(_SlotPool):
     """:class:`_SlotPool` that, when no slot continues a request's conversation, hands it the parked slot whose cache
     the request shares the longest start with and differs from only in the cache's last :data:`_SLOT_REUSE_TOKENS`
@@ -1119,6 +1150,26 @@ class _V41SlotPool(_SlotPool):
             return oldest, None
         return None
 
+    def claimed(self) -> int:
+        """Slots claimed for a turn, whether it is queued, running, or still between :meth:`acquire` and a seat."""
+        with self._cv:
+            return sum(self._busy)
+
+    def holds(self, user_key: str | None, messages: list[dict]) -> bool:
+        """Whether a conversation of this pool -- in a slot, parked in device RAM or stored in host RAM -- is
+        ``user_key``'s (``None``: unnamed) or one ``messages`` continues."""
+        with self._cv:
+            if user_key is not None and (
+                user_key in self.owner
+                or any(conv.owner == user_key for conv in self.device_parked)
+                or any(conv.owner == user_key for conv in self.host)
+            ):
+                return True
+            stored = [user.messages for user in self.engine.users]
+            stored += [conv.messages for conv in self.device_parked]
+            stored += [conv.messages for conv in self.host]
+        return any(_continues(messages, conv) for conv in stored)
+
     def counts(self) -> dict:
         """How many slots are ``running`` / ``queued`` / ``parked`` / ``empty``, plus ``max_running`` / ``max_slots``."""
         with self._cv:
@@ -1208,11 +1259,15 @@ class _SlotReuse:
     rebuilt by replaying the ``replay_window`` cached tokens before the cut (SWA bounded replay), and the rest of the
     request prefilled from there, as :meth:`_Scheduler._resume` does from a turn mark. The slot's old conversation is
     not offloaded to host RAM: the request supersedes it. A slot whose tokens differ by more is admitted as the new
-    conversation it is."""
+    conversation it is.
+
+    The prefix cache's snapshots stay in device RAM (:class:`_DevicePrefixCache`), sharing the KV blocks of the
+    session that reached them, and go to the host :class:`_PrefixCache` only when the pools need their blocks."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._reuse: dict[int, _Rewind] = {}  # slot -> the rewind its turn being admitted takes
+        self._device_prefixes = _DevicePrefixCache()
 
     def _admit(self, turn: _Turn) -> None:
         pool = self.server.pool
@@ -1350,6 +1405,91 @@ class _SlotReuse:
             self.engine.model.free_device_park(oldest_dev.snapshot)
         logger.debug(f"evicted device-parked user {oldest_dev.owner!r} ({reason}): {self._pool_summary()}")
 
+    def _evict_device_prefix_to_host(self, entry: _PrefixEntry, reason: str) -> None:
+        """Move one device prefix to the host prefix cache, freeing the device blocks only it held."""
+        model, t0 = self.engine.model, time.perf_counter()
+        try:
+            snapshot = model.export_device_park(entry.snapshot)  # frees the device blocks itself
+        except Exception as e:  # noqa: BLE001 - the prefix is only a cache
+            logger.warning(f"prefix cache: could not move a {entry.snapshot.pos}-token prefix to host RAM: {e}")
+            model.free_device_park(entry.snapshot)
+            return
+        kept = self.server.prefix_cache.store(list(entry.tokens), snapshot)
+        logger.info(
+            f"prefix cache: {snapshot.pos}-token prefix moved from device to host RAM {reason} in "
+            f"{time.perf_counter() - t0:.2f}s ({snapshot.nbytes / 2**30:.2f} GiB, "
+            f"{'kept' if kept else 'over --host-cache-gb, dropped'}; {len(self._device_prefixes)} left on device)"
+        )
+
+    def _capture_prefix(self, user: UserSession) -> None:
+        """Keep ``user``'s token prefix in device RAM (:class:`_DevicePrefixCache`) rather than copying it out."""
+        model = self.engine.model
+        if not hasattr(model, "capture_device_prefix"):
+            return super()._capture_prefix(user)
+        if (
+            getattr(self.server, "prefix_cache", None) is None
+            or not user.pos
+            or len(user.tokens) != user.pos
+            or self._posted
+            or self._inflight
+        ):
+            return
+        vocab = getattr(getattr(model, "config", None), "vocab_size", 0) or 0
+        tokens = user.tokens[: user.pos]
+        if vocab <= 0 or any(token >= vocab for token in tokens):
+            return
+        t0 = time.perf_counter()
+        try:
+            snapshot = model.capture_device_prefix(user.sid)
+        except Exception as e:  # noqa: BLE001 - the next prompt replays this prefix
+            logger.warning(f"user {user.index}: prefix of {user.pos} tokens was not cached: {type(e).__name__}: {e}")
+            return
+        if snapshot.pos != user.pos:  # a verify block left the session past its rejected drafts
+            model.free_device_park(snapshot)
+            return
+        for replaced in self._device_prefixes.keep(tokens, snapshot):
+            model.free_device_park(replaced)
+        logger.info(
+            f"prefix cache: {user.pos} tokens kept in device RAM in {1e3 * (time.perf_counter() - t0):.0f} ms "
+            f"({len(self._device_prefixes)} on device, {len(self.server.prefix_cache)} in host RAM)"
+        )
+
+    def _share_decoded_prefix(self, user: UserSession, turn: _Turn) -> bool:
+        """Start ``user`` from the longest cached prefix of ``turn.ids``: one in device RAM when it is at least as
+        long as the host cache's (its blocks shared, no copy), else the host one (``import_session``)."""
+        model = self.engine.model
+        cache = getattr(self.server, "prefix_cache", None)
+        vocab = getattr(getattr(model, "config", None), "vocab_size", 0) or 0
+        if cache is None or not hasattr(model, "import_device_prefix"):
+            return super()._share_decoded_prefix(user, turn)
+        hit = self._device_prefixes.lookup(turn.ids, vocab)
+        host = cache.lookup(turn.ids, vocab)
+        if hit is None or (host is not None and host[0] > hit[0]):
+            return super()._share_decoded_prefix(user, turn)
+        pos, snapshot = hit
+        t0 = time.perf_counter()
+        try:
+            model.import_device_prefix(user.sid, snapshot)
+        except Exception as e:  # noqa: BLE001 - the host cache, or a replay from 0
+            logger.warning(
+                f"user {turn.user_key!r}: device prefix of {pos} tokens did not load: {type(e).__name__}: {e}"
+            )
+            with contextlib.suppress(Exception):
+                model.reset_session(user.sid)
+            return super()._share_decoded_prefix(user, turn)
+        full = list(turn.ids)
+        turn.from_prefix_cache = True
+        turn.resumed_from = pos
+        user.pos = pos
+        user.tokens = full[:pos]
+        turn.ids = full[pos:]
+        logger.info(
+            f"user {turn.user_key!r}: starting from a {pos}-token prefix in device RAM "
+            f"({1e3 * (time.perf_counter() - t0):.0f} ms) of the {len(full)}-token prompt; replaying the last "
+            f"{len(turn.ids)} through decode"
+        )
+        return True
+
     def _offload(self, slot: int, owner: str | None) -> None:
         if slot in self._reuse:
             return
@@ -1414,10 +1554,13 @@ class _SlotReuse:
         return super()._restore(user, turn)
 
     def _make_room(self, n_tokens: int, keep: int) -> None:
-        """Evict the user with the oldest last request across device-parked conversations and parked slots
-        to host RAM (freeing its device KV blocks) until ``n_tokens`` fit the page table/pool."""
+        """Evict the least recently used of the device-parked conversations, parked slots and device prefixes to
+        host RAM (freeing their device KV blocks) until ``n_tokens`` fit the page table/pool."""
         pool = self.server.pool
         while n_tokens > self.engine.tokens_left():
+            prefix = self._device_prefixes.oldest()
+            # (prefix entries are stamped with perf_counter, the pool with wall time)
+            prefix_at = None if prefix is None else time.time() - (time.perf_counter() - prefix.used)
             with pool._cv:
                 oldest_dev = min(pool.device_parked, key=lambda c: c.used_at, default=None)
                 parked_slots = [
@@ -1426,17 +1569,24 @@ class _SlotReuse:
                     if not pool._busy[i] and i != keep and u.pos and not pool._closing
                 ]
                 oldest_slot = min(parked_slots, key=lambda i: pool._used_at[i], default=None)
-                if oldest_dev is None and oldest_slot is None:
+                ages = {
+                    "prefix": prefix_at,
+                    "dev": None if oldest_dev is None else oldest_dev.used_at,
+                    "slot": None if oldest_slot is None else pool._used_at[oldest_slot],
+                }
+                ages = {kind: at for kind, at in ages.items() if at is not None}
+                if not ages:
                     return
-                evict_dev = oldest_dev is not None and (
-                    oldest_slot is None or oldest_dev.used_at <= pool._used_at[oldest_slot]
-                )
-                if evict_dev:
+                evict = min(ages, key=ages.get)
+                if evict == "dev":
                     pool.device_parked.remove(oldest_dev)
-                else:
+                elif evict == "slot":
                     pool._busy[oldest_slot] = True
                     slot_owner = pool.owner[oldest_slot]
-            if evict_dev:
+            if evict == "prefix":
+                self._device_prefixes.remove(prefix)
+                self._evict_device_prefix_to_host(prefix, f"for {n_tokens} tokens")
+            elif evict == "dev":
                 self._evict_device_parked_to_host(oldest_dev, f"for {n_tokens} tokens")
             else:
                 try:
@@ -1514,7 +1664,7 @@ class _EngramPrefetch:
         if found is None:
             return None
         # The rows were gathered against a copy. Extend the live session the way the lookup would have.
-        self.lookup.hash_session(self.slot, chunk_ids.reshape(1, -1), int(start))
+        self.lookup.extend_history(self.slot, chunk_ids.reshape(1, -1), int(start))
         return found
 
     def run(
@@ -1632,14 +1782,18 @@ class _PrefillFirst(_Scheduler):
     """
 
     def _admit(self, turn: _Turn) -> None:
+        t0 = time.perf_counter()
+        times = turn.admit_times
         if isinstance(self.server.prefiller, _RemotePrefiller):
             # Admission may reset or evict the slot of a push whose turn ended: let its writes land first.
-            self.server.prefiller.reap(block=True)
+            with _timed(times, "reap"):
+                self.server.prefiller.reap(block=True)
         super()._admit(turn)
         if turn in self._active:
             if self.server.prefiller is not None and getattr(self.server, "prefix_cache", None) is not None:
                 user = self.engine.users[turn.slot]
-                self._remember_prefix(user, turn)
+                with _timed(times, "remember_prefix"):
+                    self._remember_prefix(user, turn)
                 # For disaggregated prefill, if there is an uncached shared history prefix just below
                 # device_prefill (leaving a short tail <= 1024 tokens), trim device_prefill to the aligned
                 # boundary before it so the first request populates prefix_cache for subsequent requests.
@@ -1659,8 +1813,15 @@ class _PrefillFirst(_Scheduler):
                             max_trim_tail = 2048 if getattr(self.engine.model, "verify_rows", 1) > 1 else 1024
                             if full_len - (user.pos + aligned_h) <= max_trim_tail:
                                 turn.device_prefill = aligned_h
-            self._send_ahead(turn)
-            self._prefetch_engram(turn)
+            with _timed(times, "send"):
+                self._send_ahead(turn)
+            with _timed(times, "engram_prefetch"):
+                self._prefetch_engram(turn)
+            logger.info(
+                f"user {turn.user_key!r}: {len(turn.ids)}-token prompt admitted in "
+                f"{1e3 * (time.perf_counter() - t0):.1f} ms: "
+                + ", ".join(f"{stage} {1e3 * seconds:.1f}" for stage, seconds in times.items())
+            )
 
     def _send_ahead(self, turn: _Turn) -> None:
         """Send the prompt a remote prefill takes to the prefill server now, from a thread of its own
@@ -1677,12 +1838,17 @@ class _PrefillFirst(_Scheduler):
         if user.pos % prefiller.align or len(user.tokens) < user.pos:
             return
 
-        # Not mark_prefill_chunk: it advances turn.fed, which must stay at prefill_from until the KV is loaded.
+        # Not mark_prefill_chunk: it advances turn.fed, which must stay at prefill_from until the KV is loaded. The
+        # server counts from position 0 of the whole prompt; remote_prefilled counts this turn's ids, for the monitor.
+        have, n = user.pos, turn.device_prefill
+
         def progress(done: int) -> None:
+            turn.remote_prefilled = min(max(done - have, 0), n)
             if turn.cancelled.is_set():
                 raise _PromptStopped()
 
-        turn.remote_fetch = prefiller.start(user, turn.ids[: turn.device_prefill], progress, self._wake)
+        turn.remote_prefilled = 0
+        turn.remote_fetch = prefiller.start(user, turn.ids[:n], progress, self._wake, times=turn.admit_times)
 
     @staticmethod
     def _fetching(turn: _Turn) -> bool:
@@ -1705,10 +1871,11 @@ class _PrefillFirst(_Scheduler):
         if user.pos or prefiller is None or cache is None or not hasattr(self.engine.model, "import_session"):
             return False
         vocab = getattr(getattr(self.engine.model, "config", None), "vocab_size", 0) or 0
-        hit = cache.lookup(turn.ids, vocab)
-        if hit is None:
+        tiers = (cache, getattr(self, "_device_prefixes", None))
+        hits = [tier.lookup(turn.ids, vocab) for tier in tiers if tier is not None]
+        pos = max((hit[0] for hit in hits if hit is not None), default=0)
+        if not pos:
             return False
-        pos, _ = hit
         tail = len(turn.ids) - pos
         n_whole = prefiller.aligned(len(turn.ids))
         # Prefer the unpolluted block-replay rate (excludes import_session and prefix-capture exports) when available.
@@ -1829,6 +1996,7 @@ class _PrefillFirst(_Scheduler):
                 traced._engram_prefetch = None
             turn.engram_prefetch = None
             turn.remote_fetch = None
+            turn.remote_prefilled = 0
 
     def _drain_decode_queue(self) -> bool:
         """Feed the decode steps whose traces are already posted, and do not post any more.
@@ -2470,7 +2638,8 @@ class V41GenerationServer(GenerationServer):
                     "phase": turn.phase,
                     "prompt_tokens": len(turn.ids),
                     "cached_tokens": turn.cached,
-                    "prefilled": turn.fed,
+                    # A prompt at the prefill server: its chunks done there, though turn.fed waits for the KV.
+                    "prefilled": max(turn.fed, turn.prefill_from + getattr(turn, "remote_prefilled", 0)),
                     "generated": len(turn.generated),
                     "max_tokens": turn.max_tokens,
                     "prefill_s": turn.prefill_seconds,
@@ -2710,10 +2879,11 @@ class _Instances:
     """Several :class:`V41GenerationServer` s -- one per model instance on the shared persistent MoE
     (:func:`_serve_instances`) -- behind the one HTTP server, as the handler's ``api``.
 
-    A request goes to the instance holding its conversation (a slot ``user_key`` owns, or whose stored messages the
-    request continues) and stays there: a 429 from that instance is the answer, not a reason to start the same
-    conversation on another instance. A new conversation goes to the idlest instance (an empty slot, then a parked
-    one, then the fewest running and queued turns), and an instance that turns it away with a 429 before replying
+    A request goes to the instance holding its conversation (in a slot, device RAM or host RAM, owned by
+    ``user_key`` or with stored messages the request continues) and stays there: while that instance's one active
+    slot serves another turn the request waits for it, rather than start the same conversation on another
+    instance. A new conversation goes to the idlest instance (no claimed slot, then room for a parked one, then the
+    fewest claimed slots and parked conversations), and an instance that turns it away with a 429 before replying
     passes it to the next. Each instance keeps its own sessions, scheduler and Rust host runtime; the DSpark
     schedule counts every instance's decoding users (``peers``)."""
 
@@ -2758,7 +2928,9 @@ class _Instances:
                 conv.messages and _continues(messages, conv.messages) for conv in getattr(pool, "device_parked", ())
             )
             counts = pool.counts()
-            busy = counts.get("running", 0) + counts.get("queued", 0)
+            # Claimed slots, not running + queued: a turn between acquire and its seat is not counted in either, and
+            # an instance looking idle meanwhile takes a second conversation onto its one active slot.
+            busy = pool.claimed()
             # "empty" counts the device-parked capacity too, so an instance holding idle conversations still looks
             # free: without the parked count, new conversations pile onto the lowest j and then contend for its
             # one active session.
@@ -2776,12 +2948,10 @@ class _Instances:
             return [self.servers[j] for j in sorted(range(len(self.servers)), key=rank)]
 
     def _holds(self, server, user_key: str, messages: list[dict]) -> bool:
-        """Whether ``server`` already has ``user_key``'s conversation: a slot a named ``user_key`` owns, or stored
-        messages this request continues. That instance is the only one that may serve the request."""
-        pool = server.pool
-        if user_key != _DEFAULT_USER and pool.slots_of(user_key):
-            return True
-        return any(user.messages and _continues(messages, user.messages) for user in server.engine.users)
+        """Whether ``server`` already has ``user_key``'s conversation -- in its active slot, parked in its device RAM
+        or stored in its host RAM -- by a named ``user_key`` or by stored messages this request continues. That
+        instance is the only one that may serve the request."""
+        return server.pool.holds(None if user_key == _DEFAULT_USER else user_key, messages)
 
     def generate(self, user_key: str, body: dict, on_chunk, request_id: str | None = None, client_gone=None) -> dict:
         messages = self.servers[0].normalized_messages(body)
@@ -2791,19 +2961,23 @@ class _Instances:
             replied[0] = True
             on_chunk(reasoning, content)
 
-        order = self._order(user_key, messages)
-        # A conversation stays on the instances that hold it (usually one). A new one tries the idlest, then
-        # the next, when an instance turns it away with a 429 before replying.
-        sticky = [server for server in order if self._holds(server, user_key, messages)]
-        error = None
-        for server in sticky or order:
-            try:
-                return server.generate(user_key, body, relay, request_id, client_gone)
-            except RequestError as e:
-                if e.status != 429 or replied[0]:
-                    raise
-                error = e
-        raise error
+        # A conversation stays on the instances that hold it (usually one), waiting while their one active slot
+        # serves another turn. A new one tries the idlest, then the next, when an instance turns it away with a
+        # 429 before replying.
+        while True:
+            order = self._order(user_key, messages)
+            sticky = [server for server in order if self._holds(server, user_key, messages)]
+            error = None
+            for server in sticky or order:
+                try:
+                    return server.generate(user_key, body, relay, request_id, client_gone)
+                except RequestError as e:
+                    if e.status != 429 or replied[0]:
+                        raise
+                    error = e
+            if not sticky or (client_gone is not None and client_gone()):
+                raise error
+            time.sleep(_STICKY_RETRY_SECONDS)
 
     def stats(self) -> dict:
         stats = self.servers[0].stats()
@@ -3707,26 +3881,38 @@ class _RemotePrefiller:
             )
         return list(user.tokens[: user.pos]) + list(ids), user.pos
 
-    def start(self, user: UserSession, ids: list[int], on_progress=None, wake: threading.Condition | None = None):
+    def start(
+        self,
+        user: UserSession,
+        ids: list[int],
+        on_progress=None,
+        wake: threading.Condition | None = None,
+        times: dict[str, float] | None = None,
+    ):
         """Send ``ids`` (``user``'s prompt from its position on) now, from a thread of its own; :meth:`run` for the
         same user and ids loads the reply. Replaces (aborts) a prompt of ``user``'s still in flight.
 
         In push mode this runs on the scheduler thread: it reserves ``user``'s pages (a fresh prompt rewinds the
         session first) before sending. None when they cannot be reserved: :meth:`run` then pushes synchronously
-        and reports the error to the turn."""
+        and reports the error to the turn. ``times`` gets the seconds of those steps (``send.*``)."""
+        times = {} if times is None else times
         whole, have = self._whole(user, ids)
         with self._lock:
             old = self._fetches.pop(user.index, None)
         if old is not None:
-            self.forget(user, old)
+            with _timed(times, "send.forget"):
+                self.forget(user, old)
         targets = None
         if self.push:
-            self.reap(block=True)
+            with _timed(times, "send.reap"):
+                self.reap(block=True)
             model = self.engine.model
             try:
                 if not have:
-                    model.reset_session(user.sid)
-                targets = model.remote_commit_targets(user.sid, len(whole), self.ring_layers, start=have)
+                    with _timed(times, "send.reset"):
+                        model.reset_session(user.sid)
+                with _timed(times, "send.targets"):
+                    targets = model.remote_commit_targets(user.sid, len(whole), self.ring_layers, start=have)
             except Exception as exc:  # noqa: BLE001 - run() retries and reports it to the turn
                 logger.warning(f"user {user.index}: not pushed ahead ({type(exc).__name__}: {exc})")
                 return None
@@ -3865,9 +4051,10 @@ class _RemotePrefiller:
         # The reply starts at base: have, or 0 when the server refused have and sent every entry.
         base = states["base"]
         t_commit = time.perf_counter()
+        load_times: dict[str, float] = {}
         try:
             if self.push:
-                committed = model.finish_remote_commit(user.sid, ids=whole)
+                committed = model.finish_remote_commit(user.sid, ids=whole, times=load_times)
             else:
                 if not base:
                     model.reset_session(user.sid)
@@ -3898,7 +4085,9 @@ class _RemotePrefiller:
             f"queued {states['queued']:.2f}s, "
             f"transfer {states['bytes'] / 1e6:.1f} MB ({net_seconds:.2f}s RTT, "
             f"{'sent ahead, ' if job is not None else ''}{wait_seconds:.2f}s blocking the scheduler), "
-            f"KV load {1e3 * commit_seconds:.1f} ms, "
+            f"KV load {1e3 * commit_seconds:.1f} ms"
+            + (f" ({', '.join(f'{k} {1e3 * v:.1f}' for k, v in load_times.items())})" if load_times else "")
+            + ", "
             f"drain {1e3 * drain_seconds:.1f} ms ({drained} step(s)), seat {1e3 * seat_seconds:.1f} ms"
         )
         return None

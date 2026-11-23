@@ -160,6 +160,7 @@ import json
 import math
 import os
 import queue
+import re
 import socket
 import sys
 import threading
@@ -292,6 +293,33 @@ def _content_text(content, index: int) -> str:
                 400, f"messages[{index}] carries a {kind!r} content part, but this model takes text only"
             )
     return "".join(text)
+
+
+_TOKENIZE_PIECE_CHARS = 1 << 16
+# A space between two ASCII letters is a boundary of DeepSeek's pre-tokenizer in any context: the letters before it
+# end a run of letters, and the space opens the next " word" pre-token. So text cut there tokenizes, piece by
+# piece, to exactly the ids of the whole -- as long as no added token spans the cut, i.e. none contains a space.
+_TOKENIZE_CUT = re.compile(r"[A-Za-z] [A-Za-z]")
+
+
+def _tokenize(tokenizer, text: str) -> list[int]:
+    """``tokenizer(text, add_special_tokens=False)["input_ids"]``, in pieces of about ``_TOKENIZE_PIECE_CHARS``.
+
+    One call on a long prompt runs on one core and slows per token as it grows (1.3 s at 512K tokens, 3 s at 1M);
+    a batch of pieces runs on all of them (0.16 s and 0.24 s). Pieces are cut only at ``_TOKENIZE_CUT``; a stretch
+    with none (CJK, digits, symbols) stays in one piece.
+    """
+    if len(text) < 2 * _TOKENIZE_PIECE_CHARS or any(" " in token for token in tokenizer.get_added_vocab()):
+        return list(tokenizer(text, add_special_tokens=False)["input_ids"])
+    cuts = [0]
+    while len(text) - cuts[-1] >= 2 * _TOKENIZE_PIECE_CHARS:
+        found = _TOKENIZE_CUT.search(text, cuts[-1] + _TOKENIZE_PIECE_CHARS)
+        if found is None:
+            break
+        cuts.append(found.start() + 1)
+    cuts.append(len(text))
+    pieces = tokenizer([text[a:b] for a, b in zip(cuts, cuts[1:])], add_special_tokens=False)["input_ids"]
+    return [token for piece in pieces for token in piece]
 
 
 _PROMPT_SNIPPET_CHARS = 200
@@ -1312,6 +1340,16 @@ class _Prefiller:
         return row
 
 
+@contextlib.contextmanager
+def _timed(times: dict[str, float], stage: str):
+    """Add the seconds the ``with`` body takes to ``times[stage]``."""
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        times[stage] = times.get(stage, 0.0) + time.perf_counter() - t0
+
+
 class _Turn:
     """One in-flight chat turn: the request's decode state plus its output channel.
 
@@ -1379,6 +1417,7 @@ class _Turn:
         self.capture_at: int | None = None  # snapshot the session once it is idle at this position
         self.rebuilt = False  # a continued conversation rewound and re-prefilled whole, since that was faster
         self.t_replay = 0.0  # when this turn's prompt tokens started going through decode
+        self.admit_times: dict[str, float] = {}  # seconds of each admission stage (see _timed)
         self.next_id: int | None = None  # produced but not yet fed back
         self.t_read = 0.0  # when this turn's latest output came off the socket
         self.t_prefill_out = 0.0  # when its traced prefill's logits came back, until its first decode output does
@@ -1927,34 +1966,41 @@ class _Scheduler:
         try:
             # Before the request's options touch the slot: what it holds is the previous conversation's.
             new_conversation = not cut_short and not _continues(turn.body["messages"], user.messages)
+            times = turn.admit_times
             if new_conversation:
-                self._offload(turn.slot, turn.previous_owner)
+                with _timed(times, "offload"):
+                    self._offload(turn.slot, turn.previous_owner)
             if turn.restore is not None:
-                if self._restore(user, turn):
-                    cut_short = new_conversation = False
+                with _timed(times, "restore"):
+                    if self._restore(user, turn):
+                        cut_short = new_conversation = False
             if new_conversation:
                 user.thinking_mode = self.server.thinking_mode
                 user.reasoning_effort = self.server.reasoning_effort
             self.server._apply_options(user, turn.body)
             if cut_short and not self._resume(user, turn):
                 user.reset()
-            if not turn.resumed_from and (
-                cut_short or _continues(turn.body["messages"], user.messages) or not self._resume(user, turn)
-            ):
-                continuing = self.server._sync_messages(user, turn.body["messages"])
-                if continuing:
-                    user.messages.append(turn.message)
-                    turn.ids = self.server._render_ids(user, include_assistant=False)
-                else:
-                    user.messages = user.messages + [turn.message]
-                    user._next_render = 0
-                    turn.ids = self.server._render_ids(user, include_assistant=True)
-            if continuing or not self._share_prefix(user, turn):
-                self._choose_feed(user, turn, continuing)
-            if self.server.prefiller is None:
-                self._remember_prefix(user, turn)
-            self._make_room(len(turn.ids), turn.slot)
-            self._check_capacity(user, turn.ids)
+            with _timed(times, "render"):
+                if not turn.resumed_from and (
+                    cut_short or _continues(turn.body["messages"], user.messages) or not self._resume(user, turn)
+                ):
+                    continuing = self.server._sync_messages(user, turn.body["messages"])
+                    if continuing:
+                        user.messages.append(turn.message)
+                        turn.ids = self.server._render_ids(user, include_assistant=False)
+                    else:
+                        user.messages = user.messages + [turn.message]
+                        user._next_render = 0
+                        turn.ids = self.server._render_ids(user, include_assistant=True)
+            with _timed(times, "prefix"):
+                if continuing or not self._share_prefix(user, turn):
+                    self._choose_feed(user, turn, continuing)
+                if self.server.prefiller is None:
+                    self._remember_prefix(user, turn)
+            with _timed(times, "make_room"):
+                self._make_room(len(turn.ids), turn.slot)
+            with _timed(times, "capacity"):
+                self._check_capacity(user, turn.ids)
         except Exception as e:  # noqa: BLE001 - reported to the client, the server stays up
             if cut_short:
                 self._cut_short.add(turn.slot)
@@ -3404,7 +3450,7 @@ class GenerationServer:
             for i in range(user._next_render, len(user.messages))
             if include_assistant or user.messages[i]["role"] != "assistant"
         )
-        ids = list(engine.tokenizer(rendered, add_special_tokens=False)["input_ids"])
+        ids = _tokenize(engine.tokenizer, rendered)
         if first_turn:
             # The tokenizer does not add BOS (V4.1's add_bos_token is false); encode_messages prepends it.
             ids.insert(0, engine.tokenizer.bos_token_id)

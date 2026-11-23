@@ -138,3 +138,27 @@ def test_rust_engram_matches_python(packed):
         f"per decode step (hash + {len(tables)} gathers, through Python): EngramHostLookup "
         f"{py_seconds / DECODE_STEPS * 1e6:.0f} us, RustEngramLookup {rs_seconds / DECODE_STEPS * 1e6:.0f} us"
     )
+
+
+def test_extend_history_leaves_what_hashing_does():
+    """A prefill commit writes the history without hashing (``extend_history``): it must leave every session exactly
+    as ``hash_session`` would, so the next decode token hashes the same."""
+    from transformers import AutoTokenizer
+
+    snapshot = _snapshot()
+    config = load_config(snapshot)
+    tokenizer = AutoTokenizer.from_pretrained(snapshot)
+    vocab = config.vocab_size
+    generator = torch.Generator().manual_seed(1)
+    ids = torch.randint(0, len(tokenizer), (1, 600), generator=generator)
+    span = [vocab + DELIMITER_ROWS[IMAGE_START], *(vocab + FIRST_IMAGE_ROW + i for i in range(6))]
+    ids[0, 300:308] = torch.tensor(span + [vocab + DELIMITER_ROWS[IMAGE_END]])
+    token = torch.randint(0, len(tokenizer), (1, 1), generator=generator)
+    for cls in (EngramHostLookup, host_rs.RustEngramLookup):
+        lookup = cls(config, snapshot, {}, 1, MAX_SEQ, tokenizer, sessions=SESSIONS)
+        lookup.hash_session(0, ids[:, :256], 0)
+        lookup.hash_session(0, ids[:, 256:], 256)
+        lookup.extend_history(1, ids[:, :256], 0)
+        lookup.extend_history(1, ids[:, 256:], 256)
+        assert torch.equal(lookup.export_history(0, 600), lookup.export_history(1, 600)), cls.__name__
+        assert torch.equal(lookup.hash_session(0, token, 600), lookup.hash_session(1, token, 600)), cls.__name__

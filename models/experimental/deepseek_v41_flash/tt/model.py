@@ -1637,6 +1637,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if not 0 <= pos <= self._session_pos[sid]:
             raise ValueError(f"cannot truncate session {sid} at {self._session_pos[sid]} to {pos}")
         self._wait_replays_dispatched()
+        # The block the new end falls part-way through is written again: one a stored prefix shares
+        # (capture_device_prefix) becomes the session's own copy first.
+        copies = []
+        for ratio, group in self._paged_ratios.items():
+            whole, part = divmod(pos // ratio, group.block_size)
+            if part:
+                with self._paged_lock:
+                    moved = paged.unshare_block(sid, group.layer_type, whole)
+                if moved is not None:
+                    copies.append((group.layer_type, *moved))
+        self._copy_paged_blocks(copies)
         paged.truncate_session(sid, pos)
         self._covered_to.pop(sid, None)
         self._session_pos[sid] = pos
@@ -1827,12 +1838,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if snapshot.engram is not None and self._engram_lookup is not None:
             self._engram_lookup.import_history(slot, snapshot.engram)
 
-    def evict_session_to_device_park(self, sid: int) -> DeviceParkedSnapshot:
-        """Evict ``sid`` from its slot and page table without freeing its KV cache blocks from device RAM."""
-        paged = self._require_paged()
-        if sid not in self._slot_of:
-            raise KeyError(f"no such session {sid}")
-        self._wait_replays_dispatched()
+    def _read_slot_state(self, sid: int):
+        """``sid``'s slot-local state as host tensors: ``(rings, windows, engram, dspark_rings)`` of a snapshot at
+        its position (the rows a session keeps outside the paged pools)."""
         pos, slot, w = self._session_pos[sid], self._slot_of[sid], self.sliding_window
 
         def slot_rows(t: ttnn.Tensor, start: int, n: int) -> torch.Tensor:
@@ -1858,23 +1866,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if self.dspark is not None:
             r_rows = self.dspark.ring_rows
             dspark_rings = [slot_rows(stage.ring, slot * r_rows, r_rows) for stage in self.dspark.stages]
-        rows = paged.detach_session_rows(sid)
-        self._covered_to.pop(sid, None)
-        self._session_pos[sid] = 0
-        self._spec_dirty.discard(slot)
-        self._write_page_tables()
-        return DeviceParkedSnapshot(pos, rings, windows, rows, engram, dspark_rings)
+        return rings, windows, engram, dspark_rings
 
-    def reload_session_from_device_park(self, sid: int, snapshot: DeviceParkedSnapshot) -> None:
-        """Reload a :class:`DeviceParkedSnapshot` into ``sid`` (which must be at position 0)."""
-        paged = self._require_paged()
-        if sid not in self._slot_of:
-            raise KeyError(f"no such session {sid}")
-        if self._session_pos[sid]:
-            raise ValueError(f"session {sid} is at {self._session_pos[sid]}: reload into a session at position 0")
-        self._wait_replays_dispatched()
-        paged.attach_session_rows(sid, snapshot.rows)
-        self._write_page_tables()
+    def _write_slot_state(self, sid: int, snapshot: DeviceParkedSnapshot) -> None:
+        """Write ``snapshot``'s slot-local state into ``sid``'s slot and move the session to the snapshot's
+        position; its page rows must already map the snapshot's blocks."""
         slot, w = self._slot_of[sid], self.sliding_window
         for sm in self.submeshes_io:
             device = sm["device"]
@@ -1927,6 +1923,112 @@ class DeepSeekV41Model(DeepSeekV4Model):
             ttnn.synchronize_device(d_dev)
         if snapshot.engram is not None and self._engram_lookup is not None:
             self._engram_lookup.import_history(slot, snapshot.engram)
+
+    def _copy_paged_blocks(self, copies: list[tuple[str, int, int]]) -> None:
+        """Copy physical block ``a`` into block ``b`` of every pool of ``group`` (compressed entries and index
+        keys, on every stage holding the group), for each ``(group, a, b)`` of ``copies``."""
+        if not copies:
+            return
+        block = CSA_INDEX_BLOCK_SIZE
+        layer_types = {ratio: g.layer_type for ratio, g in self._paged_ratios.items()}
+        for sm in self.submeshes_io:
+            copied = set()
+            for li in sm["layers"]:
+                scache = sm["scaches"][li]
+                src = self._kv_source_of.get(li)
+                if src is None or src in copied or scache.comp_kv is None:
+                    continue
+                copied.add(src)
+                group = layer_types[int(self.config.compress_ratios[src])]
+                device = scache.idx_key_cache.device()
+                dh, key_dim = scache.comp_kv.shape[3], scache.idx_key_cache.shape[3]
+                for name, a, b in copies:
+                    if name != group:
+                        continue
+                    kv = ttnn.slice(scache.comp_kv, [a, 0, 0, 0], [a + 1, 1, block, dh])
+                    ttnn.experimental.slice_write(kv, scache.comp_kv, [b, 0, 0, 0], [b + 1, 1, block, dh], [1, 1, 1, 1])
+                    ttnn.deallocate(kv)
+                    keys = ttnn.slice(scache.idx_key_cache, [a, 0, 0, 0], [a + 1, 1, block, key_dim])
+                    table = ttnn.from_torch(
+                        torch.tensor([[b] + [0] * 7], dtype=torch.int32),
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None,
+                    )
+                    ttnn.experimental.paged_fill_cache(scache.idx_key_cache, keys, table, batch_idx=0)
+                    ttnn.deallocate(table)
+                    ttnn.deallocate(keys)
+
+    def evict_session_to_device_park(self, sid: int) -> DeviceParkedSnapshot:
+        """Evict ``sid`` from its slot and page table without freeing its KV cache blocks from device RAM."""
+        paged = self._require_paged()
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        self._wait_replays_dispatched()
+        pos = self._session_pos[sid]
+        rings, windows, engram, dspark_rings = self._read_slot_state(sid)
+        rows = paged.detach_session_rows(sid)
+        self._covered_to.pop(sid, None)
+        self._session_pos[sid] = 0
+        self._spec_dirty.discard(self._slot_of[sid])
+        self._write_page_tables()
+        return DeviceParkedSnapshot(pos, rings, windows, rows, engram, dspark_rings)
+
+    def reload_session_from_device_park(self, sid: int, snapshot: DeviceParkedSnapshot) -> None:
+        """Reload a :class:`DeviceParkedSnapshot` into ``sid`` (which must be at position 0)."""
+        paged = self._require_paged()
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        if self._session_pos[sid]:
+            raise ValueError(f"session {sid} is at {self._session_pos[sid]}: reload into a session at position 0")
+        self._wait_replays_dispatched()
+        paged.attach_session_rows(sid, snapshot.rows)
+        self._write_page_tables()
+        self._write_slot_state(sid, snapshot)
+
+    def capture_device_prefix(self, sid: int) -> DeviceParkedSnapshot:
+        """Session ``sid``'s state at its position as a :class:`DeviceParkedSnapshot` that stays in device RAM: it
+        shares the session's whole KV blocks and holds a copy of the block its entries end part-way through, so
+        the session goes on (or is reset) while the snapshot keeps the prefix. Only the slot-local state (rings,
+        windows, Engram history) is read to the host. :meth:`import_device_prefix` starts a session from it,
+        :meth:`export_device_park` moves it to host RAM, :meth:`free_device_park` drops it. Raises
+        :class:`PagedCacheFull` when the pools cannot spare the copied blocks. Call it with no step in flight."""
+        paged = self._require_paged()
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        self._wait_replays_dispatched()
+        pos = self._session_pos[sid]
+        with self._paged_lock:
+            rows, copies = paged.share_prefix_rows(sid, pos)
+        try:
+            self._copy_paged_blocks(copies)
+            rings, windows, engram, dspark_rings = self._read_slot_state(sid)
+        except BaseException:
+            paged.free_detached_rows(rows)
+            raise
+        return DeviceParkedSnapshot(pos, rings, windows, rows, engram, dspark_rings)
+
+    def import_device_prefix(self, sid: int, snapshot: DeviceParkedSnapshot) -> None:
+        """Start session ``sid`` (at position 0) from a :meth:`capture_device_prefix` snapshot, which stays valid:
+        ``sid`` shares its whole blocks and appends to a copy of its part-filled one. Raises
+        :class:`PagedCacheFull` when the pools cannot spare that copy. Call it with no step in flight."""
+        paged = self._require_paged()
+        if sid not in self._slot_of:
+            raise KeyError(f"no such session {sid}")
+        if self._session_pos[sid]:
+            raise ValueError(f"session {sid} is at {self._session_pos[sid]}: import into a session at position 0")
+        if snapshot.pos >= self._decode_max_seq:
+            raise PagedCacheFull(f"a {snapshot.pos}-token prefix is past max_seq {self._decode_max_seq}")
+        self._wait_replays_dispatched()
+        with self._cq_lock:
+            with self._paged_lock:
+                copies = paged.attach_prefix_rows(sid, snapshot.rows, snapshot.pos)
+            self._covered_to.pop(sid, None)
+            self._write_page_tables()
+        self._copy_paged_blocks(copies)
+        self._write_slot_state(sid, snapshot)
 
     def free_device_park(self, snapshot: DeviceParkedSnapshot) -> None:
         """Free the KV cache blocks held by a :class:`DeviceParkedSnapshot`."""
@@ -3127,11 +3229,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
         if ids is not None and self._engram_lookup is not None:
-            id_list = list(ids)
-            engram_chunk = 16384
-            for offset in range(start, total, engram_chunk):
-                piece = id_list[offset : offset + engram_chunk]
-                self._engram_lookup.hash_session(slot, torch.tensor([piece], dtype=torch.long), offset)
+            self._engram_lookup.extend_history(slot, torch.tensor([list(ids)[start:total]], dtype=torch.long), start)
         note("host prefill state committed")
         return total
 
@@ -3275,12 +3373,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
         session_id: int,
         ids: Optional[Sequence[int]] = None,
         progress: Optional[Callable[[str], None]] = None,
+        times: Optional[dict] = None,
     ) -> int:
         """Complete a commit whose pages a remote prefill server wrote (:meth:`remote_commit_targets`), once its
         writes have landed: zero the rings it did not write, move the session to the prefilled length, fill its
         slot of ``dense_kv`` and (``ids``: the prompt's ids) extend the Engram history, leaving the session as
-        :meth:`commit_host_prefill_state` would. Returns the prefilled length."""
+        :meth:`commit_host_prefill_state` would. Returns the prefilled length. ``times`` gets the seconds of
+        each of those steps (``rings``, ``dense``, ``sync``, ``engram``)."""
         note = progress or (lambda message: None)
+        times = {} if times is None else times
+        t0 = time.perf_counter()
         if session_id not in self._remote_commits:
             raise KeyError(f"session {session_id} has no remote commit in flight")
         start, total, ring_layers = self._remote_commits.pop(session_id)
@@ -3309,17 +3411,18 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 ttnn.fill_cache(kv, zero_rings[dh], 0, update_idx=slot * w)
             for zeros in zero_rings.values():
                 ttnn.deallocate(zeros)
+        t1 = time.perf_counter()
 
         self._session_pos[session_id] = total
         self._sync_dense_entries(session_id)
+        t2 = time.perf_counter()
         for sm in self.submeshes_io:
             ttnn.synchronize_device(sm["device"])
+        t3 = time.perf_counter()
         if ids is not None and self._engram_lookup is not None:
-            id_list = list(ids)
-            engram_chunk = 16384
-            for offset in range(start, total, engram_chunk):
-                piece = id_list[offset : offset + engram_chunk]
-                self._engram_lookup.hash_session(slot, torch.tensor([piece], dtype=torch.long), offset)
+            self._engram_lookup.extend_history(slot, torch.tensor([list(ids)[start:total]], dtype=torch.long), start)
+        t4 = time.perf_counter()
+        times.update({"rings": t1 - t0, "dense": t2 - t1, "sync": t3 - t2, "engram": t4 - t3})
         note("remote prefill state committed")
         return total
 

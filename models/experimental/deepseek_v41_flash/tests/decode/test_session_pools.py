@@ -149,6 +149,65 @@ def test_truncate_keeps_shared_blocks_whole(expect_error) -> None:
         )
 
 
+def test_device_prefix_shares_whole_blocks_and_copies_the_part_filled_one() -> None:
+    groups = _groups()
+    paged = PagedKVManager(groups, plan_pool_blocks(groups, 2, 2 * MAX_SEQ))
+    free = {name: pool.free_blocks for name, pool in paged.pools.items()}
+    owner, user = paged.open_session(), paged.open_session()
+    pos = 3 * BLOCK + 10  # ratio 1: 3 whole blocks + 10 entries; ratio 2: 1 whole block + 37 entries
+    paged.ensure_capacity(owner, pos - 1)
+    owner_rows = {name: paged.page_row(owner, name)[0].tolist() for name in groups}
+    rows, copies = paged.share_prefix_rows(owner, pos)
+    for name, g in groups.items():
+        whole = pos // g.compress_rate // BLOCK
+        assert rows[name][:whole] == owner_rows[name][:whole]
+        assert paged.block_refs(owner, name)[:whole] == [2] * whole
+        # The owner keeps appending to its own part-filled block; the prefix has a copy.
+        assert paged.block_refs(owner, name)[whole] == 1
+        assert (name, owner_rows[name][whole], rows[name][whole]) in copies
+        assert all(b == ZERO_BLOCK for b in rows[name][whole + 1 :])
+    paged.reset_session(owner)
+    copies = paged.attach_prefix_rows(user, rows, pos)
+    for name, g in groups.items():
+        whole = pos // g.compress_rate // BLOCK
+        row = paged.page_row(user, name)[0].tolist()
+        assert row[:whole] == rows[name][:whole]
+        assert (name, rows[name][whole], row[whole]) in copies and row[whole] != rows[name][whole]
+    paged.ensure_capacity(user, pos + 500)
+    paged.free_detached_rows(rows)
+    paged.reset_session(user)
+    assert {name: pool.free_blocks for name, pool in paged.pools.items()} == free
+
+
+def test_device_prefix_changes_nothing_when_the_pools_are_full(expect_error) -> None:
+    groups = _groups()
+    paged = PagedKVManager(groups, {name: g.logical_blocks + 1 for name, g in groups.items()})
+    owner = paged.open_session()
+    paged.ensure_capacity(owner, MAX_SEQ - 1)
+    full = {name: paged.block_refs(owner, name) for name in groups}
+    with expect_error(PagedCacheFull, "need 1 blocks"):
+        paged.share_prefix_rows(owner, MAX_SEQ - BLOCK - 2)
+    assert {name: paged.block_refs(owner, name) for name in groups} == full
+
+
+def test_unshare_block_gives_the_session_its_own_copy() -> None:
+    groups = _groups()
+    paged = PagedKVManager(groups, plan_pool_blocks(groups, 1, MAX_SEQ))
+    owner = paged.open_session()
+    paged.ensure_capacity(owner, 4 * BLOCK - 1)
+    rows, _ = paged.share_prefix_rows(owner, 4 * BLOCK)
+    old = paged.page_row(owner, "ratio 1")[0].tolist()[1]
+    moved = paged.unshare_block(owner, "ratio 1", 1)
+    assert moved is not None and moved[0] == old
+    assert paged.page_row(owner, "ratio 1")[0].tolist()[1] == moved[1]
+    assert paged.pools["ratio 1"].refs(old) == 1 and paged.pools["ratio 1"].refs(moved[1]) == 1
+    assert paged.unshare_block(owner, "ratio 1", 1) is None
+    # Truncating part-way through a block (ratio 1: block 1; ratio 2: block 0) needs it to be the session's own.
+    assert paged.unshare_block(owner, "ratio 2", 0) is not None
+    paged.truncate_session(owner, BLOCK + 3)
+    paged.free_detached_rows(rows)
+
+
 @pytest.mark.parametrize("slot, pos", [(0, 5), (3, 1000)])
 def test_packet_names_the_slot(slot, pos) -> None:
     model = object.__new__(DeepSeekV41Model)

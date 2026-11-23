@@ -217,7 +217,7 @@ def _fake_engine(num_layers: int = 4, dspark: bool = False, max_seq: int = 2048)
             self.in_flight[session_id] = (start, total, list(ring_layers))
             return {"session": session_id, "seq_len": total, "start": start}
 
-        def finish_remote_commit(self, session_id: int, ids=None) -> int:
+        def finish_remote_commit(self, session_id: int, ids=None, times=None) -> int:
             start, total, _ = self.in_flight.pop(session_id)
             self.finished.append((session_id, start, list(ids) if ids is not None else None))
             return total

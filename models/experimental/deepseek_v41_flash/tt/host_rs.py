@@ -137,6 +137,13 @@ class RustEngramLookup(EngramHostLookup):
         history = history.contiguous()
         self.rust.import_history_from(slot, history.data_ptr(), history.shape[1])
 
+    def extend_history(self, slot: int, input_ids: torch.Tensor, start_pos: int) -> None:
+        # The Rust history is written from position 0 only, so the part before start_pos goes back in with it.
+        compressed = self._compressed(input_ids)
+        if start_pos:
+            compressed = torch.cat([self.export_history(slot, start_pos), compressed], dim=1)
+        self.import_history(slot, compressed)
+
     def _hashes(self, slot: int, input_ids: torch.Tensor, start_pos: int) -> torch.Tensor:
         b, length = input_ids.shape
         flat = self.rust.hash(slot, input_ids.reshape(-1).tolist(), int(start_pos))

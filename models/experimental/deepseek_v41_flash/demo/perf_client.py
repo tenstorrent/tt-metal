@@ -44,6 +44,9 @@ _CALIBRATION_WORDS = (256, 1280)
 _CONTINUE_PROMPT = "Continue."
 # Room in the context for the prefill's one-token reply and the decode phase's follow-up turn.
 _CONTINUE_MARGIN = 64
+# Waits between retries of a 429 (no KV slot free), doubling from the first to the most.
+_RETRY_FIRST_WAIT = 1.0
+_RETRY_MAX_WAIT = 30.0
 
 
 @dataclass
@@ -55,6 +58,7 @@ class Result:
     t_start: float
     t_first: float
     t_end: float
+    retries: int = 0
 
     @property
     def ttft(self) -> float:
@@ -111,8 +115,32 @@ def _delete_session(url: str, user: str) -> None:
         print(f"  warning: could not delete session {user}: {e}")
 
 
-def _query(url: str, model: str, user: str, messages: list[dict], max_tokens: int, timeout: float) -> Result:
-    """One streaming chat completion; TTFT is to the first non-empty delta, token counts are the server's usage."""
+def _query(
+    url: str, model: str, user: str, messages: list[dict], max_tokens: int, timeout: float, retry_for: float
+) -> Result:
+    """One streaming chat completion; TTFT is to the first non-empty delta, token counts are the server's usage.
+
+    A 429 (no KV slot free for the request) is retried, waiting longer each time, for up to ``retry_for`` seconds;
+    the result times the attempt that went through and counts the ones before it."""
+    deadline = time.perf_counter() + retry_for
+    wait = _RETRY_FIRST_WAIT
+    retries = 0
+    while True:
+        try:
+            result = _query_once(url, model, user, messages, max_tokens, timeout)
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or time.perf_counter() + wait > deadline:
+                raise
+            e.close()
+            time.sleep(wait)
+            wait = min(2 * wait, _RETRY_MAX_WAIT)
+            retries += 1
+            continue
+        result.retries = retries
+        return result
+
+
+def _query_once(url: str, model: str, user: str, messages: list[dict], max_tokens: int, timeout: float) -> Result:
     payload = json.dumps(
         {
             "model": model,
@@ -164,14 +192,16 @@ def _query(url: str, model: str, user: str, messages: list[dict], max_tokens: in
     )
 
 
-def _calibrate(url: str, model: str, run_id: str, rng: random.Random, timeout: float) -> tuple[float, float]:
+def _calibrate(
+    url: str, model: str, run_id: str, rng: random.Random, timeout: float, retry_for: float
+) -> tuple[float, float]:
     """Returns (tokens per word, constant token overhead) of a prompt built by :func:`_make_prompt`."""
     counts = []
     for i, n in enumerate(_CALIBRATION_WORDS):
         user = f"perf-{run_id}-calib{i}"
         try:
             messages = [{"role": "user", "content": _make_prompt(n, rng)}]
-            counts.append(_query(url, model, user, messages, 1, timeout).prompt_tokens)
+            counts.append(_query(url, model, user, messages, 1, timeout, retry_for).prompt_tokens)
         finally:
             _delete_session(url, user)
     (n1, n2), (p1, p2) = _CALIBRATION_WORDS, counts
@@ -195,7 +225,7 @@ def _run_length(
         prefills = []
         for i, user in enumerate(users):
             try:
-                prefills.append(_query(args.url, args.model, user, conversations[i], 1, args.timeout))
+                prefills.append(_query(args.url, args.model, user, conversations[i], 1, args.timeout, args.retry_for))
             except Exception as e:  # noqa: BLE001 - reraised with the server's error body
                 raise RuntimeError(f"prefill {_error_text(i, e)}") from e
 
@@ -209,7 +239,15 @@ def _run_length(
         def worker(i: int) -> None:
             try:
                 start.wait()
-                decodes[i] = _query(args.url, args.model, users[i], conversations[i], args.decode_tokens, args.timeout)
+                decodes[i] = _query(
+                    args.url,
+                    args.model,
+                    users[i],
+                    conversations[i],
+                    args.decode_tokens,
+                    args.timeout,
+                    args.retry_for,
+                )
             except BaseException as e:  # noqa: BLE001 - reported per user below
                 errors[i] = e
 
@@ -242,6 +280,12 @@ def main() -> None:
     )
     p.add_argument("--timeout", type=float, default=7200.0, help="Socket timeout per request (s)")
     p.add_argument("--seed", type=int, default=None, help="Seed for the prompts' random heads")
+    p.add_argument(
+        "--retry-for",
+        type=float,
+        default=600.0,
+        help="Seconds to keep retrying a request the server turns away with a 429 (no KV slot free); 0: never",
+    )
     args = p.parse_args()
     args.url = args.url.rstrip("/")
 
@@ -256,7 +300,7 @@ def main() -> None:
 
     context = _context_window(args.url, args.model)
     print(f"server {args.url}, context window {context}, {args.users} user(s), {args.decode_tokens} decode tokens")
-    slope, overhead = _calibrate(args.url, args.model, run_id, rng, args.timeout)
+    slope, overhead = _calibrate(args.url, args.model, run_id, rng, args.timeout, args.retry_for)
     print(f"calibration: {slope:.3f} tokens/word, {overhead:.1f} tokens of template overhead\n")
 
     header = (
@@ -299,6 +343,12 @@ def main() -> None:
             print(
                 f"         warning: the decode phase missed the cache (up to {max(reprefilled)} prompt tokens "
                 "re-prefilled per user); users did not start decoding together"
+            )
+        retried = [i for i, r in enumerate(decodes) if r.retries]
+        if retried:
+            print(
+                f"         warning: decode user(s) {retried} waited for a KV slot (429, retried); they decoded after "
+                "the others, so total_decode_t/s is lower than with every user decoding together"
             )
         if any(r.prompt_tokens != target for r in prefills):
             print(f"         note: target was {target} prompt tokens")
