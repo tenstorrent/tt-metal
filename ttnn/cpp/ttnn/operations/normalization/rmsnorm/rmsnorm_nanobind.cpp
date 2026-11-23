@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 #include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -54,6 +55,7 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             dtype (ttnn.DataType, optional): output data type. Defaults to `None` (the input's).
             output_tensor (ttnn.Tensor, optional): preallocated interleaved TILE tensor with the input's rows, at least as wide. The result is written into its tile columns starting at :attr:`output_col_tiles`; other columns are not touched. Its dtype is the output dtype. Defaults to `None`.
             output_col_tiles (int, optional): first tile column of the result in :attr:`output_tensor`. Defaults to `0`.
+            extra_output_tensors (List[ttnn.Tensor], optional): up to two more tensors with :attr:`output_tensor`'s spec; the result is written to the same columns of each. Defaults to `[]`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -122,7 +124,8 @@ void bind_normalization_rms_norm(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
-        nb::arg("output_col_tiles") = 0);
+        nb::arg("output_col_tiles") = 0,
+        nb::arg("extra_output_tensors") = std::vector<ttnn::Tensor>{});
 }
 
 }  // namespace ttnn::operations::normalization::detail

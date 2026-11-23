@@ -106,6 +106,7 @@ Tensor layer_norm(
     const std::optional<const Tensor>& recip_tensor = std::nullopt,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt,
-    uint32_t output_col_tiles = 0);
+    uint32_t output_col_tiles = 0,
+    const std::vector<Tensor>& extra_output_tensors = {});
 
 }  // namespace ttnn::prim

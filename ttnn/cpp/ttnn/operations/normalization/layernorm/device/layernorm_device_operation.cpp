@@ -82,8 +82,15 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !operation_attributes.dtype.has_value() || operation_attributes.dtype.value() == o.dtype(),
             "LayerNorm dtype must match output_tensor's dtype");
+        TT_FATAL(tensor_args.extra_output_tensors.size() <= 2, "LayerNorm takes at most 2 extra_output_tensors");
+        for (const auto& x : tensor_args.extra_output_tensors) {
+            TT_FATAL(
+                x.tensor_spec() == o.tensor_spec() && x.device() == o.device(),
+                "LayerNorm extra_output_tensors must have output_tensor's spec and device");
+        }
     } else {
         TT_FATAL(operation_attributes.output_col_tiles == 0, "LayerNorm output_col_tiles needs output_tensor");
+        TT_FATAL(tensor_args.extra_output_tensors.empty(), "LayerNorm extra_output_tensors needs output_tensor");
     }
     TT_FATAL(
         a.layout() == Layout::TILE || (a.layout() == Layout::ROW_MAJOR && !a.is_sharded()),
@@ -634,7 +641,8 @@ Tensor layer_norm(
     const std::optional<const Tensor>& recip_tensor,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     const std::optional<Tensor>& output_tensor,
-    uint32_t output_col_tiles) {
+    uint32_t output_col_tiles,
+    const std::vector<Tensor>& extra_output_tensors) {
     auto operation_attributes = LayerNormParams{
         .norm_type = norm_type,
         .distributed_norm_stage = distributed_norm_stage,
@@ -653,6 +661,7 @@ Tensor layer_norm(
         .stats = stats,
         .recip_tensor = recip_tensor,
         .output_tensor = output_tensor,
+        .extra_output_tensors = extra_output_tensors,
     };
 
     return ttnn::device_operation::launch<LayerNormDeviceOperation>(operation_attributes, tensor_args);

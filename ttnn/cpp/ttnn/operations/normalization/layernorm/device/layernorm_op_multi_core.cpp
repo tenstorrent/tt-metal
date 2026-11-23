@@ -122,6 +122,9 @@ const m2::TensorParamName RESIDUAL{"residual"};
 const m2::TensorParamName GAMMA_T{"weight"};
 const m2::TensorParamName BETA_T{"bias"};
 const m2::TensorParamName OUTPUT{"output"};
+// Extra destinations of the tile writer (LayerNormInputs::extra_output_tensors).
+const m2::TensorParamName OUTPUT_X1{"output_x1"};
+const m2::TensorParamName OUTPUT_X2{"output_x2"};
 // Backing store for the RECIPROCALS buffer. No kernel binds an accessor to it: the Welford
 // compute kernels reach the LUT through the borrowed buffer's base pointer, so the tensor exists
 // in the spec purely to resolve that buffer's address at each enqueue.
@@ -834,6 +837,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     ////////////////////////////////////////////////////////////////////////////
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = INPUT, .spec = a.tensor_spec()});
     spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
+    const auto& extra_outputs = tensor_args.extra_output_tensors;
+    for (std::size_t i = 0; i < extra_outputs.size(); ++i) {
+        spec.tensor_parameters.push_back(
+            m2::TensorParameter{.unique_id = i == 0 ? OUTPUT_X1 : OUTPUT_X2, .spec = extra_outputs[i].tensor_spec()});
+    }
     if (b) {
         spec.tensor_parameters.push_back(m2::TensorParameter{.unique_id = RESIDUAL, .spec = b.value().tensor_spec()});
     }
@@ -1009,6 +1017,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         bind_dfb(writer, OUT, "out", m2::DFBEndpointType::CONSUMER);
     }
     bind_tensor(writer, OUTPUT, "dst");
+    if (!extra_outputs.empty()) {
+        TT_FATAL(!input_is_row_major, "LayerNorm extra_output_tensors needs a TILE input");
+        writer.compiler_options.defines.emplace("EXTRA_DSTS", std::to_string(extra_outputs.size()));
+        bind_tensor(writer, OUTPUT_X1, "dst_x1");
+        if (extra_outputs.size() > 1) {
+            bind_tensor(writer, OUTPUT_X2, "dst_x2");
+        }
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compute kernel
@@ -1379,6 +1395,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     run_args.tensor_args.emplace(INPUT, a.mesh_tensor());
     run_args.tensor_args.emplace(OUTPUT, output.mesh_tensor());
+    for (std::size_t i = 0; i < extra_outputs.size(); ++i) {
+        run_args.tensor_args.emplace(i == 0 ? OUTPUT_X1 : OUTPUT_X2, extra_outputs[i].mesh_tensor());
+    }
     if (b) {
         run_args.tensor_args.emplace(RESIDUAL, b.value().mesh_tensor());
     }

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -37,6 +38,8 @@ struct LayerNormInputs {
     // Preallocated interleaved TILE output (same rows as the input, at least as wide): the result is written
     // into its tile columns [output_col_tiles, output_col_tiles + Wt); the other columns are left as they are.
     std::optional<Tensor> output_tensor;
+    // Up to two more tensors with output_tensor's spec: the writer stores every result tile to each of them too.
+    std::vector<Tensor> extra_output_tensors;
 };
 
 }  // namespace ttnn::prim

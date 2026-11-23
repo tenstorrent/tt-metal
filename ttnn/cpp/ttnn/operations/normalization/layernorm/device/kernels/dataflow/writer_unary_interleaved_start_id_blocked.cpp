@@ -25,6 +25,13 @@ void kernel_main() {
     const uint32_t tile_bytes = dfb_out0.get_tile_size();
 
     const auto s = TensorAccessor(tensor::dst);
+#ifdef EXTRA_DSTS
+    // more destinations with dst's layout: every tile goes to each of them too
+    const auto s1 = TensorAccessor(tensor::dst_x1);
+#if EXTRA_DSTS > 1
+    const auto s2 = TensorAccessor(tensor::dst_x2);
+#endif
+#endif
 
     uint32_t tile_id = tile_offset;
     for (uint32_t h = 0; h < num_tile_rows; h++) {
@@ -33,6 +40,12 @@ void kernel_main() {
             uint32_t idx = 0;
             for (auto i : block.local()) {
                 noc.async_write(dfb_out0, s, tile_bytes, {.offset_bytes = idx * tile_bytes}, {.page_id = tile_id});
+#ifdef EXTRA_DSTS
+                noc.async_write(dfb_out0, s1, tile_bytes, {.offset_bytes = idx * tile_bytes}, {.page_id = tile_id});
+#if EXTRA_DSTS > 1
+                noc.async_write(dfb_out0, s2, tile_bytes, {.offset_bytes = idx * tile_bytes}, {.page_id = tile_id});
+#endif
+#endif
                 tile_id++;
                 idx++;
             }

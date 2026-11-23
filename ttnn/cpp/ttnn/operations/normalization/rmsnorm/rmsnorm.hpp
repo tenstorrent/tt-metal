@@ -9,6 +9,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
 
+#include <vector>
+
 namespace ttnn {
 
 DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch);
@@ -26,6 +28,8 @@ Tensor rms_norm(
     // Preallocated interleaved TILE output: the result goes into its tile columns
     // [output_col_tiles, output_col_tiles + input width in tiles); its dtype is the output dtype.
     const std::optional<Tensor>& output_tensor = std::nullopt,
-    uint32_t output_col_tiles = 0);
+    uint32_t output_col_tiles = 0,
+    // Up to two more tensors like output_tensor: the same result tiles are stored to each of them too.
+    const std::vector<Tensor>& extra_output_tensors = {});
 
 }  // namespace ttnn
