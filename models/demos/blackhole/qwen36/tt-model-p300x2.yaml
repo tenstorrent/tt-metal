@@ -151,6 +151,9 @@ serve_profiles:
       RESIDENT_HEAD_GROUPS: "4"
       RESIDENT_MAX_TOKENS_ALL_USERS: "1376000"
       RESIDENT_PREFILL_CHUNKS: "256,512,1024"
+      # prefix caching in host memory, as batch (a prompt's state at its last 1,024-token boundary; for the speculating
+      # geometry also the drafter's context taps of the window before it, ~108 MB an entry)
+      RESIDENT_PREFIX_CACHE_GB: "32"
     additional_config:
       tt:
         sample_on_device_mode: decode_only   # the plain geometry's hub sampling (and a verify's sampled column 0)

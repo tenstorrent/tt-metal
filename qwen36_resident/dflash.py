@@ -272,43 +272,59 @@ class ResidentDFlash:
         self._last_row = k - 1
         return g[k - 1]
 
-    def _fill_context(self, n_tokens, host=False, phys=0, offset=0):
+    def _context_taps(self, s0, n_tokens):
+        """the last prefill's taps of positions s0 .. n_tokens - 1 (s0 a multiple of 64; at most fill_rows positions),
+        as the drafter reads them: per tap [1, 1, fill_rows, H / n] dim-fractured (each tap's rows masked to the chip
+        that holds them, one reduce-scatter)"""
+        rows = self.fill_rows
+        assert s0 % 64 == 0 and 0 < n_tokens - s0 <= rows, (s0, n_tokens, rows)
+        masked = []
+        for x, m in zip(self.pp.tap_rows(s0, rows), self.tap_masks):
+            masked.append(ttnn.mul(x, m))
+            ttnn.deallocate(x)
+        cat = ttnn.concat(masked, dim=2)  # [1, 1, taps x rows, H], each chip its taps' rows (others zero)
+        for x in masked:
+            ttnn.deallocate(x)
+        dr = self.drafter
+        fr = tt_all_reduce(  # (on a 1-D mesh: the reduce-scatter alone, [1, 1, taps x rows, H / n]; frees cat)
+            cat,
+            self.mesh,
+            dr.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=dr.topo,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        dev = [
+            ttnn.slice(fr, (0, 0, t * rows, 0), (1, 1, (t + 1) * rows, fr.shape[-1]))
+            for t in range(len(self.tap_masks))
+        ]
+        ttnn.deallocate(fr)
+        return dev
+
+    def _fill_context(self, n_tokens, host=False, phys=0, offset=0, s0=None, dev=None):
         """the drafter's context (its window) from the last prefill's taps of positions < n_tokens, one fill of
-        fill_rows rows from s0 = the window's first block. On device: each tap's rows masked to the chip that holds
-        them, one reduce-scatter -> the taps dim-fractured as the drafter reads them. host: through the host
-        (read_taps; the reference)"""
-        s0 = max(0, n_tokens - self.window) // 64 * 64
+        fill_rows rows from s0 = the window's first block (or the s0 given: a part of the window). On device: each tap's
+        rows masked to the chip that holds them, one reduce-scatter -> the taps dim-fractured as the drafter reads
+        them. host: through the host (read_taps; the reference). dev: such taps given (a prefix-cache entry's)"""
+        s0 = max(0, n_tokens - self.window) // 64 * 64 if s0 is None else s0
         rows, nt = self.fill_rows, len(self.tap_masks)
-        if host:
+        own = dev is None
+        if dev is not None:
+            pass
+        elif host:
             taps, _ = self.pp.read_taps(n_tokens, self.window)
             full = torch.zeros(nt, rows, H)
             full[:, : taps.shape[1]] = taps.float()
             dev = tap_buffers(self.mesh, nt, rows, full)
         else:
-            masked = []
-            for x, m in zip(self.pp.tap_rows(s0, rows), self.tap_masks):
-                masked.append(ttnn.mul(x, m))
-                ttnn.deallocate(x)
-            cat = ttnn.concat(masked, dim=2)  # [1, 1, taps x rows, H], each chip its taps' rows (others zero)
-            for x in masked:
-                ttnn.deallocate(x)
-            dr = self.drafter
-            fr = tt_all_reduce(  # (on a 1-D mesh: the reduce-scatter alone, [1, 1, taps x rows, H / n]; frees cat)
-                cat,
-                self.mesh,
-                dr.tt_ccl,
-                cluster_axis=0,
-                dim=3,
-                topology=dr.topo,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            dev = [ttnn.slice(fr, (0, 0, t * rows, 0), (1, 1, (t + 1) * rows, fr.shape[-1])) for t in range(nt)]
-            ttnn.deallocate(fr)
+            dev = self._context_taps(s0, n_tokens)
         # (phys: the drafter slot, multi-user; offset: the last prefill's position 0 is the user's position offset, a
         # re-prefill of a sequence's tail as a fresh prompt: DB3 phase 2's drafter refill)
         self.drafter.fill_context(dev, s0 + offset, phys=phys, valid_len=n_tokens - s0)
-        for t in dev:
-            ttnn.deallocate(t)
+        if own:
+            for t in dev:
+                ttnn.deallocate(t)
         if FILL_SYNC:
             # every chip done with the fill before the verify step is enqueued: a resident step's hubs push their first
             # round into the peers' hub slots (CB 0, mlp_hub.cpp) as soon as they start, so a chip still running the
@@ -585,8 +601,11 @@ class ResidentDFlashRows:
         self.m.capture_trace()
         self.drafter.arm_traces()
 
-    def _fill_context(self, n_tokens, phys=0, offset=0):
-        ResidentDFlash._fill_context(self, n_tokens, phys=phys, offset=offset)
+    def _fill_context(self, n_tokens, phys=0, offset=0, s0=None, dev=None):
+        ResidentDFlash._fill_context(self, n_tokens, phys=phys, offset=offset, s0=s0, dev=dev)
+
+    def _context_taps(self, s0, n_tokens):
+        return ResidentDFlash._context_taps(self, s0, n_tokens)
 
     def _reset_ptrs(self):
         U = self.U
@@ -731,10 +750,12 @@ class SpecRowsSession:
     def start(self, u, ids, table=None):
         return self.start_many([(u, ids, table)])[0]
 
-    def start_many(self, items):
+    def start_many(self, items, prefilled=()):
         """start several users, items = [(u, prompt ids, block table or None)]: each prompt but its last token through
         the PP prefill (handoff into the user's first state slot, its drafter context filled), then ONE verify step of
-        every started user's last prompt token (the other users held). Returns each user's logits there"""
+        every started user's last prompt token (the other users held). Returns each user's logits there. prefilled:
+        users whose state of the prompt but its last token and drafter context are already in place (a prefix-cache
+        restore moved in, DB3), only their last token runs"""
         e, R, U = self.e, self.e.R, self.e.U
         items = [(int(u), [int(t) for t in ids], table) for u, ids, table in items]
         assert len({u for u, _, _ in items}) == len(items), "a user started twice in one call"
@@ -750,7 +771,7 @@ class SpecRowsSession:
         active = [False] * U
         for u, ids, _ in items:
             P = len(ids)
-            if P > 1:
+            if P > 1 and u not in prefilled:
                 e.pp.reset()
                 e.pp.run(torch.as_tensor(ids[: P - 1]))
                 e.pp.handoff(e.m, P - 1, slot=u * R, block_table=e.m.block_tables[u * R])

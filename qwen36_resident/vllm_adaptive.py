@@ -42,15 +42,37 @@ SPEC_K = 3
 SPEC_BACK = int(os.environ.get("RESIDENT_ADAPTIVE_SPEC_BACK", "6"))  # back to SPEC at <= this many live users ...
 PLAIN_HOLD = int(os.environ.get("RESIDENT_ADAPTIVE_PLAIN_HOLD", "32"))  # ... for this many propose calls in a row
 PLAIN_ROWS = 32
+# (log the per-step host / call times every 64 steps)
 TIMING = os.environ.get("RESIDENT_ADAPTIVE_TIMING", "0") == "1"
-ASYNC = (
-    os.environ.get("RESIDENT_ADAPTIVE_ASYNC", "1") == "1"
-)  # (0: synchronous serving, the first served version)  # (log the per-step host / call times every 64 steps)
+# (0: synchronous serving, the first served version)
+ASYNC = os.environ.get("RESIDENT_ADAPTIVE_ASYNC", "1") == "1"
+# a spec-destined prompt of at least this many tokens goes through the host-tier prefix cache (RESIDENT_PREFIX_CACHE_GB):
+# prefilled into its plain row (restore + the rest + boundary snapshots), then moved into the spec build (option-B
+# drafter refill, ~0.2-0.4 s): the next turn of a conversation restores instead of prefilling
+SPEC_CACHE_MIN = int(os.environ.get("RESIDENT_ADAPTIVE_SPEC_CACHE_MIN", "4096"))
 
 
 class _PlainRowsEngine(RowsEngine):
     """the rows adapter's engine over the plain build (the PP prefill's batched pass runs with the drafter's tap writes
-    sent to scratch: plain-geometry prompts need no drafter context)"""
+    sent to scratch: plain-geometry prompts need no drafter context). A prefix-cache entry also keeps the drafter's
+    context taps of the window before its boundary (snapshot_extra), so a hit moving into the spec build fills the
+    drafter from them and the rest's taps instead of re-prefilling the window"""
+
+    spec = None  # (the spec build, ResidentDFlashRows, set by the class)
+
+    def snapshot_extra(self, H, h):
+        import ttnn
+
+        sp = self.spec
+        s0 = max(0, H - sp.window) // 64 * 64
+        if sp is None or h > s0:  # (the window's taps exist only where this prompt's prefill ran)
+            return None
+        dev = sp._context_taps(s0, H)
+        host = [ttnn.from_device(t) for t in dev]
+        for t in dev:
+            ttnn.deallocate(t)
+        nbytes = len(host) * sp.fill_rows * 5120 * 2
+        return {"dft_taps": host, "dft_s0": s0, "dft_n": H, "bytes": nbytes}
 
 
 class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
@@ -143,6 +165,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         self.engine = _PlainRowsEngine(
             self.ae.plain, self.ae.pp, self.ae.emb, self.vocab, d.vocab_chip, PLAIN_ROWS, CHUNK_UNIT, self.mesh
         )
+        self.engine.spec = self.ae.spec
         return []
 
     def warmup_model_prefill(self, *args, **kwargs):
@@ -180,6 +203,26 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             u = free.pop(0)
             self.ae.move_to_spec(r, u, self.tables[r], self.history[r])
             self.spec_of[r], self.last_acc[r] = u, 1
+
+    def _cache_fill(self, h, n):
+        """the drafter fill of a prefix-cache hit at h (prompt run to n): from the entry's stored taps (positions s0 ..
+        h - 1) and the PP ring's (h .. n - 1), or None when the entry has none / the ring covers the window"""
+        snap = getattr(self.engine, "last_snap", None)
+        sp = self.ae.spec
+        if not h or h <= n - sp.window or not snap or "dft_taps" not in snap or snap.get("dft_n") != h:
+            return None
+
+        def fill(u, n_):
+            import ttnn
+
+            dev = [ttnn.to_device(t, self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in snap["dft_taps"]]
+            sp._fill_context(h, phys=u, s0=snap["dft_s0"], dev=dev)  # (positions s0 .. h - 1)
+            for t in dev:
+                ttnn.deallocate(t)
+            if n_ > h:
+                sp._fill_context(n_, phys=u, s0=h)  # (h .. n - 1: this prefill's run, in the ring)
+
+        return fill
 
     @staticmethod
     def _non_speculable(sp, i):
@@ -220,6 +263,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         out = torch.zeros(n, 1, self.vocab)
         if to_spec:
             free, items = self._free_spec(), []
+            pc, cached = getattr(self.engine, "prefix_cache", None), set()
             for j in range(n):
                 T = int(prompt_lens[j])
                 r = self._start_prompt(int(empty_slots[j]))
@@ -230,8 +274,17 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 self.ae._set_spec_table(u, blocks)  # (the engine's table list stays the one source)
                 ids = [int(t) for t in tokens[j, :T]]
                 self.history[r] = list(ids)
+                if pc is not None and T - 1 >= SPEC_CACHE_MIN:
+                    self._write_tables()
+                    self.engine.prefill_whole(ids[:-1], r, blocks, self._pp_chunk(T))
+                    # (the PP ran every position of the drafter's window unless a restored prefix covers part of it:
+                    # then the entry's stored taps + the ring's for the rest, or a refill without them)
+                    h = getattr(self.engine, "last_restored", T)
+                    ring_ok = h <= T - 1 - self.ae.spec.window
+                    self.ae.move_to_spec(r, u, blocks, ids, refill=not ring_ok, fill=self._cache_fill(h, T - 1))
+                    cached.add(u)
                 items.append((u, ids, None))
-            for j, lg in enumerate(self.sess.start_many(items)):
+            for j, lg in enumerate(self.sess.start_many(items, prefilled=cached)):
                 out[j, 0] = lg  # (the runner samples the first token on the host, with the request's parameters)
                 self.live.add(self.slots.res_of[int(empty_slots[j])])
             self._write_tables()

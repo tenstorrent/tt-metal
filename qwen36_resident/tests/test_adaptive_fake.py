@@ -36,9 +36,11 @@ class FakeSpec:
         self.seq, self.pending = [None] * U, [None] * U
         self.started, self.pos = [False] * U, [0] * U
 
-    def start_many(self, items):
+    def start_many(self, items, prefilled=()):
         out = []
         for u, ids, _ in items:
+            if u in prefilled:  # (a prefix-cache restore moved in: its state is the prompt but the last token)
+                assert self.seq[u] == list(ids[:-1]), (u, len(self.seq[u]), len(ids))
             self.seq[u], self.started[u], self.pending[u] = list(ids), True, None
             self.pos[u] = len(ids)
             lg = torch.zeros(V)
