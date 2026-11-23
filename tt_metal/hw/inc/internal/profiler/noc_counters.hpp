@@ -2,18 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-launch capture of the NoC interface (NIU) event counters. The register tables are in tt-llk
-// perf_counters/noc_counters_*.h; this header adds the profiler marker format and emission.
-//
-// Enable with TT_METAL_PROFILE_NOC_COUNTERS=<group mask>. The counters belong to the tile, so one core captures:
-// the BRISC kernel entry on Wormhole and Blackhole Tensix (brisck, so the BRISC firmware region keeps its size), the
-// DM0 firmware on Quasar. The mask is a compile-time constant of the build.
+// Per-launch capture of the NoC interface event counters (tables in tt-llk perf_counters/noc_counters_*.h).
+// The counters belong to the tile, so one core captures: BRISC kernel entry on Wormhole and Blackhole, DM0 on Quasar.
 
 #pragma once
 
-// Ids above the Tensix MMIO counters (9090, 9091) and the RISC-V monitor (9092 to 9096). Each value goes
-// in the plain TS_DATA field so every row reaches profile_log_device.csv. One launch's markers share a timestamp, and
-// the host keeps one marker per (timestamp, core, risc, id), so every pair of counters has an id of its own.
+// One launch's markers share a timestamp and the host keeps one marker per (timestamp, core, risc, id), so each pair
+// of counters has its own id.
 constexpr uint16_t NOC_COUNTERS_HEADER_PROFILER_ID = 9100;     // (noc count << 32) | group mask
 constexpr uint16_t NOC_COUNTERS_PAIR_PROFILER_ID_BASE = 9101;  // base + k: (counter[2k + 1] << 32) | counter[2k]
 constexpr uint16_t NOC_COUNTERS_MAX_PAIRS = 16;
@@ -25,8 +20,7 @@ constexpr uint16_t NOC_COUNTERS_MAX_PAIRS = 16;
 #define NOC_COUNTERS_CORE 1
 #endif
 
-// Included directly by the firmware and kernel entry TUs, like riscv_pmc.hpp. The streaming profiler has no TS_DATA
-// path.
+// The streaming profiler has no TS_DATA path.
 #if defined(PROFILE_NOC_COUNTERS) && defined(PROFILE_KERNEL) && !defined(PROFILE_STREAMING) && \
     defined(NOC_COUNTERS_CORE)
 

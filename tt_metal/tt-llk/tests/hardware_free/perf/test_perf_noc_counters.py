@@ -290,3 +290,26 @@ def test_tracy_decoder_quasar_has_one_noc():
         _launch_rows(1, "QUASAR_DM0", 10, flat, mask=1, nocs=1), "quasar"
     )
     assert len(df) == 1 and df["noc_issued_read_bytes"][0] == 4 * 256
+
+
+def test_pair_layout_matches_the_firmware_header():
+    path = (
+        Path(__file__).resolve().parents[4]
+        / "hw"
+        / "inc"
+        / "internal"
+        / "profiler"
+        / "noc_counters.hpp"
+    )
+    if not path.is_file():
+        pytest.skip("not inside a tt-metal checkout")
+    text = path.read_text()
+    # data[w + 2] is the high payload word, data[w + 3] the low one; each reads the counter of its index.
+    high = re.search(r"data\[w \+ 2\]\s*=\s*m \? read_counter\(j( \+ 1)?\)", text)
+    low = re.search(r"data\[w \+ 3\]\s*=\s*m \? read_counter\(j( \+ 1)?\)", text)
+    assert high and low
+    offsets = {"high": 1 if high.group(1) else 0, "low": 1 if low.group(1) else 0}
+    assert re.search(r"const [\w:]+ j = 2 \* m - 2;", text)
+    launch = noc_counters.unpack_launch(0, {0: (0xBBBB << 32) | 0xAAAA})
+    assert launch.counters[offsets["high"]] == 0xBBBB
+    assert launch.counters[offsets["low"]] == 0xAAAA

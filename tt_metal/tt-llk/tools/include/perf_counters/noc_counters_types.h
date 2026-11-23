@@ -10,10 +10,8 @@
 namespace llk::perf::noc
 {
 
-// The 32-bit event counters of a tile's NoC interface unit (NIU), one set per NoC, shared by every core of the tile.
-// They count events (requests, data words), never stalls, and nothing resets them: a capture is a delta modulo 2^32.
-// Master side counters count what the tile issues, slave side counters what it serves.
-// Names only: the profiler record is positional, the host decodes it through the arch table. Append, never reorder.
+// 32-bit NoC interface event counters, one set per NoC, shared by the tile; never reset, so a capture is a delta
+// modulo 2^32. MST counts what the tile issues, SLV what it serves. Append, never reorder.
 enum class NocCounter : std::uint16_t
 {
     UNDEF = 0,

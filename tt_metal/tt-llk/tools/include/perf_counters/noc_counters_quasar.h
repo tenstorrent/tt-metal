@@ -18,7 +18,7 @@ namespace llk::perf::noc
 inline constexpr std::uint32_t NIU_STATUS_BASE = 0x02000200; // NoC register space base plus the status file offset 0x200
 inline constexpr std::uint32_t NIU_NOC_STRIDE  = 0x10000;
 inline constexpr std::uint32_t NIU_NOCS        = 1;
-// Bytes in one data word of the *_DATA_WORD_* counters. ASSUMED 256 (the 2048-bit NoC payload width); not yet checked on the emulator.
+// Bytes in one data word of the *_DATA_WORD_* counters. Measured on the Quasar emulator: 256.
 inline constexpr std::uint32_t NIU_DATA_WORD_BYTES = 256;
 
 // clang-format off

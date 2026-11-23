@@ -41,8 +41,8 @@ One data word is a fixed number of bytes per architecture:
 | Architecture | Bytes per data word | Status |
 |---|---|---|
 | Blackhole | 64 | measured on a card: a 128 KiB read is 2048 data words |
-| Wormhole | 32 | assumed from the 256-bit NoC payload width, not yet checked on a card |
-| Quasar | 256 | assumed from the 2048-bit NoC payload width, not yet checked on an emulator |
+| Wormhole | 32 | measured on an n150 card: a known-count test gave host poll count = NoC 1 request count = data word count |
+| Quasar | 256 | measured on the Quasar emulator |
 
 The metal firmware reads only the barrier counters (`RD_RESP_RECEIVED`, `NONPOSTED_WR_REQ_SENT`,
 `WR_ACK_RECEIVED`, `ATOMIC_RESP_RECEIVED`, `REQS_OUTSTANDING_ID`); this capture adds the data word counters next to them.
