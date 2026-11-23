@@ -115,7 +115,7 @@
   skus:
     bh_p150b_civ2:
       timeout: 5
-  owner_id: U07K00A281X # Kevin Wu
+  owner_id: U097SNVC49E # Mihailo Milosevic
   team: train
   budget_type: unit
 
