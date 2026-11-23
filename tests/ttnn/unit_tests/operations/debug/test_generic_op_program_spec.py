@@ -1400,9 +1400,16 @@ def hash_spec(**kernel_fields):
     )
 
 
+# Fields the edit helpers may touch; anything else (typos, dunder names) fails loudly instead of being set.
+_EDITABLE_LIST_FIELDS = frozenset({"kernels", "dataflow_buffers", "tensor_parameters", "work_units"})
+_EDITABLE_SPEC_FIELDS = frozenset({"name", "semaphores", "scratchpads"})
+
+
 def with_field(program_spec, field, index, /, **changes):
+    assert field in _EDITABLE_LIST_FIELDS, f"unexpected ProgramSpec list field: {field!r}"
     items = getattr(program_spec, field)
     for name, value in changes.items():
+        assert hasattr(items[index], name), f"{field}[{index}] has no attribute {name!r}"
         setattr(items[index], name, value)
     setattr(program_spec, field, items)
     return program_spec
@@ -1468,6 +1475,7 @@ NON_STRUCTURAL_EDITS = {
 
 
 def setattr_and_return(spec, field, value):
+    assert field in _EDITABLE_SPEC_FIELDS, f"unexpected ProgramSpec field: {field!r}"
     setattr(spec, field, value)
     return spec
 

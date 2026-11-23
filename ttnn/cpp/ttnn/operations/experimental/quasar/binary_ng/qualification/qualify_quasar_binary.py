@@ -232,11 +232,34 @@ def _arg_timestamp(value: str) -> str:
 
 
 # --------------------------------------------------------------------------------------------
+# Subprocess execution (single choke point; CWE-78 hardening)
+# --------------------------------------------------------------------------------------------
+# Every external command runs through _run_cmd: argv list only (never a shell), the executable must be on a
+# fixed allowlist, `bash` may only run the pinned run_test.sh, and no argument may contain control characters.
+_SAFE_LLK_TEST = re.compile(r"[A-Za-z0-9_]+\.py")
+_SAFE_OP_K = re.compile(r"[A-Za-z0-9_ ]+")
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _run_cmd(cmd: list, **kwargs) -> "subprocess.CompletedProcess":
+    allowed = {"git", "bash", sys.executable, str(LLK_VENV_PY)}
+    if not cmd or cmd[0] not in allowed:
+        raise ValueError(f"refusing to run non-allowlisted executable: {cmd[:1]!r}")
+    if cmd[0] == "bash" and (len(cmd) < 2 or cmd[1] != str(RUN_TEST_SH)):
+        raise ValueError("bash may only run the pinned run_test.sh")
+    for arg in cmd:
+        if not isinstance(arg, str) or _CONTROL_CHARS.search(arg):
+            raise ValueError(f"refusing argument with non-string value or control characters: {arg!r}")
+    kwargs.pop("shell", None)  # never a shell
+    return subprocess.run(cmd, shell=False, **kwargs)  # noqa: S603 -- validated above
+
+
+# --------------------------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------------------------
 def git_sha(path: Path) -> str:
     try:
-        out = subprocess.run(
+        out = _run_cmd(
             ["git", "-C", str(path), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=30
         )
         return out.stdout.strip() if out.returncode == 0 else "?"
@@ -249,7 +272,7 @@ def tt_llk_sha() -> str:
     if (TT_LLK_DIR / ".git").exists():
         return git_sha(TT_LLK_DIR)
     try:
-        out = subprocess.run(
+        out = _run_cmd(
             ["git", "-C", str(REPO_ROOT), "rev-parse", "--short", "HEAD:tt_metal/tt-llk"],
             capture_output=True,
             text=True,
@@ -258,6 +281,17 @@ def tt_llk_sha() -> str:
         return out.stdout.strip() if out.returncode == 0 else "?"
     except Exception:
         return "?"
+
+
+def _validate_mapping() -> None:
+    for c in MAPPING:
+        if c.llk_test and not _SAFE_LLK_TEST.fullmatch(c.llk_test):
+            raise ValueError(f"cell {c.id}: unsafe llk_test {c.llk_test!r}")
+        if c.op_k and not _SAFE_OP_K.fullmatch(c.op_k):
+            raise ValueError(f"cell {c.id}: unsafe op_k {c.op_k!r}")
+
+
+_validate_mapping()
 
 
 def select_cells(pattern: Optional[str]) -> list:
@@ -277,7 +311,7 @@ def llk_collect_ids(test_file: str, timeout: int) -> list:
             f"Create it:  cd {TT_LLK_TESTS} && CHIP_ARCH=quasar ./setup_testing_env.sh"
         )
     env = dict(os.environ, CHIP_ARCH="quasar")
-    out = subprocess.run(
+    out = _run_cmd(
         [str(LLK_VENV_PY), "-m", "pytest", "--compile-producer", "--co", "-q", f"{LLK_TEST_SUBDIR}/{test_file}"],
         capture_output=True,
         text=True,
@@ -310,7 +344,7 @@ def pick_llk_id(cell: Cell, timeout: int) -> Optional[str]:
 def op_count(cell: Cell, timeout: int) -> Optional[int]:
     if not cell.op_k:
         return None
-    out = subprocess.run(
+    out = _run_cmd(
         [
             sys.executable,
             "-m",
@@ -395,7 +429,9 @@ def classify_pytest(returncode: int, stdout: str) -> str:
 # Running on the sim
 # --------------------------------------------------------------------------------------------
 def _run_llk_once(cell: Cell, test_id: str, sim_dir: Path, timeout: int) -> int:
-    out = subprocess.run(
+    if not test_id.startswith(f"{cell.llk_test}::"):
+        raise ValueError(f"LLK test id {test_id!r} does not belong to {cell.llk_test!r}")
+    out = _run_cmd(
         [
             "bash",
             str(RUN_TEST_SH),
@@ -449,7 +485,7 @@ def run_op(cell: Cell, sim_dir: Path, timeout: int) -> str:
     if not cell.op_k:
         return "NO_OP_TEST"
     try:
-        out = subprocess.run(
+        out = _run_cmd(
             [
                 sys.executable,
                 "-m",
