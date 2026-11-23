@@ -37,6 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "tests/ttnn/unit_tests/operations/experimental/moe_block"))
@@ -156,6 +157,10 @@ CASES = [
     # Kimi-K3.1's production stage (its runner's 4x4 manifests: SP=4 on mesh axis 1, one 2,560-token chunk a forward) on
     # K3.1's own config: K3's MoE, the mesh opened with K3.1's L1_SMALL_SIZE
     BlockCase("kimi_k3_1", "4x4-sp1", 2560),
+    # GLM-5.3's production stage, the [RING, RING] 4x4 carve (SP on axis 1): one 2,560-token chunk a forward, and two
+    # packed (PREFILL_FORWARD_TOKENS_BUDGET 5120)
+    BlockCase("glm53", "xy4-sp1", 2560),
+    BlockCase("glm53", "xy4-sp1", 5120, chunks=((0, 0, 2560), (1, 2560, 5120))),
 ]
 
 
@@ -445,6 +450,8 @@ def _traced_times(run: _Run, mesh_device, out=None) -> dict:
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
 @pytest.mark.timeout(1800)
 def test_moe_block_perf(case, mesh_device, device_params):
+    if case.mesh == "xy4-sp1":
+        require_high_power("[RING, RING] 4x4 MoE block perf")
     run = _setup(case, mesh_device)
     ttnn.deallocate(run())  # (weights, programs)
 
