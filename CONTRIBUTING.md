@@ -474,7 +474,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 
 ## Development tips
 
-Please refer to the [README](README.md) for source installation and environment
+Please refer to [INSTALLING.md](INSTALLING.md) for source installation and environment
 setup instructions, then please read the [Getting Started
 page](docs/source/tt-metalium/get_started/get_started.rst).
 
