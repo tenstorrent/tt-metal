@@ -27,6 +27,9 @@ class Hy4ApcHook:
             {}
         )  # request id -> physical mesh row (filled by note_prefill when the plugin passes ``request_ids``)
         self.stats = dict(peeks=0, errors=0)
+        self.cached = (
+            {}
+        )  # request id -> tokens of its prompt that were NOT recomputed (engine.last_cached), read by install_cached_tokens_report
 
     # ---- plugin contract -------------------------------------------------------------------------------------------------------------------
     def plan_hit(self, request_id, prompt_token_ids, num_tokens, max_hit=None, **kw):
@@ -77,3 +80,32 @@ class Hy4ApcHook:
                 time.time()
             )  # tip protection: a held prompt's chain is the last candidate for the LRU overwrite of a free row
         return int(best), int(home), free
+
+
+def install_cached_tokens_report(hook, scheduler_cls=None):
+    """usage.prompt_tokens_details.cached_tokens for the row-local cache (vLLM's own prefix cache is off, so it always said 0): before the scheduler commits the outputs of a step, the prefill_stats of every request
+    first scheduled in that step (the model has run its prefill by then) get the tokens the engine did not recompute. Python only; any failure leaves the stats untouched. Idempotent.
+    """
+    if scheduler_cls is None:
+        from vllm_tt_plugin.scheduler import TTScheduler as scheduler_cls
+    if getattr(scheduler_cls, "_hy4_cached_patched", False):
+        return False
+    orig = scheduler_cls.update_from_output
+
+    def update_from_output(self, scheduler_output, model_runner_output):
+        try:
+            for nr in getattr(scheduler_output, "scheduled_new_reqs", ()) or ():
+                c = hook.cached.pop(str(nr.req_id), None)
+                req = self.requests.get(nr.req_id)
+                ps = getattr(req, "prefill_stats", None)
+                if c and ps is not None:
+                    c = max(0, min(int(c), int(ps.num_prompt_tokens)))
+                    ps.num_cached_tokens = ps.num_local_cached_tokens = c
+                    ps.num_computed_tokens = int(ps.num_prompt_tokens) - c
+        except Exception:  # noqa: BLE001
+            hook.stats["errors"] += 1
+        return orig(self, scheduler_output, model_runner_output)
+
+    scheduler_cls.update_from_output = update_from_output
+    scheduler_cls._hy4_cached_patched = True
+    return True

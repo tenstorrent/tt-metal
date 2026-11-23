@@ -133,3 +133,43 @@ def test_xrow_plan_copies_evict_short(monkeypatch):
     monkeypatch.setenv("HY4_PFX_EVICT", "lru")
     rows, _ = plan_copies(rets, live, set(), [new], [1], own_hit=[0.0, 5.0, 9.0, 1.0])
     assert rows == [3]
+
+
+def test_cached_tokens_report_wrapper():
+    from types import SimpleNamespace as NS
+
+    from models.demos.blackhole.hy4_preview.tt.hy4_apc_hook import Hy4ApcHook, install_cached_tokens_report
+
+    class Sched:
+        def __init__(self):
+            self.requests = {
+                "a": NS(
+                    prefill_stats=NS(
+                        num_prompt_tokens=1000, num_cached_tokens=0, num_local_cached_tokens=0, num_computed_tokens=1000
+                    )
+                ),
+                "b": NS(
+                    prefill_stats=NS(
+                        num_prompt_tokens=800, num_cached_tokens=0, num_local_cached_tokens=0, num_computed_tokens=800
+                    )
+                ),
+            }
+            self.called = 0
+
+        def update_from_output(self, so, mro):
+            self.called += 1
+            return "ok"
+
+    e = object.__new__(Hy4Engine)
+    e.ret = [None] * ROWS
+    hook = Hy4ApcHook(e, ROWS)
+    hook.cached = {"a": 512, "b": 5000}
+    assert install_cached_tokens_report(hook, Sched) is True and install_cached_tokens_report(hook, Sched) is False
+    s = Sched()
+    assert s.update_from_output(NS(scheduled_new_reqs=[NS(req_id="a"), NS(req_id="b"), NS(req_id="zz")]), None) == "ok"
+    assert (
+        s.requests["a"].prefill_stats.num_cached_tokens == 512
+        and s.requests["a"].prefill_stats.num_computed_tokens == 488
+    )
+    assert s.requests["b"].prefill_stats.num_cached_tokens == 800  # clamped to the prompt
+    assert s.update_from_output(NS(scheduled_new_reqs=None), None) == "ok" and s.called == 2

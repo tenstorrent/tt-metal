@@ -103,6 +103,7 @@ class Hy4Engine:
         # shadow pages) that must run on the row holding a long retained chain (>= HY4_STASH_MIN tokens) first saves the leading pages of that row to the shadow region and copies them back when the request
         # releases the row, so the long chain survives (program hy4pfx: the 'evicted' loss of the AgentX sub-agent requests, 1100-1600 s of cold recompute each).
         self.stash_on = os.environ.get("HY4_STASH", "0") == "1" and self.pfx
+        self.last_cached = {}  # mesh row -> prompt tokens not recomputed by the last prefill
         self.stash = {}  # row -> (chain tokens, n pages saved)
         self.stash_stats = dict(saved=0, restored=0, truncated=0, failed=0, seconds=0.0)
         self.bcopy = None  # Hy4PageCopy, built in warm() before the first capture
@@ -548,6 +549,8 @@ class Hy4Engine:
         """prompts_by_row {mesh row: list[int]} -> {row: first token}. ``sampling`` {row: (temperature, top_k, top_p, seed)}. Direct-to-pool chunked prefill (+ MTP prompt KV + seed round in spec mode).
         The other mesh rows keep their pool pages (masked writes) and their decode state."""
         t0 = time.perf_counter()
+        if not _sub:
+            self.last_cached = {}
         self.drain()
         rows = sorted(prompts_by_row)
         prompts = [prompts_by_row.get(r, [PAD]) for r in range(ROWS)]
@@ -608,6 +611,9 @@ class Hy4Engine:
                             )
                         )
                     return first
+            self.last_cached.update(
+                {r: min(hits[r], start) for r in rows}
+            )  # tokens of each row's prompt not recomputed (usage cached_tokens)
             if self.loss_log:
                 live_before = list(self.live)
                 loss = self.classify_loss(prompts_by_row, hits, start, live_before, rids)
