@@ -38,7 +38,6 @@ pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
 MESH = (1, 2)
 DIM = 64
-NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 
 class _Pipeline(AbstractModuleBase):

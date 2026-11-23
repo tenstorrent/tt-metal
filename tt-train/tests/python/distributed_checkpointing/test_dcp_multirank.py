@@ -41,7 +41,6 @@ pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
 MESH = (1, 4)
 DIM = 64
-NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 
 @pytest.fixture(scope="module")
