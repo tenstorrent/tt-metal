@@ -232,9 +232,8 @@ def _module_values(frames):
 
 def _one_sided_constants(mine, theirs):
     """{module: columns only I have there, holding one value, so they cannot tell its points apart}."""
-    # A column that is present but empty is a column they do not have: _medians
-    # drops all-null columns from the key. The rule is per module, because a
-    # column another module already has says nothing about this one.
+    # A present but empty column counts as absent (_medians drops all-null columns).
+    # Per module: a column another module has says nothing about this one.
     theirs_values = _module_values(theirs)
     drop = {}
     for (module, col), values in _module_values(mine).items():
