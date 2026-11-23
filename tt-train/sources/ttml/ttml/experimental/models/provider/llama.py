@@ -334,6 +334,16 @@ class LlamaProvider(ModelProvider):
         if mismatched:
             details = ", ".join(f"{key}: adapter {got!r}, run {want!r}" for key, (got, want) in mismatched.items())
             _fail("checkpoint", f"the adapter doesn't match this run's LoRA ({details})")
+        # TODO(mmilosevicTT): ttml's LoRA has one r and one alpha for every projection; load PEFT's per-projection
+        # rank_pattern and alpha_pattern once it can hold them.
+        patterns = {key: adapter.config[key] for key in ("rank_pattern", "alpha_pattern") if adapter.config.get(key)}
+        if patterns:
+            details = ", ".join(f"{key} {value!r}" for key, value in patterns.items())
+            _fail(
+                "checkpoint",
+                f"the adapter sets a per-projection rank or alpha ({details}); this run's LoRA has one r and alpha "
+                "for every projection",
+            )
 
         tensors = with_peft_prefix(adapter.tensors)
         layers = list(self._adapted_layers(model))

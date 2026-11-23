@@ -18,6 +18,7 @@ from ttml.experimental.models.provider import (
     providers,
     register_provider,
 )
+from ttml.experimental.models.utils.checkpoint import AdapterState
 
 
 @pytest.fixture(autouse=True)
@@ -110,6 +111,33 @@ def test_a_full_hf_checkpoint_is_loaded_only_onto_the_model_it_records(
         with expect_error(UnsupportedTrainingConfig, r"^checkpoint: .* is for 'meta-llama/Llama-3.2-1B'"):
             provider.load_weights(object(), checkpoint)
         assert loaded == []
+
+
+@pytest.mark.parametrize("pattern", ["rank_pattern", "alpha_pattern"])
+def test_a_peft_adapter_with_a_per_projection_rank_or_alpha_is_not_loaded(tmp_path, expect_error, pattern):
+    source = _local_model(tmp_path / "acme-7b")
+
+    class AcmeProvider(LlamaProvider):
+        def model_source(self) -> str:
+            return source
+
+    register_provider("acme/acme-7b", AcmeProvider)
+    config = _config("acme/acme-7b")
+    config.model.lora = SimpleNamespace(r=8, alpha=16, target_modules=["q_proj", "v_proj"])
+    provider = get_provider(config)
+    adapter = AdapterState(
+        tensors={},
+        config={
+            "peft_type": "LORA",
+            "r": 8,
+            "lora_alpha": 16,
+            "target_modules": ["q_proj", "v_proj"],
+            pattern: {"q_proj": 32},
+        },
+    )
+
+    with expect_error(UnsupportedTrainingConfig, rf"^checkpoint: the adapter sets a per-projection .*{pattern}"):
+        provider._import_adapter(object(), adapter)
 
 
 def test_registering_the_same_provider_again_is_a_no_op():

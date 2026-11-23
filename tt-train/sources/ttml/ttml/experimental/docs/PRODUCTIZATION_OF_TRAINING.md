@@ -342,7 +342,8 @@ checkpoint:
 `init`, the only `type` so far, loads the checkpoint's weights onto the pretrained weights of `model.name`: training
 starts at step 0 with a fresh optimizer, since checkpoints don't save its state yet. The checkpoint must be in the
 layout the run saves, by `checkpoint.format` and whether it trains LoRA (see the table above), and of the run's
-`model.name`, with the run's LoRA `r`, `alpha` and `target_modules`.
+`model.name`, with the run's LoRA `r`, `alpha` and `target_modules`. These hold for every projection: a PEFT adapter
+with a per-projection rank or alpha (`rank_pattern`, `alpha_pattern`) doesn't load yet.
 
 It takes effect with or without `CheckpointCallback`, and a checkpoint that doesn't load fails `setup`.
 
