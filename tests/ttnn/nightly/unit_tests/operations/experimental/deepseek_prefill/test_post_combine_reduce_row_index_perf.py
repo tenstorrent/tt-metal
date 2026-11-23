@@ -18,7 +18,7 @@ The gate is the ratio of the two device times, so it does not depend on the boar
 logs both times ("RT-CAL").
 
 Needs a host-IOMMU runner, hence requires_host_iommu: on Blackhole the profiler's D2H socket uses 64-bit PCIe
-addressing, which requires IOMMU with no hugepage fallback (realtime_profiler_manager.cpp).
+addressing, which requires IOMMU with no hugepage fallback (realtime_profiler_device.cpp).
 """
 
 import pytest

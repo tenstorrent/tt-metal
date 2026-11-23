@@ -17,7 +17,7 @@ rather than for device time. A band here catches drift in the op; it says nothin
 the op is worth dispatching.
 
 Needs a host-IOMMU runner, hence requires_host_iommu: on Blackhole the profiler's D2H socket uses
-64-bit PCIe addressing, which requires IOMMU with no hugepage fallback (realtime_profiler_manager.cpp).
+64-bit PCIe addressing, which requires IOMMU with no hugepage fallback (realtime_profiler_device.cpp).
 """
 
 from typing import Optional

@@ -146,7 +146,6 @@ tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema
 tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu # this should go away
 tt_metal/detail/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra # this should go away
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-runtime-performance
-tt_metal/distributed/realtime_profiler_manager.* @mo-tenstorrent @yusufbashiTT @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-runtime-performance
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-runtime-performance @tenstorrent/metalium-developers-infra
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT @tenstorrent/metalium-developers-infra
@@ -194,7 +193,6 @@ tt_metal/impl/dispatch/ @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-perfor
 tt_metal/impl/dispatch/kernels/*realtime_profiler* @mo-tenstorrent @yusufbashiTT @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/dispatch/kernels/REALTIME_PROFILER.md @mo-tenstorrent @yusufbashiTT @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp @mo-tenstorrent @yusufbashiTT @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
-tt_metal/impl/dispatch/realtime_profiler_tracy_handler.* @mo-tenstorrent @yusufbashiTT @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/emulation/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tt_metal/impl/event @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
 tt_metal/impl/experimental/blaze/ @esmalTT @cfjchu @azaytsev-epam @tenstorrent/metalium-runtime # blaze experimental impl
@@ -218,6 +216,7 @@ tt_metal/impl/metal2_host_api/ @tenstorrent/metalium-api-owners
 tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu
 tt_metal/impl/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
 tt_metal/impl/program/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
+tt_metal/impl/realtime_profiler/ @mo-tenstorrent @yusufbashiTT
 tt_metal/impl/sources.cmake @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @cfjchu @riverwuTT @akerteszTT
 tt_metal/impl/sram_arena/ @riverwuTT @akerteszTT
 tt_metal/impl/sub_device/ @abhullar-tt @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance

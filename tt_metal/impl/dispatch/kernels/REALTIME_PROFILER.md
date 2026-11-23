@@ -13,7 +13,7 @@ during execution, enabling 1:1 correlation between host-side Tracy zones
 | **dispatch_s** (signal source) | `cq_dispatch_subordinate.cpp` | NCRISC | NOC 1 |
 | **BRISC reader** (fast path) | `cq_realtime_profiler.cpp` | reserved profiler tensix BRISC | NOC 0 |
 | **NCRISC pusher** (slow path) | `cq_realtime_profiler_push.cpp` | reserved profiler tensix NCRISC | NOC 1 |
-| **host manager** | `realtime_profiler_manager.cpp` | CPU threads | PCIe |
+| **host receiver** | `tt_metal/impl/realtime_profiler/` | CPU threads | PCIe |
 
 The data mover is split across two RISCs on a reserved dedicated tensix core — an otherwise-unused core taken from the back of the dispatch core pool.
 The BRISC reader pulls timestamps off dispatch_s and drops them into an L1 ring
@@ -75,11 +75,10 @@ The **BRISC reader** polls its `record_wr_idx`. For each published slot it issue
 latest worker completion seen, so the reader never lets an end time go backwards: a
 slot that saw no completion while open still holds its end from a full ring ago, and
 the reader replaces it with the previous record's end. It then advances
-`write_index` (records for unprofiled programs are read but not committed). It
-keeps draining while servicing a clock sync. If the ring is full it spins
+`write_index` (records for unprofiled programs are read but not committed). If
+the ring is full it spins
 (heartbeat `ring_full_wait_count`); in practice this does not happen, because the
-host drains records faster than they are produced. The reader also services host
-clock-sync requests, enqueueing sync-marker records into the same ring.
+host drains records faster than they are produced.
 
 The **NCRISC pusher** owns the slow PCIe path. Each iteration it snapshots
 `write_index`/`read_index`, and if the ring is non-empty it pushes *all*
@@ -102,14 +101,14 @@ on the fast path:
    acking, and, once the following record arrives, pushes a dispatch-stall marker
    (`REALTIME_PROFILER_DISPATCH_STALL_MARKER_ID` in word 3; words 0-1 the time the
    stall ended, which is that record's start; word 2 its length).
-3. The host counts it (`RealtimeProfilerManager::dispatch_stall_events()` /
+3. The host counts it (`RealtimeProfilerReceiver::dispatch_stall_events()` /
    `dispatch_stall_cycles()`), logs a warning on the first stall per device and a
    summary at shutdown, and draws a zone on the device's **Dispatch stall** lane in
    Tracy plus an error-level Tracy message (rate-limited to one per 100 ms per device).
 
 The markers travel through the same lossless path as records, so they can be late
 but are never lost. `RealtimeProfilerStress.DispatchStallIsReportedAndLossless`
-exercises this path with `RealtimeProfilerManager::pause_receiver_for_testing()`:
+exercises this path with `RealtimeProfilerReceiver::pause_receiver_for_testing()`:
 while the host receiver is paused, the host FIFO, the BRISC ring and the record ring
 fill (about 49k records) until dispatch_s waits.
 
@@ -124,7 +123,7 @@ fill (about 49k records) until dispatch_s waits.
 | Peak production rate, `RealtimeProfilerStress` (ring vs. A/B) | ~1.068 M rec/s both |
 
 The zone figures include the zone's own overhead. `record_full_wait_count` (host:
-`RealtimeProfilerManager::record_ring_full_wait_count()`) counts how often dispatch_s
+`RealtimeProfilerReceiver::record_ring_full_wait_count()`) counts how often dispatch_s
 waited for a free slot; it stays 0 at the stress test's peak rate.
 
 ### Push cost (NCRISC pusher side)
@@ -151,5 +150,11 @@ every record arrives with the device ring and host D2H FIFO never filling.
 - The host side runs a receiver thread that drains device→host pages and
   publishes decoded records onto a `BroadcastRing`; separate per-callback
   consumer threads read from the ring and invoke the registered callbacks. A slow
-  callback only drops records for that consumer (tracked in `Consumer::dropped`);
-  it never stalls page draining or dispatch.
+  callback only drops records for that consumer (reported in
+  `ProgramRealtimeRecordBatch::dropped`); it never stalls page draining or dispatch.
+- While no callback is registered, the receiver does not read the pages: it acks
+  each device's FIFO once a millisecond and sleeps, so an unobserved profiler costs
+  the host next to nothing. Tracy's callback is registered at start and unregisters
+  itself once Tracy's connect window (60 s by default) has passed with no client.
+  Records produced while nobody is registered are dropped, along with any
+  dispatch-stall markers among them.
