@@ -175,6 +175,14 @@ struct SfpuRowSum : UnaryOp<SfpuRowSum<Slot>, Slot> {
         sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(to_u32(Slot) + off);
     }
 };
+// In-DEST transpose of one slot (exact for fp32 DEST: no srcA round trip). Raw compute API, the base op's
+// transpose_dest mechanism (transpose_gathered) as a chain element: its init reprograms the math MOP / address modes,
+// which every following CopyTile / FPU element re-inits anyway (no cohort hoist in a chain that mixes element types).
+template <Dst Slot>
+struct TransposeDestElem : UnaryOp<TransposeDestElem<Slot>, Slot> {
+    static ALWI void init() { transpose_dest_init<DST_ACCUM_MODE>(); }
+    static ALWI void exec_impl(uint32_t off) { transpose_dest<DST_ACCUM_MODE>(to_u32(Slot) + off); }
+};
 // x * scalar (fp32 bits) as a chain element (the reduce post-op MulScalarPost)
 template <Dst Slot>
 struct MulScalarElem : UnaryOp<MulScalarElem<Slot>, Slot> {
@@ -851,27 +859,40 @@ ALWI void pop_affine(uint32_t cw) {
     }
 }
 
-// Fused LN combine (gt == 1, fp32 DEST): per tile-row of the transposed gather tiles -> d (col 0) in cb_ln_m and
+// Fused LN combine (gt == 1, fp32 DEST): per tile-row of the gather tiles -> d (col 0) in cb_ln_m and
 // rstd (col 0) in cb_inv (n tiles each, waited; the normalize broadcasts them in its chain). Pops the gathered tiles.
 // Replaces ln_combine_mean + ln_mean_minus_shift + ln_combine_m2 (three chains, two reduces).
 constexpr bool ln_fused_comb = DST_ACCUM_MODE && gather_tiles == 1;
+// The row-form gather tiles (partition j = row j, as the reader placed them) are read straight from cb_gather_rows
+// and transposed in DEST (TransposeDestElem): no transpose_gathered pass, no cb_gathered round trip.
+constexpr auto g_rows = input(
+    cb_gather_rows,
+    WaitPolicy::None,
+    PopPolicy::None,
+    InputTileMapping::Block,
+    DataFormatReconfig::Enabled,
+    TileAddressing::Strided);
 template <bool Enabled = ln_fused_comb>
 ALWI void ln_combine_fused(uint32_t n, uint32_t inv_w_bits, uint32_t eps_bits) {
+    cb_wait_front(cb_gather_rows, n * nstats);
     eltwise_chain(
         IterationShape::grid(n, 1),
-        CopyTile<g_m<1>, Dst::D0>{StridedTileRange{0, nstats}},  // m
-        CopyTile<g_m<1>, Dst::D1>{StridedTileRange{2, nstats}},  // K
-        CopyTile<shift_in, Dst::D2>{},                           // c = K_own
+        CopyTile<g_rows, Dst::D0>{StridedTileRange{0, nstats}},  // m (row form)
+        TransposeDestElem<Dst::D0>{},
+        CopyTile<g_rows, Dst::D1>{StridedTileRange{2, nstats}},  // K
+        TransposeDestElem<Dst::D1>{},
+        CopyTile<shift_in, Dst::D2>{},  // c = K_own
         LnCombCenter{},
-        CopyTile<g_m<1>, Dst::D2>{StridedTileRange{1, nstats}},  // T
-        CopyTile<g_n<cb_stat_consts>, Dst::D3>{},                // n
+        CopyTile<g_rows, Dst::D2>{StridedTileRange{1, nstats}},  // T
+        TransposeDestElem<Dst::D2>{},
+        CopyTile<g_n<cb_stat_consts>, Dst::D3>{},  // n
         LnCombTerms{},
         SfpuRowSum<Dst::D0>{},
         SfpuRowSum<Dst::D1>{},
         LnCombFinalize{{}, inv_w_bits, eps_bits},
         PackTile<output(cb_ln_m), Dst::D0>{},
         PackTile<output(cb_inv), Dst::D1>{});
-    cb_pop_front(cb_gathered, n * nstats);
+    cb_pop_front(cb_gather_rows, n * nstats);
     cb_wait_front(cb_ln_m, n);
     cb_wait_front(cb_inv, n);
 }
@@ -901,15 +922,15 @@ ALWI void ln_block(const WorkerId& w, FinalizeInvRms finalize, uint32_t inv_n_bi
     {
         AGRN_ZONE("c_gather_in");
     }
-    transpose_gathered(crt * nstats * gather_tiles);
-    {
-        AGRN_ZONE("c_transposed");
-    }
-    cb_wait_front(cb_gathered, crt * nstats * gather_tiles);
     cb_wait_front(cb_stat_consts, 1);
     if constexpr (ln_fused_comb) {
         ln_combine_fused(crt, inv_w_bits, finalize.eps_bits);
     } else {
+        transpose_gathered(crt * nstats * gather_tiles);
+        {
+            AGRN_ZONE("c_transposed");
+        }
+        cb_wait_front(cb_gathered, crt * nstats * gather_tiles);
         ln_combine_mean<gather_tiles, cb_stat_consts>(crt, inv_w_bits);
         {
             AGRN_ZONE("c_mean_done");
