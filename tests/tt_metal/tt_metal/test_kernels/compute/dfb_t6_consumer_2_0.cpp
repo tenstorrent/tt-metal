@@ -32,6 +32,7 @@
 //   dfb::in — CONSUMER (host binds the same DFB the DM producer pushes to).
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/cb_api.h"
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/kernel_thread_globals.h"
@@ -63,9 +64,6 @@ void kernel_main() {
     // thread id keys its slice of the digest region.
     const uint32_t entry_bytes = dfb.get_entry_size();
     const uint32_t words_per_entry = entry_bytes / sizeof(uint32_t);
-    // Spacing between the tiles of one share: 1 on a BLOCKED consumer, the ring stride when only
-    // the producer is BLOCKED.
-    const uint32_t stride_tiles = dfb.get_consumer_stride_tiles();
 
     // Host sizes this region with dfb_tensix_digest_region_bytes(num_consumers,
     // num_entries_per_consumer) using the same CTA compiled into this kernel.
@@ -98,12 +96,11 @@ void kernel_main() {
             // which says nothing about this entry (and leaves drain index 0 unprotected entirely).
             // dummy_unpack reads nothing from L1, so it neither supplies nor disturbs the bytes hashed
             // here -- it serves only to prove the entry landed.
-            // get_read_ptr() is in 16B units on both arches, hence the << 4 (cf. dfb_t6_intra_2_0.cpp).
+            // get_tile_l1_byte_address gives tile j of the window wherever the ring stores it.
             ckernel::tensix_sync();
-            const uint32_t share_base = dfb.get_read_ptr() << 4;
             for (uint32_t j = 0; j < share; ++j) {
                 const volatile tt_l1_ptr uint32_t* const entry =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(share_base + j * stride_tiles * entry_bytes);
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_l1_byte_address(dfb.get_id(), j));
                 uint32_t digest = 2166136261u;  // FNV-1a offset basis
                 for (uint32_t w = 0; w < words_per_entry; ++w) {
                     digest = (digest ^ entry[w]) * 16777619u;  // FNV-1a prime

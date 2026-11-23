@@ -39,7 +39,6 @@ void kernel_main() {
 #endif
         } else {
             // Pages are read one at a time: an interleaved tensor's block is not contiguous in DRAM.
-            // The implicit-sync path above reads a whole block per call and needs a contiguous source.
             dfb.reserve_back(block_size);
             for (uint32_t i = 0; i < block_size; ++i) {
                 noc.async_read(

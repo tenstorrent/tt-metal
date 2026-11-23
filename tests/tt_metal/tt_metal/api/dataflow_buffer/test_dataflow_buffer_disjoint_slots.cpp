@@ -535,6 +535,93 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGridOnDeviceDataflow1DFBEach) {
     EXPECT_EQ(result_b, input_b) << "right-half DFB round-trip mismatch";
 }
 
+// A device slot repeats across DFBs on disjoint nodes, and the layout of an implicit-sync BLOCKED side must come
+// from its own DFB's kernels
+TEST_F(UnitMeshAnyDispatchFixture, HalfGridSlotReuseKeepsBlockLayoutPerDFB) {
+    require_at_least_two_nodes(this->device());
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "implicit sync is Quasar-only";
+    }
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries = 8;
+    constexpr uint32_t block_size = 4;
+    const NodeCoord node_a{0, 0};
+    const NodeCoord node_b{1, 0};
+
+    const auto dram_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
+    const auto shard_spec =
+        make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32, BufferType::L1, CoreCoord(0, 0));
+    auto in_a = MeshTensor::allocate_on_device(this->device(), shard_spec);
+    auto out_a = MeshTensor::allocate_on_device(this->device(), dram_spec);
+    auto in_b = MeshTensor::allocate_on_device(this->device(), dram_spec);
+    auto out_b = MeshTensor::allocate_on_device(this->device(), dram_spec);
+
+    const DFBSpecName dfb_a{"dfb_a"};
+    const DFBSpecName dfb_b{"dfb_b"};
+    const KernelSpecName prod_a{"producer_a"};
+    const KernelSpecName cons_a{"consumer_a"};
+    const KernelSpecName prod_b{"producer_b"};
+    const KernelSpecName cons_b{"consumer_b"};
+    const TensorParamName in_a_name{"in_a"};
+    const TensorParamName out_a_name{"out_a"};
+    const TensorParamName in_b_name{"in_b"};
+    const TensorParamName out_b_name{"out_b"};
+
+    auto producer_a =
+        make_dm_kernel(prod_a, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp", 1);
+    producer_a.dfb_bindings = {
+        {.dfb_spec_name = dfb_a,
+         .accessor_name = "out",
+         .endpoint_type = DFBEndpointType::PRODUCER,
+         .access_pattern = DFBAccessPattern::BLOCKED,
+         .block_size = block_size}};
+    producer_a.tensor_bindings = {{.tensor_parameter_name = in_a_name, .accessor_name = "src_tensor"}};
+    producer_a.compile_time_args = {
+        {"num_entries_per_producer", num_entries}, {"block_size", block_size}, {"implicit_sync", 1u}};
+    producer_a.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
+    auto consumer_a = make_dm_dfb_consumer(
+        cons_a, dfb_a, out_a_name, num_entries, /*blocked_consumer=*/false, /*implicit_sync=*/true);
+    auto producer_b = make_dm_dfb_producer(prod_b, dfb_b, in_b_name, num_entries, /*implicit_sync=*/true);
+    auto consumer_b = make_dm_dfb_consumer(
+        cons_b, dfb_b, out_b_name, num_entries, /*blocked_consumer=*/false, /*implicit_sync=*/true);
+
+    ProgramSpec spec{
+        .name = "half_grid_slot_reuse_layout",
+        .kernels = {producer_a, consumer_a, producer_b, consumer_b},
+        .dataflow_buffers =
+            {
+                {.unique_id = dfb_a,
+                 .entry_size = entry_size,
+                 .num_entries = num_entries,
+                 .data_format_metadata = tt::DataFormat::Float16_b},
+                {.unique_id = dfb_b,
+                 .entry_size = entry_size,
+                 .num_entries = num_entries,
+                 .data_format_metadata = tt::DataFormat::Float16_b},
+            },
+        .tensor_parameters =
+            {
+                {.unique_id = in_a_name, .spec = in_a.tensor_spec()},
+                {.unique_id = out_a_name, .spec = out_a.tensor_spec()},
+                {.unique_id = in_b_name, .spec = in_b.tensor_spec()},
+                {.unique_id = out_b_name, .spec = out_b.tensor_spec()},
+            },
+        .work_units =
+            {
+                {.name = "wu_a", .kernels = {prod_a, cons_a}, .target_nodes = node_a},
+                {.name = "wu_b", .kernels = {prod_b, cons_b}, .target_nodes = node_b},
+            },
+    };
+
+    Program program(this->device(), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+    const auto dfb_a_impl = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"));
+    const auto dfb_b_impl = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"));
+    ASSERT_EQ(dfb_a_impl->device_slot, dfb_b_impl->device_slot);
+    EXPECT_EQ(dfb_a_impl->block_banks, 1u);
+    EXPECT_EQ(dfb_a_impl->producer_runs_per_block, 1u);
+}
+
 TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerSlotReuseOnDevice) {
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     if (grid.x < 3) {

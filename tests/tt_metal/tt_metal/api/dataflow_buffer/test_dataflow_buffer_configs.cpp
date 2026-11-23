@@ -375,7 +375,8 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
 }
 
 // Checks the BLOCKED fields the serializer writes into each hart's init entry (block_size, split_tc,
-// entries_to_jump) for a BLOCKED side facing STRIDED peers and the reverse.
+// entries_to_jump, first_entry_in_block) for a BLOCKED side facing STRIDED peers and the reverse.
+// Each hart on the STRIDED side starts at its own index inside the first block.
 struct DfbBlockedInitEntryCase {
     const char* name;
     experimental::dfb::DataflowBufferConfig config;
@@ -383,6 +384,9 @@ struct DfbBlockedInitEntryCase {
     uint32_t consumer_jump;
     uint8_t producer_split_tc;
     uint8_t consumer_split_tc;
+    bool producers_start_at_index;
+    bool consumers_start_at_index;
+    bool bank_major = false;
 };
 
 TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
@@ -406,7 +410,9 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
          .producer_jump = 2 * 2,
          .consumer_jump = (2 - 1) * bs + 2,
          .producer_split_tc = 1,
-         .consumer_split_tc = 0},
+         .consumer_split_tc = 0,
+         .producers_start_at_index = false,
+         .consumers_start_at_index = true},
         // 2 STRIDED producers -> 2 BLOCKED consumers: the consumers are the split side.
         {.name = "2S->2B",
          .config =
@@ -422,8 +428,51 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
          .producer_jump = (2 - 1) * bs + 2,
          .consumer_jump = 2 * 2,
          .producer_split_tc = 0,
-         .consumer_split_tc = 1},
+         .consumer_split_tc = 1,
+         .producers_start_at_index = true,
+         .consumers_start_at_index = false},
+        {.name = "2B->2S implicit",
+         .config =
+             {.entry_size = 1024,
+              .num_entries = 16,
+              .producer_risc_mask = 0x3,
+              .num_producers = 2,
+              .pap = dfb::AccessPattern::BLOCKED,
+              .producer_block_size = bs,
+              .consumer_risc_mask = 0x30,
+              .num_consumers = 2,
+              .cap = dfb::AccessPattern::STRIDED,
+              .enable_producer_implicit_sync = true,
+              .enable_consumer_implicit_sync = true},
+         .producer_jump = 2 * 2,
+         .consumer_jump = (2 - 1) * bs + 2,
+         .producer_split_tc = 1,
+         .consumer_split_tc = 0,
+         .producers_start_at_index = false,
+         .consumers_start_at_index = true,
+         .bank_major = true},
+        {.name = "2S->2B implicit",
+         .config =
+             {.entry_size = 1024,
+              .num_entries = 16,
+              .producer_risc_mask = 0x3,
+              .num_producers = 2,
+              .pap = dfb::AccessPattern::STRIDED,
+              .consumer_risc_mask = 0x30,
+              .num_consumers = 2,
+              .cap = dfb::AccessPattern::BLOCKED,
+              .consumer_block_size = bs,
+              .enable_producer_implicit_sync = true,
+              .enable_consumer_implicit_sync = true},
+         .producer_jump = (2 - 1) * bs + 2,
+         .consumer_jump = 2 * 2,
+         .producer_split_tc = 0,
+         .consumer_split_tc = 1,
+         .producers_start_at_index = true,
+         .consumers_start_at_index = false,
+         .bank_major = true},
     };
+    const uint32_t num_dram_banks = static_cast<uint32_t>(this->device().num_dram_channels());
     for (const auto& c : cases) {
         SCOPED_TRACE(c.name);
         Program program = CreateProgram(this->device());
@@ -441,6 +490,8 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
         const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
 
         // One DFB, so each participating hart's blob starts with this DFB's entry.
+        uint32_t producer_index = 0;
+        uint32_t consumer_index = 0;
         for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
             const bool is_producer = (c.config.producer_risc_mask >> h) & 1u;
             const bool is_consumer = (c.config.consumer_risc_mask >> h) & 1u;
@@ -448,10 +499,14 @@ TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
                 continue;
             }
             SCOPED_TRACE("hart " + std::to_string(h));
+            const uint32_t index = is_producer ? producer_index++ : consumer_index++;
+            const bool starts_at_index = is_producer ? c.producers_start_at_index : c.consumers_start_at_index;
             const auto* entry = reinterpret_cast<const dfb_hart_init_entry_t*>(buf.data() + ghdr->hart_blob_offset[h]);
             EXPECT_EQ((entry->flags & DFB_HART_FLAG_IS_PRODUCER) != 0, is_producer);
             EXPECT_EQ(entry->block_size, bs);
             EXPECT_EQ(entry->split_tc, is_producer ? c.producer_split_tc : c.consumer_split_tc);
+            EXPECT_EQ(entry->first_entry_in_block, starts_at_index ? index : 0u);
+            EXPECT_EQ(entry->block_banks, c.bank_major ? num_dram_banks : 1u);
             EXPECT_EQ(entry->entries_to_jump, is_producer ? c.producer_jump : c.consumer_jump);
         }
     }

@@ -127,7 +127,7 @@ for (...) {
 }
 ```
 
-Each such call issues **one NOC transaction**, this is one entry on a STRIDED or ALL side and one whole block on a BLOCKED side. Credits are posted/acked by the **DM0 ISR** when that transaction’s threshold is hit.
+Each such call issues **one NOC transaction per entry** on a STRIDED or ALL side, and on a BLOCKED side **one per DRAM bank the block spans** for a DRAM-interleaved tensor, one for the whole block for a tensor in one place, and one per page for an L1-interleaved tensor or for a block that has to go in a bank-major ring. Credits are posted/acked by the **DM0 ISR** when the transaction threshold is hit.
 
 ### When the kernel returns
 
@@ -308,7 +308,9 @@ Same dealing as STRIDED with a block of `block_size` entries as the unit: block 
 | BLOCKED → ALL     | `num_entries % (block_size × P) == 0`; DM → DM: producer must use explicit sync | a block on both sides (every consumer sees every block)            | `num_entries / P`        | `1`                 |
 
 
-ALL → BLOCKED is not allowed. Limits: `block_size ≤ 65535` or `≤ 1023` with a Tensix endpoint; with implicit sync a block must also fit one NOC packet.
+ALL → BLOCKED is not allowed. Limits: `block_size ≤ 65535` or `≤ 1023` with a Tensix endpoint; with implicit sync each NOC transaction (a block, or the part of it on one DRAM bank) must also fit one NOC packet, and a block of a sharded tensor must lie inside one shard.
+
+A BLOCKED ring whose implicit-sync DM side moves a DRAM-interleaved tensor stores each block with its pages grouped by DRAM bank, so once a block is larger than the number of DRAM banks its entries are not in page order. You can reach them through the DFB lookups (`get_tile_address`, or NOC `offset_bytes` with one transfer per entry). Every other BLOCKED ring keeps page order. A side whose block cannot move in those transactions (an L1-interleaved tensor, or a contiguous block to a bank-major ring) moves it one transaction per page.
 
 **TC count (BLOCKED):**
 
@@ -424,11 +426,11 @@ That requires the batch to divide evenly across txn ids, participating DMs, and 
 - Must have `entry_threshold % num_prods_or_cons == 0` → `per_txn = entry_threshold / num_prods_or_cons`
 - Must have `per_txn % num_tcs_per_risc == 0` → `per_txn_per_tc = per_txn / num_tcs_per_risc`
 - `entries_per_noc_txn = block_size` on a BLOCKED side, otherwise `1`
-- `threshold = entry_threshold / entries_per_noc_txn` (the cmdbuf count is in transactions); each DM issues `per_txn / entries_per_noc_txn` NOC ops per txn id
+- `threshold = entry_threshold / entries_per_noc_txn` (the cmdbuf count is in transactions); each DM issues `per_txn / entries_per_noc_txn` NOC ops per txn id. Both are multiplied by the transactions a block takes
 
 So one ISR fire means: all participating DMs have each completed their NOC ops on that trid (`per_txn` entries each), which RR’d evenly so each TC is owed exactly `per_txn_per_tc` credits — matching the uniform increment.
 
-**BLOCKED side:** every transaction completes a whole block, so `per_txn` must also be a whole number of blocks: `per_txn % block_size == 0`, and `per_txn % (block_size × num_tcs_per_risc) == 0` unless the block is split over the TCs, then `block_size % num_tcs_per_risc == 0`. A STRIDED or ALL side facing a BLOCKED one moves one entry per transaction but stays on one TC for its whole share, so there `per_txn % (share × num_tcs_per_risc) == 0`. The host picks `num_txn_ids` to satisfy this and rejects the DFB only when no count works; then change `num_entries`, `block_size` or the thread counts, or use explicit sync on that side.
+**BLOCKED side:** every op completes a whole block, so `per_txn` must also be a whole number of blocks: `per_txn % block_size == 0`, and `per_txn % (block_size × num_tcs_per_risc) == 0` unless the block is split over the TCs, then `block_size % num_tcs_per_risc == 0`. A STRIDED or ALL side facing a BLOCKED one moves one entry per transaction but stays on one TC for its whole share, so there `per_txn % (share × num_tcs_per_risc) == 0`. The host picks `num_txn_ids` to satisfy this and rejects the DFB only when no count works; then change `num_entries`, `block_size` or the thread counts, or use explicit sync on that side.
 
 **ALL consumer:** `wr_sent` is global across DMs, so the threshold waits for **every** consumer’s batch:
 
@@ -522,7 +524,7 @@ sequenceDiagram
 
 - Threshold / `per_txn` / `per_txn_per_tc` as above — programmed so each TC gets the **same** increment per ISR fire
 - **ALL consumer:** threshold scales by `#consumers` so the IRQ waits for the full collective batch
-- Each `async_read` / `async_write` with `NocOptions::TXN_ID` still issues **one** NOC transaction: one entry on a STRIDED or ALL side and one whole block on a BLOCKED side
+- Each `async_read` / `async_write` with `NocOptions::TXN_ID` still moves one entry on a STRIDED or ALL side and one whole block on a BLOCKED side
 - Partial last batches that never hit the ISR threshold are credited by DM0 at kernel exit, once every DM issuing on that DFB side has returned ([C6](#c6-kernel-exit-finish-and-barriers))
 
 

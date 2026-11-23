@@ -495,10 +495,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_write_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
 #elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-    {
-        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
-        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
-    }
+    return dfb_window_tile_addr_units(local_dfb_interface_, 0);
 #elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].ptr;
 #else
@@ -513,10 +510,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_read_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
 #elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
-    {
-        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
-        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
-    }
+    return dfb_window_tile_addr_units(local_dfb_interface_, 0);
 #elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].ptr;
 #else
@@ -526,19 +520,88 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_read_ptr_impl() const {
 #endif
 }
 
+#ifndef COMPILE_FOR_TRISC
+template <typename Accessor>
+struct PageView;
+namespace dfb {
+// The remote side of the transfer is a tensor accessor, not a plain address.
+template <typename T, typename = void>
+inline constexpr bool noc_endpoint_has_dspec_v = false;
+template <typename T>
+inline constexpr bool noc_endpoint_has_dspec_v<T, std::void_t<decltype(T::DSpec::is_interleaved)>> = true;
+template <typename Accessor>
+inline constexpr bool noc_endpoint_has_dspec_v<PageView<Accessor>, void> = noc_endpoint_has_dspec_v<Accessor>;
+// The transfer arguments name a page (page_id), not one plain address.
+template <typename Args, typename = void>
+inline constexpr bool noc_args_have_page_id_v = false;
+template <typename Args>
+inline constexpr bool noc_args_have_page_id_v<Args, std::void_t<decltype(std::declval<Args&>().page_id)>> = true;
+// The remote side is an interleaved tensor, its pages are spread over banks.
+template <typename T, typename = void>
+inline constexpr bool noc_endpoint_is_interleaved_v = false;
+template <typename T>
+inline constexpr bool noc_endpoint_is_interleaved_v<T, std::void_t<decltype(T::DSpec::is_interleaved)>> =
+    T::DSpec::is_interleaved;
+template <typename Accessor>
+inline constexpr bool noc_endpoint_is_interleaved_v<PageView<Accessor>, void> = noc_endpoint_is_interleaved_v<Accessor>;
+// The remote side is a DRAM-interleaved tensor, each bank holds a contiguous run of its pages.
+template <typename T, typename = void>
+inline constexpr bool noc_endpoint_is_dram_interleaved_v = false;
+template <typename T>
+inline constexpr bool noc_endpoint_is_dram_interleaved_v<T, std::void_t<decltype(T::DSpec::is_interleaved)>> =
+    T::is_dram && T::DSpec::is_interleaved;
+template <typename Accessor>
+inline constexpr bool noc_endpoint_is_dram_interleaved_v<PageView<Accessor>, void> =
+    noc_endpoint_is_dram_interleaved_v<Accessor>;
+
+template <typename RunCallback>
+inline void for_each_run(uint32_t block, uint32_t runs, RunCallback&& run) {
+    for (uint32_t r = 0; r < runs; ++r) {
+        run(bank_major_run_offset(block, runs, r), bank_major_run_length(block, runs, r), r);
+    }
+}
+
+template <typename RunCallback>
+inline void for_each_bank_run(uint32_t block, RunCallback&& run) {
+    for_each_run(block, bank_major_num_runs(block, NUM_DRAM_BANKS), run);
+}
+
+template <typename PageCallback>
+inline void for_each_page(uint32_t block, PageCallback&& page) {
+    for (uint32_t i = 0; i < block; ++i) {
+        page(i);
+    }
+}
+}  // namespace dfb
+#endif
+
+template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+inline uint32_t DataflowBuffer<Pap, Cap>::entry_addr(uint32_t addr) const {
+#ifndef COMPILE_FOR_TRISC
+    // The cursor's address counts entries in page order; a bank-major ring keeps the entry elsewhere.
+    if constexpr (Pap == dfb::AccessPattern::BLOCKED || Cap == dfb::AccessPattern::BLOCKED) {
+        if (dfb_block_is_permuted(local_dfb_interface_)) {
+            const uint32_t entry_bytes = local_dfb_interface_.entry_size;
+            const uint32_t ring_base =
+                local_dfb_interface_.tc_slots[0].base_addr - local_dfb_interface_.first_entry_in_block * entry_bytes;
+            const uint32_t rel = addr - ring_base;
+            const uint32_t entry = dfb::bank_major_entry(
+                local_dfb_interface_.block_size, local_dfb_interface_.block_banks, rel / entry_bytes);
+            return ring_base + entry * entry_bytes + rel % entry_bytes;
+        }
+    }
+#endif
+    return addr;
+}
+
 #ifdef COMPILE_FOR_TRISC
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_tile_address(uint32_t tile_index) {
     uint32_t address = 0;
 #if defined(UCK_CHLKC_UNPACK)
     {
-        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
-        // Linear (front + tile_index * stride), no wrap. Safe because wait_front(n) must
-        // not straddle slot.limit; tile_index is in [0, n).
-        const uint32_t base_address =
-            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
-        const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
-        address = address_units_to_bytes(base_address + offset_address);
+        // No wrap: wait_front(n) must not straddle slot.limit and tile_index is in [0, n).
+        address = address_units_to_bytes(dfb_window_tile_addr_units(local_dfb_interface_, tile_index));
         mailbox_write(ckernel::ThreadId::MathThreadId, address);
         mailbox_write(ckernel::ThreadId::PackThreadId, address);
         mailbox_write(ckernel::ThreadId::IsolateSfpuThreadId, address);
@@ -560,12 +623,9 @@ T DataflowBuffer<Pap, Cap>::read_tile_value(uint32_t tile_index, uint32_t elemen
     T value = T{};
 #if defined(UCK_CHLKC_UNPACK)
     {
-        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
-        // Same linear addressing as get_tile_address: the wait_front window does not wrap.
-        const uint32_t base_address =
-            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
-        const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
-        const uint32_t byte_address = address_units_to_bytes(base_address + offset_address);
+        // Same addressing as get_tile_address: the wait_front window does not wrap.
+        const uint32_t byte_address =
+            address_units_to_bytes(dfb_window_tile_addr_units(local_dfb_interface_, tile_index));
         value = reinterpret_cast<volatile T*>(byte_address)[element_offset];
         mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(value));
         mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(value));
@@ -598,12 +658,12 @@ inline typename DataflowBuffer<Pap, Cap>::ScopedLockRegion DataflowBuffer<Pap, C
     const ScopedLockRegion region{s.ptr, s.base_addr, s.limit};
     uint32_t addr = region.start;
     for (uint16_t k = 0; k < num_entries; ++k) {
-        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, addr, entry);
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, entry_addr(addr), entry);
         // TODO: with concurrent ALL consumers, this invalidates the same shared cache line once per
         // consumer; the redundant invalidations could be deduplicated (e.g. first-locker-per-round).
         // Currently this invalidates the L2 range, which also drops the matching L1 D$ line on all
         // DM cores.
-        scoped_lock_acquire_cache_ops(addr, entry);
+        scoped_lock_acquire_cache_ops(entry_addr(addr), entry);
         addr += stride;
         if (addr >= region.limit) {
             addr = region.base;
@@ -622,9 +682,9 @@ inline void DataflowBuffer<Pap, Cap>::lock_release_impl(ScopedLockRegion region,
         // Flush on release only for a write lock. A read lock never writes.
         if constexpr (is_write) {
             // Currently this flushes l2, which writes back + drops the matching L1 D$ line on all DM cores.
-            scoped_lock_release_cache_ops(addr, entry);
+            scoped_lock_release_cache_ops(entry_addr(addr), entry);
         }
-        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, addr, entry);
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, entry_addr(addr), entry);
         addr += stride;
         if (addr >= region.limit) {
             addr = region.base;
@@ -781,23 +841,66 @@ Noc::async_read(
     ASSERT(dst_args.offset_bytes == 0);
     const uint32_t entry_bytes = dst.get_entry_size();
     const uint32_t share = dst.get_producer_share();
-    auto issue = [&](uint32_t txn_id, uint32_t l1_addr, uint32_t bytes) {
+    // Reads `bytes` from page_offset pages past src_args into L1 at l1_addr, tagged txn_id.
+    auto issue = [&](uint32_t txn_id, uint32_t l1_addr, uint32_t bytes, uint32_t page_offset) {
         noc_async_read_set_trid(txn_id, noc_id_);
         while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
         auto issue_at = [&](uint64_t src_noc_addr) {
             noc_async_read_impl<NOC_MAX_BURST_SIZE + 1, true>(src_noc_addr, l1_addr, bytes, noc_id_, NOC_UNICAST_WRITE_VC);
         };
-        if constexpr (noc_addrgen_push_v<Src>) {
-            // The ordinary issue above always traces (noc_async_read_impl<..., true>); so does the pushed one.
-            issue_read_maybe_pushed</*trace=*/true>(src, src_args, l1_addr, bytes, NOC_UNICAST_WRITE_VC, issue_at);
+        auto args = src_args;
+        uint64_t noc_offset = 0;
+        if constexpr (dfb::noc_args_have_page_id_v<decltype(args)>) {
+            args.page_id += page_offset;
         } else {
-            issue_at(get_src_ptr<AddressType::NOC>(src, src_args));
+            noc_offset = static_cast<uint64_t>(page_offset) * entry_bytes;
+        }
+        if constexpr (noc_addrgen_push_v<Src>) {
+            ASSERT(noc_offset == 0);
+            // The ordinary issue above always traces (noc_async_read_impl<..., true>); so does the pushed one.
+            issue_read_maybe_pushed</*trace=*/true>(src, args, l1_addr, bytes, NOC_UNICAST_WRITE_VC, issue_at);
+        } else {
+            const uint64_t src_noc_addr = get_src_ptr<AddressType::NOC>(src, args);
+            issue_at(src_noc_addr + noc_offset);
         }
     };
     if constexpr (Pap == dfb::AccessPattern::BLOCKED) {
-        // BLOCKED producer: one whole block per call, as one NoC transaction.
+        // BLOCKED producer: one whole block per call, in the transactions the host chose for this side.
         const uint32_t txn_id = dst.prepare_implicit_read(share);
-        issue(txn_id, dst.get_noc_write_addr(), entry_bytes * share);
+        const uint32_t block_addr = dst.get_noc_write_addr();
+        const uint32_t runs = dst.local_dfb_interface_.runs_per_block;
+        // One transaction per page, each to its own slot: always right, used when nothing faster is.
+        auto page_by_page = [&] {
+            ASSERT(runs == share);
+            dfb::for_each_page(share, [&](uint32_t i) {
+                issue(txn_id, dst.entry_addr(block_addr + i * entry_bytes), entry_bytes, i);
+            });
+        };
+        if constexpr (dfb::noc_endpoint_is_dram_interleaved_v<Src>) {
+            if (dst.local_dfb_interface_.block_banks == NUM_DRAM_BANKS &&
+                runs == dfb::bank_major_num_runs(share, NUM_DRAM_BANKS)) {
+                // One transaction per DRAM bank run (pages first+r, first+r+N, ...).
+                dfb::for_each_bank_run(share, [&](uint32_t entry_offset, uint32_t num_entries, uint32_t r) {
+                    issue(txn_id, block_addr + entry_offset * entry_bytes, num_entries * entry_bytes, r);
+                });
+            } else {
+                // The ring is not bank-major.
+                page_by_page();
+            }
+        } else if constexpr (
+            dfb::noc_endpoint_is_interleaved_v<Src> ||
+            (!dfb::noc_endpoint_has_dspec_v<Src> && dfb::noc_args_have_page_id_v<src_args_t<Src>>)) {
+            // Pages spread over L1 banks, or a layout this kernel cannot see.
+            page_by_page();
+        } else if (!dfb_block_is_permuted(dst.local_dfb_interface_)) {
+            // A contiguous block into a page-order ring: `runs` contiguous pieces (normally one).
+            dfb::for_each_run(share, runs, [&](uint32_t entry_offset, uint32_t num_entries, uint32_t) {
+                issue(txn_id, block_addr + entry_offset * entry_bytes, num_entries * entry_bytes, entry_offset);
+            });
+        } else {
+            // A contiguous block into a bank-major ring.
+            page_by_page();
+        }
         dst.commit_implicit_read(share);
     } else {
         // STRIDED producer: one entry per call, as one NoC transaction. The op's txn id stays
@@ -808,7 +911,7 @@ Noc::async_read(
         }
         const uint32_t txn_id = dst.local_dfb_interface_.txn_ids[progress.txn_idx];
         const uint32_t stride_bytes = entry_bytes * dst.get_producer_stride_tiles();
-        issue(txn_id, dst.get_noc_write_addr() + progress.share_pos * stride_bytes, entry_bytes);
+        issue(txn_id, dst.write_cursor_addr(progress.share_pos * stride_bytes), entry_bytes, 0);
         if (++progress.share_pos == share) {
             progress.share_pos = 0;
             dst.commit_implicit_read(share);
@@ -828,7 +931,8 @@ Noc::async_write(
     ASSERT(src_args.offset_bytes == 0);
     const uint32_t entry_bytes = src.get_entry_size();
     const uint32_t share = src.get_consumer_share();
-    auto issue = [&](uint32_t txn_id, uint32_t src_addr, uint32_t bytes) {
+    // Writes `bytes` from L1 at src_addr to page_offset pages past dst_args, tagged txn_id.
+    auto issue = [&](uint32_t txn_id, uint32_t src_addr, uint32_t bytes, uint32_t page_offset) {
         auto issue_at = [&](uint64_t dst_noc_addr) {
             RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, bytes, -1, false, noc_id_);
             DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, bytes);
@@ -846,17 +950,53 @@ Noc::async_write(
                 /*posted*/ false,
                 txn_id);
         };
-        if constexpr (noc_addrgen_push_v<Dst>) {
-            issue_write_maybe_pushed</*posted=*/false, /*use_trid=*/true, /*trace=*/true>(
-                dst, dst_args, src_addr, bytes, NOC_UNICAST_WRITE_VC, txn_id, issue_at);
+        auto args = dst_args;
+        uint64_t noc_offset = 0;
+        if constexpr (dfb::noc_args_have_page_id_v<decltype(args)>) {
+            args.page_id += page_offset;
         } else {
-            issue_at(get_dst_ptr<AddressType::NOC>(dst, dst_args));
+            noc_offset = static_cast<uint64_t>(page_offset) * entry_bytes;
+        }
+        if constexpr (noc_addrgen_push_v<Dst>) {
+            ASSERT(noc_offset == 0);
+            issue_write_maybe_pushed</*posted=*/false, /*use_trid=*/true, /*trace=*/true>(
+                dst, args, src_addr, bytes, NOC_UNICAST_WRITE_VC, txn_id, issue_at);
+        } else {
+            const uint64_t dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, args);
+            issue_at(dst_noc_addr + noc_offset);
         }
     };
     if constexpr (Cap == dfb::AccessPattern::BLOCKED) {
-        // BLOCKED consumer: one whole block per call, as one NoC transaction.
+        // BLOCKED consumer: the mirror image of the BLOCKED producer read above.
         const uint32_t txn_id = src.prepare_implicit_write(share);
-        issue(txn_id, src.get_noc_read_addr(), entry_bytes * share);
+        const uint32_t block_addr = src.get_noc_read_addr();
+        const uint32_t runs = src.local_dfb_interface_.runs_per_block;
+        auto page_by_page = [&] {
+            ASSERT(runs == share);
+            dfb::for_each_page(share, [&](uint32_t i) {
+                issue(txn_id, src.entry_addr(block_addr + i * entry_bytes), entry_bytes, i);
+            });
+        };
+        if constexpr (dfb::noc_endpoint_is_dram_interleaved_v<Dst>) {
+            if (src.local_dfb_interface_.block_banks == NUM_DRAM_BANKS &&
+                runs == dfb::bank_major_num_runs(share, NUM_DRAM_BANKS)) {
+                dfb::for_each_bank_run(share, [&](uint32_t entry_offset, uint32_t num_entries, uint32_t r) {
+                    issue(txn_id, block_addr + entry_offset * entry_bytes, num_entries * entry_bytes, r);
+                });
+            } else {
+                page_by_page();
+            }
+        } else if constexpr (
+            dfb::noc_endpoint_is_interleaved_v<Dst> ||
+            (!dfb::noc_endpoint_has_dspec_v<Dst> && dfb::noc_args_have_page_id_v<dst_args_t<Dst>>)) {
+            page_by_page();
+        } else if (!dfb_block_is_permuted(src.local_dfb_interface_)) {
+            dfb::for_each_run(share, runs, [&](uint32_t entry_offset, uint32_t num_entries, uint32_t) {
+                issue(txn_id, block_addr + entry_offset * entry_bytes, num_entries * entry_bytes, entry_offset);
+            });
+        } else {
+            page_by_page();
+        }
         src.commit_implicit_write(share);
     } else {
         // STRIDED consumer: one entry per call, as one NoC transaction. The op's txn id stays
@@ -867,7 +1007,7 @@ Noc::async_write(
         }
         const uint32_t txn_id = src.local_dfb_interface_.txn_ids[progress.txn_idx];
         const uint32_t stride_bytes = entry_bytes * src.get_consumer_stride_tiles();
-        issue(txn_id, src.get_noc_read_addr() + progress.share_pos * stride_bytes, entry_bytes);
+        issue(txn_id, src.read_cursor_addr(progress.share_pos * stride_bytes), entry_bytes, 0);
         if (++progress.share_pos == share) {
             progress.share_pos = 0;
             src.commit_implicit_write(share);

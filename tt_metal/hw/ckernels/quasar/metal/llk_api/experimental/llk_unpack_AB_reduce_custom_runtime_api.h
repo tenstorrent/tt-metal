@@ -37,6 +37,7 @@ inline void llk_unpack_AB_reduce_block_max_row_init_runtime(
     const ckernel::TensorShape& tensor_shape) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
+    ASSERT(block_ct_dim == 1 || !dfb_block_is_permuted(get_local_dfb_interface(operandA_id)));
     llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP0>(operandA_id);
     constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
     llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP1>(operandB_id);
@@ -81,9 +82,11 @@ inline void llk_unpack_AB_reduce_block_max_row_runtime(
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
-    const std::uint32_t l1_tile_index_a =
-        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + row_start_index;
-    const std::uint32_t l1_tile_index_b = local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx;
+    const std::uint32_t l1_tile_index_a = dfb_ring_entry(
+        local_dfb_interface_a,
+        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + row_start_index);
+    const std::uint32_t l1_tile_index_b = dfb_ring_entry(
+        local_dfb_interface_b, local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx);
 
     WAYPOINT("URBW");
     // block_ct_dim is baked into the MOP by init; the lib ignores this execute-time argument.

@@ -98,6 +98,7 @@ inline void llk_pack_untilize(
         SCALE_DATUM_SIZE(pack_dst_format[output_id], ckernel::trisc::FACE_C_DIM) >> 4;
     const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
         entry_size_16B / (face_row_16B * tensor_shape.num_faces_c_dim);
+    ASSERT(!dfb_block_is_permuted(local_dfb_interface));
     const std::uint32_t base_l1 =
         local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx * l1_index_per_entry;
 
