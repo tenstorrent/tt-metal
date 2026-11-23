@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Crossover sweep 8 (ad hoc): blocks of 9 to 16 tiles and the output formats sweep 2 skipped. Crossover sweep 2 (ad hoc): llk_pack_block's forms over its whole decision surface (see pack_block_sweep8_test.cpp).
 
 Per cell (output format, tile shape, DEST width, sync, tiles per block) seven arms: state steady/init/reconfigure x form per-tile/block/W offset (steady only).
