@@ -1475,8 +1475,13 @@ class Inkling2Prefill:
             xb = _rows(x, lo, lo + 32)
             lg = m.unembed(xb)
             lg = ttnn.multiply(ttnn.tanh(ttnn.multiply(lg, 1.0 / SOFTCAP)), SOFTCAP)
-            lt = ttnn.to_torch(lg).float().reshape(-1, lg.shape[-1])
-            part = lt[[r - lo for r in rr], :VOCAB_REAL]
+            if rr[-1] - rr[0] == len(rr) - 1 and len(rr) < 32:
+                # few rows (the last position): read only those rows, not the 32-row tile row (same values)
+                lg = ttnn.slice(ttnn.untilize(lg), [0, 0, rr[0] - lo, 0], [1, 1, rr[-1] - lo + 1, lg.shape[-1]])
+                part = ttnn.to_torch(lg).float().reshape(len(rr), -1)[:, :VOCAB_REAL]
+            else:
+                lt = ttnn.to_torch(lg).float().reshape(-1, lg.shape[-1])
+                part = lt[[r - lo for r in rr], :VOCAB_REAL]
             if self.logits_cb is not None:  # stream (host RSS): cb(first absolute position, logits rows)
                 self.logits_cb(self._s + rr[0], part)
             else:
