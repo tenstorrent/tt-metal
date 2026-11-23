@@ -29,9 +29,10 @@ class FakeSpec:
     """SpecRowsSession's interface; verify's rows follow ref_next of the user's sequence; drafts: the greedy chain with
     every third draft wrong"""
 
-    def __init__(self):
+    def __init__(self, miss_all=False):
         U = A.SPEC_USERS
         self.e = SimpleNamespace(U=U, R=4)
+        self.miss_all = miss_all  # (every draft wrong: every verify commits one token, no resolving verify)
         self.seq, self.pending = [None] * U, [None] * U
         self.started, self.pos = [False] * U, [0] * U
 
@@ -69,7 +70,7 @@ class FakeSpec:
             d, s = [], self.seq[u] + [int(anchors[u])]
             for k in range(K):
                 t = ref_next(s)
-                t = (t + 1) % V if (len(s) + k) % 3 == 0 else t
+                t = (t + 1) % V if (self.miss_all or (len(s) + k) % 3 == 0) else t
                 d.append(t)
                 s = s + [t]
             out.append(d)
@@ -116,15 +117,18 @@ def make(monkeypatch):
     m.sess = m.ae.sess
     m.ae.plain_tables = m.tables
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
-    m.sampled, m._t = set(), {}
+    m.sampled, m._t, m._plain_stale = set(), {}, False
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
 
 
 class Runner:
-    def __init__(self, m):
+    def __init__(self, m, steady=False):
         self.m, self.req = m, {}  # row -> dict(prompt, tokens, drafts, acc, table)
         self.nb = 40
+        # steady (async scheduling, DECODE_RELOAD_CONTRACT.md): a narrow call right after a narrow call over the same
+        # rows comes without reload_inputs, its tokens / positions the previous call's (a step behind)
+        self.steady, self.last_narrow = steady, None
 
     def table(self, row):
         return list(range(row * self.nb, (row + 1) * self.nb))
@@ -192,23 +196,28 @@ class Runner:
                     k += 1
                 committed[r] = q["drafts"][:k] + [g[k]]
             first = pos[:, 0]
+            # (the plugin may send the next narrow call steady after a verify too: its inputs the verify's column 0)
+            self.last_narrow = (rows, tok[:, :1].clone(), pos[:, 0].clone())
         else:
             tok = torch.zeros(B, 1, dtype=torch.long)
             pos = torch.full((B,), -1, dtype=torch.int32)
             for r in rows:
                 tok[r, 0], pos[r] = self.req[r]["tokens"][-1], len(self.req[r]["tokens"]) - 1
             sp = self.sp(rows)
+            steady = self.steady and self.last_narrow is not None and self.last_narrow[0] == rows
+            send_tok, send_pos = (self.last_narrow[1], self.last_narrow[2]) if steady else (tok, pos)
             res = self.m.decode_forward(
-                tok,
-                pos,
+                send_tok,
+                send_pos,
                 self.pt(),
-                reload_inputs=True,
+                reload_inputs=not steady,
                 reload_page_table=False,
-                reload_sampling_params=True,
-                reset_sampling_state=True,
+                reload_sampling_params=not steady,
+                reset_sampling_state=not steady,
                 read_from_device=True,
                 sampling_params=sp,
             )
+            self.last_narrow = (rows, tok.clone(), pos.clone())
             res = self.m.process_decode_output_host(res)
             committed = {r: [int(res[r, 0])] for r in rows}
             first = pos
@@ -288,5 +297,46 @@ def test_sampled_request_joins_spec(monkeypatch):
     run.finish(3)
     for _ in range(6):
         run.step()
+    run.check()
+    assert m.mode == "SPEC" and len(m.spec_of) == 3, (m.mode, m.spec_of)
+
+
+@pytest.mark.parametrize("scenario", ["ramp", "sampled", "sampled_miss_all"])
+def test_steady_calls(monkeypatch, scenario):
+    """the same scenarios with async scheduling's steady narrow calls (no reload_inputs, inputs a step behind): after
+    a move into the plain build or a spec-served step the class rebuilds the call's inputs from its history
+    (miss_all: every draft rejected, so the switch to PLAIN is followed by a narrow call, the move happens there)"""
+    monkeypatch.setattr(A, "PLAIN_HOLD", 3)
+    m, pf = make(monkeypatch)
+    if scenario.endswith("miss_all"):
+        m.ae.sess.miss_all = True
+    run = Runner(m, steady=True)
+    prompts = {r: [(r * 29 + i * 3) % V for i in range(26 + 2 * r)] for r in range(10)}
+    if scenario.startswith("ramp"):
+        run.arrive(range(4), [prompts[r] for r in range(4)])
+        for _ in range(6):
+            run.step()
+        run.arrive(range(4, 10), [prompts[r] for r in range(4, 10)])
+        for _ in range(8):
+            run.step()
+        run.check()
+        assert m.mode == "PLAIN" and not m.spec_of
+        for r in range(9, 2, -1):
+            run.finish(r)
+        for _ in range(8):
+            run.step()
+    else:
+        run.arrive(range(3), [prompts[r] for r in range(3)])
+        for _ in range(4):
+            run.step()
+        run.arrive([3], [prompts[3]])
+        run.req[3]["seed"] = 99
+        for _ in range(8):
+            run.step()
+        run.check()
+        assert m.mode == "PLAIN"
+        run.finish(3)
+        for _ in range(8):
+            run.step()
     run.check()
     assert m.mode == "SPEC" and len(m.spec_of) == 3, (m.mode, m.spec_of)

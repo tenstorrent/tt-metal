@@ -42,7 +42,10 @@ SPEC_K = 3
 SPEC_BACK = int(os.environ.get("RESIDENT_ADAPTIVE_SPEC_BACK", "6"))  # back to SPEC at <= this many live users ...
 PLAIN_HOLD = int(os.environ.get("RESIDENT_ADAPTIVE_PLAIN_HOLD", "32"))  # ... for this many propose calls in a row
 PLAIN_ROWS = 32
-TIMING = os.environ.get("RESIDENT_ADAPTIVE_TIMING", "0") == "1"  # (log the per-step host / call times every 64 steps)
+TIMING = os.environ.get("RESIDENT_ADAPTIVE_TIMING", "0") == "1"
+ASYNC = (
+    os.environ.get("RESIDENT_ADAPTIVE_ASYNC", "1") == "1"
+)  # (0: synchronous serving, the first served version)  # (log the per-step host / call times every 64 steps)
 
 
 class _PlainRowsEngine(RowsEngine):
@@ -53,7 +56,10 @@ class _PlainRowsEngine(RowsEngine):
 class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": False,
+        # (async: plain narrow steps overlap as the batch profile's; speculative steps the runner drains before the
+        # next, SPEC_DECODE_CONTRACT.md 4c; the verify's argmax block is a host tensor, valid through the readback)
+        "supports_async_decode": ASYNC,
+        "supports_async_spec_decode": ASYNC,
         "supports_sample_on_device": True,  # (the plain build's narrow calls: the hub's greedy)
         "max_device_top_k": TOP_K,
         "supports_device_penalties": False,
@@ -105,6 +111,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         self.last_acc = {}  # resident slot -> tokens its last spec step committed (its next verify applies them)
         self.mode, self.low_calls = "SPEC", 0
         self.sampled = set()  # resident slots of non-speculable requests (temperature != 0 or a penalty)
+        # the plain build's hub-fed inputs do not hold every live row's next token (a move into it, a step served by
+        # the spec build): its next ordinary call rebuilds them from the history instead of a steady replay
+        self._plain_stale = False
         self._t = {}  # (TIMING) name -> [total seconds, calls]
 
     def _lap(self, name, t0):
@@ -160,6 +169,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             acc = (acc_of or {}).get(r, self.last_acc.get(r, 1))
             self.ae.move_to_plain(u, r, self.tables[r], acc)
             self.last_acc[r] = 1
+            self._plain_stale = True
         self.spec_of.clear()
 
     def _to_spec_all(self):
@@ -191,6 +201,9 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         sitting = {s for s in self.live if s not in feed}
         self.engine.decode(feed, [0], preserve_launches={0} if sitting else ())
         self.engine.sync()
+        if sitting:  # (live rows outside this launch: their fed inputs are not this step's)
+            self._plain_stale = True
+        self._fed_launches = [0] if self.engine.device_sampling else None
         return dict(zip(feed, self.engine.tokens_from(self.engine.read_tokens(list(feed), False))))
 
     # ------------------------------------------------------------------ prefill
@@ -258,8 +271,10 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         pos = start_pos.reshape(B, -1)
         rows = {i: res_of[i] for i in range(B) if int(pos[i, 0]) >= 0 and res_of.get(i) in self.live}
         tok0 = tokens.reshape(B, -1)[:, 0].tolist()
-        for i, r in rows.items():
-            self._note(r, int(pos[i, 0]), tok0[i])
+        reload = bool(kwargs.get("reload_inputs", True))
+        for i, r in rows.items():  # (a steady call's tokens / positions are a step behind: the history has them)
+            if reload or spec_mode is not None:
+                self._note(r, int(pos[i, 0]), tok0[i])
         sp = kwargs.get("sampling_params")
         if sp is not None:
             for i, r in rows.items():
@@ -295,7 +310,17 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             if not self.spec_of:  # (every user plain: the rows adapter's own path)
                 self._lap("decode_host", t0)
                 t1 = time.perf_counter()
+                if self._plain_stale and not reload:
+                    # (a steady call after a move / a spec-served step: this step's inputs from the history, reloaded)
+                    tokens, start_pos = tokens.clone().reshape(B, -1), start_pos.clone().reshape(B, -1)
+                    for i, r in rows.items():
+                        tokens[i, 0], start_pos[i, 0] = self.history[r][-1], len(self.history[r]) - 1
+                    tokens, start_pos = tokens[:, :1], start_pos[:, 0]
+                    kwargs = dict(kwargs, reload_inputs=True, reload_page_table=False)
+                    kwargs["reload_sampling_params"] = kwargs.get("sampling_params") is not None
                 out = super().decode_forward(tokens, start_pos, page_table, *args, slot_remap=slot_remap, **kwargs)
+                if kwargs.get("reload_inputs", True):
+                    self._plain_stale = False
                 self._lap("decode_plain", t1)
                 return out
             out = self._spec_row0(rows, tokens.reshape(B, -1)[:, 0], pos[:, 0], B)
@@ -324,6 +349,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             else:
                 feed[r] = (int(tok0[i]), int(pos0[i]))
         res = torch.zeros(B, 1, dtype=torch.int32)
+        self._plain_stale = True
         if of_u:
             g = self.sess.verify(toks, upos, act)
             for i, u in of_u.items():
@@ -367,6 +393,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             g = self.sess.verify(toks, upos, act)
             for i, u in of_u.items():
                 out[i] = torch.tensor(g[u][:W], dtype=torch.int32)
+            self._plain_stale = True
         if feed:
             if sp is not None:  # (column 0 of a plain row: sampled with its parameters in the hub, greedy ones argmax)
                 plain_rows = [i for i, r in rows.items() if r in feed]
