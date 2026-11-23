@@ -450,14 +450,14 @@ def score_deep(
     ``<metrics_dir>/<tap>/metrics.json`` and returns ``{tap: metrics}``.
 
     The per-row definitions are the teacher-feed scorers': the stream and the KDA outputs by pooled PCC / NRMSE
-    (``key_sums``) and per-row NRMSE, the stream also by absolute error (``row_error_norms``: NRMSE falls when a layer
-    adds a large accurate contribution to the live sum, while the error in it still grows) and with both halves of
+    (``key_sums``) and per-row NRMSE, both also by absolute error (``row_error_norms``: NRMSE falls when a layer adds a
+    large accurate contribution to the live sum, while the error in it still grows), the stream with both halves of
     every layer input (``input_pairs``); the MoE output by per-row NRMSE floored at 1% of the median reference row norm
-    and its routing by ``routing_window`` against the FP64 ids, best first (so a miss's rank is its FP64 rank); the
-    DSA attention output (every row: the deep chain attends every row) as the MoE output, its top-k by recall on rows
-    >= k with each miss's FP64 rank (``missed_keys``) and the FP64 cut gap (``chain_vs_trace.CUT_GAP_RANKS``), its
-    caches by PCC; the KDA carry by relative L2 against the 1M chain's state (layers 0-2) or ``rebuild_deep``'s
-    (layers 4-6). The GPU trace's routing and top-k recall of the same FP64 reference sit beside the device's."""
+    and its routing by ``routing_window`` against the FP64 ids, best first (so a miss's rank is its FP64 rank); the DSA
+    attention output (every row: the deep chain attends every row) as the MoE output, its top-k by recall on rows >= k
+    with each miss's FP64 rank (``missed_keys``) and the FP64 cut gap (``chain_vs_trace.CUT_GAP_RANKS``), its caches by
+    PCC; the KDA carry by relative L2 against the 1M chain's state (layers 0-2) or ``rebuild_deep``'s (layers 4-6). The
+    GPU trace's routing and top-k recall of the same FP64 reference sit beside the device's."""
     spec = chain_taps(chain)
     stream = complete_run(run / "stream")
     count, chunk = stream["count"], stream["chunk"]
@@ -558,6 +558,7 @@ def score_deep(
                 w["kda_pcc"], w["kda_nrmse"] = pcc_nrmse(sums[f"kda_{l}"][lo:hi])
                 w["kda_row_nrmse_median"] = quantile(rows[f"kda_{l}"][lo:hi], 0.5)
                 w["kda_row_nrmse_p99"] = quantile(rows[f"kda_{l}"][lo:hi], 0.99)
+                w.update({f"kda_{n}": v for n, v in row_error_norms(sums[f"kda_{l}"][lo:hi]).items()})
             return w
         if tap.startswith("moe"):
             recall = per_row[f"recall_{l}"][lo:hi]
