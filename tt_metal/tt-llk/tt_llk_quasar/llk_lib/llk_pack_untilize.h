@@ -178,6 +178,20 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const Tenso
 }
 
 /**
+ * @brief Leaves Packer 0's address counters at zero after pack untilize.
+ *
+ * PACR_UNTILIZE steps the source and destination tile counters as well as the face counters, and its counter reset
+ * clears only the face counters, so a run of untilize calls leaves the tile counters growing. The tile packs and
+ * PACR_STRIDE read Dest from the source tile counter, so a later one would read past the tile it means to, or past
+ * the end of Dest. Call this after the last @ref _llk_pack_untilize_ and before any other pack.
+ */
+inline void _llk_pack_untilize_uninit_()
+{
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
+}
+
+/**
  * @brief Packs out tiles and untilizes them; always uses Packer 0 for untilize.
  *
  * @param dest_idx: Index into the DEST register for a tile.
