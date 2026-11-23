@@ -68,8 +68,10 @@ bool can_exec_ops_on_device(DataType type) {
             // https://github.com/tenstorrent/tt-metal/issues/58157 (typecast/tilize don't produce MX yet;
             // MX tensors are packed on the host)
         case DataType::BFLOAT2_B:
-            // https://github.com/tenstorrent/tt-metal/issues/63666 (typecast doesn't produce BFLOAT2_B;
-            // BFLOAT2_B tensors are packed on the host)
+            // Packed on the host on purpose: typecast can produce BFLOAT2_B, but the device packer rounds to
+            // BFP8 and then truncates to one magnitude bit, so values below the block max's power of two
+            // become 0 (0.75 beside 1.0 stores as 1 on the host, 0 on the device). The host packer rounds
+            // to nearest. See test_bfp2_device_typecast_non_ternary_matches_llk_reference.
             return false;
         default: return true;
     }
