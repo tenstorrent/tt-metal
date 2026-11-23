@@ -9,19 +9,23 @@
 #include "attn_io.hpp"
 
 namespace {
-// fp32 bits -> unsigned key with the same order (no NaNs)
-FORCE_INLINE uint32_t key(uint32_t x) { return (x >> 31) ? ~x : (x | 0x80000000u); }
-FORCE_INLINE uint32_t unkey(uint32_t k) { return (k >> 31) ? (k & 0x7fffffffu) : ~k; }
+// fp32 bits -> signed key with the same order as the floats (no NaNs; -0 just below +0): flip the magnitude bits of
+// negatives. Its own inverse. Branch-free, so the scan keeps up with the score tiles compute packs.
+FORCE_INLINE int32_t key(uint32_t x) {
+    return static_cast<int32_t>(x ^ (static_cast<uint32_t>(static_cast<int32_t>(x) >> 31) >> 1));
+}
+FORCE_INLINE uint32_t unkey(int32_t k) { return static_cast<uint32_t>(k) ^ (static_cast<uint32_t>(k >> 31) >> 1); }
 
 // max key over rows 0..2 of an fp32 tile at L1 t (faces 0/1: 16 values each per row)
-FORCE_INLINE void row_max(uint32_t t, uint32_t* m) {
+FORCE_INLINE void row_max(uint32_t t, int32_t* m) {
     volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(t);
     for (uint32_t k = 0; k < 3; ++k) {
-        uint32_t best = m[k];
+        int32_t best = m[k];
         for (uint32_t f = 0; f < 2; ++f) {
             volatile tt_l1_ptr uint32_t* r = p + f * 256 + k * 16;
+#pragma GCC unroll 16
             for (uint32_t c = 0; c < 16; ++c) {
-                const uint32_t kk = key(r[c]);
+                const int32_t kk = key(r[c]);
                 best = kk > best ? kk : best;
             }
         }
@@ -39,7 +43,7 @@ void kernel_main() {
     const uint32_t mp = get_arg_val<uint32_t>(2);
     const uint32_t p = get_arg_val<uint32_t>(3);
 
-    uint32_t m[3] = {0, 0, 0};  // key 0 = below every float
+    int32_t m[3] = {INT32_MIN, INT32_MIN, INT32_MIN};  // below every float
     if constexpr (has_sink) {   // the max is exact, so the scan order does not matter: sink first, then each S_j
         cb_wait_front(cb_sink, 1);  // as soon as compute packs it (the scan hides behind the next q.k)
         row_max(get_read_ptr(cb_sink), m);
