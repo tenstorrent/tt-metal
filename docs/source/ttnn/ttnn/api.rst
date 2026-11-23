@@ -14,6 +14,9 @@ Device
    ttnn.manage_device
    ttnn.synchronize_device
    ttnn.is_trace_capture_active
+   ttnn.memory_owner
+   ttnn.current_memory_owner
+   ttnn.get_memory_usage_by_owner
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
 

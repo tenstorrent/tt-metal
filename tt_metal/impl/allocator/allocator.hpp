@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -160,6 +161,16 @@ public:
     void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
     void unmirror_lockstep_allocation(DeviceAddr address);
 
+    // Per-owner accounting of live buffers (see tt-metalium/experimental/memory_owner.hpp).
+    struct MemoryUsageEntry {
+        size_t num_buffers = 0;
+        DeviceAddr total_bytes = 0;
+        DeviceAddr lockstep_bytes_per_bank = 0;
+        std::unordered_map<CoreCoord, DeviceAddr> per_core_bytes;
+    };
+    using MemoryUsageAccumulator = std::map<std::pair<uint32_t, BufferType>, MemoryUsageEntry>;
+    void accumulate_memory_usage_by_owner(MemoryUsageAccumulator& usage) const;
+
     // Device-global L1 arena for allocations that outlive individual programs.
     PersistentL1Arena& persistent_l1() { return persistent_l1_; }
     const PersistentL1Arena& persistent_l1() const { return persistent_l1_; }
@@ -206,6 +217,8 @@ private:
     std::unordered_map<std::uint32_t, CoreCoord> bank_id_to_logical_core_;
     std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<std::uint32_t>>> logical_core_to_bank_ids_;
     std::unordered_set<Buffer*> allocated_buffers_;
+    // Owner id (see current_memory_owner_id) of each live buffer allocated while an owner was set.
+    std::unordered_map<const Buffer*, uint32_t> buffer_owners_;
 
     // HYBRID mode: device allocators to query per-bank ranges during lockstep allocation.
     std::vector<AllocatorImpl*> hybrid_device_allocators_;
@@ -240,6 +253,14 @@ private:
         unsafe_tracked_ids_by_manager_and_trace_;
     std::unordered_map<size_t, std::string> unsafe_allocation_contexts_;
 };
+
+// Memory owner attribution (tt-metalium/experimental/memory_owner.hpp): 0 means no owner.
+uint32_t current_memory_owner_id();
+std::string memory_owner_name(uint32_t owner_id);
+namespace experimental {
+struct MemoryUsageByOwner;
+std::vector<MemoryUsageByOwner> memory_usage_by_owner(const std::vector<AllocatorImpl*>& allocators);
+}  // namespace experimental
 
 // Process-wide and thread-local implementation state used by the trace allocation diagnostics layer.
 void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);

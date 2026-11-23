@@ -52,6 +52,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
+#include <tt-metalium/experimental/memory_owner.hpp>
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 #include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
@@ -353,6 +354,10 @@ void MeshDeviceImpl::push_corruptible_allocation_scope() {
     tt::tt_metal::push_corruptible_allocation_scope(this->trace_allocators());
 }
 void MeshDeviceImpl::pop_corruptible_allocation_scope() { tt::tt_metal::pop_corruptible_allocation_scope(); }
+
+std::vector<tt::tt_metal::experimental::MemoryUsageByOwner> MeshDeviceImpl::get_memory_usage_by_owner() const {
+    return tt::tt_metal::experimental::memory_usage_by_owner(this->trace_allocators());
+}
 
 namespace trace_allocation_tracker {
 
@@ -2429,3 +2434,11 @@ void MeshDevice::wait_for_thread_pool() { pimpl_->wait_for_thread_pool(); }
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental {
+
+std::vector<MemoryUsageByOwner> get_memory_usage_by_owner(const distributed::MeshDevice& mesh_device) {
+    return mesh_device.impl().get_memory_usage_by_owner();
+}
+
+}  // namespace tt::tt_metal::experimental

@@ -49,6 +49,7 @@ class SystemMemoryManager;
 namespace experimental {
 class DispatchContext;
 class HostRegion;
+struct MemoryUsageByOwner;
 }  // namespace experimental
 
 namespace program_cache::detail {
@@ -296,6 +297,9 @@ public:
     void register_active_trace(const MeshTraceId& trace_id);
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void unregister_active_trace(const MeshTraceId& trace_id);
+
+    // Live buffers of this mesh's allocators grouped by owner (tt-metalium/experimental/memory_owner.hpp).
+    std::vector<tt::tt_metal::experimental::MemoryUsageByOwner> get_memory_usage_by_owner() const;
 
     // Unsafe allocation tracking
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshTraceId& trace_id) const;
