@@ -175,3 +175,25 @@ need a 5th DEST slot or a new record format, so not done here. Over-split rows c
 already one per worker.
 
 **Verifier notes**: a local-compute refinement, so it is filed after the cross-device ones. On the LN case the transport bulk (~11 µs for a 20-page slot) is still the larger term, and R2 / R3 attack it first.
+
+
+### [x] Refinement 4b — LN critical-path compute chain (indexer-k case) (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 4 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (responsible cells 1424/1437). A prior-passing cell that failed, hung, or never ran (suite hung before reaching it) is a regression.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Outcome**: the R4 regression was a kernel-config-buffer overflow (71536 > 70656 B) on
+`1x1x64x1000` w_non_aligned LN WIDTH_SHARDED fp32-DEST: R4's `cw == 1` local-stats fast path was a runtime branch, so
+every fp32-DEST LN build carried both it and the general reduce paths. Now gated at compile time (`cw_nom == 1` ⇔ every
+member has cw == 1); the LN perf case keeps the identical path (LN 21.27 µs, focus 29.20 µs). Full golden suite:
+1457 passed, 139 skipped, 123 xfailed, 0 hangs, 1 failed — `128x8192` bf8b HEIGHT_SHARDED LN (cluster_axis 0), a
+pre-existing CB OOM (fails identically on the R3 kernels; host CB plan unchanged since R3): ~1.2 MB of CBs
+(`cb_ln_sq` 512 KB, γ / β 256 KB each at cw = 256) beside the caller's 835 KB of L1 shards. Fitting it needs
+column-chunked T and a γ / β-streaming normalize for wide sharded LN rows — outside this refinement's scope.

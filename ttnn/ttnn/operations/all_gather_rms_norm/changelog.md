@@ -272,3 +272,23 @@ pages / 4 DRAM writes), relay ~4 µs, landing tail ~3 µs. LN 640×32: local sta
   (~7 µs, port-CPU bound). The stats round (~7 µs records → stats-ready) is now the largest serial term in the LN call.
 - Tests added: `test_perf_probe_ln` in `test_all_gather_rms_norm_perf_probe.py` (no-check LN profiling helper for zone
   timelines).
+
+## Refinement 4b — LN critical-path compute chain (indexer-k case) (debug: fix gate violations)
+- Date: 2026-11-23
+- What was done: ran the full golden suite to find the gate's regressions. One R4 regression:
+  `1x1x64x1000` w_non_aligned LN WIDTH_SHARDED (fp32 DEST) hit `Program size (71536) too large for kernel config
+  buffer (70656)`: R4's one-tile-column local-stats fast path (S1 once, T in-chain) was a runtime `cw == 1` branch, so
+  every fp32-DEST LN build compiled both it and the general reduce paths. Member cw = min(cw_nom, Wlt − m·cw_nom), so
+  "every member has cw == 1" ⇔ `cw_nom == 1`: `ln_fused_local` is now `DST_ACCUM_MODE && cw_nom == 1` and the S1
+  branch is `if constexpr`. The LN perf case (cw_nom == 1) compiles the same fast path as before.
+- Perf (eval harness, 5 experiments): LN 640×32 + γ + β 21.273 µs fastest / 21.674 slowest (R4: 21.42 / 21.82);
+  focus 640×384 RMS 29.196 / 29.997 µs. Not dispatch-bound.
+- Accuracy achieved: unchanged numerics (same chains; only the build gate moved).
+- Golden test progress: FULL suite: 1457 passed, 139 skipped, 123 xfailed, 1 failed, 0 hangs. Unit dir 57/57.
+- Issues encountered: `128x8192` bf8b HEIGHT_SHARDED LN (cluster_axis 0, γ + β) fails with a static-CB / L1-buffer
+  clash. This predates R4: it fails identically with the R3 compute kernel, and the host CB plan has not changed since
+  R3. The caller's input (272 KB) and output (544 KB) shards leave about 540 KB for CBs. The op needs about 1.2 MB:
+  `cb_ln_sq` 512 KB (bf16, cw = 256), `cb_gamma` / `cb_beta` 256 KB each. Finding: wide-row sharded LN needs a
+  column-chunked T (chain + accumulating reduce per column window) and a γ / β-streaming column-chunked normalize to
+  fit. That is a scheme change outside R4's scope.
+- Tests added: none.
