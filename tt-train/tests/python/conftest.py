@@ -34,10 +34,24 @@ def pytest_configure(config):
         "markers",
         "galaxy: mark test as requiring a full 32-device galaxy; the galaxy CI job selects these with -m galaxy",
     )
+    config.addinivalue_line(
+        "markers",
+        "multi_device: mark test as requiring more than one device; the distributed CI job selects these with "
+        "-m multi_device. Applied automatically to tests that use a fixture in _MULTI_DEVICE_FIXTURES",
+    )
+
+
+# Every mesh these fixtures open has more than one device, so a test that depends on any of them,
+# directly or through another fixture, is marked multi_device.
+_MULTI_DEVICE_FIXTURES = frozenset({"fresh_device_mesh", "tp_mesh", "fsdp_mesh", "dp_tp_mesh"})
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip device-requiring tests if no device is available."""
+    """Mark tests that use a multi-device fixture, and skip device-requiring tests if no device is available."""
+    for item in items:
+        if _MULTI_DEVICE_FIXTURES.intersection(getattr(item, "fixturenames", ())):
+            item.add_marker(pytest.mark.multi_device)
+
     device_available = (
         any(pathlib.Path("/dev/tenstorrent/").iterdir()) if pathlib.Path("/dev/tenstorrent/").exists() else False
     )

@@ -97,7 +97,7 @@
   cmd: |
     # Workaround for hang in QB2 https://github.com/tenstorrent/tt-metal/issues/55957
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
-    python -m pytest tt-train/tests/python
+    python -m pytest tt-train/tests/python -m "multi_device and not galaxy"
   skus:
     bh_quietbox_2:
       timeout: 25
