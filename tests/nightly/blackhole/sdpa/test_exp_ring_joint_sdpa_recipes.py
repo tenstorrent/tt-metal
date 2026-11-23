@@ -253,3 +253,25 @@ def test_exp_ring_joint_sdpa_ignores_compute_kernel_config(exp_ring_mesh):
     for chip, (a, b) in enumerate(zip(per_chip(default[0]), per_chip(ignored[0]))):
         assert torch.equal(a, b), f"chip {chip}"
         assert l2_pct(a, expected(chip)) < L2_PCT_BOUND["standard"], f"chip {chip}"
+
+
+# (q_chunk, k_chunk): 0 leaves that chunk to the op; with the Q chunk left to it the op may also narrow the grid.
+OP_CHOSEN_CHUNKS = {"op_chosen": (0, 0), "q_chosen": (0, 256), "k_chosen": (256, 0)}
+
+
+@pytest.mark.parametrize("chunks", OP_CHOSEN_CHUNKS)
+@pytest.mark.parametrize("case", ["q256_aligned", "joint_tails", "two_pass"])
+@pytest.mark.parametrize("variant", ["standard", "accurate", "fast_bfp8"])
+def test_exp_ring_joint_sdpa_recipe_op_chosen_blocking(exp_ring_mesh, variant, case, chunks):
+    """Chunk sizes of 0 are chosen by the op on the full grid; an explicit one is kept."""
+    mesh, semaphores, ring = exp_ring_mesh
+    inputs, joints, backing, logical_n, kwargs, expected, has_joint = exp_ring_case(mesh, ring, variant, case)
+    q_chunk, k_chunk = OP_CHOSEN_CHUNKS[chunks]
+    grid = mesh.compute_with_storage_grid_size()
+    # An explicit Q chunk keeps the caller's grid, so it runs on the case's grid.
+    kwargs.update(grid=(grid.x, grid.y) if q_chunk == 0 else kwargs["grid"], q_chunk=q_chunk, k_chunk=k_chunk)
+    out = run_exp_ring(
+        mesh, semaphores, inputs, joints, backing, logical_n=logical_n, precision=VARIANTS[variant][0], **kwargs
+    )
+    synchronized(mesh, out)
+    assert_per_chip(out, expected, variant, ring, has_joint)
