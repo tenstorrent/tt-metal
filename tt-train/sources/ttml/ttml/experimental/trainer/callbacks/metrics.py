@@ -98,10 +98,12 @@ class MetricsCallback(Callback):
 
 def _select(available: dict[str, Any], requested: list[str], phase: str) -> dict[str, float]:
     """``{phase}/{name}`` per requested metric; a metric of several values logs ``{phase}/{name}/{i}`` for each."""
+    found = [name for name in requested if name in available]
+    if len(found) != len(requested):
+        missing = [name for name in requested if name not in available]
+        raise ValueError(f"{phase} metric_names: unknown {missing}; available: {sorted(available)}")
     metrics = {}
-    for name in requested:
-        if name not in available:
-            continue
+    for name in found:
         value = available[name]
         if not isinstance(value, list):
             metrics[f"{phase}/{name}"] = value
