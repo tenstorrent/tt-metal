@@ -256,11 +256,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
     LLK_SAN_FUNCTION();
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
-#ifdef ARCH_QUASAR
-        if constexpr (UnpackToDestEn) {
-            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
-        }
-#endif
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
 #ifndef ARCH_QUASAR
             UNPACK((llk_unpack_A<
@@ -284,11 +280,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
                   UnpackToDestEn>(c, icb)));
 #endif
         }
-#ifdef ARCH_QUASAR
-        if constexpr (UnpackToDestEn) {
-            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
-        }
-#endif
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
         PACK((llk_packer_wait_for_math_done()));
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb, block_c_index)));

@@ -45,19 +45,11 @@ void kernel_main() {
     cb_reserve_back(out_id, per_core_tile_cnt);
 #endif
 
-#ifdef ARCH_QUASAR
-    if constexpr (UnpackToDestEn) {
-        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
-    }
-#endif
+    tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         copy_tile(in_id, b, b);
     }
-#ifdef ARCH_QUASAR
-    if constexpr (UnpackToDestEn) {
-        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
-    }
-#endif
+    tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
 #ifdef ARCH_QUASAR

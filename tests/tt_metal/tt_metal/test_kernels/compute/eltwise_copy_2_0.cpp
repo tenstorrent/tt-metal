@@ -33,17 +33,9 @@ void kernel_main() {
 
         dfb_in.wait_front(1);
         dfb_out.reserve_back(1);
-#ifdef ARCH_QUASAR
-        if constexpr (UnpackToDestEn) {
-            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
-        }
-#endif
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(dfb::in, 0, 0);
-#ifdef ARCH_QUASAR
-        if constexpr (UnpackToDestEn) {
-            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
-        }
-#endif
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         pack_tile(0, dfb::out);
         dfb_in.pop_front(1);
         dfb_out.push_back(1);

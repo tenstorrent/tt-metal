@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "api/compute/common_globals.h"
 #ifdef ARCH_QUASAR
 #include "llk_dest_borrow.h"
@@ -101,7 +103,15 @@ ALWI void tile_regs_release() {
     PACK((llk_pack_dest_section_done<is_fp32_dest_acc_en>()));
 }
 
-#ifdef ARCH_QUASAR
+#ifndef ARCH_QUASAR
+enum class DstClient : std::uint8_t {
+    UNPACK = 0,
+    MATH = 1,
+    PACK = 2,
+    SFPU = 3,
+};
+#endif
+
 /**
  * Lends the current Dest section from its owner FROM to TO (Quasar only). FROM is MATH between
  * tile_regs_acquire and tile_regs_commit, or PACK between tile_regs_wait and tile_regs_release.
@@ -115,7 +125,11 @@ ALWI void tile_regs_release() {
  */
 template <DstClient FROM, DstClient TO>
 ALWI void tile_regs_borrow() {
-    _llk_tile_regs_borrow_<FROM, TO>();
+#ifdef ARCH_QUASAR
+    if constexpr (TO != DstClient::UNPACK || UnpackToDestEn) {
+        _llk_tile_regs_borrow_<FROM, TO>();
+    }
+#endif
 }
 
 /**
@@ -125,8 +139,11 @@ ALWI void tile_regs_borrow() {
  */
 template <DstClient FROM, DstClient TO>
 ALWI void tile_regs_return() {
-    _llk_tile_regs_return_<FROM, TO>();
-}
+#ifdef ARCH_QUASAR
+    if constexpr (TO != DstClient::UNPACK || UnpackToDestEn) {
+        _llk_tile_regs_return_<FROM, TO>();
+    }
 #endif
+}
 
 }  // namespace ckernel
