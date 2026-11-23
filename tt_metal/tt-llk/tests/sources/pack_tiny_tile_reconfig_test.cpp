@@ -256,7 +256,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Rebuild the packer state for the tiny-tile geometry.
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-            formats.pack_src, formats.pack_dst, 16 * 16 * 4, face_r_dim, tile_c_dim, num_faces);
+            formats.pack_src, formats.pack_dst, 16 * 16 * 4, ckernel::tensor_shape_from_legacy_pack_geometry(face_r_dim, tile_c_dim, num_faces));
         _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, false /* skip_packer_strides */>(
             formats.pack_src, face_r_dim, tile_c_dim, num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
         _llk_pack_block_contiguous_mop_config_<>(face_r_dim, num_faces);
