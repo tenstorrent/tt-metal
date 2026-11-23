@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Generate tests/helpers/include/matmul_pack_tables.h from llk_pack_block (tt_llk_blackhole/llk_lib/llk_pack_block.h, included by the metal API's llk_pack_tile_api.h):
 the form tables, the matmul masks, llk_pack_block_class and llk_pack_block_form as constexpr functions of plain values instead of an output id.
 usage: gen_matmul_pack_tables.py [--write]   (without --write: exit 1 when the committed header differs from the generated one)
