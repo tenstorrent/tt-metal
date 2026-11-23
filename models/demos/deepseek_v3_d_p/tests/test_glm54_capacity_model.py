@@ -50,3 +50,27 @@ def test_g2_has_no_index_cache():
     g2 = m._glm54_stages()[2]
     assert g2.index_layers == 0 and "index_k" not in g2.per_user()
     assert g2.kvpe_layers == 28
+
+
+def test_mesh_budget_delta():
+    # Dispatch tokens per chip: sp x 640 x 8 + 32 x (experts per chip - 1) = 41,184 (8x4) and 20,960 (4x4).
+    t8, t4 = 8 * 640 * 8 + 32 * 7, 4 * 640 * 8 + 32 * 15
+    l8 = m.mesh_layer_independent_bytes(m.MESH_8X4, 5120)
+    l4 = m.mesh_layer_independent_bytes(m.MESH_4X4, 2560)
+    assert l8["moe_dispatched_bf16"] == t8 * 6144 * 2 == 506_068_992
+    assert l4["moe_expert_outputs_bfp8"] == t4 * 6144 * 1088 / 1024
+    assert l8["rope_cos_sin"] == 133_120 * 64 * 4 and l4["rope_cos_sin"] == 266_240 * 64 * 4
+    delta = (t8 - t4) * 6144 * (2 + 1088 / 1024) - 133_120 * 64 * 4
+    assert m.mesh_budget_delta() == delta  # 8x4 has less room than the 4x4 calibration
+    assert delta > 0
+
+
+def test_trunk_last_rank_builds_last_layer_kv_only():
+    with_mtp = m.Stage("S", (54, 77), mtp=True)
+    trunk = m.Stage("S", (54, 77))
+    assert trunk.kv_only_last_layer and not with_mtp.kv_only_last_layer
+    c = m.component_bytes(m.MESH_8X4)
+    w = trunk.weights()
+    assert w["mla"] == 23 * c["mla"] and w["moe"] == 23 * c["moe"]
+    assert w["mla_kv_only"] == 940_032 + 1024 + 3072  # kv_a_proj_with_mqa + kv_a_layernorm + attn_norm
+    assert trunk.kvpe_layers == 24  # the kv-only layer still writes its KVPE slot

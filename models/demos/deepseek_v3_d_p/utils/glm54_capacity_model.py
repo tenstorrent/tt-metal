@@ -24,8 +24,12 @@ Per chip, a stage fits ``N`` users while
   allocate weight-shaped tensors instead of loading real weights"), so ``A`` is calibrated on a measured bisection,
   #62125's 4x4 stage 6-7 (rank 0 = layers 58-67 plus the embedding, 1,064,960 tokens, 2560-token chunks): traced
   pass 55 / fail 56, eager pass 56 / fail 57. A 4x4 chip at 2560-token chunks holds the same 640 token rows and 160
-  query rows as an 8x4 chip at 5120, so the layer-independent buffers are assumed equal (assumption, see
-  ``ASSUMPTIONS``). The bisection brackets ``A`` to one user's bytes; ``capacity`` reports low / mid / high.
+  query rows as an 8x4 chip at 5120, so most layer-independent buffers (indexer score buffer, trace region) are
+  equal. Two are not, and ``mesh_budget_delta`` moves ``A`` by their difference: the MoE dispatch buffer and the
+  routed-expert output buffer of its shape scale with the SP dispatch group (8x4 holds about twice the tokens of
+  4x4), and the RoPE tables are SP-sharded (8x4 holds half). Net, an 8x4 chip has about 346 MB less than the 4x4
+  calibration. ``capacity`` reports low / mid / high: mid and high are the adjusted bisection midpoint and upper
+  bound; low is the 8x4 floor that SC4 CI proves (``CI_FLOOR``: GLM-5.3 runs 54 users, so its fullest stage fits).
 
 GLM-5.3 check: the same formula on GLM-5.3's default SC4 splits (``compute_layer_split``: 19/19/20/20 trunk,
 19/20/20/19 + MTP) against what SC4 CI runs (54 trunk, 52 MTP KV share; nightly 45115566753, both legs pass).
@@ -45,6 +49,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_4_config import GLM54Config as
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheGeometry
 
 MAX_SEQ_LEN = 1_064_960  # glm53.json PREFILL_MAX_SEQ_LEN
+CAPACITY_FACTOR = 8  # prefill_runner.py PREFILL_CAPACITY_FACTOR default; no GLM manifest sets it
 MB = 1e6
 
 # Physical bytes per 32x32 tile.
@@ -113,7 +118,12 @@ def component_bytes(mesh: Mesh) -> dict[str, int]:
         "dense_ffn": dense_ffn,
         "embedding": vocab_table,
         "lm_head": vocab_table,
-        "mtp_eh_proj": 2 * C.EMB_SIZE // tp * C.EMB_SIZE * 2,  # [12288 / tp, 6144] bf16
+        "mtp_eh_proj": 2 * C.EMB_SIZE // tp * C.EMB_SIZE * 2,
+        # A trunk-only last rank builds its last layer kv-only (prefill_runner.py kv_only_last_layer): attn_norm and
+        # the KV projection, no Q/O, wkv_b, indexer or FFN.
+        "mla_kv_only": BFP8_TILE * _tiles(h, C.KV_LORA_RANK + C.QK_ROPE_HEAD_DIM)
+        + 16 * 32 * 2
+        + 48 * 32 * 2,  # [12288 / tp, 6144] bf16
         # GLM-5.4 damp gate (A1): RMSNorm gain + Linear(6144 -> width) + bias, bf16. Synthetic weights use the
         # scalar width; a per-channel gate [6144, 6144] would add at most 75.5 MB per chip if replicated.
         "damp_gate": (C.EMB_SIZE + C.EMB_SIZE * 1 + 1) * 2,
@@ -156,6 +166,12 @@ class Stage:
         return self.layers[1] - self.layers[0] + 1
 
     @property
+    def kv_only_last_layer(self) -> bool:
+        """prefill_runner.py: ``kv_only_last_layer = is_last_rank and not MTP_LEVELS`` (an offset rank too, when it
+        ends at the model's last layer)."""
+        return not self.mtp and self.layers[1] == C.NUM_LAYERS - 1
+
+    @property
     def dense_layers(self) -> int:
         return max(0, min(self.layers[1] + 1, C.NUM_DENSE_LAYERS) - self.layers[0])
 
@@ -172,9 +188,12 @@ class Stage:
 
     def weights(self) -> dict[str, float]:
         comp = component_bytes(self.mesh)
-        moe_layers = self.num_layers - self.dense_layers + (1 if self.mtp else 0)
+        kv_only = 1 if self.kv_only_last_layer else 0
+        assert not kv_only or C.indexer_types()[self.layers[1]] == "shared", "a kv-only full layer owns no indexer"
+        moe_layers = self.num_layers - kv_only - self.dense_layers + (1 if self.mtp else 0)
         w = {
-            "mla": (self.num_layers + (1 if self.mtp else 0)) * comp["mla"],
+            "mla": (self.num_layers - kv_only + (1 if self.mtp else 0)) * comp["mla"],
+            "mla_kv_only": kv_only * comp["mla_kv_only"],
             "indexer": self.index_layers * comp["indexer"],
             "moe": moe_layers * comp["moe"],
             "dense_ffn": self.dense_layers * comp["dense_ffn"],
@@ -222,10 +241,58 @@ CALIBRATION = {
 }
 
 
-def capacity(stage: Stage, mode: str = "traced") -> dict:
-    """Users that fit, at the low / mid / high end of the calibrated budget, and the per-chip breakdown at mid."""
+def mesh_layer_independent_bytes(mesh: Mesh, chunk: int, max_seq_len: int = MAX_SEQ_LEN) -> dict[str, float]:
+    """Per-chip bytes of the layer-independent buffers whose size depends on the mesh, at one chunk size.
+
+    * MoE dispatch: ``compute_constants`` (moe/init_helpers.py) sizes the buffer to dispatch_group_size (= the SP
+      extent, ``MeshConfig``) x seq_len_per_chip (chunk / sp) x the capacity factor, plus one tile per local expert
+      but one. GLM's fabric2d dispatch moves bf16 tokens (``TtDispatch2dModule``); the routed experts write a bfp8
+      TILE buffer of the same shape (tt_routed_expert.py), live together with it (tt_moe.py).
+    * RoPE: the whole-cache cos and sin tables, bf16, SP-sharded (mla/rope.py ``get_rope_tensors``).
+    """
+    raw = mesh.sp * (chunk // mesh.sp) * CAPACITY_FACTOR
+    tokens = raw + 32 * (min(raw, mesh.experts_per_chip) - 1)
+    return {
+        "moe_dispatched_bf16": tokens * C.EMB_SIZE * 2,
+        "moe_expert_outputs_bfp8": tokens * C.EMB_SIZE * BFP8_TILE / 1024,
+        "rope_cos_sin": max_seq_len // mesh.sp * C.QK_ROPE_HEAD_DIM * 2 * 2,
+    }
+
+
+CAL_CHUNK = 2560  # glm53_4x4.json PREFILL_CHUNK_SIZE
+TARGET_CHUNK = 5120
+
+
+def mesh_budget_delta() -> float:
+    """How much less an 8x4 chip at 5120 has for weights and caches than the 4x4 calibration chip at 2560."""
+    target = sum(mesh_layer_independent_bytes(MESH_8X4, TARGET_CHUNK).values())
+    cal = sum(mesh_layer_independent_bytes(MESH_4X4, CAL_CHUNK).values())
+    return target - cal
+
+
+def ci_floor() -> float:
+    """Lower bound on the 8x4 budget A: GLM-5.3's fullest stage at the user counts SC4 CI runs and passes (54 trunk,
+    52 MTP KV share; nightly 45115566753)."""
+    configured = {"trunk": 54, "mtp_kv_share": 52}
+    return max(
+        sum(s.weights().values()) + s.fixed() + n * sum(s.per_user().values())
+        for split, n in configured.items()
+        for s in _glm53_stages()[split]
+    )
+
+
+def budget(mode: str) -> dict[str, float]:
+    """8x4 budget A: low = the CI floor; mid / high = the 4x4 bisection's midpoint / exclusive upper bound, moved by
+    ``mesh_budget_delta``. Eager has at least the traced budget, so the traced CI floor bounds both."""
     lo, hi = CALIBRATION[mode].budget_bounds()
-    mid = (lo + hi) / 2
+    delta = mesh_budget_delta()
+    return {"low": ci_floor(), "mid": (lo + hi) / 2 - delta, "high": hi - delta}
+
+
+def capacity(stage: Stage, mode: str = "traced") -> dict:
+    """Users that fit, at the low / mid / high end of the 8x4 budget, and the per-chip breakdown at mid."""
+    a = budget(mode)
+    lo, mid, hi = a["low"], a["mid"], a["high"]
     weights = stage.weights()
     per_user = stage.per_user()
     w = sum(weights.values()) + stage.fixed()
@@ -242,7 +309,7 @@ def capacity(stage: Stage, mode: str = "traced") -> dict:
             "per_user": {k: round(v / MB, 2) for k, v in per_user.items()},
             "per_user_total": round(u / MB, 2),
             "caches_at_mid_users": round(n * u / MB, 1),
-            "budget_A": {"low": round(lo / MB, 1), "mid": round(mid / MB, 1), "high": round(hi / MB, 1)},
+            "budget_A": {k: round(v / MB, 1) for k, v in a.items()},
             "slack_at_mid_users": round((mid - w - n * u) / MB, 1),
         },
         "layers": {
@@ -250,6 +317,7 @@ def capacity(stage: Stage, mode: str = "traced") -> dict:
             "kvpe_layers": stage.kvpe_layers,
             "index_k_layers": stage.index_layers,
             "dense_layers": stage.dense_layers,
+            "kv_only_last_layer": stage.kv_only_last_layer,
             "mtp": stage.mtp,
             "embedding": stage.embedding or stage.mtp,
         },
@@ -317,11 +385,12 @@ def _pipeline(stages: list[Stage], mode: str) -> dict:
 
 
 ASSUMPTIONS = [
-    "A (per-chip budget for weights + caches) is calibrated on #62125's 4x4 stage 6-7 bisection; layer-independent "
-    "buffers (trace region, indexer score buffer, MoE dispatch/combine, RoPE tables, activations) are assumed equal "
-    "on 4x4 at 2560-token chunks and 8x4 at 5120 (same 640 token rows / 160 query rows per chip). 4x4 chips serve "
-    "16 routed experts per layer, 8x4 chips 8; if MoE buffers scale with experts per chip, 8x4 has more room than "
-    "assumed (the calculation is then conservative).",
+    "A (per-chip budget for weights + caches) is calibrated on #62125's 4x4 stage 6-7 bisection and moved to 8x4 at "
+    "5120 by mesh_budget_delta (about -346 MB: MoE dispatched buffer bf16 and expert outputs bfp8 at 41,184 vs "
+    "20,960 tokens per chip, RoPE tables half the size). Other layer-independent buffers (trace region, indexer "
+    "score buffer: 160 query rows per chip on both) are taken as equal. The 4x4 failure was the 341 MB indexer "
+    "score buffer; on 8x4 the largest transient is the ~506 MB dispatched buffer, so the fragmentation-bound limit "
+    "may bind differently: the low end is the 8x4 floor SC4 CI proves (GLM-5.3 at 54 users), not the 4x4 bracket.",
     "GLM-5.4 G2 runs no indexer, so it allocates no indexer score buffer (about 341 MB per chip: 160 query rows x "
     "1,064,960 keys x bf16, the failing allocation of #62125's 4x4 stage 0); the calculation does not credit it, "
     "because the two-bank attention's own buffers are not implemented yet (q171.2.5). Crediting it adds about 0.5 "
@@ -331,7 +400,8 @@ ASSUMPTIONS = [
     "Damp gates use the scalar width (synthetic weights); a per-channel gate adds at most 75.5 MB per chip on G1 "
     "and G2 (0.1 user).",
     "G3 holds one MTP level as GLM-5.3 (A7): embedding + LM head + one MoE layer + eh_proj, and one more KVPE and "
-    "index-K slot per user. Without MTP G3 is reported separately.",
+    "index-K slot per user. Without MTP G3 is reported separately; there layer 77 is built kv-only, as the runner "
+    "does on a trunk-only last rank.",
     "Stage-alone probes (q171.3.5) put the stage on a first rank, which loads the embedding (475.8 MB per chip, "
     "about 0.7 user on G1/G2); predictions for that setup are reported under stage_alone_probe.",
     "Traced, forward_chunks = 1 (glm53.json), so no packed-forward scratch slot (kv_cache_slots).",
@@ -349,9 +419,16 @@ def report() -> dict:
             "weights_per_layer_8x4_MB": {k: v / MB for k, v in component_bytes(MESH_8X4).items()},
             "weights_per_layer_4x4_MB": {k: v / MB for k, v in component_bytes(MESH_4X4).items()},
             "calibration": {
-                mode: {"source": b.source, "A_bounds_MB": [round(x / MB, 1) for x in b.budget_bounds()]}
+                mode: {"source": b.source, "A_bounds_4x4_MB": [round(x / MB, 1) for x in b.budget_bounds()]}
                 for mode, b in CALIBRATION.items()
             },
+            "mesh_layer_independent_MB": {
+                "8x4@5120": {k: v / MB for k, v in mesh_layer_independent_bytes(MESH_8X4, TARGET_CHUNK).items()},
+                "4x4@2560": {k: v / MB for k, v in mesh_layer_independent_bytes(MESH_4X4, CAL_CHUNK).items()},
+                "budget_delta": mesh_budget_delta() / MB,
+            },
+            "ci_floor_A_MB": ci_floor() / MB,
+            "budget_A_8x4_MB": {mode: {k: v / MB for k, v in budget(mode).items()} for mode in CALIBRATION},
         },
         "assumptions": ASSUMPTIONS,
     }
