@@ -78,7 +78,7 @@ inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_tile_size = 0,
     const std::uint32_t unpB_tile_size = 0)
 {
-    // No LLK_VALIDATE_TENSOR_SHAPE_UNPACK here: this only programs face_r_dim and a 1/2/4 face count;
+    // No shape validate here or in the tile-shape reconfigs: they only program face_r_dim and a 1/2/4 face count;
     // the A/AB/AB_reduce/AB_matmul inits validate the full tile shape.
     const std::uint32_t unpA_num_faces = unpA_tensor_shape.total_num_faces();
     const std::uint32_t unpB_num_faces = unpB_tensor_shape.total_num_faces();
@@ -166,7 +166,6 @@ inline void _llk_unpack_configure_stoch_rnd_()
 template <bool issue_stall = true>
 inline void _llk_unpack_reconfig_tile_shape_srca_(const std::uint32_t tile_size, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_reconfig_tile_shape_srca_", tensor_shape);
     const std::uint32_t unpack_face_r_dim = tensor_shape.face_r_dim;
     const std::uint32_t unpack_num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
@@ -207,7 +206,6 @@ inline void _llk_unpack_reconfig_tile_shape_srca_(const std::uint32_t tile_size,
 template <bool issue_stall = true>
 inline void _llk_unpack_reconfig_tile_shape_srcb_(const std::uint32_t tile_size, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_reconfig_tile_shape_srcb_", tensor_shape);
     const std::uint32_t unpack_face_r_dim = tensor_shape.face_r_dim;
     const std::uint32_t unpack_num_faces  = tensor_shape.total_num_faces();
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
@@ -255,7 +253,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     const std::uint32_t tile_size,
     const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    // Only the face count is checked here; the full shape is validated by _llk_unpack_reconfig_tile_shape_srca_ under FACE_ROW_MAJOR.
+    // Only the face count is checked; the shape is programmed only under FACE_ROW_MAJOR.
     const std::uint32_t unpack_num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
 
@@ -327,7 +325,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     const std::uint32_t tile_size,
     const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    // Only the face count is checked here; the full shape is validated by _llk_unpack_reconfig_tile_shape_srcb_ under FACE_ROW_MAJOR.
+    // Only the face count is checked; the shape is programmed only under FACE_ROW_MAJOR.
     const std::uint32_t unpack_num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
 
