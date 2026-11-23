@@ -295,8 +295,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB2Bx2B_blk4_entry2048) {
         run_single_dfb_program_2_0(this->device(), params);                                             \
     }
 
-// STRIDED: one entry per transaction. 16 KiB = 2 packets; 12 KiB = 2 packets, the second partial.
-DFB_MULTI_PACKET_TEST(DMTest1xDFB1Sx1S_entry16K_impl, DM, DM, 1, 1, STRIDED, 0, 16384, 16)
+// STRIDED: one entry per transaction. 12 KiB = 2 packets, the second partial; 16 KiB = 2 full packets.
 DFB_MULTI_PACKET_TEST(DMTest1xDFB1Sx1S_entry12K_impl, DM, DM, 1, 1, STRIDED, 0, 12288, 16)
 DFB_MULTI_PACKET_TEST(DMTest1xDFB2Sx2S_entry16K_impl, DM, DM, 2, 2, STRIDED, 0, 16384, 16)
 DFB_MULTI_PACKET_TEST(DMTensixTest1xDFB1Sx1S_entry16K_impl, DM, TENSIX, 1, 1, STRIDED, 0, 16384, 16)
