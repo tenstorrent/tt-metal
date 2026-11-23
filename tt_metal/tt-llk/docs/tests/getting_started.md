@@ -602,7 +602,7 @@ pip install "dist/tt_llk_harness-<version>-py3-none-any.whl[pinned]" \
 
 The `pinned` extra is `tests/requirements.txt`, the versions the harness is tested with; the wheel also carries that file as `tt_llk_harness/requirements.txt`. Install without the extra (or with `--no-deps`) to manage the requirements yourself.
 
-The **LLK harness wheel** workflow (`.github/workflows/llk-harness-wheel.yaml`) builds the wheel every day and keeps it as the `llk-harness-wheel` artifact of the run. If the repository variable `LLK_HARNESS_WHEEL_RELEASE_REPO` names a repository, the workflow also publishes the wheel there as a release, using the token in the `LLK_HARNESS_WHEEL_RELEASE_TOKEN` secret. Who can download that release is decided by that repository's visibility.
+The nightly **LLK e2e Tests** workflow (`.github/workflows/llk-e2e.yaml`) builds the wheel once its tests have passed and keeps it as the `llk-harness-wheel` artifact of the run. If the repository variable `LLK_HARNESS_WHEEL_RELEASE_REPO` names a repository, it also publishes the wheel there as a release, using the token in the `LLK_HARNESS_WHEEL_RELEASE_TOKEN` secret. Who can download that release is decided by that repository's visibility.
 
 The version is `<API major>.<API minor>.<commit date>+g<commit>`: the first two numbers are `HARNESS_API_VERSION`, so wheels order by the contract first and by day within it, and an installed wheel names the commit it was built from (`pip show tt-llk-harness`).
 
