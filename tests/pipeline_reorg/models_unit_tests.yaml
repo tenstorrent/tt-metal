@@ -1374,6 +1374,19 @@
     export HF_HUB_CACHE=/mnt/weka/model-weights/video/huggingface/hub # the container presets this to /mnt/MLPerf/huggingface/hub
     export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
+    # DEBUG ONLY: report the Weka mount state seen by the job, then stop before any test.
+    echo "=== host / user"; hostname; id
+    echo "=== env"; env | grep -E "^(HF_|TT_DIT_)" | sort
+    echo "=== findmnt -T /mnt/weka/model-weights"; findmnt -T /mnt/weka/model-weights || true
+    echo "=== /proc/mounts (weka, /mnt)"; grep -E "weka|/mnt" /proc/mounts || true
+    echo "=== df"; df -hT /mnt/weka/model-weights || true
+    echo "=== ls /mnt/weka"; ls -la /mnt/weka || true
+    echo "=== ls /mnt/weka/model-weights"; ls -la /mnt/weka/model-weights || true
+    echo "=== ls /mnt/weka/model-weights/video"; ls -la /mnt/weka/model-weights/video || true
+    echo "=== ls FLUX.2-dev mirror"; ls -la /mnt/weka/model-weights/video/black-forest-labs/FLUX.2-dev || true
+    echo "=== ls FLUX.2-dev cache"; ls -la /mnt/weka/model-weights/video/huggingface/hub/models--black-forest-labs--FLUX.2-dev || true
+    echo "=== ls /mnt/MLPerf/huggingface/hub (FLUX)"; ls -d /mnt/MLPerf/huggingface/hub/*FLUX* || true
+    exit 1
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     pytest --timeout 900 -rs models/tt_dit/tests/models/flux2/test_vae_flux2.py || exit $?
     pytest --timeout 2400 -rs models/tt_dit/tests/models/flux2/test_prompt_encoder.py::test_encode -k "not klein" || exit $?
