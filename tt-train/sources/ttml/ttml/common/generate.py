@@ -82,7 +82,8 @@ def generate(
         model: LLaMA model instance
         prompt_tokens: Initial prompt token IDs
         transformer_config: Model config with num_blocks, num_groups, embedding_dim, max_sequence_length
-        use_sampling: Whether to use temperature sampling (if False, uses greedy decoding)
+        temperature: Sampling temperature; 0.0 selects greedy decoding.
+        composer: Optional mesh composer used when reading back the sampled token.
     """
 
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)

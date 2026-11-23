@@ -38,7 +38,7 @@ class LinearRegression(AbstractModuleBase):
         >>> model = LinearRegression(in_features=10, out_features=1)
         >>> x = ttml.autograd.Tensor.from_numpy(np.random.randn(32, 1, 1, 10).astype(np.float32))
         >>> y = model(x)
-        >>> print(y.shape)  # [32, 1, 1, 1]
+        >>> print(y.shape())  # [32, 1, 1, 1]
     """
 
     def __init__(
