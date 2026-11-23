@@ -412,6 +412,7 @@ def test_predict_action_tokens(mesh_device, openvla_weights_path, llama2_hf_mode
 
         assert greedy_error is None, f"{case}: {greedy_error}"
         assert len(action_tokens) == vla.get_action_dim("bridge_orig")
+        assert action_tokens == vla.language_model._last_generated_tokens, f"{case}: not the generated tokens"
         assert np.allclose(
             actions, reference_unnormalized_actions(action_tokens, action_stats)
         ), f"{case}: actions {actions} are not the decoded tokens {action_tokens}"
@@ -541,9 +542,11 @@ def test_language_model_decode_order_and_page_table(seq_len, monkeypatch):
         )
     ]
     language_model.generator = SimpleNamespace(decode_forward=decode_forward)
-    language_model(inputs_embeds=FakeTTTensor((1, 1, seq_len, 8)), return_dict=True)
+    logits = language_model(inputs_embeds=FakeTTTensor((1, 1, seq_len, 8)), return_dict=True)
 
     assert language_model._last_generated_tokens == [prefill_token] + decode_tokens
+    # generate() reads the returned logits, one per action token, the prefill's first
+    assert [int(step.reshape(-1).argmax()) for step in logits] == [prefill_token] + decode_tokens
     assert [token for token, _, _ in calls] == [prefill_token] + decode_tokens[:-1]
     assert [position for _, position, _ in calls] == list(range(seq_len, seq_len + 6))
     (prefill_page_table,) = prefill_page_tables

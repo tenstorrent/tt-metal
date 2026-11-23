@@ -112,7 +112,7 @@ The `predict_action` test uses action tokens from the HF model in bfloat16 on CP
 | SigLIP features, checkpoint weights | PCC > 0.97 | 0.988 |
 | Logits after 2 decoder layers, BOS + 256 patches + prompt | PCC > 0.97, TT top-1 in reference top-5 | 0.996, same top-1 |
 | `predict_action`, three solid-color images (the third prompt, 288 positions, makes every decode step write past its KV-cache blocks) | all returned tokens are action tokens, actions are their de-normalized bin centers; with the reference tokens fed back in, TT top-1 in the reference top-5 at all 7 steps | |
-| `predict_action` token order and non-action tokens (host only) | returns the generated tokens in order, the prefill's first; on device an end-of-sequence or other non-action token raises | host only |
+| `predict_action` token order and non-action tokens (host only) | returns the language model's generated tokens in order, decoded in that order; on device an end-of-sequence or other non-action token raises | host only |
 | Language model decode order and page table (host only, device calls stubbed) | prefill token first, each decode step takes the previous token, the decode page table covers every position written and starts with the prefill's blocks | host only |
 
 The `predict_action` test reads the config and `norm_stats` from the `OPENVLA_WEIGHTS` snapshot, so it should be revision 47a0ec7f (`references/setup_openvla_weights.sh` downloads that revision).

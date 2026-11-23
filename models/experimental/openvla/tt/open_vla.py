@@ -292,9 +292,6 @@ def get_LLama2OpenVLAArgs(state_dict, use_bf16_lm_head=True):
         def load_state_dict(self):
             if state_dict is None:
                 return super().load_state_dict()
-            # map_openvla_hf_to_meta_keys permutes Q/K for the Meta-layout RoPE
-            if self.use_hf_rope:
-                raise ValueError("OpenVLA's Q/K mapping assumes use_hf_rope=False")
             new_state_dict = map_openvla_hf_to_meta_keys(state_dict, self.head_dim)
             return new_state_dict
 
