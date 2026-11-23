@@ -882,7 +882,7 @@ def test_group_of_one_runs_phases_directly(expect_error):
     with expect_error(IncompleteCheckpointError, r"^no index$") as raised:
         group.phase("reading", raising(IncompleteCheckpointError("no index")))
     assert raised.value.__cause__ is None, "a CheckpointError propagates as raised"
-    with expect_error(KeyboardInterrupt, ""):
+    with expect_error(KeyboardInterrupt, None):
         group.phase("reading", raising(KeyboardInterrupt()))
 
 
