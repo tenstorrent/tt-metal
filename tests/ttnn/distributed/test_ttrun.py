@@ -51,12 +51,15 @@ ttrun_module = importlib.import_module("ttnn.distributed.ttrun")
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# The real lookup, for the tests that need the built tt-run-rank (the autouse fixture below stands it in with None).
+find_built_tt_run_rank = ttrun_module.find_tt_run_rank_executable
+
 
 @pytest.fixture(autouse=True)
 def _no_rank_wrapper(monkeypatch):
     """Launch lines here are compared verbatim, so they never depend on whether tt-run-rank happens to be built; the
-    wrapper's own tests patch find_rank_wrapper themselves."""
-    monkeypatch.setattr(ttrun_module, "find_rank_wrapper", lambda: None)
+    wrapper's own tests patch find_tt_run_rank_executable themselves."""
+    monkeypatch.setattr(ttrun_module, "find_tt_run_rank_executable", lambda: None)
 
 
 @pytest.fixture
@@ -785,6 +788,7 @@ class TestFindGenerateRankBindingsExecutable:
         executable_path = temp_dir / "build" / "tools" / "scaleout" / "generate_rank_bindings"
         executable_path.parent.mkdir(parents=True)
         executable_path.touch()
+        executable_path.chmod(0o755)
 
         monkeypatch.setenv("TT_METAL_HOME", str(temp_dir))
         result = find_generate_rank_bindings_executable()
@@ -1496,7 +1500,7 @@ class TestJobOwnership:
         assert "the other ranks did not all exit in time and were killed" in text, text
         assert "job end: outcome=forced exit=5" in text, text
 
-    def test_tt_run_rank_is_found_in_the_build_tree_else_on_path(self, tmp_path, monkeypatch):
+    def test_scaleout_tools_are_found_in_the_build_tree_else_on_path(self, tmp_path, monkeypatch, expect_error):
         from ttnn.distributed import ttrun as m
 
         # The build tree first; an install (cmake --install, the package) has none, so its bin on PATH next.
@@ -1510,6 +1514,7 @@ class TestJobOwnership:
         empty.mkdir()
         built = exe(home / "build" / "tools" / "scaleout" / "tt-run-rank")
         exe(installed / "tt-run-rank")
+        monkeypatch.setattr(m, "find_tt_run_rank_executable", find_built_tt_run_rank)
         monkeypatch.setattr(m, "ORIGINAL_CWD", empty)
         monkeypatch.chdir(empty)
         monkeypatch.setenv("PATH", str(installed))
@@ -1520,6 +1525,17 @@ class TestJobOwnership:
         monkeypatch.setenv("PATH", str(empty))
         assert m.find_tt_run_rank_executable() is None
         assert m.find_signal_helper() == (None, "no tt-run-rank in build/tools/scaleout or on PATH")
+        # generate_rank_bindings (Phase 1) is found the same way
+        built_grb = exe(home / "build" / "tools" / "scaleout" / "generate_rank_bindings")
+        exe(installed / "generate_rank_bindings")
+        monkeypatch.setenv("PATH", str(installed))
+        monkeypatch.setenv("TT_METAL_HOME", str(home))
+        assert m.find_generate_rank_bindings_executable() == built_grb.resolve()
+        monkeypatch.delenv("TT_METAL_HOME")
+        assert m.find_generate_rank_bindings_executable() == installed / "generate_rank_bindings"
+        monkeypatch.setenv("PATH", str(empty))
+        with expect_error(FileNotFoundError, "generate_rank_bindings executable not found"):
+            m.find_generate_rank_bindings_executable()
 
     @pytest.mark.parametrize("present", [False, True], ids=["missing", "present"])
     def test_a_missing_tt_run_rank_is_warned_and_the_job_still_runs(self, present, tmp_path, monkeypatch):
@@ -1544,14 +1560,14 @@ class TestJobOwnership:
         wrapper.write_text("#!/bin/sh\n")
         wrapper.chmod(0o755)
         config = parse_binding_config(sample_rank_binding_yaml)
-        monkeypatch.setattr(ttrun_module, "find_rank_wrapper", lambda: str(wrapper))
+        monkeypatch.setattr(ttrun_module, "find_tt_run_rank_executable", lambda: str(wrapper))
         cmd = build_mpi_command(config, ["python3", "train.py"])
         n = len(config.rank_bindings)
         assert cmd.count(str(wrapper)) == n, cmd
         i = cmd.index(str(wrapper))
         assert cmd[i : i + 4] == [str(wrapper), "--", "python3", "train.py"], cmd
         assert str(wrapper) not in build_mpi_command(config, ["python3", "train.py"], debug_gdbserver=True)
-        monkeypatch.setattr(ttrun_module, "find_rank_wrapper", lambda: None)
+        monkeypatch.setattr(ttrun_module, "find_tt_run_rank_executable", lambda: None)
         assert str(wrapper) not in build_mpi_command(config, ["python3", "train.py"])
 
     # A fake prterun for the stop tests: it publishes the PMIx tool rendezvous file the way prterun does
@@ -1914,7 +1930,7 @@ class TestJobOwnership:
 
         # P19: the launcher's daemon on a host is killed. The rank under it would run on forever (nothing can stop it
         # any more); its tt-run-rank wrapper sees it was reparented and sends its program SIGTERM.
-        wrapper = m.find_tt_run_rank_executable()  # the built one, not the autouse stand-in
+        wrapper = find_built_tt_run_rank()  # the built one, not the autouse stand-in
         if wrapper is None:
             pytest.skip("tt-run-rank is not built")
         out = tmp_path / "out"
@@ -1967,7 +1983,7 @@ class TestJobOwnership:
         # does nothing. When its stdin closes without "done" (tt-run was SIGKILLed, aborted, crashed) and the launcher
         # still runs, it stops the job as tt-run would: SIGTERM to every rank through job control, then, if the ranks
         # do not exit within the stop grace (or it cannot reach prterun), the force through the launcher.
-        wrapper = m.find_tt_run_rank_executable()  # the built one, not the autouse stand-in
+        wrapper = find_built_tt_run_rank()  # the built one, not the autouse stand-in
         if wrapper is None:
             pytest.skip("tt-run-rank is not built")
         rec = self._fake_job(tmp_path, monkeypatch, stop_ends_ranks=case == "ttrun_died")
@@ -2223,7 +2239,7 @@ class TestJobOwnership:
         with open(log, "w") as out:
             ttrun = subprocess.Popen([sys.executable, str(script)], stdout=out, stderr=subprocess.STDOUT)
         try:
-            end = time.time() + 60
+            end = time.time() + 300  # the child imports ttnn first, which takes minutes on a loaded machine
             while "still running" not in log.read_text():
                 assert time.time() < end and ttrun.poll() is None, log.read_text()
                 time.sleep(0.05)

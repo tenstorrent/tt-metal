@@ -193,21 +193,34 @@ PHASE1_CACHE_KEY_FILENAME = ".phase1_cache_key"
 PHASE1_CACHE_ID_HEX_LEN = 16
 
 
-def find_tt_run_rank_executable() -> Optional[str]:
-    """tt-run-rank from the build tree (TT_METAL_HOME, the launch directory, ./build), else the installed one on PATH
-    (an install has no build tree); None when there is neither."""
+# The tools/scaleout executables tt-run runs, and where a build puts them (an install puts them in its bin, on PATH).
+TT_RUN_RANK_EXECUTABLE = "tt-run-rank"
+GENERATE_RANK_BINDINGS_EXECUTABLE = "generate_rank_bindings"
+SCALEOUT_BUILD_DIR = Path("build") / "tools" / "scaleout"
+
+
+def find_scaleout_executable(name: str) -> Optional[Path]:
+    """A tools/scaleout executable from the build tree (TT_METAL_HOME, the launch directory, ./build), else the installed
+    one on PATH (an install has no build tree); None when there is neither."""
     roots = [Path(os.environ["TT_METAL_HOME"])] if os.environ.get("TT_METAL_HOME") else []
     for root in roots + [ORIGINAL_CWD, Path(".")]:
-        candidate = root / "build" / "tools" / "scaleout" / "tt-run-rank"
+        candidate = root / SCALEOUT_BUILD_DIR / name
         if os.access(candidate, os.X_OK):
-            return str(candidate.resolve())
-    return shutil.which("tt-run-rank")
+            return candidate.resolve()
+    installed = shutil.which(name)
+    return Path(installed) if installed else None
+
+
+def find_tt_run_rank_executable() -> Optional[str]:
+    """tt-run-rank: the wrapper every rank runs in, the guard and the signal tool; None when there is none."""
+    path = find_scaleout_executable(TT_RUN_RANK_EXECUTABLE)
+    return str(path) if path else None
 
 
 def find_signal_helper() -> Tuple[Optional[str], str]:
     """(tt-run-rank, "") to signal the job with, or (None, why not)."""
     path = find_tt_run_rank_executable()
-    return (path, "") if path else (None, "no tt-run-rank in build/tools/scaleout or on PATH")
+    return (path, "") if path else (None, f"no {TT_RUN_RANK_EXECUTABLE} in {SCALEOUT_BUILD_DIR} or on PATH")
 
 
 def mpi_args_timeout(mpi_args: Optional[List[str]]) -> Optional[str]:
@@ -219,11 +232,6 @@ def mpi_args_timeout(mpi_args: Optional[List[str]]) -> Optional[str]:
         if a.startswith("--timeout="):
             return a.split("=", 1)[1]
     return None
-
-
-def find_rank_wrapper() -> Optional[str]:
-    """tt-run-rank, the wrapper every rank runs in; None when it is not built."""
-    return find_tt_run_rank_executable()
 
 
 class LaunchedJob:
@@ -596,7 +604,7 @@ class LaunchedJob:
         """Start tt-run-rank --guard next to a prterun launcher, in its own session: it stops the job if tt-run dies."""
         if not os.path.basename(self.cmd[0]).startswith(("mpirun", "prterun", "mpiexec")):
             return
-        wrapper = find_rank_wrapper()
+        wrapper = find_tt_run_rank_executable()
         if wrapper is None:
             logger.debug(f"{TT_RUN_PREFIX} no tt-run-rank: the job is not guarded against tt-run being killed")
             return
@@ -1351,41 +1359,14 @@ def inject_rankfile_mpi_args(
 
 
 def find_generate_rank_bindings_executable() -> Path:
-    """Find the generate_rank_bindings executable.
-
-    Searches for the executable in standard locations:
-    1. TT_METAL_HOME/build/tools/scaleout/generate_rank_bindings
-    2. Current directory relative paths
-
-    Returns:
-        Path to the generate_rank_bindings executable
-
-    Raises:
-        FileNotFoundError: If the executable cannot be found
-    """
-    # Try TT_METAL_HOME first
-    tt_metal_home = os.environ.get("TT_METAL_HOME")
-    if tt_metal_home:
-        candidate = Path(tt_metal_home) / "build" / "tools" / "scaleout" / "generate_rank_bindings"
-        if candidate.exists():
-            return candidate.resolve()
-
-    # Try relative to ORIGINAL_CWD
-    candidate = ORIGINAL_CWD / "build" / "tools" / "scaleout" / "generate_rank_bindings"
-    if candidate.exists():
-        return candidate.resolve()
-
-    # Try current directory
-    candidate = Path("build") / "tools" / "scaleout" / "generate_rank_bindings"
-    if candidate.exists():
-        return candidate.resolve()
-
-    raise FileNotFoundError(
-        f"generate_rank_bindings executable not found. "
-        f"Searched: TT_METAL_HOME/build/tools/scaleout/generate_rank_bindings, "
-        f"{ORIGINAL_CWD}/build/tools/scaleout/generate_rank_bindings, "
-        f"build/tools/scaleout/generate_rank_bindings"
-    )
+    """generate_rank_bindings (Phase 1), found like tt-run-rank (find_scaleout_executable). Raises FileNotFoundError."""
+    path = find_scaleout_executable(GENERATE_RANK_BINDINGS_EXECUTABLE)
+    if path is None:
+        raise FileNotFoundError(
+            f"{GENERATE_RANK_BINDINGS_EXECUTABLE} executable not found. Searched: TT_METAL_HOME/{SCALEOUT_BUILD_DIR}, "
+            f"{ORIGINAL_CWD / SCALEOUT_BUILD_DIR}, {SCALEOUT_BUILD_DIR}, PATH"
+        )
+    return path
 
 
 def _resolve_mgd_path_for_subcontext_mapping(path_str: str, base_dir: Path, tt_metal_home: Optional[str]) -> Path:
@@ -3073,7 +3054,7 @@ def build_mpi_command(
     if "--oversubscribe" in (effective_mpi_args or []):
         cmd.extend(yield_when_idle_mca_args(effective_mpi_args))
 
-    rank_wrapper = find_rank_wrapper()
+    rank_wrapper = find_tt_run_rank_executable()
     cmd.extend(peer_failure_mca_args(effective_mpi_args, rank_wrapper))
 
     if effective_mpi_args:
