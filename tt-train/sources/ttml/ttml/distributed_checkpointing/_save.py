@@ -437,7 +437,8 @@ def save(
             own_loader = {}
             if election.dataloader_per_rank and "dataloader" in shared_state:
                 own_loader = {str(world_rank): shared_state.pop("dataloader")}
-            # The header and the scheduler and dataloader state stored are rank 0's (the latter two agree, by hash).
+            # The header and the scheduler state stored are rank 0's (the ranks' schedulers agree, by hash), and so is
+            # the dataloader state when the ranks' agree; when they differ, each rank's own went into own_loader above.
             first = group.is_coordinator
             result = ResultPart(
                 record,
