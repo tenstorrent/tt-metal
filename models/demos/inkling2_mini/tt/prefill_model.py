@@ -206,6 +206,7 @@ EXPERT_GRID_X = 9
 # Expert-op row groups: the 8 worker rows as independent groups running different experts, so an expert's tail
 # rounds up to 8 / groups tile-rows per core row instead of 8; bit-equal
 EXPERT_ROW_GROUPS = 2  # 4: no faster on prose8k
+EXPERT_GRID_Y = 10  # all 10 worker rows, two 5-row groups (a smaller grid or older build: the next entry)
 
 
 def _has_unified(dev, w_gate_up, w_down, fidelity):
@@ -226,6 +227,7 @@ def _has_unified(dev, w_gate_up, w_down, fidelity):
     )
     e = [w_gate_up] * NUM_EXPERTS
     for kw in (
+        {"core_grid_x": EXPERT_GRID_X, "core_grid_y": EXPERT_GRID_Y, "core_row_groups": EXPERT_ROW_GROUPS},
         {"core_grid_x": EXPERT_GRID_X, "core_row_groups": EXPERT_ROW_GROUPS},
         {"core_grid_x": EXPERT_GRID_X},
         {},
