@@ -9,7 +9,7 @@ The op counterpart to test_single_routed_expert_perf.py, which gates the composi
 sweep. Both share one harness, so a regression in either op is attributable to that op.
 
 Needs a host-IOMMU runner, hence requires_host_iommu: on Blackhole the profiler's D2H socket uses
-64-bit PCIe addressing, which requires IOMMU with no hugepage fallback (realtime_profiler_manager.cpp).
+64-bit PCIe addressing, which requires IOMMU with no hugepage fallback (realtime_profiler_device.cpp).
 """
 
 import pytest
