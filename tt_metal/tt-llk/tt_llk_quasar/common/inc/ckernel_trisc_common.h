@@ -71,6 +71,10 @@ constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
 constexpr std::uint32_t NUM_WORDS_TILE_CNT      = 8;
 
+// MxFp4_2x exists only on the base/8-row variant, Int8_2x only on the 4-row variant.
+constexpr bool HAS_MXFP4_2X_SRC_FORMAT = MATH_ROWS == 8;
+constexpr bool HAS_INT8_2X_SRC_FORMAT  = MATH_ROWS == 4;
+
 struct tile_counter_t
 {
     std::uint32_t reserved0                    : 32;

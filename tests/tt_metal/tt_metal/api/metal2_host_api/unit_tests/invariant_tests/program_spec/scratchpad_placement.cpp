@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -39,7 +39,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsSubsetOfDerivedPlacem
     auto spec = MakeUnplacedScratchpadBinderSpecForTest();
     spec.work_units = {MakeMinimalWorkUnit("work", NodeRange({0, 0}, {1, 0}), {"binder"})};
     spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsEqualDerivedPlacement) {
@@ -48,7 +48,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsEqualDerivedPlacement
     auto spec = MakeUnplacedScratchpadBinderSpecForTest();
     spec.work_units = {MakeMinimalWorkUnit("work", NodeRange({0, 0}, {1, 0}), {"binder"})};
     spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}));
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsSubsetAcrossBoundKernels) {
@@ -62,7 +62,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsSubsetAcrossBoundKern
         MakeMinimalWorkUnit("second", NodeRange({2, 0}, {3, 0}), {"second"})};
     spec.scratchpads[0].advanced_options.override_placement =
         CoreRangeSet(std::vector<CoreRange>{CoreRange({0, 0}), CoreRange({2, 0})});
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsNodesFromEveryBinderWorkUnit) {
@@ -74,7 +74,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsNodesFromEveryBinderW
         MakeMinimalWorkUnit("second", NodeRange({2, 0}, {3, 0}), {"binder"})};
     spec.scratchpads[0].advanced_options.override_placement =
         CoreRangeSet(std::vector<CoreRange>{CoreRange({1, 0}), CoreRange({3, 0})});
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsEqualNodesInSplitRanges) {
@@ -84,7 +84,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsEqualNodesInSplitRang
     spec.work_units = {MakeMinimalWorkUnit("work", NodeRange({0, 0}, {1, 0}), {"binder"})};
     spec.scratchpads[0].advanced_options.override_placement =
         CoreRangeSet(std::vector<CoreRange>{CoreRange({0, 0}), CoreRange({1, 0})});
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsNonContiguousSubset) {
@@ -94,7 +94,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsNonContiguousSubset) 
     spec.work_units = {MakeMinimalWorkUnit("work", NodeRange({0, 0}, {2, 0}), {"binder"})};
     spec.scratchpads[0].advanced_options.override_placement =
         CoreRangeSet(std::vector<CoreRange>{CoreRange({0, 0}), CoreRange({2, 0})});
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsNonContiguousDerivedPlacement) {
@@ -104,7 +104,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideAcceptsNonContiguousDerivedP
     const CoreRangeSet derived(std::vector<CoreRange>{CoreRange({0, 0}), CoreRange({2, 0})});
     spec.work_units = {MakeMinimalWorkUnit("work", derived, {"binder"})};
     spec.scratchpads[0].advanced_options.override_placement = derived;
-    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+    EXPECT_NO_THROW(Program(fixture_device, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideRejectsSupersetOfDerivedPlacement) {
@@ -114,7 +114,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideRejectsSupersetOfDerivedPlac
     spec.work_units = {MakeMinimalWorkUnit("work", NodeRange({0, 0}, {1, 0}), {"binder"})};
     spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {2, 0}));
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'pad' override_placement must be a subset")));
 }
@@ -126,7 +126,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideRejectsMixedDerivedAndOutsid
     spec.work_units = {MakeMinimalWorkUnit("work", NodeRange({0, 0}, {1, 0}), {"binder"})};
     spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}, {2, 0}));
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'pad' override_placement must be a subset")));
 }
@@ -138,7 +138,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideRejectsOnlyOutsideNodes) {
     spec.work_units = {MakeMinimalWorkUnit("work", NodeRange({0, 0}, {1, 0}), {"binder"})};
     spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'pad' override_placement must be a subset")));
 }
@@ -153,7 +153,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideRejectsNodesOfUnboundKernel)
         MakeMinimalWorkUnit("unbound", NodeCoord{1, 0}, {"unrelated"})};
     spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}));
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'pad' override_placement must be a subset")));
 }
@@ -166,7 +166,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideRejectsRangeContainingOutsid
     spec.work_units = {MakeMinimalWorkUnit("work", derived, {"binder"})};
     spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {2, 0}));
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'pad' override_placement must be a subset")));
 }
@@ -181,7 +181,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideRejectsOutsideNodesWithShari
     spec.scratchpads[0].advanced_options = {
         .allow_instance_multi_binding = true, .override_placement = CoreRangeSet(CoreRange({0, 0}, {2, 0}))};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'pad' override_placement must be a subset")));
 }
@@ -196,7 +196,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ScratchpadOverrideRejectsOutsideNodesWithSharing
     spec.scratchpads[0].advanced_options = {
         .allow_instance_multi_binding = true, .override_placement = CoreRangeSet(CoreRange({0, 0}, {2, 0}))};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'pad' override_placement must be a subset")));
 }
@@ -211,7 +211,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_ScratchpadOverrideRejectsOutsideNodesWithSh
     spec.scratchpads[0].advanced_options = {
         .allow_instance_multi_binding = true, .override_placement = CoreRangeSet(CoreRange({0, 0}, {2, 0}))};
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        [&] { Program(fixture_device, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'pad' override_placement must be a subset")));
 }

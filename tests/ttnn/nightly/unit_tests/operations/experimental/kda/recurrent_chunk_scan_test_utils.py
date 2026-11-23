@@ -73,7 +73,7 @@ def recurrent_oracle(protocol: Sequence[torch.Tensor], state: torch.Tensor) -> t
         output = torch.matmul(q_decay[:, chunk], state) + torch.matmul(intra[:, chunk], value_new)
         chunks.append(output)
         state = state + (state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new))
-    return torch.stack(chunks, dim=1).to(torch.bfloat16), state.float()
+    return torch.cat(chunks, dim=1).to(torch.bfloat16), state.float()
 
 
 def summary_oracle(protocol: Sequence[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:

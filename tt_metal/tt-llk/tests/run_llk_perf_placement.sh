@@ -3,9 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 # Stage 2 of the LLK perf gate: measure the tests in a node list with the TRISC code at 5 positions.
-# Each position's reports go to perf_data/runs/p<shift>/. Objects are compiled once and relinked per position.
 #
-# Usage: LLK_PERF_NODE_LIST=<file> run_llk_perf_placement.sh
 set -euo pipefail
 
 NODE_LIST="${LLK_PERF_NODE_LIST:?LLK_PERF_NODE_LIST must name the file of test node ids}"
@@ -27,17 +25,19 @@ export LLK_OBJ_CACHE="$TEMP_ROOT/placement-objects"
 mkdir -p "$LLK_OBJ_CACHE"
 # Collect only the files of the listed tests: collecting the whole suite is most of a session's time.
 mapfile -t FILES < <(cut -d: -f1 "$NODE_LIST" | sort -u)
-PYTEST_EXTRA=(-q --override-ini=log_cli=false -m "perf and not accuracy" --timeout=60 --node-list="$NODE_LIST")
+PYTEST_EXTRA=(-q --override-ini=log_cli=false -m "perf and not accuracy" --timeout=120 --node-list="$NODE_LIST")
 STATUS=0
-
-for SHIFT in 0 4 24 44 60; do
-  export LLK_CODE_SHIFT="$SHIFT"
-  export RUNNER_TEMP="$TEMP_ROOT/placement-p$SHIFT"
-  export PERF_RUN_TAG="p$SHIFT"
-  if [[ "$SHIFT" == 0 ]]; then export LLK_WINDOW_HASH=1; else unset LLK_WINDOW_HASH; fi
-  pytest "${PYTEST_EXTRA[@]}" --compile-producer -n 10 --junitxml="pytest-report-placement-p${SHIFT}-1-compile.xml" "${FILES[@]}" || STATUS=1
-  pytest "${PYTEST_EXTRA[@]}" --compile-consumer --dist loadgroup -n 15 --junitxml="pytest-report-placement-p${SHIFT}-1-run.xml" "${FILES[@]}" || STATUS=1
-done
+export LLK_CODE_SHIFTS="0 4 24 44 60"
+export RUNNER_TEMP="$TEMP_ROOT/placement"
+export PERF_RUN_TAG="p0"
+export LLK_WINDOW_HASH=1
+STOP_AT="${LLK_STOP_AT:-}"
+if [[ -n "$STOP_AT" ]]; then
+  export LLK_STOP_AT=$(( $(date +%s) + (STOP_AT - $(date +%s)) / 3 ))
+fi
+pytest "${PYTEST_EXTRA[@]}" --compile-producer -n 10 --junitxml="pytest-report-placement-1-compile.xml" "${FILES[@]}" || STATUS=1
+[[ -n "$STOP_AT" ]] && export LLK_STOP_AT="$STOP_AT"
+pytest "${PYTEST_EXTRA[@]}" --compile-consumer --dist loadgroup -n 15 --junitxml="pytest-report-placement-1-run.xml" "${FILES[@]}" || STATUS=1
 
 # A test that failed at one position is reported as unclear; the comparison still runs.
 exit "$STATUS"

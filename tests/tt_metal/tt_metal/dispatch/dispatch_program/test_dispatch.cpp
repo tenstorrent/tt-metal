@@ -31,7 +31,8 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
@@ -236,7 +237,7 @@ TEST_F(MeshDispatchFixture, TensixTestHostTransferStatsCountProgramLoads) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const CoreCoord core = {0, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     const KernelHandle kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
@@ -593,14 +594,14 @@ Program create_quasar_l1_write_program(
         }},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = dm_kernel_name,
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", l1_address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
     return program;
 }
 

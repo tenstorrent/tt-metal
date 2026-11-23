@@ -153,4 +153,8 @@ uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype);
 uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype);
 
 uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype);
+
+// True when the op's result at 0 is inf or nan. Run on the zero tile padding, such an op leaves a non-finite value in
+// the lanes that share a BFLOAT8_B / BFLOAT4_B block with real lanes, and that value sets the block's exponent.
+bool is_non_finite_at_zero(const EltwiseUnaryWithParam& op);
 }  // namespace ttnn::operations::unary::utils

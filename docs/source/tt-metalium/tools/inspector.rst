@@ -22,7 +22,7 @@ Configure the Inspector by setting the following environment variables:
    export TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS=localhost:50051 # optional: set the address of the Inspector RPC server. Default is `localhost:50051`.
    export TT_METAL_INSPECTOR_RPC=1                              # optional: enable/disable the Inspector RPC server. Default is `1` (enabled).
 
-Enabling the Inspector will override `TT_METAL_RISCV_DEBUG_INFO` and debugging info will be generated for riscv elfs.
+RISC-V debug info defaults to on when the Inspector is enabled; set `TT_METAL_RISCV_DEBUG_INFO=0` to disable it, or `TT_METAL_RISCV_DEBUG_INFO=1` to enable it independently of the Inspector.
 You can also use unix sockets for the RPC server by setting `TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS` to a unix socket path,
 e.g. `unix:/tmp/inspector_socket`.
 

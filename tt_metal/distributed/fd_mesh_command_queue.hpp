@@ -29,6 +29,7 @@ class FDMeshCQTestAccessor;
 
 namespace tt::tt_metal {
 class Device;
+struct ReadCoreDataDescriptor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
@@ -102,12 +103,9 @@ private:
         const program_dispatch::ProgramDispatchMetadata& dispatch_md);
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
-    // Access a reference system memory manager, which acts as a global host side state manager for
-    // specific MeshCommandQueue attributes.
-    // TODO: All Mesh level host state managed by this class should be moved out, since its not
-    // tied to system memory anyway. Move out the bypass mode tracker.
-    SystemMemoryManager& reference_sysmem_manager();
-    MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
+    // The CQs share the worker launch message state, so no CQ may reset it while any of them records a trace.
+    bool any_cq_capturing_trace() const;
+    MultiProducerSingleConsumerQueue<ReadBufferDescriptor>& get_read_descriptor_queue(IDevice* device);
 
     void submit_core_data_memcpy_request(
         const ReadCoreDataDescriptor& read_descriptor,
@@ -139,10 +137,6 @@ private:
     // launch.
     DispatchArray<std::unordered_map<uint64_t, uint32_t>> cross_node_program_completion_counts_;
 
-    DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
-    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
-
     struct MeshTraceNode {
         std::vector<std::pair<MeshCoordinateRange, TraceNode>> trace_nodes;
         // Per trace_nodes entry: a capture-time snapshot of the program's per-device runtime args, or null.
@@ -167,10 +161,10 @@ private:
 
     // TODO: Explore other thread-safe data-structures for these queues.
     // Main thread submits request to the completion queue reader through this queue
-    MultiProducerSingleConsumerQueue<MeshCompletionReaderVariant> completion_queue_reads_;
+    MultiProducerSingleConsumerQueue<std::shared_ptr<MeshCompletionReaderVariant>> completion_queue_reads_;
     // Main thread pushes to a queue per physical device, specifying the buffer read configuration that
     // must be used by the completion queue reader. Only used for reading buffer data from the Mesh.
-    std::unordered_map<uint32_t, std::unique_ptr<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>>
+    std::unordered_map<uint32_t, std::unique_ptr<MultiProducerSingleConsumerQueue<ReadBufferDescriptor>>>
         read_descriptors_;
     // CV used by main thread to notify completion queue reader of work
     std::condition_variable reader_thread_cv_;
