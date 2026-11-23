@@ -42,14 +42,10 @@ FORCE_INLINE void mcast_phase(const TilesArgs& tiles_args, const ExtraArgs& extr
 
     src.wait_front(num_tiles);
     const uint32_t src_addr = src.get_read_ptr();
-    const uint32_t dst_addr =
-        dst.get_write_ptr() +
-        dst_tile_offset * tile_bytes;  // the CB sits at one address on every core that declares it
-    MulticastEndpoint consumers;
     constexpr bool from_far_corner = noc_index != 0;  // NOC_1: start at the bottom-right corner
     noc.async_write_multicast(
         CoreLocalMem<uint32_t>(src_addr),
-        consumers,
+        dst,
         num_tiles * tile_bytes,
         num_dests,
         {},
@@ -57,7 +53,8 @@ FORCE_INLINE void mcast_phase(const TilesArgs& tiles_args, const ExtraArgs& extr
          .noc_y_start = from_far_corner ? y1 : y0,
          .noc_x_end = from_far_corner ? x0 : x1,
          .noc_y_end = from_far_corner ? y0 : y1,
-         .addr = dst_addr});
+         // The CB sits at one address on every core that declares it.
+         .offset_bytes = dst_tile_offset * tile_bytes});
     noc.async_write_barrier();
     for (uint32_t x = x0; x <= x1; ++x) {
         for (uint32_t y = y0; y <= y1; ++y) {

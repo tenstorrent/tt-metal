@@ -6,12 +6,14 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <climits>
 #include <cstdint>
 #include <cstddef>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -33,12 +35,63 @@ namespace tt::tt_metal {
 
 namespace thread_binding {
 
-std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node() {
+// CPUs the process may run on: the main thread's affinity mask (what taskset or a cpuset sets for the process), read
+// with a dynamically sized set. Empty if it cannot be read. Callers snapshot it on first use.
+std::vector<uint32_t> get_allowed_cpus() {
+    constexpr long max_cpus = 1L << 16;
+    const long configured = sysconf(_SC_NPROCESSORS_CONF);
+    for (long n = std::min(std::max<long>(configured, CPU_SETSIZE), max_cpus);; n = std::min(n * 2, max_cpus)) {
+        cpu_set_t* set = CPU_ALLOC(n);
+        if (set == nullptr) {
+            return {};
+        }
+        const size_t size = CPU_ALLOC_SIZE(n);
+        CPU_ZERO_S(size, set);
+        if (sched_getaffinity(getpid(), size, set) == 0) {
+            std::vector<uint32_t> cpus;
+            for (long cpu = 0; cpu < n; ++cpu) {
+                if (CPU_ISSET_S(cpu, size, set)) {
+                    cpus.push_back(static_cast<uint32_t>(cpu));
+                }
+            }
+            CPU_FREE(set);
+            return cpus;
+        }
+        const int err = errno;
+        CPU_FREE(set);
+        if (err != EINVAL || n == max_cpus) {
+            return {};
+        }
+    }
+}
+
+// CPUs per NUMA node that worker threads may be pinned to, limited to the process's allowed CPUs so a process kept off
+// some CPUs (e.g. ones another process busy-polls) keeps its workers off them too. A node with no allowed CPU gets all
+// allowed CPUs; only if none can be determined does a node keep all of its own. A narrow binding (e.g. an MPI rank on
+// one core) therefore puts all of that process's workers on those few CPUs; get_cpu_core_for_physical_device warns.
+std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(const std::vector<uint32_t>& allowed) {
     std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = {};
-    if (numa_available() != -1) {
-        for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
-            int node = numa_node_of_cpu(cpu);
+    if (numa_available() == -1) {
+        return cpu_cores_per_numa_node;
+    }
+    const std::unordered_set<uint32_t> allowed_set(allowed.begin(), allowed.end());
+    std::unordered_map<int, std::vector<uint32_t>> all_cores = {};
+    for (int cpu = 0; cpu < numa_num_configured_cpus(); ++cpu) {
+        int node = numa_node_of_cpu(cpu);
+        all_cores[node].push_back(cpu);
+        if (allowed_set.contains(cpu)) {
             cpu_cores_per_numa_node[node].push_back(cpu);
+        }
+    }
+    for (auto& [node, cores] : all_cores) {
+        auto& chosen = cpu_cores_per_numa_node[node];
+        if (!chosen.empty()) {
+            continue;
+        }
+        if (allowed.empty()) {
+            chosen = std::move(cores);
+        } else {
+            chosen = allowed;
         }
     }
     return cpu_cores_per_numa_node;
@@ -59,7 +112,25 @@ bool balanced_physical_device_numa(ContextId context_id) {
 }
 
 uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physical_device_id) {
-    static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
+    // Serialize concurrent callers: the per-node round-robin counters below are shared mutable state.
+    static std::mutex mutex;
+    const std::lock_guard<std::mutex> lock(mutex);
+    // One snapshot of the allowed CPUs, taken on first use, feeds both the NUMA map and the fallback.
+    static const std::vector<uint32_t> allowed_cpus = get_allowed_cpus();
+    static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node =
+        get_cpu_cores_per_numa_node(allowed_cpus);
+    static std::once_flag narrow_warning;
+    const uint32_t num_devices = MetalContext::instance(context_id).get_cluster().number_of_devices();
+    if (!allowed_cpus.empty() && allowed_cpus.size() < num_devices) {
+        std::call_once(narrow_warning, [&] {
+            log_warning(
+                tt::LogMetal,
+                "The process may run on {} CPUs, fewer than the cluster's {} devices: device worker threads may "
+                "share CPUs. Widen the CPU binding (taskset, MPI --bind-to) for full host throughput.",
+                allowed_cpus.size(),
+                num_devices);
+        });
+    }
     static std::unordered_map<int, int> logical_cpu_id_per_numa_node = {};
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
@@ -86,6 +157,9 @@ uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physica
         auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
         return cpu_cores_on_node[(logical_cpu_id_per_numa_node[numa_node]++) % cpu_cores_on_node.size()];
     }
+    if (!allowed_cpus.empty()) {
+        return allowed_cpus[physical_device_id % allowed_cpus.size()];
+    }
     uint32_t num_threads = std::thread::hardware_concurrency();
     TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
     return physical_device_id % num_threads;
@@ -102,10 +176,17 @@ void bind_memory_to_numa_node(void* base, size_t bytes, int numa_node) {
 }
 
 void set_worker_affinity(std::thread& worker, uint32_t cpu_core) {
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(cpu_core, &cpuset);
-    int rc = pthread_setaffinity_np(worker.native_handle(), sizeof(cpu_set_t), &cpuset);
+    // Sized for cpu_core, so CPUs beyond CPU_SETSIZE work too.
+    cpu_set_t* cpuset = CPU_ALLOC(cpu_core + 1);
+    if (cpuset == nullptr) {
+        log_warning(tt::LogMetal, "Unable to bind worker thread to CPU Core {}: out of memory", cpu_core);
+        return;
+    }
+    const size_t size = CPU_ALLOC_SIZE(cpu_core + 1);
+    CPU_ZERO_S(size, cpuset);
+    CPU_SET_S(cpu_core, size, cpuset);
+    int rc = pthread_setaffinity_np(worker.native_handle(), size, cpuset);
+    CPU_FREE(cpuset);
     if (rc) {
         log_warning(
             tt::LogMetal,
@@ -167,6 +248,25 @@ bool spin_until(Ready ready) {
         }
         i < PAUSES ? ttsl::pause() : static_cast<void>(sched_yield());
     }
+    return false;
+}
+
+// Polls for up to `window`. The pauses between polls leave most of the core to its SMT sibling, which often runs
+// the thread the poll is waiting for.
+template <typename Ready>
+bool spin_paced_for(std::chrono::nanoseconds window, Ready ready) {
+    constexpr uint32_t POLLS_PER_CLOCK_READ = 32, PAUSES_PER_POLL = 8;
+    const auto deadline = std::chrono::steady_clock::now() + window;
+    do {
+        for (uint32_t i = 0; i < POLLS_PER_CLOCK_READ; i++) {
+            if (ready()) {
+                return true;
+            }
+            for (uint32_t pause = 0; pause < PAUSES_PER_POLL; pause++) {
+                ttsl::pause();
+            }
+        }
+    } while (std::chrono::steady_clock::now() < deadline);
     return false;
 }
 
@@ -268,19 +368,23 @@ class ParallelJob;
 class NumaAwareExecutor {
 public:
     NumaAwareExecutor(
-        ContextId context_id,
-        uint32_t physical_device_id,
+        uint32_t cpu_core,
         Completion& completion,
         uint32_t index_in_pool,
         const std::atomic<uint64_t>& pool_published_job,
-        const std::unique_ptr<ParallelJob>* pool_jobs) :
-        completion_(completion), index_(index_in_pool), pool_published_job_(pool_published_job), pool_jobs_(pool_jobs) {
+        const std::atomic<uint64_t>& pool_spin_window_closed_at,
+        const std::unique_ptr<ParallelJob>* pool_jobs,
+        std::chrono::nanoseconds spin_window) :
+        completion_(completion),
+        index_(index_in_pool),
+        pool_published_job_(pool_published_job),
+        pool_spin_window_closed_at_(pool_spin_window_closed_at),
+        pool_jobs_(pool_jobs),
+        spin_window_(spin_window) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() { worker_loop(); });
-
-        auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(context_id, physical_device_id);
-        thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
+        thread_binding::set_worker_affinity(worker, cpu_core);
     }
 
     // Delete copy and move operations as this class manages a thread and should not be copied or moved
@@ -324,9 +428,21 @@ private:
         return !tasks_.empty() || pool_published_job_.load(std::memory_order_seq_cst) != last_seen_job_;
     }
 
-    // Spins briefly, then parks until a producer publishes work or the executor shuts down.
+    // A short spin (spin_until), then the pool's spin window (spin_paced_for) if it has one, so back-to-back work
+    // is picked up without entering the kernel; then parks until a producer publishes work or the executor shuts down.
     void wait_for_work() {
         if (spin_until([this] { return has_work(); })) {
+            return;
+        }
+        // A parallel_for with AfterFanOut::Park ends it for the workers whose last job is that one.
+        auto window_closed = [this] {
+            return pool_spin_window_closed_at_.load(std::memory_order_relaxed) == last_seen_job_;
+        };
+        if (spin_window_.count() > 0 && !window_closed() &&
+            spin_paced_for(
+                spin_window_,
+                [&] { return has_work() || shutdown_.load(std::memory_order_relaxed) || window_closed(); }) &&
+            !window_closed()) {
             return;
         }
         // seq_cst pairs with wake(): either the producer sees the worker parked, or the worker sees the work.
@@ -344,7 +460,9 @@ private:
     std::atomic<bool> shutdown_ = false;
     alignas(64) const uint32_t index_;
     const std::atomic<uint64_t>& pool_published_job_;
+    const std::atomic<uint64_t>& pool_spin_window_closed_at_;
     const std::unique_ptr<ParallelJob>* const pool_jobs_;
+    const std::chrono::nanoseconds spin_window_;
     uint64_t last_seen_job_ = 0;
     std::exception_ptr stored_exception_;
 };
@@ -598,6 +716,26 @@ void run_on_caller(size_t num_calls, ttsl::move_only_function<void(size_t)>& fn)
     }
 }
 
+// The spin window if every worker has a CPU of its own, else none. Workers spinning on a shared CPU take turns on it, so
+// a fan-out would wait for the scheduler to cycle through them; it happens when the process may run on fewer CPUs than
+// the pool has workers.
+std::chrono::nanoseconds spin_window_for(std::vector<uint32_t> cpu_cores, std::chrono::nanoseconds spin_window) {
+    if (spin_window.count() == 0) {
+        return spin_window;
+    }
+    std::sort(cpu_cores.begin(), cpu_cores.end());
+    const auto distinct = std::unique(cpu_cores.begin(), cpu_cores.end()) - cpu_cores.begin();
+    if (distinct == static_cast<std::ptrdiff_t>(cpu_cores.size())) {
+        return spin_window;
+    }
+    log_debug(
+        tt::LogMetal,
+        "Thread pool: {} workers share {} CPUs, so they park after a fan-out instead of spinning",
+        cpu_cores.size(),
+        distinct);
+    return std::chrono::nanoseconds(0);
+}
+
 // Custom Thread-Pool using the threading::Executor class.
 // Allows enqueuing tasks tied to specific devices.
 class DeviceBoundThreadPool : public ThreadPool {
@@ -605,13 +743,21 @@ public:
     // Constructor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
     // All physical devices must belong to the same context ID.
-    DeviceBoundThreadPool(ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) :
+    DeviceBoundThreadPool(
+        ContextId context_id,
+        const std::vector<tt::tt_metal::Device*>& physical_devices,
+        std::chrono::nanoseconds spin_window = std::chrono::nanoseconds(0)) :
         num_workers_(physical_devices.size()) {
         allocate_jobs();
+        std::vector<uint32_t> cpu_cores(num_workers_);
+        for (uint32_t i = 0; i < num_workers_; i++) {
+            cpu_cores[i] = thread_binding::get_cpu_core_for_physical_device(context_id, physical_devices[i]->id());
+        }
+        spin_window = spin_window_for(cpu_cores, spin_window);
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                context_id, physical_devices[i]->id(), completion_, i, published_, jobs_.data()));
+                cpu_cores[i], completion_, i, published_, spin_window_closed_at_, jobs_.data(), spin_window));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
             map_worker_to_device(i, physical_devices[i]->id());
         }
@@ -623,8 +769,14 @@ public:
         workers_.reserve(thread_count);
 
         for (uint32_t i = 0; i < thread_count; i++) {
-            workers_.emplace_back(
-                std::make_unique<NumaAwareExecutor>(context_id, i, completion_, i, published_, jobs_.data()));
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
+                thread_binding::get_cpu_core_for_physical_device(context_id, i),
+                completion_,
+                i,
+                published_,
+                spin_window_closed_at_,
+                jobs_.data(),
+                std::chrono::nanoseconds(0)));
             phys_device_to_thread_id_[i] = i;
             map_worker_to_device(i, i);
         }
@@ -655,8 +807,14 @@ public:
         workers_[thread_id]->enqueue(std::move(f));
     }
 
-    void parallel_for(ttsl::Span<const uint32_t> device_ids, ttsl::move_only_function<void(size_t)>&& fn) override {
+    void parallel_for(
+        ttsl::Span<const uint32_t> device_ids,
+        ttsl::move_only_function<void(size_t)>&& fn,
+        AfterFanOut after = AfterFanOut::Spin) override {
         if (device_ids.empty()) {
+            if (after == AfterFanOut::Park) {
+                close_spin_window();
+            }
             return;
         }
         auto* job = acquire_job();
@@ -664,6 +822,9 @@ public:
             // No free job, e.g. when the enclosing parallel_for calls hold them all: run every call on this thread.
             for (const uint32_t device_id : device_ids) {
                 worker_of(device_id);  // Throws for a device the pool does not serve, as planning would.
+            }
+            if (after == AfterFanOut::Park) {
+                close_spin_window();
             }
             run_on_caller(device_ids.size(), fn);
             return;
@@ -677,11 +838,17 @@ public:
         const auto& participants = job->participants();
         if (participants.size() == 1) {
             job->release();
+            if (after == AfterFanOut::Park) {
+                close_spin_window();
+            }
             run_on_caller(device_ids.size(), fn);
             return;
         }
         // Nothing below throws: once published, workers hold the job and the job refers to fn.
         job->start();
+        if (after == AfterFanOut::Park) {
+            spin_window_closed_at_.store(job->published(), std::memory_order_relaxed);
+        }
         // seq_cst pairs with the workers' check before they park: either the first participant sees the job, or
         // wake() sees it parked. It wakes the others as it starts; awake workers see the job on their own.
         published_.store(job->published(), std::memory_order_seq_cst);
@@ -716,6 +883,11 @@ public:
     }
 
 private:
+    // For a Park hint that publishes nothing: idle workers last saw the current job, so they all park.
+    void close_spin_window() {
+        spin_window_closed_at_.store(published_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    }
+
     void allocate_jobs() {
         // A worker holds at most one job, while it takes part; each concurrent or nested caller holds one more.
         jobs_.resize(num_workers_ + 2);
@@ -761,6 +933,8 @@ private:
     std::atomic<uint32_t> last_job_ = 0;
     // The job of the current parallel_for, (generation << 32) | slot; every worker watches it.
     alignas(64) std::atomic<uint64_t> published_ = 0;
+    // Published word of the last parallel_for with AfterFanOut::Park: workers that last saw it park without polling.
+    alignas(64) std::atomic<uint64_t> spin_window_closed_at_ = UINT64_MAX;
     // Worker by physical device id; NO_WORKER for a device without one.
     static constexpr uint32_t NO_WORKER = UINT32_MAX;
     std::vector<uint32_t> worker_of_device_;
@@ -783,7 +957,10 @@ public:
         f();
     }
     void wait() override {}
-    void parallel_for(ttsl::Span<const uint32_t> device_ids, ttsl::move_only_function<void(size_t)>&& fn) override {
+    void parallel_for(
+        ttsl::Span<const uint32_t> device_ids,
+        ttsl::move_only_function<void(size_t)>&& fn,
+        AfterFanOut /*after*/ = AfterFanOut::Spin) override {
         run_on_caller(device_ids.size(), fn);
     }
 };
@@ -797,6 +974,13 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) {
     return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices);
+}
+
+std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
+    ContextId context_id,
+    const std::vector<tt::tt_metal::Device*>& physical_devices,
+    std::chrono::microseconds spin_window) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices, spin_window);
 }
 
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId /*context_id*/) {

@@ -27,11 +27,18 @@ captured in a sidecar JSON file. The importer consumes that sidecar offline and
 populates the visualizer comparison tables.
 """
 
+import contextlib
+import errno
+import fcntl
 import hashlib
 import json
 import math
+import os
 import re
+import secrets
+import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 from collections import defaultdict
@@ -254,7 +261,7 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 
 
 # String so we can follow semver-like bumps (was int on an older branch).
-# Bump when the visualizer schema changes; stale DBs are deleted on import (no migration path).
+# Bump when the visualizer schema changes. Each import writes a fresh DB, so there is no migration path to maintain.
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
@@ -264,6 +271,8 @@ DATABASE_SCHEMA_VERSION = "3.5"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
+# Written by import_report into the output directory, which the graph report fixture also imports from.
+TENSOR_LIFETIME_SIDECAR_SUFFIX = ".tensor_lifetime.json"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
@@ -273,28 +282,6 @@ _OPERATION_ID_STRIDE_PER_RANK_FILE = 10000
 # stay unique wherever operation_id is. Bounds an operation to this many program executions, i.e.
 # this many devices in one rank's local mesh.
 _EXECUTION_ID_STRIDE_PER_OPERATION = 1024
-
-
-def _schema_version_tuple(ver: str) -> tuple[int, ...]:
-    """Parse ``schema_version`` metadata for ordering (e.g. ``2.1``, ``3`` → comparable tuples)."""
-    s = str(ver).strip()
-    if not s:
-        return (0,)
-    parts: list[int] = []
-    for p in s.split("."):
-        if p.isdigit():
-            parts.append(int(p))
-    return tuple(parts) if parts else (0,)
-
-
-def _schema_is_older(stored: str | None, current: str) -> bool:
-    if stored is None:
-        return True
-    a, b = _schema_version_tuple(stored), _schema_version_tuple(current)
-    n = max(len(a), len(b))
-    aa = a + (0,) * (n - len(a))
-    bb = b + (0,) * (n - len(b))
-    return aa < bb
 
 
 def _report_rank(report, path: Path) -> int:
@@ -351,7 +338,7 @@ def _discover_report_json_files(report_path: Path) -> list[_ReportFile]:
     keep only names that match the main capture file pattern. Those captures must
     come from a single run and cover every rank (see ``_check_rank_captures_complete``).
 
-    Otherwise all ``*.json`` except ``config.json`` and ``*.python_io.json``.
+    Otherwise all ``*.json`` except ``config.json`` and sidecar files (``_is_sidecar_path``).
     """
     if report_path.is_file():
         return [_parse_report_file(report_path)]
@@ -361,18 +348,14 @@ def _discover_report_json_files(report_path: Path) -> list[_ReportFile]:
     if rank_captures:
         _check_rank_captures_complete(report_path, rank_captures)
         return sorted(rank_captures, key=lambda rf: rf.rank)
-    skip = {"config.json"}
     return [
         _ReportFile(p)
         for p in sorted(report_path.glob("*.json"))
-        if p.name not in skip
-        and not p.name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
-        and not p.name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
-        and p.name != COMPARISON_RECORDS_FALLBACK_NAME
+        if p.name != "config.json" and not _is_sidecar_path(p)
     ]
 
 
-# Missing ranks named in the error before it falls back to a count, so a bogus world size can't build a huge message.
+# Files named in an import error before it falls back to a count, so a bogus world size can't build a huge message.
 _MAX_MISSING_CAPTURES_LISTED = 8
 
 
@@ -420,28 +403,320 @@ def _check_rank_captures_complete(report_path: Path, rank_captures: list[_Report
         )
 
 
-def _unchanged_database_note(db_path: Path, db_existed: bool) -> str:
-    """Tail for an import error message: an earlier import's database is still there, and this one did not change it."""
-    return f". {db_path} was not updated" if db_existed else ""
+_IMPORTING_INFIX = ".importing-"
+_SQLITE_SIDECAR_SUFFIXES = ("-journal", "-wal", "-shm")
+# What _importing_name builds, plus a SQLite sidecar suffix for a database's journal.
+_IMPORTING_FILE_RE = re.compile(
+    r"^(?P<importing>\..+"
+    + re.escape(_IMPORTING_INFIX)
+    + r"(?P<host>.+)-(?P<pid>\d+)-[0-9a-f]+)(?:"
+    + "|".join(map(re.escape, _SQLITE_SIDECAR_SUFFIXES))
+    + r")?$"
+)
 
 
-def _remove_stale_database_if_needed(db_path: Path) -> None:
-    """Remove DB file if it was built with an older schema (no migration path)."""
-    if not db_path.exists():
+def _importing_name(path: Path, host: str, pid: int, token: str) -> Path:
+    """The importing file for ``path``, ``.<name>.importing-<host>-<pid>-<token>`` beside it: hidden, with the host and
+    pid that let a later import tell whether the process writing it is still alive."""
+    return path.with_name(f".{path.name}{_IMPORTING_INFIX}{host}-{pid}-{token}")
+
+
+# (key in a capture, file stem) of the YAMLs written beside the database, one per rank of a multi-rank run.
+_YAMLS_BESIDE_DATABASE = (
+    ("cluster_descriptor", "cluster_descriptor"),
+    ("mesh_coordinate_mapping", "physical_chip_mesh_coordinate_mapping"),
+)
+_YAML_BESIDE_DATABASE_RE = re.compile(
+    r"^(?:" + "|".join(re.escape(stem) for _, stem in _YAMLS_BESIDE_DATABASE) + r")(?:_\d+_of_\d+)?\.yaml$"
+)
+# report_metadata key holding the names of the YAMLs an import published beside its database, as a JSON list. The next
+# import into the directory removes the ones it doesn't write again, and never a YAML no import recorded.
+_YAML_FILES_METADATA_KEY = "yaml_files"
+
+
+# What flock raises on a filesystem that doesn't support it: some NFS mounts (ENOLCK) and Lustre mounted without
+# -o flock (ENOSYS), both common for a report directory shared by the hosts of a multi-host run.
+_FLOCK_UNSUPPORTED_ERRNOS = frozenset({errno.ENOLCK, errno.ENOSYS, errno.EOPNOTSUPP, errno.ENOTSUP})
+
+
+def _flock(fd: int, operation: int) -> bool:
+    """``fcntl.flock(fd, operation)``; False, with no lock taken, where the filesystem doesn't support it."""
+    try:
+        fcntl.flock(fd, operation)
+    except OSError as e:
+        if e.errno in _FLOCK_UNSUPPORTED_ERRNOS:
+            return False
+        raise
+    return True
+
+
+class _ImportingFile(NamedTuple):
+    """A file an import creates under an importing name, and the descriptor it holds open (and locked) on it."""
+
+    path: Path
+    fd: int
+
+
+def _take_group_and_mode(fd: int, target: os.stat_result) -> None:
+    """Give the file open at ``fd`` the group and permission bits of ``target``, keeping read and write for its owner.
+
+    Where the group can't be taken (this user isn't in it), the group and other bits are cleared instead: the same bits
+    under this user's group could let a different set of users read the file.
+    """
+    mode = (target.st_mode & 0o777) | stat.S_IRUSR | stat.S_IWUSR
+    if os.fstat(fd).st_gid != target.st_gid:
+        try:
+            os.fchown(fd, -1, target.st_gid)
+        except OSError:
+            mode &= ~(stat.S_IRWXG | stat.S_IRWXO)
+    os.fchmod(fd, mode)
+
+
+def _create_importing_file(path: Path) -> _ImportingFile:
+    """Create an empty hidden sibling of ``path`` that an import writes first and moves onto ``path`` once it succeeds.
+
+    The descriptor holds an exclusive ``flock`` on it, which the caller releases once the file is published or removed;
+    while it is held, ``_remove_orphaned_importing_files`` leaves the file alone. Where the filesystem doesn't support
+    ``flock``, the descriptor holds no lock and the file is protected by its pid alone.
+
+    Created exclusively, so a file or link already at that name is never followed, and with a random part, so
+    overlapping imports into the same directory don't share one. When it replaces a file, it is created readable by its
+    owner only and then given that file's group and permission bits (see ``_take_group_and_mode``), so it is never
+    readable by anyone who can't read the file it replaces. Its owner is this user, whoever owned that file.
+    """
+    try:
+        target = path.stat()
+    except FileNotFoundError:
+        target = None
+    while True:
+        candidate = _importing_name(path, socket.gethostname(), os.getpid(), secrets.token_hex(4))
+        try:
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666 if target is None else 0o600)
+        except FileExistsError:
+            continue
+        try:
+            _flock(fd, fcntl.LOCK_EX)
+            # Another import took it for an orphan and removed it before the lock was taken.
+            removed = os.fstat(fd).st_nlink == 0
+            if not removed and target is not None:
+                _take_group_and_mode(fd, target)
+        except BaseException:
+            os.close(fd)
+            candidate.unlink(missing_ok=True)
+            raise
+        if removed:
+            os.close(fd)
+            continue
+        return _ImportingFile(candidate, fd)
+
+
+def _write_through(fd: int, text: str) -> None:
+    """Write ``text`` to the file open at ``fd``, leaving ``fd`` (and the lock on it) open."""
+    with os.fdopen(os.dup(fd), "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def _connect_without_sqlite_locking(path: Path) -> sqlite3.Connection:
+    """Open the importing database at ``path`` with SQLite's ``unix-none`` VFS, which takes no file locks.
+
+    Only this connection ever opens the file. On macOS, SQLite's own locks conflict with the ``flock`` the import holds
+    on it, and every write fails with ``database is locked``.
+    """
+    try:
+        return sqlite3.connect(f"{path.absolute().as_uri()}?vfs=unix-none", uri=True)
+    except sqlite3.OperationalError:  # A SQLite built without that VFS.
+        return sqlite3.connect(path)
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Whether a process with ``pid`` exists in this process's PID namespace; a pid no process can have is not alive."""
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, OverflowError, ValueError):
+        return False
+    except PermissionError:  # Alive, but owned by another user.
+        return True
+    return True
+
+
+def _remove_orphaned_importing_files(directory: Path) -> None:
+    """Remove importing files that an import on this host left in ``directory`` when its process was killed (SIGKILL,
+    OOM, a CI timeout) before its clean-up ran; each would otherwise stay hidden at the size of a database.
+
+    Files of live processes, and of other hosts sharing the directory, are left alone. So is a file whose ``flock`` is
+    still held (for a SQLite journal, the database's): a process in another PID namespace on the same host, such as
+    another container sharing the host's network and this directory, can be alive although its pid isn't here. Where
+    the filesystem doesn't support ``flock``, the dead pid is all there is to go by; if that removes a live import's
+    file, that import fails when it publishes, and publishes nothing. The clean-up is best effort: a file it can't lock
+    or remove is left, and the import goes ahead.
+    """
+    host = socket.gethostname()
+    for path in list(directory.glob(f".*{_IMPORTING_INFIX}*")):
+        match = _IMPORTING_FILE_RE.match(path.name)
+        if match is None or match["host"] != host or _pid_is_alive(int(match["pid"])):
+            continue
+        try:
+            fd = os.open(path.with_name(match["importing"]), os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:  # A journal whose database is gone.
+            path.unlink(missing_ok=True)
+            continue
+        except OSError:  # A link, or a file this user can't open: not this importer's to remove.
+            continue
+        try:
+            _flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            path.unlink(missing_ok=True)
+        except OSError:  # BlockingIOError: still locked, so its import is alive.
+            continue
+        finally:
+            os.close(fd)
+
+
+def _remove_sqlite_sidecars(path: Path) -> None:
+    """Remove the journal files SQLite keeps beside the database at ``path``, such as a crashed writer's."""
+    for suffix in _SQLITE_SIDECAR_SUFFIXES:
+        path.with_name(path.name + suffix).unlink(missing_ok=True)
+
+
+def _is_still_staged(staged: _ImportingFile) -> bool:
+    """Whether ``staged.path`` is still the file this import created and holds open: where ``flock`` is unsupported,
+    another import can take it for an orphan and remove it, and a name in a shared directory can be replaced."""
+    held = os.fstat(staged.fd)
+    try:
+        current = os.lstat(staged.path)
+    except FileNotFoundError:
+        return False
+    return (current.st_dev, current.st_ino) == (held.st_dev, held.st_ino)
+
+
+def _check_still_staged(staged: _ImportingFile) -> None:
+    if not _is_still_staged(staged):
+        raise RuntimeError(
+            f"{staged.path} was removed or replaced during the import, so none of its files were published. Another "
+            f"import into {staged.path.parent} may have taken it for an orphan, which happens where the filesystem "
+            "doesn't support flock and the two imports run in different PID namespaces on one host"
+        )
+
+
+def _publish_staged_file(staged: _ImportingFile, path: Path) -> None:
+    """Move ``staged`` onto ``path``. A link at ``path`` is replaced by the file, not followed."""
+    _check_still_staged(staged)
+    os.replace(staged.path, path)
+
+
+@contextlib.contextmanager
+def _directory_lock(directory: Path) -> Generator[None, None, None]:
+    """Hold an exclusive ``flock`` on ``directory`` itself, so imports into it publish one at a time.
+
+    Best effort: where the directory can't be locked (``flock`` unsupported, or NFS, which only grants exclusive locks
+    on files open for writing), this holds no lock.
+    """
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        yield
         return
     try:
-        conn = sqlite3.connect(db_path)
         try:
-            cur = conn.cursor()
-            cur.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'")
-            row = cur.fetchone()
-            stored = row[0] if row else None
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            pass
+        yield
+    finally:
+        os.close(fd)
+
+
+def _yamls_published_with(db_path: Path, yaml_dir: Path) -> set[Path]:
+    """The YAMLs in ``yaml_dir`` that the import which wrote the database at ``db_path`` recorded publishing beside it.
+
+    None for a database that recorded none (written before imports recorded them, or by
+    ``ttnn.graph.flush_comparison_records_to_db``), or that can't be read. Only names an import could have written
+    count, so a database can't name other files for removal.
+    """
+    if not db_path.is_file():
+        return set()
+    try:
+        conn = sqlite3.connect(f"{db_path.absolute().as_uri()}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT value FROM report_metadata WHERE key = ?", (_YAML_FILES_METADATA_KEY,)
+            ).fetchone()
         finally:
             conn.close()
-        if _schema_is_older(stored, DATABASE_SCHEMA_VERSION):
-            db_path.unlink()
-    except (sqlite3.Error, OSError, ValueError):
-        db_path.unlink(missing_ok=True)
+        names = json.loads(row[0]) if row else []
+    except (sqlite3.Error, ValueError, TypeError):
+        return set()
+    if not isinstance(names, list):
+        return set()
+    return {yaml_dir / name for name in names if isinstance(name, str) and _YAML_BESIDE_DATABASE_RE.match(name)}
+
+
+class _StagedImport:
+    """The files one import writes beside its database, built under importing names and published together.
+
+    ``publish`` moves them into place once the import has succeeded; ``close`` removes whatever is still staged (all
+    of it after a failure, the rest if publishing stopped partway) and releases the locks.
+    """
+
+    def __init__(self, db_path: Path, yaml_dir: Path):
+        self.db_path = db_path
+        self.yaml_dir = yaml_dir
+        self._created: list[_ImportingFile] = []
+        self._db = self._create(db_path)
+        self._staged_yamls: dict[Path, _ImportingFile] = {}  # final path -> its importing file
+
+    @property
+    def importing_db_path(self) -> Path:
+        return self._db.path
+
+    def _create(self, path: Path) -> _ImportingFile:
+        staged = _create_importing_file(path)
+        self._created.append(staged)
+        return staged
+
+    def stage_yaml(self, name: str, text: str) -> bool:
+        """Stage ``text`` for ``yaml_dir / name``; the first capture of an import that carries it wins. Returns
+        whether this call staged it."""
+        path = self.yaml_dir / name
+        if path in self._staged_yamls:
+            return False
+        self._staged_yamls[path] = self._create(path)
+        _write_through(self._staged_yamls[path].fd, text)
+        return True
+
+    def yaml_names(self) -> list[str]:
+        """Names of the staged YAMLs, which the database records (see ``_YAML_FILES_METADATA_KEY``)."""
+        return sorted(path.name for path in self._staged_yamls)
+
+    def publish(self) -> None:
+        """Move the staged files into place, the database last, then remove the YAMLs the replaced database's import
+        recorded that this one didn't write again.
+
+        Imports into one directory publish one at a time where it can be locked (see ``_directory_lock``). Nothing is
+        moved if a staged file was removed or replaced. Each move is atomic, but the set isn't: if one fails, the YAMLs
+        already moved stay beside the earlier database, which keeps the rest of its YAMLs.
+        """
+        with _directory_lock(self.yaml_dir):
+            for staged in self._created:
+                _check_still_staged(staged)
+            stale = _yamls_published_with(self.db_path, self.yaml_dir) - self._staged_yamls.keys()
+            for path, staged in self._staged_yamls.items():
+                _publish_staged_file(staged, path)
+            # A journal left beside the old file would otherwise be taken for the new one's.
+            _remove_sqlite_sidecars(self.db_path)
+            _publish_staged_file(self._db, self.db_path)
+            for path in stale:
+                path.unlink(missing_ok=True)
+
+    def close(self) -> None:
+        try:
+            for staged in self._created:
+                # Published files have moved, and a name another process took over is not this import's to remove.
+                if _is_still_staged(staged):
+                    staged.path.unlink()
+            _remove_sqlite_sidecars(self._db.path)
+        finally:
+            for staged in self._created:
+                os.close(staged.fd)
 
 
 # Matches "File \"path\", line N" lines in formatted Python stack traces (see ttnn.graph._capture_python_stack_trace).
@@ -2283,10 +2558,12 @@ def import_graph(
 
 
 def _is_sidecar_path(path: Path) -> bool:
+    """Whether ``path`` is a file written beside a capture or a database rather than a capture itself."""
     name = path.name
     return (
         name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
         or name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
+        or name.endswith(TENSOR_LIFETIME_SIDECAR_SUFFIX)
         or name == COMPARISON_RECORDS_FALLBACK_NAME
     )
 
@@ -2339,15 +2616,22 @@ def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: di
     }
 
 
-def _load_comparison_records_sidecar(report_file: Path) -> dict | None:
-    for sidecar_path in (
-        report_file.with_suffix(COMPARISON_RECORDS_SIDECAR_SUFFIX),
-        report_file.parent / COMPARISON_RECORDS_FALLBACK_NAME,
-    ):
+def _load_comparison_records_sidecar(report_file: Path, include_fallback: bool) -> tuple[Optional[dict], bool]:
+    """Comparison records for the capture at ``report_file``, and whether they came from the fallback.
+
+    The capture's own ``<capture>.comparison_records.json`` comes first. Otherwise, when ``include_fallback``, the
+    ``comparison_records.json`` that ``ttnn.graph.flush_comparison_records_to_db`` leaves in the capture's directory:
+    it belongs to the directory rather than to any one capture, so an import reads it at most once.
+    """
+    own = report_file.with_suffix(COMPARISON_RECORDS_SIDECAR_SUFFIX)
+    fallback = report_file.parent / COMPARISON_RECORDS_FALLBACK_NAME
+    for sidecar_path, from_fallback in ((own, False), (fallback, True)):
+        if from_fallback and not include_fallback:
+            break
         if sidecar_path.exists():
             with open(sidecar_path, "r") as f:
-                return json.load(f)
-    return None
+                return json.load(f), from_fallback
+    return None, False
 
 
 def import_metadata(cursor: sqlite3.Cursor, metadata: dict) -> None:
@@ -2423,25 +2707,57 @@ def import_report(
     Raises:
         ValueError: If the ``graph_capture_<r>_of_<N>.json`` captures in a directory don't hold every rank of one
             run exactly once (a rank missing, ranks from runs of different sizes, a rank outside 1..N, or a rank
-            named twice), if a capture's metadata rank or world size disagrees with its file name, or if one of
-            those captures has an unsupported version. No database is created, and one with the current schema that
-            was already in ``output_dir`` is left as it was. When the error comes after the import has started, files
-            written beside the database for the captures already read (``*.tensor_lifetime.json``, the cluster
-            descriptor and mesh mapping YAMLs, SVGs) are kept.
+            named twice), if a capture's metadata rank or world size disagrees with its file name, if one of
+            those captures has an unsupported version, or if there is no capture to import (none found, or every
+            loose capture skipped for its version). No database is created, and one that was already in
+            ``output_dir`` is left as it was, as are the cluster descriptor and mesh mapping YAMLs beside it; the
+            message then ends with "``<db_path>`` was not updated". When the error comes after the import has started,
+            other files written beside the database for the captures already read (``*.tensor_lifetime.json``, SVGs)
+            are kept.
+
+    Each import writes a new database, built beside the target and moved over it only once the import succeeds: a
+    finished import holds only these captures, never rows left from an earlier import into the same directory, and a
+    failed one leaves whatever file ``output_dir`` already held as it was, whatever its schema, even if it is not a
+    SQLite database. Until the move, the earlier database and the new one are both on disk, so a re-import needs room
+    for two copies, which matters for large multi-rank captures.
+
+    The cluster descriptor and mesh mapping YAMLs are staged and published the same way. The database records which
+    YAMLs its import published, and publishing removes the ones the replaced database recorded that this import doesn't
+    write again, so the YAMLs beside a database come from the import that wrote it; YAMLs no import recorded (hand-written
+    ones, or ones beside a database from before imports recorded them) are left alone. Imports into one directory
+    publish one at a time where the filesystem supports ``flock``. The files are moved one at a time, the database
+    last, and stale YAMLs are removed only after it: in the unlikely case that a move fails (all of them stay within
+    ``output_dir``), the YAMLs already moved stay beside the earlier database, which keeps the rest of its YAMLs.
+
+    Replacing the file also drops rows another writer added to it since the previous import, such as the comparison
+    records ``ttnn.graph.flush_comparison_records_to_db`` writes. That function also leaves them in
+    ``comparison_records.json`` in its directory, which an import reads once, for its first capture without comparison
+    records of its own, whichever run wrote it.
+
+    A replaced file keeps its group (where this user is in it; otherwise its group and other permission bits are
+    cleared) and its permission bits, and its temporary copy is no more readable than it at any point; a new one gets
+    the umask's. Its owner becomes this user, ACLs are not copied, and a symbolic link at the database's or a YAML's
+    path is replaced by the new file rather than followed. The temporary files are removed when the import raises; ones
+    left by a process that was killed are removed by the next import into the same directory on the same host.
     """
     report_path = Path(report_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = output_dir / db_name
-
-    # Before touching any existing DB, so a bad set of captures leaves the output directory as it was.
-    try:
-        report_files = _discover_report_json_files(report_path)
-    except ValueError as e:
-        raise ValueError(f"{e}{_unchanged_database_note(db_path, db_path.exists())}") from e
-
-    _remove_stale_database_if_needed(db_path)
     db_existed = db_path.exists()
+    try:
+        _import_report(report_path, output_dir, db_path, generate_svgs)
+    except ValueError as e:
+        # Nothing is published before the import has succeeded, so an earlier database is still as it was.
+        if not db_existed:
+            raise
+        raise ValueError(f"{e}. {db_path} was not updated") from e
+    return db_path
+
+
+def _import_report(report_path: Path, output_dir: Path, db_path: Path, generate_svgs: bool) -> None:
+    # Before creating anything in output_dir, so a bad set of captures leaves it as it was.
+    report_files = _discover_report_json_files(report_path)
 
     # Create graphs directory if generating SVGs
     graphs_dir = None
@@ -2449,8 +2765,12 @@ def import_report(
         graphs_dir = output_dir / "graphs"
         graphs_dir.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    for directory in {output_dir, db_path.parent}:
+        _remove_orphaned_importing_files(directory)
+    # Built under temporary names and moved into place at the end, so a reader never sees a partial database.
+    staged = _StagedImport(db_path, output_dir)
+
+    conn = None
     imported = False
 
     try:
@@ -2458,6 +2778,9 @@ def import_report(
         _prev_profile = sys.getprofile()
         sys.settrace(None)
         sys.setprofile(None)
+
+        conn = _connect_without_sqlite_locking(staged.importing_db_path)
+        cursor = conn.cursor()
 
         create_database_schema(cursor)
         save_database_schema_version(cursor)
@@ -2483,6 +2806,9 @@ def import_report(
         # First JSON file per rank uses operation ids 1..N; each additional file for the same rank
         # shifts ids by _OPERATION_ID_STRIDE_PER_RANK_FILE so they stay unique in the merged DB.
         import_index_by_rank: dict[int, int] = {}
+        # Loose captures skipped for their version, as (name, version or None when missing).
+        skipped_for_version: list[tuple[str, object]] = []
+        comparison_fallback_read = False
 
         # Keep the discovery order: a plain sort would put graph_capture_10_of_16 before graph_capture_2_of_16.
         for idx, (rpath, file_rank, file_world_size) in enumerate(report_files):
@@ -2501,11 +2827,9 @@ def import_report(
             if version != SUPPORTED_REPORT_VERSION:
                 if file_rank is not None:
                     # Skipping it would leave that rank out of a merge that _check_rank_captures_complete passed.
-                    raise ValueError(
-                        f"{rpath} has version {version}, expected {SUPPORTED_REPORT_VERSION}"
-                        + _unchanged_database_note(db_path, db_existed)
-                    )
+                    raise ValueError(f"{rpath} has version {version}, expected {SUPPORTED_REPORT_VERSION}")
                 logger.warning(f"{rpath} has version {version}, expected {SUPPORTED_REPORT_VERSION}")
+                skipped_for_version.append((rpath.name, report.get("version")))
                 continue
 
             file_index_for_rank = import_index_by_rank.get(rank, 0)
@@ -2517,7 +2841,6 @@ def import_report(
                 raise ValueError(
                     f"{rpath} holds the capture of {_rank_capture_name(rank, report_world_size)} according to its "
                     f"metadata (rank {rank} of world size {report_world_size})"
-                    + _unchanged_database_note(db_path, db_existed)
                 )
 
             devices_data = report.get("devices", [])
@@ -2591,7 +2914,7 @@ def import_report(
                 total_stats["tensor_consumer_rows"] += stats.get("tensor_consumers", 0)
                 total_stats["tensor_producer_rows"] += stats.get("tensor_producers", 0)
                 if tl:
-                    tl_path = output_dir / (rpath.stem + ".tensor_lifetime.json")
+                    tl_path = output_dir / (rpath.stem + TENSOR_LIFETIME_SIDECAR_SUFFIX)
                     with open(tl_path, "w") as f:
                         json.dump(tl, f, indent=2)
 
@@ -2603,7 +2926,10 @@ def import_report(
 
             comparison_data = report.get("comparison_records")
             if comparison_data is None:
-                comparison_data = _load_comparison_records_sidecar(rpath)
+                comparison_data, from_fallback = _load_comparison_records_sidecar(
+                    rpath, include_fallback=not comparison_fallback_read
+                )
+                comparison_fallback_read |= from_fallback
             if comparison_data:
                 comparison_stats = import_tensor_comparison_records(cursor, comparison_data, rank=rank)
                 total_stats["comparison_records"] += (
@@ -2615,24 +2941,11 @@ def import_report(
             if "metadata" in report:
                 import_metadata(cursor, report["metadata"])
 
-            # Save cluster descriptor YAML if present
-            if "cluster_descriptor" in report and report["cluster_descriptor"]:
-                cd_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
-                cluster_path = output_dir / f"cluster_descriptor{cd_suffix}.yaml"
-                if not cluster_path.exists():  # Only write once
-                    with open(cluster_path, "w") as f:
-                        f.write(report["cluster_descriptor"])
-                    total_stats["cluster_descriptor"] = True
-
-            # Save mesh coordinate mapping if present (matches old save_mesh_descriptor behavior)
-            if "mesh_coordinate_mapping" in report and report["mesh_coordinate_mapping"]:
-                mesh_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
-                mesh_name = f"physical_chip_mesh_coordinate_mapping{mesh_suffix}.yaml"
-                mesh_path = output_dir / mesh_name
-                if not mesh_path.exists():  # Only write once
-                    with open(mesh_path, "w") as f:
-                        f.write(report["mesh_coordinate_mapping"])
-                    total_stats["mesh_coordinate_mapping"] = True
+            # Stage the cluster descriptor and mesh mapping YAMLs; published with the database.
+            yaml_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
+            for report_key, stem in _YAMLS_BESIDE_DATABASE:
+                if report.get(report_key) and staged.stage_yaml(f"{stem}{yaml_suffix}.yaml", report[report_key]):
+                    total_stats[report_key] = True
 
             # Import buffer chunks (collapsed per-(op, device, addr, bank, core)).
             # Preferred: buffer_pages_by_address (compact, ~0.5 MB) combined with
@@ -2760,7 +3073,15 @@ def import_report(
 
             total_stats["files"] += 1
 
+        if total_stats["files"] == 0:
+            # Publishing would replace an earlier import's database with an empty one.
+            raise ValueError(_no_capture_imported_message(report_path, skipped_for_version))
+        cursor.execute(
+            "INSERT OR REPLACE INTO report_metadata VALUES (?, ?)",
+            (_YAML_FILES_METADATA_KEY, json.dumps(staged.yaml_names())),
+        )
         conn.commit()
+        imported = True
         summary = [f"Imported {total_stats['files']} report(s) into {db_path}"]
         summary.append(f"  - {total_stats['devices']} devices")
         summary.append(f"  - {total_stats['operations']} operations")
@@ -2792,19 +3113,38 @@ def import_report(
         if generate_svgs:
             summary.append(f"  - {total_stats['svgs']} SVG visualizations in {graphs_dir}/")
         logger.info("\n".join(summary))
-        imported = True
 
     finally:
         sys.settrace(_prev_trace)
         sys.setprofile(_prev_profile)
-        conn.close()
-        # A failed import commits no rows (sqlite3 commits the CREATE TABLE IF NOT EXISTS statements at once, but the
-        # rows wait for the commit), so a DB with the current schema is left as it was; one this call created holds
-        # only the schema and would pass for a report, so remove it.
-        if not imported and not db_existed:
-            db_path.unlink(missing_ok=True)
+        if conn is not None:
+            conn.close()
+        try:
+            if imported:
+                staged.publish()
+        finally:
+            staged.close()
 
-    return db_path
+
+def _no_capture_imported_message(report_path: Path, skipped_for_version: list[tuple[str, object]]) -> str:
+    """Why an import of ``report_path`` imported no capture: none was found, or each was skipped for its version."""
+    if not skipped_for_version:
+        return (
+            f"No graph captures were imported from {report_path}: it holds no capture file. Point the import at a "
+            "graph capture JSON file, or a directory holding graph_capture*.json files (config.json and sidecar files "
+            "such as *.python_io.json are not captures)"
+        )
+    listed = [
+        f"{name} ({'no version' if version is None else f'version {version}'})"
+        for name, version in skipped_for_version[:_MAX_MISSING_CAPTURES_LISTED]
+    ]
+    if len(skipped_for_version) > len(listed):
+        listed.append(f"and {len(skipped_for_version) - len(listed)} more")
+    return (
+        f"No graph captures were imported from {report_path}: all {len(skipped_for_version)} capture file(s) were "
+        f"skipped because this importer only reads version {SUPPORTED_REPORT_VERSION}: {', '.join(listed)}. Capture "
+        "them again with this version of ttnn"
+    )
 
 
 def main():

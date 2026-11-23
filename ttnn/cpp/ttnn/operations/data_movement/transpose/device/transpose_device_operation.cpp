@@ -8,6 +8,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -333,7 +334,13 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
                    (N == 1 && C == 1 && input_height_sharded && output_width_sharded));
     // RM factory hardcodes num_hw_blocks_per_core = shard_height/H, so RM demands the fully-in-shard subset.
     bool use_sharded_wh_rm = native && input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard;
-    bool use_sharded_hc = native && input_height_sharded && output_height_sharded && is_row_major;
+    // The HC sharded factory writes output shard i on the core that holds input shard i, so it needs the output
+    // sharded like the input: native already requires the same grid, and this adds shard shape and orientation.
+    bool output_shards_match_input =
+        input_height_sharded && output_height_sharded &&
+        output_memory_config.shard_spec()->shape == input_tensor.shard_spec()->shape &&
+        output_memory_config.shard_spec()->orientation == input_tensor.shard_spec()->orientation;
+    bool use_sharded_hc = output_shards_match_input && is_row_major;
 
     auto parallelization_strategy = get_parallelization_strategy(operation_attributes, tensor_args);
 
@@ -424,7 +431,7 @@ tt::tt_metal::TensorSpec TransposeDeviceOperation::compute_output_specs(
 
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(input_tensor.layout()),
             output_mem_config,
@@ -455,15 +462,27 @@ ttnn::Tensor transpose(
     float pad_value,
     bool output_mem_config_is_explicit) {
     using OperationType = ttnn::prim::TransposeDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    const auto attributes = [&](const tt::tt_metal::MemoryConfig& mem_config, bool is_explicit) {
+        return OperationType::operation_attributes_t{
             .dim = dim,
-            .output_mem_config = output_mem_config,
+            .output_mem_config = mem_config,
             .pad_value = pad_value,
-            .output_mem_config_is_explicit = output_mem_config_is_explicit,
+            .output_mem_config_is_explicit = is_explicit,
+        };
+    };
+    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
+        input_tensor,
+        output_mem_config,
+        std::nullopt,
+        [&] {
+            return OperationType::compute_output_specs(
+                attributes(output_mem_config, output_mem_config_is_explicit), TransposeInputs{.input = input_tensor});
         },
-        TransposeInputs{
-            .input = input_tensor,
+        [&](const Tensor& input, const std::optional<tt::tt_metal::MemoryConfig>& explicit_mem_config) {
+            return ttnn::device_operation::launch<OperationType>(
+                explicit_mem_config.has_value() ? attributes(*explicit_mem_config, true)
+                                                : attributes(output_mem_config, output_mem_config_is_explicit),
+                TransposeInputs{.input = input});
         });
 }
 }  // namespace ttnn::prim

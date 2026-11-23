@@ -2,20 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-import ttnn
+from functools import partial
 
+import pytest
+import torch
+import ttnn
+from tt_py_test_utils_common.utility_functions import divup, torch_random
+
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import (
+    gen_func_with_cast_tt,
+)
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_pcc,
 )
-from tt_py_test_utils_common.utility_functions import torch_random
-from tt_py_test_utils_common.utility_functions import divup
-from itertools import product as parameters
-from functools import partial
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -4542,9 +4542,11 @@ def test_binary_sharded_half_mem_config(device, input_shard_orientation, output_
         shard_config = ttnn.create_sharded_memory_config(
             shape=(1024, 64),
             core_grid=ttnn.CoreGrid(y=1, x=1),
-            strategy=ttnn.ShardStrategy.WIDTH
-            if output_memory_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-            else ttnn.ShardStrategy.BLOCK,
+            strategy=(
+                ttnn.ShardStrategy.WIDTH
+                if output_memory_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                else ttnn.ShardStrategy.BLOCK
+            ),
             orientation=input_shard_orientation,
             use_height_and_width_as_shard_shape=True,
         )
@@ -4689,6 +4691,113 @@ def test_binary_sharded_output_uneven(device):
     result = ttnn.multiply(tt_in1, tt_in2, memory_config=block_sharded)
     result = ttnn.to_torch(result)
     assert_with_pcc(torch_output, result)
+
+
+# The native L1-sharded path aliases each sharded operand's buffer as a CB and pairs the input shard on
+# each core with the output shard on the same core, with no data movement. It used to be taken whenever
+# the core grids matched (tensor-tensor) or the ShardSpecs matched (tensor-scalar), so an output with a
+# different layout, shard shape or orientation on the same cores came back permuted (#58467). Those
+# cases now take the TensorAccessor path; the same-config control stays on the aliased path.
+def _l1_sharded(layout, shard_shape, grid, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    return ttnn.MemoryConfig(layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, orientation))
+
+
+_COL_4 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+_COL_2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))})
+_GRID_2x2 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+
+_SAME_GRID_DIFFERENT_SPEC_CASES = [
+    pytest.param(
+        (128, 128),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 128], _COL_4),
+        _l1_sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, [128, 32], _COL_4),
+        id="same_grid_height_to_width",
+    ),
+    pytest.param(
+        (64, 64),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 64], _GRID_2x2),
+        _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 64], _GRID_2x2),
+        id="same_shard_spec_height_to_block",
+    ),
+    pytest.param(
+        (64, 64),
+        _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 64], _GRID_2x2),
+        _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [64, 32], _GRID_2x2),
+        id="same_layout_different_shard_shape",
+    ),
+    pytest.param(
+        (64, 64),
+        _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32], _GRID_2x2),
+        _l1_sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, [32, 32], _GRID_2x2, ttnn.ShardOrientation.COL_MAJOR),
+        id="row_major_to_col_major",
+    ),
+    # Same layout, grid and orientation. Only the shard height changes, so a check that ignores shard shape
+    # would still alias these and return the height-96 rows in the height-128 slots.
+    pytest.param(
+        (192, 128),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [96, 128], _COL_2),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [128, 128], _COL_2),
+        id="same_layout_different_shard_shape",
+    ),
+    pytest.param(
+        (128, 128),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 128], _COL_4),
+        _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 128], _COL_4),
+        id="same_config_control",
+    ),
+]
+
+
+@pytest.mark.parametrize("shape, in_mc, out_mc", _SAME_GRID_DIFFERENT_SPEC_CASES)
+@pytest.mark.parametrize("scalar_b", [False, True], ids=["tensor_tensor", "tensor_scalar"])
+def test_binary_sharded_same_grid_different_spec(device, shape, in_mc, out_mc, scalar_b):
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    if scalar_b:
+        out = ttnn.add(tx, 1.5, memory_config=out_mc)
+        golden = x + 1.5
+    else:
+        y = torch.randn(shape, dtype=torch.bfloat16)
+        ty = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+        out = ttnn.add(tx, ty, memory_config=out_mc)
+        golden = x + y
+    assert out.memory_config() == out_mc
+    assert_with_ulp(expected_result=golden, actual_result=ttnn.to_torch(out), ulp_threshold=2)
+
+
+# Same defect through a preallocated output: its memory config, not the inputs', decides the layout.
+@pytest.mark.parametrize("shape, in_mc, out_mc", _SAME_GRID_DIFFERENT_SPEC_CASES)
+def test_binary_sharded_same_grid_different_spec_output_tensor(device, shape, in_mc, out_mc):
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    y = torch.randn(shape, dtype=torch.bfloat16)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    ty = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    out = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=out_mc,
+    )
+    ttnn.add(tx, ty, output_tensor=out)
+    assert out.memory_config() == out_mc
+    assert_with_ulp(expected_result=x + y, actual_result=ttnn.to_torch(out), ulp_threshold=2)
+
+
+# A sharded input with an interleaved L1 output must not alias the output buffer as a CB.
+def test_binary_sharded_input_interleaved_l1_output(device):
+    torch.manual_seed(0)
+    shape = (128, 128)
+    in_mc = _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 128], _COL_4)
+    x = torch.randn(shape, dtype=torch.bfloat16)
+    y = torch.randn(shape, dtype=torch.bfloat16)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    ty = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    out = ttnn.add(tx, ty, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert out.memory_config() == ttnn.L1_MEMORY_CONFIG
+    assert_with_ulp(expected_result=x + y, actual_result=ttnn.to_torch(out), ulp_threshold=2)
 
 
 def test_multiply_bfloat8_b_bcast_scalarsharded(device):
@@ -4867,6 +4976,8 @@ def test_resnet50_residual_add_bfloat8b_sharded(
 # Specless sharded output must shrink CoreRangeSet to populated shard count.
 from tests.ttnn.unit_tests.operations.eltwise.specless_shard_test_utils import (
     assert_binary_shrink_h_or_w as _assert_binary_shrink_h_or_w,
+)
+from tests.ttnn.unit_tests.operations.eltwise.specless_shard_test_utils import (
     binary_add as _binary_add,
 )
 
@@ -5209,3 +5320,40 @@ def test_binary_ng_no_bcast_interleaved_bank_aliased_ranges_bandwidth(device):
         f"add with {4 * banks} tiles per core reaches {aliased / 1e3:.0f} GB/s vs {control / 1e3:.0f} GB/s with "
         f"{4 * banks + 1}: every core's tile range starts on the same DRAM bank"
     )
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 64, 96), (2, 3, 96, 160)])
+@pytest.mark.parametrize(
+    "ttnn_op, full_dtype, row_side",
+    [
+        (ttnn.logaddexp, ttnn.bfloat16, "b"),
+        (ttnn.logaddexp, ttnn.bfloat16, "a"),
+        (ttnn.logaddexp2, ttnn.bfloat16, "b"),
+        (ttnn.ldexp, ttnn.bfloat16, "b"),
+        (ttnn.add, ttnn.float32, "b"),
+    ],
+    ids=["logaddexp_row_b", "logaddexp_row_a", "logaddexp2_row_b", "ldexp_row_b", "add_fp32_bf16_row_b"],
+)
+def test_binary_bf16_row_bcast_software_fill(ttnn_op, full_dtype, row_side, shape, device):
+    """A bfloat16 row operand that does not take the LLK broadcast (exp-family ops, mixed dtypes) is
+    replicated in the reader by fill_tile_with_first_row_bfloat16. The result must be bit-identical to
+    the same op run on the operand expanded on the host."""
+    torch.manual_seed(0)
+    row_shape = shape[:-2] + (1, shape[-1])
+    full_pt = torch.empty(shape).uniform_(-4, 4)
+    row_pt = torch.empty(row_shape).uniform_(-4, 4)
+
+    def to_device(t, dtype):
+        return ttnn.from_torch(
+            t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    full_tt = to_device(full_pt, full_dtype)
+
+    def run(row_operand):
+        args = (row_operand, full_tt) if row_side == "a" else (full_tt, row_operand)
+        return ttnn.to_torch(ttnn_op(*args))
+
+    broadcast = run(to_device(row_pt, ttnn.bfloat16))
+    materialized = run(to_device(row_pt.expand(shape).contiguous(), ttnn.bfloat16))
+    assert torch.equal(broadcast, materialized)

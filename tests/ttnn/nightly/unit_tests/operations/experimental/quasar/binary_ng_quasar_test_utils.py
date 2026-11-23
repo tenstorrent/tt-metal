@@ -12,6 +12,9 @@ Not collected by pytest: the module deliberately has no `test_` prefix.
 """
 
 import math
+import os
+import pathlib
+import time
 
 import torch
 
@@ -94,6 +97,37 @@ def _act(act_type):
     return [ttnn.UnaryWithParam(act_type)] if act_type is not None else []
 
 
+# Resolve the inspector output the way the runtime does: <logs_dir>/generated/inspector, where
+# logs_dir is TT_METAL_LOGS_PATH if set, else the root dir (TT_METAL_HOME, else cwd). See
+# tt_metal/llrt/rtoptions.cpp. A hardcoded absolute path would be the only one in this directory and
+# would silently miss the file under any relocated logs dir.
+_LOGS_ROOT = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
+INSPECTOR_YAML = _LOGS_ROOT / "generated" / "inspector" / "kernels.yaml"
+
+# Wall-clock at module import. pytest imports every test module during collection, and this module with them,
+# strictly before any fixture runs, so kernels.yaml -- created when the `device` fixture opens the device -- is
+# necessarily newer than this. See bound_kernel_sources() for why that matters.
+_IMPORT_TIME = time.time()
+
+
+def bound_kernel_sources():
+    """Kernel `source:` lines from THIS process's inspector output.
+
+    Do NOT unlink kernels.yaml first: the inspector opens it once with std::ios::trunc at device
+    creation and holds the handle, and the `device` fixture runs before the test body -- so deleting the
+    path unlinks a live inode and it never reappears. Truncate-at-open is what makes the contents this
+    process's; the mtime assertion is what rejects a stale leftover, which for the fallback arm would
+    otherwise be a false green (a previous run's file holds exactly the kernels_dfb sources it asserts).
+    """
+    mtime = INSPECTOR_YAML.stat().st_mtime
+    assert mtime >= _IMPORT_TIME, (
+        f"{INSPECTOR_YAML} predates this process (mtime {mtime} < import {_IMPORT_TIME}); it is a stale "
+        "leftover, so it proves nothing about this run. Is the inspector disabled?"
+    )
+    text = INSPECTOR_YAML.read_text()
+    return [ln.split("source:", 1)[1].strip() for ln in text.splitlines() if "source:" in ln]
+
+
 # The largest ULP distance from torch's result on the device's operands, per dtype and op, on Quasar (fp32 as measured
 # on ttsim); the Wormhole and Blackhole runs share these bounds. bf16 takes production's bound of 1: on Quasar the SFPU
 # multiply truncates and the FPU add rounds twice. maximum and minimum select an operand, so they are exact.
@@ -118,15 +152,21 @@ def _fpu_add_bf16(a, b):
     return torch.where((a == 0) | (b == 0), (a + b).float().to(torch.bfloat16), rounded)
 
 
-# The bf16 sum as Quasar rounds it: twice, on the hardware, on ttsim and on craq-sim from b05091aa. A craq-sim build
-# older than b05091aa rounds once, so the FPU add and subtract cases fail on it (_ROUNDING_HINT says so).
-_FPU_ADD_ROUNDINGS = (_fpu_add_bf16,)
+def _truncate_to_bf16(x):
+    """bfloat16 of float32 values with their low 16 bits dropped, as Quasar's SFPU multiply gives its result. The
+    Wormhole and Blackhole LLKs round to nearest even instead."""
+    assert x.dtype == torch.float32, f"the truncation model takes float32 values, not {x.dtype}"
+    return (x.contiguous().view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
 
-# What a failed FPU add or subtract comparison tells the reader who runs on an older craq-sim.
-_ROUNDING_HINT = (
-    "On craq-sim, a bf16 add or subtract on the FPU kernel is exact only from build b05091aa, which rounds the FPU add "
-    "twice, as the hardware does. An older build rounds once and fails here."
-)
+
+def _sfpu_multiply_bf16(a, b):
+    """bf16 a * b as Quasar's SFPU multiply gives it out of fast mode: the float32 product, truncated to bf16. The
+    product of two bf16 values is exact in float32, so only the truncation rounds."""
+    return _truncate_to_bf16(a.float() * b.float())
+
+
+# The bf16 sum as Quasar rounds it: twice, as the hardware and ttsim do.
+_FPU_ADD_ROUNDINGS = (_fpu_add_bf16,)
 
 
 def _add_goldens(ta, tb):
