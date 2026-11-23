@@ -107,6 +107,11 @@ on:
         type: boolean
         default: false
 
+# Least privilege: every job reads the repo only. A job that needs more names it
+# in its own block (a job block replaces this one).
+permissions:
+  contents: read
+
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
@@ -117,7 +122,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-    secrets: inherit
+    secrets:
+      GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -209,7 +215,6 @@ jobs:
       contents: read
       packages: write
       actions: read
-    secrets: inherit
     with:
       artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       # Canonical, never a resolve-docker-pull-refs output: that one is
@@ -228,7 +233,9 @@ jobs:
       needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
         github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',compute_fused,')
       )
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/ttsim-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -254,7 +261,9 @@ jobs:
       !cancelled() && needs.build-artifact.result == 'success' &&
       (github.event_name == 'schedule' || inputs.run_didt_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/syseng-didt-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -278,7 +287,9 @@ jobs:
       needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
         github.event_name == 'schedule' || inputs.additional_test_categories != '' || inputs.run_cpp_tests || inputs.run_ccl_tests
       )
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/ops-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -299,7 +310,9 @@ jobs:
     if: |
       (github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',ops_docs_check,')) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/ops-integration-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -315,7 +328,9 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_tutorials_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/ttnn-integration-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
@@ -329,7 +344,9 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_cnn_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/tt-cnn-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
@@ -340,7 +357,10 @@ jobs:
   ttnn-p100-tests:
     needs: [check-harbor, build-artifact]
     if: ${{ github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests) }}
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     with:
       enabled-skus: "bh_p100"
@@ -362,7 +382,9 @@ jobs:
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
      needs.resolve-docker-pull-refs.result == 'success' &&
      (github.event_name == 'schedule' || (inputs.run_blackhole && inputs.run_p100_sanity_tests)) }}
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/umd-sanity-tests-impl.yaml
     with:
       enabled-skus: "bh_p100a_civ2_viommu"
@@ -379,8 +401,15 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
-    secrets: inherit
+    secrets:
+      HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/tt-train-tests.yaml
+    permissions:
+      contents: read
+      packages: read
     with:
       test-category: unit
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
@@ -394,8 +423,18 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_perf_pretraining_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
-    secrets: inherit
+    secrets:
+      HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
+      TT_TRAIN_AWS_HOSTNAME: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
+      TT_TRAIN_AWS_KEY: ${{ secrets.TT_TRAIN_AWS_KEY }}
+      TT_TRAIN_AWS_USERNAME: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
     uses: ./.github/workflows/tt-train-tests.yaml
+    permissions:
+      contents: read
+      packages: read
     with:
       test-category: perf
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
@@ -410,8 +449,18 @@ jobs:
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_perf_finetuning_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
-    secrets: inherit
+    secrets:
+      HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
+      TT_TRAIN_AWS_HOSTNAME: ${{ secrets.TT_TRAIN_AWS_HOSTNAME }}
+      TT_TRAIN_AWS_KEY: ${{ secrets.TT_TRAIN_AWS_KEY }}
+      TT_TRAIN_AWS_USERNAME: ${{ secrets.TT_TRAIN_AWS_USERNAME }}
     uses: ./.github/workflows/tt-train-tests.yaml
+    permissions:
+      contents: read
+      packages: read
     with:
       test-category: perf
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
@@ -438,7 +487,9 @@ jobs:
       needs.resolve-docker-pull-refs.result == 'success' &&
       (github.event_name == 'schedule' || inputs.run_triage_tests) &&
       contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150')
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/triage-tests-impl.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
@@ -467,7 +518,9 @@ jobs:
       !cancelled() && needs.build-artifact.result == 'success' &&
       (github.event_name == 'schedule' || inputs.run_llk_unit_tests) &&
       needs.generate-arch-matrix.outputs.l2-nightly-skus != ''
-    secrets: inherit
+    secrets:
+      TT_CHAT_API_KEY: ${{ secrets.TT_CHAT_API_KEY }}
+      TT_CHAT_URL: ${{ secrets.TT_CHAT_URL }}
     uses: ./.github/workflows/llk-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

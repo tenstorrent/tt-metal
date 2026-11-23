@@ -2,6 +2,22 @@ name: "[internal] tt-train tests impl"
 
 on:
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      HUGGINGFACE_TOKEN:
+        required: false
+      REDIS_CCACHE_PASSWORD:
+        required: false
+      TT_CHAT_API_KEY:
+        required: false
+      TT_CHAT_URL:
+        required: false
+      TT_TRAIN_AWS_HOSTNAME:
+        required: false
+      TT_TRAIN_AWS_KEY:
+        required: false
+      TT_TRAIN_AWS_USERNAME:
+        required: false
     inputs:
       test-category:
         required: true

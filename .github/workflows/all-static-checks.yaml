@@ -8,6 +8,11 @@ on:
       - "main"
   merge_group:
 
+# Least privilege: every job reads the repo only. A job that needs more names it
+# in its own block (a job block replaces this one).
+permissions:
+  contents: read
+
 jobs:
   find-changed-files:
     runs-on: ubuntu-latest
@@ -21,7 +26,9 @@ jobs:
     name: Run Pre-commit Hooks
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      # Read is enough: pre-commit/action v3 does not push, and reviewdog only
+      # posts review comments (pull-requests: write).
+      contents: read
       pull-requests: write
     steps:
       - name: Checkout code

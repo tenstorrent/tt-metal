@@ -313,7 +313,6 @@ jobs:
     uses: ./.github/workflows/build-docker-tools.yaml
     with:
       tool-data: ${{ needs.preflight.outputs.tool-data }}
-    secrets: inherit
 
   # Ubuntu 22.04: full build; this run also builds manylinux once for all platforms
   build-2204:
@@ -327,7 +326,6 @@ jobs:
       harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
       platform-data: ${{ needs.preflight.outputs.platform-2204-data }}
-    secrets: inherit
 
   # Ubuntu 24.04: full build in parallel with build-2204; manylinux is skipped here
   build-2404:
@@ -341,7 +339,6 @@ jobs:
       harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
       platform-data: ${{ needs.preflight.outputs.platform-2404-data }}
-    secrets: inherit
 
   # Prewarm Harbor cache after image-producing jobs complete
   prewarm-cache:

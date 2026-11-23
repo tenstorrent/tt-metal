@@ -2,6 +2,12 @@ name: "zzz Smoke tests"
 
 on:
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+      REDIS_CCACHE_PASSWORD:
+        required: false
     inputs:
       docker-image:
         required: true

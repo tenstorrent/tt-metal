@@ -2,6 +2,12 @@ name: "[internal] ttsim unit tests impl"
 
 on:
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      TT_CHAT_API_KEY:
+        required: false
+      TT_CHAT_URL:
+        required: false
     inputs:
       docker-image:
         required: true
