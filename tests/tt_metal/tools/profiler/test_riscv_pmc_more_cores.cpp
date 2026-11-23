@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Launches one kernel per idle ethernet core and one DRISC kernel, then reads the device profiler. Run it with
-// check_riscv_pmc_more_cores.py, which compares the profiler log with TT_METAL_PROFILE_RISCV_PMC off and on.
-// Idle ethernet and DRISC kernels run under slow dispatch only here, like the active ethernet profiler test.
+// One kernel per idle ethernet core and one DRISC kernel, then a device profiler read, under slow dispatch.
+// Checked by check_riscv_pmc_more_cores.py.
 
 #include <cstdint>
 #include <map>

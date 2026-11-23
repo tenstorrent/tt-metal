@@ -1233,6 +1233,27 @@ def test_active_eth_slow_dispatch():
     assert len(events.get("all_events", [])) == eriscEventCount, "Events recorded outside the active ethernet cores"
 
 
+def test_riscv_pmc_more_cores():
+    if os.getenv("ARCH_NAME") != "blackhole":
+        pytest.skip("Idle ethernet RISC-V counter capture is Blackhole only")
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import check_riscv_pmc_more_cores as checker
+
+    try:
+        rows, _ = checker.run({})
+        checks = checker.check_off(rows)
+        rows, launched = checker.run({"TT_METAL_PROFILE_RISCV_PMC": f"{checker.EV3:#x},{checker.EV4:#x}"})
+    except RuntimeError as e:
+        if "no idle ethernet cores" in str(e):
+            pytest.skip("No idle ethernet cores on this card")
+        raise
+    checks += checker.check_on(rows, launched)
+
+    failed = [what for cond, what in checks if not cond]
+    assert not failed, f"Failed checks: {failed}"
+
+
 def test_noc_event_profiler_linked_multicast_hang():
     # test that we can avoid hangs with linked multicast
     # see tt-metal issue #22578

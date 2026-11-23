@@ -210,5 +210,5 @@ riscv_pmc.decode_launch("blackhole", kind, launch)         # event names, mcycle
 
 - Quasar TRISC and DM capture on silicon, and DM counters 5 and 6; only the emulator has run the capture.
 - ERISC1 capture needs an `ERISC1` lane in the tracy submodule and a host read of every ethernet profiler buffer. DRISC capture needs a DRISC device profiler first (section 1).
-- The idle ethernet capture has been built and checked for size, but not run on silicon: `tests/tt_metal/tools/profiler/check_riscv_pmc_more_cores.py` is the single-card check.
+- The idle ethernet capture has been run on a 4 x P150 card; `test_riscv_pmc_more_cores` in `tests/tt_metal/tools/profiler/test_device_profiler.py` (also `check_riscv_pmc_more_cores.py`) is the single-card check.
 - The meaning of individual per-stage events comes from the hardware description; only the union counter, `mcycle`, `EX_INST_RET` and the TRISC-only `MEM_INS_BUF_WRITE` were validated on silicon.

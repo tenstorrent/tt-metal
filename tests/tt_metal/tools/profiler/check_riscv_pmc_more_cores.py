@@ -12,7 +12,8 @@ ethernet core and one DRISC kernel, two launches each) twice and checks profile_
        profiler RISC ERISC, the selects are echoed in 9094 and 0 < minstret <= mcycle. ERISC is the only profiler
        RISC in the log, so neither ERISC1 nor the DRAM tile RISC contributes a row, and both runs complete.
 
-Run it alone on an idle card: python3 tests/tt_metal/tools/profiler/check_riscv_pmc_more_cores.py
+Run it alone on an idle card: python3 tests/tt_metal/tools/profiler/check_riscv_pmc_more_cores.py. The same checks run
+as test_riscv_pmc_more_cores in test_device_profiler.py.
 """
 
 import csv
@@ -38,7 +39,7 @@ def run(env_extra):
     sys.stdout.write(result.stdout[-2000:])
     if result.returncode != 0:
         sys.stderr.write(result.stderr[-4000:])
-        raise SystemExit(f"{BINARY} failed with {result.returncode}")
+        raise RuntimeError(f"{BINARY} failed with {result.returncode}: {result.stderr[-2000:]}")
     with open(LOG, newline="") as f:
         f.readline()
         rows = list(csv.DictReader((line.replace(", ", ",") for line in f)))
@@ -57,24 +58,21 @@ def pmc_by_core(rows):
     return cores
 
 
-def check(cond, what):
-    print(("ok    " if cond else "FAIL  ") + what)
-    return cond
+def check_off(rows):
+    return [
+        (not pmc_by_core(rows), "off: no capture marker in the log"),
+        (not any(r["RISC processor type"].strip() == "ERISC" for r in rows), "off: no idle ethernet row"),
+    ]
 
 
-def main():
-    ok = True
-
-    rows, _ = run({})
-    ok &= check(not pmc_by_core(rows), "off: no capture marker in the log")
-    ok &= check(not any(r["RISC processor type"].strip() == "ERISC" for r in rows), "off: no idle ethernet row")
-
-    rows, launched = run({"TT_METAL_PROFILE_RISCV_PMC": f"{EV3:#x},{EV4:#x}"})
-    ok &= check({r["RISC processor type"].strip() for r in rows} <= {"ERISC"}, "on: ERISC is the only profiler RISC")
+def check_on(rows, launched):
+    checks = [({r["RISC processor type"].strip() for r in rows} <= {"ERISC"}, "on: ERISC is the only profiler RISC")]
     cores = pmc_by_core(rows)
-    ok &= check(
-        launched is not None and len(cores) == launched,
-        f"on: {len(cores)} of {launched} launched idle ethernet cores have capture markers",
+    checks.append(
+        (
+            launched is not None and len(cores) == launched,
+            f"on: {len(cores)} of {launched} launched idle ethernet cores have capture markers",
+        )
     )
     for core, markers in sorted(cores.items()):
         kinds = [k for _, k, _ in markers]
@@ -86,10 +84,20 @@ def main():
             if kind == "cycles":
                 mcycle, minstret = data & 0xFFFFFFFF, data >> 32
                 good &= 0 < minstret <= mcycle
-        ok &= check(good, f"on: core {core}: {LAUNCHES} launches, selects echoed, 0 < minstret <= mcycle")
+        checks.append((good, f"on: core {core}: {LAUNCHES} launches, selects echoed, 0 < minstret <= mcycle"))
     zones = {r["zone name"].strip() for r in rows}
-    ok &= check("ERISC-IDLE-FW" in zones, "on: idle firmware zone present")
+    checks.append(("ERISC-IDLE-FW" in zones, "on: idle firmware zone present"))
+    return checks
 
+
+def main():
+    rows, _ = run({})
+    checks = check_off(rows)
+    rows, launched = run({"TT_METAL_PROFILE_RISCV_PMC": f"{EV3:#x},{EV4:#x}"})
+    checks += check_on(rows, launched)
+    for cond, what in checks:
+        print(("ok    " if cond else "FAIL  ") + what)
+    ok = all(cond for cond, _ in checks)
     print("PASS" if ok else "FAIL")
     return 0 if ok else 1
 
