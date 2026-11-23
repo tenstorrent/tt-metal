@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Crossover sweep 2 (ad hoc): llk_pack_block's forms over its whole decision surface (see pack_block_sweep2_test.cpp).
 
 Per cell (output format, tile shape, DEST width, sync, tiles per block) seven arms: state steady/init/reconfigure x form per-tile/block/W offset (steady only).

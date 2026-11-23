@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """HiFi crossover (ad hoc): the block-float pack forms of llk_pack_block behind matmul math at LoFi, HiFi2, HiFi3 and HiFi4 (matmul_pack_sweep_test.cpp)."""
 
 import pytest
