@@ -15,8 +15,13 @@ import numpy as np
 import pytest
 import torch
 import ttnn
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 pytestmark = pytest.mark.use_module_device
+
+# On Quasar the keyed APIs reseed the existing stream kernels per tile instead of computing the counter hash, so
+# only the placement-independence tests apply there.
+counter_hash_only = pytest.mark.skipif(is_quasar(), reason="Quasar falls back to reseeded stream kernels")
 
 KERNEL = "tests/tt_metal/tt_metal/test_kernels/compute/keyed_rand_sfpu.cpp"
 READER = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp"
@@ -150,6 +155,7 @@ def run_keyed(device, num_tiles, num_cores, seed, param0, param1, dtype=ttnn.flo
 
 
 @pytest.mark.parametrize("seed", [0, 1, 12345, 0xFFFFFFFF])
+@counter_hash_only
 def test_rand_keyed_matches_host_reference(device, seed):
     num_tiles = 16
     result = run_keyed(device, num_tiles, 1, seed, f2u(0.0), f2u(1.0))
@@ -162,6 +168,7 @@ def test_rand_keyed_matches_host_reference(device, seed):
     [(-1.5, 3.0), (0.0, 1.5 * 2.0**-97)],
     ids=["normalization_folded_into_scale", "normalization_per_row"],
 )
+@counter_hash_only
 def test_rand_keyed_from_and_scale_match_host_reference(device, low, scale):
     num_tiles = 16
     seed = 77
@@ -172,6 +179,7 @@ def test_rand_keyed_from_and_scale_match_host_reference(device, low, scale):
     assert torch.equal(result, expected)
 
 
+@counter_hash_only
 def test_rand_keyed_range(device):
     # [from, from + scale], inclusive, with a mean near the midpoint.
     result = run_keyed(device, 64, 4, 7, f2u(-3.0), f2u(5.0))
@@ -181,6 +189,7 @@ def test_rand_keyed_range(device):
     torch.testing.assert_close(result, expected, rtol=0, atol=1e-6)
 
 
+@counter_hash_only
 def test_rand_keyed_bfloat16(device):
     result = run_keyed(device, 64, 4, 11, f2u(0.0), f2u(1.0), dtype=ttnn.bfloat16)
     expected = torch.from_numpy(reference_uniform(11, range(64)))
@@ -198,6 +207,7 @@ def test_rand_keyed_does_not_depend_on_core_split(device, num_cores):
     assert torch.equal(single_core, split)
 
 
+@counter_hash_only
 def test_rand_keyed_seeds_and_tiles_are_independent(device):
     num_tiles = 64
     a = run_keyed(device, num_tiles, 4, 1, f2u(0.0), f2u(1.0)).flatten()
@@ -208,6 +218,7 @@ def test_rand_keyed_seeds_and_tiles_are_independent(device):
 
 
 @pytest.mark.parametrize("probability", [0.1, 0.5])
+@counter_hash_only
 def test_dropout_keyed_matches_host_reference(device, probability):
     num_tiles = 32
     scale = 1.0 / (1.0 - probability)
@@ -224,6 +235,7 @@ def test_dropout_keyed_matches_host_reference(device, probability):
     torch.testing.assert_close(result[~dropped], expected[~dropped], rtol=2e-3, atol=0)
 
 
+@counter_hash_only
 def test_dropout_keyed_drops_neighbours_independently(device):
     # With the SFPU PRNG, an element below a dropped one was dropped about half the time at p = 0.1.
     num_tiles, probability = 256, 0.1

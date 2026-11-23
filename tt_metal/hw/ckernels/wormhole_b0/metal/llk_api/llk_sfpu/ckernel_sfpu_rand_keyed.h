@@ -187,9 +187,9 @@ inline void dropout_keyed_row() {
     TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
 }
 
-// Zeroes an element when its draw's top 31 bits are below probability (INT_MAX * p), and scales
-// the rest by scale. With the same seed and tile index, an element is dropped exactly when
-// rand_keyed with from = 0 and scale = 1 gives it a value below probability / 2^31.
+// Zeroes an element when its draw's top 31 bits, as an integer, are below probability (INT_MAX * p),
+// and scales the rest by scale. rand_keyed with the same seed and tile index rounds the same integer
+// to FP32 before scaling it, so the two agree except for draws that round across probability.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void dropout_keyed(
     std::uint32_t probability, std::uint32_t scale, std::uint32_t key, std::uint32_t& face_index) {

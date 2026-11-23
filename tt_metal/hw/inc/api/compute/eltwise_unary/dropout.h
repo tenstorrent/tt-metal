@@ -49,9 +49,11 @@ ALWI void dropout_kernel_init(uint32_t seed = 0) {
  * idst, or scales it by scale_factor, based on a draw that is a pure function of (seed, tile_index,
  * position in the tile). The mask does not depend on which core computes the tile, on what ran
  * before, or on the SFPU PRNG state, so re-running with the same seed and tile indices rebuilds it
- * exactly, and Wormhole and Blackhole give identical masks. With the same seed and tile_index, an
- * element is dropped exactly when rand_keyed_tile with from = 0 and scale = 1 gives it a value below
- * probability / 2^31. Call dropout_keyed_tile_init() once before the first call. On Quasar this
+ * exactly, and Wormhole and Blackhole give identical masks. An element is dropped when the top 31
+ * bits of its draw, as an integer, are below probability. rand_keyed_tile with the same seed and
+ * tile_index rounds that integer to FP32 before scaling it, so its value is below probability / 2^31
+ * for the same elements except those whose draw rounds across probability. Call
+ * dropout_keyed_tile_init() once before the first call. On Quasar this
  * reseeds the SFPU PRNG per tile and calls dropout_tile, so masks are deterministic per tile but
  * differ from Wormhole and Blackhole. On Wormhole, this operation records replay slots 0-15,
  * programs LREG12-LREG14 and overwrites ADDR_MOD_6 (dest incr 2). Callers sharing that state with
