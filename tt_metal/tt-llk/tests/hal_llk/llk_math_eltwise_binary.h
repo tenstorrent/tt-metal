@@ -8,10 +8,10 @@
 
 #include "hal/dst.h"
 #include "hal/fpu.h"
-#include "hal/math_counters.h"
 #include "hal/mop.h"
 #include "hal/move.h"
 #include "hal/src.h"
+#include "hal/tensix_counters.h"
 #include "llk_hal_common.h"
 #include "llk_math_common.h"
 
@@ -78,9 +78,10 @@ template <EltwiseBinaryType type, BroadcastType bcast>
 inline std::uint32_t elementwise_word(const std::uint32_t acc_to_dest, const std::uint8_t address_modifier, const hal::fpu::SourceRelease release)
 {
     return hal::fpu::get_operation(hal::fpu::Elementwise {
-        .operation        = elementwise_operation<type>(),
-        .broadcast        = srcb_broadcast<bcast>(),
-        .dest_write       = acc_to_dest ? hal::fpu::DestWriteMode::Accumulate : hal::fpu::DestWriteMode::Overwrite,
+        .operation = elementwise_operation<type>(),
+        .broadcast = srcb_broadcast<bcast>(),
+        // ELWMUL always accumulates into dest (the packer zeroes it), so like the LLK it never sets the accumulate bit.
+        .dest_write       = (acc_to_dest && type != EltwiseBinaryType::ELWMUL) ? hal::fpu::DestWriteMode::Accumulate : hal::fpu::DestWriteMode::Overwrite,
         .address_modifier = address_modifier,
         .release          = release,
     });
@@ -128,27 +129,14 @@ inline void eltwise_binary_configure_tile_mop(const std::uint32_t acc_to_dest, c
             // the second releases both banks.
             const std::uint32_t pair_first_face_end = elementwise_word<type, bcast>(acc_to_dest, AM_FACE_END, SourceRelease::SrcA);
             const std::uint32_t pair_end            = elementwise_word<type, bcast>(acc_to_dest, AM_FACE_END, SourceRelease::Both);
-            program(MopConfig<MopTemplate::Template1> {
-                .outer_loop = {.count = num_faces / 2},
-                .inner_loop =
-                    {.count                               = inner_ops,
-                     .body_op                             = step,
-                     .alternating_op                      = pair_first_face_end,
-                     .last_op_on_final_outer_iteration    = tile_end,
-                     .last_op_on_nonfinal_outer_iteration = pair_end},
-            });
+            auto config                             = loop(num_faces / 2, loop(inner_ops, step, pair_first_face_end)).patch(last_outer, tile_end);
+            program(num_faces / 2 > 1 ? config.patch(last_inner, pair_end) : config);
             return;
         }
     }
 
-    program(MopConfig<MopTemplate::Template1> {
-        .outer_loop = {.count = num_faces},
-        .inner_loop =
-            {.count                               = inner_ops,
-             .body_op                             = step,
-             .last_op_on_final_outer_iteration    = tile_end,
-             .last_op_on_nonfinal_outer_iteration = face_end},
-    });
+    const auto config = loop(num_faces, loop(inner_ops, step)).patch(last_outer, tile_end);
+    program(num_faces > 1 ? config.patch(last_inner, face_end) : config);
 }
 
 // Single-face MOP, run once per face: used with dest reuse and for high fidelity.
@@ -163,21 +151,13 @@ inline void eltwise_binary_configure_face_mop(const std::uint32_t acc_to_dest, c
 
     if constexpr (fidelity_phases(math_fidelity) > 1)
     {
-        program(MopConfig<MopTemplate::Template1> {
-            .outer_loop = {.count = fidelity_phases(math_fidelity)},
-            .inner_loop =
-                {.count                               = inner_ops,
-                 .body_op                             = step,
-                 .last_op_on_final_outer_iteration    = elementwise_word<type, bcast>(acc_to_dest, AM_FID_DONE, release),
-                 .last_op_on_nonfinal_outer_iteration = elementwise_word<type, bcast>(acc_to_dest, AM_FID_NEXT, SourceRelease::None)},
-        });
+        program(loop(fidelity_phases(math_fidelity), loop(inner_ops, step))
+                    .patch(last_outer, elementwise_word<type, bcast>(acc_to_dest, AM_FID_DONE, release))
+                    .patch(last_inner, elementwise_word<type, bcast>(acc_to_dest, AM_FID_NEXT, SourceRelease::None)));
     }
     else
     {
-        program(MopConfig<MopTemplate::Template1> {
-            .outer_loop = {.count = 1},
-            .inner_loop = {.count = inner_ops, .body_op = step, .last_op_on_final_outer_iteration = elementwise_word<type, bcast>(acc_to_dest, AM_FACE_END, release)},
-        });
+        program(loop(1 /*count*/, loop(inner_ops, step)).patch(last_outer, elementwise_word<type, bcast>(acc_to_dest, AM_FACE_END, release)));
     }
 }
 
@@ -210,6 +190,34 @@ inline void move_dest_face_to_src()
     }
 }
 
+// Zero face `face` of dest tile `dst_index` before ELWMUL accumulates into it.
+// The face-mode index is a 16-row block within the dest bank, so it excludes the section base. Blackhole
+// selects the bank from (dest row offset + block index), so the last face of the last tile of a 16-bit bank
+// would clear the other half; clear that face row by row instead, which addresses rows relative to the dest
+// offset and RWC (tt-metal#53693).
+template <bool is_fp32_dest_acc_en>
+inline void zero_dest_face(const std::uint32_t dst_index, const std::uint32_t face)
+{
+    constexpr hal::dst::DestWidth width    = is_fp32_dest_acc_en ? hal::dst::DestWidth::Bits32 : hal::dst::DestWidth::Bits16;
+    constexpr std::uint32_t tiles_per_bank = is_fp32_dest_acc_en ? MAX_TILES_IN_HALF_DEST / 2 : MAX_TILES_IN_HALF_DEST;
+    const std::uint32_t local_tile         = dst_index & (tiles_per_bank - 1);
+    const std::uint32_t face_index         = local_tile * TILE_NUM_FACES + face;
+    const std::uint32_t dest_row_offset    = local_tile * DEST_ROWS_PER_TILE + face * FACE_R_DIM;
+
+    if (!is_fp32_dest_acc_en && dest_row_offset + face_index >= DEST_HALF_ROWS)
+    {
+        for (std::uint32_t row = 0; row < FACE_R_DIM; row++)
+        {
+            hal::dst::run(hal::dst::Zero {.scope = hal::dst::ZeroScope::SingleRow, .index = row, .width = width, .address_mode = AM_HOLD});
+        }
+    }
+    else
+    {
+        // ZEROACC applies its ADDR_MOD in face mode too: hold the counters so the next face MOP starts on this face.
+        hal::dst::run(hal::dst::Zero {.scope = hal::dst::ZeroScope::Face, .index = face_index, .width = width, .address_mode = AM_HOLD});
+    }
+}
+
 } // namespace hal_llk
 
 template <
@@ -239,7 +247,8 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape tensor_sha
     // Releasing a bank must also clear its data-valid so the unpacker can refill it.
     cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::ClrDvalid::SrcA_Disable, cfg::Sec::S0, 0>(), cfg::set<cfg::ClrDvalid::SrcB_Disable, cfg::Sec::S0, 0>());
 
-    hal::math_counters.set<hal::rwc::Counters::All, 0>().clear_fidelity().apply();
+    hal::counters::rwc::set<hal_llk::rwc::MathCounter {
+        .src_a = hal_llk::rwc::Set(0), .src_b = hal_llk::rwc::Set(0), .dest = hal_llk::rwc::Set(0), .clear_fidelity = true}>();
 }
 
 template <
@@ -271,11 +280,7 @@ inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, s
                 if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
                 {
                     // ELWMUL accumulates; the face it overwrites must read back as zero.
-                    hal::dst::run(hal::dst::Zero {
-                        .scope   = hal::dst::ZeroScope::Face,
-                        .index   = tile_row / FACE_R_DIM + face,
-                        .width   = is_fp32_dest_acc_en ? hal::dst::DestWidth::Bits32 : hal::dst::DestWidth::Bits16,
-                    });
+                    hal_llk::zero_dest_face<is_fp32_dest_acc_en>(dst_index, face);
                 }
             }
             Runner::run();
@@ -288,7 +293,7 @@ inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, s
                 }
             }
         }
-        hal::math_counters.set<hal::rwc::Counters::Dest, 0>().apply();
+        hal::counters::rwc::set<hal_llk::rwc::MathCounter {.dest = hal_llk::rwc::Set(0)}>();
     }
 }
 

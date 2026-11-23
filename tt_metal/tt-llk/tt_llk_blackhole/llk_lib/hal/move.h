@@ -306,6 +306,22 @@ struct Transfer<Dst, SrcB>
     constexpr std::uint32_t get_operation() const;
 };
 
+/** @brief Describe a MOVD2A transfer. */
+template <>
+struct Transfer<Dst, SrcA>
+{
+    std::uint32_t source_row        = 0xffffffffu;
+    RowAddressing source_addressing = RowAddressing::Absolute;
+    std::uint32_t destination_row   = 0xffffffffu;
+    std::uint8_t address_mode       = 0xffu;
+    RowCount number_of_rows {0};
+    std::uint8_t final_address_mode = SameAddressMode;
+    bool source_32bit_low           = false;
+
+    /** @brief Encode the transfer when it consists of exactly one instruction. */
+    constexpr std::uint32_t get_operation() const;
+};
+
 /** @brief Describe an asynchronous LOADIND transfer from L1 to GPRs. */
 template <>
 struct Transfer<L1, Gpr>
@@ -403,6 +419,7 @@ inline constexpr std::uint32_t L1BlockCapacity       = MEM_L1_SIZE / 16u;
 
 inline constexpr std::uint32_t LoadIndOpcode    = 0x49u;
 inline constexpr std::uint32_t MoveDbgA2DOpcode = 0x09u;
+inline constexpr std::uint32_t MoveD2AOpcode    = 0x08u;
 inline constexpr std::uint32_t MoveD2BOpcode    = 0x0au;
 inline constexpr std::uint32_t MoveDbgB2DOpcode = 0x0cu;
 inline constexpr std::uint32_t MoveA2DOpcode    = 0x12u;
@@ -525,6 +542,11 @@ constexpr std::uint16_t native_rows(const Transfer<Dst, SrcB> transfer)
     return transfer.number_of_rows.value % 4u == 0u ? 4u : 1u;
 }
 
+constexpr std::uint16_t native_rows(const Transfer<Dst, SrcA> transfer)
+{
+    return transfer.number_of_rows.value % 4u == 0u ? 4u : 1u;
+}
+
 constexpr std::size_t operation_count(const Transfer<SrcA, Dst> transfer)
 {
     return transfer.number_of_rows.value / native_rows(transfer);
@@ -536,6 +558,11 @@ constexpr std::size_t operation_count(const Transfer<SrcB, Dst> transfer)
 }
 
 constexpr std::size_t operation_count(const Transfer<Dst, SrcB> transfer)
+{
+    return transfer.number_of_rows.value / native_rows(transfer);
+}
+
+constexpr std::size_t operation_count(const Transfer<Dst, SrcA> transfer)
 {
     return transfer.number_of_rows.value / native_rows(transfer);
 }
@@ -595,6 +622,15 @@ constexpr bool is_valid(const Transfer<SrcB, Dst> transfer)
 }
 
 constexpr bool is_valid(const Transfer<Dst, SrcB> transfer)
+{
+    const std::size_t count = operation_count(transfer);
+    return is_valid(transfer.source_addressing) && is_valid_dst_rows(transfer.source_row, transfer.number_of_rows.value, transfer.source_addressing) &&
+           transfer.destination_row < MatrixSourceRows && is_canonical(transfer.number_of_rows) &&
+           transfer.destination_row + transfer.number_of_rows.value <= MatrixSourceRows && count <= MaxMatrixTransferInstructions &&
+           has_valid_address_modes(transfer.address_mode, transfer.final_address_mode, count);
+}
+
+constexpr bool is_valid(const Transfer<Dst, SrcA> transfer)
 {
     const std::size_t count = operation_count(transfer);
     return is_valid(transfer.source_addressing) && is_valid_dst_rows(transfer.source_row, transfer.number_of_rows.value, transfer.source_addressing) &&
@@ -696,6 +732,15 @@ constexpr std::uint32_t encode(const Transfer<Dst, SrcB> transfer, const std::si
     const std::uint32_t fields = (static_cast<std::uint32_t>(transfer.source_32bit_low) << 23u) | (transfer.destination_row << 17u) | (address_mode << 14u) |
                                  (modifier << 12u) | transfer.source_row;
     return encode_instruction(MoveD2BOpcode, fields);
+}
+
+constexpr std::uint32_t encode(const Transfer<Dst, SrcA> transfer, const std::size_t fragment)
+{
+    const std::uint32_t modifier     = native_rows(transfer) == 4u ? 2u : 0u;
+    const std::uint32_t address_mode = address_mode_for_fragment(transfer.address_mode, transfer.final_address_mode, fragment, operation_count(transfer));
+    const std::uint32_t fields = (static_cast<std::uint32_t>(transfer.source_32bit_low) << 23u) | (transfer.destination_row << 17u) | (address_mode << 14u) |
+                                 (modifier << 12u) | transfer.source_row;
+    return encode_instruction(MoveD2AOpcode, fields);
 }
 
 constexpr std::uint32_t value(const ScalarSize size)
@@ -835,6 +880,23 @@ inline constexpr __attribute__((always_inline)) void validate(const Transfer<Dst
         "MOVD2B final address mode must be reused or select [0, 7] for a multi-instruction transfer");
 }
 
+inline constexpr __attribute__((always_inline)) void validate(const Transfer<Dst, SrcA> transfer)
+{
+    hal::detail::require(is_valid(transfer.source_addressing), "MOVD2A source addressing must be Absolute or CounterRelative");
+    hal::detail::require(transfer.source_row < MatrixDestinationRows, "MOVD2A source row field must fit ten bits");
+    hal::detail::require(transfer.destination_row < MatrixSourceRows, "MOVD2A destination row must be in [0, 63]");
+    hal::detail::require(is_canonical(transfer.number_of_rows), "MOVD2A row count must be 1, 4, 8, or a positive whole number of faces");
+    hal::detail::require(
+        transfer.source_addressing == RowAddressing::CounterRelative || transfer.source_row + transfer.number_of_rows.value <= MatrixDestinationRows,
+        "MOVD2A absolute source span must fit Dst");
+    hal::detail::require(transfer.destination_row + transfer.number_of_rows.value <= MatrixSourceRows, "MOVD2A destination span must fit SrcA");
+    hal::detail::require(operation_count(transfer) <= MaxMatrixTransferInstructions, "MOVD2A transfers may expand to at most 8 native TT instructions");
+    hal::detail::require(transfer.address_mode < AddressModeCount, "Blackhole MOVD2A address mode must be in [0, 7]");
+    hal::detail::require(
+        transfer.final_address_mode == SameAddressMode || (transfer.final_address_mode < AddressModeCount && operation_count(transfer) > 1u),
+        "MOVD2A final address mode must be reused or select [0, 7] for a multi-instruction transfer");
+}
+
 inline constexpr __attribute__((always_inline)) void validate_address(const IndirectL1Address address)
 {
     hal::detail::require(is_valid(address.base), "indirect L1 base GPR must be in [0, 63]");
@@ -949,6 +1011,12 @@ constexpr bool is_valid(const Transfer<Dst, SrcB> transfer)
     return detail::is_valid(transfer);
 }
 
+/** @brief Return whether a Dst-to-SrcA descriptor is semantically encodable. */
+constexpr bool is_valid(const Transfer<Dst, SrcA> transfer)
+{
+    return detail::is_valid(transfer);
+}
+
 /** @brief Return whether an L1-to-GPR descriptor is semantically encodable. */
 constexpr bool is_valid(const Transfer<L1, Gpr> transfer)
 {
@@ -1037,6 +1105,13 @@ inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Dst, SrcB
     return detail::encode(*this, 0u);
 }
 
+inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<Dst, SrcA>::get_operation() const
+{
+    detail::validate(*this);
+    hal::detail::require(detail::operation_count(*this) == 1u, "multi-instruction MOVD2A descriptors must use run()");
+    return detail::encode(*this, 0u);
+}
+
 inline constexpr __attribute__((always_inline)) std::uint32_t Transfer<L1, Gpr>::get_operation() const
 {
     detail::validate(*this);
@@ -1116,6 +1191,16 @@ template <auto Operation>
 inline __attribute__((always_inline)) void run_static(const Transfer<Dst, SrcB>)
 {
     static_assert(detail::is_valid(Operation), "invalid Dst-to-SrcB transfer descriptor");
+    if constexpr (detail::is_valid(Operation))
+    {
+        emit_matrix_transfer<Operation>();
+    }
+}
+
+template <auto Operation>
+inline __attribute__((always_inline)) void run_static(const Transfer<Dst, SrcA>)
+{
+    static_assert(detail::is_valid(Operation), "invalid Dst-to-SrcA transfer descriptor");
     if constexpr (detail::is_valid(Operation))
     {
         emit_matrix_transfer<Operation>();
@@ -1235,6 +1320,12 @@ inline __attribute__((always_inline)) void run_runtime(const Transfer<SrcB, Dst>
 }
 
 inline __attribute__((always_inline)) void run_runtime(const Transfer<Dst, SrcB> transfer)
+{
+    validate(transfer);
+    run_runtime_matrix(transfer);
+}
+
+inline __attribute__((always_inline)) void run_runtime(const Transfer<Dst, SrcA> transfer)
 {
     validate(transfer);
     run_runtime_matrix(transfer);

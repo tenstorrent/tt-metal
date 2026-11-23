@@ -7,10 +7,10 @@
 #include <cstdint>
 #include <utility>
 
-#include "hal/gpr_ops.h"
 #include "hal/mop.h"
 #include "hal/pack.h"
-#include "hal/utils/address_modifier.h"
+#include "hal/scalar.h"
+#include "hal/tensix_counters.h"
 #include "llk_hal_common.h"
 #include "llk_pack_common.h"
 
@@ -47,25 +47,47 @@ inline void set_packer_strides(const std::uint32_t pack_src_format)
 
 } // namespace hal_llk
 
+namespace hal_llk
+{
+
+// One packer ADDR_MOD slot: Y (row) and Z (face) updates of the source (dest register) and
+// destination (L1) counters.
+struct PackAddrMod
+{
+    std::uint32_t y_incr  = 0;
+    std::uint32_t y_clear = 0;
+    std::uint32_t z_incr  = 0;
+    std::uint32_t z_clear = 0;
+};
+
+// Program packer ADDR_MOD slot S with the same update for the source and destination counters.
+// Every field of the slot's thread-CFG word is supplied, so no stale bits remain.
+template <hal::cfg::Sec S, PackAddrMod M>
+inline void set_pack_addr_mod()
+{
+    namespace cfg = hal::cfg;
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Y].Incr, S, M.y_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Y].CR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Y].Clear, S, M.y_clear>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Y].Incr, S, M.y_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Y].CR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Y].Clear, S, M.y_clear>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Z].Incr, S, M.z_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Src][cfg::Z].Clear, S, M.z_clear>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Z].Incr, S, M.z_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest][cfg::Z].Clear, S, M.z_clear>());
+}
+
+} // namespace hal_llk
+
 template <PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_configure_addrmod_()
 {
     static_assert(pack_mode == PackMode::Default, "Only PackMode::Default is implemented");
-    using hal::pack::AddressModifier;
-    hal::pack::configure_address_modifiers<
-        AddressModifier {.selection = hal::cfg::Sec::S0, .source_row = {.step = 4}, .destination_row = {.step = 4}},
-        AddressModifier {
-            .selection        = hal::cfg::Sec::S1,
-            .source_row       = {.clear = true},
-            .destination_row  = {.clear = true},
-            .source_face      = {.step = 1},
-            .destination_face = {.step = 1}},
-        AddressModifier {
-            .selection        = hal::cfg::Sec::S2,
-            .source_row       = {.clear = true},
-            .destination_row  = {.clear = true},
-            .source_face      = {.clear = true},
-            .destination_face = {.clear = true}}>();
+    hal_llk::set_pack_addr_mod<hal::cfg::Sec::S0, hal_llk::PackAddrMod {.y_incr = 4}>();
+    hal_llk::set_pack_addr_mod<hal::cfg::Sec::S1, hal_llk::PackAddrMod {.y_clear = 1, .z_incr = 1}>();
+    hal_llk::set_pack_addr_mod<hal::cfg::Sec::S2, hal_llk::PackAddrMod {.y_clear = 1, .z_clear = 1}>();
 }
 
 /**
@@ -97,14 +119,9 @@ inline void _llk_pack_mop_config_(
     transfer.boundary            = hal::pack::TileBoundary::Last;
     const std::uint32_t tile_end = transfer.get_operation();
 
-    program(MopConfig<MopTemplate::Template1> {
-        .outer_loop = {.count = num_faces * num_tiles},
-        .inner_loop =
-            {.count                               = row_ops,
-             .body_op                             = rows,
-             .last_op_on_final_outer_iteration    = tile_end,
-             .last_op_on_nonfinal_outer_iteration = face_end},
-    });
+    const std::uint32_t outer_count = num_faces * num_tiles;
+    const auto config               = loop(outer_count, loop(row_ops, rows)).patch(last_outer, tile_end);
+    program(outer_count > 1 ? config.patch(last_inner, face_end) : config);
 }
 
 /**
@@ -222,8 +239,8 @@ inline void _llk_pack_init_(
     // Each dest-read interface moves one 16-datum row (X 0..15). The two channels are written
     // separately: the combined X/X form of the builder (SETADCXX) did not program start/end as
     // expected on hardware (the unpacker hung with it).
-    hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().X<0>().apply();
-    hal::address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel1>().X<FACE_C_DIM - 1>().apply();
+    hal::counters::adc::set<hal_llk::adc::AddrCounter {.channel0 = {.x = 0}}.for_clients<hal_llk::adc::Client::Packers>()>();
+    hal::counters::adc::set<hal_llk::adc::AddrCounter {.channel1 = {.x = FACE_C_DIM - 1}}.for_clients<hal_llk::adc::Client::Packers>()>();
 }
 
 inline void _llk_pack_uninit_()
@@ -242,13 +259,13 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
     namespace sync = hal::sync;
 
     // L1 destination: GPR load, then one WRCFG once the previous tile has left the packer.
-    hal::gpr_ops::set(hal::gpr<hal_llk::PACK_GPR_OUTPUT_ADDR>(), address);
+    hal::scalar::set(hal::gpr<hal_llk::PACK_GPR_OUTPUT_ADDR>(), address);
     sync::wait::stall<sync::StallTarget::Thcon | sync::StallTarget::Config, sync::StallCondition::PackerIdle>();
     cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg1].L1_Dest_addr, cfg::Sec::S0, cfg::GprTransferSize::Bits32, cfg::WrcfgCompletion::Deferred>(
         hal::gpr<hal_llk::PACK_GPR_OUTPUT_ADDR>());
 
     // Source tile in dest (W counter); also separates the WRCFG from the first PACR.
-    hal::runtime_address_counters.client<hal::AddressCounterClient::Packers>().channel<hal::AddressChannel::Channel0>().W(tile_index).apply();
+    hal::counters::adc::set(hal_llk::adc::AddrCounter {.channel0 = {.w = tile_index}}.for_clients<hal_llk::adc::Client::Packers>());
 
     hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 }

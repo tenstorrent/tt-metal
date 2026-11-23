@@ -130,17 +130,8 @@ inline void _llk_unpack_hw_configure_(
     sync::wait::stall<sync::StallTarget::Config, sync::StallCondition::Unpacker0Idle | sync::StallCondition::Unpacker1Idle>();
 
     // Reset the unpacker address counters (X start, Y, Z, W on both channels).
-    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
-        .channel<hal::AddressChannel::Channel0>()
-        .X<0>()
-        .Y<0>()
-        .Z<0>()
-        .W<0>()
-        .channel<hal::AddressChannel::Channel1>()
-        .Y<0>()
-        .Z<0>()
-        .W<0>()
-        .apply();
+    hal::counters::adc::set<hal_llk::adc::AddrCounter {.channel0 = {.x = 0, .y = 0, .z = 0, .w = 0}, .channel1 = {.y = 0, .z = 0, .w = 0}}
+                                .for_clients<hal_llk::adc::Client::Unpacker0, hal_llk::adc::Client::Unpacker1>()>();
 
     hal_llk::unpack_configure_output_strides<0>(unpA_dst_format);
     hal_llk::unpack_configure_output_strides<1>(unpB_dst_format);

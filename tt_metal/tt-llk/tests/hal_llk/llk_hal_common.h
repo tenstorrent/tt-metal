@@ -11,9 +11,9 @@
 #include <cstdint>
 
 #include "ckernel.h"
-#include "hal/address_counters.h"
 #include "hal/cfg.h"
 #include "hal/sync.h"
+#include "hal/tensix_counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h" // L1_ADDRESS
 #include "tensor_shape.h"
@@ -28,6 +28,9 @@ extern std::uint32_t math_sync_tile_dst_index;
 
 namespace hal_llk
 {
+
+namespace adc = hal::counters::adc;
+namespace rwc = hal::counters::rwc;
 
 // Semaphore roles. The indices match ckernel::semaphore so that kernels mixing these
 // functions with other LLK code agree on the handshakes.
@@ -79,4 +82,3 @@ inline std::uint32_t dest_section_base()
 }
 
 } // namespace hal_llk
-

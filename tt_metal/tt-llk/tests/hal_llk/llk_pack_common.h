@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "hal/dst.h"
-#include "hal/gpr_ops.h"
+#include "hal/scalar.h"
 #include "llk_hal_common.h"
 
 namespace hal_llk
@@ -104,7 +104,7 @@ template <DstSync Dst>
 inline void _llk_init_packer_dest_offset_registers_()
 {
     namespace sync = hal::sync;
-    namespace gpr  = hal::gpr_ops;
+    namespace gpr  = hal::scalar;
 
     sync::wait::stall<sync::StallTarget::Thcon | sync::StallTarget::Config, sync::StallCondition::PackerIdle>();
 
@@ -131,17 +131,8 @@ inline void _llk_pack_dest_init_()
     _llk_init_packer_dest_offset_registers_<Dst>();
 
     // Packer counters: X start, Y, Z, W on both channels back to 0.
-    hal::address_counters.client<hal::AddressCounterClient::Packers>()
-        .channel<hal::AddressChannel::Channel0>()
-        .X<0>()
-        .Y<0>()
-        .Z<0>()
-        .W<0>()
-        .channel<hal::AddressChannel::Channel1>()
-        .Y<0>()
-        .Z<0>()
-        .W<0>()
-        .apply();
+    hal::counters::adc::set<hal_llk::adc::AddrCounter {.channel0 = {.x = 0, .y = 0, .z = 0, .w = 0}, .channel1 = {.y = 0, .z = 0, .w = 0}}
+                                .for_clients<hal_llk::adc::Client::Packers>()>();
 
     pack_sync_tile_dst_ptr = 0;
 }

@@ -30,11 +30,8 @@ inline constexpr std::uint32_t UNPACK_B_NEXT_FACE = hal::unpack::get_operation<u
 inline constexpr std::uint32_t UNPACK_B_SAME_FACE = hal::unpack::get_operation<unpack_face(hal::unpack::Engine::Unpacker1, 0)>();
 
 // Jump the L1 face (channel-0 Z) counter of one unpacker.
-template <hal::AddressCounterClient Client, std::uint8_t Face>
-inline constexpr std::uint32_t UNPACK_SET_FACE = hal::address_counters.client<Client>()
-                                                      .template channel<hal::AddressChannel::Channel0>()
-                                                      .template Z<Face>()
-                                                      .template get_operation<hal::GetOpType::SETTER>();
+template <adc::Client Client, std::uint8_t Face>
+inline constexpr std::uint32_t UNPACK_SET_FACE = adc::AddrCounter {.channel0 = {.z = Face}}.for_clients<Client>().operation();
 
 } // namespace hal_llk
 
@@ -45,7 +42,7 @@ template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape tensor_shape)
 {
     using namespace hal::mop;
-    using hal::AddressCounterClient;
+    using AddressCounterClient = hal_llk::adc::Client;
 
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool narrow_tile        = (tensor_shape.num_faces_c_dim == 1) && (num_faces > 1);
@@ -64,17 +61,11 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         const std::uint32_t next_b = narrow_tile ? hal_llk::UNPACK_B_NEXT_FACE : hal_llk::UNPACK_SET_FACE<AddressCounterClient::Unpacker1, 2>;
         if (reorder_a)
         {
-            program(MopConfig<MopTemplate::Template1> {
-                .outer_loop = {.count = outerloop, .start_op = hal_llk::UNPACK_B_NEXT_FACE, .end_op = next_b, .second_end_op = rewind_a},
-                .inner_loop = {.count = innerloop, .body_op = unpack_a},
-            });
+            program(loop(outerloop, hal_llk::UNPACK_B_NEXT_FACE, loop(innerloop, unpack_a), next_b, rewind_a));
         }
         else
         {
-            program(MopConfig<MopTemplate::Template1> {
-                .outer_loop = {.count = outerloop, .start_op = hal_llk::UNPACK_B_NEXT_FACE, .end_op = next_b},
-                .inner_loop = {.count = innerloop, .body_op = unpack_a},
-            });
+            program(loop(outerloop, hal_llk::UNPACK_B_NEXT_FACE, loop(innerloop, unpack_a), next_b));
         }
     }
     else if constexpr (BType == BroadcastType::ROW)
@@ -84,53 +75,39 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         const std::uint32_t rewind_b = hal_llk::UNPACK_SET_FACE<AddressCounterClient::Unpacker1, 0>;
         if (reorder_a)
         {
-            program(MopConfig<MopTemplate::Template1> {
-                .outer_loop = {.count = outerloop, .end_op = rewind_b, .second_end_op = rewind_a},
-                .inner_loop = {.count = innerloop, .body_op = unpack_b, .alternating_op = unpack_a},
-            });
+            program(loop(outerloop, loop(innerloop, unpack_b, unpack_a), rewind_b, rewind_a));
         }
         else
         {
-            program(MopConfig<MopTemplate::Template1> {
-                .outer_loop = {.count = outerloop, .end_op = rewind_b},
-                .inner_loop = {.count = innerloop, .body_op = unpack_b, .alternating_op = unpack_a},
-            });
+            program(loop(outerloop, loop(innerloop, unpack_b, unpack_a), rewind_b));
         }
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {
         // One B face, then every A face.
-        program(MopConfig<MopTemplate::Template1> {
-            .outer_loop = {.count = 1, .start_op = hal_llk::UNPACK_B_NEXT_FACE},
-            .inner_loop = {.count = num_faces, .body_op = hal_llk::UNPACK_A_NEXT_FACE},
-        });
+        program(loop(1 /*count*/, hal_llk::UNPACK_B_NEXT_FACE, loop(num_faces, hal_llk::UNPACK_A_NEXT_FACE)));
     }
     else
     {
         if (transpose_of_faces)
         {
             // A faces in order 0, 2, 1, 3 paired with B faces 0, 1, 2, 3.
-            program(MopConfig<MopTemplate::Template1> {
-                .outer_loop = {.count = outerloop, .end_op = hal_llk::UNPACK_SET_FACE<AddressCounterClient::Unpacker0, 1>},
-                .inner_loop =
-                    {.count          = innerloop,
-                     .body_op        = num_faces < 4 ? hal_llk::UNPACK_A_NEXT_FACE : hal_llk::UNPACK_A_SKIP_FACE,
-                     .alternating_op = hal_llk::UNPACK_B_NEXT_FACE},
-            });
+            program(loop(
+                outerloop,
+                loop(innerloop, num_faces < 4 ? hal_llk::UNPACK_A_NEXT_FACE : hal_llk::UNPACK_A_SKIP_FACE, hal_llk::UNPACK_B_NEXT_FACE),
+                hal_llk::UNPACK_SET_FACE<AddressCounterClient::Unpacker0, 1>));
         }
         else
         {
-            program(MopConfig<MopTemplate::Template1> {
-                .outer_loop = {.count = 1},
-                .inner_loop = {.count = num_faces, .body_op = hal_llk::UNPACK_A_NEXT_FACE, .alternating_op = hal_llk::UNPACK_B_NEXT_FACE},
-            });
+            program(loop(1 /*count*/, loop(num_faces, hal_llk::UNPACK_A_NEXT_FACE, hal_llk::UNPACK_B_NEXT_FACE)));
         }
     }
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape_a, const ckernel::TensorShape tensor_shape_b, const ckernel::Transpose transpose)
 {
+    const ckernel::TensorShape tensor_shape = tensor_shape_a;
     namespace cfg  = hal::cfg;
     namespace sync = hal::sync;
 
@@ -144,16 +121,30 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
 
     // Datums per UNPACR: one face of face_r_dim rows (X start 0, X end face_dim - 1). The two
     // channels are written separately: the combined X/X builder form (SETADCXX) hung the unpacker.
-    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
-        .channel<hal::AddressChannel::Channel0>()
-        .X<0>()
-        .apply();
-    hal::runtime_address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
-        .channel<hal::AddressChannel::Channel1>()
-        .X(tensor_shape.face_r_dim * FACE_C_DIM - 1)
-        .apply();
+    hal::counters::adc::set<hal_llk::adc::AddrCounter {.channel0 = {.x = 0}}.for_clients<hal_llk::adc::Client::Unpacker0, hal_llk::adc::Client::Unpacker1>()>();
+    // ROW/SCALAR read only B's own faces, so B's datum count may differ from A's; NONE/COL read B in step with A.
+    const std::uint32_t srcb_face_r_dim =
+        (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR) ? tensor_shape_b.face_r_dim : tensor_shape_a.face_r_dim;
+    if (srcb_face_r_dim == tensor_shape_a.face_r_dim)
+    {
+        hal::counters::adc::set(hal_llk::adc::AddrCounter {.channel1 = {.x = tensor_shape_a.face_r_dim * FACE_C_DIM - 1u}}
+                                    .for_clients<hal_llk::adc::Client::Unpacker0, hal_llk::adc::Client::Unpacker1>());
+    }
+    else
+    {
+        hal::counters::adc::set(
+            hal_llk::adc::AddrCounter {.channel1 = {.x = tensor_shape_a.face_r_dim * FACE_C_DIM - 1u}}.for_clients<hal_llk::adc::Client::Unpacker0>());
+        hal::counters::adc::set(
+            hal_llk::adc::AddrCounter {.channel1 = {.x = srcb_face_r_dim * FACE_C_DIM - 1u}}.for_clients<hal_llk::adc::Client::Unpacker1>());
+    }
 
     _llk_unpack_AB_mop_config_<BType>(of_faces, tensor_shape);
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
+{
+    _llk_unpack_AB_init_<BType>(tensor_shape, tensor_shape, transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
@@ -186,10 +177,7 @@ inline void _llk_unpack_AB_(
     namespace sync = hal::sync;
 
     // Restart both unpackers at face 0 of the new tiles.
-    hal::address_counters.client<hal::AddressCounterClient::Unpacker0, hal::AddressCounterClient::Unpacker1>()
-        .channel<hal::AddressChannel::Channel0>()
-        .Z<0>()
-        .apply();
+    hal::counters::adc::set<hal_llk::adc::AddrCounter {.channel0 = {.z = 0}}.for_clients<hal_llk::adc::Client::Unpacker0, hal_llk::adc::Client::Unpacker1>()>();
 
     // Wait for a free configuration context, then fill it with this tile's addresses.
     while (sync::semaphore::read<hal_llk::UNPACK_SYNC_SEM>() >= hal_llk::UNPACK_NUM_CONTEXTS)
