@@ -498,14 +498,21 @@ class Conv2d(Module):
         self._release_prepared()
         super().deallocate_weights()
 
-    def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True, flat_output: bool = False
+    ) -> ttnn.Tensor:
         """Forward pass of the Conv2d layer with support for tensor parallelism.
 
         Args:
             x: Input tensor with shape (batch, height, width, channels).
+            flat_output: Return the output flat per image, of shape (batch, 1, out_height * out_width,
+                out_channels). For one image that is conv2d's output as it comes, while making it
+                (1, out_height, out_width, out_channels) moves data in a tiled output whose width is
+                not whole tiles.
 
         Returns:
-            Output tensor with shape (batch, out_height, out_width, out_channels).
+            Output tensor with shape (batch, out_height, out_width, out_channels), or the flat shape
+            with flat_output.
 
         Tensor sharding behavior:
 
@@ -638,7 +645,11 @@ class Conv2d(Module):
             raise RuntimeError(msg) from e
         self._prepared[prepared_key] = (prepared_weight, prepared_bias)
 
-        x = ttnn.reshape(x, (b, out_height, out_width, -1))
+        if flat_output:
+            # conv2d returns (1, 1, batch * out_height * out_width, out_channels).
+            x = ttnn.reshape(x, (b, 1, out_height * out_width, -1))
+        else:
+            x = ttnn.reshape(x, (b, out_height, out_width, -1))
 
         if self.in_mesh_axis is not None:
             x = self.ccl_manager.reduce_scatter(

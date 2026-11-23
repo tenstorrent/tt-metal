@@ -9,6 +9,7 @@ import torch
 
 import ttnn
 
+from ....models.vae.vae import flat_to_row_major
 from ....models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ....parallel.config import Flux2VaeParallelConfig
 from ....parallel.manager import CCLManager
@@ -109,8 +110,8 @@ def prep_data(
 @pytest.mark.parametrize(
     ("batch_size", "height", "width"),
     # 1088x1184 gives 34 x 74 latent pixels per device on 2x4, not whole tiles for the group norm.
-    [(1, 1024, 1024), (1, 1024, 1184), (1, 1056, 1024), (1, 1088, 1184)],
-    ids=["1024", "1024x1184", "1056x1024", "1088x1184"],
+    [(1, 1024, 1024), (1, 1024, 1184), (1, 1056, 1024), (1, 1088, 1184), (2, 1024, 1184)],
+    ids=["1024", "1024x1184", "1056x1024", "1088x1184", "batch2_1024x1184"],
 )
 # Rows on mesh axis 1, and channels (tp_h) or columns (h_w) on axis 0.
 @pytest.mark.parametrize("split", ["tp_h", "h_w"])
@@ -126,6 +127,9 @@ def test_vae_flux2_decoder(
     split_height: bool,
 ) -> None:
     torch.manual_seed(0)
+
+    if batch_size > 1 and mesh_device.get_num_devices() > 1:
+        pytest.skip("dit_fused_distributed_groupnorm takes one image (N == 1)")
 
     tp_axis = 0 if split == "tp_h" else None
     h_axis = 1
@@ -172,6 +176,7 @@ def test_vae_flux2_decoder(
     # The output stays split over the H and W axes.
     h_mesh_axis = vae_parallel_config.h_parallel.mesh_axis if vae_parallel_config.h_parallel is not None else None
     w_mesh_axis = vae_parallel_config.w_parallel.mesh_axis if vae_parallel_config.w_parallel is not None else None
+    tt_out = flat_to_row_major(tt_out, tt_model.output_hw((tt_inp.shape[1], tt_inp.shape[2])))
     tt_out_torch = tensor.to_torch(tt_out, mesh_axes=[None, h_mesh_axis, w_mesh_axis, None]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_out_torch, pcc=0.9978, relative_rmse=0.034)
 
@@ -240,6 +245,7 @@ def test_vae_flux2_encoder(
     tt_out = tt_model.forward(tt_image)
     ttnn.synchronize_device(mesh_device)
 
+    tt_out = flat_to_row_major(tt_out, tt_model.output_hw((tt_image.shape[1], tt_image.shape[2])))
     tt_out_torch = tensor.fast_device_to_host(
         tt_out, mesh_device, tt_model.output_concat_dims(), ccl_manager=ccl_manager
     ).permute(

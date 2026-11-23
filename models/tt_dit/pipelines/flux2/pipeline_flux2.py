@@ -24,6 +24,7 @@ from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, Se
 
 from ...blocks.attention_opt import total_sequence_length_tensor
 from ...models.transformers.transformer_flux2 import Flux2Transformer
+from ...models.vae.vae import flat_to_row_major
 from ...models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, Flux2VaeParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
@@ -722,12 +723,16 @@ class Flux2Pipeline:
                 tt_decoded_output = tracer(tt_latents, traced=traced)
             else:
                 tt_decoded_output = self._vae_decoder.forward(tt_latents)
+            # The decoder's output is flat, [N, 1, H * W, 3] tiled. float_to_uint8 maps it in tiles and
+            # untilizes the flat tensor, and the uint8 image is then made [N, H, W, 3] as a view.
+            image_hw = self._vae_decoder.output_hw((tt_latents.shape[1], tt_latents.shape[2]))
+            tt_image = float_to_uint8(tt_decoded_output)
+            tt_image = ttnn.reshape(tt_image, (tt_image.shape[0], *image_hw, tt_image.shape[-1]))
             decoded_output = fast_device_to_host(
-                tt_decoded_output,
+                tt_image,
                 self._mesh_device,
                 self._vae_decoder.output_concat_dims(),
                 ccl_manager=self._vae_ccl_manager,
-                pre_transfer_fn=float_to_uint8,
             )
             output = [Image.fromarray(image.numpy()) for image in decoded_output]
 
@@ -828,7 +833,7 @@ class Flux2Pipeline:
         # The encoder leaves its output split over the H and W axes; the host assembles it, as for the
         # decoded image, so on a single host no gather program is built per reference size.
         latents = fast_device_to_host(
-            tt_latents,
+            flat_to_row_major(tt_latents, self._vae_encoder.output_hw((tt_pixels.shape[1], tt_pixels.shape[2]))),
             self._mesh_device,
             self._vae_encoder.output_concat_dims(),
             ccl_manager=self._vae_ccl_manager,

@@ -917,10 +917,11 @@ class DistributedGroupNorm(Module):
             semaphores = [semaphores[0], self.ccl_manager.get_ag_ping_pong_semaphore(self.second_cluster_axis)[0]]
         persistent = None
         if self.cluster_size > 1:
-            # The fused activation does not change the stats geometry (it is applied after the
-            # AG, on the output tile), so it is deliberately NOT part of the cache key.
+            # The stats geometry follows the channels, the groups and the mesh axes, not H * W, so a
+            # new image size reuses the buffer. The fused activation does not change it either (it is
+            # applied after the AG, on the output tile), so it is deliberately NOT part of the key.
             persistent = self.ccl_manager.get_fused_norm_stats_buffer(
-                ("gn", tuple(x4.shape), self.num_padded_groups, self.cluster_axis, self.second_cluster_axis),
+                ("gn", channels, self.num_padded_groups, self.cluster_axis, self.second_cluster_axis),
                 lambda: ttnn.experimental.dit_fused_distributed_groupnorm_create_stats_buffer(
                     x4,
                     self.num_padded_groups,

@@ -167,20 +167,28 @@ class Flux2VaeDecoder(Module):
             z = ttnn.mesh_partition(z, dim=1, cluster_axis=self._ctx.h_mesh_axis)
         if self._ctx.w_factor > 1:
             z = ttnn.mesh_partition(z, dim=2, cluster_axis=self._ctx.w_mesh_axis)
-        z = ttnn.to_layout(z, ttnn.TILE_LAYOUT)
+        # Row major: the decoder flattens it before tilizing (see forward).
         return z
 
     @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
     def forward(self, z: ttnn.Tensor, /) -> ttnn.Tensor:
-        # Input arrives from preprocess_and_unpatchify, split over the H and W axes where the VAE has
-        # them. post_quant_conv is a per-position Linear, and the conv pyramid below exchanges halos.
+        # Input arrives from preprocess_and_unpatchify in row major, [N, H, W, C] split over the H and
+        # W axes where the VAE has them. The tiled activations stay flat, [N, 1, H * W, C], and are
+        # made 4D only in row major (see VaeConv2d.forward): a tiled reshape between the two moves data
+        # whenever the local W is not whole tiles.
+        n, h, w, c = z.shape
+        hw = (h, w)
+        # Tilizing the flat tensor pads only at its end, not per row of latents.
+        z = ttnn.to_layout(ttnn.reshape(z, (n, 1, h * w, c)), ttnn.TILE_LAYOUT)
+        # post_quant_conv is a per-position Linear, and the conv pyramid below exchanges halos.
         z = self.post_quant_conv.forward(z)
 
-        z = self.conv_in.forward(z)
-        z = self.mid_block.forward(z)
+        z = self.conv_in.forward(z, hw)
+        z = self.mid_block.forward(z, hw)
 
         for block in self.up_blocks:
-            z = block.forward(z)
+            z = block.forward(z, hw)
+            hw = block.output_hw(hw)
 
         z = self.conv_norm_out.forward(z)
 
@@ -188,8 +196,15 @@ class Flux2VaeDecoder(Module):
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
 
         # The image stays split over the H and W axes: the host assembles it (see output_concat_dims),
-        # which saves gathering it on the device, at a program per image size.
-        return self.conv_out.forward(z)
+        # which saves gathering it on the device, at a program per image size. It stays flat too, as
+        # [N, 1, H * W, C] tiled; flat_to_row_major with output_hw makes it [N, H, W, C].
+        return self.conv_out.forward(z, hw)
+
+    def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
+        """The local (H, W) of the image decoded from latents of local size `hw`."""
+        for block in self.up_blocks:
+            hw = block.output_hw(hw)
+        return hw
 
     def output_concat_dims(self) -> list[int | None]:
         """Per mesh axis, the dimension of the [N, H, W, C] output its shards are split along, or None
@@ -291,15 +306,20 @@ class Flux2VaeEncoder(Module):
                 layout.
 
         Returns:
-            The latent mean of shape (B, H / 8, W / 8, z_channels), split over the H and W axes like
-            the input.
+            The latent mean, flat and tiled as (B, 1, H / 8 * W / 8, z_channels), split over the H and
+            W axes like the input; flat_to_row_major with output_hw makes it (B, H / 8, W / 8,
+            z_channels).
         """
-        x = self.conv_in.forward(x)
+        # The tiled activations stay flat, as in Flux2VaeDecoder.forward.
+        _, h, w, _ = x.shape
+        hw = (h, w)
+        x = self.conv_in.forward(x, hw)
 
         for block in self.down_blocks:
-            x = block.forward(x)
+            x = block.forward(x, hw)
+            hw = block.output_hw(hw)
 
-        x = self.mid_block.forward(x)
+        x = self.mid_block.forward(x, hw)
 
         x = self.conv_norm_out.forward(x)
 
@@ -308,7 +328,13 @@ class Flux2VaeEncoder(Module):
 
         # The latents stay split over the H and W axes for the host to assemble (see output_concat_dims),
         # which on a single host saves gathering them on the device, at a program per image size.
-        return self.conv_out.forward(x)
+        return self.conv_out.forward(x, hw)
+
+    def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
+        """The local (H, W) of the latents of an image of local size `hw`."""
+        for block in self.down_blocks:
+            hw = block.output_hw(hw)
+        return hw
 
     def output_concat_dims(self) -> list[int | None]:
         """Per mesh axis, the dimension of the [N, H, W, C] output its shards are split along, or None

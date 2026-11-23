@@ -306,6 +306,7 @@ class VaeConv2d(Module):
         out_is_greater = out_channels > in_channels
 
         top, bottom, left, right = (padding,) * 4 if isinstance(padding, int) else padding
+        self._kernel_size, self._stride, self._padding = kernel_size, stride, (top, bottom, left, right)
 
         # SP halo: on a sharded axis the conv's own padding becomes 0 and a neighbor_pad halo
         # exchange supplies the missing rows/cols from adjacent devices, and zeros at the edges of
@@ -352,7 +353,22 @@ class VaeConv2d(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "", "inner")
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
+        """The local height and width of the output for an input of local size `hw`."""
+        top, bottom, left, right = self._padding
+        k, s = self._kernel_size, self._stride
+        return (hw[0] + top + bottom - k) // s + 1, (hw[1] + left + right - k) // s + 1
+
+    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
+        """Without `hw`, `x` and the output are [N, H, W, C]. With `hw`, the local (H, W), `x` is
+        [N, 1, H * W, C] or [N, H, W, C] and the output is [N, 1, H_out * W_out, C]: the images are
+        made 4D only in row major, where that is a view, while a tiled reshape moves data whenever W
+        is not whole tiles."""
+        if hw is not None:
+            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.reshape(x, (x.shape[0], hw[0], hw[1], x.shape[-1]))
+
         if self._needs_neighbor_pad:
             ccl = self._ctx.ccl_manager
             assert ccl is not None
@@ -390,8 +406,22 @@ class VaeConv2d(Module):
             x = ttnn.squeeze(x, 0)  # back to [N, H_local+pad, W_local+pad, C]
 
         if self._use_conv3d:
-            return self.inner.forward(x)
-        return self.inner.forward(x, use_persistent_buffer=False)
+            x = self.inner.forward(x)
+            if hw is not None:
+                # conv3d returns [N, H_out, W_out, C], tiled: flattening it moves data whenever W_out
+                # is not whole tiles.
+                n, h_out, w_out, c = x.shape
+                x = ttnn.reshape(x, (n, 1, h_out * w_out, c))
+            return x
+        return self.inner.forward(x, use_persistent_buffer=False, flat_output=hw is not None)
+
+
+def flat_to_row_major(x: ttnn.Tensor, hw: tuple[int, int]) -> ttnn.Tensor:
+    """A flat tiled [N, 1, H * W, C] tensor as row major [N, H, W, C], where `hw` is (H, W). The
+    untilize is of the flat tensor and the reshape a view, so neither depends on whether W is whole
+    tiles."""
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.reshape(x, (x.shape[0], hw[0], hw[1], x.shape[-1]))
 
 
 class VaeUpsampler(Module):
@@ -402,9 +432,17 @@ class VaeUpsampler(Module):
         super().__init__()
         self.conv = VaeConv2d(in_channels, out_channels, kernel_size=3, padding=1, ctx=ctx)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = tensor.upsample(x, scale_factor=2)
-        return self.conv.forward(x)
+    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
+        """With `hw` (see VaeConv2d.forward), `x` is flat, and the upsampled image stays in row major
+        for the conv, which wants row major anyway."""
+        if hw is None:
+            x = tensor.upsample(x, scale_factor=2)
+            return self.conv.forward(x)
+        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.reshape(x, (x.shape[0], hw[0], hw[1], x.shape[-1]))
+        x = ttnn.upsample(x, scale_factor=2)
+        return self.conv.forward(x, (2 * hw[0], 2 * hw[1]))
 
 
 class VaeResnetBlock(Module):
@@ -432,14 +470,16 @@ class VaeResnetBlock(Module):
         if "conv_shortcut.weight" in state:
             state["conv_shortcut.weight"] = state["conv_shortcut.weight"].squeeze(2, 3)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
+        """With `hw`, the local (H, W), `x` and the output are flat, [N, 1, H * W, C] (see
+        VaeConv2d.forward); without it, [N, H, W, C]."""
         h = x
 
         h = self.norm1.forward(h)
-        h = self.conv1.forward(h)
+        h = self.conv1.forward(h, hw)
 
         h = self.norm2.forward(h)
-        h = self.conv2.forward(h)
+        h = self.conv2.forward(h, hw)
 
         if self.conv_shortcut is not None:
             x = self.conv_shortcut.forward(x)
@@ -635,9 +675,10 @@ class VaeMidBlock(Module):
 
         self._num_layers = num_layers
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
+        """`hw` as in VaeResnetBlock.forward; the attention works on H * W tokens either way."""
         for i in range(self._num_layers + 1):
-            x = self.resnets[i].forward(x)
+            x = self.resnets[i].forward(x, hw)
             if i < self._num_layers:
                 x = self.attentions[i].forward(x)
 
@@ -677,12 +718,17 @@ class VaeUpBlock(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "upsamplers.0", "upsampler")
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
+        """The local height and width of the output for an input of local size `hw`."""
+        return (2 * hw[0], 2 * hw[1]) if self.upsampler is not None else hw
+
+    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
+        """`hw` as in VaeResnetBlock.forward."""
         for block in self.resnets:
-            x = block.forward(x)
+            x = block.forward(x, hw)
 
         if self.upsampler is not None:
-            x = self.upsampler.forward(x)
+            x = self.upsampler.forward(x, hw)
 
         return x
 
@@ -692,8 +738,8 @@ class VaeDownsampler(Module):
         super().__init__()
         self.conv = VaeConv2d(num_channels, num_channels, kernel_size=3, stride=2, padding=(0, 1, 0, 1), ctx=ctx)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return self.conv.forward(x)
+    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
+        return self.conv.forward(x, hw)
 
 
 class VaeDownBlock(Module):
@@ -721,12 +767,17 @@ class VaeDownBlock(Module):
 
         self.downsampler = VaeDownsampler(num_channels=out_channels, ctx=ctx) if downsample else None
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
+        """The local height and width of the output for an input of local size `hw`."""
+        return self.downsampler.conv.output_hw(hw) if self.downsampler is not None else hw
+
+    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
+        """`hw` as in VaeResnetBlock.forward."""
         for block in self.resnets:
-            x = block.forward(x)
+            x = block.forward(x, hw)
 
         if self.downsampler is not None:
-            x = self.downsampler.forward(x)
+            x = self.downsampler.forward(x, hw)
 
         return x
 
