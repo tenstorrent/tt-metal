@@ -30,13 +30,14 @@ Z_COPIES = 8  # compact z pages (one per DRAM bank): the combine cores spread th
 
 
 class _FusedGate:
-    def __init__(self, device, downs, forgets, gains, rows, eps=1e-6, combine_cores=None, fused=True):
+    def __init__(self, device, downs, forgets, gains, rows, eps=1e-6, combine_cores=None, fused=True, group=None):
         """downs: [2C, 64] per gate; forgets / gains: [64, C] per gate; rows: number of gated vectors R.
         With several gates, row i goes through gate i (block mask). fused: z and combine in one program (else two
         programs, z through DRAM); same outputs."""
         self.device = device
         self.eps = eps
         self.rows = rows
+        group = group or rows  # rows per token (the partial-sum layout of a 1-token gate of `group` rows)
         self.c = forgets[0].shape[-1]
         self.ntc = self.c // 32
         g = len(downs)
@@ -49,8 +50,10 @@ class _FusedGate:
         self.fg_dtype = ttnn.bfloat16 if exact else ttnn.float32
         self.f = R.to_device(f, device, self.fg_dtype)  # [1, 1, 64 g, C]
         self.g = R.to_device(g_, device, self.fg_dtype)
-        self.block = g > 1  # row i goes through gate i only (z tiles 2i, 2i + 1; applied by the combine reader)
-        assert not self.block or (g == rows and RANK == 64)
+        # row i goes through gate i % g only (z tiles 2 (i % g), +1; applied by the combine reader); R verify rows of
+        # the q/k/v gates: rows 3r + j, gate j
+        self.block = g > 1
+        assert not self.block or (rows % g == 0 and RANK == 64)
         ks = 2 * self.c // R.SPLIT
         assert ks % 32 == 0 and self.ntc % 1 == 0
         self.kt = ks // 32  # K tiles per split
@@ -63,7 +66,7 @@ class _FusedGate:
         assert self.ntc % n == 0
         self.nt = self.ntc // n
         self.prep_cores = F.core_list(device, 2 * rows)
-        assert 2 * rows <= R.SPLIT
+        assert 2 * rows <= R.SPLIT or fused  # the fused gate preps on cores of their own
         self.z_parts = 2  # K parts per split: 18 cores of 8 K tiles (fewer matmul tiles per core)
         n_z = R.SPLIT * self.z_parts
         # z and combine in ONE program (fused): combine on rectangles below row 0, z on the other cores (row 0 first).
@@ -89,12 +92,18 @@ class _FusedGate:
         else:
             self.comb_cores = F.core_list(device, n)
             self.z_cores = F.core_list(device, n_z)
-        # packed partial rows on the root: sender s row r -> packed row (s - 1) * rows + r; S_b[r, j] selects them
-        n_rows = (R.SPLIT * self.z_parts - 1) * rows
-        self.z_nb = -(-n_rows // 32)
+        # packed partial rows on the root, per token of `group` rows (rows = tokens x group): row j of sender s ->
+        # row (s - 1) * group + j of the token's block of nbt tiles, as the 1-token gate packs them, so each token's
+        # sums round as there (S_b[r, g] = 1 where packed row g came from row r)
+        n_send = R.SPLIT * self.z_parts - 1
+        assert rows % group == 0
+        self.group = group
+        nbt = -(-n_send * group // 32)
+        self.z_nb = rows // group * nbt
         sel = torch.zeros(32, 32 * self.z_nb)
-        for g in range(n_rows):
-            sel[g % rows, g] = 1.0
+        for r in range(rows):
+            for s_ in range(n_send):
+                sel[r, (r // group) * nbt * 32 + s_ * group + r % group] = 1.0
         self.sel = ttnn.from_torch(sel[None, None], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
     def _prep(self, h, m):
@@ -147,7 +156,8 @@ class _FusedGate:
         n_split = R.SPLIT * self.z_parts
         # fused: prep-only cores after the K parts (role 2); else the first n_prep K-part cores also prep (role 1)
         mm, pc = cores[:n_split], (cores[n_split:] if self.fused else cores[:n_prep])
-        assert self.kz * self.rows * 128 <= 4096 and len(pc) == n_prep
+        zb = self.kz * self.rows * 128  # compact z bytes (one DRAM page per copy unless fused)
+        assert (zb <= 4096 or self.fused) and len(pc) == n_prep
         z = self.out.get("zc", 32, 32 * Z_COPIES, ttnn.float32)  # Z_COPIES pages of compact z rows
         vxy = lambda cs: [
             v for c in cs for v in (lambda w: (w.x, w.y))(self.device.worker_core_from_logical_core(c))
@@ -181,6 +191,7 @@ class _FusedGate:
             sem_z=1,
             rows=self.rows,
             nb=self.z_nb,
+            group=self.group,
             z_copies=Z_COPIES,
             fused=int(self.fused),
             sem_zl=2,
@@ -203,7 +214,7 @@ class _FusedGate:
             F.cb(18, f32, self.kz, cores=crs),
             F.cb(29, ttnn.bfloat16, 1, 32, cores=crs),
             # root: compact z rows (fused: also where they land on the combine cores; one address everywhere)
-            F.cb(31, f32, 1, cores=self.all_cores if self.fused else crs),
+            F.cb(31, f32, -(-zb // 4096), cores=self.all_cores if self.fused else crs),
             F.stage_cb(30, self.ntc, crs),  # prep writer -> reader: second half of the row landed
         ]
         sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=crs, initial_value=0) for i in (0, 1)]
@@ -333,16 +344,18 @@ class FusedMessageGate(_FusedGate):
         down = _t(weights[p + "down"]).reshape(2 * c, RANK)
         forget = _t(weights[p + "forget"]).reshape(RANK, c)
         gain = _t(weights[p + "gain"]).reshape(RANK, c)
-        super().__init__(rows.device, [down], [forget], [gain], num_rows, eps)
+        # num_rows rows = num_rows verify rows of the model's 1-row gate (each sums as the 1-row gate)
+        super().__init__(rows.device, [down], [forget], [gain], num_rows, eps, group=1)
 
 
 class FusedQKVGate(_FusedGate):
     """Drop-in for model._QKVGate(rows, w): rows 0/1/2 of h, m through gates q, k, v."""
 
-    def __init__(self, rows, w, eps=1e-6):
+    def __init__(self, rows, w, eps=1e-6, num_tokens=1):
+        """num_tokens = R: R verify rows, rows 3r + j of h / m through gate j."""
         g3 = ("q", "k", "v")
         c = _t(w["msg_gate.q.forget"]).shape[-1]
         downs = [_t(w[f"msg_gate.{g}.down"]).reshape(2 * c, RANK) for g in g3]
         forgets = [_t(w[f"msg_gate.{g}.forget"]).reshape(RANK, c) for g in g3]
         gains = [_t(w[f"msg_gate.{g}.gain"]).reshape(RANK, c) for g in g3]
-        super().__init__(rows.device, downs, forgets, gains, 3, eps)
+        super().__init__(rows.device, downs, forgets, gains, 3 * num_tokens, eps, group=3)

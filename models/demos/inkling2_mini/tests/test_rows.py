@@ -141,3 +141,98 @@ def test_rows_messages(device, n_rows):
         for l, (q, m) in enumerate(got[r]):
             _eq(_h(q)[3 * r : 3 * r + 3], ref[r][l][0], f"msg qkv layer {l} row {r}")
             _eq(_h(m)[r : r + 1], ref[r][l][1], f"msg mlp layer {l} row {r}")
+
+
+@pytest.mark.parametrize("n_rows", [2, 3, 4])
+def test_rows_router(device, n_rows):
+    """R-row router: row r's ids (in order) and weights bit-equal to the 1-row call on row r (ties included)."""
+    from models.demos.inkling2_mini.tests.test_router import Chain
+    from models.demos.inkling2_mini.tt.fused.router import FusedRouter
+    from models.demos.inkling2_mini.tt.moe import HIDDEN, NUM_EXPERTS, ROUTE_SCALE, TOP_K
+
+    g = torch.Generator().manual_seed(n_rows)
+    w = torch.randn(HIDDEN, NUM_EXPERTS, generator=g) * 0.02
+    dup = torch.randperm(NUM_EXPERTS, generator=g)[:16]
+    w[:, dup[8:]] = w[:, dup[:8]]
+    bias = torch.randn(NUM_EXPERTS, generator=g) * 0.05
+    bias = bias - bias.mean()
+    chain = Chain(device, w, bias)
+    router = FusedRouter(device, chain.w, bias, TOP_K, ROUTE_SCALE, 1e-20, first_row=2)
+    xs = torch.randn(n_rows, HIDDEN, generator=g)
+    xs[1] = xs[0]  # identical rows too
+
+    def l1(v):
+        return ttnn.from_torch(v.reshape(1, 1, -1, HIDDEN), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                               device=device, memory_config=ttnn.L1_MEMORY_CONFIG)  # fmt: skip
+
+    def host(t):
+        return ttnn.to_torch(t).reshape(-1, t.shape[-1])
+
+    ref = []
+    for r in range(n_rows):
+        wt, ids = router(l1(xs[r]))
+        ref.append((host(wt)[0, :TOP_K].view(torch.int16).clone(), host(ids)[0, :TOP_K].int().clone()))
+    wt, ids = router(l1(xs))
+    hw, hi = host(wt), host(ids)
+    for r in range(n_rows):
+        _eq(hw[r, :TOP_K].view(torch.int16).float(), ref[r][0].float(), f"router weights row {r}")
+        _eq(hi[r, :TOP_K].int().float(), ref[r][1].float(), f"router ids row {r}")
+
+
+@pytest.mark.parametrize("n_rows", [2, 3, 4])
+def test_rows_mlp_gate(device, n_rows):
+    """The message gate built for R rows (FusedMessageGate num_rows=R): row r bit-equal to the 1-row gate."""
+    from models.demos.inkling2_mini.tt.fused.gate import FusedMessageGate
+
+    g = torch.Generator().manual_seed(7)
+    w, _ = weights(g, False)
+    one = FusedMessageGate(R.RowOps(device), w, "mlp")
+    many = FusedMessageGate(R.RowOps(device), w, "mlp", num_rows=n_rows)
+    hs, ms = torch.randn(n_rows, C, generator=g), torch.randn(n_rows, C, generator=g) * 0.5
+    ref = [_h(one(_row(device, hs[r], ttnn.float32), _row(device, ms[r], ttnn.float32))) for r in range(n_rows)]
+    got = _h(many(_row(device, hs, ttnn.float32), _row(device, ms, ttnn.float32)))
+    for r in range(n_rows):
+        _eq(got[r : r + 1], ref[r], f"mlp gate row {r}")
+
+
+@pytest.mark.parametrize("n_rows", [2, 3])
+def test_rows_qkv_gate(device, n_rows):
+    """The q/k/v gates for R verify rows (FusedQKVGate num_tokens=R, rows 3r + j through gate j), fed as in
+    model._app: the attn-res output repeated in rows 3r..3r+2 (one shared twin) and the per-row loop messages
+    (shared twins); row 3r + j bit-equal to the 1-row gate's row j. Then the attention-input norms per row."""
+    from models.demos.inkling2_mini.tt.fused.gate import FusedQKVGate
+
+    g = torch.Generator().manual_seed(9)
+    w, norms = weights(g, False)
+    frows = FusedRowOps(device)
+    attn = FusedAttnRes(frows, w, "attn_res_q", 1)
+    one = FusedQKVGate(R.RowOps(device), w)
+    many = FusedQKVGate(R.RowOps(device), w, num_tokens=n_rows)
+    norm = FusedRowNorm(device, norms)
+    msg = FusedMessages(device, {"msg_q": torch.randn(1, 1, 12 * 32, C, generator=g)})
+    hs = [torch.randn(2, C, generator=g) for _ in range(n_rows)]
+    keys = [
+        (_row(device, torch.randn(C, generator=g)), _row(device, torch.randn(C, generator=g))) for _ in range(n_rows)
+    ]
+    rows_h = [[_row(device, v[i]) for i in range(2)] for v in hs]
+
+    def res(r):
+        frows.seal(None, rows_h[r][0], 0)
+        return attn(None, rows_h[r][1], 2, split=False, repeat_rows=3, row_out=False)
+
+    ref = []
+    for r in range(n_rows):
+        x = res(r)
+        qkv = msg(*keys[r])[4][0]  # loop layer 4's q/k/v messages
+        y = one(x, qkv)
+        ref.append((_h(y), [_h(t) for t in norm(y)]))
+    xs = F.per_row(device, n_rows, res)
+    ms = F.per_row(device, n_rows, lambda r: msg(*keys[r]))
+    assert all(t is xs[0] for t in xs) and xs[0].shape[-2] == 3 * n_rows
+    y = many(xs[0], ms[0][4][0])
+    got = _h(y)
+    ns = F.per_row(device, n_rows, lambda r: norm(y, num_rows=3, first_row=3 * r))
+    for r in range(n_rows):
+        _eq(got[3 * r : 3 * r + 3], ref[r][0], f"qkv gate row {r}")
+        for j in range(3):
+            _eq(_h(ns[r][j]), ref[r][1][j], f"norm {j} row {r}")

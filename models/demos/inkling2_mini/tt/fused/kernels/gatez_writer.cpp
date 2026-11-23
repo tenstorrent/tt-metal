@@ -13,6 +13,9 @@ void kernel_main() {
     constexpr uint32_t n_split = get_named_compile_time_arg_val("n_split");
     constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
     constexpr uint32_t nb = get_named_compile_time_arg_val("nb");  // packed partial-row tiles per z tile
+    constexpr uint32_t group = get_named_compile_time_arg_val("group");  // rows per token
+    constexpr uint32_t nbt = nb / (rows / group);                        // packed tiles per token
+    static_assert(rows % group == 0 && nbt * (rows / group) == nb);
     constexpr uint32_t cb_recv = 7, cb_z = 18;
     constexpr uint32_t A = 3;  // first z arg
 
@@ -57,7 +60,10 @@ void kernel_main() {
         cb_wait_front(9, 1);  // cb_zero (reader)
         const uint64_t zero = get_noc_addr(get_read_ptr(9));
         const uint32_t recv = get_write_ptr(cb_recv);
-        for (uint32_t g = (n_split - 1) * rows; g < nb * 32; ++g) {
+        for (uint32_t g = 0; g < nb * 32; ++g) {
+            if (g % (nbt * 32) < (n_split - 1) * group) {  // a row some sender owns (packed block of one token)
+                continue;
+            }
             for (uint32_t t = 0; t < kz; ++t) {
                 const uint32_t off = (t * nb + g / 32) * 4096 + rowio::row_offset(g % 32, 4);
                 noc_async_read(zero, recv + off, 64);
@@ -138,13 +144,15 @@ void kernel_main() {
         return;
     }
     cb_wait_front(cb_z, kz);
-    // only rows 0..rows-1 of the partials matter (the combine reads only those rows of z). Row r of sender s goes
-    // to row g = (s - 1) * rows + r of the root's packed tiles: recv tile t * nb + g / 32, row g % 32.
+    // only rows 0..rows-1 of the partials matter (the combine reads only those rows of z). Rows come in tokens of
+    // `group` rows (q/k/v gates: 3; R verify rows: R tokens), each token's partials in a block of nbt tiles laid out
+    // as the 1-token gate's: row j of sender s at block row (s - 1) * group + j. Every token's sums then round
+    // exactly as the 1-token gate's. Packed row g -> recv tile t * nb + g / 32, row g % 32.
     const uint32_t recv = get_write_ptr(cb_recv);
     const uint32_t src = get_read_ptr(cb_z);
     for (uint32_t t = 0; t < kz; ++t) {
         for (uint32_t r = 0; r < rows; ++r) {
-            const uint32_t g = (s - 1) * rows + r;
+            const uint32_t g = (r / group) * nbt * 32 + (s - 1) * group + r % group;
             const uint32_t so = t * 4096 + rowio::row_offset(r, 4);
             const uint32_t d = recv + (t * nb + g / 32) * 4096 + rowio::row_offset(g % 32, 4);
             noc_async_write(src + so, get_noc_addr(root_x, root_y, d), 64);

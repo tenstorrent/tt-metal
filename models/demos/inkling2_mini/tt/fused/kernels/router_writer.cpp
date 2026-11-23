@@ -42,15 +42,27 @@ void kernel_main() {
     const uint32_t collector = get_arg_val<uint32_t>(4);
     const uint32_t cx = get_arg_val<uint32_t>(5);
     const uint32_t cy = get_arg_val<uint32_t>(6);
+    // R-row router (speculative verify, rows > 1): token r is row r of x; collector r (args 8.. hold the NOC
+    // coordinates of collectors 1..R-1) gets row r of every tile and writes row r of the outputs
+    constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
+    const uint32_t my_row = get_arg_val<uint32_t>(7);
 
-    // fp32 row 0 of the tile: columns 0..15 in face 0, 16..31 in face 1 (+1024 B)
+    // fp32 row r of the tile: columns 0..15 in face 0, 16..31 in face 1 (+1024 B)
     cb_wait_front(cb_mm, 1);
     const uint32_t src = get_read_ptr(cb_mm);
     const uint32_t dst = get_write_ptr(cb_parts) + chunk * 4096 + n * 128;  // same address on every core
-    noc_async_write(src, get_noc_addr(cx, cy, dst), 64);
-    noc_async_write(src + 1024, get_noc_addr(cx, cy, dst + 64), 64);
+    for (uint32_t r = 0; r < rows; ++r) {
+        const uint32_t x = r == 0 ? cx : get_arg_val<uint32_t>(6 + 2 * r);
+        const uint32_t y = r == 0 ? cy : get_arg_val<uint32_t>(7 + 2 * r);
+        noc_async_write(src + r * 64, get_noc_addr(x, y, dst), 64);
+        noc_async_write(src + 1024 + r * 64, get_noc_addr(x, y, dst + 64), 64);
+    }
     noc_async_write_barrier();
-    noc_semaphore_inc(get_noc_addr(cx, cy, get_semaphore(sem_id)), 1);
+    for (uint32_t r = 0; r < rows; ++r) {
+        const uint32_t x = r == 0 ? cx : get_arg_val<uint32_t>(6 + 2 * r);
+        const uint32_t y = r == 0 ? cy : get_arg_val<uint32_t>(7 + 2 * r);
+        noc_semaphore_inc(get_noc_addr(x, y, get_semaphore(sem_id)), 1);
+    }
     noc_async_atomic_barrier();
     cb_pop_front(cb_mm, 1);
     if (!collector) {
@@ -118,9 +130,16 @@ void kernel_main() {
     cb_pop_front(cb_sigmoid, 1);
     cb_push_back(cb_gathered, 1);
 
-    noc_async_write(it, i_acc.get_noc_addr(0), 2048);
-    cb_wait_front(cb_out_weights, 1);
-    noc_async_write(get_read_ptr(cb_out_weights), w_acc.get_noc_addr(0), 2048);
+    if constexpr (rows == 1) {
+        noc_async_write(it, i_acc.get_noc_addr(0), 2048);
+        cb_wait_front(cb_out_weights, 1);
+        noc_async_write(get_read_ptr(cb_out_weights), w_acc.get_noc_addr(0), 2048);
+    } else {  // row my_row, columns 0..7 (16 B of 2-byte elements in face 0) of both outputs
+        static_assert(rows <= 16 && k <= 8, "R-row outputs: face 0, 8 columns");
+        noc_async_write(it, i_acc.get_noc_addr(0) + my_row * 32, 16);
+        cb_wait_front(cb_out_weights, 1);
+        noc_async_write(get_read_ptr(cb_out_weights), w_acc.get_noc_addr(0) + my_row * 32, 16);
+    }
     noc_async_write_barrier();
     cb_pop_front(cb_out_weights, 1);
     cb_pop_front(cb_out_indices, 1);

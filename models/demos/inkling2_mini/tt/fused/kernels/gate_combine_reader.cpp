@@ -66,7 +66,7 @@ void kernel_main() {
         }
     }
     // z: only rows 0..rows-1 matter (output rows >= rows are never written; matmul rows are independent). With
-    // the block mask, row i keeps z tiles 2i, 2i+1 (gate i) and the rest of the row is zeroed.
+    // the block mask, row i keeps z tiles 2g, 2g+1 (gate g = i % gates) and the rest of the row is zeroed.
     cb_reserve_back(cb_z, kz);
     const uint32_t zl = get_write_ptr(cb_z);
     // compact z (gatez): rows only, block (t, r) = 128 B at (t * rows + r) * 128 of copy z_copy; staged in cb 1
@@ -87,7 +87,7 @@ void kernel_main() {
         const uint32_t off = rowio::row_offset(r, 4);
         for (uint32_t t = 0; t < kz; ++t) {
             const uint32_t d = zl + t * 4096 + off;
-            if (!block || t / 2 == r) {
+            if (!block || t / 2 == r % (kz / 2)) {  // gate of row r: r % gates (R verify rows: 3 per token)
                 const uint64_t a = get_noc_addr(zst + (t * rows + r) * 128);  // compact z rows
                 noc_async_read(a, d, 64);
                 noc_async_read(a + 64, d + 1024, 64);

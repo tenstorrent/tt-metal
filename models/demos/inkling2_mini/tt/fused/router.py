@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net>
 # SPDX-License-Identifier: Apache-2.0
-"""Fused decode router: x -> (top-k weights, top-k ids) in one program, one token.
+"""Fused decode router: x -> (top-k weights, top-k ids) in one program, one token (or R tokens: x rows, one
+collector per row, each row bit-equal to its 1-row call).
 
 Replaces in tt/moe.py: reshape, the K-split router GEMM (ROUTER_SPLIT batched matmuls), ttnn.sum over the
 splits (FastReduceNC) and moe_grouped_topk (sigmoid, + bias, top-k, gather of the unbiased scores,
@@ -36,8 +37,7 @@ class FusedRouter:
         self.k = k
         self.packed = dict(packed_eps=_f32_bits(epsilon), packed_scale=_f32_bits(route_scale))
         self.cores, self.grid = F.core_list(device, self.chunks * self.nt, first_row)
-        c = device.worker_core_from_logical_core(self.cores[0])
-        self.collector_noc = (c.x, c.y)
+        self.collector_noc = self._noc(self.cores[0])
         # as the op's factory: fp32 inputs and biased keys to DEST; the partials too (FastReduceNC's SFPU path)
         self.compute_cfg = F.compute_config([0, 1, 5, 9])
         fp, g = ttnn.float32, self.grid
@@ -50,24 +50,33 @@ class FusedRouter:
             F.cb(22, fp, 2, cores=g),
         ]  # fmt: skip
 
+    def _noc(self, core):
+        c = self.device.worker_core_from_logical_core(core)
+        return (c.x, c.y)
+
     def __call__(self, x, w_stage=None):
         """x [1,1,1,K] bf16 TILE (post-norm) -> (weights [1,1,1,k] bf16 TILE L1, ids [1,1,1,k] uint16 TILE L1).
         w_stage: an L1 tensor sharded over self.cores whose shards hold each core's W tiles (tt/mk/router_stage.py);
         the reader then takes them from local L1 instead of DRAM (same bytes, same output)."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT, (x.dtype, x.layout)
-        assert tuple(x.shape) == (1, 1, 1, 32 * self.kt * self.chunks), x.shape  # one token
-        shape = ttnn.Shape([1, 1, 1, self.k])
+        n_rows = x.shape[-2]  # R-row router (speculative verify): row r of x = token r, collector r = core r
+        assert tuple(x.shape) == (1, 1, n_rows, 32 * self.kt * self.chunks) and n_rows <= 16, x.shape
+        shape = ttnn.Shape([1, 1, n_rows, self.k])
         l1 = ttnn.L1_MEMORY_CONFIG
         w = ttnn.allocate_tensor_on_device(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, l1)
         ids = ttnn.allocate_tensor_on_device(shape, ttnn.uint16, ttnn.TILE_LAYOUT, self.device, l1)
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         named = dict(kt=self.kt, nt=self.nt, chunks=self.chunks, sem=0, width_tiles=self.nt, k=self.k, **self.packed)
+        named["rows"] = n_rows
+        assert n_rows <= len(self.cores)
+        more = [v for c in self.cores[1:n_rows] for v in self._noc(c)]  # collectors 1..R-1
         r_args, w_args, c_args = {}, {}, {}
         for i, c in enumerate(self.cores):
-            chunk, n, col = i // self.nt, i % self.nt, int(i == 0)
+            chunk, n, col = i // self.nt, i % self.nt, int(i < n_rows)
             r_args[c] = [x.buffer_address(), self.w.buffer_address(), chunk, n, col, self.bias.buffer_address(),
                          w_stage.buffer_address() if w_stage is not None else 0]  # fmt: skip
             w_args[c] = [w.buffer_address(), ids.buffer_address(), chunk, n, col, *self.collector_noc]
+            w_args[c] += [i if col else 0, *more]
             c_args[c] = [col]
 
         def kern(name, config, rt, cta=()):
