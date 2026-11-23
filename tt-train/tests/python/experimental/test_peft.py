@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""LoRA adapters between ttml's fused layers and HF PEFT's per-projection ones.
+"""LoRA adapters between ttml's fused layers and HF PEFT's per-projection ones, and the real ``peft`` library loading
+and saving them.
 
 Device-free. The layouts are the ones ``hf_layout`` gives a Llama, read off the loader's rules, so q's and k's rows
 are permuted for RoPE as on a real model.
@@ -10,8 +11,12 @@ are permuted for RoPE as on a real model.
 
 import numpy as np
 import pytest
+import torch
+import transformers
+from peft import LoraConfig, PeftModel, get_peft_model
 
 from ttml.experimental.errors import UnsupportedTrainingConfig
+from ttml.experimental.models.utils.checkpoint import AdapterState, read_adapter, write_adapter
 from ttml.experimental.models.utils.peft import (
     PEFT_PREFIX,
     check_peft_keys,
@@ -24,7 +29,8 @@ from ttml.experimental.models.utils.peft import (
 from ttml.models.llama import HfTensor, HfTensors, LlamaConfig
 from ttml.models.llama.safetensors_loader import _hf_name, _rules
 
-HEADS, KV_HEADS, HIDDEN, INTERMEDIATE, RANK = 4, 2, 32, 64, 4
+HEADS, KV_HEADS, HIDDEN, INTERMEDIATE, RANK, ALPHA = 4, 2, 32, 64, 4, 8
+LAYERS, VOCAB, MAX_POSITIONS = 2, 64, 32
 HEAD_DIM = HIDDEN // HEADS
 Q_ROWS, KV_ROWS = HEADS * HEAD_DIM, KV_HEADS * HEAD_DIM
 
@@ -32,10 +38,10 @@ CONFIG = LlamaConfig(
     hidden_size=HIDDEN,
     num_attention_heads=HEADS,
     num_key_value_heads=KV_HEADS,
-    num_hidden_layers=2,
+    num_hidden_layers=LAYERS,
     intermediate_size=INTERMEDIATE,
-    vocab_size=64,
-    max_position_embeddings=32,
+    vocab_size=VOCAB,
+    max_position_embeddings=MAX_POSITIONS,
 )
 
 QKV, OUT, GATE_UP, DOWN = "attention/qkv_linear", "attention/out_linear", "mlp/w_gate_up", "mlp/w2"
@@ -71,6 +77,17 @@ def ttml_adapter(rng, held: HfTensors, adapted) -> tuple[np.ndarray, np.ndarray]
         if not has_adapter:
             b[rows] = 0.0
     return a, b
+
+
+def ttml_update(a, b, held: HfTensors, adapted) -> np.ndarray:
+    """ttml's update to the fused weight, before scaling: ``B_i @ A_i`` in each adapted block's rows."""
+    update = np.zeros((b.shape[0], a.shape[1]), np.float32)
+    slot = 0
+    for rows, has_adapter in zip(block_rows(held), adapted):
+        if has_adapter:
+            update[rows] = b[rows] @ a[slot * RANK : (slot + 1) * RANK]
+            slot += 1
+    return update
 
 
 def peft_adapter(rng, held: HfTensors, adapted) -> dict[str, np.ndarray]:
@@ -157,17 +174,12 @@ def test_the_peft_adapters_make_the_layers_weight_update(adapted):
     a, b = ttml_adapter(np.random.default_rng(3), held, adapted)
     tensors = lora_to_peft(a, b, held, adapted)
 
-    ttml_update = np.zeros((b.shape[0], a.shape[1]), np.float32)
-    slot = 0
-    for rows, has_adapter in zip(block_rows(held), adapted):
-        if has_adapter:
-            ttml_update[rows] = b[rows] @ a[slot * RANK : (slot + 1) * RANK]
-            slot += 1
     hf_updates = []
     for tensor, has_adapter in zip(held.tensors, adapted):
         key_a, key_b = peft_keys(tensor)
         hf_updates.append(tensors[key_b] @ tensors[key_a] if has_adapter else np.zeros(tensor.shape, np.float32))
-    np.testing.assert_allclose(np.concatenate(held.transform(*hf_updates)), ttml_update, rtol=1e-6, atol=1e-6)
+    expected = ttml_update(a, b, held, adapted)
+    np.testing.assert_allclose(np.concatenate(held.transform(*hf_updates)), expected, rtol=1e-6, atol=1e-6)
     # Otherwise the check above would pass without the permutation.
     q_rows = block_rows(held)[0]
     assert not np.array_equal(tensors[peft_keys(held.tensors[0])[1]], b[q_rows]), "q's rows were not permuted"
@@ -227,3 +239,83 @@ def test_adapter_config():
     assert config["target_modules"] == ["q_proj", "v_proj"]
     assert config["base_model_name_or_path"] == "meta-llama/Llama-3.2-1B"
     assert not config["use_rslora"] and not config["use_dora"] and config["bias"] == "none"
+
+
+# Every kind of LoRA layer, with some of a fused layer's projections left out: k of qkv, and gate of gate/up.
+TARGET_MODULES = ["q_proj", "v_proj", "o_proj", "up_proj", "down_proj"]
+TARGETED = [(QKV, Q_AND_V), (OUT, (True,)), (GATE_UP, (False, True)), (DOWN, (True,))]
+
+
+@pytest.fixture
+def hf_llama():
+    """A random HF Llama of ``CONFIG``'s sizes, on the CPU."""
+    torch.manual_seed(0)
+    config = transformers.LlamaConfig(
+        hidden_size=HIDDEN,
+        num_attention_heads=HEADS,
+        num_key_value_heads=KV_HEADS,
+        num_hidden_layers=LAYERS,
+        intermediate_size=INTERMEDIATE,
+        vocab_size=VOCAB,
+        max_position_embeddings=MAX_POSITIONS,
+    )
+    return transformers.LlamaForCausalLM(config).eval()
+
+
+def _targeted_layouts():
+    return [(layout(linear, layer), adapted) for layer in range(LAYERS) for linear, adapted in TARGETED]
+
+
+def test_peft_loads_an_exported_adapter_as_the_layers_weight_update(tmp_path, hf_llama):
+    """An adapter written as ``LlamaProvider.export_weights`` writes one loads into ``PeftModel`` with each tensor
+    where it belongs, and merging it changes each fused weight by ttml's update, scaled by alpha / r."""
+    rng = np.random.default_rng(8)
+    layers, tensors = [], {}
+    for held, adapted in _targeted_layouts():
+        a, b = ttml_adapter(rng, held, adapted)
+        layers.append((held, adapted, a, b))
+        tensors.update(lora_to_peft(a, b, held, adapted))
+    config = peft_adapter_config(str(tmp_path), RANK, ALPHA, 0.0, TARGET_MODULES, "CAUSAL_LM")
+    write_adapter(tmp_path, AdapterState(tensors=tensors, config=config))
+
+    base = {name: value.clone() for name, value in hf_llama.state_dict().items()}
+    model = PeftModel.from_pretrained(hf_llama, tmp_path)
+    # PEFT names the adapter "default" in its modules; the file doesn't.
+    loaded = {
+        name.replace(".default.", "."): value.numpy() for name, value in model.state_dict().items() if ".lora_" in name
+    }
+    assert sorted(loaded) == sorted(tensors)
+    for name, value in tensors.items():
+        np.testing.assert_array_equal(loaded[name], value, err_msg=name)
+
+    merged = model.merge_and_unload().state_dict()
+    for held, adapted, a, b in layers:
+        hf_updates = [(merged[tensor.name] - base[tensor.name]).numpy() for tensor in held.tensors]
+        if held.transform is not None:
+            hf_updates = held.transform(*hf_updates)
+        np.testing.assert_allclose(
+            np.concatenate(hf_updates),
+            ALPHA / RANK * ttml_update(a, b, held, adapted),
+            rtol=1e-5,
+            atol=1e-4,
+            err_msg=held.tensors[0].name,
+        )
+
+
+def test_an_adapter_peft_saves_imports_as_ttml_layers(tmp_path, hf_llama):
+    """What a run started from a PEFT adapter reads: the config ``LlamaProvider`` checks, and tensors that map to
+    ttml's layers and back unchanged."""
+    lora = LoraConfig(r=RANK, lora_alpha=ALPHA, target_modules=TARGET_MODULES, init_lora_weights=False)
+    get_peft_model(hf_llama, lora).save_pretrained(tmp_path)
+
+    adapter = read_adapter(tmp_path)
+    config = adapter.config
+    assert (config["peft_type"], config["r"], config["lora_alpha"]) == ("LORA", RANK, ALPHA)
+    assert sorted(config["target_modules"]) == sorted(TARGET_MODULES) and not config["use_rslora"]
+    tensors = with_peft_prefix(adapter.tensors)
+    layers = _targeted_layouts()
+    check_peft_keys(tensors, layers)
+    for held, adapted in layers:
+        back = lora_to_peft(*peft_to_lora(tensors, held, adapted, RANK), held, adapted)
+        for name, value in back.items():
+            np.testing.assert_array_equal(value, tensors[name], err_msg=name)

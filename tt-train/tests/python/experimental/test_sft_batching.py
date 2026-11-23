@@ -2,8 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""How SFT dataset providers batch a split: train drops a last partial batch, validation fills it with padding rows
-that don't count in the loss; and how a validation split carved out of the train split stays held out. Device-free."""
+"""How SFT dataset providers batch a split: an example is its prompt, response and EOS, and only the response and
+EOS are targets, each of the position before it; train drops a last partial batch, validation fills it with padding
+rows that don't count in the loss; and a validation split carved out of the train split stays held out. Device-free."""
 
 from types import SimpleNamespace
 
@@ -12,21 +13,32 @@ from datasets import Dataset
 
 from ttml.experimental.datasets.provider.sft.base import DatasetProvider
 from ttml.experimental.datasets.utils.sft import collate_causal_lm
+from ttml.experimental.datasets.utils.sft.collate import IGNORED_INDEX
 
 BATCH_SIZE = 4
 MAX_LENGTH = 32
 PAD = 0
+EOS = 1
+BOS = 2
 NUM_EXAMPLES = 10  # two full batches and one of two examples
 
 
 class _Tokenizer:
     """One token per character, its code point; no special tokens."""
 
-    eos_token = "\x01"
+    eos_token = chr(EOS)
     pad_token_id = PAD
 
     def __call__(self, text, **kwargs):
         return {"input_ids": [ord(c) for c in text]}
+
+
+class _BosTokenizer(_Tokenizer):
+    """Starts what it tokenizes with BOS unless ``add_special_tokens=False``, as Llama's tokenizer does."""
+
+    def __call__(self, text, add_special_tokens=True, **kwargs):
+        bos = [BOS] if add_special_tokens else []
+        return {"input_ids": bos + super().__call__(text)["input_ids"]}
 
 
 class _Provider(DatasetProvider):
@@ -41,9 +53,9 @@ class _CarvedProvider(_Provider):
     train_val_split_ratio = 0.8
 
 
-def _provider(split):
+def _provider(split, tokenizer=None):
     config = SimpleNamespace(batch_size=BATCH_SIZE, max_length=MAX_LENGTH, seed=0)
-    return _Provider(config, split, _Tokenizer())
+    return _Provider(config, split, tokenizer or _Tokenizer())
 
 
 def _carved_ns(split, seed, max_length):
@@ -56,6 +68,47 @@ def _carved_ns(split, seed, max_length):
 def _masked_mean(batch, per_token):
     """The loss ``SFTTrainer._forward`` computes, for a per-token loss of ``per_token``."""
     return float(np.mean(per_token[: len(batch["loss_mask"])] * batch["loss_mask"][:, 0, :, 0]))
+
+
+def test_an_example_is_its_prompt_response_and_eos_with_the_prompt_masked():
+    """The prompt's BOS stays at the start; the response adds none."""
+    examples = list(_provider("validation", _BosTokenizer()).examples)
+    assert len(examples) == NUM_EXAMPLES
+    for n, example in enumerate(examples):
+        prompt_ids = [BOS, *map(ord, f"q{n}:")]
+        response_ids = [*map(ord, "a" * (1 + n % 3)), EOS]
+        assert example["input_ids"] == prompt_ids + response_ids, n
+        assert example["labels"] == [IGNORED_INDEX] * len(prompt_ids) + response_ids, n
+
+
+def test_each_target_is_the_next_token_of_the_response():
+    """Position ``t`` is trained to predict token ``t + 1``: the prompt's last position the response's first token,
+    and so on up to EOS, which itself predicts nothing. Prompt and padding positions have no target."""
+    validation = _provider("validation", _BosTokenizer())
+    rows = [(batch, row) for batch in validation for row in range(BATCH_SIZE)]
+    for n, (batch, row) in enumerate(rows[:NUM_EXAMPLES]):
+        prompt_length = len(f"q{n}:") + 1
+        response = "a" * (1 + n % 3) + chr(EOS)
+        length = prompt_length + len(response)
+
+        mask = batch["loss_mask"][row, 0, :, 0]
+        targeted = np.flatnonzero(mask)
+        np.testing.assert_array_equal(targeted, np.arange(prompt_length - 1, length - 1), err_msg=str(n))
+        assert "".join(chr(t) for t in batch["labels"][row, targeted]) == response, n
+        np.testing.assert_array_equal(batch["labels"][row, targeted], batch["input_ids"][row, 0, 0, targeted + 1])
+        # One weight for every target of the batch, so the masked mean is the mean over targets.
+        assert (mask[targeted] == mask[targeted[0]]).all()
+
+    for batch in validation:
+        np.testing.assert_allclose(batch["loss_mask"].sum(), BATCH_SIZE * MAX_LENGTH, rtol=1e-6)
+
+
+def test_an_example_of_max_length_keeps_its_eos_target():
+    """The last position has no next token; at max_length that is EOS's own, and EOS is still the one before's."""
+    example = {"input_ids": [BOS, 10, 11, EOS], "labels": [IGNORED_INDEX, IGNORED_INDEX, 11, EOS]}
+    batch = collate_causal_lm([example], max_length=4, pad_token_id=PAD)
+    assert batch["labels"].tolist() == [[PAD, 11, EOS, PAD]]
+    assert batch["loss_mask"][0, 0, :, 0].tolist() == [0.0, 2.0, 2.0, 0.0]
 
 
 def test_train_drops_the_last_partial_batch():

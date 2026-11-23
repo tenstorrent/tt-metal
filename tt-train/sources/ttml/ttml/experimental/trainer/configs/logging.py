@@ -15,7 +15,6 @@ class LoggingConfig(BaseModel):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     use_wandb: bool = False
     wandb_project: str = ""
-    # Also names the console logger.
     wandb_run_name: str = "ttml-experimental-trainer"
     wandb_tags: list[str] = Field(default_factory=list)
 

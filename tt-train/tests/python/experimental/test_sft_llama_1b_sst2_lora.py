@@ -23,7 +23,7 @@ import pytest
 import ttml
 import ttml.experimental
 import ttml.experimental.trainer.implementations.base as trainer_base
-from ttml.experimental.datasets.provider.sft import SST2Provider
+from ttml.experimental.datasets.provider.sft import IGNORED_INDEX, SST2Provider, load_tokenizer
 from ttml.experimental.models.provider import LlamaProvider
 from ttml.experimental.models.utils.checkpoint import ADAPTER_CONFIG, ADAPTER_WEIGHTS, read_adapter
 from ttml.experimental.models.utils.hub import load_hf_config
@@ -43,17 +43,20 @@ SPLIT_SIZES = {"train": 256, "validation": 64}
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.slow]
 
+_load_raw_dataset = SST2Provider._load_raw_dataset
+
+
+def load_head(provider: SST2Provider):
+    """The first ``SPLIT_SIZES`` examples of the provider's split, in place of ``SST2Provider._load_raw_dataset``."""
+    raw = _load_raw_dataset(provider)
+    return raw.select(range(min(len(raw), SPLIT_SIZES[provider.split])))
+
 
 def run_recipe(overrides: list[str]) -> SimpleNamespace:
     """Run the recipe with ``--set`` overrides, on the first ``SPLIT_SIZES`` examples of each split; return the
     ``(metrics, step)`` it logged and the messages it logged."""
     logged = SimpleNamespace(metrics=[], messages=[])
     log_metrics, info = TrainingLogger.log_metrics, TrainingLogger.info
-    load_raw_dataset = SST2Provider._load_raw_dataset
-
-    def load_head(self):
-        raw = load_raw_dataset(self)
-        return raw.select(range(min(len(raw), SPLIT_SIZES[self.split])))
 
     def record_metrics(self, metrics, step=None, commit=True):
         if metrics:
@@ -117,6 +120,45 @@ def test_logs_the_train_and_validation_losses(recipe):
     for name, value in [*train.items(), *val.items()]:
         assert math.isfinite(value) and value > 0, f"{name}: {value}"
     assert sorted(logged_values(recipe.logged, "train/epoch")) == [1, 2]
+
+
+def hf_validation_loss(config) -> float:
+    """The base model's loss on the run's validation examples, as HF computes a causal-LM loss: fp32 on the CPU, the
+    mean over each batch's response tokens, averaged over the batches as the trainer averages them."""
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    tokenizer = load_tokenizer(MODEL_SOURCE)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SST2Provider, "_load_raw_dataset", load_head)
+        examples = list(SST2Provider(config, "validation", tokenizer).examples)
+    model = AutoModelForCausalLM.from_pretrained(MODEL_SOURCE, dtype=torch.float32).eval()
+
+    losses = []
+    with torch.no_grad():
+        for start in range(0, len(examples), config.batch_size):
+            batch = examples[start : start + config.batch_size]
+            length = max(len(example["input_ids"]) for example in batch)
+            input_ids = torch.full((len(batch), length), tokenizer.pad_token_id)
+            labels = torch.full((len(batch), length), IGNORED_INDEX)
+            attention_mask = torch.zeros((len(batch), length), dtype=torch.long)
+            for row, example in enumerate(batch):
+                n = len(example["input_ids"])
+                input_ids[row, :n] = torch.tensor(example["input_ids"])
+                labels[row, :n] = torch.tensor(example["labels"])
+                attention_mask[row, :n] = 1
+            losses.append(model(input_ids=input_ids, attention_mask=attention_mask, labels=labels).loss.item())
+    del model
+    gc.collect()
+    return float(np.mean(losses))
+
+
+def test_the_untrained_adapters_validate_as_the_base_model(recipe):
+    """lora_B starts at zero, so the model the step-0 validation runs is the base model, and its val/loss is the base
+    model's loss as HF computes it. An end-to-end check of the loss: the labels, the shift, the mask and the
+    cross-entropy, and of the model's forward, within bf16."""
+    val_loss = logged_values(recipe.logged, "val/loss")[0]
+    assert val_loss == pytest.approx(hf_validation_loss(recipe.config), rel=0.01)
 
 
 def test_saves_every_step_and_keeps_the_last_checkpoint(recipe):

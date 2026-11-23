@@ -26,7 +26,7 @@ class TrainingLogger:
         self._wandb = None
         self._run = None
 
-        self.std_logger = logging.getLogger(config.wandb_run_name)
+        self.std_logger = logging.getLogger(__name__)
         level = getattr(logging, config.log_level)
         self.std_logger.setLevel(level)
         self.std_logger.handlers.clear()
