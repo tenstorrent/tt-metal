@@ -186,7 +186,11 @@ class TtPrefillBlock(LightweightModule):
 
         # Build MLA cache
         if use_fused_rmsnorm is None:
-            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole()
+            use_fused_rmsnorm = (
+                getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False)
+                and is_blackhole()
+                and os.environ.get("PREFILL_FUSED_RMSNORM", "1") != "0"
+            )
         ttMLA.build_ttnn_cache(
             state_dict=state_dict.get("mla_weights", {}),
             cache_path=cache_path,
@@ -342,7 +346,12 @@ class TtPrefillBlock(LightweightModule):
         # A caller can enable fusion for any model or override its default.
         # Eager execution and trace capture use the same operator; the op validates shapes.
         if use_fused_rmsnorm is None:
-            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
+            use_fused_rmsnorm = (
+                getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False)
+                and is_blackhole()
+                and is_chunked
+                and os.environ.get("PREFILL_FUSED_RMSNORM", "1") != "0"
+            )
 
         # --- Attention norm ---
         # Mistral-Small-4 at 640 rows/device: the 2D post-all-gather split (one tile row per core) runs

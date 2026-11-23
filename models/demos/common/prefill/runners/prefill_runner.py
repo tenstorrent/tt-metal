@@ -119,6 +119,20 @@ _tp = int(os.environ.get("PREFILL_TP", 4))
 SP_AXIS = int(os.environ.get("PREFILL_SP_AXIS", 0))
 TP_AXIS = 1 - SP_AXIS
 GLOBAL_MESH_SHAPE = stage_mesh_shape(_sp, _tp, SP_AXIS)
+# A [RING,RING] seam stage's mesh spans two hosts: this process drives only its host's row block, so host reads of a
+# replicated tensor start at the first shard of that block (shards are listed row-major).
+_MULTI_HOST_STAGE = any(int(h) > 1 for h in os.environ.get("PREFILL_STAGE_HOSTS", "").split(",") if h.strip())
+_LOCAL_FIRST_SHARD = None  # resolved on first use, once the distributed context is up
+
+
+def _local_first_shard() -> int:
+    global _LOCAL_FIRST_SHARD
+    if _LOCAL_FIRST_SHARD is None:
+        layout = StageLayout.from_env(int(ttnn.distributed_context_get_size()))
+        rank = int(ttnn.distributed_context_get_rank())
+        _LOCAL_FIRST_SHARD = layout.host_rows(rank, GLOBAL_MESH_SHAPE[0])[0] * GLOBAL_MESH_SHAPE[1]
+    return _LOCAL_FIRST_SHARD
+
 
 # Token ids shard over SP; the sequence (dim 2) of the D2D activation shards over SP and its embedding
 # (dim 3) over TP.
@@ -319,6 +333,16 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
+def _first_local_shard(t: ttnn.Tensor) -> torch.Tensor:
+    """Host copy of a replicated tensor's first shard on a chip this process drives. On a mesh two hosts share (a
+    [RING,RING] seam stage) the first coordinates may be the other host's, whose shards cannot be read here."""
+    if not _MULTI_HOST_STAGE:
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+    for shard in ttnn.get_device_tensors(t)[_local_first_shard() :]:
+        return ttnn.to_torch(shard)
+    raise RuntimeError("no local shard to read")
+
+
 def _meta_from_words(words) -> dict:
     """Chunk 0 as slot_id / actual_start / actual_end (sentinels, MTP, logs), plus all FORWARD_CHUNKS chunks."""
     chunks = decode_forward_metadata(words, FORWARD_CHUNKS)
@@ -343,7 +367,7 @@ def _no_provided_levels():
 
 def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
     # One D2H read; the words after the chunk metadata are MTP provided_levels, one per chunk.
-    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
+    m = _first_local_shard(metadata_msg).view(torch.int32).flatten()
     n = CHUNK_METADATA_SIZE_BYTES // 4
     meta = _meta_from_words(m[:n].tolist())
     # Mirror _metadata_record_words: those words exist only when MTP is on.
@@ -794,14 +818,18 @@ def _forward_shutdown(
     # `planes` must match this rank's OUTBOUND spec, not its inbound one.
     d2d_out = outbound.activation
     dev = d2d_out.get_backing_tensor().device()
-    dummy = ttnn.from_torch(
-        torch.zeros(1, planes, d2d_rows, d2d_width),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=dev,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.create_mesh_mapper(dev, D2D_MAPPER_CONFIG),
-    )
+    if _MULTI_HOST_STAGE:
+        # A host tensor cannot be distributed onto a mesh two hosts share; the sentinel's payload is never read.
+        dummy = ttnn.zeros_like(d2d_out.get_backing_tensor())
+    else:
+        dummy = ttnn.from_torch(
+            torch.zeros(1, planes, d2d_rows, d2d_width),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.create_mesh_mapper(dev, D2D_MAPPER_CONFIG),
+        )
     extras = [ttnn.zeros_like(b) for b in d2d_out.get_backing_tensors()[1:]]
     sentinel = {
         **_meta_from_words(sentinel_words(SHUTDOWN_METADATA_WORD, FORWARD_CHUNKS)),
