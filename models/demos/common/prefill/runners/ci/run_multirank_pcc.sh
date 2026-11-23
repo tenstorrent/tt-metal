@@ -587,6 +587,14 @@ WATCHDOG_PID=$!
 # shallower models nothing. Keep it below the leg's job timeout, or the container is killed first
 # and this diagnostic never prints.
 TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-${TABLE_WAIT_DEFAULT}}"
+# A CI job running several launches sets PREFILL_JOB_DEADLINE (epoch seconds) once: each launch then waits no longer
+# than the job has left, less a margin, so a stuck bringup in a later launch still prints the line below before the
+# container is killed.
+if [ -n "${PREFILL_JOB_DEADLINE:-}" ]; then
+  JOB_LEFT=$(( PREFILL_JOB_DEADLINE - $(date +%s) - 120 ))
+  [ "${JOB_LEFT}" -lt 5 ] && JOB_LEFT=5
+  [ "${JOB_LEFT}" -lt "${TABLE_WAIT_SECS}" ] && TABLE_WAIT_SECS=${JOB_LEFT}
+fi
 WAITED=0
 while [ "${WAITED}" -lt "${TABLE_WAIT_SECS}" ]; do
   [ -f "${TABLE_PATH}" ] && break
