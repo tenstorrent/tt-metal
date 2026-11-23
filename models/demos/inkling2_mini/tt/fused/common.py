@@ -477,6 +477,27 @@ def probe_rms_bf16(device, ckc):
     return _RMS_BF16
 
 
+RMS_WINDOW = True  # tests: False runs the norm + concat chain
+
+
+def rms_window():
+    """This build's rms_norm can write into a column window of a preallocated tensor (output_tensor,
+    output_col_tiles), and its bf16 result of an fp32 input rounds as rms_norm_bf16's (probe_rms_bf16)."""
+    return RMS_WINDOW and bool(_RMS_BF16) and "output_col_tiles" in (ttnn.rms_norm.__doc__ or "")
+
+
+def rms_norm_bf16_cat(xs, **kw):
+    """concat([rms_norm_bf16(x) for x in xs], dim=-1) without the concat: each norm writes its tile columns of the
+    result (rms_window() builds). Same values: the same norm programs, only their writers' page ids differ."""
+    t, c = xs[0].shape[2], xs[0].shape[3]
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, t, c * len(xs)]), ttnn.bfloat16, ttnn.TILE_LAYOUT, xs[0].device(), ttnn.DRAM_MEMORY_CONFIG
+    )
+    for i, x in enumerate(xs):
+        ttnn.rms_norm(x, output_tensor=out, output_col_tiles=i * c // 32, **kw)
+    return out
+
+
 def rms_norm_bf16(x, **kw):
     """ttnn.rms_norm of an fp32 input to a bf16 result: in the op when probe_rms_bf16 found it bit-equal to
     ttnn.typecast of the fp32 result (rounding in DEST), else through a typecast (also when never probed)."""

@@ -58,7 +58,14 @@ from models.demos.inkling2_mini.tt.attention import (
     log_scale,
 )
 from models.demos.inkling2_mini.tt.attention_fast import KV_WIDTH, V_WIDTH
-from models.demos.inkling2_mini.tt.fused.common import dense_matrix, probe_rms_bf16, rms_norm_bf16, rms_norm_f32
+from models.demos.inkling2_mini.tt.fused.common import (
+    dense_matrix,
+    probe_rms_bf16,
+    rms_norm_bf16,
+    rms_norm_bf16_cat,
+    rms_norm_f32,
+    rms_window,
+)
 from models.demos.inkling2_mini.tt.fused.pf_attnres import PfAttnRes
 from models.demos.inkling2_mini.tt.fused.pf_combine import PfCombine
 from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
@@ -309,9 +316,12 @@ class _Gate:
         """bf16: opt-in bf16 gate path (Inkling2Prefill.gate_bf16): m may be bf16, bf16 output. Changes output."""
         h = _f32(h)
         m = m if bf16 and m.dtype == ttnn.bfloat16 else _f32(m)
-        nm = rms_norm_bf16(m, epsilon=EPS, compute_kernel_config=self.ckc) if m.dtype == ttnn.bfloat16 else self.norm(m)
-        # typecast(concat(fp32 norms)) == concat(bf16 norms): the typecast is per element; half the bytes moved
-        x = ttnn.concat([self.norm(h) if nh is None else nh, nm], dim=-1)
+        if nh is None and rms_window():  # the two norms write the halves of x: no concat
+            x = rms_norm_bf16_cat([h, m], epsilon=EPS, compute_kernel_config=self.ckc)
+        else:
+            nm = rms_norm_bf16(m, epsilon=EPS, compute_kernel_config=self.ckc)
+            # typecast(concat(fp32 norms)) == concat(bf16 norms): the typecast is per element; half the bytes moved
+            x = ttnn.concat([self.norm(h) if nh is None else nh, nm], dim=-1)
         if self.tail is not None:  # typecast z .. addcmul in one program
             zb = ttnn.matmul(x, self.down, dtype=ttnn.bfloat16, compute_kernel_config=self.ckc)
             return self.tail(zb, self.forget, self.gain, h, m, ttnn.bfloat16 if bf16 else ttnn.float32)
@@ -1278,8 +1288,8 @@ class Inkling2Prefill:
         else:
             xs = lp.attn_res(normed, h)  # 1 or 3 fp32
         if msgs is not None:
-            if len(xs) == 1:  # one input for the 3 gates: its norm once
-                nh = lp.gates["q"].norm(xs[0])
+            if len(xs) == 1:  # one input for the 3 gates: its norm once (rms_window: once per gate, no concats)
+                nh = None if rms_window() else lp.gates["q"].norm(xs[0])
                 xs = [lp.gates[g](xs[0], msgs[i], nh, self.gate_bf16) for i, g in enumerate(("q", "k", "v"))]
             else:
                 xs = [lp.gates[g](xs[i], msgs[i], bf16=self.gate_bf16) for i, g in enumerate(("q", "k", "v"))]
