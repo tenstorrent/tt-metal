@@ -875,8 +875,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("KV table not published within 5s", result.stdout)
         self.assertLess(time.monotonic() - start, 120)
 
-    def test_kimi_sp_axis_knob_moves_sp_on_runner_producer_and_cache(self):
-        """PREFILL_SP_AXIS=0 alone puts a 4x4 stage's SP on axis 0: exported to runner and producer over the manifest,
+    def test_kimi_sp_axis_knob_moves_sp_on_runner_and_cache(self):
+        """PREFILL_SP_AXIS=0 alone puts a 4x4 stage's SP on axis 0: exported to the runner over the manifest,
         the pre-launch probe checks that axis's cache, and the fabric is left to the stage's descriptor."""
         for model in ("kimi_k3", "kimi_k3_1"):
             with self.subTest(model=model):
@@ -899,8 +899,6 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertIn(f"export PREFILL_HF_MODEL={self.checkpoint};", launch_line)
                 self.assertTrue(runner["PREFILL_MANIFEST"].endswith(f"manifests/{model}.json"))
                 self.assert_kimi_4x4_cache_check(result, records, model, sp_axis=0)
-                producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
-                self.assertIn("export PREFILL_SP_AXIS=0;", producer_mpi[0]["args"][-1])
                 self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_kimi_4x4_checkpoint_without_index_fails_on_the_host_before_launch(self):

@@ -529,10 +529,10 @@ if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   # a manifest without it would bring 8x4 settings up on a 4x4 mesh.
   LAYOUT_SOURCE="${LAYOUT_MANIFEST:-${MANIFEST}}"
   [ "$(MANIFEST="${LAYOUT_SOURCE}" manifest_env PREFILL_SP_AXIS)" = 1 ] || { echo "${LAYOUT_SOURCE} does not set the 4x4 stage's PREFILL_SP_AXIS=1" >&2; exit 2; }
-  # The knob, exported after the stage layout so it overrides the manifest's axis on runner and producer alike.
+  # The knob, exported after the stage layout so it overrides the runner's manifest axis (the producer sends one row per
+  # SP chip in SP order and does not read the axis).
   if [ -n "${SP_AXIS_KNOB}" ]; then
     RUNNER_ENV+=" export PREFILL_SP_AXIS=${SP_AXIS_KNOB};"
-    PRODUCER_ENV+=" export PREFILL_SP_AXIS=${SP_AXIS_KNOB};"
   fi
   # The CI controller mounts no Weka: each host resolves and checks the cache it will read.
   CACHE_PROBE="d='${PP_CACHE_DIR}';"
