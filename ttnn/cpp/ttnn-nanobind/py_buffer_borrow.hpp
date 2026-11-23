@@ -6,8 +6,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
@@ -49,9 +51,15 @@ inline std::optional<size_t> borrowable_element_size(tt::tt_metal::DataType dtyp
 //
 // A read-only array (nb::ro) is accepted: HostBuffer has no read-only flavour, so the span is writable in type only,
 // and nothing may write through it.
+//
+// With `copy_if_unaligned`, data that is not aligned for the element type (for example a tensor that views a
+// safetensors mmap at an odd offset) is copied into an owned, aligned buffer instead of being refused.
 template <typename... Args>
 tt::tt_metal::HostBuffer borrow_py_buffer(
-    const nanobind::ndarray<Args...>& buffer, tt::tt_metal::DataType dtype, size_t elements) {
+    const nanobind::ndarray<Args...>& buffer,
+    tt::tt_metal::DataType dtype,
+    size_t elements,
+    bool copy_if_unaligned = false) {
     using Array = nanobind::ndarray<Args...>;
     using tt::tt_metal::DataType;
     using tt::tt_metal::HostBuffer;
@@ -63,6 +71,11 @@ tt::tt_metal::HostBuffer borrow_py_buffer(
     std::byte* data = const_cast<std::byte*>(static_cast<const std::byte*>(buffer.data()));
 
     auto borrow = [&]<typename T>() -> HostBuffer {
+        if (copy_if_unaligned && reinterpret_cast<uintptr_t>(data) % alignof(T) != 0) {
+            std::vector<T> copy(elements);
+            std::memcpy(copy.data(), data, elements * sizeof(T));
+            return HostBuffer(std::move(copy));
+        }
         TT_FATAL(
             reinterpret_cast<uintptr_t>(data) % alignof(T) == 0,
             "Cannot borrow a Python buffer as {}: its data starts at address {:#x}, which is not aligned to {} bytes",
