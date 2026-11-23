@@ -124,11 +124,12 @@ class DecodePositionsFast(DecodePositions):
 
 
 class _NoFar:
-    """RowsOut view without the shared-far tensors (decode_rows' per-token far path)."""
+    """RowsOut view for decode_rows' per-token far path: the prep writes token t's far q to rows.q_far_tok[t]."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, t):
         self._rows = rows
-        self.q_far = None
+        self.q_far = rows.q_far_tok[t]
+        self.far_shared = False
 
     def __getattr__(self, name):
         return getattr(self._rows, name)
@@ -478,35 +479,40 @@ class Inkling2AttentionFast(Inkling2Attention):
                 and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
             )
             proj = self._rows_proj(xs, state, rows)
-            for t, (x, pos) in enumerate(zip(xs, positions)):
+            for t, pos in enumerate(positions):
                 pr = 4 * t
-                prep_rows = (t, rows) if shared else (t, _NoFar(rows))
-                _, mask, sink_t = self.prep(proj, pos, {"q": pr, "k": pr, "v": pr}, state, rows=prep_rows)
-                outs = (rows.o_near[t], rows.r[t], rows.sink_far if shared else self.near.sink, t if shared else 0)
-                self.near(
-                    self.prep.q_grp,
-                    mask,
-                    sink_t,
-                    state.k_ring,
-                    state.v_ring,
-                    pend=(rows, positions[0].pos, t + 1),
-                    outs=outs,
+                prep_rows = (t, rows) if shared else (t, _NoFar(rows, t))
+                self.prep(proj, pos, {"q": pr, "k": pr, "v": pr}, state, rows=prep_rows)
+            # near + combine of all tokens in one program each (token t reads pending rows 0 .. t)
+            sinks = [rows.sink_far if shared else rows.sink_tok[t] for t in range(R)]
+            items = [
+                (
+                    rows.q_grp[t],
+                    rows.mask_g[t],
+                    rows.sink_blk[t],
+                    rows.o_near[t],
+                    rows.r[t],
+                    sinks[t],
+                    t if shared else 0,
                 )
-                if shared:
-                    continue
-                far_pos, valid = pos.far_grp
-                far = ttnn.transformer.flash_multi_latent_attention_decode(
-                    self.prep.q_far,
-                    state.kv_grp,
-                    head_dim_v=V_WIDTH,
-                    is_causal=True,
-                    cur_pos_tensor=far_pos,
-                    attention_sink=self.near.sink,
-                    scale=1.0,
-                    program_config=self.far_grp_cfg,
-                    compute_kernel_config=self.hifi4,
-                )
-                self.out(far, proj, (rows.o_near[t], rows.r[t], valid), row=t, proj_row=pr)
+                for t in range(R)
+            ]
+            self.near.rows(items, state.k_ring, state.v_ring, rows, positions[0].pos)
+            if not shared:
+                for t, pos in enumerate(positions):
+                    far_pos, valid = pos.far_grp
+                    far = ttnn.transformer.flash_multi_latent_attention_decode(
+                        rows.q_far_tok[t],
+                        state.kv_grp,
+                        head_dim_v=V_WIDTH,
+                        is_causal=True,
+                        cur_pos_tensor=far_pos,
+                        attention_sink=sinks[t],
+                        scale=1.0,
+                        program_config=self.far_grp_cfg,
+                        compute_kernel_config=self.hifi4,
+                    )
+                    self.out(far, proj, (rows.o_near[t], rows.r[t], valid), row=t, proj_row=4 * t)
             if shared:
                 far = ttnn.transformer.flash_multi_latent_attention_decode(
                     rows.q_far,
