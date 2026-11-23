@@ -139,22 +139,25 @@ serve_profiles:
         prefill_chunk_tokens: 1024       # the TT chunk core: a prompt over the gang cap splits into 1024-token spans
         prefill_gang_tokens: 2048        # prefill gangs; 0 = the interleaved (TTFT-first) policy
         sample_on_device_mode: decode_only   # the rows-mode hub feed
-  - name: batch-spec
-    description: 1-8 concurrent requests with DFlash2 speculative decoding (greedy only), up to 256K context each. All users verify in one launch (8 users x 4 verify rows, 3 drafts per verify) on one shared KV pool. Phase 1 of DFlash2 in the batch engine.
-    max_num_seqs: 8                      # one launch: 8 users x 4 verify rows
+  - name: batch-dflash2
+    description: 1-32 concurrent requests on the resident engine with DFlash2 speculative decoding while at most 8 greedy requests are live (its tokens equal greedy decoding except at near-ties) (8 users x 4 verify rows, 3 drafts per verify), and the 32-row batch decode otherwise (more users, or any sampled / penalized request), up to 256K context each, one shared KV pool. Logprobs and structured output are not available on this profile (use batch).
+    max_num_seqs: 32
     env:
-      TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=qwen36_resident.vllm_spec_rows:Qwen36ResidentSpecRowsForCausalLM"
+      TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=qwen36_resident.vllm_adaptive:Qwen36ResidentAdaptiveForCausalLM"
       DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
-      # the verify-rows build's core split: 28 attention workers leave the free cores its 4 GDN head groups need
+      # both geometries in one process (ResidentModel share=): 28 attention workers leave the cores their 4 GDN head
+      # groups need; the KV pool leaves ~1 GB a chip next to the second build (21,500 blocks x 64; 2026-11-23)
       RESIDENT_ATTN_WORKERS: "28"
-      # KV pool = 22,000 blocks x 64 (as batch): the 256K build leaves 13.25 GB a chip with a 1,000-block pool
-      # (tests/spec_rows_mem.py, 2026-11-23); the drafter's KV is a 2,176-token ring per user (D-ring)
-      RESIDENT_MAX_TOKENS_ALL_USERS: "1408000"
+      RESIDENT_HEAD_GROUPS: "4"
+      RESIDENT_MAX_TOKENS_ALL_USERS: "1376000"
       RESIDENT_PREFILL_CHUNKS: "256,512,1024"
-    # replaces serve.args (no --async-scheduling: the verify / propose steps run synchronously). The drafter is the
-    # model's own (vllm-tt-plugin runner-model spec contract: custom_class + the model_owned_drafter sentinel); K = 3.
-    # --max-num-batched-tokens: with a speculative_config vLLM pins max_num_scheduled_tokens at the 2048 default before
-    # the TT platform raises max_num_batched_tokens to max_model_len, and a longer prompt is never scheduled
+    additional_config:
+      tt:
+        sample_on_device_mode: decode_only   # the plain geometry's hub sampling (and a verify's sampled column 0)
+    # replaces serve.args (synchronous: the verify / propose steps). The drafter is the model's own (vllm-tt-plugin
+    # runner-model spec contract: custom_class + the model_owned_drafter sentinel); K = 3, narrow decode in the plain
+    # geometry. --max-num-batched-tokens: with a speculative_config vLLM pins max_num_scheduled_tokens at the 2048
+    # default before the TT platform raises the budget, and a longer prompt is never scheduled
     args:
       - ["--speculative-config", '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}']
       - ["--max-num-batched-tokens", "262144"]
@@ -297,8 +300,8 @@ card:
 verify:
   - "from qwen36_resident.generator_vllm import Qwen36ResidentForCausalLM, Qwen36ResidentDFlashForCausalLM; assert Qwen36ResidentDFlashForCausalLM"
   - "from qwen36_resident.dflash import ResidentDFlash, DRAFTER_WEIGHTS; assert DRAFTER_WEIGHTS.endswith('dedf8df68adfb1afeaf7b7480c0a0243108177b4')"
-  # batch-spec: the spec rows class and its plan (K = 3 at up to 8 users, refused above)
-  - "from qwen36_resident.vllm_spec_rows import Qwen36ResidentSpecRowsForCausalLM as C; p = C.spec_plan(None, 8, 3); assert p.effective_k == 3 and p.accept_modes == ('argmax_ids',); assert type(C.spec_plan(None, 9, 3)).__name__ == 'SpecReject'"
+  # batch-dflash2: the adaptive class and its plan (K = 3 with narrow decode up to 32 users, refused above)
+  - "from qwen36_resident.vllm_adaptive import Qwen36ResidentAdaptiveForCausalLM as C; p = C.spec_plan(None, 32, 3); assert p.effective_k == 3 and p.supports_narrow_decode and p.accept_modes == ('argmax_ids',); assert type(C.spec_plan(None, 33, 3)).__name__ == 'SpecReject'"
   # batch: the row groups reach the adapter (one launch of 4 groups for 32 users)
   - "import os; os.environ['RESIDENT_ROW_GROUPS'] = '4'; from qwen36_resident.generator_vllm import ROW_GROUPS; assert ROW_GROUPS == 4, ROW_GROUPS"
   # batch's chunk list reaches the adapter (ae776ee280c); without it the build keeps the 128 chunk and OOMs
