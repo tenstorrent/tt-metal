@@ -424,7 +424,13 @@ class StackBackend(ModelBackend):
         # native-t width buckets: extra programs for t = w (e.g. 8 / 16) on the SHARED 32-row state (per-user rows:
         # kda_rec S pages, kda_pre C tile rows, masks, latent cache / page table / positions), the full-width residual
         # through a w-row view and ONE aliased L1 pool (mk_stack.AllocPool.alias) -> a few live users (slots 0..w-1)
-        # decode at the cost of w rows. GLM53_STACK_NATIVE_WIDTHS (default "none"; the served construction: "8,16")
+        # decode at the cost of w rows. GLM53_STACK_NATIVE_WIDTHS (default "none"; GLM53_SPEC_W8_VERIFY adds 8 on the B 16
+        # build: generator.spec_w8_env, on GLM53_STACK_NATIVE_FAB=pad; w8_verify = that width-8 verify is on)
+        self.w8_verify = False
+        if self.chunk == max_batch and max_batch > CHUNK:
+            from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_w8_env
+
+            self.w8_verify = spec_w8_env(max_batch=max_batch) is not None
         nspec = os.environ.get("GLM53_STACK_NATIVE_WIDTHS", "none")
         nws = () if nspec in ("", "none") else tuple(int(v) for v in nspec.split(","))
         self.native_widths = (tuple(sorted(w for w in nws if 4 < w < max_batch))
@@ -713,11 +719,13 @@ class StackBackend(ModelBackend):
                         if alt is not None:
                             spec_ts |= set(spec_widths(alt[1], self.chunk, tuple(self.narrow_widths)
                                                        + tuple(self.native_widths), groups=alt[0])["ts"])  # fmt: skip
-                        from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_lone
+                        from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_subs
 
-                        if spec_multi_lone():  # (GLM53_SPEC_MULTI_LONE: the lone-user step's G 1 row counts)
-                            spec_ts |= set(spec_widths(k_spec, self.chunk, tuple(self.narrow_widths)
-                                                       + tuple(self.native_widths), groups=1)["ts"])  # fmt: skip
+                        # (the subset steps' row counts: GLM53_SPEC_MULTI_LONE's G 1, GLM53_SPEC_MULTI_SUB's /
+                        # GLM53_SPEC_W8_VERIFY's G' of a step's K)
+                        for g_sub, k_sub in spec_multi_subs():
+                            spec_ts |= set(spec_widths(k_sub, self.chunk, tuple(self.narrow_widths)
+                                                       + tuple(self.native_widths), groups=g_sub)["ts"])  # fmt: skip
                     from models.autoports.zai_org_glm_5_3_flash.tt import fabric_ar as FAR
 
                     nat_ts = set(FAR.native_ts(self.native_widths, self.chunk, self.native_fab or "own"))
@@ -846,6 +854,10 @@ class StackBackend(ModelBackend):
         mark("states_stacks_s")
         if self.native_widths:  # the width stacks: w-row views of the residual / masks, the full width's pool aliased
             kv.extra["pool"] = pool
+            # (GLM53_SPEC_W8_VERIFY: the width-8 / 4 alias builds must not add L1 below the full width's static CBs --
+            # their requests with the row count outside the tile dims also view the full width's tensors of the same
+            # tile rows / columns: mk_stack.AllocPool.wide_prefix)
+            pool.wide_prefix = bool(getattr(self, "w8_verify", False))
             kv.extra["wres"], kv.extra["wmasks"], kv.extra["wstacks"] = {}, {}, {}
             pool.alias = True
             try:
@@ -1069,6 +1081,7 @@ class StackBackend(ModelBackend):
             from models.autoports.zai_org_glm_5_3_flash.tt.mk_stack import AllocPool
 
             kv.extra["dsa_pool"] = AllocPool()
+            kv.extra["dsa_pool"].wide_prefix = bool(getattr(kv.extra.get("pool"), "wide_prefix", False))
             # GLM53_DSA_POOL_BORROW=1 (L1 diet, 2026-11-12): the DSA pool and its hand-off child take the KDA stacks'
             # pool tensors of the same key before allocating (mk_stack.AllocPool.lend_from: the two sets of programs
             # never overlap, both pools hold build intermediates only). The B 16 x 1 M floor binder is the TPMoE program
@@ -1227,26 +1240,39 @@ class StackBackend(ModelBackend):
             from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_alt
 
             alt = spec_multi_alt()
-            # GLM53_SPEC_MULTI_LONE (generator.spec_multi_lone): a lone-user step (the primary's K, G 1) listed FIRST so
-            # the step pick prefers it when the only live user is on slot 0; the primary stays current at startup
-            from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_lone
+            # the SUBSET steps (generator.spec_multi_subs: GLM53_SPEC_MULTI_LONE's lone-user step, GLM53_SPEC_MULTI_SUB's,
+            # GLM53_SPEC_W8_VERIFY's 8-row halves -- G' users x a step's K on its first G' bases), each listed before
+            # its step (generator.spec_multi_layout), so the step pick takes the narrowest verify that holds the live
+            # users; the primary stays current at startup
+            from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_layout, spec_multi_subs
 
-            lone = spec_multi_lone()
-            if alt is not None or lone:
+            if alt is not None or spec_multi_subs():
                 from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import SpecSwitch
                 from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import env as _spec_env
 
-                steps = [self.spec]
-                if alt is not None:
-                    with _spec_env(GLM53_SPEC_MULTI_USERS=str(alt[0])):
-                        steps.append(SpecMTP(self, kv, K=int(alt[1]), drafter=self.spec.drafter, share=self.spec))
-                if lone:
-                    with _spec_env(GLM53_SPEC_MULTI_USERS="1", GLM53_SPEC_LONE_BUILD="1"):
-                        one = SpecMTP(self, kv, K=int(self.spec.K), drafter=self.spec.drafter, share=self.spec)
-                    steps = [one] + steps
+                primary = self.spec
+                built = {(int(primary.groups), int(primary.K)): primary}
+                # (the build order fixes the AllocPool hand-out order of the steps' L1: the alternate, then the subset
+                # steps in spec_multi_subs order; the switch lists them in spec_multi_layout's preference order)
+                for g_s, k_s in ([tuple(alt)] if alt is not None else []) + list(spec_multi_subs()):
+                    lone_env = {"GLM53_SPEC_LONE_BUILD": "1"} if g_s == 1 else {}
+                    with _spec_env(GLM53_SPEC_MULTI_USERS=str(g_s), **lone_env):
+                        built[(int(g_s), int(k_s))] = SpecMTP(self, kv, K=int(k_s), drafter=primary.drafter,
+                                                              share=primary)  # fmt: skip
+                steps = [built[tuple(gk)] for gk in spec_multi_layout()]
+                assert len(steps) == len(built), (
+                    "spec_multi_layout vs the built steps",
+                    spec_multi_layout(),
+                    list(built),
+                )
                 self.spec = SpecSwitch(steps)
-                if lone:
-                    self.spec.select(1)  # (the primary current, as without the lone step)
+                self.spec.select(steps.index(primary))  # (the primary current, as without the other steps)
+                if getattr(self, "w8_verify", False):  # (one line: the served gates assert the knob reached the build)
+                    from loguru import logger
+
+                    logger.info(f"StackBackend: GLM53_SPEC_W8_VERIFY active (native widths {self.native_widths}, "
+                                f"GLM53_STACK_NATIVE_FAB={os.environ.get('GLM53_STACK_NATIVE_FAB')}; steps (G, K) "
+                                f"{spec_multi_layout()})")  # fmt: skip
         if self.pos_c:  # per-chunk page tables (rows 4c..4c+3 at rows 0..3)
             host = (torch.arange(rows * kv.blocks_per_seq, dtype=torch.int32) % kv.num_blocks).reshape(rows, -1)
             if shard_pt:

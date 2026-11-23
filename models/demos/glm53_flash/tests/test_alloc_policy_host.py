@@ -276,3 +276,72 @@ def test_dsa_pool_borrows_the_kda_pool(monkeypatch, expect_error):
     c, r, r2 = mirror(redo=True)
     assert r == r2 and r[0] is c.base and r[1] is not c.base and len(made) == 2
     monkeypatch.delenv("GLM53_STACK_PREFIX_REDO")
+
+
+def test_wide_prefix_views(monkeypatch):
+    """mk_stack.AllocPool.wide_prefix (GLM53_SPEC_W8_VERIFY's build pools): an alias request whose row count sits outside
+    the tile dims -- (1, 4, t, 1) post, (1, t, 2, 512) / (1, t, 32, 128) MLA rows -- is served as a view of an unhanded
+    tensor of the same tile rows / columns whose dim -3 reaches as far (the smallest such base); with every base handed
+    it allocates; without the flag and in a child pool (persistent hand-offs) it allocates as before; a request pinned to
+    a base another request of the build holds is decided once (_conflict) and replayed."""
+    from models.autoports.zai_org_glm_5_3_flash.tt import mk_stack as MS
+
+    made: list = []
+    monkeypatch.setattr(MS, "ttnn", _fake_ttnn(made))
+    monkeypatch.setenv("GLM53_STACK_PREFIX_REDO", "1")
+    BF, FP, L1, DEV = "bf16", "fp32", "L1", None
+    req = lambda pool, shape, dt: pool(shape, dt, "TILE", DEV, L1)  # noqa: E731
+
+    def full(wide: bool):
+        """a pool after the full-width (t = 16) build: post, q_ix, the two (1, 16, 2, 512) rows, a wider (1, 32, 2, 512)"""
+        p = MS.AllocPool()
+        p.wide_prefix = wide
+        with p:
+            f = dict(post=req(p, (1, 4, 16, 1), FP), qix=req(p, (1, 16, 32, 128), BF),
+                     lat=[req(p, (1, 16, 2, 512), BF) for _ in range(2)], big=req(p, (1, 32, 2, 512), BF))  # fmt: skip
+        p.alias = True
+        return p, f
+
+    p, f = full(True)
+    n0 = len(made)
+    with p:  # a width-8 build: post (1, 4, 8, 1) on the full width's (same padded shape), q_ix on (1, 16, 32, 128)
+        post, qix = req(p, (1, 4, 8, 1), FP), req(p, (1, 8, 32, 128), BF)
+        lat = [req(p, (1, 8, 2, 512), BF).base for _ in range(3)]
+    assert post.base is f["post"] and post.shape == (1, 4, 8, 1) and qix.base is f["qix"] and len(made) == n0
+    assert lat == f["lat"] + [f["big"]], "the smallest dim -3 base first (16 slices, then 32); a handed base is skipped"
+    with p:  # a width-4 build: the smallest base that reaches
+        assert req(p, (1, 4, 2, 512), BF).base is f["lat"][0] and len(made) == n0
+    with p:  # a build wanting a fourth (1, 8, 2, 512): every base handed -> a tensor of its own
+        four = [req(p, (1, 8, 2, 512), BF).base for _ in range(4)]
+    assert four[:3] == lat and four[3] is made[-1] and len(made) == n0 + 1
+    with p:  # the same build again: the same buffers (prefix pins + its own tensor), no new L1
+        assert [req(p, (1, 8, 2, 512), BF).base for _ in range(4)] == four and len(made) == n0 + 1
+    # wide_prefix off: the same requests allocate tensors of their own
+    q, g = full(False)
+    m0 = len(made)
+    with q:
+        own = [req(q, (1, 4, 8, 1), FP).base, req(q, (1, 8, 2, 512), BF).base]
+    assert own == made[m0:] and len(made) == m0 + 2 and g["post"] not in own
+    # a child pool (persistent hand-offs) never takes wide views, even under a wide parent
+    c = p.child()
+    c.alias = False
+    with c:
+        c_full = req(c, (1, 16, 2, 512), BF)
+    c.alias = True
+    k0 = len(made)
+    with c:
+        c8 = req(c, (1, 8, 2, 512), BF)
+    assert not c.wide_prefix and c8.base is not c_full and c8.base is made[-1] and len(made) == k0 + 1
+    # a pinned base held by another request of the build (another program's order): decided once, then replayed
+    r, h = full(True)
+    with r:  # program A: its (1, 8, 2, 512) pinned to the first 16-slice base
+        a1 = req(r, (1, 8, 2, 512), BF).base
+    assert a1 is h["lat"][0]
+    with r:  # program B: a (1, 4, 2, 512) request takes that base first, then its (1, 8, 2, 512) meets the pin
+        b1 = [req(r, (1, 4, 2, 512), BF).base, req(r, (1, 8, 2, 512), BF).base]
+    with r:
+        b2 = [req(r, (1, 4, 2, 512), BF).base, req(r, (1, 8, 2, 512), BF).base]
+    with r:
+        a2 = req(r, (1, 8, 2, 512), BF).base
+    assert b1 == b2 and b1[0] is h["lat"][0] and b1[1] is h["lat"][1] and a2 is a1, "decided once and replayed"
+    monkeypatch.delenv("GLM53_STACK_PREFIX_REDO")

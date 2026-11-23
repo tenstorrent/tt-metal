@@ -840,7 +840,12 @@ class SpecMTP:
             else:
                 SM._narrow_knobs(kind == SPARSE_KDA, be.tp, w)
             if kind not in fabs:
-                if self.flat:  # the full width's 32-row phase of this kind (whole-tile packets: the t > 4 consumer)
+                if self.flat and w in be.wseq:  # a native width's programs' phase of this kind (StackBackend
+                    # ._build_width). The same object as the full width's phase (below) except under
+                    # GLM53_STACK_NATIVE_FAB=own on a <= 16-row full width, where width w has a w-row phase of its own:
+                    # the single-user flat verify there (multi-user steps refuse "own": generator.spec_widths)
+                    fabs[kind] = be.wseq[w][i]["tp"].fabric
+                elif self.flat:  # the full width's 32-row phase of this kind (whole-tile packets: the t > 4 consumer)
                     fabs[kind] = e["tp"].fabric
                 elif nseq is not None:  # the narrow width w's phase of this kind
                     fabs[kind] = nseq[i]["tp"].fabric
