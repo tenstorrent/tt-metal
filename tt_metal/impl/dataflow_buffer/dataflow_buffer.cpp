@@ -839,8 +839,10 @@ size_t serialize_dfb_config_for_core(
     {
         auto blob = serialize_dm1_remapper_core_blob(core, dfbs_on_core);
         TT_FATAL(offset + blob.size() <= out.size(), "DFB config overflow (DM1 blob)");
-        std::memcpy(out.data() + offset, blob.data(), blob.size());
-        offset += static_cast<uint32_t>(blob.size());
+        if (!blob.empty()) {
+            std::memcpy(out.data() + offset, blob.data(), blob.size());
+            offset += static_cast<uint32_t>(blob.size());
+        }
     }
     pad_to(dm0_off, "DM0 ISR blob");
 
