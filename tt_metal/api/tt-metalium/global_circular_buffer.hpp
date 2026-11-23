@@ -128,7 +128,7 @@ CBHandle CreateCircularBuffer(
  *
  * @param program The program containing the circular buffer.
  * @param cb_handle Handle of the circular buffer.
- * @param buffer Dynamically allocated global L1 buffer that shares address space with the circular buffer.
+ * @param global_circular_buffer Global circular buffer whose address the circular buffer is updated to.
  */
 void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const GlobalCircularBuffer& global_circular_buffer);

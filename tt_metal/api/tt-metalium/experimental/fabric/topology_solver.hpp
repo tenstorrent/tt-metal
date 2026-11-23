@@ -52,9 +52,9 @@ public:
     AdjacencyGraph() = default;
 
     /**
-     * @brief Construct adjacency graph from a MeshGraph
+     * @brief Construct adjacency graph from an adjacency map
      *
-     * @param mesh_graph The mesh graph to construct the adjacency graph from
+     * @param adjacency_map Map from each node to its neighbors
      */
     explicit AdjacencyGraph(const AdjacencyMap& adjacency_map);
 
@@ -97,6 +97,7 @@ public:
      * Useful for debugging mapping failures.
      *
      * @param graph_name Name to identify this graph in the output
+     * @param quiet_mode If true, the per-node lines are logged at debug level instead of info
      */
     void print_adjacency_map(const std::string& graph_name = "Graph", bool quiet_mode = false) const;
 
