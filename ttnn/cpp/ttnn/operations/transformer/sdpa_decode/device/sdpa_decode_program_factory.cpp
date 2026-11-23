@@ -1002,6 +1002,17 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
+    if (program_config.has_value() && program_config->rows_per_token > 0) {
+        const uint32_t g = program_config->rows_per_token;
+        TT_FATAL(is_causal, "rows_per_token needs a causal call");
+        TT_FATAL(
+            num_q_heads % g == 0 && num_q_heads <= 16,
+            "rows_per_token ({}) must divide the q rows ({}), at most 16",
+            g,
+            num_q_heads);
+        writer_desc.defines.emplace_back("SDPA_DECODE_ROW_GROUP", std::to_string(g));
+        writer_desc.defines.emplace_back("SDPA_DECODE_ROW_TOKENS", std::to_string(num_q_heads / g));
+    }
     writer_desc.config = DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = tt::tt_metal::NOC::NOC_1,  // WriterConfigDescriptor's NOC

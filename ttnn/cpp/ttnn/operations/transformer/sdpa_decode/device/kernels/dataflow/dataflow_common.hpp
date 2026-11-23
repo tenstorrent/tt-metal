@@ -301,6 +301,27 @@ void generate_mask(uint32_t /*k_num_chunks*/, uint32_t Sk_chunk_t, uint32_t cur_
         }
     }
 
+#ifdef SDPA_DECODE_ROW_GROUP
+    // speculative verify: rows of token t (t * G .. t * G + G - 1) end at cur_pos - (T - 1 - t), so keys after that
+    // bound are masked for them too. The caller keeps every bound in this (last) chunk.
+    {
+        constexpr uint32_t G = SDPA_DECODE_ROW_GROUP, T = SDPA_DECODE_ROW_TOKENS;
+        noc.async_read_barrier();
+        const uint32_t chunk_start = cur_pos - cur_pos_in_chunk;
+        for (uint32_t t = 0; t + 1 < T; ++t) {
+            const uint32_t bound = cur_pos - (T - 1 - t);
+            for (uint32_t key = bound + 1; key <= cur_pos; ++key) {
+                const uint32_t c = key - chunk_start, ti = c >> 5, cc = c & 31;
+                for (uint32_t r = t * G; r < (t + 1) * G; ++r) {
+                    const uint32_t face = (r >> 4) * 2 + (cc >> 4);
+                    volatile tt_l1_ptr uint16_t* e = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                        q_write_ptr_base + ti * tile_bytes + (face * 256 + (r & 15) * 16 + (cc & 15)) * 2);
+                    *e = 0xFF80;  // -inf
+                }
+            }
+        }
+    }
+#endif
     cb_mask.push_back(total_read_tiles);
 }
 

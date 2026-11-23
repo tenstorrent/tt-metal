@@ -41,7 +41,8 @@ void py_module(nb::module_& mod) {
                 std::optional<uint32_t>,
                 uint32_t,
                 std::optional<uint32_t>,
-                bool>(),
+                bool,
+                uint32_t>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("sub_core_grids") = nb::none(),
@@ -55,7 +56,8 @@ void py_module(nb::module_& mod) {
             nb::arg("min_blocked_pack_tiles") = nb::none(),
             nb::arg("qk_skip_head_dim") = 0,
             nb::arg("const_k_tile_col") = nb::none(),
-            nb::arg("exact_exp_half_tile") = false)
+            nb::arg("exact_exp_half_tile") = false,
+            nb::arg("rows_per_token") = 0)
         .def_rw("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
         .def_rw("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_rw("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
@@ -69,6 +71,7 @@ void py_module(nb::module_& mod) {
         .def_rw("qk_skip_head_dim", &SDPAProgramConfig::qk_skip_head_dim)
         .def_rw("const_k_tile_col", &SDPAProgramConfig::const_k_tile_col)
         .def_rw("exact_exp_half_tile", &SDPAProgramConfig::exact_exp_half_tile)
+        .def_rw("rows_per_token", &SDPAProgramConfig::rows_per_token)
         .def("__repr__", [](const SDPAProgramConfig& config) {
             return fmt::format(
                 "SDPAProgramConfig(compute_with_storage_grid_size={}, sub_core_grids={}, q_chunk_size={}, "

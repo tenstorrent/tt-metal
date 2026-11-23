@@ -42,6 +42,10 @@ struct SDPAProgramConfig {
     // Decode only: with half tiles (16-row Q, <= 16 heads) the softmax exp is the accurate one, as with full tiles,
     // instead of the approximate one; the rows are then bit-equal to the full-tile path.
     bool exact_exp_half_tile = false;
+    // Decode, causal, speculative verify: Q rows come in groups of rows_per_token, one group per token at consecutive
+    // positions (cur_pos = the last token's). Row r's causal bound is cur_pos - (tokens - 1 - r / rows_per_token).
+    // Exact when every token's bound lies in the same K chunk as cur_pos (the caller checks); 0 = off.
+    uint32_t rows_per_token = 0;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

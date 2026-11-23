@@ -73,3 +73,49 @@ def test_sdpa_decode_pending_rows(device, p0, R):
             rk[:, (p0 + tp) % w], rv[:, (p0 + tp) % w] = new_k[:, tp], new_v[:, tp]
         ref = call(q[t].unsqueeze(0), ring(rk), ring(rv), mask[t].unsqueeze(1), sink[t])
         assert torch.equal(out[t], ref), t
+
+
+@pytest.mark.parametrize("R, b0", [(3, 3000 + 40), (2, 2047 - 5)])
+def test_flash_mla_decode_rows_per_token(device, R, b0):
+    """Causal flash MLA decode with rows_per_token = 3: R tokens' q rows in one call (cur_pos = the last token's
+    bound) give each token's rows bit-equal to its own call, when all bounds are in one K chunk."""
+    assert b0 // 128 == (b0 + R - 1) // 128
+    torch.manual_seed(b0)
+    put = lambda t, dt=ttnn.bfloat16: ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)  # noqa
+    kv = put(torch.randn(8, 1, 4096, 288) * 0.3, ttnn.bfloat8_b)
+    grid = device.compute_with_storage_grid_size()
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+
+    def call(q, s, pos, rpt):
+        cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            q_chunk_size=0,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+            exact_exp_half_tile=True,
+            rows_per_token=rpt,
+        )
+        sk = torch.zeros(8, 32, 32)
+        sk[:, : s.shape[1]] = s
+        cp = ttnn.from_torch(torch.tensor([pos] * 8, dtype=torch.int32), dtype=ttnn.int32, device=device)
+        o = ttnn.transformer.flash_multi_latent_attention_decode(
+            put(q.unsqueeze(0)),
+            kv,
+            head_dim_v=160,
+            is_causal=True,
+            cur_pos_tensor=cp,
+            attention_sink=put(sk.view(256, 32)),
+            scale=1.0,
+            program_config=cfg,
+            compute_kernel_config=ck,
+        )
+        return ttnn.to_torch(o).float()[0]
+
+    q = torch.randn(8, 3 * R, 288) * 0.3
+    s = torch.randn(8, 3 * R, 32)
+    out = call(q, s, b0 + R - 1, 3)
+    for t in range(R):
+        ref = call(q[:, 3 * t : 3 * t + 3], s[:, 3 * t : 3 * t + 3], b0 + t, 0)[:, :3]
+        assert torch.equal(out[:, 3 * t : 3 * t + 3], ref), t
