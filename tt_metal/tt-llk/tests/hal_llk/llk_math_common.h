@@ -54,6 +54,23 @@ inline void _configure_default_zero_flag_state_()
     _apply_src_zero_flag_(value);
 }
 
+// Set the flag to `disable`; skip if it already holds that value (cmath_common.h _configure_src_zero_flag_).
+inline void _configure_src_zero_flag_(const bool disable)
+{
+    const std::uint32_t value = disable ? 1u : 0u;
+    if (ckernel::math::src_zero_flag_hw == value)
+    {
+        return;
+    }
+    _apply_src_zero_flag_(value);
+}
+
+// Data-movement ops keep the flag set so values pass through faithfully.
+inline void _configure_preserve_zero_flag_state_()
+{
+    _configure_src_zero_flag_(true);
+}
+
 // ---------------------------------------------------------------------------------------------
 // cmath_common.h helpers
 // ---------------------------------------------------------------------------------------------

@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_unpack_AB_reduce.h. Same instruction sequence and access kinds as
+// production, expressed through the HAL.
+
 #pragma once
 
 #include <cstdint>
@@ -10,8 +13,13 @@
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "hal/cfg.h"
+#include "hal/mop.h"
+#include "hal/replay.h"
+#include "hal/sync.h"
+#include "hal/tensix_counters.h"
+#include "hal/unpack.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
@@ -19,6 +27,56 @@
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
+
+namespace hal_port
+{
+
+// One reduce UNPACR: TT_OP_UNPACR(engine, address_mode, 0, 0, 0, 1, set_dvalid, RAREFYB_DISABLE, 0, 0, 0, 0, 1),
+// i.e. explicit context 0, last (flush) set, Z increments per channel as given.
+constexpr std::uint32_t reduce_unpack(
+    const hal::unpack::Engine engine, const std::uint8_t ch0_z, const std::uint8_t ch1_z, const hal::unpack::SourceHandoff handoff)
+{
+    return hal::unpack::get_operation(hal::unpack::DataTransfer {
+        .engine     = engine,
+        .increments = {.channel0 = {.z = ch0_z}, .channel1 = {.z = ch1_z}},
+        .handoff    = handoff,
+    });
+}
+
+// Clear one source bank of the unpacker that owns it, waiting like an UNPACR:
+// TT_OP_UNPACR_NOP(src, 0, 0, 0, 0, WAIT_LIKE_UNPACR, 0, clear_val, CLR_SRC).
+// HAL-GAP: hal::nop encodes only the pure-delay UNPACR_NOP; the clear-source flavor has no HAL descriptor, so the
+// production encoding is kept.
+constexpr std::uint32_t reduce_clear_src(const std::uint32_t src, const std::uint32_t clear_val)
+{
+    return TT_OP_UNPACR_NOP(
+        src,
+        0 /*Stream_Id*/,
+        0 /*Msg_Clr_Cnt*/,
+        0 /*Set_Dvalid*/,
+        0 /*Clr_to1_fmt_Ctrl*/,
+        p_unpacr_nop::WAIT_LIKE_UNPACR,
+        0 /*Bank_Clr_Ctrl*/,
+        clear_val,
+        p_unpacr_nop::CLR_SRC);
+}
+
+// p_setadc::UNP_A / UNP_B as an address-counter client.
+template <std::uint32_t UNP_SEL>
+constexpr hal::counters::adc::AddrCounter reduce_for_unpacker(const hal::counters::adc::AddrCounter counter)
+{
+    static_assert(UNP_SEL == p_setadc::UNP_A || UNP_SEL == p_setadc::UNP_B, "UNP_SEL must be UNP_A or UNP_B");
+    if constexpr (UNP_SEL == p_setadc::UNP_A)
+    {
+        return counter.for_clients<hal::counters::adc::Client::Unpacker0>();
+    }
+    else
+    {
+        return counter.for_clients<hal::counters::adc::Client::Unpacker1>();
+    }
+}
+
+} // namespace hal_port
 
 /**
  * @brief Whether the reduce unpacks the scaler into SrcA and the data into SrcB.
@@ -81,6 +139,10 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_mop_config_", tensor_shape);
     LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_reduce_mop_config_", tensor_shape_scaler);
 
+    using hal::unpack::Engine;
+    using hal::unpack::SourceHandoff;
+    using namespace hal::mop;
+
     constexpr bool is_max        = pool_type == PoolType::MAX;
     constexpr bool is_scalar     = reduce_dim == ReduceDim::REDUCE_SCALAR;
     constexpr bool swap_operands = _llk_unpack_AB_reduce_swaps_operands_<pool_type, reduce_dim>();
@@ -88,6 +150,17 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
     constexpr std::uint32_t data_unpacker  = swap_operands ? Srcs::SrcB : Srcs::SrcA;
     constexpr std::uint32_t scaler_adc     = swap_operands ? p_setadc::UNP_A : p_setadc::UNP_B;
     constexpr std::uint32_t data_clear_val = is_max ? p_unpacr_nop::CLR_SRC_NEGINF : p_unpacr_nop::CLR_SRC_0;
+
+    // TT_OP_UNPACR(Src, 0b0, ..., SetDatValid=1): whole tile / rest of the scaler, handed to math.
+    constexpr std::uint32_t unpack_srca_whole = hal_port::reduce_unpack(Engine::Unpacker0, 0, 0, SourceHandoff::FlipAndSetDataValid);
+    constexpr std::uint32_t unpack_srcb_whole = hal_port::reduce_unpack(Engine::Unpacker1, 0, 0, SourceHandoff::FlipAndSetDataValid);
+    // TT_OP_UNPACR(SrcA, 0b00010001 /*ch0_z+=1, ch1_z+=1*/, ..., SetDatValid=0): first scaler face, bank kept.
+    constexpr std::uint32_t unpack_srca_first_face = hal_port::reduce_unpack(Engine::Unpacker0, 1, 1, SourceHandoff::Keep);
+    // TT_OP_UNPACR(Src, 0b01 /*ch0_z+=1*/, ..., SetDatValid=1): one face, handed to math.
+    constexpr std::uint32_t unpack_srca_face = hal_port::reduce_unpack(Engine::Unpacker0, 1, 0, SourceHandoff::FlipAndSetDataValid);
+    constexpr std::uint32_t unpack_srcb_face = hal_port::reduce_unpack(Engine::Unpacker1, 1, 0, SourceHandoff::FlipAndSetDataValid);
+    constexpr std::uint32_t clear_srca       = hal_port::reduce_clear_src(SrcA, p_unpacr_nop::CLR_SRC_0);
+    constexpr std::uint32_t clear_data       = hal_port::reduce_clear_src(data_unpacker, data_clear_val);
 
     const std::uint32_t num_faces        = tensor_shape.total_num_faces();
     const std::uint32_t num_scaler_faces = tensor_shape_scaler.total_num_faces();
@@ -99,36 +172,31 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
         const bool clear_scaler = _llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler);
         if (_llk_unpack_AB_reduce_scaler_whole_tile_(tensor_shape, tensor_shape_scaler))
         {
-            constexpr std::uint32_t whole_tile_replay_len = 2;
-            load_replay_buf(
-                0,
-                whole_tile_replay_len,
+            constexpr hal::replay::BufferRange whole_tile_replay {0 /*start*/, 2 /*count*/};
+            hal::replay::record<whole_tile_replay>(
                 []
                 {
-                    TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                    TTI_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                    TTI_INSN(unpack_srca_whole);
+                    TTI_INSN(unpack_srcb_whole);
                 });
-            ckernel_template tmp(1, 1, lltt::replay_insn(0, whole_tile_replay_len));
-            tmp.program();
+            program(loop(1, loop(1, hal::replay::get_operation<whole_tile_replay>())));
             return;
         }
-        const std::uint32_t replay_len = (clear_scaler ? 1 : 0) + 3;
-        load_replay_buf(
-            0,
-            replay_len,
+        const hal::replay::BufferRange replay_range {0 /*start*/, (clear_scaler ? 1u : 0u) + 3};
+        hal::replay::record(
+            replay_range,
             [clear_scaler]
             {
                 if (clear_scaler)
                 {
-                    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+                    TTI_INSN(clear_srca);
                 }
-                TTI_UNPACR(SrcA, 0b00010001 /*ch0_z+=1, ch1_z+=1*/, 0, 0, 0, 1, 0 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                TTI_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_INSN(unpack_srca_first_face);
+                TTI_INSN(unpack_srca_whole);
+                TTI_INSN(unpack_srcb_whole);
             });
 
-        ckernel_template tmp(1, 1, lltt::replay_insn(0, replay_len));
-        tmp.program();
+        program(loop(1, loop(1, hal::replay::get_operation(replay_range))));
         return;
     }
 
@@ -139,33 +207,29 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
         "A scaler with fewer faces than the data needs a face for every column of data faces");
     const std::uint32_t outerloop = wrap_scaler ? num_faces / num_scaler_faces : 1;
     const std::uint32_t innerloop = wrap_scaler ? num_scaler_faces : num_faces;
-    const bool clear_data         = is_scalar || tensor_shape.face_r_dim < FACE_R_DIM;
+    const bool clear_data_bank    = is_scalar || tensor_shape.face_r_dim < FACE_R_DIM;
     const bool clear_scaler       = swap_operands && _llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler);
 
-    const std::uint32_t replay_len = (clear_data ? 1 : 0) + (clear_scaler ? 1 : 0) + 2;
-    load_replay_buf(
-        0,
-        replay_len,
-        [clear_data, clear_scaler]
+    const hal::replay::BufferRange replay_range {0 /*start*/, (clear_data_bank ? 1u : 0u) + (clear_scaler ? 1u : 0u) + 2};
+    hal::replay::record(
+        replay_range,
+        [clear_data_bank, clear_scaler]
         {
-            if (clear_data)
+            if (clear_data_bank)
             {
-                TTI_UNPACR_NOP(data_unpacker, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, data_clear_val, p_unpacr_nop::CLR_SRC);
+                TTI_INSN(clear_data);
             }
             if (clear_scaler)
             {
-                TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+                TTI_INSN(clear_srca);
             }
-            TTI_UNPACR(SrcA, 0b01 /*ch0_z+=1*/, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-            TTI_UNPACR(SrcB, 0b01 /*ch0_z+=1*/, 0, 0, 0, 1, 1 /*SetDatValid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            TTI_INSN(unpack_srca_face);
+            TTI_INSN(unpack_srcb_face);
         });
 
-    ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, replay_len));
-    if (wrap_scaler)
-    {
-        tmp.set_end_op(TT_OP_SETADCZW(scaler_adc, 0, 0, 0, 0, 0b0001));
-    }
-    tmp.program();
+    // After each pass over the scaler's faces, move it back to face 0: TT_OP_SETADCZW(scaler_adc, 0, 0, 0, 0, 0b0001).
+    constexpr std::uint32_t scaler_face0 = hal_port::reduce_for_unpacker<scaler_adc>(hal::counters::adc::AddrCounter {.channel0 = {.z = 0}}).operation();
+    program(loop(outerloop, loop(innerloop, hal::replay::get_operation(replay_range)), wrap_scaler ? scaler_face0 : TT_OP_NOP));
 }
 
 /**
@@ -201,24 +265,29 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape,
     constexpr std::uint32_t data_adc   = swap_operands ? p_setadc::UNP_B : p_setadc::UNP_A;
     constexpr std::uint32_t scaler_adc = swap_operands ? p_setadc::UNP_A : p_setadc::UNP_B;
 
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>((reduce_dim == ReduceDim::REDUCE_ROW));
+    namespace cfg = hal::cfg;
+
+    // Haloize (transpose) for row reductions; the value is a template constant, so the RMWCIB is an immediate.
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg2].Haloize_mode, cfg::Sec::S0, (reduce_dim == ReduceDim::REDUCE_ROW) ? 1 : 0>();
 
     if (swap_operands && tensor_shape.total_num_faces() == MAX_NUM_FACES)
     {
-        TT_SETADCXX(data_adc, MAX_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+        // TT_SETADCXX(data_adc, MAX_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1, 0x0), as an immediate
+        hal_port::set_unpacker_x_end<data_adc, MAX_NUM_FACES * FACE_R_DIM>();
     }
     else
     {
-        config_unpacker_x_end<data_adc>(tensor_shape.face_r_dim);
+        hal_port::config_unpacker_x_end<data_adc>(tensor_shape.face_r_dim);
     }
     // The scaler reads one row per face, unless the swapped path reads it whole.
     if (swap_operands && _llk_unpack_AB_reduce_scaler_whole_tile_(tensor_shape, tensor_shape_scaler))
     {
-        TT_SETADCXX(scaler_adc, MAX_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+        // TT_SETADCXX(scaler_adc, MAX_NUM_FACES * FACE_R_DIM * FACE_C_DIM - 1, 0x0), as an immediate
+        hal_port::set_unpacker_x_end<scaler_adc, MAX_NUM_FACES * FACE_R_DIM>();
     }
     else
     {
-        config_unpacker_x_end<scaler_adc>(swap_operands && !_llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler) ? FACE_R_DIM : 1);
+        hal_port::config_unpacker_x_end<scaler_adc>(swap_operands && !_llk_unpack_AB_reduce_scaler_row_only_(tensor_shape_scaler) ? FACE_R_DIM : 1);
     }
 
     _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(tensor_shape, tensor_shape_scaler);
@@ -262,15 +331,17 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b)
 {
-    // Reset address counters for both unpackers
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    namespace adc = hal::counters::adc;
+
+    // Reset address counters for both unpackers: TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111)
+    adc::set<adc::AddrCounter {.channel0 = {.z = 0, .w = 0}, .channel1 = {.z = 0, .w = 0}}.for_clients<adc::Client::Unpacker0, adc::Client::Unpacker1>()>();
 
     // Program srcA and srcB base addresses
     // Get pointer to configuration registers for current state ID
-    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+    volatile std::uint32_t tt_reg_ptr *cfg = hal::cfg::detail::state_cfg_bank();
 
     // Wait for free context
-    wait_for_next_context(2);
+    hal_port::wait_for_next_context(2);
 
     constexpr bool swap_operands = _llk_unpack_AB_reduce_swaps_operands_<pool_type, reduce_dim>();
 
@@ -280,18 +351,18 @@ inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uin
     const std::uint32_t addr_unp_b = swap_operands ? address_a : address_b;
     _llk_unpack_configure_addresses_(addr_unp_a, addr_unp_b, cfg);
 
-    // Trisc::SEMPOST for context acquire
-    semaphore_post(semaphore::UNPACK_SYNC);
+    // Trisc::SEMPOST for context acquire (MMIO)
+    hal::sync::semaphore::post<hal::sync::Access::MMIO, hal_port::UNPACK_SYNC_SEM>();
 
     // Stall unpacker until pending CFG writes from Trisc have completed
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    hal::sync::wait::stall<hal::sync::StallTarget::Unpack, hal::sync::StallCondition::RiscvAccessProcessed>();
 
     // Execute the configured MOP
-    ckernel::ckernel_template::run();
+    hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
 
     // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    hal::sync::semaphore::get<hal_port::UNPACK_SYNC_SEM>();
 
     // Switch unpacker config context
-    switch_config_context(unp_cfg_context);
+    hal_port::switch_config_context(unp_cfg_context);
 }

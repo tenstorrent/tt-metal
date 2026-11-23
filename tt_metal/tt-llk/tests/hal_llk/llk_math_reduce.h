@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// HAL port of tt_llk_blackhole/llk_lib/llk_math_reduce.h, except SFPU: the SFPLOAD/SFPSTORE lines stay as production
+// has them. Same Tensix instruction sequence as production, expressed through the HAL.
+
 #pragma once
 
 #include <cstdint>
@@ -10,14 +13,93 @@
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
 #include "cmath_common.h"
+#include "hal/cfg.h"
+#include "hal/counters/rwc.h"
+#include "hal/dst.h"
+#include "hal/fpu.h"
+#include "hal/mop.h"
+#include "hal/move.h"
+#include "hal/replay.h"
+#include "hal/src.h"
+#include "hal/sync.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_math.h"
 
 using namespace ckernel;
+
+namespace hal_port
+{
+
+// One ADDR_MOD slot in the units of ckernel::addr_mod_t (every field the reduce sets, including SrcA/SrcB CR).
+struct ReduceAddrMod
+{
+    std::uint32_t srca_incr = 0;
+    std::uint32_t srca_clr  = 0;
+    std::uint32_t srca_cr   = 0;
+    std::uint32_t srcb_incr = 0;
+    std::uint32_t srcb_clr  = 0;
+    std::uint32_t srcb_cr   = 0;
+    std::uint32_t dest_incr = 0;
+    std::uint32_t dest_clr  = 0;
+    std::uint32_t dest_cr   = 0;
+    std::uint32_t fid_incr  = 0;
+    std::uint32_t fid_clr   = 0;
+};
+
+// addr_mod_t::set(n): three SETC16 words (SrcA|SrcB, Dest|Fidelity, Bias), each fully specified.
+template <cfg::Sec S, ReduceAddrMod M>
+inline void set_reduce_addr_mod()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AddrMod[cfg::SrcA].Incr, S, M.srca_incr>(),
+        cfg::set<cfg::AddrMod[cfg::SrcA].CR, S, M.srca_cr>(),
+        cfg::set<cfg::AddrMod[cfg::SrcA].Clear, S, M.srca_clr>(),
+        cfg::set<cfg::AddrMod[cfg::SrcB].Incr, S, M.srcb_incr>(),
+        cfg::set<cfg::AddrMod[cfg::SrcB].CR, S, M.srcb_cr>(),
+        cfg::set<cfg::AddrMod[cfg::SrcB].Clear, S, M.srcb_clr>());
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AddrMod[cfg::Dest].Incr, S, M.dest_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest].CR, S, M.dest_cr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest].Clear, S, M.dest_clr>(),
+        cfg::set<cfg::AddrMod[cfg::Dest].CToCR, S, 0>(),
+        cfg::set<cfg::AddrMod[cfg::Fidelity].Incr, S, M.fid_incr>(),
+        cfg::set<cfg::AddrMod[cfg::Fidelity].Clear, S, M.fid_clr>());
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::AddrMod[cfg::Bias].Incr, S, 0>(), cfg::set<cfg::AddrMod[cfg::Bias].Clear, S, 0>());
+}
+
+// p_setrwc::CLR_NONE / CLR_AB as an FPU source release.
+constexpr hal::fpu::SourceRelease reduce_release(const std::uint32_t clear_mode)
+{
+    return clear_mode == p_setrwc::CLR_AB ? hal::fpu::SourceRelease::Both : hal::fpu::SourceRelease::None;
+}
+
+// TT_OP_MVMUL(clear_mode, 0, addr_mod, dst)
+constexpr std::uint32_t reduce_mvmul(const std::uint32_t clear_mode, const std::uint8_t addr_mod, const std::uint16_t dst)
+{
+    return hal::fpu::get_operation(hal::fpu::MatrixMultiply {.address_modifier = addr_mod, .dest_row_offset = dst, .release = reduce_release(clear_mode)});
+}
+
+// TT_OP_GMPOOL / TT_OP_GAPOOL(clear_mode, DIM_16X16, addr_mod, INDEX_DIS, dst)
+constexpr std::uint32_t reduce_pool(const PoolType type, const std::uint32_t clear_mode, const std::uint8_t addr_mod, const std::uint16_t dst)
+{
+    return hal::fpu::get_operation(hal::fpu::Pool {
+        .function         = type == PoolType::MAX ? hal::fpu::PoolFunction::Maximum : hal::fpu::PoolFunction::Sum,
+        .indices          = hal::fpu::IndexTracking::Disabled,
+        .address_modifier = addr_mod,
+        .dest_row_offset  = dst,
+        .release          = reduce_release(clear_mode)});
+}
+
+// TT_OP_SETRWC(CLR_AB, 0, 0, 0, 0, SET_ABD_F)
+inline constexpr std::uint32_t setrwc_clr_ab_abd_f =
+    rwc::MathCounter {.src_a = rwc::Set(0), .src_b = rwc::Set(0), .dest = rwc::Set(0), .flip = rwc::Src::A | rwc::Src::B, .clear_fidelity = true}.operation();
+// TT_OP_SETRWC(CLR_AB, 0, 0, 0, 0, SET_B)
+inline constexpr std::uint32_t setrwc_clr_ab_b = rwc::MathCounter {.src_b = rwc::Set(0), .flip = rwc::Src::A | rwc::Src::B}.operation();
+
+} // namespace hal_port
 
 // local function declarations
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
@@ -40,39 +122,58 @@ inline void reduce_row_perform_transpose()
     // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
     // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
     // return it to the operand driven baseline. WH does the same in its fp32 transpose.
-    math::_configure_preserve_zero_flag_state_();
+    namespace cfg  = hal::cfg;
+    namespace move = hal::move;
+    namespace rwc  = hal::counters::rwc;
+    namespace sync = hal::sync;
+
+    hal_port::_configure_preserve_zero_flag_state_();
 
     if constexpr (is_int_fpu_en)
     {
-        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+        sync::wait::stall<sync::StallTarget::Sfpu, sync::StallCondition::MathIdle>();
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0);
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2);
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2);
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-        TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
+        sync::wait::stall<sync::StallTarget::Math, sync::StallCondition::SfpuIdle>();
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::Fp16aForce::Enable, cfg::Sec::S0, 1>();
     }
 
     // Move pooled result to SrcB rows 16–31 and transpose
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
-    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-    TTI_TRNSPSRCB;
-    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+    // TTI_SETRWC(CLR_NONE, CR_D, 0, 0, 0, SET_AB): the CR_D bit has no effect without SET_D, so the HAL leaves it out.
+    rwc::set<rwc::MathCounter {.src_a = rwc::Set(0), .src_b = rwc::Set(0)}>();
+    // TTI_MOVD2B(0, SRC_ROW16_OFFSET, ADDR_MOD_0, MOV_1_ROW, 0)
+    constexpr move::Transfer<move::Dst, move::SrcB> dest_row0_to_srcb_row16 {
+        .source_row = 0, .destination_row = p_movd2b::SRC_ROW16_OFFSET, .address_mode = ADDR_MOD_0, .number_of_rows = move::rows::One};
+    move::run<dest_row0_to_srcb_row16>();
+    hal::src<hal::SrcB>.transpose();
+    move::run<dest_row0_to_srcb_row16>();
 
     if constexpr (is_int_fpu_en)
     {
-        TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::Fp16aForce::Enable, cfg::Sec::S0, 0>();
     }
 
     // Add transposed SrcB into Dest through a zeroed SrcA
+    // HAL-GAP: rwc::set encodes a lone SrcB AdvanceAndReset as INCRWC; production issues SETRWC, kept as is.
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-    TTI_ZEROSRC(0, 1, 0, 1);
-    TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
-    TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
+    // TTI_ZEROSRC(0, 1, 0, 1): zero the math thread's current SrcA bank
+    hal::src<hal::SrcA>.fill<hal::src_ops::BankScope::Current, hal::src_ops::BankOwner::Math, hal::src_ops::Fill::Zero>();
+    // TTI_ELWADD(0, 0, SRCB_NO_BCAST, ADDR_MOD_1, 0), twice
+    constexpr hal::fpu::Elementwise add_srcb {
+        .operation        = hal::fpu::ElementwiseOperation::Add,
+        .broadcast        = hal::fpu::SrcBBroadcast::None,
+        .dest_write       = hal::fpu::DestWriteMode::Overwrite,
+        .address_modifier = ADDR_MOD_1,
+        .dest_row_offset  = 0,
+        .release          = hal::fpu::SourceRelease::None};
+    hal::fpu::run<add_srcb>();
+    hal::fpu::run<add_srcb>();
 
     // Restore the operand-driven baseline for the currently configured formats.
-    math::_configure_default_zero_flag_state_();
+    hal_port::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -88,21 +189,25 @@ inline void reduce_row_perform_transpose()
 template <PoolType type, bool high_fidelity, std::uint32_t clear_mode, std::uint32_t index = 0>
 inline void reduce_pool_op()
 {
+    static_assert(clear_mode == p_setrwc::CLR_NONE || clear_mode == p_setrwc::CLR_AB, "reduce pools release no source or both");
     if constexpr (type == PoolType::MAX)
     {
-        TTI_GMPOOL(clear_mode, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, index);
+        constexpr std::uint32_t gmpool = hal_port::reduce_pool(PoolType::MAX, clear_mode, ADDR_MOD_0, index);
+        TTI_INSN(gmpool);
     }
     else if constexpr (high_fidelity)
     {
-        ckernel_template::run();
+        hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
         if constexpr (clear_mode != p_setrwc::CLR_NONE)
         {
-            TTI_CLEARDVALID(clear_mode, 0);
+            // TTI_CLEARDVALID(CLR_AB, 0)
+            hal::src<hal::BothSources>.release<hal::src_ops::BankAdvance::Flip>();
         }
     }
     else
     {
-        TTI_GAPOOL(clear_mode, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, index);
+        constexpr std::uint32_t gapool = hal_port::reduce_pool(type, clear_mode, ADDR_MOD_0, index);
+        TTI_INSN(gapool);
     }
 }
 
@@ -130,13 +235,17 @@ inline void reduce_row_pool_all_faces(const std::uint32_t num_faces_c_dim)
  */
 inline void reduce_row_advance_dest(const bool is_narrow_tile)
 {
+    namespace rwc = hal::counters::rwc;
+
+    // HAL-GAP: rwc::set encodes a lone Dest AdvanceAndReset as INCRWC; production issues SETRWC, kept as is.
     if (!is_narrow_tile)
     {
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-    TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
+    // TTI_SETRWC(CLR_AB, CR_D, 8, 0, 0, SET_BD)
+    rwc::set<rwc::MathCounter {.src_b = rwc::Set(0), .dest = rwc::AdvanceAndReset(8), .flip = rwc::Src::A | rwc::Src::B}>();
 }
 
 /**
@@ -151,88 +260,87 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
 template <PoolType type, ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
 {
+    using namespace hal::mop;
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
     {
         if (tensor_shape.total_num_faces() == 4)
         {
-            constexpr std::uint32_t replay_buf_len = 8;
-            constexpr std::uint32_t last_clr       = high_fidelity ? p_setrwc::CLR_NONE : p_setrwc::CLR_AB;
-            constexpr std::uint32_t inner_loops    = high_fidelity ? to_underlying(math_fidelity) : 1;
-            const std::uint32_t replay_start       = ckernel::math::replay_buf_offset;
+            constexpr std::uint32_t last_clr    = high_fidelity ? p_setrwc::CLR_NONE : p_setrwc::CLR_AB;
+            constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
+            constexpr hal::replay::BufferRange replay_range {ckernel::math::replay_buf_offset /*start*/, 8 /*count*/};
 
-            load_replay_buf(
-                replay_start,
-                replay_buf_len,
+            hal::replay::record<replay_range>(
                 []
                 {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-                    TTI_MVMUL(last_clr, 0, ADDR_MOD_3, 0);
+                    using hal_port::reduce_mvmul;
+                    TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_0, 0));
+                    TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_1, 0));
+                    TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_0, 0));
+                    TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_2, 0));
+                    TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_0, 0));
+                    TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_1, 0));
+                    TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_0, 0));
+                    TTI_INSN(reduce_mvmul(last_clr, ADDR_MOD_3, 0));
                 });
 
-            ckernel_template tmp(1, inner_loops, lltt::replay_insn(replay_start, replay_buf_len));
+            constexpr std::uint32_t replay_op = hal::replay::get_operation<replay_range>();
             if constexpr (high_fidelity)
             {
-                tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD_F));
+                program(loop(1, loop(inner_loops, replay_op), hal_port::setrwc_clr_ab_abd_f));
             }
-            tmp.program();
+            else
+            {
+                program(loop(1, loop(inner_loops, replay_op)));
+            }
         }
         else
         {
-            constexpr std::uint32_t fid_count  = (math_fidelity == MathFidelity::LoFi) ? 1 : to_underlying(math_fidelity);
-            const std::uint32_t replay_buf_len = tensor_shape.num_faces_c_dim * 2 * fid_count;
-            const std::uint32_t replay_start   = ckernel::math::replay_buf_offset;
+            constexpr std::uint32_t fid_count = (math_fidelity == MathFidelity::LoFi) ? 1 : to_underlying(math_fidelity);
+            const hal::replay::BufferRange replay_range {ckernel::math::replay_buf_offset /*start*/, tensor_shape.num_faces_c_dim * 2 * fid_count};
 
-            load_replay_buf(
-                replay_start,
-                replay_buf_len,
+            hal::replay::record(
+                replay_range,
                 [&tensor_shape]
                 {
+                    using hal_port::reduce_mvmul;
                     for (std::uint32_t faces_remaining = tensor_shape.num_faces_c_dim; faces_remaining > 0; faces_remaining--)
                     {
                         for (std::uint32_t p = 0; p < fid_count - 1; p++)
                         {
-                            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                            TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_0, 0));
                         }
-                        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+                        TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_1, 0));
 
                         for (std::uint32_t p = 0; p < fid_count - 1; p++)
                         {
-                            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 8);
+                            TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_0, 8));
                         }
                         if (faces_remaining == 1)
                         {
-                            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 8);
+                            TTI_INSN(reduce_mvmul(p_setrwc::CLR_NONE, ADDR_MOD_3, 8));
                         }
                         else
                         {
-                            TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 8);
+                            TTI_INSN(reduce_mvmul(p_setrwc::CLR_AB, ADDR_MOD_2, 8));
                         }
                     }
                 });
 
-            const std::uint32_t replay_op = lltt::replay_insn(replay_start, replay_buf_len);
-            ckernel_template tmp(tensor_shape.num_faces_r_dim, 1, replay_op);
-            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B));
-            tmp.program();
+            program(loop(tensor_shape.num_faces_r_dim, loop(1, hal::replay::get_operation(replay_range)), hal_port::setrwc_clr_ab_b));
         }
     }
     else if constexpr (high_fidelity)
     {
-        constexpr int inner_loop_len = to_underlying(math_fidelity);
-        constexpr std::uint32_t dst  = (dim == ReduceDim::REDUCE_SCALAR) ? 4 : 0;
+        constexpr std::uint32_t inner_loop_len = to_underlying(math_fidelity);
+        constexpr std::uint16_t dst            = (dim == ReduceDim::REDUCE_SCALAR) ? 4 : 0;
 
-        ckernel_template tmp(1, inner_loop_len, TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, dst));
-        tmp.set_last_inner_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, dst));
-        tmp.set_last_outer_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, dst));
-        tmp.program();
+        // Always GAPOOL, as production. Production also sets the last-inner-loop op (MopCfg word 8) to the ADDR_MOD_0
+        // GAPOOL; with an outer count of 1 the expander never issues it, and the HAL rejects that patch, so word 8 keeps
+        // the ADDR_MOD_1 GAPOOL.
+        program(loop(1, loop(inner_loop_len, hal_port::reduce_pool(PoolType::SUM, p_setrwc::CLR_NONE, ADDR_MOD_1, dst)))
+                    .patch(last_outer, hal_port::reduce_pool(PoolType::SUM, p_setrwc::CLR_NONE, ADDR_MOD_0, dst)));
     }
 }
 
@@ -264,8 +372,12 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         !((tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim) /* narrow_tile */ && tensor_shape.total_num_faces() == 4),
         "Reduce narrow tile requires num_faces 1 or 2; num_faces=4 is full-width 32x32");
 
+    namespace rwc  = hal::counters::rwc;
+    namespace move = hal::move;
+    using Mop      = hal::mop::Runner<hal::mop::MopTemplate::Template1>;
+
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    hal_port::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     if constexpr (dim == ReduceDim::REDUCE_ROW)
     {
@@ -282,12 +394,14 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
                 reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
                 reduce_row_perform_transpose<is_int_fpu_en>();
             }
-            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
+            // TTI_SETRWC(CLR_AB, 0, 0, 0, 0, SET_BD)
+            rwc::set<rwc::MathCounter {.src_b = rwc::Set(0), .dest = rwc::Set(0), .flip = rwc::Src::A | rwc::Src::B}>();
         }
         else
         {
-            ckernel_template::run();
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
+            Mop::run();
+            // TTI_SETRWC(CLR_NONE, 0, 0, 0, 0, SET_ABD)
+            rwc::set<rwc::MathCounter {.src_a = rwc::Set(0), .src_b = rwc::Set(0), .dest = rwc::Set(0)}>();
         }
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
@@ -298,13 +412,15 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
             reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
             if (tensor_shape.num_faces_c_dim > 1)
             {
+                // HAL-GAP: rwc::set encodes a lone Dest AdvanceAndReset as INCRWC; production issues SETRWC, kept as is.
                 TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-                TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+                // TTI_SETRWC(CLR_AB, CR_D, 8, 0, 0, SET_D)
+                rwc::set<rwc::MathCounter {.dest = rwc::AdvanceAndReset(8), .flip = rwc::Src::A | rwc::Src::B}>();
 
                 reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
             }
-            // Reset Dest Counter
-            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AD);
+            // Reset Dest Counter: TTI_SETRWC(CLR_AB, 0, 0, 0, 0, SET_AD)
+            rwc::set<rwc::MathCounter {.src_a = rwc::Set(0), .dest = rwc::Set(0), .flip = rwc::Src::A | rwc::Src::B}>();
         }
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
@@ -318,39 +434,46 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 4>();
 
         // Need row in dest as column in src A
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+        // TTI_SETRWC(CLR_NONE, CR_D, 0, 0, 0, SET_AB): the CR_D bit has no effect without SET_D, so the HAL leaves it out.
+        rwc::set<rwc::MathCounter {.src_a = rwc::Set(0), .src_b = rwc::Set(0)}>();
 
         // copy over from dest to B and do transpose
         // use rows 16 - 31 in src B as scratch
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 4);
-        TTI_GATESRCRST(0b1, 0b1);
-        TTI_TRNSPSRCB;
+        // TTI_MOVD2B(0, SRC_ROW16_OFFSET, ADDR_MOD_0, MOV_1_ROW, 4)
+        move::run<move::Transfer<move::Dst, move::SrcB> {
+            .source_row = 4, .destination_row = p_movd2b::SRC_ROW16_OFFSET, .address_mode = ADDR_MOD_0, .number_of_rows = move::rows::One}>();
+        hal::src<hal::BothSources>.reset_pipeline_gating(); // TTI_GATESRCRST(0b1, 0b1)
+        hal::src<hal::SrcB>.transpose();
         // gate math instructions until src B has been updated
-        TTI_GATESRCRST(0b1, 0b1);
+        hal::src<hal::BothSources>.reset_pipeline_gating();
         // copy over all 16 rows from B to A
+        // HAL-GAP: hal::move has no SrcB-to-SrcA transfer (MOVB2A); production lines kept.
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
         // gate math instructions until src A has been updated by MOV instructions
-        TTI_GATESRCRST(0b1, 0b1);
-        // zero out scratch in dest
-        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 4);
+        hal::src<hal::BothSources>.reset_pipeline_gating();
+        // zero out scratch in dest: TTI_ZEROACC(CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 4)
+        hal::dst::run<hal::dst::Zero {.scope = hal::dst::ZeroScope::SingleRow, .index = 4, .width = hal::dst::DestWidth::Bits16, .address_mode = ADDR_MOD_0}>();
 
         if constexpr (type == PoolType::MAX)
         {
-            TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            constexpr std::uint32_t gmpool = hal_port::reduce_pool(PoolType::MAX, p_setrwc::CLR_AB, ADDR_MOD_0, 0);
+            TTI_INSN(gmpool);
         }
         else
         {
             if constexpr (high_fidelity)
             {
+                constexpr std::uint32_t gapool_phase = hal_port::reduce_pool(type, p_setrwc::CLR_NONE, ADDR_MOD_1, 0);
                 for (std::uint32_t i = 0; i < to_underlying(math_fidelity) - 1; i++)
                 {
-                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
+                    TTI_INSN(gapool_phase);
                 }
             }
-            TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            constexpr std::uint32_t gapool_last = hal_port::reduce_pool(type, p_setrwc::CLR_AB, ADDR_MOD_0, 0);
+            TTI_INSN(gapool_last);
         }
     }
 }
@@ -368,100 +491,52 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 {
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
+    using hal_port::ReduceAddrMod;
+    using hal_port::set_reduce_addr_mod;
+    using S = hal::cfg::Sec;
+
     if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
     {
         if (tensor_shape.total_num_faces() == 4)
         {
-            addr_mod_t {
-                .srcb = {.incr = 8},
-                .dest = {.incr = 8},
-            }
-                .set(ADDR_MOD_0);
-
-            addr_mod_t {
-                .srcb = {.incr = 24},
-                .dest = {.incr = 24},
-            }
-                .set(ADDR_MOD_1);
-
-            addr_mod_t {
-                .srca = {.incr = 16},
-                .srcb = {.incr = 16, .cr = 1},
-                .dest = {.cr = 1},
-            }
-                .set(ADDR_MOD_2);
-
-            addr_mod_t {
-                .srca     = {.clr = 1, .cr = 1},
-                .srcb     = {.clr = 1, .cr = 1},
-                .dest     = {.clr = 1, .cr = 1},
-                .fidelity = {.incr = high_fidelity ? 1u : 0u},
-            }
-                .set(ADDR_MOD_3);
+            set_reduce_addr_mod<S::S0, ReduceAddrMod {.srcb_incr = 8, .dest_incr = 8}>();
+            set_reduce_addr_mod<S::S1, ReduceAddrMod {.srcb_incr = 24, .dest_incr = 24}>();
+            set_reduce_addr_mod<S::S2, ReduceAddrMod {.srca_incr = 16, .srcb_incr = 16, .srcb_cr = 1, .dest_cr = 1}>();
+            set_reduce_addr_mod<
+                S::S3,
+                ReduceAddrMod {.srca_clr = 1, .srca_cr = 1, .srcb_clr = 1, .srcb_cr = 1, .dest_clr = 1, .dest_cr = 1, .fid_incr = high_fidelity ? 1u : 0u}>();
         }
         else
         {
             if constexpr (high_fidelity)
             {
-                addr_mod_t {
-                    .fidelity = {.incr = 1},
-                }
-                    .set(ADDR_MOD_0);
+                set_reduce_addr_mod<S::S0, ReduceAddrMod {.fid_incr = 1}>();
             }
 
-            addr_mod_t {
-                .srcb     = {.incr = 8},
-                .fidelity = {.clr = 1},
-            }
-                .set(ADDR_MOD_1);
-
-            addr_mod_t {
-                .srcb     = {.cr = 1},
-                .fidelity = {.clr = 1},
-            }
-                .set(ADDR_MOD_2);
+            set_reduce_addr_mod<S::S1, ReduceAddrMod {.srcb_incr = 8, .fid_clr = 1}>();
+            set_reduce_addr_mod<S::S2, ReduceAddrMod {.srcb_cr = 1, .fid_clr = 1}>();
 
             if (tensor_shape.num_faces_c_dim == 2)
             {
-                addr_mod_t {
-                    .srcb     = {.cr = 1},
-                    .dest     = {.incr = 32},
-                    .fidelity = {.clr = 1},
-                }
-                    .set(ADDR_MOD_3);
+                set_reduce_addr_mod<S::S3, ReduceAddrMod {.srcb_cr = 1, .dest_incr = 32, .fid_clr = 1}>();
             }
             else
             {
-                addr_mod_t {
-                    .srcb     = {.cr = 1},
-                    .dest     = {.incr = 16},
-                    .fidelity = {.clr = 1},
-                }
-                    .set(ADDR_MOD_3);
+                set_reduce_addr_mod<S::S3, ReduceAddrMod {.srcb_cr = 1, .dest_incr = 16, .fid_clr = 1}>();
             }
         }
     }
     else
     {
-        addr_mod_t {
-            .fidelity = {.clr = 1},
-        }
-            .set(ADDR_MOD_0);
+        set_reduce_addr_mod<S::S0, ReduceAddrMod {.fid_clr = 1}>();
 
         if constexpr (type == PoolType::MAX)
         {
-            addr_mod_t {
-                .srcb = {.incr = 8},
-                .dest = {.incr = 8},
-            }
-                .set(ADDR_MOD_1);
+            set_reduce_addr_mod<S::S1, ReduceAddrMod {.srcb_incr = 8, .dest_incr = 8}>();
         }
         else if constexpr (high_fidelity)
         {
-            addr_mod_t {
-                .fidelity = {.incr = 1},
-            }
-                .set(ADDR_MOD_1);
+            set_reduce_addr_mod<S::S1, ReduceAddrMod {.fid_incr = 1}>();
         }
     }
 }
@@ -489,15 +564,19 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
     reduce_configure_addrmod<type, dim, math_fidelity>(tensor_shape);
     reduce_configure_mop<type, dim, math_fidelity>(tensor_shape);
 
-    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    namespace cfg = hal::cfg;
 
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    // TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0): the whole word, both disable bits
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::ClrDvalid::SrcA_Disable, cfg::Sec::S0, 0>(), cfg::set<cfg::ClrDvalid::SrcB_Disable, cfg::Sec::S0, 0>());
+
+    hal_port::reset_counters_abd_f();
 
     // Establish the operand-driven DEFAULT zero-flag state before the reduce's GMPOOLs, mirroring
     // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
     // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
     // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
-    math::_configure_default_zero_flag_state_();
+    hal_port::_configure_default_zero_flag_state_();
 }
 
 /**
