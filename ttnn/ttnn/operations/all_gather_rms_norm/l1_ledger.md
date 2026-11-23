@@ -139,3 +139,27 @@ pull the own slice from worker L1). Measured probe: re-reading the own slice fro
 Data-movement budget, sharded input: x never crosses DRAM (consumed in place); a sharded output is written once in
 L1 (own slice in place for HEIGHT one-row shards, local / NoC writes otherwise) and the remote slices land at their
 final shard addresses over the fabric. Interleaved budget unchanged.
+
+## Refinement 1b (WIDTH_SHARDED row-owner pre-combine) — ledger deltas
+
+`pre_combine` (WIDTH_SHARDED input only). `rc` = `row_chunk`: the largest divisor of R whose per-row Float32 CBs fit
+`ROW_CHUNK_L1_BUDGET` (320 KiB, knob); `rpo` = rows per owner = `ceil(R / k)` rounded up to a multiple of `rc`.
+Every block pushed into a per-row CB is then exactly `rc` rows (contiguous in its ring); elsewhere `rc` = the whole
+block (`crt_max`) and nothing changes.
+
+| CB | Change | Shares with / why not |
+|----|--------|-----------------------|
+| `cb_partial`, `cb_record_staging`, `cb_sumsq`, `cb_inv`, `cb_ln_m`, `cb_ln_shift`, `cb_mean_col`, `cb_mean_b`, `cb_rstd_b` | `rc` (× nstats) pages instead of `crt_max`: one row chunk | each is consumed per chunk; the LN final record set (mean, rstd) is padded to `nstats` stats so every `cb_partial` block is `rc · nstats` |
+| `cb_gather_rows`, `cb_gathered` | `rc · nstats · max(gather_tiles, gt_pc)` | the pre-combine chunk (`gt_pc` = ⌈k/32⌉ tiles) fills the ring, a cross-chip chunk (1 tile) divides it |
+| `cb_ln_tmp` | `rc · max(gather_tiles, gt_pc)` | as above |
+| `cb_stats_table` | `G · R · nstats` × 128 B (kt = 1 member per row, whatever k is) | was `G · R · k · nstats` (393 KiB at 2048×384 RMS, k = 12) |
+| `cb_record_landing` | `G · kt · nstats` × 128 B | — |
+| `cb_x_stats` (26) | zero-copy second view of the input shard (0 CB bytes) | the local-stats pass pops it per chunk while `cb_x` stays whole for the normalize (two consumers of one resident block need two CBs) |
+| `cb_pre_table` (27) | `rpo · k · nstats` × 128 B (≤ ~27 KiB at the golden shapes) | live from the members' record writes to the owner's pre-combine gather |
+| `cb_final_table` (28) | `R · nfinal` × 128 B (≤ 16 KiB) | live from the owners' final writes to the normalize |
+| `cb_final_inv` (29), `cb_final_mean` (30, LN) | `rc` Float32 pages: final stats in column 0, built by the reader from `cb_final_table` | separate from `cb_inv` / `cb_mean_col`: on an owner those are compute → writer / compute → compute, a second producer would break single-producer |
+| `cb_stat_consts_x` (31, LN) | `gather_tiles` Float32 (n_q = W_local of each chip) | `cb_stat_consts` carries the k member widths of the pre-combine |
+
+Data-movement budget: unchanged (x never crosses DRAM). New on-chip NoC traffic: each member writes `R · nstats`
+records to the owners, each owner writes `rpo · nfinal` records to each of the k members (`k · R · nfinal · 128 B`
+per chip); the hub table and the fabric stats slots shrink by k×.

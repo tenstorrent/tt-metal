@@ -3,3 +3,4 @@
 {"event":"perf","focus_us":[52.63,38.41,35.54,35.54],"ln_us":[37.86,33.19,32.22,29.58],"dominant":"bulk own entry ~15us: 1-2 page bank runs on interleaved final pages","ts":"2026-11-23T14:59:42+00:00"}
 {"event":"test_run","refinement":1,"result":"fp32_dest=False interleaved gate 188 pass/98 xfail; sharded gate 128 pass/30 fail/11 skip/6 xfail; perf unchanged","ts":"2026-11-23T16:47:58+00:00"}
 {"event":"fix_applied","what":"masked W tail via mask block x DestReuse row-bcast (AccumulateViaAdd only_partial fold of lone tail tile with crt>1 accumulates on unseeded DEST); multi-gather-tile LN combine via exact ReduceTile (tagged cb_ln_tmp cannot feed add_tiles)","ts":"2026-11-23T16:47:58+00:00"}
+{"event":"test_run","refinement":"1b","result":"WIDTH gate 85 pass/2 xfail of 87; HEIGHT+IL sample 454 pass, 1 known fail; regression 32/32; unit 55/55; perf unchanged","ts":"2026-11-23T17:27:03+00:00"}

@@ -236,9 +236,7 @@ def select_sharded_split(geo: Geometry, input_tensor):
         if unit_h < geo.R:
             raise RuntimeError(f"all_gather_rms_norm: WIDTH shard height {sh} does not cover the {geo.R} tile-rows")
         k = -(-geo.Wlt // unit_w)
-        if geo.Wlt % unit_w and geo.R > 1:
-            # a ragged last shard keeps the nominal row pitch, the block helpers assume pitch = width (R = 1: no pitch)
-            raise RuntimeError(f"all_gather_rms_norm: ragged WIDTH shards ({geo.Wlt} tiles / {unit_w}) over R > 1")
+        # a ragged last shard keeps the nominal row pitch (unit_w): the kernels address x with that pitch (strided)
         if len(order) < k:
             raise RuntimeError(f"all_gather_rms_norm: {k} W shards but only {len(order)} shard-grid cores")
         return Split(k, 1, geo.R, 1, unit_w, geo.R), order[:k]

@@ -64,7 +64,7 @@
 EXCLUSIONS), HEIGHT_SHARDED (71/72 runnable gate cells; 128×8192 bf8b LN cannot fit its 1.1 MB output shard) and
 WIDTH_SHARDED where R × k is small (≈ 57/86). Remaining blocker: WIDTH at large R × k → Refinement 1b.
 
-### [ ] Refinement 1b — WIDTH_SHARDED at large R × k: on-chip pre-combine of the k shard members + row-chunked stats CBs
+### [x] Refinement 1b — WIDTH_SHARDED at large R × k: on-chip pre-combine of the k shard members + row-chunked stats CBs
 
 **Goal**: the WIDTH_SHARDED gate cells that still fail with `RuntimeError: WIDTH_SHARDED k = … exceeds the
 stats-partition cap` or an L1 CB overflow (≈ 29 cells: 2048×384, 2048×1280, 640×{896,1536,1792}, 1×640×1792,
@@ -81,6 +81,12 @@ sizes a Float32 CB. A scheme-change (dependent-axis cross-core combine), not a k
 
 **Done when**: those WIDTH_SHARDED gate cells pass (or skip INFEASIBLE_L1 in the harness's own from_torch); no prior
 cell regresses.
+
+**Outcome**: built as specified (row-owner pre-combine, kt = 1 stats table, final stats returned to the k members,
+row-chunked per-row CBs) plus strided x addressing for ragged WIDTH shards at R > 1 (128×8192). WIDTH_SHARDED gate
+slice: 85 passed / 2 xfailed (EXCLUSIONS) of 87 (was ≈ 57). No regression: unit dir 55/55, HEIGHT + interleaved
+golden sample 454 pass (the one failure is the known 128×8192 bf8b HEIGHT LN L1 overflow), test_regression 32/32;
+perf cases unchanged (focus 35.52 / 35.89 µs, LN 29.59 / 29.84 µs).
 
 ### [ ] Refinement 2 — TRANSPORT: bulk packet efficiency on interleaved final pages (focus case)
 

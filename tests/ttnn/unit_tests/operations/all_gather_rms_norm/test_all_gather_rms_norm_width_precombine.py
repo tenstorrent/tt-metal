@@ -12,6 +12,7 @@ the auto_shard_config L1 shard spec, a WIDTH_SHARDED output for the gathered sha
   640x32    LN ........... k = 1, R = 20: the per-row LN CBs only fit row-chunked
   2x1x128x128 LN ......... several rows per owner, several chunks, aligned
   2x1x128x100 LN ......... the same with a W tail (masked tail member) and the R_U staged landing
+  128x8192 RMS / LN ...... ragged last shard (256 tiles / 3 per shard) at R = 4: x addressed with the shard pitch
 """
 
 from __future__ import annotations
@@ -51,6 +52,8 @@ CASES = [
     ((2, 1, 128, 128), "layer_norm", BF16, True),
     ((2, 1, 128, 100), "layer_norm", BF16, True),
     ((1, 1, 2048, 384), "rms_norm", BF16, False),
+    ((128, 8192), "rms_norm", BF16, True),
+    ((128, 8192), "layer_norm", BF16, True),
 ]
 
 

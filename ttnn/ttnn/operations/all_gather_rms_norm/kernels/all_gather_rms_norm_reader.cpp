@@ -209,11 +209,13 @@ void kernel_main() {
     if constexpr (x_sharded) {
         // zero-copy: cb_x is backed on the resident shard (crt x cw tiles, row pitch cw); announce it in place. The
         // W tail of the caller's shard is not zeroed: compute masks it (cb_mask, below).
-        cb_reserve_back(cb_x, w.crt * w.cw);
-        cb_push_back(cb_x, w.crt * w.cw);
+        // (WIDTH: row pitch = the shard width cw_nom; a ragged last member has cw < cw_nom valid tiles per row)
+        const uint32_t x_tiles = w.crt * (pre_combine ? cw_nom : w.cw);
+        cb_reserve_back(cb_x, x_tiles);
+        cb_push_back(cb_x, x_tiles);
         if constexpr (pre_combine) {
-            cb_reserve_back(cb_x_stats, w.crt * w.cw);  // the same shard, the local-stats pass's own view
-            cb_push_back(cb_x_stats, w.crt * w.cw);
+            cb_reserve_back(cb_x_stats, x_tiles);  // the same shard, the local-stats pass's own view
+            cb_push_back(cb_x_stats, x_tiles);
         }
     } else {
         AGRN_ZONE("rd_x");

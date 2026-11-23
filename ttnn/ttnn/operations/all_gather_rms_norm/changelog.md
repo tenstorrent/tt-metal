@@ -116,3 +116,37 @@ pages / 4 DRAM writes), relay ~4 µs, landing tail ~3 µs. LN 640×32: local sta
   dropping the LN Float32 x copy on sharded input. Remaining (Refinement 1b): WIDTH at large R × k (stats table cap /
   per-row CBs, ≈ 29 cells, RuntimeError); 128×8192 bf8b HEIGHT LN (output shard alone exceeds L1).
 - Tests added: `tests/ttnn/unit_tests/operations/all_gather_rms_norm/test_all_gather_rms_norm_sharded_numeric.py`
+
+## Refinement 1b — WIDTH_SHARDED at large R × k: on-chip pre-combine of the k shard members + row-chunked stats CBs
+- Date: 2026-11-23
+- What was done:
+  - **Row-owner pre-combine** (CT path `pre_combine`, WIDTH_SHARDED input only): member m owns tile-rows
+    `[m·rpo, …)`. Every member writes its per-row records into the owners' `cb_pre_table` (+ `sem_pre`); the owner
+    gathers the k records of its rows as gather-tile rows (the hub gather's placement), transposes and combines them
+    into ONE record per (row, stat) — RMS Σ; LN (mean, M2, K = mean) by the existing chains — and publishes it to the
+    hubs (stats table G·R·nstats, kt = 1, whatever k is). After the fabric round the owner runs the existing
+    cross-chip combine (P = G) and writes the final records (inv | mean, rstd) into every member's `cb_final_table`
+    (+ `sem_final`); members normalize with them. Hubs wait for `n_owners` record writers instead of `n_active`.
+  - **Row-chunked per-row CBs**: `row_chunk` (largest divisor of R within `ROW_CHUNK_L1_BUDGET` = 320 KiB, knob) sizes
+    every per-row Float32 CB; the local-stats pass pops `cb_x_stats` (second zero-copy view of the shard) per chunk
+    while `cb_x` stays whole for the normalize. One block size per CB ring (owner rows a multiple of the chunk, LN final
+    set padded to nstats): a block-indexed helper cannot read a block that wraps the ring (first cut: PCC 0 / inf).
+  - **LN**: centering shift K = tf32(mean) of the row itself in both combines and the normalize; the combine collapse
+    is the exact ReduceTile path for any gather-tile count (AccumulateViaAdd over tagged `cb_ln_tmp` with ≥ 2-row
+    chunks gave PCC 0.82).
+  - **Ragged WIDTH shards at R > 1** (128×8192: 256 tiles / 3): x addressed with the shard pitch (chain `Strided`,
+    reduce `with_row_stride`, raw x² loop pitch); the RuntimeError is gone.
+  - Reused: stats round + port kernels, hub gather placement (factored `place_records` / `gather_partials`),
+    transpose, RMS / LN combine and normalize chains (factored into templates on gather tiles / partition-width CB),
+    writer record extraction. Added: pre / final tables, 2 semaphores, 6 CBs, the PC block functions.
+- Accuracy achieved: every WIDTH gate cell within `helpers.TOLERANCES` (fp32 DEST bf16 (0.999, 0.01), 16-bit DEST);
+  unit pins on [2048×384 RMS/LN, 2048×384 RMS 16-bit DEST, 640×1792 RMS (k = 56), 640×32 LN (k = 1, R = 20),
+  2×1×128×128 LN, 2×1×128×100 LN (tail + R_U), 128×8192 RMS/LN (ragged)].
+- Golden test progress (gate tier, targeted slices): WIDTH_SHARDED 85 passed / 2 xfailed of 87 (was ≈ 57/86 + 29
+  RuntimeError / L1); HEIGHT + interleaved sample 454 passed / 88 xfailed / 11 skipped / 1 failed (the known
+  128×8192 bf8b HEIGHT LN output-shard L1 overflow from Refinement 1); test_regression 32/32; unit dir 55/55.
+- Perf (eval harness, 5 experiments, fastest / slowest chip): focus 35.52 / 35.89 µs, LN 29.59 / 29.84 µs — unchanged
+  (the interleaved path is the same code, refactored into templates).
+- Issues encountered: CB ring wrap of mixed block sizes (fixed by uniform chunks); multi-row AccumulateViaAdd LN
+  combine on tagged input (switched to ReduceTile); a name clash of the chunk variable with the port loop's `rc`.
+- Tests added: `tests/ttnn/unit_tests/operations/all_gather_rms_norm/test_all_gather_rms_norm_width_precombine.py`
