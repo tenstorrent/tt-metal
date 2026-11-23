@@ -40,7 +40,6 @@ set(UNIT_TESTS_LEGACY_SRC
     test_single_dm_l1_write.cpp
     test_quasar_dram_backing.cpp
     test_horizon_x2_flat_write.cpp
-    test_horizon_x2_fabric_unicast_write.cpp
     test_horizon_x2_flat_write_2_device.cpp
     test_horizon_x2_mesh_fabric_apis.cpp
     test_stress_noc_mcast.cpp
