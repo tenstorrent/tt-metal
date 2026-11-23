@@ -624,18 +624,6 @@ def test_a_message_that_cannot_be_encoded_or_rendered_still_reaches_every_rank()
         assert "rank 2: Unprintable (its message could not be rendered)" in str(err), err
 
 
-def test_a_failing_collective_is_fatal_and_ends_the_exchanges(expect_error):
-    """A rank whose collective fails (a peer died, under ULFM) raises CheckpointFatalError, and its transport refuses
-    every later exchange."""
-    fake = _Fake(3)
-    fake.die.add(2)
-    group = Group(fake.transport(2))
-    with expect_error(CheckpointFatalError, "collective failed .*; a peer may have died"):
-        group.allgather(1)
-    with expect_error(CheckpointFatalError, "no further exchange is attempted"):
-        group.allgather(2)
-
-
 def _dies_sending(group, fake):
     """Make this rank's next send fail as a dying process's would, and its peers' receives with it."""
 
@@ -675,16 +663,19 @@ def test_a_failing_point_to_point_transfer_is_fatal_on_both_ends():
 
 
 def test_no_exchange_after_a_fatal_failure(expect_error):
-    """A retry must not reach the other ranks: MPI pairs collectives by order, so an exchange on a communicator that
-    failed could hang, or be paired with an unrelated one on a rank that moved on. The transport outlives the group
-    of one save or load and records the failure, so a group built later on it raises before exchanging anything."""
+    """A rank whose collective fails (a peer died, under ULFM) raises CheckpointFatalError, and a retry must not reach
+    the other ranks: MPI pairs collectives by order, so an exchange on a communicator that failed could hang, or be
+    paired with an unrelated one on a rank that moved on. The transport outlives the group of one save or load and
+    records the failure, so a group built later on it raises before exchanging anything."""
     fake = _Fake(2)
     fake.die.add(1)
     transport = fake.transport(1)
-    with expect_error(CheckpointFatalError, "peer may have died"):
+    with expect_error(CheckpointFatalError, "collective failed .*; a peer may have died"):
         Group(transport).allgather(1)
     calls = []
     transport.allgather_int = lambda value: calls.append(value) or [value, value]  # would succeed if reached
+    with expect_error(CheckpointFatalError, "already failed in this process .*; no further exchange is attempted"):
+        Group(transport).allgather(2)
     with expect_error(CheckpointFatalError, "already failed in this process"):
         Group(transport).phase("a later save", lambda: None)
     assert calls == [], "the retry reached the transport"
