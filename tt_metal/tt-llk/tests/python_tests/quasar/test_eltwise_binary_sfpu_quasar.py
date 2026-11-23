@@ -401,7 +401,7 @@ def test_eltwise_binary_sfpu_int_quasar(
 
 
 # ===========================================================================
-# Family 2 — float ops (add, sub, mul, div, atan2, copy_dest). Ported from test_sfpu_binary_float_quasar.py.
+# Family 2 — float ops (add, sub, rsub, mul, div, atan2, copy_dest). Ported from test_sfpu_binary_float_quasar.py.
 # add/sub route the SFPU calculate_sfpu_binary ADD/SUB path (tenstorrent/tt-metal#49883).
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
@@ -441,7 +441,7 @@ def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
             flat[src0_idx * MAX_TILE_ELEMENTS + lane] = dividend
             flat[src1_idx * MAX_TILE_ELEMENTS + lane] = divisor
         return flat.reshape(scaled.shape)
-    # SfpuElwadd / SfpuElwsub / SfpuElwmul / SfpuCopyDest — symmetric ±250 range.
+    # SfpuElwadd / SfpuElwsub / SfpuElwrsub / SfpuElwmul / SfpuCopyDest — symmetric ±250 range.
     scaled = ((src_A.to(torch.float32) - 0.5) * 500.0).to(torch_format)
     return scaled.flatten().reshape(scaled.shape)
 
@@ -483,6 +483,7 @@ _FLOAT_VARIANTS = _get_valid_float_formats_dest_acc()
 _FLOAT_MATHOPS = [
     MathOperation.SfpuElwadd,
     MathOperation.SfpuElwsub,
+    MathOperation.SfpuElwrsub,
     MathOperation.SfpuElwmul,
     MathOperation.SfpuElwdiv,
     MathOperation.SfpuAtan2,
@@ -535,7 +536,7 @@ def test_eltwise_binary_sfpu_float_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU float ops (add, sub, mul, div, atan2, copy_dest)."""
+    """Binary SFPU float ops (add, sub, rsub, mul, div, atan2, copy_dest)."""
     format_variant = resolve_quasar_sfpu_variant(
         MathOperation.SfpuElwadd, formats, dest_acc
     )
@@ -794,6 +795,7 @@ def test_eltwise_binary_sfpu_bcast_quasar(
 _BF16_ADD_SUB_OPS = [
     ("ADD", MathOperation.SfpuElwadd),
     ("SUB", MathOperation.SfpuElwsub),
+    ("RSUB", MathOperation.SfpuElwrsub),
 ]
 
 BF16_RNE_SWEEP = dict(
@@ -815,7 +817,7 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU ADD/SUB with NearestEven rounding on bfloat16 inputs.
+    """Binary SFPU ADD/SUB/RSUB with NearestEven rounding on bfloat16 inputs.
 
     RNE narrowing only applies when DEST holds bf16 (fp32 dest accumulation
     disabled), so this test is scoped to Float16_b with DestAccumulation.No.
@@ -832,6 +834,8 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
         binary_op,
         prepare_stimuli=_prepare_float_stimuli,
         dst_rounding_mode=DstRoundingMode.NearestEven,
+        # Bit-exact: the golden rounds to nearest-even, and a tolerance would also pass truncation.
+        max_ulp=0,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
@@ -1305,6 +1309,11 @@ _PROCESSED_ELEMS = MAX_TILE_ELEMENTS
 _QUANT_INT8_MIN = -127
 _QUANT_INT8_MAX = 127
 
+# Pinned lanes per tile (two per face) that discriminate the SFPCAST SM<->2's-comp mod1 values.
+_QUANT_PINNED_LANES = 8
+# A*scale+zp target that STOCH_RND rounds to sign-magnitude -0 (0x80000000).
+_QUANT_NEG_ZERO_PROD = -0.25
+
 
 _QUANT_OPS = ["QUANT", "REQUANT", "DEQUANT"]
 
@@ -1340,9 +1349,18 @@ def _run_quant(
     # Zero-point: a small fp32 offset.
     zero_point = 3.0
 
+    # Pinned lanes: SFPCAST Mod1 2 and Mod1 3 differ from each other only at 0x80000000.
+    # Even entries of `pinned` give A*scale+zp = _QUANT_NEG_ZERO_PROD; odd entries hold INT32_MIN (int, 2's-comp only).
+    pinned = torch.arange(0, n, n // _QUANT_PINNED_LANES)
+    neg_zero_lanes, int32_min_lanes = pinned[0::2], pinned[1::2]
+    neg_zero_a = (_QUANT_NEG_ZERO_PROD - zero_point) / scale[neg_zero_lanes]
+
     if a_is_int:
         # int32 operand A in a modest range so int*scale stays well within int8.
         a_vals = torch.randint(-2000, 2000, (n,), dtype=torch.int32)
+        a_vals[neg_zero_lanes] = torch.round(neg_zero_a).to(torch.int32)
+        if not sign_magnitude:
+            a_vals[int32_min_lanes] = torch.iinfo(torch.int32).min
         a_float = a_vals.to(torch.float32)
         # The SIGN_MAGNITUDE_FORMAT path skips the 2's-comp->SM input cast, so operand
         # A must already be SMAG32; the default path expects raw 2's-complement.
@@ -1350,6 +1368,7 @@ def _run_quant(
     else:
         # fp32 operand A.
         a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0  # +/-2000
+        a_float[neg_zero_lanes] = neg_zero_a
         a_vals = a_float
         a_staged = fp32_bits_as_int32(a_float)
 
@@ -1368,18 +1387,15 @@ def _run_quant(
         prod = a_float * scale + zero_point
         rounded = torch.round(prod)  # round-half-to-even matches SFP STOCH_RND NearEven
         clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
-        # STOCH_RND emits a sign-magnitude int8 result. A negative value whose
-        # magnitude rounds to 0 becomes sign-magnitude negative-zero (0x80000000).
-        neg_zero = (clamped == 0) & (prod < 0)
         if sign_magnitude:
             # SM path stores the STOCH_RND SMAG32 result as-is (no SM32_TO_2SC cast):
-            # negatives keep bit31|magnitude and negative-zero stays 0x80000000.
+            # negatives keep bit31|magnitude and a negative value rounding to 0 stays -0 (0x80000000).
+            neg_zero = (clamped == 0) & (prod < 0)
             golden_active = int32_to_smag32(clamped)
             golden_active[neg_zero] = torch.tensor(-(2**31), dtype=torch.int32)
         else:
-            # 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to -1 (not +0).
+            # 2's-comp path: SM32_TO_2SC maps STOCH_RND negative-zero to 0.
             golden_active = clamped
-            golden_active[neg_zero] = -1
         out_dtype = torch.int32
 
     golden_tensor = torch.zeros(MAX_TILE_ELEMENTS, dtype=out_dtype)

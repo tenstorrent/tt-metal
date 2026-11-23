@@ -669,6 +669,17 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            ),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
