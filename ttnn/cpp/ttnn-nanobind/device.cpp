@@ -74,7 +74,7 @@ void ttnn_device(nb::module_& mod) {
         "open_device",
         &ttnn::open_mesh_device,
         nb::sig("def open_device(\\*, device_id: int, l1_small_size: int, trace_region_size: int, "
-                "dispatch_core_config: ttnn.device.DispatchCoreConfig, worker_l1_size: int)"),
+                "num_command_queues: int, dispatch_core_config: ttnn.device.DispatchCoreConfig, worker_l1_size: int)"),
         nb::kw_only(),
         nb::arg("device_id"),
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
@@ -306,7 +306,7 @@ void device_module(nb::module_& m_device) {
         +------------------+------------------------+---------------------+------------------------------+----------+
         | Argument         | Description            | Data type           | Valid range                  | Required |
         +==================+========================+=====================+==============================+==========+
-        | device_id        | Device index           | int                 |                              | Yes      |
+        | device_ids       | Device indices         | List[int]           |                              | Yes      |
         +------------------+------------------------+---------------------+------------------------------+----------+
     )doc",
         nb::arg("device_ids"),
@@ -343,7 +343,8 @@ void device_module(nb::module_& m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
         +==================+========================+=======================+=============+==========+
-        | device           | TT Device to close     | ttnn.Device           |             | Yes      |
+        | devices          | Devices from           | Dict[int, Device]     |             | Yes      |
+        |                  | CreateDevices          |                       |             |          |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
