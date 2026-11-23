@@ -16,3 +16,9 @@
   - Documented the `block_k_tiles ≤ 16` precision ceiling: PCC falls below 0.9998 at kb ≥ 24, from 16-bit DEST drift.
   - Corrected stale kb-4 figures in `l1_ledger.md` and appended the verifier audit.
 - **Tests added**: `test_wq_b_linear_precision_baseline.py`, `_op_bench.py` (device-time bench for perf phases, not collected by default).
+
+## Refinement 1 — Speed up x delivery on the perf-flagged profile
+- Date: 2026-11-23
+- **Calculator predictions (written before measuring)**:
+  - `op_model.py matmul 5 48 128 --designs --c-mem l1 ...`: current (kb 8, 64 workers + sender) 18.75 µs; rank 1 16.53 µs (73 cores, kb 2, linked x mcast, c_noc split); same-grid kb 2 linked 16.60 µs. Model's sender: x read done 6.9 µs, last multicast sent 7.6 µs.
+  - `estimate.py` (`dm_estimates.json`, phase "Refinement 1"): x read alone, 1 core, 2 KB pages — barrier per 40-page round (current) **8.37 µs** vs all rounds in flight (trid window) **6.63 µs**. x multicast, 30 × 16 KB unlinked bursts to 64 receivers — write barrier every 5 (current) **15.3 µs** vs every 30 **13.8 µs**; the tool binds on per-burst path reservation (352 cycles) and has no linked option, so the linked candidate is priced only by the op model.

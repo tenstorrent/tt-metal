@@ -1168,6 +1168,269 @@
    },
    "calculator": "5c96a38e1499653a",
    "measurements": []
+  },
+  {
+   "id": "a8e90708",
+   "utc": "2026-11-23T00:58:05.579377+00:00",
+   "phase": "Refinement 1",
+   "label": "cur",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "x [1,1,160,1536] bf16 -> 64 workers; kb 8, Phase 0 x path",
+    "groups": [
+     {
+      "name": "x_read",
+      "family": "dram_read",
+      "cores": [
+       [
+        10,
+        9
+       ]
+      ],
+      "bytes": 2048,
+      "pages_per_core": 240,
+      "batch": 40,
+      "noc": 0,
+      "placement": "interleaved"
+     },
+     {
+      "name": "x_mcast",
+      "family": "multicast",
+      "sender": [
+       10,
+       9
+      ],
+      "rect": [
+       2,
+       2,
+       9,
+       9
+      ],
+      "bytes": 16384,
+      "pages": 30,
+      "batch": 5,
+      "noc": 1
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "x [1,1,160,1536] bf16 -> 64 workers; kb 8, Phase 0 x path",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "x_read",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 8373.333333333334,
+      "details": {
+       "pass_cycles": 11304.0,
+       "steady_cycles_per_pass": 11311.0,
+       "binding": "latency and issue (no resource above 90% busy)",
+       "lower_bounds_cycles": {
+        "noc_link": 5940.000000000001,
+        "dram_channel": 1320.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 1
+      },
+      "steady_ns_per_pass": 8378.518518518518
+     },
+     {
+      "name": "x_mcast",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 15345.0,
+      "details": {
+       "pass_cycles": 20715.75,
+       "steady_cycles_per_pass": 20715.75,
+       "binding": "path reservation (352 cycles per multicast) and tree delivery",
+       "recipients": 64,
+       "tree_depth_hops": 19,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 15345.0
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": []
+  },
+  {
+   "id": "7715aacb",
+   "utc": "2026-11-23T00:58:05.812907+00:00",
+   "phase": "Refinement 1",
+   "label": "cand",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "x [1,1,160,1536] bf16 -> 64 workers; kb 8, trid window 4, overlapped rounds",
+    "groups": [
+     {
+      "name": "x_read",
+      "family": "dram_read",
+      "cores": [
+       [
+        10,
+        9
+       ]
+      ],
+      "bytes": 2048,
+      "pages_per_core": 240,
+      "batch": 160,
+      "noc": 0,
+      "placement": "interleaved"
+     },
+     {
+      "name": "x_mcast",
+      "family": "multicast",
+      "sender": [
+       10,
+       9
+      ],
+      "rect": [
+       2,
+       2,
+       9,
+       9
+      ],
+      "bytes": 16384,
+      "pages": 30,
+      "batch": 30,
+      "noc": 1
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "x [1,1,160,1536] bf16 -> 64 workers; kb 8, trid window 4, overlapped rounds",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "x_read",
+      "family": "dram_read",
+      "status": "refused",
+      "reason": "pages_per_core must be a multiple of batch"
+     },
+     {
+      "name": "x_mcast",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 13835.277777777777,
+      "details": {
+       "pass_cycles": 18677.625,
+       "steady_cycles_per_pass": 18677.625,
+       "binding": "path reservation (352 cycles per multicast) and tree delivery",
+       "recipients": 64,
+       "tree_depth_hops": 19,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 13835.277777777777
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": []
+  },
+  {
+   "id": "72205eb9",
+   "utc": "2026-11-23T00:58:12.790751+00:00",
+   "phase": "Refinement 1",
+   "label": "cand_read_window",
+   "schedule": {
+    "op": "wq_b_linear",
+    "case": "x [1,1,160,1536] bf16 -> 64 workers; kb 8, trid window 4, overlapped rounds",
+    "groups": [
+     {
+      "name": "x_read",
+      "family": "dram_read",
+      "cores": [
+       [
+        10,
+        9
+       ]
+      ],
+      "bytes": 2048,
+      "pages_per_core": 240,
+      "batch": 240,
+      "noc": 0,
+      "placement": "interleaved"
+     },
+     {
+      "name": "x_mcast",
+      "family": "multicast",
+      "sender": [
+       10,
+       9
+      ],
+      "rect": [
+       2,
+       2,
+       9,
+       9
+      ],
+      "bytes": 16384,
+      "pages": 30,
+      "batch": 30,
+      "noc": 1
+     }
+    ]
+   },
+   "result": {
+    "op": "wq_b_linear",
+    "case": "x [1,1,160,1536] bf16 -> 64 workers; kb 8, trid window 4, overlapped rounds",
+    "aiclk_mhz": 1350,
+    "groups": [
+     {
+      "name": "x_read",
+      "family": "dram_read",
+      "status": "estimated",
+      "pass_ns": 6632.592592592592,
+      "details": {
+       "pass_cycles": 8954.0,
+       "steady_cycles_per_pass": 8961.0,
+       "binding": "latency and issue (no resource above 90% busy)",
+       "lower_bounds_cycles": {
+        "noc_link": 5940.000000000001,
+        "dram_channel": 1320.0
+       },
+       "issue_cycles_per_request": [
+        35.375,
+        0
+       ],
+       "noc": 0,
+       "cores": 1
+      },
+      "steady_ns_per_pass": 6637.777777777778
+     },
+     {
+      "name": "x_mcast",
+      "family": "multicast",
+      "status": "estimated",
+      "pass_ns": 13835.277777777777,
+      "details": {
+       "pass_cycles": 18677.625,
+       "steady_cycles_per_pass": 18677.625,
+       "binding": "path reservation (352 cycles per multicast) and tree delivery",
+       "recipients": 64,
+       "tree_depth_hops": 19,
+       "noc": 1,
+       "issue_cycles_per_request": 64.625
+      },
+      "steady_ns_per_pass": 13835.277777777777
+     }
+    ],
+    "note": "pass_ns: one pass over the group's pages, first-request latency included (compare with a single-pass measurement). steady_ns_per_pass: per pass once repeated. Every estimate ranks schedules; none is a target."
+   },
+   "calculator": "5c96a38e1499653a",
+   "measurements": []
   }
  ]
 }

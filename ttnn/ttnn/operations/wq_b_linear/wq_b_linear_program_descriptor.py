@@ -30,6 +30,11 @@ BLOCK_K_TILES = 8
 W_DEPTH_BLOCKS = None  # cb_w_block depth in K-steps; None = num_k_blocks (whole W slice resident)
 OUT_DEPTH_BLOCKS = 1  # one output block per core
 MCAST_RECT_WIDTH_MAX = 8
+# ---- x-delivery knobs (Refinement 1; see changelog). 1 / False / False = the Phase 0 schedule. ----
+X_READ_TRIDS = 4  # x rounds whose DRAM reads stay in flight on the sender (trid window, 1..15)
+X_MCAST_LINKED = True  # one linked path reservation per x round instead of one per 16 KB burst
+X_MCAST_NOC = ttnn.NOC.NOC_1  # sender BRISC's NoC (WriterConfigDescriptor default)
+X_SIGNAL_LAG = True  # publish round r-1's counter after issuing round r's payload (rounds overlap)
 
 
 def _dest_tile_limit(fp32_dest_acc_en):
@@ -91,9 +96,10 @@ def _worker_geometry(device, num_workers):
     x0 = grid.x - 1 - rect_w
     y0 = grid.y - rect_h
     workers = [(x, y) for y in range(y0, y0 + rect_h) for x in range(x0, x0 + rect_w)]  # row-major
-    rect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x0 + rect_w - 1, grid.y - 1))])
+    rect_lo, rect_hi = ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x0 + rect_w - 1, grid.y - 1)
+    rect = ttnn.CoreRangeSet([ttnn.CoreRange(rect_lo, rect_hi)])
     sender = (grid.x - 1, grid.y - 1)
-    return workers, rect, sender
+    return workers, rect, (rect_lo, rect_hi), sender
 
 
 def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor:
@@ -119,7 +125,7 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
     in0_num_subblocks = block_m_tiles // sb_h
     in1_num_subblocks = block_n_tiles // sb_w
 
-    workers, rect, sender = _worker_geometry(device, num_workers)
+    workers, rect, (rect_lo, rect_hi), sender = _worker_geometry(device, num_workers)
     worker_crs = _crs(workers)
     sender_crs = _crs([sender])
     all_crs = _crs(workers + [sender])
@@ -166,7 +172,8 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
     )
 
     # ---- Sender core: x-reader (NCRISC / NoC0) -> cb_x_resident -> multicaster (BRISC / NoC1) ----
-    x_reader_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks, tensor_k_tiles]
+    x_read_trids = min(X_READ_TRIDS, num_k_blocks)
+    x_reader_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks, tensor_k_tiles, x_read_trids]
     x_reader_ct.extend(ttnn.TensorAccessorArgs(x).get_compile_time_args())
     x_reader_rt = ttnn.RuntimeArgs()
     x_reader_rt[sender[0]][sender[1]] = [x.buffer_address()]
@@ -177,9 +184,14 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
         runtime_args=x_reader_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
-    sender_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks]
+    sender_ct = [CB_X_RESIDENT, block_m_tiles, block_k_tiles, num_k_blocks, int(X_MCAST_LINKED), int(X_SIGNAL_LAG)]
+    # Receiver rectangle in NoC coordinates, in routing order for the multicast NoC (NoC1 runs
+    # high -> low, so its start is the high corner).
+    mc_lo = device.worker_core_from_logical_core(rect_lo)
+    mc_hi = device.worker_core_from_logical_core(rect_hi)
+    mc_start, mc_end = (mc_hi, mc_lo) if X_MCAST_NOC == ttnn.NOC.NOC_1 else (mc_lo, mc_hi)
     sender_rt = ttnn.RuntimeArgs()
-    sender_rt[sender[0]][sender[1]] = []
+    sender_rt[sender[0]][sender[1]] = [mc_start.x, mc_start.y, mc_end.x, mc_end.y, num_workers]
     sender_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "wq_b_linear_sender.cpp"),
         core_ranges=sender_crs,
@@ -244,7 +256,7 @@ def create_program_descriptor(x, w, y, compute_config) -> ttnn.ProgramDescriptor
     # ---- x multicast channel: rect receivers, explicit sender outside the rect, no handshake ----
     mcast = ttnn.Mcast(
         device,
-        ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=False, data_ready=ttnn.McastDataReady.Counter),
+        ttnn.McastConfig(noc=X_MCAST_NOC, handshake=False, data_ready=ttnn.McastDataReady.Counter),
         rect,
         num_workers,
         ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*sender)]),
