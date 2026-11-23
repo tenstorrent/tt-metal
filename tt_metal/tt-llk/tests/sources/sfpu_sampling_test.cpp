@@ -45,8 +45,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "params.h"
+#include "perf.h"
+#include "profiler.h"
 
 // Globals required by the test framework.
 std::uint32_t unp_cfg_context          = 0;
@@ -56,13 +59,14 @@ std::uint32_t math_sync_tile_dst_index = 0;
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 
 // DEST tile indices.
-static constexpr std::uint32_t SAMPLING_IN0_TILE  = 0;
-static constexpr std::uint32_t SAMPLING_IN1_TILE  = 1;
-static constexpr std::uint32_t SAMPLING_OUT_TILE  = 2;
+static constexpr std::uint32_t SAMPLING_IN0_TILE = 0;
+static constexpr std::uint32_t SAMPLING_IN1_TILE = 1;
+static constexpr std::uint32_t SAMPLING_OUT_TILE = 2;
 static constexpr std::uint32_t SAMPLING_NUM_TILES = 3;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
@@ -71,16 +75,52 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
-
-    for (std::uint32_t tile = 0; tile < SAMPLING_NUM_TILES; ++tile)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_A         = params.buffer_A;
+#endif
+    constexpr std::uint32_t TILE_CNT        = SAMPLING_NUM_TILES;
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, TILE_NUM_FACES);
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+
+        _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && unpack_to_dest)
+        {
+            // Service math's direct-unpack handshake without moving data.
+            for (std::uint32_t tile = 0; tile < LOOP_FACTOR * TILE_CNT; ++tile)
+            {
+                (void)mailbox_read(ThreadId::MathThreadId);
+                wait_for_dest_available();
+                t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            _perf_unpack_stream_set_valid<true /* set_a */, true /* set_b */, PERF_RUN_TYPE>(src_handshake_iters);
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                {
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -90,6 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "ckernel_sfpu.h"
 #include "llk_lib_math_wrappers.h"
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_init.h"
@@ -139,52 +180,88 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+#endif
+    constexpr std::uint32_t TILE_CNT        = SAMPLING_NUM_TILES;
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /* tilize_en */, TILE_CNT, TILE_NUM_FACES);
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            false /* is_int_fpu_en */,
+            PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
-    // The header's own init programs vConstFloatPrgm0 for the reciprocal
-    // path. Everything else needs only the invariant
-    // SFPU config + ADDR_MOD_7 from the LLK init.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+        // The reciprocal programs vConstFloatPrgm0 separately; other ops need
+        // only the invariant SFPU configuration and ADDR_MOD_7.
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
 
 #if defined(SAMPLING_POLLUTE_PRGM0)
-    // Stand in for an earlier op in the same kernel that owns vConstFloatPrgm0. log_init
-    // sets it to LOG_TWO * 2^-23 (~8.3e-8); the reciprocal's Newton-Raphson
-    // step needs 2.0f, so this is the cross-op hazard sampling_recip_init exists to
-    // repair -- see tt-metal #52745. Any vConstFloatPrgm0 writer would do; log is picked
-    // because its constant is nine orders of magnitude away, so a surviving pollution is
-    // unmistakable rather than a near-miss.
-    ckernel::sfpu::log_init<false /* APPROXIMATION_MODE */, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
+        // Model tt-metal #52745: log_init replaces the reciprocal's required
+        // vConstFloatPrgm0 value with a clearly distinguishable constant.
+        ckernel::sfpu::log_init<false /* APPROXIMATION_MODE */, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
 #endif
 
 #if !defined(SAMPLING_SKIP_RECIP_INIT)
-    // Match the production scalar wrapper: generic SFPU state plus scalar constants only.
-    ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>(ckernel::sfpu::sampling_recip_init);
+        // Match the production scalar wrapper: generic SFPU state plus scalar constants only.
+        ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>(ckernel::sfpu::sampling_recip_init);
 #endif
-
-    _llk_math_wait_for_dest_available_<DST_SYNC>();
-
-    for (std::uint32_t tile = 0; tile < SAMPLING_NUM_TILES; ++tile)
-    {
-        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-            tile, formats.math, formats.math);
+        PROFILER_SYNC();
     }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            if constexpr (unpack_to_dest)
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                    {
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            tile, formats.math, formats.math);
+                    }
+                }
+            }
+            else
+            {
+                _perf_math_stream_clear_valid<true /* clear_a */, true /* clear_b */, PERF_RUN_TYPE>(src_handshake_iters);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                }
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                {
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        tile, formats.math, formats.math);
+                }
 
-    // The sampling helpers do their own DEST tile addressing off dst_reg, so tile 0 is
-    // the window base for every vector mode.
-    //
-    // VectorMode::None is the single-pass unit check. VectorMode::C is what production
-    // actually dispatches the *_first_column helpers with (deepseek_v3_b1
-    // unified_kernels/sampling.hpp), and it is the interesting case: it invokes the
-    // helper twice with an inc_dst_face_addr between, so it pins down whether the
-    // helper's internal `dst_reg += 2` is a per-instruction immediate offset (second
-    // pass lands on face 2, as intended) or a persistent RWC advance (it does not).
-    _llk_math_eltwise_unary_sfpu_params_([] { run_sampling_op(); }, 0 /* dst_index */, VECTOR_MODE);
+                // Tile 0 is the window base because the helpers address DEST from dst_reg;
+                // VectorMode::C verifies that the second dispatch lands on face 2.
+                _llk_math_eltwise_unary_sfpu_params_([] { run_sampling_op(); }, 0 /* dst_index */, VECTOR_MODE);
 
-    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif
@@ -199,16 +276,44 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
-    _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
-
-    _llk_packer_wait_for_math_done_();
-    for (std::uint32_t tile = 0; tile < SAMPLING_NUM_TILES; ++tile)
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const Operand& buffer_Res       = params.buffer_Res;
+#endif
+    constexpr std::uint32_t TILE_CNT = SAMPLING_NUM_TILES;
     {
-        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[tile]));
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
+        _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
+        PROFILER_SYNC();
     }
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+        }
+        else
+        {
+            constexpr bool sync_with_math = PERF_RUN_TYPE == PerfRunType::L1_TO_L1;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (sync_with_math)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
+                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                {
+                    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(buffer_Res[tile]));
+                }
+                if constexpr (sync_with_math)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 }
 
 #endif

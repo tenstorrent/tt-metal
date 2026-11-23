@@ -4,8 +4,8 @@
 #include "argmax_device_operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt_stl/fmt.hpp>
@@ -18,7 +18,6 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 static std::tuple<uint32_t, uint32_t> get_page_sizes_single_core(
     const MeshTensor& input, const MeshTensor& output, bool keepdim, bool reduce_all) {
@@ -236,6 +235,17 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
     };
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+ttnn::command_list::CmdListBindings ArgMaxSingleCoreProgramFactory::map_cmd_list_parameters(
+    const ArgmaxParams&,
+    const ArgmaxInputs&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    binder.tensor(/*invoke_name=*/"output_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"output"});
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

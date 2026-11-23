@@ -17,7 +17,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
@@ -32,7 +32,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "hostdev/debug_ring_buffer_common.h"
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -756,8 +756,9 @@ void WatcherDeviceReader::Core::Dump() const {
     if (is_eth_core) {
         DumpEthFwStage();
     }
-    // Ethernet and DRAM cores don't use the sync reg
-    if (!is_eth_core && !is_dram_core && rtoptions.get_watcher_dump_all()) {
+    // Ethernet, DRAM and dispatch cores don't use the sync reg. Dispatch engines have no NEOs, so their NEO tile
+    // counter and remapper registers don't exist, and on Trinity a host read of them never returns.
+    if (!is_eth_core && !is_dram_core && !is_dispatch_core && rtoptions.get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
         // requested explicitly
         DumpSyncRegs();

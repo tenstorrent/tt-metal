@@ -1,6 +1,6 @@
 # Invariant tests
 
-The tests in this folder check that `MakeProgramFromSpec` accepts valid `ProgramSpec`s and rejects invalid ones. An
+The tests in this folder check that the `Program` constructor accepts valid `ProgramSpec`s and rejects invalid ones. An
 invalid `ProgramSpec` is one that violates one of its invariants. Each subfolder's README lists the invariants it
 tests.
 

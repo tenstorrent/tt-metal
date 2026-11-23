@@ -17,6 +17,8 @@ list(
     UNIT_TESTS_API_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/arg_value/api_idioms.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/arg_value/arg_value.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/dfb_placement.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/scratchpad_allocations.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/dfb_advanced_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/kernel_advanced_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/semaphore_advanced_options.cpp
@@ -26,6 +28,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/basic_kernel_info.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/compiler_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/dfb_binding.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/global_semaphore_binding.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/hardware_config.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/kernel_arguments.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/scratchpad_binding.cpp
@@ -44,6 +47,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/program_spec_fields.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/sram_arena_references.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/references.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/scratchpad_placement.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/semaphores.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/valid_program_specs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/work_unit_bindings.cpp
@@ -68,6 +72,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/array_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/sram_arena_dispatch.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/borrowed_dfb_attach.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/dfb_placement.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/dfb_run_overrides.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/kernel_run_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/merge_program_run_args.cpp
@@ -81,8 +86,9 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/update_tensor_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/spec_type_properties.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/tensor_spec_relaxations/tensor_spec_relaxations.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/utility/table.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/utils/table.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/get_token_if_present.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/global_semaphore_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/llk_operand.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/per_node_tensor_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/scratchpad_bindings.cpp
@@ -93,6 +99,8 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_kernel_defines.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/binding_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/compute_semaphore.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/integration_tests/dfb_placement.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/integration_tests/global_semaphore.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/kernel_args_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/llk_operand_mul.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/mesh_workload_factories.cpp

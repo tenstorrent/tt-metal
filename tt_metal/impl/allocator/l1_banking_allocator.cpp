@@ -7,7 +7,7 @@
 #include <allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <buffer_types.hpp>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -21,7 +21,7 @@
 #include <vector>
 
 #include "bank_manager.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
 #include <tt-metalium/math.hpp>

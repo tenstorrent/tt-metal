@@ -725,11 +725,12 @@ def test_fused_conditioner_two_refs_real_weights(
 )
 # Decoder-only parallel configs: `sp_on` shards the sequence, `is_fsdp` the weights, on the non-TP axis.
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "tp_axis", "sp_on", "is_fsdp", "num_links"),
+    ("mesh_device", "submesh_shape", "tp_axis", "sp_on", "is_fsdp", "num_links", "dynamic_length"),
     [
-        pytest.param((4, 8), (4, 8), 0, False, True, 2, id="tp4_fsdp8"),
-        pytest.param((4, 8), (4, 8), 0, True, True, 2, id="tp4_sp8_fsdp8"),
-        pytest.param((4, 8), (4, 8), 1, True, False, 2, id="tp8_sp4"),
+        pytest.param((4, 8), (4, 8), 0, False, True, 2, False, id="tp4_fsdp8"),
+        pytest.param((4, 8), (4, 8), 0, True, True, 2, False, id="tp4_sp8_fsdp8"),
+        pytest.param((4, 8), (4, 8), 1, True, False, 2, False, id="tp8_sp4"),
+        pytest.param((4, 8), (4, 8), 0, True, True, 2, True, id="tp4_sp8_fsdp8_dynamic"),
     ],
     indirect=["mesh_device"],
 )
@@ -737,10 +738,13 @@ def test_fused_conditioner_two_refs_real_weights(
 # 512 is a whole number of SEQ_BUCKET_SIZE=128 buckets, so the encoder pads nothing.
 @pytest.mark.parametrize("seq_len", [512], ids=["prompt_512"])
 def test_fused_conditioner_t2va_real_weights(
-    conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, check_pcc, seq_len
+    conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, dynamic_length, check_pcc, seq_len
 ):
-    """The `t2va` conditioner: text-only presentation on released weights; no vision tower, decoder only."""
+    """The `t2va` conditioner: text-only presentation on released weights; no vision tower, decoder only.
+    `dynamic_length` takes the row count at run time, which needs SP and two K heads per chip (TP=4)."""
     path, reference = conditioner
+    if dynamic_length and mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip("dynamic_length is Blackhole only")
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     shape = tuple(submesh.shape)
     tp_factor = shape[tp_axis]
@@ -751,6 +755,7 @@ def test_fused_conditioner_t2va_real_weights(
     torch.manual_seed(0)
     ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
     tag = f"tp{tp_factor}" + (f"_sp{sp_factor}" if sp_on else "") + (f"_fsdp{shape[1 - tp_axis]}" if is_fsdp else "")
+    tag += "_dynamic" if dynamic_length else ""
     logger.info(f"[t2va] presentation built: seq={seq_len}, text only, config {tag}.")
 
     golden = None
@@ -776,6 +781,8 @@ def test_fused_conditioner_t2va_real_weights(
         is_fsdp=is_fsdp,
         num_layers=TAP,
         load_weights=False,
+        kv_gather_capacity=seq_len if dynamic_length else None,
+        dynamic_length=dynamic_length,
     )
     layer_re = re.compile(r"^layers\.(\d+)\.")
     truncated = {
@@ -793,8 +800,7 @@ def test_fused_conditioner_t2va_real_weights(
         dcos, dsin = create_rope_tensors(
             1, seq_len, None, head_dim, rope_params["rope_theta"], rope_params["mrope_section"]
         )
-        tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
-        tt_dcos, tt_dsin = bf16_tensor(dcos, device=submesh), bf16_tensor(dsin, device=submesh)
+        tt_ids, (tt_dcos, tt_dsin) = encoder.upload_inputs(ids, dcos, dsin)
         ttnn.synchronize_device(submesh)
         t1 = time.time()
         out = encoder.forward(tt_ids, attention_mask=None, pos_embeds=(tt_dcos, tt_dsin))[0]

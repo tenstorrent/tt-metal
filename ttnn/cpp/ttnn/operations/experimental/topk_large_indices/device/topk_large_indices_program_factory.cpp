@@ -87,8 +87,11 @@ void set_runtime_args(
     reader_args[topk_common_args::input_row_bytes] = runtime_args.input_row_bytes;
     tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel_id)[topk_common_args::compute_search_length] =
         runtime_args.search_len;
-    // The row assignment depends on the row count and, through the column split, on the searched chunk count.
-    const uint32_t num_chunks = tt::div_up(runtime_args.search_len, shared.llk_k);
+    // The row assignment depends on the row count and, through the column split, on the chunk count. It uses the
+    // physical width, as in metadata mode: the kernels bound each row (or half row) by search_len on the device, so
+    // a new valid_length changes only the common args above, not every core's.
+    const uint32_t input_width = input.logical_shape()[-1];
+    const uint32_t num_chunks = tt::div_up(input_width, shared.llk_k);
     if (shared.num_rows == runtime_args.num_rows && shared.num_chunks == num_chunks) {
         return;
     }
@@ -265,7 +268,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram(*tensor_args.input_tensor.device());
 
     const auto& input = tensor_args.input_tensor;
     auto& indices = tensor_return_value;

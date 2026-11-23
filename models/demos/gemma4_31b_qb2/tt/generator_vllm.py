@@ -5,6 +5,7 @@
 import torch
 
 import ttnn
+from models.common.hf_layer_type_attention import layer_type_attention
 from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 from models.demos.gemma4_31b_qb2.tt.generator import CacheState, build_generator
 
@@ -76,14 +77,15 @@ class Gemma4ForCausalLM:
         # Equal accounting page sizes preserve the logical block size across
         # hybrid groups. Different native geometries still use separate pools.
         # The runner divides these global head counts by the TP degree.
-        page_bytes = 2 * block * config.num_key_value_heads * config.head_dim * 2
+        attn = layer_type_attention(config)
+        page_bytes = 2 * block * attn.sliding_kv_heads * attn.sliding_head_dim * 2
         result = {}
         for i, kind in enumerate(config.layer_types):
             sliding = kind == "sliding_attention"
             common = dict(
                 block_size=block,
-                num_kv_heads=config.num_key_value_heads if sliding else config.num_global_key_value_heads,
-                head_size=config.head_dim if sliding else config.global_head_dim,
+                num_kv_heads=attn.sliding_kv_heads if sliding else attn.full_kv_heads,
+                head_size=attn.sliding_head_dim if sliding else attn.full_head_dim,
                 dtype=torch.bfloat16,
                 page_size_padded=page_bytes,
             )

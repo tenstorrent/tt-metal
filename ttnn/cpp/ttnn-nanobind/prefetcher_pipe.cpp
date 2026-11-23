@@ -19,6 +19,8 @@
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
+#include "ttnn/core.hpp"
+
 namespace ttnn::prefetcher_pipe {
 
 using tt::tt_metal::experimental::PrefetcherPipe;
@@ -228,7 +230,7 @@ void py_module(nb::module_& mod) {
            PrefetcherPipeL1Source l1_source) {
             auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.experimental.create_prefetcher_pipe_space");
             return tt::tt_metal::experimental::CreatePrefetcherPipeSpace(
-                mesh_device,
+                mesh_device.mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()),
                 make_space_config(
                     sender_cores,
                     receiver_domain,
@@ -256,6 +258,10 @@ void py_module(nb::module_& mod) {
             the 1:N map; pipes are carved afterwards with PrefetcherPipeSpace.create_pipe /
             create_pipes.
 
+            The space keeps the command queue selected when it is created (ttnn.command_queue, queue 0
+            by default). With the Allocator source its config pages, including those written by later
+            carves, go through that queue.
+
             Args:
                 mesh_device (MeshDevice): the mesh device to reserve on.
                 sender_cores (CoreRangeSet): worker cores that may act as pipe senders.
@@ -280,8 +286,9 @@ void py_module(nb::module_& mod) {
             // create_prefetcher_pipe_space's device tie, applied per element: the list returned is not
             // weak-referenceable, so nb::keep_alive<0, 1> would raise at call time.
             nb::list out;
-            for (PrefetcherPipeSpace& space :
-                 tt::tt_metal::experimental::CreatePrefetcherPipeSpaces(mesh_device, configs)) {
+            for (PrefetcherPipeSpace& space : tt::tt_metal::experimental::CreatePrefetcherPipeSpaces(
+                     mesh_device.mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()),
+                     configs)) {
                 nb::object space_obj = nb::cast(std::move(space));
                 nb::detail::keep_alive(space_obj.ptr(), mesh_device_obj.ptr());
                 out.append(std::move(space_obj));
@@ -299,7 +306,8 @@ void py_module(nb::module_& mod) {
             the same l1_source. The shared ring and config page are sized for the largest of them.
             With the Allocator source this takes one range of every worker core's L1 where creating
             the spaces one by one would take one range each. The L1 is released once every returned
-            space and every pipe carved from them are gone.
+            space and every pipe carved from them are gone. Every space keeps the selected command
+            queue, as with create_prefetcher_pipe_space.
 
             Args:
                 mesh_device (MeshDevice): the mesh device to reserve on.
