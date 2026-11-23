@@ -19,13 +19,16 @@ cache's format (``MlaKvCache.format``; the window format IS that format, see ``w
 with ``window_base = push_rows`` and ``chunk_base = window_base + W - 1``. The push validates only that its output
 holds at least its own rows, so the window rows sit behind them in the same buffer, and the push never writes them.
 
-The index list of a query at chunk row ``g`` is ``[window ids | bank-A compact ids]``, ``W + top-k`` wide. Its window
-id for slot ``j`` (position ``start + g - W + 1 + j``) is ``window_base + g + j``: affine, independent of the chunk
-start, so it is uploaded once. ``sparse_sdpa`` stops a row at its first sentinel, so sentinels must be one tail; that
-holds when every window slot is real (``p >= W - 1``) because bank A's own sentinels are already a tail. A row with
-``p < W - 1`` has ``W - 1 - p`` leading window slots before position 0: a gather through
-``perm = min(max(c + W - 1 - g - start, c), sentinel column)`` slides the row left by that many slots and fills the end
-with the sentinel column, reading ``start`` on device so one captured trace serves every chunk (any 32-aligned start).
+The index list of a query at position ``p`` is ``[window ids | bank-A compact ids]``, ``W + top-k`` wide. Window slot
+``j`` is position ``start + u`` with ``u = p - start - W + 1 + j``; its id is ``chunk_base + u`` in the carry region
+(``u < 0``) and ``chunk_base + chunk_row(start + u)`` in the chunk region, whose rows follow the SP gather's order: a
+chunk starting mid-slab lies rotated across the SP chips (``rotated_chunk_positions``), and any 32-aligned start is
+legal. ``index_list`` computes the ids, and each query row's ``p``, on device from the chunk start (metadata[1]), so
+one captured trace serves every start; ``table_row`` is the host mirror. ``sparse_sdpa`` stops a row at its first
+sentinel, so sentinels must be one tail; that holds when every window slot is real (``p >= W - 1``) because bank A's
+own sentinels are already a tail. A row with ``p < W - 1`` has ``W - 1 - p`` leading window slots before position 0: a
+gather through ``perm = min(c + max(0, W - 1 - p), sentinel column)`` slides the row left by that many slots and fills
+the end with the sentinel column.
 
 Window format (A2, ``loop_window_format``): ``scaled_fp8`` (default) or ``bf16``. The table has one format, so the
 window format is the bank-A cache format: a bf16 window means a bf16 table, whose bank A must reach G2 as bf16
@@ -222,7 +225,7 @@ class TwoBankTable:
         if not start < end <= start + self.chunk_global:
             raise ValueError(f"chunk [{start}, {end}) is not a non-empty chunk of at most {self.chunk_global} tokens")
         first = end - (self.window - 1)
-        rows = [self.table_row(max(p, start - (self.window - 1)), start) for p in range(first, end)]
+        rows = [self.table_row(p, start) for p in range(first, end)]
         pieces, lo = [], 0
         for k in range(1, len(rows) + 1):  # runs of consecutive table rows
             if k == len(rows) or rows[k] != rows[k - 1] + 1:

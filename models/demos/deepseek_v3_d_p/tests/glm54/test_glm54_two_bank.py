@@ -12,16 +12,16 @@ draw ``glm54_tier1_weights`` makes; layer 2 owns an indexer here so pass 1 produ
 * pass 2: each layer is a 'shared' pass-2 layer (no indexer) fed its group's set (``pass1_index_set``), reading bank A
   from the same cache (G2's copy is bit-exact to G1's, q171.2.7) and carrying its window between chunks explicitly.
 
-Phase 1 (device, ``test_two_bank_device``) runs the schedule, checks determinism and window replication on device, and
-saves every input the reference needs (bank A, the sets, the carries, the hidden states) with the device's outputs and
-window regions. Phase 2 (CPU, ``test_two_bank_vs_reference``) feeds them to ``LoopPass2MLAReference`` and checks
-output PCC >= 0.99 and window PCC >= 0.998, so the minutes-long CPU reference never holds the device lock. Run phase 1
-first. ``test_two_bank_traced`` checks a captured pass-2 forward replays bit-identically to eager across chunk starts.
+``test_two_bank_device`` runs a schedule of chunks and checks, per chunk and layer: pass 2 leaves the pass-1 KVPE
+cache (bank A) byte-identical; repeated forwards are bit-identical; every chip holds the same window rows; and
+``LoopPass2MLAReference``, fed the device's own inputs (bank A as pass 1 left it, the top-k set, the carry, the hidden
+states), matches the output (PCC >= 0.99 overall and over each SP shard's first W rows, which read the previous
+shard's rows) and the window rows (PCC >= 0.998). The reference runs in the test, about 20 s per chunk and layer on
+the host. ``test_two_bank_traced`` checks a captured pass-2 forward replays bit-identically to eager across chunk
+starts; ``test_two_bank_index_list`` checks the device index list row for row.
 """
 
 import copy
-import os
-from pathlib import Path
 
 import pytest
 import torch
@@ -63,7 +63,6 @@ LOOP_LAYERS = (1, 2)
 OUTPUT_PCC = 0.99
 WINDOW_PCC = 0.998
 SENTINEL = 0xFFFFFFFF
-ARTIFACTS = Path(os.environ.get("GLM54_TWO_BANK_ARTIFACTS", Path.home() / ".cache" / "tt-glm54" / "two-bank"))
 
 # (start, end) chunks of one request; every chunk is a 5120-row slab, `end` its real tokens.
 SCHEDULES = {
@@ -87,10 +86,6 @@ def _pass2_config(config):
     c = copy.deepcopy(config)
     c.indexer_types = pass2_indexer_types(config)
     return c
-
-
-def _artifact(window_format: str, schedule: str) -> Path:
-    return ARTIFACTS / f"{window_format}-{schedule}-seed{GLM54_SYNTHETIC_SEED}.pt"
 
 
 def _hidden(layer: int, loop_pass: int, start: int) -> torch.Tensor:
@@ -290,10 +285,14 @@ class _Stage:
         """Physical table/cache rows [..., row] -> logical bf16 [..., 576]."""
         return self.pass2[LOOP_LAYERS[0]]._two_bank.table().unpack_host(physical).to(torch.bfloat16)
 
-    def bank_a(self, layer: int) -> torch.Tensor:
-        """Layer `layer`'s pass-1 KVPE, natural order, logical bf16 [MAX_SEQ, 576]."""
+    def cache_snapshot(self) -> torch.Tensor:
+        """The whole pass-1 KVPE cache (bank A), physical rows in stripe order [layers, MAX_SEQ, row]."""
+        return striped_cache_to_host(self.cache.storage, self.mesh, self.sp_axis)
+
+    def bank_a(self, snapshot: torch.Tensor, layer: int) -> torch.Tensor:
+        """Layer `layer`'s pass-1 KVPE from a cache snapshot, natural order, logical bf16 [MAX_SEQ, 576]."""
         stripes = self.shape[0] * self.shape[1]
-        flat = striped_cache_to_host(self.cache.storage, self.mesh, self.sp_axis)[LOOP_LAYERS.index(layer)]
+        flat = snapshot[LOOP_LAYERS.index(layer)]
         nat = torch.empty_like(flat)
         nat[blockcyclic_positions(stripes, CHUNK, flat.shape[0])] = flat
         return self.rows_logical(nat)
@@ -357,44 +356,52 @@ class _Stage:
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (sparse SDPA, push) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_two_bank_device(mesh_device, window_format, schedule):
-    """Phase 1: run the schedule; deterministic outputs and windows; every chip holds the same window (the halo); save
-    the reference's inputs (the device's own) and the device's outputs for phase 2."""
+    """Run the schedule; per chunk and layer check bank A untouched by pass 2, determinism, window replication, and
+    the output and window against the reference given the device's own inputs."""
     stage = _Stage(mesh_device, window_format)
+    window = stage.config.loop_window_size
     carries = {L: None for L in LOOP_LAYERS}
-    record = {"schedule": SCHEDULES[schedule], "window_format": window_format, "chunks": []}
     for start, end in SCHEDULES[schedule]:
         sets = stage.pass1_chunk(start, end)
-        chunk = {"start": start, "end": end, "sets": [stage.indices(s, start) for s in sets], "layers": {}}
+        before = stage.cache_snapshot()  # bank A as pass 1 left it: the reference's bank A
+        set_rows = [stage.indices(s, start) for s in sets]
         # Window region row i is position start - (W - 1) + i; rows of positions < 0 are never written.
-        real_from = max(0, stage.config.loop_window_size - 1 - start)
+        real_from = max(0, window - 1 - start)
+        results = {}
         for L in LOOP_LAYERS:
             carry_in = None if carries[L] is None else stage.rows_logical(stage.replicated(carries[L], real_from))
             out = stage.output_to_torch(stage.pass2_forward(L, start, end, sets, carries[L]), start)
-            window = stage.replicated(stage.pass2[L]._two_bank.window_rows(), real_from)
+            rows = stage.replicated(stage.pass2[L]._two_bank.window_rows(), real_from)
             # Determinism: the same forward again (same carry, same bank A, same set) is bit-identical.
             again = stage.output_to_torch(stage.pass2_forward(L, start, end, sets, carries[L]), start)
             assert torch.equal(out, again), f"layer {L} chunk {start}: repeated pass-2 forward differs"
             assert torch.equal(
                 stage.replicated(stage.pass2[L]._two_bank.window_rows(), real_from)[real_from:].view(torch.uint8),
-                window[real_from:].view(torch.uint8),
+                rows[real_from:].view(torch.uint8),
             ), f"layer {L} chunk {start}: repeated window differs"
-            next_carry = stage.pass2[L].window_carry(start, end)
-            chunk["layers"][L] = {
-                "output": out[:, : end - start],
-                "window": stage.rows_logical(stage.window_natural(L, window, start, end)),
-                "carry_in": carry_in,
-            }
-            carries[L] = next_carry
+            results[L] = (out, stage.rows_logical(stage.window_natural(L, rows, start, end)), carry_in)
+            carries[L] = stage.pass2[L].window_carry(start, end)
         ttnn.synchronize_device(mesh_device)
-        record["bank_a"] = {L: stage.bank_a(L) for L in LOOP_LAYERS}  # after this chunk: complete up to `end`
-        chunk["bank_a"] = {L: record["bank_a"][L][:end].clone() for L in LOOP_LAYERS}
-        record["chunks"].append(chunk)
-        for s in sets:
-            ttnn.deallocate(s)
-    record.pop("bank_a")
-    ARTIFACTS.mkdir(parents=True, exist_ok=True)
-    torch.save(record, _artifact(window_format, schedule))
-    logger.info(f"saved {_artifact(window_format, schedule)}")
+        after = stage.cache_snapshot()
+        assert torch.equal(after.view(torch.uint8), before.view(torch.uint8)), (
+            f"chunk {start}: pass 2 changed the pass-1 KVPE cache (bank A) in "
+            f"{int((after.view(torch.uint8) != before.view(torch.uint8)).any(-1).sum())} rows"
+        )
+        for L, (out, window_rows, carry_in) in results.items():
+            _check_vs_reference(
+                stage.config,
+                f"{window_format} {schedule}",
+                L,
+                start,
+                end,
+                out=out,
+                window_rows=window_rows,
+                carry_in=carry_in,
+                bank_a=stage.bank_a(before, L)[:end],
+                indices=set_rows[pass1_index_set(stage.config, L)],
+            )
+        for t in sets:
+            ttnn.deallocate(t)
 
 
 def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -403,50 +410,35 @@ def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a @ b) / (a.norm() * b.norm()))
 
 
-@pytest.mark.parametrize("schedule", list(SCHEDULES))
-@pytest.mark.parametrize("window_format", FORMATS)
-def test_two_bank_vs_reference(window_format, schedule):
-    """Phase 2 (CPU): LoopPass2MLAReference on the device's inputs (bank A, top-k set, carry, hidden) vs the device's
-    output (PCC >= 0.99, all rows and each SP shard's first W rows, which read the previous shard's rows) and window
-    rows (PCC >= 0.998)."""
-    path = _artifact(window_format, schedule)
-    assert path.exists(), f"{path} missing: run test_two_bank_device[{window_format}-{schedule}] first"
-    record = torch.load(path)
-    config = _config(window_format)
-    window, shard = config.loop_window_size, CHUNK // 8
-    for chunk in record["chunks"]:
-        start, end = chunk["start"], chunk["end"]
-        n = end - start
-        for L, got in chunk["layers"].items():
-            mla_ref = SparseMLAReference(
-                config, glm_random_mla_weights(config, L, GLM54_SYNTHETIC_SEED), seq_len=MAX_SEQ
-            )
-            ref = LoopPass2MLAReference(mla_ref, window=window, latent_dim=config.kv_lora_rank)
-            need = min(window - 1, start)
-            carry = None if got["carry_in"] is None else got["carry_in"][window - 1 - need :]
-            indices = chunk["sets"][pass1_index_set(config, L)][..., :n, :]
-            res = ref.forward(
-                _hidden(L, 2, start)[:, :n],
-                kvpe_a=chunk["bank_a"][L],
-                indices_a=indices,
-                actual_start=start,
-                window_carry=carry,
-            )
-            out_pcc = _pearson(got["output"], res.output)
-            window_pcc = _pearson(got["window"], res.kvpe)
-            shard_pccs = [
-                _pearson(got["output"][:, s : min(s + window, n)], res.output[:, s : min(s + window, n)])
-                for s in range(shard, n, shard)
-            ]
-            logger.info(
-                f"[{window_format} {schedule}] L{L} chunk {start}-{end}: output PCC {out_pcc:.5f}, window PCC "
-                f"{window_pcc:.5f}, shard-start PCC min {min(shard_pccs, default=float('nan')):.5f}"
-            )
-            # The shard halo first: a row near a shard start reads the previous shard's rows (all-gathered).
-            for k, p in enumerate(shard_pccs, start=1):
-                assert p >= OUTPUT_PCC, f"L{L} chunk {start}: SP shard {k}'s first {window} rows PCC {p:.5f}"
-            assert out_pcc >= OUTPUT_PCC, f"L{L} chunk {start}: output PCC {out_pcc:.5f} < {OUTPUT_PCC}"
-            assert window_pcc >= WINDOW_PCC, f"L{L} chunk {start}: window PCC {window_pcc:.5f} < {WINDOW_PCC}"
+def _check_vs_reference(config, case, layer, start, end, *, out, window_rows, carry_in, bank_a, indices):
+    """LoopPass2MLAReference on the device's inputs vs the device's output (overall and each SP shard's first W rows,
+    which read the previous shard's rows through the halo) and its window rows (positions start .. end-1)."""
+    window, shard, n = config.loop_window_size, CHUNK // 8, end - start
+    mla_ref = SparseMLAReference(config, glm_random_mla_weights(config, layer, GLM54_SYNTHETIC_SEED), seq_len=MAX_SEQ)
+    ref = LoopPass2MLAReference(mla_ref, window=window, latent_dim=config.kv_lora_rank)
+    need = min(window - 1, start)
+    res = ref.forward(
+        _hidden(layer, 2, start)[:, :n],
+        kvpe_a=bank_a,
+        indices_a=indices[..., :n, :],
+        actual_start=start,
+        window_carry=None if carry_in is None else carry_in[window - 1 - need :],
+    )
+    got = out[:, :n]
+    out_pcc = _pearson(got, res.output)
+    window_pcc = _pearson(window_rows, res.kvpe)
+    shard_pccs = [
+        _pearson(got[:, s : min(s + window, n)], res.output[:, s : min(s + window, n)]) for s in range(shard, n, shard)
+    ]
+    logger.info(
+        f"[{case}] L{layer} chunk {start}-{end}: output PCC {out_pcc:.5f}, window PCC {window_pcc:.5f}, "
+        f"shard-start PCC min {min(shard_pccs, default=float('nan')):.5f}"
+    )
+    # The shard halo first: a row near a shard start reads the previous shard's rows (all-gathered).
+    for k, p in enumerate(shard_pccs, start=1):
+        assert p >= OUTPUT_PCC, f"L{layer} chunk {start}: SP shard {k}'s first {window} rows PCC {p:.5f}"
+    assert out_pcc >= OUTPUT_PCC, f"L{layer} chunk {start}: output PCC {out_pcc:.5f} < {OUTPUT_PCC}"
+    assert window_pcc >= WINDOW_PCC, f"L{layer} chunk {start}: window PCC {window_pcc:.5f} < {WINDOW_PCC}"
 
 
 def _scalar(mesh_device, value: int) -> ttnn.Tensor:
@@ -473,7 +465,17 @@ def test_two_bank_traced(mesh_device, window_format):
     chunks = [(0, CHUNK), (CHUNK, 2 * CHUNK)]
     # Eager over both chunks (metadata path); keep each chunk's inputs to replay them.
     inputs, eager = {}, {}
-    carry = None
+    row = stage.pass2[L]._two_bank.row_width
+    # The metadata path always takes a carry; a chunk at start 0 reads none of its rows.
+    carry = ttnn.allocate_tensor_on_device(
+        ttnn.TensorSpec(
+            shape=ttnn.Shape([1, 1, stage.config.loop_window_size - 1, row]),
+            dtype=stage.kv_format.storage_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            buffer_type=ttnn.BufferType.DRAM,
+        ),
+        mesh_device,
+    )
     for start, end in chunks:
         sets = stage.pass1_chunk(start, end)
         metadata = [_scalar(mesh_device, v) for v in (0, start, end)]
@@ -482,7 +484,6 @@ def test_two_bank_traced(mesh_device, window_format):
         eager[start] = stage.output_to_torch(out, start)
         inputs[start] = (sets, carry)
         carry = stage.pass2[L].window_carry(start, end)
-    row = stage.pass2[L]._two_bank.row_width
     # Persistent inputs the capture reads; their contents change between replays.
     p_meta = [_scalar(mesh_device, v) for v in (0, chunks[1][0], chunks[1][1])]
     p_hidden = stage.to_device(_hidden(L, 2, chunks[1][0]), chunks[1][0])

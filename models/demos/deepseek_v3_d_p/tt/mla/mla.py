@@ -2171,7 +2171,8 @@ class ttMLA:
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, Optional[dict]]":
         # window_carry (loop pass-2 layers only): this layer's pass-2 KVPE rows of positions actual_start-W+1 ..
         # actual_start-1, [1, 1, W-1, row] replicated in the window format (the previous chunk's window_carry());
-        # None at actual_start 0. Rows of positions < 0 are never read.
+        # None only at actual_start 0 on the eager path (the metadata path always takes one). Rows of positions < 0
+        # are never read.
         # next_step: the attention step after this one, whose prefix rows this step pushes beside its attention when
         # that step is a pushed (shared) one. SAME_CHUNK_NEXT_LAYER (one chunk per forward): the next layer's step on
         # this chunk. A packed forward passes its next step (PushStep), or None for no pre-send.
@@ -2575,8 +2576,14 @@ class ttMLA:
         expected_shape = self.indexer_indices_shape()
         if tuple(indices.shape) != expected_shape:
             raise ValueError(f"pass-2 attention needs this chip's top-k {expected_shape}, got {tuple(indices.shape)}")
-        if metadata is None and kv_actual_isl and window_carry is None:
-            raise ValueError(f"a chunk at {kv_actual_isl} needs the window carry of the positions before it")
+        # The table is shared by the mesh's pass-2 layers, so a missing carry would silently leave another layer's or
+        # chunk's rows in the carry region. The traced (metadata) path cannot see the start: it always takes a carry,
+        # whose contents a chunk at start 0 never reads.
+        if window_carry is None and (metadata is not None or kv_actual_isl):
+            raise ValueError(
+                "a pass-2 chunk needs its window carry (the previous chunk's window_carry()); on the metadata path "
+                "always, at start 0 any [1, 1, W-1, row] tensor"
+            )
         table = self._two_bank
         table.write_window(pack_window_rows(kvpe_cache.format, tt_kvpe), window_carry)
 
@@ -2609,7 +2616,7 @@ class ttMLA:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
         joint_indices = table.index_list(plan.compact_indices, chunk_start)
-        if chunk_start is not (metadata[1] if metadata is not None else None):
+        if metadata is None:
             ttnn.deallocate(chunk_start)
         out = self._finish_sparse_chunked_attn(
             tt_q=tt_q,
