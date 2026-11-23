@@ -613,6 +613,7 @@ jobs:
             'tt_metal/third_party/CMakeLists.txt',
             'tt_metal/third_party/tracy/cmake/CPM.cmake',
             'tt_metal/third_party/tracy/cmake/vendor.cmake',
+            'tt_metal/third_party/umd/cmake/CPM.cmake',
             'tt_metal/third_party/umd/third_party/CMakeLists.txt',
             'tt-train/cmake/CPM.cmake',
             'tt-train/cmake/dependencies.cmake',
@@ -640,12 +641,12 @@ jobs:
             echo "hit=true" >> "$GITHUB_OUTPUT"
           elif [ "${rc}" -eq 0 ] && [ "${http_code}" = "404" ]; then
             echo "CPM cache MISS (key=${CACHE_KEY}, HTTP 404); configure fetches sources, and this job saves the cache"
-            rm -f .cpmcache.tar.zst   # remove the 404 response body
+            rm -f .cpmcache.tar.zst
             echo "hit=false" >> "$GITHUB_OUTPUT"
             echo "save=true" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::CPM cache restore failed (curl exit=${rc}, HTTP ${http_code:-none}, key=${CACHE_KEY}); configure fetches sources, and this job does not save the cache"
-            rm -f .cpmcache.tar.zst   # remove any partial download or error body
+            rm -f .cpmcache.tar.zst   # remove any partial/empty download
             echo "hit=false" >> "$GITHUB_OUTPUT"
             echo "save=false" >> "$GITHUB_OUTPUT"
           fi
@@ -706,7 +707,6 @@ jobs:
           [ -d .cpmcache ] && tar -I 'zstd -T0 --long -9 -v' -cf .cpmcache.tar.zst .cpmcache || true
 
       - name: 📦 Save CPM source cache (Garage S3)
-        # Only upload on a miss, and only where we have S3 creds (same fork guard).
         if: steps.cpm-cache.outputs.save == 'true'
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
