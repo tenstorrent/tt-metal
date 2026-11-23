@@ -1912,6 +1912,10 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     {
         // The Compute API's <op>_bw_tile_init.
         SFPU_UNARY_INIT(unused);
+        if constexpr (BINOP == BinaryOp::ERF_BW)
+        {
+            init_erf_bw_bf16();
+        }
     }
 #endif
     else if constexpr (BINOP == BinaryOp::LCM)
