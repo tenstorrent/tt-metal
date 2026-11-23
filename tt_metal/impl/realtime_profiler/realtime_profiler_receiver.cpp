@@ -243,9 +243,8 @@ void RealtimeProfilerReceiver::publish_pages(RealtimeProfilerDevice& dev_state, 
         }
         const uint64_t start = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];
         const uint64_t end = (static_cast<uint64_t>(rp[4]) << 32) | rp[5];
-        // A record that ends before it starts has no duration to report. It happens around a dispatch stall, and in
-        // the startup race where a compute kernel sees dispatch_d clear the stream registers before dispatch_s stamps
-        // the start.
+        // A record that ends before it starts has no duration to report. It happens in the startup race where a
+        // compute kernel sees dispatch_d clear the stream registers before dispatch_s stamps the start.
         if (end < start) {
             if (num_end_before_start_records_.fetch_add(1, std::memory_order_relaxed) == 0) {
                 log_warning(

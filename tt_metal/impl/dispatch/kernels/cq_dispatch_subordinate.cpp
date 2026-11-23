@@ -451,7 +451,6 @@ void reserve_realtime_profiler_record_slot(volatile tt_l1_ptr realtime_profiler_
 }
 
 // Publish the open record slot to the RT-profiler BRISC and open the reserved one.
-// A slot's stale end time is fixed up by the BRISC (see realtime_profiler_read_and_enqueue), not here.
 FORCE_INLINE
 void publish_realtime_profiler_record(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
     const uint32_t next_wr_idx = (rt_record_wr_idx + 1) & REALTIME_PROFILER_RECORD_WR_IDX_MASK;
