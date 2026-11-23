@@ -24,7 +24,16 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
-from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import Bar, RowSeries, check, nrmse, row_nrmse, row_sums
+from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
+    Bar,
+    RowSeries,
+    check,
+    error_metrics,
+    nrmse,
+    of,
+    row_nrmse,
+    row_sums,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FirstLayerInput
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
@@ -121,22 +130,28 @@ def test_kimi_k3_layer0_long_context_accuracy(
             pcc_threshold=_PCC,
             nrmse_threshold=thresholds["call"],
         )
-        series.append(start, row_sums(golden, output))
+        series.append(start, sums=row_sums(golden, output))
 
     whole = series.windows(
-        tokens, {"output_nrmse": nrmse, "token_nrmse_max": lambda s: float(row_nrmse(s, floor).max())}
+        tokens,
+        {**error_metrics("output"), "token_nrmse_max": of("sums", lambda s: float(row_nrmse(s, floor).max()))},
     )
-    windows = series.windows(_WINDOW, {"window_nrmse": nrmse})
-    per_token = row_nrmse(series.sums(), floor)
+    windows = series.windows(_WINDOW, {"window_nrmse": of("sums", nrmse), **error_metrics("window")})
+    per_token = row_nrmse(series.column("sums"), floor)
     golden_state = torch.load(run_dir / f"segment_{tokens // manifest['segment'] - 1:06d}.pt", weights_only=True)
     recurrent = reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tensor_parallel_axis, sp_size - 1)
     result = {
         "golden_id": K3_LAYER0_GOLDEN,
         "tokens": tokens,
         "output_nrmse": whole[0]["output_nrmse"],
-        "call_nrmse_max": max(w["call_nrmse"] for w in series.windows(_CALL, {"call_nrmse": nrmse})),
+        "output_rms_err": whole[0]["output_rms_err"],
+        "output_rms_ref": whole[0]["output_rms_ref"],
+        "call_nrmse_max": max(w["call_nrmse"] for w in series.windows(_CALL, {"call_nrmse": of("sums", nrmse)})),
         "window_nrmse_max": max(w["window_nrmse"] for w in windows),
         "window_nrmse_last": windows[-1]["window_nrmse"],
+        # absolute error next to the relative: RMS over elements of the first and last window, and the golden's RMS
+        "window_rms_err_first_last": [windows[0]["window_rms_err"], windows[-1]["window_rms_err"]],
+        "window_rms_ref_first_last": [windows[0]["window_rms_ref"], windows[-1]["window_rms_ref"]],
         "token_nrmse_median": float(per_token.median()),
         "token_nrmse_max": whole[0]["token_nrmse_max"],
         "token_nrmse_argmax": int(per_token.argmax()),

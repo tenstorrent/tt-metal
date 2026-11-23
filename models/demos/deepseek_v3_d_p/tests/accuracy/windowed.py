@@ -3,16 +3,23 @@
 """Shared windowed scoring core for long-context accuracy: per-row sums, fixed row windows, trends and bars.
 
 A device result over a long prompt is scored chunk by chunk without holding its rows: each chunk becomes per-row
-FP64 sufficient statistics (``row_sums``), from which the NRMSE and PCC of any set of rows follow exactly. Windows
-are aligned to absolute row 0, so two runs with different chunk sizes or layouts score identical row windows.
+FP64 sufficient statistics (``row_sums``), from which the NRMSE, PCC and absolute RMS error of any set of rows follow
+exactly. Windows are aligned to absolute row 0, so two runs with different chunk sizes or layouts score identical row
+windows.
 
-Bars are checked fail closed: a NaN or infinite metric fails, and a bar on a metric no window measured fails.
+Every continuous product is reported in absolute and relative terms together (``error_metrics``): a relative error
+that stays flat while the golden grows is a growing absolute error downstream, so NRMSE alone misleads. Absolute
+error is the RMS over all elements of the window (``rms_err``), next to the golden's own RMS (``rms_ref``);
+``nrmse = rms_err / rms_ref``.
+
+Bars are checked fail closed: a NaN or infinite metric fails, and a bar on a metric no window measured fails. A
+metric a window does not define is left out of that window (its function returns ``None``), never reported as NaN.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -82,47 +89,131 @@ def row_nrmse(sums: torch.Tensor, floor: float) -> torch.Tensor:
     return torch.where(error == 0, torch.zeros_like(error), error / sums[:, SUM_YY].sqrt().clamp_min(floor))
 
 
-Metric = Callable[[torch.Tensor], float]
+def rms_err(sums: torch.Tensor) -> float:
+    """Absolute error: the RMS of ``x − y`` over all elements of the rows of ``sums``."""
+    return math.sqrt(float(sums[:, SUM_EE].sum()) / float(sums[:, COUNT].sum()))
+
+
+def rms_ref(sums: torch.Tensor) -> float:
+    """The golden's own scale: the RMS of ``y`` over all elements of the rows of ``sums``."""
+    return math.sqrt(float(sums[:, SUM_YY].sum()) / float(sums[:, COUNT].sum()))
+
+
+def quantile(t: torch.Tensor, q: float) -> float:
+    """The ``q`` quantile of all of ``t``'s values (linear interpolation, as ``torch.quantile``), NaN if empty; for any
+    size (``torch.quantile`` refuses more than 2^24 values)."""
+    v = t.flatten().float().sort().values
+    if not v.numel():
+        return math.nan
+    pos = q * (v.numel() - 1)
+    lo = int(pos)
+    hi = min(lo + 1, v.numel() - 1)
+    return float(v[lo] + (v[hi] - v[lo]) * (pos - lo))
+
+
+Window = Mapping[str, object]
+"""One window's slice of a ``RowSeries``: each row column as a ``[rows, ...]`` tensor, each event column as a dict of
+1-D tensors (its ``row`` field absolute)."""
+
+Metric = Callable[[Window], "float | None"]
+
+
+def of(column: str, f: Callable[[torch.Tensor], float]) -> Metric:
+    """A window metric computing ``f`` on one row column."""
+    return lambda window: f(window[column])
+
+
+def error_metrics(prefix: str, column: str = "sums") -> dict[str, Metric]:
+    """The absolute and relative error of a continuous product whose ``row_sums`` are in ``column``:
+    ``<prefix>_nrmse``, ``<prefix>_rms_err``, ``<prefix>_rms_ref`` and ``<prefix>_pcc``."""
+    return {
+        f"{prefix}_{name}": of(column, f)
+        for name, f in (("nrmse", nrmse), ("rms_err", rms_err), ("rms_ref", rms_ref), ("pcc", pcc))
+    }
 
 
 class RowSeries:
-    """Per-row sums of a result streamed in contiguous chunks from absolute row ``start``."""
+    """Named per-row columns of a result streamed in contiguous chunks from row 0, plus row-tagged event columns.
 
-    def __init__(self, start: int = 0) -> None:
-        self.start = start
-        self._chunks: list[torch.Tensor] = []
-        self._end = start
+    ``append(start, **columns)`` adds the rows ``[start, start + n)`` of every row column (each ``[n, ...]``; the same
+    names on every call). ``add_events(name, row=..., **fields)`` adds events (for example top-k misses) at absolute
+    rows, in any order. ``windows`` slices both by row."""
+
+    def __init__(self) -> None:
+        self._chunks: dict[str, list[torch.Tensor]] = {}
+        self._events: dict[str, dict[str, list[torch.Tensor]]] = {}
+        self._end = 0
 
     @property
     def end(self) -> int:
         return self._end
 
-    def append(self, start: int, sums: torch.Tensor) -> None:
+    def append(self, start: int, **columns: torch.Tensor) -> None:
         if start != self._end:
             raise ValueError(f"chunk at row {start} does not continue the series, which ends at row {self._end}")
-        if sums.ndim != 2 or sums.shape[1] != COUNT + 1 or sums.dtype != torch.float64:
-            raise ValueError(f"expected [rows, {COUNT + 1}] float64 row sums, got {tuple(sums.shape)} {sums.dtype}")
-        self._chunks.append(sums)
-        self._end += sums.shape[0]
+        if not columns:
+            raise ValueError("a chunk needs at least one column")
+        if self._chunks and set(columns) != set(self._chunks):
+            raise ValueError(f"chunk columns {sorted(columns)} differ from the series' {sorted(self._chunks)}")
+        rows = {name: t.shape[0] if t.ndim else -1 for name, t in columns.items()}
+        if len(set(rows.values())) != 1 or -1 in rows.values():
+            raise ValueError(f"every column needs the same leading row count, got {rows}")
+        for name, t in columns.items():
+            self._chunks.setdefault(name, []).append(t)
+        self._end += next(iter(rows.values()))
 
-    def sums(self) -> torch.Tensor:
-        if not self._chunks:
-            raise ValueError("no rows accumulated")
-        return torch.cat(self._chunks)
+    def add_events(self, name: str, *, row: torch.Tensor, **fields: torch.Tensor) -> None:
+        if name in self._chunks:
+            raise ValueError(f"{name!r} is a row column")
+        fields = {"row": row, **fields}
+        if any(t.ndim != 1 or t.shape[0] != row.shape[0] for t in fields.values()):
+            raise ValueError(f"event fields must be 1-D of one length, got {[tuple(t.shape) for t in fields.values()]}")
+        events = self._events.setdefault(name, {k: [] for k in fields})
+        if set(events) != set(fields):
+            raise ValueError(f"event fields {sorted(fields)} differ from {name!r}'s {sorted(events)}")
+        for k, t in fields.items():
+            events[k].append(t)
+
+    def column(self, name: str) -> torch.Tensor:
+        """All rows of row column ``name``."""
+        if name not in self._chunks:
+            raise ValueError(f"no row column {name!r}" if self._chunks else "no rows accumulated")
+        chunks = self._chunks[name]
+        if len(chunks) > 1:
+            chunks[:] = [torch.cat(chunks)]
+        return chunks[0]
+
+    def events(self, name: str) -> dict[str, torch.Tensor]:
+        """All events of event column ``name`` (``{}`` fields empty when none were added)."""
+        fields = self._events[name]
+        for chunks in fields.values():
+            if len(chunks) > 1:
+                chunks[:] = [torch.cat(chunks)]
+        return {k: v[0] for k, v in fields.items()}
 
     def windows(self, size: int, metrics: dict[str, Metric]) -> list[dict]:
-        """``metrics`` of each ``size``-row window aligned to absolute row 0 and clipped to the series; each window is
-        ``{"start", "end", "rows", <metric>: value}`` (``rows`` < ``size`` marks a partial window)."""
+        """``metrics`` of each ``size``-row window aligned to row 0 and clipped to the series; each window is
+        ``{"start", "end", "rows", <metric>: value}`` (``rows`` < ``size`` marks a partial window). A metric that
+        returns ``None`` is left out of that window."""
         if size <= 0:
             raise ValueError(f"window size must be positive, got {size}")
-        sums = self.sums()
+        if not self._chunks:
+            raise ValueError("no rows accumulated")
+        columns = {name: self.column(name) for name in self._chunks}
+        events = {name: self.events(name) for name in self._events}
         windows = []
-        for lo in range((self.start // size) * size, self._end, size):
-            start, end = max(lo, self.start), min(lo + size, self._end)
-            part = sums[start - self.start : end - self.start]
-            windows.append(
-                {"start": start, "end": end, "rows": end - start, **{n: f(part) for n, f in metrics.items()}}
-            )
+        for start in range(0, self._end, size):
+            end = min(start + size, self._end)
+            view: dict[str, object] = {name: t[start:end] for name, t in columns.items()}
+            for name, fields in events.items():
+                inside = (fields["row"] >= start) & (fields["row"] < end)
+                view[name] = {k: v[inside] for k, v in fields.items()}
+            window = {"start": start, "end": end, "rows": end - start}
+            for metric, f in metrics.items():
+                value = f(view)
+                if value is not None:
+                    window[metric] = value
+            windows.append(window)
         return windows
 
 
