@@ -78,6 +78,7 @@ def resplit(bl, split, exclude=()):
     """A copy of BankLinear ``bl`` whose every work item is cut into ``split`` cores (contiguous runs of its passes),
     over the SAME weight tensor: an item's tiles are contiguous in its bank in pass order, so a sub-item's range is
     a sub-range (offset = the passes before it). Each pass keeps its own Dest chain: same output."""
+    assert not bl.spreads(), "a spread layout (BankLinear spread=True) has no contiguous item ranges"
     out = copy.copy(bl)
     tiles = lambda part: sum(ncq for ncq, _ in part) * bl.nblk * bl.KB  # noqa: E731
     out.items, out.offsets = [], []

@@ -73,6 +73,7 @@ def rebuild(bl, ckc, **kw):
     pages = ttnn.to_torch(bl.weight).bfloat16().reshape(-1, TILE, TILE)  # page = slot * nb + bank
     nt = bl.chunk * bl.n_chunks // TILE
     W = torch.zeros(bl.Kt, nt, TILE, TILE, dtype=torch.bfloat16)
+    assert not bl.spreads(), "a spread layout (BankLinear spread=True) is not read back here"
     for (b, rot, part), off in zip(bl.items, bl.offsets):
         slot = off
         for ncq, g0 in part:

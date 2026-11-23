@@ -53,17 +53,50 @@ def reference_schedule(Kt, Nt, Nbt, C, kb):
     return out, KB, nblk
 
 
+def _alt_block(p, n_alt, nblk):
+    """Block p of a pass is one of the n_alt blocks stored in the alt bank (evenly spaced; bank_linear_reader.cpp)."""
+    return (p + 1) * n_alt // nblk > p * n_alt // nblk
+
+
+def _spread(items, nb, ktiles, kb):
+    """[(alt bank, blocks)] per item: whole first-pass blocks of the over-full banks' largest items move to the
+    under-full banks (vs the mean) while that lowers the larger of the two banks' tile counts."""
+    size = [sum(ncq for ncq, _ in part) * ktiles for _, _, part in items]
+    load = [0] * nb
+    for (b, _, _), n in zip(items, size):
+        load[b] += n
+    mean = sum(load) / nb
+    takers = [c for c in range(nb) if load[c] < mean]
+    alt = [(b, 0) for b, _, _ in items]
+    for i in sorted(range(len(items)), key=lambda i: -size[i]):
+        b, _, part = items[i]
+        if load[b] <= mean or not takers:
+            continue
+        blk = kb * part[0][0]
+        lo = min(takers, key=lambda c: load[c])
+        n = 0
+        while n < ktiles // kb and load[b] - blk >= max(mean, load[lo] + blk):
+            load[b] -= blk
+            load[lo] += blk
+            n += 1
+        if n:
+            alt[i] = (lo, n)
+    return alt
+
+
 class BankLinear:
     def __init__(
         self, device, w, dtype, chunk, kb, cores_per_bank, compute_kernel_config, out_cols=None, out_dtype=ttnn.float32,
-        split=1, pass_cols=None,
+        split=1, pass_cols=None, spread=False,
     ):  # fmt: skip
         """w: torch [K, N]; ``chunk`` columns per reference op (a multiple of banks * 32; N is zero-padded to whole
         chunks, as tt/dram_sharded.DramShardedLinear); kb / cores_per_bank: the reference in0_block_w /
         num_workers_per_dram_bank. out_cols: columns written (default N). out_dtype: the reference's output dtype
         (fp32 or bf16; the tile is packed from fp32 Dest as the reference packs it). split: cores per reference
         column group (its passes are divided between them; every pass is its own Dest chain, so the output is the
-        same). pass_cols: cut passes to at most this many columns (fewer columns per matmul_block call)."""
+        same). pass_cols: cut passes to at most this many columns (fewer columns per matmul_block call).
+        spread: even out the banks' bytes: evenly spaced blocks of the busiest items of over-full banks are stored in
+        (and read from) under-full banks (same tiles, same order into compute, so the output is the same)."""
         nb = device.dram_grid_size().x
         K, N = w.shape
         n_chunks = math.ceil(N / chunk)
@@ -89,12 +122,26 @@ class BankLinear:
                 part = todo[len(todo) * s_ // split : len(todo) * (s_ + 1) // split]
                 if part:
                     self.items.append((b, rot, part))
+        # spread: alt[i][1] blocks of item i's first pass, spaced evenly (_alt_block), live in bank alt[i][0]
+        self.alt = [(b, 0) for b, _, _ in self.items]
+        if spread:
+            self.alt = _spread(self.items, nb, self.KB * self.nblk, self.KB)
         per_bank = [[] for _ in range(nb)]
-        self.offsets = []
-        for b, rot, part in self.items:
+        self.offsets, self.alt_offsets = [], []
+        for (b, rot, part), (ab, na) in zip(self.items, self.alt):
+            self.alt_offsets.append(sum(t.shape[0] for t in per_bank[ab]))
+            on_alt = lambda q, p: q == 0 and _alt_block(p, na, self.nblk)  # noqa: E731
+            ncq, g0 = part[0]
+            for p in range(self.nblk):
+                if on_alt(0, p):
+                    j = (p + rot) % self.nblk
+                    for r in range(self.KB):
+                        per_bank[ab].append(tiles[j * self.KB + r, g0 : g0 + ncq])
             self.offsets.append(sum(t.shape[0] for t in per_bank[b]))  # first tile slot of this item in bank b
-            for ncq, g0 in part:
+            for q, (ncq, g0) in enumerate(part):
                 for p in range(self.nblk):
+                    if on_alt(q, p):
+                        continue
                     j = (p + rot) % self.nblk
                     for r in range(self.KB):
                         per_bank[b].append(tiles[j * self.KB + r, g0 : g0 + ncq])
@@ -132,6 +179,18 @@ class BankLinear:
         )  # fmt: skip
         assert cfg.fp32_dest_acc_en, "the replayed schedule is the fp32 Dest one"
 
+    def reader_args(self, i):
+        """bank_linear_reader.cpp runtime args of work item i (+ reader_defines())."""
+        b, rot, part = self.items[i]
+        args = [self.weight.buffer_address(), b, self.offsets[i], len(part)] + [n for n, _ in part]
+        return args + ([*self.alt[i], self.alt_offsets[i]] if self.spreads() else [])
+
+    def spreads(self):
+        return any(n for _, n in self.alt)
+
+    def reader_defines(self):
+        return [("W_SPREAD", "1")] * self.spreads()
+
     def __call__(self, x, out=None):
         """x [1,1,M,K] bf16 TILE, M <= 32 (any memory). out=None: returns [1,1,M,out_cols] TILE DRAM interleaved
         in out_dtype (the reference's output after to_memory_config(DRAM) + slice: every row of each tile). out given:
@@ -155,7 +214,7 @@ class BankLinear:
         for c, i in self.cores:
             b, rot, part = self.items[i]
             core = ttnn.CoreCoord(*c)
-            r_args[core] = [self.weight.buffer_address(), b, self.offsets[i], len(part)] + [n for n, _ in part]
+            r_args[core] = self.reader_args(i)
             c_args[core] = [rot, len(part)] + [n for n, _ in part]
             w_args[core] = [x.buffer_address(), rot, out.buffer_address(), len(part)] + [v for p_ in part for v in p_]
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
@@ -164,7 +223,7 @@ class BankLinear:
             ttnn.KernelDescriptor(
                 kernel_source=f"{F.KDIR}/bank_linear_reader.cpp", core_ranges=self.grid,
                 compile_time_args=acc(self.weight), named_compile_time_args=list(named.items()),
-                runtime_args=[(k, v) for k, v in r_args.items()],
+                defines=self.reader_defines(), runtime_args=[(k, v) for k, v in r_args.items()],
                 config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
             ),
             ttnn.KernelDescriptor(

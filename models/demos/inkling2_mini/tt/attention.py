@@ -22,6 +22,7 @@ Weights come as host tensors in the weight-cache contract (written by convert/co
 """
 
 import math
+import os
 
 import torch
 
@@ -119,7 +120,7 @@ class _DramShardedLinear:
     CORES = 8  # activation shard grid; K must split into whole tiles over it
     READERS = 2
 
-    def __init__(self, device, w, dtype, trim=False, bank=True):
+    def __init__(self, device, w, dtype, trim=False, bank=True, **bank_kw):
         """trim: slice the output back to N when N is padded to whole bank shards (callers that use all of N).
         bank: one bank-streamed program (tt/fused/bank_linear.py), bit-equal to the DRAM-sharded matmul; False runs
         the ttnn.linear path (A/B runs)."""
@@ -141,7 +142,7 @@ class _DramShardedLinear:
             )  # fmt: skip
             self.bank = BankLinear(device, w, dtype, bank_w * banks, kb=2, cores_per_bank=self.READERS,
                                    compute_kernel_config=ckc, out_cols=n if trim else bank_w * banks,
-                                   out_dtype=ttnn.bfloat16)  # fmt: skip
+                                   out_dtype=ttnn.bfloat16, **bank_kw)  # fmt: skip
             self.bank_ckc = ckc
         else:
             w = torch.nn.functional.pad(w, (0, bank_w * banks - n)).view(1, 1, k, -1)
@@ -225,7 +226,11 @@ class Inkling2Attention:
         def put(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT):
             return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device, memory_config=dram)
 
-        self.w_o = _DramShardedLinear(device, torch_of("w_o")[0, 0], weights["w_o"].dtype, trim=True)
+        # w_o reads: 2 cores per column group (<= 3 columns each) and the banks' bytes evened out (bank_linear.py
+        # spread): 23.2 -> 21.7 us per call in the model, same output. INKLING_WO=1,0,0: the old layout (A/B).
+        wo = [int(v) for v in os.environ.get("INKLING_WO", "2,3,1").split(",")]
+        wo_kw = dict(split=wo[0], pass_cols=wo[1] or None, spread=bool(wo[2]))
+        self.w_o = _DramShardedLinear(device, torch_of("w_o")[0, 0], weights["w_o"].dtype, trim=True, **wo_kw)
         self.q_scale = put(torch_of("q_clip_scale").view(1, 1, N_HEADS, HEAD_DIM))
         self.rel_scale = put(torch_of("rel_clip_scale").view(1, 1, 1, N_HEADS * D_REL))
         # clip reductions (see _clip_factor): [128, 1] over head_dim; [384, 32] per 16-wide rel head (cols >= 24

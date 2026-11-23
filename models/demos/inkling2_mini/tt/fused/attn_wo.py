@@ -53,7 +53,7 @@ class AttnWo:
         for c, i in b.cores:
             bank, rot, part = b.items[i]
             core = ttnn.CoreCoord(*c)
-            r_args[core] = [b.weight.buffer_address(), bank, b.offsets[i], len(part)] + [n for n, _ in part]
+            r_args[core] = b.reader_args(i)
             c_args[core] = [rot, len(part)] + [n for n, _ in part]
             w_args[core] = [x.buffer_address(), rot, len(part)] + conv_args + [v for p_ in part for v in p_]
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
@@ -110,6 +110,7 @@ class AttnWo:
                 core_ranges=self.bank.grid,
                 compile_time_args=acc,
                 named_compile_time_args=list(named.items()),
+                defines=self.bank.reader_defines(),
                 runtime_args=[(k, v) for k, v in r_args.items()],
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0

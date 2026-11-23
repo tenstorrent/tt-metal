@@ -5,7 +5,8 @@
 // Streams this core's weight tiles, stored contiguous in its own bank in the order compute eats them: per pass nblk
 // blocks of kb * ncq tiles, each into one fixed slot of kb * max_ncq tiles of cb_w (as the reference's BT), up to 3
 // blocks in flight (transaction ids 1..4). The activation comes in on the writer's NOC.
-// Runtime args: weight address, bank, first tile slot, number of passes, ncq per pass.
+// Runtime args: weight address, bank, first tile slot, number of passes, ncq per pass (W_SPREAD: then alt bank, alt
+// blocks, alt first tile slot: n_alt evenly spaced blocks of pass 0 are stored in the alt bank).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -24,6 +25,11 @@ void kernel_main() {
     const uint32_t bank = get_arg_val<uint32_t>(a++);
     uint32_t slot = get_arg_val<uint32_t>(a++);
     const uint32_t npass = get_arg_val<uint32_t>(a++);
+#ifdef W_SPREAD
+    const uint32_t alt_bank = get_arg_val<uint32_t>(a + npass);
+    const uint32_t n_alt = get_arg_val<uint32_t>(a + npass + 1);
+    uint32_t alt_slot = get_arg_val<uint32_t>(a + npass + 2);
+#endif
 
     constexpr auto w_args = TensorAccessorArgs<0>();
     const auto ws = TensorAccessor(w_args, w_addr);
@@ -38,8 +44,16 @@ void kernel_main() {
         for (uint32_t p = 0; p < nblk; ++p) {
             cb_reserve_back(cb_w, SLOT * (issued - retired + 1));  // this block's slot plus the ones in flight
             noc_async_read_set_trid(issued % NSLOT + 1);
-            noc_async_read(ws.get_noc_addr(slot * nb + bank), base + (issued % NSLOT) * SLOT * tb, bytes);
-            slot += kb * ncq;
+#ifdef W_SPREAD
+            if (q == 0 && (p + 1) * n_alt / nblk > p * n_alt / nblk) {  // bank_linear.py _alt_block
+                noc_async_read(ws.get_noc_addr(alt_slot * nb + alt_bank), base + (issued % NSLOT) * SLOT * tb, bytes);
+                alt_slot += kb * ncq;
+            } else
+#endif
+            {
+                noc_async_read(ws.get_noc_addr(slot * nb + bank), base + (issued % NSLOT) * SLOT * tb, bytes);
+                slot += kb * ncq;
+            }
             ++issued;
             if (issued - retired == IN_FLIGHT) {
                 noc_async_read_barrier_with_trid(retired % NSLOT + 1);
