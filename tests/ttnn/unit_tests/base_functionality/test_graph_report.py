@@ -1867,6 +1867,7 @@ class TestImportReportRankMetadata:
             db_path, "SELECT rank, value FROM rank_metadata WHERE key = 'capture_timestamp_ns' ORDER BY rank"
         )
         assert rows == [(0, "1000"), (1, "2000"), (2, "3000")]
+        assert [self._rank_metadata(db_path, rank)["rank"] for rank in range(3)] == ["0", "1", "2"]
 
     def test_report_metadata_is_rank_0s(self, tmp_path):
         """Ranks are imported in order, so a last-file-wins report_metadata would show rank 2's."""
@@ -1891,14 +1892,16 @@ class TestImportReportRankMetadata:
         assert _query_db(db_path, "SELECT DISTINCT rank FROM rank_metadata ORDER BY rank") == [(0,), (2,)]
 
     def test_without_rank_0_report_metadata_is_the_lowest_rank_imported(self, tmp_path):
+        """Rank 2's file is imported last, so a last-file-wins report_metadata would show it, extra key included."""
         db_path = self._import(
             tmp_path,
             [
-                self._loose_capture("a.json", rank=2, world_size=3),
-                self._loose_capture("b.json", rank=1, world_size=3),
+                self._loose_capture("a.json", rank=1, world_size=3),
+                self._loose_capture("b.json", rank=2, world_size=3, only_on_rank_2="x"),
             ],
         )
         assert self._report_metadata(db_path)["rank"] == "1"
+        assert "only_on_rank_2" not in self._report_metadata(db_path)
 
     def test_several_captures_of_one_rank_merge_per_key_and_the_last_imported_wins(self, tmp_path):
         """Captures of one rank are merged key by key: a key only the first has is kept, and for a key both have,
@@ -1932,15 +1935,21 @@ class TestImportReportRankMetadata:
         assert self._report_metadata(db_path)["rank"] == "1"
 
     def test_a_negative_rank_is_rejected(self, tmp_path, expect_error):
-        """It would otherwise sort ahead of rank 0 and supply report_metadata."""
+        """It would otherwise sort ahead of rank 0 and supply report_metadata. The rejected capture is imported first,
+        and an earlier import's database is left as it was."""
+        db_path = self._import(tmp_path, [self._loose_capture("a.json", rank=0, world_size=2)])
+        before = db_path.read_bytes()
+        bad_dir = tmp_path / "bad_reports_in"
+        _write_reports(
+            bad_dir,
+            [
+                self._loose_capture("a.json", rank=-1, world_size=2),
+                self._loose_capture("b.json", rank=0, world_size=2),
+            ],
+        )
         with expect_error(ValueError, "negative rank -1"):
-            self._import(
-                tmp_path,
-                [
-                    self._loose_capture("a.json", rank=0, world_size=2),
-                    self._loose_capture("b.json", rank=-1, world_size=2),
-                ],
-            )
+            graph_report.import_report(bad_dir, db_path.parent)
+        assert db_path.read_bytes() == before
 
     def test_single_file_import_keeps_its_own_rank_metadata(self, tmp_path):
         name, report = _rank_capture(1, 2)
