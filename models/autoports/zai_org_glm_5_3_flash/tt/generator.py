@@ -804,9 +804,134 @@ def spec_multi_alt(env=os.environ) -> tuple | None:
     return G, K
 
 
+def spec_w8_verify(env=os.environ) -> bool:
+    """GLM53_SPEC_W8_VERIFY=1 (default off; GLM53_SPEC_MULTI + GLM53_SPEC_MTP_SPARSE on the B 16 build): the width-8
+    verify. The build also runs the native decode width 8 (spec_w8_env: GLM53_STACK_NATIVE_WIDTHS gets 8, on the full
+    width's packed phases, GLM53_STACK_NATIVE_FAB=pad) and every 16-row multi-user step gets its 8-row half
+    (spec_multi_subs): the 4 x 3 primary's PAIR step (2 users x 3 drafts on bases 0 / 4) and the 8 x 1 alternate's 4 x 1
+    step (bases 0 / 2 / 4 / 6). Live users inside slots 0..7 that one of them holds verify 8 rows instead of 16. The
+    placement order is unchanged (spec_multi_layout: the 4 x 1 step lists after the primary, so a 3rd / 4th user still
+    takes the 4 x 3 step's bases)."""
+    if env.get("GLM53_SPEC_W8_VERIFY", "0") != "1":
+        return False
+    if env.get("GLM53_SPEC_MULTI", "0") != "1" or env.get("GLM53_SPEC_MTP_SPARSE", "0") != "1":
+        raise ValueError(
+            "GLM53_SPEC_W8_VERIFY: with GLM53_SPEC_MULTI=1 and GLM53_SPEC_MTP_SPARSE=1 (the shared MTP state)"
+        )
+    return True
+
+
+def spec_w8_env(env=os.environ, max_batch: int = 16) -> dict | None:
+    """GLM53_SPEC_W8_VERIFY's width (StackBackend, before any layer is built): 8 joins GLM53_STACK_NATIVE_WIDTHS -- in
+    the environment, since every TPMlaShard (the MTP layer's too) builds its t = 8 streams from it -- and
+    GLM53_STACK_NATIVE_FAB defaults to "pad" (the width-8 programs on the full width's packed phases; spec_widths refuses
+    another mode for an 8-row step). -> {knob: value} it set (empty: already set), or None when the width-8 verify is
+    off (the knob unset or GLM53_SPEC_K 0). The B 16 build only (the halves of its 16-row steps)."""
+    if not spec_w8_verify(env) or int(env.get("GLM53_SPEC_K", "0") or 0) <= 0:
+        return None
+    if int(max_batch) != 16:
+        raise ValueError(
+            f"GLM53_SPEC_W8_VERIFY: the B 16 build (the 8-row halves of its 16-row steps), not B {max_batch}"
+        )
+    out = {}
+    nspec = env.get("GLM53_STACK_NATIVE_WIDTHS", "none") or "none"
+    nws = set() if nspec == "none" else {int(v) for v in nspec.split(",") if v.strip()}
+    if 8 not in nws:
+        out["GLM53_STACK_NATIVE_WIDTHS"] = ",".join(str(w) for w in sorted(nws | {8}))
+    if env.get("GLM53_STACK_NATIVE_FAB") is None:
+        out["GLM53_STACK_NATIVE_FAB"] = "pad"
+    env.update(out)
+    return out
+
+
+def _spec_multi_parents(env) -> list:
+    """the built multi-user steps [(G, K)]: the primary (GLM53_SPEC_MULTI_USERS x GLM53_SPEC_K), then
+    GLM53_SPEC_MULTI_ALT's alternate"""
+    g0 = spec_multi_groups(env)
+    out = [(g0, int(env.get("GLM53_SPEC_K", "0") or 0))] if g0 else []
+    alt = spec_multi_alt(env)
+    return out + ([tuple(alt)] if alt is not None else [])
+
+
+def _spec_sub_parent(parents, g: int, k: int):
+    """the index of the step a (g, k) subset step belongs to: the first with k drafts and more than g users, else None"""
+    return next((i for i, (G, K) in enumerate(parents) if K == k and g < G), None)
+
+
+def spec_multi_subs(env=os.environ) -> tuple:
+    """the SUBSET steps of the multi-user steps -> sorted ((G', K), ..): G' users x a built step's K drafts on that
+    step's first G' group bases u (K + 1) (G' (K + 1) verify rows), built next to it (tt/spec_mtp.py SpecSwitch, sharing
+    the sparse MTP layer and its per-slot state) and listed before it (spec_multi_layout), so the step pick
+    (spec_pick_step / the adapter's _spec_multi_pick: the first step whose bases hold every live user) takes the
+    narrowest verify that holds them. Sources (any subset compose):
+      GLM53_SPEC_MULTI_LONE=1 (spec_multi_lone): (1, K) -- the lone-user step (the primary's K, base 0)
+      GLM53_SPEC_MULTI_SUB = "2" / "2:3,4:1" (comma-separated G' or G':K'; row sparsity): G' users of the built step
+        with K' drafts (default the primary's K) and more than G' users (the primary, else GLM53_SPEC_MULTI_ALT's
+        alternate); needs GLM53_SPEC_MULTI and GLM53_SPEC_MTP_SPARSE
+      GLM53_SPEC_W8_VERIFY=1 (spec_w8_verify): the 8-row half of every 16-row step -- (2, 3) of the 4 x 3 primary, (4, 1)
+        of the 8 x 1 alternate
+    A subset equal to a built step is refused (it would be that step a second time). G' (K + 1) must be a decode width
+    of the build (spec_widths checks it and, for an 8-row step below a <= 16-row full width, the packed phases). ()
+    when none."""
+    subs = set()
+    v = (env.get("GLM53_SPEC_MULTI_SUB", "") or "").strip()
+    w8 = spec_w8_verify(env)
+    if (v and v != "0") or w8:
+        if env.get("GLM53_SPEC_MULTI", "0") != "1" or env.get("GLM53_SPEC_MTP_SPARSE", "0") != "1":
+            raise ValueError(
+                "GLM53_SPEC_MULTI_SUB: with GLM53_SPEC_MULTI=1 and GLM53_SPEC_MTP_SPARSE=1 (the shared MTP state)"
+            )
+        parents = _spec_multi_parents(env)
+        k0 = parents[0][1]
+        if v and v != "0":
+            try:
+                ent = [tuple(int(y) for y in x.split(":")) for x in v.split(",") if x.strip()]
+                if any(len(e) > 2 for e in ent):
+                    raise ValueError(v)
+                ent = [(e[0], e[1] if len(e) == 2 else k0) for e in ent]
+            except ValueError:
+                raise ValueError(
+                    f"GLM53_SPEC_MULTI_SUB={v!r}: comma-separated G or G:K (e.g. '2' or '2:3,4:1')"
+                ) from None
+            bad = sorted(e for e in ent if e[0] < 1 or _spec_sub_parent(parents, *e) is None)
+            if bad:
+                raise ValueError(f"GLM53_SPEC_MULTI_SUB={v!r}: {bad} are not 1 <= G' < G of a built step with K' drafts "
+                                 f"(steps (G, K) {parents})")  # fmt: skip
+            dup = sorted(e for e in ent if e in parents)
+            if dup:
+                raise ValueError(f"GLM53_SPEC_MULTI_SUB={v!r}: {dup} are built steps already (steps (G, K) {parents})")
+            subs |= set(ent)
+        if w8:
+            halves = {(G // 2, K) for G, K in parents if G * (K + 1) == 16 and G % 2 == 0}
+            if not halves:
+                raise ValueError(f"GLM53_SPEC_W8_VERIFY: no 16-row multi-user step to halve (steps (G, K) {parents})")
+            dup = sorted(h for h in halves if h in parents)
+            if dup:
+                raise ValueError(f"GLM53_SPEC_W8_VERIFY: the 8-row halves {dup} are built steps already (steps (G, K) "
+                                 f"{parents})")  # fmt: skip
+            subs |= halves
+    if spec_multi_lone(env):
+        subs.add((1, int(env.get("GLM53_SPEC_K", "0") or 0)))
+    return tuple(sorted(subs))
+
+
+def spec_multi_layout(env=os.environ) -> list:
+    """the backend's multi-user steps in preference order (StackBackend builds them in it; Glm53Generator.spec_steps
+    returns it) -> [(G, K)]: each built step -- the primary, then GLM53_SPEC_MULTI_ALT's alternate -- preceded by its
+    subset steps (spec_multi_subs), fewest users first. The served B 16 steps: [(1, 3), (4, 3), (8, 1)]; with
+    GLM53_SPEC_W8_VERIFY=1 [(1, 3), (2, 3), (4, 3), (4, 1), (8, 1)] -- the placement order (spec_all_slots: every step's
+    new bases in this order) stays 0, 4, 8, 12, 2, 6, 10, 14. [] without GLM53_SPEC_MULTI."""
+    parents = _spec_multi_parents(env)
+    subs = spec_multi_subs(env)
+    out = []
+    for i, p in enumerate(parents):
+        out += [s for s in subs if _spec_sub_parent(parents, *s) == i] + [p]
+    return out
+
+
 def spec_pick_step(steps, live, room=None, partial: bool = True):
     """the multi-user step that serves the live generator slots (pure; GLM53_SPEC_MULTI_ALT): steps = [(K, G, bases)]
-    in preference order (the primary first), live = the live slots -> (step index, the entering bases) of the FIRST
+    in preference order (spec_multi_layout), live = the live slots -> (step index, the entering bases) of the FIRST
     step whose bases hold every live slot (partial: any non-empty subset; else exactly), room(i) its context check;
     None when no step serves them (the step decodes plainly)"""
     lv = sorted(int(v) for v in live)
@@ -917,7 +1042,7 @@ def spec_verify_masks(K: int, groups: int, wv: int, active) -> torch.Tensor:
     return m
 
 
-def spec_widths(K: int, chunk: int, widths=(), groups: int = 0) -> dict:
+def spec_widths(K: int, chunk: int, widths=(), groups: int = 0, env=None) -> dict:
     """the speculative step's row counts on a backend with decode chunk `chunk` and extra decode widths `widths` (its
     narrow + native widths) -- pure, so StackBackend sizes the sparse_dsa layers' fabric row counts before SpecMTP exists:
       w      K + 1, the draft block (verify rows 0..K, the MTP catch-up rows 0..K)
@@ -934,7 +1059,10 @@ def spec_widths(K: int, chunk: int, widths=(), groups: int = 0) -> dict:
     group is whole row pairs: K + 1 even) -- wv = cu = w (the catch-up: every group's K + 1 rows), ch = the smallest
     width >= G (chained row u = user u; K 1: no chained launch -- the catch-up head drafts d'1 directly, spec_ctl GATHER
     reads mout row u (K + 1) + n_u -- so ch = w and no extra width is built); ts = those of cu / ch <= 4 (t > 4 runs on
-    the full width's phases, as the native widths)."""
+    the full width's phases, as the native widths). A multi-user step of 4 < w rows below a full width of <= 16 rows
+    needs GLM53_STACK_NATIVE_FAB=pad (env, default os.environ): its programs, the shared MTP layer's included, run on the
+    full width's packed phases; "own" gives the width phases the MTP layer, built for the primary's row counts, has not
+    got."""
     if groups:
         G, g = int(groups), int(K) + 1
         ws = sorted({int(x) for x in widths} | {int(chunk)})
@@ -942,6 +1070,10 @@ def spec_widths(K: int, chunk: int, widths=(), groups: int = 0) -> dict:
         assert G >= 1 and (G == 1 or g % 2 == 0) and w <= 16, (
             "GLM53_SPEC_MULTI: G (K + 1) <= 16 rows, K + 1 even (kda_pre's verify groups: row pairs)", G, K)  # fmt: skip
         assert w in ws, ("GLM53_SPEC_MULTI: G (K + 1) rows must be a decode width of the build", w, ws)
+        fab = (os.environ if env is None else env).get("GLM53_STACK_NATIVE_FAB", "own") or "own"
+        if 4 < w < int(chunk) <= 16 and fab != "pad":
+            raise ValueError(f"GLM53_SPEC_MULTI: a {w}-row step on the {chunk}-row build runs on the packed phases "
+                             f"(GLM53_STACK_NATIVE_FAB=pad, not {fab!r})")  # fmt: skip
         ch = w if K == 1 else min(x for x in ws if x >= G)
         return dict(w=w, lone=w, wv=w, cu=w, ch=ch, mode="multi", ts=tuple(sorted(t for t in {w, ch} if t <= 4)))
     w = int(K) + 1
@@ -2840,8 +2972,9 @@ class Glm53Generator(_ReadinessGenerator):
     # primary + the alternate, one current); every entry point above / below acts on the CURRENT step. The served adapter
     # picks the step for its live users (spec_steps / spec_pick_step) and selects it between entries (spec_select).
     def spec_steps(self) -> list:
-        """[(K, G, group bases)] of the backend's multi-user steps in preference order (the primary first); one entry
-        without GLM53_SPEC_MULTI_ALT, none without a multi-user step"""
+        """[(K, G, group bases)] of the backend's multi-user steps in preference order (spec_multi_layout: the primary,
+        then the alternate, each after its subset steps); one entry without GLM53_SPEC_MULTI_ALT / subset steps, none
+        without a multi-user step"""
         sp = getattr(self.backend, "spec", None)
         if sp is None or not self.spec_groups():
             return []
@@ -3477,14 +3610,8 @@ class Glm53Generator(_ReadinessGenerator):
         self.last_batch_timing = None
         # GLM53_SPEC_MULTI (spec_k with the backend's G-user step): the G prompts go to the group bases (no slot moves)
         multi = bool(spec_k) and self.spec_groups() > 0
-        if multi and slots is None:
-            # the first step (spec_steps: the primary, then GLM53_SPEC_MULTI_ALT's) with room for the n users -> current;
-            # the users on its first n group bases (n < G: GLM53_SPEC_PARTIAL's inactive groups)
-            steps = self.spec_steps()
-            pick = next((i for i, (_k, g, _b) in enumerate(steps) if g >= n), None)
-            if pick is not None and (n == steps[pick][1] or self.spec_partial_groups()):
-                self.spec_select(pick)
-                slots = list(steps[pick][2][:n])
+        if multi:
+            slots = self._spec_batch_slots(b, n, slots)
         slots = list(slots) if slots is not None else list(range(n))
         if len(slots) != n or len(set(slots)) != n or any(not 0 <= s < b.max_batch for s in slots):
             raise ValueError(f"need {n} distinct slots in [0, {b.max_batch})")
@@ -3632,6 +3759,29 @@ class Glm53Generator(_ReadinessGenerator):
                 b.slots[s].active = False
                 b.slots[s].finished = True
         return outputs
+
+    def _spec_batch_slots(self, b, n: int, slots):
+        """generate_batch's multi-user step (spec_k with the backend's GLM53_SPEC_MULTI steps) -> the users' slots, that
+        step made current: slots None -> the first step (spec_steps' preference order) with room for the n users, the
+        users on its first n group bases (n < G: GLM53_SPEC_PARTIAL's inactive groups), else None (range(n), refused by
+        _spec_check); explicit slots (e.g. the 4 x 1 step's 0 / 2 / 4 / 6) -> validated first (a bad argument leaves
+        the current step), then the first step whose bases hold them (spec_pick_step: the served adapter's
+        _spec_multi_pick rule), whatever step is current; none holds them: the current step stays (_spec_check refuses)
+        """
+        steps = self.spec_steps()
+        if slots is None:
+            pick = next((i for i, (_k, g, _b) in enumerate(steps) if g >= n), None)
+            if pick is not None and (n == steps[pick][1] or self.spec_partial_groups()):
+                self.spec_select(pick)
+                return list(steps[pick][2][:n])
+            return None
+        slots = [int(s) for s in slots]
+        if len(slots) != n or len(set(slots)) != n or any(not 0 <= s < b.max_batch for s in slots):
+            raise ValueError(f"need {n} distinct slots in [0, {b.max_batch})")
+        p = spec_pick_step(steps, slots, partial=self.spec_partial_groups())
+        if p is not None:
+            self.spec_select(p[0])
+        return slots
 
     def _spec_check(self, b, K: int, slots: Sequence[int], params: Sequence[SamplingParams], next_input,
                     mm=None) -> None:  # fmt: skip
