@@ -483,6 +483,7 @@ jobs:
           HEAD_RESULT: ${{ needs.placement-measure-head.result }}
           BASE_RESULT: ${{ needs.placement-measure-base.result }}
           SOURCE_RUN: ${{ needs.placement-plan.outputs.run }}
+          POSITIONS: ${{ needs.placement-plan.outputs.shifts }}
         run: |
           mkdir -p current baseline
           LIMIT_NOTE="The limit of ${PLACEMENT_CAP} tests per arch keeps this job short. To re-measure all of them, run the **LLK perf gate** workflow by hand with \`placement_run_id\` = \`${SOURCE_RUN}\`; it reuses this stage 1 and updates this comment."
@@ -492,7 +493,7 @@ jobs:
             --threshold "$THRESHOLD" --min-cycles "$MIN_CYCLES" \
             --module-threshold "$MODULE_THRESHOLDS" \
             --over-cap nodes/nodes.over --limit-note "$LIMIT_NOTE" \
-            --arch "$ARCH" --report stage2.md || true
+            --positions "$POSITIONS" --arch "$ARCH" --report stage2.md || true
           if [ "$HEAD_RESULT" != success ] || [ "$BASE_RESULT" != success ]; then
             NOTE="> ⚠️ A stage-2 measuring job did not succeed (PR head: ${HEAD_RESULT}, branch point: ${BASE_RESULT}). What it did not measure is listed as not re-measured."
             printf '%s\n\n%s\n' "$(head -1 stage2.md)" "$NOTE" > stage2.tmp

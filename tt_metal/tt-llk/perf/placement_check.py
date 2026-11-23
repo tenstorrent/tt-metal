@@ -332,7 +332,8 @@ def render(results, arch, limit_note=""):
         verdict = "ℹ️ no confirmed regression, code-placement effects only"
     else:
         verdict = "✅ no confirmed regression"
-    head = "| test | configuration | run type | change at positions +0 / +4 / +20 / +36 / +52 B | loop code changed in |"
+    at = " / ".join(f"+{p[1:]}" for p in POSITIONS)
+    head = f"| test | configuration | run type | change at positions {at} B | loop code changed in |"
     rule = "|---|---|---|---|---|"
     lines = [
         f"## {name}: {verdict}",
@@ -439,6 +440,9 @@ def main(argv=None):
     d.add_argument("--module-threshold", default="")
     d.add_argument("--arch", default="")
     d.add_argument(
+        "--positions", default="", help="the code shifts both sides measured at, e.g. '0 4 20 36 52'"
+    )
+    d.add_argument(
         "--over-cap", default="", help="file of candidate indices left out by the cap"
     )
     d.add_argument(
@@ -464,6 +468,9 @@ def main(argv=None):
     g.add_argument("--arch", default="")
     g.add_argument("--report", required=True)
     a = ap.parse_args(argv)
+    if getattr(a, "positions", ""):
+        global POSITIONS
+        POSITIONS = tuple(f"p{shift}" for shift in a.positions.split())
     if a.cmd == "gate":
         paths = sorted(glob.glob(a.results, recursive=True))
         results, notes = gate(
