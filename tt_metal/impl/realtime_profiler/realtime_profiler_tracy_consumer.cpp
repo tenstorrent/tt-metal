@@ -4,28 +4,66 @@
 
 #include "realtime_profiler_tracy_consumer.hpp"
 
-#include <fmt/format.h>
-#include <tt-logger/tt-logger.hpp>
-
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <filesystem>
+#include <mutex>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+
 #if defined(TRACY_ENABLE)
-#include <common/TracyTTDeviceData.hpp>
+#include <client/TracyProfiler.hpp>
 #include <tracy/Tracy.hpp>
 #endif
 
 namespace tt::tt_metal {
 
-namespace {
+void RealtimeProfilerTracyConsumer::add_device(
+    uint32_t chip_id, int64_t anchor_host, uint64_t anchor_device, double frequency) {
+    enqueue(
+        {.kind = Event::Kind::Add,
+         .chip_id = chip_id,
+         .host_time = anchor_host,
+         .device_timestamp = anchor_device,
+         .frequency = frequency});
+}
+
+void RealtimeProfilerTracyConsumer::remove_device(uint32_t chip_id) {
+    enqueue({.kind = Event::Kind::Remove, .chip_id = chip_id});
+}
+
+void RealtimeProfilerTracyConsumer::calibrate_device(
+    uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency) {
+    enqueue(
+        {.kind = Event::Kind::Calibrate,
+         .chip_id = chip_id,
+         .host_time = host_time,
+         .device_timestamp = device_timestamp,
+         .frequency = frequency});
+}
+
+void RealtimeProfilerTracyConsumer::push_dispatch_stall_marker(
+    uint32_t chip_id, uint64_t stall_end_timestamp, uint32_t stall_cycles) {
+    enqueue(
+        {.kind = Event::Kind::Stall,
+         .chip_id = chip_id,
+         .device_timestamp = stall_end_timestamp,
+         .stall_cycles = stall_cycles});
+}
 
 #if defined(TRACY_ENABLE)
-// Synthetic core for the real-time profiler's Tracy lanes: programs go on BRISC, sync checks on NCRISC.
+
+namespace {
+
+// Synthetic core for the real-time profiler's Tracy lanes: programs go on BRISC, dispatch stalls on NONE.
 constexpr uint32_t kRealtimeProfilerCore_X = 100;
 constexpr uint32_t kRealtimeProfilerCore_Y = 100;
+constexpr auto kStallMessageInterval = std::chrono::milliseconds(100);
 
 uint32_t lane_thread_id(uint32_t chip_id, tracy::RiscType risc) {
     tracy::TTDeviceMarker lane{};
@@ -36,364 +74,207 @@ uint32_t lane_thread_id(uint32_t chip_id, tracy::RiscType risc) {
     return lane.get_thread_id();
 }
 
-tracy::TTDeviceMarker make_marker(
-    const tt::ProgramRealtimeRecord& record,
-    uint64_t timestamp,
-    tracy::TTDeviceMarkerType type,
-    const std::string& file_str) {
-    tracy::TTDeviceMarker marker;
-    marker.chip_id = record.chip_id;
-    marker.core_x = kRealtimeProfilerCore_X;
-    marker.core_y = kRealtimeProfilerCore_Y;
-    marker.risc = tracy::RiscType::BRISC;
-    marker.timestamp = timestamp;
-    marker.runtime_host_id = record.runtime_id;
-    marker.marker_name = fmt::format("Program_{}", record.runtime_id);
-    marker.marker_type = type;
-    marker.file = file_str;
-    marker.line = 0;
-    return marker;
+// The name Kernel::name() gives the kernel: its source file's stem. An inline-source kernel's entry is its source
+// text, not a path.
+std::string kernel_name(std::string_view source) {
+    if (source.find('\n') != std::string_view::npos) {
+        return "Kernel_Source_Code";
+    }
+    return std::filesystem::path(source).stem().string();
 }
-#endif
 
-constexpr size_t kMaxSummaryEntries = 8;
-
-template <typename Key>
-std::string FormatTopCounts(const std::unordered_map<Key, uint64_t>& counts) {
-    if (counts.empty()) {
-        return "none";
-    }
-    std::vector<std::pair<Key, uint64_t>> entries(counts.begin(), counts.end());
-    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-    std::string result;
-    const size_t limit = std::min(entries.size(), kMaxSummaryEntries);
-    for (size_t i = 0; i < limit; ++i) {
-        if (i > 0) {
-            result += ", ";
-        }
-        result += fmt::format("{}×{}", entries[i].first, entries[i].second);
-    }
-    if (entries.size() > kMaxSummaryEntries) {
-        result += fmt::format(", ... (+{} more)", entries.size() - kMaxSummaryEntries);
-    }
-    return result;
-}
+constexpr tracy::SourceLocationData kStallSrcloc{
+    "DISPATCH STALL: RT profiler record ring full", "realtime_profiler", "realtime_profiler", 0, tracy::Color::Red};
 
 }  // namespace
 
-RealtimeProfilerTracyHandler::RealtimeProfilerTracyHandler() {
-#if defined(TRACY_ENABLE)
-    callback_handle_ = tt::RegisterProgramRealtimeProfilerCallback([this](const tt::ProgramRealtimeRecordBatch& batch) {
-        if (!tracy::GetProfiler().IsConnected()) {
-            return;
+void RealtimeProfilerTracyConsumer::enqueue(const Event& event) {
+    // Past its connect window Tracy takes nothing more. Before a client connects it keeps whatever it is given, so a
+    // stall is not queued until then.
+    if (tracy::GetProfiler().IsEmitSuppressed() ||
+        (event.kind == Event::Kind::Stall && !tracy::GetProfiler().IsConnected())) {
+        return;
+    }
+    std::lock_guard lock(events_mutex_);
+    // Only a device's newest mapping matters, so a mapping still waiting to be applied is overwritten.
+    if (event.kind == Event::Kind::Calibrate) {
+        for (Event& pending : events_ | std::views::reverse) {
+            if (pending.chip_id != event.chip_id) {
+                continue;
+            }
+            if (pending.kind == Event::Kind::Calibrate) {
+                pending = event;
+                return;
+            }
+            break;
         }
-        for (const auto& record : batch.records) {
-            HandleRecord(record);
-        }
-    });
-#endif
+    }
+    events_.push_back(event);
+    events_pending_.store(true, std::memory_order_release);
 }
 
-RealtimeProfilerTracyHandler::~RealtimeProfilerTracyHandler() {
-#if defined(TRACY_ENABLE)
-    tt::UnregisterProgramRealtimeProfilerCallback(callback_handle_);
-
-    std::lock_guard<std::mutex> lock(mutex_);
-    MaybeEmitSkippedZoneSummaryLocked();
-
-    for (auto& entry : tracy_contexts_) {
-        FlushDispatchStallMessageLocked(entry.first);
+bool RealtimeProfilerTracyConsumer::on_records(const experimental::ProgramRealtimeRecordBatch& batch) {
+    if (tracy::GetProfiler().IsEmitSuppressed()) {
+        return false;
     }
-    for (auto& entry : tracy_contexts_) {
-        TracyTTDestroy(entry.second);
+    if (events_pending_.load(std::memory_order_acquire)) {
+        apply_events();
     }
-    tracy_contexts_.clear();
-#endif
-}
-
-void RealtimeProfilerTracyHandler::AddDevice(
-    [[maybe_unused]] uint32_t chip_id,
-    [[maybe_unused]] int64_t host_start,
-    [[maybe_unused]] double first_timestamp,
-    [[maybe_unused]] double frequency) {
-#if defined(TRACY_ENABLE)
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (tracy_contexts_.contains(chip_id)) {
-        log_warning(tt::LogMetal, "RealtimeProfilerTracyHandler: device {} already added, skipping", chip_id);
-        return;
-    }
-
-    TracyTTCtx ctx = TracyTTContext();
-    TracyTTContextPopulate(ctx, host_start, first_timestamp, frequency);
-    std::string name = fmt::format("Device {}:", chip_id);
-    TracyTTContextName(ctx, name.c_str(), name.size());
-
-    // The GUI labels a lane with the thread name registered for its id; register before the first zone.
-    tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::BRISC), "Programs");
-    tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::NCRISC), "Sync check");
-    tracy::SetThreadName(lane_thread_id(chip_id, tracy::RiscType::NONE), "Dispatch stall");
-
-    tracy_contexts_[chip_id] = ctx;
-#endif
-}
-
-void RealtimeProfilerTracyHandler::RemoveDevice([[maybe_unused]] uint32_t chip_id) {
-#if defined(TRACY_ENABLE)
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = tracy_contexts_.find(chip_id);
-    if (it == tracy_contexts_.end()) {
-        return;
-    }
-    FlushDispatchStallMessageLocked(chip_id);
-    TracyTTDestroy(it->second);
-    tracy_contexts_.erase(it);
-#endif
-}
-
-TracyTTCtx RealtimeProfilerTracyHandler::GetContext(uint32_t chip_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = tracy_contexts_.find(chip_id);
-    return it != tracy_contexts_.end() ? it->second : nullptr;
-}
-
-void RealtimeProfilerTracyHandler::RecordSkippedZoneWithEndBeforeStart(
-    const tt::ProgramRealtimeRecord& record, int64_t delta) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto& stats = skipped_end_before_start_stats_;
-    stats.total_skipped++;
-
-    if (!stats.logged_first_detail) {
-        stats.logged_first_detail = true;
-        stats.last_summary_time = std::chrono::steady_clock::now();
-        log_warning(
-            tt::LogMetal,
-            "[Real-time profiler] Skipping zone with end < start: runtime_id={}, chip_id={}, "
-            "start_timestamp={}, end_timestamp={} (delta={})",
-            record.runtime_id,
-            record.chip_id,
-            record.start_timestamp,
-            record.end_timestamp,
-            delta);
-        return;
-    }
-
-    stats.suppressed_since_last_summary++;
-    stats.count_by_runtime_id[record.runtime_id]++;
-    stats.count_by_chip_id[record.chip_id]++;
-    const auto now = std::chrono::steady_clock::now();
-    if (now - stats.last_summary_time >= SkippedEndBeforeStartStats::kSummaryInterval) {
-        MaybeEmitSkippedZoneSummaryLocked();
-    }
-}
-
-void RealtimeProfilerTracyHandler::MaybeEmitSkippedZoneSummaryLocked() {
-    auto& stats = skipped_end_before_start_stats_;
-    if (stats.total_skipped == 0) {
-        return;
-    }
-    if (stats.suppressed_since_last_summary == 0) {
-        return;
-    }
-
-    log_warning(
-        tt::LogMetal,
-        "[Real-time profiler] Skipped {} additional zones with end < start ({} total); programs: {}; chips: {}",
-        stats.suppressed_since_last_summary,
-        stats.total_skipped,
-        FormatTopCounts(stats.count_by_runtime_id),
-        FormatTopCounts(stats.count_by_chip_id));
-
-    stats.suppressed_since_last_summary = 0;
-    stats.count_by_runtime_id.clear();
-    stats.count_by_chip_id.clear();
-    stats.last_summary_time = std::chrono::steady_clock::now();
-}
-
-void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord& record) {
-    if (record.end_timestamp < record.start_timestamp) {
-        auto delta = static_cast<int64_t>(record.end_timestamp) - static_cast<int64_t>(record.start_timestamp);
-        constexpr int64_t kStartupRaceThreshold = -100000;
-        if (delta > kStartupRaceThreshold) {
-            // Small negative delta from deterministic startup race: compute kernel
-            // detects dispatch_d's stream-register clearing before dispatch_s records
-            // the first start timestamp. Benign — silently skip.
-            log_debug(
-                tt::LogMetal,
-                "[Real-time profiler] Skipping startup zone with end < start: "
-                "runtime_id={}, delta={}",
-                record.runtime_id,
-                delta);
-        } else {
-            RecordSkippedZoneWithEndBeforeStart(record, delta);
-        }
-        return;
-    }
-
-#if defined(TRACY_ENABLE)
-    TracyTTCtx ctx = GetContext(record.chip_id);
-    if (!ctx) {
-        return;
-    }
-
-    std::string file_str;
-    for (size_t i = 0; i < record.kernel_sources.size(); i++) {
-        if (i > 0) {
-            file_str += ",\n";
-        }
-        file_str += record.kernel_sources[i];
-    }
-    if (file_str.empty()) {
-        file_str = "realtime_profiler";
-    }
-
-    auto start = make_marker(record, record.start_timestamp, tracy::TTDeviceMarkerType::ZONE_START, file_str);
-    auto end = make_marker(record, record.end_timestamp, tracy::TTDeviceMarkerType::ZONE_END, file_str);
-
-    std::lock_guard<std::mutex> lock(mutex_);
-    TracyTTPushStartMarker(ctx, start);
-    TracyTTPushEndMarker(ctx, end);
-#endif
-}
-
-void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
-    [[maybe_unused]] uint32_t chip_id, [[maybe_unused]] uint64_t device_timestamp, [[maybe_unused]] double frequency) {
-#if defined(TRACY_ENABLE)
     if (!tracy::GetProfiler().IsConnected()) {
-        return;
+        return true;
     }
-    TracyTTCtx ctx = GetContext(chip_id);
-    if (!ctx) {
-        return;
+    for (const auto& record : batch.records) {
+        handle_record(record);
     }
-
-    // Sync-check zones go on a dedicated Tracy lane (NCRISC) so they don't have to
-    // strictly nest with program zones — overlap there caused zones to disappear or duplicate.
-    tracy::TTDeviceMarker start_marker;
-    start_marker.chip_id = chip_id;
-    start_marker.core_x = kRealtimeProfilerCore_X;
-    start_marker.core_y = kRealtimeProfilerCore_Y;
-    start_marker.risc = tracy::RiscType::NCRISC;
-    start_marker.timestamp = device_timestamp;
-    start_marker.runtime_host_id = 0;
-    start_marker.marker_name = "SYNC_CHECK";
-    start_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_START;
-    start_marker.file = "sync_check";
-    start_marker.line = 0;
-
-    // End marker: 1µs after start (just enough to be visible in Tracy)
-    uint64_t end_timestamp = device_timestamp + static_cast<uint64_t>(frequency * 1000.0);
-
-    tracy::TTDeviceMarker end_marker = start_marker;
-    end_marker.timestamp = end_timestamp;
-    end_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
-
-    std::lock_guard<std::mutex> lock(mutex_);
-    TracyTTPushStartMarker(ctx, start_marker);
-    TracyTTPushEndMarker(ctx, end_marker);
-#endif
+    return true;
 }
 
-void RealtimeProfilerTracyHandler::PushDispatchStallMarker(
-    [[maybe_unused]] uint32_t chip_id,
-    [[maybe_unused]] uint64_t stall_end_timestamp,
-    [[maybe_unused]] uint32_t stall_cycles,
-    [[maybe_unused]] double frequency) {
-#if defined(TRACY_ENABLE)
-    if (!tracy::GetProfiler().IsConnected()) {
-        return;
+void RealtimeProfilerTracyConsumer::apply_events() {
+    std::vector<Event> events;
+    {
+        std::lock_guard lock(events_mutex_);
+        events.swap(events_);
+        events_pending_.store(false, std::memory_order_release);
     }
-    TracyTTCtx ctx = GetContext(chip_id);
-    if (!ctx) {
-        return;
+    for (const Event& event : events) {
+        switch (event.kind) {
+            case Event::Kind::Add: apply_add(event); break;
+            case Event::Kind::Remove: apply_remove(event); break;
+            case Event::Kind::Calibrate: {
+                Chip& chip = chips_[event.chip_id];
+                chip.anchor_host = event.host_time;
+                chip.anchor_device = event.device_timestamp;
+                chip.frequency = event.frequency;
+                break;
+            }
+            case Event::Kind::Stall: apply_stall(chips_[event.chip_id], event); break;
+        }
     }
+}
 
-    // Own lane, so stall zones never have to nest with program or sync-check zones. RiscType::NONE because the
-    // lane is not a RISC; red because a stall is an error.
-    tracy::TTDeviceMarker start_marker;
-    start_marker.chip_id = chip_id;
-    start_marker.core_x = kRealtimeProfilerCore_X;
-    start_marker.core_y = kRealtimeProfilerCore_Y;
-    start_marker.risc = tracy::RiscType::NONE;
-    start_marker.color = tracy::Color::Red;
-    start_marker.timestamp = stall_end_timestamp - stall_cycles;
-    start_marker.runtime_host_id = 0;
-    start_marker.marker_name = "DISPATCH STALL: RT profiler record ring full";
-    start_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_START;
-    start_marker.file = "realtime_profiler";
-    start_marker.line = 0;
+void RealtimeProfilerTracyConsumer::apply_add(const Event& event) {
+    if (event.chip_id >= chips_.size()) {
+        chips_.resize(event.chip_id + 1);
+    }
+    Chip& chip = chips_[event.chip_id];
+    chip.anchor_host = event.host_time;
+    chip.anchor_device = event.device_timestamp;
+    chip.frequency = event.frequency;
+    ns_per_host_tick_ = TracyGetTimerMul();
+    chip.context_host = event.host_time;
+    chip.ctx = TracyTTContext();
+    // Time 0 on the context is host time context_host, and the context counts in ns.
+    TracyTTContextPopulateCalibratedLockfree(chip.ctx, event.host_time, 0.0, 1.0);
+    const std::string name = fmt::format("Device {}:", event.chip_id);
+    TracyTTContextNameLockfree(chip.ctx, name.c_str(), name.size());
 
-    tracy::TTDeviceMarker end_marker = start_marker;
-    end_marker.timestamp = stall_end_timestamp;
-    end_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
+    chip.programs_lane = lane_thread_id(event.chip_id, tracy::RiscType::BRISC);
+    chip.stall_lane = lane_thread_id(event.chip_id, tracy::RiscType::NONE);
+    // The GUI labels a lane with the thread name registered for its id.
+    tracy::SetThreadName(chip.programs_lane, "Programs");
+    tracy::SetThreadName(chip.stall_lane, "Dispatch stall");
+}
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    TracyTTPushStartMarker(ctx, start_marker);
-    TracyTTPushEndMarker(ctx, end_marker);
+void RealtimeProfilerTracyConsumer::apply_remove(const Event& event) {
+    srcloc_of_sources_.clear();
+    Chip& chip = chips_[event.chip_id];
+    flush_stall_message(event.chip_id, chip);
+    TracyTTDestroy(chip.ctx);
+    chip = Chip{};
+}
 
-    auto& state = dispatch_stall_messages_[chip_id];
-    state.frequency = frequency;
+void RealtimeProfilerTracyConsumer::apply_stall(Chip& chip, const Event& event) {
+    const uint64_t stall_end = context_ns(chip, event.device_timestamp);
+    const uint64_t stall_ns = std::llround(static_cast<double>(event.stall_cycles) / chip.frequency);
+    const uint64_t start = std::max(stall_end - std::min(stall_ns, stall_end), chip.stall_end);
+    chip.stall_end = std::max(stall_end, start);
+    TracyTTPushZone(chip.ctx, &kStallSrcloc, chip.stall_lane, start, chip.stall_end);
+
+    chip.suppressed_stalls++;
+    chip.suppressed_stall_cycles += event.stall_cycles;
     const auto now = std::chrono::steady_clock::now();
-    if (state.last_message_time != std::chrono::steady_clock::time_point{} &&
-        now - state.last_message_time < DispatchStallMessageState::kMinInterval) {
-        state.suppressed++;
-        state.suppressed_cycles += stall_cycles;
+    if (now - chip.last_stall_message >= kStallMessageInterval) {
+        flush_stall_message(event.chip_id, chip);
+        chip.last_stall_message = now;
+    }
+}
+
+void RealtimeProfilerTracyConsumer::flush_stall_message(uint32_t chip_id, Chip& chip) {
+    if (chip.suppressed_stalls == 0) {
         return;
     }
-    const double us_per_cycle = frequency > 0.0 ? 1.0 / (frequency * 1000.0) : 0.0;
-    std::string text = fmt::format(
-        "Device {}: dispatch stalled {:.2f} us waiting for the real-time profiler (record ring full); "
+    const std::string text = fmt::format(
+        "Device {}: dispatch stalled {} time(s), {:.2f} us, waiting for the real-time profiler (record ring full); "
         "profiler records are delayed, not lost",
         chip_id,
-        stall_cycles * us_per_cycle);
-    if (state.suppressed != 0) {
-        text += fmt::format(
-            " (+{} more stalls, {:.2f} us, since the last message)",
-            state.suppressed,
-            state.suppressed_cycles * us_per_cycle);
-    }
+        chip.suppressed_stalls,
+        static_cast<double>(chip.suppressed_stall_cycles) / (chip.frequency * 1000.0));
     TracyLogString(tracy::MessageSeverity::Error, 0xFF0000, TRACY_CALLSTACK, text.size(), text.c_str());
-    state.last_message_time = now;
-    state.suppressed = 0;
-    state.suppressed_cycles = 0;
-#endif
+    chip.suppressed_stalls = 0;
+    chip.suppressed_stall_cycles = 0;
 }
 
-void RealtimeProfilerTracyHandler::FlushDispatchStallMessageLocked([[maybe_unused]] uint32_t chip_id) {
-#if defined(TRACY_ENABLE)
-    auto it = dispatch_stall_messages_.find(chip_id);
-    if (it == dispatch_stall_messages_.end() || it->second.suppressed == 0 || !tracy::GetProfiler().IsConnected()) {
-        return;
-    }
-    auto& state = it->second;
-    const double us_per_cycle = state.frequency > 0.0 ? 1.0 / (state.frequency * 1000.0) : 0.0;
-    const std::string text = fmt::format(
-        "Device {}: dispatch stalled {} more time(s), {:.2f} us, waiting for the real-time profiler (record ring "
-        "full) since the last message; profiler records are delayed, not lost",
-        chip_id,
-        state.suppressed,
-        state.suppressed_cycles * us_per_cycle);
-    TracyLogString(tracy::MessageSeverity::Error, 0xFF0000, TRACY_CALLSTACK, text.size(), text.c_str());
-    state.suppressed = 0;
-    state.suppressed_cycles = 0;
-#endif
+void RealtimeProfilerTracyConsumer::handle_record(const experimental::ProgramRealtimeRecord& record) {
+    Chip& chip = chips_[record.chip_id];
+    const uint64_t start = std::max(context_ns(chip, record.start_timestamp), chip.programs_end);
+    chip.programs_end = std::max(context_ns(chip, record.end_timestamp), start);
+    TracyTTPushZone(chip.ctx, program_srcloc(record), chip.programs_lane, start, chip.programs_end);
+    char runtime_id[32];
+    const auto text = fmt::format_to_n(runtime_id, sizeof(runtime_id), "Runtime ID: {}", record.runtime_id);
+    TracyTTPushZoneText(chip.ctx, chip.programs_lane, runtime_id, text.size);
 }
 
-void RealtimeProfilerTracyHandler::CalibrateDevice(
-    [[maybe_unused]] uint32_t chip_id,
-    [[maybe_unused]] int64_t host_time,
-    [[maybe_unused]] uint64_t device_timestamp,
-    [[maybe_unused]] double frequency) {
-#if defined(TRACY_ENABLE)
-    if (!tracy::GetProfiler().IsConnected()) {
-        return;
+const tracy::SourceLocationData* RealtimeProfilerTracyConsumer::program_srcloc(
+    const experimental::ProgramRealtimeRecord& record) {
+    const auto known = srcloc_of_sources_.find(record.kernel_sources.data());
+    if (known != srcloc_of_sources_.end()) {
+        return known->second;
     }
-    TracyTTCtx ctx = GetContext(chip_id);
-    if (!ctx) {
-        return;
+    std::string sources_text;
+    for (const std::string_view source : record.kernel_sources) {
+        if (!sources_text.empty()) {
+            sources_text += ",\n";
+        }
+        sources_text += source;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    TracyTTContextCalibrate(ctx, host_time, static_cast<double>(device_timestamp), frequency);
-#endif
+    if (sources_text.empty()) {
+        sources_text = "realtime_profiler";
+    }
+    const auto [it, fresh] = programs_.try_emplace(std::move(sources_text));
+    Program& program = it->second;
+    if (fresh) {
+        // The zone is named after the program's first kernel, with a count of its other kernels. A program can build
+        // several kernels from one file; that name counts once.
+        std::vector<std::string> names;
+        for (const std::string_view source : record.kernel_sources) {
+            std::string name = kernel_name(source);
+            if (std::ranges::find(names, name) == names.end()) {
+                names.push_back(std::move(name));
+            }
+        }
+        program.name = names.empty() ? "Program" : names.front();
+        if (names.size() > 1) {
+            program.name += fmt::format(" +{}", names.size() - 1);
+        }
+        program.srcloc = {program.name.c_str(), "realtime_profiler", it->first.c_str(), 0, 0};
+    }
+    srcloc_of_sources_.emplace(record.kernel_sources.data(), &program.srcloc);
+    return &program.srcloc;
 }
+
+uint64_t RealtimeProfilerTracyConsumer::context_ns(const Chip& chip, uint64_t device_timestamp) const {
+    const double since_anchor_ns =
+        static_cast<double>(static_cast<int64_t>(device_timestamp - chip.anchor_device)) / chip.frequency;
+    const int64_t ns =
+        std::llround(static_cast<double>(chip.anchor_host - chip.context_host) * ns_per_host_tick_ + since_anchor_ns);
+    return static_cast<uint64_t>(std::max<int64_t>(ns, 0));
+}
+
+#else
+
+void RealtimeProfilerTracyConsumer::enqueue(const Event&) {}
+bool RealtimeProfilerTracyConsumer::on_records(const experimental::ProgramRealtimeRecordBatch&) { return false; }
+
+#endif
 
 }  // namespace tt::tt_metal

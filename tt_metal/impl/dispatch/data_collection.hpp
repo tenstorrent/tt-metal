@@ -8,7 +8,6 @@
 #include <optional>
 #include <span>
 #include <string_view>
-#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/mesh/sub_device_types.hpp>
 #include "program/program_impl.hpp"
 #include "impl/context/context_types.hpp"
@@ -25,12 +24,6 @@ enum data_collector_t {
     DISPATCH_DATA_RTARGS,
     DISPATCH_DATA_BINARY,
 };
-
-// Aliases to the public experimental types for internal use.
-using ProgramRealtimeRecord = tt::tt_metal::experimental::ProgramRealtimeRecord;
-using ProgramRealtimeRecordBatch = tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
-using ProgramRealtimeProfilerCallback = tt::tt_metal::experimental::ProgramRealtimeProfilerCallback;
-using ProgramRealtimeProfilerCallbackHandle = tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle;
 
 /* Record a single dispatch write, to be dumped with stats on program exit. Should only be called once per transaction
  * per program (if a program is enqueued multiple times, don't call this multiple times).
@@ -86,43 +79,5 @@ void RecordProgramSubDevice(
 // Look up the sub-device a program was dispatched on, keyed by physical device and runtime_id.
 std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(
     tt::tt_metal::ContextId context_id, tt::ChipId device_id, uint64_t runtime_id);
-
-// Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
-// The returned span is valid until MetalContext teardown or reinitialization.
-std::span<const std::string_view> GetKernelSourcesForRuntimeId(tt::tt_metal::ContextId context_id, uint16_t runtime_id);
-
-// Register a callback to be invoked when real-time profiler data arrives.
-// Multiple callbacks can be registered; each callback is called from its own thread.
-// Returns a handle that can be used to unregister the callback.
-ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallback callback);
-
-// Unregister a previously registered callback by its handle.
-void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
-
-class RealtimeProfilerCallbackListener {
-public:
-    virtual ~RealtimeProfilerCallbackListener() = default;
-    virtual void on_callback_registered(
-        ProgramRealtimeProfilerCallbackHandle handle, const ProgramRealtimeProfilerCallback& callback) = 0;
-    virtual void on_callback_unregistered(ProgramRealtimeProfilerCallbackHandle handle) = 0;
-};
-
-// Returns true if the real-time profiler is currently active on at least one chip,
-// i.e. at least one MeshDevice finished the init+sync handshake and has a receiver
-// thread delivering records. Callers can use this to distinguish "RT profiler is
-// disabled on this configuration" (e.g. ETH dispatch) from "RT profiler is on but
-// has not produced records yet".
-bool IsProgramRealtimeProfilerActive();
-
-// As above, for the collector owning `context_id`. Activation state lives per MetalContext, so a
-// caller that knows which context its devices belong to reads it from there; the no-argument form
-// answers for the default context.
-bool IsProgramRealtimeProfilerActive(tt::tt_metal::ContextId context_id);
-
-// Internal lifecycle hooks wired by MeshDevice (not for end-user calls). `context_id` is the owning
-// MeshDevice's context: activation marks the collector whose per-program metadata the profiler goes
-// on to consume, so it has to be the same one the dispatch path records into.
-void NotifyProgramRealtimeProfilerActivated(tt::tt_metal::ContextId context_id, uint32_t chip_id);
-void NotifyProgramRealtimeProfilerDeactivated(tt::tt_metal::ContextId context_id, uint32_t chip_id);
 
 }  // end namespace tt

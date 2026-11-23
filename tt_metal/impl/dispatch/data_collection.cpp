@@ -87,34 +87,4 @@ bool IsProgramMetadataRecordingEnabled(ContextId context_id) {
     return MetalContext::instance(context_id).data_collector()->IsProgramMetadataRecordingEnabled();
 }
 
-std::span<const std::string_view> GetKernelSourcesForRuntimeId(ContextId context_id, uint16_t runtime_id) {
-    return MetalContext::instance(context_id).data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
-}
-
-ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
-    ProgramRealtimeProfilerCallback callback) {
-    return tt::tt_metal::MetalContext::instance().data_collector()->RegisterProgramRealtimeProfilerCallback(
-        std::move(callback));
-}
-
-void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
-    tt::tt_metal::MetalContext::instance().data_collector()->UnregisterProgramRealtimeProfilerCallback(handle);
-}
-
-bool IsProgramRealtimeProfilerActive() {
-    return tt::tt_metal::MetalContext::instance().data_collector()->IsRealtimeProfilerActive();
-}
-
-bool IsProgramRealtimeProfilerActive(ContextId context_id) {
-    return tt::tt_metal::MetalContext::instance(context_id).data_collector()->IsRealtimeProfilerActive();
-}
-
-void NotifyProgramRealtimeProfilerActivated(ContextId context_id, uint32_t chip_id) {
-    tt::tt_metal::MetalContext::instance(context_id).data_collector()->NotifyRealtimeProfilerActivated(chip_id);
-}
-
-void NotifyProgramRealtimeProfilerDeactivated(ContextId context_id, uint32_t chip_id) {
-    tt::tt_metal::MetalContext::instance(context_id).data_collector()->NotifyRealtimeProfilerDeactivated(chip_id);
-}
-
 }  // namespace tt

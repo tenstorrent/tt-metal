@@ -6,20 +6,19 @@
 
 #include <utility>
 
-#include "tt_metal/impl/dispatch/data_collection.hpp"
+#include "realtime_profiler_service.hpp"
 
-// Public experimental API — delegates to the internal tt:: functions.
 namespace tt::tt_metal::experimental {
 
 ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
     ProgramRealtimeProfilerCallback callback) {
-    return tt::RegisterProgramRealtimeProfilerCallback(std::move(callback));
+    return realtime_profiler_service().register_consumer(std::move(callback));
 }
 
 void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle) {
-    tt::UnregisterProgramRealtimeProfilerCallback(handle);
+    realtime_profiler_service().unregister_consumer(handle);
 }
 
-bool IsProgramRealtimeProfilerActive() { return tt::IsProgramRealtimeProfilerActive(); }
+bool IsProgramRealtimeProfilerActive() { return realtime_profiler_service().is_active(); }
 
 }  // namespace tt::tt_metal::experimental

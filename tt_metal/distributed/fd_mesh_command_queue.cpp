@@ -20,6 +20,7 @@
 #include <type_traits>
 #include <utility>
 
+#include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt_stl/assert.hpp>
 #include "tt-metalium/memory/buffer/buffer.hpp"
 #include "tt-metalium/mesh/legacy/device.hpp"
@@ -852,7 +853,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
         return;
     }
 
-    if (tt::IsProgramRealtimeProfilerActive(mesh_device_->impl().get_context_id())) {
+    if (experimental::IsProgramRealtimeProfilerActive()) {
         for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
             const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
             for (auto* device : mesh_device_->impl().get_devices()) {
@@ -891,11 +892,6 @@ void FDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("FDMeshCommandQueue::finish");
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
-
-    {
-        TTZoneScopedDN(RT_PROFILER, "RealtimeProfilerSyncCheck");
-        mesh_device_->impl().trigger_realtime_profiler_sync_check();
-    }
 
     // Barrier across all active hosts of the mesh
     active_distributed_context_->barrier();

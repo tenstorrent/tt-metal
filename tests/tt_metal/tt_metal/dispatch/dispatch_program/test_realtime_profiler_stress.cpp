@@ -78,26 +78,9 @@ constexpr double kMaxStressDurationNs = 1'000'000'000.0;
 // Quiesce + drain window before unregistering the callback.
 constexpr auto kPostQuiesceDrain = std::chrono::milliseconds(2000);
 
-// Allowed slack for the deterministic startup race where the compute kernel
-// detects dispatch_d's stream-register clearing before dispatch_s has
-// recorded the first start_timestamp, producing one record where
-// end_timestamp < start_timestamp by a handful of cycles. Same value the
-// host/device correlation test tolerates (see test_realtime_profiler.py
-// :: test_host_device_correlation, "startup_race_threshold") and the same
-// value the production Tracy handler uses to distinguish "benign" from
-// "noisy" skips (see realtime_profiler_tracy_handler.cpp,
-// kStartupRaceThreshold).
-constexpr uint64_t kStartupRaceSlackCycles = 100'000;
-
-// Hard upper bound on the fraction of records that can come back with
-// end_timestamp < start_timestamp before this test fails. The production
-// host receiver already silently skips any such record on the Tracy path
-// (see realtime_profiler_tracy_handler.cpp:HandleRecord), so a tiny number
-// of these is tolerated by the live system; we only want this test to flag
-// a *regression* where the corruption rate balloons (e.g. an off-by-one in
-// rt_ring_full leading to systemic slot reuse). Empirically the live
-// system produces ~1 such record per ~4000 launches on Blackhole p100a
-// (rate ≈ 0.025%); 1% gives ~40x headroom over the observed baseline.
+// Upper bound on the fraction of records the receiver may drop for ending before they started. A few come from the
+// startup race where the compute kernel sees dispatch_d clear the stream registers before dispatch_s stamps the
+// start; more than that means timestamps are being corrupted.
 constexpr double kMaxBadTimestampFraction = 0.01;
 
 distributed::MeshWorkload build_blank_kernel_workload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -156,11 +139,8 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint64_t num_active_devices = rt->num_active_devices();
 
     uint64_t stress_records = 0;
-    uint64_t startup_race_skips = 0;
-    uint64_t large_negative_skips = 0;
     uint64_t bad_frequency = 0;
     uint64_t implausible_duration = 0;
-    int64_t worst_negative_delta = 0;
     uint64_t max_callback_batch = 0;
     ProgramRealtimeProfilerCallbackHandle handle =
         RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
@@ -170,18 +150,9 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                     continue;
                 }
                 ++stress_records;
-                if (rec.end_timestamp < rec.start_timestamp) {
-                    const uint64_t neg_delta = rec.start_timestamp - rec.end_timestamp;
-                    if (neg_delta <= kStartupRaceSlackCycles) {
-                        ++startup_race_skips;
-                    } else {
-                        ++large_negative_skips;
-                        worst_negative_delta = std::min(-static_cast<int64_t>(neg_delta), worst_negative_delta);
-                    }
-                }
                 if (!(rec.frequency > 0.0)) {
                     ++bad_frequency;
-                } else if (rec.end_timestamp >= rec.start_timestamp) {
+                } else {
                     const double duration_ns =
                         static_cast<double>(rec.end_timestamp - rec.start_timestamp) / rec.frequency;
                     if (duration_ns >= kMaxStressDurationNs) {
@@ -227,6 +198,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint32_t record_ring_full_waits = rt->record_ring_full_wait_count();
     const uint64_t dispatch_stalls = rt->dispatch_stall_events();
     const uint64_t dispatch_stall_cycles = rt->dispatch_stall_cycles();
+    const uint64_t end_before_start_records = rt->num_end_before_start_records();
     const uint64_t published_batches = rt->num_published_batches();
     const double mean_publish_batch =
         published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
@@ -240,8 +212,8 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         tt::LogTest,
         "[RT profiler stress] {} stress records across {} active device(s) over {} replays, max_callback_batch={}, "
         "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, record_ring_full_waits={}, "
-        "dispatch_stalls={} ({} cycles), {} startup-race skips, {} "
-        "large-negative-delta skips (worst delta = {} cycles), {} bad-frequency, {} implausible-duration",
+        "dispatch_stalls={} ({} cycles), {} dropped for ending before they started, {} bad-frequency, "
+        "{} implausible-duration",
         stress_records,
         num_active_devices,
         num_replays,
@@ -253,13 +225,11 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         record_ring_full_waits,
         dispatch_stalls,
         dispatch_stall_cycles,
-        startup_race_skips,
-        large_negative_skips,
-        worst_negative_delta,
+        end_before_start_records,
         bad_frequency,
         implausible_duration);
 
-    ASSERT_GE(stress_records, expected_stress_records)
+    ASSERT_GE(stress_records + end_before_start_records, expected_stress_records)
         << "expected one record per program run: " << kNumProgramsInTrace << " programs per replay x " << num_replays
         << " replays x " << num_active_devices
         << " active device(s). A shortfall means profiler records were dropped at some point in the pipeline.";
@@ -270,16 +240,11 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     EXPECT_EQ(ring_full_waits, 0u)
         << "device ring reached capacity; the receiver drained it slower than the device filled it";
 
-    const uint64_t max_allowed_large_negative =
-        static_cast<uint64_t>(static_cast<double>(stress_records) * kMaxBadTimestampFraction);
-    EXPECT_LE(large_negative_skips, max_allowed_large_negative)
-        << large_negative_skips << " stress record(s) had end_timestamp < start_timestamp by more than "
-        << kStartupRaceSlackCycles << " cycles, exceeding the allowed budget of " << max_allowed_large_negative
-        << " (= " << (kMaxBadTimestampFraction * 100.0) << "% of " << stress_records << " stress records). "
-        << "These are torn 64-bit reads or stale-slot residue from BRISC writing the timestamp slot before "
-        << "bumping write_index; the production Tracy handler silently drops them. A spike here means the "
-        << "corruption rate has become systemic — most likely an off-by-one in the rt_ring_full check or a "
-        << "missing memory barrier between slot write and write_index increment.";
+    EXPECT_LE(
+        end_before_start_records,
+        static_cast<uint64_t>(static_cast<double>(expected_stress_records) * kMaxBadTimestampFraction))
+        << "the receiver dropped more than " << (kMaxBadTimestampFraction * 100.0)
+        << "% of the records for ending before they started";
     EXPECT_EQ(bad_frequency, 0u) << bad_frequency << " stress record(s) had a non-positive frequency";
     EXPECT_EQ(implausible_duration, 0u) << implausible_duration
                                         << " stress record(s) reported duration >= " << kMaxStressDurationNs
@@ -378,7 +343,8 @@ TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
     ASSERT_TRUE(backed_up) << "pausing the host receiver never backed the profiler up to the BRISC";
     EXPECT_GT(device_waits, 0u) << "the backup never made dispatch_s wait for a record slot";
     const uint64_t expected_records = static_cast<uint64_t>(kNumProgramsInTrace) * kNumReplays * num_active_devices;
-    EXPECT_GE(stress_records.load() - records_before, expected_records)
+    // The receiver drops a record that ends before it starts; one per device does around a stall.
+    EXPECT_GE(stress_records.load() - records_before + rt->num_end_before_start_records(), expected_records)
         << "records were dropped while dispatch_s waited";
     EXPECT_GT(host_stalls, 0u) << "dispatch_s waits were not reported to the host";
     EXPECT_EQ(end_before_start.load(), end_before_start_before)
@@ -422,6 +388,9 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     mesh_device->end_mesh_trace(cq, trace_id);
 
     constexpr auto kCalibrationWindow = std::chrono::seconds(2);
+    // The receiver reads and publishes records only while a callback is registered, so calibrate with one.
+    const ProgramRealtimeProfilerCallbackHandle h_calibration =
+        RegisterProgramRealtimeProfilerCallback([](const ProgramRealtimeRecordBatch&) {});
     const uint64_t pubs_before = rt->num_published_records();
     const auto cal_start = std::chrono::steady_clock::now();
     const auto cal_deadline = cal_start + kCalibrationWindow;
@@ -430,6 +399,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     }
     const double cal_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - cal_start).count();
     const double production_rate = static_cast<double>(rt->num_published_records() - pubs_before) / cal_seconds;
+    UnregisterProgramRealtimeProfilerCallback(h_calibration);
     ASSERT_GT(production_rate, 0.0) << "no records produced during calibration";
     mesh_device->quiesce_devices();
 
