@@ -668,6 +668,11 @@ Tensor unary_with_scalar_variant(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // Floating-point codegen casts the scalar to float, so normalizing here keeps add_sfpu(t, 128) and
+    // add_sfpu(t, 128.0f) on one program cache entry. Integer dtypes keep the exact scalar.
+    if (is_floating_point(input_tensor.dtype())) {
+        param = std::visit([](auto value) { return static_cast<float>(value); }, param);
+    }
     return std::visit(
         [&](auto value) {
             return operations::unary::detail::unary_impl(
