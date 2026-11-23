@@ -154,11 +154,13 @@ serve_profiles:
     additional_config:
       tt:
         sample_on_device_mode: decode_only   # the plain geometry's hub sampling (and a verify's sampled column 0)
-    # replaces serve.args (synchronous: the verify / propose steps). The drafter is the model's own (vllm-tt-plugin
-    # runner-model spec contract: custom_class + the model_owned_drafter sentinel); K = 3, narrow decode in the plain
-    # geometry. --max-num-batched-tokens: with a speculative_config vLLM pins max_num_scheduled_tokens at the 2048
-    # default before the TT platform raises the budget, and a longer prompt is never scheduled
+    # replaces serve.args. Async scheduling: plain-geometry steps overlap as batch's, speculative steps are drained one
+    # by one (c32 TPOT 45.9 ms as batch, 2026-11-23). The drafter is the model's own (vllm-tt-plugin runner-model spec
+    # contract: custom_class + the model_owned_drafter sentinel); K = 3, narrow decode in the plain geometry.
+    # --max-num-batched-tokens: with a speculative_config vLLM pins max_num_scheduled_tokens at the 2048 default before
+    # the TT platform raises the budget, and a longer prompt is never scheduled
     args:
+      - --async-scheduling
       - ["--speculative-config", '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}']
       - ["--max-num-batched-tokens", "262144"]
 default_profile: batch                   # user decision 2026-11-21: one engine for 1-32 users
