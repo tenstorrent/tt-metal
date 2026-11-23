@@ -12,6 +12,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.kda import tp_gather_mux_buffers, tp_gather_resources
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     NullIndexer,
     ReuseIndexer,
@@ -19,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     indexer_layer_is_reused,
     resolve_has_indexer,
 )
-from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_AGMM_CONFIG, MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.rope import identity_rope_tensors_indexed
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import (
     SAME_CHUNK_NEXT_LAYER,
@@ -613,6 +614,7 @@ class ttMLA:
         self._q_a_latent_gather_output = None
         self._kv_stem_gather_output = None
         self._output_gate_gather_output = None
+        self._gate_agmm_kwargs = None
         # q_a and kv_a as one matmul + one all-reduce over [q_a_proj | kv_a_proj_with_mqa | pad].
         self._merge_qkv_a = ttMLA.merges_qkv_a(config, self.tp_factor, self.kv_only, self._has_indexer)
         if self._merge_qkv_a:
@@ -642,13 +644,6 @@ class ttMLA:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
-            if self._use_gate and not self.kv_only:
-                self._output_gate_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
-                    name="output_gate",
-                    shape=[1, 1, self.active_seq_len_local, self.hidden_size],
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                )
 
         # Per-axis CCL topology, named symmetrically by axis. The q/kv/wo collectives run on the TP
         # axis (cluster_axis=tp_axis) and use tp_ccl_topology; the ring-attention SDPA (ring_mla /
@@ -734,6 +729,7 @@ class ttMLA:
             self.o_proj_weight = weights["o_proj"]
             if self._use_gate:
                 self.g_proj_weight = weights["g_proj"]
+                self._setup_output_gate(mesh_device)
             if self._q_distnorm:
                 self._q_a_norm_weight_tp = weights["q_a_layernorm_tp"]
                 self._q_a_norm_resources_memo = [None, None, None]  # see TT_CCL.get_fused_rmsnorm_resources
@@ -1438,22 +1434,30 @@ class ttMLA:
             num_links=self.ccl_num_links,
         )
 
-    def _q_a_latent_from_tp_rows(
-        self, qr_rows: ttnn.Tensor, seq_len_local: int, norm_memory_config: ttnn.MemoryConfig
-    ) -> ttnn.Tensor:
-        """All-gather the TP ranks' q_a rows and normalize: the same qr _q_a_latent returns."""
+    def _gather_tp_rows(self, qr_local: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        """All-gather the TP ranks' normalized q_a rows: the same qr _q_a_latent returns, in the persistent (borrowed)
+        gather buffer."""
         assert (
             seq_len_local == self.active_seq_len_local
         ), f"TP gather was preallocated for {self.active_seq_len_local} local tokens, got {seq_len_local}"
-        qr = ttnn.experimental.high_bw_all_gather(
-            qr_rows,
+        return ttnn.experimental.high_bw_all_gather(
+            qr_local,
             dim=2,
             output_tensor=self._q_a_latent_gather_output,
             cluster_axis=self.tp_axis,
             num_links=self.ccl_num_links,
             **self._tp_gather_semaphores,
         )
-        return self._q_a_norm(qr, norm_memory_config)
+
+    def _is_q_gather_buffer(self, qr: ttnn.Tensor) -> bool:
+        """True when qr is the persistent q_a gather buffer, shared across layers: borrowed, never deallocated."""
+        gather = self._q_a_latent_gather_output
+        # Addresses are per buffer type: an L1 tensor can share the DRAM gather buffer's numeric address.
+        return (
+            gather is not None
+            and qr.memory_config().buffer_type == gather.memory_config().buffer_type
+            and qr.buffer_address() == gather.buffer_address()
+        )
 
     def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         x = ttnn.experimental.reduce_scatter_minimal_async(
@@ -1565,9 +1569,11 @@ class ttMLA:
         kv_actual_isl: Optional[int],
         seq_len_local: int,
         metadata: Optional[ttnn.Tensor] = None,
+        qr_borrowed: bool = False,
     ) -> ttnn.Tensor:
         """Absorbed-Q stem from the q_a latent: q_b_proj → heads → split → wkv_b1(nope) → RoPE(rope)
-        → query assembly. Consumes qr (the indexer, if any, has already read it by this point)."""
+        → query assembly. Consumes qr (the indexer, if any, has already read it by this point) unless it is borrowed:
+        the persistent q_a gather buffer, which must stay allocated."""
         num_heads_local = self.num_heads // self.tp_factor
         if self._llama4_beta is not None:
             # Mistral's per-position query temperature, applied to the normed q_a latent rather than to
@@ -1577,14 +1583,15 @@ class ttMLA:
             scaled = ttnn.multiply(
                 qr, self._llama4_scale(kv_actual_isl, seq_len_local, metadata), memory_config=qr.memory_config()
             )
-            ttnn.deallocate(qr)
-            qr = scaled
+            if not qr_borrowed:
+                ttnn.deallocate(qr)
+            qr, qr_borrowed = scaled, False
         tt_q = ttnn.linear(
             qr,
             self.q_b_proj_weight,
             **self._get_mm_kwargs("q_b_proj", seq_len_local),
         )
-        if not self._q_distnorm or qr.memory_config().buffer_type == ttnn.BufferType.L1:
+        if not qr_borrowed:
             ttnn.deallocate(qr)
 
         if self._early_q_reshard:
@@ -1952,6 +1959,55 @@ class ttMLA:
                 scales=scales,
             )
 
+    def _setup_output_gate(self, mesh_device) -> None:
+        """Fuse the output gate's TP all-gather into g_proj (all_gather_minimal_matmul_async, gathering K, sigmoid fused)
+        when a tuned MLA_AGMM_CONFIG entry applies, a column beside its grid is free for the fabric muxes, and the
+        fabric is 2D; else allocate the standalone gather's output. The fused gather shares its input buffer and
+        semaphores with KDA and the dense FFN (tp_gather_resources)."""
+        if self.tp_factor == 1:
+            return
+        cfg = None
+        if self._is_blackhole:
+            cfg = self._select_cfg(MLA_AGMM_CONFIG["g_proj"].get(self.active_seq_len_local), "g_proj")
+        grid = mesh_device.compute_with_storage_grid_size()
+        topology = ttnn.get_usable_topology(self.g_proj_weight, self.tp_ccl_topology, self.tp_axis)
+        fuse = False
+        if cfg is not None:
+            mm = cfg["config"]
+            matmul_grid = ttnn.CoreCoord(*mm["compute_with_storage_grid_size"])
+            local_k_tiles = self.g_proj_weight.shape[-2] // self.tp_factor // ttnn.TILE_SIZE
+            fuse = (
+                matmul_grid.x < grid.x
+                and ttnn.get_fabric_config(mesh_device).name.startswith("FABRIC_2D")
+                and mm["K_block_size"] <= local_k_tiles
+                # A Ring needs the K block to divide the local K shard (no tail block).
+                and (topology == ttnn.Topology.Linear or local_k_tiles % mm["K_block_size"] == 0)
+            )
+        if not fuse:
+            self._output_gate_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                name="output_gate",
+                shape=[1, 1, self.active_seq_len_local, self.hidden_size],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            return
+        links = max(1, min(self.ccl_num_links, matmul_grid.y // 2))
+        self._gate_agmm_kwargs = dict(
+            tp_gather_resources(mesh_device, self.active_seq_len_local, self.hidden_size),
+            config=ttnn.MinimalMatmulConfig(**{**mm, "compute_with_storage_grid_size": matmul_grid}),
+            fused_activation=cfg["fused_activation"],
+            compute_kernel_config=self._tuned_compute_kernel_config(cfg),
+            memory_config=cfg["out_mem_config"],
+            dtype=cfg["out_dtype"],
+            topology=topology,
+            cluster_axis=self.tp_axis,
+            num_links=links,
+            num_workers_per_link=-(-matmul_grid.y // links),
+            num_buffers_per_channel=tp_gather_mux_buffers(mesh_device),
+            force_transpose=False,
+            use_mcast=True,
+        )
+
     def _output_gate(self, hidden_states: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Kimi-K3 gated MLA: sigmoid(g_proj(hidden_states)), head-sharded to match concat_heads.
 
@@ -1960,6 +2016,19 @@ class ttMLA:
         12288-wide partial: less traffic, no wide intermediate, and g is complete per device so sigmoid
         can fuse into the matmul (measured ~292 us less collective at FABRIC_2D).
         """
+        if self._gate_agmm_kwargs is not None:
+            assert seq_len_local == self.active_seq_len_local, (
+                f"output-gate gather was preallocated for {self.active_seq_len_local} local tokens, "
+                f"got {seq_len_local}"
+            )
+            assert hidden_states.dtype == ttnn.bfloat16, f"the fused gate gathers BF16, got {hidden_states.dtype}"
+            rows, width = seq_len_local, hidden_states.shape[-1]
+            g = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=ttnn.reshape(hidden_states, (1, rows, width)),
+                weight_tensor=self.g_proj_weight,
+                **self._gate_agmm_kwargs,
+            )[0]
+            return ttnn.reshape(g, (1, 1, rows, g.shape[-1]))
         if self.tp_factor > 1:
             assert self._output_gate_gather_output is not None
             assert seq_len_local == self.active_seq_len_local, (
@@ -2113,9 +2182,13 @@ class ttMLA:
         else:
             qr, kv_a = self._q_a_latent(hidden_states, seq_len_local, q_norm_mem_config), None
         indexer_qr, indexer_qr_kwargs = qr, {}
-        if qr_rows is not None and indexer_indices is None:
+        if qr_rows is not None:
+            # RMSNorm is per row, so each rank normalizes only its own rows: the indexer (if it runs) reads them, and the
+            # same tensor is gathered for _q_stem afterwards instead of gathering raw rows and normalizing all of them.
             qr_local = self._q_a_norm(qr_rows, ttnn.DRAM_MEMORY_CONFIG)
-            indexer_qr, indexer_qr_kwargs = qr_local, {"qr_tp_local": True}
+            ttnn.deallocate(qr_rows)
+            if indexer_indices is None:
+                indexer_qr, indexer_qr_kwargs = qr_local, {"qr_tp_local": True}
 
         # DSA dispatch (v3.2 / GLM): the op graph is fixed by CONFIG — self._indexer and self._attention
         # are bound once at construction (sparsity × chunking), never by the runtime sequence length.
@@ -2166,12 +2239,12 @@ class ttMLA:
                 **indexer_qr_kwargs,
             )
 
-        if qr_rows is not None:
-            if qr_local is not None:
-                ttnn.deallocate(qr_local)
-            qr = self._q_a_latent_from_tp_rows(qr_rows, seq_len_local, q_norm_mem_config)
-            ttnn.deallocate(qr_rows)
-        tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata)
+        if qr_local is not None:
+            qr = self._gather_tp_rows(qr_local, seq_len_local)
+            ttnn.deallocate(qr_local)
+        tt_q = self._q_stem(
+            qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata, qr_borrowed=self._is_q_gather_buffer(qr)
+        )
         tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
             hidden_states,
             rope_tensors,
