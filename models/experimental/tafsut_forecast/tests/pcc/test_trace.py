@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fresh inputs through captured traces (skill §1 C, D2 item 4): every replay against eager on inputs the trace was
+"""Fresh inputs through captured traces: every replay against eager on inputs the trace was
 not captured with, at several shapes (paper 1024 x 2048 and 1 x 32768 included), shapes interleaved so that each
 new shape releases and recaptures the others.
 
@@ -55,7 +55,7 @@ def test_trace_vs_eager(device, capfd):
         assert torch.isfinite(got).all() and p > 0.99999 and err < 1e-2
     traced.release()
     out = capfd.readouterr()
-    with capfd.disabled():  # the replay-vs-eager lines reach the job log (D3 item 5)
+    with capfd.disabled():  # the replay-vs-eager lines reach the log
         print(out.out, end="")
     assert UNSAFE not in out.out + out.err, "an allocation happened while a trace was alive"
 
@@ -77,7 +77,7 @@ def test_trace_fresh_inputs(device, capfd):
         assert torch.isfinite(q).all()
     traced.release()
     out = capfd.readouterr()
-    with capfd.disabled():  # the replay-vs-eager lines reach the job log (D3 item 5)
+    with capfd.disabled():  # the replay-vs-eager lines reach the log
         print(out.out, end="")
     assert UNSAFE not in out.out + out.err, "an allocation happened while a trace was alive"
 

@@ -4,7 +4,7 @@
 """Tracy profile of one warm Tafsut forward reduced to two layers (real weights, the real bench shape).
 
 The reduced forward runs the embedding, one ordinary layer (counted 13 times), the last layer with the read-out cut
-(counted once) and the head. The profiler is drained after every section (F7: ~1000 programs; never the full
+(counted once) and the head. The profiler is drained after every section (the device profiler buffer holds ~1000 programs; never the full
 ``long_context`` forward). Signposts (``tt-perf-report --start-signpost``): MODEL_START / MODEL_END around the whole
 reduced forward, and ``<section>_start`` / ``<section>_end`` for embed, layer, layer_last, head. Runs eagerly; the
 bench runs the captured trace.

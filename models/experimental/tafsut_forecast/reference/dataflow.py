@@ -39,7 +39,7 @@ ROPE_THETA = 10000.0
 MEDIAN_IDX = 4
 MASK_FILL = -1e9
 
-# CONTRACT §7 item 1, option (a): bucket context lengths and their (padded S, masked SDPA chunk).
+# Bucket context lengths and their (padded S, masked SDPA chunk).
 # ttnn SDPA returns wrong values (masked or not) when the q-chunk count s_pad / chunk is odd and > 1 at B = 16 or 32
 # (fine at B = 2 and 64): 160/32, 384/128, 640/128, 1088/64, 1152/128 all fail (job 933). Every row here has an even
 # count or a single chunk; tests/pcc/test_sdpa_mask.py checks each at the batches the model runs.

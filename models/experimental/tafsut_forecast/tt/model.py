@@ -30,22 +30,22 @@ NREAD = df.NFUT  # read-out rows: all 32 future tokens (one tile row)
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 MM_2D = os.environ.get("TAFSUT_MM_2D", "1") != "0"  # R1-2; 0 = the auto-config (screening)
 FUSED_ROPE = os.environ.get("TAFSUT_FUSED_ROPE", "1") != "0"  # R1-1; 0 = the round-0 matmul RoPE (screening)
-# screening knobs (D7 (b)), default off: embed + head linears on the auto-config, fp32 cos/sin tables, bf16 RoPE DST
+# screening knobs, default off: embed + head linears on the auto-config, fp32 cos/sin tables, bf16 RoPE DST
 MM_2D_SKIP_HIFI4 = os.environ.get("TAFSUT_MM_2D_SKIP_HIFI4", "0") == "1"
 ROPE_FP32_TABLE = os.environ.get("TAFSUT_ROPE_FP32_TABLE", "0") == "1"
 ROPE_FP32_DEST = os.environ.get("TAFSUT_ROPE_FP32_DEST", "1") != "0"
 # round 1 candidates: R1-5 kept (0 = off); R1-4/7b and R1-7a dropped, knobs kept for screening (1 = on)
 ADD_NORM = (
     os.environ.get("TAFSUT_ADD_NORM", "0") == "1"
-)  # R1-4 + R1-7b: fused add+norm, gamma folded; dropped (check_gates 1333)
+)  # R1-4 + R1-7b: fused add+norm, gamma folded; dropped (gate failures, job 1333)
 SDPA_CONCAT = os.environ.get("TAFSUT_SDPA_CONCAT", "1") != "0"  # R1-5: SDPA writes the heads concatenated; 0 = off
 PERF_BF16_DEST = (
     os.environ.get("TAFSUT_PERF_BF16_DEST", "0") == "1"
-)  # R1-7a: performance linears without fp32 DST; dropped (check_gates 1333)
+)  # R1-7a: performance linears without fp32 DST; dropped (gate failures, job 1333)
 
 
 def sdpa_chunks(s_pad: int, ctx_len: int | None) -> int:
-    """Masked k-chunk from the per-shape table (CONTRACT §7 item 1); never chosen by catching exceptions."""
+    """Masked k-chunk from the per-shape table; never chosen by catching exceptions."""
     if ctx_len in df.PAD_TABLE and df.PAD_TABLE[ctx_len][0] == s_pad:
         chunk = df.PAD_TABLE[ctx_len][1]
     else:
@@ -117,7 +117,7 @@ class TtTafsut:
         return df.prepare_inputs(x, bucket=True)
 
     def constants(self, B: int, ctx_len: int) -> dict:
-        """Per-shape device constants, keyed on shape and kept alive (skill §4 item 9)."""
+        """Per-shape device constants, keyed on shape and kept alive."""
         key = (B, ctx_len)
         if key in self._consts:
             return self._consts[key]

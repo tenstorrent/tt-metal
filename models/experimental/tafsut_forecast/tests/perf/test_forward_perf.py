@@ -3,7 +3,7 @@
 
 """Benchmark: Tafsut forecasts on one Blackhole chip, traced, parametrized ``<shape>-<precision>``.
 
-Shapes (CONTRACT §1, §2): ``paper`` (target, 1024 x 2048 -> 64), ``long_context`` (32 x 32768 -> 64),
+Shapes: ``paper`` (target, 1024 x 2048 -> 64), ``long_context`` (32 x 32768 -> 64),
 ``long_horizon`` (512 x 2048 -> 2048: two forwards; forward 2 gated teacher-forced), ``gift_ragged`` (32, GIFT batch
 construction -> 48) and ``gift_ragged_odd`` (16, batch max 4931 -> bucket 8192).
 
@@ -139,7 +139,6 @@ def test_forward_perf(device, shape, precision):
         "upload_s": upload_s,
         "postprocess_s": postprocess_s,
         "split_runs": [dict(zip(("prepare_s", "upload_s", "device_s", "postprocess_s"), s)) for s in splits],
-        "chip": os.environ.get("TTQ_CHIP_SERIAL"),
         "traced": True,
     }
     msg = ""
@@ -152,11 +151,11 @@ def test_forward_perf(device, shape, precision):
         rec.update(met)
         rec.update({f"collapsed_{k}": v for k, v in col.items() if not isinstance(v, (list, dict))})
         msg = f"\n  metrics:   {M.fmt(met)}\n  collapsed: {M.fmt(col)}"
-        if len(xs) > 1:  # forward 2, teacher-forced (CONTRACT §3, D0 amendment 5)
+        if len(xs) > 1:  # forward 2, teacher-forced
             met2, col2 = gate_case(g, heads, q, 1)
             rec.update({f"f2_{k}": v for k, v in met2.items() if not k.startswith("pcc_final")})
             msg += f"\n  forward 2 (teacher-forced): {M.fmt(met2)}"
-        if os.environ.get("TAFSUT_DUMP"):  # raw heads for row-level analysis (D3 item 1)
+        if os.environ.get("TAFSUT_DUMP"):  # raw heads for row-level analysis
             torch.save(
                 {"heads": heads, "q": q}, os.path.join(os.environ["TAFSUT_DUMP"], f"bench-{shape}-{precision}.pt")
             )

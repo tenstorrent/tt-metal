@@ -19,7 +19,7 @@ class TracedForward:
 
     Each shape's output buffer is allocated eagerly too, with no trace alive, and each capture copies its result into
     it: an output allocated inside a capture while another trace exists could sit in that trace's intermediates and
-    be overwritten when the other shape replays (D2 item 4). The only allocations made while a trace is alive are a
+    be overwritten when the other shape replays. The only allocations made while a trace is alive are a
     capture's own intermediates, all freed before the capture ends (``TT_METAL_TRACE_ALLOC_TRACKING=1`` checks it)."""
 
     def __init__(self, tt: TtTafsut):

@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU fp32 goldens for Tafsut (CONTRACT §5, §6A). Run in the reference venv, under ``ttq run --kind cpu``:
+"""CPU fp32 goldens for Tafsut. Run in the reference venv (README.md), from the tt-metal root:
 
-    HF_HUB_OFFLINE=1 /home/andy/bringup/venvs/tafsut/bin/python -m \
-        models.experimental.tafsut_forecast.tests.golden.make_goldens --out <dir> --manifest <dir>/MANIFEST.json \
-        --only test        # or: --only bench
+    <reference venv>/bin/python -m models.experimental.tafsut_forecast.tests.golden.make_goldens [--only test]
+
+``--out`` defaults to ``models/experimental/tafsut_forecast/goldens`` (git-ignored; the tests read it, or
+``$TAFSUT_GOLDENS``), ``--manifest`` to ``<out>/MANIFEST.json``. The default builds the test goldens and the
+bench goldens; ``--only test`` / ``--only bench`` / bench names build a subset.
 
 Every file holds its inputs. ``head`` is the reference's ``output_patch_embedding`` output ``[B, 32, 288]`` per
 forward (asinh space, before the fallback), the ``pcc_normalized`` tensor.
@@ -36,7 +38,7 @@ MIX_WEIGHTS = (0.35, 0.15, 0.15, 0.1, 0.15, 0.1)
 
 
 def make_series_mix(n: int, length: int, seed: int, nan_frac: float = 0.005):
-    """``([n, length] fp32, [n] kind)``: the realistic mix (skill §1 A). Random walk + daily/weekly seasonality at
+    """``([n, length] fp32, [n] kind)``: the realistic mix. Random walk + daily/weekly seasonality at
     SNR ~1; intermittent counts (some end in a long zero run, which triggers the fallback); level shifts; smooth
     trends; multi-seasonal with drifting amplitude and a missing segment; spikes. Own scale 1e-1..1e3 and offset per
     series; 0.5 % interior NaNs (never the last step)."""
@@ -100,7 +102,7 @@ def ragged(lengths: list[int], seed: int, all_nan_row: int | None, gap_rows: int
 
 
 def fallback_set():
-    """16 x 2048 around the fallback boundaries (CONTRACT §2 `fallback`, D0 amendment 3)."""
+    """16 x 2048 around the fallback boundaries."""
     T, g = 2048, torch.Generator().manual_seed(7)
     rn = lambda *s: torch.randn(*s, generator=g)
     x = torch.empty(16, T)
@@ -226,7 +228,7 @@ def gen_test(m, out: Path, info: dict):
     x = y[None, :2048]
     q, fwd = run(m, x, 64, blocks=True)
     assert not fwd[0]["fb_mask"].any()
-    # sdpa vs eager once (CONTRACT §5 nondeterminism)
+    # sdpa vs eager once (nondeterminism check)
     for b in m.encoder.block:
         b.layer[0].self_attention.attn_implementation = "eager"
     qe, _ = run(m, x, 64)
@@ -305,7 +307,7 @@ def gen_bench(m, name: str, out: Path, info: dict):
     x, kinds = make_series_mix(s["n"], s["context"], s["seed"])
     chunk = 256 if s["context"] <= 2048 else s["n"]
     qs, fwds = [], []
-    for c in range(0, s["n"], chunk):  # series are independent at uniform length (CONTRACT §5 batch rules)
+    for c in range(0, s["n"], chunk):  # series are independent at uniform length
         q, fwd = run(m, x[c : c + chunk], s["horizon"])
         qs.append(q)
         fwds.append(fwd)
@@ -380,10 +382,11 @@ def write_manifest(out: Path, manifest: Path, info: dict, timings: dict):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--manifest", type=Path, required=True)
-    ap.add_argument("--only", nargs="*", default=["test"], help="test, bench, or bench names")
+    ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[2] / "goldens")
+    ap.add_argument("--manifest", type=Path, help="default: <out>/MANIFEST.json")
+    ap.add_argument("--only", nargs="*", default=["test", "bench"], help="test, bench, or bench names")
     args = ap.parse_args()
+    args.manifest = args.manifest or args.out / "MANIFEST.json"
     assert "python_env" not in sys.executable, "run in the reference venv"
     args.out.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(0)

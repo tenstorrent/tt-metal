@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Op-level masked-SDPA tests (F1, F9, PLAN v1.12, v1.13, v1.20; CONTRACT §6B, D0 amendment 2).
+"""Op-level masked-SDPA tests.
 
 Every padded length and masked chunk the code can reach (``dataflow.PAD_TABLE`` plus the measured alternatives),
 with the model's own SDPA program and compute config in both precisions (and ``exp_approx_mode``, a round-1
@@ -22,15 +22,15 @@ from models.experimental.tafsut_forecast.tests.pcc import metrics as M
 from models.experimental.tafsut_forecast.tt.common import MASK_FILL, Precision, ckc
 
 NH, DH = df.NH, df.DH
-# (bucket context, s_pad, chunk): the table, plus the alternatives D0 Q2 / CONTRACT §7 item 1 measure.
+# (bucket context, s_pad, chunk): the table, plus the measured alternative at long_context's length.
 SHAPES = [(b, *df.PAD_TABLE[b]) for b in df.BUCKETS] + [(32768, 1152, 64)]
-# Batch per SDPA call that the model really issues at each padded length (D1 ruling 3): the model runs the whole
+# Batch per SDPA call that the model really issues at each padded length: the model runs the whole
 # batch through one SDPA call, so this is each golden's rows at each forward's bucket. 128: single 1, ragged4 4,
 # model16/fallback 16, long_horizon forward 1 512, paper 1024. 256: horizon4 / long_horizon forward 2 (4, 512).
 # 384: gift_ragged_odd 16. 640: no case reaches it, so 2 and 32 cover the row. 1088: single_long 1, long_context /
 # gift_ragged 32. 1152/64 is the round-1 alternative at long_context's 32. The odd-chunk-count bug shows at B = 16 / 32,
 # not at 2 or 64 (jobs 932/933), so batch is part of the trigger.
-# D2 item 3 (v1.21): the GIFT predictor issues B = 32 at every bucket, and a ragged final batch (7) at any of them.
+# The GIFT predictor issues B = 32 at every bucket, and a ragged final batch (7) at any of them.
 MODEL_BATCHES = {
     128: (1, 4, 7, 16, 32, 512, 1024),
     256: (4, 7, 32, 512),
@@ -110,7 +110,7 @@ def test_sdpa_masked(device, ctx_len, s_pad, chunk, prec, B):
         assert float((got - other).abs().max()) < 0.1
     else:
         chunk_diff = "other chunk n/a"
-    # positive control (v1.13): drop the mask on one whole masked key block of row 0
+    # positive control: drop the mask on one whole masked key block of row 0
     ctrl = bias.clone()
     blk = (~kv[0]).nonzero().flatten()[: min(chunk, 32)]
     ctrl[0, :, :, blk] = 0.0
@@ -160,7 +160,7 @@ def test_sdpa_readout(device, ctx_len, s_pad, chunk, prec, B):
 
 
 def test_sdpa_rejects_broadcast_mask(device, expect_error):
-    """D0 amendment 4: ttnn SDPA needs the mask's query dim equal to Q's; a [B, 1, 1, S] mask is rejected."""
+    """ttnn SDPA needs the mask's query dim equal to Q's; a [B, 1, 1, S] mask is rejected."""
     q = torch.randn(1, NH, 128, DH)
     bias = torch.zeros(1, 1, 1, 128)
     up = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

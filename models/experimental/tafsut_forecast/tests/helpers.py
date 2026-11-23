@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test helpers and floors (skill §3). ``FLOORS`` / ``DRIFT`` change only through a DECISIONS.md entry."""
+"""Test helpers and the suite floors (the bench floors are in tests/perf/floors.json)."""
 
 from __future__ import annotations
 
@@ -10,14 +10,12 @@ import torch
 from models.experimental.tafsut_forecast.reference import dataflow as df
 from models.experimental.tafsut_forecast.tests.pcc import metrics as M
 
-# CONTRACT §3 / D0 Q3: pcc_normalized 0.999 provisional (accuracy), pcc_final 0.99; performance 0.995 / 0.98.
-# Band, row, inactive and abs_err_max floors: proposed at G1 from round 0.
+# pcc_normalized / pcc_final per precision; the band, row and error floors are in tests/perf/floors.json.
 FLOORS = {
     "accuracy": {"pcc_normalized": 0.999, "pcc_final": 0.99},
     "performance": {"pcc_normalized": 0.995, "pcc_final": 0.98},
 }
-MODULE_FLOORS = {"pcc_normalized": 0.99, "pcc_final": 0.98}  # tt-metal tiers for committed tests (skill §3)
-DRIFT: dict = {}
+MODULE_FLOORS = {"pcc_normalized": 0.99, "pcc_final": 0.98}  # module-level tier of the suite
 
 
 def pcc(a, b) -> float:

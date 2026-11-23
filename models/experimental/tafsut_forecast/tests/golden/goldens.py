@@ -10,12 +10,15 @@ from pathlib import Path
 import pytest
 import torch
 
-GOLDEN_DIR = Path(os.environ.get("TAFSUT_GOLDENS", "/home/andy/bringup/goldens/tafsut"))
+# Default: <model dir>/goldens (git-ignored, README.md); TAFSUT_GOLDENS overrides it.
+GOLDEN_DIR = Path(os.environ.get("TAFSUT_GOLDENS", Path(__file__).resolve().parents[2] / "goldens"))
 
 
 @lru_cache(maxsize=4)
 def load_golden(name: str) -> dict:
     path = GOLDEN_DIR / f"{name}.pt"
     if not path.is_file():
-        pytest.skip(f"golden {path} missing (make_goldens.py)")
+        pytest.fail(
+            f"golden {path} missing; generate the goldens (see the tafsut_forecast README) or set TAFSUT_GOLDENS"
+        )
     return torch.load(path, weights_only=False)

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU dataflow vs the fp32 reference goldens (CONTRACT §6A): within 1e-5 relative; fallback decision exact."""
+"""CPU dataflow vs the fp32 reference goldens: within 1e-5 relative; fallback decision exact."""
 
 import math
 

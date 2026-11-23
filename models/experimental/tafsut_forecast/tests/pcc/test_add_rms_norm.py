@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """R1-4: the ported ``ops.add_rms_norm`` / ``ops.rms_norm`` against torch on the same bf16 inputs, at the shapes the
-model issues (paper s_pad 128, the read-out cut's 32 rows), with a positive control (v1.13)."""
+model issues (paper s_pad 128, the read-out cut's 32 rows), with a positive control."""
 
 from __future__ import annotations
 

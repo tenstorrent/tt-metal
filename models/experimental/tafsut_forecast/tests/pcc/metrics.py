@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Copied from TiRex-2 651e8c4af93 tests/pcc/metrics.py (CONTRACT §3); Q, P = 9, 32 and Tafsut post-processing.
-
-Gate metrics of a forecast against the upstream goldens (CONTRACT section 3, PLAN section 9).
+"""Gate metrics of a forecast against the upstream goldens (Q, P = 9, 32 and Tafsut post-processing).
 
 All head metrics use the head output at the read-out tokens in normalized space, ``[rows, n, 288]`` with 288 =
 9 quantiles x 32 steps (quantile-major):
@@ -19,38 +17,36 @@ All head metrics use the head output at the read-out tokens in normalized space,
     flat_max_err    worst absolute error (normalized units) over the flat rows (0 when there are none)
     inactive_max_err
                     worst absolute error (normalized units) over the inactive rows (the golden-defined complement
-                    of the active set; D4 condition b: ``flat_max_err`` misses inactive rows that are not flat)
+                    of the active set; ``flat_max_err`` misses inactive rows that are not flat)
     abs_err_max     worst absolute error (normalized units) over every element: a gross single-element check, not a
-                    band check (PLAN section 9 v1.16)
+                    band check
     pcc_row_p01_active, pcc_row_min_active
                     per-row PCC over the active rows only: rows whose golden head std is >= ACTIVE_FRAC of the
-                    golden's global std (PLAN section 9 v1.2); the active set depends on the golden only
+                    golden's global std; the active set depends on the golden only
     active_rows, excluded_rows
     spread_ratio_p01, spread_ratio_p99
-                    per active row, |h - mean_q h| / |h_ref - mean_q h_ref| (band amplitude ratio; PLAN v1.3)
+                    per active row, |h - mean_q h| / |h_ref - mean_q h_ref| (band amplitude ratio)
     spread_ratio_p50
                     the median ratio: a uniform band scaling (0.88x, 1.12x) moves it, row noise does not
     spread_ratio_min, spread_ratio_max
-                    the extremes of that ratio (floor-only, no drift; D3 condition 1b)
+                    the extremes of that ratio (floor-only)
     bias_row_p50    median over rows of |mean(h - h_ref)| (normalized units): a level shift of the whole forecast
-                    (PLAN v1.22 ``level_shift``) moves it one for one, element noise averages out
+                    moves it one for one, element noise averages out
     bias_row_max    the largest of those per-row biases: a shift on a minority of rows, which the median misses
-                    (D3 item 3)
     bias_row_p95    the 95th percentile of those biases (>= 100 rows): a shift on >= 5 % of the rows, on cases where
-                    single rows of the performance preset already exceed the shift (D3 item 3)
+                    single rows of the performance preset already exceed the shift
     pcc_step        PCC of the step-to-step differences along the horizon (within each 32-step patch): a forecast
-                    delayed by a step (PLAN v1.22 ``lag1``) keeps its values but not its increments
+                    delayed by a step keeps its values but not its increments
     row_active_idx, bias_row_vec, spread_ratio_row_vec
                     per active row (golden-defined, so the same rows in every record of a case): its index, its
-                    signed mean error mean(h - h_ref) and its spread ratio. check_gates derives the row-indexed
-                    drifts ``bias_row_drift_max`` and ``spread_ratio_row_drift_max`` against the fixed record from
-                    them (D4 items 1-2): a population statistic cannot tell a +0.05 shift on 1 % of the rows from
-                    rows whose own bias is already 0.05-0.25
+                    signed mean error mean(h - h_ref) and its spread ratio, to compare two records row by row: a
+                    population statistic cannot tell a +0.05 shift on 1 % of the rows from rows whose own bias
+                    is already 0.05-0.25
     pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
     pcc_final_spread  PCC of that forecast minus its mean over the quantile axis (data space)
     median_err      worst |median error| / scale over target rows
-    <key>_at        for every ``*_max_err``, ``abs_err_max`` and ``median_err``: where the maximum sits (D7 condition
-                    a): row, read-out token, step in the token's patch, horizon step, quantile, golden and device
+    <key>_at        for every ``*_max_err``, ``abs_err_max`` and ``median_err``: where the maximum sits:
+                    row, read-out token, step in the token's patch, horizon step, quantile, golden and device
                     value, and the golden row std
 
 ``collapsed(head)`` replaces every quantile by the mean over quantiles: the failure mode these metrics must
@@ -64,7 +60,7 @@ import torch
 from models.experimental.tafsut_forecast.reference import dataflow as df
 
 Q, P = 9, 32
-MIN_P50, MIN_P01 = 8, 100  # PLAN v1.14: p50 at >= 8 active rows, p01/p99 at >= 100
+MIN_P50, MIN_P01 = 8, 100  # p50 at >= 8 active rows, p01/p99 at >= 100
 FLAT_STD = 0.05  # normalized units: 5 % of the series' own scale
 ACTIVE_FRAC = 0.05  # active rows: golden head std >= 5 % of the golden's global std
 
@@ -158,7 +154,7 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
     act = active_rows(g_head)
     ratio = spread_ratios(g_head[act], head[act])
     n_act = int(act.sum())
-    na = lambda ok, f: float(f()) if ok else None  # None prints as "not applicable (n_active=N < M)" (v1.14)
+    na = lambda ok, f: float(f()) if ok else None  # None prints as "not applicable (n_active=N < M)"
     err = (head.double() - g_head.double()).abs().reshape(g_head.shape[0], -1).amax(1)
     med_err = (q[:, Q // 2] - g_q[:, Q // 2]).abs().amax(-1) / scale_targets.reshape(-1)
     sbias = (head.double() - g_head.double()).reshape(g_head.shape[0], -1).mean(1)
@@ -182,7 +178,7 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
         "flat_rows": int(flat.sum()),
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
         "inactive_max_err": float(err[~act].max()) if bool((~act).any()) else 0.0,
-        "abs_err_max": float(err.max()),  # gross single-element check, not a band check (v1.16)
+        "abs_err_max": float(err.max()),  # gross single-element check, not a band check
         "bias_row_p50": float(bias.median()),
         "bias_row_max": float(bias.max()),
         "bias_row_p95": na(len(bias) >= MIN_P01, lambda: torch.quantile(bias, 0.95)),

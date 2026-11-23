@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Real-weight full-model PCC on the test goldens (CONTRACT §6C), both precisions."""
+"""Real-weight full-model PCC on the test goldens, both precisions."""
 
 import os
 
@@ -39,7 +39,7 @@ def test_model(device, case, prec):
         )
     )
     rec = {"test": "suite", "name": case, "precision": prec, "rows": int(g["x"].shape[0]), **met}
-    if g["horizon"] > 1024:  # forward 2, teacher-forced on the reference's forward-1 median, as the bench (D3 item 1)
+    if g["horizon"] > 1024:  # forward 2, teacher-forced on the reference's forward-1 median, as the bench
         th = m.forward(m.prepare_inputs(forward_inputs(g)[1])).float()
         met2, _ = gate_case(g, [heads[0], th], q, 1)
         rec.update({f"f2_{k}": v for k, v in met2.items() if not k.startswith("pcc_final")})
@@ -47,7 +47,7 @@ def test_model(device, case, prec):
         assert met2["pcc_normalized"] > MODULE_FLOORS["pcc_normalized"]
     else:
         th = None
-    # suite record for check_gates (MODEL_PERF_JSON), and the raw outputs for row-level analysis (TAFSUT_DUMP dir)
+    # suite record (MODEL_PERF_JSON), and the raw outputs for row-level analysis (TAFSUT_DUMP dir)
     _record(rec)
     if os.environ.get("TAFSUT_DUMP"):
         torch.save(
@@ -62,8 +62,8 @@ def test_block_outputs(device, case):
     """Embedding, every block and the head against the reference (accuracy; module floor 0.999 on context rows).
 
     Context rows of the embedding and blocks 0-12; the future rows (and REG) of every block, the last one included
-    (it runs on the 32 future rows only, the read-out cut); and the head output (D2 item 5: where does
-    single_long's error first appear). Each line prints the PCC and the worst absolute error (normalized units)."""
+    (it runs on the 32 future rows only, the read-out cut); and the head output (where
+    single_long's error first appears). Each line prints the PCC and the worst absolute error (normalized units)."""
     from models.experimental.tafsut_forecast.reference import dataflow as df
     from models.experimental.tafsut_forecast.tests.helpers import pcc
 

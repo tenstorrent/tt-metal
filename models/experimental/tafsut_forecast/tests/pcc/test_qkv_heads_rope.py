@@ -27,7 +27,7 @@ def run(device, x, cos, sin, fp32_dest):
 
 
 def bad_tiles(got, ref, fp32_dest, label=""):
-    """Sequence tiles whose worst error exceeds one output rounding of that tile's own largest value (v1.24: the
+    """Sequence tiles whose worst error exceeds one output rounding of that tile's own largest value (the
     bound is per tile, so one misread cos/sin row cannot hide under the global maximum)."""
     err = (got - ref).abs().amax((0, 1, 3)).view(-1, 32).amax(1)
     mag = ref.abs().amax((0, 1, 3)).view(-1, 32).amax(1)
@@ -63,7 +63,7 @@ def test_qkv_heads_rope(device, ctx, B, fp32_dest):
 
 
 def test_qkv_heads_rope_control(device):
-    """Positive control (v1.13): a cos/sin table with one sequence tile misread (tile 1 holds tile 0's rows) must fail
+    """Positive control: a cos/sin table with one sequence tile misread (tile 1 holds tile 0's rows) must fail
     the per-tile check on that tile and only there."""
     ctx, B = 2048, 3
     P = ctx // df.PATCH
