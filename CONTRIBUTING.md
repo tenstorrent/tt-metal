@@ -328,7 +328,7 @@ running such tests.
 
 1. Run the specific test point with pytest tool, e.g.
    ```
-   $ pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py
+   $ pytest tests/ttnn/unit_tests/operations/eltwise/test_composite.py
    ```
 2. If you have any issues with import paths for python libraries include the following environment variable,
    ```
@@ -360,7 +360,7 @@ Breakpoint 1, tt::tt_metal::Device::Device (this=0x3c, device_id=21845, num_hw_c
   - Files with the kernel configurations are generated as `<tt-metal dir>/built/<device id>/kernels/kernel_args.csv`
 - To examine the compile time arguments of a kernel:
   - Within your kernel, assign the arguments to **constexpr** like this: `constexpr uint32_t in1_mcast_sender_noc_y = get_compile_time_arg_val(0);`
-  - Run `dump-constexprs.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-consts.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf --function kernel_main`. Note: debug information (DWARF) must be present in ELF files (compiler option `-g`). To enable, add TT_METAL_RISCV_DEBUG_INFO=1 environment variable.
+  - Run `dump-consts.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-consts.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf --function kernel_main`. Note: debug information (DWARF) must be present in ELF files (compiler option `-g`). To enable, add TT_METAL_RISCV_DEBUG_INFO=1 environment variable.
 
 ### Debugging device-side code
 
