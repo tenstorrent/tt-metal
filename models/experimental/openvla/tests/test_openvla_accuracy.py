@@ -388,8 +388,9 @@ def test_predict_action_tokens(mesh_device, openvla_weights_path, llama2_hf_mode
         vla.language_model.forced_tokens = reference["tokens"]
         try:
             vla.predict_action(**predict_kwargs)
-        except ValueError:  # the model's own top-1 at some step is not an action token; still recorded below
-            pass
+        except ValueError as error:  # the model's own top-1 at some step is not an action token; still recorded below
+            if "non-action" not in str(error):
+                raise
         finally:
             vla.language_model.forced_tokens = None
         forced_top1 = vla.language_model._last_generated_tokens
@@ -519,14 +520,14 @@ def test_language_model_decode_order_and_page_table(seq_len, monkeypatch):
     block_size = 32
     monkeypatch.setattr(open_vla, "get_block_size", lambda kv_cache: block_size)
     prefill_token, decode_tokens = 31900, [31801, 31802, 31803, 31804, 31805, 31806]
-    calls = []
+    calls, prefill_page_tables = [], []
 
     def decode_forward(out_tok, current_pos, page_table=None, **kwargs):
-        calls.append((int(out_tok.item()), int(current_pos.item()), page_table.shape[1]))
+        calls.append((int(out_tok.item()), int(current_pos.item()), page_table))
         return one_hot_logits(decode_tokens[len(calls) - 1]), None
 
     language_model = object.__new__(OpenVLALanguageModel)
-    language_model.page_table = torch.arange(512).view(1, 512)
+    language_model.page_table = torch.randperm(512).view(1, 512)
     language_model.tt_kv_cache = [[None]]
     language_model.num_actions = 7
     rope_setup = SimpleNamespace(
@@ -535,7 +536,7 @@ def test_language_model_decode_order_and_page_table(seq_len, monkeypatch):
     language_model.model = [
         SimpleNamespace(
             rope_setup=rope_setup,
-            forward=lambda *args, **kwargs: None,
+            forward=lambda *args, page_table=None, **kwargs: prefill_page_tables.append(page_table),
             process_output_prefill=lambda logits, last_token_idx: one_hot_logits(prefill_token).view(-1),
         )
     ]
@@ -545,5 +546,8 @@ def test_language_model_decode_order_and_page_table(seq_len, monkeypatch):
     assert language_model._last_generated_tokens == [prefill_token] + decode_tokens
     assert [token for token, _, _ in calls] == [prefill_token] + decode_tokens[:-1]
     assert [position for _, position, _ in calls] == list(range(seq_len, seq_len + 6))
-    for _, position, num_blocks in calls:
+    (prefill_page_table,) = prefill_page_tables
+    for _, position, page_table in calls:
+        num_blocks = page_table.shape[1]
         assert position < block_size * num_blocks, f"decode writes position {position} past {num_blocks} blocks"
+        assert torch.equal(page_table[:, : prefill_page_table.shape[1]], prefill_page_table), "decode maps other blocks"

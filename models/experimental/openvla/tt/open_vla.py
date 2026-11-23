@@ -51,7 +51,7 @@ from models.tt_transformers.tt.common import (
     sample_host,
 )
 from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.ttt_compat.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
@@ -1868,7 +1868,7 @@ def test_openvla_model(mesh_device, iterations):
     print(f"Action Tokens: {action_tokens}")
     if action_tokens:
         for idx, token_id in enumerate(action_tokens):
-            print(f"  DoF {idx}: token={token_id}, bin={vla.vocab_size - 1 - token_id}")
+            print(f"  DoF {idx}: token={token_id}, bin={min(vla.vocab_size - 1 - token_id, len(vla.bin_centers) - 1)}")
 
     # Print timings in same format as tt_transformers
     print(f"Timings after running {iterations} iterations: {json.dumps(results, indent=4)}")
