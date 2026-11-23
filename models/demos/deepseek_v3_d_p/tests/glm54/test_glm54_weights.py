@@ -40,14 +40,16 @@ from models.demos.deepseek_v3_d_p.tests.glm54_weights import (
     glm54_tier1_weights,
     glm54_tier2_weights,
     tier2_provenance,
+    tier2_sources,
 )
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 
 HIDDEN = GLM54Config.EMB_SIZE
 GOLDEN = Path(GLM53Adapter.test_prefill_trace_default) / "decoder_io"
 needs_checkpoint = pytest.mark.skipif(
-    not (Path(GLM53_CHECKPOINT) / "model.safetensors.index.json").is_file(), reason="GLM-5.3 checkpoint absent"
+    not (tier2_sources()[0] / "model.safetensors.index.json").is_file(), reason="GLM-5.3 checkpoint absent"
 )
+_SOURCE_ENV = (GLM53Adapter.env_var, "PREFILL_HF_MODEL", "PREFILL_TTNN_CACHE")
 needs_golden = pytest.mark.skipif(not GOLDEN.is_dir(), reason="GLM-5.3 golden trace absent")
 
 
@@ -175,12 +177,44 @@ def test_tier1_weights_run_the_reference_stack():
 # --- tier 2 ---------------------------------------------------------------------------------------------------
 
 
+def test_tier2_provenance_follows_the_runner_environment(monkeypatch, tmp_path):
+    """Provenance records the checkpoint and cache a run actually reads: the runner's env overrides, in its order
+    ($GLM53_HF_MODEL before $PREFILL_HF_MODEL), and as many gates as the config's loop passes."""
+
+    def fake_checkpoint(name: str, text: str) -> Path:
+        d = tmp_path / name
+        d.mkdir()
+        (d / "config.json").write_text(text)
+        (d / "model.safetensors.index.json").write_text("{}")
+        return d
+
+    for name in _SOURCE_ENV:
+        monkeypatch.delenv(name, raising=False)
+    prefill = fake_checkpoint("GLM-5.3-fp8-prefill1", "a")
+    monkeypatch.setenv("PREFILL_HF_MODEL", str(prefill))
+    monkeypatch.setenv("PREFILL_TTNN_CACHE", str(tmp_path / "cache"))
+    assert tier2_sources() == (prefill, tmp_path / "cache")
+    c = glm_5_4_hf_config()
+    c.loop_count = 1  # not GLM54Config.LOOP_COUNT (2)
+    p = tier2_provenance(c)
+    assert p["checkpoint"] == str(prefill) and p["checkpoint_dir_tag"] == "prefill1"
+    assert p["config_sha256"] == "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"  # sha256(b"a")
+    assert p["ttnn_cache"] == str(tmp_path / "cache") and len(p["gates"]["gate_seeds"]) == 1
+    own = fake_checkpoint("GLM-5.3-fp8-own2", "b")
+    monkeypatch.setenv(GLM53Adapter.env_var, str(own))
+    assert tier2_sources()[0] == own
+
+
 @needs_checkpoint
-def test_tier2_provenance():
-    p = tier2_provenance()
+def test_tier2_provenance(monkeypatch):
+    for name in _SOURCE_ENV:
+        monkeypatch.delenv(name, raising=False)
+    c = glm_5_4_hf_config()
+    p = tier2_provenance(c)
     assert p["checkpoint"] == GLM53_CHECKPOINT and p["checkpoint_dir_tag"] == "aca966e4"
+    assert p["ttnn_cache"] == GLM53_TTNN_CACHE
     assert len(p["config_sha256"]) == 64 and len(p["index_sha256"]) == 64
-    w = glm54_tier2_weights(glm_5_4_hf_config())
+    w = glm54_tier2_weights(c)
     assert w.state_dict == {} and len(w.gates) == 2 and w.provenance == p
     assert all(
         torch.equal(a["proj_weight"], b["proj_weight"]) for a, b in zip(w.gates, synthetic_gates(HIDDEN, 2, seed=1))
@@ -236,14 +270,14 @@ def test_tier2_loop_layer_in_the_reference():
     assert out.output.shape == (1, seq, HIDDEN) and torch.isfinite(out.output).all()
 
 
-@pytest.mark.skipif(not Path(GLM53_TTNN_CACHE).is_dir(), reason="GLM-5.3 TTNN cache absent")
+@pytest.mark.skipif(not tier2_sources()[1].is_dir(), reason="GLM-5.3 TTNN cache absent")
 def test_tier2_ttnn_cache_holds_every_layer():
     """The device side of tier 2: the GLM-5.3 TTNN cache for a Blackhole 8x4 stage (SP on axis 0, TP 4) holds every
     trunk tensor of layers 0-77, which GLM-5.4 reuses as is (pass 2 reads loop layers 26-53 again)."""
     from models.demos.deepseek_v3_d_p.tt.runners.weight_categories import missing_trunk_categories
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 
-    cache = Path(GLM53_TTNN_CACHE) / "glm_5_3_bh_32dev" / "8x4"
+    cache = tier2_sources()[1] / "glm_5_3_bh_32dev" / "8x4"
     if not cache.is_dir():
         pytest.skip(f"{cache} absent")
     c = glm_5_4_hf_config()

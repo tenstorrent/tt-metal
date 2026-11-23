@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tier-1 GLM-5.4 weights on device: the reduced stack (tests/glm54_weights.py) builds as a TtPrefillTransformer
-and its prelude and loop pass 1 (layers 0-2, run once) match the GLM-5.4 CPU reference stack on the same weights.
+and every layer's output matches the CPU reference on the same weights: the prelude and loop pass 1 (layers 0-2, run
+once) against the GLM-5.4 reference stack, and the coda layer 3, which on device follows pass 1 directly (no gates or
+pass 2), teacher-forced: the CPU GLM-5.3 decoder layer runs on the device's own layer-2 output.
 
 A load check, not the loop's acceptance: the loop, gates and pass 2 on device are q171.2.4 / q171.2.5. The bar
 only has to catch weights that did not load as the reference reads them (wrong layer, role or order; see LOAD_PCC).
@@ -12,6 +14,7 @@ device (run it with plain pytest first) and the device test reads it back; the d
 when the file is missing. Nothing at import or collection opens the device.
 """
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -21,8 +24,9 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens, rotated_chunk_positions
+from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLAReference
+from models.demos.deepseek_v3_d_p.reference.glm_5_3.block import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_4 import glm54_stack_reference
-from models.demos.deepseek_v3_d_p.reference.glm_5_4.synthetic_gates import GLM54_SYNTHETIC_SEED, SYNTHETIC_GATES_VERSION
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.glm54_weights import (
     GLM54ReducedConfig,
@@ -45,13 +49,18 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 # reference: loop layers 1/2 norms + router swapped -> layer 2 0.756, layer 0 with another layer's MLA -> 0.006.
 LOAD_ROWS = 512
 LOAD_PCC = 0.90
-# Device layer -> reference checkpoint: the prelude output (loop pass-1 input) and the loop pass-1 output. The device
-# runs layers 0-3 once; its layer 3 is not GLM-5.4's (that follows the gates and pass 2).
+# Device layer -> reference checkpoint: the prelude output (loop pass-1 input) and the loop pass-1 output. Layer 1 is
+# checked through layer 2.
 COMPARED = {0: "pass1.in", 2: "pass1.out"}
+# Layer 3 (coda) is compared teacher-forced, on its own contribution (output - input): by layer 3 the residual stream
+# dominates, so on whole outputs even skipping the layer scores 0.868 and a wrong router 0.935 (rows < 512, CPU).
+# Measured on rows < 512: correct device load 0.992; CPU faults: layer 1's norms + router 0.747, layer 1's MLA 0.321.
+CODA_DELTA_PCC = 0.95
 SP = 8  # the 8x4 mesh's SP factor (axis 0)
 CHUNK = PREFILL_CHUNK_TOKENS_PER_CHIP * SP
 TOKEN_SEED = 5
-# Bump when the stored bytes change for the same key below (reference stack, layer generator, compared checkpoints).
+# Bump when the reference code changes the stored bytes for the same weights (reference stack, compared entries); the
+# weights themselves are in the key as a digest.
 REFERENCE_VERSION = 1
 REFERENCE_CACHE = Path.home() / ".cache" / "tt-glm54"
 
@@ -60,17 +69,44 @@ def _tokens(config):
     return torch.randint(0, config.vocab_size, (CHUNK,), generator=torch.Generator().manual_seed(TOKEN_SEED))
 
 
-def _reference_path() -> Path:
-    key = f"seed{GLM54_SYNTHETIC_SEED}-gates{SYNTHETIC_GATES_VERSION}-chunk{CHUNK}-tokens{TOKEN_SEED}-v{REFERENCE_VERSION}"
+def _weights_digest(weights) -> str:
+    """sha256 over a sample of every tensor group (embedding rows, each layer's norms, every MLA tensor's first row,
+    router, first routed and shared expert, gates): any change of generator, config or seed moves it."""
+    h = hashlib.sha256()
+
+    def add(t: torch.Tensor) -> None:
+        h.update(t.detach().reshape(-1)[:4096].float().numpy().tobytes())
+
+    add(weights.state_dict["embed_weight"][:64])
+    for layer in weights.state_dict["layers"]:
+        add(layer["attn_norm_weight"])
+        add(layer["ffn_norm_weight"])
+        for name in sorted(layer["mla_weights"]):
+            add(layer["mla_weights"][name])
+        if "ffn_weights" in layer:
+            add(layer["ffn_weights"]["gate_proj"])
+        else:
+            add(layer["gate_weights"]["weight"])
+            add(layer["gate_weights"]["e_score_correction_bias"])
+            add(layer["routed_expert_weights"][0]["gate_proj"])
+            add(layer["shared_expert_weights"]["down_proj"])
+    for gate in weights.gates:
+        for name in sorted(gate):
+            add(gate[name])
+    return h.hexdigest()[:16]
+
+
+def _reference_path(weights) -> Path:
+    key = f"w{_weights_digest(weights)}-chunk{CHUNK}-tokens{TOKEN_SEED}-v{REFERENCE_VERSION}"
     return REFERENCE_CACHE / f"tier1-reference-{key}.pt"
 
 
 def _compute_reference(config, weights) -> dict:
-    """The compared GLM-5.4 reference checkpoints for one chunk of ``_tokens``, saved for the device test."""
+    """The compared reference outputs for one chunk of ``_tokens``, saved for the device test."""
     x = weights.state_dict["embed_weight"][_tokens(config)].unsqueeze(0)
     cp = glm54_stack_reference(config, list(weights.state_dict["layers"]), weights.gates, x).checkpoints
     ref = {name: cp[name] for name in COMPARED.values()}
-    path = _reference_path()
+    path = _reference_path(weights)
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(ref, path.with_suffix(".tmp"))
     path.with_suffix(".tmp").rename(path)
@@ -197,7 +233,7 @@ def test_glm54_tier1_loads_on_device(mesh_device, device_params, num_links):
         device[i] = nat
         assert torch.isfinite(nat).all(), f"layer {i} output not finite"
 
-    path = _reference_path()
+    path = _reference_path(weights)
     if path.is_file():
         logger.info(f"tier-1 reference from {path}")
         ref = torch.load(path)
@@ -219,4 +255,25 @@ def test_glm54_tier1_loads_on_device(mesh_device, device_params, num_links):
         )
         if p < LOAD_PCC:
             failures.append(f"layer {i} PCC rows < {LOAD_ROWS} {p:.5f} < {LOAD_PCC}")
+
+    # Coda, teacher-forced on rows < LOAD_ROWS (causal, and below index_topk every key is selected, so these rows
+    # depend on nothing after them): CPU layer 3 on the device's layer-2 output.
+    coda = weights.state_dict["layers"][3]
+    assert config.indexer_types[3] == "full"  # owns its indexer: no top-k to inject
+    assert LOAD_ROWS <= config.index_topk
+    x2 = device[2][:LOAD_ROWS]
+    cpu3, _ = glm_decoder_layer_reference(
+        config,
+        None,
+        coda["attn_norm_weight"],
+        coda["ffn_norm_weight"],
+        x2.unsqueeze(0).to(torch.bfloat16),
+        LOAD_ROWS,
+        moe_weights={k: coda[k] for k in ("gate_weights", "routed_expert_weights", "shared_expert_weights")},
+        mla_ref=SparseMLAReference(config, coda["mla_weights"], seq_len=LOAD_ROWS),
+    )
+    p = _pcc(device[3][:LOAD_ROWS] - x2, cpu3[0].float() - x2)
+    logger.info(f"tier-1 layer 3 device vs CPU layer 3 on device layer 2, contribution PCC rows < {LOAD_ROWS}: {p:.5f}")
+    if p < CODA_DELTA_PCC:
+        failures.append(f"layer 3 contribution PCC rows < {LOAD_ROWS} {p:.5f} < {CODA_DELTA_PCC}")
     assert not failures, failures

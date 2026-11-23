@@ -18,15 +18,22 @@ sensitivity).
 Tier 2 (performance): every shared tensor is GLM-5.3's FP8 checkpoint, GLM-5.4 layer L (either loop pass) =
 GLM-5.3 layer L; only the damp gates are synthetic (``reference.glm_5_4.synthetic_gates``, centred so beta1 ~0.2,
 beta2 ~0.9). Device runs read those tensors from the GLM-5.3 TTNN cache through the runner, unchanged: its
-directory is ``{GLM53Adapter.ttnn_cache_default}/glm_5_3_{arch}_{N}dev/...`` (``MLAPrefillAdapter.weight_cache_path``
-names it after the adapter, so a GLM-5.4 adapter must keep the ``glm_5_3`` name or override that path). Reference
+directory is ``{cache}/glm_5_3_{arch}_{N}dev/...``. ``MLAPrefillAdapter.weight_cache_path`` names it after the
+adapter, so a GLM-5.4 adapter must keep the ``glm_5_3`` name or override that path: otherwise it creates
+``{cache}/glm_5_4_{arch}_{N}dev`` on Weka, finds every weight category missing, and the runner rebuilds and writes a
+full cache there (``weight_categories``), breaking the read-only rule for the GLM-5.3 checkpoint and cache. Reference
 checks load one layer with ``glm54_checkpoint_layer``. Nothing here writes to the checkpoint or the cache.
+
+``tier2_sources`` resolves the checkpoint and cache the way the runner does (``$GLM53_HF_MODEL``, else
+``$PREFILL_HF_MODEL``, else the adapter default; ``$PREFILL_TTNN_CACHE``, else the adapter default), and every tier-2
+function reads its paths from it, so the recorded provenance is the source actually used.
 
 ``tier1_provenance`` / ``tier2_provenance`` return what a run must record to be reproducible: generator,
 seeds and constants for synthetic tensors; checkpoint path, revision and file digests for real ones.
 """
 
 import hashlib
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -68,7 +75,6 @@ def glm54_reduced_config(max_seq_len: int):
     c.first_k_dense_replace = m.NUM_DENSE_LAYERS
     c.indexer_types = m.indexer_types()
     c.loop_first_layer, c.loop_last_layer = m.LOOP_FIRST_LAYER, m.LOOP_LAST_LAYER
-    c.max_seq_len = max_seq_len
     return c
 
 
@@ -126,36 +132,43 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def tier2_provenance(checkpoint: str | Path = GLM53_CHECKPOINT, seed: int = GLM54_SYNTHETIC_SEED) -> dict:
-    """What determines the tier-2 weights: the GLM-5.3 checkpoint (path, revision tag of its directory name, digests
-    of its config and tensor index), the TTNN cache device runs read, and the synthetic gates."""
-    ckpt = Path(checkpoint)
+def tier2_sources() -> tuple[Path, Path]:
+    """(checkpoint, TTNN cache root) a tier-2 run reads, resolved as the GLM-5.3 runner resolves them
+    (``GLM53Adapter.moe_block_nonrouted_weights`` / ``MLAPrefillAdapter.weight_cache_path``)."""
+    checkpoint = os.environ.get(GLM53Adapter.env_var) or os.environ.get("PREFILL_HF_MODEL") or GLM53_CHECKPOINT
+    cache = os.environ.get("PREFILL_TTNN_CACHE", GLM53_TTNN_CACHE)
+    return Path(checkpoint), Path(cache)
+
+
+def tier2_provenance(config, seed: int = GLM54_SYNTHETIC_SEED) -> dict:
+    """What determines the tier-2 weights: the GLM-5.3 checkpoint in use (path, revision tag of its directory name,
+    digests of its config and tensor index), the TTNN cache root device runs read, and the synthetic gates of
+    ``config.loop_count`` passes."""
+    ckpt, cache = tier2_sources()
     return {
         "tier": 2,
         "checkpoint": str(ckpt),
         "checkpoint_dir_tag": ckpt.name.rsplit("-", 1)[-1],
         "config_sha256": _sha256(ckpt / "config.json"),
         "index_sha256": _sha256(ckpt / "model.safetensors.index.json"),
-        "ttnn_cache": GLM53_TTNN_CACHE,
+        "ttnn_cache": str(cache),
         "layer_map": "GLM-5.4 layer L, any loop pass = GLM-5.3 layer L",
-        "gates": _gate_provenance(seed, GLM54Config.LOOP_COUNT),
+        "gates": _gate_provenance(seed, config.loop_count),
     }
 
 
 def glm54_tier2_weights(config, seed: int = GLM54_SYNTHETIC_SEED) -> Glm54Weights:
     """Tier 2: the synthetic gates; ``state_dict`` is empty, the runner's cache-only form (shared tensors come from
     the GLM-5.3 TTNN cache on device, or ``glm54_checkpoint_layer`` for a reference check)."""
-    return Glm54Weights(
-        {}, synthetic_gates(config.hidden_size, config.loop_count, seed=seed), tier2_provenance(seed=seed)
-    )
+    gates = synthetic_gates(config.hidden_size, config.loop_count, seed=seed)
+    return Glm54Weights({}, gates, tier2_provenance(config, seed))
 
 
-def glm54_checkpoint_layer(
-    config, layer_idx: int, *, checkpoint: str | Path = GLM53_CHECKPOINT, categories=LAYER_CATEGORIES
-) -> dict:
-    """GLM-5.4 layer ``layer_idx`` from the GLM-5.3 checkpoint as one TtPrefillBlock dict (FP8 dequantized to
-    bf16), holding ``categories`` (the FFN categories that do not apply to the layer are dropped). Read only.
-    ``config`` is the full-size GLM-5.4 hf config (``glm_5_4_hf_config``): its layer kinds must be the checkpoint's.
+def glm54_checkpoint_layer(config, layer_idx: int, *, categories=LAYER_CATEGORIES) -> dict:
+    """GLM-5.4 layer ``layer_idx`` from the tier-2 checkpoint (``tier2_sources``) as one TtPrefillBlock dict (FP8
+    dequantized to bf16), holding ``categories`` (the FFN categories that do not apply to the layer are dropped).
+    Read only. ``config`` is the full-size GLM-5.4 hf config (``glm_5_4_hf_config``): its layer kinds must be the
+    checkpoint's.
 
     A MoE layer with routed experts is ~19 GB of host RAM and minutes of reading; pass fewer categories when the
     check does not need them. A ``shared``-indexer layer's MLA dict carries no indexer weights."""
@@ -164,16 +177,12 @@ def glm54_checkpoint_layer(
     if config.num_hidden_layers != GLM54Config.NUM_LAYERS:
         raise ValueError("glm54_checkpoint_layer needs the full-size config (the checkpoint's layer kinds)")
     moe = layer_idx >= config.first_k_dense_replace
-    wanted = [
-        c
-        for c in categories
-        if not (moe and c == "dense_ffn") and not (not moe and c in ("moe_gate", "shared_experts", "routed_experts"))
-    ]
+    skip = {"dense_ffn"} if moe else {"moe_gate", "shared_experts", "routed_experts"}
     sd = load_trunk_state_dict(
-        checkpoint,
+        tier2_sources()[0],
         config,
         GLM54Config,
-        missing={c: [layer_idx] for c in wanted},
+        missing={c: [layer_idx] for c in categories if c not in skip},
         first_layer_idx=layer_idx,
         num_layers=1,
     )
@@ -192,4 +201,5 @@ __all__ = [
     "glm54_tier2_weights",
     "tier1_provenance",
     "tier2_provenance",
+    "tier2_sources",
 ]
