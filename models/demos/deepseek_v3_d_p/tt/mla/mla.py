@@ -963,6 +963,15 @@ class ttMLA:
         self._pass2_push_geometry = dict(
             self._push_geometry, distinct_rows=query_rows * (window + topk)  # window ids beside the top-k
         )
+        # Pass 2 runs no full layer, so the dense gather buffer is idle while it runs: its push output goes there when
+        # it fits (as GLM-5.3's shared layers do, _push_reuses_dense), else to a buffer of its own. Safe because the
+        # layers use the buffer serially (pass 1 is done before pass 2 writes it) and _two_bank_attn calls
+        # self._push.invalidate() first, which drops any pre-send record a pass-1 layer left for a buffer pass 2 is
+        # about to overwrite.
+        dense = self._sparse_kv_gather_buffer
+        self._pass2_push_reuses_dense = (
+            self._push.buffer_spec(dense, **self._pass2_push_geometry).shape[2] <= dense.shape[2]
+        )
         return self.tt_ccl.get_two_bank_index(
             ring_base=ring_base,
             window=window,
@@ -2613,9 +2622,7 @@ class ttMLA:
         self._push.pushes[SparseKvPushPart.ALL.name] += 1
         compact = ttnn.experimental.sparse_kv_push(
             storage,
-            output_tensor=self._push.push_buffer(
-                "loop_pass2", self._sparse_kv_gather_buffer, **self._pass2_push_geometry
-            ),
+            output_tensor=self._pass2_push_output(),
             table=plan.table,
             stripe_chunk=plan.stripe_chunk,
             max_rows=plan.max_rows,
@@ -2639,6 +2646,13 @@ class ttMLA:
             for t in metadata:
                 ttnn.deallocate(t)
         return out
+
+    def _pass2_push_output(self):
+        """Where pass 2's push writes its rows: the idle dense gather buffer when it fits (see _build_two_bank_index)."""
+        dense = self._sparse_kv_gather_buffer
+        if self._pass2_push_reuses_dense:
+            return dense
+        return self._push.push_buffer("loop_pass2", dense, **self._pass2_push_geometry)
 
     def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata):
         """Cache slot of a push. On the metadata path it is recomposed on device from the user id tensor, so a captured
