@@ -293,7 +293,8 @@ def get_LLama2OpenVLAArgs(state_dict, use_bf16_lm_head=True):
             if state_dict is None:
                 return super().load_state_dict()
             # map_openvla_hf_to_meta_keys permutes Q/K for the Meta-layout RoPE
-            assert not self.use_hf_rope, "OpenVLA's Q/K mapping assumes use_hf_rope=False"
+            if self.use_hf_rope:
+                raise ValueError("OpenVLA's Q/K mapping assumes use_hf_rope=False")
             new_state_dict = map_openvla_hf_to_meta_keys(state_dict, self.head_dim)
             return new_state_dict
 
@@ -1645,7 +1646,14 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
                 return_dict=True,
             )
             self.cached_output = (None, None)
-            action_ids = torch.tensor([self.language_model._last_generated_tokens], dtype=input_ids.dtype)
+            generated_tokens = self.language_model._last_generated_tokens
+            first_action_token = self.vocab_size - len(self.bin_centers) - 1
+            if not all(first_action_token <= token < self.vocab_size for token in generated_tokens):
+                raise ValueError(
+                    f"predict_action generated non-action tokens {generated_tokens} "
+                    f"(action tokens are {first_action_token}..{self.vocab_size - 1})"
+                )
+            action_ids = torch.tensor([generated_tokens], dtype=input_ids.dtype)
             generated_ids = torch.cat((input_ids, action_ids), dim=1)
         else:
             generated_ids = self.generate(input_ids, max_new_tokens=self.get_action_dim(unnorm_key), **kwargs)
@@ -1655,12 +1663,6 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
         action_token_ids = (
             generated_ids[0, -action_dim:].tolist() if generated_ids.dim() > 1 else generated_ids[-action_dim:].tolist()
         )
-        first_action_token = self.vocab_size - len(self.bin_centers) - 1
-        if not all(first_action_token <= token < self.vocab_size for token in action_token_ids):
-            raise ValueError(
-                f"predict_action generated non-action tokens {action_token_ids} "
-                f"(action tokens are {first_action_token}..{self.vocab_size - 1})"
-            )
 
         # get final actions
         actions = get_final_action(
@@ -1798,7 +1800,8 @@ def test_openvla_model(mesh_device, iterations):
                 for key in f.keys():
                     merged_tensors[key] = f.get_tensor(key)
     else:
-        print("⚠️  OPENVLA_WEIGHTS not set, using random weights")
+        # Without them the language model loads base Llama-2, whose tokens are not action tokens
+        pytest.skip("Set OPENVLA_WEIGHTS to an openvla/openvla-7b snapshot")
 
     processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
 
@@ -1865,8 +1868,7 @@ def test_openvla_model(mesh_device, iterations):
     print(f"Action Tokens: {action_tokens}")
     if action_tokens:
         for idx, token_id in enumerate(action_tokens):
-            bin_idx = token_id - 31833 if 31833 <= token_id <= 31872 else "N/A"
-            print(f"  DoF {idx}: token={token_id}, bin={bin_idx}")
+            print(f"  DoF {idx}: token={token_id}, bin={vla.vocab_size - 1 - token_id}")
 
     # Print timings in same format as tt_transformers
     print(f"Timings after running {iterations} iterations: {json.dumps(results, indent=4)}")

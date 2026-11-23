@@ -14,6 +14,8 @@ Accuracy tests for OpenVLA pieces that the PCC tests with random weights do not 
    TT top-1 is in the reference top-5 (needs OPENVLA_WEIGHTS). One case crosses a KV-cache block during decode.
 6. predict_action on device rejects generation options it cannot honour (host only)
 7. predict_action returns the generated tokens in order, first the prefill's, and rejects non-action tokens (host only)
+8. The language model's forward puts the prefill token first, feeds each token to the next decode step, and gives decode
+   a page table that covers every position it writes (host only, device calls stubbed)
 
 Reference for 5: references/generate_reference_actions.py (HF, bfloat16 on CPU, revision 47a0ec7f).
 Reference for 3 and 4: openvla/openvla-7b (revision 47a0ec7f) on CPU in float32, through the timm towers of
@@ -34,12 +36,13 @@ from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding, apply
 import ttnn
 from models.common.reference_rope import apply_rotary_emb, precompute_freqs_cis
 from models.common.utility_functions import comp_pcc, torch_random
+import models.experimental.openvla.tt.open_vla as open_vla
 from models.experimental.openvla.tt.open_vla import (
+    OPENVLA_FABRIC_CONFIG,
+    OPENVLA_MESH_DEVICE,
     TIMM_OVERRIDE_ACT_LAYER,
     VISION_BACKBONE_TO_RESOLUTION,
     VISION_BACKBONE_TO_TIMM_ID,
-    OPENVLA_FABRIC_CONFIG,
-    OPENVLA_MESH_DEVICE,
     OpenVLAConfig,
     OpenVLALanguageModel,
     PrismaticProjector,
@@ -367,7 +370,6 @@ def test_predict_action_tokens(mesh_device, openvla_weights_path, llama2_hf_mode
     vla = TTOpenVLAForActionPrediction(vla_config, ttnn_device=mesh_device, local_state_dict=merged_tensors).to(
         "cpu", dtype=torch.bfloat16
     )
-    first_action_token = OPENVLA_VOCAB_SIZE - OPENVLA_ACTION_BINS
     action_stats = vla_config.norm_stats["bridge_orig"]["action"]
 
     for case, reference in REFERENCE_ACTIONS.items():
@@ -382,14 +384,20 @@ def test_predict_action_tokens(mesh_device, openvla_weights_path, llama2_hf_mode
             "do_sample": False,
             "return_tokens": True,
         }
-        actions, action_tokens = vla.predict_action(**predict_kwargs)
-
+        # Teacher-forced pass first, so its numbers are printed even if the greedy pass raises
         vla.language_model.forced_tokens = reference["tokens"]
         try:
             vla.predict_action(**predict_kwargs)
-            forced_top1 = vla.language_model._last_generated_tokens
+        except ValueError:  # the model's own top-1 at some step is not an action token; still recorded below
+            pass
         finally:
             vla.language_model.forced_tokens = None
+        forced_top1 = vla.language_model._last_generated_tokens
+        try:
+            actions, action_tokens = vla.predict_action(**predict_kwargs)
+            greedy_error = None
+        except ValueError as error:  # a non-action token among the generated ones
+            actions, action_tokens, greedy_error = None, vla.language_model._last_generated_tokens, error
         outside_top5 = [i for i, token in enumerate(forced_top1) if token not in reference["top5"][i]]
 
         print(f"\n{'='*60}")
@@ -401,10 +409,8 @@ def test_predict_action_tokens(mesh_device, openvla_weights_path, llama2_hf_mode
         print(f"  Steps outside the reference top-5: {outside_top5}")
         print(f"{'='*60}\n")
 
+        assert greedy_error is None, f"{case}: {greedy_error}"
         assert len(action_tokens) == vla.get_action_dim("bridge_orig")
-        assert all(
-            first_action_token <= token < OPENVLA_VOCAB_SIZE for token in action_tokens
-        ), f"{case}: non-action token in {action_tokens}"
         assert np.allclose(
             actions, reference_unnormalized_actions(action_tokens, action_stats)
         ), f"{case}: actions {actions} are not the decoded tokens {action_tokens}"
@@ -480,3 +486,64 @@ def test_predict_action_rejects_non_action_tokens(bad_token, expect_error):
     """An end-of-sequence or other non-action token among the generated tokens must not be decoded as an action."""
     with expect_error(ValueError, "non-action tokens"):
         predict_with_tokens([31868, 31744, 31947, 31864, 31834, 31823, bad_token])
+
+
+class FakeTTTensor:
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def device(self):
+        return None
+
+
+def one_hot_logits(token):
+    logits = torch.zeros(1, 1, OPENVLA_VOCAB_SIZE)
+    logits[..., token] = 1.0
+    return logits
+
+
+# 276 and 282 positions stay in the prompt's last KV block; 283 and 288 make decode write into the next one
+@pytest.mark.parametrize("seq_len", [276, 282, 283, 288])
+def test_language_model_decode_order_and_page_table(seq_len, monkeypatch):
+    """OpenVLALanguageModel's forward with the device calls stubbed: the prefill's token comes first, each decode step
+    takes the previous token, and every position decode writes is covered by the page table it gets."""
+    monkeypatch.setattr(
+        open_vla.ttnn,
+        "pad",
+        lambda t, pads, value: FakeTTTensor((t.shape[0], t.shape[1], t.shape[2] + pads[2][1], t.shape[3])),
+    )
+    monkeypatch.setattr(open_vla.ttnn, "unsqueeze", lambda t, dim: FakeTTTensor((t.shape[0], 1) + t.shape[1:]))
+    monkeypatch.setattr(open_vla.ttnn, "from_torch", lambda t, **kwargs: t)
+    monkeypatch.setattr(open_vla.ttnn, "from_device", lambda t: t)
+    monkeypatch.setattr(open_vla.ttnn, "ReplicateTensorToMesh", lambda device: None)
+    block_size = 32
+    monkeypatch.setattr(open_vla, "get_block_size", lambda kv_cache: block_size)
+    prefill_token, decode_tokens = 31900, [31801, 31802, 31803, 31804, 31805, 31806]
+    calls = []
+
+    def decode_forward(out_tok, current_pos, page_table=None, **kwargs):
+        calls.append((int(out_tok.item()), int(current_pos.item()), page_table.shape[1]))
+        return one_hot_logits(decode_tokens[len(calls) - 1]), None
+
+    language_model = object.__new__(OpenVLALanguageModel)
+    language_model.page_table = torch.arange(512).view(1, 512)
+    language_model.tt_kv_cache = [[None]]
+    language_model.num_actions = 7
+    rope_setup = SimpleNamespace(
+        cos_matrix_prefill=torch.zeros(1, 1, 1024, 2), sin_matrix_prefill=torch.zeros(1, 1, 1024, 2)
+    )
+    language_model.model = [
+        SimpleNamespace(
+            rope_setup=rope_setup,
+            forward=lambda *args, **kwargs: None,
+            process_output_prefill=lambda logits, last_token_idx: one_hot_logits(prefill_token).view(-1),
+        )
+    ]
+    language_model.generator = SimpleNamespace(decode_forward=decode_forward)
+    language_model(inputs_embeds=FakeTTTensor((1, 1, seq_len, 8)), return_dict=True)
+
+    assert language_model._last_generated_tokens == [prefill_token] + decode_tokens
+    assert [token for token, _, _ in calls] == [prefill_token] + decode_tokens[:-1]
+    assert [position for _, position, _ in calls] == list(range(seq_len, seq_len + 6))
+    for _, position, num_blocks in calls:
+        assert position < block_size * num_blocks, f"decode writes position {position} past {num_blocks} blocks"
