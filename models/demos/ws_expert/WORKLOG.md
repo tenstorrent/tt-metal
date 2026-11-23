@@ -1850,3 +1850,30 @@ last packet (receiver timing), FABRIC_2D, chips (0,0) -> (0,1) unless noted; 48 
   cores sit; not explained yet (the senders share no core, NoC route or router). high_bw_all_gather on the 8-chip
   ring (four link directions out of each chip): 37.7 GB/s a link direction - the same regime.
 - 200G for comparison: high_bw_all_gather 23.9 of 25 (96%).
+
+### Ring forwarding microbench at 400G (2026-11-23, bh-lb-09; tests/test_fr_ring.py, kernels/fr_lane.cpp)
+The weight-streaming shape without compute: the tray snake as an 8-chip ring, one-way lanes (a link core's BRISC sends
+to the next chip, its NCRISC to the previous one), every chip injects E packets a lane (L1 source) that travel 7 hops,
+so every link direction carries 7 E packets (67 MB a launch). Packets land in an S-slot L1 ring on the next chip (the
+k-th into slot k % S, fused write + inc), the receiver forwards or retires them in arrival order (forwards-left in the
+packet's last 16 B, no tables); ring credits = the receiver's freed prefix, piggy-backed in the last 16 B of every
+packet of the opposite lane (same core) plus an explicit inline write when that lane is idle; bubble rule (forward 1
+free slot, inject 2). Sends and arrivals counted exactly on every lane; 2 + 3 launches, AICLK 1350.
+| step (8704 B packets, router payload 8704, one link unless noted) | GB/s a link direction |
+|---|---|
+| S 8, flush every 2 sends | 17.3 (credit round trip: S x PB / 17 GB/s = 4 us) |
+| S 16 / 32 / 48 | 22.7 / 38.0 / 37.9 |
+| S 32, slots freed by the NoC's sent-write counter instead of a blocking flush | 35.8 (waits ~0: the RISC is the limit) |
+| + the connection's stateful send path | 37.9 |
+| arrivals handled 2 / 4 / 32 a pass | 38.1 / 37.6 / 5.7 (long passes delay the piggy-backed credits) |
+| a core a lane (partner words over the NoC; stateful re-armed after each) | 32.2 (plain) / 27.5 (stateful) |
+| 15232 B packets (router 15232), S 32, 2 a pass | 38.6 (router-space waits 677 of 1741 us: the router is the limit) |
+| two links, link cores side by side (1,0) (2,0) | 21.3 |
+| two links, cores apart (1,0) (9,9), 8704 / 15232 | 32.4 / 31.8 |
+- Reference points on this box (test_fx_bench): one link both directions 45.5 / 46.8 (8704) and 42.4 (15232); four
+  flows a chip ~40 each; high_bw_all_gather on the same ring and links 37.7.
+- So one link forwards at ~91% of what the fabric gives that pattern (38.6 of 42.4), and two links at ~32, the per-chip
+  multi-flow drop (~15%) on top. Bugs on the way (fixed): the outstanding-send queue overflowed when a pass sent more
+  than S packets (freed counts corrupted); split lanes sent the explicit credit to the downstream same-lane core
+  instead of its other-lane core (hang, chips reset by the runner); the stateful send path keeps state in the command
+  buffer that noc_inline_dw_write uses, so it is re-armed after any other write from that RISC.
