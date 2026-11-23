@@ -313,24 +313,56 @@ ALWI void rms_normalize(uint32_t n, uint32_t cw) {
     }
 }
 
+// xg_pre: x * gamma of the block -> cb_xg, in the stats shadow (before the gather tiles arrive)
+ALWI void rms_x_times_gamma(uint32_t crt, uint32_t cw) {
+    eltwise_chain(
+        IterationShape::grid(crt, cw), CopyTile<x_input<cb_x>, Dst::D0>{}, TimesGamma{}, PackTile<output(cb_xg)>{});
+}
+
+// xg_pre normalize: (x * gamma) * inv (bcast col) over grid(n, cw) of cb_xg -> cb_out_block
+ALWI void rms_normalize_xg(uint32_t n, uint32_t cw) {
+    constexpr auto xg_in = input(
+        cb_xg,
+        WaitPolicy::None,
+        PopPolicy::None,
+        InputTileMapping::Block,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Direct);
+    constexpr auto inv_in = input(cb_inv, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+    eltwise_chain(
+        IterationShape::grid(n, cw), BinaryFpu<BinaryFpuOp::Mul, xg_in, inv_in>{}, PackTile<output(cb_out_block)>{});
+}
+
 ALWI void rms_block(const WorkerId& w, FinalizeInvRms finalize, bool tail) {
     const uint32_t crt = w.crt, cw = w.cw;
     cb_wait_front(cb_x, crt * cw);
     // local_stats_block
     rms_local_stats<cb_x>(crt, cw, tail);
+    if constexpr (xg_pre) {
+        cb_wait_front(cb_gamma, cw);
+        rms_x_times_gamma(crt, cw);
+        cb_pop_front(cb_gamma, cw);
+        cb_pop_front(cb_x, crt * cw);
+    }
     // combine_stats_block (waits for the reader's gather tiles)
     rms_combine<gather_tiles, cb_inv>(crt, finalize);
     // normalize_block
     cb_wait_front(cb_inv, crt);
-    if constexpr (has_gamma) {
-        cb_wait_front(cb_gamma, cw);
-    }
-    rms_normalize<cb_inv>(crt, cw);
-    if constexpr (has_gamma) {
-        cb_pop_front(cb_gamma, cw);
+    if constexpr (xg_pre) {
+        cb_wait_front(cb_xg, crt * cw);
+        rms_normalize_xg(crt, cw);
+        cb_pop_front(cb_xg, crt * cw);
+    } else {
+        if constexpr (has_gamma) {
+            cb_wait_front(cb_gamma, cw);
+        }
+        rms_normalize<cb_inv>(crt, cw);
+        if constexpr (has_gamma) {
+            cb_pop_front(cb_gamma, cw);
+        }
+        cb_pop_front(cb_x, crt * cw);
     }
     cb_pop_front(cb_inv, crt);
-    cb_pop_front(cb_x, crt * cw);
 }
 
 // WIDTH_SHARDED row-owner pre-combine (RMS): per row chunk local sums -> the owners; the owner sums the K members'

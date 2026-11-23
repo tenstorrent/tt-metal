@@ -56,7 +56,10 @@ constexpr uint32_t rows_per_owner = get_compile_time_arg_val(33);  // pre_combin
 // own-ready bands (OVERLAP): > 1 — the writer announces its own block on band g * own_bands / n_groups (a global
 // semaphore per band on every port core) instead of the single program semaphore sem_own_ready
 constexpr uint32_t own_bands = get_compile_time_arg_val(34);
-constexpr uint32_t WORKER_CT_ARGS = 35;  // TensorAccessorArgs follow (reader / writer)
+// RMS with gamma (OVERLAP): x * gamma is computed into cb_xg while the stats round runs (x * r * g = (x * g) * r),
+// leaving one multiply per tile on the critical path after the stats arrive
+constexpr bool xg_pre = get_compile_time_arg_val(35) != 0;
+constexpr uint32_t WORKER_CT_ARGS = 36;  // TensorAccessorArgs follow (reader / writer)
 
 constexpr uint32_t KT = pre_combine ? 1 : K;  // members per (slot, row) in the stats table
 constexpr uint32_t P = G * KT;                // stats partitions per row of the cross-chip combine

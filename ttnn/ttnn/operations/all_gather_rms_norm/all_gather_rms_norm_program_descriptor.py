@@ -78,6 +78,7 @@ CB_FINAL_INV = 29  # reader -> compute: RMS inv / LN rstd (col 0) of one row chu
 CB_FINAL_MEAN = 30  # reader -> compute: LN mean (col 0) of one row chunk
 CB_STAT_CONSTS_X = 31  # LN: n_q of the cross-chip partitions (one per chip)
 CB_PORT_DESC = 32  # port reader -> sender: one packet descriptor (runs) per port-CB chunk slot
+CB_XG = 33  # RMS xg_pre: x * gamma of the block (T_acc), computed in the stats shadow
 PORT_DESC_BYTES = 64  # agrn_port_common.hpp DESC_BYTES
 
 # ---- program-local semaphores (declared before the fabric connections take theirs) ----
@@ -123,6 +124,11 @@ OWN_BANDS = 1
 # port reader: push each packet as soon as its own reads landed (non-blocking check after every issue), not only once
 # READ_DEPTH packets are in flight — the first packet of an entry no longer waits for 3 more to be issued
 EAGER_PUSH = 1
+# RMS with gamma: compute x * gamma into a T_acc block during the stats round, so only x*g * inv (one FPU multiply per
+# tile instead of two) follows the stats; on while the block fits XG_L1_BUDGET bytes. Measured (focus): normalize
+# 1.03 -> 0.65 us in the zone profile, the harness call time unchanged (29.21 vs 29.18 us) — parked at 0 (live knob)
+XG_PRE = 0
+XG_L1_BUDGET = 128 * 1024
 OWN_BANDS_MAX = 16  # persistent band counters (global semaphores) per port core
 NOC_READER = ttnn.NOC.RISCV_0_default  # NoC0 (fabric_all_gather's convention)
 NOC_WRITER = ttnn.NOC.RISCV_1_default  # NoC1
@@ -615,6 +621,16 @@ def create_mesh_program_descriptor(
     else:
         row_chunk = crt_max
 
+    # x * gamma in the stats shadow (OVERLAP): RMS with gamma, dense block (the WIDTH pre-combine normalizes per row
+    # chunk from a strided shard — not built there)
+    xg_pre = bool(
+        _knob("XG_PRE", XG_PRE)
+        and not is_ln
+        and has_gamma
+        and not pre_combine
+        and crt_max * cw_max * T_acc <= _knob("XG_L1_BUDGET", XG_L1_BUDGET)
+    )
+
     # destination of the slices: final output pages (aligned) or the slot-contiguous staging scratch (R_U)
     staging = staging_buffer(mesh_device, geo, out_dtype) if is_ru else None
     dst_tensor = staging if is_ru else output_tensor
@@ -724,6 +740,7 @@ def create_mesh_program_descriptor(
         row_chunk,
         rpo,
         own_bands,
+        int(xg_pre),
     ]
     # Sharded: the local shard is consumed in place, never through an accessor -> empty accessor args.
     acc_ct = list(
@@ -925,6 +942,8 @@ def create_mesh_program_descriptor(
                 cbs.append(_cb(CB_X32, crt_max * cw_max, T32, ttnn.float32, full))
         else:
             cbs.append(_cb(CB_SUMSQ, row_chunk, T_acc, acc_dtype, full))
+        if xg_pre:
+            cbs.append(_cb(CB_XG, crt_max * cw_max, T_acc, acc_dtype, full))
         if is_ru:
             cbs.append(_cb(CB_ASSEMBLE, src_max + 1, out_page, out_dtype, full))
         if pre_combine:
