@@ -166,6 +166,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         if empty_slots is None:
             raise RuntimeError("a stateful multi-user model needs the plugin's empty_slots (destination slots)")
         live_after = len(self.live) + n
+        if self.mode == "PLAIN" and not self.live:  # (nobody to move: an idle server starts speculating again)
+            self.mode, self.low_calls = "SPEC", 0
         to_spec = self.mode == "SPEC" and live_after <= SPEC_USERS and len(self._free_spec()) >= n
         out = torch.zeros(n, 1, self.vocab)
         if to_spec:
