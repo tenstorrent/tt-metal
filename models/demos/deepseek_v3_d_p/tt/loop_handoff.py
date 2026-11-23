@@ -116,13 +116,15 @@ class LoopHandoffSender:
             for _ in range(handoff.num_index_sets)
         ]
 
-    def collect(self, kvpe_cache: ttnn.Tensor, metadata: Sequence[ttnn.Tensor], index_sets: Sequence[ttnn.Tensor]):
-        """Gather this chunk's handoff after every loop layer has written its KV: the rows each chip stored at the
-        chunk's (slot, start) in ``metadata`` (the same tensors the writes read), and the full layers' top-k sets
-        in layer order. Device-only, so it may be captured."""
-        assert len(index_sets) == len(
-            self.index_sets
-        ), f"{len(index_sets)} top-k sets, handoff carries {len(self.index_sets)}"
+    def store_index_set(self, set_idx: int, indices: ttnn.Tensor) -> None:
+        """Copy one full loop layer's top-k into its set's buffer, as soon as the layer made it: a later full
+        layer's top-k may reuse the same (gather scratch) buffer. Device-only, so it may be captured."""
+        ttnn.copy(indices, self.index_sets[set_idx])
+
+    def collect(self, kvpe_cache: ttnn.Tensor, metadata: Sequence[ttnn.Tensor]):
+        """Gather this chunk's KVPE rows after every loop layer has written its KV: the rows each chip stored at the
+        chunk's (slot, start) in ``metadata`` (the same tensors the writes read). The top-k sets are stored as they
+        are made (:meth:`store_index_set`). Device-only, so it may be captured."""
         self.kvpe.update_tensor_topology(kvpe_cache.tensor_topology())
         ttnn.experimental.deepseek_prefill.read_padded_kv_cache(
             kvpe_cache,
@@ -137,8 +139,6 @@ class LoopHandoffSender:
             tp_axis=1,
             output=self.kvpe,
         )
-        for src, dst in zip(index_sets, self.index_sets):
-            ttnn.copy(src, dst)
 
     def segments(self) -> list:
         """The tensors to send after the activation, in :meth:`LoopHandoff.segments` order."""

@@ -92,6 +92,9 @@ class PrefillRunParams:
     mtp_decode_levels: int = 0
     # Chunks per forward, PREFILL_FORWARD_TOKENS_BUDGET // chunk_size.
     forward_chunks: int = 1
+    # A looped model (pipeline_schedule() not None): the loop passes this rank runs its loop layers in, from the
+    # rank's position range (PassSchedule.rank_slice). None for a model without a loop.
+    loop_passes: Optional[tuple] = None
 
     @property
     def sp_factor(self) -> int:
@@ -270,6 +273,12 @@ class PrefillModelAdapter(ABC):
         ``KvCaches``). ``params`` carries the per-rank knobs (max_seq_len, mesh_shape, this rank's
         num_layers, num_users, …)."""
 
+    def pipeline_schedule(self):
+        """A looped model's pipeline positions, one per layer pass (``runners.pass_schedule.PassSchedule``), which
+        the runner splits over ranks instead of the layers. ``None`` (default): every layer runs once, positions are
+        layers."""
+        return None
+
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
         """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
         these). ``None`` => unconstrained (dense models — any split is fine). The runner
@@ -392,6 +401,8 @@ ADAPTER_PATHS = {
     # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
     "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
+    # GLM-5.4: GLM-5.3 with L27-54 looped twice (damp gates, two-bank pass 2); reads GLM-5.3's weights and cache.
+    "glm_5_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_4:GLM54Adapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).

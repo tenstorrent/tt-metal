@@ -17,15 +17,30 @@ class LayerCompletionLayout:
 
 
 def layer_completion_layout(
-    layer_split: list, rank: int, *, kv_slot_layer_ids=None, extra_layers: int = 0
+    layer_split: list, rank: int, *, kv_slot_layer_ids=None, extra_layers: int = 0, pass_schedule=None
 ) -> LayerCompletionLayout:
     """`layer_split` is compute_layer_split's [(first_layer, count)] per rank; `kv_slot_layer_ids`
     the global layers that write KV (None: every layer); `extra_layers` the rows the last rank
-    reports past the trunk (MTP levels plus drafter layers)."""
+    reports past the trunk (MTP levels plus drafter layers).
+
+    With a looped model's `pass_schedule` (pass_schedule.PassSchedule) the split is in pass positions: every
+    position acks once, under its PassSchedule.ack_id, and the extra rows follow the model's layers."""
     first_layer_idx, num_my_layers = layer_split[rank]
     trunk_layers = sum(count for _, count in layer_split)
-    extra_layer_ids = list(range(trunk_layers, trunk_layers + extra_layers))
     last_rank = rank == len(layer_split) - 1
+    if pass_schedule is not None:
+        assert kv_slot_layer_ids is None, "a looped model acks every pass position"
+        extra_ids = list(range(pass_schedule.num_layers, pass_schedule.num_layers + extra_layers))
+        my_ids = pass_schedule.ack_ids(first_layer_idx, num_my_layers) + (extra_ids if last_rank else [])
+        overlap = set(extra_ids) & {pass_schedule.ack_id(p) for p in range(len(pass_schedule))}
+        assert not overlap, f"extra rows {sorted(overlap)} collide with loop pass ack ids"
+        return LayerCompletionLayout(
+            completions_per_chunk=trunk_layers + extra_layers,
+            rank_first_record=sum(count for _, count in layer_split[:rank]),
+            rank_record_count=num_my_layers + (extra_layers if last_rank else 0),
+            rank_layer_ids=my_ids,
+        )
+    extra_layer_ids = list(range(trunk_layers, trunk_layers + extra_layers))
 
     if kv_slot_layer_ids is None:
         records_per_rank = [count for _, count in layer_split]

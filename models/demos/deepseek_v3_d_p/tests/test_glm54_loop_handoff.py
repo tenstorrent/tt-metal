@@ -238,7 +238,7 @@ def test_read_padded_kv_cache_round_trip(mesh_device):
                 tp_axis=1,
             )
         else:
-            sender.collect(source, meta, [])
+            sender.collect(source, meta)
             rows = sender.kvpe
         write_kvpe_copy(copy, rows, meta, handoff, first_kv_layer=first, num_kv_layers=num_layers)
         if rows is not sender.kvpe:
@@ -344,7 +344,9 @@ def test_glm54_loop_handoff(mesh_device, traced):
     )
 
     def g1_send():
-        sender_handoff.collect(g1_cache, g1_meta, index_src)
+        for set_idx, indices in enumerate(index_src):
+            sender_handoff.store_index_set(set_idx, indices)
+        sender_handoff.collect(g1_cache, g1_meta)
         ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
             sender, [activation, *sender_handoff.segments()], metadata=record
         )

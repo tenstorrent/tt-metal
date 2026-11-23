@@ -12,6 +12,7 @@ Equivalent to the reference Transformer class (models/demos/deepseek_v3/referenc
 but targeting the TT prefill path with SP+TP parallelism.
 """
 
+import copy
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -23,7 +24,15 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import LoopStep, loop_schedule
+from models.demos.common.prefill.runners.pass_schedule import loop_ack_id
+from models.demos.deepseek_v3_d_p.reference.glm_5_4.schedule import (
+    LoopStep,
+    loop_index_set,
+    loop_index_sets,
+    loop_schedule,
+    runs_loop_without_indexer,
+    stage_indexer_types,
+)
 from models.demos.deepseek_v3_d_p.tt.glm54.damp_gate import TtDampGate
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -203,8 +212,17 @@ class TtPrefillTransformer(LightweightModule):
         mtp_predictor=None,
         use_fused_rmsnorm: Optional[bool] = None,
         forward_chunks: int = 1,
+        loop_passes: Optional[tuple] = None,
     ):
         super().__init__()
+        # GLM-5.4 stage placement: the loop passes this instance runs its loop layers in (None: every pass of the
+        # loop it holds). A stage running only passes >= 2 (G2) builds its loop layers as 'shared' layers: it runs no
+        # indexer and takes pass 1's top-k sets instead (A5), so its blocks see the stage's full/shared map.
+        self._loop_passes = None if loop_passes is None else tuple(loop_passes)
+        model_config = config  # the model's own full/shared map: pass 1's top-k sets are numbered by it
+        if self._loop_passes is not None and runs_loop_without_indexer(config, self._loop_passes):
+            config = copy.copy(config)
+            config.indexer_types = stage_indexer_types(config, self._loop_passes)
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         # Chunks per packed forward (forward(..., chunks=...)); seq_len stays the per-chunk size.
@@ -318,6 +336,18 @@ class TtPrefillTransformer(LightweightModule):
 
         # GLM-5.4 loop: the order the blocks run in, and one damp gate per loop pass (see _build_schedule).
         self.steps, self.loop_gates = self._build_schedule(config, state_dict, num_links, tp_topology, tp_axis)
+        self._num_model_layers = config.num_hidden_layers
+        self._loop_count = getattr(config, "loop_count", 0) or 0
+        # Stage handoff of a looped model (G1 -> G2): pass 1's top-k sets, one per full loop layer, in layer order.
+        self._loop_set_of = (
+            {
+                layer: loop_index_set(model_config, layer)
+                for layer in range(config.loop_first_layer, config.loop_last_layer + 1)
+            }
+            if self.loop_gates
+            else {}
+        )
+        self.num_loop_index_sets = loop_index_sets(model_config) if self.loop_gates else 0
 
         build_tail = mtp_predictor is not None and is_last_rank and not kv_only_last_layer
         self.norm = (
@@ -437,31 +467,40 @@ class TtPrefillTransformer(LightweightModule):
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
 
     def _build_schedule(self, config, state_dict: dict, num_links: int, tp_topology, tp_axis: int):
-        """(steps, gates): the blocks' execution order as ``LoopStep``s and the damp gates, one per loop pass.
+        """(steps, gates): the blocks' execution order as ``LoopStep``s and the damp gates, ``{loop pass: gate}``.
 
         Without loop fields in ``config`` every block runs once, in order. With them (GLM-5.4: layers
         loop_first_layer..loop_last_layer run loop_count times with shared weights), the order is the reference
-        ``loop_schedule`` restricted to this instance's layers: prelude, then per loop pass the loop's blocks
-        (the same TtPrefillBlock objects every pass) and that pass's gate, then coda. Gate k reads the pass input
-        x_{k-1} and the pass output h_k (A1c); its weights are ``state_dict["loop_gates"][k - 1]``
+        ``loop_schedule`` restricted to this instance's layers and loop passes: prelude, then per loop pass the
+        loop's blocks (the same TtPrefillBlock objects every pass) and that pass's gate, then coda. Gate k reads the
+        pass input x_{k-1} and the pass output h_k (A1c); its weights are ``state_dict["loop_gates"][k - 1]``
         (``synthetic_gates`` form), always host tensors.
 
-        An instance holds the whole loop or none of it; splitting the loop across pipeline stages (one pass per
-        stage) is the four-stage placement's (q171.2.8).
+        An instance holds the whole loop or none of it, and runs a contiguous run of its passes (``loop_passes``):
+        a pipeline stage holds whole loop passes (GLM-5.4: G1 pass 1, G2 pass 2). Prelude layers need pass 1 to
+        follow on the same instance, coda layers the last pass to precede them.
         """
         first, end = self.first_layer_idx, self.first_layer_idx + self.num_layers
         plain = [LoopStep("layer", 0, i) for i in range(first, end)]
         loop_count = getattr(config, "loop_count", None)
-        if loop_count is None:
-            return plain, []
+        holds_loop = loop_count is not None and not (config.loop_last_layer < first or config.loop_first_layer >= end)
+        if not holds_loop:
+            if self._loop_passes:
+                raise ValueError(f"layers {first}..{end - 1} hold no loop layer to run passes {self._loop_passes} of")
+            return plain, {}
         loop_first, loop_last = config.loop_first_layer, config.loop_last_layer
-        if loop_last < first or loop_first >= end:
-            return plain, []
         if not (first <= loop_first and loop_last < end):
             raise NotImplementedError(
                 f"layers {first}..{end - 1} hold part of the loop {loop_first}..{loop_last}; an instance runs the "
                 "whole loop or none of it"
             )
+        passes = tuple(range(1, loop_count + 1)) if self._loop_passes is None else self._loop_passes
+        if not passes or list(passes) != list(range(passes[0], passes[0] + len(passes))) or passes[-1] > loop_count:
+            raise ValueError(f"loop passes {passes} are not a contiguous run of 1..{loop_count}")
+        if first < loop_first and passes[0] != 1:
+            raise ValueError(f"prelude layers {first}..{loop_first - 1} must precede loop pass 1, not {passes}")
+        if end - 1 > loop_last and passes[-1] != loop_count:
+            raise ValueError(f"coda layers {loop_last + 1}..{end - 1} must follow loop pass {loop_count}, not {passes}")
         if self.kv_only_last_layer and loop_last == end - 1:
             raise ValueError("a kv-only last layer cannot be a loop layer: its pass-1 output feeds pass 2")
         gate_weights = state_dict.get("loop_gates")
@@ -473,16 +512,22 @@ class TtPrefillTransformer(LightweightModule):
         steps = [
             s
             for s in loop_schedule(config.num_hidden_layers, loop_first, loop_last, loop_count)
-            if s.kind == "gate" or first <= s.layer < end
+            if (s.loop_pass in passes if s.loop_pass else first <= s.layer < end)
         ]
-        gates = [
-            TtDampGate(
-                self.mesh_device, w, eps=config.rms_norm_eps, tp_axis=tp_axis, num_links=num_links, topology=tp_topology
+        gates = {
+            k: TtDampGate(
+                self.mesh_device,
+                gate_weights[k - 1],
+                eps=config.rms_norm_eps,
+                tp_axis=tp_axis,
+                num_links=num_links,
+                topology=tp_topology,
             )
-            for w in gate_weights
-        ]
+            for k in passes
+        }
         logger.info(
-            f"GLM-5.4 loop: layers {loop_first}..{loop_last} x{loop_count}, gate widths {[g.width for g in gates]}"
+            f"GLM-5.4 loop: layers {loop_first}..{loop_last} x{loop_count}, this instance runs passes {passes}, "
+            f"gate widths {[g.width for g in gates.values()]}"
         )
         return steps, gates
 
@@ -535,14 +580,36 @@ class TtPrefillTransformer(LightweightModule):
         return host
 
     @property
+    def num_layer_passes(self) -> int:
+        """Block runs per forward, one layer ack each: num_layers, plus a loop's later passes."""
+        return sum(1 for s in self.steps if s.kind == "layer")
+
+    @property
+    def receives_loop_handoff(self) -> bool:
+        """A stage running the loop only in passes >= 2 (GLM-5.4 G2): its loop layers read pass 1's KV (a copy in
+        this stage's cache) at pass 1's top-k, both sent by the previous pass's stage (tt/loop_handoff.py)."""
+        return bool(self.loop_gates) and 1 not in self.loop_gates
+
+    @property
+    def sends_loop_handoff(self) -> bool:
+        """A stage whose last loop pass is not the loop's last (GLM-5.4 G1): the next pass runs downstream."""
+        return bool(self.loop_gates) and max(self.loop_gates) < self._loop_count
+
+    @property
     def receives_indexer_indices(self) -> bool:
-        return self.indexer_types is not None and self.indexer_types[self.first_layer_idx] == "shared"
+        # A loop pass-2 stage receives its top-k in the loop handoff, not as one inherited set.
+        return (
+            self.indexer_types is not None
+            and self.indexer_types[self.first_layer_idx] == "shared"
+            and not self.receives_loop_handoff
+        )
 
     @property
     def forwards_indexer_indices(self) -> bool:
         next_idx = self.first_layer_idx + self.num_layers
         return (
             not self.is_last_rank
+            and not self.sends_loop_handoff
             and self.indexer_types is not None
             and next_idx < len(self.indexer_types)
             and self.indexer_types[next_idx] == "shared"
@@ -600,6 +667,8 @@ class TtPrefillTransformer(LightweightModule):
         seed_indexer_indices: Optional[ttnn.Tensor] = None,
         chunks: Optional[list] = None,
         mtp_unions: Optional[list] = None,
+        loop_index_sets: Optional[list] = None,
+        loop_index_sets_out: Optional[list] = None,
     ):
         """
         Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
@@ -659,6 +728,11 @@ class TtPrefillTransformer(LightweightModule):
                         caller sending the forward's acks once it is done.
             mtp_unions: a packed forward's MTP input, one `MTPUnionEmbedding` per chunk position (see
                         forward_packed); `provided_levels` is then one count per chunk.
+            loop_index_sets: GLM-5.4 loop pass >= 2 stage (receives_loop_handoff): pass 1's top-k sets, one per
+                        full loop layer in layer order (indexer_indices_shape() each); loop layer L takes the set
+                        of its reuse group, as pass-1 layer L did (A5).
+            loop_index_sets_out: GLM-5.4 stage sending the loop handoff (sends_loop_handoff): one persistent
+                        buffer per set, each full loop layer's top-k copied into its set's buffer as it is made.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next rank.
@@ -676,13 +750,18 @@ class TtPrefillTransformer(LightweightModule):
             "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
             "d2h_service and would silently drop on_layer_complete"
         )
-        # While pass 2 runs the GLM-5.3 attention stand-in it rewrites the pass-1 KV slot and would ack the same
-        # layer id twice, so a loop model takes no layer acks until two-bank pass 2 (q171.2.5) and the stage ack
-        # identities (q171.2.8) exist.
-        assert not self.loop_gates or (d2h_service is None and on_layer_complete is None), (
-            "a GLM-5.4 loop model takes no layer acks (d2h_service / on_layer_complete) while pass 2 runs the "
-            "GLM-5.3 attention stand-in"
+        assert (loop_index_sets is not None) == self.receives_loop_handoff, (
+            f"loop_index_sets must be passed exactly when this stage runs the loop only in passes >= 2 "
+            f"(receives_loop_handoff={self.receives_loop_handoff})"
         )
+        assert (loop_index_sets_out is not None) == self.sends_loop_handoff, (
+            f"loop_index_sets_out must be passed exactly when this stage sends the loop handoff "
+            f"(sends_loop_handoff={self.sends_loop_handoff})"
+        )
+        for sets in (loop_index_sets, loop_index_sets_out):
+            assert (
+                sets is None or len(sets) == self.num_loop_index_sets
+            ), f"{len(sets)} top-k sets, the loop's pass 1 makes {self.num_loop_index_sets}"
         if chunks is not None:
             assert (
                 metadata is None and mtp_union is None
@@ -744,7 +823,11 @@ class TtPrefillTransformer(LightweightModule):
         # exactly as before.
         reuse = self.indexer_types is not None
         if reuse:
-            assert self.indexer_types[self.first_layer_idx] == "full" or seed_indexer_indices is not None, (
+            assert (
+                self.indexer_types[self.first_layer_idx] == "full"
+                or seed_indexer_indices is not None
+                or loop_index_sets is not None
+            ), (
                 f"first layer {self.first_layer_idx} is '{self.indexer_types[self.first_layer_idx]}': "
                 "a stack starting on a shared layer needs seed_indexer_indices from the upstream rank"
             )
@@ -756,7 +839,7 @@ class TtPrefillTransformer(LightweightModule):
             if step.kind == "gate":
                 name = f"gate{step.loop_pass}"
                 signpost(f"forward_{name}_start")
-                h = self.loop_gates[step.loop_pass - 1](pass_input, h)
+                h = self.loop_gates[step.loop_pass](pass_input, h)
                 pass_input = None
                 signpost(f"forward_{name}_end")
                 if return_intermediates:
@@ -771,9 +854,13 @@ class TtPrefillTransformer(LightweightModule):
             name = f"layer_{i}" if step.loop_pass <= 1 else f"layer_{i}.pass{step.loop_pass}"
             signpost(f"forward_{name}_start")
             mode = self.indexer_types[step.layer] if reuse else "full"
+            if loop_index_sets is not None and step.loop_pass:
+                # Loop pass >= 2 stage: every loop layer is 'shared' and takes pass-1 layer L's set (A5).
+                indexer_indices = loop_index_sets[self._loop_set_of[step.layer]]
             inject = indexer_indices if (reuse and mode == "shared") else None
             # STAND-IN until q171.2.5: a later loop pass runs the block's own (GLM-5.3) attention, which computes
-            # a fresh top-k and writes this layer's KVPE / index-cache slot for the chunk over pass 1's. GLM-5.4
+            # a fresh top-k and writes this layer's KVPE / index-cache slot for the chunk over pass 1's (on a pass-2
+            # stage: shared-layer attention at the injected pass-1 top-k, writing the stage's bank-A copy). GLM-5.4
             # pass 2 instead reads pass-1 KVPE at pass-1 top-k plus its own window (two-bank sparse MLA).
             ret = layer(
                 h,
@@ -794,6 +881,10 @@ class TtPrefillTransformer(LightweightModule):
                 return_indexer_indices=reuse,
                 index_kv_cache=index_kv_cache,
                 metadata=metadata,
+                # A later loop pass acks under its own id, never under the pass-1 layer's (pass_schedule).
+                ack_layer_idx=(
+                    loop_ack_id(step.layer, step.loop_pass, self._num_model_layers) if step.loop_pass >= 2 else None
+                ),
             )
             if reuse:
                 h, _, new_idx = ret
@@ -803,6 +894,9 @@ class TtPrefillTransformer(LightweightModule):
                     # consumer holds it. Gathered outputs can alias persistent scratch, so do not
                     # explicitly deallocate the old tensor (it may back new_idx as well).
                     indexer_indices = new_idx
+                    if loop_index_sets_out is not None and step.loop_pass == 1:
+                        # Copied now: a later full layer's top-k can reuse this one's (gather scratch) buffer.
+                        ttnn.copy(new_idx, loop_index_sets_out[self._loop_set_of[step.layer]])
             else:
                 h, _ = ret
             signpost(f"forward_{name}_end")

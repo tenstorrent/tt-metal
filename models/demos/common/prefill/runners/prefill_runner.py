@@ -128,7 +128,11 @@ D2D_MAPPER_CONFIG = axis_mapper_config(
 INDEX_MAPPER_CONFIG = axis_mapper_config(ttnn.PlacementShard(2), ttnn.PlacementShard(3), SP_AXIS)
 
 
-NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
+# A looped model (GLM-5.4) is split over its layer PASSES, not its layers (pass_schedule.py): there NUM_LAYERS,
+# PREFILL_PP_LAYER_OFFSET and PREFILL_PP_LAYER_COUNTS count pass positions, and MODEL_POSITIONS is the pass count.
+PASS_SCHEDULE = ADAPTER.pipeline_schedule()
+MODEL_POSITIONS = len(PASS_SCHEDULE) if PASS_SCHEDULE is not None else MODEL_CFG.NUM_LAYERS
+NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_POSITIONS))
 # Capacity probes: shift every rank's layers by this many, so a 2-rank run on one Galaxy stands in for two
 # later pipeline stages (SC4 4x4 stages 6 and 7: PREFILL_PP_LAYER_OFFSET=72 PREFILL_NUM_LAYERS=21
 # PREFILL_PP_LAYER_COUNTS=12,9). Rank 0 still takes the H2D input, so it also holds the embedding. When set,
@@ -879,6 +883,7 @@ def _compute_and_send(
     indices=None,
     send_indices: bool = False,
     mtp_id_segments=(),
+    loop_handoff=None,
 ) -> float:
     d2d_out = outbound.activation
     t_start = time.time()
@@ -943,6 +948,7 @@ def _compute_and_send(
                 metadata_msg=sockets.metadata,
                 **mtp_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),
+                **({"loop_handoff": loop_handoff} if loop_handoff is not None else {}),
             )
     forward_md = None
     if not runtime.config.is_last_rank:
@@ -1004,6 +1010,7 @@ def run_request_loop(
     sockets=None,
     recv_indices: bool = False,
     send_indices: bool = False,
+    recv_handoff: bool = False,
     hang_detector: Optional[StreamHangDetector] = None,
 ) -> None:
     inbound = inbound or D2DBoundary()
@@ -1062,7 +1069,11 @@ def run_request_loop(
             _lease_reclaim(D2DBoundary(), outbound)
             forward_shutdown()
             raise
-        # The top-k is the inbound's last segment; what is left are the MTP ids.
+        # The GLM-5.4 loop handoff is the inbound's tail, the top-k the segment before it; what is left are the MTP ids.
+        loop_handoff = None
+        if recv_handoff:
+            n_handoff = len(runtime.loop_handoff_segments())
+            loop_handoff, mtp_id_segments = mtp_id_segments[-n_handoff:], mtp_id_segments[:-n_handoff]
         indices = mtp_id_segments.pop() if recv_indices else None
         _lease_reclaim(inbound, outbound)
         warmup = _is_warmup_sentinel(meta)
@@ -1081,7 +1092,7 @@ def run_request_loop(
             if mtp_tokens is not None and sockets.overhang is None:
                 ttnn.deallocate(mtp_tokens)
             if sockets.extras is None:
-                for t in mtp_id_segments + ([indices] if indices is not None else []):
+                for t in mtp_id_segments + ([indices] if indices is not None else []) + (loop_handoff or []):
                     ttnn.deallocate(t)
             forward_shutdown()
             break
@@ -1091,7 +1102,7 @@ def run_request_loop(
             if sockets.persistent_metadata() is None:
                 ttnn.deallocate(sockets.metadata)
             if sockets.extras is None:
-                for t in mtp_id_segments + ([indices] if indices is not None else []):
+                for t in mtp_id_segments + ([indices] if indices is not None else []) + (loop_handoff or []):
                     ttnn.deallocate(t)
         if before_first_chunk is not None:
             before_first_chunk()
@@ -1114,6 +1125,7 @@ def run_request_loop(
                 indices=indices,
                 send_indices=send_indices,
                 mtp_id_segments=mtp_id_segments,
+                loop_handoff=loop_handoff,
             )
         except BaseException:
             # The next rank waits in _d2d_recv for this forward; the shutdown sentinel releases it. The
@@ -1258,11 +1270,23 @@ def main() -> None:
     if PP_LAYER_OFFSET is not None:
         first_layer_idx += int(PP_LAYER_OFFSET)
         assert (
-            first_layer_idx + num_my_layers <= MODEL_CFG.NUM_LAYERS
-        ), f"PREFILL_PP_LAYER_OFFSET={PP_LAYER_OFFSET} puts rank {rank} past layer {MODEL_CFG.NUM_LAYERS}"
-        kv_only_last_layer = kv_only_last_layer and first_layer_idx + num_my_layers == MODEL_CFG.NUM_LAYERS
+            first_layer_idx + num_my_layers <= MODEL_POSITIONS
+        ), f"PREFILL_PP_LAYER_OFFSET={PP_LAYER_OFFSET} puts rank {rank} past layer {MODEL_POSITIONS}"
+        kv_only_last_layer = kv_only_last_layer and first_layer_idx + num_my_layers == MODEL_POSITIONS
+    loop_passes = None
+    positions = ""
+    if PASS_SCHEDULE is not None:
+        # The rank's pass positions -> the blocks it builds and the loop passes it runs them in.
+        first_pos, num_pos = first_layer_idx, num_my_layers
+        rank_slice = PASS_SCHEDULE.rank_slice(first_pos, num_pos)
+        first_layer_idx, num_my_layers, loop_passes = (
+            rank_slice.first_layer,
+            rank_slice.num_layers,
+            rank_slice.loop_passes,
+        )
+        positions = f"passes=[{first_pos}, {first_pos + num_pos}) loop_passes={loop_passes} "
     print(
-        f"[pp rank {rank}/{num_ranks}] mesh={GLOBAL_MESH_SHAPE} layers=[{first_layer_idx}, "
+        f"[pp rank {rank}/{num_ranks}] mesh={GLOBAL_MESH_SHAPE} {positions}layers=[{first_layer_idx}, "
         f"{first_layer_idx + num_my_layers}) is_first={is_first_rank} is_last={is_last_rank} "
         f"chunk_size={CHUNK_SIZE} forward_chunks={FORWARD_CHUNKS} max_seq_len={MAX_SEQ_LEN} num_users={NUM_USERS}",
         flush=True,
@@ -1308,6 +1332,7 @@ def main() -> None:
         sparse_kv_cache_format=_sparse_kv_cache_format(),
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",
+        loop_passes=loop_passes,
     )
 
     runtime = ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
@@ -1377,7 +1402,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     inbound, outbound = D2DBoundary(), D2DBoundary()
     socket_receivers_file = None
-    recv_indices = send_indices = False
+    recv_indices = send_indices = recv_handoff = False
     if num_ranks > 1:
         recv_indices = getattr(runtime, "receives_indexer_indices", False)
         send_indices = getattr(runtime, "forwards_indexer_indices", False)
@@ -1390,6 +1415,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         if recv_indices or send_indices:
             idx_spec = indexer_indices_global_spec(runtime.indexer_indices_shape(), (_sp, _tp))
             idx_tail = ((idx_spec, INDEX_MAPPER_CONFIG),)
+        # GLM-5.4 loop handoff (pass 1 -> pass 2): KVPE rows + the top-k sets ride after the activation.
+        recv_handoff = getattr(runtime, "receives_loop_handoff", False)
+        send_handoff = getattr(runtime, "sends_loop_handoff", False)
+        handoff_tail = tuple(runtime.loop_handoff_segments()) if recv_handoff or send_handoff else ()
+        assert not (
+            handoff_tail and FORWARD_CHUNKS > 1
+        ), "the GLM-5.4 loop handoff is sent per chunk: one chunk per forward"
         mesh_device.clear_loaded_sub_device_manager()
         inbound.activation, outbound.activation = build_d2d_pipeline_endpoints(
             mesh_device,
@@ -1403,8 +1435,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             extra_specs=mtp_id_segment_specs(
                 GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS, SP_AXIS, forward_chunks=FORWARD_CHUNKS
             ),
-            inbound_tail=idx_tail if recv_indices else (),
-            outbound_tail=idx_tail if send_indices else (),
+            inbound_tail=(idx_tail if recv_indices else ()) + (handoff_tail if recv_handoff else ()),
+            outbound_tail=(idx_tail if send_indices else ()) + (handoff_tail if send_handoff else ()),
         )
         ttnn.distributed_context_barrier()
 
@@ -1450,10 +1482,14 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     )
     first_layer_idx, num_my_layers = layer_split[rank]
     extra_layers = runtime.layer_ack_layers(0, 0)[0] if getattr(runtime, "layer_ack_layers", None) else 0
+    if PASS_SCHEDULE is not None and PP_LAYER_OFFSET is not None:
+        # A stage-alone probe acks under its stage's real ids (a later loop pass's distinct ones included).
+        layer_split = [(first + int(PP_LAYER_OFFSET), count) for first, count in layer_split]
     layout = layer_completion_layout(
         layer_split,
         rank,
         extra_layers=extra_layers,
+        pass_schedule=PASS_SCHEDULE,
     )
     router = LayerCompletionRouter(
         rank=rank,
@@ -1507,17 +1543,31 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         + (f"(owns scheduler shm {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
     )
 
-    migration_endpoint = setup_kv_chunk_table(
-        runtime,
-        kv_caches,
-        mesh_device,
-        GLOBAL_MESH_SHAPE,
-        rank=rank,
-        num_ranks=num_ranks,
-        # The table's layer space, from 0. Under PREFILL_PP_LAYER_OFFSET no table is built (setup_kv_chunk_table).
-        first_layer_idx=first_layer_idx,
-        num_my_layers=num_my_layers,
-    )
+    if PASS_SCHEDULE is not None:
+        # The rank's blocks (the split above is in pass positions).
+        first_layer_idx, num_my_layers = runtime.config.first_layer_idx, runtime.config.num_layers
+    if PASS_SCHEDULE is not None and num_ranks > 1:
+        # A looped model's decode KV handoff is not defined yet (GLM-5.4 Q2.3, deferred): no chunk table, so a loop
+        # pass-2 stage's copy of pass 1's KV (G2's bank A) can never be published as a layer's KV.
+        if migration_publish_enabled() or migration_file_export_enabled():
+            raise RuntimeError(
+                f"{ADAPTER.name}: KV migration of a looped model across pipeline ranks is not supported (its decode "
+                "KV handoff is deferred); run with PREFILL_ENABLE_MIGRATION=0 PREFILL_MIGRATION_EXPORT_TO_FILE=0"
+            )
+        logger.info(f"[migration] rank {rank}: looped model across {num_ranks} ranks, no KV chunk table")
+        migration_endpoint = None
+    else:
+        migration_endpoint = setup_kv_chunk_table(
+            runtime,
+            kv_caches,
+            mesh_device,
+            GLOBAL_MESH_SHAPE,
+            rank=rank,
+            num_ranks=num_ranks,
+            # The table's layer space, from 0. Under PREFILL_PP_LAYER_OFFSET no table is built (setup_kv_chunk_table).
+            first_layer_idx=first_layer_idx,
+            num_my_layers=num_my_layers,
+        )
 
     traced = bool(getattr(runtime, "capture_trace", None)) and runtime.config.use_trace
 
@@ -1614,6 +1664,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             sockets=sockets,
             recv_indices=recv_indices,
             send_indices=send_indices,
+            recv_handoff=recv_handoff,
             hang_detector=hang_detector,
         )
     finally:

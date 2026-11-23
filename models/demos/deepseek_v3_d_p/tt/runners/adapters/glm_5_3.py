@@ -152,17 +152,22 @@ class GLM53Adapter(MLAPrefillAdapter):
         num_index_layers = (
             full_indexer_rank(hf_config, params.first_layer_idx + params.num_layers + mtp_levels) - first_full
         )
-        index_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=hf_config.index_head_dim,
-            mesh_device=mesh_device,
-            seq_len=params.max_seq_len,
-            mesh_shape=list(params.mesh_shape),
-            sp_axis=params.sp_axis,
-            num_kvpe_cache_layers=num_index_layers,
-            num_users=self.kv_cache_slots(params),
-            dtype=ttnn.bfloat8_b,
-            tp_axis=kv_tp_axis,
-            bank_aligned=True,
+        # A stage of only shared layers (GLM-5.4's loop pass-2 stage) runs no indexer and owns no index cache.
+        index_cache = (
+            None
+            if num_index_layers == 0
+            else init_kvpe_cache(
+                kvpe_cache_head_dim=hf_config.index_head_dim,
+                mesh_device=mesh_device,
+                seq_len=params.max_seq_len,
+                mesh_shape=list(params.mesh_shape),
+                sp_axis=params.sp_axis,
+                num_kvpe_cache_layers=num_index_layers,
+                num_users=self.kv_cache_slots(params),
+                dtype=ttnn.bfloat8_b,
+                tp_axis=kv_tp_axis,
+                bank_aligned=True,
+            )
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 
