@@ -18,7 +18,9 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
@@ -91,8 +93,8 @@ TEST_P(OptimalDramWorkers, ReturnsOneValidWorkerPerDramBank) {
     auto devs = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, /*num_command_queues=*/1, cfg);
 
-    const uint32_t num_nocs = MetalContext::instance().hal().get_num_nocs();
     for (auto& [chip_id, dev] : devs) {
+        const uint32_t num_nocs = dev->impl().metal_env().get_hal().get_num_nocs();
         const CoreCoord grid = dev->compute_with_storage_grid_size();
         const CoreCoord dram_grid = dev->dram_grid_size();
         const size_t expected_banks = static_cast<size_t>(dram_grid.x) * dram_grid.y;

@@ -28,6 +28,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -42,7 +43,7 @@ void build_and_run_program(
     uint32_t MAX_LOOP,
     uint32_t page_size,
     bool mix_noc_mode) {
-    const uint32_t num_nocs = MetalContext::instance().hal().get_num_nocs();
+    const uint32_t num_nocs = device->impl().metal_env().get_hal().get_num_nocs();
     if (num_nocs < 2) {
         GTEST_SKIP() << "Dynamic NOC mode needs 2 NOCs, but " << device->arch() << " has only " << num_nocs;
     }
