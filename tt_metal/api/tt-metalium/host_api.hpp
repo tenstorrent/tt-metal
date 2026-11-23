@@ -63,7 +63,7 @@ class MeshTensor;
  *
  * | Argument  | Description                                 | Type                | Valid range | Required |
  * |-----------|---------------------------------------------|---------------------|-------------|----------|
- * | root_dir  | Path to the root directory                  | const std::string & |             | No       |
+ * | root_dir  | Path to the root directory                  | const std::string & |             | Yes      |
  */
 // clang-format on
 void SetRootDir(const std::string& root_dir);
@@ -134,7 +134,7 @@ Program CreateProgram(distributed::MeshDevice& mesh_device);
 /**
  * Creates a data movement or compute kernel with the given config and adds it to the program.
  *
- * Return value: Kernel ID (uintptr_t)
+ * Return value: Kernel ID (KernelHandle)
  *
  * | Argument     | Description                                                                                                                                 | Type                                                                     | Valid Range | Required |
  * |--------------|---------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|-------------|----------|
@@ -154,7 +154,7 @@ KernelHandle CreateKernel(
 /**
  * Creates a data movement or compute kernel from source code with the given config and adds it to the program.
  *
- * Return value: Kernel ID (uintptr_t)
+ * Return value: Kernel ID (KernelHandle)
  *
  * | Argument           | Description                                                                                                                          | Type                                                                    | Valid Range | Required |
  * |--------------------|--------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------|-------------|----------|
@@ -205,7 +205,7 @@ CBHandle CreateCircularBuffer(
  * | Argument  | Description                                                    | Type                         | Valid Range | Required |
  * |-----------|----------------------------------------------------------------|------------------------------|-------------|----------|
  * | program   | The program containing the circular buffer                     | Program &                    |             | Yes      |
- * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers` | CBHandle (uintptr_t) |       |    Yes      |
+ * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffer`  | CBHandle (uintptr_t) |       |    Yes      |
 */
 // clang-format on
 const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle cb_handle);
@@ -220,7 +220,7 @@ const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle c
  * | Argument   | Description                                                    | Type                         | Valid Range | Required |
  * |------------|----------------------------------------------------------------|------------------------------|-------------|----------|
  * | program    | The program containing the circular buffer                     | Program &                    |             | Yes      |
- * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffers` | CBHandle (uintptr_t) |       | Yes         |          |
+ * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffer`  | CBHandle (uintptr_t) |       | Yes         |          |
  * | total_size | New size of the circular buffer in bytes                       | uint32_t                     |             | Yes      |
 */
 // clang-format on
@@ -235,7 +235,7 @@ void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_
  * | Argument     | Description                                                                                                                | Type                         | Valid Range                   | Required |
  * |--------------|----------------------------------------------------------------------------------------------------------------------------|------------------------------|-------------------------------|----------|
  * | program      | The program containing the circular buffer                                                                                 | Program &                    |                               | Yes      |
- * | cb_handle    | ID of the circular buffer, returned by `CreateCircularBuffers`                                                             | CBHandle (uintptr_t) |                               | Yes      |
+ * | cb_handle    | ID of the circular buffer, returned by `CreateCircularBuffer`                                                              | CBHandle (uintptr_t) |                               | Yes      |
  * | buffer_index | Circular buffer index to update page size. `cb_handle` must be a circular buffer that had previously programmed this index | uint8_t                      | 0 to NUM_CIRCULAR_BUFFERS - 1 | Yes      |
  * | page_size    | Updated page size in bytes                                                                                                 | uint32_t                     |                               | Yes      |
 */
@@ -252,7 +252,7 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
  * | Argument  | Description                                                                              | Type                         | Valid Range | Required |
  * |-----------|------------------------------------------------------------------------------------------|------------------------------|-------------|----------|
  * | program   | The program containing the circular buffer                                               | Program &                    |             | Yes      |
- * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers`                           | CBHandle (uintptr_t) |       | Yes         |          |
+ * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffer`                            | CBHandle (uintptr_t) |       | Yes         |          |
  * | buffer    | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
  */
 // clang-format on
@@ -270,7 +270,7 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
  * | Argument   | Description                                                                              | Type                         | Valid Range | Required |
  * |------------|------------------------------------------------------------------------------------------|------------------------------|-------------|----------|
  * | program    | The program containing the circular buffer                                               | Program &                    |             | Yes      |
- * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffers`                           | CBHandle (uintptr_t) |       | Yes         |          |
+ * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffer`                            | CBHandle (uintptr_t) |       | Yes         |          |
  * | buffer     | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
  * | total_size | New size of the circular buffer in bytes                                                 | uint32_t                     |             | Yes      |
  */
@@ -283,7 +283,7 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
 
 // clang-format off
 /**
- * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
+ * Initializes semaphore on all cores within core range (inclusive). Each core can have up to sixteen 4B semaphores aligned to L1_ALIGNMENT.
  *
  * Return value: Semaphore id (uint32_t). This can be used inside a kernel to extract the address using get_semaphore
  *
@@ -346,7 +346,7 @@ void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program&
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint32_t)                                |                                                                     | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
  * | runtime_args | The runtime args to be written                                         | ttsl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
@@ -368,7 +368,7 @@ void SetRuntimeArgs(
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint32_t)                                |                                                                     | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
  * | runtime_args | The runtime args to be written                                         | initializer_list<uint32_t>                       |                                                                     | Yes      |
  */
@@ -390,7 +390,7 @@ void SetRuntimeArgs(
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                            | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                            | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint32_t)                                |                                                                            | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector<CoreCoord> &                         | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector< vector<uint32_t> > &                | Outer vector size must be equal to size of core_spec vector                | Yes      |
  */
@@ -412,7 +412,7 @@ void SetRuntimeArgs(
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint32_t)                                |                                                                     | Yes      |
  * | runtime_args | The runtime args to be written                                         | ttsl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
 // clang-format on
@@ -429,7 +429,7 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, ttsl::
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint32_t)                                |                                                                     | Yes      |
  * | runtime_args | The runtime args to be written                                         | std::initializer_list<uint32_t>                  |                                                                     | Yes      |
  */
 // clang-format on
@@ -439,12 +439,12 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, std::i
 /**
  * Get the runtime args for a kernel.
  *
- * Return value: uint32_t *
+ * Return value: RuntimeArgsData &
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint32_t)       |                                    | Yes      |
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
  */
 // clang-format on
@@ -459,7 +459,7 @@ RuntimeArgsData& GetRuntimeArgs(const Program& program, KernelHandle kernel_id, 
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint32_t)       |                                    | Yes      |
  */
 // clang-format on
 std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program, KernelHandle kernel_id);
@@ -473,7 +473,7 @@ std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint32_t)       |                                    | Yes      |
  */
 // clang-format on
 RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id);
