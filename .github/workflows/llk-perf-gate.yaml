@@ -247,7 +247,9 @@ jobs:
             echo "pr=${PR_NUMBER}"
             echo "cap=${CAP}"
           } >> "$GITHUB_OUTPUT"
+      # One arch can have a report while the other has none, so a missing one is not a failure.
       - name: Download the stage-1 Blackhole report
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: llk-perf-gate-report-blackhole
@@ -255,13 +257,24 @@ jobs:
           path: reports/blackhole
           run-id: ${{ steps.source.outputs.run }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download the stage-1 Wormhole report
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: llk-perf-gate-report-wormhole
+          merge-multiple: true
+          path: reports/wormhole
+          run-id: ${{ steps.source.outputs.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check for stage-1 regressions
         id: any
         run: |
           # Header plus at least one row; with none, there is nothing to re-measure and no data to download.
-          if [ "$(wc -l < reports/blackhole/perf_gate_report.regressions.csv 2>/dev/null || echo 0)" -gt 1 ]; then
-            echo "blackhole=true" >> "$GITHUB_OUTPUT"
-          fi
+          for ARCH in blackhole wormhole; do
+            if [ "$(wc -l < "reports/${ARCH}/perf_gate_report.regressions.csv" 2>/dev/null || echo 0)" -gt 1 ]; then
+              echo "${ARCH}=true" >> "$GITHUB_OUTPUT"
+            fi
+          done
       - name: Download the PR head's Blackhole data
         if: steps.any.outputs.blackhole == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -271,14 +284,22 @@ jobs:
           path: head/blackhole
           run-id: ${{ steps.source.outputs.run }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download the PR head's Wormhole data
+        if: steps.any.outputs.wormhole == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-wormhole-*-head
+          merge-multiple: true
+          path: head/wormhole
+          run-id: ${{ steps.source.outputs.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Pick the tests
         id: plan
         env:
           CAP: ${{ steps.source.outputs.cap }}
         run: |
-          # Blackhole only: same-code Wormhole runs are not repeatable yet (#62044).
           ARCHES=()
-          for ARCH in blackhole; do
+          for ARCH in blackhole wormhole; do
             CANDIDATES="reports/${ARCH}/perf_gate_report.regressions.csv"
             [ -f "$CANDIDATES" ] || continue
             mkdir -p "nodes/${ARCH}"
@@ -297,6 +318,13 @@ jobs:
           path: |
             nodes/blackhole/nodes.txt
             nodes/blackhole/nodes.over
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        if: hashFiles('nodes/wormhole/nodes.txt') != ''
+        with:
+          name: placement-nodes-wormhole
+          path: |
+            nodes/wormhole/nodes.txt
+            nodes/wormhole/nodes.over
 
   placement-measure-head:
     name: "Stage 2: measure the PR head on ${{ matrix.arch }} at 5 code positions"
