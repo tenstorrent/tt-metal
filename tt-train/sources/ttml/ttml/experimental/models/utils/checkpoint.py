@@ -8,11 +8,13 @@
   ``adapter_model.safetensors``;
 - ``checkpoint.pkl``: parameters as ``ttml.checkpointing`` writes them.
 
-Beside them, a checkpoint a trainer saved has ``trainer_state.json``, which records the base model.
+Beside them, a checkpoint a trainer saved has ``trainer_state.json``, which the provider writes: the run, and what the
+provider records about the model, such as the base model.
 """
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import os
 from dataclasses import dataclass
@@ -57,6 +59,19 @@ def read_adapter(directory: PathLike) -> AdapterState:
     if not weights.is_file():
         raise FileNotFoundError(f"{directory} has no {ADAPTER_WEIGHTS}")
     return AdapterState(tensors=load_file(str(weights)), config=json.loads(config.read_text()))
+
+
+def tt_metal_version() -> Optional[str]:
+    """The version of the installed ``ttnn`` package, or ``None`` if ttnn isn't installed as one. An editable install
+    keeps the version it was installed at."""
+    try:
+        return importlib.metadata.version("ttnn")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def write_trainer_state(directory: PathLike, state: dict[str, Any]) -> None:
+    (Path(directory) / TRAINER_STATE).write_text(json.dumps(state, indent=2) + "\n")
 
 
 def read_trainer_state(directory: PathLike) -> Optional[dict[str, Any]]:

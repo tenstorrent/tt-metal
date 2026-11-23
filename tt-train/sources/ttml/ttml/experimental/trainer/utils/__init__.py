@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from .checkpoint import TRAINER_STATE, checkpoint_exists, staged_directory, write_trainer_state
+from .checkpoint import TRAINER_STATE, checkpoint_exists, staged_directory
 from .optimizer import CombinedOptimizer, assign_parameters
 
 __all__ = [
@@ -11,5 +11,4 @@ __all__ = [
     "assign_parameters",
     "checkpoint_exists",
     "staged_directory",
-    "write_trainer_state",
 ]

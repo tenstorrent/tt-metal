@@ -18,7 +18,7 @@ from ttml.experimental.errors import UnsupportedTrainingConfig
 from ttml.experimental.models.provider import get_provider as get_model_provider
 from ..configs import SFTTrainerConfig
 from ..managers.device import DeviceManager
-from ..utils import CombinedOptimizer, assign_parameters, staged_directory, write_trainer_state
+from ..utils import CombinedOptimizer, assign_parameters, staged_directory
 from .base import Trainer
 
 # Device layout and dtype of each key of a dataset provider's batches.
@@ -169,19 +169,8 @@ class SFTTrainer(Trainer):
         return [float(lr) for lr in self.optimizer.get_group_lrs()]
 
     def save_checkpoint(self, path: str, metadata: Optional[dict] = None) -> None:
-        """A checkpoint directory: the model's weights in the format ``checkpoint.format`` picks, as the model provider
-        exports them, and ``trainer_state.json``."""
+        """A checkpoint directory, which the model provider writes: the model's weights in the format
+        ``checkpoint.format`` picks, and ``trainer_state.json`` with ``metadata``; see ``ModelProvider.export_weights``.
+        """
         with staged_directory(path) as directory:
-            self.provider.export_weights(self.model, directory)
-            write_trainer_state(
-                directory,
-                {
-                    **(metadata or {}),
-                    "format": self.config.checkpoint.format.model_dump(),
-                    "base_model": self._base_model(),
-                },
-            )
-
-    def _base_model(self) -> dict:
-        """The model the run trains, as a checkpoint records it."""
-        return {"name_or_path": self.config.model.name}
+            self.provider.export_weights(self.model, directory, metadata)

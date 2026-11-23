@@ -16,7 +16,8 @@ The weights a checkpoint holds, by ``checkpoint.format.type`` and whether ``mode
 - ``tt`` without: every parameter, in ``checkpoint.pkl``.
 
 ``checkpoint.pkl`` has a header naming the base model and the LoRA settings, which a load must match. A PEFT adapter
-names its base model in ``adapter_config.json``; a full ``hf`` model a trainer saved, in ``trainer_state.json``.
+names its base model in ``adapter_config.json``; a full ``hf`` model, in the ``trainer_state.json`` ``export_weights``
+writes beside every checkpoint.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from ..utils.checkpoint import (
     read_adapter,
     read_trainer_state,
     write_adapter,
+    write_trainer_state,
 )
 from ..utils.hub import load_hf_config, model_dir
 from ..utils.peft import check_peft_keys, lora_to_peft, peft_adapter_config, peft_to_lora, with_peft_prefix
@@ -229,7 +231,7 @@ class LlamaProvider(ModelProvider):
             self._check_base_model(directory, (state.get("base_model") or {}).get("name_or_path"))
             load_from_safetensors(model, directory)
 
-    def export_weights(self, model: Any, directory: PathLike) -> None:
+    def export_weights(self, model: Any, directory: PathLike, metadata: Optional[dict[str, Any]] = None) -> None:
         directory = Path(directory)
         if self.config.checkpoint.format.type == "tt":
             from ttml import checkpointing
@@ -243,6 +245,11 @@ class LlamaProvider(ModelProvider):
             from ttml.models.llama import export_hf_model
 
             export_hf_model(model, directory, hf_source_dir=model_dir(self.model_source(), local_only=True))
+        write_trainer_state(directory, {**self.trainer_state(metadata), "base_model": self._base_model()})
+
+    def _base_model(self) -> dict:
+        """The model the run trains, as a ``tt`` checkpoint's header and ``trainer_state.json`` record it."""
+        return {"name_or_path": self.config.model.name}
 
     # ------------------------------------------------------------------ tt checkpoints
 
@@ -261,7 +268,7 @@ class LlamaProvider(ModelProvider):
 
     def _tt_header(self) -> dict:
         return {
-            "base_model": {"name_or_path": self.config.model.name},
+            "base_model": self._base_model(),
             "model_type": self.hf_config.get("model_type"),
             "lora": self._lora_settings(),
         }

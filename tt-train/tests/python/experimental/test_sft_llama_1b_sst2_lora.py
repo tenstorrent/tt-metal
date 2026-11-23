@@ -30,6 +30,7 @@ from ttml.experimental.trainer.__main__ import main
 from ttml.experimental.trainer.configs import load_config
 from ttml.experimental.trainer.managers.checkpoint import HISTORY_FILE
 from ttml.experimental.trainer.managers.logging import TrainingLogger
+from ttml.experimental.models.utils.checkpoint import tt_metal_version
 from ttml.experimental.trainer.utils import TRAINER_STATE
 
 RECIPE = Path(ttml.experimental.__file__).parent / "training_configs" / "llama_3_2_1b_instruct_sst2_lora.yaml"
@@ -136,6 +137,8 @@ def test_a_checkpoint_carries_the_metrics_of_its_step(recipe):
     assert (state["step"], state["epoch"], state["metrics"]) == (STEPS, 0, metrics)
     assert state["format"] == {"type": "hf"}
     assert state["base_model"] == {"name_or_path": recipe.config.model.name}
+    assert state["config"] == recipe.config.model_dump(mode="json")
+    assert state["tt_metal_version"] == tt_metal_version()
     (entry,) = json.loads((recipe.checkpoints / HISTORY_FILE).read_text())["checkpoints"]
     assert (entry["name"], entry["path"], entry["step"], entry["metrics"]) == (last.name, str(last), STEPS, metrics)
 

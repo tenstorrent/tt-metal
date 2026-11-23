@@ -2,15 +2,18 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Saving checkpoint directories: a failed or interrupted save never leaves a partial checkpoint, and a run never
-saves over another run's. Device-free."""
+"""Saving checkpoint directories: a failed or interrupted save never leaves a partial checkpoint, a run never saves
+over another run's, and the trainer has the model provider write the checkpoint. Device-free."""
 
+import importlib.metadata
 import os
 from datetime import datetime
 
 import pytest
 
 import ttml.experimental.trainer.managers.checkpoint as checkpoint_manager
+from ttml.experimental.models.utils.checkpoint import tt_metal_version
+from ttml.experimental.trainer import SFTTrainer
 from ttml.experimental.trainer.configs import CheckpointConfig
 from ttml.experimental.trainer.managers.checkpoint import CheckpointManager
 from ttml.experimental.trainer.utils import checkpoint_exists, staged_directory
@@ -107,3 +110,41 @@ def test_manager_never_saves_over_another_runs_checkpoint(tmp_path, monkeypatch,
     assert saved == []
     assert manager.history == []
     assert not os.path.exists(manager.history_file)
+
+
+def test_tt_metal_version_is_the_ttnn_packages(monkeypatch):
+    versions = {"ttnn": "0.64.0"}
+
+    def version(name):
+        if name not in versions:
+            raise importlib.metadata.PackageNotFoundError(name)
+        return versions[name]
+
+    monkeypatch.setattr(importlib.metadata, "version", version)
+    assert tt_metal_version() == "0.64.0"
+    versions.clear()
+    assert tt_metal_version() is None
+
+
+class _Provider:
+    """Records what each ``export_weights`` gets, and writes ``weights``."""
+
+    def __init__(self):
+        self.calls = []
+
+    def export_weights(self, model, directory, metadata=None):
+        self.calls.append((model, metadata))
+        (directory / "weights").write_text("new")
+
+
+def test_save_checkpoint_has_the_provider_export_into_a_staged_directory(tmp_path):
+    trainer = SFTTrainer()
+    model, metadata = object(), {"step": 3, "epoch": 0, "metrics": {"train/loss": 1.5}}
+    trainer.provider, trainer.model = _Provider(), model
+    final = tmp_path / "checkpoint"
+    _write_checkpoint(final, "old")
+    trainer.save_checkpoint(str(final), metadata)
+
+    assert trainer.provider.calls == [(model, metadata)]
+    assert (final / "weights").read_text() == "new"
+    assert _entries(tmp_path) == ["checkpoint"]

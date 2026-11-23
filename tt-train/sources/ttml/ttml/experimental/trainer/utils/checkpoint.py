@@ -4,18 +4,16 @@
 
 """Writing checkpoint directories.
 
-A checkpoint holds the model's weights, which the model provider writes, and a ``trainer_state.json`` with the step,
-epoch and metrics, the format, and the base model.
+A checkpoint holds the model's weights and its ``trainer_state.json``, both of which the model provider writes.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Union
+from typing import Iterator, Union
 
 from ttml.experimental.models.utils.checkpoint import TRAINER_STATE
 
@@ -77,7 +75,3 @@ def staged_directory(path: PathLike) -> Iterator[Path]:
         raise
     if previous.exists():
         _remove(previous)
-
-
-def write_trainer_state(directory: PathLike, state: dict[str, Any]) -> None:
-    (Path(directory) / TRAINER_STATE).write_text(json.dumps(state, indent=2) + "\n")
