@@ -110,7 +110,8 @@ struct RecipeBlockingProblem {
     // Nonzero pins that dimension (a caller-provided chunk); zero lets the chooser pick.
     uint32_t fixed_q_tiles = 0;
     uint32_t fixed_k_tiles = 0;
-    bool exp_mux_on_bottom_row = false;
+    // Nonzero: Q chunks must divide this many rows (balanced ring: half the local Q).
+    uint32_t q_chunk_divides = 0;
     // Dense key ranges (sdpa_recipe.hpp: RecipeKeyRange): a Q chunk processes only the K chunks its rows see, and
     // all heads' Q chunks are dealt over the whole grid. Windowed segments (unknown on the host) cost every K chunk.
     bool key_range = false;
@@ -173,5 +174,30 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const RecipeDenseOptions* options = nullptr,
     bool chunks_are_hints = false,
     std::optional<KVStorage> v_storage = std::nullopt);
+
+// Ring joint / ring MLA: the caller's config when both chunk sizes are explicit, otherwise a copy with the chosen chunk
+// sizes on the caller's grid (an explicit one is pinned). `q_rows` are the per-device Q rows, `k_rows` the K/V rows of
+// one ring iteration, `ring_size` the K/V shards, `v_head_dim` 0 unless V is narrower than Q.
+SDPAProgramConfig resolve_ring_recipe_blocking(
+    const PrecisionPolicy& policy,
+    const Tensor& q,
+    uint32_t q_rows,
+    uint32_t k_rows,
+    uint32_t joint_q_rows,
+    uint32_t joint_k_rows,
+    uint32_t ring_size,
+    uint32_t v_head_dim,
+    uint32_t q_chunk_divides,
+    const SDPAProgramConfig& program_config);
+
+// Exp ring: as resolve_ring_recipe_blocking; with the Q chunk left to the op it may also narrow the grid width.
+SDPAProgramConfig resolve_exp_ring_recipe_blocking(
+    const PrecisionPolicy& policy,
+    const Tensor& q,
+    uint32_t q_rows,
+    uint32_t k_rows,
+    uint32_t joint_rows,
+    uint32_t ring_size,
+    const SDPAProgramConfig& program_config);
 
 }  // namespace ttnn::operations::transformer::sdpa::detail

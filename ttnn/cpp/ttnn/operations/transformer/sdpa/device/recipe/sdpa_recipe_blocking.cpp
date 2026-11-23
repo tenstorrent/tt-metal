@@ -196,6 +196,7 @@ double syncs_per_group(const PrecisionPolicy& policy, bool fused, uint32_t vd) {
 struct RecipeBuild {
     uint64_t cb_bytes = 0;
     uint64_t fused_cb_bytes = 0;  // CBs 29-31 of fused chunks, which a factory drops when they do not fit
+    uint64_t kv_cb_bytes = 0;     // the K and V CBs (1, 2), which the ring factories resize
     uint32_t qk_width = 4;        // recipe_qk_w
     uint32_t pv_width = 4;        // recipe_pv_w
     bool fused = false;           // recipe_fused: fused STANDARD / FAST chunks
@@ -233,6 +234,8 @@ RecipeBuild recipe_build(
     RecipeBuild build{.cb_bytes = recipe_cb_bytes(program)};
     for (const auto& cb : program.cbs) {
         build.fused_cb_bytes += recipe_fused_cb(cb) ? cb.total_size : 0;
+        const uint8_t index = cb.format_descriptors.front().buffer_index;
+        build.kv_cb_bytes += index == 1 || index == 2 ? cb.total_size : 0;
     }
     const auto& args = program.kernels.front().named_compile_time_args;
     build.qk_width = named_arg(args, "recipe_qk_w");
@@ -433,18 +436,22 @@ RecipeL1Estimate recipe_l1_bytes(
                 cbs + 2 * mask_group + context.extra_bytes,
                 build.cb_bytes - droppable_fused(rows, build) + mask_group + context.extra_bytes};
         }
-        case RecipeOp::Ring: {
-            const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
-            const uint64_t bytes = build.cb_bytes + kRingRecipeExtraBytes;
-            // The factory's fallbacks: drop the fused chunks' CBs, then single-slot Q.
-            return {bytes, bytes - droppable_fused(q_tiles, build) - q_slot};
-        }
+        case RecipeOp::Ring:
         case RecipeOp::ExpRing: {
-            // The exp-ring factory keeps the recipe layout with a single Q slot, plus the 64 B live-length
-            // mailbox of a device-tensor logical_n (counted unconditionally).
+            // The ring factories size K and V for two entries each (the recipe layout's FP32 recipes have one).
             const auto build = recipe_build(policy, q_tiles, k_tiles, d_tiles);
-            const uint64_t bytes = build.cb_bytes - q_slot + 64;
-            return {bytes, bytes - droppable_fused(q_tiles, build)};  // the factory drops the fused chunks' CBs to fit
+            const uint32_t vd = context.vd_tiles != 0 ? context.vd_tiles : d_tiles;
+            const uint64_t two_kv = 2ull * k_tiles * (d_tiles + vd) * kv_tile_bytes(policy.selection.kv_storage);
+            const uint64_t layout = build.cb_bytes - build.kv_cb_bytes + two_kv;
+            if (op == RecipeOp::Ring) {
+                const uint64_t bytes = layout + kRingRecipeExtraBytes;
+                // The factory's fallbacks: single-slot Q, then drop the fused chunks' CBs.
+                return {bytes, bytes - droppable_fused(q_tiles, build) - q_slot};
+            }
+            // Exp ring: a single Q slot, plus the 64 B live-length mailbox of a device-tensor logical_n (counted
+            // unconditionally); its fallbacks keep one K and one V entry, then drop the fused chunks' CBs.
+            const uint64_t bytes = layout - q_slot + 64;
+            return {bytes, bytes - two_kv / 2 - droppable_fused(q_tiles, build)};
         }
     }
     TT_THROW("Unknown SDPA recipe op");
@@ -583,6 +590,9 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
     const uint32_t kv_page = kv_tile_bytes(p.policy.selection.kv_storage);
     const uint32_t vd = dense && p.vd_tiles != 0 ? p.vd_tiles : p.d_tiles;
     for (const uint32_t qt : q_range) {
+        if (p.q_chunk_divides != 0 && p.q_chunk_divides % (qt * kTile) != 0) {
+            continue;
+        }
         bool any_fit = false, size_excluded = false;
         for (const uint32_t kt : k_range) {
             if (!recipe_geometry_supported(qt, kt, p.d_tiles)) {
@@ -635,7 +645,12 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                 if (l1.minimum > p.l1_bytes) {
                     return;
                 }
-                const bool fused = build.fused && !attn_mask && l1.preferred <= p.l1_bytes;
+                // The ring factories give up Q prefetch (ring) or a K/V entry (exp ring) before the fused chunks' CBs.
+                // (An odd STANDARD Q chunk keeps them in any case: recipe_drop_fused.)
+                const bool keeps_fused = qt % 2 != 0 && p.policy.selection.recipe == Recipe::B;
+                const uint64_t fused_layout =
+                    dense ? l1.preferred : l1.minimum + (keeps_fused ? 0 : build.fused_cb_bytes);
+                const bool fused = build.fused && !attn_mask && fused_layout <= p.l1_bytes;
                 candidates.push_back({q_chunk, k_chunk, grid, work(fused) + fill_drain(used, readers), jobs, l1});
             };
             auto block = [&](bool fused) { return block_compute(p, rows, kt, build, dense, fused, attn_mask); };
@@ -715,11 +730,11 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                 case RecipeOp::ExpRing: {
                     // The ring factories deliver every ring step's K/V shard to each worker over the NoC (DRAM traffic
                     // depends on their K/V distribution and is not modeled).
-                    auto ring_work = [&](uint32_t jobs, uint32_t k_blocks) {
-                        return [&, jobs, k_blocks](bool fused) {
+                    auto ring_work = [&](uint32_t jobs, uint32_t k_blocks, double stream) {
+                        return [&, jobs, k_blocks, stream](bool fused) {
                             const double compute = k_blocks * block(fused) + q_chunk_work(fused);
-                            return jobs *
-                                   q_chunk_time(p.policy, compute, k_blocks * kv.bytes / arch.noc_bytes_per_cycle, 0.0);
+                            const double kv_noc = k_blocks * kv.bytes / arch.noc_bytes_per_cycle;
+                            return jobs * q_chunk_time(p.policy, compute, kv_noc, stream);
                         };
                     };
                     const uint32_t k_blocks = p.ring_size * div_up(p.k_rows, k_chunk) + div_up(p.joint_k_rows, k_chunk);
@@ -729,20 +744,33 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                         const uint32_t cores = p.grid.x * p.grid.y;
                         const uint32_t q_chunks = div_up(p.q_rows, q_chunk) + div_up(p.joint_q_rows, q_chunk);
                         const uint32_t jobs = div_up(batch_heads * q_chunks, cores);
-                        admit(jobs, p.grid, RecipeL1Context{}, cores, cores, ring_work(jobs, k_blocks));
+                        // A head whose Q chunks span two or more cores shares its K/V through a store-and-forward
+                        // chain (ring_joint_kv_chains.hpp), which streams every K block once per Q chunk at the chain
+                        // rate, as the dense chains do.
+                        const bool chained = q_chunks > jobs;
+                        const double stream = chained ? k_blocks * kv.bytes / arch.chain_stream_bytes_per_cycle : 0.0;
+                        // Only a chain's first core reads K/V from DRAM (the pipeline fill).
+                        const double readers = chained ? std::min<double>(cores, batch_heads) : cores;
+                        admit(
+                            jobs,
+                            p.grid,
+                            RecipeL1Context{.vd_tiles = p.vd_tiles},
+                            cores,
+                            readers,
+                            ring_work(jobs, k_blocks, stream));
                         break;
                     }
                     // exp_ring_joint_sdpa_device_operation.cpp: a head's Q chunks fill one core row
                     // exactly (num_q_chunks == cols * segs_per_head); rows walk head-segments as serial
-                    // passes (at most 3). The joint Q length must divide by the Q chunk.
+                    // passes. The joint Q length must divide by the Q chunk.
                     if (p.joint_q_rows % q_chunk != 0) {
                         break;
                     }
-                    if (p.grid.x < 2 || (p.exp_mux_on_bottom_row && p.grid.y < 3)) {
+                    if (p.grid.x < 2) {
                         break;
                     }
-                    const uint32_t max_cols = p.exp_mux_on_bottom_row ? p.grid.x : p.grid.x - 1;
-                    const uint32_t rows_of_cores = p.exp_mux_on_bottom_row ? p.grid.y - 2 : p.grid.y;
+                    const uint32_t max_cols = p.grid.x - 1;  // the last column runs the fabric MUX
+                    const uint32_t rows_of_cores = p.grid.y;
                     const uint32_t q_chunks = div_up(p.q_rows, q_chunk) + p.joint_q_rows / q_chunk;
                     // An explicit Q chunk keeps the caller's grid; otherwise the op may narrow it, down
                     // to the factory's minimum of 3 SDPA columns (one pure SDPA plus two MUX writers).
@@ -757,12 +785,9 @@ std::vector<RecipeBlocking> blocking_candidates(const RecipeBlockingProblem& p, 
                             continue;
                         }
                         const uint32_t passes = div_up(segments, rows_of_cores);
-                        if (passes > 3) {
-                            continue;
-                        }
-                        const CoreCoord grid(p.exp_mux_on_bottom_row ? cols : cols + 1, p.grid.y);
+                        const CoreCoord grid(cols + 1, p.grid.y);
                         const double workers = static_cast<double>(cols) * rows_of_cores;
-                        admit(passes, grid, RecipeL1Context{}, workers, workers, ring_work(passes, k_blocks));
+                        admit(passes, grid, RecipeL1Context{}, workers, workers, ring_work(passes, k_blocks, 0.0));
                     }
                     break;
                 }
@@ -999,6 +1024,55 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     }
     const auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(config, choice, problem, op_name);
+}
+
+SDPAProgramConfig resolve_ring_recipe_blocking(
+    const PrecisionPolicy& policy,
+    const Tensor& q,
+    uint32_t q_rows,
+    uint32_t k_rows,
+    uint32_t joint_q_rows,
+    uint32_t joint_k_rows,
+    uint32_t ring_size,
+    uint32_t v_head_dim,
+    uint32_t q_chunk_divides,
+    const SDPAProgramConfig& program_config) {
+    if (!recipe_blocking_requested(program_config)) {
+        return program_config;
+    }
+    auto problem = base_problem(RecipeOp::Ring, policy, q, program_config);
+    problem.vd_tiles = v_head_dim != 0 && v_head_dim != q.logical_shape()[3] ? div_up(v_head_dim, kTile) : 0;
+    problem.q_rows = q_rows;
+    problem.k_rows = k_rows;
+    problem.joint_q_rows = joint_q_rows;
+    problem.joint_k_rows = joint_k_rows;
+    problem.ring_size = ring_size;
+    problem.q_chunk_divides = q_chunk_divides;
+    problem.l1_bytes = recipe_free_l1(*q.device());
+    const auto choice = invalid_fixed(program_config) ? std::nullopt : choose_recipe_blocking(problem);
+    return apply_choice(program_config, choice, problem, "ring");
+}
+
+SDPAProgramConfig resolve_exp_ring_recipe_blocking(
+    const PrecisionPolicy& policy,
+    const Tensor& q,
+    uint32_t q_rows,
+    uint32_t k_rows,
+    uint32_t joint_rows,
+    uint32_t ring_size,
+    const SDPAProgramConfig& program_config) {
+    if (!recipe_blocking_requested(program_config)) {
+        return program_config;
+    }
+    auto problem = base_problem(RecipeOp::ExpRing, policy, q, program_config);
+    problem.q_rows = q_rows;
+    problem.k_rows = k_rows;
+    problem.joint_q_rows = joint_rows;
+    problem.joint_k_rows = joint_rows;
+    problem.ring_size = ring_size;
+    problem.l1_bytes = recipe_free_l1(*q.device());
+    const auto choice = invalid_fixed(program_config) ? std::nullopt : choose_recipe_blocking(problem);
+    return apply_choice(program_config, choice, problem, "exp ring");
 }
 
 }  // namespace ttnn::operations::transformer::sdpa::detail

@@ -762,7 +762,7 @@ void bind_sdpa(nb::module_& mod) {
                 the per-device length still resolves to replicated). The tensor form makes the value
                 trace-dynamic and ALWAYS selects the sharded path (its placeholder is the padded ring total),
                 so never pass a tensor with a replicated joint. Requires joint tensors present and ring_size > 1.
-            program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
+            program_config (ttnn.SDPAProgramConfig): The SDPA worker grid and optional chunk sizes; a chunk size of 0 is chosen by the op on that grid.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Ignored (deprecated); see precision.
             precision (ttnn.SDPAPrecision, optional): The numerics recipe: STANDARD (default), BALANCED, ACCURATE
@@ -1008,7 +1008,7 @@ void bind_sdpa(nb::module_& mod) {
             persistent_output_buffer_kv (ttnn.Tensor): Persistent buffer for gathered KV tensor.
             head_dim_v (int): Tile-aligned V hidden dimension, read from KV's prefix.
             logical_n (int): Logical global sequence length before sharding.
-            program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
+            program_config (ttnn.SDPAProgramConfig): The SDPA worker grid and optional chunk sizes; a chunk size of 0 is chosen by the op on that grid.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Ignored (deprecated); see precision.
             precision (ttnn.SDPAPrecision, optional): The numerics recipe: STANDARD (default), BALANCED, ACCURATE
@@ -1126,7 +1126,7 @@ void bind_sdpa(nb::module_& mod) {
             logical_n (int or ttnn.Tensor): The logical sequence length N before sharding across devices.
                 A single-valued int32/uint32 device tensor is read on-device each dispatch, so one captured
                 trace can replay at different lengths (rewrite the tensor between replays).
-            program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
+            program_config (ttnn.SDPAProgramConfig): The grid (its last column runs the fabric MUX) and optional chunk sizes; with q_chunk_size 0 the op chooses the chunks and may narrow the grid.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Deprecated and ignored (the numerics
                 come from precision).

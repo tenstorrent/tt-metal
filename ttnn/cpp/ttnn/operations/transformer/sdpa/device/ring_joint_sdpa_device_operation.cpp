@@ -467,6 +467,71 @@ std::optional<tt::tt_metal::TensorSpec> optional_spec(const std::optional<Tensor
     return tensor.has_value() ? std::optional<tt::tt_metal::TensorSpec>{tensor->tensor_spec()} : std::nullopt;
 }
 
+// Fills the chunk sizes the caller left to the op (0) before the program-cache lookup, on the caller's grid; an
+// explicit chunk size is kept. Calls with both chunk sizes explicit return at once.
+void resolve_ring_joint_blocking(RingJointSDPAParams& args, const RingJointSDPAInputs& tensors) {
+    namespace recipes = ttnn::operations::transformer::sdpa::detail;
+    if (!args.program_config.has_value() || !recipes::recipe_blocking_requested(args.program_config)) {
+        return;
+    }
+    auto& config = *args.program_config;
+    if (args.has_sliding_window()) {
+        // Chunked sliding attention builds Q64/Q128 with K128 only.
+        const uint32_t q_rows = tensors.input_q.logical_shape()[2];
+        config.q_chunk_size = config.q_chunk_size != 0 ? config.q_chunk_size : (q_rows % 128 == 0 ? 128 : 64);
+        config.k_chunk_size = config.k_chunk_size != 0 ? config.k_chunk_size : 128;
+        return;
+    }
+    // The key holds what the resolve reads. Free L1 is left out, as it is out of the program hash: querying it on a
+    // mesh costs more than the whole resolve (the factory checks the fit when it builds the program).
+    const auto rows = [](const std::optional<Tensor>& t) { return t.has_value() ? t->padded_shape()[2] : 0u; };
+    // dynamic_local_n: the gathered buffer's capacity bounds the per-chip length, so the blocking serves every length
+    // the program does.
+    const uint32_t capacity_rows = tensors.gathered_k.padded_shape()[2] / static_cast<uint32_t>(args.ring_size);
+    const uint32_t q_rows = args.dynamic_local_n ? capacity_rows : tensors.input_q.padded_shape()[2];
+    const uint32_t k_rows = args.dynamic_local_n ? capacity_rows : tensors.input_k.padded_shape()[2];
+    const uint32_t joint_q_rows = rows(tensors.joint_q);
+    const uint32_t joint_k_rows =
+        tensors.gathered_joint_k.has_value() ? rows(tensors.gathered_joint_k) : rows(tensors.joint_k);
+    const uint32_t v_head_dim = tensors.v_head_dim(args.latent_v_head_dim);
+    const auto& q_shape = tensors.input_q.padded_shape();
+    const auto key = ttsl::hash::hash_objects_with_default_seed(
+        tensors.input_q.device()->id(),
+        args.precision,
+        args.scale,
+        config,
+        args.is_balanced,
+        args.ring_size,
+        q_shape[0],
+        q_shape[1],
+        q_shape[3],
+        q_rows,
+        k_rows,
+        joint_q_rows,
+        joint_k_rows,
+        v_head_dim,
+        tensors.input_q.dtype(),
+        tensors.gathered_k.dtype());
+    const auto resolution = recipes::memoized_recipe_resolution(key, [&] {
+        const auto policy = recipes::resolve_recipe_policy(
+            tensors.input_q, tensors.gathered_k, args.precision, args.scale, args.program_config);
+        recipes::RecipeResolution r;
+        r.program_config = recipes::resolve_ring_recipe_blocking(
+            policy,
+            tensors.input_q,
+            q_rows,
+            k_rows,
+            joint_q_rows,
+            joint_k_rows,
+            static_cast<uint32_t>(args.ring_size),
+            v_head_dim,
+            args.is_balanced ? q_rows / 2 : 0,
+            config);
+        return r;
+    });
+    args.program_config = resolution.program_config;
+}
+
 }  // namespace
 
 void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
@@ -1798,6 +1863,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .logical_l_tensor = logical_l_tensor,
         .kv_valid_end = kv_valid_end_tensor};
 
+    resolve_ring_joint_blocking(operation_attributes, tensor_args);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
