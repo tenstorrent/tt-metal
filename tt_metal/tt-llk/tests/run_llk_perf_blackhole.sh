@@ -12,7 +12,7 @@ set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
 N_GROUPS="${2:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
+SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-false}"
 export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
 
 case "$SPEED_OF_LIGHT" in
@@ -58,6 +58,7 @@ esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/python_tests"
+export PERF_RUN_COUNT=3
 mkdir -p perf_data
 
 PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
