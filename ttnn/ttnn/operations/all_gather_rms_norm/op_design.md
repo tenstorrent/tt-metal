@@ -537,3 +537,22 @@ setter costs ~0.5 µs per header, and loading precomputed runs from L1 is slower
 reader writing the command fields into routed per-slot headers (the sender then only sends: 30.75 µs, no gain over
 30.52 — the per-packet work is ~1000–1100 ticks in total and is already split about evenly between the two RISCs,
 removed).
+
+## Refinement 3 — OVERLAP as built: the chain after the stats round
+
+Zone timeline of the focus case before the refinement (chip with the earliest stats, µs from kernel start):
+stats complete 5.4 → workers see stats-ready 6.0 → **gather 0.55–2.4 µs** (80 workers × 4 reads × 2 halves into the 2
+hub cores: a NoC hot spot that set the slowest worker) → combine ≈ 0.9 → normalize ≈ 1.0 (two HiFi4 FPU multiplies
+per tile) → own DRAM write 1.1–2.3 (480 KiB from 80 workers at once) → own-ready 10.4 → first packet handed to the
+sender +1.6 µs (the reader pushed only once `READ_DEPTH` packets were issued).
+
+| Lever | Mechanism | Measured (harness, fastest chip, focus / LN) | Kept |
+|---|---|---|---|
+| stats-table multicast | the hub readers multicast each completed slot into every core's `cb_stats_table` (the fwd hub the own slot after `records_local`, each hub its upstream slots on arrival). The last slot goes out **linked** to the stats-ready flag (kernel_lib mcast pipe Flag protocol: no ack round trip between payload and flag). The reader re-arms `stats_arrived` after the sender's `done`. Workers gather from local L1, and `cb_record_landing` is gone. | unlinked + barrier: 30.17 / 27.99 (LN regressed); linked: **30.45 → 29.39 / 27.73 → 27.45** | yes |
+| eager push | after each packet's reads the port reader pushes every in-flight packet whose reads already landed (non-blocking trid check, `EAGER_PUSH`) | **29.39 → 29.21 / 27.45 → 26.32** (LN: every relay entry starts sooner) | yes |
+| own-ready bands | `OWN_BANDS` bands of row-groups, a persistent global-semaphore counter per band on every port core, re-armed at the end of each call; the own entry waits per packet only for its runs' bands | 16 bands: 31.81 / 30.14 (+1.4 / +2.4 µs). The early own-entry reads hit DRAM during the workers' 480 KiB own-write burst, and the entry ran ~1.5 µs longer. Bank-major walk: the first 5 packets already touch every row-group | parked at 1 |
+| x·γ in the stats shadow | `XG_PRE`: `x · γ` → `cb_xg` (T_acc) during the stats round, then `xg · inv` | normalize 1.03 → 0.65 µs in the zone profile, call 29.21 → 29.18 (null); precision baseline passes with it on | parked at 0 |
+| own pull from worker L1 (`OWN_SRC_DST = 0`, so that own-ready could precede the DRAM write) | existing knob | +4.5 µs focus: the per-page pull is far too expensive | not built further |
+
+What binds now (focus, chip with the earliest stats): stats ready 6.4 → gather 0.25 → combine 0.9 → normalize 1.0 →
+own write ≈ 1.1–2.3 (DRAM burst) → own entry ≈ 10 µs (port-CPU bound, Refinement 2) → relays ≈ 4 µs → tail.

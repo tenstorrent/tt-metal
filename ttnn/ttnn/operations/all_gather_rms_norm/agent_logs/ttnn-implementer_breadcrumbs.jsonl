@@ -6,3 +6,4 @@
 {"event":"test_run","refinement":"1b","result":"WIDTH gate 85 pass/2 xfail of 87; HEIGHT+IL sample 454 pass, 1 known fail; regression 32/32; unit 55/55; perf unchanged","ts":"2026-11-23T17:27:03+00:00"}
 {"event":"refinement_done","refinement":"2","focus_us":[35.514,30.452],"ln_us":[29.592,27.726],"finding":"bulk is port-CPU bound per packet, not packet/DRAM bound","ts":"2026-11-23T18:50:00+00:00"}
 {"event":"test_run","status":"pass","what":"R3 lever 1 stats-table mcast","focus_us":29.39,"ln_us":27.45,"ts":"2026-11-23T19:12:22+00:00"}
+{"event":"test_run","status":"pass","what":"R3 final","focus_us":29.205,"ln_us":26.322,"golden_slice":"57p/2s/4xf","regression":"32/32","ts":"2026-11-23T19:33:52+00:00"}

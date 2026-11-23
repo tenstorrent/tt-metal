@@ -176,3 +176,15 @@ Data-movement budget (changed): the ports now read the own normalized slice back
 landed 3, relay read 1) against 6S before; the NoC pull of 2S from worker L1 is gone. Measured: the read-back
 is 2.8 µs faster on the focus case with the pipelined reader (35.26 vs 32.46 µs at read depth 4): the port reader
 is CPU-bound per page, not DRAM-bound. `OWN_SRC_DST = 0` restores the L1 pull (6S).
+
+## As built — Refinement 3 (OVERLAP: stats-table multicast, eager push, own bands, x·γ)
+
+| CB / resource | Index | Size | Change |
+|---|---|---|---|
+| `cb_stats_table` | 25 | unchanged (`G · R · kt · nstats` × 128 B, full range) | **now live on every core**: the hubs multicast each completed slot into the same address on the whole program grid (the fwd hub the own slot once the records are in, each hub the slots landing in it), so the workers gather from their own L1. Before, the copy on workers was allocated but unused (identical-address rule). Shares: none (written by the multicast during the stats round, read by the gather). |
+| `cb_record_landing` | 11 | — | **deleted**: the gather places the records straight from the local table (no hub read, no landing copy). Frees `G · kt · nstats` × 128 B per core. |
+| `cb_xg` | 33 | `crt_max · cw_max` × `T_acc` (focus: 3 × 4 KiB) | **new, only with `XG_PRE = 1`** (default 0, parked): x·γ of the block, computed in the stats shadow, read by the normalize. Gated by `XG_L1_BUDGET` = 128 KiB. Shares: cannot alias `cb_x` (bf16 x would round x·γ a second time) or `cb_out_block` (the normalize reads `cb_xg` while packing `cb_out_block`). |
+| own-ready band counters | — | `OWN_BANDS_MAX` = 16 global semaphores on the port cores (16 B each) | **new, only used with `OWN_BANDS > 1`** (default 1, parked). Persistent and re-armed at the end of every call. |
+
+Data-movement budget: unchanged in DRAM. The cross-core NoC drops from ~80 · G · 2 hub reads per call (the
+gather hot spot) to G slot multicasts (≈ 40 KiB per hub on the focus case).

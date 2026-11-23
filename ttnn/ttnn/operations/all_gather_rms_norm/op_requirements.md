@@ -116,7 +116,7 @@ work (e.g. fewer packets per byte — `SPLIT_RUNS` measured +1.2 µs because mor
 packets save), and the larger share of the call is now the serial chain before the bulk (stats → normalize → own
 entry starts at ~11 µs), which is Refinement 3 (OVERLAP).
 
-### [ ] Refinement 3 — OVERLAP: start the bulk before the slowest worker finishes, and shorten the stats → normalize → own-entry chain
+### [x] Refinement 3 — OVERLAP: start the bulk before the slowest worker finishes, and shorten the stats → normalize → own-entry chain
 
 **Type**: perf
 
@@ -130,6 +130,20 @@ The own entry waits on `sem_own_ready == n_active` (all 80 workers on the focus 
 Measure the exposed transport per call in the op (zones: `AGRN_PROFILE_ZONES=1`, `tests/ttnn/unit_tests/operations/all_gather_rms_norm/zone_timeline.py`), never on a dummy exchange. No SUPPORTED change; the master.md catalog (`fabric_ring_exchange`, `double_buffer`) bounds the levers.
 
 **Done when**: measured device time improves beyond noise on at least one perf-flagged case (fastest chip lower, slowest not higher, `eval.ccl_perf compare`) with no regression on the other; the golden suite is green; and there is no regression across the config-spanning guard set (as Refinement 2).
+
+**Outcome**: focus 30.45 → **29.21 µs** fastest / 31.38 → 30.00 µs slowest; LN 27.73 → **26.32** / 27.94 → 26.71 µs
+(`eval.ccl_perf compare`: win on both, noise 0.05). Measured first: after the stats round the 80 workers' gathers
+converged on the 2 hub cores (0.55–2.4 µs, set the slowest worker), and the port reader handed its first packet over
+only after `READ_DEPTH` were issued (+1.6 µs after own-ready). Landed: the hubs multicast each stats slot into every
+core's table as it completes (last slot linked to the stats-ready flag; the gather is now a flat 0.25 µs from local
+L1), and eager push in the port reader. Built, measured and parked as live knobs: per-band own-ready
+(`OWN_BANDS`, +1.4 / +2.4 µs at 16 bands: the early own-entry reads hit DRAM during the workers' own-write burst), and
+x·γ in the stats shadow (`XG_PRE`, normalize 1.03 → 0.65 µs but the call is unchanged). Launch spread is now 0.79 µs
+focus / 0.39 µs LN (slowest − fastest). What binds now: the own entry plus relays (~14 µs, port-CPU bound per
+Refinement 2) behind a ~10 µs serial chain, and inside that chain the own DRAM write burst (1.1–2.3 µs: 480 KiB from
+80 workers at once) followed by the port's read-back. Next would be landing the own slice without the DRAM
+round trip before the first packet (a cheaper L1 source for the own entry: the per-page pull costs +4.5 µs today), or
+fewer port per-packet cycles. Neither fits this refinement's chain scope.
 
 **Verifier notes**: after Refinement 2. If R2 changes the landing topology (lever a), per-entry notification and the R_U `announce_landed` granularity (lamp: per-slot assembly) belong here.
 

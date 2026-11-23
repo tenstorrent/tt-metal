@@ -193,3 +193,46 @@ pages / 4 DRAM writes), relay ~4 µs, landing tail ~3 µs. LN 640×32: local sta
   serial chain before the bulk starts (~11 µs: stats → normalize → own-ready) — Refinement 3.
 - Tests added: `tests/ttnn/unit_tests/operations/all_gather_rms_norm/test_all_gather_rms_norm_perf_probe.py`
   (no-check profiling helper for zone timelines).
+
+## Refinement 3 — OVERLAP: start the bulk before the slowest worker finishes, and shorten the stats → normalize → own-entry chain
+- Date: 2026-11-23
+- What was done:
+  - **Measured the chain first** (zones, focus case): stats ready → gather 0.55–2.4 µs (80 workers × G reads hitting
+    the 2 hub cores: the hot spot set the slowest worker) → combine ≈ 0.9 → normalize ≈ 1.0 → own DRAM write
+    1.1–2.3 → own-ready → first packet +1.6 µs (the port reader pushed only after `READ_DEPTH` packets were issued).
+  - **Stats-table multicast** (kept): the hub readers multicast each completed slot into the same `cb_stats_table`
+    address on the whole program grid (the fwd hub the own slot after `records_local`, each hub its upstream slots as
+    they land). The last slot is linked to the stats-ready flag (kernel_lib mcast pipe Flag protocol), and the reader
+    re-arms `stats_arrived` after the sender's `done`. Workers gather from local L1: a flat 0.25 µs, and
+    `cb_record_landing` is deleted. The first cut (unlinked + barrier before the flag) won only 0.28 µs on focus and
+    regressed LN.
+  - **Eager push** (kept, `EAGER_PUSH = 1`): the port reader pushes every in-flight packet whose reads already
+    landed after each issue (non-blocking trid check). Own-ready → first packet dropped from 1.6 to 0.8 µs, and every
+    relay entry starts sooner.
+  - **Own-ready bands** (`OWN_BANDS`, parked at 1): a persistent global-semaphore counter per band of row-groups on
+    every port core, re-armed every call; the own entry waits per packet only for its runs' bands. At 16 bands it
+    measured +1.4 / +2.4 µs: the own entry's DRAM read-backs started during the workers' 480 KiB own-write burst, and
+    the entry ran ~1.5 µs longer.
+  - **x·γ in the stats shadow** (`XG_PRE`, parked at 0): x·γ → `cb_xg` during the stats round, then one multiply
+    after it. Normalize 1.03 → 0.65 µs in the zone profile, call time unchanged (29.21 vs 29.18 µs). The precision
+    baseline passes with it on.
+  - Measured and dropped: the L1 own pull (`OWN_SRC_DST = 0`, so own-ready could precede the DRAM write) at +4.5 µs.
+  - Reused: hub reader / sender stats protocol, the gather placement (`place_records`), the reader pipeline, the
+    RMS chains. Added: slot multicast + runtime args (stats address, slot bytes, own / received slots), band counters
+    + args, `EAGER_PUSH` / `OWN_BANDS` / `XG_PRE` / `XG_L1_BUDGET` knobs, `cb_xg`, `ps_own_pkt0` profiling marker.
+- Perf (eval harness, 5 experiments, `eval.ccl_perf compare` vs the post-R2 build measured in this session):
+  focus 640×384 RMS **30.448 → 29.205 µs** fastest (−1.24), slowest 31.377 → 30.001; LN 640×32 + γ + β
+  **27.727 → 26.322 µs** fastest (−1.41), slowest 27.935 → 26.711; both "win" (noise 0.05). Not dispatch-bound.
+- Accuracy achieved: unchanged numerics on the default path (the multicast moves the same records); unit dir green
+  within `helpers.TOLERANCES` (focus 640×384 RMS/LN, R_U, fp32, sharded HEIGHT/WIDTH, WIDTH pre-combine, precision
+  baseline incl. `XG_PRE = 1` and `OWN_BANDS = 16` runs of the main file).
+- Golden test progress: targeted slice of 63 cells (perf shapes, interleaved RMS/LN aligned, w/h non-aligned, Linear,
+  1 link, cluster_axis 0, HEIGHT/WIDTH sharded, fp32, bf8b, fp32_dest=False, no gamma): 57 passed, 2 skipped,
+  4 xfailed (EXCLUSIONS); test_regression 32/32.
+- Issues encountered: the per-slot unlinked multicast + write barrier before the flag cost ~1.7 µs between the last
+  arrival and stats-ready (LN regressed) — fixed by the linked last payload; band gating loses while the own entry
+  reads its source from DRAM during the own-write burst.
+- Remaining headroom (finding): the bulk (own entry + relays ≈ 14 µs) is still port-CPU bound (Refinement 2), and the
+  chain before it is ≈ 10 µs, of which the own DRAM write burst + read-back is the largest piece left. A cheaper L1
+  source for the own entry would make both bands and x·γ pay.
+- Tests added: none (existing unit files cover the paths; `ps_own_pkt0` marker for zone timelines).
