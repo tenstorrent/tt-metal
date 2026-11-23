@@ -120,6 +120,7 @@ def make(monkeypatch):
     m.ae.plain_tables = m.tables
     m.spec_of, m.history, m.last_acc, m.mode, m.low_calls = {}, {}, {}, "SPEC", 0
     m.sampled, m._t, m._plain_stale, m.greedy_ok = set(), {}, False, set()
+    m._pay = dict(acc=None, spec_ms={}, plain_ms={}, verifies=0, last_t=None, kind=None, n=0, hold=0, excl=0.0)
     m.engine = A._PlainRowsEngine(plain, pp, torch.eye(V), V, V, B, CHUNK_UNIT, None)
     return m, pf
 
@@ -343,3 +344,21 @@ def test_steady_calls(monkeypatch, scenario):
             run.step()
     run.check()
     assert m.mode == "SPEC" and len(m.spec_of) == 3, (m.mode, m.spec_of)
+
+
+@pytest.mark.parametrize("acc,expect", [(1.0, False), (3.2, True)])
+def test_pay_policy(monkeypatch, acc, expect):
+    """speculation pays when its tokens per user-ms reach a plain step's (x PAY_MARGIN): 8 users, 40 ms verify steps
+    vs the default 20 ms plain step -> 1.0 token per step does not pay, 3.2 does"""
+    import time as _time
+
+    m, pf = make(monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(_time, "perf_counter", lambda: clock[0])
+    m._pay["last_t"] = clock[0]
+    pays = None
+    for _ in range(A.PAY_MIN + 4):
+        clock[0] += 0.040
+        m._pay["kind"], m._pay["n"] = "verify", 8
+        pays = m._measure([acc] * 8)
+    assert pays is expect, (m._pay, pays)
