@@ -137,8 +137,10 @@ inline __attribute__((always_inline)) void _reshuffle_rows_row_(const std::uint3
  * @param idx_addr: L1 address of the mask minus RESHUFFLE_MASK_HEADER_BYTES; 4-byte aligned.
  * @note Once per tile (VectorMode::RC_custom); the caller must ensure idst+1 is a valid Dest tile.
  */
-template <bool APPROXIMATION_MODE /*unused*/>
+template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en = false>
 inline void calculate_reshuffle_rows(const std::uint32_t idx_addr) {
+    // reshuffle_rows_tile passes DST_ACCUM_MODE on every arch; the 32-bit DEST row path is only implemented on WH/BH.
+    static_assert(!is_fp32_dest_acc_en, "calculate_reshuffle_rows: FP32 DEST rows are not implemented on Quasar");
     LLK_ASSERT((idx_addr & 0x3) == 0, "reshuffle_rows mask must be 4-byte aligned");
     // One 32-bit word holds the targets of a 4-row group (little-endian, row 4g in the low byte).
     volatile tt_l1_ptr std::uint32_t* mask =
