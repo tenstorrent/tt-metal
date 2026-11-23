@@ -346,7 +346,7 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
         TT_FATAL(device_cores_set.contains(all_cores), "Socket cores must be contained in the specified sub device");
     }
 
-    MeshBufferConfig mesh_buffer_specs = ReplicatedBufferConfig{
+    ReplicatedBufferConfig mesh_buffer_specs{
         .size = total_config_buffer_size,
     };
 
@@ -411,7 +411,7 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
                              ? std::nullopt
                              : socket_mem_config.receiver_sub_device,
     };
-    MeshBufferConfig socket_data_mesh_buffer_specs = ReplicatedBufferConfig{
+    ReplicatedBufferConfig socket_data_mesh_buffer_specs{
         .size = total_data_buffer_size,
     };
 

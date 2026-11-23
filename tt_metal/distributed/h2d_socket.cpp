@@ -171,7 +171,7 @@ void H2DSocketImpl::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_d
         .sub_device_id = std::nullopt,
     };
 
-    MeshBufferConfig config_mesh_buffer_specs = ReplicatedBufferConfig{
+    ReplicatedBufferConfig config_mesh_buffer_specs{
         .size = config_buffer_size,
     };
 
@@ -216,7 +216,7 @@ void H2DSocketImpl::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_dev
             .bottom_up = std::nullopt,
             .sub_device_id = std::nullopt,
         };
-        MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{.size = alloc_size};
+        ReplicatedBufferConfig data_mesh_buffer_specs{.size = alloc_size};
         data_buffer_ = MeshBuffer::create(
             data_mesh_buffer_specs, data_buffer_specs, mesh_device.get(), std::make_optional<DeviceAddr>(raw_addr));
         aligned_data_buf_start_ = tt::align(raw_addr, pcie_alignment);
@@ -255,7 +255,7 @@ void H2DSocketImpl::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_dev
         .bottom_up = std::nullopt,
         .sub_device_id = std::nullopt,
     };
-    MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{
+    ReplicatedBufferConfig data_mesh_buffer_specs{
         .size = total_data_buffer_size,
     };
     data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
