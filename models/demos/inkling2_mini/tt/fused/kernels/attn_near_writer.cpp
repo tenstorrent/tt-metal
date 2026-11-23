@@ -40,14 +40,14 @@ void kernel_main() {
     const uint32_t p = get_arg_val<uint32_t>(3);
 
     uint32_t m[3] = {0, 0, 0};  // key 0 = below every float
-    cb_wait_front(cb_s, nj);
+    if constexpr (has_sink) {   // the max is exact, so the scan order does not matter: sink first, then each S_j
+        cb_wait_front(cb_sink, 1);  // as soon as compute packs it (the scan hides behind the next q.k)
+        row_max(get_read_ptr(cb_sink), m);
+    }
     const uint32_t s = get_read_ptr(cb_s);
     for (uint32_t j = 0; j < nj; ++j) {
+        cb_wait_front(cb_s, j + 1);
         row_max(s + j * 4096, m);
-    }
-    if constexpr (has_sink) {
-        cb_wait_front(cb_sink, 1);
-        row_max(get_read_ptr(cb_sink), m);
     }
     cb_reserve_back(cb_c, 1);
     const uint32_t c = get_write_ptr(cb_c);

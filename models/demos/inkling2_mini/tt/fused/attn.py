@@ -539,6 +539,11 @@ class AttnWindow:
         ttnn.generic_op([hist, scratch], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 
 
+def _comb_cfg():
+    """Combine compute: fp32 unpack of its inputs, 8 fp32 DST tiles (it keeps x_i and s_i of all 4 partials in DST)."""
+    return F.compute_config([0, 1, 2, 16, 18, 21, 22], full_sync=True)
+
+
 class AttnNear:
     """Near (+ sink) partial of global layers in two programs (attention_fast.py module doc): q.k over the
     1024-slot ring + mask, softmax, P.V, split over NSPLIT cores per kv group (32 cores, each with its exact row
@@ -646,7 +651,7 @@ class AttnNear:
                 w_rt,
                 ttnn.WriterConfigDescriptor(),
             ),
-            _kernel("attn_comb_compute.cpp", cc, named, [[]] * n, F.compute_config([0, 1, 2, 16, 18, 21, 22])),
+            _kernel("attn_comb_compute.cpp", cc, named, [[]] * n, _comb_cfg()),
         ]
         crs = _crs(cc)
         cbs = [
@@ -766,7 +771,7 @@ class AttnNear:
                     w_rt,
                     ttnn.WriterConfigDescriptor(),
                 ),
-                _kernel("attn_comb_compute.cpp", cc, named, [[]] * N_KV, F.compute_config([0, 1, 2, 16, 18, 21, 22])),
+                _kernel("attn_comb_compute.cpp", cc, named, [[]] * N_KV, _comb_cfg()),
             ]
             io += [zp, op, mp, r_t, s_t, o_t]
         crs = _crs(all_cc)
