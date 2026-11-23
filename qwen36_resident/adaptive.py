@@ -195,52 +195,61 @@ class AdaptiveEngine:
         return out
 
     # ------------------------------------------------------------------ moves
-    def to_plain(self, uid):
-        """a spec user into a free plain row: its last commit applied (as its next verify would), its state moved; the
-        KV stays (its block table goes to the plain row)"""
-        import time
-
-        t0 = time.perf_counter()
-        us, e, s = self.users[uid], self.spec, self.sess
-        u = us.idx
+    def move_to_plain(self, u, j, table, acc):
+        """spec user u's state into plain row j (the vLLM class's primitive): its last verify's commit (acc tokens)
+        applied as its next verify would, vrows_snapshot -> restore_slot, the block table moves; u freed"""
+        e, s = self.spec, self.sess
         if s.started[u]:  # (no verify since its start / return: the state is at the start's commit)
             ring, slot = e.ring[u], e.slot[u]
         else:
-            a = us.acc - 1
+            a = int(acc) - 1
             ring, slot = e.ring[u] + 1 + a, (e.slot[u] + a) % self.R
         snap = e.m.vrows_snapshot(u, ring, slot)
-        j = self.free_plain.pop(0)
-        self._set_plain_table(j, us.table)
+        self._set_plain_table(j, table)
         self.plain.restore_slot(j, snap)
         for k in ("state", "hist"):
             ttnn.deallocate(snap[k])
-        self.free_spec.append(u)
         self._set_spec_table(u, [0])
+
+    def move_to_spec(self, j, u, table, tokens):
+        """plain row j's state into spec user u (ring 0, slot 0), its drafter window refilled from the last `window`
+        of tokens[:-1] (the run tokens; tokens[-1] is the next, at position len(tokens) - 1) re-prefilled as a fresh
+        prompt at their absolute positions (option B); plain row j's table cleared"""
+        e, s = self.spec, self.sess
+        snap = self.plain.snapshot_slot(j)
+        self._set_spec_table(u, table)
+        e.m.vrows_restore(u, snap)
+        for k in ("state", "hist"):
+            ttnn.deallocate(snap[k])
+        n = len(tokens) - 1
+        s0 = max(0, n - e.window) // 64 * 64
+        self.pp.reset()
+        self.pp.run(torch.as_tensor(list(tokens[s0:n])))
+        e._fill_context(n - s0, phys=u, offset=s0)
+        e.ring[u], e.slot[u], e.prev[u] = 0, 0, None
+        s.pos[u], s.started[u], s.committed[u], s.last[u] = n, True, 1, None
+
+    def to_plain(self, uid):
+        """a spec user into a free plain row (its KV stays: the block table goes with it)"""
+        import time
+
+        t0 = time.perf_counter()
+        us = self.users[uid]
+        j = self.free_plain.pop(0)
+        self.move_to_plain(us.idx, j, us.table, us.acc)
+        self.free_spec.append(us.idx)
         us.geo, us.idx, us.acc = "plain", j, 1
         self.switch_log.append(("to_plain", uid, time.perf_counter() - t0))
 
     def to_spec(self, uid):
-        """a plain user into a free spec user (ring 0, slot 0), its drafter window refilled from its last `window` tokens
-        re-prefilled as a fresh prompt at their absolute positions (option B)"""
+        """a plain user into a free spec user, its drafter window refilled (option B)"""
         import time
 
         t0 = time.perf_counter()
-        us, e, s = self.users[uid], self.spec, self.sess
-        j = us.idx
-        snap = self.plain.snapshot_slot(j)
+        us = self.users[uid]
         u = self.free_spec.pop(0)
-        self._set_spec_table(u, us.table)
-        e.m.vrows_restore(u, snap)
-        for k in ("state", "hist"):
-            ttnn.deallocate(snap[k])
-        n = us.pos  # (tokens run so far: positions 0 .. n - 1)
-        s0 = max(0, n - e.window) // 64 * 64
-        self.pp.reset()
-        self.pp.run(torch.as_tensor(us.tokens[s0:n]))
-        e._fill_context(n - s0, phys=u, offset=s0)
-        e.ring[u], e.slot[u], e.prev[u] = 0, 0, None
-        s.pos[u], s.started[u], s.committed[u], s.last[u] = n, True, 1, None
-        self.free_plain.append(j)
-        self._set_plain_table(j, [0])
+        self.move_to_spec(us.idx, u, us.table, us.tokens)
+        self._set_plain_table(us.idx, [0])
+        self.free_plain.append(us.idx)
         us.geo, us.idx, us.acc = "spec", u, 1
         self.switch_log.append(("to_spec", uid, time.perf_counter() - t0))
