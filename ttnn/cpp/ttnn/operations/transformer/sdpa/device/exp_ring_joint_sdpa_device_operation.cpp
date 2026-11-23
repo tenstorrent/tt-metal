@@ -477,6 +477,51 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADevi
 
 namespace ttnn::prim {
 
+namespace {
+// Fills the chunk sizes the caller left to the op (0) before the program-cache lookup; with the Q chunk left to the op
+// the grid width may narrow. An explicit chunk size is kept; calls with both explicit return at once.
+void resolve_exp_ring_blocking(ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensors) {
+    namespace recipes = ttnn::operations::transformer::sdpa::detail;
+    if (!args.program_config.has_value() || !recipes::recipe_blocking_requested(args.program_config)) {
+        return;
+    }
+    // The key holds what the resolve reads; free L1 is left out, as it is out of the program hash (see
+    // resolve_ring_joint_blocking).
+    const auto& q_shape = tensors.input_q.padded_shape();
+    const uint32_t k_rows = tensors.input_k.padded_shape()[2];
+    const uint32_t joint_rows = tensors.joint_q.has_value() ? tensors.joint_q->logical_shape()[2] : 0;
+    const auto key = ttsl::hash::hash_objects_with_default_seed(
+        tensors.input_q.device()->id(),
+        args.precision,
+        args.scale,
+        *args.program_config,
+        args.ring_size,
+        q_shape[0],
+        q_shape[1],
+        q_shape[2],
+        q_shape[3],
+        k_rows,
+        joint_rows,
+        tensors.input_q.dtype(),
+        tensors.gathered_k.dtype());
+    const auto resolution = recipes::memoized_recipe_resolution(key, [&] {
+        const auto policy = recipes::resolve_recipe_policy(
+            tensors.input_q, tensors.gathered_k, args.precision, args.scale, args.program_config);
+        recipes::RecipeResolution r;
+        r.program_config = recipes::resolve_exp_ring_recipe_blocking(
+            policy,
+            tensors.input_q,
+            q_shape[2],
+            k_rows,
+            joint_rows,
+            static_cast<uint32_t>(args.ring_size),
+            *args.program_config);
+        return r;
+    });
+    args.program_config = resolution.program_config;
+}
+}  // namespace
+
 ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -546,6 +591,7 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         .gathered_v = persistent_output_buffer_v,
         .logical_n_tensor = logical_n_tensor};
 
+    resolve_exp_ring_blocking(operation_attributes, tensor_args);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
