@@ -30,11 +30,11 @@ class Precision:
     """Precision policy, per matmul role (``ROLES``).
 
     ``accuracy``: bf16 weights and activations; every dense matmul at HiFi4. (Round 0 first ran HiFi2 with only
-    ``w_in``, the sLSTM input projection that feeds the exponential gates, at HiFi4; the G1 sweep measured HiFi4
+    ``w_in``, the sLSTM input projection that feeds the exponential gates, at HiFi4; a precision sweep measured HiFi4
     on every dense role at +0.4 % device time for active-row PCC 0.959 -> 0.995 and a worst median error of
-    0.165 -> 0.118 of the scale: ``doc/optimize/iter_00/precision_sweep.md``.)
+    0.165 -> 0.118 of the scale.)
     ``performance``: bfp8 weights, bf16 activations; ``w_in`` bf16 at HiFi4, embed / mLSTM / head at HiFi2, FFN
-    and variate at LoFi (R1-0 sweep, ``doc/optimize/iter_01/r1_0/precision_sweep.md``: LoFi everywhere narrowed the
+    and variate at LoFi (R1-0 sweep: LoFi everywhere narrowed the
     band, spread_ratio p01 0.867; this policy 0.938 for +0.4 % device time).
     In every policy:
     - the recurrent states (mLSTM C, n, m; sLSTM c, n, m) and the exponential gating are fp32;
@@ -132,7 +132,7 @@ class Precision:
     def gate_config(self):
         """The sLSTM input projection ``W_in`` (role ``w_in``): HiFi4 in ``accuracy`` (at HiFi2 it was the largest
         single error source: worst paper-row median error 0.20 -> 0.05 of the scale), and HiFi4 with bf16 weights in
-        ``performance`` too (R1-0, D4)."""
+        ``performance`` too (R1-0)."""
         return self.matmul_config("w_in")
 
 

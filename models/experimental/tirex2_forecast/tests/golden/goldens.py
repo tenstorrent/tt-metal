@@ -12,7 +12,8 @@ from pathlib import Path
 
 import torch
 
-GOLDEN_DIR = Path(os.environ.get("TIREX2_GOLDENS", "/home/andy/bringup/goldens/tirex2"))
+# Default: <model dir>/goldens (git-ignored; tests/golden/make_goldens.py writes it). TIREX2_GOLDEN_DIR overrides it.
+GOLDEN_DIR = Path(os.environ.get("TIREX2_GOLDEN_DIR", Path(__file__).resolve().parents[2] / "goldens"))
 MANIFEST = Path(__file__).resolve().parent / "MANIFEST.json"
 
 

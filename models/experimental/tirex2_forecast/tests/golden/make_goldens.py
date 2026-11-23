@@ -3,13 +3,15 @@
 
 """Generate the fp32 CPU goldens for TiRex-2 from the pinned upstream reference.
 
-Runs only inside the reference venv (Python 3.12, torch 2.14.1+cpu, tirex-2 0.4.0), never from
-tt-metal's python_env, and with the worktree kept off the import path:
+Runs only inside the reference venv (Python 3.12, torch 2.14.1+cpu, tirex-2 0.4.0; see README.md), never from
+tt-metal's python_env, and with the repo kept off the import path. From the tt-metal root:
 
-    ttq run --model tirex2 --kind cpu --sh 'env -u PYTHONPATH -u VIRTUAL_ENV HF_HUB_OFFLINE=1 \
-        TORCHDYNAMO_DISABLE=1 /home/andy/bringup/venvs/tirex2/bin/python \
-        models/experimental/tirex2_forecast/tests/golden/make_goldens.py --out /home/andy/bringup/goldens/tirex2 \
-        --manifest models/experimental/tirex2_forecast/tests/golden/MANIFEST.json'
+    env -u PYTHONPATH -u VIRTUAL_ENV TORCHDYNAMO_DISABLE=1 <reference venv>/bin/python \
+        models/experimental/tirex2_forecast/tests/golden/make_goldens.py [--only single model16 ...]
+
+``--out`` defaults to ``models/experimental/tirex2_forecast/goldens`` (git-ignored; the tests read it, or
+``$TIREX2_GOLDEN_DIR``), ``--manifest`` to ``<out>/MANIFEST.json``. ``tests/golden/MANIFEST.json`` is the manifest
+of the goldens the test floors were set on.
 
 Every golden saves its inputs next to the outputs; the device tests load those inputs and never
 regenerate them. Files (all ``torch.save`` dicts):
@@ -104,7 +106,7 @@ MIX_WEIGHTS = (0.4, 0.15, 0.15, 0.15, 0.15)
 
 
 def make_series_mix(n: int, length: int, seed: int, nan_frac: float = 0.005):
-    """``([n, length] series, [n] kind index)``: a realistic mix for the bench goldens (PLAN section 9).
+    """``([n, length] series, [n] kind index)``: a realistic mix for the bench goldens.
 
     Kinds (weights): 40 % random walk + daily/weekly seasonality + white noise near SNR 1; 15 % intermittent
     demand (90 % zeros, log-normal spikes); 15 % level shifts (piecewise-constant levels, 1-4 jumps, noise);
@@ -564,10 +566,11 @@ def write_manifest(out: Path, manifest: Path, timings: dict):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--manifest", type=Path, required=True)
+    ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[2] / "goldens")
+    ap.add_argument("--manifest", type=Path, help="default: <out>/MANIFEST.json")
     ap.add_argument("--only", nargs="*", default=None, help="subset of: single model16 multivar4 bench e2e64 pad")
     args = ap.parse_args()
+    args.manifest = args.manifest or args.out / "MANIFEST.json"
     args.out.mkdir(parents=True, exist_ok=True)
     assert "tt-metal" not in torch.__file__ and "python_env" not in sys.executable, "run in the reference venv"
 

@@ -3,7 +3,7 @@
 
 """Module PCC of the TTNN TiRex-2 layers against the upstream fp32 CPU goldens (real weights).
 
-Every module gets the golden input and is compared with the golden output. Floors (CONTRACT section 3):
+Every module gets the golden input and is compared with the golden output. Floors:
 embedding, FFN, norms, head and each mLSTM block >= 0.999; each sLSTM block >= 0.995; sLSTM per-step
 states over 32 steps >= 0.9999.
 """
@@ -234,7 +234,7 @@ def test_variate(device, tt_model, b):
 
 def test_log_sigmoid_fp32(device):
     """The gates' log-sigmoid runs in fp32 as ``log(sigmoid(max(x, -80)))`` (``ttnn.log_sigmoid`` and a bf16
-    softplus are inaccurate; PLAN section 9). Check it over |x| <= 40, past the gate ranges seen in the goldens."""
+    softplus are inaccurate). Check it over |x| <= 40, past the gate ranges seen in the goldens."""
     import ttnn
 
     from models.experimental.tirex2_forecast.tt import layers

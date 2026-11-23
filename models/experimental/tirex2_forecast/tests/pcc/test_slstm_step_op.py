@@ -4,7 +4,7 @@
 """Fused sLSTM kernel (``ops/slstm_step``) against the op-level loop (``tt/layers.py: slstm_recurrence``).
 
 Same WxT for both (golden block input through the layer's W_in, rows tiled with noise up to B); per-step PCC
-of y, c, n and m must be >= 0.9999 (D2), and no worse than the loop's own PCC against the fp32 upstream goldens.
+of y, c, n and m must be >= 0.9999, and no worse than the loop's own PCC against the fp32 upstream goldens.
 """
 
 from __future__ import annotations

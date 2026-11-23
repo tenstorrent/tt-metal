@@ -93,19 +93,19 @@ def _unflat(y, shape):
     return y if shape is None else ttnn.reshape(y, (*shape[:3], y.shape[-1]))
 
 
-# minimal_matmul (M, K, N) blocks and subblock per (K, N), from tests/perf/sweep_matmul.py (R1-2f, M = 131072,
-# HiFi4; doc/optimize/iter_01/r1_2f/matmul_sweep.md): 2.0-2.5x faster than ttnn.linear's default config
+# minimal_matmul (M, K, N) blocks and subblock per (K, N), from a per-role sweep (R1-2f, M = 131072, HiFi4):
+# 2.0-2.5x faster than ttnn.linear's default config
 MM_BLOCKS = {
     (512, 1536): (8, 8, 8, 2, 2),
     (512, 2048): (8, 8, 8, 4, 1),
     (512, 512): (4, 8, 8, 4, 1),
     (2048, 512): (8, 8, 4, 4, 1),
-    (1408, 512): (16, 11, 4, 2, 2),  # FFN w_down, R1-2f' (iter_01/r1_2fp/matmul_sweep.md: 4.00 -> 1.82 ms)
+    (1408, 512): (16, 11, 4, 2, 2),  # FFN w_down, R1-2f' (4.00 -> 1.82 ms)
     (64, 512): (4, 2, 8, 2, 2),
     (512, 288): (8, 8, 4, 1, 4),
 }
 MM_MIN_M_TILES = 64  # below this the default linear
-# variance table (D5 c): roles listed here (comma separated) go back to ttnn.linear; measurement only
+# Measurement aid: roles listed here (comma separated) go back to ttnn.linear; measurement only
 MM_REVERT = frozenset(r for r in os.environ.get("TIREX2_MM_REVERT", "").split(",") if r)
 
 

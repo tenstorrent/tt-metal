@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Gate metrics of a forecast against the upstream goldens (CONTRACT section 3, PLAN section 9).
+"""Gate metrics of a forecast against the upstream goldens (floors in ``tests/gates.json``).
 
 All head metrics use the head output at the read-out tokens in normalized space, ``[rows, n, 288]`` with 288 =
 9 quantiles x 32 steps (quantile-major):
@@ -17,19 +17,19 @@ All head metrics use the head output at the read-out tokens in normalized space,
     flat_max_err    worst absolute error (normalized units) over the flat rows (0 when there are none)
     inactive_max_err
                     worst absolute error (normalized units) over the inactive rows (the golden-defined complement
-                    of the active set; D4 condition b: ``flat_max_err`` misses inactive rows that are not flat)
+                    of the active set; ``flat_max_err`` misses inactive rows that are not flat)
     abs_err_max     worst absolute error (normalized units) over every element: a gross single-element check, not a
-                    band check (PLAN section 9 v1.16)
+                    band check
     pcc_row_p01_active, pcc_row_min_active
                     per-row PCC over the active rows only: rows whose golden head std is >= ACTIVE_FRAC of the
-                    golden's global std (PLAN section 9 v1.2); the active set depends on the golden only
+                    golden's global std; the active set depends on the golden only
     active_rows, excluded_rows
     spread_ratio_p01, spread_ratio_p99
-                    per active row, |h - mean_q h| / |h_ref - mean_q h_ref| (band amplitude ratio; PLAN v1.3)
+                    per active row, |h - mean_q h| / |h_ref - mean_q h_ref| (band amplitude ratio)
     spread_ratio_p50
                     the median ratio: a uniform band scaling (0.88x, 1.12x) moves it, row noise does not
     spread_ratio_min, spread_ratio_max
-                    the extremes of that ratio (floor-only, no drift; D3 condition 1b)
+                    the extremes of that ratio
     pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
     pcc_final_spread  PCC of that forecast minus its mean over the quantile axis (data space)
     median_err      worst |median error| / scale over target rows
@@ -118,7 +118,7 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
         "flat_rows": int(flat.sum()),
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
         "inactive_max_err": float(err[~act].max()) if bool((~act).any()) else 0.0,
-        "abs_err_max": float(err.max()),  # gross single-element check, not a band check (v1.16)
+        "abs_err_max": float(err.max()),  # gross single-element check, not a band check
         "pcc_final": pearson(g_q, q),
         "pcc_final_spread": pearson(q_spread(g_q), q_spread(q)),
         "median_err": float(med_err.max()),

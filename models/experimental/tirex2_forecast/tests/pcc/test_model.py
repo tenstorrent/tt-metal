@@ -3,7 +3,7 @@
 
 """Full-model PCC of TTNN TiRex-2 on real weights against the upstream fp32 CPU goldens.
 
-Metrics (CONTRACT section 3):
+Metrics (``tests/pcc/metrics.py``):
     pcc_normalized  head output (scaled space) at the read-out tokens vs the upstream ``output_patch_embedding``
     pcc_final       single-pass ``[targets, 9, H]`` forecast vs ``q_one``; every median within 1e-2 x its scale
 
@@ -23,11 +23,10 @@ from models.experimental.tirex2_forecast.tests.pcc.helpers import host_weights
 
 pytestmark = pytest.mark.skipif(not have_goldens(), reason="goldens not generated")
 
-# Floors: doc/optimize/gates.json (D3 accuracy, D4 performance), read through check_gates; the suite has no
-# constants of its own (D4 condition a). Single-series cases keep pcc_normalized >= 0.9975 and pcc_final >= 0.98
-# (D3).
+# Floors: tests/gates.json, read through tests/gates.py; the suite has no constants of its own except the
+# single-series cases, which keep pcc_normalized >= 0.9975 and pcc_final >= 0.98.
 SINGLE_SERIES = {"pcc_normalized": 0.9975, "pcc_final": 0.98}
-# D5: population band metrics need enough active rows. p50 applies at n_active >= 8, p01 / p99 at >= 100; below
+# Population band metrics need enough active rows. p50 applies at n_active >= 8, p01 / p99 at >= 100; below
 # that the floor-only min / max and the PCC metrics carry the case (suite only, the bench gates everything).
 MIN_ACTIVE = {"spread_ratio_p50": 8, "spread_ratio_p01": 100, "spread_ratio_p99": 100}
 
@@ -42,16 +41,14 @@ def applicable(f: dict, n_active: int, name: str = "") -> dict:
     return out
 
 
-# D6: the suite cases that take a bench shape's per-shape floors (inactive_max_err)
+# The suite cases that take a bench shape's per-shape floors (inactive_max_err)
 SUITE_SHAPE = {"paper64": "paper", "long_context": "long_context", "multivar4": "multivariate"}
 
 
 def floors(precision: str, single: bool = False, name: str = "") -> dict:
-    import json
+    from models.experimental.tirex2_forecast.tests.gates import floors_for
 
-    from models.experimental.tirex2_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors
-
-    f = _floors(json.loads(DEFAULT_GATES.read_text()), SUITE_SHAPE.get(name.split("[")[0], "suite"), precision)
+    f = floors_for(SUITE_SHAPE.get(name.split("[")[0], "suite"), precision)
     if single:
         f.update(SINGLE_SERIES)
     return f
@@ -91,9 +88,8 @@ def run(tt, context, horizon, group_ids=None, target_mask=None):
 def check_forecast(
     name, head, q, g_head, g_q, scale, target_mask, precision="accuracy", loc=None, horizon=64, single=False
 ):
+    from models.experimental.tirex2_forecast.tests.gates import passes
     from models.experimental.tirex2_forecast.tests.pcc import metrics as M
-
-    from models.experimental.tirex2_forecast.tests.perf.check_gates import passes
 
     m = M.gate_metrics(head, g_head, q, g_q, scale[target_mask])
     f = applicable(floors(precision, single, name), m["active_rows"], name)
@@ -214,7 +210,7 @@ def test_paper_rows(device, precision):
 def sign_flip_case():
     """model16 as the sign-flip batch ``[x; -x]`` (32 rows, two groups per series pair) and its references: the
     head output of both halves from the CPU dataflow (upstream to 1e-7; the ``x`` half is the golden), the upstream
-    two-pass ``q_full``, and ``forecast(head)`` = the sign-flip average of the two single-pass halves (D7 a)."""
+    two-pass ``q_full``, and ``forecast(head)`` = the sign-flip average of the two single-pass halves."""
     g = golden("model16")
     both = torch.cat([g["context"], -g["context"]])
     n = g["context"].shape[0]
@@ -233,10 +229,9 @@ def sign_flip_case():
 @pytest.mark.parametrize("precision", ["accuracy", "performance"])
 def test_sign_flip_16(device, precision):
     """Sign-flip TTA: x and -x as one batch of 32 rows, against the upstream two-pass ``q_full``, gated on every
-    head-space floor of model16 (D7 a); the collapsed output must fail them."""
+    head-space floor of model16; the collapsed output must fail them."""
+    from models.experimental.tirex2_forecast.tests.gates import passes
     from models.experimental.tirex2_forecast.tests.pcc import metrics as M
-
-    from models.experimental.tirex2_forecast.tests.perf.check_gates import passes
 
     g, both, prep, ref_head, forecast = sign_flip_case()
     n = g["context"].shape[0]

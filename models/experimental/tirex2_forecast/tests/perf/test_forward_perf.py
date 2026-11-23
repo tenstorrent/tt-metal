@@ -3,7 +3,7 @@
 
 """Benchmark: one TiRex-2 forward pass (``tta_sign_flip=False``, ``pad_context=True``) on one Blackhole chip.
 
-Shapes (CONTRACT sections 1 and 2), parametrized as ``<shape>-<precision>``:
+Shapes, parametrized as ``<shape>-<precision>``:
     paper          1024 univariate series x 2048 -> 64 (target in ``accuracy``; guard in ``performance``)
     long_context   32 series x 8192 -> 928 (29 read-out tokens, no constant left pad)
     multivariate   128 groups x 8 rows (1 target + 7 past covariates) x 2048 -> 64
@@ -11,8 +11,8 @@ Shapes (CONTRACT sections 1 and 2), parametrized as ``<shape>-<precision>``:
 Inputs, the upstream head output at the read-out tokens, ``q_one`` and the CPU time come from the fp32 goldens
 (``tests/golden/make_goldens.py``). The forward runs as a captured trace (the op-level sLSTM loop is ~50k ops).
 
-``MODEL_PERF_JSON=<path>`` appends one record per case (keys per model_bringup_optim reference.md, plus
-``pcc_final``, ``median_err`` and the host split). ``TIREX2_PAD_SKIP=0`` forces the full path (R1-1 baseline).
+``MODEL_PERF_JSON=<path>`` appends one record per case (timings, the host split and every gate metric).
+``TIREX2_PAD_SKIP=0`` forces the full path (no constant-left-pad cut, the R1-1 baseline).
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def _record(entry: dict) -> None:
     path = os.environ.get("MODEL_PERF_JSON")
     if not path:
         return
-    from models.experimental.tirex2_forecast.tests.perf.check_gates import git_stamp
+    from models.experimental.tirex2_forecast.tests.gates import git_stamp
 
     entry.update(git_stamp())
     out = Path(path)
@@ -171,10 +171,10 @@ def test_forward_perf(device, shape, precision):
             "traced": True,
         }
     )
-    # every gates.json floor for this shape and precision (D3 condition 3, D4); a missing metric is a miss
-    from models.experimental.tirex2_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors, passes
+    # every gates.json floor for this shape and precision; a missing metric is a miss
+    from models.experimental.tirex2_forecast.tests.gates import floors_for, passes
 
-    floors = _floors(json.loads(DEFAULT_GATES.read_text()), shape, precision)
+    floors = floors_for(shape, precision)
     failed = {k: (metrics.get(k), f) for k, f in floors.items() if k not in metrics or not passes(k, metrics[k], f)}
     assert not failed, f"{shape}/{precision}: floors failed {failed}"
 
@@ -184,10 +184,10 @@ def test_forward_perf(device, shape, precision):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": TRACE_REGION}], indirect=True)
 @pytest.mark.parametrize("precision", ["accuracy", "performance"])
 def test_sign_flip_perf(device, precision):
-    """D7 (a): the sign-flip forecast (model16 as one ``[x; -x]`` batch of 32 rows, traced) timed and gated
-    against the upstream two-pass ``q_full`` on the suite (model16) floors."""
+    """The sign-flip forecast (model16 as one ``[x; -x]`` batch of 32 rows, traced) timed and gated against the
+    upstream two-pass ``q_full`` on the suite (model16) floors."""
+    from models.experimental.tirex2_forecast.tests.gates import floors_for, passes
     from models.experimental.tirex2_forecast.tests.pcc.test_model import sign_flip_case
-    from models.experimental.tirex2_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors, passes
     from models.experimental.tirex2_forecast.tt.common import Precision
     from models.experimental.tirex2_forecast.tt.model import TtTiRex2
     from models.experimental.tirex2_forecast.tt.trace import TracedForward
@@ -249,7 +249,7 @@ def test_sign_flip_perf(device, precision):
             "traced": True,
         }
     )
-    floors = _floors(json.loads(DEFAULT_GATES.read_text()), "suite", precision)
+    floors = floors_for("suite", precision)
     failed = {k: (metrics.get(k), f) for k, f in floors.items() if k not in metrics or not passes(k, metrics[k], f)}
     assert not failed, f"sign_flip/{precision}: floors failed {failed}"
     assert [k for k, f in floors.items() if not passes(k, collapsed[k], f)], "the collapsed output passes every floor"
