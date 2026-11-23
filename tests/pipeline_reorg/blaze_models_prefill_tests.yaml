@@ -2270,7 +2270,12 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    RR_DIAG_STEPS="3" bash models/demos/common/prefill/runners/ci/rr_sc4_diag.sh
+    # Reset every Galaxy first: the CI recovery runs with --skip-reset, and a chip left dead by an earlier job
+    # (run 45103141164: device 19 "Read 0xffffffff over PCIe") fails bring-up.
+    MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
+    HOSTS=$(awk 'NF && $1 !~ /^#/ {printf "%s:1,", $1}' "${TTRUN_DIR:-/etc/ttop}/hostfile" | sed 's/,$//')
+    "${MPIRUN}" -np 4 --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
+      bash -lc 'timeout 600 tt-smi -glx_reset 2>&1 | tail -2' || echo "glx_reset on some host failed (continuing)"
     echo "===== [runner] (GLM-5.3-744B) 8x[4,4] RING,RING KV accuracy 1M tail@2.5k, SC4 ====="
     export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr
