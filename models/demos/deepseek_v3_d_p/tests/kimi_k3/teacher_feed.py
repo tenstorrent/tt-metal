@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """What the Kimi-K3.1 single-layer teacher-feed harnesses share (``dsa_teacher_feed.py``, ``moe_teacher_feed.py``):
-a vLLM trace reader, the AttnRes state a layer's module reads rebuilt from the trace, the resumable input store, a
-device run's output directory lifecycle and the selection measures. No device, no ttnn.
+a vLLM trace reader, the AttnRes state a layer's module reads rebuilt from the trace, the resumable input store and a
+device run's output directory lifecycle. Scoring is the shared harness's (``tests/accuracy``). No device, no ttnn.
 
 Each harness has three steps, and only the middle one opens a device, so CPU work never holds it:
 
@@ -11,8 +11,8 @@ Each harness has three steps, and only the middle one opens a device, so CPU wor
    segment against something the trace recorded downstream of that input (fails closed).
 2. The device test runs the production module chunk by chunk over the whole prefix (``load_input``), saves each
    chunk's outputs into a run directory (``start_run`` / ``chunk_path`` / ``finish_run``).
-3. ``score``: every saved row against the trace, per window of context positions, with proposed bars
-   (``check_bars``).
+3. ``score``: every saved row against the trace, per window of context positions, with the harness's family
+   scorers and its fail-closed bar check (``tests/accuracy/windowed.check``).
 
 AttnRes (block size 12): every module reads a softmax mix of the sealed block snapshots and the live in-block sum,
 not the residual the trace's ``decoder_input`` alias names. A trace that records every layer's ``attn_output`` and
@@ -248,71 +248,3 @@ def complete_run(out: Path) -> dict:
     if not manifest.get("complete"):
         raise ValueError(f"{out} holds no complete device run (its manifest is not marked complete)")
     return manifest
-
-
-# --- selection measures and bars --------------------------------------------------------------------------------
-
-
-def quantile(t: torch.Tensor, q: float) -> float:
-    """The ``q`` quantile of all of ``t``'s values (linear interpolation, as ``torch.quantile``), NaN if empty; for any
-    size (``torch.quantile`` refuses more than 2^24 values, which 1M rows' top-k misses exceed)."""
-    v = t.flatten().float().sort().values
-    if not v.numel():
-        return float("nan")
-    pos = q * (v.numel() - 1)
-    lo = int(pos)
-    hi = min(lo + 1, v.numel() - 1)
-    return float(v[lo] + (v[hi] - v[lo]) * (pos - lo))
-
-
-def topk_recall(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
-    """Per row the fraction of `want`'s valid (>= 0) keys that occur in `got`, i.e. |got ∩ want| / |want| as sets
-    (a key `got` holds twice counts once). Both `[rows, k]` int64; `got`'s no-key entries (the uint32 0xFFFFFFFF
-    sentinel, or -1) match nothing. Rows with no valid `want` entry read NaN."""
-    rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
-    valid = want >= 0
-    return (torch.isin(rows + want, rows + got) & valid).sum(dim=1) / valid.sum(dim=1)
-
-
-def missed_keys(got: torch.Tensor, want: torch.Tensor, scores: torch.Tensor) -> dict[str, torch.Tensor]:
-    """Every trace key the device missed, one entry per miss: its ``row`` (index into the chunk), its ``rank`` in the
-    trace's own selection ordered by the trace's score (0 = best), that selection's size ``selected``, and its
-    ``spread_share`` (score - cut) / (top - cut), the cut being the lowest selected score. A rank near ``selected``
-    or a share near 0 is a near-tie at the cut."""
-    rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
-    valid = want >= 0
-    missed = ~torch.isin(rows + want, rows + got) & valid
-    masked = scores.masked_fill(~valid, -float("inf"))
-    rank = torch.empty_like(want)
-    rank.scatter_(1, masked.argsort(dim=1, descending=True), torch.arange(want.shape[1]).expand_as(want).contiguous())
-    top = masked.max(dim=1, keepdim=True).values
-    cut = scores.masked_fill(~valid, float("inf")).min(dim=1, keepdim=True).values
-    share = (scores - cut) / (top - cut).clamp_min(1e-30)
-    row = torch.arange(want.shape[0]).unsqueeze(1).expand_as(want)
-    return {
-        "row": row[missed],
-        "rank": rank[missed],
-        "selected": valid.sum(dim=1, keepdim=True).expand_as(want)[missed],
-        "spread_share": share[missed].float(),
-    }
-
-
-def check_bars(windows: list[dict], bars: dict, growth: tuple[str, float]) -> list[str]:
-    """The windows that break a bar of ``bars`` (``{metric: ("min" | "max", value)}``; NaN, a metric a window does
-    not define, passes), and growth of ``growth[0]`` (worst window over the first) beyond ``growth[1]``."""
-    failures = []
-    for name, (kind, bar) in bars.items():
-        for w in windows:
-            v = w[name]
-            if v == v and (v < bar if kind == "min" else v > bar):
-                failures.append(f"{name} {v:.6f} {'<' if kind == 'min' else '>'} {bar} at [{w['start']}, {w['end']})")
-    metric, factor = growth
-    defined = [w for w in windows if w[metric] == w[metric]]  # (a window without rows for the metric reads NaN)
-    if not defined:
-        return failures
-    first = defined[0][metric]
-    worst = max(defined, key=lambda w: w[metric])
-    if worst[metric] > factor * first:
-        ratio = worst[metric] / first if first > 0 else float("inf")  # (from an exact first window, any error grows)
-        failures.append(f"{metric} grows {ratio:.3f}x (> {factor}) by [{worst['start']}, {worst['end']})")
-    return failures

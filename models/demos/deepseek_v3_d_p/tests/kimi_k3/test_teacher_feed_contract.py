@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.model import Indexe
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import HfStream
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_k3_mla import KimiMLAAttention, KimiRMSNorm
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import Bar, check
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, segment_path
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as golden
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_teacher_feed import BARS, NRMSE_GROWTH, score
@@ -27,7 +28,6 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed import (
     HostMoE,
     owner_positions,
     route,
-    routing_window,
     same_rows,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_teacher_feed import score as score_moe
@@ -35,17 +35,51 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     FFN,
     Trace,
     build_input,
-    check_bars,
     chunk_path,
     finish_run,
     load_input,
-    missed_keys,
     replay_live_and_sealed,
     replay_missing,
     rms_norm,
     start_run,
-    topk_recall,
 )
+
+TINY = {"model": "tiny", "token_source": "test token ids"}  # a chain's identity as the registry requires it
+
+
+@pytest.fixture(autouse=True)
+def _golden_root(tmp_path: Path, monkeypatch):
+    """Chains written into ``tmp_path`` are the registry's (consumers open them by id); never the shared root."""
+    monkeypatch.setenv("TT_ACCURACY_GOLDEN_ROOT", str(tmp_path))
+
+
+def _old_chain_manifest(new: dict) -> dict:
+    """A chain manifest as ``fp64_chain`` wrote it before the registry: no ``golden_id`` / ``products``, ``count``,
+    the weight digests in ``model``."""
+    old = {k: v for k, v in new.items() if k not in ("golden_id", "products", "rows")}
+    old["count"] = new["rows"]
+    old["identity"] = {k: v for k, v in new["identity"].items() if k != "weights_sha256"}
+    old["model"] = {**new["model"], "weights_sha256": new["identity"]["weights_sha256"]}
+    return old
+
+
+def _old_deep_manifest(new: dict) -> dict:
+    """A deep-chain manifest as ``fp64_deep_chain`` wrote it before the registry: ``segments`` lists the passes with
+    their digests, ``embedding_sha256`` and ``count`` at the top, no ``golden_id`` / row segments / ``products``."""
+    weights = new["identity"]["weights_sha256"]
+    old = {k: v for k, v in new.items() if k not in ("golden_id", "products", "rows", "segments", "passes")}
+    old["identity"] = {k: v for k, v in new["identity"].items() if k != "weights_sha256"}
+    old["embedding_sha256"], old["count"] = weights["embed_tokens"], new["rows"]
+    old["segments"] = [
+        {
+            **e,
+            "digests": {
+                k.split(".", 1)[1]: v for k, v in weights.items() if k.startswith(f"{e['site']}.layers.{e['layer']}")
+            },
+        }
+        for e in new["passes"]
+    ]
+    return old
 
 
 def _write_trace(path: Path, streams: dict[str, torch.Tensor], chunk_rows: int) -> None:
@@ -120,36 +154,19 @@ def test_rms_norm_rounds_where_the_model_reference_does():
     assert out.float().tolist() == [[1.2734375, 1.703125]]
 
 
-def test_topk_recall_and_missed_keys_by_hand():
-    """Row 0: trace keys 5 / 6 / 7 / 8 scored 4 / 3 / 2 / 1, device {5, 7, 9, 8}: recall 3/4, one miss, key 6, at
-    rank 1 of 4 (top half) and (3 - 1) / (4 - 1) = 2/3 of the spread. Row 1: two valid trace keys (and two -1), both
-    found: recall 1, no miss. A device -1 (no key) matches nothing, and duplicates count once."""
-    want = torch.tensor([[5, 6, 7, 8], [1, 0, -1, -1]])
-    got = torch.tensor([[5, 7, 9, 8], [0, 1, -1, -1]])
-    scores = torch.tensor([[4.0, 3.0, 2.0, 1.0], [4.0, 5.0, 0.0, 0.0]])
-    assert topk_recall(got, want).tolist() == pytest.approx([3 / 4, 1.0])
-    misses = missed_keys(got, want, scores)
-    assert misses["row"].tolist() == [0] and misses["rank"].tolist() == [1] and misses["selected"].tolist() == [4]
-    assert misses["spread_share"].tolist() == pytest.approx([2 / 3])
-    assert topk_recall(torch.tensor([[-1, 0, 0]]), torch.tensor([[0, 1, 2]])).tolist() == pytest.approx([1 / 3])
-
-
-def test_check_bars_flags_each_breach():
-    """A window under a min bar, over a max bar and NRMSE growth past NRMSE_GROWTH are each named; NaN passes."""
-    good = {name: bar for name, (_, bar) in BARS.items()}
-    good |= {"start": 0, "end": 1, "attn_nrmse_median": 0.04, "recall_min_below_topk": float("nan")}
-    growth = ("attn_nrmse_median", NRMSE_GROWTH)
-    assert check_bars([good, {**good, "start": 1, "end": 2}], BARS, growth) == []
-    bad = {
-        **good,
-        "start": 1,
-        "end": 2,
-        "kv_latent_pcc": 0.99,
-        "miss_top_half_fraction": 0.5,
-        "attn_nrmse_median": 0.05,
-    }
-    failures = check_bars([good, bad], BARS, growth)
+def test_dsa_bars_flag_each_breach_and_fail_closed():
+    """The DSA teacher feed's bars (values unchanged, now ``windowed.check``): a window under a min bar, over a max bar
+    and NRMSE growth past NRMSE_GROWTH are each named. A window that does not define a metric leaves it out
+    (``recall_min_below_topk`` past top-k) and passes; a NaN fails."""
+    good = {bar.metric: bar.value for bar in BARS if isinstance(bar, Bar)}
+    good |= {"start": 0, "end": 1, "attn_nrmse_median": 0.04}
+    later = {k: v for k, v in good.items() if k != "recall_min_below_topk"} | {"start": 1, "end": 2}
+    assert check([good, later], BARS) == []
+    bad = {**later, "kv_latent_pcc": 0.99, "miss_top_half_fraction": 0.5, "attn_nrmse_median": 0.05}
+    failures = check([good, bad], BARS)
     assert [f.split()[0] for f in failures] == ["kv_latent_pcc", "miss_top_half_fraction", "attn_nrmse_median"]
+    assert NRMSE_GROWTH == 1.15 and f"(> {NRMSE_GROWTH})" in failures[-1]
+    assert check([{**good, "recall_mean": float("nan")}], BARS) == ["recall_mean nan is not finite in [0, 1)"]
 
 
 def test_a_new_run_clears_stale_outputs_and_score_needs_completion(tmp_path: Path, expect_error):
@@ -241,23 +258,6 @@ def test_router_and_host_moe_match_the_model_reference():
         got = host(x)
     assert torch.allclose(got, ref_out, atol=1e-5, rtol=1e-5), (got - ref_out).abs().max()
     assert len(host.experts) == int(ids.unique().numel())
-
-
-def test_routing_window_by_hand():
-    """Row 0: trace experts 3 / 5 / 7 / 1 at weights 0.4 / 0.3 / 0.2 / 0.1, fp32 choice order 3 > 5 > 7 > 1; the
-    device picks {3, 5, 2, 1} at 0.5 / 0.25 / 0.15 / 0.1: recall 3/4, expert 7 missed at rank 2 of 4 (bottom half),
-    dropped trace weight 0.2, largest weight difference on the shared picks |0.4 - 0.5| = 0.1. Row 1: the same set
-    in another order: recall 1, nothing dropped."""
-    want = torch.tensor([[3, 5, 7, 1], [0, 1, 2, 3]])
-    want_w = torch.tensor([[0.4, 0.3, 0.2, 0.1], [0.25, 0.25, 0.25, 0.25]])
-    got = torch.tensor([[3, 5, 2, 1], [3, 2, 1, 0]])
-    got_w = torch.tensor([[0.5, 0.25, 0.15, 0.1], [0.25, 0.25, 0.25, 0.25]])
-    choice = torch.tensor([[4.0, 3.0, 2.0, 1.0], [4.0, 3.0, 2.0, 1.0]])
-    r = routing_window(got, got_w, want, want_w, choice, num_experts=8)
-    assert r["recall"].tolist() == pytest.approx([0.75, 1.0])
-    assert r["dropped"].tolist() == pytest.approx([0.2, 0.0])
-    assert r["weight_err"].tolist() == pytest.approx([0.1, 0.0])
-    assert r["misses"]["row"].tolist() == [0] and r["misses"]["rank"].tolist() == [2]
 
 
 def test_owner_positions_by_hand():
@@ -464,17 +464,11 @@ def test_fp64_attention_matches_the_kimi_reference_layer(monkeypatch):
 
 
 def test_dsa_missed_weight_by_hand_and_on_a_small_layer():
-    """``head_mass`` sums a head's weight on the marked keys: [[0.5, 0.3, 0.2], [0.1, 0.1, 0.8]] on keys {1, 2} is
-    [0.5, 0.9]. On a small layer, the same selection on both sides misses nothing; a device that swaps the FP64
+    """On a small layer (``row_weights``: FP64 attention weights into ``accuracy.dsa.selection_masses``), the same selection on both sides misses nothing; a device that swaps the FP64
     selection's last (lowest-scored, stored best first) key for another loses that key's FP64 weight, the bottom-1
-    mass is the same key's, and the intruder's mass is its weight in the softmax over the device's selection.
-    ``error_split`` of FP64 output [0, 0], FP64 output over the device's selection [3, 0], device output [3, 4]:
-    orthogonal parts, shares 9/25 and 16/25; with device output [6, 0] the parts are parallel (cos 1), shares 9/36
-    each and the cross term the other half."""
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_missed_weight import error_split, head_mass, row_weights
+    mass is the same key's, and the intruder's mass is its weight in the softmax over the device's selection."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_missed_weight import row_weights
 
-    got = head_mass(torch.tensor([[0.5, 0.3, 0.2], [0.1, 0.1, 0.8]]), torch.tensor([False, True, True]))
-    assert torch.allclose(got, torch.tensor([0.5, 0.9]))
     w, _, keys, q = _small_layer()
     r = 15
     fp64_sel = torch.tensor([1, 4, 7, 9, 15, 12])  # best first
@@ -493,13 +487,6 @@ def test_dsa_missed_weight_by_hand_and_on_a_small_layer():
     assert torch.allclose(wa.sum(-1), torch.ones(SMALL.heads, dtype=torch.float64))
     assert torch.equal(
         res["out_device_sel"], golden.attend(q, r, keys["latent"][device_sel], keys["kpe"][device_sel], w, SMALL)
-    )
-    zero, sel = torch.zeros(2, dtype=torch.float64), torch.tensor([3.0, 0.0], dtype=torch.float64)
-    assert error_split(zero, sel, torch.tensor([3.0, 4.0], dtype=torch.float64)) == pytest.approx(
-        {"selection_rest_cos": 0.0, "selection_share": 9 / 25, "rest_share": 16 / 25}
-    )
-    assert error_split(zero, sel, torch.tensor([6.0, 0.0], dtype=torch.float64)) == pytest.approx(
-        {"selection_rest_cos": 1.0, "selection_share": 0.25, "rest_share": 0.25}
     )
 
 
@@ -1008,7 +995,7 @@ def test_fp64_chain_segments_match_a_one_shot_reference_walk_and_resume(tmp_path
         token_ids=token_ids,
         segment=4,
         sampled=sampled,
-        identity={"t": 1},
+        identity={**TINY, "t": 1},
         trace=Trace(trace_dir),
     )
     with torch.no_grad():
@@ -1042,6 +1029,18 @@ def test_fp64_chain_segments_match_a_one_shot_reference_walk_and_resume(tmp_path
         checks["kv_latent_pcc"] > 0.9999 and checks["attn_output_0_pcc"] > 0.9999 and checks["topk_recall_mean"] == 1.0
     )
     assert manifest["bytes_per_row"]["topk_indices_3"] == 4 * SMALL.topk
+    # a registry golden: opens by id with its identity, token ids and products; an old manifest conforms to it
+    registered = fp64_chain.open_chain(out.name)
+    registered.require(
+        producer="fp64_chain",
+        producer_version=2,
+        identity={"weights_sha256": model.weights_sha256(), "t": 1},
+        products=["moe_output_1", "latent", "attn_output_3", "kda.2.recurrent"],
+    )
+    assert torch.equal(registered.token_ids(), token_ids.long()) and registered.rows == 10
+    assert registered.manifest["products"]["attn_output_3"]["kind"] == "sampled_row"
+    assert registered.manifest["products"]["kda.0.recurrent"]["kind"] == "segment_end"
+    assert fp64_chain.conform_manifest(_old_chain_manifest(manifest), out.name, manifest["products"]) == manifest
     before = {
         p: torch.load(p, weights_only=True) for p in (fp64_chain.segment_path(out, 2), fp64_chain.state_path(out, 2))
     }
@@ -1073,9 +1072,11 @@ def test_fp64_chain_refuses_a_different_run(tmp_path: Path, expect_error):
     model, _ = _tiny_chain()
     ids = torch.arange(6) % 50
     with torch.no_grad():
-        fp64_chain.run_chain(run_dir=tmp_path, model=model, token_ids=ids, segment=4, sampled=[5], identity={})
+        fp64_chain.run_chain(run_dir=tmp_path, model=model, token_ids=ids, segment=4, sampled=[5], identity=TINY)
         with expect_error(ValueError, "token_ids_sha256"):
-            fp64_chain.run_chain(run_dir=tmp_path, model=model, token_ids=ids + 1, segment=4, sampled=[5], identity={})
+            fp64_chain.run_chain(
+                run_dir=tmp_path, model=model, token_ids=ids + 1, segment=4, sampled=[5], identity=TINY
+            )
 
 
 # --- GPU trace vs the FP64 chain (chain_vs_trace.py) ---------------------------------------------------------------
@@ -1094,7 +1095,7 @@ def test_chain_vs_trace_scores_hand_made_differences_incrementally(tmp_path: Pat
     rows, chain = 10, tmp_path / "chain"
     ids = torch.randint(0, 50, (rows,), generator=torch.Generator().manual_seed(4))
     with torch.no_grad():
-        fp64_chain.run_chain(run_dir=chain, model=model, token_ids=ids, segment=4, sampled=[3, 9], identity={})
+        fp64_chain.run_chain(run_dir=chain, model=model, token_ids=ids, segment=4, sampled=[3, 9], identity=TINY)
     p = fp64_chain.load_products(
         chain,
         [
@@ -1172,36 +1173,21 @@ def test_chain_vs_trace_scores_hand_made_differences_incrementally(tmp_path: Pat
         chain_vs_trace.score_landed(chain, trace, out)
 
 
-def test_key_sums_give_pcc_and_nrmse_by_hand():
-    """x = [1, 2, 3], y = [1, 2, 4]: PCC 0.98198 and NRMSE 1 / sqrt(21); rows' sums combine to the PCC / NRMSE of all
-    their elements."""
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import key_sums, pcc_nrmse
+def test_device_chain_stream_errors_by_hand():
+    """Device x = [[3, 4], [1, 2]], FP64 y = [[6, 8], [1, 1]], all RMS over elements: per-row error sqrt(25/2) and
+    sqrt(1/2), reference sqrt(100/2) and 1, so medians (sqrt 12.5 + sqrt 0.5) / 2 and (sqrt 50 + 1) / 2; the window's
+    RMS error sqrt(26/4) and reference RMS sqrt(102/4), whose ratio is its NRMSE sqrt(26/102); per-row NRMSE 1/2 and
+    1/sqrt 2."""
+    from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import row_nrmse, row_sums
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import stream_errors
 
-    p, n = pcc_nrmse(key_sums(torch.tensor([[1.0, 2.0, 3.0]]), torch.tensor([[1.0, 2.0, 4.0]])))
-    assert p == pytest.approx(0.9819805, rel=1e-6) and n == pytest.approx(21**-0.5)
-    gen = torch.Generator().manual_seed(0)
-    x, y = torch.randn(5, 7, generator=gen, dtype=torch.float64), torch.randn(5, 7, generator=gen, dtype=torch.float64)
-    p, n = pcc_nrmse(key_sums(x, y))
-    xf, yf = x.flatten() - x.mean(), y.flatten() - y.mean()
-    assert p == pytest.approx(float(xf @ yf / (xf.norm() * yf.norm())), rel=1e-12)
-    assert n == pytest.approx(float((x - y).norm() / y.norm()), rel=1e-12)
-
-
-def test_row_error_norms_by_hand():
-    """x = [[3, 4], [1, 2]], y = [[6, 8], [1, 1]]: per-row |x - y| 5 and 1, |y| 10 and sqrt(2); medians 3 and
-    (10 + sqrt 2) / 2, RMS sqrt(13) and sqrt(51), whose ratio is the pooled NRMSE; a two-row window's RMS values are
-    the RMS of its rows' (they combine exactly)."""
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import key_sums, pcc_nrmse
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import row_error_norms
-
-    sums = key_sums(torch.tensor([[3.0, 4.0], [1.0, 2.0]]), torch.tensor([[6.0, 8.0], [1.0, 1.0]]))
-    r = row_error_norms(sums)
-    assert r["row_err_median"] == pytest.approx(3.0)
-    assert r["row_ref_median"] == pytest.approx((10 + 2**0.5) / 2)
-    assert (r["rms_err"], r["rms_ref"]) == (pytest.approx(13**0.5), pytest.approx(51**0.5))
-    assert r["rms_err"] / r["rms_ref"] == pytest.approx(pcc_nrmse(sums)[1])
-    halves = [row_error_norms(sums[i : i + 1]) for i in range(2)]
-    assert r["rms_err"] == pytest.approx(((halves[0]["rms_err"] ** 2 + halves[1]["rms_err"] ** 2) / 2) ** 0.5)
+    sums = row_sums(torch.tensor([[6.0, 8.0], [1.0, 1.0]]), torch.tensor([[3.0, 4.0], [1.0, 2.0]]))
+    r = stream_errors(sums, row_nrmse(sums, 0.0), "live_0_")
+    assert r["live_0_row_err_median"] == pytest.approx((12.5**0.5 + 0.5**0.5) / 2)
+    assert r["live_0_row_ref_median"] == pytest.approx((50**0.5 + 1) / 2)
+    assert (r["live_0_rms_err"], r["live_0_rms_ref"]) == (pytest.approx(6.5**0.5), pytest.approx(25.5**0.5))
+    assert r["live_0_nrmse"] == pytest.approx((26 / 102) ** 0.5)
+    assert row_nrmse(sums, 0.0).tolist() == pytest.approx([0.5, 2**-0.5])
 
 
 def test_chain_model_reads_each_checkpoint_tensor_into_its_slot(tmp_path: Path):
@@ -1334,7 +1320,12 @@ def _fed_chain(tmp_path: Path, rows: int = 10):
     ids = torch.randint(0, 50, (rows,), generator=torch.Generator().manual_seed(4))
     with torch.no_grad():
         fp64_chain.run_chain(
-            run_dir=chain, model=model, token_ids=ids, segment=4, sampled=[2, 6, 9], identity={"checkpoint": "c"}
+            run_dir=chain,
+            model=model,
+            token_ids=ids,
+            segment=4,
+            sampled=[2, 6, 9],
+            identity={**TINY, "checkpoint": "c"},
         )
     return model, chain, _chain_checkpoint(model, tmp_path / "ckpt")
 
@@ -1436,19 +1427,6 @@ def test_dsa_teacher_feed_from_the_chain_scores_against_it(tmp_path: Path, expec
         fp64_chain.load_products(chain, ["attn_output_3"])
 
 
-def test_quantile_by_hand_and_beyond_torch_quantile_size():
-    """[1, 2, 3, 4]: median 2.5, p10 1.3 (linear interpolation); empty is NaN; 2^24 + 1 values (torch.quantile's
-    limit is 2^24) give their exact median."""
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import quantile
-
-    t = torch.tensor([4.0, 1.0, 3.0, 2.0])
-    assert quantile(t, 0.5) == pytest.approx(2.5) and quantile(t, 0.1) == pytest.approx(1.3)
-    assert quantile(t, 0.0) == 1.0 and quantile(t, 1.0) == 4.0
-    assert quantile(torch.empty(0), 0.5) != quantile(torch.empty(0), 0.5)  # NaN
-    big = torch.arange(2**24 + 1).flip(0)
-    assert quantile(big, 0.5) == 2**23
-
-
 def test_kda_chain_feed_rebuilds_the_chain_and_scores_a_device_run(tmp_path: Path, expect_error):
     """The KDA rebuild of a 10-row chain (segments of 4), split over two shards, reproduces the chain's stored KDA
     states and products (layers 0-1 states exactly: the same FP64 walk); a tampered state file of the chain fails the
@@ -1475,7 +1453,7 @@ def test_kda_chain_feed_rebuilds_the_chain_and_scores_a_device_run(tmp_path: Pat
         c = q["checks"]
         assert c["state_0_rel"] == c["state_1_rel"] == c["conv_0_rel"] == c["conv_1_rel"] == 0.0
         assert c["state_2_rel"] < 1e-6 and c["moe_input_1_rel"] < 1e-6 and c["dsa_input_3_rel"] < 1e-6
-    assert [q["start"] for q in payloads] == [0, 4, 8] and payloads[0]["gpu_attn_output_0_sums"].shape == (4, 7)
+    assert [q["start"] for q in payloads] == [0, 4, 8] and payloads[0]["gpu_attn_output_0_sums"].shape == (4, 8)
 
     src = tmp_path / "kda_in"
     m = kda_chain_feed.build_kda_input(rebuilt=rebuilt, layer=1, out=src)
@@ -1502,7 +1480,19 @@ def test_kda_chain_feed_rebuilds_the_chain_and_scores_a_device_run(tmp_path: Pat
     assert r["overall"]["routing_recall_reference"] == 1.0
     assert r["overall"]["routing_recall_gpu"] == pytest.approx(1 - 0.5 / 10)
     assert r["states"][0]["row"] == 8 and r["states"][0]["recurrent_rel"] < 1e-6
+    assert r["states"][0]["recurrent_rms_err"] / r["states"][0]["recurrent_rms_ref"] == pytest.approx(
+        r["states"][0]["recurrent_rel"]
+    )
+    w0 = r["windows"][0]
+    assert w0["kda_rms_err"] / w0["kda_rms_ref"] == pytest.approx(w0["kda_nrmse"]) and w0["kda_rms_err"] > 0
+    kda_chain_feed.write_metrics(out, r)
     assert json.loads((out / "metrics.json").read_text())["layer"] == 1
+    # the FFN read replays AttnRes with the embedding as the only sealed snapshot: a layer past the block is refused
+    deep = tmp_path / "dev-deep"
+    start_run(deep, {**run, "layer": model.block_size})
+    finish_run(deep, {**run, "layer": model.block_size}, 1.0)
+    with expect_error(ValueError, "past the first AttnRes block"):
+        kda_chain_feed.score(rebuilt=rebuilt, run=deep, trace=trace, model=model, window=4)
 
     # device_chain.score reads every stream reference from the chain and the rebuild (no model): a run that taps the
     # references (in fp32) but doubles row 6 of live_0 scores fp32 rounding everywhere else and |live_0[6]| / sqrt(10)
@@ -1527,7 +1517,11 @@ def test_kda_chain_feed_rebuilds_the_chain_and_scores_a_device_run(tmp_path: Pat
     finish_run(dc / "kda-l0", {**dc_run, "states": [{"row": 8, "file": "state_00000008.pt"}]}, 1.0)
     o = device_chain.score(run=dc, rebuilt=rebuilt, window=4)["overall"]
     assert all(o[f"{k}_nrmse"] < 1e-6 for k in device_chain.STREAM_KEYS if k != "live_0")
-    assert o["live_0_rms_err"] == pytest.approx(float(taps["live_0"][6].double().norm() / 2) / 10**0.5, rel=1e-6)
+    # RMS over all 10 x hidden elements of live_0: only row 6 is off, by its own reference value
+    elements = 10 * taps["live_0"].shape[1]
+    assert o["live_0_rms_err"] == pytest.approx(
+        float(taps["live_0"][6].double().norm() / 2) / elements**0.5, rel=1e-6
+    )
     assert o["live_0_rms_err"] / o["live_0_rms_ref"] == pytest.approx(o["live_0_nrmse"])
 
     state = torch.load(fp64_chain.state_path(chain, 0), weights_only=True)
@@ -1666,7 +1660,7 @@ def _run_deep(model, layers, ids, out, load=None):
             eps=model.eps,
             token_ids=ids,
             segment=4,
-            identity={"t": 1},
+            identity={**TINY, "t": 1},
         )
 
 
@@ -1744,7 +1738,18 @@ def test_fp64_deep_chain_matches_a_one_shot_walk_and_fp64_chain_and_resumes(
         want = _deep_reference_walk(model, layers, refs, ids, fp64_references)
     out = tmp_path / "deep"
     manifest = _run_deep(model, layers, ids, out)
-    assert [(p["layer"], p["site"]) for p in manifest["segments"]] == fp64_deep_chain.passes(8)
+    assert [(p["layer"], p["site"]) for p in manifest["passes"]] == fp64_deep_chain.passes(8)
+    registered = fp64_deep_chain.open_deep_chain(out.name)  # complete: row segments and products written
+    assert [(s["start"], s["end"]) for s in registered.manifest["segments"]] == [(0, 4), (4, 8), (8, 10)]
+    assert registered.manifest["products"]["L0_attn/kda_state_0_recurrent"]["kind"] == "segment_end"
+    assert registered.manifest["products"]["L3_attn/latent"] == {
+        "kind": "row",
+        "dtype": "float64",
+        "shape": [SMALL.lora],
+    }
+    assert set(registered.identity["weights_sha256"]) >= {"embed_tokens", "attn.layers.0", "ffn.layers.7"}
+    assert torch.equal(registered.token_ids(), ids.long())
+    assert fp64_deep_chain.conform_manifest(_old_deep_manifest(manifest), out.name, manifest["products"]) == manifest
     for l in range(1, 8):
         p = fp64_deep_chain.load_deep(out, l, "ffn", [f"moe_input_{l}", f"moe_output_{l}", f"routing_ids_{l}"])
         assert _rel(p[f"moe_input_{l}"], want[f"moe_input_{l}"]) <= 1e-7, l
@@ -1778,7 +1783,7 @@ def test_fp64_deep_chain_matches_a_one_shot_walk_and_fp64_chain_and_resumes(
     # layers 0-3 against fp64_chain (segment-major, layer 3's router only)
     chain = tmp_path / "chain"
     with torch.no_grad():
-        fp64_chain.run_chain(run_dir=chain, model=model, token_ids=ids, segment=4, sampled=[3], identity={})
+        fp64_chain.run_chain(run_dir=chain, model=model, token_ids=ids, segment=4, sampled=[3], identity=TINY)
     names = ["moe_input_1", "moe_output_1", "routing_ids_1", "moe_input_2", "routing_ids_2"]
     c = fp64_chain.load_products(chain, names + ["dsa_input_3", "latent", "kpe", "index_key", "topk_indices_3"])
     d = {**fp64_deep_chain.load_deep(out, 1, "ffn", names[:3]), **fp64_deep_chain.load_deep(out, 2, "ffn", names[3:])}
@@ -1795,95 +1800,13 @@ def test_fp64_deep_chain_matches_a_one_shot_walk_and_fp64_chain_and_resumes(
 
     with expect_error(RuntimeError, "interrupted"):
         _run_deep(model, layers, ids, again, load=failing)
-    assert len(json.loads((again / MANIFEST).read_text())["segments"]) == 15
+    interrupted = json.loads((again / MANIFEST).read_text())
+    assert len(interrupted["passes"]) == 15 and "segments" not in interrupted and "products" not in interrupted
     resumed = _run_deep(model, layers, ids, again)
     assert len(resumed["sessions"]) == 2
     _assert_identical_files(out, again, sorted(out.rglob("segment_*.pt")) + [out / "live.pt"])
     with expect_error(ValueError, "different run"):
         _run_deep(model, layers, (ids + 1) % 50, again)
-
-
-def test_fp64_deep_chain_backfill_brings_a_version_1_run_to_version_2(tmp_path: Path, expect_error):
-    """A version-1 run (the KDA and dense passes' products stripped, the manifest at version 1) backfilled equals the
-    version-2 run on every KDA / dense product to the fp32 rounding of the replayed outputs (<= 1e-6), with each
-    replayed pass's reconstructed input within 1e-6 of its stored one and the DSA / MoE files untouched; the manifest
-    then says version 2 backfilled from 1 with the session's code revision, and a second backfill changes nothing; a
-    backfill interrupted in its third rerun pass stays at version 1, then resumes to byte-identical files; another
-    token sequence is refused."""
-    import shutil
-
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_deep_chain
-
-    model, layers, _ = _tiny_deep()
-    ids = torch.randint(0, 50, (10,), generator=torch.Generator().manual_seed(4))
-    full = tmp_path / "v2"
-    _run_deep(model, layers, ids, full)
-    rerun = [(l, s) for l, s in fp64_deep_chain.passes(8) if DEEP_KINDS[l][0 if s == "attn" else 1] in ("kda", "dense")]
-
-    def make_v1(path: Path) -> None:
-        shutil.copytree(full, path)
-        for l, s in rerun:
-            for f in fp64_deep_chain.pass_dir(path, l, s).glob("segment_*.pt"):
-                d = torch.load(f, weights_only=True)
-                torch.save({"start": d["start"], "end": d["end"]}, f)
-        m = json.loads((path / MANIFEST).read_text())
-        (path / MANIFEST).write_text(json.dumps({**m, "producer_version": 1}))
-
-    def load(l, kind):
-        if kind == "norms":
-            return {
-                k: v
-                for k, v in layers[l].items()
-                if k in ("input_layernorm", "attn_res", "mlp_res", "post_attention_layernorm")
-            }, {}
-        return layers[l], {f"layers.{l}": kind}
-
-    def run(path, load=load, token_ids=ids):
-        with torch.no_grad():
-            return fp64_deep_chain.backfill(
-                run_dir=path, load=load, embedding=model.embedding, token_ids=token_ids, kda_config=model.kda_config
-            )
-
-    one = tmp_path / "one"
-    make_v1(one)
-    manifest = run(one)
-    assert manifest["producer_version"] == 2 and manifest["backfilled_from"] == 1
-    m = manifest["backfill"]
-    assert len(m["passes"]) == 16 and m["live_rel"] <= 1e-6
-    assert [s["first_pass"] for s in m["sessions"]] == [0] and m["sessions"][0]["code_revision"]
-    assert json.loads((one / MANIFEST).read_text()) == manifest and run(one) == manifest  # stored; a rerun is a no-op
-    assert all(p["input_rel"] <= 1e-6 for p in m["passes"] if "input_rel" in p)
-    for f in sorted(full.rglob("segment_*.pt")):
-        a, b = torch.load(f, weights_only=True), torch.load(one / f.relative_to(full), weights_only=True)
-        assert a.keys() == b.keys(), f
-        for k in a:
-            if not torch.is_tensor(a[k]):
-                assert a[k] == b[k]
-            elif (int(f.parent.name[1]), f.parent.name[3:]) in rerun:
-                assert _rel(b[k], a[k]) <= 1e-6, (f, k)
-            else:
-                _assert_identical(a[k], b[k], (f, k))
-    two = tmp_path / "two"
-    make_v1(two)
-    calls = []
-
-    def failing(l, kind):
-        calls.append(kind) if kind in ("kda", "dense") else None
-        if len(calls) == 3:
-            raise RuntimeError("interrupted")
-        return load(l, kind)
-
-    with expect_error(RuntimeError, "interrupted"):
-        run(two, load=failing)
-    interrupted = json.loads((two / MANIFEST).read_text())
-    assert len(interrupted["backfill"]["passes"]) == 2  # L0 attn and L0 ffn rerun; L1 attn interrupted
-    assert interrupted["producer_version"] == 1 and "backfilled_from" not in interrupted
-    assert [s["first_pass"] for s in run(two)["backfill"]["sessions"]] == [0, 2]
-    _assert_identical_files(one, two, sorted(one.rglob("segment_*.pt")))
-    three = tmp_path / "three"
-    make_v1(three)
-    with expect_error(ValueError, "other tokens"):
-        run(three, token_ids=(ids + 1) % 50)
 
 
 def test_fp64_deep_chain_layer_kinds_from_a_config(expect_error):

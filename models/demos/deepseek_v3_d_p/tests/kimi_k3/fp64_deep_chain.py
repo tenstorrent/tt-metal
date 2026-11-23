@@ -24,12 +24,12 @@ segment's last row, ``kda_state_L_<field>`` (``KDAReferenceState``'s fields, bat
 ``routing_margin_L``; dense ``dense_input_L`` / ``dense_output_L``. After each pass the live sum is checkpointed
 (``live.pt``); an interrupted pass reruns from it.
 
-``backfill`` brings a complete version-1 run (whose KDA and dense passes stored nothing) to version 2: it replays
-the stored passes (the live sum adds their stored fp32 outputs, and each pass's reconstructed input is compared with
-its stored one) and reruns the KDA and dense passes, so their products carry the fp32 rounding of the replayed
-outputs (recorded per pass as ``input_rel``). On completion the manifest says ``producer_version`` 2 with
-``backfilled_from`` 1; until then it stays at version 1. A run holds every version-2 product exactly when its
-``producer_version`` is 2, whichever way it got there.
+The run is a registry golden (``tests/accuracy/golden_registry.py``; ``open_deep_chain`` opens one by id). Its manifest
+lists the completed ``passes`` in order; the weight digests each pass read go to ``identity.weights_sha256`` (as
+``<site>.<checkpoint prefix>``, next to ``embed_tokens``); when the last pass completes, the row ``segments`` and the
+``products`` schema (``L<l>_<site>/<name>``) are written, so the registry opens only a complete run. Version 1 (KDA
+and dense passes stored nothing) was brought to version 2 by a ``backfill`` command that existed until no version-1
+run remained; such runs record ``backfilled_from: 1`` and the ``backfill`` sessions.
 
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_deep_chain run --trace T --count N --layers 8 --out G
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_deep_chain score --chain G --trace T --out S
@@ -49,16 +49,21 @@ from pathlib import Path
 import torch
 
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
-    MANIFEST,
-    atomic_save,
-    provenance,
-    resume_manifest,
+from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import (
+    Golden,
+    make_golden_dir,
+    open_golden,
+    product_schema,
+    publish,
     token_ids_sha256,
     write_manifest,
+    write_token_ids,
 )
+from models.demos.deepseek_v3_d_p.tests.accuracy.topk import topk_recall
+from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import errors, quantile, row_sums
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, atomic_save, provenance
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as dsa
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import CUT_GAP_RANKS, direction, key_sums, pcc_nrmse
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import CUT_GAP_RANKS, direction
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import (
     F64,
     attn_res64,
@@ -69,13 +74,15 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import (
     rms64,
     tensor_digest,
 )
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, checkpoint_tensors, quantile, topk_recall
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, checkpoint_tensors
 
-PRODUCER_VERSION = 2  # 2: KDA and dense passes store their products too (``backfill`` brings a version-1 run there)
+PRODUCER = "fp64_deep_chain"
+PRODUCER_VERSION = 2  # 2: KDA and dense passes store their products too
+GOLDEN_256K = "k31-l0-7-fp64-256k"  # layers 0-7 over the first 262,144 rows of the vLLM K3.1-Pro 1M prompt
 ATTN_BLOCK = 16  # rows per attend_rows block (16 measured 11 ms/row at 1M context against 29 for per-row gathers)
 KEYS = ("latent", "kpe", "index_key")
 KDA_STATE = ("recurrent", "q_convolution", "k_convolution", "v_convolution")  # KDAReferenceState's fields
-SCORER_VERSION = 1
+SCORER_VERSION = 2  # 2: key sums are ``windowed.row_sums`` (absolute error, centred PCC)
 
 
 def layer_kinds(config: dict, layers: int) -> dict[int, tuple[str, str]]:
@@ -145,7 +152,7 @@ def run_pass(
     """One pass over all rows; updates ``live`` in place and writes the pass's products per segment."""
     n = emb.shape[0]
     segments = -(-n // segment)
-    out.mkdir(parents=True, exist_ok=True)
+    make_golden_dir(out)
     state, keys = None, {k: [] for k in KEYS}
     for index in range(segments):
         began = time.perf_counter()
@@ -187,7 +194,8 @@ def run_pass(
                 )
                 products[f"routing_margin_{layer}"] = m["margin"].float()
             live[lo:hi] += ffn
-        atomic_save({"start": lo, "end": hi, **products}, out / f"segment_{index:06d}.pt")
+        payload = {"start": lo, "end": hi, **products}
+        publish(lambda path: torch.save(payload, path), out / f"segment_{index:06d}.pt")
         log(
             f"L{layer} {site} ({kind}) segment {index + 1}/{segments} rows [{lo}, {hi}) {time.perf_counter() - began:.1f} s"
         )
@@ -209,31 +217,34 @@ def run_deep_chain(
 ) -> dict:
     """Run (or resume) every pass of layers ``kinds`` over ``token_ids``; returns the manifest. ``load(l, kind)``
     gives layer l's weights for one site's ``kind`` (``kda`` / ``dsa`` / ``dense`` / ``moe``; ``fp64_chain.load_layer``
-    form, the layer's norms and AttnRes queries included) and their digests, so only that site's weights are resident. A resume refuses another identity, token
-    sequence, segment size or thread count, and reruns the first pass not listed as complete from ``live.pt``."""
+    form, the layer's norms and AttnRes queries included) and their digests, so only that site's weights are resident.
+    The golden's id is ``run_dir``'s name. A resume refuses another identity, token sequence, segment size or thread
+    count, and reruns the first pass not listed as complete from ``live.pt``."""
     run_dir = Path(run_dir)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    make_golden_dir(run_dir)
     layers = len(kinds)
     if layers > 12:
         raise ValueError("the chain keeps one AttnRes block (block size 12); deeper layers need a second seal")
     expected = {
-        "producer": "fp64_deep_chain",
+        "golden_id": run_dir.name,
+        "producer": PRODUCER,
         "producer_version": PRODUCER_VERSION,
-        "identity": identity,
         "kinds": {str(l): list(k) for l, k in kinds.items()},
         "kda_config": asdict(kda_config),
         "dsa_dims": asdict(dims),
         "eps": eps,
-        "embedding_sha256": tensor_digest({"w": embedding}),
-        "count": int(token_ids.numel()),
-        "token_ids_sha256": token_ids_sha256(token_ids.tolist()),
+        "rows": int(token_ids.numel()),
+        "token_ids_sha256": token_ids_sha256(token_ids),
         "segment": segment,
         "dtype": "float64",
         "threads": torch.get_num_threads(),
     }
     todo = passes(layers)
-    manifest = resume_manifest(run_dir, expected, len(todo))  # its "segments": the completed passes, in order
-    done = len(manifest["segments"])
+    identity = {**identity, "weights_sha256": {"embed_tokens": tensor_digest({"w": embedding})}}
+    manifest = resume_deep(run_dir, expected, identity, len(todo))
+    if not (run_dir / "token_ids.pt").is_file():
+        write_token_ids(run_dir, token_ids)
+    done = len(manifest["passes"])
     emb = embedding[token_ids.long()]
     if done:
         saved = torch.load(run_dir / "live.pt", weights_only=True)
@@ -264,119 +275,91 @@ def run_deep_chain(
             log=log,
         )
         del L
-        atomic_save({"after": p + 1, "live": live}, run_dir / "live.pt")
-        entry = {"layer": layer, "site": site, "kind": kind, "digests": digests}
+        publish(lambda path: torch.save({"after": p + 1, "live": live}, path), run_dir / "live.pt")
+        entry = {"layer": layer, "site": site, "kind": kind}
         entry["seconds"] = round(time.perf_counter() - began, 1)
         entry["max_rss_gb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20, 2)
-        manifest["segments"].append(entry)
+        manifest["identity"]["weights_sha256"].update({f"{site}.{k}": v for k, v in digests.items()})
+        manifest["passes"].append(entry)
+        if len(manifest["passes"]) == len(todo):
+            manifest["segments"] = row_segments(manifest["rows"], segment)
+            manifest["products"] = products_of(run_dir, kinds)
         write_manifest(run_dir, manifest)
         log(f"pass {p + 1}/{len(todo)} done in {entry['seconds']:.0f} s; rss {entry['max_rss_gb']} GB")
     return manifest
 
 
-def replay_pass(
-    *, layer: int, site: str, kind: str, L: dict, emb: torch.Tensor, live: torch.Tensor, eps: float, out: Path
-) -> float:
-    """Add a stored DSA or MoE pass's fp32 outputs to ``live`` (in place); returns the largest per-segment relative
-    norm distance between the input reconstructed from ``live`` and the pass's stored input."""
-    worst = 0.0
-    for f in sorted(out.glob("segment_*.pt")):
-        d = torch.load(f, weights_only=True, mmap=True)
-        lo, hi = d["start"], d["end"]
-        sealed = emb[lo:hi].to(F64).unsqueeze(1)
-        if site == "attn":
-            got, want = attn_res64(live[lo:hi], sealed, L["attn_res"], eps), d[f"dsa_input_{layer}"]
-            output = d[f"attn_output_{layer}"]
-        else:
-            got = rms64(attn_res64(live[lo:hi], sealed, L["mlp_res"], eps), L["post_attention_layernorm"], eps)
-            want, output = d[f"moe_input_{layer}"], d[f"moe_output_{layer}"]
-        worst = max(worst, float((got - want.to(F64)).norm() / want.to(F64).norm()))
-        live[lo:hi] += output.to(F64)
-    return worst
-
-
-def backfill(
-    *,
-    run_dir: Path,
-    load: Callable[[int, str], tuple[dict, dict]],
-    embedding: torch.Tensor,
-    token_ids: torch.Tensor,
-    kda_config: KDAConfig,
-    log: Callable[[str], None] = print,
-) -> dict:
-    """Bring a complete version-1 run to version 2 (module docstring); resumable after each rerun pass from
-    ``live_backfill.pt``. ``load(l, "norms")`` gives a layer's norms and AttnRes queries only. Returns the manifest,
-    whose ``backfill`` entry lists every pass with its ``input_rel`` (replayed) or seconds (rerun) and each backfill
-    session's provenance (code revision included). A run already backfilled is returned unchanged."""
-    run_dir = Path(run_dir)
-    manifest = json.loads((run_dir / MANIFEST).read_text())
-    kinds = {int(l): tuple(k) for l, k in manifest["kinds"].items()}
-    todo = passes(len(kinds))
-    if manifest.get("backfilled_from") == 1:
-        return manifest
-    if manifest["producer_version"] != 1 or len(manifest["segments"]) != len(todo):
-        raise ValueError(f"{run_dir} is not a complete version-1 run")
-    if manifest["token_ids_sha256"] != token_ids_sha256(token_ids.tolist()) or manifest[
-        "embedding_sha256"
-    ] != tensor_digest({"w": embedding}):
-        raise ValueError(f"{run_dir} was run on other tokens or another embedding")
-    record = manifest.setdefault("backfill", {"sessions": [], "passes": []})
-    record["sessions"].append({"first_pass": len(record["passes"]), **provenance()})
-    write_manifest(run_dir, manifest)
-    dims, eps, segment = dsa.Dims(**manifest["dsa_dims"]), manifest["eps"], manifest["segment"]
-    emb = embedding[token_ids.long()]
-    checkpoint = run_dir / "live_backfill.pt"
-    done = len(record["passes"])
-    if done:
-        saved = torch.load(checkpoint, weights_only=True)
-        if saved["after"] != done:
-            raise ValueError(f"live_backfill.pt holds the state after pass {saved['after']}, the manifest lists {done}")
-        live = saved["live"]
-        log(f"backfill resuming after pass {done}/{len(todo)}")
+def resume_deep(run_dir: Path, expected: dict, identity: dict, total: int) -> dict:
+    """The manifest of a deep run in ``run_dir``: new, or the directory's own when every ``expected`` field and the
+    ``identity`` (its weight digests so far include ``identity``'s) match. While passes remain, the session's
+    provenance is recorded with the pass it starts from."""
+    path = run_dir / MANIFEST
+    if path.is_file():
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        mismatched = sorted(key for key, value in expected.items() if manifest.get(key) != value)
+        have = manifest.get("identity", {})
+        weights = have.get("weights_sha256", {})
+        if {k: v for k, v in have.items() if k != "weights_sha256"} != {
+            k: v for k, v in identity.items() if k != "weights_sha256"
+        } or any(weights.get(k) != v for k, v in identity["weights_sha256"].items()):
+            mismatched.append("identity")
+        if mismatched:
+            raise ValueError(f"{run_dir} holds a different run; mismatched fields: {mismatched}")
     else:
-        live = torch.zeros(emb.shape, dtype=F64)
-    for p in range(done, len(todo)):
-        layer, site = todo[p]
-        kind = kinds[layer][0 if site == "attn" else 1]
-        began = time.perf_counter()
-        entry = {"layer": layer, "site": site, "kind": kind}
-        if kind in ("kda", "dense"):
-            L, entry["digests"] = load(layer, kind)
-            if entry["digests"] != manifest["segments"][p]["digests"]:
-                raise ValueError(f"layer {layer} {kind} weights differ from the run's")
-            run_pass(
-                layer=layer,
-                site=site,
-                kind=kind,
-                L=L,
-                emb=emb,
-                live=live,
-                segment=segment,
-                kda_config=kda_config,
-                dims=dims,
-                eps=eps,
-                out=pass_dir(run_dir, layer, site),
-                log=log,
-            )
-            entry["seconds"] = round(time.perf_counter() - began, 1)
-        else:
-            L, _ = load(layer, "norms")
-            entry["input_rel"] = replay_pass(
-                layer=layer, site=site, kind=kind, L=L, emb=emb, live=live, eps=eps, out=pass_dir(run_dir, layer, site)
-            )
-        del L
-        record["passes"].append(entry)
-        if kind in ("kda", "dense") or p == len(todo) - 1:
-            atomic_save({"after": p + 1, "live": live}, checkpoint)
-            write_manifest(run_dir, manifest)
-        log(f"backfill pass {p + 1}/{len(todo)} {entry}")
-    final = torch.load(run_dir / "live.pt", weights_only=True)["live"]
-    record["live_rel"] = float((live - final).norm() / final.norm())
-    manifest.update(producer_version=PRODUCER_VERSION, backfilled_from=1)
-    write_manifest(run_dir, manifest)
-    checkpoint.unlink()
-    log(f"backfill complete; final live sum relative distance {record['live_rel']:.3e}")
+        manifest = {**expected, "identity": identity, "sessions": [], "passes": []}
+    if len(manifest["passes"]) < total:
+        manifest["sessions"].append({"first_pass": len(manifest["passes"]), **provenance()})
+        write_manifest(run_dir, manifest)
     return manifest
+
+
+def row_segments(rows: int, segment: int) -> list[dict]:
+    return [{"start": lo, "end": min(lo + segment, rows)} for lo in range(0, rows, segment)]
+
+
+def products_of(run_dir: Path, kinds: dict[int, tuple[str, str]]) -> dict:
+    """The registry ``products`` schema of a complete run, ``L<l>_<site>/<name>``, from each pass's first segment:
+    KDA states are ``segment_end``, every other product ``row``."""
+    products = {}
+    for layer in kinds:
+        for site in ("attn", "ffn"):
+            first = torch.load(pass_dir(run_dir, layer, site) / "segment_000000.pt", weights_only=True, mmap=True)
+            for name, t in first.items():
+                if torch.is_tensor(t):
+                    kind = "segment_end" if name.startswith("kda_state_") else "row"
+                    products[f"L{layer}_{site}/{name}"] = product_schema(kind, t)
+    return products
+
+
+def conform_manifest(old: dict, golden_id: str, products: dict) -> dict:
+    """A deep-chain manifest written before the registry, as ``run_deep_chain`` writes it now: ``golden_id`` added,
+    ``count`` renamed ``rows``, the pass list ``segments`` renamed ``passes`` with each pass's ``digests`` and
+    ``embedding_sha256`` moved into ``identity.weights_sha256``, the row ``segments`` and the ``products`` schema
+    (``products_of`` the run) added. Session and backfill records stay as they were."""
+    weights = {"embed_tokens": old["embedding_sha256"]}
+    for entry in old["segments"]:
+        weights.update({f"{entry['site']}.{k}": v for k, v in entry["digests"].items()})
+    new = {"golden_id": golden_id}
+    for key, value in old.items():
+        if key == "count":
+            new["rows"] = value
+        elif key == "identity":
+            new["identity"] = {**value, "weights_sha256": weights}
+        elif key == "segments":
+            new["passes"] = [{k: v for k, v in entry.items() if k != "digests"} for entry in value]
+        elif key != "embedding_sha256":
+            new[key] = value
+    new["segments"] = row_segments(old["count"], old["segment"])
+    new["products"] = products
+    return new
+
+
+def open_deep_chain(recorded: str | Path) -> Golden:
+    """The registered deep-chain golden a run or a derived artifact names, by id or by the path it recorded (the
+    id is its directory name), checked to be this producer's current version."""
+    golden = open_golden(Path(recorded).name)
+    golden.require(producer=PRODUCER, producer_version=PRODUCER_VERSION)
+    return golden
 
 
 def load_deep(run_dir: Path, layer: int, site: str, names: list[str], start: int = 0, end: int | None = None):
@@ -419,7 +402,7 @@ def score_segment(run_dir: Path, kinds: dict, trace: Trace, lo: int, hi: int) ->
             kv = trace.rows(f"kv_post_transform_layer_{l}", lo, hi)
             lora = p["latent"].shape[1]
             got = {"latent": kv[:, :lora], "kpe": kv[:, lora:], "index_key": trace.rows(f"indexer_k_layer_{l}", lo, hi)}
-            out[f"keys_{l}"] = {k: key_sums(got[k], p[k]) for k in KEYS}
+            out[f"keys_{l}"] = {k: row_sums(p[k], got[k]) for k in KEYS}
             want = p[f"topk_indices_{l}"].long()
             topk = want.shape[1]
             full = torch.arange(lo, hi) >= topk - 1
@@ -454,7 +437,7 @@ def summarize(results: list[dict], window: int) -> dict:
                 m[f"{key}_margin_median_all"] = quantile(cat("margin"), 0.5)
             elif key.startswith("keys_"):
                 for k in KEYS:
-                    m[f"{k}_{key[5:]}_pcc"], m[f"{k}_{key[5:]}_nrmse"] = pcc_nrmse(cat(k))
+                    m.update(errors(cat(k), f"{k}_{key[5:]}_"))
             elif key.startswith("topk_"):
                 recall = cat("recall")
                 m[f"{key}_recall_mean"] = float(recall.mean()) if recall.numel() else float("nan")
@@ -480,15 +463,15 @@ def summarize(results: list[dict], window: int) -> dict:
 def score(run_dir: Path, trace: Trace, out: Path, window: int, log: Callable[[str], None] = print) -> dict:
     """Score every row the complete run holds (cached per segment in ``out``) and write metrics.json / windows.tsv."""
     manifest = json.loads((Path(run_dir) / MANIFEST).read_text())
-    if len(manifest["segments"]) < 2 * len(manifest["kinds"]):
-        raise ValueError(f"{run_dir}: {len(manifest['segments'])} of {2 * len(manifest['kinds'])} passes complete")
+    if len(manifest["passes"]) < 2 * len(manifest["kinds"]):
+        raise ValueError(f"{run_dir}: {len(manifest['passes'])} of {2 * len(manifest['kinds'])} passes complete")
     kinds = {int(l): tuple(k) for l, k in manifest["kinds"].items()}
     out.mkdir(parents=True, exist_ok=True)
     identity = {
         "chain": str(run_dir),
         "producer_version": manifest["producer_version"],
         "token_ids_sha256": manifest["token_ids_sha256"],
-        "passes_digests": [p["digests"] for p in manifest["segments"]],
+        "weights_sha256": manifest["identity"]["weights_sha256"],
         "trace": str(trace.path),
         "scorer_version": SCORER_VERSION,
     }
@@ -497,7 +480,7 @@ def score(run_dir: Path, trace: Trace, out: Path, window: int, log: Callable[[st
         raise ValueError(f"{out} holds scores of another chain or trace")
     id_path.write_text(json.dumps(identity, indent=1))
     results = []
-    count, seg = manifest["count"], manifest["segment"]
+    count, seg = manifest["rows"], manifest["segment"]
     for index, lo in enumerate(range(0, count, seg)):
         cached = out / f"segment_{index:06d}.pt"
         if not cached.is_file():
@@ -518,10 +501,10 @@ def score(run_dir: Path, trace: Trace, out: Path, window: int, log: Callable[[st
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["run", "score", "backfill"])
+    parser.add_argument("command", choices=["run", "score"])
     parser.add_argument("--trace", type=Path, required=True)
     parser.add_argument("--out", type=Path, help="run: the run directory; score: the score directory")
-    parser.add_argument("--chain", type=Path, help="score / backfill: the run directory")
+    parser.add_argument("--chain", type=Path, help="score: the run directory")
     parser.add_argument("--count", type=int, help="run: prompt rows (default: the trace's prompt)")
     parser.add_argument("--layers", type=int, default=8)
     parser.add_argument("--segment", type=int, default=4096)
@@ -564,18 +547,6 @@ def main() -> None:
             log=log,
         )
 
-    if args.command == "backfill":
-        manifest = json.loads((args.chain / MANIFEST).read_text())
-        token_ids = token_ids[: manifest["count"]]
-        backfill(
-            run_dir=args.chain,
-            load=load,
-            embedding=embedding,
-            token_ids=token_ids,
-            kda_config=KDAConfig.from_model_config(config),
-            log=log,
-        )
-        return
     run_deep_chain(
         run_dir=args.out,
         load=load,

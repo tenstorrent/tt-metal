@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import att
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import fold_query
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+from models.demos.deepseek_v3_d_p.tests.accuracy.topk import topk_recall
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
@@ -55,7 +56,6 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import topk_recall
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_pipeline_split import RECOVERY_FROM, RECOVERY_PCC
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk

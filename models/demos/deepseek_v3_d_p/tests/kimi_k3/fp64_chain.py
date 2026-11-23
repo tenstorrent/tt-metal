@@ -12,8 +12,9 @@ with the AttnRes residual bookkeeping of ``reference/kimi_k3/attn_res/hf_walk.py
 embedding; every later read mixes the sealed snapshot and the live in-block sum). AttnRes acts row by row, so the
 only state carried across rows is each KDA layer's recurrent and convolution state and DSA layer 3's keys.
 
-The run is segment-major and resumable (``tests/kda/long_context_golden.py``'s manifest helpers): each segment of
-rows passes through all four layers, then atomically writes its products (``segment_<i>.pt``, fp32) and the carried
+The run is a registry golden (``tests/accuracy/golden_registry.py``: ``golden_id`` the directory name, ``rows``,
+``products``, ``token_ids.pt``, the weight digests in ``identity.weights_sha256``; ``open_chain`` opens one by id) and
+is segment-major and resumable: each segment of rows passes through all four layers, then atomically writes its products (``segment_<i>.pt``, fp32) and the carried
 state after it (``state_<i>.pt``: the three KDA states and the segment's DSA keys, FP64), so an interruption costs
 one segment and a resume is bit-identical to an uninterrupted run (same thread count). Per row, the products are:
 
@@ -59,24 +60,30 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_state_dict, required_kda_weight_names
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import pcc
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
-    MANIFEST,
-    atomic_save,
-    resume_manifest,
-    segment_path,
+from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import (
+    Golden,
+    make_golden_dir,
+    open_golden,
+    product_schema,
+    publish,
     token_ids_sha256,
     write_manifest,
+    write_token_ids,
 )
+from models.demos.deepseek_v3_d_p.tests.accuracy.topk import missed_keys, topk_recall
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import pcc
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, resume_manifest, segment_path
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as dsa
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_vllm_emulation import kda_flashkda_emulation
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, checkpoint_tensors, missed_keys, topk_recall
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, checkpoint_tensors
 
 C = KimiK31Config
 F64 = torch.float64
 KDA_LAYERS, MOE_LAYERS, DSA_LAYER = (0, 1, 2), (1, 2), 3
 # Bump when anything the run stores changes its bytes (math, rounding, layout of the payloads).
+PRODUCER = "fp64_chain"
 PRODUCER_VERSION = 2  # 2: buffered indexer blocks of 4096 keys (FP64 summation order of the scores)
+GOLDEN_1M = "k31-l0-3-fp64-1m"  # layers 0-3 over the vLLM K3.1-Pro 1M prompt (1,044,480 rows)
 # Keys per indexer score block. Each block's [rows x heads, keys] FP64 scores go into one reused buffer: a fresh
 # allocation per block page-faults, and 4096 keys measured 48.7 M keys/s per row against 19.6 for unbuffered 128K
 # blocks (16 threads, logs/indexer-buffers-probe-*). The rate is then the FP64 matmul's.
@@ -129,6 +136,26 @@ def dense_mlp64(x: torch.Tensor, w: dict[str, torch.Tensor]) -> torch.Tensor:
     return situ64(x @ w["gate_proj.weight"].T, x @ w["up_proj.weight"].T) @ w["down_proj.weight"].T
 
 
+def route64(
+    x: torch.Tensor, gate: torch.Tensor, bias: torch.Tensor, top_k: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The K3 router in FP64, the one every FP64 routing here uses: sigmoid scores, selection by score + ``bias``,
+    top-k, the selected scores renormalized x ROUTE_SCALE. Returns (ids ``[n, k]`` best first, weights ``[n, k]``,
+    margin ``[n]``: k-th minus (k+1)-th choice score, inf with no (k+1)-th)."""
+    scores = (x @ gate.T).sigmoid()
+    choice = scores + bias
+    top = choice.topk(min(top_k + 1, choice.shape[-1]), dim=-1)
+    ids = top.indices[:, :top_k]
+    margin = (
+        top.values[:, top_k - 1] - top.values[:, top_k]
+        if top.values.shape[-1] > top_k
+        else torch.full_like(top.values[:, 0], float("inf"))
+    )
+    weights = scores.gather(1, ids)
+    weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-20) * C.ROUTE_SCALE
+    return ids, weights, margin
+
+
 class MoE64:
     """A K3 latent MoE layer in FP64: sigmoid router with selection bias, top-k, weights renormalized x ROUTE_SCALE;
         routed experts at the latent width (down-project, the experts' weighted sum, ``routed_expert_norm``, up-project)
@@ -146,19 +173,7 @@ class MoE64:
         self.buffers = [torch.empty(t.shape, dtype=F64) for t in experts[0]]
 
     def route(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """(ids ``[n, k]`` best first, weights ``[n, k]``, margin ``[n]``: k-th minus (k+1)-th choice score)."""
-        scores = (x @ self.w["gate.weight"].T).sigmoid()
-        choice = scores + self.w["gate.e_score_correction_bias"]
-        top = choice.topk(min(self.top_k + 1, choice.shape[-1]), dim=-1)
-        ids = top.indices[:, : self.top_k]
-        margin = (
-            top.values[:, self.top_k - 1] - top.values[:, self.top_k]
-            if top.values.shape[-1] > self.top_k
-            else torch.full_like(top.values[:, 0], float("inf"))
-        )
-        weights = scores.gather(1, ids)
-        weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-20) * C.ROUTE_SCALE
-        return ids, weights, margin
+        return route64(x, self.w["gate.weight"], self.w["gate.e_score_correction_bias"], self.top_k)
 
     def __call__(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         ids, weights, margin = self.route(x)
@@ -270,13 +285,17 @@ class ChainModel:
             digests.update(d)
         return cls(embedding, layers, kda_config, dsa.Dims(eps=eps), eps, digests=digests)
 
+    def weights_sha256(self) -> dict[str, str]:
+        """The digests of every weight the chain read, as a golden's ``identity.weights_sha256``."""
+        return dict(sorted(self.digests.items()))
+
     def identity(self) -> dict:
+        """The model configuration a run records (``model``); the weights are in ``weights_sha256``."""
         identity = {
             "kda_config": asdict(self.kda_config),
             "dsa_dims": asdict(self.dsa_dims),
             "eps": self.eps,
             "block_size": self.block_size,
-            "weights_sha256": dict(sorted(self.digests.items())),
         }
         if self.kda_precision != "fp64":  # absent for the golden, so existing FP64 runs keep their identity
             identity["kda_precision"] = self.kda_precision
@@ -478,8 +497,7 @@ def chain_segment(
             L["post_attention_layernorm"],
             eps,
         )
-        gate = (normed @ L["gate"].T).sigmoid().add(L["gate_bias"])
-        extra["routing_ids_3_sampled"] = gate.topk(model.top_k, dim=-1).indices
+        extra["routing_ids_3_sampled"] = route64(normed, L["gate"], L["gate_bias"], model.top_k)[0]
     else:
         out["attn_output_3"] = hidden.new_zeros(0, hidden.shape[1])
         extra["routing_ids_3_sampled"] = torch.zeros(0, model.top_k, dtype=torch.int64)
@@ -578,19 +596,21 @@ def run_chain(
     trace: Trace | None = None,
     log: Callable[[str], None] = print,
 ) -> dict:
-    """Run (or resume) the chain over ``token_ids`` and return the manifest. A resume refuses a directory whose
+    """Run (or resume) the chain over ``token_ids`` into the golden ``run_dir`` (its id is the directory name) and
+    return the manifest. ``identity`` gains the model's ``weights_sha256``. A resume refuses a directory whose
     identity, tokens, segment size, sampled rows or thread count differ (the thread count fixes FP64 summation
     order, so a resumed run stays bit-identical to an uninterrupted one)."""
     run_dir = Path(run_dir)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    make_golden_dir(run_dir)
     count = int(token_ids.numel())
     expected = {
-        "producer": "fp64_chain",
+        "golden_id": run_dir.name,
+        "producer": PRODUCER,
         "producer_version": PRODUCER_VERSION,
-        "identity": identity,
+        "identity": {**identity, "weights_sha256": model.weights_sha256()},
         "model": model.identity(),
-        "count": count,
-        "token_ids_sha256": token_ids_sha256(token_ids.tolist()),
+        "rows": count,
+        "token_ids_sha256": token_ids_sha256(token_ids),
         "segment": segment,
         "sampled_rows": sampled,
         "dtype": "float64",
@@ -598,6 +618,9 @@ def run_chain(
     }
     segments = -(-count // segment)
     manifest = resume_manifest(run_dir, expected, segments)
+    write_manifest(run_dir, manifest)  # (resume_manifest's own write leaves the umask's mode)
+    if not (run_dir / "token_ids.pt").is_file():
+        write_token_ids(run_dir, token_ids)
     done = len(manifest["segments"])
     carried = load_carried(run_dir, done)
     if done:
@@ -617,11 +640,9 @@ def run_chain(
         products, extra = chain_segment(model, token_ids[start:end], start, carried, sampled, stage)
         keys = {k: v[-1] for k, v in carried.keys.items()}
         payload = {"start": start, "end": end, **storable(products)}
-        atomic_save(payload, segment_path(run_dir, index))
-        atomic_save(
-            {"start": start, "end": end, "keys": keys, "kda": {l: vars(s) for l, s in carried.kda.items()}},
-            state_path(run_dir, index),
-        )
+        state = {"start": start, "end": end, "keys": keys, "kda": {l: vars(s) for l, s in carried.kda.items()}}
+        publish(lambda path: torch.save(payload, path), segment_path(run_dir, index))
+        publish(lambda path: torch.save(state, path), state_path(run_dir, index))
         stage("save")
         entry = {"start": start, "end": end, "seconds": round(time.perf_counter() - began, 2), "stages": stages}
         if trace is not None:
@@ -634,6 +655,8 @@ def run_chain(
             per_row = {k: v for k, v in payload.items() if torch.is_tensor(v) and k not in SAMPLED}
             per_row.update({f"state.{k}": v for k, v in keys.items()})
             manifest["bytes_per_row"] = {k: v.element_size() * v[0].numel() for k, v in per_row.items()}
+        if "products" not in manifest:
+            manifest["products"] = products_of(payload, state)
         manifest["segments"].append(entry)
         write_manifest(run_dir, manifest)
         log(
@@ -641,6 +664,48 @@ def run_chain(
             f"rss {entry['max_rss_gb']} GB " + json.dumps(entry.get("checks", {}))
         )
     return manifest
+
+
+def products_of(payload: dict, state: dict) -> dict:
+    """The registry ``products`` schema of a chain from one segment's payload (``segment_<i>.pt``) and state
+    (``state_<i>.pt``): every per-row stream and key (``row``), the sampled rows' attention (``sampled_row``) and each
+    KDA layer's state after the segment, ``kda.<layer>.<field>`` (``segment_end``)."""
+    products = {}
+    for name, t in payload.items():
+        if torch.is_tensor(t):
+            products[name] = product_schema("sampled_row" if name in SAMPLED else "row", t)
+    products.update({name: product_schema("row", t) for name, t in state["keys"].items()})
+    for layer, fields in state["kda"].items():
+        products.update({f"kda.{layer}.{f}": product_schema("segment_end", t) for f, t in fields.items()})
+    return products
+
+
+def conform_manifest(old: dict, golden_id: str, products: dict) -> dict:
+    """A chain manifest written before the registry, as ``run_chain`` writes it now: ``golden_id`` added, ``count``
+    renamed ``rows``, the weight digests moved from ``model.weights_sha256`` to ``identity.weights_sha256``, the
+    ``products`` schema (``products_of`` the run's first segment) added. Nothing else changes."""
+    model = dict(old["model"])
+    weights = model.pop("weights_sha256")
+    new = {"golden_id": golden_id}
+    for key, value in old.items():
+        if key == "count":
+            new["rows"] = value
+        elif key == "model":
+            new["model"] = model
+        elif key == "identity":
+            new["identity"] = {**value, "weights_sha256": weights}
+        else:
+            new[key] = value
+    new["products"] = products
+    return new
+
+
+def open_chain(recorded: str | Path) -> Golden:
+    """The registered chain golden a run or a derived artifact names, by id or by the path it recorded (the id is
+    its directory name), checked to be this producer's current version."""
+    golden = open_golden(Path(recorded).name)
+    golden.require(producer=PRODUCER, producer_version=PRODUCER_VERSION)
+    return golden
 
 
 def load_products(run_dir: Path, names: list[str], start: int = 0, end: int | None = None) -> dict[str, torch.Tensor]:

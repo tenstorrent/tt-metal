@@ -19,7 +19,10 @@ with the chain's FP64 query (``input_layernorm`` of ``dsa_input_3``) and FP64 ke
 * ``rest_nrmse``: the device's attention output against the FP64 output over ``D``, the error its selection does not
   explain (cache format and arithmetic);
 * ``selection_rest_cos``, ``selection_share``, ``rest_share``: the split of the device's error against the FP64 output
-  over ``A`` into those two parts (``error_split``); the shares sum to one with the cross term ``1 - both``.
+  over ``A`` into those two parts (``accuracy.dsa.error_split``); the shares sum to one with the cross term
+  ``1 - both``.
+
+The masses come from ``accuracy.dsa.selection_masses``; this module computes the FP64 attention weights they need.
 
 Masses are per head, reported as the mean over heads and the worst head. ``check_nrmse`` compares the recomputed
 FP64 output over ``A`` with the chain's stored ``attn_output_3`` (the chain's query came from its FP64 read, this
@@ -37,11 +40,12 @@ from pathlib import Path
 
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import TokenErrorAccumulator
+from models.demos.deepseek_v3_d_p.tests.accuracy.dsa import error_split, selection_masses
+from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import quantile, row_nrmse, row_sums
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_fp64_golden as dsa
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import DSA_LAYER, load_products, load_sampled
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import checkpoint_tensors, chunk_path, quantile
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import DSA_LAYER, load_products, load_sampled, open_chain
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import checkpoint_tensors, chunk_path
 
 ROW_METRICS = (
     "missed",
@@ -63,11 +67,6 @@ ROW_METRICS = (
 )
 
 
-def head_mass(weights: torch.Tensor, keys: torch.Tensor) -> torch.Tensor:
-    """Per head the summed weight on the key positions ``keys`` (bool ``[n]``) of ``weights`` ``[heads, n]``."""
-    return weights[:, keys].sum(-1)
-
-
 def row_weights(
     q: dict,
     i: int,
@@ -81,21 +80,10 @@ def row_weights(
     """The missed-key weights of query row ``i`` of ``q``: ``fp64_sel`` the FP64 selection (valid keys only, best first
     by the FP64 indexer score), ``device_sel`` the device's (valid, distinct keys only); ``latent`` / ``kpe`` the
     FP64 keys of every causal row. Returns the per-row metrics (masses as ``[heads]`` tensors) and both outputs."""
-    missed = ~torch.isin(fp64_sel, device_sel)
-    intruder = ~torch.isin(device_sel, fp64_sel)
-    n = int(missed.sum())
-    bottom = torch.zeros_like(missed)
-    if n:
-        bottom[len(fp64_sel) - n :] = True
     wa = dsa.attention_weights(q, i, latent[fp64_sel], kpe[fp64_sel], w, dims)
     wd = dsa.attention_weights(q, i, latent[device_sel], kpe[device_sel], w, dims)
     return {
-        "missed": n,
-        "intruders": int(intruder.sum()),
-        "missed_mass": head_mass(wa, missed),
-        "bottom_mass": head_mass(wa, bottom),
-        "intruder_mass": head_mass(wd, intruder),
-        "missed_key_max": float(wa[:, missed].max()) if n else 0.0,
+        **selection_masses(wa, wd, fp64_sel, device_sel),
         "out_fp64": dsa.attend(q, i, latent[fp64_sel], kpe[fp64_sel], w, dims),
         "out_device_sel": dsa.attend(q, i, latent[device_sel], kpe[device_sel], w, dims),
     }
@@ -109,25 +97,8 @@ def device_row(device: Path, chunk: int, row: int) -> tuple[torch.Tensor, torch.
     return torch.unique(sel[(sel >= 0) & (sel <= row)]), payload["attn_out"][row - payload["start"]].double()
 
 
-def error_split(fp64: torch.Tensor, fp64_device_sel: torch.Tensor, device: torch.Tensor) -> dict[str, float]:
-    """Split the device output's error ``device - fp64`` into the selection part ``fp64_device_sel - fp64`` and the
-    rest ``device - fp64_device_sel``: their cosine (0 when a part is zero, e.g. identical selections) and each part's
-    share of the squared error (exact; the parts' shares plus the cross term ``2 cos |sel| |rest| / |total|^2`` sum to
-    one)."""
-    sel, rest = fp64_device_sel - fp64, device - fp64_device_sel
-    total = float((device - fp64).square().sum())
-    norms = float(sel.norm() * rest.norm())
-    return {
-        "selection_rest_cos": float(sel @ rest) / norms if norms else 0.0,
-        "selection_share": float(sel.square().sum()) / total,
-        "rest_share": float(rest.square().sum()) / total,
-    }
-
-
 def nrmse(want: torch.Tensor, got: torch.Tensor, floor: float) -> float:
-    acc = TokenErrorAccumulator()
-    acc.update(want.unsqueeze(0), got.unsqueeze(0))
-    return float(acc.token_nrmse(floor)[0])
+    return float(row_nrmse(row_sums(want.unsqueeze(0), got.unsqueeze(0)), floor)[0])
 
 
 def spearman(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -186,8 +157,8 @@ def run(*, device: Path, out: Path, window: int, log) -> dict:
     ``windows.tsv`` to ``out``."""
     manifest = json.loads((device / MANIFEST).read_text())
     input_manifest = json.loads((Path(manifest["input"]) / MANIFEST).read_text())
-    chain, count, chunk = Path(input_manifest["chain"]), manifest["count"], manifest["chunk"]
-    chain_manifest = json.loads((chain / MANIFEST).read_text())
+    golden, count, chunk = open_chain(input_manifest["chain"]), manifest["count"], manifest["chunk"]
+    chain, chain_manifest = golden.path, golden.manifest
     checkpoint = Path(chain_manifest["identity"]["checkpoint"])
     dims = dsa.Dims(**chain_manifest["model"]["dsa_dims"])
     score = json.loads((device / "metrics.json").read_text())

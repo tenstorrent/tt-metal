@@ -47,6 +47,8 @@ from pathlib import Path
 import torch
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
+from models.demos.deepseek_v3_d_p.tests.accuracy.topk import missed_keys, topk_recall
+from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import row_nrmse, row_sums
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor, pcc
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     MANIFEST,
@@ -61,9 +63,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     checkpoint_tensors,
     chunk_path,
     load_input,
-    missed_keys,
     rms_norm,
-    topk_recall,
 )
 
 C = KimiK31Config
@@ -436,7 +436,7 @@ def compare(*, out: Path, name: str, trace: Trace, device: Path | None, checkpoi
     floor = golden_floor(ref.norm(dim=-1))
 
     def nr(a: torch.Tensor, b: torch.Tensor) -> float:
-        return float((a.double() - b.double()).norm() / max(float(b.double().norm()), floor))
+        return float(row_nrmse(row_sums(b.reshape(1, -1), a.reshape(1, -1)), floor)[0])
 
     records = []
     for i, r in enumerate(rows):

@@ -13,8 +13,8 @@ The three steps of ``teacher_feed.py`` for one MoE layer (latent MoE, 896 routed
 2. The device test (``test_moe_teacher_feed.py``) runs the production MoE (the MoE block, K3.1's default, from the
    stage's weight cache) on every 2560-token chunk of the prefix and saves each chunk's MoE output and the device's
    routing (expert ids, weights).
-3. ``score``: per window of context positions, the MoE output's per-row NRMSE against ``decoder_output_layer_L``
-   (the tracer's FFN output alone), and the routing three ways - device, trace and an fp32 host router on the same
+3. ``score``: per window of context positions, the MoE output's absolute and relative error and per-row NRMSE
+   against ``decoder_output_layer_L`` (the tracer's FFN output alone), and the routing three ways - device, trace and an fp32 host router on the same
    input - as recall of each other's top-16 sets, the rank of every expert the device misses in the trace's
    selection (ordered by the fp32 router's choice score, the order the selection uses), and the trace routing
    weight the device drops. ``host`` recomputes the whole MoE in fp32 on sampled rows, so the MoE output's three
@@ -39,26 +39,34 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import hf_attn_res
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import TokenErrorAccumulator, golden_floor
+from models.demos.deepseek_v3_d_p.tests.accuracy.moe import routing_rows
+from models.demos.deepseek_v3_d_p.tests.accuracy.topk import topk_recall
+from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
+    SUM_YY,
+    Bar,
+    GrowthBar,
+    check,
+    errors,
+    quantile,
+    row_nrmse,
+    row_sums,
+)
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import load_products
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import load_products, open_chain
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     EPS,
     FFN,
     Trace,
     build_input,
     chain_identity,
-    check_bars,
     checkpoint_tensors,
     chunk_path,
     complete_run,
     load_input,
-    missed_keys,
-    quantile,
     replay_live_and_sealed,
     replay_missing,
     rms_norm,
-    topk_recall,
 )
 
 TOP_K = KimiK3Config.NUM_EXPERTS_PER_TOKEN  # 16
@@ -82,13 +90,14 @@ INPUT_CHECK_RECALL = 0.98
 # * routing: mean recall of the trace's top-16 >= 0.98 (measured >= 0.991); misses are near-ties: <= 1% of the
 #   trace experts the device misses rank in the top half of the trace's selection (measured <= 0.06%; most at rank
 #   15); trace routing weight the device drops, mean <= 0.01 (measured 0.002-0.006).
-BARS = {
-    "moe_nrmse_median": ("max", 0.20),
-    "recall_vs_reference_mean": ("min", 0.98),
-    "miss_top_half_fraction": ("max", 0.01),
-    "dropped_reference_weight_mean": ("max", 0.01),
-}
 NRMSE_GROWTH = 1.15
+BARS = [
+    Bar("moe_nrmse_median", "max", 0.20),
+    Bar("recall_vs_reference_mean", "min", 0.98),
+    Bar("miss_top_half_fraction", "max", 0.01),
+    Bar("dropped_reference_weight_mean", "max", 0.01),
+    GrowthBar("moe_nrmse_median", NRMSE_GROWTH),
+]
 
 
 def layer_weights(checkpoint: Path, layer: int) -> dict[str, torch.Tensor]:
@@ -234,30 +243,14 @@ def owner_positions(
 # --- scoring -------------------------------------------------------------------------------------------------
 
 
-def routing_window(got, got_w, want, want_w, choice, num_experts: int = NUM_EXPERTS) -> dict[str, torch.Tensor]:
-    """Per row, the device routing (``got`` ids / ``got_w`` weights) against the trace's (``want`` / ``want_w``):
-    ``recall`` of the trace's set, the trace weight on the experts the device misses (``dropped``), the largest
-    weight difference on the experts both pick (``weight_err``), and every missed expert (``missed_keys``: its rank
-    in the trace's selection ordered by ``choice``, the fp32 router's choice score of each trace expert)."""
-    recall = topk_recall(got, want)
-    rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
-    missed = ~torch.isin(rows + want, rows + got)
-    dropped = (want_w.float() * missed).sum(dim=1)
-    both = torch.zeros(want.shape[0], num_experts).scatter_(1, want, want_w.float())
-    dev = torch.zeros(want.shape[0], num_experts).scatter_(1, got, got_w.float())
-    shared = (both != 0) & (dev != 0)
-    weight_err = ((both - dev).abs() * shared).amax(dim=1)
-    return {"recall": recall, "dropped": dropped, "weight_err": weight_err, "misses": missed_keys(got, want, choice)}
-
-
 def _mean(t) -> float:
     t = torch.cat(t) if isinstance(t, list) else t
     return float(t.float().mean()) if t.numel() else float("nan")
 
 
 def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: torch.Tensor) -> dict:
-    """Score a complete device run in ``out`` per context position against its reference; writes metrics.json,
-    windows.tsv and rows.pt. The reference is the run's input's source: the trace (MoE output
+    """Score a complete device run in ``out`` per context position against its reference; returns the metrics with
+    the per-row values under ``rows`` (``write_score`` stores them in the run directory). The reference is the run's input's source: the trace (MoE output
     ``decoder_output_layer_L``, routing ``expert_ids`` / ``expert_weights``, missed experts ranked by the fp32 router's
     choice score), or the FP64 chain the input came from (``moe_output_L``, ``routing_ids_L`` / ``routing_weights_L``,
     best first, so a miss's rank is its FP64 rank), with the GPU trace's routing as a third reference
@@ -267,9 +260,10 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
     count, chunk, layer = manifest["count"], manifest["chunk"], manifest["layer"]
     source = Path(manifest["input"])
     chain = json.loads((source / MANIFEST).read_text()).get("chain")
+    chain_path = open_chain(chain).path if chain is not None else None
     gate = gate.float()
     num_chunks = -(-count // chunk)
-    moe = TokenErrorAccumulator()
+    sums = []
     keys = ("recall", "dropped", "weight_err", "recall_reference_vs_fp32", "recall_device_vs_fp32")
     per_row = {k: [] for k in keys + ("recall_gpu_vs_reference",)}
     misses = []
@@ -283,7 +277,7 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
             want_w = trace.rows(f"expert_weights_layer_{layer}", lo, hi)
         else:
             names = [f"moe_output_{layer}", f"routing_ids_{layer}", f"routing_weights_{layer}"]
-            expected, want, want_w = load_products(Path(chain), names, lo, hi).values()
+            expected, want, want_w = load_products(chain_path, names, lo, hi).values()
             want = want.long()
         host_ids, _, choice = route(load_input(source, lo, hi), gate, bias, top_k=want.shape[1])
         if chain is None:
@@ -293,8 +287,8 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
             per_row["recall_gpu_vs_reference"].append(
                 topk_recall(trace.rows(f"expert_ids_layer_{layer}", lo, hi).long(), want)
             )
-        moe.update(expected, payload["moe_out"])
-        r = routing_window(got, got_w, want, want_w, want_score)
+        sums.append(row_sums(expected, payload["moe_out"]))
+        r = routing_rows(got, got_w, want, want_w, want_score)
         for k in ("recall", "dropped", "weight_err"):
             per_row[k].append(r[k])
         per_row["recall_reference_vs_fp32"].append(topk_recall(host_ids, want))
@@ -302,8 +296,9 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
         r["misses"]["row"] = r["misses"]["row"] + lo
         misses.append(r["misses"])
         print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
-    floor = golden_floor(moe.expected_norms())
-    row_nrmse = moe.token_nrmse(floor)
+    sums = torch.cat(sums)
+    floor = golden_floor(sums[:, SUM_YY].sqrt())
+    per_row_nrmse = row_nrmse(sums, floor)
     per_row = {k: torch.cat(v) if v else torch.zeros(0) for k, v in per_row.items()}
     misses = {k: torch.cat([m[k] for m in misses]) for k in misses[0]}
     windows = []
@@ -316,9 +311,10 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
             {
                 "start": lo,
                 "end": hi,
-                "moe_nrmse_median": float(row_nrmse[lo:hi].median()),
-                "moe_nrmse_p99": quantile(row_nrmse[lo:hi], 0.99),
-                "moe_nrmse_max": float(row_nrmse[lo:hi].max()),
+                **errors(sums[lo:hi], "moe_"),
+                "moe_nrmse_median": float(per_row_nrmse[lo:hi].median()),
+                "moe_nrmse_p99": quantile(per_row_nrmse[lo:hi], 0.99),
+                "moe_nrmse_max": float(per_row_nrmse[lo:hi].max()),
                 "recall_vs_reference_mean": float(recall.mean()),
                 "set_equal_vs_reference": float((recall == 1).float().mean()),
                 "recall_reference_vs_fp32_mean": float(per_row["recall_reference_vs_fp32"][lo:hi].mean()),
@@ -326,7 +322,8 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
                 "misses": int(rank.numel()),
                 "miss_rank_median": quantile(rank, 0.5),
                 "miss_rank_min": int(rank.min()) if rank.numel() else -1,
-                "miss_top_half_fraction": float((2 * rank < selected).float().mean()) if rank.numel() else float("nan"),
+                # no miss in the window: no miss in the top half (as "overall" reports it), not undefined
+                "miss_top_half_fraction": float((2 * rank < selected).float().mean()) if rank.numel() else 0.0,
                 "dropped_reference_weight_mean": float(per_row["dropped"][lo:hi].mean()),
                 "dropped_reference_weight_p99": quantile(per_row["dropped"][lo:hi], 0.99),
                 "recall_gpu_vs_reference_mean": _mean(per_row["recall_gpu_vs_reference"][lo:hi]),
@@ -344,7 +341,8 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
         "run": manifest,
         "moe_nrmse_floor": floor,
         "overall": {
-            "moe_nrmse_median": float(row_nrmse.median()),
+            **errors(sums, "moe_"),
+            "moe_nrmse_median": float(per_row_nrmse.median()),
             "recall_vs_reference_mean": float(per_row["recall"].mean()),
             "set_equal_vs_reference": float((per_row["recall"] == 1).float().mean()),
             "recall_gpu_vs_reference_mean": _mean(per_row["recall_gpu_vs_reference"]),
@@ -358,14 +356,19 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
         },
         "windows": windows,
     }
-    result["bar_failures"] = check_bars(windows, BARS, ("moe_nrmse_median", NRMSE_GROWTH))
-    (out / "metrics.json").write_text(json.dumps(result, indent=1))
-    columns = list(windows[0])
-    (out / "windows.tsv").write_text(
-        "\t".join(columns) + "\n" + "".join("\t".join(f"{w[c]:.6g}" for c in columns) + "\n" for w in windows)
-    )
-    torch.save({"moe_nrmse": row_nrmse.float(), **{k: v.float() for k, v in per_row.items()}}, out / "rows.pt")
+    result["bar_failures"] = check(windows, BARS)
+    result["rows"] = {"moe_nrmse": per_row_nrmse.float(), **{k: v.float() for k, v in per_row.items()}}
     return result
+
+
+def write_score(out: Path, result: dict) -> None:
+    """``score``'s result into the run directory: metrics.json, windows.tsv and the per-row values (rows.pt)."""
+    (out / "metrics.json").write_text(json.dumps({k: v for k, v in result.items() if k != "rows"}, indent=1))
+    columns = list(result["windows"][0])
+    (out / "windows.tsv").write_text(
+        "\t".join(columns) + "\n" + "".join("\t".join(f"{w[c]:.6g}" for c in columns) + "\n" for w in result["windows"])
+    )
+    torch.save(result["rows"], out / "rows.pt")
 
 
 # --- fp32 host recompute on sampled rows ------------------------------------------------------------------------
@@ -440,8 +443,8 @@ class HostMoE:
 
 
 def nrmse_rows(got: torch.Tensor, want: torch.Tensor, floor: float) -> torch.Tensor:
-    """Per-row ||got - want|| / max(||want||, floor) (the scorer's per-row NRMSE, against ``want``)."""
-    return (got.float() - want.float()).norm(dim=-1) / want.float().norm(dim=-1).clamp_min(floor)
+    """Per-row NRMSE of ``got`` against ``want`` with the score's floor (``windowed.row_nrmse``)."""
+    return row_nrmse(row_sums(want, got), floor)
 
 
 def host_check(*, trace: Trace, out: Path, checkpoint: Path, rows: int) -> dict:
@@ -556,6 +559,7 @@ def main() -> None:
         w = layer_weights(args.checkpoint, complete_run(args.out)["layer"])
         gate, bias = w["block_sparse_moe.gate.weight"], w["block_sparse_moe.gate.e_score_correction_bias"]
         result = score(trace=trace, out=args.out, window=args.window, gate=gate, bias=bias)
+        write_score(args.out, result)
         print(json.dumps(result["overall"], indent=1))
         print("bars: " + ("PASS" if not result["bar_failures"] else "FAIL\n  " + "\n  ".join(result["bar_failures"])))
         raise SystemExit(1 if result["bar_failures"] else 0)

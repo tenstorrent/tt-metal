@@ -10,8 +10,9 @@ the chain's token ids on device and every layer reads the device's own previous 
 DSA caches carried across 2560-token chunks as chunked prefill carries them. The device embedding is a lookup of the
 checkpoint's bf16 table, the chain's embedding exactly.
 
-``$TT_DC_CHAIN`` picks the reference and so the layers (``device_chain.chain_taps``): the 1M chain
-``k31-l0-3-fp64-1m`` (layers 0-3, the default) or the deep chain ``k31-l0-7-fp64-256k`` (layers 0-7). Each layer's
+``$TT_DC_CHAIN`` picks the reference, a registry golden by id, and so the layers (``device_chain.chain_taps``): the
+1M chain ``k31-l0-3-fp64-1m`` (layers 0-3, the default) or the deep chain ``k31-l0-7-fp64-256k`` (layers 0-7). The
+token ids are the golden's. Each layer's
 taps go to ``$TT_DC_OUT`` in the teacher-feed formats:
 
 - ``kda-l<l>/``: the KDA output (``attn_out``, layers >= 1; the chains have no layer-0 KDA output) and the carry
@@ -44,16 +45,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, provenance, token_ids_sha256
+from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import open_golden
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, provenance
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import (
-    CHAIN,
-    INPUTS,
-    LAYERS_0_3,
-    TRACE,
-    chain_taps,
-    load_token_ids,
-)
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.device_chain import INPUTS, LAYERS_0_3, chain_taps
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import GOLDEN_1M
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import chunk_path, finish_run, start_run
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_kda_chain_feed import read_carry
@@ -70,14 +66,13 @@ OUT = os.environ.get("TT_DC_OUT")
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENT_4X4, indirect=True)
 def test_k31_layers_run_free(mesh_device, device_params):
     out = Path(OUT)
-    chain = Path(os.environ.get("TT_DC_CHAIN", CHAIN))
-    chain_manifest = json.loads((chain / MANIFEST).read_text())
+    golden = open_golden(os.environ.get("TT_DC_CHAIN", GOLDEN_1M))
+    chain = golden.path
     spec = chain_taps(chain)
     num_layers, kda_fed = spec.num_layers, tuple(l for l in spec.kda if l)
-    count = int(os.environ.get("TT_DC_COUNT", chain_manifest["count"]))
+    count = int(os.environ.get("TT_DC_COUNT", golden.rows))
     state_every = int(os.environ.get("TT_DC_STATE_EVERY", 20480))
-    token_ids = load_token_ids(Path(os.environ.get("TT_DC_TRACE", TRACE)), chain_manifest["count"])
-    assert token_ids_sha256(token_ids.tolist()) == chain_manifest["token_ids_sha256"], "not the chain's tokens"
+    token_ids = golden.token_ids()  # (checked against the golden's token_ids_sha256)
     mesh_shape = tuple(mesh_device.shape)
     layout = k31_stage.STAGE_LAYOUTS[mesh_shape]
     chunk = layout.chunk

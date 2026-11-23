@@ -47,14 +47,16 @@ from pathlib import Path
 
 import torch
 
+from models.demos.deepseek_v3_d_p.tests.accuracy.topk import missed_keys, topk_recall
+from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import errors, row_sums
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, atomic_save, segment_path
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import DSA_LAYER, MOE_LAYERS, load_products, state_path
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace, missed_keys, topk_recall
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import Trace
 
 SHARE_BINS = 100  # spread-share histogram bins over [0, 1]
 KEYS = ("latent", "kpe", "index_key")
 CUT_GAP_RANKS = 100  # the cut density: FP64 score gap between ranks k-1-CUT_GAP_RANKS and k-1 (from rank 0 if k <= 100)
-SCORER_VERSION = 2  # 2: the cut gap
+SCORER_VERSION = 3  # 2: the cut gap; 3: key sums are ``windowed.row_sums`` (absolute error, centred PCC)
 # Which way is worse, by metric-name suffix: +1 larger is worse, -1 smaller is worse. A missed key or expert ranked
 # deeper (larger rank) is nearer the cut, so smaller ranks are worse. Metrics with no entry (FP64 margins and cut
 # gap) get no "worst" in the trend.
@@ -64,6 +66,7 @@ DIRECTION = {
     "set_equal": -1,
     "pcc": -1,
     "nrmse": +1,
+    "rms_err": +1,
     "dropped_mean": +1,
     "dropped_p99": +1,
     "miss_rank_median": -1,
@@ -82,7 +85,9 @@ def direction(key: str) -> int | None:
 
 
 def model_sha256(manifest: dict) -> str:
-    return hashlib.sha256(json.dumps(manifest["model"], sort_keys=True).encode()).hexdigest()
+    """Digest of a chain's model configuration and weight digests."""
+    model = {"model": manifest["model"], "weights_sha256": manifest["identity"]["weights_sha256"]}
+    return hashlib.sha256(json.dumps(model, sort_keys=True).encode()).hexdigest()
 
 
 class ChainStreams:
@@ -117,24 +122,6 @@ class ChainStreams:
         raise KeyError(f"{key}: no chain product stands for this trace stream")
 
 
-def key_sums(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
-    """Per row ``[n, 7]`` FP64: sum x, sum y, sum xx, sum yy, sum xy, sum (x - y)^2, elements, with x the trace (got)
-    and y the FP64 value (want); PCC and NRMSE over any set of rows follow exactly from the column sums."""
-    x, y = got.double(), want.double()
-    count = torch.full((x.shape[0],), float(x.shape[1]), dtype=torch.float64)
-    return torch.stack(
-        [x.sum(1), y.sum(1), (x * x).sum(1), (y * y).sum(1), (x * y).sum(1), ((x - y) ** 2).sum(1), count], 1
-    )
-
-
-def pcc_nrmse(sums: torch.Tensor) -> tuple[float, float]:
-    """PCC and NRMSE (||x - y|| / ||y||) of the rows whose ``key_sums`` are given."""
-    sx, sy, sxx, syy, sxy, see, n = sums.sum(0).tolist()
-    cov = sxy - sx * sy / n
-    var = (sxx - sx * sx / n) * (syy - sy * sy / n)
-    return (cov / var**0.5 if var > 0 else float("nan")), (see / syy) ** 0.5 if syy > 0 else float("nan")
-
-
 def score_segment(chain: Path, index: int, trace: Trace, checks: dict) -> dict:
     """Per-row measures of one chain segment's rows against the trace."""
     seg = torch.load(segment_path(chain, index), weights_only=True)
@@ -161,7 +148,7 @@ def score_segment(chain: Path, index: int, trace: Trace, checks: dict) -> dict:
         "kpe": kv[:, lora:],
         "index_key": trace.rows(f"indexer_k_layer_{DSA_LAYER}", lo, hi),
     }
-    out["keys"] = {k: key_sums(trace_keys[k], keys[k]) for k in KEYS}
+    out["keys"] = {k: row_sums(keys[k], trace_keys[k]) for k in KEYS}
     want = seg["topk_indices_3"].long()
     got = trace.rows(f"dsa_topk_indices_layer_{DSA_LAYER}", lo, hi).long()
     topk = want.shape[1]
@@ -193,9 +180,9 @@ def check_comparable(chain: dict, candidate: dict) -> None:
     same = {
         "token source": source(a) == source(b),
         "checkpoint": a["checkpoint"] == b["checkpoint"],
-        "weights": chain["model"]["weights_sha256"] == candidate["model"]["weights_sha256"],
+        "weights": a["weights_sha256"] == b["weights_sha256"],
         "segment": chain["segment"] == candidate["segment"],
-        "rows": candidate["count"] <= chain["count"],
+        "rows": candidate["rows"] <= chain["rows"],
     }
     if not all(same.values()):
         raise ValueError(f"candidate chain differs from the chain in {[k for k, v in same.items() if not v]}")
@@ -279,7 +266,7 @@ def summarize(results: list[dict], window: int) -> dict:
             sum(r["routing_3_sampled"]["recall_sum"] for r in rs) / n3 if n3 else float("nan")
         )
         for k in KEYS:
-            m[f"{k}_pcc"], m[f"{k}_nrmse"] = pcc_nrmse(torch.cat([r["keys"][k] for r in rs]))
+            m.update(errors(torch.cat([r["keys"][k] for r in rs]), f"{k}_"))
         recall = torch.cat([r["topk"]["recall"][r["topk"]["full"]] for r in rs])
         rank = sum(r["topk"]["miss_rank_hist"] for r in rs)
         share = sum(r["topk"]["miss_share_hist"] for r in rs)

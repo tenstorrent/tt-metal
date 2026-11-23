@@ -36,23 +36,30 @@ import torch
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import hf_attn_res
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import TokenErrorAccumulator, golden_floor, pcc
+from models.demos.deepseek_v3_d_p.tests.accuracy.topk import missed_keys, topk_recall
+from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
+    SUM_YY,
+    Bar,
+    GrowthBar,
+    check,
+    errors,
+    quantile,
+    row_nrmse,
+    row_sums,
+)
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor, pcc
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     EPS,
     Trace,
     build_input,
     chain_identity,
-    check_bars,
     checkpoint_tensors,
     chunk_path,
     complete_run,
-    missed_keys,
-    quantile,
     replay_live_and_sealed,
     replay_missing,
     rms_norm,
-    topk_recall,
 )
 
 LAYER = KimiK3Config.NUM_LAYERS - 1  # 92: the one DSA layer whose input and outputs every K3.1 trace records
@@ -71,16 +78,17 @@ CHECK_ROWS = 64  # rows per segment the input check samples
 # * top-k recall, window mean over rows >= top-k, >= 0.85 (measured 0.955-0.987; 0.85 is the 128K floor of the
 #   depth ladder at HiFi2) and recall 1 below top-k; misses are near-ties: <= 1% of missed keys ranked in the top
 #   half of the trace's own selection by its score.
-BARS = {
-    "attn_nrmse_median": ("max", 0.06),
-    "kv_latent_pcc": ("min", 0.999),
-    "kv_rope_pcc": ("min", 0.9999),
-    "index_key_pcc": ("min", 0.999),
-    "recall_mean": ("min", 0.85),
-    "recall_min_below_topk": ("min", 1.0),
-    "miss_top_half_fraction": ("max", 0.01),
-}
 NRMSE_GROWTH = 1.15
+BARS = [
+    Bar("attn_nrmse_median", "max", 0.06),
+    Bar("kv_latent_pcc", "min", 0.999),
+    Bar("kv_rope_pcc", "min", 0.9999),
+    Bar("index_key_pcc", "min", 0.999),
+    Bar("recall_mean", "min", 0.85),
+    Bar("recall_min_below_topk", "min", 1.0),
+    Bar("miss_top_half_fraction", "max", 0.01),
+    GrowthBar("attn_nrmse_median", NRMSE_GROWTH),
+]
 
 
 def layer_weights(checkpoint: Path, layer: int = LAYER) -> dict[str, torch.Tensor]:
@@ -210,8 +218,8 @@ def build_dsa_input_from_chain(*, chain: Path, checkpoint: Path, count: int, out
 
 
 def score(*, trace: Trace, out: Path, window: int) -> dict:
-    """Score a complete device run in ``out`` per context position against its reference; writes metrics.json,
-    windows.tsv and rows.pt.
+    """Score a complete device run in ``out`` per context position against its reference; returns the metrics with
+    the per-row values under ``rows`` (``write_score`` stores them in the run directory).
 
     The reference is the run's input's source. From a trace: the trace's attention output (every row), top-k and its
     scores, kv_post_transform and indexer_k. From an FP64 chain (``fp64_chain.py``): the chain's FP64 attention output
@@ -219,18 +227,22 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
     chain's selection is reported beside the device's (``recall_gpu_vs_reference``). Streams chunk by chunk (the 1M
     attention output is 15 GB per side). Per row: attention output NRMSE (floored at 1% of the median reference row
     norm, as the KDA golden), top-k recall, and each missed key's rank and spread share in the reference's scores.
-    Per ``window`` rows: summaries of those, and the kvpe latent / rope and index key PCC.
+    Per ``window`` rows: summaries of those, the attention output's and the kvpe latent / rope and index key's absolute
+    and relative error (``windowed.errors``; their PCC is the bars' ``*_pcc``). A quantity a window does not define
+    (no scored attention row, no row past top-k, rows past top-k for ``recall_min_below_topk``) is left out of it; a
+    window without a miss has no miss in the top half.
     """
     manifest = complete_run(out)
     count, chunk, layer = manifest["count"], manifest["chunk"], manifest["layer"]
     chain = json.loads((Path(manifest["input"]) / MANIFEST).read_text()).get("chain")
     num_chunks = -(-count // chunk)
-    attn, attn_rows = TokenErrorAccumulator(), []
+    attn, attn_rows = [], []
     recall, gpu_recall, misses = [], [], []
     if chain is not None:
-        from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import load_products, load_sampled
+        from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import load_products, load_sampled, open_chain
 
-        sampled = load_sampled(Path(chain))
+        chain_path = open_chain(chain).path
+        sampled = load_sampled(chain_path)
         keep = sampled["sampled_rows"] < count
         sampled = {k: v[keep] for k, v in sampled.items()}
     for c in range(num_chunks):
@@ -238,7 +250,7 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         lo, hi = payload["start"], payload["end"]
         got = payload["topk"].long()
         if chain is None:
-            attn.update(trace.rows(f"attn_output_layer_{layer}", lo, hi), payload["attn_out"])
+            attn.append(row_sums(trace.rows(f"attn_output_layer_{layer}", lo, hi), payload["attn_out"]))
             attn_rows.append(torch.arange(lo, hi))
             want = trace.rows(f"dsa_topk_indices_layer_{layer}", lo, hi).long()
             want_scores = trace.rows(f"dsa_topk_scores_layer_{layer}", lo, hi).float()
@@ -246,9 +258,9 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
             inside = (sampled["sampled_rows"] >= lo) & (sampled["sampled_rows"] < hi)
             if inside.any():
                 rows = sampled["sampled_rows"][inside]
-                attn.update(sampled["attn_output_3"][inside].float(), payload["attn_out"][rows - lo])
+                attn.append(row_sums(sampled["attn_output_3"][inside].float(), payload["attn_out"][rows - lo]))
                 attn_rows.append(rows)
-            p = load_products(Path(chain), ["topk_indices_3", "topk_scores_3"], lo, hi)
+            p = load_products(chain_path, ["topk_indices_3", "topk_scores_3"], lo, hi)
             want, want_scores = p["topk_indices_3"].long(), p["topk_scores_3"].float()
             gpu_recall.append(topk_recall(trace.rows(f"dsa_topk_indices_layer_{layer}", lo, hi).long(), want))
         recall.append(topk_recall(got, want))
@@ -256,8 +268,9 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         chunk_misses["row"] = chunk_misses["row"] + lo
         misses.append(chunk_misses)
         print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
-    floor = golden_floor(attn.expected_norms())
-    row_nrmse, attn_rows = attn.token_nrmse(floor), torch.cat(attn_rows)
+    attn = torch.cat(attn)
+    floor = golden_floor(attn[:, SUM_YY].sqrt())
+    per_row_nrmse, attn_rows = row_nrmse(attn, floor), torch.cat(attn_rows)
     recall = torch.cat(recall)
     gpu_recall = torch.cat(gpu_recall) if gpu_recall else None
     misses = {k: torch.cat([m[k] for m in misses]) for k in misses[0]}
@@ -267,10 +280,18 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         kv_ref = trace.rows(f"kv_post_transform_layer_{layer}", 0, count)
         key_ref = trace.rows(f"indexer_k_layer_{layer}", 0, count)
     else:
-        k = load_products(Path(chain), ["latent", "kpe", "index_key"], 0, count)
+        k = load_products(chain_path, ["latent", "kpe", "index_key"], 0, count)
         lora, kv_ref, key_ref = k["latent"].shape[1], torch.cat([k["latent"], k["kpe"]], -1), k["index_key"]
     topk = want.shape[1]  # the reference's selection size (2048)
     nan = float("nan")
+    keys = {
+        "kv_latent": row_sums(kv_ref[:, :lora], caches["kvpe"][:, :lora]),
+        "kv_rope": row_sums(kv_ref[:, lora:], caches["kvpe"][:, lora:]),
+        "index_key": row_sums(key_ref, caches["index"]),
+    }
+
+    def key_errors(lo: int, hi: int) -> dict:
+        return {k: v for name, sums in keys.items() for k, v in errors(sums[lo:hi], f"{name}_").items()}
 
     windows = []
     for lo in range(0, count, window):
@@ -278,33 +299,33 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         inside = (misses["row"] >= lo) & (misses["row"] < hi)
         rank, selected, share = (misses[k][inside] for k in ("rank", "selected", "spread_share"))
         gated = recall[max(lo, topk) : hi]  # rows < top-k select every causal key on both sides
-        nr = row_nrmse[(attn_rows >= lo) & (attn_rows < hi)]
-        windows.append(
-            {
-                "start": lo,
-                "end": hi,
-                "attn_rows": int(nr.numel()),
-                "attn_nrmse_median": float(nr.median()) if nr.numel() else nan,
-                "attn_nrmse_p99": quantile(nr, 0.99),
-                "attn_nrmse_max": float(nr.max()) if nr.numel() else nan,
-                "kv_latent_pcc": pcc(kv_ref[lo:hi, :lora], caches["kvpe"][lo:hi, :lora]),
-                "kv_rope_pcc": pcc(kv_ref[lo:hi, lora:], caches["kvpe"][lo:hi, lora:]),
-                "index_key_pcc": pcc(key_ref[lo:hi], caches["index"][lo:hi]),
-                "recall_mean": float(gated.mean()) if gated.numel() else nan,
-                "recall_p05": quantile(gated, 0.05),
-                "recall_gpu_vs_reference_mean": (
-                    float(gpu_recall[max(lo, topk) : hi].mean()) if gpu_recall is not None and gated.numel() else nan
-                ),
-                "recall_min_below_topk": float(recall[lo : min(hi, topk)].min()) if lo < topk else nan,
-                "misses": int(rank.numel()),
-                "miss_rank_p10": quantile(rank, 0.1),
-                "miss_rank_median": quantile(rank, 0.5),
-                "miss_rank_min": int(rank.min()) if rank.numel() else -1,
-                "miss_top_half_fraction": float((2 * rank < selected).float().mean()) if rank.numel() else nan,
-                "miss_spread_share_median": quantile(share, 0.5),
-                "miss_spread_share_p90": quantile(share, 0.9),
-            }
+        in_window = (attn_rows >= lo) & (attn_rows < hi)
+        nr = per_row_nrmse[in_window]
+        w = {"start": lo, "end": hi, "attn_rows": int(nr.numel())}
+        if nr.numel():
+            w.update(
+                attn_nrmse_median=float(nr.median()),
+                attn_nrmse_p99=quantile(nr, 0.99),
+                attn_nrmse_max=float(nr.max()),
+                **errors(attn[in_window], "attn_"),
+            )
+        w.update(key_errors(lo, hi))
+        if gated.numel():
+            w.update(recall_mean=float(gated.mean()), recall_p05=quantile(gated, 0.05))
+            if gpu_recall is not None:
+                w["recall_gpu_vs_reference_mean"] = float(gpu_recall[max(lo, topk) : hi].mean())
+        if lo < topk:
+            w["recall_min_below_topk"] = float(recall[lo : min(hi, topk)].min())
+        w.update(
+            misses=int(rank.numel()),
+            miss_rank_p10=quantile(rank, 0.1),
+            miss_rank_median=quantile(rank, 0.5),
+            miss_rank_min=int(rank.min()) if rank.numel() else -1,
+            miss_top_half_fraction=float((2 * rank < selected).float().mean()) if rank.numel() else 0.0,
+            miss_spread_share_median=quantile(share, 0.5),
+            miss_spread_share_p90=quantile(share, 0.9),
         )
+        windows.append(w)
     result = {
         "layer": layer,
         "count": count,
@@ -314,30 +335,35 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         "run": manifest,
         "attn_nrmse_floor": floor,
         "overall": {
-            "attn_rows": int(row_nrmse.numel()),
-            "attn_nrmse_median": float(row_nrmse.median()),
-            "kv_latent_pcc": pcc(kv_ref[:, :lora], caches["kvpe"][:, :lora]),
-            "kv_rope_pcc": pcc(kv_ref[:, lora:], caches["kvpe"][:, lora:]),
-            "index_key_pcc": pcc(key_ref, caches["index"]),
+            "attn_rows": int(per_row_nrmse.numel()),
+            "attn_nrmse_median": float(per_row_nrmse.median()),
+            **errors(attn, "attn_"),
+            **key_errors(0, count),
             "recall_mean": float(recall[topk:].mean()) if count > topk else nan,
             "recall_gpu_vs_reference_mean": (
                 float(gpu_recall[topk:].mean()) if gpu_recall is not None and count > topk else nan
             ),
             "misses": int(misses["rank"].numel()),
             "miss_top_half_fraction": (
-                float((2 * misses["rank"] < misses["selected"]).float().mean()) if misses["rank"].numel() else nan
+                float((2 * misses["rank"] < misses["selected"]).float().mean()) if misses["rank"].numel() else 0.0
             ),
         },
         "windows": windows,
     }
-    result["bar_failures"] = check_bars(windows, BARS, ("attn_nrmse_median", NRMSE_GROWTH))
-    (out / "metrics.json").write_text(json.dumps(result, indent=1))
-    columns = list(windows[0])
-    (out / "windows.tsv").write_text(
-        "\t".join(columns) + "\n" + "".join("\t".join(f"{w[c]:.6g}" for c in columns) + "\n" for w in windows)
-    )
-    torch.save({"attn_rows": attn_rows, "attn_nrmse": row_nrmse.float(), "recall": recall.float()}, out / "rows.pt")
+    result["bar_failures"] = check(windows, BARS)
+    result["rows"] = {"attn_rows": attn_rows, "attn_nrmse": per_row_nrmse.float(), "recall": recall.float()}
     return result
+
+
+def write_score(out: Path, result: dict) -> None:
+    """``score``'s result into the run directory: metrics.json, windows.tsv (the columns every window has) and the
+    per-row values (rows.pt)."""
+    (out / "metrics.json").write_text(json.dumps({k: v for k, v in result.items() if k != "rows"}, indent=1))
+    columns = [c for c in result["windows"][0] if all(c in w for w in result["windows"])]
+    (out / "windows.tsv").write_text(
+        "\t".join(columns) + "\n" + "".join("\t".join(f"{w[c]:.6g}" for c in columns) + "\n" for w in result["windows"])
+    )
+    torch.save(result["rows"], out / "rows.pt")
 
 
 def main() -> None:
@@ -378,6 +404,7 @@ def main() -> None:
         )
     else:
         result = score(trace=trace, out=args.out, window=args.window)
+        write_score(args.out, result)
         print(json.dumps(result["overall"], indent=1))
         print("bars: " + ("PASS" if not result["bar_failures"] else "FAIL\n  " + "\n  ".join(result["bar_failures"])))
         raise SystemExit(1 if result["bar_failures"] else 0)

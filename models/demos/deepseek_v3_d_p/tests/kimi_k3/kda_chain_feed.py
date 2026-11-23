@@ -16,12 +16,12 @@ stored, so a rebuild that does not reproduce the chain fails: the recomputed KDA
 ``state_<i>.pt`` (all three layers, relative L2 <= ``STATE_BAR`` of the layer), the recomputed MoE inputs and ``dsa_input_3``
 against the stored ones (relative L2 <= ``PRODUCT_BAR``; fp32 storage, and the live sum carries the stored fp32 MoE
 outputs instead of the chain's FP64 ones). It also records the GPU trace's layer-0 KDA output against FP64 per row
-(``chain_vs_trace.key_sums``): the only KDA output the trace has, the GPU's calibration.
+(``windowed.row_sums``): the only KDA output the trace has, the GPU's calibration.
 
 ``input --layer L``: the device input of layer L as a ``teacher_feed`` input directory (``normed`` per segment).
 
 ``score --layer L``: a device run (``test_kda_chain_feed.py``) against FP64 per window of positions: the KDA output
-(per-row NRMSE, PCC), the device recurrent state at the rows where a device chunk and a chain segment end together
+(absolute and relative error, per-row NRMSE, PCC), the device recurrent state at the rows where a device chunk and a chain segment end together
 (every 20480 rows) against the chain's state (relative L2 per head), and downstream the layer's MoE routing from the
 device output (the FFN read of the FP64 live sum plus the device output, routed in FP64) against the chain's routing,
 next to the GPU's routing recall of the same rows (the trace).
@@ -43,8 +43,18 @@ from pathlib import Path
 import torch
 
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
+from models.demos.deepseek_v3_d_p.tests.accuracy.kda import state_errors
+from models.demos.deepseek_v3_d_p.tests.accuracy.topk import topk_recall
+from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
+    COUNT,
+    SUM_EE,
+    SUM_YY,
+    errors,
+    quantile,
+    row_nrmse,
+    row_sums,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, atomic_save, segment_path
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.chain_vs_trace import key_sums, pcc_nrmse
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import (
     DSA_LAYER,
     F64,
@@ -53,7 +63,9 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import (
     ChainModel,
     attn_res64,
     dense_mlp64,
+    open_chain,
     rms64,
+    route64,
     state_path,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
@@ -62,12 +74,10 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     chain_identity,
     chunk_path,
     complete_run,
-    quantile,
-    topk_recall,
 )
 
 FED_LAYERS = MOE_LAYERS  # (1, 2): the KDA layers whose input is an AttnRes read (layer 0's is the embedding)
-REBUILD_VERSION = 1
+REBUILD_VERSION = 2  # 2: the GPU calibration sums are ``windowed.row_sums`` (8 columns; 1: 7 raw-sum columns)
 # The rebuild must reproduce the chain. Layers 0-1 see only recomputed FP64, so their KDA states match to rounding
 # (a different thread count changes FP64 summation order only). Layer 2's input carries the stored fp32 MoE output of
 # layer 1 instead of the chain's FP64 one, a ~1e-8 relative perturbation (pilot: state 2.5e-9, convolution 5.4e-9),
@@ -112,7 +122,7 @@ def rebuild_segment(model: ChainModel, chain: Path, index: int, token_ids: torch
             out[f"kda_output_{l}"] = attn.float()
             out[f"live_{l}"] = live.float()
         elif trace is not None:
-            out["gpu_attn_output_0_sums"] = key_sums(trace.rows("attn_output_layer_0", start, end), attn)
+            out["gpu_attn_output_0_sums"] = row_sums(attn, trace.rows("attn_output_layer_0", start, end))
         live = attn if live is None else live + attn
         normed = rms64(attn_res64(live, sealed, L["mlp_res"], eps), L["post_attention_layernorm"], eps)
         if l == 0:
@@ -154,9 +164,8 @@ def rebuild(
         "segment_rows": [[s["start"], s["end"]] for s in manifest["segments"]],
         "gpu_calibration": trace is not None,
     }
-    digests = {k: v for k, v in model.identity()["weights_sha256"].items()}
-    want = manifest["model"]["weights_sha256"]
-    differ = [k for k, v in digests.items() if want.get(k) != v]
+    want = open_chain(chain).identity["weights_sha256"]
+    differ = [k for k, v in model.weights_sha256().items() if want.get(k) != v]
     if differ:
         raise ValueError(f"weights {differ} differ from the chain's {chain}")
     out.mkdir(parents=True, exist_ok=True)
@@ -231,24 +240,25 @@ def build_kda_input(*, rebuilt: Path, layer: int, out: Path, count: int | None =
 # --- scoring a device run against the rebuilt FP64 ------------------------------------------------------------------
 
 
-def route64(normed: torch.Tensor, gate: torch.Tensor, bias: torch.Tensor, top_k: int) -> torch.Tensor:
-    """The K3 router's selection in FP64 (sigmoid scores + selection bias, top-k, best first), as ``MoE64.route``."""
-    return ((normed @ gate.T).sigmoid() + bias).topk(top_k, dim=-1).indices
-
-
-def score(*, rebuilt: Path, run: Path, trace: Trace | None, model: ChainModel, window: int, log=print) -> dict:
-    """A device run of ``test_kda_chain_feed.py`` against the rebuilt FP64 (module docstring); writes
-    ``metrics.json`` into the run directory."""
+def score(*, rebuilt: Path, run: Path, trace: Trace, model: ChainModel, window: int, log=print) -> dict:
+    """A device run of ``test_kda_chain_feed.py`` against the rebuilt FP64 (module docstring); returns the metrics
+    (``write_metrics`` stores them). ``trace`` gives the token ids and the GPU's routing. The FFN read replays AttnRes
+    with the embedding as the only sealed snapshot, which holds for a layer inside the first block only."""
     run_manifest = complete_run(run)
     layer, count = run_manifest["layer"], run_manifest["count"]
+    if layer >= model.block_size:
+        raise ValueError(
+            f"layer {layer} is past the first AttnRes block ({model.block_size} layers): its FFN read mixes more "
+            "sealed snapshots than the embedding, which this scorer does not replay"
+        )
     rb = rebuilt_manifest(rebuilt, count)
     seg_rows = rb["segment_rows"]
     segment = seg_rows[0][1] - seg_rows[0][0]
-    chain = Path(rb["chain"]["chain"])
+    chain = open_chain(rb["chain"]["chain"]).path
     L = model.layers[layer]
     eps = model.eps
     sums, nrmse_rows, recall_dev, recall_gpu, recall_ref = [], [], [], [], []
-    token_ids = torch.tensor(trace.metadata["token_ids"][:count], dtype=torch.int64) if trace is not None else None
+    token_ids = torch.tensor(trace.metadata["token_ids"][:count], dtype=torch.int64)
     chunk = run_manifest["chunk"]
     pending: dict | None = None
     for index in range(-(-count // segment)):
@@ -263,18 +273,18 @@ def score(*, rebuilt: Path, run: Path, trace: Trace | None, model: ChainModel, w
             ]
         )
         want = p[f"kda_output_{layer}"][: hi - lo]
-        sums.append(key_sums(got, want))
-        nrmse_rows.append(((got.double() - want.double()).norm(dim=1) / want.double().norm(dim=1)).float())
+        sums.append(row_sums(want, got))
+        nrmse_rows.append(row_nrmse(sums[-1], 0.0).float())
         seg = torch.load(segment_path(chain, index), weights_only=True, mmap=True)
         emb = model.embedding[token_ids[lo:hi]].to(F64).unsqueeze(1)
         live = p[f"live_{layer}"][: hi - lo].double() + got.double()
         normed = rms64(attn_res64(live, emb, L["mlp_res"], eps), L["post_attention_layernorm"], eps)
-        ids = route64(normed, L["gate"], L["gate_bias"], model.top_k)
+        ids = route64(normed, L["gate"], L["gate_bias"], model.top_k)[0]
         chain_ids = seg[f"routing_ids_{layer}"][: hi - lo].long()
         recall_dev.append(topk_recall(ids, chain_ids))
         live_ref = p[f"live_{layer}"][: hi - lo].double() + want.double()
         normed_ref = rms64(attn_res64(live_ref, emb, L["mlp_res"], eps), L["post_attention_layernorm"], eps)
-        recall_ref.append(topk_recall(route64(normed_ref, L["gate"], L["gate_bias"], model.top_k), chain_ids))
+        recall_ref.append(topk_recall(route64(normed_ref, L["gate"], L["gate_bias"], model.top_k)[0], chain_ids))
         recall_gpu.append(topk_recall(trace.rows(f"expert_ids_layer_{layer}", lo, hi).long(), chain_ids))
         log(f"scored segment {index + 1} rows [{lo}, {hi})") if index % 32 == 0 else None
     sums, nrmse_rows = torch.cat(sums), torch.cat(nrmse_rows)
@@ -286,26 +296,13 @@ def score(*, rebuilt: Path, run: Path, trace: Trace | None, model: ChainModel, w
             continue
         want = torch.load(state_path(chain, row // segment - 1), weights_only=True, mmap=True)["kda"][layer]
         got = torch.load(run / entry["file"], weights_only=True)
-        per_head = (got["recurrent"].double() - want["recurrent"]).flatten(2).norm(dim=2) / want["recurrent"].flatten(
-            2
-        ).norm(dim=2)
-        states.append(
-            {
-                "row": row,
-                "recurrent_rel": rel(got["recurrent"], want["recurrent"]),
-                "recurrent_head_rel_max": float(per_head.max()),
-                "recurrent_head_rel_median": float(per_head.median()),
-                "conv_rel": max(rel(got[f"{c}_convolution"], want[f"{c}_convolution"]) for c in "qkv"),
-            }
-        )
+        states.append({"row": row, **state_errors(got, want)})
 
     def measures(lo: int, hi: int) -> dict:
-        pcc, nrmse = pcc_nrmse(sums[lo:hi])
         return {
             "start": lo,
             "end": hi,
-            "kda_pcc": pcc,
-            "kda_nrmse": nrmse,
+            **errors(sums[lo:hi], "kda_"),
             "kda_row_nrmse_median": float(nrmse_rows[lo:hi].median()),
             "kda_row_nrmse_p99": quantile(nrmse_rows[lo:hi], 0.99),
             "routing_recall_device": float(recall_dev[lo:hi].mean()),
@@ -327,8 +324,22 @@ def score(*, rebuilt: Path, run: Path, trace: Trace | None, model: ChainModel, w
         "windows": windows,
         "states": states,
     }
-    (run / "metrics.json").write_text(json.dumps(result, indent=1))
     return result
+
+
+def write_metrics(run: Path, result: dict) -> None:
+    (run / "metrics.json").write_text(json.dumps(result, indent=1))
+
+
+def row_sums_v1(sums: torch.Tensor) -> torch.Tensor:
+    """``windowed.row_sums`` from a version-1 rebuild's 7 raw-sum columns (Σx, Σy, Σx², Σy², Σxy, Σ(x−y)², n): the
+    means and centred moments follow from the raw sums (with their cancellation, as version 1 computed PCC)."""
+    sx, sy, sxx, syy, sxy, see, n = sums.double().unbind(1)
+    out = torch.empty(sums.shape[0], COUNT + 1, dtype=torch.float64)
+    out[:, 0], out[:, 1] = sy / n, sx / n
+    out[:, 2], out[:, 3], out[:, 4] = syy - sy * sy / n, sxx - sx * sx / n, sxy - sx * sy / n
+    out[:, SUM_YY], out[:, SUM_EE], out[:, COUNT] = syy, see, n
+    return out
 
 
 def gpu_calibration(rebuilt: Path, window: int) -> list[dict]:
@@ -340,11 +351,12 @@ def gpu_calibration(rebuilt: Path, window: int) -> list[dict]:
             for i in range(manifest["segments"])
         ]
     )
-    out = []
-    for lo in range(0, sums.shape[0], window):
-        pcc, nrmse = pcc_nrmse(sums[lo : lo + window])
-        out.append({"start": lo, "end": min(lo + window, sums.shape[0]), "gpu_kda0_pcc": pcc, "gpu_kda0_nrmse": nrmse})
-    return out
+    if manifest["rebuild_version"] == 1:
+        sums = row_sums_v1(sums)
+    return [
+        {"start": lo, "end": min(lo + window, sums.shape[0]), **errors(sums[lo : lo + window], "gpu_kda0_")}
+        for lo in range(0, sums.shape[0], window)
+    ]
 
 
 def main() -> None:
@@ -384,7 +396,7 @@ def main() -> None:
         m = build_kda_input(rebuilt=args.rebuilt, layer=args.layer, out=args.out, count=args.count)
         log(f"input layer {args.layer}: {m['segments'][-1]['end']} rows -> {args.out}")
     elif args.command == "score":
-        chain = Path(json.loads((args.rebuilt / MANIFEST).read_text())["chain"]["chain"])
+        chain = open_chain(json.loads((args.rebuilt / MANIFEST).read_text())["chain"]["chain"]).path
         result = score(
             rebuilt=args.rebuilt,
             run=args.run,
@@ -393,6 +405,7 @@ def main() -> None:
             window=args.window,
             log=log,
         )
+        write_metrics(args.run, result)
         print(json.dumps({k: result[k] for k in ("overall", "states")}, indent=1))
     else:
         print(json.dumps(gpu_calibration(args.rebuilt, args.window), indent=1))
