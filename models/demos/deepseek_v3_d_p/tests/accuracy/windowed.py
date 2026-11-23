@@ -7,7 +7,7 @@ FP64 sufficient statistics (``row_sums``), from which the NRMSE, PCC and absolut
 exactly. Windows are aligned to absolute row 0, so two runs with different chunk sizes or layouts score identical row
 windows.
 
-Every continuous product is reported in absolute and relative terms together (``error_metrics``): a relative error
+Every continuous product is reported in absolute and relative terms together (``errors``): a relative error
 that stays flat while the golden grows is a growing absolute error downstream, so NRMSE alone misleads. Absolute
 error is the RMS over all elements of the window (``rms_err``), next to the golden's own RMS (``rms_ref``);
 ``nrmse = rms_err / rms_ref``.
@@ -111,44 +111,43 @@ def quantile(t: torch.Tensor, q: float) -> float:
     return float(v[lo] + (v[hi] - v[lo]) * (pos - lo))
 
 
-Window = Mapping[str, object]
-"""One window's slice of a ``RowSeries``: each row column as a ``[rows, ...]`` tensor, each event column as a dict of
-1-D tensors (its ``row`` field absolute)."""
-
-Metric = Callable[[Window], "float | None"]
-
-
-def of(column: str, f: Callable[[torch.Tensor], float]) -> Metric:
-    """A window metric computing ``f`` on one row column."""
-    return lambda window: f(window[column])
-
-
-ERRORS: dict[str, Callable[[torch.Tensor], float]] = {
-    "nrmse": nrmse,
-    "rms_err": rms_err,
-    "rms_ref": rms_ref,
-    "pcc": pcc,
-}
-
-
 def errors(sums: torch.Tensor, prefix: str = "") -> dict[str, float]:
     """The absolute and relative error of the rows of ``sums`` together: ``<prefix>nrmse``, ``<prefix>rms_err``,
-    ``<prefix>rms_ref`` and ``<prefix>pcc``."""
-    return {f"{prefix}{name}": f(sums) for name, f in ERRORS.items()}
+    ``<prefix>rms_ref``, and ``<prefix>pcc`` unless one side is constant (PCC undefined: left out, not NaN)."""
+    out = {f"{prefix}nrmse": nrmse(sums), f"{prefix}rms_err": rms_err(sums), f"{prefix}rms_ref": rms_ref(sums)}
+    correlation = pcc(sums)
+    if not math.isnan(correlation):
+        out[f"{prefix}pcc"] = correlation
+    return out
 
 
-def error_metrics(prefix: str, column: str = "sums") -> dict[str, Metric]:
-    """``errors`` as window metrics of a continuous product whose ``row_sums`` are in ``column``:
-    ``<prefix>_nrmse``, ``<prefix>_rms_err``, ``<prefix>_rms_ref`` and ``<prefix>_pcc``."""
-    return {f"{prefix}_{name}": of(column, f) for name, f in ERRORS.items()}
+@dataclass(frozen=True)
+class Window:
+    """Rows ``[start, end)`` of a ``RowSeries``: ``window[name]`` is a row column's ``[rows, ...]`` slice, or an
+    event column's events inside the window (a dict of tensors, ``row`` absolute)."""
+
+    start: int
+    end: int
+    data: Mapping[str, object]
+
+    def __getitem__(self, name: str):
+        return self.data[name]
+
+    def __contains__(self, name: str) -> bool:
+        return name in self.data
+
+
+Measure = Callable[[Window], dict]
 
 
 class RowSeries:
-    """Named per-row columns of a result streamed in contiguous chunks from row 0, plus row-tagged event columns.
+    """Named per-row columns of a result from row 0, plus row-tagged event columns, measured per window.
 
     ``append(start, **columns)`` adds the rows ``[start, start + n)`` of every row column (each ``[n, ...]``; the same
-    names on every call). ``add_events(name, row=..., **fields)`` adds events (for example top-k misses) at absolute
-    rows, in any order. ``windows`` slices both by row."""
+    names on every call, contiguous from row 0). ``add_events(name, row=..., **fields)`` adds events (top-k misses,
+    or quantities known on sampled rows only) at absolute rows, in any order; every field has one entry per event.
+    ``windows`` and ``whole`` apply one ``measure`` to each window's slice of both. A measure returns ``None`` for a
+    quantity its window does not define; that key is left out of the window, never reported as NaN."""
 
     def __init__(self) -> None:
         self._chunks: dict[str, list[torch.Tensor]] = {}
@@ -177,8 +176,10 @@ class RowSeries:
         if name in self._chunks:
             raise ValueError(f"{name!r} is a row column")
         fields = {"row": row, **fields}
-        if any(t.ndim != 1 or t.shape[0] != row.shape[0] for t in fields.values()):
-            raise ValueError(f"event fields must be 1-D of one length, got {[tuple(t.shape) for t in fields.values()]}")
+        if row.ndim != 1 or any(t.ndim < 1 or t.shape[0] != row.shape[0] for t in fields.values()):
+            raise ValueError(
+                f"every event field needs one entry per event, got {[tuple(t.shape) for t in fields.values()]}"
+            )
         events = self._events.setdefault(name, {k: [] for k in fields})
         if set(events) != set(fields):
             raise ValueError(f"event fields {sorted(fields)} differ from {name!r}'s {sorted(events)}")
@@ -194,38 +195,36 @@ class RowSeries:
             chunks[:] = [torch.cat(chunks)]
         return chunks[0]
 
-    def events(self, name: str) -> dict[str, torch.Tensor]:
-        """All events of event column ``name`` (``{}`` fields empty when none were added)."""
+    def _events_of(self, name: str) -> dict[str, torch.Tensor]:
         fields = self._events[name]
         for chunks in fields.values():
             if len(chunks) > 1:
                 chunks[:] = [torch.cat(chunks)]
         return {k: v[0] for k, v in fields.items()}
 
-    def windows(self, size: int, metrics: dict[str, Metric]) -> list[dict]:
-        """``metrics`` of each ``size``-row window aligned to row 0 and clipped to the series; each window is
-        ``{"start", "end", "rows", <metric>: value}`` (``rows`` < ``size`` marks a partial window). A metric that
-        returns ``None`` is left out of that window."""
+    def _measure(self, start: int, end: int, measure: Measure) -> dict:
+        data: dict[str, object] = {name: self.column(name)[start:end] for name in self._chunks}
+        for name in self._events:
+            fields = self._events_of(name)
+            inside = (fields["row"] >= start) & (fields["row"] < end)
+            data[name] = {k: v[inside] for k, v in fields.items()}
+        values = measure(Window(start, end, data))
+        return {"start": start, "end": end, "rows": end - start, **{k: v for k, v in values.items() if v is not None}}
+
+    def windows(self, size: int, measure: Measure) -> list[dict]:
+        """``measure`` of each ``size``-row window aligned to row 0 and clipped to the series: ``{"start", "end",
+        "rows", **measure(window)}`` (``rows`` < ``size`` marks a partial window)."""
         if size <= 0:
             raise ValueError(f"window size must be positive, got {size}")
         if not self._chunks:
             raise ValueError("no rows accumulated")
-        columns = {name: self.column(name) for name in self._chunks}
-        events = {name: self.events(name) for name in self._events}
-        windows = []
-        for start in range(0, self._end, size):
-            end = min(start + size, self._end)
-            view: dict[str, object] = {name: t[start:end] for name, t in columns.items()}
-            for name, fields in events.items():
-                inside = (fields["row"] >= start) & (fields["row"] < end)
-                view[name] = {k: v[inside] for k, v in fields.items()}
-            window = {"start": start, "end": end, "rows": end - start}
-            for metric, f in metrics.items():
-                value = f(view)
-                if value is not None:
-                    window[metric] = value
-            windows.append(window)
-        return windows
+        return [self._measure(start, min(start + size, self._end), measure) for start in range(0, self._end, size)]
+
+    def whole(self, measure: Measure) -> dict:
+        """``measure`` of every row of the series, as one window."""
+        if not self._chunks:
+            raise ValueError("no rows accumulated")
+        return self._measure(0, self._end, measure)
 
 
 Kind = Literal["max", "min"]

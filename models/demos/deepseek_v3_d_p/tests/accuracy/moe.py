@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """MoE accuracy against a reference: what a routing difference costs, per row.
 
-The MoE output is a continuous product, scored by ``windowed.error_metrics`` (absolute and relative). Routing is
+The MoE output is a continuous product, scored by ``windowed.errors`` (absolute and relative). Routing is
 scored here. ``dropped`` is in the router's own weight units (the reference weight lost), so it is absolute already;
 ``recall`` and set equality are fractions. Router math (scores, bias, top-k, scaling) is the model's and stays with
 the model. MoE is stateless: judge its error per window absolutely, not by growth over context.

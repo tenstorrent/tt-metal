@@ -132,6 +132,20 @@ def test_require_names_every_mismatch(tmp_path: Path, expect_error) -> None:
     )
 
 
+def test_require_checks_the_weights_a_consumer_loaded_against_the_golden_s(tmp_path: Path, expect_error) -> None:
+    """A consumer loads some of the weights a golden was built from; each digest it passes must be the golden's
+    (a subset: unnamed layers pass), and a different or unknown one is named."""
+    digests = {"embed": "aa" * 32, "layers.0": "bb" * 32, "layers.1": "cc" * 32}
+    identity = {"model": "tiny", "token_source": "hand-written", "weights_sha256": digests}
+    golden = open_golden(make_golden(tmp_path, {"identity": identity}).name, root=tmp_path)
+    golden.require(producer="tests.tiny", producer_version=1, weights_sha256={"layers.0": "bb" * 32})
+    with expect_error(GoldenMismatch, "weights layers.0 are dddddddddddd..., the golden's bbbbbbbbbbbb...") as raised:
+        golden.require(
+            producer="tests.tiny", producer_version=1, weights_sha256={"layers.0": "dd" * 32, "x": "ee" * 32}
+        )
+    assert "weights x are eeeeeeeeeeee..., the golden's None..." in str(raised.value)
+
+
 def test_token_ids_must_match_the_manifest_digest(tmp_path: Path, expect_error) -> None:
     path = make_golden(tmp_path)
     golden = open_golden(path.name, root=tmp_path)

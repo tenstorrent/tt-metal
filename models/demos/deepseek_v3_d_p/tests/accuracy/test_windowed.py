@@ -12,10 +12,8 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
     GrowthBar,
     RowSeries,
     check,
-    error_metrics,
     errors,
     nrmse,
-    of,
     pcc,
     quantile,
     rms_err,
@@ -68,17 +66,12 @@ def test_absolute_error_is_the_rms_over_elements_next_to_the_golden_rms() -> Non
     assert rms_err(sums) == pytest.approx(math.sqrt(0.5)) and rms_ref(sums) == pytest.approx(math.sqrt(12.5))
     assert rms_err(sums) / rms_ref(sums) == pytest.approx(nrmse(sums)) == pytest.approx(0.2)
     # All four rows: Σe² 2, Σy² 75 over 8 elements; the exact zero row counts in the element total.
-    whole = {"sums": row_sums(EXPECTED, ACTUAL)}
-    values = {name: f(whole) for name, f in error_metrics("out").items()}
-    assert values == errors(whole["sums"], "out_")
-    assert values == pytest.approx(
-        {
-            "out_nrmse": math.sqrt(2 / 75),
-            "out_rms_err": 0.5,
-            "out_rms_ref": math.sqrt(75 / 8),
-            "out_pcc": pcc(whole["sums"]),
-        }
+    whole = row_sums(EXPECTED, ACTUAL)
+    assert errors(whole, "out_") == pytest.approx(
+        {"out_nrmse": math.sqrt(2 / 75), "out_rms_err": 0.5, "out_rms_ref": math.sqrt(75 / 8), "out_pcc": pcc(whole)}
     )
+    # PCC is undefined when one side is constant: left out, not NaN
+    assert errors(row_sums(torch.ones(1, 3), torch.ones(1, 3))) == {"nrmse": 0.0, "rms_err": 0.0, "rms_ref": 1.0}
 
 
 def test_quantile_interpolates_and_is_nan_when_empty() -> None:
@@ -96,31 +89,42 @@ def test_windows_align_to_absolute_rows_whatever_the_chunking() -> None:
     one.append(0, sums=sums)
     for start in range(4):  # one-row chunks
         two.append(start, sums=sums[start : start + 1])
-    metrics = {"nrmse": of("sums", nrmse)}
-    assert one.windows(3, metrics) == two.windows(3, metrics)
-    windows = one.windows(3, metrics)
+    measure = lambda w: {"nrmse": nrmse(w["sums"])}  # noqa: E731
+    assert one.windows(3, measure) == two.windows(3, measure)
+    windows = one.windows(3, measure)
     assert [(w["start"], w["end"], w["rows"]) for w in windows] == [(0, 3, 3), (3, 4, 1)]  # last window partial
     assert windows[0]["nrmse"] == pytest.approx(math.sqrt(1 / 50)) and windows[1]["nrmse"] == pytest.approx(0.2)
+    assert one.whole(measure) == {"start": 0, "end": 4, "rows": 4, "nrmse": pytest.approx(math.sqrt(2 / 75))}
     assert torch.equal(two.column("sums"), sums)
 
 
-def test_windows_slice_every_column_and_event_and_leave_out_undefined_metrics() -> None:
+def test_windows_slice_every_column_and_event_and_leave_out_undefined_quantities() -> None:
+    """Row columns slice by row; events (any order, fields with one entry per event, here a row-sums field too)
+    fall in the window of their absolute row; a measure's None is left out."""
     series = RowSeries()
-    series.append(0, sums=row_sums(EXPECTED[:2], ACTUAL[:2]), recall=torch.tensor([1.0, 0.5]))
-    series.append(2, sums=row_sums(EXPECTED[2:], ACTUAL[2:]), recall=torch.tensor([1.0, 0.75]))
-    series.add_events("misses", row=torch.tensor([3, 1]), rank=torch.tensor([7, 2]))  # any order
+    series.append(0, recall=torch.tensor([1.0, 0.5]))
+    series.append(2, recall=torch.tensor([1.0, 0.75]))
+    series.add_events("misses", row=torch.tensor([3, 1]), rank=torch.tensor([7, 2]))
     series.add_events("misses", row=torch.tensor([1]), rank=torch.tensor([5]))
-    metrics = {
-        "recall_mean": of("recall", lambda r: float(r.mean())),
-        "miss_rank_min": lambda w: int(w["misses"]["rank"].min()) if w["misses"]["rank"].numel() else None,
-    }
-    windows = series.windows(2, metrics)
-    assert windows == [
-        {"start": 0, "end": 2, "rows": 2, "recall_mean": 0.75, "miss_rank_min": 2},
-        {"start": 2, "end": 4, "rows": 2, "recall_mean": 0.875, "miss_rank_min": 7},
+    series.add_events("sampled", row=torch.tensor([2]), sums=row_sums(EXPECTED[1:2], ACTUAL[1:2]))
+
+    def measure(w):
+        rank = w["misses"]["rank"]
+        return {
+            "recall_mean": float(w["recall"].mean()),
+            "miss_rank_min": int(rank.min()) if rank.numel() else None,
+            "first_row": w.start,
+            **(errors(w["sampled"]["sums"], "sampled_") if w["sampled"]["row"].numel() else {}),
+        }
+
+    windows = series.windows(2, measure)
+    assert [{k: v for k, v in w.items() if not k.startswith("sampled_")} for w in windows] == [
+        {"start": 0, "end": 2, "rows": 2, "recall_mean": 0.75, "miss_rank_min": 2, "first_row": 0},
+        {"start": 2, "end": 4, "rows": 2, "recall_mean": 0.875, "miss_rank_min": 7, "first_row": 2},
     ]
-    assert "miss_rank_min" not in series.windows(1, metrics)[0]  # row 0 has no miss: not defined, not NaN
-    assert check(series.windows(1, metrics), [Bar("miss_rank_min", "min", 0)]) == []
+    assert "sampled_nrmse" not in windows[0] and windows[1]["sampled_nrmse"] == pytest.approx(0.2)
+    assert "miss_rank_min" not in series.windows(1, measure)[0]  # row 0 has no miss: not defined, not NaN
+    assert check(series.windows(1, measure), [Bar("miss_rank_min", "min", 0)]) == []
 
 
 def test_series_refuses_a_gap_an_overlap_or_inconsistent_columns(expect_error) -> None:
@@ -134,8 +138,10 @@ def test_series_refuses_a_gap_an_overlap_or_inconsistent_columns(expect_error) -
         series.append(2, other=torch.zeros(1))
     with expect_error(ValueError, "same leading row count"):
         RowSeries().append(0, sums=row_sums(EXPECTED, ACTUAL), recall=torch.zeros(3))
+    with expect_error(ValueError, "one entry per event"):
+        series.add_events("misses", row=torch.tensor([1, 2]), rank=torch.tensor([3]))
     with expect_error(ValueError, "no rows accumulated"):
-        RowSeries().windows(2, {})
+        RowSeries().windows(2, dict)
 
 
 WINDOWS = [
