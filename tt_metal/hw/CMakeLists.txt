@@ -408,9 +408,9 @@ foreach(ARCH IN LISTS ARCHS)
         list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})
     endforeach()
 
-    # The DRISC service kernel (tt_metal/impl/drisc_service/kernel), built here rather than by the JIT and linked
-    # like DRISC firmware. One image per NoC, which the host loads from
-    # runtime/hw/lib/blackhole/drisc_service_noc<N>.elf. It compiles at -O2 and without LTO.
+    # The DRISC service kernel (tt_metal/impl/drisc_service/kernel). Its clients run without a metal device, so they
+    # cannot build it: it is built here, one image per NoC, at -O2 without LTO, and linked like DRISC firmware. The host
+    # loads runtime/hw/lib/blackhole/drisc_service_noc<N>.elf.
     if(ARCH STREQUAL "blackhole")
         set(DRISC_SERVICE_SRC ${PROJECT_SOURCE_DIR}/tt_metal/impl/drisc_service/kernel/drisc_service.cpp)
         set(DRISC_SERVICE_LD ${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/blackhole/firmware_drisc.ld)
