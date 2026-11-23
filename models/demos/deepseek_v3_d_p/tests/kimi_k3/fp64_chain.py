@@ -214,7 +214,9 @@ def dsa_topk(
         hi = min(lo + QUERY_BLOCK, hidden.shape[0])
         qr = rms64(hidden[lo:hi] @ w["q_a_proj.weight"].T, w["q_a_layernorm.weight"], eps)
         index_q = (qr @ w["indexer.wq_b.weight"].T).reshape(-1, dims.index_heads, dims.index_dim)
-        index_w = (hidden[lo:hi] @ w["indexer.weights_proj.weight"].T) * (dims.index_heads**-0.5 * dims.index_dim**-0.5)
+        index_w = (hidden[lo:hi] @ w["indexer.weights_proj.weight"].T) * (
+            dims.index_heads**-0.5 * dims.index_dim**-0.5
+        )
         i, s = index_topk(index_q, index_w, index_keys, torch.arange(start + lo, start + hi), dims.topk)
         indices.append(i)
         scores.append(s)
