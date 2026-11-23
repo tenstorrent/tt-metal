@@ -834,8 +834,16 @@ std::optional<RecipeBlocking> choose_recipe_blocking(const RecipeBlockingProblem
     std::optional<RecipeBlocking> choice;
     if (!candidates.empty()) {
         // Candidates within kTieTolerance of the cheapest are ties: the default Q256/K512 (the most-measured blocking)
-        // when among them, else the larger K chunk (fewer of the per-chunk handshakes the model leaves out), then the
-        // larger Q chunk, then the cheaper.
+        // when among them, else the larger K chunk (fewer of the per-chunk handshakes the model leaves out), then (ring
+        // ops) the fewer Q rows on the busiest core, then the larger Q chunk, then the cheaper.
+        // Ring ties: a short ring sequence is bound by the K/V chain stream, which is the same for every Q chunk at one
+        // Q chunk per core, so candidates differing only in per-core compute tie. The model under-predicts compute where
+        // it meets the stream bound (b04u08: Flux 1024^2 Q192/K512 predicted 0.286 ms, measured 0.323; Wan 480p Q192/K512
+        // 3.59 vs 3.93), so the tie goes to the core with less compute (Flux Q128/K512: 0.274 ms).
+        const bool ring = problem.op == RecipeOp::Ring || problem.op == RecipeOp::ExpRing;
+        const auto core_rows = [ring](const RecipeBlocking& c) {
+            return ring ? uint64_t{c.jobs_per_core} * c.q_chunk_size : uint64_t{0};
+        };
         const double limit = candidates.front().cost * (1.0 + kTieTolerance);
         for (const auto& candidate : candidates) {
             if (candidate.cost > limit) {
@@ -846,7 +854,9 @@ std::optional<RecipeBlocking> choose_recipe_blocking(const RecipeBlockingProblem
                 break;
             }
             if (!choice || candidate.k_chunk_size > choice->k_chunk_size ||
-                (candidate.k_chunk_size == choice->k_chunk_size && candidate.q_chunk_size > choice->q_chunk_size)) {
+                (candidate.k_chunk_size == choice->k_chunk_size &&
+                 (core_rows(candidate) < core_rows(*choice) ||
+                  (core_rows(candidate) == core_rows(*choice) && candidate.q_chunk_size > choice->q_chunk_size)))) {
                 choice = candidate;
             }
         }
