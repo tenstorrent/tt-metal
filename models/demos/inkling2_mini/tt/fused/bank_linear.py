@@ -84,10 +84,61 @@ def _spread(items, nb, ktiles, kb):
     return alt
 
 
+# noc0_flow_links / plan_noc0_workers: adapted from Lottolabs' Inkling-2-Mini P150 runtime
+# (runtime/inkling2/tt/moe.py, https://huggingface.co/Lottolabs/Inkling-2-Mini-TT-Mixed-BFP4-BFP8-P150),
+# Copyright Lottolabs, Licensed under the Apache License, Version 2.0.
+# SPDX-FileCopyrightText: © 2026 Olof Johansson <olof@lixom.net> (changes: per-bank counts, p100a use)
+def noc0_flow_links(anchor, core, half, rows, south=10):
+    """NOC0 links of the DRAM read responses from the bank at `anchor`'s row to `core` (logical coordinates): east
+    along the endpoint row, then south (wrapping). -> (links, hops); `south` weights a south hop against an east one."""
+    ax, ay = anchor
+    x, y = core
+    links = {("E", ay, c) for c in range(half[0], x + 1)}
+    dy = (y - ay) % rows
+    links |= {("S", x, (ay + i + 1) % rows) for i in range(dy)}
+    wrap = 2 if dy and y < ay else 0
+    return links, (x - half[0] + 1) + south * (dy + wrap)
+
+
+def noc0_placement(device, per_bank, south=10):
+    """per_bank[b] logical cores for DRAM bank b whose NOC0 response paths share as few links with other banks' as
+    possible: dealt one per bank per round, each the free core of the bank's half (its anchor column to the next
+    anchor column) with the fewest links used by other banks, then the fewest hops."""
+    grid = device.compute_with_storage_grid_size()
+    gx, gy = grid.x, grid.y
+    anchors = [(int(c.x), int(c.y)) for c in device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)]
+    starts = sorted({a[0] for a in anchors})
+    half_of = {s_: (s_, ([t for t in starts if t > s_] or [gx])[0]) for s_ in starts}
+    free = {(x, y) for x in range(gx) for y in range(gy)}
+    used, out = {}, {b: [] for b in range(len(anchors))}
+    for rnd in range(max(per_bank)):
+        for b, anchor in enumerate(anchors):
+            if rnd >= per_bank[b]:
+                continue
+            half = half_of[anchor[0]]
+            best = None
+            for c in sorted(free):
+                if not half[0] <= c[0] < half[1]:
+                    continue
+                links, hops = noc0_flow_links(anchor, c, half, gy, south)
+                key = (sum(1 for k in links if used.get(k, b) != b), hops, c[1], c[0])
+                if best is None or key < best[0]:
+                    best = (key, c, links)
+            assert best is not None, f"no free worker left for bank {b}"
+            free.discard(best[1])
+            for k in best[2]:
+                used.setdefault(k, b)
+            out[b].append(best[1])
+    return out
+
+
+PLACEMENT = "row"  # BankLinear worker placement: "row" (moe_bank.row_placement) or "noc0" (noc0_placement)
+
+
 class BankLinear:
     def __init__(
         self, device, w, dtype, chunk, kb, cores_per_bank, compute_kernel_config, out_cols=None, out_dtype=ttnn.float32,
-        split=1, pass_cols=None, spread=False,
+        split=1, pass_cols=None, spread=False, placement=None,
     ):  # fmt: skip
         """w: torch [K, N]; ``chunk`` columns per reference op (a multiple of banks * 32; N is zero-padded to whole
         chunks, as tt/dram_sharded.DramShardedLinear); kb / cores_per_bank: the reference in0_block_w /
@@ -157,7 +208,8 @@ class BankLinear:
                                       device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # fmt: skip
         self.device, self.nb, self.dtype = device, nb, dtype
         counts = [sum(1 for it in self.items if it[0] == b) for b in range(nb)]
-        place = row_placement(device, counts)
+        self.placement = placement or PLACEMENT
+        place = noc0_placement(device, counts) if self.placement == "noc0" else row_placement(device, counts)
         seen = [0] * nb
         self.cores = []
         for i, (b, rot, part) in enumerate(self.items):

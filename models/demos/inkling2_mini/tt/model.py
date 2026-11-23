@@ -187,6 +187,7 @@ class Inkling2Model:
                 cores_per_bank=3,
                 compute_kernel_config=self.mm_cfg,
                 split=UNEMBED_SPLIT,
+                placement="noc0",  # NOC0 response paths kept apart per bank: 1.175 -> 1.158 ms (head, same process)
             )
             del uw
         elif head == "ds":
