@@ -209,8 +209,11 @@ Train metrics are logged as `train/<name>` and validation metrics as `val/<name>
 averaged over the steps since the previous log, which may be fewer than `frequency`.
 
 A run with a validation `frequency` but no validation data fails in `setup`, before the device is opened. That is a
-`custom` dataset without `val_dataset_path`, or a validation split with fewer examples than one batch; set the
-validation `frequency` to 0 to train without validation.
+`custom` dataset without `val_dataset_path`, or a validation split with no example of at most `max_length` tokens;
+set the validation `frequency` to 0 to train without validation.
+
+Validation runs every example of the validation split. A last batch with fewer than `batch_size` examples is filled
+with padding rows, which don't count in the loss. Training drops that batch.
 
 ### Several optimizers
 

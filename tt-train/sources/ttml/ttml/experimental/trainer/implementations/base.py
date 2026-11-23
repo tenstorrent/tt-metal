@@ -177,7 +177,7 @@ class Trainer(ABC):
                 self.callback_handler("on_validation_batch_end", batch, loss)
                 self._clean_graph_state()
 
-        # `_check_val_data` rejected a validation split without a full batch.
+        # `_check_val_data` rejected a validation split without a batch.
         val_loss = total_loss / num_batches
         self.callback_handler("on_validation_end", val_loss)
         self._train_mode()
@@ -221,7 +221,7 @@ class Trainer(ABC):
         if self.val_dataloader is None:
             reason = "the dataset has no validation split"
         elif len(self.val_dataloader) == 0:
-            reason = "the validation split has no full batch"
+            reason = "the validation split has no batch"
         else:
             return
         raise ValueError(f"metrics.validation.frequency: it is {frequency}, but {reason}; set it to 0 to not validate")

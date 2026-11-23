@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping, Sequence
+from typing import Mapping, Optional, Sequence
 
 import numpy as np
 
@@ -14,8 +14,13 @@ import numpy as np
 IGNORED_INDEX = -100
 
 
-def collate_causal_lm(examples: Sequence[Mapping], max_length: int, pad_token_id: int) -> dict[str, np.ndarray]:
+def collate_causal_lm(
+    examples: Sequence[Mapping], max_length: int, pad_token_id: int, batch_size: Optional[int] = None
+) -> dict[str, np.ndarray]:
     """Pad tokenized examples to ``max_length`` and build next-token targets in ttml's batch layout.
+
+    ``B`` is ``batch_size``, or ``len(examples)`` when it is None. The rows past the examples are padding rows: all
+    ``pad_token_id``, with no targets: a short last batch keeps the shape of the others, and its loss is its examples'.
 
     - ``input_ids``  ``[B, 1, 1, T]`` uint32, right-padded with ``pad_token_id``;
     - ``labels``     ``[B, T]`` uint32, the next token at each position (ignored positions hold
@@ -28,7 +33,10 @@ def collate_causal_lm(examples: Sequence[Mapping], max_length: int, pad_token_id
     equally, as ``ttml.trainers.SFTTrainer`` does, where HF's Trainer weights each by its share of the window's
     targets; the two match only with ``gradient_accumulation_steps=1``.
     """
-    batch_size = len(examples)
+    if batch_size is None:
+        batch_size = len(examples)
+    elif len(examples) > batch_size:
+        raise ValueError(f"{len(examples)} examples don't fit in a batch of {batch_size}")
     input_ids = np.full((batch_size, max_length), pad_token_id, dtype=np.uint32)
     labels = np.full((batch_size, max_length), IGNORED_INDEX, dtype=np.int64)
     for row, example in enumerate(examples):

@@ -29,7 +29,8 @@ class DatasetProvider:
 
     ``stream`` runs the epochs one after another, as a training loop takes them.
 
-    A batch is ``config.batch_size`` examples as host arrays (``collate_causal_lm``); a last partial batch is dropped.
+    A batch is ``config.batch_size`` examples as host arrays (``collate_causal_lm``). The train split drops a last
+    partial batch; other splits fill it with padding rows, which have no targets, so every example is evaluated.
     The train split is shuffled, in an order that depends only on the seed and the epoch, which ``seek`` sets.
 
     Each example is ``input_ids`` (prompt, response and EOS) and ``labels``, which are ``input_ids`` with the
@@ -62,13 +63,19 @@ class DatasetProvider:
             self.source = source
         # A `datasets.Dataset` of the split's tokenized examples.
         self.examples: Any = self._prepare_examples()
-        collate = partial(collate_causal_lm, max_length=config.max_length, pad_token_id=tokenizer.pad_token_id)
+        collate = partial(
+            collate_causal_lm,
+            max_length=config.max_length,
+            pad_token_id=tokenizer.pad_token_id,
+            batch_size=config.batch_size,
+        )
+        is_train_split = split == "train"
         self._dataloader = InMemoryDataloader(
             self.examples,
             collate,
             batch_size=config.batch_size,
-            shuffle=split == "train",
-            drop_last=True,
+            shuffle=is_train_split,
+            drop_last=is_train_split,
             seed=config.seed,
         )
         # The batches left in the current epoch; None between epochs.
