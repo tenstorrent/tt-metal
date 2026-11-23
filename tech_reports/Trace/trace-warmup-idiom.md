@@ -47,13 +47,15 @@ without warmup:
 - `ttnn.experimental.quasar.reshape` (tiled) —
   `reshape_tiled_metal2_program_factory.cpp`
 - `ttnn.sort` — `sort_program_factory.cpp`
-- `ttnn.pad` (RM reader/writer) — op-owned pad-value tensor
+- `ttnn.pad` (RM reader/writer) — `pad_rm_reader_writer_program_factory.cpp`
 - `ttnn.conv2d`, `ttnn.halo`, `ttnn.pool` with `config_tensor(s)_in_dram=True`
 
-L1_SMALL placements (conv/halo/pool defaults, upsample sharded) are
-structurally safer because L1_SMALL is a separate reserved per-core region
-outside the main free list, but **warmup is still recommended** — trace
-replay can target any physical address.
+L1_SMALL placements (conv/halo/pool with `config_tensor(s)_in_dram=False`,
+upsample sharded) are structurally safer: L1_SMALL is a separate reserved
+per-core region outside the main L1 free list, and trace replay targeting the
+main free list cannot land on L1_SMALL addresses. Warmup is still the most
+robust pattern because it protects against all buffer-reuse scenarios —
+including future allocator changes.
 
 ## Flags
 

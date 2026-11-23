@@ -1393,19 +1393,27 @@ def test_reshape_tile_trace_warmup_hazard(mesh_device, order, expect_error):
     if order == "warmup_first":
         _reshape_once()
 
+    # Several heavy ops inside the trace push the DRAM allocation high-water mark deep enough
+    # that a post-capture reshape miss reliably lands on an address the replay will overwrite.
     x = ttnn.from_torch(torch.randn(4096, 4096), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
     ttnn.add(x, x)
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    ttnn.add(x, x)
+    for _ in range(5):
+        x = ttnn.add(x, x)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
+    flag_on = _fail_on_unsafe_trace_alloc_set()
     if order == "trace_first":
-        if _fail_on_unsafe_trace_alloc_set():
+        if flag_on:
             # Flag on: the hazardous cache-miss alloc here must raise, not silently corrupt memory.
             with expect_error(RuntimeError, r"Unsafe device allocation.*#61727"):
                 _reshape_once()
             ttnn.release_trace(mesh_device, trace_id)
             return
+        _reshape_once()
+    elif flag_on:
+        # Warmup populated the cache before the trace registered as active; cache-hit reshape
+        # here must NOT raise. Catches regressions where the flag path is over-eager.
         _reshape_once()
 
     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
@@ -1414,6 +1422,7 @@ def test_reshape_tile_trace_warmup_hazard(mesh_device, order, expect_error):
 
 
 def _fail_on_unsafe_trace_alloc_set():
+    # Mirrors tt_metal/llrt/rtoptions.cpp:is_env_enabled; keep in sync if that ever accepts new truthy values.
     import os
 
     return os.environ.get("TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC", "").lower() in ("1", "true", "yes", "on")

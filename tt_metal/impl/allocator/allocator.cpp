@@ -131,16 +131,19 @@ void AllocatorImpl::verify_safe_allocation() const {
         return;
     }
 
-    // Context is non-empty only when TT_METAL_TRACE_ALLOC_TRACKING=1; otherwise the message is generic.
-    const auto& ctx = current_allocation_context();
-
     // Opt-in via TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC turns the silent hang in #61727 into a named failure.
     if (fail_on_unsafe_trace_alloc_enabled()) {
+        // Context is non-empty only when TT_METAL_TRACE_ALLOC_TRACKING=1.
+        const auto& ctx = current_allocation_context();
+        if (ctx.empty()) {
+            TT_THROW(
+                "Unsafe device allocation while a trace is active (#61727). Warm up this op before "
+                "begin_trace_capture; set TT_METAL_TRACE_ALLOC_TRACKING=1 for op attribution.");
+        }
         TT_THROW(
-            "Unsafe device allocation while a trace is active (#61727). Warm up this op before begin_trace_capture, "
-            "or unset TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC. Context: {}",
-            ctx.empty() ? std::string_view{"<unknown; set TT_METAL_TRACE_ALLOC_TRACKING=1 for op name>"}
-                        : std::string_view{ctx});
+            "Unsafe device allocation while a trace is active (#61727). Warm up this op before "
+            "begin_trace_capture. Context: {}",
+            ctx);
     }
 
     thread_local static bool warning_generated = false;
