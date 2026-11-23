@@ -16,7 +16,10 @@
 //                                 the chunks the port reader stages, each one packet into the same pages of the
 //                                 downstream chip's destination (final output pages, or R_U staging): the routers
 //                                 write them, no receive-side kernel. Every inc_every-th chunk and each entry's
-//                                 last carry a fused increment of the downstream port's arrival counter.
+//                                 last carry an increment of the downstream port's arrival counter. The bulk is
+//                                 bound by per-packet work on this core: the runs come from the reader (cb_desc, no
+//                                 second walk) and an interleaved destination's command fields are written directly
+//                                 from per-bank router-side addresses (no per-chunk address re-encoding).
 // fabric_all_gather's sender + fabric_ring_exchange's stats round, ported.
 
 #include <cstddef>
@@ -28,23 +31,12 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "agrn_port_common.hpp"
-#if defined(AGRN_ABL_TIMING)
-#include "api/debug/device_print.h"
-#define TT_(...) __VA_ARGS__
-#else
-#define TT_(...)
-#endif
 
 using namespace tt::tt_fabric;
 using namespace agrn_port;
 
 // Interleaved destination with few banks (DRAM): per-bank precomputed router-side addresses (see kernel_main).
 constexpr bool fast_banks = shard_w == 0 && nb <= 16;
-#if defined(AGRN_ABL_DST)
-constexpr bool abl_dst = true;
-#else
-constexpr bool abl_dst = false;
-#endif
 
 constexpr uint8_t scatter_enc =
     expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE);
@@ -201,55 +193,72 @@ void kernel_main() {
             dirty |= 1u << hk;
             return hdrs[hk];
         };
+        // The command fields of one bulk packet. Returns true when its increment must follow as a header-only packet
+        // (an increment on a scatter write of more than 2 runs).
+        auto fill_header = [&](volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, const Packet& pk, bool inc) -> bool {
+            const uint32_t bytes = pk.pages * page_bytes;
+            uint16_t sz[4];
+            for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+                sz[ri] = static_cast<uint16_t>(pk.n[ri] * page_bytes);
+            }
+            if (fast_banks && !inc) {
+                // the header builders' fields, written directly from the precomputed bank addresses
+                if (pk.nr == 1) {
+                    hdr->noc_send_type = NOC_UNICAST_WRITE;
+                    hdr->command_fields.unicast_write.noc_address =
+                        bank_base[pk.first[0] % nb] + (pk.first[0] / nb) * bank_pitch;
+                } else {
+                    // the scatter command fields as ten 32-bit stores (layout pinned by the static_asserts above)
+                    hdr->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
+                    volatile tt_l1_ptr uint32_t* w =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(&hdr->command_fields.unicast_scatter_write);
+                    for (uint32_t ri = 0; ri < NOC_SCATTER_WRITE_MAX_CHUNKS; ++ri) {
+                        const uint64_t ad =
+                            ri < pk.nr ? bank_base[pk.first[ri] % nb] + (pk.first[ri] / nb) * bank_pitch : 0;
+                        w[2 * ri] = static_cast<uint32_t>(ad);
+                        w[2 * ri + 1] = static_cast<uint32_t>(ad >> 32);
+                    }
+                    const uint32_t s1 = pk.nr > 2 ? sz[1] : 0, s2 = pk.nr > 3 ? sz[2] : 0;
+                    w[8] = static_cast<uint32_t>(sz[0]) | (s1 << 16);
+                    w[9] = s2 | (pk.nr << 16) | (static_cast<uint32_t>(scatter_enc) << 24);
+                }
+                hdr->payload_size_bytes = static_cast<uint16_t>(bytes);
+                return false;
+            }
+            uint64_t d[4];
+            for (uint32_t ri = 0; ri < pk.nr; ++ri) {
+                d[ri] = dst.get_noc_addr(pk.first[ri], 0, 0);  // NoC0 coordinates (header builders)
+            }
+            if (pk.nr == 1) {
+                if (inc) {
+                    hdr->to_noc_fused_unicast_write_atomic_inc(
+                        NocUnicastAtomicIncFusedCommandHeader{d[0], arrival_noc, 1, true}, bytes);
+                } else {
+                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{d[0]}, bytes);
+                }
+                return false;
+            }
+            if (pk.nr == 2 && inc) {
+                hdr->to_noc_fused_unicast_scatter_write_atomic_inc(
+                    NocUnicastScatterAtomicIncFusedCommandHeader({d[0], d[1]}, arrival_noc, {sz[0]}, 1, true), bytes);
+                return false;
+            }
+            hdr->to_noc_unicast_scatter_write(
+                NocUnicastScatterCommandHeader(d, sz, static_cast<uint8_t>(pk.nr)), bytes);
+            return inc;
+        };
+
         AGRN_ZONE("ps_bulk");
         constexpr uint32_t n_slots = 2 * group;
         const uint32_t desc_base = get_read_ptr(cb_desc);
         uint32_t taken = 0;  // packets taken from the port CB (= the reader's issue index)
-        TT_(uint32_t t_cb[2] = {0, 0}; uint32_t t_slot[2] = {0, 0}; uint32_t t_fl[2] = {0, 0};
-            uint32_t n_pk[2] = {0, 0};
-            uint32_t t_e[2] = {0, 0};
-            uint32_t t_addr[2] = {0, 0};
-            uint32_t t_hdr[2] = {0, 0};
-            uint32_t t_send[2] = {0, 0};)
         for (uint32_t k = 0; k < n_entries; ++k) {
-            TT_(uint32_t te = get_timestamp_32b();)
-            const uint32_t e = get_arg_val<uint32_t>(entries_idx + 2 * k);
             const uint32_t entry_total = get_arg_val<uint32_t>(entries_idx + 2 * k + 1);
-            uint32_t entry_sent = 0;
             if (k == 1) {
                 AGRN_ZONE("ps_relay_start");  // marker
             }
-#if defined(AGRN_ABL_MINSEND)
-            if (k == 0) {  // perf ablation only: entry_total full-size packets, minimal CPU, into peer L1, no reader
-                const uint32_t base = get_read_ptr(cb_chunks);
-                for (uint32_t i = 0; i < entry_total; ++i) {
-                    const bool inc = (++sent % inc_every) == 0 || i + 1 == entry_total;
-                    const uint64_t d0 =
-                        get_noc_addr(peer_xy & 0xFFFF, peer_xy >> 16, base + (i % (2 * group)) * chunk_bytes);
-                    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = next_header();
-                    if (inc) {
-                        hdr->to_noc_fused_unicast_write_atomic_inc(
-                            NocUnicastAtomicIncFusedCommandHeader{d0, arrival_noc, 1, true}, chunk_bytes);
-                    } else {
-                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{d0}, chunk_bytes);
-                    }
-                    conn.wait_for_empty_write_slot();
-                    conn.send_current_slot_non_blocking(base, chunk_bytes, reinterpret_cast<uint32_t>(hdr));
-                    if ((i + 1) % group == 0) {
-                        noc_async_writes_flushed();
-                        dirty = 0;
-                    }
-                }
-                chunks_left -= entry_total;
-                TT_(n_pk[0] = entry_total; t_e[0] += get_timestamp_32b() - te;)
-                continue;
-            }
-#endif
-            (void)e;
             for (uint32_t pi = 0; pi < entry_total; ++pi) {
-                TT_(uint32_t t0 = get_timestamp_32b();)
                 cb_wait_front(cb_chunks, run_pages * (unflushed + 1));
-                TT_(t_cb[k > 0] += get_timestamp_32b() - t0;)
                 invalidate_l1_cache();  // the slot's descriptor was written by the reader (NCRISC)
                 Packet pk;
                 {
@@ -264,83 +273,13 @@ void kernel_main() {
                 }
                 ++taken;
                 const uint32_t src = get_read_ptr(cb_chunks) + unflushed * chunk_bytes;
-                const uint32_t bytes = pk.pages * page_bytes;
-                uint64_t d[4];
-                uint16_t sz[4];
-                uint32_t pk_nr_override = 0;
-                TT_(uint32_t ta = get_timestamp_32b();)
-                const bool inc = (sent + 1) % inc_every == 0 || entry_sent + 1 == entry_total;
-                for (uint32_t ri = 0; ri < pk.nr; ++ri) {
-                    if (!fast_banks || abl_dst || inc) {
-                        d[ri] = dst.get_noc_addr(pk.first[ri], 0, 0);  // NoC0 coordinates (header builders)
-                    }
-                    sz[ri] = static_cast<uint16_t>(pk.n[ri] * page_bytes);
-                }
-                TT_(t_addr[k > 0] += get_timestamp_32b() - ta; ta = get_timestamp_32b();)
-#if defined(AGRN_ABL_DST)
-                {  // perf ablation only: land the packet in the peer port's L1 (data is garbage)
-                    uint32_t la = get_read_ptr(cb_chunks) + (sent % (2 * group)) * chunk_bytes;
-                    for (uint32_t ri = 0; ri < pk.nr; ++ri) {
-                        d[ri] = get_noc_addr(peer_xy & 0xFFFF, peer_xy >> 16, la);
-                        la += sz[ri];
-                    }
-                }
-#if AGRN_ABL_DST == 1
-                pk_nr_override = 1;
-#endif
-#endif
-                ++entry_sent;
-                (void)pk_nr_override;
                 // The increment lands only after the packet's writes (flush), stalling the receiving router, so only
                 // every inc_every-th packet and each entry's last carry one (fabric_all_gather).
-                ++sent;
+                const bool inc = (++sent % inc_every) == 0 || pi + 1 == entry_total;
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = next_header();
-                bool extra_inc = false;
-                const uint32_t pnr = pk_nr_override ? pk_nr_override : pk.nr;
-                if (fast_banks && !abl_dst && !inc) {
-                    // the header builders' fields, written directly from the precomputed bank addresses
-                    if (pnr == 1) {
-                        hdr->noc_send_type = NOC_UNICAST_WRITE;
-                        hdr->command_fields.unicast_write.noc_address =
-                            bank_base[pk.first[0] % nb] + (pk.first[0] / nb) * bank_pitch;
-                    } else {
-                        // the scatter command fields as ten 32-bit stores (layout pinned by the static_asserts above)
-                        hdr->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
-                        volatile tt_l1_ptr uint32_t* w =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(&hdr->command_fields.unicast_scatter_write);
-                        for (uint32_t ri = 0; ri < NOC_SCATTER_WRITE_MAX_CHUNKS; ++ri) {
-                            const uint64_t a =
-                                ri < pnr ? bank_base[pk.first[ri] % nb] + (pk.first[ri] / nb) * bank_pitch : 0;
-                            w[2 * ri] = static_cast<uint32_t>(a);
-                            w[2 * ri + 1] = static_cast<uint32_t>(a >> 32);
-                        }
-                        const uint32_t s1 = pnr > 2 ? sz[1] : 0, s2 = pnr > 3 ? sz[2] : 0;
-                        w[8] = static_cast<uint32_t>(sz[0]) | (s1 << 16);
-                        w[9] = s2 | (pnr << 16) | (static_cast<uint32_t>(scatter_enc) << 24);
-                    }
-                    hdr->payload_size_bytes = static_cast<uint16_t>(bytes);
-                } else if (pnr == 1) {
-                    if (inc) {
-                        hdr->to_noc_fused_unicast_write_atomic_inc(
-                            NocUnicastAtomicIncFusedCommandHeader{d[0], arrival_noc, 1, true}, bytes);
-                    } else {
-                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{d[0]}, bytes);
-                    }
-                } else if (pnr == 2 && inc) {
-                    hdr->to_noc_fused_unicast_scatter_write_atomic_inc(
-                        NocUnicastScatterAtomicIncFusedCommandHeader({d[0], d[1]}, arrival_noc, {sz[0]}, 1, true),
-                        bytes);
-                } else {
-                    hdr->to_noc_unicast_scatter_write(
-                        NocUnicastScatterCommandHeader(d, sz, static_cast<uint8_t>(pnr)), bytes);
-                    extra_inc = inc;
-                }
-                TT_(uint32_t t1 = get_timestamp_32b(); t_hdr[k > 0] += t1 - ta;)
+                const bool extra_inc = fill_header(hdr, pk, inc);
                 conn.wait_for_empty_write_slot();
-                TT_(t_slot[k > 0] += get_timestamp_32b() - t1; t1 = get_timestamp_32b();)
-                conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
-                TT_(t_send[k > 0] += get_timestamp_32b() - t1;)
-                TT_(++n_pk[k > 0];)
+                conn.send_current_slot_non_blocking(src, pk.pages * page_bytes, reinterpret_cast<uint32_t>(hdr));
                 if (extra_inc) {
                     // > 2 runs: a header-only increment after the scatter write (flush: lands after the writes)
                     volatile tt_l1_ptr PACKET_HEADER_TYPE* ih = next_header();
@@ -352,33 +291,13 @@ void kernel_main() {
                 --chunks_left;
                 // pops stay on group boundaries of the 2-group CB (the read offset never wraps), plus the last
                 if (++unflushed == group || chunks_left == 0) {
-                    TT_(uint32_t t2 = get_timestamp_32b();)
-                    noc_async_writes_flushed();
-                    TT_(t_fl[k > 0] +=
-                        get_timestamp_32b() - t2;)  // sources + headers of the in-flight packets have left L1
+                    noc_async_writes_flushed();  // sources + headers of the in-flight packets have left L1
                     dirty = 0;
                     cb_pop_front(cb_chunks, run_pages * unflushed);
                     unflushed = 0;
                 }
             }
-            TT_(t_e[k > 0] += get_timestamp_32b() - te;)
         }
-        TT_(DEVICE_PRINT(
-                "AGRN_T own n={} tot={} cb={} slot={} fl={} | relay n={} tot={} cb={} slot={} fl={} addr={} hdr={} "
-                "send={}\n",
-                n_pk[0],
-                t_e[0],
-                t_cb[0],
-                t_slot[0],
-                t_fl[0],
-                n_pk[1],
-                t_e[1],
-                t_cb[1],
-                t_slot[1],
-                t_fl[1],
-                t_addr[0],
-                t_hdr[0],
-                t_send[0]);)
         noc_async_writes_flushed();
         conn.close();
     } else if (is_hub) {

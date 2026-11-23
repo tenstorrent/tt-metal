@@ -778,16 +778,6 @@ def create_mesh_program_descriptor(
     full = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
     # per-stage profiler zones (perf probes only; the harness needs them off)
     defines = [("AGRN_PROFILE_ZONES", "1")] if os.environ.get("AGRN_PROFILE_ZONES") == "1" else []
-    if os.environ.get("AGRN_OWN_FROM_DST") == "1":  # perf probe only (op_design.md: the own slice is pulled from L1)
-        defines.append(("AGRN_OWN_FROM_DST", "1"))
-    if os.environ.get("AGRN_ABL_DST"):  # perf ablation only: bulk packets land in the peer port's L1 (wrong output)
-        defines.append(("AGRN_ABL_DST", os.environ["AGRN_ABL_DST"]))
-    if os.environ.get("AGRN_ABL_NOREAD") == "1":  # perf ablation only: the port reader skips the own-entry reads
-        defines.append(("AGRN_ABL_NOREAD", "1"))
-    if os.environ.get("AGRN_ABL_MINSEND") == "1":  # perf ablation only: own entry = full packets, no walk / reader
-        defines.append(("AGRN_ABL_MINSEND", "1"))
-    if os.environ.get("AGRN_ABL_TIMING") == "1":  # perf probe only: port-sender per-stage cycle counters (DEVICE_PRINT)
-        defines.append(("AGRN_ABL_TIMING", "1"))
     in_addr = int(input_tensor.buffer_address())
     out_addr = int(output_tensor.buffer_address())
     dst_addr = int(dst_tensor.buffer_address())

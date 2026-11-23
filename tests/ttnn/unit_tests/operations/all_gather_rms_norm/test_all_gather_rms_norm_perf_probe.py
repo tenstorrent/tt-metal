@@ -1,8 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Perf probe (Refinement 2): run the focus case a few times WITHOUT checking the output, so a perf ablation define
-(AGRN_ABL_*, wrong output by construction) can be profiled with AGRN_PROFILE_ZONES=1 + --profile and read with
-zone_timeline.py. Correctness lives in test_all_gather_rms_norm.py; this file only times."""
+"""Profiling helper (Refinement 2): run the focus case a few times without checking the output, synchronizing between
+calls, so a device profile of a steady call can be taken with zones and read with zone_timeline.py:
+
+    AGRN_PROFILE_ZONES=1 scripts/run_safe_pytest.sh --profile <this file>
+    python tests/ttnn/unit_tests/operations/all_gather_rms_norm/zone_timeline.py
+
+Knobs (AGRN_<NAME>, all_gather_rms_norm_program_descriptor._knob) apply as usual. Correctness lives in
+test_all_gather_rms_norm.py; this file asserts nothing."""
 
 import os
 

@@ -2,36 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // all_gather_rms_norm port reader (NCRISC / NoC0), one per (direction, link). gather_normalized_slices, read side
-// (TRANSPORT; fabric_all_gather's port reader with two changes):
-//   own entry (k = 0)   waits until every active worker announced its normalized block resident (own_ready), then
-//                       PULLS the pages from the workers' cb_out_block (same L1 address on every core of the chip)
-//                       straight into the port CB, packed in destination-run order: no DRAM re-read of the own slice.
+// (TRANSPORT; fabric_all_gather's port reader, adapted):
+//   own entry (k = 0)   waits until every active worker announced its normalized block written (own_ready), then
+//                       reads each bank run back from this chip's own destination pages (own_from_dst, default: one
+//                       read per run) or pulls the pages one by one from the workers' cb_out_block (L1).
 //   relay entry k >= 1  waits the arrival counter for the chunk (upstream's increment every inc_every chunks and on
 //                       each entry's last; threshold A + (B + c) / inc_every, A / B host-computed), then reads the run
 //                       from the local destination (output pages / R_U staging), contiguous in one bank.
 //   end                 waits every expected arrival; R_U: announces "landed" to every active worker (after own_ready,
 //                       so the own staging slot is complete too); re-arms the arrival counter (trace-safe).
-// Reads are pipelined per packet (read_depth packets in flight, one NoC transaction id each) and each packet is pushed
-// as soon as its reads landed; the sender pops on group boundaries of the 2-group CB.
+// The bulk is bound by per-packet work on the port core, so this reader is the only one that walks the packets: each
+// packet's runs go to the sender in cb_desc (one page per chunk slot). Reads are pipelined per packet (read_depth
+// packets in flight, one NoC transaction id each) and each packet is pushed as soon as its own reads landed.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 #include "agrn_port_common.hpp"
-#if defined(AGRN_ABL_TIMING)
-#include "api/debug/device_print.h"
-#define TT_(...) __VA_ARGS__
-#else
-#define TT_(...)
-#endif
 
 using namespace agrn_port;
 
-#if defined(AGRN_OWN_FROM_DST)
-constexpr bool own_from_dst = true;  // perf probe override
-#else
 constexpr bool own_from_dst = own_from_dst_ct != 0;
-#endif
 
 void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<PORT_CT_ARGS>();
@@ -95,11 +86,8 @@ void kernel_main() {
     const uint32_t chunks_base = get_write_ptr(cb_chunks);  // nothing pushed yet: the CB's first slot
     const uint32_t desc_base = get_write_ptr(cb_desc);
     uint32_t pushed = 0, inflight = 0, issued = 0;
-    TT_(uint32_t t_bar = 0, t_res = 0, t_iss = 0, t_tot = 0, t_arr = 0; uint32_t t_start = 0;)
     auto retire_oldest = [&]() {
-        TT_(uint32_t tb = get_timestamp_32b();)
         noc_async_read_barrier_with_trid(1 + (issued - inflight) % read_depth);
-        TT_(t_bar += get_timestamp_32b() - tb;)
         cb_push_back(cb_chunks, run_pages);
         ++pushed;
         --inflight;
@@ -116,24 +104,12 @@ void kernel_main() {
         if (k == 0) {
             AGRN_ZONE("pr_own_first");  // marker: own entry starts
         }
-        TT_(
-            if (k == 0) { t_start = get_timestamp_32b(); } if (k == 1) {
-                t_tot = get_timestamp_32b() - t_start;
-                DEVICE_PRINT("AGRN_R own tot={} bar={} res={} iss={} pk={}\n", t_tot, t_bar, t_res, t_iss, issued);
-            })
-#if defined(AGRN_ABL_MINSEND)
-        if (k == 0) {
-            continue;  // perf ablation only: the sender sends the own entry without a source
-        }
-#endif
         uint32_t c = 0;
         for_each_packet(q, part, first_bank, bank_stride, [&](const Packet& pk) {
             if (inflight == read_depth) {
                 retire_oldest();
             }
-            TT_(uint32_t tr = get_timestamp_32b();)
             cb_reserve_back(cb_chunks, run_pages * (inflight + 1));
-            TT_(t_res += get_timestamp_32b() - tr;)
             uint32_t l1 = chunks_base + ((pushed + inflight) % n_slots) * chunk_bytes;
             if (k > 0) {
                 const uint32_t need_arrivals = A + (B + c) / inc_every;
@@ -146,7 +122,7 @@ void kernel_main() {
                     noc_semaphore_wait_min(arrived, need_arrivals);
                 }
             }
-            TT_(uint32_t ti = get_timestamp_32b();) {
+            {
                 volatile tt_l1_ptr PacketDesc* dsc =
                     reinterpret_cast<volatile tt_l1_ptr PacketDesc*>(desc_base + (issued % n_slots) * DESC_BYTES);
                 dsc->nr = pk.nr;
@@ -159,11 +135,7 @@ void kernel_main() {
             noc_async_read_set_trid(1 + issued % read_depth);
             for (uint32_t ri = 0; ri < pk.nr; ++ri) {
                 const uint32_t n = pk.n[ri];
-#if defined(AGRN_ABL_NOREAD)
-                if (k == 0) {  // perf ablation only: the own entry is sent without reading it (wrong output)
-                } else
-#endif
-                    if (k == 0 && !own_from_dst) {
+                if (k == 0 && !own_from_dst) {
                     for (uint32_t t = 0; t < n; ++t) {
                         const uint32_t f = pk.jj[ri] + t * run_stride;
                         const uint32_t r = flat_slot ? f / Wlt : pk.rr[ri];
@@ -190,7 +162,6 @@ void kernel_main() {
                 }
                 l1 += n * page_bytes;
             }
-            TT_(t_iss += get_timestamp_32b() - ti;)
             ++issued;
             ++inflight;
             ++c;
