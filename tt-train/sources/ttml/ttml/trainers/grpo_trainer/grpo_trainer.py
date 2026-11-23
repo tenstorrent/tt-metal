@@ -244,6 +244,10 @@ class GRPOConfig:
     # "ttt_remote_sync": tt-transformers on rank 1 of a 2-rank tt-run job, on request.
     # "ttt_remote_async": tt-transformers on rank 1, generating and scoring continuously with the newest pushed weights.
     rollout_backend: str
+    # Token aggregation of the clipped surrogate; values follow TRL's ``loss_type``:
+    #   "grpo"    -> divide each completion's token sum by its length, then average over completions.
+    #   "dr_grpo" -> divide the token sum of all completions by completions * ``max_completion_length``.
+    loss_type: str = "grpo"
     # LR schedule; values follow TRL's ``lr_scheduler_type``:
     #   "constant"             -> flat at base_lr; ``warmup_steps`` is ignored.
     #   "constant_with_warmup" -> linear warmup, then flat at base_lr.
@@ -302,6 +306,7 @@ class GRPOConfig:
             ("num_iterations", self.num_iterations),
             ("gradient_accumulation_steps", self.gradient_accumulation_steps),
             ("prompts_to_train", self.prompts_to_train),
+            ("max_completion_length", self.max_completion_length),
         ):
             if _val <= 0:
                 raise ValueError(f"grpo_config: '{_name}' must be > 0 (got {_val}).")
@@ -327,6 +332,8 @@ class GRPOConfig:
                 f"grpo_config: 'lr_scheduler_type' must be one of {sorted(_allowed_lr_scheduler)} "
                 f"(got {self.lr_scheduler_type!r})."
             )
+        if self.loss_type not in ("grpo", "dr_grpo"):
+            raise ValueError(f"grpo_config: 'loss_type' must be one of ['dr_grpo', 'grpo'] (got {self.loss_type!r}).")
         # ``min_lr_rate`` is a fraction of base_lr (TRL semantics). Only
         # consulted by "cosine_with_min_lr"; still validate the range so a
         # misconfigured yaml fails at construction rather than silently.
@@ -1413,6 +1420,8 @@ class GRPOTrainer:
         completions_batch_len: int,
         eps: float,
         ddp_world_size: int = 1,
+        loss_type: str = "grpo",
+        max_completion_length: Optional[int] = None,
     ) -> ttml.autograd.Tensor:
         """Compute the clipped GRPO surrogate loss.
 
@@ -1434,10 +1443,15 @@ class GRPOTrainer:
         surr2 = clipped_ratio * adv_ttml
         surr = ttml.ops.binary.min(surr1, surr2)
 
-        # Per-completion normalised weight: w[i,t] = mask[i,t] / max(sum_t(mask[i,t]), 1)
         mask_val = mask.get_value()
-        tokens_per_completion = ttnn.maximum(ttnn.sum(mask_val, dim=1, keepdim=True), 1.0)
-        weight_tt = ttml.autograd.create_tensor(ttnn.div(mask_val, tokens_per_completion), requires_grad=False)
+        if loss_type == "dr_grpo":
+            # Constant weight: w[i,t] = mask[i,t] / max_completion_length
+            weight_val = ttnn.multiply(mask_val, 1.0 / max_completion_length)
+        else:
+            # Per-completion normalised weight: w[i,t] = mask[i,t] / max(sum_t(mask[i,t]), 1)
+            tokens_per_completion = ttnn.maximum(ttnn.sum(mask_val, dim=1, keepdim=True), 1.0)
+            weight_val = ttnn.div(mask_val, tokens_per_completion)
+        weight_tt = ttml.autograd.create_tensor(weight_val, requires_grad=False)
 
         weighted_surr = surr * weight_tt
         weighted_surr_4d = ttml.ops.reshape.reshape(weighted_surr, [1, 1, B_local, Tp])
@@ -1693,6 +1707,8 @@ class GRPOTrainer:
             global_len,
             self.config.epsilon,
             ddp_world_size=self._batch_layout.grad_sync_world_size,
+            loss_type=self.config.loss_type,
+            max_completion_length=self.config.max_completion_length,
         )
         loss.backward(retain_graph=False)
         ttml.autograd.AutoContext.get_instance().reset_graph()

@@ -863,6 +863,18 @@ def test_grpo_config_rejects_invalid_lr_and_clip(expect_error, override, message
         GRPOConfig(**{**_HOST_GRPO_CONFIG, **override})
 
 
+@pytest.mark.parametrize(
+    "override, message",
+    [
+        ({"loss_type": "dapo"}, "'loss_type' must be one of"),
+        ({"max_completion_length": 0}, "'max_completion_length' must be > 0"),
+    ],
+)
+def test_grpo_config_rejects_invalid_loss_settings(expect_error, override, message):
+    with expect_error(ValueError, message):
+        GRPOConfig(**{**_HOST_GRPO_CONFIG, **override})
+
+
 def test_grpo_config_rejects_weight_sync_every_for_in_process(expect_error):
     with expect_error(ValueError, "'weight_sync_every' does not apply to rollout_backend='ttml_in_process_sync'"):
         GRPOConfig(**_HOST_GRPO_CONFIG, weight_sync_every=2)
@@ -1182,6 +1194,47 @@ def test_compute_policy_nlog_probs_divides_logits_by_temperature(temperature):
     log_sum_exp = np.log(np.exp(z - z_max).sum(axis=-1)) + z_max[..., 0]
     expected = log_sum_exp - np.take_along_axis(z, targets[..., None].astype(np.int64), axis=-1)[..., 0]
     np.testing.assert_allclose(nlog.to_numpy(ttnn.DataType.FLOAT32), expected, rtol=2e-2, atol=5e-2)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize("loss_type", ["grpo", "dr_grpo"])
+def test_compute_grpo_loss_matches_numpy(loss_type):
+    B, Tp, max_completion_length, global_len, eps = 2, 32, 16, 4, 0.2
+    rng = np.random.default_rng(0)
+    bf16 = lambda x: torch.from_numpy(x.astype(np.float32)).bfloat16().float().numpy()
+    old = bf16(rng.uniform(0.5, 2.0, size=(B, Tp)))
+    new = bf16(old + rng.normal(scale=0.3, size=(B, Tp)))
+    mask = np.zeros((B, Tp), dtype=np.float32)
+    mask[0, 3:8] = 1.0
+    mask[1, 3:15] = 1.0
+    adv = np.array([1.0, 0.5], dtype=np.float32)
+
+    def constant(x, layout):
+        tensor = ttml.autograd.Tensor.from_numpy(x, layout, ttnn.DataType.BFLOAT16)
+        tensor.set_requires_grad(False)
+        return tensor
+
+    adv_tt = ttml.autograd.create_tensor(grpo_trainer_module.upload_micro_advantages(adv, None, 1), requires_grad=False)
+    trainer = GRPOTrainer.__new__(GRPOTrainer)
+    loss = trainer._compute_grpo_loss(
+        constant(old, ttnn.Layout.TILE),
+        constant(new, ttnn.Layout.TILE),
+        constant(mask, ttnn.Layout.ROW_MAJOR),
+        adv_tt,
+        global_len,
+        eps,
+        loss_type=loss_type,
+        max_completion_length=max_completion_length,
+    )
+
+    ratio = np.exp(old - new)
+    surr = np.minimum(ratio * adv[:, None], np.clip(ratio, 1 - eps, 1 + eps) * adv[:, None]) * mask
+    if loss_type == "grpo":
+        expected = -(surr.sum(axis=1) / mask.sum(axis=1)).sum() / global_len
+    else:
+        expected = -surr.sum() / (global_len * max_completion_length)
+    np.testing.assert_allclose(loss.to_numpy(ttnn.DataType.FLOAT32).item(), expected, rtol=2e-2)
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
@@ -2419,7 +2472,9 @@ class _FirstBlockGrads(TrainerCallback):
                 self.grads[name] = np.asarray(ttml.Sharding.from_tensor(grad).gather(grad), dtype=np.float32)
 
 
-def _first_block_grads_after_one_step(fresh_device_mesh, device_config, gradient_accumulation_steps, scored=None):
+def _first_block_grads_after_one_step(
+    fresh_device_mesh, device_config, gradient_accumulation_steps, loss_type, scored=None
+):
     """One GRPO step of Qwen3-0.6B on a fresh mesh; generates the scored batch unless ``scored`` is given."""
     recorder = _FirstBlockGrads()
     mesh = build_mesh(device_config)
@@ -2435,6 +2490,7 @@ def _first_block_grads_after_one_step(fresh_device_mesh, device_config, gradient
                 "prompts_to_train": 4,
                 "max_completion_length": 8,
                 "gradient_accumulation_steps": gradient_accumulation_steps,
+                "loss_type": loss_type,
                 "disable_default_monitor": True,
             }
         )
@@ -2457,8 +2513,9 @@ def _first_block_grads_after_one_step(fresh_device_mesh, device_config, gradient
 
 
 @pytest.mark.requires_device
+@pytest.mark.parametrize("loss_type", ["grpo", pytest.param("dr_grpo", marks=pytest.mark.slow)])
 @pytest.mark.parametrize("parallelism", ["enable_ddp", "enable_fsdp"])
-def test_grpo_gradients_match_across_device_counts(fresh_device_mesh, parallelism):
+def test_grpo_gradients_match_across_device_counts(fresh_device_mesh, parallelism, loss_type):
     """Gradients don't depend on the device count.
 
     One step on the same 8 completions: 1 device runs two micro-batches of 4, and a
@@ -2469,8 +2526,8 @@ def test_grpo_gradients_match_across_device_counts(fresh_device_mesh, parallelis
     one_device = DeviceConfig({"device_config": {"mesh_shape": [1, 1]}})
     two_devices = DeviceConfig({"device_config": {parallelism: True, "mesh_shape": [1, 2]}})
 
-    actual, scored = _first_block_grads_after_one_step(fresh_device_mesh, two_devices, 1)
-    expected, _ = _first_block_grads_after_one_step(fresh_device_mesh, one_device, 2, scored)
+    actual, scored = _first_block_grads_after_one_step(fresh_device_mesh, two_devices, 1, loss_type)
+    expected, _ = _first_block_grads_after_one_step(fresh_device_mesh, one_device, 2, loss_type, scored)
 
     assert expected and actual.keys() == expected.keys()
     for name, grad in expected.items():
