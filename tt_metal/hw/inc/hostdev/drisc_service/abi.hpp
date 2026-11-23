@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 
@@ -127,7 +126,7 @@ inline constexpr uint32_t MAX_CLIENTS = 8;
 
 // Per-client command queue entries in L1.
 inline constexpr uint32_t CLIENT_QUEUE_CAPACITY = 8;
-static_assert(std::has_single_bit(CLIENT_QUEUE_CAPACITY), "CLIENT_QUEUE_CAPACITY must be a power of two");
+static_assert(__builtin_popcount(CLIENT_QUEUE_CAPACITY) == 1, "CLIENT_QUEUE_CAPACITY must be a power of two");
 
 // Most commands one batch carries.
 inline constexpr uint32_t BATCH_MAX_COMMANDS = 64;
@@ -234,7 +233,7 @@ inline constexpr uint32_t ATTACH_TIMEOUT_MS = 2000;       // host waits this lon
 inline constexpr uint32_t DETACH_TIMEOUT_MS = 2000;       // host waits this long for ack = FREED|gen
 inline constexpr uint32_t BOOT_TIMEOUT_MS = 10000;        // host waits this long for a launched kernel's ack
 inline constexpr uint32_t PULL_TRIDS = 7;                 // NIU transaction IDs the kernel pulls batch lists with
-static_assert(std::has_single_bit(SLOT_SCAN_TICK_INTERVAL), "the kernel checks this with a power-of-two modulo");
+static_assert(__builtin_popcount(SLOT_SCAN_TICK_INTERVAL) == 1, "the kernel checks this with a power-of-two modulo");
 static_assert(ALIVE_PROBE_MS < ATTACH_TIMEOUT_MS);
 
 }  // namespace tt::tt_metal::drisc_service::abi

@@ -18,9 +18,6 @@ constexpr uint32_t PUBLISH_TRID = NOC_MAX_TRANSACTION_ID;
 constexpr uint32_t PULL_TRIDS_MASK = ((1u << PUBLISH_TRID) - 1) & ~((1u << MAX_INFLIGHT_TRANSACTIONS) - 1);
 static_assert(__builtin_popcount(PULL_TRIDS_MASK) == abi::PULL_TRIDS);
 
-// The guard linker script holds the kernel's text below the batch windows.
-asm(".globl drisc_service_text_limit\n.set drisc_service_text_limit, %0" ::"i"(l1::BATCH_WINDOWS_START));
-
 // do_crt1 from firmware_common.h, which compiles only with the JIT's full define set. Both are in substitutes.o.
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, L1WordCount len);

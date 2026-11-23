@@ -12,6 +12,7 @@
 
 #include "internal/tt-1xx/blackhole/dev_mem_map.h"
 #include "internal/tt-1xx/blackhole/noc/noc_parameters.h"
+#include "impl/drisc_service/kernel/l1_layout.hpp"
 #include "llrt/tt_elffile.hpp"
 
 namespace tt::tt_metal::drisc_service {
@@ -45,7 +46,8 @@ void DriscCore::load(const ll_api::ElfFile& image) const {
             constexpr uint32_t lo = MEM_DRISC_INIT_LOCAL_L1_BASE_SCRATCH;
             return Placement{(address & ~MEM_LOCAL_BASE) + lo, lo, lo + MEM_DRISC_INIT_LOCAL_L1_SCRATCH_SIZE};
         }
-        return Placement{address, MEM_DRISC_FIRMWARE_BASE, MEM_DRISC_MAP_END};
+        // metal's ELF reader holds text to the firmware window; the batch windows sit at its top.
+        return Placement{address, MEM_DRISC_FIRMWARE_BASE, l1::BATCH_WINDOWS_START};
     };
     for (const auto& seg : image.GetSegments()) {
         const Placement p = place(seg.address);

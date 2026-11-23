@@ -407,6 +407,66 @@ foreach(ARCH IN LISTS ARCHS)
 
         list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})
     endforeach()
+
+    # The DRISC service kernel (tt_metal/impl/drisc_service/kernel), built here rather than by the JIT and linked
+    # like DRISC firmware. One image per NoC, which the host loads from
+    # runtime/hw/lib/blackhole/drisc_service_noc<N>.elf. It compiles at -O2 and without LTO.
+    if(ARCH STREQUAL "blackhole")
+        set(DRISC_SERVICE_SRC ${PROJECT_SOURCE_DIR}/tt_metal/impl/drisc_service/kernel/drisc_service.cpp)
+        set(DRISC_SERVICE_LD ${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/blackhole/firmware_drisc.ld)
+        set(DRISC_SERVICE_FLAGS
+            ${GPP_FLAGS}
+            -O2
+            -fno-lto
+            -Wno-array-bounds # false positive on fixed L1 addresses
+            ${GPP_DEFINES}
+            -DARCH_BLACKHOLE
+            -DCOMPILE_FOR_DRISC
+            -DPROCESSOR_INDEX=0
+            -DLOCAL_MEM_EN=0
+            -DKERNEL_BUILD
+            -DDRISC_SERVICE_BUILD
+            -DNOC_MODE=DM_DEDICATED_NOC
+            -DNUM_DRAM_BANKS=8
+            -DNUM_L1_BANKS=110
+            -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3
+            -DIS_NOT_POW2_NUM_L1_BANKS=1
+            ${GPP_INCLUDES}
+            -I${PROJECT_SOURCE_DIR}/tt_metal/hostdevcommon/api
+        )
+        foreach(NOC 0 1)
+            set(DRISC_SERVICE_OBJ ${CMAKE_CURRENT_BINARY_DIR}/drisc_service_noc${NOC}.o)
+            set(DRISC_SERVICE_ELF ${HW_OBJ_DIR}/drisc_service_noc${NOC}.elf)
+            add_custom_command(
+                OUTPUT
+                    ${DRISC_SERVICE_OBJ}
+                COMMAND
+                    ${GPP_CMD} ${DRISC_SERVICE_FLAGS} -DNOC_INDEX=${NOC} -MD -MT ${DRISC_SERVICE_OBJ} -MF
+                    ${DRISC_SERVICE_OBJ}.d -c -o ${DRISC_SERVICE_OBJ} ${DRISC_SERVICE_SRC}
+                DEPENDS ${DRISC_SERVICE_SRC}
+                DEPFILE ${DRISC_SERVICE_OBJ}.d
+                COMMENT "Building DRISC service kernel drisc_service_noc${NOC}.o"
+                VERBATIM
+            )
+            # Linked with the flags as they are: tmu-crt0.o and substitutes.o are LTO objects.
+            add_custom_command(
+                OUTPUT
+                    ${DRISC_SERVICE_ELF}
+                COMMAND
+                    ${GPP_CMD} ${GPP_FLAGS} -O2 -nostdlib -nostartfiles -Wl,-z,max-page-size=16
+                    -Wl,-z,common-page-size=16 -Wl,-T,${DRISC_SERVICE_LD} ${HW_OBJ_DIR}/tmu-crt0.o ${DRISC_SERVICE_OBJ}
+                    ${HW_OBJ_DIR}/substitutes.o -lgcc -o ${DRISC_SERVICE_ELF}
+                DEPENDS
+                    ${DRISC_SERVICE_OBJ}
+                    ${DRISC_SERVICE_LD}
+                    ${HW_OBJ_DIR}/tmu-crt0.o
+                    ${HW_OBJ_DIR}/substitutes.o
+                COMMENT "Linking DRISC service kernel drisc_service_noc${NOC}.elf"
+                VERBATIM
+            )
+            list(APPEND DRISC_SERVICE_ELFS ${DRISC_SERVICE_ELF})
+        endforeach()
+    endif()
 endforeach()
 
 # TLS-style
@@ -493,6 +553,17 @@ add_custom_target(
         ${LD_FILES}
         ${OBJ_FILES}
 )
+
+add_custom_target(drisc_service_elf ALL DEPENDS ${DRISC_SERVICE_ELFS})
+add_dependencies(drisc_service_elf hw_toolchain)
+if(TT_INSTALL)
+    install(
+        FILES
+            ${DRISC_SERVICE_ELFS}
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime/hw/lib/blackhole
+        COMPONENT metalium-runtime
+    )
+endif()
 
 add_library(hw INTERFACE)
 add_library(Metalium::Metal::Hardware ALIAS hw)

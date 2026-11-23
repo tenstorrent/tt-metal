@@ -12,7 +12,7 @@
 #include "hostdev/drisc_service/abi.hpp"  // shared host<->kernel contract (abi::NocEndpoint)
 
 // clang-format off
-#include "risc_common.h"  // brings in noc_nonblocking_api.h in the order metal expects
+#include "internal/tt-1xx/risc_common.h"  // brings in noc_nonblocking_api.h in the order metal expects
 #include "internal/dataflow/dataflow_api_common.h"
 #include "internal/dataflow/dataflow_cmd_bufs.h"
 // clang-format on

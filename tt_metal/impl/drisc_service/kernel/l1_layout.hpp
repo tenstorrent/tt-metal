@@ -4,7 +4,7 @@
 #pragma once
 #include <cstdint>
 
-#include "dev_mem_map.h"
+#include "internal/tt-1xx/blackhole/dev_mem_map.h"
 #include "hostdev/drisc_service/abi.hpp"
 
 // The kernel's L1 outside its ELF: below MEM_DRISC_FIRMWARE_BASE after the command block, at the top of the firmware
@@ -17,7 +17,7 @@ constexpr uint32_t SCRATCH_SIZE = 64;
 
 // One window per client slot for its CMD_BATCH lists: a ring of two halves, each pulled from the host batch slot with
 // one NOC read while the other is carved. A half is a whole number of 64 B lines, so its pulls stay 64B-aligned like
-// the host slot. The windows sit at the top of the firmware window, above the kernel's text (drisc_service_guard.ld).
+// the host slot. The windows sit at the top of the firmware window, above the kernel's text (DriscCore::load).
 constexpr uint32_t WINDOW_HALF_COMMANDS = 8;
 constexpr uint32_t WINDOW_HALF_SIZE = WINDOW_HALF_COMMANDS * sizeof(tt::tt_metal::drisc_service::abi::KernelCommand);
 constexpr uint32_t WINDOW_SIZE = 2 * WINDOW_HALF_SIZE;
