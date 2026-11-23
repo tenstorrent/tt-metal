@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import time
 
+import torch
+
 import ttnn
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.model import APPS, Inkling2Model
@@ -65,9 +67,13 @@ class TappedModel(Inkling2Model):
 
 
 class SpecGenerator(Generator):
-    def __init__(self, model: TappedModel, drafter: DSparkDrafter):
-        super().__init__(model)
+    def __init__(self, model: TappedModel, drafter: DSparkDrafter, overlap=True, verify=None):
+        """verify: a tt/verify.VerifyStep (R = drafter.k + 1) for generate_rows; None: generate_spec only."""
+        super().__init__(model, overlap=overlap)
         self.drafter = drafter
+        self.verify = verify
+        self.vtrace = {}  # (conv phase, shared far call) -> (trace id, outputs)
+        self.ctrace = {}  # (conv phase, accepted rows) -> trace id
 
     def capture(self):
         """Compile target step and draft first, then capture both traces (no program first built after a capture)."""
@@ -82,7 +88,100 @@ class SpecGenerator(Generator):
 
     def release(self):
         self.drafter.release()
+        for tid in [t for t, _ in self.vtrace.values()] + list(self.ctrace.values()):
+            ttnn.release_trace(self.device, tid)
+        self.vtrace, self.ctrace = {}, {}
         super().release()
+
+    # ------------------------------------------------------------ multi-row verify (tt/verify.py)
+    @staticmethod
+    def _shared(p0, R):
+        from models.demos.inkling2_mini.tt.attention import WINDOW
+        from models.demos.inkling2_mini.tt.attention_fast import FAR_CHUNK
+
+        return p0 >= WINDOW and (p0 - WINDOW) // FAR_CHUNK == (p0 + R - 1 - WINDOW) // FAR_CHUNK
+
+    def capture_rows(self, p_shared, p_split):
+        """Plain traces (Generator.capture), the draft trace, and per conv phase the verify pass (far call shared or
+        per token) and the commit of n = 1 .. R accepted rows. p_shared / p_split: positions >= 1024 whose
+        pass does / does not share the far chunk (only the host-side choice depends on them). Every program is
+        compiled eagerly first (a program first compiled after a capture corrupts that trace's scratch)."""
+        m, d, V = self.model, self.drafter, self.verify
+        R = V.R
+        assert self._shared(p_shared, R) and not self._shared(p_split, R)
+        m.set_inputs(0, 0)
+        m.step()
+        d.set_draft_pos(1)
+        d.draft(d.anchor)
+        for p in (p_shared, p_split):
+            V.set_inputs([0] * R, p)
+            V.step()
+        for n in range(1, R + 1):
+            V.commit(n)
+        ttnn.synchronize_device(self.device)
+        super().capture()
+        d.capture(compile=False)
+        for ph in range(4):
+            for shared, base in ((True, p_shared), (False, p_split)):
+                p = base - base % 4 + ph
+                p += 4 * (self._shared(p, R) != shared)  # keep the far-chunk case while moving to phase ph
+                assert self._shared(p, R) == shared
+                V.set_inputs([0] * R, p)
+                tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+                out = V.step()
+                ttnn.end_trace_capture(self.device, tid, cq_id=0)
+                self.vtrace[(ph, shared)] = (tid, out)
+            for n in range(1, R + 1):
+                V.set_inputs([0] * R, p_shared - p_shared % 4 + ph)
+                tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+                V.commit(n)
+                ttnn.end_trace_capture(self.device, tid, cq_id=0)
+                self.ctrace[(ph, n)] = tid
+        ttnn.synchronize_device(self.device)
+
+    def generate_rows(self, prompt_ids, max_new, on_pass=None):
+        """Greedy tokens through draft (k = R - 1) + one R-row verify pass + commit per pass; output identical to
+        Generator.generate. Returns (new ids, stats)."""
+        import time as _t
+
+        m, d, V = self.model, self.drafter, self.verify
+        R, k = V.R, V.R - 1
+        assert d.k >= k
+        m.reset()
+        out = None
+        for pos, t in enumerate(prompt_ids):
+            out = self.decode(t, pos, True)
+            if pos % 64 == 63:
+                self.read_token(out)
+        nxt = self.read_token(out)
+        pos = len(prompt_ids)
+        new, acc, t_draft, t_ver = [nxt], [], 0.0, 0.0
+        while len(new) < max_new:
+            t0 = _t.perf_counter()
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(torch.tensor([[nxt]], dtype=torch.int32), dtype=ttnn.uint32), d.anchor
+            )
+            drafts = d.run(pos)[:k]
+            t1 = _t.perf_counter()
+            V.set_inputs([nxt] + drafts, pos)
+            ph = pos % 4
+            tid, vout = self.vtrace[(ph, self._shared(pos, R))]
+            ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)
+            tgt = [int(ttnn.to_torch(t).reshape(-1)[0]) for t in vout["token"]]
+            a = 0
+            while a < k and drafts[a] == tgt[a]:
+                a += 1
+            ttnn.execute_trace(self.device, self.ctrace[(ph, a + 1)], cq_id=0, blocking=False)
+            t_draft += t1 - t0
+            t_ver += _t.perf_counter() - t1
+            new += tgt[: a + 1]
+            acc.append(a)
+            nxt, pos = tgt[a], pos + a + 1
+            if on_pass:
+                on_pass(a)
+        ttnn.synchronize_device(self.device)
+        stats = {"passes": len(acc), "accepted": acc, "draft_s": t_draft, "verify_s": t_ver}
+        return new[:max_new], stats
 
     def generate_spec(self, prompt_ids, max_new, k=4, traced=True):
         """Greedy tokens (identical to Generator.generate) + per-pass stats.
