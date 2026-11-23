@@ -722,7 +722,10 @@ class ResidentRowsAdapter:
                 kept = self.engine.swap_out(
                     r, self.tables[r], q, [int(t) for t in token_ids], self.dev_tok.get(r, False)
                 )
-                logger.info(f"swap: resident slot {r} preempted at {q} tokens, state {'kept' if kept else 'dropped'}")
+                why = "" if kept else f" ({getattr(self.engine, 'swap_why', '')})"
+                logger.info(
+                    f"swap: resident slot {r} preempted at {q} tokens, state {'kept' if kept else 'dropped'}{why}"
+                )
             except Exception as e:  # (a failed swap-out only costs the recompute vLLM planned anyway)
                 logger.warning(f"swap: resident slot {r}: swap-out failed ({e!r}); its resume prefills again")
         self.release_request(vslot)
@@ -918,6 +921,7 @@ class RowsEngine:
         device-sampled; its out word holds the token for position q). False when the next token is unknown."""
         self.sync()
         nxt = int(tokens[q]) if len(tokens) > q else None
+        self.swap_why = f"q {q}, host tokens {len(tokens)}, device token {bool(device_tok and self.device_sampling)}"
         if nxt is None and device_tok and self.device_sampling:
             k, u = divmod(r, self.launch_rows)
             out = self.model.out_tensor(k)
@@ -926,6 +930,7 @@ class RowsEngine:
 
                 out = ttnn.to_torch(ttnn.from_device(ttnn.get_device_tensors(out)[0]))
             w = out.reshape(-1)[: self.launch_rows * 4].reshape(self.launch_rows, 4)[u].to(torch.int64)
+            self.swap_why += f", out word {w.tolist()}"
             if int(w[2]) == 1 and int(w[1]) == q:  # (active, and its token is for position q)
                 nxt = int(w[0])
         if nxt is None or not 0 < q <= len(tokens) <= q + 1:  # (more tokens than the state consumed + 1: inconsistent)
