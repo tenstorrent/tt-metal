@@ -46,8 +46,9 @@ IP_TO_CATEGORY = {
     "board": "board",
     "eth": "eth",
 }
-# eth deployment tests and the galaxy load's links test live in the "tests"
-# phase. Route them to the eth category by name so they don't land in stress_test.
+# The eth deployment tests, the galaxy load's links test and the checks read
+# around the tests live in the "tests" phase. Route them by name so they don't
+# land in stress_test.
 CHECK_CATEGORY = {
     "post_reset_state_stable": "reset",
     "eth_bandwidth": "eth",
@@ -55,8 +56,13 @@ CHECK_CATEGORY = {
     "links_pair": "eth",
     "links_sweep": "eth",
     "links_fabric": "eth",
+    "hsc_input_status": "board",
+    "pcie_enum_count_after_tests": "pcie",
 }
 STRESS_PHASE = "tests"
+# A stress test that ran no test cases tested nothing (executed=0). The galaxy
+# load's bus-bar steps count none: each runs one program, so a PASS or FAIL ran.
+BUSBAR_STEP_PREFIX = "busbar_"
 
 # Benign fleet-wide WARNs: tracked but kept out of the actionable rollups.
 ACKNOWLEDGED_CHECKS = {"cpld_fw_old"}
@@ -94,6 +100,17 @@ DETAIL_RICH = {
     "eth_status_cabling",
     "links_pair",
     "links_sweep",
+    "links_fabric",
+    "busbar_qb",
+    "busbar_mix",
+    "busbar_step",
+    "busbar_heavy",
+    "busbar_code",
+    "hsc_input_status",
+    "pcie_enum_count_after_tests",
+    "pcie_aer_delta",
+    "asic_thermal_precheck",
+    "c8_telemetry",
 }
 
 # numeric forensic checks: dropped from checks_fact, folded into runs rollups.
@@ -238,12 +255,9 @@ def _hexint(v):
 
 
 def _max_asic_temp(report: dict):
-    c = _find_check(report, "asic_thermal_precheck")
-    if not c:
-        return ""
-    temps = (c.get("data", {}) or {}).get("all_temps_c", {}) or {}
-    vals = [float(v) for v in temps.values() if v not in ("", None)]
-    return round(max(vals), 1) if vals else ""
+    c = _find_check(report, "asic_thermal_precheck") or {}
+    t = (c.get("data", {}) or {}).get("hottest_temp_c")
+    return round(float(t), 1) if t not in ("", None) else ""
 
 
 def _gddr_temp_and_uncorr(report: dict):
@@ -350,7 +364,7 @@ def checks_rows(report: dict, meta: dict):
         cat = category_for(pname, c)
         tp, tf = _testcases(c)
         ran = isinstance(tp, int) and (tp + tf) > 0
-        executed = 0 if (cat == "stress_test" and not ran) else 1
+        executed = 0 if (cat == "stress_test" and not ran and not name.startswith(BUSBAR_STEP_PREFIX)) else 1
         cap = 400 if name in DETAIL_RICH else 140
         rows.append(
             {
