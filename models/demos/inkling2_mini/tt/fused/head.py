@@ -50,9 +50,11 @@ class FusedLogitsTail:
             z = torch.zeros(1, 1, 1, n, dtype=tdtype)
             return ttnn.from_torch(z, dtype=dtype, layout=rm, device=device, memory_config=dram)
 
+        self._row = row
         self.raw = row(self.raw_width)
         self.logits = row(vocab_pad)
         self.token = row(1, ttnn.uint32, torch.int32)
+        self.rows_bufs = [(self.raw, self.logits, self.token)]  # per verify row (rows()); row 0 = the 1-row buffers
         n_cores = math.ceil(self.n_pages / PAGES_PER_CORE)
         self.cores, self.grid = F.core_list(device, n_cores)
         self.master = device.worker_core_from_logical_core(self.cores[0])
@@ -80,6 +82,21 @@ class FusedLogitsTail:
         self._cap()
         return self.logits, self.token
 
+    def rows(self, x):
+        """R verify rows: x [1,1,R,K] bf16 -> [(logits, token)] per row, each bit-equal to the 1-row call on row r
+        (rows ride in the unembed's tiles, raw row r per row; then the 1-row tail program per row). Bank only."""
+        assert self.bank
+        n = x.shape[-2]
+        while len(self.rows_bufs) < n:  # first use must be eager
+            self.rows_bufs.append(
+                (self._row(self.raw_width), self._row(self.vocab_pad), self._row(1, ttnn.uint32, torch.int32))
+            )
+        bufs = self.rows_bufs[:n]
+        self.mm(x, [b[0] for b in bufs])
+        for raw, logits, token in bufs:
+            self._cap(raw, logits, token)
+        return [(lg, tk) for _, lg, tk in bufs]
+
     def _pack(self, y, i):
         spec = y.memory_config().shard_spec
         cores = ttnn.corerange_to_cores(spec.grid, row_wise=True)
@@ -94,16 +111,18 @@ class FusedLogitsTail:
         cbs = [F.cb(0, ttnn.float32, 1, w * 4, cores=spec.grid)]
         ttnn.generic_op([y, self.raw], ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
 
-    def _cap(self):
+    def _cap(self, raw=None, logits=None, token=None):
+        if raw is None:
+            raw, logits, token = self.raw, self.logits, self.token
         T, n = PAGES_PER_CORE, len(self.cores)
         r_args, w_args = {}, {}
         for k, c in enumerate(self.cores):
             col0 = k * T * F.PAGE
             n_write = max(0, min(T * F.PAGE, self.vocab_pad - col0))
             n_arg = max(0, min(T * F.PAGE, self.vocab_real - col0))
-            r_args[c] = [self.raw.buffer_address(), k * T, self.scal.buffer_address()]
-            w_args[c] = [self.logits.buffer_address(), col0, n_write, n_arg, k, self.master.x, self.master.y, n,
-                         self.token.buffer_address()]  # fmt: skip
+            r_args[c] = [raw.buffer_address(), k * T, self.scal.buffer_address()]
+            w_args[c] = [logits.buffer_address(), col0, n_write, n_arg, k, self.master.x, self.master.y, n,
+                         token.buffer_address()]  # fmt: skip
         named = dict(pages=T, row_page=self.raw_width * 4, logits_page=self.vocab_pad * 4, sem=0)
         kernels = [
             F.kernel("head_reader.cpp", ttnn.ReaderConfigDescriptor(), named, r_args, self.grid),
@@ -117,5 +136,5 @@ class FusedLogitsTail:
             F.cb(17, ttnn.float32, 1, 16 * (n + 1), cores=self.grid),
         ]
         sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=self.grid, initial_value=0)]
-        io = [self.raw, self.scal, self.token, self.logits]
+        io = [raw, self.scal, token, logits]
         ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=sems))

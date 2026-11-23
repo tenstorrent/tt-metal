@@ -210,7 +210,7 @@ class StagedBankLinear:
         otb = ttnn.Tile([TILE, TILE]).get_tile_size(bl.out_dtype)
         named = dict(kt=bl.Kt, kb=bl.KB, nblk=bl.nblk, n_banks=bl.nb, out_cols=bl.out_cols,
                      out_page=otb if tiles_out else out.shape[-1] * 4, max_ncq=bl.max_ncq, tiles_out=int(tiles_out),
-                     out_tile=otb, x_rows=getattr(bl, "x_rows", 0))  # fmt: skip
+                     out_tile=otb, x_rows=getattr(bl, "x_rows", 0), raw_rows=1)  # fmt: skip
         r_args, c_args, w_args = [], [], []
         for c, i in bl.cores:
             b, rot, part = bl.items[i]

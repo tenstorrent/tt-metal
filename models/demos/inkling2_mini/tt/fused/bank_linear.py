@@ -194,7 +194,10 @@ class BankLinear:
     def __call__(self, x, out=None):
         """x [1,1,M,K] bf16 TILE, M <= 32 (any memory). out=None: returns [1,1,M,out_cols] TILE DRAM interleaved
         in out_dtype (the reference's output after to_memory_config(DRAM) + slice: every row of each tile). out given:
-        a dense fp32 ROW_MAJOR [1,1,1,W] row (W >= out_cols) receiving row 0 only (tt/fused/head.py's raw row)."""
+        a dense fp32 ROW_MAJOR [1,1,1,W] row (W >= out_cols) receiving row 0 only (tt/fused/head.py's raw row), or a
+        list of M such rows (R verify rows: row r of x -> out[r])."""
+        outs = out if isinstance(out, (list, tuple)) else [out]
+        out = outs[0]
         tb = ttnn.Tile([TILE, TILE]).get_tile_size(self.dtype)
         tiles_out = out is None
         if tiles_out and self.out_buf is not None:
@@ -205,11 +208,11 @@ class BankLinear:
             out = ttnn.allocate_tensor_on_device(shape, self.out_dtype, ttnn.TILE_LAYOUT, self.device,
                                                  self.out_mem)  # fmt: skip
         else:
-            assert self.out_dtype == ttnn.float32 and x.shape[-2] == 1
+            assert self.out_dtype == ttnn.float32 and x.shape[-2] == len(outs)
         otb = ttnn.Tile([TILE, TILE]).get_tile_size(self.out_dtype)
         named = dict(kt=self.Kt, kb=self.KB, nblk=self.nblk, n_banks=self.nb, out_cols=self.out_cols,
                      out_page=otb if tiles_out else out.shape[-1] * 4, max_ncq=self.max_ncq, tiles_out=int(tiles_out),
-                     out_tile=otb, x_rows=self.x_rows)  # fmt: skip
+                     out_tile=otb, x_rows=self.x_rows, raw_rows=1 if tiles_out else len(outs))  # fmt: skip
         r_args, c_args, w_args = {}, {}, {}
         for c, i in self.cores:
             b, rot, part = self.items[i]
@@ -249,5 +252,7 @@ class BankLinear:
             cb(1, self.dtype, tb, 4 * blk),  # weight blocks: 4 fixed slots (reader keeps 3 in flight)
             cb(16, self.out_dtype, otb, 2 * DST_TILES),  # output tiles of a pass
         ]
+        if len(outs) > 1:
+            kernels[2].common_runtime_args = [o.buffer_address() for o in outs[1:]]
         prog = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[])
-        return ttnn.generic_op([x, self.weight, out], prog)
+        return ttnn.generic_op([x, self.weight, *outs[1:], out], prog)

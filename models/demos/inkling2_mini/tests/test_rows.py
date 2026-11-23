@@ -17,10 +17,11 @@ from models.demos.inkling2_mini.tt.fused.messages import FusedMessages
 from models.demos.inkling2_mini.tt.fused.norm import FusedRowNorm
 
 
-def _row(device, v, dtype=ttnn.bfloat16, l1=False):
+def _row(device, v, dtype=ttnn.bfloat16, l1=False, c=None):
+    c = c or v.shape[-1]
     mem = ttnn.L1_MEMORY_CONFIG if l1 else ttnn.DRAM_MEMORY_CONFIG
     return ttnn.from_torch(
-        v.reshape(1, 1, -1, C), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
+        v.reshape(1, 1, -1, c), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
     )
 
 
@@ -236,3 +237,68 @@ def test_rows_qkv_gate(device, n_rows):
         _eq(got[3 * r : 3 * r + 3], ref[r][0], f"qkv gate row {r}")
         for j in range(3):
             _eq(_h(ns[r][j]), ref[r][1][j], f"norm {j} row {r}")
+
+
+@pytest.mark.parametrize("out_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_rows_bank_linear(device, out_dtype):
+    """Bank-streamed linears (unembed, w_all, w_o): R verify rows ride in the activation tile rows; row r of the
+    R-row call bit-equal to the 1-row call (L1 accumulation across K blocks, as the unembed)."""
+    from models.demos.inkling2_mini.tt.fused.bank_linear import BankLinear
+
+    torch.manual_seed(0)
+    k, n, n_rows = 2304, 7 * 32 * 6, 4
+    ckc = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False,
+        fp32_dest_acc_en=True, packer_l1_acc=True,
+    )  # fmt: skip
+    bl = BankLinear(device, torch.randn(k, n) * 0.02, ttnn.bfloat8_b, n, kb=2, cores_per_bank=2,
+                    compute_kernel_config=ckc, out_dtype=out_dtype)  # fmt: skip
+    xs = torch.randn(n_rows, k)
+    ref = [ttnn.to_torch(bl(_row(device, xs[r]))).float().reshape(-1, n)[:1].clone() for r in range(n_rows)]
+    for x_rows in (0, n_rows):
+        bl.x_rows = x_rows
+        got = ttnn.to_torch(bl(_row(device, xs))).float().reshape(-1, n)
+        for r in range(n_rows):
+            _eq(got[r : r + 1], ref[r], f"linear row {r} (x_rows {x_rows})")
+
+
+def test_rows_head(device):
+    """Unembed (bank linear, raw row per verify row) + softcap / argmax tail per row: logits and token of row r
+    bit-equal to the 1-row head on row r. A 2-chunk vocab (the model's chunk, kb and cores per bank)."""
+    from models.demos.inkling2_mini.tt.fused.bank_linear import BankLinear
+    from models.demos.inkling2_mini.tt.fused.head import FusedLogitsTail
+    from models.demos.inkling2_mini.tt.model import SOFTCAP, UNEMBED_CHUNK
+
+    torch.manual_seed(1)
+    n_rows, vocab = 3, 2 * UNEMBED_CHUNK
+    w = torch.randn(C, vocab) * 0.02
+    ckc = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False,
+        fp32_dest_acc_en=True, packer_l1_acc=True,
+    )  # fmt: skip
+    bl = BankLinear(device, w, ttnn.bfloat8_b, UNEMBED_CHUNK, kb=3, cores_per_bank=3, compute_kernel_config=ckc)
+    tail = FusedLogitsTail(device, bl, vocab, vocab - 40, SOFTCAP)
+    xs = torch.randn(n_rows, C)
+    xs[2] = xs[0] * 300.0  # saturated softcap
+
+    def host(lg, tok):
+        return ttnn.to_torch(lg).float().reshape(1, -1).clone(), int(ttnn.to_torch(tok).reshape(-1)[0])
+
+    ref = [host(*tail(_row(device, xs[r]))) for r in range(n_rows)]
+    got = [host(*o) for o in tail.rows(_row(device, xs))]
+    for r in range(n_rows):
+        _eq(got[r][0], ref[r][0], f"logits row {r}")
+        assert got[r][1] == ref[r][1], (r, got[r][1], ref[r][1])
+
+
+def test_rows_final_norm(device):
+    """model._rms (residual.RowOps.rms, ttnn rms_norm) on R rows: row r bit-equal to the 1-row call."""
+    torch.manual_seed(2)
+    rows = R.RowOps(device)
+    w = ttnn.from_torch((1 + torch.randn(C) * 0.1).reshape(1, 1, 1, C), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                        device=device)  # fmt: skip
+    xs = torch.randn(3, C) * 3
+    ref = [_h(rows.rms(_row(device, xs[r], ttnn.float32), weight=w, dtype=ttnn.bfloat16)) for r in range(3)]
+    got = _h(rows.rms(_row(device, xs, ttnn.float32), weight=w, dtype=ttnn.bfloat16))
+    for r in range(3):
+        _eq(got[r : r + 1], ref[r], f"final norm row {r}")

@@ -22,6 +22,7 @@ constexpr uint32_t nblk = get_named_compile_time_arg_val("nblk");
 constexpr uint32_t out_cols = get_named_compile_time_arg_val("out_cols");
 constexpr uint32_t out_page = get_named_compile_time_arg_val("out_page");
 constexpr uint32_t tiles_out = get_named_compile_time_arg_val("tiles_out");
+constexpr uint32_t raw_rows = get_named_compile_time_arg_val("raw_rows");  // raw rows written (tiles_out 0)
 constexpr uint32_t out_tile = get_named_compile_time_arg_val("out_tile");
 constexpr uint32_t x_rows = get_named_compile_time_arg_val("x_rows");
 constexpr uint32_t DST_TILES = 8;
@@ -77,6 +78,13 @@ void kernel_main() {
                 const uint64_t dst = out.get_noc_addr(0, col * 4);
                 noc_async_write(src + t * 4096, dst, 64);
                 noc_async_write(src + t * 4096 + 1024, dst + 64, 64);
+                // R verify rows: row r of the tile into raw row r (common args: the rows' row addresses)
+                for (uint32_t r = 1; r < raw_rows; ++r) {
+                    const auto o = TensorAccessor(out_args, get_common_arg_val<uint32_t>(r - 1), out_page);
+                    const uint64_t d = o.get_noc_addr(0, col * 4);
+                    noc_async_write(src + t * 4096 + r * 64, d, 64);
+                    noc_async_write(src + t * 4096 + 1024 + r * 64, d + 64, 64);
+                }
             }
         }
         noc_async_write_barrier();

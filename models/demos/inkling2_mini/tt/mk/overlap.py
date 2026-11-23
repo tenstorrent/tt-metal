@@ -55,6 +55,11 @@ HOST_KB = {
         36,
     ): 100,  # 130 before its weights were staged (router_stage.py)
 }
+# R verify rows (fused/common.py per_row): the 1-row program once per row, on R x its cores (logical rows 0..5, off
+# the staging block), about as long as the 1-row program (alpha ~ 0, M6-report.md): the same KB per staging core
+for _key, _kb in list(HOST_KB.items()):
+    for _r in (2, 3, 4):
+        HOST_KB.setdefault(_key[:-1] + (_key[-1] * _r,), _kb)
 BUDGET = 0.8
 # KB per staging core one piece may fill inside a local sdpa call (sdpa_decode extra_kernels; 0 = off)
 SDPA_KB = 200  # 150 / 200 / 250 / 300: 16.18 / 16.09 / 16.24 / 16.41 ms at 4K (11 us delay); 0 / no hook: 16.29
