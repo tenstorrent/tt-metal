@@ -322,7 +322,7 @@ class Sim:
         # lag (with swap): a preemption lands while the device has drawn a token the host has not seen (async
         # scheduling): the request forgets its last token and the swap entry must supply it from the device
         self.lag = lag
-        self.sampled_share = 0.0 if lag else 0.4  # (lag: greedy requests, the Sim's prefill check samples greedily)
+        self.sampled_share = 0.0 if lag == 1 else 0.4  # (lag 1: greedy, the Sim's prefill check samples greedily)
         # sync: the runner without async scheduling hands decode_forward's handle straight to
         # process_decode_output_host (finalize_decode); async: read_decode_output(async_read=True) first
         self.sync = sync
@@ -385,12 +385,18 @@ class Sim:
     def preempt(self, rid):
         r = self.reqs[rid]
         self.stats["preempted_live"] += rid in self.rows  # (decoding: its slot has a state to keep)
-        if self.lag and rid in self.rows and r.out > 1:
+        seen = len(r.tokens)
+        if self.lag == 1 and rid in self.rows and r.out > 1:
             r.tokens.pop()  # (the host has not seen the device's last draw)
             r.out -= 1
+            seen -= 1
+        elif self.lag == 2 and rid in self.rows:
+            # (served, async: the runner's record lags the scheduler by up to two device draws — a prefill's first token
+            # the runner sampled itself — and the scheduler replays them all)
+            seen -= min(2, getattr(r, "dev_drawn", 0))
         # the runner's request state: prompt + the outputs it saw (what preempt_request gets)
         self.runner.requests[rid] = SimpleNamespace(
-            prompt_token_ids=r.tokens[: r.n_prompt], output_token_ids=r.tokens[r.n_prompt :]
+            prompt_token_ids=r.tokens[: r.n_prompt], output_token_ids=r.tokens[r.n_prompt : seen]
         )
         TTModelRunner._release_model_request(self.runner, rid, preempted=True)
         TTModelRunner._release_dead_state_slots(
@@ -452,6 +458,7 @@ class Sim:
             if self.partial == r.rid:
                 self.partial = None
             tok = int(out[i, 0].argmax())  # the runner samples the prefill logits on the host (greedy)
+            r.dev_drawn = 0
             assert tok == ref_next(r.tokens), f"{r.rid}: first token {tok}, want {ref_next(r.tokens)}"
             self._emit(r, tok)
             if r.rid in self.reqs:
@@ -517,6 +524,7 @@ class Sim:
                 tok = int(res[i, 0].argmax())
                 want = ref_next(r.tokens)
             assert tok == want, f"{r.rid} at {len(r.tokens)}: token {tok}, want {want}"
+            r.dev_drawn = getattr(r, "dev_drawn", 0) + bool(self.sample)
             self._emit(r, tok)
         self.stats["decode"] += 1
 
@@ -638,7 +646,7 @@ def test_churn_swap(seed, sample, sync):
 def test_churn_swap_device_ahead(seed, sync):
     """Strata S3 under async scheduling: the device drew a token the host had not seen when the request was preempted;
     the resume replays only the tokens the state consumed and gets the device's token from the swap entry"""
-    sim = Sim(seed, sample=True, sync=sync, swap=True, lag=True)
+    sim = Sim(seed, sample=True, sync=sync, swap=True, lag=1)
     logits_hits = []
     orig = sim.adapter._swap_in
 
@@ -651,6 +659,19 @@ def test_churn_swap_device_ahead(seed, sync):
     sim.adapter._swap_in = swap_in
     stats = sim.run(700)
     assert stats["preempted"] > 5 and any(logits_hits), (stats, logits_hits)
+
+
+@pytest.mark.parametrize("seed", range(4))
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+def test_churn_swap_runner_lags(seed, sync):
+    """Strata S3 as served (vLLM async scheduling): the runner's token record lags the device by two draws at the
+    preemption while the scheduler replays them all; the adapter fills the lag from the draws it read, so every
+    decoding request's preemption is kept and its replay restored"""
+    sim = Sim(seed, sample=True, sync=sync, swap=True, lag=2)
+    stats = sim.run(700)
+    sw = sim.adapter.engine.swap
+    assert stats["preempted_live"] > 5 and sw.stats["inserts"] == stats["preempted_live"], (sw.stats, stats)
+    assert sw.stats["hits"] > 3 and sim.model.restores == sw.stats["hits"], (sw.stats, stats)
 
 
 def test_swap_off_keeps_the_recompute():

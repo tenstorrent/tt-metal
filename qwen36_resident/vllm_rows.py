@@ -214,7 +214,7 @@ class ResidentRowsAdapter:
         self._fed_launches = None  # launches the last device-sampled step replayed (their token states are fed)
         # (Strata S3) each live slot's last stepped position and whether that step was device-sampled; a resumed split
         # prompt that may replay a swap entry (its spans deferred until the last decides)
-        self.pos_of, self.dev_tok, self.swap_pending = {}, {}, None
+        self.pos_of, self.dev_tok, self.swap_pending, self.seen = {}, {}, None, {}
 
     # ------------------------------------------------------------------ helpers
     def _launch(self, r):
@@ -688,7 +688,16 @@ class ResidentRowsAdapter:
         if not isinstance(out, DecodeRead):
             raise TypeError(f"process_decode_output_host takes a decode handle or its read, not {type(out).__name__}")
         if out.device:
-            got = self.engine.tokens_from(out.read)  # [len(rows)] int
+            words = self.engine.token_words_from(out.read)  # [len(rows)] (token, position)
+            got = [tok for tok, _ in words]
+            if (
+                getattr(self.engine, "swap", None) is not None
+            ):  # (Strata S3: the draws the runner may not have recorded)
+                for r, (tok, p) in zip(out.read[0], words):
+                    tail = self.seen.setdefault(r, {})
+                    tail[p] = tok
+                    for old in [k for k in tail if k < p - 3]:
+                        del tail[old]
             res = torch.zeros(out.n, 1, dtype=torch.int32)
             res[: len(out.rows), 0] = torch.as_tensor(got, dtype=torch.int32)
             return res
@@ -720,7 +729,7 @@ class ResidentRowsAdapter:
             q = self.pos_of[r] + 1
             try:
                 kept = self.engine.swap_out(
-                    r, self.tables[r], q, [int(t) for t in token_ids], self.dev_tok.get(r, False)
+                    r, self.tables[r], q, [int(t) for t in token_ids], self.dev_tok.get(r, False), self.seen.get(r)
                 )
                 why = "" if kept else f" ({getattr(self.engine, 'swap_why', '')})"
                 logger.info(
@@ -737,6 +746,7 @@ class ResidentRowsAdapter:
         self.live.discard(r)
         self.pos_of.pop(r, None)
         self.dev_tok.pop(r, None)
+        self.seen.pop(r, None)
         if self.swap_pending is not None and self.swap_pending["r"] == r:
             self.swap_pending = None
         if self.pp_partial is not None and self.pp_partial[0] == r:
@@ -915,13 +925,23 @@ class RowsEngine:
         self.pp.run_span(torch.as_tensor(ids), first_chunk, n_tokens, drain=True, chunk=chunk)
         self.pp.handoff(self.model, n_tokens, block_table=blocks, slot=r)
 
-    def swap_out(self, r, table, q, tokens, device_tok):
+    def swap_out(self, r, table, q, tokens, device_tok, seen=None):
         """Strata S3: slot r's state (positions < q consumed) into the swap store, keyed by those q tokens, with its next
         token: the host's if it saw it (tokens[q]), else the device's draw (device_tok: the slot's last step was
-        device-sampled; its out word holds the token for position q). False when the next token is unknown."""
+        device-sampled; its out word holds the token for position q), else unknown (None: a replay must carry it).
+        tokens: the runner's view (prompt + the outputs it recorded), which lags the device under async scheduling;
+        seen {position: token}: the device draws the adapter read for this slot, which fill that lag. False when the
+        consumed tokens are not all known."""
         self.sync()
-        nxt = int(tokens[q]) if len(tokens) > q else None
-        self.swap_why = f"q {q}, host tokens {len(tokens)}, device token {bool(device_tok and self.device_sampling)}"
+        seen = seen or {}
+        toks = [int(t) for t in tokens[:q]]
+        while len(toks) < q and len(toks) in seen:
+            toks.append(int(seen[len(toks)]))
+        nxt = int(tokens[q]) if len(tokens) > q else seen.get(q)
+        self.swap_why = (
+            f"q {q}, host tokens {len(tokens)}, seen {sorted(seen)[-3:]}, "
+            f"device token {bool(device_tok and self.device_sampling)}"
+        )
         if nxt is None and device_tok and self.device_sampling:
             k, u = divmod(r, self.launch_rows)
             out = self.model.out_tensor(k)
@@ -933,10 +953,10 @@ class RowsEngine:
             self.swap_why += f", out word {w.tolist()}"
             if int(w[2]) == 1 and int(w[1]) == q:  # (active, and its token is for position q)
                 nxt = int(w[0])
-        if nxt is None or not 0 < q <= len(tokens) <= q + 1:  # (more tokens than the state consumed + 1: inconsistent)
+        if len(toks) < q or q <= 0 or len(tokens) > q + 1:  # (more tokens than the state consumed + 1: inconsistent)
             return False
         host = self.model.snapshot_to_host(self.model.snapshot_slot(r, n_tokens=q, table=table))
-        return self.swap.insert(tokens[:q], nxt, host, _host_bytes(host))
+        return self.swap.insert(toks, nxt, host, _host_bytes(host))
 
     def swap_restore(self, r, key, table):
         """a swap entry back into slot r (its state, its KV pages into the slot's blocks `table`)"""
@@ -999,6 +1019,10 @@ class RowsEngine:
         return read[2]
 
     def tokens_from(self, read):
+        return [tok for tok, _ in self.token_words_from(read)]
+
+    def token_words_from(self, read):
+        """[(token, its position)] of the read slots (the out words: token, position + 1 of the step's row)"""
         slots, reads, _ = read
         rows = {}
         for k, host in reads.items():
@@ -1012,5 +1036,5 @@ class RowsEngine:
             w = rows[r // self.launch_rows][r % self.launch_rows]
             if int(w[2]) != 1:
                 raise RuntimeError(f"slot {r}: its launch's out word is not active ({w.tolist()})")
-            out.append(int(w[0]))
+            out.append((int(w[0]), int(w[1])))
         return out

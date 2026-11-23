@@ -81,3 +81,13 @@ def test_swap_store_match_candidate_lru():
     assert sw.insert([1, 2], 3, "B", 60) and sw.insert([4, 5], 6, "C", 60)  # (B evicted: 120 > 100)
     assert sw.match([1, 2]) is None and sw.match([4, 5, 6])[1:] == (2, 6) and sw.stats["evictions"] == 1
     assert not sw.insert([7], 8, "D", 101)  # (larger than the budget: refused)
+
+
+def test_swap_store_unknown_next_token():
+    """an entry without its next token (host-sampled, not yet seen): only a replay that carries one matches"""
+    from qwen36_resident.prefix_cache import SwapStore
+
+    sw = SwapStore(100)
+    assert sw.insert([1, 2, 3], None, "A", 10)
+    assert sw.match([1, 2, 3]) is None
+    assert sw.match([1, 2, 3, 9])[1:] == (3, None) and sw.match([1, 2, 3, 4])[1:] == (3, None)

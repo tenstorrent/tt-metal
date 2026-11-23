@@ -108,7 +108,8 @@ class SwapStore:
     the state restores it instead. An entry: the tokens the state consumed (positions < q), the next token (position
     q: the device's draw, or the host's when it saw it), the host snapshot. A resumed prompt replays either exactly the
     q tokens (its next token is the entry's) or the q tokens and the next one (one decode step from the state); any
-    other prompt is not a match (a plain prefill)."""
+    other prompt is not a match (a plain prefill). The next token may be unknown (None): then only a replay that
+    carries it matches."""
 
     def __init__(self, budget_bytes):
         self.budget = int(budget_bytes)
@@ -131,7 +132,7 @@ class SwapStore:
         if nbytes > self.budget:
             self.stats["refused"] += 1
             return False
-        self._entries[key] = (tokens, int(nxt), value, int(nbytes))
+        self._entries[key] = (tokens, None if nxt is None else int(nxt), value, int(nbytes))
         self.bytes += int(nbytes)
         self.stats["inserts"] += 1
         while self.bytes > self.budget:
@@ -160,7 +161,9 @@ class SwapStore:
                 continue
             key = self._key(ids[:q])
             e = self._entries.get(key)
-            if e is not None and e[0] == ids[:q] and (q == len(ids) or ids[q] == e[1]):
+            if e is None or e[0] != ids[:q]:
+                continue
+            if (q == len(ids) and e[1] is not None) or (q < len(ids) and e[1] in (None, ids[q])):
                 return key, q, e[1]
         return None
 
