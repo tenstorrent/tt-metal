@@ -167,13 +167,13 @@ def _golden_function(tensor, repeats, dim=0, **_):
 ttnn.attach_golden_function(ttnn.repeat_interleave, golden_function=_golden_function)
 
 
-def _golden_function(tensor, shape, **_):
-    repeat_dims = [int(shape[i]) for i in range(len(shape))]
+def _golden_function(input_tensor, repeat_dims, **_):
+    repeat_dims = [int(repeat_dims[i]) for i in range(len(repeat_dims))]
     # ttnn.repeat allows fewer repeat dims than tensor rank (pads leading 1s);
     # torch.repeat requires len(dims) >= tensor.dim(), so pad to match.
-    if len(repeat_dims) < tensor.dim():
-        repeat_dims = [1] * (tensor.dim() - len(repeat_dims)) + repeat_dims
-    return tensor.repeat(*repeat_dims)
+    if len(repeat_dims) < input_tensor.dim():
+        repeat_dims = [1] * (input_tensor.dim() - len(repeat_dims)) + repeat_dims
+    return input_tensor.repeat(*repeat_dims)
 
 
 ttnn.attach_golden_function(ttnn.repeat, golden_function=_golden_function)
@@ -303,10 +303,12 @@ def _golden_function(input_tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.move, golden_function=_golden_function)
 
 
-def _golden_function(input, dim, index, src, *args, **kwargs):
+def _golden_function(input, dim, index, src, *args, reduce=None, **kwargs):
     import torch
 
-    return torch.scatter(input, dim, index.to(torch.int64), src)
+    if reduce is None:
+        return torch.scatter(input, dim, index.to(torch.int64), src)
+    return torch.scatter(input, dim, index.to(torch.int64), src, reduce=reduce)
 
 
 ttnn.attach_golden_function(ttnn.scatter, golden_function=_golden_function)
