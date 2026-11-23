@@ -43,7 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
 )
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches, kv_cache_slots
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
-from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer, stage_kv_cache_seq_len
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_dflash_kv_cache
@@ -550,7 +550,16 @@ class TtPrefillRuntime:
             cache_name_prefix=MTP_CACHE_PREFIX,
             first_layer_idx=self.config.first_layer_idx,
             is_chunked=True,
-            max_seq_len=self.config.max_seq_len,
+            # The stage's KVPE slot length, as the trunk blocks': on a stage running loop pass 2 (GLM-5.4) every slot
+            # holds the window ring past max_seq_len.
+            max_seq_len=stage_kv_cache_seq_len(
+                self.hf_config,
+                self.config.first_layer_idx,
+                self.config.num_layers,
+                self.config.loop_passes,
+                self.config.max_seq_len,
+                self.config.chunk_size,
+            ),
             # The trunk's slots: a traced packed forward also runs the MTP layer of an empty chunk position, in the
             # scratch slot.
             slot_num=self.config.cache_num_users,

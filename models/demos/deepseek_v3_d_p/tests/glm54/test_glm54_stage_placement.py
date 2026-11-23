@@ -220,6 +220,40 @@ def test_transformer_handoff_roles():
     assert roles((), {}) == (False, False)  # G0, G3
 
 
+@pytest.mark.parametrize(
+    "stage, loop_passes, ring",
+    [(G0, (), False), (G1, (1,), False), (G2, (2,), True), (G3, (), False), ((0, 106), (1, 2), True)],
+    ids=["G0", "G1", "G2", "G3", "whole_trunk"],
+)
+def test_every_block_of_a_stage_addresses_the_allocated_slot_length(schedule, stage, loop_passes, ring):
+    """The KVPE slot length the trunk blocks and the MTP block are built with (stage_kv_cache_seq_len) is the one the
+    adapter allocates (kv_cache_slot_rows): max_seq_len, plus pass 2's window ring on a stage that runs pass 2
+    (q171.2.10: MTP on the whole trunk once took max_seq_len and its dense KV gather mismatched the slot)."""
+    from types import SimpleNamespace
+
+    from models.demos.deepseek_v3_d_p.tt.mla.two_bank import pass2_kv_cache_seq_len
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import stage_kv_cache_seq_len
+
+    max_seq, chunk = 1064960, 5120
+    rank = schedule.rank_slice(*stage)
+    assert rank.loop_passes == loop_passes
+    config = glm_5_4_hf_config()
+    rows = stage_kv_cache_seq_len(config, rank.first_layer, rank.num_layers, rank.loop_passes, max_seq, chunk)
+    params = SimpleNamespace(loop_passes=rank.loop_passes, max_seq_len=max_seq, chunk_size=chunk)
+    assert rows == GLM54Adapter().kv_cache_slot_rows(config, params)[0]
+    assert rows == (pass2_kv_cache_seq_len(max_seq, chunk) if ring else max_seq)
+
+
+def test_glm53_stage_slot_length_is_max_seq_len():
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import stage_kv_cache_seq_len
+
+    config = glm_5_3_hf_config()
+    assert [stage_kv_cache_seq_len(config, first, n, None, 1064960, 5120) for first, n in [(0, 78), (54, 24)]] == [
+        1064960
+    ] * 2
+
+
 def test_stage_loop_predicates():
     """One decision per fact, shared by the model and the cache allocator (None: every pass, the whole loop)."""
     assert [runs_later_loop_pass(p) for p in (None, (1, 2), (1,), (2,), ())] == [True, True, False, True, False]
