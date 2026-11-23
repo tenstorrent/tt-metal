@@ -501,3 +501,8 @@ try:  # hy4sched scenarios (demo/scenario_sched.py): sched_xrow5, sched_cached, 
     SCENARIOS.update(_SS.SCENARIOS)
 except Exception:  # noqa: BLE001  (never break the base scenarios)
     pass
+
+# capacity tiers (tail-park / host tier): demo/scenario_capacity.py overrides the SKIP stub ``tailpark`` above
+from models.demos.blackhole.hy4_preview.demo.scenario_capacity import SCENARIOS as _CAP  # noqa: E402
+
+SCENARIOS.update(_CAP)

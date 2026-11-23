@@ -270,6 +270,42 @@ class Hy4Xrow:
         self._prog(full, t, ctl_out, n * u, 0, p0 * u, pb)
         return full
 
+    def copy_off(self, src, src_page0, dst, dst_page0, npages):
+        """HY4_TAILPARK: pool[dst][dst_page0 + i] = pool[src][src_page0 + i] for i < npages (every pool tensor), rows src != dst, DIFFERENT page offsets allowed (the stage-in reads from src_page0 + k, the
+        stage-out writes at dst_page0 + k per chunk k). Same machinery as ``copy`` (stage-in, all_gather over the row axis, stage-out on the destination row only). Raises on any error: the caller drops the chain.
+        [NC] device-untested: needs the E2 probe (demo scenario tailpark)."""
+        import ttnn
+
+        if not (0 <= src < self.rows and 0 <= dst < self.rows) or src == dst or npages <= 0:
+            raise ValueError(f"xrow copy_off rows {src} -> {dst} npages {npages}")
+        t0 = time.perf_counter()
+        keep = []
+        try:
+            for name, t in self.tensors:
+                kind = self.kind[name]
+                cp, u = (self.cp_kv, KV_UNITS) if kind == "kv" else (self.cp_key, KEY_UNITS)
+                pb = KV_PAGE_B if kind == "kv" else self.key_page
+                stage = self.stage[(kind, pb)]
+                ctl_out = self._ctl(src * cp * u, dst)
+                keep.append(ctl_out)
+                for k, n in chunk_plan(npages, cp):
+                    self._prog(t, stage, self.ctl_in, n * u, (src_page0 + k) * u, 0, pb)
+                    full = ttnn.all_gather(stage, dim=0, cluster_axis=0, num_links=1, topology=self.topo)
+                    keep.append(full)
+                    self._prog(full, t, ctl_out, n * u, 0, (dst_page0 + k) * u, pb)
+            ttnn.synchronize_device(self.md)
+        except Exception:
+            self.stats["failed"] += 1
+            raise
+        finally:
+            for x in keep:
+                ttnn.deallocate(x)
+        dt = time.perf_counter() - t0
+        self.stats["copies"] += 1
+        self.stats["tokens"] += npages * PAGE_TOK
+        self.stats["seconds"] += dt
+        return dt
+
     def copy(self, src, dst, h, only=None, allow_same=False):
         """pool[dst][pages 0..h/512) = pool[src][...] for every pool tensor (in place, synchronous). Raises on any error (the caller recomputes cold). ``only``: restrict to the first N tensors (probes)."""
         import ttnn

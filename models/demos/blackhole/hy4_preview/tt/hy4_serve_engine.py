@@ -50,6 +50,13 @@ class _Seed:
 
 
 class Hy4Engine:
+    cap = None  # capacity tiers (hy4_capacity.Capacity), set in warm() when HY4_TAILPARK / HY4_HOSTTIER
+    tail_on = host_on = False
+    tail_stats = {}
+    cap_round_outputs = ()  # outputs of the decode rounds run between host-tier slices (HY4_HOSTTIER_SLICE_ROUNDS=1): the plugin must consume them (list of round() results)
+    cap_rounds = 0
+    cap_yield = None  # callable(kind, i, n_slices, nbytes) run between host-tier slices (HY4_HOSTTIER_SLICE_MB > 0): the plugin / chunked-prefill glue runs decode rounds here
+
     def __init__(self, md, max_num_seqs, max_seq_len, k=None, log=None):
         from models.demos.blackhole.hy4_preview.tt import hy4_pool_decode as pool_decode
         from models.demos.blackhole.hy4_preview.tt.hy4_attn_opt import Opt
@@ -103,6 +110,13 @@ class Hy4Engine:
         # shadow pages) that must run on the row holding a long retained chain (>= HY4_STASH_MIN tokens) first saves the leading pages of that row to the shadow region and copies them back when the request
         # releases the row, so the long chain survives (program hy4pfx: the 'evicted' loss of the AgentX sub-agent requests, 1100-1600 s of cold recompute each).
         self.stash_on = os.environ.get("HY4_STASH", "0") == "1" and self.pfx
+        # HY4_TAILPARK=1 / HY4_HOSTTIER=1 (default 0; need HY4_PFX=1; live switch files HY4_TAILPARK_FILE / HY4_HOSTTIER_FILE holding 0 / 1): CAPACITY tiers of the prefix cache (tt/hy4_chainstore.py + hy4_capacity.py,
+        # agent hy4cap). A retained chain (>= HY4_CAP_MIN_SPILL=32768 tokens) that a new prompt would overwrite is first parked in the idle TAIL pages of any pool row (copy within / across rows) or in host RAM, and copied
+        # back before the suffix prefill when a later prompt hits it. A request / decode that needs the tail pages invalidates the entry first. Any copy error = cold recompute. Replaces the stash for chains >= min_spill.
+        self.tail_on = os.environ.get("HY4_TAILPARK", "0") == "1" and self.pfx
+        self.host_on = os.environ.get("HY4_HOSTTIER", "0") == "1" and self.pfx
+        self.cap = None  # hy4_capacity.Capacity, built in warm()
+        self.tail_stats = {}
         self.last_cached = {}  # mesh row -> prompt tokens not recomputed by the last prefill
         self.tier_stats = {}  # cumulative per-tier tokens (flag HY4_PFX_TIER_LOG / live file tier_log): row, xrow, cold
         self.stash = {}  # row -> (chain tokens, n pages saved)
@@ -273,6 +287,16 @@ class Hy4Engine:
         return (min(self.match_len(r, toks), len(toks) - 1) // A) * A
 
     def assign_rows(self, prompts, cur_rows):
+        rows = self._assign_rows_base(prompts, cur_rows)
+        if self.cap is not None and self.cap.active():
+            arrs = [torch.as_tensor(p, dtype=torch.int32).numpy() for p in prompts]
+            moved = self.cap.plan(arrs, rows)
+            if moved != list(rows) or self.cap.plan_by_row:
+                logger.info(f"HY4 cap plan: rows {rows} -> {moved} promote={self.cap.plan_by_row}")
+            return moved
+        return rows
+
+    def _assign_rows_base(self, prompts, cur_rows):
         """row-match admission: prompts = list of token lists (one new request each), cur_rows = the mesh row the plugin's slot currently maps to. Returns the mesh row per request: a free (not live) row holding the
         longest matching retained prefix; with no match the free row with nothing retained / least recently used (so retained prefixes of other sessions survive). Never a live row, never twice.
         """
@@ -534,6 +558,79 @@ class Hy4Engine:
             f"HY4 stash: row {r} restored {n} pages in {dt * 1e3:.0f} ms, chain {len(self.ret[r])}/{len(chain)} tokens valid (stats {self.stash_stats})"
         )
 
+    def _cap_pre_prefill(self, rows, prompts_by_row, xplan):
+        """demote / promote / invalidate (tt/hy4_capacity.py); never raises (an error = nothing parked, cold)."""
+        try:
+            t0 = time.perf_counter()
+            before = dict(self.cap.store.stats)
+            self.cap.pre_prefill({r: prompts_by_row[r] for r in rows}, skip_rows=set(xplan))
+            d = {k: v - before[k] for k, v in self.cap.store.stats.items() if v != before[k] and k != "move_s"}
+            if d or self.cap.last:
+                logger.info(
+                    f"HY4 cap: {time.perf_counter() - t0:.2f} s delta={d} promoted={self.cap.last} store={self.cap.store.snapshot()}"
+                )
+            self.tail_stats = self.cap.store.snapshot()["stats"]
+            self.tail_stats["demoted"] = self.tail_stats["demoted_tail"] + self.tail_stats["demoted_host"]
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"HY4 cap: pre_prefill FAILED ({type(e).__name__}: {str(e)[:200]}): entries cleared, cold")
+            self.cap.reset()
+
+    def _cap_do_yield(self, kind, i, n, nbytes):
+        """between host-tier slices: the plugin's ``cap_yield`` if set, else (HY4_HOSTTIER_SLICE_ROUNDS=1 and the live file HY4_HOSTTIER_SLICE_FILE not 0) ONE greedy decode round for the live rows when any row is live
+        (no live row = nothing happens: behaviour unchanged). The round outputs are queued in ``cap_round_outputs`` (the plugin has to hand them to its requests): [NC] plugin integration; greedy rows only.
+        """
+        if self.cap_yield is not None:
+            return self.cap_yield(kind, i, n, nbytes)
+        if os.environ.get("HY4_HOSTTIER_SLICE_ROUNDS", "0") != "1" or not any(self.live):
+            return None
+        from models.demos.blackhole.hy4_preview.tt import hy4_chainstore as CS
+
+        if not CS.live_file_on("HY4_HOSTTIER_SLICE_FILE"):
+            return None
+        if not isinstance(self.cap_round_outputs, list):
+            self.cap_round_outputs = []
+        self.cap_round_outputs.append(self.round([self.K if self.live[r] else 0 for r in range(ROWS)], False))
+        self.cap_rounds += 1
+
+    def _cap_build(self):
+        from models.demos.blackhole.hy4_preview.tt import hy4_chainstore as CS
+        from models.demos.blackhole.hy4_preview.tt.hy4_capacity import Capacity
+        from models.demos.blackhole.hy4_preview.tt.hy4_chain_backend import DeviceBackend
+
+        self._dram("before cap build")
+        if (
+            self.bcopy is None
+        ):  # row-local page copy (also used by the stash / block store): persistent control pages before the first capture
+            from models.demos.blackhole.hy4_preview.tt.hy4_blocks_copy import Hy4PageCopy
+
+            self.bcopy = Hy4PageCopy(self.md, self._pool_tensors())
+            for r in range(ROWS):
+                self.bcopy._ctl_row(r)
+        be = DeviceBackend(self.md, self._pool_tensors(), xrow=self.xrow, bcopy=self.bcopy)
+        if self.xrow is None:
+            logger.warning(
+                "HY4 cap: HY4_XROW=1 is off: tail entries only on the SAME row (row-local copy), host tier disabled (needs the xrow stage tensors)"
+            )
+            self.host_on = False
+        store = CS.ChainStore(
+            ROWS,
+            self.pages,
+            be,
+            lambda r: 0,
+            costs=CS.Costs.from_env(),
+            tail=lambda: self.tail_on and CS.tail_enabled(),
+            host=lambda: self.host_on and CS.host_enabled(),
+            min_spill=int(os.environ.get("HY4_CAP_MIN_SPILL", "32768")),
+            host_cap_tokens=int(float(os.environ.get("HY4_HOSTTIER_GB", "128")) * 1e9 / CS.BYTES_PER_TOKEN),
+            lookahead_tokens=int(os.environ.get("HY4_CAP_LOOKAHEAD", "1024")),
+            live_headroom_tokens=int(os.environ.get("HY4_CAP_LIVE_HEADROOM", "65536")),
+            log=lambda s: logger.info(s),
+            yield_fn=lambda *a: self._cap_do_yield(*a),
+        )
+        self.cap = Capacity(self, store, log=lambda s: logger.info(s))
+        self._dram("after cap build")
+        logger.info(f"HY4 cap: built (tail={self.tail_on}, host={self.host_on}, {be.describe()})")
+
     def _xrow_build(self):
         from models.demos.blackhole.hy4_preview.tt.hy4_xrow import Hy4Xrow
 
@@ -583,6 +680,8 @@ class Hy4Engine:
         if self.pfx:
             A = self.pf_rows
             plan, self.xrow_plan = self.xrow_plan, {}
+            if self.cap is not None and not _sub:
+                self._cap_pre_prefill(rows, prompts_by_row, plan)
             for r in rows:
                 sc = plan.get(r)
                 if sc is not None and self.xrow is not None:
@@ -683,7 +782,7 @@ class Hy4Engine:
         if self.spec:
             self._seed_rows(rows, first, res, prompts_by_row, sampling or {})
         logger.info(
-            f"HY4 prefill call: lg_md5={ {r: hashlib.md5(res.logits[r].numpy().tobytes()).hexdigest()[:12] for r in rows} } pfx_start={start} hits={hits} pfx_stats={self.pfx_stats} xrow={self.xrow_stats} blocks={self.blocks_stats} mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
+            f"HY4 prefill call: lg_md5={ {r: hashlib.md5(res.logits[r].numpy().tobytes()).hexdigest()[:12] for r in rows} } pfx_start={start} hits={hits} pfx_stats={self.pfx_stats} xrow={self.xrow_stats} blocks={self.blocks_stats} cap={self.tail_stats} mode={'chain' if chain else 'pool'} handoff={res.handoff_sec:.2f}s rows={rows} lens={[len(prompts_by_row[r]) for r in rows]} chunks={len(res.chunk_sec)} prefill={t1 - t0:.2f}s "
             f"(chunk median {sorted(res.chunk_sec)[len(res.chunk_sec) // 2]:.2f}s) chunks_s={[round(x, 1) for x in res.chunk_sec[:6]]}..{[round(x, 1) for x in res.chunk_sec[-2:]]} seed={time.perf_counter() - t1:.2f}s"
         )
         return first
@@ -766,6 +865,8 @@ class Hy4Engine:
                     self.pipe = want
             except OSError:
                 pass
+        if self.cap is not None:
+            self.cap.note_round()  # a decode growing towards a parked tail invalidates it BEFORE it can write there
         for r in range(ROWS):
             if not self.live[r]:
                 caps[r] = 0
@@ -1066,6 +1167,8 @@ class Hy4Engine:
             self._xrow_build()  # persistent stage tensors + programs before the first capture (D75-1)
         if self.blocks_on:
             self._blocks_build()
+        if self.tail_on or self.host_on:
+            self._cap_build()
         t1 = time.time()
         if self.spec:
             # D75-1: EVERY lazily created persistent tensor of EVERY variant must exist before the FIRST capture (one allocated between two captures can sit in the first trace's scratch and is clobbered by its
@@ -1114,6 +1217,8 @@ class Hy4Engine:
             self.release(r)
         self.pp.set_keep(None)
         self.ret = [None] * ROWS  # the warm-up prompts are synthetic: nothing retained
+        if self.cap is not None:
+            self.cap.reset()
         self.pfx_stats = dict(calls=0, hit_calls=0, hit_tokens=0, prompt_tokens=0, computed_tokens=0)
         self._b50_chain_guard()
         self._b50_dram_log()
