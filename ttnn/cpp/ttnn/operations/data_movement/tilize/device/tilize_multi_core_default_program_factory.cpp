@@ -147,8 +147,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
 
     KernelSpec writer{
         .unique_id = WRITER,
-        .source = quasar_dm ? "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
-                              "writer_tiles_batched.cpp"
+        .source = quasar_dm ? "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                              "writer_unary_interleaved_start_id_batched.cpp"
                             : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
                               "writer_unary_interleaved_start_id_metal2.cpp",
         .dfb_bindings = {DFBBinding{
@@ -160,11 +160,9 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
             .tensor_parameter_name = OUTPUT,
             .accessor_name = "dst",
         }},
-        .compile_time_args = quasar_dm ? KernelSpec::CompileTimeArgs{{"tiles_per_batch", ntiles_per_block}}
+        .compile_time_args = quasar_dm ? KernelSpec::CompileTimeArgs{{"pages_per_batch", ntiles_per_block}}
                                        : KernelSpec::CompileTimeArgs{},
-        .runtime_arg_schema =
-            {.runtime_arg_names = quasar_dm ? Group<std::string>{"num_blocks", "start_id"}
-                                            : Group<std::string>{"num_pages", "start_id"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
@@ -268,15 +266,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
              {"block_width_size", page_size},
              {"num_full_blocks_in_row", uint32_t{1}},
              {"start_page_id", page_start_id}});
-        if (quasar_dm) {
-            AddRuntimeArgsForNode(
-                writer_ra.runtime_arg_values, core, {{"num_blocks", nblocks_per_core}, {"start_id", tile_start_id}});
-        } else {
-            AddRuntimeArgsForNode(
-                writer_ra.runtime_arg_values,
-                core,
-                {{"num_pages", ntiles_per_block * nblocks_per_core}, {"start_id", tile_start_id}});
-        }
+        AddRuntimeArgsForNode(
+            writer_ra.runtime_arg_values,
+            core,
+            {{"num_pages", ntiles_per_block * nblocks_per_core}, {"start_id", tile_start_id}});
 
         tile_start_id += ntiles_per_block * nblocks_per_core;
         page_start_id += tile_height * nblocks_per_core * num_pages_in_row;
@@ -291,17 +284,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
              {"block_width_size", page_size},
              {"num_full_blocks_in_row", uint32_t{1}},
              {"start_page_id", page_start_id}});
-        if (quasar_dm) {
-            AddRuntimeArgsForNode(
-                writer_ra.runtime_arg_values,
-                core,
-                {{"num_blocks", nblocks_per_core_cliff}, {"start_id", tile_start_id}});
-        } else {
-            AddRuntimeArgsForNode(
-                writer_ra.runtime_arg_values,
-                core,
-                {{"num_pages", ntiles_per_block * nblocks_per_core_cliff}, {"start_id", tile_start_id}});
-        }
+        AddRuntimeArgsForNode(
+            writer_ra.runtime_arg_values,
+            core,
+            {{"num_pages", ntiles_per_block * nblocks_per_core_cliff}, {"start_id", tile_start_id}});
     }
 
     run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra)};

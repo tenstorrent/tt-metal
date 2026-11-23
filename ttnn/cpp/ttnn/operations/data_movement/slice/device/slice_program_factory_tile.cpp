@@ -158,8 +158,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 
     KernelSpec writer{
         .unique_id = TILE_WRITER,
-        .source = batch_tiles ? "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-                                "writer_unary_interleaved_batched.cpp"
+        .source = batch_tiles ? "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                "writer_unary_interleaved_start_id_batched.cpp"
                               : "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
                                 "writer_unary_interleaved_start_id.cpp",
         .dfb_bindings =
@@ -177,7 +177,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
                     .accessor_name = "dst",
                 },
             },
-        .compile_time_args = batch_tiles ? KernelSpec::CompileTimeArgs{{"tiles_per_batch", tiles_per_batch}}
+        .compile_time_args = batch_tiles ? KernelSpec::CompileTimeArgs{{"pages_per_batch", tiles_per_batch}}
                                          : KernelSpec::CompileTimeArgs{},
         .runtime_arg_schema =
             {

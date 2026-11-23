@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Page writer with one write barrier per batch of pages; each batch is popped as a unit. The batch size is
-// named tiles_per_batch because the host sizes it in tiles, the pages this op moves.
+// Batched form of writer_unary_interleaved_start_id_metal2.cpp: one wait, one write barrier and one pop per batch
+// of `pages_per_batch` consecutive pages instead of per page. A batch is laid out by stepping one address from
+// the ring's read pointer, so the host must size the ring as a whole number of batches; only the final batch of
+// a core may be short. The binding names (dfb::out, tensor::dst) and the argument set are the interface every
+// consumer inherits.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -16,7 +19,7 @@
 void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
     const uint32_t start_id = get_arg(args::start_id);
-    constexpr uint32_t tiles_per_batch = get_arg(args::tiles_per_batch);
+    constexpr uint32_t pages_per_batch = get_arg(args::pages_per_batch);
 
     DataflowBuffer dfb_out(dfb::out);
     const uint32_t page_bytes = dfb_out.get_entry_size();
@@ -27,7 +30,7 @@ void kernel_main() {
     uint32_t page_id = start_id;
     for (uint32_t done = 0; done < num_pages;) {
         const uint32_t remaining = num_pages - done;
-        const uint32_t n = remaining < tiles_per_batch ? remaining : tiles_per_batch;
+        const uint32_t n = remaining < pages_per_batch ? remaining : pages_per_batch;
         dfb_out.wait_front(n);
         uint32_t l1_read_addr = dfb_out.get_read_ptr();
         for (uint32_t t = 0; t < n; ++t) {
