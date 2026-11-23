@@ -67,11 +67,10 @@ def nrmse(sums: torch.Tensor) -> float:
     return math.sqrt(error / norm) if norm > 0 else math.inf
 
 
-def pcc(sums: torch.Tensor) -> float:
-    """Pearson correlation of all elements of the rows of ``sums``; NaN when either side is constant.
-
-    Rows are merged by their centred moments (Chan et al.): each row's moments about its own mean plus the spread of
-    the row means about the overall mean, so no large raw sums cancel."""
+def _centred(sums: torch.Tensor) -> tuple[float, float, float]:
+    """(Σ(y − ȳ)², Σ(x − x̄)², Σ(x − x̄)(y − ȳ)) over all elements of the rows of ``sums``. Rows are merged by their
+    centred moments (Chan et al.): each row's moments about its own mean plus the spread of the row means about the
+    overall mean, so no large raw sums cancel."""
     n = sums[:, COUNT]
     total = n.sum()
     mean_y, mean_x = (n * sums[:, MEAN_Y]).sum() / total, (n * sums[:, MEAN_X]).sum() / total
@@ -79,7 +78,19 @@ def pcc(sums: torch.Tensor) -> float:
     m2_y = float(sums[:, M2_Y].sum() + (n * shift_y * shift_y).sum())
     m2_x = float(sums[:, M2_X].sum() + (n * shift_x * shift_x).sum())
     c_xy = float(sums[:, C_XY].sum() + (n * shift_x * shift_y).sum())
-    return c_xy / math.sqrt(m2_x * m2_y) if m2_x > 0 and m2_y > 0 else math.nan
+    return m2_y, m2_x, c_xy
+
+
+def pcc(sums: torch.Tensor) -> float:
+    """Pearson correlation of all elements of the rows of ``sums``. Fails closed: a varying golden against a constant
+    device side (an all-zero cache never written, say) is 0 (no correlation), and non-finite data give NaN. Only a
+    constant golden leaves it undefined (NaN; ``errors`` leaves it out)."""
+    m2_y, m2_x, c_xy = _centred(sums)
+    if m2_y == 0:
+        return math.nan
+    if m2_x == 0:
+        return 0.0
+    return c_xy / math.sqrt(m2_x * m2_y)
 
 
 def row_nrmse(sums: torch.Tensor, floor: float) -> torch.Tensor:
@@ -113,11 +124,11 @@ def quantile(t: torch.Tensor, q: float) -> float:
 
 def errors(sums: torch.Tensor, prefix: str = "") -> dict[str, float]:
     """The absolute and relative error of the rows of ``sums`` together: ``<prefix>nrmse``, ``<prefix>rms_err``,
-    ``<prefix>rms_ref``, and ``<prefix>pcc`` unless one side is constant (PCC undefined: left out, not NaN)."""
+    ``<prefix>rms_ref``, and ``<prefix>pcc`` unless the golden is constant (PCC undefined: left out, not NaN). A
+    constant device side gives PCC 0 and non-finite data NaN, so a minimum-PCC bar fails them (fail closed)."""
     out = {f"{prefix}nrmse": nrmse(sums), f"{prefix}rms_err": rms_err(sums), f"{prefix}rms_ref": rms_ref(sums)}
-    correlation = pcc(sums)
-    if not math.isnan(correlation):
-        out[f"{prefix}pcc"] = correlation
+    if _centred(sums)[0] != 0:
+        out[f"{prefix}pcc"] = pcc(sums)
     return out
 
 
