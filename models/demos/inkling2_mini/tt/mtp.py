@@ -142,8 +142,17 @@ class DSparkDrafter:
             rot[j, j + D // 2] = 1.0
         self.rot = put(rot.view(1, 1, D, D))
         # host-rewritten inputs
-        self.cos_blk, self.sin_blk = put(torch.zeros(1, 1, 32, D)), put(torch.zeros(1, 1, 32, D))
-        self.cos_pos, self.sin_pos = put(torch.zeros(1, 1, 1, D)), put(torch.zeros(1, 1, 1, D))
+        # RoPE rows by position: device tables, looked up inside the traces (no host tilize / write per pass)
+        rows = self.max_ctx + KV_PAD + 32
+        c, sn = rope_tables(0, rows)
+        self.rope_tab = [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev,
+                                         memory_config=dram) for t in (c, sn)]  # fmt: skip
+        del c, sn
+        self.blk_ids = ttnn.from_torch(
+            torch.zeros(1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
+        )  # fmt: skip  p .. p+31
+        self.commit_ids = ttnn.from_torch(torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.uint32,
+                                          layout=ttnn.ROW_MAJOR_LAYOUT, device=dev)  # fmt: skip
         self.blk_pos = ttnn.from_torch(torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, device=dev)  # p
         # p + 7, once per kv group (the flash-decode batch)
         self.cur_pos = ttnn.from_torch(torch.zeros(NKV, dtype=torch.int32), dtype=ttnn.int32, device=dev)
@@ -216,6 +225,10 @@ class DSparkDrafter:
             w = self.w[w]
         return ttnn.linear(x, w, dtype=dtype, compute_kernel_config=self.mmc)
 
+    def _rope_rows(self, ids, n):
+        """(cos, sin) [1, 1, n, 128] TILE bf16 for the positions in ids (uint32 [1, n] ROW_MAJOR)."""
+        return [ttnn.reshape(ttnn.embedding(ids, t, layout=ttnn.TILE_LAYOUT), [1, 1, n, D]) for t in self.rope_tab]
+
     def _rope(self, x, cos, sin):
         x32 = ttnn.typecast(x, ttnn.float32) if x.dtype != ttnn.float32 else x
         r = ttnn.matmul(x32, self.rot, dtype=ttnn.float32, compute_kernel_config=self.ckc)
@@ -244,31 +257,34 @@ class DSparkDrafter:
 
     # ------------------------------------------------------------ host inputs
     def set_commit_pos(self, pos):
-        c, s = rope_tables(pos, 1)
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(c.view(1, 1, 1, D), layout=ttnn.TILE_LAYOUT), self.cos_pos)
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(s.view(1, 1, 1, D), layout=ttnn.TILE_LAYOUT), self.sin_pos)
+        """The committed position's RoPE row index (one 4-byte write; the rows are looked up on device)."""
+        ids = torch.tensor([[pos]], dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+                                        self.commit_ids)  # fmt: skip
 
     def set_draft_pos(self, p):
         if not 0 < p < self.max_ctx:
             raise ValueError(f"draft position {p} outside (0, {self.max_ctx})")
-        c, s = rope_tables(p, 32)
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(c.view(1, 1, 32, D), layout=ttnn.TILE_LAYOUT), self.cos_blk)
-        ttnn.copy_host_to_device_tensor(ttnn.from_torch(s.view(1, 1, 32, D), layout=ttnn.TILE_LAYOUT), self.sin_blk)
+        ids = torch.arange(p, p + 32, dtype=torch.int32).view(1, 32)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), self.blk_ids
+        )
         for t, v in ((self.blk_pos, [p]), (self.cur_pos, [p + BLOCK - 1] * NKV)):
             ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch.tensor(v, dtype=torch.int32), dtype=ttnn.int32), t)
 
     # ------------------------------------------------------------ device
     def commit(self, feats, pos_idx):
         """feats: [1,1,32,C] rows 0..3 = the 4 taps (bf16/fp32) of the position just decoded; pos_idx: int32 [1]
-        device tensor (DecodePositions.pos). Uses cos_pos/sin_pos (set_commit_pos)."""
+        device tensor (DecodePositions.pos). RoPE row: commit_ids (set_commit_pos)."""
         f = ttnn.typecast(feats, ttnn.float32) if feats.dtype != ttnn.float32 else feats
         mix = ttnn.matmul(self.w["alpha"], f, dtype=ttnn.float32, compute_kernel_config=self.ckc)  # row r = mix r
+        cos_pos, sin_pos = self._rope_rows(self.commit_ids, 1)
         for i in range(N_LAYERS):
             c = self._rms(ttnn.slice(mix, [0, 0, i, 0], [1, 1, i + 1, HIDDEN]), f"l{i}.ctx_norm")
             kv = self._lin(c, f"l{i}.wkv_ctx")
             k = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, 0], [1, 1, 1, NKV * D]), [1, 1, NKV, D])
             v = ttnn.reshape(ttnn.slice(kv, [0, 0, 0, NKV * D], [1, 1, 1, 2 * NKV * D]), [1, 1, NKV, D])
-            k = self._rope(self._rms(k, f"l{i}.k_norm_ctx", ttnn.float32), self.cos_pos, self.sin_pos)
+            k = self._rope(self._rms(k, f"l{i}.k_norm_ctx", ttnn.float32), cos_pos, sin_pos)
             for cache, t in ((self.k_cache[i], k), (self.v_cache[i], v)):
                 ttnn.experimental.paged_update_cache(
                     cache, ttnn.to_memory_config(t, self.kv_shard), update_idxs_tensor=pos_idx
@@ -282,7 +298,7 @@ class DSparkDrafter:
 
         qh, kh, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=NH, num_kv_heads=NKV,
                                                            transpose_k_heads=False)  # fmt: skip
-        rope = lambda x: ttnn.experimental.rotary_embedding(x, self.cos_blk, self.sin_blk)  # noqa: E731
+        rope = lambda x: ttnn.experimental.rotary_embedding(x, *self.rope_blk)  # noqa: E731
         q = rope(self._rms(qh, f"l{i}.q_norm"))  # [1, 24, 32, 128] bf16
         k = rope(self._rms(kh, f"l{i}.k_norm"))
         self._write_block(i, k, v)
@@ -320,6 +336,7 @@ class DSparkDrafter:
         tensor of greedy draft tokens for positions p+1..p+k (set_draft_pos(p) first)."""
         m = self.model
         tok = ttnn.reshape(anchor, [1, 1])
+        self.rope_blk = self._rope_rows(self.blk_ids, 32)  # used by every layer
         e = ttnn.embedding(tok, m.embed, layout=ttnn.TILE_LAYOUT)
         e = m._rms(ttnn.reshape(e, [1, 1, 1, HIDDEN]), m.embed_norm)
         res = ttnn.add(self.x_base, ttnn.pad(ttnn.typecast(e, ttnn.float32), [(0, 0), (0, 0), (0, 31), (0, 0)], 0.0))
