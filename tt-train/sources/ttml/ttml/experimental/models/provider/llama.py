@@ -33,6 +33,7 @@ from ..utils.checkpoint import (
     TT_CHECKPOINT,
     AdapterState,
     PathLike,
+    check_base_model,
     read_adapter,
     write_adapter,
 )
@@ -292,9 +293,7 @@ class LlamaProvider(ModelProvider):
     def _check_base_model(self, directory: Path, base: Optional[str]) -> None:
         """A checkpoint that records no base model is taken as this model's. A PEFT adapter records
         ``model_source()``; a ``tt`` checkpoint, ``model.name``."""
-        name = self.config.model.name
-        if base and base not in (name, self.model_source()):
-            _fail("checkpoint", f"{directory} is for {base!r}, this model is {name!r}")
+        check_base_model(directory, base, self.config.model.name, self.model_source())
 
     # ------------------------------------------------------------------ PEFT adapters
 

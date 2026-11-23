@@ -16,6 +16,7 @@ from ttml.experimental.datasets.provider.sft import get_providers as get_dataset
 from ttml.experimental.datasets.provider.sft import providers as dataset_providers
 from ttml.experimental.errors import UnsupportedTrainingConfig
 from ttml.experimental.models.provider import get_provider as get_model_provider
+from ttml.experimental.models.utils.checkpoint import check_base_model
 from ..configs import SFTTrainerConfig
 from ..managers.device import DeviceManager
 from ..utils import (
@@ -217,6 +218,4 @@ class SFTTrainer(Trainer):
         One without ``trainer_state.json``, such as a model from elsewhere, is taken as this model's."""
         state = read_trainer_state(directory) or {}
         base = (state.get("base_model") or {}).get("name_or_path")
-        name = self.config.model.name
-        if base and base not in (name, self.provider.model_source()):
-            raise UnsupportedTrainingConfig(f"checkpoint: {directory} is for {base!r}, this model is {name!r}")
+        check_base_model(directory, base, self.config.model.name, self.provider.model_source())

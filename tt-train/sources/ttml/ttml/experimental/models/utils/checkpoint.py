@@ -15,9 +15,11 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import numpy as np
+
+from ...errors import UnsupportedTrainingConfig
 
 ADAPTER_CONFIG = "adapter_config.json"
 ADAPTER_WEIGHTS = "adapter_model.safetensors"
@@ -54,3 +56,11 @@ def read_adapter(directory: PathLike) -> AdapterState:
     if not weights.is_file():
         raise FileNotFoundError(f"{directory} has no {ADAPTER_WEIGHTS}")
     return AdapterState(tensors=load_file(str(weights)), config=json.loads(config.read_text()))
+
+
+def check_base_model(directory: PathLike, base: Optional[str], name: str, source: str) -> None:
+    """Raise ``UnsupportedTrainingConfig`` if the checkpoint at ``directory``, which records ``base`` as its base
+    model, is for a model other than the one ``model.name`` (``name``) names, or than its ``model_source()``
+    (``source``). A checkpoint that records no base model is taken as this model's."""
+    if base and base not in (name, source):
+        raise UnsupportedTrainingConfig(f"checkpoint: {directory} is for {base!r}, this model is {name!r}")
