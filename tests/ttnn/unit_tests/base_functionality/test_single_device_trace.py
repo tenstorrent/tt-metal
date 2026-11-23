@@ -340,6 +340,54 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
     assert trace_output.is_allocated()
 
 
+# #61727: a native tiled reshape first compiled after capture keeps an op-owned mapping tensor that
+# replay can overwrite. Compiling it before capture must leave nothing for the tracker to reject.
+@skip_for_slow_dispatch()
+@pytest.mark.skipif(
+    not trace_allocation_tracker.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup"
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+@pytest.mark.parametrize("warmup", [True, False], ids=["warmup", "late_miss"])
+def test_trace_allocation_tracking_rejects_late_native_reshape_miss(device, warmup, expect_error):
+    # ttnn.reshape routes this case to codegen, which keeps no mapping tensor; force the native factory.
+    reshape_native = ttnn._ttnn.operations.data_movement.reshape_force_native
+    get_unsafe_tracked_ids = ttnn._ttnn.operations.trace.get_unsafe_tracked_ids
+    out_shape = [32, 128]
+
+    torch_input = torch.rand((64, 64), dtype=torch.bfloat16)
+    reshape_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    trace_input = ttnn.allocate_tensor_on_device(ttnn.Shape((1, 1, 32, 32)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    ttnn.neg(trace_input).deallocate()
+    if warmup:
+        reshape_native(reshape_input, out_shape).deallocate()
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    trace_output = ttnn.neg(trace_input)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    try:
+        assert not get_unsafe_tracked_ids(device, trace_id)
+        reshape_native(reshape_input, out_shape).deallocate()
+        left_by_reshape = get_unsafe_tracked_ids(device, trace_id)
+
+        if warmup:
+            assert not left_by_reshape
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            output = ttnn.to_torch(reshape_native(reshape_input, out_shape))
+            assert torch.equal(output.float(), torch_input.float().reshape(out_shape))
+        else:
+            # The output is freed, so what remains is what the cache miss kept for later hits.
+            assert left_by_reshape
+            with expect_error(RuntimeError, "still alive before trace replay") as error:
+                ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            for buffer_id in left_by_reshape:
+                assert f"Buffer {buffer_id}" in str(error.value)
+    finally:
+        ttnn.release_trace(device, trace_id)
+
+    assert trace_output.is_allocated()
+
+
 @skip_for_slow_dispatch()
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
 def test_trace_allocation_tracking_release_trace_is_idempotent(device):

@@ -127,32 +127,18 @@ void AllocatorImpl::init_one_bank_per_l1() {
 }
 
 void AllocatorImpl::verify_safe_allocation() const {
-    // Use the set directly: allocations_unsafe_ only gets set with tracking off, so it would silently
-    // disable the fatal under the recommended CI config (fail flag forces tracking on).
-    if (active_traces_by_manager_.empty() || allocation_context_contains("trace_storage")) {
+    if (!allocations_unsafe_ || allocation_context_contains("trace_storage")) {
         return;
     }
 
-    const auto& ctx = current_allocation_context();
-
-    // Scope the fatal to program-cache-origin allocations (the #61727 class). Normal op outputs and
-    // from_torch uploads legitimately allocate between end_trace_capture and release_trace; only the
-    // cached op-owned buffers cause the hang. The fail flag implies tracking (rtoptions snapshot),
-    // so ctx is populated whenever fail_on_unsafe_trace_alloc_enabled() is true.
-    if (fail_on_unsafe_trace_alloc_enabled() && ctx.starts_with(kProgramCacheAllocationContextPrefix)) {
-        TT_THROW(
-            "Unsafe program-cache allocation while a trace is active (#61727). Warm up this op "
-            "before begin_trace_capture. Context: {}",
-            ctx);
-    }
-
+    // Emit at most once per host thread for the process lifetime, shared across all allocator instances.
     thread_local static bool warning_generated = false;
     if (!warning_generated) {
         log_warning(
             tt::LogMetal,
             "Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers "
-            "may be corrupted once a trace is executed if they are not released before then. Set "
-            "TT_METAL_FAIL_ON_UNSAFE_TRACE_ALLOC=1 to fail on program-cache-origin allocations instead (#61727).");
+            "may be corrupted once a trace is executed if they are not released before then. Use the trace allocation "
+            "tracker to verify.");
         warning_generated = true;
     }
 }

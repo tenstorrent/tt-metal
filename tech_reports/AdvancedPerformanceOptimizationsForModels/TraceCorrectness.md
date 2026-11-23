@@ -124,6 +124,16 @@ python your_program.py
 
 This option should normally be used only to reduce diagnostic noise while investigating other allocations. It does not make late program compilation safe and can conceal an incomplete warmup or an incorrectly keyed program cache.
 
+A late compilation is reported as a `program_cache:` entry naming the operation and its arguments. If that operation also uploads a buffer of its own, such as the page-mapping table of the native tiled reshape ([#61727](https://github.com/tenstorrent/tt-metal/issues/61727)), that buffer is listed next to it under `ttnn.to_device`:
+
+```
+RuntimeError: Found 2 device buffer(s) still alive before trace replay. These will be corrupted on replay.
+Buffer 17 [op: ttnn.to_device]
+Buffer 19 [op: program_cache: ReshapeViewDeviceOperation logical_output_shape=Shape([1, 32, 128]) ...]
+```
+
+Both buffers belong to the cached program, so there is no tensor to release. Run the named operation with the same arguments before the first capture instead.
+
 Some trace inputs and outputs are intentionally reused even though replaying another trace may overwrite them. Acknowledge a specific device tensor after allocating it with:
 
 ```python
