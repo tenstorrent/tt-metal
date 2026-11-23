@@ -82,6 +82,7 @@
   "perf_sdpa_reduce_row": 4.2,
   "perf_sdpa_weighted_reduce": 7.9,
   "perf_sfpu_binop_scalar": 8.5,
+  "perf_sfpu_clamped_silu": 1.0,
   "perf_sfpu_ema": 0.2,
   "perf_sfpu_reduce": 1.0,
   "perf_sfpu_reduce_sdpa": 0.0,
