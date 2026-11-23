@@ -315,6 +315,10 @@ fi
 if [ -n "${PREFILL_SCALED_FP8_KV_CACHE:-}" ]; then
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE};"
 fi
+# Ranks whose outbound boundary crosses the host instead of the fabric (runners/host_hop.py).
+if [ -n "${PREFILL_HOST_HOP_RANKS:-}" ]; then
+  RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_HOST_HOP_RANKS=${PREFILL_HOST_HOP_RANKS};"
+fi
 
 # Capacity probes replace the config's request with one of their own, e.g. a full context at a probed
 # PREFILL_NUM_USERS, resolved here so the perf probes cover that request: whole chunks, within the context the
@@ -463,13 +467,14 @@ if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   # assemble_pipeline_binding.py predict: same halves per host, even meshes on the top half.
   IFS=, read -r -a HOST_LIST <<< "${RESOLVED_HOSTS}"
   [ "${#HOST_LIST[@]}" -eq "${PP_4X4_HOSTS}" ] || {
-    echo "${MODEL}/${CONFIG} requires exactly ${PP_4X4_HOSTS} cabled Galaxy hosts in ${TTRUN_DIR}/hostfile; got '${RESOLVED_HOSTS}'" >&2; exit 2;
+    echo "${MODEL}/${CONFIG} requires exactly ${PP_4X4_HOSTS} Galaxy hosts in ${TTRUN_DIR}/hostfile; got '${RESOLVED_HOSTS}'" >&2; exit 2;
   }
   if [ "${PP_4X4_HOSTS}" -eq 1 ]; then
     MGD="${MGD_DIR%/ci}/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto"
   else
     MGD="${MGD_DIR}/sc4_4x4_sp1_mgd.textproto"
   fi
+  MGD="${PREFILL_MGD:-${MGD}}"
   [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
   # The stage shape comes from the manifest (the runner applies it under the launch line's exports);
   # a manifest without it would bring 8x4 settings up on a 4x4 mesh.
