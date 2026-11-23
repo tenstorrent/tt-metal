@@ -43,10 +43,7 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
     generate_input_dim,
 )
-from helpers.tile_constants import (
-    MX_SUPPORTED_TILE_SIZES,
-    is_mx_unsupported_tile_dims,
-)
+from helpers.tile_constants import is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test, result_tensor
 
@@ -55,6 +52,8 @@ UNPACK_TILIZE_TILE_SIZES = [
     (1, 32),
     (2, 32),
 ]
+# The to-DEST small-faces path also takes faces of 4 and 8 rows.
+UNPACK_TILIZE_TO_DEST_TILE_SIZES = UNPACK_TILIZE_TILE_SIZES + [(4, 32), (8, 32)]
 
 # Rows the SrcA/SrcB tilize takes in more than one MOP run: full_ct_dim -> block_ct_dim, a
 # proper divisor (the init asserts block_ct_dim divides full_ct_dim), so each run past the
@@ -103,10 +102,12 @@ def generate_unpack_tilize_combinations(
             else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
         )
         tile_sizes = (
-            select_perf_tile_sizes(UNPACK_TILIZE_TILE_SIZES)
-            if is_perf
+            UNPACK_TILIZE_TO_DEST_TILE_SIZES
+            if in_fmt.is_32_bit()
             else UNPACK_TILIZE_TILE_SIZES
         )
+        if is_perf:
+            tile_sizes = select_perf_tile_sizes(tile_sizes)
 
         for dest_acc in dest_acc_modes:
             for dest_sync in dest_sync_modes:
@@ -120,11 +121,6 @@ def generate_unpack_tilize_combinations(
                         continue
                     for tile_dims in tile_sizes:
                         if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
-                            continue
-                        if (
-                            unpacks_to_dest(in_fmt, dest_acc)
-                            and tile_dims not in MX_SUPPORTED_TILE_SIZES
-                        ):
                             continue
                         tile_shape = construct_tile_shape(tile_dims)
                         dimensions_list = (
