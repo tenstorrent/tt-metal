@@ -42,15 +42,12 @@ SPEC_K = 3
 SPEC_BACK = int(os.environ.get("RESIDENT_ADAPTIVE_SPEC_BACK", "6"))  # back to SPEC at <= this many live users ...
 PLAIN_HOLD = int(os.environ.get("RESIDENT_ADAPTIVE_PLAIN_HOLD", "32"))  # ... for this many propose calls in a row
 PLAIN_ROWS = 32
-# acceptance-aware policy: SPEC gives way to PLAIN for PAY_HOLD propose calls when, after PAY_MIN verify steps, the
-# tokens its steps committed would not have taken PAY_MARGIN x their time in plain steps. Its time is everything SPEC
-# costs: the verify steps, mixed steps (a plain launch for users not yet moved), and the promotions' drafter refills
-# (every live user waits for them); prefills are no step's cost. Both as sums decayed by PAY_DECAY a step (~20-step
-# window). Plain step times measured per live count, a default model (ms) until then
+# acceptance-aware policy: SPEC gives way to PLAIN when its measured tokens per user-second fall below a plain step's
+# (x PAY_MARGIN) after PAY_MIN verify steps, for PAY_HOLD propose calls; plain step times measured per live count, a
+# default model (ms) until then
 PAY_MARGIN = float(os.environ.get("RESIDENT_ADAPTIVE_PAY_MARGIN", "1.05"))
 PAY_MIN = int(os.environ.get("RESIDENT_ADAPTIVE_PAY_MIN", "16"))
 PAY_HOLD = int(os.environ.get("RESIDENT_ADAPTIVE_PAY_HOLD", "512"))
-PAY_DECAY = float(os.environ.get("RESIDENT_ADAPTIVE_PAY_DECAY", "0.95"))
 PLAIN_MS_DEFAULT = lambda n: 16.5 + 0.5 * (n - 1)  # noqa: E731  (the batch card's 128 / 128 TPOT, c1 .. c8)
 # (log the per-step host / call times every 64 steps)
 TIMING = os.environ.get("RESIDENT_ADAPTIVE_TIMING", "0") == "1"
@@ -130,7 +127,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         # prefill / layout change, any speculative step)
         self._calls = [0, 0]
         # (the acceptance-aware policy's measurements: EMAs of tokens per spec user-step and of step times per kind)
-        self._pay = self._new_pay()
+        self._pay = dict(acc=None, spec_ms={}, plain_ms={}, verifies=0, last_t=None, kind=None, n=0, hold=0, excl=0.0)
         # the plain build's hub-fed inputs do not hold every live row's next token (a move into it, a step served by
         # the spec build): its next ordinary call rebuilds them from the history instead of a steady replay
         self._plain_stale = False
@@ -192,47 +189,34 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self._plain_stale = True
         self.spec_of.clear()
 
-    @staticmethod
-    def _new_pay():
-        # (t_act / t_eq: SPEC's decayed time and the plain time of its tokens; excl: prefill seconds since the last
-        # propose; refill: promotion seconds since then, a cost of SPEC but not of the plain step it may sit in)
-        return dict(
-            plain_ms={}, t_act=0.0, t_eq=0.0, verifies=0, last_t=None, kind=None, n=0, hold=0, excl=0.0, refill=0.0
-        )
-
-    def _spec_restart(self):
-        """a SPEC period starts: its measurements start over"""
-        self._pay.update(t_act=0.0, t_eq=0.0, verifies=0)
-
-    def _measure(self, step_accepts):
-        """update the policy with the step just committed (its kind and live count from its decode call, its time since
-        the previous propose, step_accepts = every stepping user's committed tokens); whether speculation pays (True
-        until PAY_MIN verify steps are in)"""
+    def _measure(self, spec_accepts):
+        """update the policy's EMAs with the step just committed (its kind and live count from its decode call, its time
+        since the previous propose); whether speculation pays: its tokens per user-ms >= a plain step's x PAY_MARGIN
+        (True until PAY_MIN verify steps are in)"""
         import time
 
         pay, now, ema = self._pay, time.perf_counter(), lambda old, x, a=0.1: x if old is None else old + a * (x - old)
-        dt_ms = None if pay["last_t"] is None else (now - pay["last_t"] - pay["excl"]) * 1000
-        refill_ms = pay["refill"] * 1000
-        pay["last_t"], pay["excl"], pay["refill"] = now, 0.0, 0.0
+        # (a promotion's refill and a prefill between the steps are no step's cost: excluded)
+        dt_ms = None if pay["last_t"] is None else (now - pay["last_t"] - pay.get("excl", 0.0)) * 1000
+        pay["last_t"], pay["excl"] = now, 0.0
         n = max(1, pay["n"])
-        if dt_ms is not None and dt_ms < 5000 and step_accepts:  # (an idle gap is no step)
-            if pay["kind"] == "plain":
-                pay["plain_ms"][n] = ema(pay["plain_ms"].get(n), dt_ms - refill_ms)
-            if self.mode == "SPEC":  # (the mode this step ran in)
-                plain = pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n))
-                pay["t_act"] = pay["t_act"] * PAY_DECAY + dt_ms
-                pay["t_eq"] = pay["t_eq"] * PAY_DECAY + sum(step_accepts) * plain / n
-                pay["verifies"] += pay["kind"] == "verify"
-        if pay["verifies"] < PAY_MIN:
+        if dt_ms is not None and dt_ms < 5000:  # (an idle gap is no step)
+            if pay["kind"] == "verify" and spec_accepts:
+                pay["spec_ms"][n] = ema(pay["spec_ms"].get(n), dt_ms)
+                pay["acc"] = ema(pay["acc"], sum(spec_accepts) / len(spec_accepts))
+                pay["verifies"] += 1
+            elif pay["kind"] == "plain":
+                pay["plain_ms"][n] = ema(pay["plain_ms"].get(n), dt_ms)
+        if pay["verifies"] < PAY_MIN or pay["acc"] is None or n not in pay["spec_ms"]:
             return True
-        return pay["t_eq"] >= PAY_MARGIN * pay["t_act"]
+        plain = pay["plain_ms"].get(n, PLAIN_MS_DEFAULT(n))
+        return pay["acc"] / pay["spec_ms"][n] >= PAY_MARGIN / plain
 
     def _pay_line(self):
         pay, n = self._pay, max(1, self._pay["n"])
         return (
-            f"{n} users: their tokens would take {pay['t_eq']:.0f} ms in plain steps "
-            f"({pay['plain_ms'].get(n, PLAIN_MS_DEFAULT(n)):.1f} ms each), speculating took {pay['t_act']:.0f} ms "
-            f"(sums decayed {PAY_DECAY} a step, refills included)"
+            f"{n} users: {pay['acc']:.2f} tokens per {pay['spec_ms'].get(n, 0):.1f} ms speculating vs 1 per "
+            f"{pay['plain_ms'].get(n, PLAIN_MS_DEFAULT(n)):.1f} ms plain"
         )
 
     def _promote(self):
@@ -250,7 +234,7 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             self.spec_of[r], self.last_acc[r] = u, 1
         if items:  # (one batched refill for every user promoted now)
             self.ae.move_to_spec_many(items)
-        self._pay["refill"] += time.perf_counter() - t0  # (a cost of speculating: every live user waits for it)
+        self._pay["excl"] = self._pay.get("excl", 0.0) + time.perf_counter() - t0
 
     @staticmethod
     def _non_speculable(sp, i):
@@ -288,7 +272,6 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         n = int(len(prompt_lens))
         if self.mode == "PLAIN" and not self.live:  # (an idle server starts speculating again)
             self.mode, self.low_calls = "SPEC", 0
-            self._spec_restart()
         res = super().prefill_forward(
             tokens, page_table, kv_cache, prompt_lens, start_pos=start_pos, empty_slots=empty_slots, **kwargs
         )
@@ -300,8 +283,8 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
         if len(self.live) > SPEC_USERS and self.mode == "SPEC":
             logger.info(f"adaptive: {len(self.live)} live users -> PLAIN")
             self.mode, self.low_calls = "PLAIN", 0
-        # (a prefill between two decode steps is no step's cost: excluded from the policy's step times)
-        self._pay["excl"] += time.perf_counter() - t0
+        # (a prefill between two decode steps is no step's cost either: excluded from the policy's step times)
+        self._pay["excl"] = self._pay.get("excl", 0.0) + time.perf_counter() - t0
         return res
 
     # ------------------------------------------------------------------ decode
@@ -491,13 +474,13 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
             rows[i] = (r, a, int(committed_tokens[i, a - 1]), p)
             self.last_acc[r] = a
         live = len(self.live)
-        pays = self._measure([a for r, a, _, _ in rows.values()])
+        pays = self._measure([a for r, a, _, _ in rows.values() if r in self.spec_of])
         # ---- the mode for the next step
         if self.sampled & self.live or getattr(self, "_host_steps", False):  # (non-speculable traffic: no drafts)
             self.mode, self.low_calls = "PLAIN", 0
         elif self.mode == "SPEC" and not pays:
             logger.info(f"adaptive: speculation does not pay ({self._pay_line()}) -> PLAIN for {PAY_HOLD} steps")
-            self.mode, self.low_calls, self._pay["hold"] = "PLAIN", 0, PAY_HOLD
+            self.mode, self.low_calls, self._pay["hold"], self._pay["verifies"] = "PLAIN", 0, PAY_HOLD, 0
         elif live > SPEC_USERS:
             if self.mode == "SPEC":
                 logger.info(f"adaptive: {live} live users -> PLAIN")
@@ -508,7 +491,6 @@ class Qwen36ResidentAdaptiveForCausalLM(ResidentRowsAdapter):
                 self._pay["hold"] = 0
                 logger.info(f"adaptive: {live} live users for {self.low_calls} steps -> SPEC")
                 self.mode, self.low_calls = "SPEC", 0
-                self._spec_restart()
         self._calls[1] += 1
         if self.mode == "SPEC" and self._calls[0] == self._calls[1]:
             self._promote()  # (known-greedy plain users into the spec build: state moves + drafter refill; drafts below)
