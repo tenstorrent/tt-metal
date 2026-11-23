@@ -55,7 +55,7 @@ from datasets import Dataset
 from safetensors.numpy import save_file
 from transformers import AutoTokenizer, LlamaConfig as HFLlamaConfig, LlamaForCausalLM
 
-from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.common.config import DeviceConfig, TransformerConfig, load_config
 from ttml.common.utils import build_mesh, repeat_interleave
 from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from ttml.modules import RunMode
@@ -497,8 +497,8 @@ class _GradientDtypes(TrainerCallback):
 def test_grpo_trainer_trains_fp32_master_weights_with_fp32_gradient_accumulation(
     patch_llama_weight_loading, tmp_path, gradient_reduce_default
 ):
-    """precision= reaches the model before its weights load: fused AdamW then steps fp32 master weights on gradients
-    added up in fp32 over two micro-batches, and every parameter moves."""
+    """The config's precision block reaches the model before its weights load: fused AdamW then steps fp32 master
+    weights on gradients added up in fp32 over two micro-batches, and every parameter moves."""
     grpo_cfg = GRPOConfig(
         epsilon=0.2,
         per_device_train_batch_size=4,
@@ -515,6 +515,7 @@ def test_grpo_trainer_trains_fp32_master_weights_with_fp32_gradient_accumulation
         warmup_steps=0,
         rollout_backend="ttml_in_process_sync",
         lr_scheduler_type="constant",
+        precision=FP32_PRECISION,
     )
     tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
     prompts = ["What is 1+1?", "Name a color.", "Name a fruit.", "What is 2+2?"] * 2
@@ -540,7 +541,6 @@ def test_grpo_trainer_trains_fp32_master_weights_with_fp32_gradient_accumulation
         reward_func=lambda completions, **_: [float(i % 2) for i in range(len(completions))],
         optimizer_dict={"type": "AdamW", "lr": 1.0e-3},
         callbacks=[gradients],
-        precision=FP32_PRECISION,
     )
     assert _stored_dtypes(trainer.model) == {ttnn.DataType.FLOAT32}
     assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
@@ -563,7 +563,8 @@ def test_grpo_trainer_trains_fp32_master_weights_with_fp32_gradient_accumulation
 
 def test_grpo_trainer_rejects_a_whole_config_as_optimizer_dict(expect_error):
     """``create_optimizer`` applies a whole config's precision block, which here would run after the weights loaded.
-    The trainer takes that block as ``precision=`` and only the optimizer's own dict as ``optimizer_dict``."""
+    The trainer takes that block from ``GRPOConfig.precision`` and only the optimizer's own dict as
+    ``optimizer_dict``."""
     whole_config = {
         "training_config": {"optimizer": {"type": "AdamW", "lr": 1.0e-3}, "precision": {"master_dtype": "float32"}}
     }
@@ -586,19 +587,34 @@ def test_grpo_trainer_rejects_a_whole_config_as_optimizer_dict(expect_error):
         ("float32", TypeError, "precision must be a dict"),
     ],
 )
-def test_grpo_trainer_checks_the_precision_block_in_its_constructor(expect_error, precision, error, message):
-    """A typo in ``precision=`` stops the constructor before it opens the device and builds the model. No device
-    needed: the other arguments are never read."""
+def test_grpo_config_checks_its_precision_block(expect_error, precision, error, message):
+    """A typo in the precision block stops the config, before a trainer opens a device and builds a model."""
     with expect_error(error, message):
-        GRPOTrainer(
-            transformer_config=None,
-            device_config=None,
-            model_source="unused",
-            dataset_func=lambda: None,
-            config=None,
-            optimizer_dict={"type": "AdamW", "lr": 1.0e-3},
-            precision=precision,
-        )
+        GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_backend="ttml_in_process_sync", precision=precision)
+
+
+def test_get_grpo_config_reads_the_precision_block_of_the_training_config(expect_error):
+    """The block has one place in the YAML, ``training_config.precision`` next to the optimizer. ``get_grpo_config``
+    puts it into ``GRPOConfig.precision``, which the trainer applies and wandb logs with the rest of the config."""
+    raw = load_config("training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml")
+    assert get_grpo_config(raw).precision is None  # the shipped config has no block
+
+    raw["training_config"]["precision"] = dict(FP32_PRECISION)
+    cfg = get_grpo_config(raw)
+    assert cfg.precision == FP32_PRECISION
+    logged = grpo_trainer_module._build_wandb_config(
+        SimpleNamespace(config=cfg, model_source="unused", optimizer_dict=raw["training_config"]["optimizer"])
+    )
+    assert logged["precision"] == FP32_PRECISION and logged["optimizer"] == raw["training_config"]["optimizer"]
+
+    raw["training_config"]["precision"] = {"master_dtpye": "float32"}
+    with expect_error(RuntimeError, "Unknown key precision.master_dtpye"):
+        get_grpo_config(raw)
+
+    del raw["training_config"]["precision"]
+    raw["training_config"]["grpo_config"]["precision"] = dict(FP32_PRECISION)
+    with expect_error(ValueError, "belongs under training_config.precision"):
+        get_grpo_config(raw)
 
 
 @pytest.mark.requires_device

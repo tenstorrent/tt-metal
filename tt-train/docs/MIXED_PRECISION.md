@@ -85,7 +85,8 @@ names the compute dtype. It is applied by `core::apply_precision_config()`
 optimizer state follows. It is applied once per run, where the optimizer is built:
 
 - **Python.** `ttml.common.utils.create_optimizer()` applies it when it is given the whole config (as in `train.py`).
-  `SFTTrainer` and `GRPOTrainer` take the block as the keyword argument `precision=` (the YAML's
+  `SFTTrainer` takes the block as the keyword argument `precision=`, and `GRPOTrainer` reads it from
+  `GRPOConfig.precision`, which `get_grpo_config()` fills from the YAML (in both, the YAML's
   `training_config.precision` as a dict, whose values may also be `ttnn.DataType.BFLOAT16`/`FLOAT32`). `SFTTrainer`
   applies it after the LoRA wrapping and before it builds the optimizer from a dict or its default; given a ready
   optimizer it applies nothing, and a block passed with one raises. `GRPOTrainer` applies it right after it builds the
@@ -95,7 +96,7 @@ optimizer state follows. It is applied once per run, where the optimizer is buil
 - **C++.** The `nano_gpt` runner applies it.
 - **Checking.** `ttml.core.validate_precision_config()` (C++ `core::validate_precision_config()`) checks the block
   without applying it. Python's `ttml.common.config.TrainingConfig`, which also exposes the block as `.precision`,
-  `GRPOTrainer`'s constructor (through `ttml.common.utils.validate_precision()`) and the C++ `nano_gpt`
+  `GRPOConfig` (through `ttml.common.utils.validate_precision()`) and the C++ `nano_gpt`
   `parse_config()` call it, so a typo stops the run before the model is built.
 
 The load order is: build the model, convert, load weights, create the optimizer, then load a training checkpoint,
