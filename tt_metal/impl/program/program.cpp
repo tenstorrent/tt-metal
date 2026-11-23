@@ -2496,16 +2496,15 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
 
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
-            // Track globally allocated CBs too (they use L1 memory from the allocator), but skip unbound buffers
-            if (!circular_buffer->config().buffer_unbound()) {
-                for (const IDevice* dev : devices_to_track) {
-                    tt::tt_metal::GraphTracker::instance().track_allocate_cb(
-                        circular_buffer->core_ranges(),
-                        circular_buffer->address(),
-                        circular_buffer->size(),
-                        circular_buffer->globally_allocated(),
-                        dev);
-                }
+            // Track globally allocated CBs too (they use L1 memory from the allocator).
+            // An unbound CB has no address yet, so it is tracked at address 0.
+            for (const IDevice* dev : devices_to_track) {
+                tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                    circular_buffer->core_ranges(),
+                    circular_buffer->config().buffer_unbound() ? 0 : circular_buffer->address(),
+                    circular_buffer->size(),
+                    circular_buffer->globally_allocated(),
+                    dev);
             }
         } else {
             const uint64_t computed_addr = allocate_dfb(

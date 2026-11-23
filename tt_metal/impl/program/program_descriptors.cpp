@@ -245,6 +245,9 @@ void apply_descriptor_runtime_args(Program& program, const ProgramDescriptor& de
             UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *buf, cb_desc.address_offset);
         } else if (cb_desc.buffer) {
             UpdateDynamicCircularBufferAddress(program, program_cbs[ci]->id(), *cb_desc.buffer, cb_desc.address_offset);
+        } else {
+            TT_FATAL(
+                !cb_desc.globally_allocated_bound_later, "CB {} is bound later but the descriptor names no buffer", ci);
         }
     }
 }

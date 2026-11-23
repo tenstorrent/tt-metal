@@ -50,7 +50,7 @@ ResolvedBindings resolve_bindings(
     if (std::any_of(desc.cbs.begin(), desc.cbs.end(), [](const CBDescriptor& cb) {
             return cb.globally_allocated_bound_later && !cb.buffer && !cb.tensor;
         })) {
-        return result;
+        return ResolvedBindings{};
     }
 
     // If the same Buffer* appears more than once, every binding for that buffer maps to the
