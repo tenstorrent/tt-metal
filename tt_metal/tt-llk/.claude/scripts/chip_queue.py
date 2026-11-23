@@ -23,6 +23,7 @@ Usage (from anywhere):
 production; any other value is passed through as the include dir.
 """
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -244,6 +245,14 @@ def _status_writer():
 
 def cmd_daemon(a):
     _dirs()
+    # One daemon per queue root: a second one would hand the same chip to two jobs.
+    lock = open(ROOT / "daemon.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(f"another chip_queue daemon already serves {ROOT}")
+    lock.write(str(os.getpid()))
+    lock.flush()
     # Jobs left mid-flight by a previous daemon go back to the start of their stage.
     for s, back in (("compiling", "pending"), ("running", "compiled")):
         for p in (ROOT / s).glob("*.json"):
