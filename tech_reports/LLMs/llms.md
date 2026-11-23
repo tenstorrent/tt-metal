@@ -1770,10 +1770,10 @@ torch_tok = ttnn.to_torch(tt_tok)
 
 #### 4.5.4 Device Dispatch and OP Performance
 
-A bit of preparation is required to get started. First, metal must be compiled with `-p` to enable device profiling:
+A bit of preparation is required to get started. Device profiling is enabled by default, so build metal as usual (do not pass `--disable-profiler`):
 
 ```bash
-./build_metal -p
+./build_metal.sh
 ```
 
 Then we can record an OP performance CSV file with Tracy. For the pytests, run the following:
