@@ -6,7 +6,7 @@
     python -m models.demos.inkling2_mini.demo.demo --golden DIR --max-ctx 131072 \
         [--skip-app-trace] [--gen 64] [--perf-pos 2048 32768] [--json out.json]
 
-Weights come from ``$INKLING_CACHE``. ``--prompt`` is wrapped in the model's chat template (tokenizer from
+Weights come from ``$INKLING_CACHE`` (default: cache/own2-def-pf, see convert/cache.py). ``--prompt`` is wrapped in the model's chat template (tokenizer from
 ``--tokenizer``, default ``$INKLING_CKPT``) and replaces the golden prompts; without it the golden prompts
 (``--golden``, default ``$INKLING_GOLDEN``) are generated and prompt 0 is compared with the golden greedy tokens.
 """

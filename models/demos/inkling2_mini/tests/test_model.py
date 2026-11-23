@@ -14,10 +14,7 @@ from models.demos.inkling2_mini.tests.hf_ref import finite_min
 from models.demos.inkling2_mini.tt.model import Inkling2Model
 
 pytestmark = pytest.mark.skipif(
-    GOLDEN is None
-    or wcache.DEFAULT_ROOT is None
-    or not (GOLDEN / "prompt0").exists()
-    or not (wcache.DEFAULT_ROOT / "manifest.json").exists(),
+    GOLDEN is None or not (GOLDEN / "prompt0").exists() or not (wcache.DEFAULT_ROOT / "manifest.json").exists(),
     reason="golden or weight cache missing (set INKLING_GOLDEN and INKLING_CACHE)",
 )
 

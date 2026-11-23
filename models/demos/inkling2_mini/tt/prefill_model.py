@@ -22,7 +22,7 @@ any read of it, so those rows are never read. Per application, everything is a [
   dim 160 with anchor keys whose logit is the near LSE, so the far output carries the exact near weight in column 128;
 - MoE: router + top-8 on device, token -> expert sort on host, 64-row slots each bound to one expert, indexed
   sparse_matmul (<= 128 slots per call; one call where sparse_matmul takes repeated ids), gathered back and weighted. Needs TILE expert weights:
-  the stick-layout layers of a stick cache are refused, so prefill sessions load a TILE cache ($INKLING_TILE_CACHE).
+  the stick-layout layers of a stick cache are refused, so prefill sessions load a TILE cache (DEFAULT_TILE_ROOT, $INKLING_TILE_CACHE).
 
 Trace rule: every constant device tensor (and every weight copy) is made in __init__, sized for `chunk`; a prefill
 call allocates only per-call tensors. So make the Inkling2Prefill before `Generator.capture()` (a buffer first
@@ -396,7 +396,7 @@ class _LayerPF:
                 raise ValueError(
                     f"layer {L}: prefill needs TILE expert weights [1, {NUM_EXPERTS}, K, N], got {tuple(t.shape)} "
                     f"{t.layout} (stick layout from a stick cache). Load the model from a TILE cache "
-                    "(e.g. INKLING_CACHE=/work/inkling-bringup/cache/v1): sparse_matmul cannot read sticks."
+                    "(e.g. root=wcache.DEFAULT_TILE_ROOT): sparse_matmul cannot read sticks."
                 )
         del w
 
@@ -405,7 +405,7 @@ class Inkling2Prefill:
     def __init__(
         self,
         model,
-        root=wcache.DEFAULT_ROOT,
+        root=wcache.DEFAULT_TILE_ROOT,
         chunk=None,
         r3=None,
         r2=None,
@@ -417,7 +417,8 @@ class Inkling2Prefill:
         fused_glue=True,
         trace=True,
         experts="auto",
-        expert_fidelity=None,
+        expert_fidelity=ttnn.MathFidelity.LoFi,
+        mm_blocked=True,
         proj_fidelity=None,
         expert_precise=True,
         fused_heads=True,
@@ -439,7 +440,9 @@ class Inkling2Prefill:
         experts: "unified" (all experts in one deepseek_prefill.unified_routed_expert_moe program, precise mode:
         fp32 DEST; needs a build with stacked expert weights and, for fidelities above LoFi, the op's
         math_fidelity attribute), "sparse" (grouped sparse_matmul), "auto" (default): unified when the build runs it
-        at HiFi2, else at LoFi, else sparse. expert_fidelity: pin the unified op's fidelity.
+        at HiFi2, else at LoFi, else sparse. expert_fidelity: pin the unified op's fidelity; default LoFi
+        (with mm_blocked: +9.6 % at 8K, KL .00865 -> .00913, perf/G4f-report.md); None: HiFi2 when the build
+        takes it (the earlier, exact default). mm_blocked: see self.mm_blocked below; False: the earlier default.
         proj_fidelity: opt-in math fidelity of the prefill projections (q|gate|rel|sink, k, v, w_o; not the router), e.g.
         LoFi; None (default): the model's (HiFi2). Changes output; decode keeps its own config.
         expert_precise: False opts the unified expert op out of its precise mode (bf16 DEST, bf8 activations);
@@ -556,10 +559,10 @@ class Inkling2Prefill:
         self.wred = weighted_reduce
         self.r2_step = 1 << 20 if r2 else NUM_EXPERTS  # sparse_matmul ids per call
         self.r3_chunks = tuple(r3_chunks)
-        # Opt-in, changes output: q|k|v|gate (2304 -> 6560) and w_o (3072 -> 2304) projections with hand-set 2D
-        # multicast configs that accumulate K in blocks of 4 tiles (default 1 / 2): other fp32 summation order,
-        # ~-1.3 ms per application at 8K (perf/G5d-report.md). Off by default.
-        self.mm_blocked = False
+        # q|k|v|gate (2304 -> 6560) and w_o (3072 -> 2304) projections with hand-set 2D multicast configs that
+        # accumulate K in blocks of 4 tiles (else 1 / 2): other fp32 summation order, ~-1.3 ms per application at
+        # 8K (perf/G5d-report.md). On by default; mm_blocked=False is the earlier default.
+        self.mm_blocked = mm_blocked
         self.debug = debug
         self.profile = profile
         self.trace = trace

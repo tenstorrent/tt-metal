@@ -10,7 +10,7 @@ Every card part runs in its own worker process, so other card users can interlea
 ``$INKLING_CARD_RESET``, if set, is a shell command run after that (under the lock) to reset the card.
 The line is printed and appended to ``<results>/results.jsonl`` (with branch, commit, label).
 Paths: ``--golden`` (default ``$INKLING_GOLDEN``), ``--results`` (default ``$INKLING_PERF_DIR``); weights
-``$INKLING_CACHE``.
+``$INKLING_CACHE`` (default: cache/own2-def-pf, see convert/cache.py).
 
 Gate, short golden prompts prompt0/prompt1/chat/math, eager:
   forced:     per-app PCC >= 0.99 and >= baseline - 0.0005, logits PCC >= 0.98, top-1 >= 90 %,

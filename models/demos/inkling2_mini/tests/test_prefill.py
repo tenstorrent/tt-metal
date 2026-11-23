@@ -12,22 +12,21 @@ Logits are streamed per 128 rows (host RSS < 3 GB).
 """
 
 import json
-import os
-from pathlib import Path
 
 import pytest
 import torch
 
 import ttnn
+from models.demos.inkling2_mini.convert import cache as wcache
 from models.demos.inkling2_mini.demo.golden_check import GOLDEN
 from models.demos.inkling2_mini.tt.generator import Generator
 from models.demos.inkling2_mini.tt.model import Inkling2Model
 from models.demos.inkling2_mini.tt.prefill_model import Inkling2Prefill
 
 # Prefill reads the experts as tiles: a TILE-layout cache (the stick caches are refused).
-TILE_CACHE = Path(os.environ["INKLING_TILE_CACHE"]) if os.environ.get("INKLING_TILE_CACHE") else None
+TILE_CACHE = wcache.DEFAULT_TILE_ROOT
 pytestmark = pytest.mark.skipif(
-    GOLDEN is None or TILE_CACHE is None or not (GOLDEN / "code1500").exists(),
+    GOLDEN is None or not (TILE_CACHE / "manifest.json").exists() or not (GOLDEN / "code1500").exists(),
     reason="golden or TILE weight cache missing (set INKLING_GOLDEN and INKLING_TILE_CACHE)",
 )
 

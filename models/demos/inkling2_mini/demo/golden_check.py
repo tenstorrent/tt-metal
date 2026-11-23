@@ -8,7 +8,8 @@ messages follow from those inputs. Prints per-app PCC over all positions, then l
     python -m models.demos.inkling2_mini.demo.golden_check --golden DIR [--prompts 0 1] [--json out.json]
 
 The golden directory (``--golden``, default ``$INKLING_GOLDEN``) holds one sub-directory per prompt with the CPU
-reference tensors; the weight cache is ``$INKLING_CACHE``.
+reference tensors; the weight cache is ``$INKLING_CACHE``
+(default: cache/own2-def-pf, see convert/cache.py).
 """
 
 from __future__ import annotations
