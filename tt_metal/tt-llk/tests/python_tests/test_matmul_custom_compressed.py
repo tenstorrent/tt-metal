@@ -38,7 +38,8 @@ def encode_meta(assignment, ct, kt, aux):
 
 
 COMPRESSION_GRANULARITY = DEFAULT_TILE_C_DIM
-SUPPORTED_M = {1, 2, 4, 8}
+# Rows of one in0 tile: the short tiles, and a full [32, 32] one.
+SUPPORTED_M = {1, 2, 4, 8, 32}
 # The tile kernel handles all four BFP precisions.
 SUPPORTED_FORMATS = {FMT_CODE[f] for f in ("bfp0", "bfp2", "bfp4", "bfp8")}
 
@@ -52,6 +53,7 @@ def run_tile_compressed(
     dest_layout=CustomMmDestLayout.Dense,
     dest_sync=DestSync.Half,
     compression_case=None,
+    rt_dim=1,
     *,
     is_perf=False,
     perf_report=None,
@@ -74,6 +76,7 @@ def run_tile_compressed(
         dest_layout=dest_layout,
         dest_sync=dest_sync,
         compression_case=compression_case,
+        rt_dim=rt_dim,
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,
@@ -259,6 +262,75 @@ def test_matmul_custom_compressed_wide(M, K, N, dest_layout, dest_sync):
     assignment = assign_random(K, N, ("bfp4", "bfp2", "bfp0"), COMPRESSION_GRANULARITY)
     run_tile_compressed(
         M, K, N, assignment, dest_layout=dest_layout, dest_sync=dest_sync
+    )
+
+
+# ---------------------------------------------------------------------------
+# in0 blocks: an in0 of [32, 32] tiles, which gives [32, 32] output tiles in the Default layout, and an in0 of more
+# than one tile-row, each row a pass over the whole weight stream into its own output tiles. M is the row count of
+# one in0 tile, so in0 is [rt_dim * M, K].
+
+IN0_BLOCK_FORMATS = ("bfp4", "bfp2", "bfp0")
+IN0_BLOCK_CASES = [
+    # (id, M, rt_dim, K, N, layout, dest sync)
+    ("full-2x1", 32, 1, 64, 32, CustomMmDestLayout.Default, DestSync.Half),
+    ("full-8x4", 32, 1, 256, 128, CustomMmDestLayout.Default, DestSync.Half),
+    ("full-16x7", 32, 1, 512, 224, CustomMmDestLayout.Default, DestSync.Half),
+    ("full-rt2-8x2", 32, 2, 256, 64, CustomMmDestLayout.Default, DestSync.Half),
+    # eight output tiles, the whole SyncHalf DEST
+    ("full-rt8-4x1", 32, 8, 128, 32, CustomMmDestLayout.Default, DestSync.Half),
+    ("full-rt2-8x7", 32, 2, 256, 224, CustomMmDestLayout.Default, DestSync.Full),
+    ("short-rt4-m8-8x2", 8, 4, 256, 64, CustomMmDestLayout.Dense, DestSync.Half),
+    ("short-rt3-m1-2x5", 1, 3, 64, 160, CustomMmDestLayout.Compact, DestSync.Half),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,rt_dim,K,N,dest_layout,dest_sync",
+    [pytest.param(*case[1:], id=case[0]) for case in IN0_BLOCK_CASES],
+)
+def test_matmul_custom_compressed_in0_block(M, rt_dim, K, N, dest_layout, dest_sync):
+    assignment = assign_random(K, N, IN0_BLOCK_FORMATS, COMPRESSION_GRANULARITY)
+    run_tile_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        dest_layout=dest_layout,
+        dest_sync=dest_sync,
+        rt_dim=rt_dim,
+    )
+
+
+# The DeepSeek weight grids under an in0 of one and of two full tile-rows. 8x7 with two rows is 14 output tiles,
+# which needs the SyncFull DEST.
+DEEPSEEK_IN0_BLOCKS = [
+    # (M, rt_dim)
+    (32, 1),
+    (32, 2),
+]
+
+
+@blackhole_only
+@parametrize(
+    shape=DEEPSEEK_SHAPES,
+    in0_block=DEEPSEEK_IN0_BLOCKS,
+    seed=[0],
+)
+def test_matmul_custom_compressed_deepseek_in0_block(shape, in0_block, seed):
+    _, K, N = shape
+    M, rt_dim = in0_block
+    assignment = generate_exact_assignment(K, N, DEEPSEEK_T420, seed=seed)
+    ct = N // DEFAULT_TILE_C_DIM
+    run_tile_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        dest_layout=CustomMmDestLayout.Default,
+        dest_sync=DestSync.Half if rt_dim * ct <= 8 else DestSync.Full,
+        rt_dim=rt_dim,
     )
 
 

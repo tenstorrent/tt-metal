@@ -28,6 +28,8 @@ constexpr std::uint32_t b_words_per_call = kt_per_call * CT_DIM * bfp8_tile_word
 constexpr std::uint32_t meta_bytes_per_call =
     ((kt_per_call * CT_DIM + COMPRESSED_META_SLOTS_PER_WORD - 1) / COMPRESSED_META_SLOTS_PER_WORD) * sizeof(std::uint32_t);
 static_assert(kt_per_call * num_calls == KT_DIM && kt_per_call % 2 == 0, "each call needs an even share of the K tiles");
+// in0 is RT_DIM tile-rows, each a pass over the weights inside one call; the split-K cases keep to one row.
+static_assert(RT_DIM == 1 || num_calls == 1, "in0 tile-rows and split-K calls are not combined");
 
 // Perf runs copy compile-time metadata locally before the profiler rendezvous.
 inline void initialize_perf_compressed_meta(const std::uint32_t meta_base)
@@ -99,7 +101,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC_1, p_unpacr_nop::CLR_SRC);
         }
 
-        _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */, true /* clear_src */>(in0_face_r_dim);
+        _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */, true /* clear_src */>(in0_face_r_dim, num_faces_A);
         PROFILER_SYNC();
     }
     {
@@ -109,21 +111,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            compressed_mm_isolate_dvalids<true>(LOOP_FACTOR, num_calls, kt_per_call, CT_DIM, buffer_C[0], meta_bytes_per_call);
+            // Every in0 tile-row repeats the dvalid sequence of the weight metadata.
+            compressed_mm_isolate_dvalids<true>(LOOP_FACTOR * RT_DIM, num_calls, kt_per_call, CT_DIM, buffer_C[0], meta_bytes_per_call);
         }
         else
         {
+            // An in0 tile is num_faces_A faces x in0_face_r_dim rows x 16 Float16_b datums, in 16-byte words.
+            const std::uint32_t in0_tile_words = 2 * num_faces_A * in0_face_r_dim;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
-                // An in0 tile is 2 faces x in0_face_r_dim rows x 16 Float16_b datums = 4 * in0_face_r_dim 16-byte words.
                 for (std::uint32_t call = 0; call < num_calls; call++)
                 {
                     _llk_unpack_AB_compressed_custom_mm_(
                         L1_ADDRESS(buffer_B[0]) + call * b_words_per_call,
-                        L1_ADDRESS(buffer_A[0]) + call * kt_per_call * 4 * in0_face_r_dim,
+                        L1_ADDRESS(buffer_A[0]) + call * kt_per_call * in0_tile_words,
                         buffer_C[0] + call * meta_bytes_per_call,
                         kt_per_call,
-                        CT_DIM);
+                        CT_DIM,
+                        RT_DIM,
+                        in0_tile_words);
                     if constexpr (CUSTOM_MM_REARM)
                     {
                         // Rearm cases only. Leave a -inf SrcA clear value after every call, as a max-reduce or top-k between
@@ -146,6 +152,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "experimental/llk_math_compressed_custom_mm.h"
 #include "llk_math_common.h"
 
+// The in0 tile type is a template parameter of the math LLK and a run-time parameter of this test. A [32, 32] in0
+// only exists in the Default layout, so the other layouts never instantiate it.
+constexpr bool full_in0_layout = dest_layout == ckernel::CustomMmDestLayout::Default;
+
+inline void math_init(const std::uint32_t in0_num_faces)
+{
+    if constexpr (full_in0_layout)
+    {
+        if (ckernel::custom_mm_full_in0(in0_num_faces))
+        {
+            _llk_math_compressed_custom_mm_init_<false /* transpose */, dest_layout, true /* full_in0 */>();
+            return;
+        }
+    }
+    _llk_math_compressed_custom_mm_init_<false /* transpose */, dest_layout>();
+}
+
+inline void math_run(const std::uint32_t in0_num_faces, const std::uint32_t base_address_meta, const std::uint32_t kt_dim)
+{
+    if constexpr (full_in0_layout)
+    {
+        if (ckernel::custom_mm_full_in0(in0_num_faces))
+        {
+            _llk_math_compressed_custom_mm_<dest_layout, true /* full_in0 */>(base_address_meta, 0 /* dst_index */, kt_dim, CT_DIM, RT_DIM);
+            return;
+        }
+    }
+    _llk_math_compressed_custom_mm_<dest_layout>(base_address_meta, 0 /* dst_index */, kt_dim, CT_DIM, RT_DIM);
+}
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -153,6 +189,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces_A = params.num_faces_A;
     const auto& buffer_C            = params.buffer_C;
 #endif
 
@@ -161,10 +198,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        _llk_math_compressed_custom_mm_init_<false /* transpose */, dest_layout>();
+        math_init(num_faces_A);
 
         LLK_ASSERT(
-            (custom_mm_fits_dest<dest_sync, dest_layout>(0 /* dst_index */, CT_DIM)), "compressed_custom_mm: CT_DIM output tiles overrun the DEST sync region");
+            (custom_mm_fits_dest<dest_sync, dest_layout>(0 /* dst_index */, RT_DIM * CT_DIM)),
+            "compressed_custom_mm: the RT_DIM * CT_DIM output tiles overrun the DEST sync region");
         PROFILER_SYNC();
     }
     {
@@ -174,7 +212,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            compressed_mm_isolate_dvalids<false>(LOOP_FACTOR, num_calls, kt_per_call, CT_DIM, buffer_C[0], meta_bytes_per_call);
+            compressed_mm_isolate_dvalids<false>(LOOP_FACTOR * RT_DIM, num_calls, kt_per_call, CT_DIM, buffer_C[0], meta_bytes_per_call);
         }
         else
         {
@@ -193,7 +231,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         ckernel::wait(2000 /* cycles */);
 #endif
                     }
-                    _llk_math_compressed_custom_mm_<dest_layout>(buffer_C[0] + call * meta_bytes_per_call, 0 /* dst_index */, kt_per_call, CT_DIM);
+                    math_run(num_faces_A, buffer_C[0] + call * meta_bytes_per_call, kt_per_call);
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
@@ -251,7 +289,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_packer_wait_for_math_done_();
                 }
-                for (std::uint32_t i = 0; i < CT_DIM; i++)
+                for (std::uint32_t i = 0; i < RT_DIM * CT_DIM; i++)
                 {
                     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(buffer_Res[i]));
                 }

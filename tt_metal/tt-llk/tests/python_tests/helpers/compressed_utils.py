@@ -285,11 +285,11 @@ def generate_refined_face_assignment(K, N, stats, switch_mult=2.0, seed=0):
 
 
 class CompressedStimuliConfig(StimuliConfig):
-    def __init__(self, kt, ct, packed_a, packed_b, packed_meta):
+    def __init__(self, kt, ct, packed_a, packed_b, packed_meta, rt=1):
         super().__init__(
             buffer_A=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_A_format=DataFormat.Float16_b,
-            tile_count_A=kt,
+            tile_count_A=rt * kt,
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_B_format=DataFormat.Bfp8_b,
             tile_count_B=kt * ct,
@@ -297,7 +297,7 @@ class CompressedStimuliConfig(StimuliConfig):
             stimuli_C_format=DataFormat.UInt32,
             tile_count_C=(len(packed_meta) + 4095) // 4096,
             stimuli_res_format=DataFormat.Float16_b,
-            tile_count_res=ct,
+            tile_count_res=rt * ct,
         )
         self.packed_a = packed_a
         self.packed_b = packed_b
@@ -389,6 +389,7 @@ def run_compressed(
     dest_sync=DestSync.Half,
     compression_case=None,
     golden_multiplier=1,
+    rt_dim=1,
     *,
     is_perf=False,
     perf_report=None,
@@ -406,6 +407,8 @@ def run_compressed(
     # calls (CUSTOM_MM_CALLS) splits K over back-to-back calls; pack_b / make_meta then lay B and its meta
     # out per call. dest_layout (CUSTOM_MM_LAYOUT) is where the output tiles sit in DEST and dest_sync (DEST_SYNC) how
     # much of DEST one block may use; kernels that do not read them ignore them.
+    # M is the row count of one in0 tile, a short [M, 32] tile or a full one at M = 32, and rt_dim (RT_DIM) the
+    # number of in0 tile-rows: in0 is [rt_dim * M, K] and the output [rt_dim * M, N].
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM  # 32-tile kernel grid
     ku, cu = (
         K // granularity,
@@ -416,8 +419,8 @@ def run_compressed(
     # DEST capacity bounds ct_dim: a 16-bit DEST has 1024 rows, SyncHalf gives a block half of them.
     dest_rows = 1024 if dest_sync == DestSync.Full else 512
     assert (
-        1 <= ct and ct * dest_layout.tile_rows <= dest_rows
-    ), f"ct_dim {ct} does not fit {dest_layout.name} tiles in a {dest_sync.name}-sync DEST"
+        1 <= ct and rt_dim * ct * dest_layout.tile_rows <= dest_rows
+    ), f"{rt_dim} x {ct} output tiles do not fit {dest_layout.name} tiles in a {dest_sync.name}-sync DEST"
     assert (
         K % DEFAULT_TILE_R_DIM == 0 and N % DEFAULT_TILE_C_DIM == 0
     ), "K and N must be multiples of the 32x32 kernel tile"
@@ -453,7 +456,7 @@ def run_compressed(
     # than charged against PCC. The per-kernel pack_b / make_meta turn the packed
     # tiles into the device B buffer and its meta.
     torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+    torch_a = torch.randn((rt_dim * M, K), dtype=torch.bfloat16)
     torch_b = torch.randn((K, N), dtype=torch.bfloat16)
     b_dequant = None if is_perf else torch.zeros((K, N), dtype=torch.bfloat16)
     tiles = []  # (code, packed_bytes) per assignment unit, in row-major order
@@ -471,9 +474,22 @@ def run_compressed(
             ] = unpack_bfp_tile(full, code, tile_dim=granularity)
         tiles.append((code, full))
 
+    # in0 in L1: tiles in row-major (r, k) order, each as its faces of in0_face_r x 16 back to back. A short tile
+    # is one row of two faces, a full [32, 32] one the usual four.
+    in0_face_r = min(M, FACE_C_DIM)
+    in0_faces_r = M // in0_face_r
+    faces_c = DEFAULT_TILE_C_DIM // FACE_C_DIM
+    in0_num_faces = in0_faces_r * faces_c
     packed_a = b""
-    for i in range(kt * 2):
-        packed_a += pack_bfp16(torch_a[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM])
+    for r in range(rt_dim):
+        for k in range(kt):
+            for fr in range(in0_faces_r):
+                for fc in range(faces_c):
+                    row = r * M + fr * in0_face_r
+                    col = k * DEFAULT_TILE_C_DIM + fc * FACE_C_DIM
+                    packed_a += pack_bfp16(
+                        torch_a[row : row + in0_face_r, col : col + FACE_C_DIM]
+                    )
     packed_b, aux = pack_b(tiles)
     meta = make_meta(assignment, cu, ku, aux)
 
@@ -486,12 +502,12 @@ def run_compressed(
                 b_dequant,
                 DataFormat.Float16_b,
                 MathFidelity.LoFi,
-                input_A_dimensions=[M, K],
+                input_A_dimensions=[rt_dim * M, K],
                 input_B_dimensions=[K, N],
                 tilize=False,
                 input_A_format=DataFormat.Float16_b,
                 input_B_format=DataFormat.Float16_b,
-            ).reshape(M, N)
+            ).reshape(rt_dim * M, N)
             * golden_multiplier
         )
 
@@ -508,35 +524,37 @@ def run_compressed(
                 input_format_B=DataFormat.Bfp8_b,
             ),
             templates=[
-                CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+                CRK_TILE_DIMM(c_dimm=ct, r_dimm=rt_dim, k_dimm=kt),
                 calls,
                 CUSTOM_MM_LAYOUT(dest_layout),
                 DEST_SYNC(dest_sync),
             ]
             + ([COMPRESSED_META(compression_case, meta)] if is_perf else []),
             runtimes=[
-                NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
-                IN_FACE_DIMS(in0_face_r_dim=M),
-                TILE_COUNT(ct),
+                NUM_FACES(
+                    num_faces=in0_num_faces, num_faces_A=in0_num_faces, num_faces_B=4
+                ),
+                IN_FACE_DIMS(in0_face_r_dim=in0_face_r),
+                TILE_COUNT(rt_dim * ct),
             ],
-            variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
+            variant_stimuli=CompressedStimuliConfig(
+                kt, ct, packed_a, packed_b, meta, rt=rt_dim
+            ),
             dest_acc=DestAccumulation.No,
         ),
     )
     if is_perf:
         return
     res = outcome.result
-    # Device packs the result as ct = N//32 tiles; within a tile the two 16-col faces
-    # (M x FACE_C_DIM, row-major) sit contiguously, then padding out to a full 32-row tile.
-    # Drop the per-tile padding (span = len // ct) and reorder to row-major (M, N).
+    # Device packs the result as rt_dim * ct tiles in row-major (r, c) order; within a tile its faces
+    # (in0_face_r x FACE_C_DIM, row-major) sit contiguously, then padding out to a full 32-row tile.
+    # Drop the per-tile padding (span = len // tiles) and reorder to row-major (rt_dim * M, N).
     res_tensor = torch.as_tensor(res, dtype=torch.bfloat16)
-    ct = N // DEFAULT_TILE_C_DIM
-    faces_per_tile = DEFAULT_TILE_C_DIM // FACE_C_DIM
-    per_tile = res_tensor.reshape(ct, -1)[:, : M * DEFAULT_TILE_C_DIM]
+    per_tile = res_tensor.reshape(rt_dim * ct, -1)[:, : M * DEFAULT_TILE_C_DIM]
     res_tensor = (
-        per_tile.reshape(ct, faces_per_tile, M, FACE_C_DIM)
-        .permute(2, 0, 1, 3)
-        .reshape(M, N)
+        per_tile.reshape(rt_dim, ct, in0_faces_r, faces_c, in0_face_r, FACE_C_DIM)
+        .permute(0, 2, 4, 1, 3, 5)
+        .reshape(rt_dim * M, N)
     )
 
     # K-aware absolute floor, see helpers.utils.matmul_acc_atol: the single LoFi MVMUL
