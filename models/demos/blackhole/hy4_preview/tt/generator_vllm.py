@@ -82,6 +82,15 @@ def _spec_cap():
     return _SPEC_CAP_ENV
 
 
+# ---- chunked prefill interleaved with decode (default OFF; see RESULT_HY4CHUNK.md) ----------------------------------------------------------------------------------------------------
+# HY4_CHUNKED_PF=1 (boot): the model declares supports_chunked_prefill / prefill_chunk_alignment / prefill_first_step_tokens / prefill_lookahead (spec mode only). The plugin scheduler then splits a prompt into
+# pieces of the step budget (max_num_batched_tokens) and runs decode steps between them (tt decode_interleave config, or the plugin copy's work_ms policy). HY4_CHUNKED_PF_FILE (live, a file with 0 / 1): 0 = every
+# piece but the last returns at once and the last one runs ONE monolithic call (the scheduler flow is exercised, the device work is exactly the old one). HY4_CPF_SHORT_MONO=1 (default): a prompt that arrives
+# whole in one step (start 0, final) with no chunked prefill in flight takes the old monolithic path (hybrid chain allowed); 0 = everything through begin / chunks / end.
+_CPF = os.environ.get("HY4_CHUNKED_PF", "0") == "1" and _SPEC_K > 0
+_CPF_ALIGN = int(os.environ.get("HY4_SERVE_PF_ROWS", "512"))
+
+
 class _Slots:
     """logical slot (the plugin's state slot) -> physical mesh row. ``remap`` applies the plugin's permutation: new slot i reads old slot remap[i]."""
 
@@ -131,6 +140,13 @@ class HYV4ForCausalLM:
     }
     if _SPEC_K > 0 and _SAMPLED:
         model_capabilities["supports_sampled_verify"] = True
+    if _CPF:
+        model_capabilities.update(
+            supports_chunked_prefill=True,
+            prefill_chunk_alignment=_CPF_ALIGN,
+            prefill_first_step_tokens=int(os.environ.get("HY4_CPF_FIRST_STEP", str(4 * _CPF_ALIGN))),
+            prefill_lookahead=True,  # the step carries the whole sequence and says which rows end (prefill_final / prefill_total)
+        )
 
     # ---- construction ------------------------------------------------------------------------------------------------------------------------
     @classmethod
@@ -257,6 +273,16 @@ class HYV4ForCausalLM:
         B = int(tokens.shape[0])
         starts = [0] * B if start_pos is None else [int(x) for x in start_pos]
         lens = [int(tokens.shape[1])] * B if prompt_lens is None else [int(x) for x in prompt_lens]
+        if _CPF and (any(s != 0 for s in starts) or kwargs.get("prefill_final") is not None):
+            finals = kwargs.get("prefill_final")
+            totals = kwargs.get("prefill_total")
+            if (
+                (finals is not None and not all(bool(x) for x in finals))
+                or any(s != 0 for s in starts)
+                or self.eng.cpf_pending()
+                or os.environ.get("HY4_CPF_SHORT_MONO", "1") == "0"
+            ):
+                return self._prefill_chunked(tokens, starts, lens, totals, finals, empty_slots, sampling_params, kwargs)
         if any(s != 0 for s in starts):
             raise TTRequestError(
                 "Hy4 serving prefills whole prompts (start_pos must be 0: no chunked prefill, no prefix cache)"
@@ -315,6 +341,176 @@ class HYV4ForCausalLM:
             self._seeds[p] = sampling[p][3]
         self._samp_set = False  # plain mode: the decode reload contract re-uploads tokens / positions / sampling state after a prefill
         return torch.tensor([first[p] for p in phys], dtype=torch.int32).reshape(B)
+
+    # ---- chunked prefill (HY4_CHUNKED_PF) ----------------------------------------------------------------------------------------------------------------------------------------------
+    def _sampling_tuple(self, sampling_params, B, i):
+        import secrets
+
+        if sampling_params is None:
+            return None
+        temps = _col(getattr(sampling_params, "temperature", None), B, 0.0)
+        ks = _col(getattr(sampling_params, "top_k", None), B, -1)
+        ps = _col(getattr(sampling_params, "top_p", None), B, 1.0)
+        sds = _col(getattr(sampling_params, "seed", None), B, None)
+        return (
+            float(temps[i] or 0.0),
+            int(ks[i]),
+            float(ps[i]),
+            (int(sds[i]) & 0x7FFFFFFF) if sds[i] is not None else secrets.randbits(31),
+        )
+
+    def _bind_slot(self, slot, row):
+        """make logical slot -> mesh row (a swap of two entries of the logical -> physical map; device state is per physical row and nothing moves)."""
+        if self.slots.phys[slot] != row:
+            s2 = self.slots.phys.index(row)
+            self.slots.phys[slot], self.slots.phys[s2] = self.slots.phys[s2], self.slots.phys[slot]
+
+    def _prefill_chunked(self, tokens, starts, ends, totals, finals, empty_slots, sampling_params, kwargs):
+        """One prefill STEP of the plugin scheduler (a piece of every row's prompt: [start, end) of a sequence of ``total`` tokens; ``tokens`` carry the whole sequence). Returns the first token per row (device
+        sampling) or the logits rows (host sampling: any row of the step is not final): rows that are not final return a dummy (the scheduler discards it).
+        ON (cpf_on): the first piece of a prompt admits it (``prefill_begin``: prefix hit, lock-step group with the other prompts of the step), every piece runs the chunks up to its end, the final piece finishes the rows (first token + seed
+        round: they decode from the next step). The plugin re-picks logical slots every step: a continuation is found by its token prefix and its slot re-bound to the mesh row it lives on.
+        OFF: nothing runs until the final piece, which is ONE monolithic call (bisect arm)."""
+        eng = self.eng
+        B = int(tokens.shape[0])
+        slots = list(range(B)) if empty_slots is None else [int(x) for x in empty_slots]
+        if len(set(slots)) != B:
+            raise RuntimeError(f"duplicate prefill slots {slots}")
+        totals = [int(x) for x in totals] if totals is not None else list(ends)
+        finals = [bool(x) for x in finals] if finals is not None else [e >= t for e, t in zip(ends, totals)]
+        toks = [[int(x) for x in tokens[i, : totals[i]].tolist()] for i in range(B)]
+        on = eng.cpf_on()
+        rid_list = list(kwargs.get("request_ids") or [])
+        out_first = {}
+        if not on:
+            fin = [i for i in range(B) if finals[i]]
+            if fin:
+                ph = {}
+                for i in fin:
+                    ph[i] = self.slots.phys[slots[i]]
+                if eng.pfx:
+                    want = eng.assign_rows([toks[i] for i in fin], [ph[i] for i in fin])
+                    for i, q in zip(fin, want):
+                        self._bind_slot(slots[i], q)
+                        ph[i] = q
+                prompts = {ph[i]: toks[i] for i in fin}
+                sampling = {}
+                for i in fin:
+                    sp = self._sampling_tuple(sampling_params, B, i)
+                    sampling[ph[i]] = sp if sp is not None else (0.0, -1, 1.0, 0)
+                rids = {ph[i]: str(rid_list[i]) for i in fin} if len(rid_list) == B else None
+                first = eng.prefill(prompts, sampling, rids=rids)
+                for i in fin:
+                    out_first[i] = first[ph[i]]
+                    self._seeds[ph[i]] = sampling[ph[i]][3]
+                    if self.apc_hook is not None and len(rid_list) == B:
+                        self.apc_hook.cached[str(rid_list[i])] = int(eng.last_cached.get(ph[i], 0))
+                self._samp_set = False
+            return self._chunk_result(
+                B, slots, out_first, sampling_params, {i: ph[i] for i in out_first} if fin else {}
+            )
+        # --- ON: resolve continuations (token-prefix match against the rows part-way through a prefill) and new prompts
+        cont, new = {}, []
+        for i in range(B):
+            r = eng.pf_find(toks[i]) if starts[i] > 0 else None
+            if r is not None:
+                cont[i] = r
+                self._bind_slot(slots[i], r)
+            else:
+                if starts[i] > 0:
+                    logger.warning(
+                        f"HY4 chunked prefill: continuation of slot {slots[i]} has no live state: recomputed from 0"
+                    )
+                new.append(i)
+        claimed = set(cont.values())
+        for i in new:
+            r = self.slots.phys[slots[i]]
+            if r in claimed or eng.row_busy(r):
+                free = [
+                    x
+                    for x in range(ROWS)
+                    if x not in claimed and not eng.row_busy(x) and x not in self._cpf_taken(new, slots)
+                ]
+                if not free:
+                    raise RuntimeError("chunked prefill: no free mesh row for a new prompt")
+                self._bind_slot(slots[i], free[0])
+                r = free[0]
+            claimed.add(r)
+        if new:
+            ph = {i: self.slots.phys[slots[i]] for i in new}
+            if eng.pfx:
+                want = eng.assign_rows([toks[i] for i in new], [ph[i] for i in new])
+                for i, q in zip(new, want):
+                    self._bind_slot(slots[i], q)
+                    ph[i] = q
+            if self.apc_hook is not None and len(rid_list) == B:
+                self.apc_hook.note_prefill([rid_list[i] for i in new], [ph[i] for i in new])
+            smp = {}
+            for i in new:
+                sp = self._sampling_tuple(sampling_params, B, i)
+                smp[ph[i]] = sp if sp is not None else (0.0, -1, 1.0, 0)
+            rids = {ph[i]: str(rid_list[i]) for i in new} if len(rid_list) == B else None
+            h = eng.prefill_begin({ph[i]: toks[i] for i in new}, smp, rids=rids)
+            for i in new:
+                cont[i] = ph[i]
+                if self.apc_hook is not None and len(rid_list) == B:
+                    self.apc_hook.cached[str(rid_list[i])] = int(eng.last_cached.get(ph[i], 0))
+        # --- advance every handle touched by this step to the end of the piece of each of its rows
+        by_h = {}
+        for i, r in cont.items():
+            by_h.setdefault(id(eng.pf_owner.get(r)), (eng.pf_owner.get(r), []))[1].append((i, r))
+        ph_out = {}
+        for hid, (h, its) in by_h.items():
+            if h is None:  # row already finished (a repeated piece): nothing to run
+                for i, r in its:
+                    ph_out[i] = r
+                continue
+            smp = {}
+            for i, r in its:
+                sp = self._sampling_tuple(sampling_params, B, i)
+                if sp is not None:
+                    smp[r] = sp
+            allow = {r for i, r in its if finals[i]}
+            while True:
+                prog = eng.prefill_progress(h)
+                todo = [(i, r) for i, r in its if r in prog and prog[r] < ends[i]]
+                if not todo:
+                    break
+                need = max(-(-(ends[i] - prog[r]) // eng.pf_rows) for i, r in todo)
+                eng.prefill_chunks(h, max(need, 1), sampling=smp or None, finish=allow)
+            eng.prefill_chunks(
+                h, 0, sampling=smp or None, finish=allow
+            )  # seed final rows that ended in an earlier piece's chunks
+            for i, r in its:
+                ph_out[i] = r
+            if eng.prefill_done(h) and not h.closed:
+                eng.prefill_end(h)
+        for i in range(B):
+            r = ph_out.get(i)
+            if finals[i] and r is not None:
+                if not eng.live[r]:
+                    raise RuntimeError(f"chunked prefill: final piece of slot {slots[i]} (row {r}) did not finish")
+                out_first[i] = int(eng.pend[r])
+                sp = self._sampling_tuple(sampling_params, B, i)
+                self._seeds[r] = sp[3] if sp is not None else self._seeds[r]
+        self._samp_set = False
+        return self._chunk_result(B, slots, out_first, sampling_params, {i: ph_out[i] for i in out_first})
+
+    def _cpf_taken(self, new, slots):
+        return set()
+
+    def _chunk_result(self, B, slots, out_first, sampling_params, rows_of):
+        if sampling_params is not None:
+            t = torch.zeros(B, dtype=torch.int32)
+            for i, v in out_first.items():
+                t[i] = int(v)
+            return t
+        lg = torch.zeros(B, 1, self.vocab, dtype=torch.float32)
+        for i, r in rows_of.items():
+            row = self.eng.last_logits.get(r)
+            if row is not None:
+                lg[i, 0, : row.numel()] = row.reshape(-1).float()
+        return lg
 
     # ---- decode ------------------------------------------------------------------------------------------------------------------------------
     def decode_forward(
