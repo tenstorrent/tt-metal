@@ -9,6 +9,8 @@ Return a fresh dictionary for every ``pytest.param`` so cases cannot share mutab
 import re
 from pathlib import Path
 
+import pytest
+
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
@@ -128,6 +130,63 @@ def torus_xy_device_params(*, fabric_payload_size=None, **overrides) -> dict:
     }
     params.update(overrides)
     return params
+
+
+def prefill_block_mesh_params() -> list:
+    """Shared production-policy params for prefill block + transformer tests.
+
+    LoudBox executes canonical 2x4 Fabric2D and one 4x2 axis-order diagnostic; Galaxy production
+    executes only 8x4 TorusXY. A function, not a module constant: the payload sizes read the arch,
+    which opens the devices, so only the modules that use these cases do that at collection.
+    """
+    return [
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
+        ),
+        # FABRIC_2D_TORUS_XY on the full 8x4 galaxy: Ring on BOTH axes (SP dim 0 = Ring-8, TP dim 1 =
+        # Ring-4). SP-axis MoE dispatch/combine ride #48225's ring-aware kernels; TP-axis collectives ring.
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+        # Existing 16-chip subtorus diagnostics. These run only with an explicit 4x4 carve descriptor;
+        # they are a distinct workload and are not substitutes for production 8x4 TorusXY coverage.
+        pytest.param(
+            (4, 4),
+            torus_y_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-y-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4",
+        ),
+    ]
 
 
 def _device_topologies(path: str) -> tuple[Path, list[tuple[str, str, str, str]]]:
