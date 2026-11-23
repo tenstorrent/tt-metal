@@ -1784,3 +1784,30 @@ speed-of-light ep4_targets.py.
   24.32 ms (experts 12.06, combine 5.11 - all 8 banks still serve it), y min PCC 0.99988, two layers bit-identical.
   The east rectangles' compute waits ~3.3 ms on weights there (west 0.4-0.5); the LoudBox's collector-free Galaxy run
   (test_ws_lane5_glx_oneway_cols) had the same east slowdown. Not explained yet.
+
+### The LoudBox at 200G (2026-11-23, bh-lb-09: 19.12.0 + tensix disable-count 1 + eth200, 12 x 10 grid, every link 200G)
+- Same tree (a5559a4661b), 302K uniform, AICLK 1350 under load on every chip (sysfs, 0.5 s samples; one 1343).
+- EP-4 phases, against bh-lb-19 (400G, stage 6):
+| phase | 200G | 400G |
+|---|---|---|
+| head + exchange (traced) | 1.00 + 0.11 | 0.99 + 0.09 |
+| dispatch (traced, 8 pieces) | 4.98 | 4.24 |
+| lists (traced) | 0.59 (0.51 in the layer) | 0.51 |
+| experts G 2 (O min PCC 0.99988) | 10.95-11.00 | 10.95-11.02 |
+| experts G 2, weights only | 7.45 | 5.25 |
+| shared / home | 1.59 / 1.04 | 1.60 / 1.04 |
+| combine | 8.63 | 7.03 |
+| layer in sequence (y min PCC 0.99988, two layers bit-identical) | 28.73 | 26.5 |
+  The X phases (dispatch, combine) carry the difference; G 2 experts stay compute-bound. EP4_G=4 on the LoudBox stops
+  at ws_lane5's assert (one-way lanes need cycles of 3+ chips; EP-4 columns here are 2 chips): G 4 EP-4 is Galaxy only.
+- WS 5 x 5 lane on the tray snake (test_ws_lane5_tray, G 2, 32 experts, 20 + 5), against the 400G runs above:
+| M | 200G util / end to end | 400G |
+|---|---|---|
+| 586 | 46.8% / 2,365 us | 54.0% / 2,086 us |
+| 2048 | 74.2% / 4,863 us | 72.9% / 4,914 us |
+| 0 (weights only, NCRISC end lane 0 / 1) | 1,649 / 1,632 us (17.7 GB/s a link direction) | 1,185 / 1,184 us |
+  At 200G the weights (1.64 ms) come close to the M 586 compute (~2.1 ms) and the launch slows 13%; M 2048 unchanged.
+- One-way G 4 on the snake (test_ws_lane5_tray_oneway, 160 experts, placed): M 586 PCC 0.99988, 11.02 ms (24.7%;
+  bh-lb-19 11.4); M 0 6.80-6.87 ms = 21.1 GB/s a link direction (bh-lb-19 at 400G: 8.39, NoC-bound at chips 3 / 4 / 7).
+  WL5_WHY at M 0: every chip's groups wait 2.4-4.3 ms on mux space (credits 0.1-2.1 ms), not two bottleneck chips:
+  the 200G links (25 GB/s raw) drain the muxes, ~84% of raw. A different box, so its ethernet-core sides differ too.
