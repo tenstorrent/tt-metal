@@ -49,6 +49,7 @@ from helpers.test_variant_parameters import (
     TOPK,
 )
 from helpers.utils import _RECORD_TEST_ORDER, passed_test, result_tensor
+from test_topk import _adversarial_value_bits
 
 NUM_STAGES = 2  # Values and Indices stage
 
@@ -445,4 +446,223 @@ def test_topk_quasar_signed_values(
         sort_direction,
         False,
         value_range=value_range,
+    )
+
+
+# =============================================================================
+# 32-bit Dest network: unstable, fused-key and rank-stamped modes
+# =============================================================================
+#
+# sources/quasar/sfpu_topk_dest32_quasar_test.cpp unpacks Float32 value tiles and Int32 index tiles
+# straight to a 32-bit Dest (Quasar cannot datacopy a 16-bit integer into a 32-bit Dest), already
+# transposed by the host, one 2-tile slab per tile row (W == 128, as the Blackhole fused and
+# rank-stamped coverage). Values are bf16 numbers widened exactly to fp32, so the stable modes' tag
+# bits are free; the result's value words must come back as exact [bf16 | 0x0000] words.
+#
+# The stable modes promise torch's stable order: ties broken index-ascending, -0.0 in the +0.0 tie
+# class (it comes back as +0.0). bf16 denormals reach Dest unflushed and sort as the values they are.
+
+DEST32_INPUT_DIMENSIONS_W = 128
+DEST32_K = 32
+DEST32_FORMATS = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+DEST32_SORT_MODES = ("unstable", "fused", "rank_stamped")
+DEST32_TIE_CLASSES = ["neg_ties", "mixed_sign_ties", "tie_straddle_k", "signed_zero"]
+
+
+def _dest32_canon_bits(bits_u16):
+    """bf16 bits as the stable modes order and return them: -0.0 folded into +0.0, all else kept."""
+    b = bits_u16.to(torch.int32)
+    b = torch.where(b == 0x8000, torch.zeros_like(b), b)
+    return b.to(torch.uint16)
+
+
+def _dest32_stable_golden(row_bits_u16, K, descending):
+    """(value bits, indices) of torch's stable top-K over one row of bf16 bit patterns."""
+    canon = _dest32_canon_bits(row_bits_u16)
+    values = canon.view(torch.bfloat16).to(torch.float32)
+    order = torch.argsort(values, descending=descending, stable=True)[:K]
+    return canon.view(torch.int16)[order].view(torch.uint16), order
+
+
+def _dest32_device_input(row_bits_u16, num_rows):
+    """The L1 image: per row, the bf16 values widened to fp32 then an Int32 index iota, tilized and
+    transposed tile by tile into the column-major order the network sorts in."""
+    w_values = DEST32_INPUT_DIMENSIONS_W // NUM_STAGES
+    values = row_bits_u16.view(torch.bfloat16).to(torch.float32)
+    indices = (
+        torch.arange(w_values, dtype=torch.int32)
+        .repeat(num_rows, 1)
+        .view(torch.float32)
+    )
+    rows = torch.cat([values, indices], dim=1).flatten()
+    dims = [num_rows, DEST32_INPUT_DIMENSIONS_W]
+    tilized = get_golden_generator(TilizeGolden)(rows, dims, DataFormat.Float32)
+    # transform_result_tensor_to_right_form transposes every tile; transposition is an involution.
+    return transform_result_tensor_to_right_form(
+        tilized, DEST32_FORMATS, w_values, dims
+    )
+
+
+def _dest32_device_result(res_tensor, num_rows, K):
+    """Per-row (value words as int64, indices) of the device result, back in row-major order."""
+    res_tensor = transform_result_tensor_to_right_form(
+        res_tensor, DEST32_FORMATS, K, [num_rows, DEST32_INPUT_DIMENSIONS_W]
+    )
+    untilized = get_golden_generator(UntilizeGolden)(
+        res_tensor, DataFormat.Float32, [num_rows, K * NUM_STAGES]
+    )
+    words = untilized.reshape(num_rows, K * NUM_STAGES).contiguous().view(torch.int32)
+    value_words = words[:, :K].to(torch.int64) & 0xFFFFFFFF
+    indices = words[:, K:].to(torch.int64)
+    return value_words, indices
+
+
+def run_topk_dest32_case(
+    row_bits_u16: torch.Tensor,
+    sort_direction: TopKSortDirection,
+    sort_mode: str,
+    tag_bits: int = 16,
+    label: str = "",
+):
+    num_rows = row_bits_u16.shape[0]
+    K = DEST32_K
+    input_dimensions = [num_rows, DEST32_INPUT_DIMENSIONS_W]
+    descending = sort_direction == TopKSortDirection.Descending
+
+    filler_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    _, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=DataFormat.Float32,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=DataFormat.Float32,
+        input_dimensions_B=input_dimensions,
+        spec_A=filler_spec,
+        spec_B=filler_spec,
+    )
+    src_A = _dest32_device_input(row_bits_u16, num_rows)
+
+    configuration = TestConfig(
+        test_name="sources/quasar/sfpu_topk_dest32_quasar_test.cpp",
+        formats=DEST32_FORMATS,
+        templates=[
+            DEST_SYNC(),
+            TOPK(
+                topk_k=K,
+                topk_matrix_width=DEST32_INPUT_DIMENSIONS_W,
+                topk_sort_direction=sort_direction,
+                topk_fused_stable=sort_mode == "fused",
+                topk_rank_stamped=sort_mode == "rank_stamped",
+                topk_tag_bits=tag_bits,
+            ),
+        ],
+        runtimes=[
+            INPUT_DIMENSIONS(num_rows // 32, DEST32_INPUT_DIMENSIONS_W // 32),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            DataFormat.Float32,
+            src_B,
+            DataFormat.Float32,
+            DataFormat.Float32,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=tile_cnt_A,
+        ),
+        dest_acc=DestAccumulation.Yes,
+        unpack_to_dest=True,
+    )
+
+    res_from_L1 = configuration.run().result
+    if _RECORD_TEST_ORDER:
+        return
+    res_tensor = result_tensor(res_from_L1, DataFormat.Float32)
+    value_words, indices = _dest32_device_result(res_tensor, num_rows, K)
+
+    for row in range(num_rows):
+        row_bits = row_bits_u16[row]
+        exp_bits, exp_idx = _dest32_stable_golden(row_bits, K, descending)
+        exp_words = exp_bits.to(torch.int64) << 16
+        if sort_mode == "unstable":
+            # No tie order: the K values must be the golden's, and each index must point at its value.
+            ok = torch.equal(value_words[row], exp_words) and torch.equal(
+                (_dest32_canon_bits(row_bits).to(torch.int64) << 16)[indices[row]],
+                value_words[row],
+            )
+        else:
+            ok = torch.equal(indices[row], exp_idx) and torch.equal(
+                value_words[row], exp_words
+            )
+        if ok:
+            continue
+        pytest.fail(
+            "\n".join(
+                [
+                    f"topk dest32 mismatch: {label} mode={sort_mode} tag_bits={tag_bits} "
+                    f"direction={sort_direction.name} row={row}",
+                    f"  expected indices:     {exp_idx.tolist()}",
+                    f"  expected value words: {[f'{w:08X}' for w in exp_words.tolist()]}",
+                    f"  result indices:       {indices[row].tolist()}",
+                    f"  result value words:   {[f'{w:08X}' for w in value_words[row].tolist()]}",
+                ]
+            )
+        )
+
+
+def _dest32_random_row_bits(num_rows, value_range, seed):
+    """Uniform bf16 values in value_range, one row of W / 2 values per tensor row."""
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    lo, hi = value_range
+    w_values = DEST32_INPUT_DIMENSIONS_W // NUM_STAGES
+    u = torch.rand((num_rows, w_values), generator=generator)
+    return (lo + u * (hi - lo)).to(torch.bfloat16).view(torch.uint16)
+
+
+@pytest.mark.quasar
+@parametrize(
+    num_rows=[32, 64],
+    sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
+    sort_mode=list(DEST32_SORT_MODES),
+)
+def test_topk_quasar_dest32(
+    num_rows: int,
+    sort_direction: TopKSortDirection,
+    sort_mode: str,
+):
+    """Uniform signed bf16 values; ties are rare, so this pins the network, not the tie order."""
+    row_bits = _dest32_random_row_bits(num_rows, (-1.0, 1.0), seed=num_rows)
+    run_topk_dest32_case(row_bits, sort_direction, sort_mode, label="uniform")
+
+
+# Bit-pattern stimuli from the Blackhole adversarial suite (test_topk.py): tie pileups, signed zeros
+# with bf16 denormals, and infinities. Quasar's SFPSWAP has no sign-magnitude compare, so these are
+# the cases the int32 key transform has to get right. NaN payloads are left out: their order is not
+# defined by torch's stable sort. "rank_stamped_tag6" is the rank-stamped mode with a 6-bit tag field
+# (fp32 keys with free low mantissa bits; the MoE gate's field), on the tie classes.
+DEST32_ADVERSARIAL_CASES = [
+    (mode, stimuli_class)
+    for mode in ("fused", "rank_stamped")
+    for stimuli_class in (*DEST32_TIE_CLASSES, "infinities")
+] + [("rank_stamped_tag6", stimuli_class) for stimuli_class in DEST32_TIE_CLASSES]
+
+
+@pytest.mark.quasar
+@parametrize(
+    sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
+    mode_class=DEST32_ADVERSARIAL_CASES,
+)
+def test_topk_quasar_dest32_adversarial(
+    sort_direction: TopKSortDirection,
+    mode_class: tuple,
+):
+    mode, stimuli_class = mode_class
+    sort_mode, tag_bits = (
+        ("rank_stamped", 6) if mode == "rank_stamped_tag6" else (mode, 16)
+    )
+    num_rows = 32
+    row_bits = _adversarial_value_bits(
+        stimuli_class, num_rows, DEST32_INPUT_DIMENSIONS_W // NUM_STAGES
+    )
+    run_topk_dest32_case(
+        row_bits, sort_direction, sort_mode, tag_bits, label=f"class={stimuli_class}"
     )
