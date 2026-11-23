@@ -10,7 +10,7 @@ from helpers.chip_architecture import is_4row_arch
 from helpers.constraints import get_valid_math_fidelities
 from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
+from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, PerfRunType
 from helpers.param_config import parametrize
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -54,6 +54,18 @@ def _tile_dimensions_for_format(formats):
     return ALL_TILE_DIMENSIONS
 
 
+def _math_fidelities(formats):
+    # With 32-bit DEST the pools read Tf32, so the HiFi phases do real work
+    if dest_acc_for(formats.output_format) == DestAccumulation.Yes:
+        return [
+            MathFidelity.LoFi,
+            MathFidelity.HiFi2,
+            MathFidelity.HiFi3,
+            MathFidelity.HiFi4,
+        ]
+    return get_valid_math_fidelities(formats)
+
+
 def _num_tiles_for_format(formats):
     # One tile, and a full DEST half section
     return (
@@ -66,7 +78,7 @@ def _num_tiles_for_format(formats):
 @pytest.mark.quasar
 @parametrize(
     formats=FORMATS,
-    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
+    math_fidelity=_math_fidelities,
     num_tiles=_num_tiles_for_format,
     tile_dimensions=_tile_dimensions_for_format,
     run_types=[[PerfRunType.L1_TO_L1]],
@@ -154,9 +166,11 @@ def test_sum_reduce_scalar_quasar(
 
     device_scalar = float(res_from_L1[0])
     tol = tolerances[formats.output_format]
-    assert abs(device_scalar - golden_scalar) <= tol.atol + tol.rtol * abs(
-        golden_scalar
-    ), (
+    rtol, atol = tol.rtol, tol.atol
+    if math_fidelity != MathFidelity.LoFi:
+        # The bound the Metal test uses above LoFi
+        rtol, atol = 0.01, 0.01
+    assert abs(device_scalar - golden_scalar) <= max(rtol * abs(golden_scalar), atol), (
         f"sum_reduce_scalar mismatch: device={device_scalar} golden={golden_scalar} "
         f"(num_tiles={num_tiles}, tile={tile_dimensions}, fidelity={math_fidelity.name})"
     )
