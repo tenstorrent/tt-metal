@@ -226,7 +226,7 @@ _RMS_DTYPE = None  # does this build's rms_norm take an output dtype?
 def rms_norm_f32(x, **kw):
     """ttnn.rms_norm with an fp32 result for a bf16 or fp32 input. A bf16 input goes in as it is when the build's
     rms_norm takes `dtype` (bit-equal to typecasting it to fp32 first: the norm's math is fp32 and bf16 is exact in
-    fp32), else through a typecast. Not for a bf16 result: the pack rounds otherwise than ttnn.typecast."""
+    fp32), else through a typecast."""
     global _RMS_DTYPE
     if x.dtype != ttnn.float32 and _RMS_DTYPE is not False:
         try:
@@ -418,3 +418,19 @@ def _launch(device, progs):
                 seen.add(id(t))
                 io.append(t)
     return ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[]))
+
+
+def rms_norm_bf16(x, **kw):
+    """ttnn.rms_norm of an fp32 input to a bf16 result: in the op when the build's rms_norm takes `dtype` (with fp32
+    DEST it rounds to nearest even in DEST, bit-equal to ttnn.typecast of the fp32 result), else through a typecast.
+    """
+    global _RMS_DTYPE
+    if x.dtype == ttnn.float32 and _RMS_DTYPE is not False:
+        try:
+            y = ttnn.rms_norm(x, dtype=ttnn.bfloat16, **kw)
+            _RMS_DTYPE = True
+            return y
+        except TypeError:
+            _RMS_DTYPE = False
+    y = ttnn.rms_norm(x, **kw)
+    return y if y.dtype == ttnn.bfloat16 else ttnn.typecast(y, ttnn.bfloat16)

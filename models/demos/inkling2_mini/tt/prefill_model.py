@@ -57,7 +57,7 @@ from models.demos.inkling2_mini.tt.attention import (
     log_scale,
 )
 from models.demos.inkling2_mini.tt.attention_fast import KV_WIDTH, V_WIDTH
-from models.demos.inkling2_mini.tt.fused.common import dense_matrix, rms_norm_f32
+from models.demos.inkling2_mini.tt.fused.common import dense_matrix, rms_norm_bf16, rms_norm_f32
 from models.demos.inkling2_mini.tt.fused.pf_attnres import PfAttnRes
 from models.demos.inkling2_mini.tt.fused.pf_combine import PfCombine
 from models.demos.inkling2_mini.tt.fused.pf_conv import PfConv
@@ -986,8 +986,7 @@ class Inkling2Prefill:
         """h [1,1,T,C] fp32 (gated mlp input) -> [1,1,T,C] bf16. Rows >= n are not routed (output 0)."""
         moe = lp.lay.moe
         t = h.shape[2]
-        x = ttnn.rms_norm(h, weight=moe.norm_w, epsilon=RMS_EPS, compute_kernel_config=moe.router_compute)
-        x = _bf16(x)
+        x = rms_norm_bf16(h, weight=moe.norm_w, epsilon=RMS_EPS, compute_kernel_config=moe.router_compute)
         logits = ttnn.matmul(x, lp.router_w, dtype=ttnn.float32, compute_kernel_config=moe.router_compute)
         bias = _rows(lp.router_bias_rows, 0, t)
         weights, indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
@@ -1156,7 +1155,7 @@ class Inkling2Prefill:
 
     def _rms(self, x, w):
         """Weighted RMSNorm (fp32 math), bf16 out."""
-        return _bf16(ttnn.rms_norm(x, weight=w, epsilon=EPS, compute_kernel_config=self.hifi4))
+        return rms_norm_bf16(x, weight=w, epsilon=EPS, compute_kernel_config=self.hifi4)
 
     def _app(self, L, p, h, stack, msgs, s, n, tau, ctx):
         """h bf16 [1,1,T,C]; stack: list of (sealed fp32, normed fp32). Returns (out bf16, stack)."""
