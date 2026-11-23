@@ -1859,14 +1859,17 @@ If OPs are reading from the fastest memory they can, sharded if possible, what m
 
 * **Unnecessary `ShardedToInterleaved` and `InterleavedToSharded` calls**. The fastest work is work that you don’t have to do. These calls are pure data movement and it is often better to have some OPs using fewer cores if it means they can use the same sharding of their input data as the previous and subsequent OPs. Always avoid data movement!
 * **Always use `ScaledDotProductAttention` (SDPA) OPs if possible**. These implement FlashAttention / FlashDecode and are much faster than writing attention using individual operations.
-* **Cross-device communication OPs**. `AllGather`, `ReduceScatter` etc. Avoid these where possible, try using `bfp8` inputs instead of `bf16` if you can. There is an `AllGatherMatmul` OP that overlaps `AllGather` with a `Matmul` that you can investigate further too - see `ttnn.experimental.all_gather_matmul` with an [example of its use](https://github.com/tenstorrent/tt-metal/blob/79ff70b0e115ac50e70a72391dde3c4a4a6fab7f/models/demos/llama3/tt/llama_attention.py#L329) looking like this:
+* **Cross-device communication OPs**. `AllGather`, `ReduceScatter` etc. Avoid these where possible, try using `bfp8` inputs instead of `bf16` if you can. There is an `AllGatherMatmul` OP that overlaps `AllGather` with a `Matmul` that you can investigate further too - see `ttnn.experimental.all_gather_matmul_async` with an [example of its use](https://github.com/tenstorrent/tt-metal/blob/e39e42718ca4fe5d1f5cb26a323de54dfe8a7438/models/demos/qwen3_vl/tt/attention.py#L526) looking like this:
 
 ```python
-_, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
+_, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
     input_tensor,
     weights,
+    persistent_output_buffer=None,
     dim=3,
+    multi_device_global_semaphore=ag_semaphore_handles,
     all_gather_core_grid_offset=(0, 4),
+    barrier_semaphore=barrier_semaphore_handle,
     num_links=1,
     memory_config_ag=all_gather_memcfg,
     memory_config_mm=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
