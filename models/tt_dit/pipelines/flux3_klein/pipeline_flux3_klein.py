@@ -77,6 +77,8 @@ MULTI_REFERENCE_TOKEN_BUCKETS = tuple(
 WARMUP_PROMPT = "warmup"
 # Plans (RoPE tables, modulation / row-gather indices) kept on device: ~200 MB host-built each at 4096.
 PLAN_CACHE_SIZE = 8
+# Meshes whose pipelines free other layouts' CCL pairs at the largest size (_claim_pairs): DP4's (4, 2) groups.
+PAIR_FREEING_MESH_SHAPES = ((4, 2),)
 
 
 @dataclass(frozen=True)
@@ -220,13 +222,14 @@ class Flux3KleinPipeline:
         encoder_parallel = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis)
         )
+        encoder_ccl = CCLManager(
+            mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
+        )
         encoder = build_flux3_klein_text_encoder(
             shared,
             mesh_device=mesh_device,
             parallel_config=encoder_parallel,
-            ccl_manager=CCLManager(
-                mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
-            ),
+            ccl_manager=encoder_ccl,
             # the TP shard is ~1.8 GB per chip: keep it resident instead of all-gathering every weight per prompt
             is_fsdp=False,
         )
@@ -260,12 +263,13 @@ class Flux3KleinPipeline:
             )
             self._transformers[model] = transformer
 
+        vae_ccl = CCLManager(
+            mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
+        )
         self._vae = Flux3KleinVae(
             shared,
             device=mesh_device,
-            ccl_manager=CCLManager(
-                mesh_device=mesh_device, num_links=num_links, topology=topology, axis_topologies=axis_topologies
-            ),
+            ccl_manager=vae_ccl,
             dit_ccl_manager=self._ccl,
             dit_sp_axis=sp_axis,
             sizes=SIZES,
@@ -277,6 +281,10 @@ class Flux3KleinPipeline:
             null_rows = ttnn.core.roundup(self._prompt_encoder.tokenize("")[2], mesh_shape[sp_axis] * TILE)
             self._null_text = self._prompt_encoder.encode("", null_rows)
         self._plan_cache: OrderedDict[tuple, Flux3KleinPlan] = OrderedDict()
+        self._ccl_managers = (encoder_ccl, self._ccl, vae_ccl)
+        self._pair_users: dict[tuple, set] = {}
+        self._last_layout = None
+        self._free_pairs = tuple(mesh_device.shape) in PAIR_FREEING_MESH_SHAPES
         self._mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
 
@@ -356,7 +364,10 @@ class Flux3KleinPipeline:
         latent_job = self._prestep_pool().submit(self._prepare_latent_host, seed, h, w, sp)
 
         t0 = time.time()
-        text = self._prompt_encoder.encode(prompt, text_rows or self._text_rows(prompt, size, ref_bucket))
+        text_rows = text_rows or self._text_rows(prompt, size, ref_bucket)
+        if self._free_pairs:
+            self._claim_pairs((request.model, size, ref_bucket, text_rows), free_others=size == max(SIZES))
+        text = self._prompt_encoder.encode(prompt, text_rows)
         timings["encode"] = time.time() - t0
 
         t0 = time.time()
@@ -411,6 +422,29 @@ class Flux3KleinPipeline:
             lengths = dict(key[3])
             if (lengths["image"], lengths["image_cond"]) != (image_rows, cond_rows):
                 self._plan_cache.pop(key).deallocate()
+
+    def _claim_pairs(self, layout: tuple, free_others: bool) -> None:
+        """Credits the CCL ping-pong pairs (keyed by shape, never evicted) the previous request used to its layout and,
+        at the largest size, frees the allocated pairs only other largest-size layouts have used, as _free_other_plans
+        does for plans: a DP4 group warmed on every 4096 layout otherwise runs out of DRAM on them. Pairs of a shape
+        the layouts share stay once each has used them; pairs a smaller size used stay too (small, and freed they would
+        be re-created mid-render on its next request)."""
+        for index, ccl in enumerate(self._ccl_managers):
+            for key in ccl.take_used_ping_pong_keys():
+                self._pair_users.setdefault((index, key), set()).add(self._last_layout)
+        self._last_layout = layout
+        if not free_others:
+            return
+        live = [ccl.ping_pong_keys() for ccl in self._ccl_managers]
+        stale = [
+            (i, key)
+            for (i, key), users in self._pair_users.items()
+            if layout not in users and key in live[i] and all(user is None or user[1] == layout[1] for user in users)
+        ]
+        if stale:
+            ttnn.synchronize_device(self._device)
+        for index, key in stale:
+            self._ccl_managers[index].free_ping_pong_buffers([key])
 
     def _prestep_pool(self) -> ThreadPoolExecutor:
         if getattr(self, "_prestep_executor", None) is None:

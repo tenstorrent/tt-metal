@@ -19,7 +19,7 @@ from ....models.transformers.flux3_klein.transformer_block_flux3_klein import (
 from ....models.transformers.flux3_klein.transformer_flux3_klein import DP4_MLP_ROWS, Flux3KleinSequenceLayout
 from ....parallel.manager import CCLManager
 from ....pipelines.flux3_klein.packing import TEXT_BUCKETS, TEXT_BUCKETS_BY_LAYOUT
-from ....pipelines.flux3_klein.pipeline_flux3_klein import REFERENCE_TOKEN_BUCKETS, SIZES
+from ....pipelines.flux3_klein.pipeline_flux3_klein import REFERENCE_TOKEN_BUCKETS, SIZES, Flux3KleinPipeline
 from ....utils import matmul
 
 SP = 4
@@ -120,3 +120,37 @@ def test_dp4_mlp_rows_have_blockings() -> None:
         assert (m, 3072, 9216) in matmul.grid_12_9_configs, m
         if m not in (2048, 2304):
             assert (m, 3072, 4608) in matmul.grid_12_9_configs, m
+
+
+def test_claim_pairs_frees_only_pairs_other_largest_size_layouts_used(monkeypatch) -> None:
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda device: None)
+    small, r0, r1 = ("distilled", 1024, 0, 1024), ("distilled", 4096, 0, 1024), ("distilled", 4096, 4096, 2048)
+    ccl, freed = SimpleNamespace(live=set(), used=set()), []
+
+    def take_used():
+        used, ccl.used = ccl.used, set()
+        return used
+
+    def free(keys):
+        freed.extend(keys)
+        ccl.live.difference_update(keys)
+
+    ccl.ping_pong_keys = lambda: set(ccl.live)
+    ccl.take_used_ping_pong_keys = take_used
+    ccl.free_ping_pong_buffers = free
+    pipe = Flux3KleinPipeline.__new__(Flux3KleinPipeline)
+    pipe._device, pipe._ccl_managers, pipe._pair_users, pipe._last_layout = None, (ccl,), {}, None
+
+    def render(layout, *keys):
+        pipe._claim_pairs(layout, free_others=layout[1] == 4096)
+        ccl.live.update(keys)
+        ccl.used.update(keys)
+
+    render(small, "small ring")
+    render(r0, "vae", "r0 ring")  # the smaller size's pair stays
+    assert freed == []
+    render(r1, "vae", "r1 ring")  # r1 has used nothing yet: every 4096 pair goes, this once
+    render(r0, "vae", "r0 ring")
+    render(r1, "vae", "r1 ring")  # from here on only the layout's own pairs churn; the shared pair stays
+    assert sorted(freed) == sorted(["vae", "r0 ring", "r1 ring", "r0 ring"])
+    assert ccl.live == {"small ring", "vae", "r1 ring"}
