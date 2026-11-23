@@ -28,9 +28,11 @@ D_REL = 16
 WINDOW = 1024
 TAPS = 4
 TABLE_ROWS = WINDOW + 34  # wrap rows so a 1088-byte aligned read never runs past the end
-# Bias cores of the prep: 32 = one slot tile each (8: four each). Same per-tile math, so the same bits.
-# 4K / 128K ms with slim reads: 8 cores 15.14 / 20.49, 32 cores 15.11 / 20.46. (q one head per core, 24 cores:
-# slower, its readers' DRAM waits grow.)
+# Prep layout: q cores (24 = one head each, 8 = three each) and bias cores (32 = one slot tile each, 8 = four).
+# Same per-head / per-tile math, so the same bits. 4K / 128K ms with slim reads: q 8 + bias 8 15.14 / 20.49,
+# q 8 + bias 32 15.11 / 20.44, q 24 + bias 32 15.07 / 20.41. (Without slim reads more cores were slower: their
+# DRAM reads queued behind the expert stream.)
+Q_CORES = int(os.environ.get("INKLING_PREP_Q_CORES", "24"))
 BIAS_CORES = int(os.environ.get("INKLING_PREP_BIAS_CORES", "32"))
 # Slim prep reads: only the bytes of the constant pages the compute uses, the rest zeroed / built in L1 (same CB
 # bytes). The expert stream keeps DRAM busy while the prep runs, so its reads end sooner: 4K 15.28 -> 15.14 ms,
@@ -156,10 +158,10 @@ class AttnPrep:
         mass[0, 0] = 1.0  # far-cache mass chunk [1, 0 x 15] (+ a zero chunk), packed like the v row
         self.mass = F.dense_tensor(device, mass)
 
-        assert (WINDOW // 32) % BIAS_CORES == 0, BIAS_CORES
-        cores, _ = F.core_list(device, 3 * N_KV + BIAS_CORES, first_row=1)
-        self.q_cores, self.k_cores = cores[:N_KV], cores[N_KV : 2 * N_KV]
-        self.v_cores, self.b_cores = cores[2 * N_KV : 3 * N_KV], cores[3 * N_KV :]
+        assert N_HEADS % Q_CORES == 0 and (WINDOW // 32) % BIAS_CORES == 0, (Q_CORES, BIAS_CORES)
+        cores, _ = F.core_list(device, Q_CORES + 2 * N_KV + BIAS_CORES, first_row=1)
+        self.q_cores, cores = cores[:Q_CORES], cores[Q_CORES:]
+        self.k_cores, self.v_cores, self.b_cores = cores[:N_KV], cores[N_KV : 2 * N_KV], cores[2 * N_KV :]
         self.cache = {}
 
     def _head_group(self, cores, proj, kind, mode_rows, tau, state, positions, rows=None, chain=None):
@@ -168,7 +170,8 @@ class AttnPrep:
         instead of the ring. chain = (wait, next token's cores or None): k / v writers of tokens in one program
         (rows()) take turns (attn_kv_writer.cpp)."""
         q = kind == "q"
-        nitems, nlag = (GROUPS, 1) if q else (1, TAPS)
+        nitems, nlag = (N_HEADS // len(cores), 1) if q else (1, TAPS)  # q: heads per core (3, or 1 on 24 cores)
+        assert not q or nitems * len(cores) == N_HEADS, len(cores)
         dyn = int(self.dyn and not q)
         has_tau = int(self.dyn and q)
         mass = int(self.dyn and kind == "v")
@@ -178,22 +181,22 @@ class AttnPrep:
             r += [self.scaler.buffer_address(), tau.buffer_address() if has_tau else 0, self.mass.buffer_address()]
             if q:
                 w = []
-                for i in range(GROUPS):
-                    h = g * GROUPS + i
+                for h in range(g * nitems, (g + 1) * nitems):
+                    gq, i = divmod(h, GROUPS)  # kv group, row in the group
                     r += [h * HEAD_DIM // 32, mode_rows["q"], h]
                     if rows is not None and not self.dyn:
                         k, lt = rows[1].local(rows[0])
-                        w += [rows[1].qc[k].buffer_address(), 0, 0, 0, (lt * N_KV + g) * (HEAD_DIM // 32), i]
+                        w += [rows[1].qc[k].buffer_address(), 0, 0, 0, (lt * N_KV + gq) * (HEAD_DIM // 32), i]
                         continue
                     w += [self.q.buffer_address(), 0, 0, 0, 0, h]
                     if self.dyn:
                         qg = rows[1].q_grp[rows[0]] if rows is not None else self.q_grp
-                        w += [qg.buffer_address(), 0, 0, 0, g * (HEAD_DIM // 32), i]
+                        w += [qg.buffer_address(), 0, 0, 0, gq * (HEAD_DIM // 32), i]
                         if rows is not None and rows[1].q_far is not None:  # verify pass: shared (rows 3 t + i)
                             qrow = rows[0] * GROUPS + i if getattr(rows[1], "far_shared", True) else i  # or per token
-                            w += [rows[1].q_far.buffer_address(), 0, 0, 0, g * 9 + 5, qrow]
+                            w += [rows[1].q_far.buffer_address(), 0, 0, 0, gq * 9 + 5, qrow]
                         else:
-                            w += [self.q_far.buffer_address(), 0, 0, 0, g * 9 + 5, i]
+                            w += [self.q_far.buffer_address(), 0, 0, 0, gq * 9 + 5, i]
             else:
                 c0 = self.kv0 + (0 if kind == "k" else N_KV * HEAD_DIM) + g * HEAD_DIM
                 r += [c0 // 32, mode_rows[kind], g * TAPS]
