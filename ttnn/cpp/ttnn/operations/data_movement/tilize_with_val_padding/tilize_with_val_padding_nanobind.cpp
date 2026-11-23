@@ -102,6 +102,7 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor.
                 * :attr:`dtype`: Data type of the output tensor.
                 * :attr:`use_multicore`: Whether to use multicore.
+                * :attr:`sub_core_grids`: Sub core grids to run the operation on.
         )doc";
 
     ttnn::bind_function<"tilize_with_zero_padding">(

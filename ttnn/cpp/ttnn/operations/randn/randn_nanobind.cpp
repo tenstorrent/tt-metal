@@ -21,9 +21,9 @@ void bind_randn_operation(nb::module_& mod) {
 
         Args:
             shape (list[int]): a list of integers defining the shape of the output tensor.
+            device (ttnn.Device | ttnn.MeshDevice): The device on which the tensor will be allocated.
 
         Keyword Args:
-            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `ttnn.bfloat16`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `ttnn.TILE_LAYOUT`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
