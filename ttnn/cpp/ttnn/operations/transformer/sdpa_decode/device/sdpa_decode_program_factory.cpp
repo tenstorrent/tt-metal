@@ -90,6 +90,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     const bool use_attention_mask = attn_mask.has_value();
     const bool use_attention_sink = attention_sink.has_value();
+    const bool use_pending = tensor_args.pending_kv.has_value();  // speculative verify rows (non-paged only)
     // ========== Tensor Shapes ==========
     auto q_shape = input_tensor_q.padded_shape();
     q_shape[2] = tt::round_up(q_shape[2], tt::constants::TILE_HEIGHT);
@@ -677,6 +678,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             is_cur_pos_tensor_sharded ? cur_pos_buffer : nullptr);
         add_cb(CBIndex::c_15, cur_pos_stick_size, cur_pos_df, cur_pos_stick_size);
     }
+    if (use_pending) {
+        // c_9 (the page table CB, unused without paging): this kv group's pending K / V tiles + the position stick
+        const uint32_t pend_bytes = (DHt + vDHt) * k_tile_size + 64;
+        add_cb(CBIndex::c_9, pend_bytes, k_df, pend_bytes);
+    }
     if (is_paged_attention) {
         uint32_t page_table_cb_size = is_page_table_sharded ? B * page_table_stick_size : page_table_stick_size;
         add_cb(
@@ -847,6 +853,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     } else {
         tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(reader_compile_time_args_common);
     }
+    if (use_pending) {
+        tt_metal::TensorAccessorArgs(*tensor_args.pending_kv->buffer()).append_to(reader_compile_time_args_common);
+        tt_metal::TensorAccessorArgs(*tensor_args.pending_pos->buffer()).append_to(reader_compile_time_args_common);
+    }
 
     std::vector<uint32_t> writer_compile_time_args_common = {
         PNHt,
@@ -964,6 +974,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         two_noc_k ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
     if (two_noc_k) {
         reader_desc.defines.emplace_back("SDPA_DECODE_TWO_NOC", "1");
+    }
+    if (use_pending) {
+        TT_FATAL(q_heads_parallel_factor == 1 && num_kv_heads == 1, "pending_kv needs the kv groups as the batch");
+        reader_desc.defines.emplace_back("SDPA_DECODE_PENDING", "1");
     }
     // one sink block of PNHt tiles per batch (validate allows [B * padded heads, 32])
     if (use_attention_sink && q_shape[1] > 1 && attention_sink->padded_shape()[0] == q_shape[1] * q_shape[2]) {
@@ -1110,6 +1124,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.push_back(page_table_buffer);
         reader_rt_args.push_back(attn_mask_buffer);
         reader_rt_args.push_back(attention_sink_buffer);
+        if (use_pending) {
+            reader_rt_args.push_back(tensor_args.pending_kv->buffer());
+            reader_rt_args.push_back(tensor_args.pending_pos->buffer());
+        }
         reader_rt_args.push_back(page_table_stick_size);
         reader_rt_args.push_back(static_cast<uint32_t>(do_output));
         reader_rt_args.push_back(cur_head);

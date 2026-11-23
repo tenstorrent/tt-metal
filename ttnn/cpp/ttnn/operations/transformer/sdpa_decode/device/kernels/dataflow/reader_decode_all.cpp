@@ -73,6 +73,10 @@ void kernel_main() {
     constexpr auto pos_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+#ifdef SDPA_DECODE_PENDING
+    constexpr auto pend_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
+    constexpr auto ppos_args = TensorAccessorArgs<pend_args.next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -95,6 +99,10 @@ void kernel_main() {
     const uint32_t page_table_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mask_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(arg_idx++);
+#ifdef SDPA_DECODE_PENDING
+    const uint32_t pend_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t ppos_addr = get_arg_val<uint32_t>(arg_idx++);
+#endif
     const uint32_t page_table_page_size = get_arg_val<uint32_t>(arg_idx++);
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head_group = get_arg_val<uint32_t>(arg_idx++);
@@ -112,6 +120,31 @@ void kernel_main() {
         return;
     }
 
+#ifdef SDPA_DECODE_PENDING
+    {
+        // this batch's kv group's pending K / V tiles (pending_kv [2, Bkv, 32, DH]) and token 0's position
+        constexpr uint32_t ptb = get_tile_size(cb_k_in);
+        const uint32_t base = CircularBuffer(cb_id_page_table).get_write_ptr();
+        const auto pend_reader = TensorAccessor(pend_args, pend_addr);
+        const auto ppos_reader = TensorAccessor(ppos_args, ppos_addr);
+        const uint32_t g = cur_batch % Bkv;
+        for (uint32_t c = 0; c < DHt; ++c) {
+            noc.async_read(pend_reader, CoreLocalMem<uint32_t>(base + c * ptb), ptb, {.page_id = g * DHt + c}, {});
+        }
+        for (uint32_t c = 0; c < vDHt; ++c) {
+            noc.async_read(
+                pend_reader, CoreLocalMem<uint32_t>(base + (DHt + c) * ptb), ptb, {.page_id = (Bkv + g) * DHt + c}, {});
+        }
+        const uint32_t pos_l1 = base + (DHt + vDHt) * ptb;
+        noc.async_read(ppos_reader, CoreLocalMem<uint32_t>(pos_l1), 16, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        g_pend.k_tiles = base;
+        g_pend.v_tiles = base + DHt * ptb;
+        g_pend.ntok = cur_batch / Bkv + 1;
+        g_pend.pos0 = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1);
+        g_pend.S = St * 32;
+    }
+#endif
     // Get cur_pos
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this

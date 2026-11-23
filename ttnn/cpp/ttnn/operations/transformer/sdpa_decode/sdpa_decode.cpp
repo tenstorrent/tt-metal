@@ -52,7 +52,9 @@ ttnn::Tensor scaled_dot_product_attention_decode(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<bool> share_cache,
-    const std::optional<tt::tt_metal::ProgramDescriptor>& extra_kernels) {
+    const std::optional<tt::tt_metal::ProgramDescriptor>& extra_kernels,
+    const std::optional<const Tensor>& pending_kv,
+    const std::optional<const Tensor>& pending_pos) {
     uint32_t s = input_tensor_k.logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
@@ -97,7 +99,9 @@ ttnn::Tensor scaled_dot_product_attention_decode(
         std::nullopt,
         0,
         0,
-        extra_kernels);
+        extra_kernels,
+        pending_kv,
+        pending_pos);
 }
 
 ttnn::Tensor paged_scaled_dot_product_attention_decode(

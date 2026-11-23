@@ -89,7 +89,9 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("share_cache") = nb::none(),
-        nb::arg("extra_kernels") = nb::none());
+        nb::arg("extra_kernels") = nb::none(),
+        nb::arg("pending_kv") = nb::none(),
+        nb::arg("pending_pos") = nb::none());
 
     ttnn::bind_function<"paged_scaled_dot_product_attention_decode", "ttnn.transformer.">(
         mod,

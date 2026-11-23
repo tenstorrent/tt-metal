@@ -106,6 +106,11 @@ struct SdpaDecodeInputs {
     std::optional<Tensor> page_table_tensor;
     std::optional<Tensor> attn_mask;
     std::optional<Tensor> attention_sink;
+    // Speculative verify (kv groups as batch, batch b = token t * Bkv + group): rows of the pass's tokens that are not
+    // in the ring yet. pending_kv [2, Bkv, 32, DH] (K then V, the ring's dtype, row t = token t) and pending_pos
+    // (int32, element 0 = position of token 0). Batch b sees tokens 0 .. b / Bkv in ring slots (pos + t) % S.
+    std::optional<Tensor> pending_kv;
+    std::optional<Tensor> pending_pos;
 };
 
 }  // namespace ttnn::prim

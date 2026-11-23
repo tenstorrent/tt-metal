@@ -975,6 +975,66 @@ void read_k_chunks_two_noc(
 }
 #endif
 
+#ifdef SDPA_DECODE_PENDING
+// Speculative verify: rows of the pass's tokens that are not in the ring yet (sdpa_decode pending_kv). The reader
+// keeps this batch's pending K / V tiles in L1 (row t = token t, tile c = head-dim tile c) and copies rows 0 .. ntok -
+// 1 into the ring tiles it reads, at slot (pos0 + t) % S, so each token sees the ring plain decode would see at its
+// step.
+struct PendingRows {
+    uint32_t k_tiles;  // L1: pending K tiles (DHt), then V tiles (vDHt)
+    uint32_t v_tiles;
+    uint32_t ntok;
+    uint32_t pos0;
+    uint32_t S;
+};
+PendingRows g_pend;
+
+// row sr of the tile at src -> row dr of the tile at dst (bf16, or bfp8: exponent byte + 16 mantissa bytes per face
+// row)
+FORCE_INLINE void pend_copy_row(uint32_t src, uint32_t sr, uint32_t dst, uint32_t dr, uint32_t tile_bytes) {
+    for (uint32_t h = 0; h < 2; ++h) {
+        const uint32_t fs = (sr >> 4) * 2 + h, rs = sr & 15, fd = (dr >> 4) * 2 + h, rd = dr & 15;
+        if (tile_bytes == 2048) {
+            volatile tt_l1_ptr uint32_t* s =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + (fs * 256 + rs * 16) * 2);
+            volatile tt_l1_ptr uint32_t* d =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + (fd * 256 + rd * 16) * 2);
+            for (uint32_t w = 0; w < 8; ++w) {
+                d[w] = s[w];
+            }
+        } else {
+            reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst)[fd * 16 + rd] =
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src)[fs * 16 + rs];
+            volatile tt_l1_ptr uint32_t* s =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + 64 + fs * 256 + rs * 16);
+            volatile tt_l1_ptr uint32_t* d =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + 64 + fd * 256 + rd * 16);
+            for (uint32_t w = 0; w < 4; ++w) {
+                d[w] = s[w];
+            }
+        }
+    }
+}
+
+// patch the K (col-major tile order: col * Sk_chunk_t + row) or V (row-major: row * cols + col) chunk at base
+FORCE_INLINE void pend_patch_chunk(
+    uint32_t base, uint32_t k_chunk, uint32_t Sk_chunk_t, uint32_t cols, uint32_t tile_bytes, bool is_k) {
+    const uint32_t s0 = k_chunk * Sk_chunk_t * 32, s1 = s0 + Sk_chunk_t * 32;
+    for (uint32_t t = 0; t < g_pend.ntok; ++t) {
+        const uint32_t slot = (g_pend.pos0 + t) % g_pend.S;
+        if (slot < s0 || slot >= s1) {
+            continue;
+        }
+        const uint32_t trow = (slot - s0) >> 5, r = slot & 31;
+        for (uint32_t c = 0; c < cols; ++c) {
+            const uint32_t dst = base + (is_k ? c * Sk_chunk_t + trow : trow * cols + c) * tile_bytes;
+            const uint32_t src = (is_k ? g_pend.k_tiles : g_pend.v_tiles) + c * tile_bytes;
+            pend_copy_row(src, t, dst, r, tile_bytes);
+        }
+    }
+}
+#endif
+
 template <
     uint32_t DHt,
     uint32_t vDHt,
@@ -1076,6 +1136,9 @@ void read_kv_mask_chunks(
         if constexpr (row_noc_mask != 0) {
             noc_alt.async_read_barrier();
         }
+#ifdef SDPA_DECODE_PENDING
+        pend_patch_chunk(k_base_read_ptr, k_chunk, Sk_chunk_t, DHt, k_tile_bytes, true);
+#endif
         cb_k.push_back(k_chunk_tiles);
 
         if constexpr (use_attention_mask) {
@@ -1125,6 +1188,11 @@ void read_kv_mask_chunks(
             }
         }
         noc.async_read_barrier();
+#ifdef SDPA_DECODE_PENDING
+        if constexpr (!reuse_k) {
+            pend_patch_chunk(cb_v.get_write_ptr(), k_chunk, Sk_chunk_t, vDHt, v_tile_bytes, false);
+        }
+#endif
         cb_v.push_back(v_chunk_tiles);
 
         // Update the starting tile id for next iteration
