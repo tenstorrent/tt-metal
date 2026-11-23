@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Size-optimized: the dataflow kernels leave the kernel config buffer to the recipe compute (the ring's masked recipe
-// builds sit within a few hundred bytes of it on Blackhole).
-#pragma GCC optimize("Os")
-
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
