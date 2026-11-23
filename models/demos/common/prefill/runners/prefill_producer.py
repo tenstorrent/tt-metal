@@ -838,6 +838,8 @@ def _has_index_config(table) -> bool:
 
 # A [RING,RING] seam stage spans two hosts, so each layer's KV lies on chips of both: a validator reads the chunks
 # its host can reach and scores those positions (the other host's validator scores the rest).
+# ASIC unique id -> whether read_dram_umd reaches it from this process (seam stages only, see _read_chunks).
+_UID_VISIBLE: dict = {}
 _MULTI_HOST_STAGES = any(int(h) > 1 for h in os.environ.get("PREFILL_STAGE_HOSTS", "").split(",") if h.strip())
 
 
@@ -856,6 +858,21 @@ def _read_chunks(table, device_map, config_id, layer, slot_id, positions, allow_
                 if not allow_missing:
                     raise
                 unique_ids[loc.device_group_index] = None
+    if allow_missing:
+        # A seam stage's device map lists every chip of its mesh, the other host's too, which read_dram_umd cannot
+        # reach from here: probe each chip once with a one-chunk read and treat the unreachable ones as missing.
+        for loc in locs:
+            uid = unique_ids[loc.device_group_index]
+            if uid is None or uid in _UID_VISIBLE:
+                continue
+            try:
+                ttnn.experimental.disaggregation.read_dram_umd_batch([uid], [loc.noc_addr], [loc.size_bytes])
+                _UID_VISIBLE[uid] = True
+            except RuntimeError:
+                _UID_VISIBLE[uid] = False
+        for group, uid in list(unique_ids.items()):
+            if uid is not None and not _UID_VISIBLE.get(uid, True):
+                unique_ids[group] = None
     present = [loc for loc in locs if unique_ids[loc.device_group_index] is not None]
     sizes = [loc.size_bytes for loc in present]
     blob = (
