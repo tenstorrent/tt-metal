@@ -332,7 +332,12 @@ void kernel_main() {
                                 in0_mcast_num_cores);
                         }
 
-                        if constexpr (!(core_in_in0_receiver_mcast_grid && (in0_mcast_num_cores == 1))) {
+                        // When this sender is also in the receiver grid, its own looped-back block and VALID must
+                        // have LANDED (write acks) before push_back / the next INVALID; a flush only means the
+                        // requests left the core, so a late VALID could overwrite the next block's INVALID.
+                        if constexpr (core_in_in0_receiver_mcast_grid) {
+                            noc.async_write_barrier();
+                        } else {
                             noc.async_writes_flushed();
                         }
                         // [DEBUG #47797] Sender finished issuing the in0 data + VALID multicast for

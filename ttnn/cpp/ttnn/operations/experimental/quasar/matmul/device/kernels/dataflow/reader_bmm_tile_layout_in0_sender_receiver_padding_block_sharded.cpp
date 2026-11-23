@@ -324,7 +324,12 @@ void kernel_main() {
                         // VALID value from L1, causing receivers to see INVALID and hang.
                         // In single-core receiver-grid configurations, semaphore multicast may be compiled out;
                         // in that case, skip the flush to avoid an unnecessary stall.
-                        if constexpr (!(core_in_in0_receiver_mcast_grid && (in0_mcast_num_cores == 1))) {
+                        // When this sender is also in the receiver grid, its own looped-back block and VALID must
+                        // have LANDED (write acks) before push_back / the next INVALID; a flush only means the
+                        // requests left the core, so a late VALID could overwrite the next block's INVALID.
+                        if constexpr (core_in_in0_receiver_mcast_grid) {
+                            noc.async_write_barrier();
+                        } else {
                             noc.async_writes_flushed();
                         }
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {
